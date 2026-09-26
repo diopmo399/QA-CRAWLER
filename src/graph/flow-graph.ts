@@ -139,6 +139,11 @@ export class FlowGraph {
   }
 
   /** True once the action was attempted (or blocked) from this state. */
+  /** An action handled without a transition of its own (a field filled with its whole form). */
+  markTried(stateId: string, actionId: string): void {
+    this.tried.add(triedKey(stateId, actionId));
+  }
+
   hasTransition(from: string, actionId: string): boolean {
     return this.tried.has(triedKey(from, actionId));
   }

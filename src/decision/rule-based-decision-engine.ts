@@ -11,6 +11,8 @@ export interface RuleBasedOptions {
   maxDepth: number;
   maxStatesPerRoute: number;
   queryParamMode: QueryParamMode;
+  /** Similar controls (same kind, same label once numbers are masked) tried at most this many times per state. */
+  maxSimilarActions?: number;
 }
 
 /** Base interest of each kind of click: structure first (tabs, menus, sections), then details, steps, pages. */
@@ -101,8 +103,24 @@ export class RuleBasedDecisionEngine implements DecisionEngine {
         );
       }
     }
+    // Similar controls: "1", "2"… of a date picker, "Voir" on each row. A few samples are enough.
+    const similarOnScreen = new Map<string, number>();
+    for (const action of context.actions) {
+      const key = similarKey(action.type, action.category, action.text);
+      if (key) similarOnScreen.set(key, (similarOnScreen.get(key) ?? 0) + 1);
+    }
+    const similarTried = new Map<string, number>();
+    for (const edge of graph.allEdges()) {
+      if (edge.from !== context.stateId || edge.result === 'BLOCKED') continue;
+      const key = similarKey(edge.action.type, edge.action.category, edge.action.text);
+      if (key) similarTried.set(key, (similarTried.get(key) ?? 0) + 1);
+    }
+    const maxSimilar = this.options.maxSimilarActions ?? Number.POSITIVE_INFINITY;
     const scored: ScoredAction[] = [];
     for (const action of context.actions) {
+      const key = similarKey(action.type, action.category, action.text);
+      if (key && (similarOnScreen.get(key) ?? 0) > maxSimilar && (similarTried.get(key) ?? 0) >= maxSimilar)
+        continue;
       const score = this.score(
         action,
         context,
@@ -192,6 +210,13 @@ export class RuleBasedDecisionEngine implements DecisionEngine {
     }
     return { score, why };
   }
+}
+
+/** Same kind of control, same label once numbers are masked ("12" → "#", "2026-09-12" → "#-#-#"). */
+function similarKey(type: string, category: string, text: string | undefined): string | undefined {
+  if (type !== 'click' && type !== 'navigate') return undefined;
+  const label = (text ?? '').trim().toLowerCase().replace(/\d+/g, '#');
+  return label ? `${type}|${category}|${label}` : undefined;
 }
 
 /** Base interest of links: content first, the global menu after the page is explored. */

@@ -154,6 +154,10 @@ safety:
 | `exploration.actionTimeoutMs`                                                  | 10000                          | Localiser et exécuter une action                                                                                                      |
 | `exploration.maxStatesPerRoute`                                                | 3                              | Échantillons par modèle de route (`/users/:id`)                                                                                       |
 | `exploration.settleTimeMs`                                                     | 400                            | Attente après chaque action (rendu SPA, appels d'API)                                                                                 |
+| `exploration.maxSimilarActions`                                                | 2                              | Contrôles semblables essayés par écran (jours d'un calendrier, numéros de page, « Voir » de chaque ligne)                             |
+| `forms.exercise`                                                               | `true`                         | Remplir les formulaires de chaque écran (même sans `<form>`) puis relever les messages de validation                                  |
+| `forms.submit`                                                                 | non défini                     | Boutons qui envoient un formulaire : `false` jamais, `true` comme une MUTATION ; non défini : `safety.block` (`form-submit`) décide   |
+| `testData.fields`                                                              | `{}`                           | Valeur par champ (libellé, name ou placeholder). Voir [Formulaires](#formulaires)                                                     |
 | `exploration.queryParams.mode`                                                 | `pattern`                      | `?page=1..N` comptent comme une seule route (`ignore` / `keep`)                                                                       |
 | `exploration.autonomous`                                                       | `true`                         | Explorer seul après les flows ; `false` n'exécute que les flows                                                                       |
 | `goals.*`                                                                      | tous à `true`                  | Ce qu'il faut explorer (voir ci-dessus)                                                                                               |
@@ -509,7 +513,12 @@ Le résultat est un `stateId` lisible et stable, par exemple `parametres-securit
 - en mode exploration, les actions du premier plan sont essayées avant celles de la page derrière ;
 - les calques s'empilent : un calendrier ouvert depuis une fenêtre pose son propre fond (transparent) sur la fenêtre. Seul le calque du dessus est au premier plan ; un élément dont le point de clic tombe sur un autre calque est masqué et n'est pas cliqué ;
 - derrière un calque **modal**, la page est marquée masquée (`obscured`) et n'est pas cliquée tant que le calque est ouvert. Derrière un calque non modal (bandeau cookies), la page reste explorée ensuite ;
-- les éléments du premier plan sont gardés même au-delà de la limite d'éléments observés, et un overlay ouvert donne un état distinct.
+- les éléments du premier plan sont gardés même au-delà de la limite d'éléments observés, et un overlay ouvert donne un état distinct ;
+- pour revenir à l'écran du dessous, le crawler **ferme d'abord le calque du dessus** (touche Échap, sinon son bouton « Fermer » / « Close ») au lieu de recharger la page : la fenêtre et ce qui y est saisi sont conservés ;
+- un titre, une fenêtre ou un bloc de texte qui prend seulement le focus (`tabindex="0"` sans curseur de clic ni rôle interactif) n'est pas une action ;
+- un clic pris par un autre élément échoue vite (≈ 2,5 s) avec le coupable dans le rapport : « clic intercepté par `<div class="cdk-overlay-backdrop">` ».
+
+**Contrôles semblables :** les jours d'un calendrier, les numéros de page ou le « Voir » de chaque ligne ne sont pas essayés un par un : `exploration.maxSimilarActions` (2 par défaut) exemples par écran suffisent.
 
 Après un échec, si l'écran de départ ne peut pas être retrouvé (fenêtre fermée par le rechargement), l'exploration repart de ce qui est réellement affiché au lieu d'essayer les actions de l'écran perdu.
 
@@ -525,13 +534,30 @@ Après un échec, si l'écran de départ ne peut pas être retrouvé (fenêtre f
 
 ## Formulaires
 
-- **Découverte.** Chaque champ est découvert avec ses contraintes : `type`, `required`, `min`, `max`, `step`, `minlength`, `maxlength`, `pattern` et les options des listes.
-- **Remplissage.** Quand le moteur décide de cliquer un bouton dans un formulaire (« Suivant » d'un assistant, une recherche), l'explorateur remplit d'abord ce formulaire avec le `TestDataProvider`. Chaque champ passe d'abord par la `SafetyPolicy`.
-- **`DefaultTestDataProvider`.** Ses valeurs sont déterministes et visiblement factices :
-  - e-mails `qa-crawler@example.test`, texte `QA Test` ;
-  - nombres dans min/max/step, dates dans les bornes ;
-  - cases obligatoires cochées, première vraie option d'une liste.
-- **Jamais remplis :** les champs sensibles. Les envois qui modifient des données restent bloqués sauf autorisation explicite.
+En exploration, un écran qui contient des champs est d'abord **rempli comme le ferait un utilisateur**, puis vérifié. Rien n'est envoyé par défaut.
+
+- **Un formulaire, même sans `<form>`.** Les champs d'un `<form>`, ou ceux d'une fenêtre ou d'un calque (les fenêtres Angular Material n'ont souvent pas de `<form>`), forment un formulaire. Ce qui est devant l'écran est rempli en premier.
+- **Tous les types de champ :** texte, nombre, date (saisie directe ou champ avec calendrier), heure, liste native `<select>`, liste Material (`mat-select`, `role=combobox`) ouverte puis choisie, groupe de boutons radio (une option par groupe), case à cocher (obligatoires seulement). Les radios et cases stylées (input natif masqué) sont gérées.
+- **Champ déjà rempli** (date proposée par défaut…) : laissé tel quel.
+- **Valeurs :**
+  1. celles de la mission, par champ (`testData.fields`) ;
+  2. sinon, d'après l'aide affichée par l'application : `99999` → 5 chiffres, `HH:MM` → `10:00`, `AAAA-MM-JJ` / `JJ/MM/AAAA` → date du jour dans ce format ;
+  3. sinon, des valeurs factices déterministes : e-mail `qa-crawler@example.test`, texte `QA Test`, nombres dans min/max/step, dates dans les bornes, première vraie option d'une liste.
+
+```yaml
+testData:
+  fields: # libellé, name ou placeholder ; majuscules, accents et « * » ignorés
+    'Code agence': '12345'
+    'Raison sociale': QA TEST
+    'Canal de contact': Téléphone # groupe de radios : l'option à cocher
+    'Type de dossier': Ouverture # liste : l'option à choisir
+    "M'assigner le dossier": oui # case à cocher
+```
+
+- **Validation.** Chaque champ est quitté (comme un utilisateur, ce qui déclenche la validation Angular), puis le crawler relève ce qui reste invalide (`aria-invalid`, `mat-error`, `invalid-feedback`, validation HTML…). Chaque champ refusé devient une anomalie `FORM_VALIDATION` (WARNING) : formulaire, champ, valeur saisie et message de l'application, par exemple `formulaire « Nouveau dossier » : champ « Numéro de dossier » (valeur « QA Test ») : Format attendu : AB-1234`. Elles sont listées dans la section _Validation des formulaires_ du rapport.
+- **Rien n'est envoyé.** Un bouton qui envoie son formulaire (`submit`, ou « Soumettre », « Enregistrer », « Valider », « Créer »… dans un formulaire ou une fenêtre qui contient des champs) porte le risque `form-submit`, bloqué par défaut, même quand `MUTATION` est autorisé. Pour l'autoriser : `forms.submit: true`, ou `allow: MUTATION` sur l'étape d'un flow imposé. « Suivant » d'un assistant reste une étape.
+- **Jamais remplis :** les champs sensibles (mot de passe, carte, IBAN, secret, OTP), même listés dans `testData.fields`.
+- Une fois le formulaire rempli, ses champs ne sont pas réessayés un par un. Quand un chemin est rejoué, le formulaire est rempli à nouveau avec les mêmes valeurs.
 
 ## Ce qui est détecté
 

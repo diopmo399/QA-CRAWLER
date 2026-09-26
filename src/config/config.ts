@@ -66,6 +66,11 @@ const explorationSchema = z
     /** Distinct states explored per route pattern (/users/:id → only N users). */
     maxStatesPerRoute: z.number().int().positive().default(3),
     queryParams: queryParamsSchema.default({}),
+    /**
+     * Similar controls of a screen (days of a date picker, page numbers, "Voir"
+     * on every row…) are tried this many times at most, not one by one.
+     */
+    maxSimilarActions: z.number().int().positive().default(2),
     /** Cap on actions recorded per state. */
     maxRecordedActions: z.number().int().positive().default(200),
     /**
@@ -351,6 +356,35 @@ const reportSchema = z
   })
   .strict();
 
+const formsSchema = z
+  .object({
+    /**
+     * Fill the forms of each screen (fields of a <form>, of a dialog or of an
+     * overlay) with test data, then report their validation messages. Nothing
+     * is sent: see `submit`.
+     */
+    exercise: z.boolean().default(true),
+    /**
+     * Buttons that send a form ("Soumettre", "Enregistrer"… inside a form or a
+     * dialog with fields). true: allowed like any MUTATION; false: never
+     * clicked by the exploration. Unset: `safety.block` decides (form-submit,
+     * blocked by default). Imposed flow steps with `allow: MUTATION` always may.
+     */
+    submit: z.boolean().optional(),
+  })
+  .strict();
+
+const testDataSchema = z
+  .object({
+    /**
+     * Value per field, by label, name or placeholder (case and accents
+     * ignored). For a list or a radio group: the option to choose. Sensitive
+     * fields (passwords, cards, secrets) are never filled, even when listed here.
+     */
+    fields: z.record(nonEmpty, z.string()).default({}),
+  })
+  .strict();
+
 export const scenarioSchema = z
   .object({
     mission: z
@@ -383,6 +417,8 @@ export const scenarioSchema = z
     flows: flowsSchema,
     credentials: credentialsSchema,
     browserInteractions: browserInteractionsSchema.default({}),
+    forms: formsSchema.default({}),
+    testData: testDataSchema.default({}),
   })
   .strict();
 

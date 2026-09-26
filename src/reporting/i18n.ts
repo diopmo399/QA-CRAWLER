@@ -28,7 +28,7 @@ export interface ReportTexts {
   };
   discoveredFlow: string;
   discoveredFlowHint: string;
-  issueSections: { flow: string; http: string; js: string; navigation: string };
+  issueSections: { flow: string; forms: string; http: string; js: string; navigation: string };
   noneDetected: string;
   columns: {
     severity: string;
@@ -131,6 +131,7 @@ const EN: ReportTexts = {
     'Each state appears under the state from which it was first reached, with the action that led there.',
   issueSections: {
     flow: 'Flow failures',
+    forms: 'Form validation',
     http: 'HTTP errors & broken pages',
     js: 'JavaScript errors',
     navigation: 'Navigation problems',
@@ -239,6 +240,7 @@ const FR: ReportTexts = {
     "Chaque état apparaît sous l'état depuis lequel il a été atteint la première fois, avec l'action qui y a mené.",
   issueSections: {
     flow: 'Échecs des flows',
+    forms: 'Validation des formulaires',
     http: 'Erreurs HTTP et pages cassées',
     js: 'Erreurs JavaScript',
     navigation: 'Problèmes de navigation',
@@ -348,6 +350,7 @@ const FR_VALUES: Record<string, string> = {
   PAGE_CRASH: 'PLANTAGE',
   NAVIGATION: 'NAVIGATION',
   FLOW: 'FLOW',
+  FORM_VALIDATION: 'FORMULAIRE',
   // action types
   click: 'clic',
   navigate: 'navigation',
@@ -474,6 +477,20 @@ const FR_REASONS: [RegExp, string | ((...groups: string[]) => string)][] = [
   [/action not available on this state/g, 'action absente de cet état'],
   [/invalid link target/g, 'cible de lien invalide'],
   [/invalid URL/g, 'URL invalide'],
+  // forms
+  [/form "(.*?)": field "(.*?)" \(value "(.*?)"\): /g, 'formulaire « $1 » : champ « $2 » (valeur « $3 ») : '],
+  [/form "(.*?)": field "(.*?)" \(left empty\): /g, 'formulaire « $1 » : champ « $2 » (laissé vide) : '],
+  [/form "(.*?)": field "(.*?)" \(filled\): /g, 'formulaire « $1 » : champ « $2 » (rempli) : '],
+  [/: invalid value$/g, ' : valeur invalide'],
+  [
+    /(\d+) field\(s\) filled, (\d+) validation message\(s\), nothing sent/g,
+    '$1 champ(s) rempli(s), $2 message(s) de validation, rien n’est envoyé',
+  ],
+  [/; not filled: /g, ' ; non remplis : '],
+  [
+    /click intercepted by (.*?): another layer covers the element/g,
+    'clic intercepté par $1 : un autre calque couvre l’élément',
+  ],
   [
     /\bstep (\d+) (failed|blocked)\b/g,
     (_match, step = '', status = '') => `étape ${step} ${status === 'failed' ? 'échouée' : 'bloquée'}`,

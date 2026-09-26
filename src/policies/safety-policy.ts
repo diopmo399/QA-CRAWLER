@@ -32,6 +32,8 @@ export interface ClassifiableAction {
   autocomplete?: string;
   placeholder?: string;
   isSubmit?: boolean;
+  /** Sends the form it belongs to (inside a <form>, a dialog or an overlay with fields). */
+  submitsForm?: boolean;
   inSearchForm?: boolean;
   /** The enclosing form posts to a server URL. */
   formHasAction?: boolean;
@@ -149,7 +151,7 @@ export class SafetyPolicy {
 
     // click: buttons, tabs, menus, routerLink elements…
     const stepWord = this.step.match(label);
-    if (action.isSubmit && !action.inSearchForm) {
+    if ((action.isSubmit || action.submitsForm) && !action.inSearchForm) {
       if (stepWord && !action.formHasAction) {
         return { classification: 'SAFE', reason: `wizard step "${stepWord}" (client-side form)`, risks: [] };
       }

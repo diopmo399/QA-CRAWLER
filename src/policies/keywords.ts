@@ -180,6 +180,32 @@ export const MUTATION_KEYWORDS = [
 ] as const;
 
 /** Moving between steps of a wizard (client-side, no data sent). */
+/** Buttons that send the form they belong to (inside a <form>, a dialog or an overlay with fields). */
+export const SUBMIT_KEYWORDS = [
+  'submit',
+  'save',
+  'send',
+  'confirm',
+  'validate',
+  'create',
+  'add',
+  'finish',
+  'publish',
+  'register',
+  'ok',
+  'soumettre',
+  'enregistrer',
+  'sauvegarder',
+  'envoyer',
+  'transmettre',
+  'confirmer',
+  'valider',
+  'creer',
+  'ajouter',
+  'terminer',
+  'publier',
+] as const;
+
 export const STEP_KEYWORDS = [
   'next',
   'next step',

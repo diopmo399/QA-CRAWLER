@@ -61,6 +61,35 @@ const graphWith = (stateId: string, actions: DiscoveredAction[]): FlowGraph => {
 };
 
 describe('RuleBasedDecisionEngine', () => {
+  it('tries only a few of many similar controls (days of a date picker)', () => {
+    const limited = new RuleBasedDecisionEngine(safety, {
+      goals: config.goals,
+      maxDepth: 3,
+      maxStatesPerRoute: 2,
+      queryParamMode: 'pattern',
+      maxSimilarActions: 2,
+    });
+    const days = Array.from({ length: 30 }, (_, i) => action(String(i + 1)));
+    const other = action('Fermer le calendrier');
+    const actions = [...days, other];
+    const graph = graphWith('home', actions);
+    for (const day of days.slice(0, 2)) {
+      graph.addEdge({
+        from: 'home',
+        to: 'home',
+        actionId: day.id,
+        action: summaryOf(day),
+        result: 'SUCCESS',
+      });
+    }
+    expect(limited.rank(context(actions), graph).map((entry) => entry.action.text)).toEqual([
+      'Fermer le calendrier',
+    ]);
+    // Two similar controls only: nothing to group.
+    const two = [action('1'), action('2')];
+    expect(limited.rank(context(two), graphWith('home', two))).toHaveLength(2);
+  });
+
   it('explores what is in front of the screen first and skips what a modal layer covers', () => {
     const actions = [
       action('Onglet', { category: 'tab' }),

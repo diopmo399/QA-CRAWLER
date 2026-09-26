@@ -61,6 +61,18 @@ export interface FieldConstraints {
   name?: string;
   label?: string;
   placeholder?: string;
+  /** Help text shown with the field ("99999", "HH:MM"…). */
+  hint?: string;
+  /** The field already holds a value: left as it is. */
+  hasValue?: boolean;
+  /** Text field that opens a date picker. */
+  dateLike?: boolean;
+  /** A select that is not a native <select> (Angular Material…). */
+  customSelect?: boolean;
+  /** Label of the group of a radio/checkbox. */
+  groupLabel?: string;
+  /** Radios of the same choice share this key. */
+  choiceGroup?: string;
 }
 
 /** A user action available on a given state. Plain, serializable data. */
@@ -91,6 +103,10 @@ export interface DiscoveredAction {
   fallback?: LocatorDescriptor;
   /** Name of the dialog the element belongs to. */
   dialogName?: string;
+  /** Form the element belongs to (its <form>, or the dialog/overlay that holds it). */
+  formGroup?: string;
+  /** Button that sends its form (submit, "Soumettre", "Enregistrer"… inside a form). */
+  submitsForm?: boolean;
   /** In front of the screen (dialog, drawer, open menu, overlay): explored first. */
   foreground?: boolean;
   /** Behind a modal layer: not clickable while the layer is open. */

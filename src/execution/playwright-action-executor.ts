@@ -72,7 +72,7 @@ export class PlaywrightActionExecutor {
           };
           page.on('popup', onPopup);
           try {
-            await target.locator.click({ timeout });
+            await this.click(target.locator, timeout);
             await this.settle(page);
           } finally {
             page.off('popup', onPopup);
@@ -91,13 +91,14 @@ export class PlaywrightActionExecutor {
           await target.locator.fill(input.value ?? '', { timeout });
           break;
         case 'select':
-          await target.locator.selectOption(
-            input.value !== undefined ? { label: input.value } : { index: 0 },
-            { timeout },
-          );
+          await this.select(page, target.locator, input.value, timeout);
           break;
         case 'check':
-          await target.locator.setChecked(true, { timeout });
+          await target.locator.setChecked(true, { timeout }).catch(async (error: unknown) => {
+            // Styled checkbox/radio (Angular Material): the drawing covers the native input.
+            if (!interceptor(error)) throw error;
+            await target.locator.check({ force: true, timeout });
+          });
           break;
         case 'uncheck':
           await target.locator.setChecked(false, { timeout });
@@ -109,6 +110,54 @@ export class PlaywrightActionExecutor {
       await this.settle(page).catch(() => undefined);
       return result('FAILED', { error: firstLine(error), usedFallback: target.usedFallback, openedPopup });
     }
+  }
+
+  /**
+   * Clicks, failing fast with a clear reason when another layer (a date
+   * picker's backdrop, a modal…) takes the click instead of the element.
+   */
+  private async click(locator: Locator, timeout: number): Promise<void> {
+    try {
+      await locator.click({ trial: true, timeout: Math.min(timeout, TRIAL_CLICK_MS) });
+    } catch (error) {
+      const blocker = interceptor(error);
+      if (blocker) throw new Error(`click intercepted by ${blocker}: another layer covers the element`);
+      // Not ready yet (animation, loading…): the real click below waits for it.
+    }
+    await locator.click({ timeout });
+  }
+
+  /** Native <select>: selectOption; custom list (Angular Material, ARIA combobox): open it, pick the option. */
+  private async select(
+    page: Page,
+    locator: Locator,
+    label: string | undefined,
+    timeout: number,
+  ): Promise<void> {
+    const tag = await locator.evaluate((el) => el.tagName.toLowerCase());
+    if (tag === 'select') {
+      await locator.selectOption(label ? { label } : { index: 0 }, { timeout });
+      return;
+    }
+    await this.click(locator, timeout);
+    const options = page.locator('[role="option"]:visible:not([aria-disabled="true"])');
+    await options.first().waitFor({ state: 'visible', timeout });
+    if (label) {
+      await page.getByRole('option', { name: label }).first().click({ timeout });
+    } else {
+      // The first real option: placeholders ("--", "Choisir…") are skipped.
+      const texts = await options.allInnerTexts();
+      const index = texts.findIndex((text) => text.trim() !== '' && !PLACEHOLDER_OPTION.test(text.trim()));
+      await options.nth(Math.max(index, 0)).click({ timeout });
+    }
+    // A multiple-choice list stays open: close it.
+    if (
+      await options
+        .first()
+        .isVisible()
+        .catch(() => false)
+    )
+      await page.keyboard.press('Escape');
   }
 
   /** Preferred locator, else the CSS fallback; `nth` applied when several elements match. */
@@ -133,6 +182,19 @@ export class PlaywrightActionExecutor {
     await page.waitForLoadState('domcontentloaded', { timeout: this.actionTimeoutMs }).catch(() => undefined);
     if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
   }
+}
+
+/** Time given to a click before telling that another layer takes it. */
+const TRIAL_CLICK_MS = 2500;
+const PLACEHOLDER_OPTION = /^(-+|choisir|select|choose|aucun|none)/i;
+
+/** The element that took the click instead of the target, from Playwright's call log. */
+export function interceptor(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = /(<[^\n]*?>)(?: from <[^\n]*?> subtree)? intercepts pointer events/.exec(message);
+  if (!match?.[1]) return undefined;
+  const element = match[1];
+  return element.length > 90 ? `${element.slice(0, 87)}…>` : element;
 }
 
 function firstLine(error: unknown): string {

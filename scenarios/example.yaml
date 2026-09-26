@@ -19,6 +19,7 @@ exploration:
   waitUntil: load # load | domcontentloaded | networkidle | commit
   settleTimeMs: 400 # extra wait after each action (SPA rendering, API calls)
   maxStatesPerRoute: 3 # /users/1, /users/2 … share the route /users/:id: 3 samples are enough
+  maxSimilarActions: 2 # days of a date picker, page numbers, "View" on each row: 2 samples per screen
   queryParams:
     mode: pattern # pattern: ?page=1..N share one route | ignore | keep
     ignored: ['utm_*', 'fbclid', 'gclid', '_', 'ts', 'timestamp', 'cachebuster']
@@ -93,6 +94,13 @@ credentials: {}
 
 # Interactions raised by the browser outside the DOM (native sign-in dialog,
 # alert/confirm/prompt, popups, downloads, file chooser, permissions, external navigation).
+forms:
+  exercise: true # fill the forms of each screen (even without <form>), then report validation messages
+  # submit: false # buttons that send a form: false never, true like any MUTATION; unset: safety.block decides
+
+testData:
+  fields: {} # value per field label/name/placeholder, e.g. { "Code agence": "12345", "Canal de contact": Courriel }
+
 browserInteractions:
   enabled: true
   timeoutMs: 15000

@@ -209,4 +209,19 @@ describe('auth.type: http', () => {
       /origin/,
     );
   });
+
+  it('forms.submit decides whether buttons that send a form may run', () => {
+    const allowed = parseConfig(`${minimal}forms: { submit: true }\n`, {}, {}).config;
+    expect(allowed.safety.block).not.toContain('form-submit');
+    const refused = parseConfig(
+      `${minimal}forms: { submit: false }\nsafety: { block: [delete] }\n`,
+      {},
+      {},
+    ).config;
+    expect(refused.safety.block).toEqual(['delete', 'form-submit']);
+    const byDefault = parseConfig(minimal, {}, {}).config;
+    expect(byDefault.forms).toEqual({ exercise: true });
+    expect(byDefault.safety.block).toContain('form-submit');
+    expect(byDefault.exploration.maxSimilarActions).toBe(2);
+  });
 });

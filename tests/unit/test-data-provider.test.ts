@@ -97,4 +97,62 @@ describe('DefaultTestDataProvider', () => {
       expect(provider.instructionFor(fieldAction(field)).kind, JSON.stringify(field)).toBe('skip');
     }
   });
+
+  it('follows the hints of the application: 99999, HH:MM, date formats', () => {
+    const text = (extra: Partial<FieldConstraints>) =>
+      provider.instructionFor(fieldAction({ inputType: 'text', required: true, ...extra }));
+    expect(text({ hint: '99999' })).toEqual({ kind: 'fill', value: '12345' });
+    expect(text({ hint: 'HH:MM' })).toEqual({ kind: 'fill', value: '10:00' });
+    expect(text({ hint: 'AAAA-MM-JJ' })).toEqual({ kind: 'fill', value: '2026-09-26' });
+    expect(text({ placeholder: 'JJ/MM/AAAA' })).toEqual({ kind: 'fill', value: '26/09/2026' });
+    expect(text({ dateLike: true })).toEqual({ kind: 'fill', value: '2026-09-26' });
+    // Already filled (prefilled date…): left as it is.
+    expect(text({ hasValue: true }).kind).toBe('skip');
+  });
+
+  it('uses the values of the mission, by label, name or group label (case, accents, * ignored)', () => {
+    const configured = new DefaultTestDataProvider(() => new Date('2026-09-26T12:00:00Z'), {
+      'code agence': '81234',
+      'Canal de contact': 'Courriel',
+      'Type de dossier': 'Fermeture',
+      "M'assigner le dossier": 'oui',
+      'Mot de passe': 'secret',
+    });
+    const field = (extra: Partial<FieldConstraints>, type: DiscoveredAction['type'] = 'fill') =>
+      configured.instructionFor(fieldAction({ inputType: 'text', required: true, ...extra }, type));
+    expect(field({ label: 'Code agence *', hasValue: true })).toEqual({ kind: 'fill', value: '81234' });
+    const radio = { inputType: 'radio', groupLabel: '* Canal de contact', choiceGroup: 'name:p' };
+    expect(field({ ...radio, label: 'Courriel' }, 'check')).toEqual({ kind: 'check' });
+    expect(field({ ...radio, label: 'Téléphone' }, 'check').kind).toBe('skip');
+    expect(field({ label: 'Type de dossier', customSelect: true }, 'select')).toEqual({
+      kind: 'select',
+      label: 'Fermeture',
+    });
+    expect(
+      field({ inputType: 'checkbox', required: false, label: "M'assigner le dossier" }, 'check'),
+    ).toEqual({
+      kind: 'check',
+    });
+    // Sensitive fields: never, even when listed.
+    expect(field({ inputType: 'password', label: 'Mot de passe' }).kind).toBe('skip');
+  });
+
+  it('chooses an option of every radio group and the first option of a custom list', () => {
+    expect(
+      provider.instructionFor(
+        fieldAction({ inputType: 'radio', required: false, choiceGroup: 'name:p', label: 'Oui' }, 'check'),
+      ),
+    ).toEqual({ kind: 'check' });
+    expect(
+      provider.instructionFor(
+        fieldAction({ inputType: 'div', required: false, customSelect: true }, 'select'),
+      ),
+    ).toEqual({ kind: 'select', label: '' });
+    // An optional checkbox stays unchecked.
+    expect(
+      provider.instructionFor(
+        fieldAction({ inputType: 'checkbox', required: false, label: 'Newsletter' }, 'check'),
+      ),
+    ).toEqual({ kind: 'skip', reason: 'optional choice' });
+  });
 });
