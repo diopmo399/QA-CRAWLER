@@ -61,6 +61,10 @@ export interface UiElement {
   options?: string[];
   /** The element targeted by the current imposed flow step. */
   flowTarget?: boolean;
+  /** In front of the screen: inside a dialog, drawer, open menu or overlay layer. */
+  foreground?: boolean;
+  /** Behind a modal layer (backdrop, aria-modal): a click would land on the layer. */
+  obscured?: boolean;
   /** Best-effort CSS selector (last-resort locator). */
   css: string;
 }
@@ -73,6 +77,8 @@ export interface UiSnapshot {
   headings: string[];
   /** Accessible names of visible dialogs (modal, drawer…). */
   dialogs: string[];
+  /** Name of the layer that covers the page (modal, full-screen overlay), if any. */
+  overlay?: string;
   /** Names of selected tabs (aria-selected=true). */
   selectedTabs: string[];
   /** Elements marked aria-current (active step, active menu entry). */

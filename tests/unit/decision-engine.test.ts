@@ -61,6 +61,17 @@ const graphWith = (stateId: string, actions: DiscoveredAction[]): FlowGraph => {
 };
 
 describe('RuleBasedDecisionEngine', () => {
+  it('explores what is in front of the screen first and skips what a modal layer covers', () => {
+    const actions = [
+      action('Onglet', { category: 'tab' }),
+      action('Derrière', { obscured: true }),
+      action('Compte courant', { foreground: true }),
+    ];
+    const ranked = engine.rank(context(actions), graphWith('home', actions));
+    expect(ranked.map((entry) => entry.action.text)).toEqual(['Compte courant', 'Onglet']);
+    expect(ranked[0]?.why).toContain('in front of the screen');
+  });
+
   it('never proposes disabled, hidden, dangerous, blocked or unknown actions', async () => {
     const actions = [
       action('Disabled', { disabled: true }),

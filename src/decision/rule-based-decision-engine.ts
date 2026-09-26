@@ -29,6 +29,9 @@ const CLICK_SCORE: Record<ActionCategory, number> = {
   submit: 0,
 };
 
+/** Added to actions in front of the screen: above any action of the page behind. */
+const FOREGROUND_BONUS = 200;
+
 export interface ScoredAction {
   action: DiscoveredAction;
   score: number;
@@ -49,6 +52,8 @@ export interface ScoredAction {
  *    tabs already opened from a sibling state are skipped, nothing is unchecked;
  *    links already followed from another state (global menu entries) are skipped,
  *    clicks already executed elsewhere come last;
+ *    what is in front of the screen (dialog, drawer, open menu, overlay) comes
+ *    before the page behind it, and what a modal layer covers is not tried;
  * 5. nothing left → BACKTRACK; max depth reached → BACKTRACK.
  *
  * Free-text fields are not filled one by one: the explorer fills a form
@@ -122,6 +127,8 @@ export class RuleBasedDecisionEngine implements DecisionEngine {
   ): { score: number; why: string } | undefined {
     const { goals } = this.options;
     if (action.disabled || !action.visible) return undefined;
+    // Behind a modal layer: the click would land on the layer, not on the element.
+    if (action.obscured) return undefined;
     if (action.classification === 'DANGEROUS') return undefined;
     if (graph.hasTransition(context.stateId, action.id)) return undefined;
     if (this.safetyPolicy.evaluate(action).verdict === 'BLOCK') return undefined;
@@ -177,6 +184,11 @@ export class RuleBasedDecisionEngine implements DecisionEngine {
       if (action.type === 'navigate') return undefined;
       score -= 60;
       why += ', already explored from another state';
+    }
+    if (action.foreground) {
+      // What is in front of the screen first (dialog, drawer, open menu, overlay): it is what a user sees.
+      score += FOREGROUND_BONUS;
+      why += ', in front of the screen';
     }
     return { score, why };
   }
