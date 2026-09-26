@@ -1,0 +1,36 @@
+# Minimal smoke test: crawl the application, report broken pages, HTTP errors
+# and JavaScript errors. Point it at another environment with
+#   npm run qa -- scenarios/smoke.yaml --base-url https://my-pr-env.example.com
+# or the QA_BASE_URL environment variable.
+name: smoke-test
+
+target:
+  baseUrl: http://localhost:4200
+  startAt: /
+
+browser:
+  headless: true
+
+exploration:
+  maxPages: 50
+  maxDepth: 5
+  navigationTimeoutMs: 15000
+
+checks:
+  consoleErrors: true
+  pageErrors: true
+  httpErrors: true
+  brokenLinks: true
+  screenshots: true
+
+http:
+  failOnStatus: 400
+
+safety:
+  allowedHosts:
+    - localhost
+
+  ignoredPaths:
+    - /logout
+    - /payment
+    - /delete

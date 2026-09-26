@@ -1,0 +1,19 @@
+# Targets the bundled demo site (full of deliberate bugs and traps):
+#   npm run demo:server           # terminal 1, serves http://localhost:4173
+#   npm run qa -- scenarios/demo.yaml
+name: demo-site
+description: Bundled demo site with broken links, API errors, JS errors and destructive actions
+
+target:
+  baseUrl: http://localhost:4173
+
+exploration:
+  maxPages: 40
+  maxDepth: 4
+  navigationTimeoutMs: 10000
+  settleTimeMs: 300
+  clickSafeActions: true
+
+safety:
+  ignoredPaths:
+    - /logout

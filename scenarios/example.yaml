@@ -1,0 +1,84 @@
+# Fully documented scenario. Every key is optional except target.baseUrl;
+# the values below are the defaults unless stated otherwise.
+name: example-full
+description: Every available option, with its default value
+
+target:
+  baseUrl: http://localhost:4200 # required — overridable with --base-url or QA_BASE_URL
+  startAt: / # first page, relative to baseUrl
+
+browser:
+  headless: true # false needs a display (debugging only)
+  viewport: { width: 1366, height: 768 }
+  # locale: fr-FR
+  # userAgent: qa-crawler/0.1
+  ignoreHttpsErrors: false # true for self-signed certificates on test environments
+  args: ['--disable-dev-shm-usage'] # extra Chromium flags; this one avoids crashes with a small /dev/shm in containers
+  slowMoMs: 0
+
+exploration:
+  maxPages: 50 # hard cap on visited pages
+  maxDepth: 5 # link distance from the start page
+  navigationTimeoutMs: 15000
+  waitUntil: load # load | domcontentloaded | networkidle | commit
+  settleTimeMs: 500 # extra wait so SPAs render and fire their API calls
+  maxUrlsPerRoute: 2 # /users/1, /users/2 … share the route /users/:id: only 2 are visited
+  queryParams:
+    mode: pattern # pattern: ?page=1..N share one route | ignore: drop params | keep: every query is a page
+    ignored: ['utm_*', 'fbclid', 'gclid', '_', 'ts', 'timestamp', 'cachebuster']
+  followRouterLinks: true # follow Angular [routerLink] on non-anchor elements
+  clickSafeActions: false # let the rule-based engine click SAFE buttons (SPA navigation)
+  maxActionsPerPage: 5
+  maxRecordedActions: 200
+
+checks:
+  consoleErrors: true
+  consoleWarnings: false
+  pageErrors: true # uncaught exceptions
+  httpErrors: true # API/resource responses >= http.failOnStatus
+  requestFailures: true # DNS/connection/CORS failures
+  brokenLinks: true # visited pages answering >= http.failOnStatus
+  screenshots: true # every visited page
+  screenshotOnError: true # pages with ERROR/CRITICAL issues, even when screenshots is false
+  fullPageScreenshots: false
+
+http:
+  failOnStatus: 400
+  ignoreStatus: [] # e.g. [401] for an optional session probe
+  ignoreUrlPatterns: [] # substrings, e.g. ['/analytics', 'googletagmanager']
+
+safety:
+  allowedHosts: [] # default: the host of target.baseUrl. Wildcards: '*.example.com'
+  ignoredPaths: # prefix match, '*' within a segment, '**' across segments
+    - /logout
+    - /signout
+    - /sign-out
+    - /deconnexion
+  allowedActionClasses: [SAFE] # SAFE | MUTATION | DANGEROUS | UNKNOWN — keep SAFE outside disposable environments
+  keywords: # added to the built-in French/English vocabulary
+    safe: []
+    mutation: []
+    dangerous: []
+
+# Form login, credentials read from environment variables only:
+# auth:
+#   type: form
+#   loginUrl: /login
+#   usernameSelector: 'input[name="username"]'
+#   passwordSelector: 'input[type="password"]'
+#   submitSelector: 'button[type="submit"]'
+#   usernameEnv: QA_USERNAME
+#   passwordEnv: QA_PASSWORD
+#   successSelector: 'nav .user-menu'
+#   # successUrlContains: /dashboard
+auth:
+  type: none
+
+output:
+  reportsDir: reports
+  screenshotsDir: screenshots
+  json: true
+  html: true
+
+report:
+  failOnSeverity: ERROR # INFO | WARNING | ERROR | CRITICAL | NONE — sets the CLI exit code
