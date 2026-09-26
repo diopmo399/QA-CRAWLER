@@ -1,6 +1,7 @@
 import type { ActionClassification, DiscoveredAction, DiscoveredForm } from './discovered-action.js';
 import type { FlowEdge, FlowNode } from './flow.js';
 import type { FlowRunReport } from './flow-run.js';
+import type { BrowserInteractionResult } from '../interactions/types.js';
 import type { Issue, IssueType, Severity } from './issue.js';
 
 /** Why the exploration ended. */
@@ -28,6 +29,9 @@ export interface ExplorationStats {
   formsFound: number;
   flowsPassed: number;
   flowsFailed: number;
+  /** Browser interactions by type and by status. */
+  interactionsByType: Record<string, number>;
+  interactionsByStatus: Record<string, number>;
 }
 
 /** A state with everything observed on it. */
@@ -55,6 +59,8 @@ export interface ExplorationResult {
   transitions: FlowEdge[];
   /** Imposed flows, in mission order. */
   flows: FlowRunReport[];
+  /** Interactions raised by the browser outside the DOM (HTTP_AUTH, dialogs, popups, downloads…). */
+  browserInteractions: BrowserInteractionResult[];
   issues: Issue[];
   /** Non-secret summary of the effective configuration. */
   settings: Record<string, unknown>;

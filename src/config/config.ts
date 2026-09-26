@@ -188,10 +188,133 @@ const formAuthSchema = z
   })
   .strict();
 
+/**
+ * HTTP authentication handled by the browser itself (the grey "Sign in"
+ * dialog: Basic, e.g. SiteMinder Basic scheme; NTLM depending on the server).
+ * Playwright answers the server's challenge with these credentials.
+ */
+const httpAuthSchema = z
+  .object({
+    type: z.literal('http'),
+    /** Names of the environment variables holding the credentials — never the credentials themselves. */
+    usernameEnv: nonEmpty.default('QA_USERNAME'),
+    passwordEnv: nonEmpty.default('QA_PASSWORD'),
+    /**
+     * Only send the credentials to this origin (https://sso.example.com).
+     * Recommended; without it they are sent to any host that asks for them.
+     */
+    origin: z
+      .string()
+      .url()
+      .refine((value) => /^https?:\/\//i.test(value), 'origin must use http or https')
+      .transform((value) => new URL(value).origin)
+      .optional(),
+    /** Page loaded to check the login (default: target.startAt). */
+    checkUrl: nonEmpty.optional(),
+    timeoutMs: z.number().int().positive().default(15_000),
+  })
+  .strict();
+
 const authSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('none') }).strict(),
   formAuthSchema,
+  httpAuthSchema,
 ]);
+
+/** Browser permissions (Playwright names) a mission may grant explicitly. */
+export const BROWSER_PERMISSIONS = [
+  'geolocation',
+  'notifications',
+  'camera',
+  'microphone',
+  'clipboard-read',
+  'clipboard-write',
+] as const;
+export type BrowserPermission = (typeof BROWSER_PERMISSIONS)[number];
+
+const httpOrigin = z
+  .string()
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), 'must use http or https')
+  .transform((value) => new URL(value).origin);
+
+/**
+ * Named credential profiles: only the NAMES of the environment variables
+ * holding the secrets (CI secrets, Kubernetes env…), never the secrets.
+ */
+const credentialsSchema = z
+  .record(nonEmpty, z.object({ usernameEnv: nonEmpty, passwordEnv: nonEmpty }).strict())
+  .default({});
+
+/**
+ * Interactions raised by the browser itself, outside the application's DOM
+ * (native sign-in dialog, alert/confirm/prompt, popups, downloads, file
+ * chooser, permission requests, navigation to another origin).
+ */
+const browserInteractionsSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Longest time a handler may take before its interaction is abandoned. */
+    timeoutMs: z.number().int().positive().default(15_000),
+    retry: z
+      .object({
+        /** Tries when the browser raises the same interaction again (e.g. rejected credentials). */
+        maxAttempts: z.number().int().min(1).max(5).default(2),
+      })
+      .strict()
+      .default({}),
+    /** Same interaction (type, origin, action) seen more than this many times: INTERACTION_LOOP_DETECTED. */
+    loopThreshold: z.number().int().min(2).default(5),
+    /** Origins never visited nor trusted (popups, redirects, credentials). */
+    blockedOrigins: z.array(httpOrigin).default([]),
+    httpAuth: z
+      .object({
+        /** Profile of `credentials` used to answer the browser's sign-in dialog. None: AUTH_REQUIRED. */
+        credentialProfile: nonEmpty.optional(),
+        /** Origins that may receive the credentials. Default: the target and allowed hosts. */
+        origins: z.array(httpOrigin).default([]),
+      })
+      .strict()
+      .default({}),
+    dialogs: z
+      .object({
+        /** alert(): accept (OK) or dismiss. */
+        alert: z.enum(['accept', 'dismiss']).default('accept'),
+        /**
+         * confirm(): dismiss (default), or accept-safe: accept only when the
+         * message has no destructive or mutating wording.
+         */
+        confirm: z.enum(['dismiss', 'accept-safe']).default('dismiss'),
+        /** Answers for prompt() whose message contains `match`. Other prompts are dismissed. */
+        promptValues: z
+          .array(
+            z
+              .object({
+                match: nonEmpty,
+                value: z.union([z.string(), z.object({ env: nonEmpty }).strict()]),
+              })
+              .strict(),
+          )
+          .default([]),
+      })
+      .strict()
+      .default({}),
+    popups: z
+      .object({
+        /** Record the new page as a state of the flow graph (allowed origins only), then close it. */
+        observe: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+    permissions: z
+      .object({
+        /** Permissions granted to the target origin. Default: none (every request is denied). */
+        grant: z.array(z.enum(BROWSER_PERMISSIONS)).default([]),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
 
 const outputSchema = z
   .object({
@@ -252,6 +375,8 @@ export const scenarioSchema = z
     report: reportSchema.default({}),
     /** Imposed test flows, run before the autonomous exploration. */
     flows: flowsSchema,
+    credentials: credentialsSchema,
+    browserInteractions: browserInteractionsSchema.default({}),
   })
   .strict();
 
@@ -260,5 +385,7 @@ export type ScenarioInput = z.input<typeof scenarioSchema>;
 /** Fully resolved scenario with defaults applied. */
 export type ScenarioConfig = z.output<typeof scenarioSchema>;
 export type FormAuthConfig = z.output<typeof formAuthSchema>;
+export type HttpAuthConfig = z.output<typeof httpAuthSchema>;
+export type BrowserInteractionsConfig = z.output<typeof browserInteractionsSchema>;
 export type AuthConfig = ScenarioConfig['auth'];
 export type QueryParamMode = ScenarioConfig['exploration']['queryParams']['mode'];

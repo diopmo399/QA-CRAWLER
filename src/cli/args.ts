@@ -51,7 +51,7 @@ Exit codes:
 
 Environment:
   QA_BASE_URL                Overrides target.baseUrl
-  QA_USERNAME / QA_PASSWORD  Default credential variables for auth.type: form
+  QA_USERNAME / QA_PASSWORD  Default credential variables for auth.type: form | http
   PLAYWRIGHT_BROWSERS_PATH   Where Playwright finds Chromium
 `;
 

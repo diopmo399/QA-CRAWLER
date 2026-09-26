@@ -181,3 +181,32 @@ describe('hostMatches', () => {
     expect(hostMatches('example.com.evil.test', '*.example.com')).toBe(false);
   });
 });
+
+describe('auth.type: http', () => {
+  const base = 'target:\n  baseUrl: http://localhost:4200\n';
+  it('reads credentials from the environment and normalizes the origin', () => {
+    const { config, warnings } = parseConfig(
+      `${base}auth:\n  type: http\n  origin: https://sso.example.com/siteminder/\n`,
+      {},
+      {},
+    );
+    expect(config.auth).toMatchObject({
+      type: 'http',
+      usernameEnv: 'QA_USERNAME',
+      passwordEnv: 'QA_PASSWORD',
+      origin: 'https://sso.example.com',
+    });
+    expect(warnings.some((warning) => warning.includes('auth.origin'))).toBe(false);
+  });
+
+  it('warns when the credentials may go to any host, and rejects inline secrets', () => {
+    const { warnings } = parseConfig(`${base}auth:\n  type: http\n`, {}, {});
+    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining('auth.origin is not set')]));
+    expect(() => parseConfig(`${base}auth:\n  type: http\n  password: x\n`, {}, {})).toThrowError(
+      /environment variables/,
+    );
+    expect(() => parseConfig(`${base}auth:\n  type: http\n  origin: ftp://x\n`, {}, {})).toThrowError(
+      /origin/,
+    );
+  });
+});

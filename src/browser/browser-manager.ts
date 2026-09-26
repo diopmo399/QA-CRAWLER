@@ -1,4 +1,10 @@
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Page,
+} from 'playwright';
 import type { ScenarioConfig } from '../config/config.js';
 
 /**
@@ -13,7 +19,8 @@ export class BrowserManager {
 
   constructor(private readonly options: ScenarioConfig['browser']) {}
 
-  async start(): Promise<BrowserContext> {
+  /** `extra`: options set by the authenticator (HTTP credentials). */
+  async start(extra: BrowserContextOptions = {}): Promise<BrowserContext> {
     this.browser = await chromium.launch({
       headless: this.options.headless,
       args: this.options.args,
@@ -26,6 +33,7 @@ export class BrowserManager {
       ...(this.options.userAgent ? { userAgent: this.options.userAgent } : {}),
       // A download is never a page to crawl.
       acceptDownloads: false,
+      ...extra,
     });
     // Page scripts are serialized with Function#toString. When the crawler runs through a
     // TypeScript loader that keeps function names (tsx/esbuild), those scripts reference a

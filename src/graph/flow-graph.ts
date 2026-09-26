@@ -1,4 +1,5 @@
 import type { ActionSummary, DiscoveredAction } from '../model/discovered-action.js';
+import type { BrowserInteractionResult } from '../interactions/types.js';
 import type { FlowEdge, FlowGraphData, FlowNode, TransitionResult } from '../model/flow.js';
 
 export interface NodeInput {
@@ -25,6 +26,7 @@ export class FlowGraph {
   private readonly edges: FlowEdge[] = [];
   /** `${stateId}::${actionId}` of every attempted (or blocked) action. */
   private readonly tried = new Set<string>();
+  private readonly interactions: BrowserInteractionResult[] = [];
   private root: string | undefined;
 
   static fromJSON(data: FlowGraphData): FlowGraph {
@@ -35,6 +37,7 @@ export class FlowGraph {
       graph.tried.add(triedKey(edge.from, edge.actionId));
     }
     graph.root = data.rootId ?? data.nodes[0]?.id;
+    for (const interaction of data.interactions ?? []) graph.interactions.push({ ...interaction });
     return graph;
   }
 
@@ -44,6 +47,7 @@ export class FlowGraph {
       ...(this.root ? { rootId: this.root } : {}),
       nodes: [...this.nodes.values()],
       edges: [...this.edges],
+      ...(this.interactions.length > 0 ? { interactions: [...this.interactions] } : {}),
     };
   }
 
@@ -115,6 +119,15 @@ export class FlowGraph {
       result: 'BLOCKED',
       reason,
     });
+  }
+
+  /** Stores a browser interaction (already free of secrets) with the flow. */
+  recordInteraction(result: BrowserInteractionResult): void {
+    this.interactions.push({ ...result, details: { ...result.details } });
+  }
+
+  allInteractions(): BrowserInteractionResult[] {
+    return [...this.interactions];
   }
 
   hasNode(stateId: string): boolean {

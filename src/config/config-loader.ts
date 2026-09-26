@@ -191,6 +191,30 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
   if (!config.exploration.autonomous && config.flows.length === 0) {
     warnings.push('exploration.autonomous is false and no flow is defined: nothing will be tested.');
   }
+  if (config.auth.type === 'http') {
+    // auth.type: http is a shortcut for a credential profile answered by the HttpAuthHandler.
+    const { httpAuth } = config.browserInteractions;
+    if (!('auth' in config.credentials)) {
+      config.credentials.auth = {
+        usernameEnv: config.auth.usernameEnv,
+        passwordEnv: config.auth.passwordEnv,
+      };
+    }
+    httpAuth.credentialProfile ??= 'auth';
+    if (config.auth.origin !== undefined && httpAuth.origins.length === 0)
+      httpAuth.origins = [config.auth.origin];
+    if (config.auth.origin === undefined) {
+      warnings.push(
+        'auth.origin is not set: the HTTP credentials are only sent to the target and allowed hosts. If the sign-in dialog comes from another server (SSO), set auth.origin (e.g. https://sso.example.com).',
+      );
+    }
+  }
+  const profile = config.browserInteractions.httpAuth.credentialProfile;
+  if (profile !== undefined && !(profile in config.credentials)) {
+    throw new ConfigError('Invalid scenario', [
+      `browserInteractions.httpAuth.credentialProfile: unknown profile "${profile}" (declare it under credentials)`,
+    ]);
+  }
   if (config.auth.type === 'form' && !config.auth.successSelector && !config.auth.successUrlContains) {
     warnings.push(
       'auth: neither successSelector nor successUrlContains is set; login success cannot be verified.',

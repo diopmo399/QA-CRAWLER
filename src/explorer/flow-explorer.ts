@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { IssueCollector } from '../anomaly/issue-collector.js';
 import { SeverityRules } from '../anomaly/severity-rules.js';
-import { createAuthenticator, type Authenticator } from '../auth/authenticator.js';
+import { AuthError, createAuthenticator, type Authenticator } from '../auth/authenticator.js';
 import { BrowserManager } from '../browser/browser-manager.js';
 import { ScreenshotService } from '../browser/screenshot-service.js';
 import type { ScenarioConfig } from '../config/config.js';
@@ -18,6 +18,19 @@ import { evaluateFlowAction, evaluateFlowUrl } from '../flows/flow-safety.js';
 import { actionsInScope, isInScope, scopeOf, type ExplorationScope } from '../flows/flow-scope.js';
 import { FlowStepExecutor, type FlowElementAction } from '../flows/flow-step-executor.js';
 import { FlowGraph, summaryOf } from '../graph/flow-graph.js';
+import { BrowserEventDiscovery } from '../interactions/browser-event-discovery.js';
+import { BrowserInteractionManager } from '../interactions/browser-interaction-manager.js';
+import { EnvironmentCredentialProvider } from '../interactions/credential-provider.js';
+import { DialogHandler } from '../interactions/handlers/dialog-handler.js';
+import { DownloadHandler } from '../interactions/handlers/download-handler.js';
+import { ExternalNavigationHandler } from '../interactions/handlers/external-navigation-handler.js';
+import { FileChooserHandler } from '../interactions/handlers/file-chooser-handler.js';
+import { HttpAuthHandler } from '../interactions/handlers/http-auth-handler.js';
+import { PermissionHandler } from '../interactions/handlers/permission-handler.js';
+import { PopupHandler } from '../interactions/handlers/popup-handler.js';
+import type { BrowserInteractionResult, InteractionContext } from '../interactions/types.js';
+import { InteractionPolicy } from '../policies/interaction-policy.js';
+import { AllowedOriginPolicy } from '../policies/origin-policy.js';
 import type { FlowMemory } from '../memory/flow-memory.js';
 import { actionLabel, type DiscoveredAction, type DiscoveredForm } from '../model/discovered-action.js';
 import type { StopReason } from '../model/exploration-result.js';
@@ -47,6 +60,10 @@ export interface ExplorationListener {
   onFlowStart?(flow: FlowConfig): void;
   onFlowStep?(flow: FlowConfig, step: FlowStepReport): void;
   onFlowEnd?(report: FlowRunReport): void;
+  /** A browser interaction outside the DOM was handled (or refused). */
+  onInteraction?(result: BrowserInteractionResult): void;
+  /** Structured log line of a browser interaction (no secret). */
+  onInteractionLog?(line: string): void;
 }
 
 export interface FlowExplorerOptions {
@@ -65,6 +82,8 @@ export interface ExplorationOutcome {
   details: Map<string, { actions: DiscoveredAction[]; forms: DiscoveredForm[] }>;
   /** Imposed flows, in mission order. */
   flows: FlowRunReport[];
+  /** Browser interactions outside the DOM, in order. */
+  interactions: BrowserInteractionResult[];
   stopReason: StopReason;
   startedAt: Date;
   finishedAt: Date;
@@ -108,6 +127,12 @@ export class FlowExplorer {
   private readonly memory: FlowMemory;
   private readonly startUrl: string;
   private readonly flowSteps: FlowStepExecutor;
+  /** Browser interactions outside the DOM (native sign-in dialog, JS dialogs, popups, downloads…). */
+  private readonly interactions: BrowserInteractionManager;
+  private readonly browserEvents: BrowserEventDiscovery;
+  private readonly credentials: EnvironmentCredentialProvider;
+  /** Action being executed, for interaction attribution and loop detection. */
+  private currentAction: InteractionContext | undefined;
   private readonly env: NodeJS.ProcessEnv;
 
   private graph = new FlowGraph();
@@ -147,9 +172,48 @@ export class FlowExplorer {
     this.executor = new PlaywrightActionExecutor(exploration.actionTimeoutMs, exploration.settleTimeMs);
     this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs);
     this.env = options.env ?? process.env;
+    const origins = new AllowedOriginPolicy(
+      new URL(config.target.startAt, config.target.baseUrl).origin,
+      this.safety.navigation,
+      config.browserInteractions.blockedOrigins,
+    );
+    this.credentials = new EnvironmentCredentialProvider(config.credentials, this.env);
+    this.interactions = new BrowserInteractionManager({
+      config: config.browserInteractions,
+      policy: new InteractionPolicy(config.browserInteractions, this.safety, origins),
+      credentials: this.credentials,
+      crawlContext: () =>
+        this.currentAction ?? (this.attribution.stateId ? { stateId: this.attribution.stateId } : {}),
+      onResult: (result) => {
+        this.onInteractionResult(result);
+      },
+      log: (line) => this.listener.onInteractionLog?.(line),
+    })
+      .register(new HttpAuthHandler())
+      .register(new DialogHandler(this.env))
+      .register(
+        new PopupHandler({
+          observe: config.browserInteractions.popups.observe,
+          inspect: (page) => this.inspectNewPage(page),
+        }),
+      )
+      .register(new DownloadHandler())
+      .register(new FileChooserHandler())
+      .register(new PermissionHandler())
+      .register(new ExternalNavigationHandler());
+    this.browserEvents = new BrowserEventDiscovery(this.interactions, {
+      origins,
+      httpAuth: config.browserInteractions.enabled,
+      popupLoadTimeoutMs: Math.min(config.exploration.navigationTimeoutMs, 5_000),
+    });
     this.testData = options.testData ?? new DefaultTestDataProvider();
     this.screenshots = new ScreenshotService(config.output.screenshotsDir, config.checks.fullPageScreenshots);
-    this.authenticator = createAuthenticator(config.auth, config.target.baseUrl, options.env);
+    this.authenticator = createAuthenticator(
+      config.auth,
+      config.target.baseUrl,
+      options.env,
+      new URL(config.target.startAt, config.target.baseUrl).toString(),
+    );
     this.listener = options.listener ?? {};
     this.memory = options.memory;
     this.startUrl = new URL(config.target.startAt, config.target.baseUrl).toString();
@@ -171,20 +235,26 @@ export class FlowExplorer {
     const observers = this.createObservers();
     let stopReason: StopReason = 'exhausted';
     try {
-      const context = await browser.start();
-      // Never follow new windows: the exploration stays in one tab.
-      context.on('page', (opened) => {
-        void opened
-          .opener()
-          .then((opener) => (opener ? opened.close() : undefined))
-          .catch(() => undefined);
-      });
+      const context = await browser.start(this.authenticator.contextOptions());
+      // Browser interactions outside the DOM (new windows, dialogs, sign-in dialog…) go through the manager.
+      if (this.config.browserInteractions.enabled) await this.browserEvents.attachContext(context);
+      const { grant } = this.config.browserInteractions.permissions;
+      if (grant.length > 0) await context.grantPermissions(grant, { origin: new URL(this.startUrl).origin });
       let page = await this.openPage(browser, observers.all);
 
+      const loginMark = this.interactions.mark();
       await this.authenticator.login(page);
+      if (this.config.auth.type === 'http') this.assertHttpLogin(loginMark);
       if (this.config.auth.type !== 'none') this.listener.onAuthenticated?.(this.authenticator.description);
 
-      if (!(await this.goto(page, this.startUrl))) {
+      const startMark = this.interactions.mark();
+      const started = await this.goto(page, this.startUrl);
+      if (started && this.interactions.blockingSince(startMark).length > 0) {
+        // e.g. AUTH_REQUIRED on the start page: recorded, nothing else can be explored.
+        this.skipFlows('the start page requires an interaction that cannot be completed');
+        return this.outcome('unreachable-start');
+      }
+      if (!started) {
         page = await this.recyclePage(browser, page, observers.all);
         if (!(await this.goto(page, this.startUrl))) {
           this.skipFlows('the start page is unreachable');
@@ -384,9 +454,16 @@ export class FlowExplorer {
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
     // Anomalies raised from now on are caused by this action; their state is known after observation.
     this.attribution = { actionId: action.id };
+    this.currentAction = { stateId: from.stateId, actionId: action.id };
+    const interactionMark = this.interactions.mark();
 
     const result = await this.execute(page, from, action);
     this.actionsExecuted += 1;
+    const raised = this.interactions.since(interactionMark);
+    const blocking = raised.filter((interaction) => interaction.blocking);
+    const interactionIds =
+      raised.length > 0 ? { interactionIds: raised.map((interaction) => interaction.id) } : {};
+    this.currentAction = undefined;
     const newIssues = (): string[] =>
       this.collector
         .all()
@@ -394,7 +471,12 @@ export class FlowExplorer {
         .map((issue) => issue.id);
 
     const leftAllowedHosts = !this.isExplorablePage(page);
-    if (result.status === 'FAILED' || leftAllowedHosts || observers.pageErrors.consumeCrash()) {
+    if (
+      result.status === 'FAILED' ||
+      blocking.length > 0 ||
+      leftAllowedHosts ||
+      observers.pageErrors.consumeCrash()
+    ) {
       if (leftAllowedHosts && result.status === 'SUCCESS' && /^https?:/.test(page.url())) {
         this.collector.add({
           type: 'NAVIGATION',
@@ -412,12 +494,16 @@ export class FlowExplorer {
         to: from.stateId,
         actionId: action.id,
         action: summaryOf(action),
-        result: 'FAILED',
+        // A browser interaction that could not be completed (e.g. AUTH_REQUIRED) blocks the transition.
+        result: blocking.length > 0 ? 'BLOCKED' : 'FAILED',
         reason:
-          result.error ??
-          (leftAllowedHosts ? 'left the allowed hosts or the page failed to load' : 'page crashed'),
+          blocking.length > 0
+            ? blockingReason(blocking)
+            : (result.error ??
+              (leftAllowedHosts ? 'left the allowed hosts or the page failed to load' : 'page crashed')),
         durationMs: result.durationMs,
         issueIds: ids,
+        ...interactionIds,
       });
       this.graph.attachIssues(from.stateId, ids);
       this.listener.onTransition?.(edge, action);
@@ -445,6 +531,7 @@ export class FlowExplorer {
       result: 'SUCCESS',
       durationMs: result.durationMs,
       issueIds: ids,
+      ...interactionIds,
     });
     // Issues of the new state now know which action and path led to them.
     for (const issue of this.collector.all()) {
@@ -728,7 +815,18 @@ export class FlowExplorer {
         this.attribution = { actionId };
         if (!/^https?:/.test(page.url()) || page.isClosed())
           page = await this.recyclePage(browser, page, observers.all);
-        if (!(await this.goto(page, url))) {
+        this.currentAction = { stateId: context.stateId, actionId, flow: flow.name };
+        const gotoMark = this.interactions.mark();
+        const reached = await this.goto(page, url);
+        const gotoBlocking = this.interactions.blockingSince(gotoMark);
+        this.currentAction = undefined;
+        if (gotoBlocking.length > 0) {
+          return {
+            page,
+            report: done('BLOCKED', { reason: blockingReason(gotoBlocking), stateId: context.stateId }),
+          };
+        }
+        if (!reached) {
           return {
             page,
             report: done('FAILED', {
@@ -892,15 +990,22 @@ export class FlowExplorer {
     // "Execute it."
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
     this.attribution = { actionId: action.id };
+    this.currentAction = { stateId: before.stateId, actionId: action.id, flow: flow.name };
+    const interactionMark = this.interactions.mark();
     const error = await this.flowSteps.perform(page, located, elementAction, timeout);
     this.actionsExecuted += 1;
+    const raised = this.interactions.since(interactionMark);
+    const blocking = raised.filter((interaction) => interaction.blocking);
+    const interactionIds =
+      raised.length > 0 ? { interactionIds: raised.map((interaction) => interaction.id) } : {};
+    this.currentAction = undefined;
     const newIssues = (): string[] =>
       this.collector
         .all()
         .filter((issue) => !issuesBefore.has(issue.id))
         .map((issue) => issue.id);
 
-    if (error || !this.isExplorablePage(page) || observers.pageErrors.consumeCrash()) {
+    if (error || blocking.length > 0 || !this.isExplorablePage(page) || observers.pageErrors.consumeCrash()) {
       const ids = newIssues();
       this.collector.assignState(ids, before.stateId, before.metadata.flow);
       const edge = this.graph.addEdge({
@@ -908,10 +1013,14 @@ export class FlowExplorer {
         to: before.stateId,
         actionId: action.id,
         action: summaryOf(action),
-        result: 'FAILED',
-        reason: error ?? 'left the allowed hosts, or the page crashed',
+        result: blocking.length > 0 ? 'BLOCKED' : 'FAILED',
+        reason:
+          blocking.length > 0
+            ? blockingReason(blocking)
+            : (error ?? 'left the allowed hosts, or the page crashed'),
         issueIds: ids,
         flow: flow.name,
+        ...interactionIds,
       });
       this.graph.attachIssues(before.stateId, ids);
       this.listener.onTransition?.(edge, action);
@@ -920,7 +1029,7 @@ export class FlowExplorer {
       return {
         page,
         context: before,
-        report: done('FAILED', {
+        report: done(blocking.length > 0 ? 'BLOCKED' : 'FAILED', {
           reason: edge.reason ?? 'action failed',
           stateId: before.stateId,
           url: before.url,
@@ -940,6 +1049,7 @@ export class FlowExplorer {
       result: 'SUCCESS',
       issueIds: ids,
       flow: flow.name,
+      ...interactionIds,
     });
     for (const issue of this.collector.all()) {
       if (ids.includes(issue.id)) {
@@ -1229,14 +1339,111 @@ export class FlowExplorer {
   }
 
   private async openPage(browser: BrowserManager, observers: PageObserver[]): Promise<Page> {
-    const page = await browser.newPage();
+    if (!this.config.browserInteractions.enabled) {
+      const page = await browser.newPage();
+      page.setDefaultTimeout(this.config.exploration.actionTimeoutMs);
+      // Browser interactions disabled: dialogs are dismissed and new windows closed, nothing is recorded.
+      page.on('dialog', (dialog) => {
+        void dialog.dismiss().catch(() => undefined);
+      });
+      page.on('popup', (popup) => {
+        void popup.close().catch(() => undefined);
+      });
+      for (const observer of observers) observer.attach(page);
+      return page;
+    }
+    const page = await this.browserEvents.openOwnPage(() => browser.newPage());
     page.setDefaultTimeout(this.config.exploration.actionTimeoutMs);
-    // alert/confirm/prompt: always dismissed ("Cancel"), so a confirmation never goes through.
-    page.on('dialog', (dialog) => {
-      void dialog.dismiss().catch(() => undefined);
-    });
+    // Dialogs, downloads, file choosers, the native sign-in dialog…: BrowserEventDiscovery → BrowserInteractionManager.
+    await this.browserEvents.attachPage(page);
     for (const observer of observers) observer.attach(page);
     return page;
+  }
+
+  // ---------------------------------------------------------------- browser interactions
+
+  /** auth.type: http — the recorded HTTP_AUTH interaction tells whether the login worked. */
+  private assertHttpLogin(mark: number): void {
+    const blocking = this.interactions.blockingSince(mark).find((result) => result.type === 'HTTP_AUTH');
+    if (!blocking) return;
+    const profile = blocking.credentialProfile ?? this.config.browserInteractions.httpAuth.credentialProfile;
+    const missing = profile ? this.credentials.missingVariables(profile) : [];
+    const detail =
+      blocking.outcome === 'AUTH_REQUIRED' && missing.length > 0
+        ? `missing environment variable(s) ${missing.join(', ')}`
+        : (blocking.reason ?? '');
+    const hint =
+      blocking.outcome === 'CREDENTIALS_NOT_ALLOWED'
+        ? ' — set auth.origin to the server of the sign-in dialog'
+        : '';
+    throw new AuthError(
+      `HTTP authentication ${blocking.outcome ?? blocking.status} at ${blocking.origin ?? blocking.sourceUrl}: ${detail}${hint}`,
+    );
+  }
+
+  /** Every interaction result: flow graph (persisted without secrets), popup transitions, issues, listener. */
+  private onInteractionResult(result: BrowserInteractionResult): void {
+    this.graph.recordInteraction(result);
+    if (result.targetStateId && result.stateId && (result.type === 'POPUP' || result.type === 'NEW_TAB')) {
+      // CLICK "Voir le document" → POPUP → new page: the relation stays in the flow graph.
+      this.graph.addEdge({
+        from: result.stateId,
+        to: result.targetStateId,
+        actionId: `${result.actionId ?? result.id}#${result.type.toLowerCase()}`,
+        action: {
+          type: 'navigate',
+          category: 'navigation',
+          classification: 'SAFE',
+          text: result.type,
+          ...(result.targetUrl ? { href: result.targetUrl } : {}),
+        },
+        result: 'SUCCESS',
+        interaction: { id: result.id, type: result.type, status: result.status },
+      });
+    }
+    const severity = SeverityRules.browserInteraction(result);
+    if (severity) {
+      this.collector.add({
+        type: 'BROWSER_INTERACTION',
+        severity,
+        message: `${result.type} ${result.outcome ?? result.status}${result.origin ? ` (${result.origin})` : ''}: ${result.reason ?? ''}`,
+        pageUrl: result.sourceUrl || this.currentUrl,
+        ...(result.stateId ? { stateId: result.stateId } : {}),
+        ...(result.actionId ? { actionId: result.actionId } : {}),
+      });
+    }
+    this.listener.onInteraction?.(result);
+  }
+
+  /** A popup / new tab on an allowed origin becomes a state of the graph (a crawl context reachable by URL). */
+  private async inspectNewPage(page: Page): Promise<string | undefined> {
+    if (!/^https?:/.test(page.url())) return undefined;
+    const snapshot = await this.observer.observe(page);
+    const state = this.stateDetector.detect(snapshot);
+    const actions = this.discovery.discover(snapshot, state.stateId);
+    const sourceDepth = this.currentAction?.stateId
+      ? (this.graph.getNode(this.currentAction.stateId)?.depth ?? 0)
+      : 0;
+    const isNew = this.graph.addNode({
+      id: state.stateId,
+      label: state.label,
+      url: redactUrl(snapshot.url),
+      route: state.route,
+      title: snapshot.title,
+      headings: snapshot.headings,
+      ...(stateSubtitle(snapshot) ? { subtitle: stateSubtitle(snapshot) } : {}),
+      depth: sourceDepth + 1,
+      actions,
+    });
+    this.details.set(state.stateId, { actions, forms: snapshot.forms });
+    if (isNew) {
+      this.recordRefusedActions(state.stateId, actions);
+      if (this.config.checks.screenshots) {
+        const file = await this.screenshots.captureState(page, this.graph.nodeCount, state.label, 'popup');
+        if (file) this.graph.setScreenshot(state.stateId, file);
+      }
+    }
+    return state.stateId;
   }
 
   /** Replaces a crashed page or one stuck on an error page (pending error navigation). */
@@ -1270,6 +1477,7 @@ export class FlowExplorer {
       issues: this.collector.all(),
       details: this.details,
       flows: this.flowReports,
+      interactions: this.interactions.results(),
       stopReason,
       startedAt: this.startedAt,
       finishedAt: new Date(),
@@ -1291,4 +1499,14 @@ function skippedStep(step: FlowStep, index: number, reason: string): FlowStepRep
     reason,
     durationMs: 0,
   };
+}
+
+/** Reason of a transition blocked by browser interactions (e.g. "HTTP_AUTH AUTH_REQUIRED: …"). */
+function blockingReason(results: readonly BrowserInteractionResult[]): string {
+  return results
+    .map(
+      (result) =>
+        `${result.type} ${result.outcome ?? result.status}${result.reason ? `: ${result.reason}` : ''}`,
+    )
+    .join('; ');
 }

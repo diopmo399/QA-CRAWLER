@@ -1,3 +1,4 @@
+import type { BrowserInteractionResult } from '../interactions/types.js';
 import type { ActionClassification, ActionSummary, ActionType, ActionCategory } from './discovered-action.js';
 
 /** A functional state of the application (a screen, a wizard step, a tab…). */
@@ -48,6 +49,10 @@ export interface FlowEdge {
   issueIds: string[];
   /** Name of the imposed flow that executed this transition (absent for autonomous exploration). */
   flow?: string;
+  /** Browser interactions raised while this action ran (ids of FlowGraphData.interactions). */
+  interactionIds?: string[];
+  /** Transition produced by a browser interaction itself (popup, new tab). */
+  interaction?: { id: string; type: string; status: string };
 }
 
 export interface FlowGraphData {
@@ -55,4 +60,6 @@ export interface FlowGraphData {
   rootId?: string;
   nodes: FlowNode[];
   edges: FlowEdge[];
+  /** Browser interactions (HTTP_AUTH, dialogs, popups…). Never contains a secret. */
+  interactions?: BrowserInteractionResult[];
 }

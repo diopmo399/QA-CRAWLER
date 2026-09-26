@@ -70,10 +70,13 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
       flowsPassed: outcome.flows.filter((flow) => flow.status === 'PASSED').length,
       flowsFailed: outcome.flows.filter((flow) => flow.status === 'FAILED' || flow.status === 'BLOCKED')
         .length,
+      interactionsByType: countBy(outcome.interactions.map((interaction) => interaction.type)),
+      interactionsByStatus: countBy(outcome.interactions.map((interaction) => interaction.status)),
     },
     states,
     transitions: edges,
     flows: outcome.flows,
+    browserInteractions: outcome.interactions,
     issues,
     settings: {
       exploration,
@@ -84,6 +87,17 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
       browser: { headless: browser.headless, viewport: browser.viewport },
       auth: { type: auth.type },
       failOnSeverity: report.failOnSeverity,
+      browserInteractions: {
+        ...config.browserInteractions,
+        // Prompt answers are mission data: only their match is reported.
+        dialogs: {
+          ...config.browserInteractions.dialogs,
+          promptValues: config.browserInteractions.dialogs.promptValues.map((entry) => ({
+            match: entry.match,
+          })),
+        },
+      },
+      credentialProfiles: Object.keys(config.credentials),
       flows: config.flows.map((flow) => ({
         name: flow.name,
         steps: flow.steps.length,
@@ -92,4 +106,10 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     },
     artifacts: {},
   };
+}
+
+function countBy(values: readonly string[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const value of values) counts[value] = (counts[value] ?? 0) + 1;
+  return counts;
 }

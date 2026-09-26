@@ -93,11 +93,6 @@ export class FlowStepExecutor {
     action: FlowElementAction,
     timeoutMs: number,
   ): Promise<string | undefined> {
-    const popups: Page[] = [];
-    const onPopup = (popup: Page): void => {
-      popups.push(popup);
-    };
-    page.on('popup', onPopup);
     try {
       switch (action.kind) {
         case 'click':
@@ -121,10 +116,6 @@ export class FlowStepExecutor {
     } catch (error) {
       await this.settle(page, timeoutMs).catch(() => undefined);
       return firstLine(error);
-    } finally {
-      page.off('popup', onPopup);
-      // The flow stays in one tab.
-      for (const popup of popups) await popup.close().catch(() => undefined);
     }
   }
 
