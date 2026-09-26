@@ -27,6 +27,11 @@ export const SeverityRules = {
     return isDocument ? 'ERROR' : 'WARNING';
   },
 
+  /** A field still invalid once the form is filled: wrong test data, or a validation bug. */
+  formValidation(): Severity {
+    return 'WARNING';
+  },
+
   consoleError(): Severity {
     return 'ERROR';
   },

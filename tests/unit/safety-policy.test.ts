@@ -190,4 +190,12 @@ describe('normalizeText', () => {
     expect(normalizeText('Réinitialiser  LE   Mot')).toBe('reinitialiser le mot');
     expect(normalizeText('deleteUser')).toBe('delete user');
   });
+
+  it('treats a button that sends its form (dialog without <form>) as a form submission', () => {
+    const sent = policy.classify({ type: 'click', category: 'other', text: 'Soumettre', submitsForm: true });
+    expect(sent).toMatchObject({ classification: 'MUTATION', risks: ['form-submit'] });
+    expect(policy.evaluate(action({ text: 'Soumettre', ...sent, submitsForm: true })).verdict).toBe('BLOCK');
+    // A wizard step stays a step.
+    expect(click('Suivant', { submitsForm: true })).toBe('SAFE');
+  });
 });

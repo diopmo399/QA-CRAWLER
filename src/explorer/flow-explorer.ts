@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Page } from 'playwright';
 import { IssueCollector } from '../anomaly/issue-collector.js';
 import { SeverityRules } from '../anomaly/severity-rules.js';
@@ -17,6 +18,7 @@ import {
 import { evaluateFlowAction, evaluateFlowUrl } from '../flows/flow-safety.js';
 import { actionsInScope, isInScope, scopeOf, type ExplorationScope } from '../flows/flow-scope.js';
 import { FlowStepExecutor, type FlowElementAction } from '../flows/flow-step-executor.js';
+import { FormExerciser, type FormRun } from '../forms/form-exerciser.js';
 import { FlowGraph, summaryOf } from '../graph/flow-graph.js';
 import { BrowserEventDiscovery } from '../interactions/browser-event-discovery.js';
 import { BrowserInteractionManager } from '../interactions/browser-interaction-manager.js';
@@ -152,6 +154,11 @@ export class FlowExplorer {
   private readonly flowReports: FlowRunReport[] = [];
   /** Last raw observation (lets flow steps find the element they target). */
   private lastSnapshot: UiSnapshot | undefined;
+  private readonly forms: FormExerciser;
+  /** Forms already filled, per state (`stateId|group`). */
+  private readonly formsExercised = new Set<string>();
+  /** Transitions that filled a form: id → form, to fill it again when a path is replayed. */
+  private readonly formActions = new Map<string, string>();
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -164,6 +171,7 @@ export class FlowExplorer {
     this.decisionEngine =
       options.decisionEngine ??
       new RuleBasedDecisionEngine(this.safety, {
+        maxSimilarActions: config.exploration.maxSimilarActions,
         goals,
         maxDepth: exploration.maxDepth,
         maxStatesPerRoute: exploration.maxStatesPerRoute,
@@ -207,7 +215,8 @@ export class FlowExplorer {
       httpAuth: config.browserInteractions.enabled,
       popupLoadTimeoutMs: Math.min(config.exploration.navigationTimeoutMs, 5_000),
     });
-    this.testData = options.testData ?? new DefaultTestDataProvider();
+    this.testData = options.testData ?? new DefaultTestDataProvider(undefined, config.testData.fields);
+    this.forms = new FormExerciser(this.executor, this.testData, this.safety);
     this.screenshots = new ScreenshotService(config.output.screenshotsDir, config.checks.fullPageScreenshots);
     this.authenticator = createAuthenticator(
       config.auth,
@@ -323,6 +332,15 @@ export class FlowExplorer {
         page = restored.page;
         if (!restored.context) return { page, stopReason: 'exhausted' };
         current = restored.context;
+        continue;
+      }
+
+      // Forms first: a screen with fields (a dialog "Nouveau dossier"…) is filled, then checked.
+      const form = this.formToExercise(current);
+      if (form) {
+        const step = await this.exerciseForm(page, current, form);
+        page = step.page;
+        current = step.context;
         continue;
       }
 
@@ -550,6 +568,92 @@ export class FlowExplorer {
     await this.captureErrorScreenshot(page, after, ids);
     this.listener.onTransition?.(edge, action);
     this.pushState(after);
+    return { page, context: { ...after, errors: this.collector.forState(after.stateId) } };
+  }
+
+  /** Next form of this state to fill, if the mission explores forms. */
+  private formToExercise(context: PageContext): string | undefined {
+    if (!this.config.forms.exercise || !this.config.goals.discoverForms) return undefined;
+    return this.forms
+      .groupsOf(context)
+      .find((group) => !this.formsExercised.has(`${context.stateId}|${group}`));
+  }
+
+  /**
+   * FILL A FORM → CHECK ITS VALIDATION → STORE THE TRANSITION. Nothing is
+   * sent: the button that sends the form is an action like any other, under
+   * the SafetyPolicy (forms.submit / safety.block).
+   */
+  private async exerciseForm(
+    page: Page,
+    from: PageContext,
+    group: string,
+  ): Promise<{ page: Page; context: PageContext }> {
+    this.formsExercised.add(`${from.stateId}|${group}`);
+    const actionId = `form-${createHash('sha1').update(`${from.stateId}|${group}`).digest('hex').slice(0, 10)}`;
+    this.formActions.set(actionId, group);
+    const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
+    this.attribution = { actionId };
+    this.currentAction = { stateId: from.stateId, actionId };
+    const started = Date.now();
+
+    const run = await this.forms.fill(page, from, group);
+    run.problems = await this.forms.validate(page, run);
+    // Its fields were handled with the form: not tried again one by one.
+    for (const field of run.fields) this.graph.markTried(from.stateId, field.action.id);
+    this.actionsExecuted += 1;
+    this.currentAction = undefined;
+    for (const problem of run.problems) {
+      this.collector.add({
+        type: 'FORM_VALIDATION',
+        severity: SeverityRules.formValidation(),
+        message: validationMessage(run, problem.field, problem.message),
+        pageUrl: from.url,
+        actionId,
+      });
+    }
+
+    const after = await this.observeState(page, from.metadata.depth).catch(() => from);
+    this.formsExercised.add(`${after.stateId}|${group}`);
+    const ids = this.collector
+      .all()
+      .filter((issue) => !issuesBefore.has(issue.id))
+      .map((issue) => issue.id);
+    this.collector.assignState(ids, after.stateId, this.graph.flowTo(after.stateId));
+    const filled = run.fields.filter((field) => !field.skipped && !field.error).length;
+    const action: DiscoveredAction = {
+      id: actionId,
+      stateId: from.stateId,
+      type: 'fill',
+      category: 'form-input',
+      elementType: 'form',
+      text: run.name,
+      label: 'form',
+      disabled: false,
+      visible: true,
+      classification: 'SAFE',
+      reason: `${filled} field(s) filled, ${run.problems.length} validation message(s), nothing sent`,
+      risks: [],
+      locator: { strategy: 'css', value: 'form' },
+    };
+    const failures = run.fields.filter((field) => field.error);
+    const edge = this.graph.addEdge({
+      from: from.stateId,
+      to: after.stateId,
+      actionId,
+      action: summaryOf(action),
+      result: filled === 0 && failures.length > 0 ? 'FAILED' : 'SUCCESS',
+      reason:
+        failures.length > 0
+          ? `${action.reason}; not filled: ${failures.map((field) => `${fieldName(field.action)} (${field.error ?? ''})`).join(', ')}`
+          : action.reason,
+      durationMs: Date.now() - started,
+      issueIds: ids,
+    });
+    this.graph.attachIssues(after.stateId, ids);
+    await this.captureErrorScreenshot(page, after, ids);
+    this.listener.onTransition?.(edge, action);
+    if (after.stateId !== from.stateId) this.pushState(after);
     return { page, context: { ...after, errors: this.collector.forState(after.stateId) } };
   }
 
@@ -1230,6 +1334,11 @@ export class FlowExplorer {
     };
 
     this.attribution = {};
+    // A dialog, a date picker…: close the top layer first, the screen under it stays as it is.
+    if (await this.closeTopLayer(page)) {
+      const context = await matches('top layer closed');
+      if (context) return context;
+    }
     if (tryHistory) {
       const back = await page
         .goBack({
@@ -1260,6 +1369,15 @@ export class FlowExplorer {
     let context = await this.observeState(page, 0).catch(() => undefined);
     for (const edge of path) {
       if (!context || context.stateId !== edge.from) return undefined;
+      const form = this.formActions.get(edge.actionId);
+      if (form !== undefined) {
+        // A filled form: fill it again (same test data), without reporting it twice.
+        await this.forms.fill(page, context, form);
+        context = await this.observeState(page, this.graph.getNode(edge.to)?.depth ?? 0).catch(
+          () => undefined,
+        );
+        continue;
+      }
       const action = context.actions.find((candidate) => candidate.id === edge.actionId);
       if (!action || this.safety.evaluate(action).verdict === 'BLOCK') return undefined;
       const result = await this.execute(page, context, action);
@@ -1275,6 +1393,37 @@ export class FlowExplorer {
       return context;
     }
     return undefined;
+  }
+
+  /**
+   * Closes what is in front of the screen (date picker, menu, dialog) with
+   * Escape, else with its "Close"/"Fermer" button when it is SAFE. Returns
+   * whether something was in front.
+   */
+  private async closeTopLayer(page: Page): Promise<boolean> {
+    const snapshot = this.lastSnapshot;
+    if (!snapshot?.elements.some((element) => element.foreground) || !this.isExplorablePage(page))
+      return false;
+    const before = await this.observer.observe(page).catch(() => undefined);
+    if (!before?.elements.some((element) => element.foreground)) return false;
+    await page.keyboard.press('Escape').catch(() => undefined);
+    await page.waitForTimeout(this.config.exploration.settleTimeMs).catch(() => undefined);
+    const after = await this.observer.observe(page).catch(() => undefined);
+    // Escape closed it: done. Otherwise, its "Close" button.
+    if (!after || this.stateDetector.detect(after).stateId !== this.stateDetector.detect(before).stateId)
+      return true;
+    const close = this.discovery
+      .discover(after, 'close')
+      .find(
+        (action) =>
+          action.foreground === true &&
+          action.type === 'click' &&
+          action.classification === 'SAFE' &&
+          CLOSE_LABEL.test((action.text ?? action.label ?? '').trim()) &&
+          this.safety.evaluate(action).verdict !== 'BLOCK',
+      );
+    if (close) await this.executor.execute(page, close);
+    return true;
   }
 
   private async goto(page: Page, url: string): Promise<boolean> {
@@ -1509,6 +1658,25 @@ function skippedStep(step: FlowStep, index: number, reason: string): FlowStepRep
 }
 
 /** Reason of a transition blocked by browser interactions (e.g. "HTTP_AUTH AUTH_REQUIRED: …"). */
+/** Buttons that close a layer (dialog, date picker, panel). */
+const CLOSE_LABEL =
+  /^(close|fermer|close calendar|fermer le calendrier|close dialog|fermer la fen[eê]tre|[×✕✖x])$/i;
+
+/** Name of a form field in reports: its label, the label of its group, else its name. */
+function fieldName(action: DiscoveredAction): string {
+  const field = action.field;
+  const own = field?.label ?? action.label ?? action.text ?? field?.name ?? '?';
+  const name = field?.groupLabel && field.choiceGroup !== undefined ? field.groupLabel : own;
+  return name.replace(/^\*\s*|\s*\*$/g, ''); // required marker
+}
+
+/** `form "Nouveau dossier": field "Code agence" (value "12345"): Ce champ est obligatoire` */
+function validationMessage(run: FormRun, field: FormRun['fields'][number], message: string): string {
+  const value =
+    field.value !== undefined ? `value "${field.value}"` : field.skipped ? 'left empty' : 'filled';
+  return `form "${run.name}": field "${fieldName(field.action)}" (${value}): ${message}`;
+}
+
 function blockingReason(results: readonly BrowserInteractionResult[]): string {
   return results
     .map(
