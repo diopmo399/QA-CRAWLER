@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 import { SeverityRules } from '../anomaly/severity-rules.js';
-import type { ObservationContext, PageObserver } from './observer.js';
+import { attributionOf, type ObservationContext, type PageObserver } from './observer.js';
 
 /** Reports uncaught JavaScript exceptions (`pageerror`) and renderer crashes. */
 export class PageErrorObserver implements PageObserver {
@@ -18,6 +18,7 @@ export class PageErrorObserver implements PageObserver {
       severity: SeverityRules.pageError(),
       message: `Uncaught ${error.name}: ${error.message}${firstFrame ? ` ${firstFrame}` : ''}`,
       pageUrl: this.context.currentPageUrl(),
+      ...attributionOf(this.context),
     });
   };
 
@@ -28,6 +29,7 @@ export class PageErrorObserver implements PageObserver {
       severity: SeverityRules.pageCrash(),
       message: 'The browser page crashed',
       pageUrl: this.context.currentPageUrl(),
+      ...attributionOf(this.context),
     });
   };
 

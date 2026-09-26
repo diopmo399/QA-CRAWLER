@@ -1,0 +1,141 @@
+import type { Locator, Page } from 'playwright';
+import type { DiscoveredAction } from '../model/discovered-action.js';
+import type { LocatorDescriptor } from '../model/locator.js';
+import { toLocator } from './locator-resolver.js';
+
+/** Value to type/select for fill and select actions. */
+export interface ExecutionInput {
+  value?: string;
+}
+
+export interface ActionExecutionResult {
+  status: 'SUCCESS' | 'FAILED';
+  error?: string;
+  urlBefore: string;
+  urlAfter: string;
+  durationMs: number;
+  /** The preferred locator did not match; the CSS fallback was used. */
+  usedFallback: boolean;
+  /** The element opened a new window, which was closed. */
+  openedPopup: boolean;
+}
+
+/**
+ * "Execute it." Translates the chosen action into Playwright calls
+ * (getByRole(...).click(), fill, selectOption, setChecked) and waits for the
+ * page to settle. It contains no decision logic and no safety rules: it is
+ * only ever called with an action the SafetyPolicy allowed.
+ */
+export class PlaywrightActionExecutor {
+  constructor(
+    private readonly actionTimeoutMs: number,
+    private readonly settleTimeMs: number,
+  ) {}
+
+  async execute(
+    page: Page,
+    action: DiscoveredAction,
+    input: ExecutionInput = {},
+  ): Promise<ActionExecutionResult> {
+    const started = Date.now();
+    const urlBefore = page.url();
+    const result = (
+      status: 'SUCCESS' | 'FAILED',
+      extra: Partial<ActionExecutionResult> = {},
+    ): ActionExecutionResult => ({
+      status,
+      urlBefore,
+      urlAfter: page.isClosed() ? urlBefore : page.url(),
+      durationMs: Date.now() - started,
+      usedFallback: false,
+      openedPopup: false,
+      ...extra,
+    });
+
+    let target: { locator: Locator; usedFallback: boolean } | undefined;
+    try {
+      target = await this.resolve(page, action);
+    } catch (error) {
+      return result('FAILED', { error: `locator error: ${firstLine(error)}` });
+    }
+    if (!target) return result('FAILED', { error: 'element not found on the page' });
+
+    const timeout = this.actionTimeoutMs;
+    let openedPopup = false;
+    try {
+      switch (action.type) {
+        case 'click':
+        case 'navigate': {
+          let opened: Page | undefined;
+          const onPopup = (popup: Page): void => {
+            opened = popup;
+          };
+          page.on('popup', onPopup);
+          try {
+            await target.locator.click({ timeout });
+            await this.settle(page);
+          } finally {
+            page.off('popup', onPopup);
+          }
+          if (opened) {
+            openedPopup = true;
+            await opened.close().catch(() => undefined);
+            // A link opening a new window: reach its target in the current page instead.
+            if (action.type === 'navigate' && action.href) {
+              await page.goto(action.href, { timeout, waitUntil: 'domcontentloaded' });
+            }
+          }
+          break;
+        }
+        case 'fill':
+          await target.locator.fill(input.value ?? '', { timeout });
+          break;
+        case 'select':
+          await target.locator.selectOption(
+            input.value !== undefined ? { label: input.value } : { index: 0 },
+            { timeout },
+          );
+          break;
+        case 'check':
+          await target.locator.setChecked(true, { timeout });
+          break;
+        case 'uncheck':
+          await target.locator.setChecked(false, { timeout });
+          break;
+      }
+      await this.settle(page);
+      return result('SUCCESS', { usedFallback: target.usedFallback, openedPopup });
+    } catch (error) {
+      await this.settle(page).catch(() => undefined);
+      return result('FAILED', { error: firstLine(error), usedFallback: target.usedFallback, openedPopup });
+    }
+  }
+
+  /** Preferred locator, else the CSS fallback; `nth` applied when several elements match. */
+  private async resolve(
+    page: Page,
+    action: DiscoveredAction,
+  ): Promise<{ locator: Locator; usedFallback: boolean } | undefined> {
+    const attempts: [LocatorDescriptor, boolean][] = [[action.locator, false]];
+    if (action.fallback) attempts.push([action.fallback, true]);
+    for (const [descriptor, usedFallback] of attempts) {
+      const base = toLocator(page, descriptor);
+      const count = await base.count();
+      if (count === 0) continue;
+      const index = Math.min(descriptor.nth ?? 0, count - 1);
+      return { locator: count === 1 ? base : base.nth(index), usedFallback };
+    }
+    return undefined;
+  }
+
+  private async settle(page: Page): Promise<void> {
+    if (page.isClosed()) return;
+    await page.waitForLoadState('domcontentloaded', { timeout: this.actionTimeoutMs }).catch(() => undefined);
+    if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
+  }
+}
+
+function firstLine(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return (message.split('\n')[0] ?? message).trim();
+}

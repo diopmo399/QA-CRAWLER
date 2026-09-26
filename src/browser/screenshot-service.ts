@@ -20,9 +20,22 @@ export class ScreenshotService {
     }
   }
 
+  /** Screenshot named after a state label; undefined when the page could not be captured. */
+  async captureState(
+    page: Page,
+    sequence: number,
+    label: string,
+    suffix?: string,
+  ): Promise<string | undefined> {
+    return this.write(page, stateScreenshotFileName(sequence, label, suffix));
+  }
+
   /** Returns the file path, or undefined when the page could not be captured (closed, crashed…). */
   async capture(page: Page, sequence: number, url: string, suffix?: string): Promise<string | undefined> {
-    const file = screenshotFileName(sequence, url, suffix);
+    return this.write(page, screenshotFileName(sequence, url, suffix));
+  }
+
+  private async write(page: Page, file: string): Promise<string | undefined> {
     const target = path.join(this.directory, file);
     try {
       await page.screenshot({
@@ -36,6 +49,21 @@ export class ScreenshotService {
       return undefined;
     }
   }
+}
+
+/** Safe, sortable file name for a state: (3, "Users list", "error") → "003-users-list-error.png". */
+export function stateScreenshotFileName(sequence: number, label: string, suffix?: string): string {
+  const slug =
+    label
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60)
+      .replace(/-+$/, '') || 'state';
+  const safeSuffix = suffix ? `-${suffix.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : '';
+  return `${String(sequence).padStart(3, '0')}-${slug}${safeSuffix}.png`;
 }
 
 /** Safe, sortable file name derived from the page path: 3 → "003-admin-users-error.png". */

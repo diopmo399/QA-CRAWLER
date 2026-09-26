@@ -29,6 +29,8 @@ export class IssueCollector {
     if (existing) {
       existing.occurrences += 1;
       if (!existing.pages.includes(clean.pageUrl)) existing.pages.push(clean.pageUrl);
+      if (clean.stateId !== undefined && !existing.states.includes(clean.stateId))
+        existing.states.push(clean.stateId);
       this.emit(existing, false);
       return existing;
     }
@@ -37,6 +39,7 @@ export class IssueCollector {
       ...clean,
       id: `ISSUE-${String(this.issues.length + 1).padStart(4, '0')}`,
       pages: [clean.pageUrl],
+      states: clean.stateId !== undefined ? [clean.stateId] : [],
       timestamp: this.now().toISOString(),
       occurrences: 1,
     };
@@ -53,6 +56,22 @@ export class IssueCollector {
   forPage(pageUrl: string): Issue[] {
     const redacted = redactUrl(pageUrl);
     return this.issues.filter((issue) => issue.pages.includes(redacted));
+  }
+
+  forState(stateId: string): Issue[] {
+    return this.issues.filter((issue) => issue.states.includes(stateId));
+  }
+
+  /** Attaches issues first seen before their state was known (e.g. while a page was loading). */
+  assignState(issueIds: readonly string[], stateId: string, flow: readonly string[]): void {
+    for (const issue of this.issues) {
+      if (!issueIds.includes(issue.id)) continue;
+      if (issue.stateId === undefined) {
+        issue.stateId = stateId;
+        issue.flow = [...flow];
+      }
+      if (!issue.states.includes(stateId)) issue.states.push(stateId);
+    }
   }
 
   countBySeverity(): Record<Severity, number> {

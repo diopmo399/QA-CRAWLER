@@ -1,6 +1,6 @@
 import type { ConsoleMessage, Page } from 'playwright';
 import { SeverityRules } from '../anomaly/severity-rules.js';
-import type { ObservationContext, PageObserver } from './observer.js';
+import { attributionOf, type ObservationContext, type PageObserver } from './observer.js';
 
 /** Chrome's own echo of a failed HTTP response — already reported by the NetworkObserver. */
 const RESOURCE_FAILURE_ECHO = /^Failed to load resource: the server responded with a status of \d+/i;
@@ -40,6 +40,7 @@ export class ConsoleObserver implements PageObserver {
       severity: isError ? SeverityRules.consoleError() : SeverityRules.consoleWarning(),
       message: `console.${type}: ${text}${where}`,
       pageUrl: this.context.currentPageUrl(),
+      ...attributionOf(this.context),
     });
   }
 }
