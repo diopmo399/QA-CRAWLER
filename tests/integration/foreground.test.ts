@@ -128,3 +128,155 @@ output:
     expect(fromOverlay.every((edge) => edge.result !== 'FAILED')).toBe(true);
   });
 });
+
+/** A date picker opened from a modal dialog: its transparent backdrop covers the dialog. */
+const STACKED = page(`
+<h1>Demandes</h1>
+<button onclick="document.getElementById('dlg').style.display='block'">Afficher le formulaire</button>
+<div id="dlg" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:10">
+  <div role="dialog" aria-modal="true" aria-label="Création" style="margin:10vh auto;width:600px;background:#fff;padding:16px">
+    <h2>Création</h2>
+    <button onclick="openPicker()">Ouvrir le calendrier</button>
+    <button style="margin-top:200px" onclick="document.getElementById('dlg').style.display='none'">Annuler</button>
+  </div>
+</div>
+<script>
+  function closePicker() { document.querySelectorAll('.cdk-overlay-backdrop, .cdk-overlay-pane').forEach((el) => el.remove()); }
+  function openPicker() {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'cdk-overlay-backdrop';
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:20';
+    backdrop.onclick = closePicker;
+    const pane = document.createElement('div');
+    pane.className = 'cdk-overlay-pane';
+    pane.style.cssText = 'position:absolute;top:10px;right:10px;z-index:21;background:#eee;padding:8px';
+    pane.innerHTML = '<button aria-label="2026-09-01" onclick="closePicker()">1</button><button aria-label="2026-09-02" onclick="closePicker()">2</button>';
+    document.body.append(backdrop, pane);
+  }
+</script>`);
+
+describe('stacked layers (date picker over a dialog)', () => {
+  let browser: Browser;
+
+  beforeAll(async () => {
+    browser = await chromium.launch();
+  });
+  afterAll(async () => {
+    await browser.close();
+  });
+
+  it('only the top layer is in front; the dialog under the backdrop is covered', async () => {
+    const tab = await browser.newPage();
+    await tab.setContent(STACKED);
+    await tab.getByRole('button', { name: 'Afficher le formulaire' }).click();
+    await tab.getByRole('button', { name: 'Ouvrir le calendrier' }).click();
+    const snapshot = await new UIObserver().observe(tab);
+    const byName = (name: string) => snapshot.elements.find((element) => element.name === name);
+    expect(byName('2026-09-01')).toMatchObject({ foreground: true });
+    expect(byName('Annuler')).toMatchObject({ obscured: true });
+    expect(byName('Annuler')?.foreground).toBeUndefined();
+    expect(byName('Afficher le formulaire')).toMatchObject({ obscured: true });
+    await tab.close();
+  });
+});
+
+describe('exploration of a date picker inside a dialog', () => {
+  let server: Server;
+  let result: ExplorationResult;
+
+  beforeAll(async () => {
+    server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(STACKED);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const outputDir = await mkdtemp(path.join(tmpdir(), 'qa-stacked-'));
+    const { config } = parseConfig(
+      `
+mission: { name: stacked }
+target: { baseUrl: ${url} }
+exploration: { maxStates: 10, maxActions: 15, actionTimeoutMs: 2000, settleTimeMs: 100 }
+output:
+  reportsDir: ${path.join(outputDir, 'reports')}
+  screenshotsDir: ${path.join(outputDir, 'screenshots')}
+`,
+      {},
+      {},
+    );
+    result = (await runMission(config)).result;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it('picks a day before touching the dialog behind, and no click is intercepted', () => {
+    const opened = result.transitions.find((edge) => edge.action.text === 'Ouvrir le calendrier');
+    expect(opened?.result).toBe('SUCCESS');
+    // Executed actions only (BLOCKED ones are listed, never run).
+    const next = result.transitions.find((edge) => edge.from === opened?.to && edge.result !== 'BLOCKED');
+    expect(next?.action.text).toMatch(/^[12]$/);
+    expect(result.transitions.filter((edge) => edge.result === 'FAILED')).toEqual([]);
+  });
+});
+
+describe('after a failure the state cannot be restored', () => {
+  let server: Server;
+  let result: ExplorationResult;
+
+  beforeAll(async () => {
+    // The dialog opens only once (like a request that can be created once); in it, the first
+    // button is covered by a small element that takes the click: the action fails.
+    const html = page(`
+<h1>Accueil</h1>
+<a href="/aide">Aide</a>
+<button id="open" onclick="localStorage.setItem('done','1');document.getElementById('dlg').style.display='block'">Ouvrir</button>
+<div id="dlg" role="dialog" aria-label="Demande" style="display:none;position:fixed;top:40px;left:40px;width:400px;height:300px;background:#fff">
+  <div style="position:relative">
+    <button>Piège</button>
+    <div style="position:absolute;inset:0;z-index:5"></div>
+  </div>
+  <button>Autre</button>
+</div>
+<script>if (localStorage.getItem('done')) document.getElementById('open').remove();</script>`);
+    server = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(req.url === '/' ? html : page('<h1>Aide</h1><a href="/">Accueil</a>'));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const outputDir = await mkdtemp(path.join(tmpdir(), 'qa-stale-'));
+    const { config } = parseConfig(
+      `
+mission: { name: stale }
+target: { baseUrl: ${url} }
+exploration: { autonomous: false, maxStates: 10, maxActions: 10, actionTimeoutMs: 1000, settleTimeMs: 100 }
+flows:
+  # Explores the dialog right after the flow: no jump to other states in this scope.
+  - name: demande
+    thenExplore: true
+    steps:
+      - click: { role: button, name: Ouvrir }
+output:
+  reportsDir: ${path.join(outputDir, 'reports')}
+  screenshotsDir: ${path.join(outputDir, 'screenshots')}
+`,
+      {},
+      {},
+    );
+    result = (await runMission(config)).result;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it('goes on from what is on screen, not from the actions of the lost state', () => {
+    const trap = result.transitions.find((edge) => edge.action.text === 'Piège');
+    expect(trap?.result).toBe('FAILED');
+    // The dialog is gone after the reload: none of its other actions is tried on a page that no longer shows it.
+    const failed = result.transitions.filter((edge) => edge.result === 'FAILED');
+    expect(failed.map((edge) => edge.action.text)).toEqual(['Piège']);
+  });
+});

@@ -224,6 +224,32 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     coveringLayer();
   if (modal && !layers.includes(modal)) layers.push(modal);
   const foregroundOf = (el: Element): boolean => layers.some((layer) => layer.contains(el));
+  // Layers stack: a date picker opened from a dialog puts its own backdrop over the dialog. An element
+  // is covered when the point a click would hit belongs to another layer (pane, backdrop, large
+  // fixed/absolute layer). Small sticky headers are not layers: Playwright scrolls around them.
+  const BACKDROP = '.cdk-overlay-backdrop, [class*="backdrop"], [class*="Backdrop"]';
+  const layerOf = (hit: Element): Element | undefined => {
+    for (let current: Element | null = hit; current; current = current.parentElement) {
+      if (current === document.body || current === document.documentElement) return undefined;
+      if (current.matches(LAYERS) || current.matches(BACKDROP)) return current;
+      const position = window.getComputedStyle(current).position;
+      if (position === 'fixed' || position === 'absolute') {
+        const rect = current.getBoundingClientRect();
+        if ((rect.width * rect.height) / viewportArea >= 0.5) return current;
+      }
+    }
+    return undefined;
+  };
+  const coveredByLayer = (el: Element): boolean => {
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return false; // off screen
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || el.contains(hit) || hit.contains(el)) return false;
+    const layer = layerOf(hit);
+    return layer !== undefined && !layer.contains(el);
+  };
   const overlayName = (el: Element): string => {
     const heading = el.querySelector<HTMLElement>('h1, h2, h3, [role="heading"]');
     return clean(el.getAttribute('aria-label') ?? heading?.innerText ?? '', 80) || 'overlay';
@@ -233,11 +259,13 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
   const elements: UiElement[] = [];
   const all = Array.from(document.querySelectorAll(CANDIDATES));
   for (const [index, el] of all.entries()) {
-    const foreground = layers.length > 0 && foregroundOf(el);
+    const inLayer = layers.length > 0 && foregroundOf(el);
     // What is in front is always kept, even beyond maxElements (overlays are often last in the DOM).
-    if (elements.length >= options.maxElements && !el.hasAttribute(FLOW_TARGET_ATTRIBUTE) && !foreground)
+    if (elements.length >= options.maxElements && !el.hasAttribute(FLOW_TARGET_ATTRIBUTE) && !inLayer)
       continue;
     if (!isVisible(el)) continue;
+    const covered = coveredByLayer(el);
+    const foreground = inLayer && !covered;
     const tag = el.tagName.toLowerCase();
     const isField = ['input', 'select', 'textarea'].includes(tag);
     // A clickable wrapper around another candidate (e.g. <li onclick><a href>): keep the innermost element.
@@ -335,7 +363,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       flowTarget: el.hasAttribute(FLOW_TARGET_ATTRIBUTE) ? true : undefined,
       foreground: foreground ? true : undefined,
       // Behind a modal layer: the page behind cannot receive the click.
-      obscured: modal !== undefined && !foreground ? true : undefined,
+      obscured: covered || (modal !== undefined && !inLayer) ? true : undefined,
       min: attr('min'),
       max: attr('max'),
       step: attr('step'),

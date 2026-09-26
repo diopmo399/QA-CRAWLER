@@ -517,6 +517,12 @@ export class FlowExplorer {
       if (restored) return { page, context: restored };
       const fallback = await this.backtrack(page, browser, observers.all, this.allowJump);
       if (fallback.context) return { page: fallback.page, context: fallback.context };
+      // The page is no longer in the state the action started from (e.g. a dialog closed by the
+      // reload): go on from what is really on screen, not from the stale list of actions.
+      if (this.isExplorablePage(fallback.page)) {
+        const current = await this.observeState(fallback.page, from.metadata.depth).catch(() => undefined);
+        if (current) return { page: fallback.page, context: current };
+      }
       return { page: fallback.page, context: from };
     }
 
