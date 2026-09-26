@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { NavigationPolicy, pathPatternToRegex } from '../../src/policies/navigation-policy.js';
+import { pathPatternToRegex } from '../../src/policies/navigation-policy.js';
 import { SafetyPolicy } from '../../src/policies/safety-policy.js';
+import { testConfig } from '../helpers.js';
 
-const safety = {
-  allowedHosts: ['localhost', '*.example.com'],
-  ignoredPaths: ['/logout', '/admin/*/purge', '/api/**'],
-  allowedActionClasses: ['SAFE' as const],
-  keywords: { safe: [], mutation: [], dangerous: [] },
-};
-const policy = new NavigationPolicy(safety, new SafetyPolicy(safety));
+const safety = testConfig(`safety:
+  allowedHosts: [localhost, '*.example.com']
+  ignoredPaths: [/logout, '/admin/*/purge', '/api/**']
+`).safety;
+const policy = new SafetyPolicy(safety).navigation;
 const evaluate = (url: string) => policy.evaluate(new URL(url));
 
 describe('NavigationPolicy', () => {

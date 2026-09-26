@@ -44,6 +44,12 @@ describe('routeKey', () => {
     expect(routeKey('https://example.com/products?page=2', 'keep')).toBe('/products?page=2');
   });
 
+  it('ignores trailing slashes', () => {
+    expect(routeKey('https://example.com/about/', 'pattern')).toBe(
+      routeKey('https://example.com/about', 'pattern'),
+    );
+  });
+
   it('normalizes hash routes', () => {
     expect(routeKey('https://example.com/#/users/12?tab=info', 'pattern')).toBe('/users/:id?tab');
   });

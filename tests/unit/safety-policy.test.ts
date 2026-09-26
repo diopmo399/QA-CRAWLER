@@ -1,29 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import type { RawAction } from '../../src/model/discovered-action.js';
-import { normalizeText, SafetyPolicy } from '../../src/policies/safety-policy.js';
+import type { DiscoveredAction } from '../../src/model/discovered-action.js';
+import { normalizeText } from '../../src/policies/keywords.js';
+import { SafetyPolicy, type ClassifiableAction } from '../../src/policies/safety-policy.js';
+import { testConfig } from '../helpers.js';
 
-const policy = new SafetyPolicy({
-  allowedActionClasses: ['SAFE'],
-  keywords: { safe: [], mutation: [], dangerous: ['obliterate'] },
-});
+const policy = new SafetyPolicy(testConfig('safety:\n  keywords:\n    dangerous: [obliterate]\n').safety);
 
-const action = (overrides: Partial<RawAction>): RawAction => ({
-  type: 'button',
-  text: '',
-  tagName: 'button',
-  selector: 'button',
-  index: 0,
-  visible: true,
+const click = (text: string, extra: Partial<ClassifiableAction> = {}): string =>
+  policy.classify({ type: 'click', category: 'other', text, ...extra }).classification;
+
+const action = (overrides: Partial<DiscoveredAction>): DiscoveredAction => ({
+  id: 'a-1',
+  stateId: 's-1',
+  type: 'click',
+  category: 'other',
+  elementType: 'button',
   disabled: false,
-  isSubmit: false,
-  inSearchForm: false,
+  visible: true,
+  classification: 'SAFE',
+  reason: 'test',
+  risks: [],
+  locator: { strategy: 'role', role: 'button', name: 'x' },
   ...overrides,
 });
 
-const classify = (overrides: Partial<RawAction>): string => policy.classify(action(overrides)).classification;
-
 describe('SafetyPolicy.classify', () => {
-  it('classifies destructive and irreversible actions as DANGEROUS (FR/EN)', () => {
+  it('classifies destructive, payment, sending and session actions as DANGEROUS (FR/EN)', () => {
     for (const text of [
       'Supprimer',
       'Delete user',
@@ -35,102 +37,151 @@ describe('SafetyPolicy.classify', () => {
       'Déconnexion',
       'Log out',
       'Réinitialiser le mot de passe',
+      'Vider le cache',
     ]) {
-      expect(classify({ text }), text).toBe('DANGEROUS');
+      expect(click(text), text).toBe('DANGEROUS');
     }
+  });
+
+  it('records the kind of risk', () => {
+    expect(policy.classify({ type: 'click', category: 'other', text: 'Supprimer' }).risks).toContain(
+      'delete',
+    );
+    expect(policy.classify({ type: 'click', category: 'other', text: 'Payer' }).risks).toContain('payment');
+    expect(policy.classify({ type: 'click', category: 'other', text: 'Log out' }).risks).toContain('logout');
   });
 
   it('classifies data changes as MUTATION', () => {
     for (const text of [
       'Créer',
-      'Nouvelle inscription',
+      'Nouvel utilisateur',
       'Enregistrer',
       'Modifier',
       'Mettre à jour',
       'Save',
       'Add item',
+      'Oui',
     ]) {
-      expect(classify({ text }), text).toBe('MUTATION');
+      expect(click(text), text).toBe('MUTATION');
     }
   });
 
-  it('classifies navigation-like buttons as SAFE', () => {
-    for (const text of [
-      'Suivant',
-      'Page 2',
-      'Onglet Détails',
-      'Filtrer',
-      'Rechercher',
-      'Next',
-      'Voir plus',
-    ]) {
-      expect(classify({ text }), text).toBe('SAFE');
+  it('classifies labelled in-page controls without risky words as SAFE', () => {
+    for (const text of ['Suivant', 'Onglet Détails', 'Filtrer', 'Rechercher', 'Utilisateurs', 'Voir plus']) {
+      expect(click(text), text).toBe('SAFE');
     }
   });
 
-  it('marks unrecognised buttons as UNKNOWN (never executed)', () => {
-    expect(classify({ text: '⚙' })).toBe('UNKNOWN');
-    expect(classify({ text: '' })).toBe('UNKNOWN');
+  it('marks unlabelled and symbol-only controls as UNKNOWN (never executed)', () => {
+    expect(click('')).toBe('UNKNOWN');
+    for (const symbol of ['⚙', '×', '…', '+', '🗑']) expect(click(symbol), symbol).toBe('UNKNOWN');
     expect(policy.isExecutionAllowed('UNKNOWN')).toBe(false);
   });
 
   it('matches whole words only', () => {
-    expect(classify({ type: 'link', text: 'Address book', href: 'https://x.test/address' })).toBe('SAFE');
-    expect(classify({ type: 'link', text: 'Paysage', href: 'https://x.test/paysage' })).toBe('SAFE');
-    expect(classify({ text: 'Newsletter archive list' })).toBe('DANGEROUS'); // "archive"
+    expect(
+      policy.classify({
+        type: 'navigate',
+        category: 'navigation',
+        text: 'Address book',
+        href: 'http://localhost:4200/address',
+      }).classification,
+    ).toBe('SAFE');
+    expect(
+      policy.classify({
+        type: 'navigate',
+        category: 'navigation',
+        text: 'Paysage',
+        href: 'http://localhost:4200/paysage',
+      }).classification,
+    ).toBe('SAFE');
   });
 
-  it('gives DANGEROUS precedence over MUTATION and SAFE', () => {
-    expect(classify({ text: 'Enregistrer et supprimer' })).toBe('DANGEROUS');
-    expect(classify({ text: 'Supprimer la page' })).toBe('DANGEROUS');
+  it('uses the link target and the dialog context', () => {
+    expect(
+      policy.classify({
+        type: 'navigate',
+        category: 'navigation',
+        text: 'Voir',
+        href: 'http://localhost:4200/users/3/delete',
+      }).classification,
+    ).toBe('DANGEROUS');
+    expect(click('Confirmer', { dialogName: "Supprimer l'utilisateur ?" })).toBe('DANGEROUS');
+    expect(click('x', { elementId: 'deleteUserButton' })).toBe('DANGEROUS');
+    expect(click('Obliterate')).toBe('DANGEROUS');
   });
 
-  it('classifies links by their target too', () => {
-    expect(classify({ type: 'link', text: 'Utilisateurs', href: 'https://x.test/users' })).toBe('SAFE');
-    expect(classify({ type: 'link', text: 'Retirer', href: 'https://x.test/users/3' })).toBe('DANGEROUS');
-    expect(classify({ type: 'link', text: 'Voir', href: 'https://x.test/users/3/delete' })).toBe('DANGEROUS');
-    expect(classify({ type: 'router-link', text: 'x', routerLink: '/orders/new' })).toBe('MUTATION');
+  it('treats form submission as MUTATION, except search forms and client-side wizard steps', () => {
+    expect(click('OK', { isSubmit: true })).toBe('MUTATION');
+    expect(click('Go', { isSubmit: true, inSearchForm: true })).toBe('SAFE');
+    expect(click('Suivant', { isSubmit: true })).toBe('SAFE');
+    expect(click('Suivant', { isSubmit: true, formHasAction: true })).toBe('MUTATION');
   });
 
-  it('treats form submission as MUTATION unless it is a search form', () => {
-    expect(classify({ text: 'OK', isSubmit: true })).toBe('MUTATION');
-    expect(classify({ text: 'OK', isSubmit: true, inSearchForm: true })).toBe('SAFE');
-    expect(classify({ text: 'Supprimer', isSubmit: true, inSearchForm: true })).toBe('DANGEROUS');
+  it('never fills sensitive fields', () => {
+    const fill = (extra: Partial<ClassifiableAction>): string =>
+      policy.classify({ type: 'fill', category: 'form-input', ...extra }).classification;
+    expect(fill({ inputType: 'password', label: 'Mot de passe' })).toBe('DANGEROUS');
+    expect(fill({ inputType: 'text', label: 'Numéro de carte bancaire' })).toBe('DANGEROUS');
+    expect(fill({ inputType: 'text', autocomplete: 'cc-number' })).toBe('DANGEROUS');
+    expect(fill({ inputType: 'text', label: 'IBAN' })).toBe('DANGEROUS');
+    expect(fill({ inputType: 'email', label: 'Email' })).toBe('SAFE');
   });
 
-  it('classifies fields', () => {
-    expect(classify({ type: 'input', inputType: 'search' })).toBe('SAFE');
-    expect(classify({ type: 'input', inputType: 'email' })).toBe('MUTATION');
-    expect(classify({ type: 'select', text: 'Trier par' })).toBe('SAFE');
-    expect(classify({ type: 'textarea' })).toBe('MUTATION');
-  });
-
-  it('supports custom keywords and camelCase identifiers', () => {
-    expect(classify({ text: 'Obliterate' })).toBe('DANGEROUS');
-    expect(classify({ text: '', elementId: 'deleteUserButton' })).toBe('DANGEROUS');
+  it('flags links to other sites', () => {
+    const result = policy.classify({
+      type: 'navigate',
+      category: 'navigation',
+      text: 'Docs',
+      href: 'https://other.test',
+      external: true,
+    });
+    expect(result.risks).toContain('external-navigation');
   });
 });
 
-describe('SafetyPolicy execution rules', () => {
-  it('only allows SAFE actions by default', () => {
-    expect(policy.isExecutionAllowed('SAFE')).toBe(true);
-    expect(policy.isExecutionAllowed('MUTATION')).toBe(false);
-    expect(policy.isExecutionAllowed('DANGEROUS')).toBe(false);
+describe('SafetyPolicy.evaluate (gate between the decision engine and Playwright)', () => {
+  it('allows SAFE actions of allowed kinds', () => {
+    expect(policy.evaluate(action({ category: 'tab' })).verdict).toBe('ALLOW');
   });
 
-  it('allows other classes only when explicitly configured', () => {
-    const permissive = new SafetyPolicy({
-      allowedActionClasses: ['SAFE', 'MUTATION'],
-      keywords: { safe: [], mutation: [], dangerous: [] },
-    });
-    expect(permissive.isExecutionAllowed('MUTATION')).toBe(true);
-    expect(permissive.isExecutionAllowed('DANGEROUS')).toBe(false);
+  it('blocks DANGEROUS, MUTATION, UNKNOWN, disabled and hidden actions by default', () => {
+    expect(policy.evaluate(action({ classification: 'DANGEROUS', risks: ['delete'] })).verdict).toBe('BLOCK');
+    expect(policy.evaluate(action({ classification: 'MUTATION', risks: ['mutation'] })).verdict).toBe(
+      'BLOCK',
+    );
+    expect(policy.evaluate(action({ classification: 'UNKNOWN' })).verdict).toBe('BLOCK');
+    expect(policy.evaluate(action({ disabled: true })).verdict).toBe('BLOCK');
+    expect(policy.evaluate(action({ visible: false })).verdict).toBe('BLOCK');
   });
 
-  it('classifies URLs', () => {
-    expect(policy.classifyUrl('https://x.test/admin/users/4/delete').classification).toBe('DANGEROUS');
-    expect(policy.classifyUrl('https://x.test/checkout').classification).toBe('DANGEROUS');
-    expect(policy.classifyUrl('https://x.test/users/4').classification).toBe('SAFE');
+  it('blocks external navigation, ignored paths and downloads', () => {
+    const navigate = (href: string, extra: Partial<DiscoveredAction> = {}) =>
+      policy.evaluate(action({ type: 'navigate', category: 'navigation', href, ...extra })).verdict;
+    expect(navigate('https://evil.test/', { external: true, risks: ['external-navigation'] })).toBe('BLOCK');
+    expect(navigate('http://localhost:4200/logout')).toBe('BLOCK');
+    expect(navigate('http://localhost:4200/files/report.pdf')).toBe('BLOCK');
+    expect(navigate('http://localhost:4200/users')).toBe('ALLOW');
+  });
+
+  it('applies the mission allow-list of SAFE action kinds', () => {
+    const restricted = new SafetyPolicy(testConfig('safety:\n  allow: [navigation, search]\n').safety);
+    expect(restricted.evaluate(action({ category: 'tab' })).verdict).toBe('BLOCK');
+    expect(restricted.evaluate(action({ category: 'search' })).verdict).toBe('ALLOW');
+  });
+
+  it('always blocks sensitive data, even when every class is allowed', () => {
+    const permissive = new SafetyPolicy(
+      testConfig('safety:\n  allowedActionClasses: [SAFE, MUTATION, DANGEROUS, UNKNOWN]\n  block: []\n')
+        .safety,
+    );
+    expect(
+      permissive.evaluate(action({ type: 'fill', classification: 'DANGEROUS', risks: ['sensitive-data'] }))
+        .verdict,
+    ).toBe('BLOCK');
+    expect(permissive.evaluate(action({ classification: 'DANGEROUS', risks: ['delete'] })).verdict).toBe(
+      'ALLOW',
+    );
   });
 });
 
