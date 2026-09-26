@@ -32,6 +32,14 @@ export interface Issue {
   status?: number;
   /** Page that linked to a broken page. */
   referrerUrl?: string;
+  /** Functional state (see StateDetector) on which the anomaly was first observed. */
+  stateId?: string;
+  /** Action whose execution triggered the anomaly (undefined when seen while loading a state). */
+  actionId?: string;
+  /** Path of state ids from the start state to `stateId`: how to reproduce the problem. */
+  flow?: string[];
+  /** All states on which this anomaly was observed. */
+  states: string[];
   /** ISO timestamp of the first occurrence. */
   timestamp: string;
   occurrences: number;
@@ -40,7 +48,7 @@ export interface Issue {
 }
 
 /** Data needed to report a new anomaly; bookkeeping fields are filled by the collector. */
-export type IssueInput = Omit<Issue, 'id' | 'pages' | 'timestamp' | 'occurrences' | 'severity'> & {
+export type IssueInput = Omit<Issue, 'id' | 'pages' | 'states' | 'timestamp' | 'occurrences' | 'severity'> & {
   severity?: Severity;
 };
 
