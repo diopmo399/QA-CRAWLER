@@ -44,6 +44,11 @@ export const SeverityRules = {
     return 'CRITICAL';
   },
 
+  /** An imposed flow step failed or was blocked; optional steps only warn. */
+  flowStep(optional: boolean): Severity {
+    return optional ? 'WARNING' : 'ERROR';
+  },
+
   /** Navigation that could not complete (timeout, redirect loop, redirect off-site...). */
   navigationFailure(kind: 'timeout' | 'redirect-loop' | 'external-redirect' | 'other'): Severity {
     return kind === 'external-redirect' ? 'WARNING' : 'ERROR';

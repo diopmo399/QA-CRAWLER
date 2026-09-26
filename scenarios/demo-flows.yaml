@@ -1,0 +1,64 @@
+# Imposed flows on the bundled back-office demo: the mission lists the steps
+# to follow, the SafetyPolicy still checks each one before Playwright runs it.
+#   npm run demo:server                     # terminal 1
+#   QA_DEMO_PASSWORD=demo npm run qa -- scenarios/demo-flows.yaml   # terminal 2
+mission:
+  name: demo-flows
+  description: Imposed test flows on the demo back-office, then autonomous exploration
+
+target:
+  baseUrl: http://localhost:4174
+  startAt: /
+
+exploration:
+  maxStates: 40
+  maxActions: 150
+  maxDurationMinutes: 5
+  actionTimeoutMs: 5000
+  settleTimeMs: 200
+  # false: run only the flows below.
+  autonomous: true
+
+flows:
+  - name: connexion
+    description: Log in with credentials read from the environment
+    startAt: /login
+    steps:
+      - fill: { label: Identifiant, value: agent.qa }
+      - fill: { label: Mot de passe, value: { env: QA_DEMO_PASSWORD } }
+      - click: { role: button, name: Se connecter }
+      - expect: { text: Bienvenue agent.qa }
+
+  - name: nouveau-dossier
+    description: Fill the 3-step wizard up to the confirmation screen
+    startAt: /dossiers
+    steps:
+      - click: { role: link, name: Nouveau dossier }
+      - fill: { label: Titre, value: Dossier QA }
+      - fill: { label: Email du demandeur, value: demandeur@example.test }
+      - click: { role: button, name: Suivant }
+      - expect: { text: Étape 2 — Détails }
+      - fill: { label: Montant, value: 250 }
+      - select: { label: Catégorie, option: Subvention }
+      - check: { label: J'accepte les conditions }
+      - click: { role: button, name: Suivant }
+      - expect: { text: Étape 3 — Confirmation }
+      - screenshot: confirmation
+      # Saving would modify data: this step only runs with "allow: MUTATION".
+      # It is optional here, so the refusal is reported as a warning.
+      - click: { role: button, name: Enregistrer le dossier }
+        optional: true
+
+  - name: fiche-utilisateur
+    description: Open a user, then let the explorer explore that screen
+    startAt: /users
+    thenExplore: true
+    steps:
+      - click: { role: link, name: Voir, nth: 2 }
+      - expect: { url: /users/3 }
+      - click: { role: tab, name: Historique }
+      - expect: { text: Aucune activité. }
+
+safety:
+  allow: [navigation, tabs, menus, details, pagination, search, filter, forms, other]
+  block: [delete, payment, send, logout, irreversible, sensitive-data, external-navigation, form-submit]

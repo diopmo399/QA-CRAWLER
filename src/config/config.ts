@@ -1,12 +1,14 @@
 import { z } from 'zod';
 import { ACTION_CLASSIFICATIONS, RISK_KINDS } from '../model/discovered-action.js';
 import { SEVERITIES } from '../model/issue.js';
+import { flowsSchema } from './flow-schema.js';
 
 /**
  * Mission configuration. The YAML describes *what to explore and within which
- * limits* — never the list of buttons to click: the explorer discovers the
- * screens and transitions by itself. Every section except `target.baseUrl`
- * has defaults, so a minimal mission is just a URL.
+ * limits*: the explorer discovers the screens and transitions by itself.
+ * Optional `flows` impose ordered test steps on top of that (still checked by
+ * the SafetyPolicy). Every section except `target.baseUrl` has defaults, so a
+ * minimal mission is just a URL.
  */
 
 const nonEmpty = z.string().trim().min(1);
@@ -65,6 +67,11 @@ const explorationSchema = z
     queryParams: queryParamsSchema.default({}),
     /** Cap on actions recorded per state. */
     maxRecordedActions: z.number().int().positive().default(200),
+    /**
+     * Explore the application autonomously from target.startAt. Set to false
+     * to run only the imposed `flows`.
+     */
+    autonomous: z.boolean().default(true),
   })
   .strict();
 
@@ -240,6 +247,8 @@ export const scenarioSchema = z
     output: outputSchema.default({}),
     memory: memorySchema.default({}),
     report: reportSchema.default({}),
+    /** Imposed test flows, run before the autonomous exploration. */
+    flows: flowsSchema,
   })
   .strict();
 

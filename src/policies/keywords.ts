@@ -285,6 +285,25 @@ export const SENSITIVE_FIELD_KEYWORDS = [
   'passeport',
 ] as const;
 
+/** Payment fields: never filled, not even with a value from the environment. */
+export const PAYMENT_FIELD_KEYWORDS = [
+  'card',
+  'card number',
+  'credit card',
+  'carte',
+  'carte bancaire',
+  'cb',
+  'cvv',
+  'cvc',
+  'cryptogramme',
+  'expiry',
+  'expiration',
+  'iban',
+  'bic',
+  'swift',
+  'rib',
+] as const;
+
 /** Lower-case, accent-free, camelCase split: "Supprimer l'élément" → "supprimer l'element", "deleteUser" → "delete user". */
 export function normalizeText(text: string): string {
   return text

@@ -5,6 +5,7 @@ import { createAuthenticator, type Authenticator } from '../auth/authenticator.j
 import { BrowserManager } from '../browser/browser-manager.js';
 import { ScreenshotService } from '../browser/screenshot-service.js';
 import type { ScenarioConfig } from '../config/config.js';
+import { describeStep, type FlowConfig, type FlowStep } from '../config/flow-schema.js';
 import { DefaultTestDataProvider, type TestDataProvider } from '../data/test-data-provider.js';
 import type { ActionDecision, DecisionEngine } from '../decision/decision-engine.js';
 import { RuleBasedDecisionEngine } from '../decision/rule-based-decision-engine.js';
@@ -13,13 +14,17 @@ import {
   PlaywrightActionExecutor,
   type ActionExecutionResult,
 } from '../execution/playwright-action-executor.js';
+import { evaluateFlowAction, evaluateFlowUrl } from '../flows/flow-safety.js';
+import { FlowStepExecutor, type FlowElementAction } from '../flows/flow-step-executor.js';
 import { FlowGraph, summaryOf } from '../graph/flow-graph.js';
 import type { FlowMemory } from '../memory/flow-memory.js';
 import { actionLabel, type DiscoveredAction, type DiscoveredForm } from '../model/discovered-action.js';
 import type { StopReason } from '../model/exploration-result.js';
 import type { FlowEdge } from '../model/flow.js';
+import type { FlowRunReport, FlowStatus, FlowStepReport } from '../model/flow-run.js';
 import { isAtLeast, type Issue } from '../model/issue.js';
 import type { PageContext } from '../model/page-context.js';
+import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
 import { UIObserver } from '../observation/ui-observer.js';
 import { ConsoleObserver } from '../observers/console-observer.js';
@@ -38,6 +43,9 @@ export interface ExplorationListener {
   onTransition?(edge: FlowEdge, action: DiscoveredAction): void;
   onBacktrack?(from: string, to: string | undefined, method: string): void;
   onIssue?(issue: Issue, isNew: boolean): void;
+  onFlowStart?(flow: FlowConfig): void;
+  onFlowStep?(flow: FlowConfig, step: FlowStepReport): void;
+  onFlowEnd?(report: FlowRunReport): void;
 }
 
 export interface FlowExplorerOptions {
@@ -54,6 +62,8 @@ export interface ExplorationOutcome {
   issues: Issue[];
   /** Latest full observation of each state (actions with locators, forms). */
   details: Map<string, { actions: DiscoveredAction[]; forms: DiscoveredForm[] }>;
+  /** Imposed flows, in mission order. */
+  flows: FlowRunReport[];
   stopReason: StopReason;
   startedAt: Date;
   finishedAt: Date;
@@ -96,6 +106,8 @@ export class FlowExplorer {
   private readonly listener: ExplorationListener;
   private readonly memory: FlowMemory;
   private readonly startUrl: string;
+  private readonly flowSteps: FlowStepExecutor;
+  private readonly env: NodeJS.ProcessEnv;
 
   private graph = new FlowGraph();
   private readonly details = new Map<string, { actions: DiscoveredAction[]; forms: DiscoveredForm[] }>();
@@ -106,9 +118,14 @@ export class FlowExplorer {
   private readonly unreachable = new Set<string>();
   private currentUrl: string;
   private attribution: IssueAttribution = {};
+  /** False while exploring below a flow's last screen (thenExplore). */
+  private allowJump = true;
   private actionsExecuted = 0;
   private backtracks = 0;
   private startedAt = new Date();
+  private readonly flowReports: FlowRunReport[] = [];
+  /** Last raw observation (lets flow steps find the element they target). */
+  private lastSnapshot: UiSnapshot | undefined;
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -127,6 +144,8 @@ export class FlowExplorer {
         queryParamMode: exploration.queryParams.mode,
       });
     this.executor = new PlaywrightActionExecutor(exploration.actionTimeoutMs, exploration.settleTimeMs);
+    this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs);
+    this.env = options.env ?? process.env;
     this.testData = options.testData ?? new DefaultTestDataProvider();
     this.screenshots = new ScreenshotService(config.output.screenshotsDir, config.checks.fullPageScreenshots);
     this.authenticator = createAuthenticator(config.auth, config.target.baseUrl, options.env);
@@ -140,7 +159,11 @@ export class FlowExplorer {
   async explore(): Promise<ExplorationOutcome> {
     this.startedAt = new Date();
     if (this.config.memory.resume) this.graph = await this.memory.load();
-    if (this.config.checks.screenshots || this.config.checks.screenshotOnError)
+    if (
+      this.config.checks.screenshots ||
+      this.config.checks.screenshotOnError ||
+      this.config.flows.some((flow) => flow.steps.some((step) => step.kind === 'screenshot'))
+    )
       await this.screenshots.prepare();
 
     const browser = new BrowserManager(this.config.browser);
@@ -163,62 +186,35 @@ export class FlowExplorer {
       if (!(await this.goto(page, this.startUrl))) {
         page = await this.recyclePage(browser, page, observers.all);
         if (!(await this.goto(page, this.startUrl))) {
+          this.skipFlows('the start page is unreachable');
           return this.outcome('unreachable-start');
         }
       }
-
+      // The start state is the root of the flow graph, whatever the flows visit first.
       let current = await this.observeState(page, 0);
-      this.stack = [{ stateId: current.stateId, url: current.url }];
 
-      for (;;) {
-        const limit = this.limitReached();
-        if (limit) {
-          stopReason = limit;
-          break;
+      // 1. Imposed flows, in mission order.
+      let flowsStop: StopReason | undefined;
+      if (this.config.flows.length > 0) {
+        const flows = await this.runFlows(page, browser, observers);
+        page = flows.page;
+        flowsStop = flows.stopReason;
+      }
+
+      // 2. Autonomous exploration from the start state.
+      if (flowsStop) {
+        stopReason = flowsStop;
+      } else if (!this.config.exploration.autonomous) {
+        stopReason = 'flows-only';
+      } else {
+        if (this.config.flows.length > 0) {
+          if (!/^https?:/.test(page.url()) || page.isClosed())
+            page = await this.recyclePage(browser, page, observers.all);
+          if (await this.goto(page, this.startUrl)) current = await this.observeState(page, 0);
         }
-
-        const decision = await this.decisionEngine.decide(current, this.graph);
-        this.listener.onDecision?.(current, decision);
-
-        if (decision.decision === 'STOP') {
-          stopReason = 'engine-stop';
-          break;
-        }
-        if (decision.decision === 'BACKTRACK') {
-          this.exhausted.add(current.stateId);
-          const restored = await this.backtrack(page, browser, observers.all);
-          page = restored.page;
-          if (!restored.context) break; // nothing left anywhere
-          current = restored.context;
-          continue;
-        }
-
-        const action = current.actions.find((candidate) => candidate.id === decision.actionId);
-        if (!action) {
-          // The engine proposed something that is not on screen: never retry it.
-          this.graph.addEdge({
-            from: current.stateId,
-            to: current.stateId,
-            actionId: decision.actionId ?? 'unknown',
-            action: { type: 'click', category: 'other', classification: 'UNKNOWN' },
-            result: 'FAILED',
-            reason: 'action not available on this state',
-          });
-          continue;
-        }
-
-        // "Is it allowed?" — after the decision, before Playwright, whatever the engine.
-        const verdict = this.safety.evaluate(action);
-        if (verdict.verdict === 'BLOCK') {
-          this.graph.recordBlocked(current.stateId, action, verdict.reason);
-          this.listener.onBlocked?.(current, action, verdict.reason);
-          continue;
-        }
-
-        const step = await this.executeAndObserve(page, browser, observers, current, action);
-        page = step.page;
-        current = step.context;
-        await this.memory.save(this.graph);
+        this.stack = [{ stateId: current.stateId, url: current.url }];
+        const loop = await this.explorationLoop(page, browser, observers, current, true);
+        stopReason = loop.stopReason;
       }
     } finally {
       await browser.close();
@@ -227,11 +223,73 @@ export class FlowExplorer {
     return this.outcome(stopReason);
   }
 
+  /**
+   * OBSERVE → DECIDE → SAFETY CHECK → EXECUTE → OBSERVE → STORE, from `current`
+   * until the engine stops, a limit is reached or nothing is left. With
+   * `allowJump` false, exploration stays below the states of the current
+   * stack (exploration of a flow's last screen).
+   */
+  private async explorationLoop(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    start: PageContext,
+    allowJump: boolean,
+  ): Promise<{ page: Page; stopReason: StopReason }> {
+    this.allowJump = allowJump;
+    let current = start;
+    for (;;) {
+      const limit = this.limitReached();
+      if (limit) return { page, stopReason: limit };
+
+      const decision = await this.decisionEngine.decide(current, this.graph);
+      this.listener.onDecision?.(current, decision);
+
+      if (decision.decision === 'STOP') return { page, stopReason: 'engine-stop' };
+      if (decision.decision === 'BACKTRACK') {
+        this.exhausted.add(current.stateId);
+        const restored = await this.backtrack(page, browser, observers.all, allowJump);
+        page = restored.page;
+        if (!restored.context) return { page, stopReason: 'exhausted' }; // nothing left anywhere
+        current = restored.context;
+        continue;
+      }
+
+      const action = current.actions.find((candidate) => candidate.id === decision.actionId);
+      if (!action) {
+        // The engine proposed something that is not on screen: never retry it.
+        this.graph.addEdge({
+          from: current.stateId,
+          to: current.stateId,
+          actionId: decision.actionId ?? 'unknown',
+          action: { type: 'click', category: 'other', classification: 'UNKNOWN' },
+          result: 'FAILED',
+          reason: 'action not available on this state',
+        });
+        continue;
+      }
+
+      // "Is it allowed?" — after the decision, before Playwright, whatever the engine.
+      const verdict = this.safety.evaluate(action);
+      if (verdict.verdict === 'BLOCK') {
+        this.graph.recordBlocked(current.stateId, action, verdict.reason);
+        this.listener.onBlocked?.(current, action, verdict.reason);
+        continue;
+      }
+
+      const step = await this.executeAndObserve(page, browser, observers, current, action);
+      page = step.page;
+      current = step.context;
+      await this.memory.save(this.graph);
+    }
+  }
+
   // ---------------------------------------------------------------- loop steps
 
   /** OBSERVE → STATE → DISCOVER → record the node. */
   private async observeState(page: Page, depth: number): Promise<PageContext> {
     const snapshot = await this.observer.observe(page);
+    this.lastSnapshot = snapshot;
     const state = this.stateDetector.detect(snapshot);
     const actions = this.discovery.discover(snapshot, state.stateId);
     const isNew = this.graph.addNode({
@@ -355,7 +413,7 @@ export class FlowExplorer {
       }
       const restored = await this.restore(page, from.stateId);
       if (restored) return { page, context: restored };
-      const fallback = await this.backtrack(page, browser, observers.all);
+      const fallback = await this.backtrack(page, browser, observers.all, this.allowJump);
       if (fallback.context) return { page: fallback.page, context: fallback.context };
       return { page: fallback.page, context: from };
     }
@@ -445,6 +503,509 @@ export class FlowExplorer {
     }
   }
 
+  // ---------------------------------------------------------------- imposed flows
+
+  /** Runs every imposed flow in order. Returns a stop reason when a mission limit ended the run. */
+  private async runFlows(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+  ): Promise<{ page: Page; stopReason?: StopReason }> {
+    for (const flow of this.config.flows) {
+      const limit = this.limitReached();
+      if (limit) {
+        this.skipFlows(`mission limit reached (${limit})`);
+        return { page, stopReason: limit };
+      }
+      const run = await this.runFlow(page, browser, observers, flow);
+      page = run.page;
+      if (run.stopReason) {
+        this.skipFlows(`mission limit reached (${run.stopReason})`);
+        return { page, stopReason: run.stopReason };
+      }
+    }
+    return { page };
+  }
+
+  /** Reports every flow not run yet as SKIPPED. */
+  private skipFlows(reason: string): void {
+    const done = new Set(this.flowReports.map((report) => report.name));
+    for (const flow of this.config.flows) {
+      if (done.has(flow.name)) continue;
+      const report: FlowRunReport = {
+        name: flow.name,
+        ...(flow.description ? { description: flow.description } : {}),
+        status: 'SKIPPED',
+        startedAt: new Date().toISOString(),
+        durationMs: 0,
+        steps: flow.steps.map((step, position) => skippedStep(step, position + 1, reason)),
+        states: [],
+        issueIds: [],
+        explored: false,
+      };
+      this.flowReports.push(report);
+      this.listener.onFlowEnd?.(report);
+    }
+  }
+
+  private async runFlow(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    flow: FlowConfig,
+  ): Promise<{ page: Page; stopReason?: StopReason }> {
+    const started = Date.now();
+    const report: FlowRunReport = {
+      name: flow.name,
+      ...(flow.description ? { description: flow.description } : {}),
+      status: 'PASSED',
+      startedAt: new Date(started).toISOString(),
+      durationMs: 0,
+      steps: [],
+      states: [],
+      issueIds: [],
+      explored: false,
+    };
+    this.flowReports.push(report);
+    this.listener.onFlowStart?.(flow);
+    const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
+    const knownStates = new Set(this.graph.allNodes().map((node) => node.id));
+    let stopReason: StopReason | undefined;
+
+    // Every flow starts from a freshly loaded page.
+    const flowStart = new URL(
+      flow.startAt ?? this.config.target.startAt,
+      this.config.target.baseUrl,
+    ).toString();
+    if (!/^https?:/.test(page.url()) || page.isClosed())
+      page = await this.recyclePage(browser, page, observers.all);
+    this.attribution = {};
+    let context: PageContext | undefined;
+    if (await this.goto(page, flowStart)) {
+      context = await this.observeState(page, flowStart === this.startUrl ? 0 : 1).catch(() => undefined);
+    }
+    if (context) report.states.push(context.stateId);
+
+    let stopped: string | undefined = context ? undefined : `start page ${flowStart} could not be loaded`;
+    if (stopped) {
+      report.status = 'FAILED';
+      await this.flowIssue(flow, undefined, stopped, false, page);
+    }
+    for (const [position, step] of flow.steps.entries()) {
+      const index = position + 1;
+      if (stopped !== undefined || !context) {
+        const skipped = skippedStep(step, index, stopped ?? 'flow stopped');
+        report.steps.push(skipped);
+        this.listener.onFlowStep?.(flow, skipped);
+        continue;
+      }
+      const limit = this.limitReached();
+      if (limit) {
+        stopReason = limit;
+        stopped = `mission limit reached (${limit})`;
+        const skipped = skippedStep(step, index, stopped);
+        report.steps.push(skipped);
+        this.listener.onFlowStep?.(flow, skipped);
+        continue;
+      }
+
+      const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
+      page = outcome.page;
+      context = outcome.context ?? context;
+      report.steps.push(outcome.report);
+      this.listener.onFlowStep?.(flow, outcome.report);
+      if (outcome.report.stateId && report.states[report.states.length - 1] !== outcome.report.stateId) {
+        report.states.push(outcome.report.stateId);
+      }
+      if (outcome.report.status === 'FAILED' || outcome.report.status === 'BLOCKED') {
+        await this.flowIssue(flow, outcome.report, outcome.report.reason ?? '', step.optional, page, context);
+        if (!step.optional) {
+          report.status = outcome.report.status;
+          stopped = `step ${index} ${outcome.report.status.toLowerCase()}`;
+        }
+      }
+      await this.memory.save(this.graph);
+    }
+
+    // Explore the flow's last screen (often reachable only through the flow).
+    if (report.status === 'PASSED' && flow.thenExplore && context && !stopReason) {
+      report.explored = true;
+      this.stack = [{ stateId: context.stateId, url: context.url }];
+      const loop = await this.explorationLoop(page, browser, observers, context, false);
+      page = loop.page;
+      this.allowJump = true;
+      if (loop.stopReason !== 'exhausted' && loop.stopReason !== 'engine-stop') stopReason = loop.stopReason;
+    } else if (!flow.thenExplore) {
+      // States only the flow reaches are not explored autonomously later.
+      for (const stateId of report.states) if (!knownStates.has(stateId)) this.exhausted.add(stateId);
+    }
+
+    report.durationMs = Date.now() - started;
+    report.issueIds = this.collector
+      .all()
+      .filter((issue) => !issuesBefore.has(issue.id))
+      .map((issue) => issue.id);
+    this.listener.onFlowEnd?.(report);
+    return stopReason ? { page, stopReason } : { page };
+  }
+
+  /** One step: locate → classify → SafetyPolicy → execute → observe → store. */
+  private async runFlowStep(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    flow: FlowConfig,
+    step: FlowStep,
+    index: number,
+    context: PageContext,
+  ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
+    const started = Date.now();
+    const timeout = step.timeoutMs ?? this.config.exploration.actionTimeoutMs;
+    const base = { index, kind: step.kind, description: describeStep(step), optional: step.optional };
+    const done = (status: FlowStatus, extra: Partial<FlowStepReport> = {}): FlowStepReport => ({
+      ...base,
+      status,
+      durationMs: Date.now() - started,
+      ...extra,
+    });
+
+    switch (step.kind) {
+      case 'expect': {
+        const failure = await this.flowSteps.expect(page, step.expect, timeout);
+        return {
+          page,
+          report: failure
+            ? done('FAILED', {
+                reason: `expectation not met: ${failure}`,
+                stateId: context.stateId,
+                url: context.url,
+              })
+            : done('PASSED', { stateId: context.stateId, url: redactUrl(page.url()) }),
+        };
+      }
+      case 'screenshot': {
+        const file = await this.screenshots.captureState(
+          page,
+          this.graph.nodeCount,
+          `${flow.name}-${step.label}`,
+          'flow',
+        );
+        return {
+          page,
+          report: done('PASSED', {
+            stateId: context.stateId,
+            url: context.url,
+            ...(file ? { screenshot: file } : {}),
+          }),
+        };
+      }
+      case 'goto': {
+        const url = new URL(step.url, this.config.target.baseUrl).toString();
+        const verdict = evaluateFlowUrl(this.safety, url);
+        if (verdict.verdict === 'BLOCK') {
+          return { page, report: done('BLOCKED', { reason: verdict.reason, stateId: context.stateId }) };
+        }
+        const actionId = `flow:${flow.name}:${index}`;
+        this.attribution = { actionId };
+        if (!/^https?:/.test(page.url()) || page.isClosed())
+          page = await this.recyclePage(browser, page, observers.all);
+        if (!(await this.goto(page, url))) {
+          return {
+            page,
+            report: done('FAILED', {
+              reason: `navigation to ${redactUrl(url)} failed`,
+              stateId: context.stateId,
+            }),
+          };
+        }
+        this.actionsExecuted += 1;
+        const after = await this.observeState(page, context.metadata.depth + 1);
+        this.graph.addEdge({
+          from: context.stateId,
+          to: after.stateId,
+          actionId,
+          action: {
+            type: 'navigate',
+            category: 'navigation',
+            classification: 'SAFE',
+            href: redactUrl(url),
+            text: step.url,
+          },
+          result: 'SUCCESS',
+          durationMs: Date.now() - started,
+          flow: flow.name,
+        });
+        return {
+          page,
+          context: after,
+          report: done('PASSED', { stateId: after.stateId, url: after.url, classification: 'SAFE' }),
+        };
+      }
+      case 'click':
+      case 'check':
+      case 'uncheck':
+      case 'fill':
+      case 'select':
+        return this.runFlowElementStep(page, browser, observers, flow, step, context, timeout, done);
+    }
+  }
+
+  private async runFlowElementStep(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    flow: FlowConfig,
+    step: Extract<FlowStep, { target: unknown }>,
+    context: PageContext,
+    timeout: number,
+    finish: (status: FlowStatus, extra?: Partial<FlowStepReport>) => FlowStepReport,
+  ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
+    let done = finish;
+    // "Where is it?"
+    const located = await this.flowSteps.locate(page, step.target, timeout);
+    if (typeof located === 'string') {
+      return {
+        page,
+        report: done('FAILED', { reason: located, stateId: context.stateId, url: context.url }),
+      };
+    }
+
+    // "What is it?" — the same observation and classification as autonomous exploration.
+    let before: PageContext;
+    let action: DiscoveredAction | undefined;
+    try {
+      await this.flowSteps.mark(located);
+      before = await this.observeState(page, context.metadata.depth);
+      const element = this.lastSnapshot?.elements.find((candidate) => candidate.flowTarget === true);
+      action =
+        element && this.lastSnapshot
+          ? this.discovery.discover({ ...this.lastSnapshot, elements: [element] }, before.stateId)[0]
+          : undefined;
+    } catch (error) {
+      await this.flowSteps.unmark(page);
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        page,
+        report: done('FAILED', {
+          reason: `cannot inspect the element: ${message.split('\n')[0] ?? message}`,
+          stateId: context.stateId,
+        }),
+      };
+    } finally {
+      await this.flowSteps.unmark(page);
+    }
+    if (!action) {
+      // Not an interactive element (plain text, div…): classified from its visible text.
+      const text = ((await located.innerText({ timeout }).catch(() => '')) || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+      action = this.syntheticAction(before.stateId, step, text);
+    }
+    if (action.risks.includes('sensitive-data')) {
+      // Never show what is typed in a sensitive field, even a literal value from the mission.
+      const masked = describeStep(step, true);
+      done = (status, extra = {}) => ({ ...finish(status, extra), description: masked });
+    }
+    if (action.disabled) {
+      return {
+        page,
+        report: done('FAILED', {
+          reason: 'element is disabled',
+          stateId: before.stateId,
+          url: before.url,
+          classification: action.classification,
+        }),
+      };
+    }
+
+    // "Is it allowed?" — before Playwright, whatever the YAML says.
+    const value = step.kind === 'fill' ? step.value : undefined;
+    const verdict = evaluateFlowAction(this.safety, action, {
+      allow: step.allow,
+      valueFromEnv: value !== undefined && typeof value !== 'string',
+    });
+    if (verdict.verdict === 'BLOCK') {
+      this.graph.addEdge({
+        from: before.stateId,
+        to: before.stateId,
+        actionId: action.id,
+        action: summaryOf(action),
+        result: 'BLOCKED',
+        reason: verdict.reason,
+        flow: flow.name,
+      });
+      return {
+        page,
+        context: before,
+        report: done('BLOCKED', {
+          reason: verdict.reason,
+          stateId: before.stateId,
+          url: before.url,
+          classification: action.classification,
+        }),
+      };
+    }
+
+    let elementAction: FlowElementAction;
+    if (step.kind === 'fill') {
+      const resolved = typeof step.value === 'string' ? step.value : this.env[step.value.env];
+      if (resolved === undefined) {
+        const name = typeof step.value === 'string' ? '' : step.value.env;
+        return {
+          page,
+          context: before,
+          report: done('FAILED', {
+            reason: `environment variable ${name} is not set`,
+            stateId: before.stateId,
+            url: before.url,
+            classification: action.classification,
+          }),
+        };
+      }
+      elementAction = { kind: 'fill', value: resolved };
+    } else if (step.kind === 'select') {
+      elementAction = { kind: 'select', option: step.option };
+    } else {
+      elementAction = { kind: step.kind };
+    }
+
+    // "Execute it."
+    const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
+    this.attribution = { actionId: action.id };
+    const error = await this.flowSteps.perform(page, located, elementAction, timeout);
+    this.actionsExecuted += 1;
+    const newIssues = (): string[] =>
+      this.collector
+        .all()
+        .filter((issue) => !issuesBefore.has(issue.id))
+        .map((issue) => issue.id);
+
+    if (error || !this.isExplorablePage(page) || observers.pageErrors.consumeCrash()) {
+      const ids = newIssues();
+      this.collector.assignState(ids, before.stateId, before.metadata.flow);
+      const edge = this.graph.addEdge({
+        from: before.stateId,
+        to: before.stateId,
+        actionId: action.id,
+        action: summaryOf(action),
+        result: 'FAILED',
+        reason: error ?? 'left the allowed hosts, or the page crashed',
+        issueIds: ids,
+        flow: flow.name,
+      });
+      this.graph.attachIssues(before.stateId, ids);
+      this.listener.onTransition?.(edge, action);
+      if (!/^https?:/.test(page.url()) || page.isClosed())
+        page = await this.recyclePage(browser, page, observers.all);
+      return {
+        page,
+        context: before,
+        report: done('FAILED', {
+          reason: edge.reason ?? 'action failed',
+          stateId: before.stateId,
+          url: before.url,
+          classification: action.classification,
+        }),
+      };
+    }
+
+    // "What happened?"
+    const after = await this.observeState(page, before.metadata.depth + 1);
+    const ids = newIssues();
+    const edge = this.graph.addEdge({
+      from: before.stateId,
+      to: after.stateId,
+      actionId: action.id,
+      action: summaryOf(action),
+      result: 'SUCCESS',
+      issueIds: ids,
+      flow: flow.name,
+    });
+    for (const issue of this.collector.all()) {
+      if (ids.includes(issue.id)) {
+        issue.actionId ??= action.id;
+        issue.flow = this.graph.flowTo(after.stateId);
+      }
+    }
+    await this.captureErrorScreenshot(page, after, ids);
+    this.listener.onTransition?.(edge, action);
+    return {
+      page,
+      context: after,
+      report: done('PASSED', {
+        stateId: after.stateId,
+        url: after.url,
+        classification: action.classification,
+      }),
+    };
+  }
+
+  /** Classification of an element the observer does not list (plain text, container…). */
+  private syntheticAction(
+    stateId: string,
+    step: Extract<FlowStep, { target: unknown }>,
+    text: string,
+  ): DiscoveredAction {
+    const type =
+      step.kind === 'fill' || step.kind === 'select' || step.kind === 'check' || step.kind === 'uncheck'
+        ? step.kind
+        : 'click';
+    const label = step.target.name ?? step.target.value ?? '';
+    const classification = this.safety.classify({ type, category: 'other', text: text || label });
+    return {
+      id: `flow-target:${stateId}:${step.kind}:${label}`,
+      stateId,
+      type,
+      category: 'other',
+      elementType: 'element',
+      ...(text ? { text } : {}),
+      disabled: false,
+      visible: true,
+      ...classification,
+      locator: {
+        strategy: step.target.strategy === 'role' ? 'role' : step.target.strategy,
+        ...(step.target.role ? { role: step.target.role } : {}),
+        ...(step.target.name !== undefined ? { name: step.target.name } : {}),
+        ...(step.target.value !== undefined ? { value: step.target.value } : {}),
+      },
+    };
+  }
+
+  /** A FLOW issue for a failed or blocked step (ERROR, WARNING for optional steps), with a screenshot. */
+  private async flowIssue(
+    flow: FlowConfig,
+    step: FlowStepReport | undefined,
+    reason: string,
+    optional: boolean,
+    page: Page,
+    context?: PageContext,
+  ): Promise<void> {
+    const where = step
+      ? `step ${step.index} "${step.description}" ${step.status.toLowerCase()}`
+      : 'could not start';
+    const issue = this.collector.add({
+      type: 'FLOW',
+      severity: SeverityRules.flowStep(optional),
+      message: `Flow "${flow.name}" — ${where}: ${reason}`,
+      pageUrl: context?.url ?? (page.isClosed() ? this.startUrl : page.url()),
+      ...(context ? { stateId: context.stateId, flow: this.graph.flowTo(context.stateId) } : {}),
+    });
+    if (context) this.graph.attachIssues(context.stateId, [issue.id]);
+    if (!step || page.isClosed() || !(this.config.checks.screenshotOnError || this.config.checks.screenshots))
+      return;
+    const file = await this.screenshots.captureState(
+      page,
+      this.graph.nodeCount,
+      `${flow.name}-step-${step.index}`,
+      step.status === 'BLOCKED' ? 'blocked' : 'failed',
+    );
+    if (file) {
+      issue.screenshot ??= file;
+      step.screenshot ??= file;
+    }
+  }
+
   // ---------------------------------------------------------------- navigation
 
   private pushState(context: PageContext): void {
@@ -466,6 +1027,7 @@ export class FlowExplorer {
     page: Page,
     browser: BrowserManager,
     observers: PageObserver[],
+    allowJump = true,
   ): Promise<{ page: Page; context?: PageContext }> {
     const from = this.stack[this.stack.length - 1]?.stateId ?? '';
     while (this.stack.length > 1) {
@@ -483,7 +1045,7 @@ export class FlowExplorer {
     }
 
     // The current path is exhausted: look for any other state with unexplored actions.
-    for (const node of this.graph.allNodes()) {
+    for (const node of allowJump ? this.graph.allNodes() : []) {
       if (this.exhausted.has(node.id) || this.unreachable.has(node.id)) continue;
       if (this.graph.getUnexploredActions(node.id).length === 0) {
         this.exhausted.add(node.id);
@@ -688,6 +1250,7 @@ export class FlowExplorer {
       graph: this.graph,
       issues: this.collector.all(),
       details: this.details,
+      flows: this.flowReports,
       stopReason,
       startedAt: this.startedAt,
       finishedAt: new Date(),
@@ -697,4 +1260,16 @@ export class FlowExplorer {
       startUrl: redactUrl(this.startUrl),
     };
   }
+}
+
+function skippedStep(step: FlowStep, index: number, reason: string): FlowStepReport {
+  return {
+    index,
+    kind: step.kind,
+    description: describeStep(step),
+    status: 'SKIPPED',
+    optional: step.optional,
+    reason,
+    durationMs: 0,
+  };
 }

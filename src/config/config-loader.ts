@@ -179,6 +179,18 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
   if (config.safety.allowedActionClasses.includes('MUTATION')) {
     warnings.push('safety.allowedActionClasses includes MUTATION: the crawler may modify data.');
   }
+  for (const flow of config.flows) {
+    if (flow.startAt !== undefined && !flow.startAt.startsWith('/') && !/^https?:\/\//i.test(flow.startAt)) {
+      flow.startAt = `/${flow.startAt}`;
+    }
+    const mutating = flow.steps.filter((step) => step.allow.includes('MUTATION')).length;
+    if (mutating > 0) {
+      warnings.push(`flow "${flow.name}": ${mutating} step(s) allow MUTATION and may modify data.`);
+    }
+  }
+  if (!config.exploration.autonomous && config.flows.length === 0) {
+    warnings.push('exploration.autonomous is false and no flow is defined: nothing will be tested.');
+  }
   if (config.auth.type === 'form' && !config.auth.successSelector && !config.auth.successUrlContains) {
     warnings.push(
       'auth: neither successSelector nor successUrlContains is set; login success cannot be verified.',

@@ -58,6 +58,7 @@ export function renderHtml(
   );
   const jsIssues = bySeverity.filter((issue) => ['CONSOLE', 'PAGE_ERROR', 'PAGE_CRASH'].includes(issue.type));
   const navigationIssues = bySeverity.filter((issue) => issue.type === 'NAVIGATION');
+  const flowIssues = bySeverity.filter((issue) => issue.type === 'FLOW');
   const executed = result.transitions.filter((edge) => edge.result !== 'BLOCKED');
   const blocked = result.transitions.filter((edge) => edge.result === 'BLOCKED');
   const tree = buildFlowTree(result.states, result.transitions, result.states[0]?.id);
@@ -112,6 +113,7 @@ export function renderHtml(
     ${card('Actions blocked', result.stats.actionsBlocked)}
     ${card('Max depth', result.stats.maxDepth)}
     ${card('Backtracks', result.stats.backtracks)}
+    ${result.flows.length > 0 ? card('Flows passed', `${result.stats.flowsPassed}/${result.flows.length}`) : ''}
     ${card('Issues', result.issues.length)}
     ${SEVERITIES.slice()
       .reverse()
@@ -120,12 +122,15 @@ export function renderHtml(
     ${card('Duration', formatDuration(result.durationMs))}
   </div>
 
+  ${result.flows.length > 0 ? flowsSection(result, nameOf, href) : ''}
+
   <section>
     <h2>Discovered flow</h2>
     <p class="muted">Each state appears under the state from which it was first reached, with the action that led there.</p>
     ${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length)}
   </section>
 
+  ${flowIssues.length > 0 ? issueTable('Flow failures', flowIssues, false) : ''}
   ${issueTable('HTTP errors & broken pages', httpIssues, true)}
   ${issueTable('JavaScript errors', jsIssues, false)}
   ${navigationIssues.length > 0 ? issueTable('Navigation problems', navigationIssues, true) : ''}
@@ -182,6 +187,31 @@ export function renderHtml(
 </body>
 </html>
 `;
+}
+
+function flowsSection(
+  result: ExplorationResult,
+  nameOf: (stateId: string) => string,
+  href: (file: string) => string,
+): string {
+  const runs = result.flows
+    .map((flow) => {
+      const rows = flow.steps
+        .map(
+          (step) =>
+            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.optional ? ' <span class="muted">(optional)</span>' : ''}</td><td>${step.classification ? classPill(step.classification) : ''}</td><td>${classPill(step.status)}</td><td class="wrap muted">${esc(step.reason ?? '')}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">view</a>` : ''}</td></tr>`,
+        )
+        .join('');
+      return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ' · last screen explored' : ''}</span></h3>
+      ${flow.description ? `<p class="muted">${esc(flow.description)}</p>` : ''}
+      <table><thead><tr><th>#</th><th>Step</th><th>Class</th><th>Result</th><th>Reason</th><th>State</th><th>Duration</th><th>Shot</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    })
+    .join('');
+  return `<section>
+    <h2>Imposed flows (${result.flows.length})</h2>
+    <p class="muted">Steps written in the mission, run in order. Each step still goes through the safety policy: DANGEROUS actions never run, MUTATION ones only with <code>allow: MUTATION</code>.</p>
+    ${runs}
+  </section>`;
 }
 
 function statesTable(states: StateReport[], href: (file: string) => string): string {

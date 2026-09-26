@@ -59,6 +59,8 @@ export interface UiElement {
   pattern?: string;
   /** Option labels of a <select> (first 30). */
   options?: string[];
+  /** The element targeted by the current imposed flow step. */
+  flowTarget?: boolean;
   /** Best-effort CSS selector (last-resort locator). */
   css: string;
 }

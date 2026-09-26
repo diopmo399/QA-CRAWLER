@@ -46,6 +46,8 @@ export interface FlowEdge {
   timestamp: string;
   durationMs?: number;
   issueIds: string[];
+  /** Name of the imposed flow that executed this transition (absent for autonomous exploration). */
+  flow?: string;
 }
 
 export interface FlowGraphData {

@@ -26,6 +26,7 @@ No AI, no LLM, no API token, no GPU: same application, same exploration.
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [Mission (YAML)](#mission-yaml)
+- [Imposed flows](#imposed-flows)
 - [Safety](#safety)
 - [State detection and loop protection](#state-detection-and-loop-protection)
 - [Forms](#forms)
@@ -112,7 +113,7 @@ When the whole path is exhausted, it jumps to any known state that still has une
 
 ## Mission (YAML)
 
-The YAML describes a **mission**: a goal and limits, not steps. Only `target.baseUrl` is required.
+The YAML describes a **mission**: a goal and limits. Only `target.baseUrl` is required. To make the explorer follow precise steps as well, add [imposed flows](#imposed-flows).
 [`scenarios/example.yaml`](scenarios/example.yaml) documents every key with its default value.
 
 ```yaml
@@ -156,12 +157,78 @@ safety:
 | `safety.allow`                                                                 | all kinds                      | `navigation`, `tabs`, `menus`, `details`, `pagination`, `search`, `filter`, `forms`, `other`                                          |
 | `safety.block`                                                                 | see below                      | `delete`, `payment`, `send`, `logout`, `irreversible`, `sensitive-data`, `external-navigation`, `form-submit`, `mutation`, `download` |
 | `safety.allowedHosts` / `ignoredPaths`                                         | host of `baseUrl` / `/logout`… | Where the explorer may go                                                                                                             |
+| `exploration.autonomous`                                                       | `true`                         | Explore autonomously after the flows; `false` runs only the flows                                                                     |
+| `flows`                                                                        | `[]`                           | [Imposed flows](#imposed-flows), run before the autonomous exploration                                                                |
 | `memory.resume`                                                                | `false`                        | Continue from the previous `flow-graph.json`, skipping actions already tried                                                          |
 | `checks.*`, `http.*`, `browser.*`, `auth`, `output.*`, `report.failOnSeverity` |                                | As in the example file                                                                                                                |
 
 Unknown keys are rejected, so a typo like `explorations:` fails instead of being ignored.
 
 Scenarios written for the first version (`name`, `maxPages`, `maxUrlsPerRoute`, `clickSafeActions`) still load, with a deprecation warning.
+
+## Imposed flows
+
+The autonomous explorer decides by itself what to click. When a test must follow a precise path (log in, create a record through a wizard, check the confirmation), list the steps in `flows`. [`scenarios/demo-flows.yaml`](scenarios/demo-flows.yaml) is a complete example.
+
+```yaml
+flows:
+  - name: creer-un-devoir
+    description: Create a homework through the 2-step dialog
+    startAt: /app/admin/devoirs # page loaded before the first step (default: target.startAt)
+    thenExplore: false # true: explore autonomously from the last screen
+    steps:
+      - click: { role: button, name: Nouveau devoir }
+      - fill: { label: Titre, value: Devoir QA }
+      - select: { label: Classe, option: N1 10-12 Dimanche }
+      - click: { role: button, name: Suivant }
+      - expect: { text: Étape 2 }
+      - screenshot: etape-2
+      - click: { role: button, name: Enregistrer }
+        allow: MUTATION # explicit permission, for this step only
+      - expect: { text: Devoir créé }
+```
+
+**Steps.** Each step has exactly one action.
+
+| Step         | Example                                            | What it does                                                                            |
+| ------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `goto`       | `goto: /dossiers`                                  | Loads a page (relative to `target.baseUrl`)                                             |
+| `click`      | `click: { role: button, name: Suivant }`           | Clicks the element                                                                      |
+| `fill`       | `fill: { label: Titre, value: Dossier QA }`        | Types a value; `value: { env: NAME }` reads it from an environment variable             |
+| `select`     | `select: { label: Catégorie, option: Subvention }` | Native `<select>`, or a custom one (Angular Material): opens it and clicks the option   |
+| `check`      | `check: { label: J'accepte les conditions }`       | Checks a checkbox (`uncheck` unchecks it)                                               |
+| `expect`     | `expect: { text: Étape 2, url: /create }`          | Waits until it holds: `text`, `url` (contains), `visible: <target>`, `hidden: <target>` |
+| `screenshot` | `screenshot: confirmation`                         | Named screenshot, linked in the report                                                  |
+
+**Targets** use one strategy, as in Playwright: `role` (+ `name`), `label`, `text`, `testId` or `css`. Add `exact: true` for an exact match and `nth: 2` to pick the third match. Without `nth`, when several elements match, the one inside an open dialog wins (the page behind a modal cannot be clicked).
+
+**Common options** on any step: `name` (label in reports), `allow`, `optional: true` (a failure only warns and the flow goes on), `timeoutMs`.
+
+**Safety still applies.** The YAML chooses the element, but the `SafetyPolicy` classifies it exactly as during autonomous exploration and decides:
+
+| Target                                                                 | Runs?                                                                   |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `SAFE` (navigation, tab, "Suivant", non-sensitive field…)              | yes                                                                     |
+| `MUTATION` (créer, enregistrer, submit…)                               | only with `allow: MUTATION` on the step                                 |
+| `UNKNOWN` (icon-only control)                                          | only with `allow: UNKNOWN` on the step                                  |
+| `DANGEROUS` (supprimer, payer, envoyer, déconnexion…)                  | **never**                                                               |
+| Password, OTP, secret field                                            | only with `value: { env: NAME }`; the value never appears in the output |
+| Payment field (card, CVV, IBAN)                                        | **never**                                                               |
+| Link or `goto` outside `allowedHosts`, to an ignored or dangerous path | **never**                                                               |
+
+**Run order.**
+
+1. Log in (`auth`) and load `target.startAt`.
+2. Run each flow in order, each from a freshly loaded `startAt`. A failed or blocked step stops its flow; the next steps are `SKIPPED`.
+3. With `thenExplore: true`, explore autonomously below the flow's last screen (states often reachable only through the flow).
+4. With `exploration.autonomous: true` (default), explore the application from `target.startAt`.
+
+**Results.**
+
+- Each flow is `PASSED`, `FAILED`, `BLOCKED` or `SKIPPED`; each step records its status, classification, reason, state and duration.
+- A failed or blocked step raises a `FLOW` issue (`ERROR`, or `WARNING` for an optional step) with a screenshot, so the run fails in CI like any other error.
+- Flow transitions are stored in the flow graph, tagged with the flow name.
+- `index.html` has an _Imposed flows_ section; `result.json` has a `flows` array.
 
 ## Safety
 
@@ -191,11 +258,13 @@ A future decision engine, whether a local or a cloud LLM, cannot bypass it.
 
 **3. Blocked actions are recorded** in the flow graph (`BLOCKED` transitions, with the reason) and shown in the reports.
 
-**4. Sensitive data is never filled**, whatever the configuration:
+**4. Sensitive data is never filled automatically**, whatever the configuration:
 
 - passwords;
 - payment cards (`autocomplete="cc-*"`, card number, CVV, IBAN);
 - OTP codes, secrets, social security numbers.
+
+An [imposed flow](#imposed-flows) may fill a password or secret field only with a value read from an environment variable (`value: { env: NAME }`). Payment fields are never filled.
 
 **5. Browser dialogs** (`confirm`, `alert`, `prompt`) are always dismissed. New windows are closed.
 

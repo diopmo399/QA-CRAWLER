@@ -148,6 +148,29 @@ show(1);`,
        <button type="button" onclick="fetch('/api/danger/purge',{method:'POST'})">Vider le cache</button>
        <a href="https://external.example.com/docs">Documentation externe</a>`,
     ),
+  // Not linked from the menu: only reached by imposed flows.
+  '/login': () =>
+    layout(
+      'Connexion',
+      `<form onsubmit="return false">
+        <label for="identifiant">Identifiant</label><input id="identifiant" name="identifiant">
+        <label for="mdp">Mot de passe</label><input id="mdp" name="mdp" type="password">
+        <button type="button" id="connexion">Se connecter</button>
+        <p id="message"></p>
+      </form>`,
+      "document.querySelector('#connexion').addEventListener('click', () => { const ok = document.querySelector('#mdp').value.length > 0; document.querySelector('#message').textContent = ok ? 'Bienvenue ' + document.querySelector('#identifiant').value : 'Mot de passe requis'; });",
+    ),
+  // A field of the page with the same label as a field of the open modal dialog.
+  '/equipe': () =>
+    layout(
+      'Équipe',
+      `<label for="filtre-nom">Nom</label><input id="filtre-nom">
+       <div role="dialog" aria-modal="true" aria-label="Nouveau membre" style="position:fixed;inset:60px;background:#fff;border:1px solid #333;padding:20px">
+         <label for="membre-nom">Nom</label><input id="membre-nom">
+         <p id="apercu"></p>
+       </div>`,
+      "document.querySelector('#membre-nom').addEventListener('input', (e) => { document.querySelector('#apercu').textContent = 'Aperçu : ' + e.target.value; });",
+    ),
   '/admin/logs': () =>
     layout(
       'Journal',

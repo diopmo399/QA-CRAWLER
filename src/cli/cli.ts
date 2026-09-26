@@ -80,6 +80,11 @@ export async function runCli(argv: string[]): Promise<number> {
   logger.info(
     `  Safety   : executes [${safety.allowedActionClasses.join(', ')}] ${safety.allow.join('/')}; blocks ${safety.block.join(', ')}`,
   );
+  if (config.flows.length > 0) {
+    logger.info(
+      `  Flows    : ${config.flows.map((flow) => `${flow.name} (${flow.steps.length} steps)`).join(', ')}${exploration.autonomous ? ', then autonomous exploration' : ' only'}`,
+    );
+  }
   for (const warning of warnings) logger.warn(`  ! ${warning}`);
   logger.info('');
 
@@ -102,6 +107,13 @@ export async function runCli(argv: string[]): Promise<number> {
     logger.info(
       `  Issues        : ${result.issues.length} (${color.red(`${counts.CRITICAL} critical`)}, ${color.red(`${counts.ERROR} error`)}, ${color.yellow(`${counts.WARNING} warning`)}, ${counts.INFO} info)`,
     );
+    if (result.flows.length > 0) {
+      const statusCount = (status: string): number =>
+        result.flows.filter((flow) => flow.status === status).length;
+      logger.info(
+        `  Flows         : ${result.flows.length} (${color.green(`${statusCount('PASSED')} passed`)}, ${color.red(`${statusCount('FAILED')} failed`)}, ${color.yellow(`${statusCount('BLOCKED')} blocked`)}, ${statusCount('SKIPPED')} skipped)`,
+      );
+    }
     logger.info(`  Stopped       : ${result.stopReason} after ${(result.durationMs / 1000).toFixed(1)} s`);
     if (result.artifacts.json) logger.info(`  JSON report   : ${result.artifacts.json}`);
     if (result.artifacts.html) logger.info(`  HTML report   : ${result.artifacts.html}`);
@@ -168,6 +180,36 @@ function progressListener(quiet: boolean): ExplorationListener {
     onBacktrack(_from, to, method) {
       if (quiet) return;
       logger.info(`      ${color.magenta('↩ backtrack')} ${to ?? ''} ${color.dim(`(${method})`)}`);
+    },
+    onFlowStart(flow) {
+      logger.info(
+        `${color.bold(color.cyan('▶ flow'))} ${color.bold(flow.name)} ${color.dim(`(${flow.steps.length} steps)`)}`,
+      );
+    },
+    onFlowStep(_flow, step) {
+      const mark =
+        step.status === 'PASSED'
+          ? color.green('✓')
+          : step.status === 'SKIPPED'
+            ? color.dim('-')
+            : step.status === 'BLOCKED'
+              ? color.yellow('⛔')
+              : color.red('✗');
+      const reason = step.reason ? ` ${color.dim(`(${step.reason})`)}` : '';
+      logger.info(
+        `   ${mark} ${String(step.index).padStart(2, ' ')}. ${step.description}${step.status !== 'PASSED' ? ` ${step.status}` : ''}${reason}`,
+      );
+    },
+    onFlowEnd(report) {
+      const status =
+        report.status === 'PASSED'
+          ? color.green(report.status)
+          : report.status === 'SKIPPED'
+            ? color.dim(report.status)
+            : color.red(report.status);
+      logger.info(
+        `${color.bold(color.cyan('■ flow'))} ${report.name}: ${status} ${color.dim(`${(report.durationMs / 1000).toFixed(1)} s${report.explored ? ', last screen explored' : ''}`)}`,
+      );
     },
     onIssue(issue, isNew) {
       if (quiet || !isNew) return;
