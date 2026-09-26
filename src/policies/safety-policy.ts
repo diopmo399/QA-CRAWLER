@@ -9,6 +9,7 @@ import type {
 import {
   KeywordMatcher,
   MUTATION_KEYWORDS,
+  PAYMENT_FIELD_KEYWORDS,
   RISK_KEYWORDS,
   SENSITIVE_FIELD_KEYWORDS,
   STEP_KEYWORDS,
@@ -85,6 +86,7 @@ export class SafetyPolicy {
   private readonly mutation: KeywordMatcher;
   private readonly step: KeywordMatcher;
   private readonly sensitive = new KeywordMatcher(SENSITIVE_FIELD_KEYWORDS);
+  private readonly payment = new KeywordMatcher(PAYMENT_FIELD_KEYWORDS);
   private readonly allowedClasses: ReadonlySet<ActionClassification>;
   private readonly allowedGroups: ReadonlySet<SafeActionGroup>;
   private readonly blocked: ReadonlySet<RiskKind>;
@@ -231,6 +233,22 @@ export class SafetyPolicy {
       }
     }
     return { verdict: 'ALLOW', reason: action.reason };
+  }
+
+  /** Card, IBAN… fields: never filled, whatever the source of the value. */
+  isPaymentField(action: DiscoveredAction): boolean {
+    const field = action.field;
+    if (/^cc-/.test(field?.autocomplete ?? '')) return true;
+    return (
+      this.payment.match(
+        action.label,
+        action.text,
+        action.name,
+        field?.label,
+        field?.name,
+        field?.placeholder,
+      ) !== undefined
+    );
   }
 
   /** Whether an action class may run at all (used to pre-filter candidates). */

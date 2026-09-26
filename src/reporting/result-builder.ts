@@ -67,9 +67,13 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
         (total, state) => total + state.forms.filter((form) => form.index >= 0).length,
         0,
       ),
+      flowsPassed: outcome.flows.filter((flow) => flow.status === 'PASSED').length,
+      flowsFailed: outcome.flows.filter((flow) => flow.status === 'FAILED' || flow.status === 'BLOCKED')
+        .length,
     },
     states,
     transitions: edges,
+    flows: outcome.flows,
     issues,
     settings: {
       exploration,
@@ -80,6 +84,11 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
       browser: { headless: browser.headless, viewport: browser.viewport },
       auth: { type: auth.type },
       failOnSeverity: report.failOnSeverity,
+      flows: config.flows.map((flow) => ({
+        name: flow.name,
+        steps: flow.steps.length,
+        thenExplore: flow.thenExplore,
+      })),
     },
     artifacts: {},
   };

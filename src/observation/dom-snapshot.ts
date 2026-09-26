@@ -12,6 +12,8 @@ export type DomSnapshot = Omit<UiSnapshot, 'url' | 'title'>;
  * getByRole uses). Field values are never read.
  */
 export function collectDomSnapshot(options: { maxElements: number }): DomSnapshot {
+  // Set by the flow runner on the element an imposed step targets (see FlowStepExecutor).
+  const FLOW_TARGET_ATTRIBUTE = 'data-qa-flow-target';
   const CANDIDATES = [
     'a[href]',
     'button',
@@ -176,7 +178,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
   const elements: UiElement[] = [];
   const all = Array.from(document.querySelectorAll(CANDIDATES));
   for (const [index, el] of all.entries()) {
-    if (elements.length >= options.maxElements) break;
+    if (elements.length >= options.maxElements && !el.hasAttribute(FLOW_TARGET_ATTRIBUTE)) continue;
     if (!isVisible(el)) continue;
     const tag = el.tagName.toLowerCase();
     const isField = ['input', 'select', 'textarea'].includes(tag);
@@ -272,6 +274,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       expanded: ariaExpanded !== null ? ariaExpanded === 'true' : undefined,
       formIndex: formIndex >= 0 ? formIndex : undefined,
       dialogName,
+      flowTarget: el.hasAttribute(FLOW_TARGET_ATTRIBUTE) ? true : undefined,
       min: attr('min'),
       max: attr('max'),
       step: attr('step'),

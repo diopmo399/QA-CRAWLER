@@ -1,10 +1,17 @@
 import type { ActionClassification, DiscoveredAction, DiscoveredForm } from './discovered-action.js';
 import type { FlowEdge, FlowNode } from './flow.js';
+import type { FlowRunReport } from './flow-run.js';
 import type { Issue, IssueType, Severity } from './issue.js';
 
 /** Why the exploration ended. */
 export type StopReason =
-  'exhausted' | 'max-states' | 'max-actions' | 'max-duration' | 'engine-stop' | 'unreachable-start';
+  | 'exhausted'
+  | 'flows-only'
+  | 'max-states'
+  | 'max-actions'
+  | 'max-duration'
+  | 'engine-stop'
+  | 'unreachable-start';
 
 export interface ExplorationStats {
   states: number;
@@ -19,6 +26,8 @@ export interface ExplorationStats {
   issuesByType: Record<IssueType, number>;
   actionsByClassification: Record<ActionClassification, number>;
   formsFound: number;
+  flowsPassed: number;
+  flowsFailed: number;
 }
 
 /** A state with everything observed on it. */
@@ -44,6 +53,8 @@ export interface ExplorationResult {
   stats: ExplorationStats;
   states: StateReport[];
   transitions: FlowEdge[];
+  /** Imposed flows, in mission order. */
+  flows: FlowRunReport[];
   issues: Issue[];
   /** Non-secret summary of the effective configuration. */
   settings: Record<string, unknown>;

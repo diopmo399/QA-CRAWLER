@@ -84,6 +84,12 @@ export const BASE_CSS = `
   td.wrap { word-break:break-word; }
   .sev { display:inline-block; padding:1px 8px; border-radius:999px; color:#fff; font-size:11px; font-weight:700; }
   .pill { display:inline-block; padding:1px 7px; border-radius:6px; background:#eef2ff; font-size:11px; margin:1px; }
+  .pill.PASSED, .pill.SUCCESS { background:#dcfce7; color:#166534; }
+  .pill.FAILED, .pill.DANGEROUS { background:#fee2e2; color:#991b1b; }
+  .pill.BLOCKED, .pill.MUTATION { background:#fef3c7; color:#92400e; }
+  .pill.SKIPPED, .pill.UNKNOWN { background:#f1f5f9; color:#475569; }
+  .flow-run { margin-bottom:18px; }
+  .flow-run h3 { margin:0 0 6px; font-size:15px; }
   .SAFE, .SUCCESS { background:#dcfce7; } .MUTATION { background:#fef3c7; } .DANGEROUS, .BLOCKED { background:#fee2e2; } .UNKNOWN { background:#e5e7eb; } .FAILED { background:#fde68a; }
   .muted { color:var(--muted); }
   .empty { color:var(--muted); font-style:italic; }
