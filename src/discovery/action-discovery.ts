@@ -114,6 +114,8 @@ export class ActionDiscovery {
         locator,
         ...(locator.strategy !== 'css' ? { fallback: { strategy: 'css' as const, value: element.css } } : {}),
         ...(element.dialogName ? { dialogName: element.dialogName } : {}),
+        ...(element.foreground ? { foreground: true } : {}),
+        ...(element.obscured ? { obscured: true } : {}),
         ...(element.formIndex !== undefined ? { formIndex: element.formIndex } : {}),
         ...(external ? { external } : {}),
         ...(isField(type) ? { field: fieldConstraints(element) } : {}),

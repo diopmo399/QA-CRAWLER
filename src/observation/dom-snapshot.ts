@@ -174,11 +174,69 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       ((form.getAttribute('method') ?? 'get').toLowerCase() === 'get' &&
         form.querySelector('input[type="search"], input[name="q"], input[name="search"]') !== null));
 
+  // ---- foreground: what is in front of the screen (modal, drawer, open menu, cookie banner…)
+  const LAYERS =
+    '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], .cdk-overlay-pane, [role="menu"], [role="listbox"]';
+  // A menu or listbox is in front only when it floats (dropdown), not when it is part of the page (sidebar).
+  const floating = (el: Element): boolean => {
+    let current: Element | null = el;
+    for (let depth = 0; current && depth < 4; depth += 1, current = current.parentElement) {
+      const position = window.getComputedStyle(current).position;
+      if (position === 'fixed' || position === 'absolute') return true;
+    }
+    return false;
+  };
+  const layers = Array.from(document.querySelectorAll(LAYERS)).filter(
+    (el) =>
+      isVisible(el) &&
+      el.querySelector(CANDIDATES) !== null &&
+      !el.parentElement?.closest(LAYERS) &&
+      (!el.matches('[role="menu"], [role="listbox"]') || floating(el)),
+  );
+  // A layer that takes the pointer from the page behind: an aria-modal/<dialog> modal, or a
+  // fixed/absolute layer covering most of the viewport whatever its markup (backdrop + box).
+  const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+  const coveringLayer = (): Element | undefined => {
+    const points: [number, number][] = [
+      [0.5, 0.5],
+      [0.5, 0.3],
+      [0.5, 0.7],
+    ];
+    for (const [x, y] of points) {
+      let hit = document.elementFromPoint(window.innerWidth * x, window.innerHeight * y);
+      let covering: Element | undefined;
+      while (hit && hit !== document.body && hit !== document.documentElement) {
+        const position = window.getComputedStyle(hit).position;
+        const rect = hit.getBoundingClientRect();
+        if (
+          (position === 'fixed' || position === 'absolute') &&
+          (rect.width * rect.height) / viewportArea >= 0.6
+        )
+          covering = hit; // keep the outermost one: the backdrop's container holds the box
+        hit = hit.parentElement;
+      }
+      if (covering && covering.querySelector(CANDIDATES) !== null) return covering;
+    }
+    return undefined;
+  };
+  const modal =
+    layers.find((el) => el.matches('[aria-modal="true"], dialog[open]:modal, [role="alertdialog"]')) ??
+    coveringLayer();
+  if (modal && !layers.includes(modal)) layers.push(modal);
+  const foregroundOf = (el: Element): boolean => layers.some((layer) => layer.contains(el));
+  const overlayName = (el: Element): string => {
+    const heading = el.querySelector<HTMLElement>('h1, h2, h3, [role="heading"]');
+    return clean(el.getAttribute('aria-label') ?? heading?.innerText ?? '', 80) || 'overlay';
+  };
+
   // ---- interactive elements
   const elements: UiElement[] = [];
   const all = Array.from(document.querySelectorAll(CANDIDATES));
   for (const [index, el] of all.entries()) {
-    if (elements.length >= options.maxElements && !el.hasAttribute(FLOW_TARGET_ATTRIBUTE)) continue;
+    const foreground = layers.length > 0 && foregroundOf(el);
+    // What is in front is always kept, even beyond maxElements (overlays are often last in the DOM).
+    if (elements.length >= options.maxElements && !el.hasAttribute(FLOW_TARGET_ATTRIBUTE) && !foreground)
+      continue;
     if (!isVisible(el)) continue;
     const tag = el.tagName.toLowerCase();
     const isField = ['input', 'select', 'textarea'].includes(tag);
@@ -275,6 +333,9 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       formIndex: formIndex >= 0 ? formIndex : undefined,
       dialogName,
       flowTarget: el.hasAttribute(FLOW_TARGET_ATTRIBUTE) ? true : undefined,
+      foreground: foreground ? true : undefined,
+      // Behind a modal layer: the page behind cannot receive the click.
+      obscured: modal !== undefined && !foreground ? true : undefined,
       min: attr('min'),
       max: attr('max'),
       step: attr('step'),
@@ -372,6 +433,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
         const heading = el.querySelector<HTMLElement>('h1, h2, h3, [role="heading"]');
         return clean(el.getAttribute('aria-label') ?? heading?.innerText ?? 'dialog', 80);
       }),
+    overlay: modal ? overlayName(modal) : undefined,
     selectedTabs: visibleTexts('[role="tab"][aria-selected="true"]', 10),
     currentItems: visibleTexts('[aria-current]:not([aria-current="false"])', 10),
     textExcerpt: clean(document.body.innerText, 600),

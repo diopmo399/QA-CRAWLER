@@ -480,6 +480,14 @@ Les nombres sont masqués : `/users/1` et `/users/2` (« Utilisateur 1/2 ») son
 
 Le résultat est un `stateId` lisible et stable, par exemple `parametres-securite-f3a0baba`.
 
+**Ce qui est devant l'écran passe en premier :**
+
+- une fenêtre (`role=dialog`, `aria-modal`, `<dialog>`), un tiroir, un menu déroulant ou une liste d'options flottants (`role=menu` / `listbox`, `.cdk-overlay-pane`) sont détectés comme **premier plan** ;
+- un **overlay sans rôle ARIA** est aussi détecté : un calque `fixed`/`absolute` qui couvre la majeure partie de l'écran (fond grisé + boîte) ;
+- en mode exploration, les actions du premier plan sont essayées avant celles de la page derrière ;
+- derrière un calque **modal**, la page est marquée masquée (`obscured`) et n'est pas cliquée tant que le calque est ouvert. Derrière un calque non modal (bandeau cookies), la page reste explorée ensuite ;
+- les éléments du premier plan sont gardés même au-delà de la limite d'éléments observés, et un overlay ouvert donne un état distinct.
+
 **Protection contre les boucles :**
 
 - chaque action essayée depuis un état est mémorisée dans le graphe et jamais réessayée ;
