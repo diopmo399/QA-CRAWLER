@@ -87,6 +87,31 @@ safety:
 auth:
   type: none
 
+# Credential profiles: NAMES of environment variables only, never secrets.
+credentials: {}
+#  qa-default: { usernameEnv: QA_USERNAME, passwordEnv: QA_PASSWORD }
+
+# Interactions raised by the browser outside the DOM (native sign-in dialog,
+# alert/confirm/prompt, popups, downloads, file chooser, permissions, external navigation).
+browserInteractions:
+  enabled: true
+  timeoutMs: 15000
+  retry:
+    maxAttempts: 2 # the browser asking again (rejected credentials): tries before AUTH_FAILED
+  loopThreshold: 5 # same interaction, origin and action more often: INTERACTION_LOOP_DETECTED
+  blockedOrigins: []
+  httpAuth:
+    # credentialProfile: qa-default   # none: AUTH_REQUIRED (nothing is invented)
+    origins: [] # who may receive the credentials (default: target and allowed hosts)
+  dialogs:
+    alert: accept # accept | dismiss
+    confirm: dismiss # dismiss | accept-safe (never accepts a destructive or mutating message)
+    promptValues: [] # [{ match: "Nom du dossier", value: "Dossier QA" }] or value: { env: NAME }
+  popups:
+    observe: true # new page on an allowed origin: recorded as a state, then closed
+  permissions:
+    grant: [] # geolocation, notifications, camera, microphone, clipboard-read, clipboard-write
+
 memory:
   # file: reports/flow-graph.json    # default: <reportsDir>/flow-graph.json
   resume: false # true: continue from the previous graph, skip actions already tried

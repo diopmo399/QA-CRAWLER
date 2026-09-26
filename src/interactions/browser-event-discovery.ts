@@ -1,0 +1,342 @@
+import type {
+  BrowserContext,
+  CDPSession,
+  Dialog,
+  Download,
+  FileChooser,
+  Frame,
+  Page,
+  Response,
+} from 'playwright';
+import type { AllowedOriginPolicy } from '../policies/origin-policy.js';
+import { originOf } from '../policies/origin-policy.js';
+import type { BrowserInteractionManager } from './browser-interaction-manager.js';
+import type { BrowserInteraction, BrowserInteractionType, InteractionDetails } from './types.js';
+
+/** Page → crawler bridge for permission requests (the browser raises no event for them). */
+const BINDING = '__qaBrowserInteraction';
+
+/**
+ * Reports permission requests. Runs in every page before its own scripts;
+ * it only observes and calls the original API (which the browser denies
+ * unless the mission granted the permission).
+ */
+const PERMISSION_SCRIPT = `(() => {
+  const report = (permission) => { try { window.${BINDING}?.({ type: 'PERMISSION_REQUEST', permission }); } catch {} };
+  const wrap = (target, name, permission) => {
+    if (!target || typeof target[name] !== 'function') return;
+    const original = target[name];
+    target[name] = function (...args) { report(permission); return original.apply(this, args); };
+  };
+  if (navigator.geolocation) {
+    wrap(navigator.geolocation, 'getCurrentPosition', 'geolocation');
+    wrap(navigator.geolocation, 'watchPosition', 'geolocation');
+  }
+  if (window.Notification) wrap(window.Notification, 'requestPermission', 'notifications');
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = (constraints) => {
+      if (constraints && constraints.video) report('camera');
+      if (constraints && constraints.audio) report('microphone');
+      return original(constraints);
+    };
+  }
+  if (navigator.clipboard) {
+    wrap(navigator.clipboard, 'readText', 'clipboard-read');
+    wrap(navigator.clipboard, 'read', 'clipboard-read');
+  }
+})();`;
+
+interface FetchRequestPaused {
+  requestId: string;
+  request: { url: string };
+  responseStatusCode?: number;
+  responseHeaders?: { name: string; value: string }[];
+}
+
+interface FetchAuthRequired {
+  requestId: string;
+  request: { url: string };
+  authChallenge: { source?: string; origin: string; scheme: string; realm: string };
+}
+
+export interface BrowserEventDiscoveryOptions {
+  origins: AllowedOriginPolicy;
+  /** Watch for the browser's sign-in dialog (HTTP_AUTH) through the browser protocol. */
+  httpAuth: boolean;
+  /** Longest wait for a new page to load before it is classified. */
+  popupLoadTimeoutMs: number;
+}
+
+/**
+ * "Browser Event Discovery": the counterpart of the DOM ActionDiscovery for
+ * everything the DOM does not show. Listens to Playwright and to the
+ * browser protocol, turns each event into a BrowserInteraction and hands it
+ * to the BrowserInteractionManager. It never decides anything.
+ *
+ * Sources:
+ * - HTTP_AUTH: Chromium's `Fetch.authRequired` (the native sign-in dialog), not the page's status code;
+ * - JS_ALERT / JS_CONFIRM / JS_PROMPT (and unknown dialogs such as beforeunload): `page.on('dialog')`;
+ * - POPUP / NEW_TAB: `context.on('page')`, with or without opener;
+ * - DOWNLOAD: `page.on('download')`; FILE_CHOOSER: `page.on('filechooser')`;
+ * - PERMISSION_REQUEST: an init script around the permission APIs;
+ * - EXTERNAL_NAVIGATION: main-frame navigations leaving the allowed origins.
+ */
+export class BrowserEventDiscovery {
+  /** Pages opened by the crawler itself (not popups). */
+  private creatingOwnPage = 0;
+  private readonly ownPages = new WeakSet<Page>();
+  private readonly lastUrl = new WeakMap<Page, string>();
+  /** Recent downloadable responses: MIME type and size for DOWNLOAD records. */
+  private readonly fileResponses = new Map<string, { mimeType?: string; size?: number }>();
+
+  constructor(
+    private readonly manager: BrowserInteractionManager,
+    private readonly options: BrowserEventDiscoveryOptions,
+  ) {}
+
+  async attachContext(context: BrowserContext): Promise<void> {
+    await context.exposeBinding(BINDING, (source: { page: Page }, payload: unknown) => {
+      const permission =
+        payload && typeof payload === 'object' && 'permission' in payload
+          ? String(payload.permission)
+          : 'unknown';
+      void this.dispatch('PERMISSION_REQUEST', source.page, {
+        native: { kind: 'none' },
+        details: { permission },
+      });
+    });
+    await context.addInitScript({ content: PERMISSION_SCRIPT });
+    context.on('page', (page) => {
+      void this.onNewPage(page);
+    });
+  }
+
+  /** Opens a page for the crawler itself: it is not reported as a popup/new tab. */
+  async openOwnPage(open: () => Promise<Page>): Promise<Page> {
+    this.creatingOwnPage += 1;
+    try {
+      const page = await open();
+      this.ownPages.add(page);
+      return page;
+    } finally {
+      this.creatingOwnPage -= 1;
+    }
+  }
+
+  /** Listens to one page (crawler pages and popups). */
+  async attachPage(page: Page): Promise<void> {
+    page.on('dialog', (dialog) => {
+      void this.onDialog(page, dialog);
+    });
+    page.on('download', (download) => {
+      void this.onDownload(page, download);
+    });
+    page.on('filechooser', (chooser) => {
+      void this.onFileChooser(page, chooser);
+    });
+    page.on('response', (response) => {
+      this.rememberFileResponse(response);
+    });
+    page.on('framenavigated', (frame) => {
+      this.onNavigation(page, frame);
+    });
+    if (this.options.httpAuth) await this.watchHttpAuth(page);
+  }
+
+  // ------------------------------------------------------------------ sources
+
+  private async watchHttpAuth(page: Page): Promise<void> {
+    let session: CDPSession;
+    try {
+      session = await page.context().newCDPSession(page);
+      await session.send('Fetch.enable', {
+        handleAuthRequests: true,
+        patterns: [
+          { urlPattern: '*' },
+          // Documents are also paused once their headers arrive: a download's name, type and size.
+          { urlPattern: '*', resourceType: 'Document', requestStage: 'Response' },
+        ],
+      });
+    } catch {
+      return; // not Chromium, or the page is already gone
+    }
+    // Every request is paused by Fetch.enable: let it go on untouched.
+    session.on('Fetch.requestPaused', (event: FetchRequestPaused) => {
+      if (event.responseStatusCode === undefined) {
+        void session.send('Fetch.continueRequest', { requestId: event.requestId }).catch(() => undefined);
+        return;
+      }
+      this.rememberFileHeaders(event.request.url, event.responseHeaders ?? []);
+      void session
+        .send('Fetch.continueResponse', { requestId: event.requestId })
+        .catch(() => session.send('Fetch.continueRequest', { requestId: event.requestId }))
+        .catch(() => undefined);
+    });
+    session.on('Fetch.authRequired', (event: FetchAuthRequired) => {
+      let answered = false;
+      const answer = async (response: Record<string, string>): Promise<void> => {
+        if (answered) return;
+        answered = true;
+        await session
+          .send('Fetch.continueWithAuth', {
+            requestId: event.requestId,
+            authChallengeResponse: response as never,
+          })
+          .catch(() => undefined);
+      };
+      const cancel = (): Promise<void> => answer({ response: 'CancelAuth' });
+      void this.dispatch('HTTP_AUTH', page, {
+        targetUrl: event.request.url,
+        origin: event.authChallenge.origin,
+        details: {
+          scheme: event.authChallenge.scheme,
+          realm: event.authChallenge.realm,
+          source: event.authChallenge.source ?? 'Server',
+        },
+        native: {
+          kind: 'http-auth',
+          provideCredentials: (username, password) =>
+            answer({ response: 'ProvideCredentials', username, password }),
+          cancel,
+        },
+        fallback: cancel,
+      });
+    });
+  }
+
+  private async onDialog(page: Page, dialog: Dialog): Promise<void> {
+    const kind = dialog.type();
+    const type: BrowserInteractionType =
+      kind === 'alert'
+        ? 'JS_ALERT'
+        : kind === 'confirm'
+          ? 'JS_CONFIRM'
+          : kind === 'prompt'
+            ? 'JS_PROMPT'
+            : 'UNKNOWN_BROWSER_INTERACTION';
+    await this.dispatch(type, page, {
+      details: { dialog: kind, message: dialog.message() },
+      native: { kind: 'dialog', dialog },
+      // beforeunload: let the page go (the crawler decided to leave); anything else: dismiss.
+      fallback: () => (kind === 'beforeunload' ? dialog.accept() : dialog.dismiss()).catch(() => undefined),
+    });
+  }
+
+  private async onNewPage(page: Page): Promise<void> {
+    if (this.creatingOwnPage > 0 || this.ownPages.has(page)) return;
+    const opener = await page.opener().catch(() => null);
+    await page
+      .waitForLoadState('domcontentloaded', { timeout: this.options.popupLoadTimeoutMs })
+      .catch(() => undefined);
+    await this.attachPage(page).catch(() => undefined);
+    // POPUP: the page can script its opener (window.open, target=_blank with opener).
+    // NEW_TAB: no link back (rel="noopener", ctrl+click…), even when the browser knows who opened it.
+    const scriptable = await page.evaluate(() => window.opener !== null).catch(() => false);
+    const type = opener && scriptable ? 'POPUP' : 'NEW_TAB';
+    await this.dispatch(type, opener ?? page, {
+      targetUrl: page.url(),
+      ...(originOf(page.url()) ? { origin: originOf(page.url()) } : {}),
+      details: { opener: scriptable },
+      native: { kind: 'page', page },
+      fallback: () => page.close().catch(() => undefined),
+    });
+  }
+
+  private async onDownload(page: Page, download: Download): Promise<void> {
+    const file = this.fileResponses.get(download.url());
+    await this.dispatch('DOWNLOAD', page, {
+      targetUrl: download.url(),
+      details: {
+        filename: download.suggestedFilename(),
+        ...(file?.mimeType ? { mimeType: file.mimeType } : {}),
+        ...(file?.size !== undefined ? { size: file.size } : {}),
+      },
+      native: { kind: 'download', download },
+      fallback: () => download.cancel().catch(() => undefined),
+    });
+  }
+
+  private async onFileChooser(page: Page, chooser: FileChooser): Promise<void> {
+    const accept = await chooser
+      .element()
+      .getAttribute('accept')
+      .catch(() => null);
+    await this.dispatch('FILE_CHOOSER', page, {
+      details: { multiple: chooser.isMultiple(), ...(accept ? { accept } : {}) },
+      native: { kind: 'file-chooser', chooser },
+      // Nothing to do: the intercepted chooser never opens and no file is set.
+    });
+  }
+
+  private onNavigation(page: Page, frame: Frame): void {
+    if (frame !== page.mainFrame()) return;
+    const url = frame.url();
+    const previous = this.lastUrl.get(page);
+    this.lastUrl.set(page, url);
+    const originClass = this.options.origins.classify(url);
+    if (originClass !== 'EXTERNAL_ORIGIN' && originClass !== 'BLOCKED_ORIGIN') return;
+    if (previous !== undefined && originOf(previous) === originOf(url)) return; // already reported
+    void this.dispatch('EXTERNAL_NAVIGATION', page, {
+      ...(previous ? { sourceUrl: previous } : {}),
+      targetUrl: url,
+      ...(originOf(url) ? { origin: originOf(url) } : {}),
+      details: {},
+      native: { kind: 'none' },
+    });
+  }
+
+  private rememberFileResponse(response: Response): void {
+    this.rememberFile(response.url(), response.headers());
+  }
+
+  private rememberFileHeaders(url: string, headers: readonly { name: string; value: string }[]): void {
+    this.rememberFile(
+      url,
+      Object.fromEntries(headers.map((header) => [header.name.toLowerCase(), header.value])),
+    );
+  }
+
+  private rememberFile(url: string, headers: Record<string, string>): void {
+    const disposition = headers['content-disposition'] ?? '';
+    const type = headers['content-type'] ?? '';
+    if (!/attachment/i.test(disposition) && (type === '' || /text\/html/i.test(type))) return;
+    const length = Number(headers['content-length']);
+    this.fileResponses.set(url, {
+      ...(type ? { mimeType: type.split(';')[0]?.trim() ?? type } : {}),
+      ...(Number.isFinite(length) && headers['content-length'] !== undefined ? { size: length } : {}),
+    });
+    if (this.fileResponses.size > 50) {
+      const oldest = this.fileResponses.keys().next().value;
+      if (oldest !== undefined) this.fileResponses.delete(oldest);
+    }
+  }
+
+  // ------------------------------------------------------------------ dispatch
+
+  private async dispatch(
+    type: BrowserInteractionType,
+    page: Page,
+    parts: {
+      sourceUrl?: string;
+      targetUrl?: string;
+      origin?: string;
+      details: InteractionDetails;
+      native: BrowserInteraction['native'];
+      fallback?: () => Promise<void>;
+    },
+  ): Promise<void> {
+    const interaction: BrowserInteraction = {
+      id: this.manager.nextId(),
+      type,
+      page,
+      sourceUrl: parts.sourceUrl ?? (page.isClosed() ? '' : page.url()),
+      ...(parts.targetUrl ? { targetUrl: parts.targetUrl } : {}),
+      ...(parts.origin ? { origin: parts.origin } : {}),
+      details: parts.details,
+      native: parts.native,
+      fallback: parts.fallback ?? (() => Promise.resolve()),
+    };
+    await this.manager.dispatch(interaction).catch(() => interaction.fallback());
+  }
+}

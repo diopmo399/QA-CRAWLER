@@ -28,6 +28,7 @@ No AI, no LLM, no API token, no GPU: same application, same exploration.
 - [Mission (YAML)](#mission-yaml)
 - [Imposed flows](#imposed-flows)
 - [Authentication](#authentication)
+- [Browser interactions](#browser-interactions)
 - [Safety](#safety)
 - [State detection and loop protection](#state-detection-and-loop-protection)
 - [Forms](#forms)
@@ -256,7 +257,66 @@ auth:
   checkUrl: / # page loaded to check the login (default: target.startAt)
 ```
 
-The browser answers the server's challenge itself; nothing is typed in a page. Without `origin`, the credentials are sent to any host that asks for them (a warning says so). A `401` on `checkUrl` stops the run with a clear message.
+Nothing is typed in a page: the dialog is not in the DOM. It is detected and answered through the browser protocol by the `HttpAuthHandler` (see [Browser interactions](#browser-interactions)); `auth.type: http` is a shortcut for a credential profile named `auth`. Without `origin`, the credentials only go to the target and its allowed hosts. `AUTH_REQUIRED`, `AUTH_FAILED` or `CREDENTIALS_NOT_ALLOWED` on `checkUrl` stops the run with a clear message.
+
+`FORM_AUTH` (a login form in the page) stays in the DOM world: `auth.type: form`, or an imposed flow. `HTTP_AUTH` (the browser's dialog) is a browser interaction. The two are never mixed.
+
+## Browser interactions
+
+Some interactions come from the browser itself, not from the application's DOM: they cannot be found with locators, and they can block a flow silently. The `BrowserInteractionManager` detects them, classifies them, applies the safety policy, hands them to a handler, records what happened, and lets the crawl go on.
+
+```
+DOM ActionDiscovery ─────────────────────────────────────────────┐
+                                                                 ├─► Playwright ─► Chromium
+Browser Event Discovery ─► BrowserInteractionManager ─► handlers ┘
+ (Playwright events + CDP)   loop guard · SafetyPolicy ·           HttpAuth · Dialog · Popup ·
+                             retry · timeout · record              Download · FileChooser ·
+                                                                   Permission · ExternalNavigation
+```
+
+| Type                          | Source                                       | Default behaviour                                                                                              |
+| ----------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `HTTP_AUTH`                   | browser protocol (`Fetch.authRequired`)      | credentials from a profile, to trusted origins only; otherwise `AUTH_REQUIRED` and the transition is `BLOCKED` |
+| `JS_ALERT`                    | `page.on('dialog')`                          | accepted (OK)                                                                                                  |
+| `JS_CONFIRM`                  | `page.on('dialog')`                          | dismissed; with `confirm: accept-safe`, accepted only if the message is not destructive nor mutating           |
+| `JS_PROMPT`                   | `page.on('dialog')`                          | answered only with a value from `promptValues`; otherwise dismissed, `PROMPT_VALUE_REQUIRED`                   |
+| `POPUP` / `NEW_TAB`           | `context.on('page')` (with / without opener) | allowed origin: observed as a new state linked to the action (`CLICK → POPUP → page`), then closed             |
+| `DOWNLOAD`                    | `page.on('download')`                        | action, file name, MIME type and size recorded; the file is never saved nor opened                             |
+| `FILE_CHOOSER`                | `page.on('filechooser')`                     | never opens, no file picked: `FILE_INPUT_REQUIRED`                                                             |
+| `PERMISSION_REQUEST`          | init script around the permission APIs       | denied unless listed in `permissions.grant`                                                                    |
+| `EXTERNAL_NAVIGATION`         | main-frame navigation                        | classified (`SAME_ORIGIN`, `ALLOWED_ORIGIN`, `EXTERNAL_ORIGIN`, `BLOCKED_ORIGIN`), not explored                |
+| `UNKNOWN_BROWSER_INTERACTION` | e.g. `beforeunload` dialogs                  | `UNSUPPORTED`, safe fallback                                                                                   |
+
+```yaml
+credentials: # names of environment variables only, never secrets
+  qa-default: { usernameEnv: QA_USERNAME, passwordEnv: QA_PASSWORD }
+
+browserInteractions:
+  enabled: true
+  timeoutMs: 15000 # longest time a handler may take
+  retry: { maxAttempts: 2 } # e.g. rejected credentials: 2 tries, then AUTH_FAILED
+  loopThreshold: 5 # same interaction (type, origin, action) more often: INTERACTION_LOOP_DETECTED
+  blockedOrigins: [] # never followed nor trusted
+  httpAuth:
+    credentialProfile: qa-default # none: AUTH_REQUIRED
+    origins: [https://sso.example.com] # who may receive the credentials (default: target + allowed hosts)
+  dialogs:
+    alert: accept # accept | dismiss
+    confirm: dismiss # dismiss | accept-safe
+    promptValues: [{ match: 'Nom du dossier', value: 'Dossier QA' }] # value: text or { env: NAME }
+  popups: { observe: true }
+  permissions: { grant: [] } # geolocation, notifications, camera, microphone, clipboard-read, clipboard-write
+```
+
+**Results.** Each interaction is recorded with its type, status (`DETECTED`, `HANDLED`, `BLOCKED`, `FAILED`, `SKIPPED`, `UNSUPPORTED`), outcome (`AUTHENTICATED`, `AUTH_REQUIRED`, `AUTH_FAILED`, `INTERACTION_LOOP_DETECTED`, `FILE_INPUT_REQUIRED`…), handler, action, source state and action, target, origin class, attempt and retry, and non-secret details.
+
+- They appear in `result.json` (`browserInteractions`, `stats.interactionsByType` / `interactionsByStatus`), in `index.html` (_Browser interactions_ section) and in `flow-graph.json` (`interactions`). Popups and new tabs also add a transition to the observed page.
+- Blocking ones (`AUTH_REQUIRED`, `AUTH_FAILED`, `CREDENTIALS_NOT_ALLOWED`, loops) turn the transition into `BLOCKED` and raise an `ERROR` issue; `FILE_INPUT_REQUIRED`, `PROMPT_VALUE_REQUIRED` and unsupported interactions raise a `WARNING`.
+- The CLI prints one structured line per interaction: `[BROWSER_INTERACTION] type=HTTP_AUTH origin=https://… handler=HttpAuthHandler status=HANDLED outcome=AUTHENTICATED attempt=1`.
+
+**Secrets.** Credentials are resolved by a `CredentialProvider` (environment variables today; a vault or secret manager can implement the same interface) only when a trusted origin asks for them, and are handed to the browser only. They never appear in the mission, the flow graph, logs, reports or screenshots; only the profile name (`credentialProfile: "qa-default"`) is recorded.
+
+**Extending.** A new interaction needs a source in `BrowserEventDiscovery`, a rule in `InteractionPolicy` and a `BrowserInteractionHandler` registered in the manager. The crawl engine does not change.
 
 ## Safety
 
@@ -505,7 +565,7 @@ src/
 ├── observation/                  UIObserver (DOM snapshot script), StateDetector
 ├── discovery/                    ActionDiscovery (pure), locator builder
 ├── decision/                     DecisionEngine interface, RuleBasedDecisionEngine
-├── policies/                     SafetyPolicy, NavigationPolicy, vocabulary
+├── policies/                     SafetyPolicy, NavigationPolicy, AllowedOriginPolicy, InteractionPolicy, vocabulary
 ├── execution/                    PlaywrightActionExecutor, locator resolver
 ├── data/                         TestDataProvider, DefaultTestDataProvider
 ├── graph/                        FlowGraph
@@ -515,6 +575,7 @@ src/
 ├── crawler/                      URL and route normalization
 ├── browser/                      Chromium lifecycle, screenshots
 ├── auth/                         form and HTTP authentication (credentials from env)
+├── interactions/                 BrowserEventDiscovery, BrowserInteractionManager, handlers, CredentialProvider
 ├── reporting/                    result builder, JSON, HTML, flow graph HTML, flow tree
 ├── security/                     redaction
 └── model/                        PageContext, DiscoveredAction, LocatorDescriptor, FlowNode/Edge, Issue…
@@ -576,7 +637,8 @@ npm run build            # dist/
 - The rule-based engine cannot know what an unlabelled icon does, so icons are never clicked.
 - Mutating actions (create/save/submit) are never executed. Their effects are not explored unless explicitly allowed on a disposable environment.
 - Backtracking by replay needs the path to be deterministic; states that can't be restored are skipped.
-- A single role per run. Login in a separate window, MFA/OTP and stored sessions are not supported yet.
+- A single role per run. MFA/OTP and stored sessions are not supported yet.
+- Browser interactions: HTTP authentication is detected through the Chromium protocol (Chromium only); a challenge raised by a popup before it is attached, by a cross-origin iframe or by a service worker is not seen. NTLM/Kerberos negotiation depends on the server. Popups and new tabs are observed and closed, not explored in parallel. File choosers never receive a file.
 - Shadow DOM and iframes are not explored.
 
 ## Roadmap

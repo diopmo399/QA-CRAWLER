@@ -16,7 +16,7 @@ export interface ActionExecutionResult {
   durationMs: number;
   /** The preferred locator did not match; the CSS fallback was used. */
   usedFallback: boolean;
-  /** The element opened a new window, which was closed. */
+  /** The element opened a new window (handled by the BrowserInteractionManager). */
   openedPopup: boolean;
 }
 
@@ -79,8 +79,8 @@ export class PlaywrightActionExecutor {
           }
           if (opened) {
             openedPopup = true;
-            await opened.close().catch(() => undefined);
-            // A link opening a new window: reach its target in the current page instead.
+            // The new window itself is handled by the BrowserInteractionManager (recorded, observed, closed).
+            // A link opening a new window: reach its target in the current page too.
             if (action.type === 'navigate' && action.href) {
               await page.goto(action.href, { timeout, waitUntil: 'domcontentloaded' });
             }

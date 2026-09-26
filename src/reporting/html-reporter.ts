@@ -133,6 +133,8 @@ export function renderHtml(
 
   ${result.flows.length > 0 ? flowsSection(result, nameOf, href, t) : ''}
 
+  ${result.browserInteractions.length > 0 ? interactionsSection(result, nameOf, t) : ''}
+
   <section>
     <h2>${esc(t.discoveredFlow)}</h2>
     <p class="muted">${esc(t.discoveredFlowHint)}</p>
@@ -196,6 +198,46 @@ export function renderHtml(
 </body>
 </html>
 `;
+}
+
+function interactionsSection(
+  result: ExplorationResult,
+  nameOf: (stateId: string) => string,
+  t: ReportTexts,
+): string {
+  const c = t.interactionColumns;
+  const actionText = (actionId: string | undefined): string => {
+    if (!actionId) return '';
+    const edge = result.transitions.find((candidate) => candidate.actionId === actionId);
+    return edge
+      ? `${valueLabel(t.lang, edge.action.type)} “${edge.action.text ?? edge.action.label ?? ''}”`
+      : actionId;
+  };
+  const rows = result.browserInteractions
+    .map((interaction) => {
+      const details = Object.entries(interaction.details)
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .join(' · ');
+      const target = interaction.targetStateId ? `<b>${esc(nameOf(interaction.targetStateId))}</b><br>` : '';
+      return `<tr>
+        <td><code>${esc(interaction.type)}</code><br><span class="muted">${esc(interaction.id)}</span></td>
+        <td>${classPill(interaction.status, t.lang)}${interaction.blocking ? ' ⛔' : ''}</td>
+        <td><code>${esc(interaction.outcome ?? '')}</code></td>
+        <td>${esc(interaction.handler ?? '')}${interaction.action ? `<br><span class="muted">${esc(interaction.action)}</span>` : ''}${interaction.credentialProfile ? `<br><span class="muted">profile: ${esc(interaction.credentialProfile)}</span>` : ''}</td>
+        <td class="wrap">${esc(interaction.originClass ?? '')}${interaction.origin ? `<br><span class="muted">${esc(interaction.origin)}</span>` : ''}</td>
+        <td class="wrap">${interaction.stateId ? esc(nameOf(interaction.stateId)) : ''}${interaction.actionId ? `<br><span class="muted">${esc(actionText(interaction.actionId))}</span>` : ''}${interaction.flow ? `<br><span class="muted">flow: ${esc(interaction.flow)}</span>` : ''}</td>
+        <td class="wrap">${target}${esc(interaction.targetUrl ?? '')}</td>
+        <td>${interaction.attempt}${interaction.retryAttempted ? ' ↻' : ''}</td>
+        <td class="wrap muted">${esc(translateReason(t.lang, interaction.reason ?? ''))}</td>
+        <td class="wrap muted">${esc(details)}</td>
+      </tr>`;
+    })
+    .join('');
+  return `<section>
+    <h2>${esc(t.interactionsTitle)} (${result.browserInteractions.length})</h2>
+    <p class="muted">${esc(t.interactionsHint)}</p>
+    <table><thead><tr><th>${c.type}</th><th>${c.status}</th><th>${c.outcome}</th><th>${c.handler}</th><th>${c.origin}</th><th>${c.source}</th><th>${c.target}</th><th>${c.attempt}</th><th>${c.reason}</th><th>${c.details}</th></tr></thead><tbody>${rows}</tbody></table>
+  </section>`;
 }
 
 function flowsSection(

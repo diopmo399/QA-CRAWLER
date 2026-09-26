@@ -12,6 +12,8 @@ export const ISSUE_TYPES = [
   'NAVIGATION',
   /** An imposed flow step failed or was blocked. */
   'FLOW',
+  /** A browser interaction outside the DOM needs attention (AUTH_REQUIRED, loop, file requested…). */
+  'BROWSER_INTERACTION',
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 

@@ -1,3 +1,4 @@
+import type { BrowserInteractionResult } from '../interactions/types.js';
 import type { Severity } from '../model/issue.js';
 
 /**
@@ -47,6 +48,24 @@ export const SeverityRules = {
   /** An imposed flow step failed or was blocked; optional steps only warn. */
   flowStep(optional: boolean): Severity {
     return optional ? 'WARNING' : 'ERROR';
+  },
+
+  /**
+   * Browser interaction outside the DOM. Blocking ones (authentication
+   * required or refused, loop) are errors; things the crawler must not do by
+   * itself (pick a file, answer a prompt) and unknown interactions are
+   * warnings; the rest is only recorded.
+   */
+  browserInteraction(result: BrowserInteractionResult): Severity | undefined {
+    if (result.blocking) return 'ERROR';
+    if (
+      result.status === 'UNSUPPORTED' ||
+      result.status === 'FAILED' ||
+      result.outcome === 'FILE_INPUT_REQUIRED' ||
+      result.outcome === 'PROMPT_VALUE_REQUIRED'
+    )
+      return 'WARNING';
+    return undefined;
   },
 
   /** Navigation that could not complete (timeout, redirect loop, redirect off-site...). */

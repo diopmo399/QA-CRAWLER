@@ -83,6 +83,21 @@ export interface ReportTexts {
   movesTitle: string;
   othersTitle: string;
   othersHint: string;
+  interactionsTitle: string;
+  interactionsHint: string;
+  noInteractions: string;
+  interactionColumns: {
+    type: string;
+    status: string;
+    outcome: string;
+    handler: string;
+    origin: string;
+    source: string;
+    target: string;
+    attempt: string;
+    reason: string;
+    details: string;
+  };
 }
 
 const EN: ReportTexts = {
@@ -175,6 +190,22 @@ const EN: ReportTexts = {
   movesTitle: 'Transitions between states',
   othersTitle: 'Other attempts',
   othersHint: 'Actions without visible effect, failed or blocked by the safety policy.',
+  interactionsTitle: 'Browser interactions',
+  interactionsHint:
+    'Raised by the browser outside the DOM (native sign-in dialog, JS dialogs, popups, downloads, file chooser, permissions, external navigation): detected, classified and handled according to the safety policy. No credential is ever recorded.',
+  noInteractions: 'No browser interaction.',
+  interactionColumns: {
+    type: 'Type',
+    status: 'Status',
+    outcome: 'Outcome',
+    handler: 'Handler · action',
+    origin: 'Origin',
+    source: 'State · action',
+    target: 'Target',
+    attempt: 'Attempt',
+    reason: 'Reason',
+    details: 'Details',
+  },
 };
 
 const FR: ReportTexts = {
@@ -268,6 +299,22 @@ const FR: ReportTexts = {
   movesTitle: 'Transitions entre états',
   othersTitle: 'Autres tentatives',
   othersHint: 'Actions sans effet visible, échouées ou bloquées par la politique de sécurité.',
+  interactionsTitle: 'Interactions navigateur',
+  interactionsHint:
+    'Déclenchées par le navigateur hors du DOM (fenêtre native d’authentification, dialogues JS, popups, téléchargements, choix de fichier, permissions, navigation externe) : détectées, classées et traitées selon la politique de sécurité. Aucun identifiant n’est jamais enregistré.',
+  noInteractions: 'Aucune interaction navigateur.',
+  interactionColumns: {
+    type: 'Type',
+    status: 'Statut',
+    outcome: 'Résultat',
+    handler: 'Gestionnaire · action',
+    origin: 'Origine',
+    source: 'État · action',
+    target: 'Cible',
+    attempt: 'Tentative',
+    reason: 'Raison',
+    details: 'Détails',
+  },
 };
 
 export function reportTexts(language: ReportLanguage = 'en'): ReportTexts {
@@ -325,6 +372,10 @@ const FR_VALUES: Record<string, string> = {
   submit: 'envoi',
   toggle: 'bascule',
   other: 'autre',
+  // browser interaction statuses
+  HANDLED: 'TRAITÉE',
+  DETECTED: 'DÉTECTÉE',
+  UNSUPPORTED: 'NON GÉRÉE',
   // stop reasons
   exhausted: 'tout exploré',
   'flows-only': 'flows uniquement',
@@ -439,6 +490,54 @@ const FR_REASONS: [RegExp, string | ((...groups: string[]) => string)][] = [
   [/wizard step "(.*?)" \(client-side form\)/g, 'étape d’assistant « $1 » (formulaire côté client)'],
   [/\bplain navigation\b/g, 'navigation simple'],
   [/\bnavigation allowed\b/g, 'navigation autorisée'],
+  // browser interactions
+  [/confirm\(\) is dismissed by default/g, 'confirm() est refusé par défaut'],
+  [/never confirmed automatically: /g, 'jamais confirmé automatiquement : '],
+  [/harmless confirmation/g, 'confirmation sans risque'],
+  [
+    /no value for this prompt in browserInteractions\.dialogs\.promptValues: dismissed, nothing invented/g,
+    'aucune valeur pour ce prompt dans browserInteractions.dialogs.promptValues : refusé, rien n’est inventé',
+  ],
+  [/recorded only: never saved nor opened/g, 'enregistré seulement : jamais sauvegardé ni ouvert'],
+  [/download recorded, file not saved/g, 'téléchargement enregistré, fichier non sauvegardé'],
+  [
+    /a file is requested: the crawler never picks a file by itself/g,
+    'un fichier est demandé : le crawler ne choisit jamais de fichier lui-même',
+  ],
+  [
+    /"(.*?)" is not granted \(browserInteractions\.permissions\.grant\): denied/g,
+    '« $1 » n’est pas accordée (browserInteractions.permissions.grant) : refusée',
+  ],
+  [
+    /navigation outside the allowed origins is not explored/g,
+    'navigation hors des origines autorisées : non explorée',
+  ],
+  [
+    /new page outside the allowed origins: closed without being explored/g,
+    'nouvelle page hors des origines autorisées : fermée sans être explorée',
+  ],
+  [/new page on an allowed origin/g, 'nouvelle page sur une origine autorisée'],
+  [
+    /no credentials available for profile "(.*?)": nothing is invented, authentication cancelled/g,
+    'aucun identifiant pour le profil « $1 » : rien n’est inventé, authentification annulée',
+  ],
+  [/credentials rejected by the server/g, 'identifiants refusés par le serveur'],
+  [
+    /credentials rejected (\d+) time\(s\): authentication cancelled/g,
+    'identifiants refusés $1 fois : authentification annulée',
+  ],
+  [
+    /no credential profile configured for HTTP authentication/g,
+    'aucun profil d’identifiants configuré pour l’authentification HTTP',
+  ],
+  [
+    /no handler for this interaction: safe fallback applied/g,
+    'aucun gestionnaire pour cette interaction : repli sûr appliqué',
+  ],
+  [
+    /raised (\d+) times for the same origin and action/g,
+    'déclenchée $1 fois pour la même origine et la même action',
+  ],
 ];
 
 /** Reason or message in the report language. */

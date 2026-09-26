@@ -99,10 +99,11 @@ export class FormAuthenticator implements Authenticator {
 }
 
 /**
- * HTTP authentication answered by the browser (the grey "Sign in" dialog:
- * Basic, NTLM depending on the server). The credentials are given to the
- * browser context, which answers the server's 401 challenge; they are never
- * typed in a page nor written anywhere.
+ * HTTP authentication: the browser's own sign-in dialog. It is answered by
+ * the HttpAuthHandler of the BrowserInteractionManager (auth.type: http is
+ * mapped to a credential profile by the config loader); this authenticator
+ * only opens the page that triggers the challenge. The crawl engine then
+ * checks the recorded interaction (AUTHENTICATED, AUTH_REQUIRED, AUTH_FAILED…).
  */
 export class HttpAuthenticator implements Authenticator {
   readonly description: string;
@@ -110,40 +111,21 @@ export class HttpAuthenticator implements Authenticator {
   constructor(
     private readonly config: HttpAuthConfig,
     private readonly startUrl: string,
-    private readonly env: NodeJS.ProcessEnv = process.env,
   ) {
     this.description = `HTTP authentication${config.origin ? ` for ${config.origin}` : ''} (credentials from $${config.usernameEnv} / $${config.passwordEnv})`;
   }
 
   contextOptions(): BrowserContextOptions {
-    const { username, password } = readCredentials(
-      this.env,
-      this.config.usernameEnv,
-      this.config.passwordEnv,
-    );
-    return {
-      httpCredentials: {
-        username,
-        password,
-        ...(this.config.origin ? { origin: this.config.origin } : {}),
-      },
-    };
+    return {};
   }
 
   async login(page: Page): Promise<void> {
     const checkUrl = new URL(this.config.checkUrl ?? this.startUrl, this.startUrl).toString();
-    let status: number | undefined;
     try {
-      const response = await page.goto(checkUrl, { waitUntil: 'load', timeout: this.config.timeoutMs });
-      status = response?.status();
+      await page.goto(checkUrl, { waitUntil: 'load', timeout: this.config.timeoutMs });
     } catch (error) {
       const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
       throw new AuthError(`HTTP authentication failed: ${reason}`);
-    }
-    if (status === 401 || status === 407) {
-      throw new AuthError(
-        `HTTP authentication refused (${status}) at ${checkUrl}: check the credentials${this.config.origin ? ` and auth.origin (${this.config.origin})` : ''}`,
-      );
     }
   }
 }
@@ -160,6 +142,6 @@ export function createAuthenticator(
     case 'form':
       return new FormAuthenticator(auth, baseUrl, env);
     case 'http':
-      return new HttpAuthenticator(auth, startUrl ?? baseUrl, env);
+      return new HttpAuthenticator(auth, startUrl ?? baseUrl);
   }
 }

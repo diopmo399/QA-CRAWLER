@@ -114,6 +114,12 @@ export async function runCli(argv: string[]): Promise<number> {
         `  Flows         : ${result.flows.length} (${color.green(`${statusCount('PASSED')} passed`)}, ${color.red(`${statusCount('FAILED')} failed`)}, ${color.yellow(`${statusCount('BLOCKED')} blocked`)}, ${statusCount('SKIPPED')} skipped)`,
       );
     }
+    if (result.browserInteractions.length > 0) {
+      const byStatus = Object.entries(stats.interactionsByStatus)
+        .map(([status, count]) => `${count} ${status.toLowerCase()}`)
+        .join(', ');
+      logger.info(`  Browser inter.: ${result.browserInteractions.length} (${byStatus})`);
+    }
     logger.info(`  Stopped       : ${result.stopReason} after ${(result.durationMs / 1000).toFixed(1)} s`);
     if (result.artifacts.json) logger.info(`  JSON report   : ${result.artifacts.json}`);
     if (result.artifacts.html) logger.info(`  HTML report   : ${result.artifacts.html}`);
@@ -210,6 +216,10 @@ function progressListener(quiet: boolean): ExplorationListener {
       logger.info(
         `${color.bold(color.cyan('■ flow'))} ${report.name}: ${status} ${color.dim(`${(report.durationMs / 1000).toFixed(1)} s${report.explored ? ', last screen explored' : ''}`)}`,
       );
+    },
+    onInteractionLog(line) {
+      // Structured, without secrets: [BROWSER_INTERACTION] type=HTTP_AUTH origin=… handler=… status=… attempt=1
+      if (!quiet) logger.info(`      ${color.magenta(line)}`);
     },
     onIssue(issue, isNew) {
       if (quiet || !isNew) return;
