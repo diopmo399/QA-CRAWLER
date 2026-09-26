@@ -66,6 +66,7 @@ export function renderHtml(
   const jsIssues = bySeverity.filter((issue) => ['CONSOLE', 'PAGE_ERROR', 'PAGE_CRASH'].includes(issue.type));
   const navigationIssues = bySeverity.filter((issue) => issue.type === 'NAVIGATION');
   const flowIssues = bySeverity.filter((issue) => issue.type === 'FLOW');
+  const formIssues = bySeverity.filter((issue) => issue.type === 'FORM_VALIDATION');
   const executed = result.transitions.filter((edge) => edge.result !== 'BLOCKED');
   const blocked = result.transitions.filter((edge) => edge.result === 'BLOCKED');
   const tree = buildFlowTree(result.states, result.transitions, result.states[0]?.id);
@@ -85,7 +86,7 @@ export function renderHtml(
         (issue) => `<tr>
         <td>${severityBadge(issue.severity, language)}<br><span class="muted">${esc(label(issue.type))}</span></td>
         ${withRequest ? `<td>${issue.status ?? ''}</td><td class="wrap">${esc([issue.method, issue.requestUrl].filter(Boolean).join(' '))}</td>` : ''}
-        <td class="wrap">${esc(issue.type === 'FLOW' ? reason(issue.message) : issue.message)}</td>
+        <td class="wrap">${esc(issue.type === 'FLOW' || issue.type === 'FORM_VALIDATION' ? reason(issue.message) : issue.message)}</td>
         <td class="wrap">${issue.stateId ? `<b>${esc(nameOf(issue.stateId))}</b>` : ''}${issue.actionId ? `<br><span class="muted">${esc(t.after)} ${esc(actionText(issue.actionId))}</span>` : ''}
           ${issue.flow && issue.flow.length > 1 ? `<div class="flow">${issue.flow.map((id) => esc(nameOf(id))).join(' → ')}</div>` : ''}</td>
         <td>${issue.occurrences}</td>
@@ -142,6 +143,7 @@ export function renderHtml(
   </section>
 
   ${flowIssues.length > 0 ? issueTable(t.issueSections.flow, flowIssues, false) : ''}
+  ${formIssues.length > 0 ? issueTable(t.issueSections.forms, formIssues, false) : ''}
   ${issueTable(t.issueSections.http, httpIssues, true)}
   ${issueTable(t.issueSections.js, jsIssues, false)}
   ${navigationIssues.length > 0 ? issueTable(t.issueSections.navigation, navigationIssues, true) : ''}

@@ -1,9 +1,10 @@
 import type { DiscoveredAction, FieldConstraints } from '../model/discovered-action.js';
-import { KeywordMatcher, SENSITIVE_FIELD_KEYWORDS } from '../policies/keywords.js';
+import { KeywordMatcher, normalizeText, SENSITIVE_FIELD_KEYWORDS } from '../policies/keywords.js';
 
 /** What to do with a field when a form is prepared. */
 export type FillInstruction =
   | { kind: 'fill'; value: string }
+  /** label '' : the first real option (the options of a custom list are only known once it is open). */
   | { kind: 'select'; label: string }
   | { kind: 'check' }
   | { kind: 'skip'; reason: string };
@@ -18,32 +19,68 @@ export interface TestDataProvider {
 
 const sensitive = new KeywordMatcher(SENSITIVE_FIELD_KEYWORDS);
 
+const YES = new Set(['true', 'oui', 'yes', '1', 'x', 'coche', 'checked']);
+
 /**
- * Deterministic, obviously fake, valid-looking values.
+ * Deterministic, obviously fake, valid-looking values — or the values the
+ * mission gives per field (`testData.fields`, by label, name or placeholder).
  * Never fills passwords, payment or secret fields — even if asked to.
  */
 export class DefaultTestDataProvider implements TestDataProvider {
-  constructor(private readonly today: () => Date = () => new Date()) {}
+  private readonly fields: ReadonlyMap<string, string>;
+
+  constructor(
+    private readonly today: () => Date = () => new Date(),
+    fields: Readonly<Record<string, string>> = {},
+  ) {
+    this.fields = new Map(Object.entries(fields).map(([key, value]) => [fieldKey(key), value]));
+  }
+
+  /** Value the mission gives for this field, if any. */
+  configured(field: FieldConstraints): string | undefined {
+    for (const key of [field.label, field.groupLabel, field.name, field.placeholder]) {
+      if (!key) continue;
+      const value = this.fields.get(fieldKey(key));
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  }
 
   instructionFor(action: DiscoveredAction): FillInstruction {
     const field = action.field;
     if (!field) return { kind: 'skip', reason: 'not a form field' };
     if (isSensitive(field)) return { kind: 'skip', reason: 'sensitive field: never filled automatically' };
 
+    const configured = this.configured(field);
+    if (configured === undefined && field.hasValue) return { kind: 'skip', reason: 'already filled' };
     switch (action.type) {
       case 'check':
-        // Only what the form requires: required checkboxes, and a choice in required radio groups.
-        return field.required ? { kind: 'check' } : { kind: 'skip', reason: 'optional choice' };
+        if (field.choiceGroup !== undefined && field.groupLabel !== undefined && configured !== undefined) {
+          // "Canal de contact": "Téléphone" → this radio only if it is that option.
+          const own = [field.label, field.name].some((key) => key && fieldKey(key) === fieldKey(configured));
+          return own ? { kind: 'check' } : { kind: 'skip', reason: 'another option is configured' };
+        }
+        if (configured !== undefined)
+          return YES.has(fieldKey(configured))
+            ? { kind: 'check' }
+            : { kind: 'skip', reason: 'configured: unchecked' };
+        // Radios: one choice per group (the explorer checks the first option of each group).
+        // Checkboxes: only what the form requires.
+        return field.required || field.choiceGroup !== undefined
+          ? { kind: 'check' }
+          : { kind: 'skip', reason: 'optional choice' };
       case 'uncheck':
         return { kind: 'skip', reason: 'already checked' };
       case 'select': {
+        if (configured !== undefined) return { kind: 'select', label: configured };
+        if (field.customSelect) return { kind: 'select', label: '' };
         const option = (field.options ?? []).find(
           (label) => label !== '' && !/^(-+|choisir|select|choose|--)/i.test(label),
         );
         return option ? { kind: 'select', label: option } : { kind: 'skip', reason: 'no usable option' };
       }
       case 'fill': {
-        const value = this.valueFor(field);
+        const value = configured ?? this.valueFor(field);
         return value === undefined
           ? { kind: 'skip', reason: 'no valid value satisfies the constraints' }
           : { kind: 'fill', value };
@@ -55,6 +92,16 @@ export class DefaultTestDataProvider implements TestDataProvider {
 
   valueFor(field: FieldConstraints): string | undefined {
     const hint = `${field.name ?? ''} ${field.label ?? ''} ${field.placeholder ?? ''}`.toLowerCase();
+    const shown = `${field.hint ?? ''} ${field.placeholder ?? ''}`;
+    const today = this.today().toISOString().slice(0, 10);
+    if (field.inputType === 'text' || field.inputType === 'textarea') {
+      // Help text of the application: "99999" (5 digits), "HH:MM", "AAAA-MM-JJ", "JJ/MM/AAAA"…
+      const digits = /(?:^|[^\w])([9#]{2,})(?:$|[^\w])/.exec(shown)?.[1];
+      if (digits) return fitText('1234567890'.repeat(3).slice(0, digits.length), field);
+      if (/\b(HH|hh):(MM|mm)\b/.test(shown)) return fitText('10:00', field);
+      const date = dateFormat(shown);
+      if (date || field.dateLike) return fitText(formatDate(today, date ?? 'iso'), field);
+    }
     let value: string;
     switch (field.inputType) {
       case 'email':
@@ -106,6 +153,27 @@ export class DefaultTestDataProvider implements TestDataProvider {
     }
     return fitText(value, field);
   }
+}
+
+/** Label as written in the YAML or on screen: case, accents, required marker "*" ignored. */
+function fieldKey(text: string): string {
+  return normalizeText(text.replace(/\*/g, ' '));
+}
+
+type DateFormat = 'iso' | 'dmy' | 'mdy';
+
+function dateFormat(text: string): DateFormat | undefined {
+  if (/\b(AAAA|YYYY|aaaa|yyyy)-(MM|mm)-(JJ|DD|jj|dd)\b/.test(text)) return 'iso';
+  if (/\b(JJ|DD|jj|dd)\/(MM|mm)\/(AAAA|YYYY|aaaa|yyyy)\b/.test(text)) return 'dmy';
+  if (/\b(MM|mm)\/(JJ|DD|jj|dd)\/(AAAA|YYYY|aaaa|yyyy)\b/.test(text)) return 'mdy';
+  return undefined;
+}
+
+function formatDate(iso: string, format: DateFormat): string {
+  const [year, month, day] = iso.split('-');
+  if (format === 'dmy') return `${day}/${month}/${year}`;
+  if (format === 'mdy') return `${month}/${day}/${year}`;
+  return iso;
 }
 
 function isSensitive(field: FieldConstraints): boolean {

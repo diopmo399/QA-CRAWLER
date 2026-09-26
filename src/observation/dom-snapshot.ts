@@ -31,11 +31,38 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     '[role="checkbox"]',
     '[role="radio"]',
     '[role="option"]',
+    '[role="combobox"]',
     '[routerlink]',
     '[ng-reflect-router-link]',
     '[onclick]',
     '[tabindex="0"]',
   ].join(', ');
+  /** Candidates that are actions by themselves (everything but a bare tabindex="0"). */
+  const ACTIONABLE = CANDIDATES.replace(/,\s*\[tabindex="0"\]/, '');
+  const STRUCTURE_ROLES = new Set([
+    'heading',
+    'dialog',
+    'alertdialog',
+    'document',
+    'region',
+    'group',
+    'presentation',
+    'none',
+    'img',
+    'article',
+    'main',
+    'navigation',
+    'banner',
+    'contentinfo',
+    'complementary',
+    'list',
+    'table',
+    'grid',
+    'tabpanel',
+    'status',
+    'alert',
+    'tooltip',
+  ]);
   const FIELD_SELECTOR =
     'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea';
 
@@ -46,7 +73,12 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return false;
     const style = window.getComputedStyle(el);
-    return style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
+    if (style.visibility === 'hidden' || style.display === 'none') return false;
+    if (style.opacity !== '0') return true;
+    // Styled checkboxes and radios (Angular Material…) hide the native input under their own drawing.
+    return el.matches('input[type="checkbox"], input[type="radio"]') && el.parentElement !== null
+      ? isVisible(el.parentElement)
+      : false;
   };
 
   /** Text used for accessible names: text nodes, skipping aria-hidden/hidden subtrees (no CSS text-transform). */
@@ -255,6 +287,81 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     return clean(el.getAttribute('aria-label') ?? heading?.innerText ?? '', 80) || 'overlay';
   };
 
+  // ---- what a form field needs besides its constraints (the value itself is never read)
+  const FIELD_CONTAINER =
+    'mat-form-field, .mat-mdc-form-field, .mat-form-field, .form-group, .form-field, .field, .input-group';
+  const ERROR_SELECTOR =
+    'mat-error, .mat-mdc-form-field-error, .mat-error, .invalid-feedback, .error-message, .field-error, [role="alert"]';
+  const textOfIds = (ids: string | null): string =>
+    clean(
+      (ids ?? '')
+        .split(/\s+/)
+        .map((ref) => (ref ? document.getElementById(ref) : null))
+        .filter((target): target is HTMLElement => target !== null && !target.matches(ERROR_SELECTOR))
+        .map((target) => nameText(target))
+        .join(' '),
+      60,
+    );
+  const describeField = (
+    el: Element,
+    tag: string,
+    inputType: string | undefined,
+    customSelect: boolean,
+  ): Partial<UiElement> => {
+    const info: Partial<UiElement> = {};
+    const input = el as HTMLInputElement;
+    if (customSelect) {
+      // A custom select shows its placeholder until an option is chosen.
+      info.hasValue = el.querySelector('[class*="placeholder"]') === null && clean(nameText(el)) !== '';
+    } else if (tag === 'input' || tag === 'textarea') {
+      if (inputType !== 'checkbox' && inputType !== 'radio') info.hasValue = input.value !== '';
+    }
+    const container = el.closest(FIELD_CONTAINER);
+    const hint =
+      textOfIds(el.getAttribute('aria-describedby')) ||
+      clean(
+        Array.from(
+          container?.querySelectorAll(
+            'mat-hint, .mat-mdc-form-field-hint, .mat-hint, .form-text, .help-block',
+          ) ?? [],
+        )
+          .map((node) => nameText(node))
+          .join(' '),
+        60,
+      );
+    if (hint) info.hint = hint;
+    if (
+      /datepicker/i.test(el.className && typeof el.className === 'string' ? el.className : '') ||
+      container?.querySelector('mat-datepicker-toggle, [class*="datepicker-toggle"]') ||
+      (tag === 'input' && el.getAttribute('aria-haspopup') === 'dialog')
+    )
+      info.dateLike = true;
+    if (
+      inputType === 'radio' ||
+      inputType === 'checkbox' ||
+      el.matches('[role="radio"], [role="checkbox"]')
+    ) {
+      const group = el.closest('[role="radiogroup"], mat-radio-group, fieldset, [role="group"]');
+      const groupName =
+        clean(group?.getAttribute('aria-label')) ||
+        textOfIds(group?.getAttribute('aria-labelledby') ?? null) ||
+        clean(group?.querySelector('legend')?.textContent) ||
+        clean(group?.previousElementSibling?.textContent, 80);
+      if (groupName) info.groupLabel = groupName.replace(/^\*\s*/, '');
+      const name = el.getAttribute('name');
+      // Radios of the same choice (one option per group); checkboxes stay independent.
+      if (inputType === 'radio' || el.matches('[role="radio"]'))
+        info.choiceGroup = name ? `name:${name}` : groupName ? `label:${groupName}` : undefined;
+      if (
+        group?.hasAttribute('required') ||
+        group?.getAttribute('aria-required') === 'true' ||
+        (name !== null && document.querySelector(`input[name="${CSS.escape(name)}"][required]`) !== null)
+      )
+        info.required = true;
+    }
+    return info;
+  };
+
   // ---- interactive elements
   const elements: UiElement[] = [];
   const all = Array.from(document.querySelectorAll(CANDIDATES));
@@ -284,6 +391,15 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       clean(el.getAttribute('role')) ||
       implicitRole(el) ||
       (el.matches('[routerlink], [ng-reflect-router-link], [onclick], [tabindex="0"]') ? 'button' : '');
+    // Only focusable (tabindex="0"): a title, a dialog or a text block that takes the focus is not an
+    // action, unless it looks clickable (pointer cursor) or declares an interactive role.
+    if (
+      !el.matches(ACTIONABLE) &&
+      (/^h[1-6]$/.test(tag) ||
+        STRUCTURE_ROLES.has(clean(el.getAttribute('role'))) ||
+        (!clean(el.getAttribute('role')) && window.getComputedStyle(el).cursor !== 'pointer'))
+    )
+      continue;
     const inputType =
       tag === 'input'
         ? (el.getAttribute('type') ?? 'text').toLowerCase()
@@ -304,6 +420,12 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       el.getAttribute('routerlink') ?? el.getAttribute('ng-reflect-router-link') ?? undefined;
     const dialogName = dialogNameOf(el);
     const label = isField ? labelOf(el) : '';
+    // The form an element belongs to: its <form>, else the dialog/overlay that holds it (forms of
+    // Angular Material dialogs often have no <form>).
+    const layer = layers.find((candidate) => candidate.contains(el));
+    const formGroup = form ? `form:${formIndex}` : layer ? `layer:${overlayName(layer)}` : undefined;
+    const customSelect = !isField && (role === 'combobox' || role === 'listbox');
+    const fieldInfo = isField || customSelect ? describeField(el, tag, inputType, customSelect) : {};
     const numberAttr = (name: string): number | undefined => {
       const value = el.getAttribute(name);
       return value !== null && value !== '' && !Number.isNaN(Number(value)) ? Number(value) : undefined;
@@ -360,6 +482,9 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       expanded: ariaExpanded !== null ? ariaExpanded === 'true' : undefined,
       formIndex: formIndex >= 0 ? formIndex : undefined,
       dialogName,
+      formGroup,
+      customSelect: customSelect ? true : undefined,
+      ...fieldInfo,
       flowTarget: el.hasAttribute(FLOW_TARGET_ATTRIBUTE) ? true : undefined,
       foreground: foreground ? true : undefined,
       // Behind a modal layer: the page behind cannot receive the click.

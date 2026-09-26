@@ -13,6 +13,7 @@ import {
   PAGINATION_KEYWORDS,
   SEARCH_KEYWORDS,
   STEP_KEYWORDS,
+  SUBMIT_KEYWORDS,
 } from '../policies/keywords.js';
 import type { SafetyPolicy } from '../policies/safety-policy.js';
 import { buildLocators } from './locator-builder.js';
@@ -39,6 +40,7 @@ const details = new KeywordMatcher(DETAILS_KEYWORDS);
 const search = new KeywordMatcher(SEARCH_KEYWORDS);
 const filter = new KeywordMatcher(FILTER_KEYWORDS);
 const step = new KeywordMatcher(STEP_KEYWORDS);
+const submitWords = new KeywordMatcher(SUBMIT_KEYWORDS);
 
 /**
  * "What can I do on this screen?"
@@ -58,6 +60,23 @@ export class ActionDiscovery {
     const locators = buildLocators(snapshot.elements);
     const actions: DiscoveredAction[] = [];
     const ids = new Set<string>();
+    // Forms (a <form>, or a dialog/overlay) that hold at least one field.
+    // Radio groups where an option is already chosen: left as they are.
+    const answered = new Set(
+      snapshot.elements
+        .filter(
+          (element) =>
+            element.choiceGroup !== undefined &&
+            element.checked === true &&
+            (element.inputType === 'radio' || element.role === 'radio'),
+        )
+        .map((element) => element.choiceGroup),
+    );
+    const groupsWithFields = new Set(
+      snapshot.elements
+        .filter((element) => element.formGroup !== undefined && isFieldElement(element))
+        .map((element) => element.formGroup),
+    );
 
     snapshot.elements.forEach((element, position) => {
       if (actions.length >= this.maxActions) return;
@@ -72,6 +91,12 @@ export class ActionDiscovery {
       const category = actionCategory(element, type);
       const label = element.label ?? (element.name !== element.text ? element.name : undefined);
       const text = element.text || element.name || undefined;
+      const submitsForm =
+        type === 'click' &&
+        !element.inSearchForm &&
+        element.formGroup !== undefined &&
+        groupsWithFields.has(element.formGroup) &&
+        (element.isSubmit || submitWords.match(element.name, element.text) !== undefined);
       const classification = this.safetyPolicy.classify({
         type,
         category,
@@ -89,6 +114,7 @@ export class ActionDiscovery {
         inSearchForm: element.inSearchForm,
         formHasAction: element.formHasAction,
         ...(element.dialogName ? { dialogName: element.dialogName } : {}),
+        ...(submitsForm ? { submitsForm } : {}),
         external,
       });
 
@@ -114,15 +140,29 @@ export class ActionDiscovery {
         locator,
         ...(locator.strategy !== 'css' ? { fallback: { strategy: 'css' as const, value: element.css } } : {}),
         ...(element.dialogName ? { dialogName: element.dialogName } : {}),
+        ...(element.formGroup ? { formGroup: element.formGroup } : {}),
+        ...(submitsForm ? { submitsForm: true } : {}),
         ...(element.foreground ? { foreground: true } : {}),
         ...(element.obscured ? { obscured: true } : {}),
         ...(element.formIndex !== undefined ? { formIndex: element.formIndex } : {}),
         ...(external ? { external } : {}),
-        ...(isField(type) ? { field: fieldConstraints(element) } : {}),
+        ...(isField(type)
+          ? {
+              field: fieldConstraints(
+                element.choiceGroup !== undefined && answered.has(element.choiceGroup)
+                  ? { ...element, hasValue: true }
+                  : element,
+              ),
+            }
+          : {}),
       });
     });
     return actions;
   }
+}
+
+function isFieldElement(element: UiElement): boolean {
+  return ['input', 'select', 'textarea'].includes(element.tag) || element.customSelect === true;
 }
 
 function isField(type: ActionType): boolean {
@@ -137,7 +177,7 @@ function actionType(element: UiElement, pageUrl: string): ActionType | undefined
     return isScrollAnchor(element.href, pageUrl) ? undefined : 'click';
   }
   if (element.routerLink && tag !== 'button') return 'navigate';
-  if (tag === 'select') return 'select';
+  if (tag === 'select' || element.customSelect) return 'select';
   if (tag === 'textarea') return element.readOnly ? undefined : 'fill';
   if (tag === 'input') {
     if (inputType === 'checkbox' || inputType === 'radio') {
@@ -249,6 +289,12 @@ function fieldConstraints(element: UiElement): FieldConstraints {
     name: element.fieldName,
     label: element.label ?? element.name,
     placeholder: element.placeholder,
+    hint: element.hint,
+    hasValue: element.hasValue,
+    dateLike: element.dateLike,
+    customSelect: element.customSelect,
+    groupLabel: element.groupLabel,
+    choiceGroup: element.choiceGroup,
   };
   for (const [key, value] of Object.entries(optional) as [keyof FieldConstraints, unknown][]) {
     if (value !== undefined && value !== '') (constraints as unknown as Record<string, unknown>)[key] = value;

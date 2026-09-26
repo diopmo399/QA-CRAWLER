@@ -61,6 +61,20 @@ export interface UiElement {
   options?: string[];
   /** The element targeted by the current imposed flow step. */
   flowTarget?: boolean;
+  /** Form the element belongs to: `form:<index>` for a <form>, `layer:<name>` for a dialog/overlay. */
+  formGroup?: string;
+  /** A select that is not a native <select> (role combobox/listbox: Angular Material…). */
+  customSelect?: boolean;
+  /** The field already holds a value (the value itself is never read). */
+  hasValue?: boolean;
+  /** Help text of the field (mat-hint, aria-describedby): "99999", "HH:MM"… */
+  hint?: string;
+  /** The field opens a date picker. */
+  dateLike?: boolean;
+  /** Label of the group of a radio/checkbox ("Canal de contact"). */
+  groupLabel?: string;
+  /** Radios of the same choice share this key. */
+  choiceGroup?: string;
   /** In front of the screen: inside a dialog, drawer, open menu or overlay layer. */
   foreground?: boolean;
   /** Behind a modal layer (backdrop, aria-modal): a click would land on the layer. */

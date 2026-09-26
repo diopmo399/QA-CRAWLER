@@ -188,6 +188,11 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
       warnings.push(`flow "${flow.name}": ${mutating} step(s) allow MUTATION and may modify data.`);
     }
   }
+  if (config.forms.submit === true) {
+    config.safety.block = config.safety.block.filter((risk) => risk !== 'form-submit');
+  } else if (config.forms.submit === false && !config.safety.block.includes('form-submit')) {
+    config.safety.block = [...config.safety.block, 'form-submit'];
+  }
   if (!config.exploration.autonomous && config.flows.length === 0) {
     warnings.push('exploration.autonomous is false and no flow is defined: nothing will be tested.');
   }

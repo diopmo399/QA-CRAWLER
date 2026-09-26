@@ -14,6 +14,8 @@ export const ISSUE_TYPES = [
   'FLOW',
   /** A browser interaction outside the DOM needs attention (AUTH_REQUIRED, loop, file requested…). */
   'BROWSER_INTERACTION',
+  /** A form field is still invalid once filled with the test data (or could not be filled). */
+  'FORM_VALIDATION',
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 
