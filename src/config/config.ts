@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ACTION_CLASSIFICATIONS, RISK_KINDS } from '../model/discovered-action.js';
 import { SEVERITIES } from '../model/issue.js';
+import { REPORT_LANGUAGES } from '../reporting/i18n.js';
 import { flowsSchema } from './flow-schema.js';
 
 /**
@@ -216,6 +217,8 @@ const reportSchema = z
   .object({
     /** The CLI exits with code 1 when an issue at or above this severity is found. NONE disables it. */
     failOnSeverity: z.enum([...SEVERITIES, 'NONE']).default('ERROR'),
+    /** Language of the HTML reports (index.html, flow-graph.html). result.json stays in English. */
+    language: z.enum(REPORT_LANGUAGES).default('en'),
   })
   .strict();
 

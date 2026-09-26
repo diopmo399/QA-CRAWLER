@@ -224,6 +224,8 @@ flows:
     const result = await run(
       'failures',
       `
+report:
+  language: fr
 flows:
   - name: carte
     startAt: /dossiers/create
@@ -250,6 +252,23 @@ flows:
     expect(severities.sort()).toEqual(['ERROR', 'WARNING']);
     const json = await readFile(path.join(outputDir, 'failures', 'reports', 'result.json'), 'utf8');
     expect(json).not.toContain('4111111111111111'.slice(4));
+    // report.language: fr — the HTML is in French, result.json stays in English.
+    const html = await readFile(path.join(outputDir, 'failures', 'reports', 'index.html'), 'utf8');
+    expect(html).toContain('<html lang="fr">');
+    for (const text of [
+      'Flows imposés',
+      'BLOQUÉ',
+      'ÉCHOUÉ',
+      'IGNORÉ',
+      'champ de paiement',
+      'Échecs des flows',
+    ]) {
+      expect(html, text).toContain(text);
+    }
+    expect(html).not.toContain('Imposed flows');
+    expect(json).toContain('"status": "BLOCKED"');
+    const graph = await readFile(path.join(outputDir, 'failures', 'reports', 'flow-graph.html'), 'utf8');
+    expect(graph).toContain('Carte de l&#39;application');
   });
 
   it('explores the last screen of a flow (thenExplore), then the whole application', async () => {

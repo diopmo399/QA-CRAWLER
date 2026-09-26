@@ -7,13 +7,13 @@ report:
 
 browser:
   headless: false
-  slowMoMs: 2000          # 0,5 s avant chaque action
+  slowMoMs: 2000 # 0,5 s avant chaque action
 
 target:
   baseUrl: http://localhost:4200
   startAt: /app/admin/dashboard
 
-auth:                    # connexion faite une fois, avant tout le reste
+auth: # connexion faite une fois, avant tout le reste
   type: form
   loginUrl: /login
   usernameSelector: input[formcontrolname="identifiant"]
@@ -46,7 +46,7 @@ flows:
 
   - name: gestion-utilisateurs
     startAt: /app/admin/fideles
-    thenExplore: true    # explore aussi cet écran juste après
+    thenExplore: true # explore aussi cet écran juste après
     steps:
       - expect: { text: Gestion des Utilisateurs }
       - screenshot: utilisateurs
