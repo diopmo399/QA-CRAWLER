@@ -175,7 +175,7 @@ flows:
   - name: creer-un-devoir
     description: Create a homework through the 2-step dialog
     startAt: /app/admin/devoirs # page loaded before the first step (default: target.startAt)
-    thenExplore: false # true: explore autonomously from the last screen
+    thenExplore: false # true: explore the last screen (and pages below it) right after the flow
     steps:
       - click: { role: button, name: Nouveau devoir }
       - fill: { label: Titre, value: Devoir QA }
@@ -220,7 +220,7 @@ flows:
 
 1. Log in (`auth`) and load `target.startAt`.
 2. Run each flow in order, each from a freshly loaded `startAt`. A failed or blocked step stops its flow; the next steps are `SKIPPED`.
-3. With `thenExplore: true`, explore autonomously below the flow's last screen (states often reachable only through the flow).
+3. With `thenExplore: true`, explore the flow's last screen right after the flow, even when `exploration.autonomous` is `false`. This exploration stays in that screen's section: in-page controls (tabs, buttons, details) and links to pages below its path (`/admin/fideles` → `/admin/fideles/12`). The global menu and other pages are left to step 4.
 4. With `exploration.autonomous: true` (default), explore the application from `target.startAt`.
 
 **Results.**
