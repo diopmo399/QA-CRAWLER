@@ -1,0 +1,94 @@
+# Fully documented mission. Every key is optional except target.baseUrl;
+# the values below are the defaults unless stated otherwise.
+# The YAML never lists buttons to click: it gives a goal and limits.
+mission:
+  name: explore-application
+  description: Every available option, with its default value
+
+target:
+  baseUrl: http://localhost:4200 # required — overridable with --base-url or QA_BASE_URL
+  startAt: / # first screen, relative to baseUrl
+
+exploration:
+  maxStates: 100 # distinct functional states (screens, steps, tabs)
+  maxActions: 500 # actions executed (clicks, navigations, fills)
+  maxDepth: 10 # transitions away from the start state
+  maxDurationMinutes: 15
+  actionTimeoutMs: 10000 # locate + execute one action
+  navigationTimeoutMs: 15000
+  waitUntil: load # load | domcontentloaded | networkidle | commit
+  settleTimeMs: 400 # extra wait after each action (SPA rendering, API calls)
+  maxStatesPerRoute: 3 # /users/1, /users/2 … share the route /users/:id: 3 samples are enough
+  queryParams:
+    mode: pattern # pattern: ?page=1..N share one route | ignore | keep
+    ignored: ['utm_*', 'fbclid', 'gclid', '_', 'ts', 'timestamp', 'cachebuster']
+  maxRecordedActions: 200 # actions recorded per state
+
+goals:
+  discoverNavigation: true # follow links and routerLinks
+  discoverForms: true # fill forms with fake test data before clicking their step buttons
+  discoverFlows: true # click tabs, menus, details, toggles, wizard steps
+  detectErrors: true # network, console and JavaScript observers
+
+browser:
+  headless: true
+  viewport: { width: 1366, height: 768 }
+  # locale: fr-FR
+  ignoreHttpsErrors: false
+  args: ['--disable-dev-shm-usage']
+  slowMoMs: 0
+
+checks:
+  consoleErrors: true
+  consoleWarnings: false
+  pageErrors: true
+  httpErrors: true # API/resource responses >= http.failOnStatus
+  requestFailures: true
+  brokenLinks: true # screens whose document answers >= http.failOnStatus
+  screenshots: true # one per discovered state
+  screenshotOnError: true # when an ERROR/CRITICAL anomaly happens
+  fullPageScreenshots: false
+
+http:
+  failOnStatus: 400
+  ignoreStatus: []
+  ignoreUrlPatterns: [] # substrings, e.g. ['/analytics']
+
+safety:
+  allowedHosts: [] # default: host of target.baseUrl ('*.example.com' allowed)
+  ignoredPaths: [/logout, /signout, /sign-out, /deconnexion]
+  allowedActionClasses: [SAFE] # SAFE | MUTATION | DANGEROUS | UNKNOWN
+  allow: # kinds of SAFE actions the mission may execute
+    [navigation, tabs, menus, details, pagination, search, filter, forms, other]
+  block: # risks always blocked (sensitive-data is blocked even if omitted)
+    [delete, payment, send, logout, irreversible, sensitive-data, external-navigation, form-submit, download]
+  keywords: # extra vocabulary for the classification
+    safe: []
+    mutation: []
+    dangerous: []
+
+# auth:
+#   type: form
+#   loginUrl: /login
+#   usernameSelector: 'input[name="username"]'
+#   passwordSelector: 'input[type="password"]'
+#   submitSelector: 'button[type="submit"]'
+#   usernameEnv: QA_USERNAME
+#   passwordEnv: QA_PASSWORD
+#   successSelector: 'nav .user-menu'
+auth:
+  type: none
+
+memory:
+  # file: reports/flow-graph.json    # default: <reportsDir>/flow-graph.json
+  resume: false # true: continue from the previous graph, skip actions already tried
+
+output:
+  reportsDir: reports
+  screenshotsDir: screenshots
+  json: true
+  html: true
+  flowGraphHtml: true
+
+report:
+  failOnSeverity: ERROR # INFO | WARNING | ERROR | CRITICAL | NONE — sets the CLI exit code

@@ -1,0 +1,81 @@
+name: qa-crawler
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: URL of the application to crawl (optional)
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Integration tests (local test site)
+        run: npm run test:integration
+
+  # Real smoke test, only when a target is available (repository variable
+  # TARGET_URL or a manual run with target_url). Never runs against nothing.
+  smoke:
+    needs: build
+    if: ${{ vars.TARGET_URL != '' || github.event.inputs.target_url != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Crawl
+        env:
+          QA_BASE_URL: ${{ github.event.inputs.target_url || vars.TARGET_URL }}
+          QA_USERNAME: ${{ secrets.QA_USERNAME }}
+          QA_PASSWORD: ${{ secrets.QA_PASSWORD }}
+        run: npm run qa -- scenarios/smoke.yaml
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-report
+          path: |
+            reports/
+            screenshots/
+          retention-days: 14

@@ -1,0 +1,29 @@
+# Mission on the bundled back-office demo. Nothing below says which buttons
+# to click: the explorer discovers screens, tabs and wizard steps by itself.
+#   npm run demo:server               # terminal 1
+#   npm run qa -- scenarios/demo.yaml # terminal 2
+mission:
+  name: explore-back-office
+  description: Discover the screens and flows of the demo back-office
+
+target:
+  baseUrl: http://localhost:4174
+  startAt: /
+
+exploration:
+  maxStates: 40
+  maxActions: 150
+  maxDepth: 10
+  maxDurationMinutes: 5
+  actionTimeoutMs: 5000
+  settleTimeMs: 200
+
+goals:
+  discoverNavigation: true
+  discoverForms: true
+  discoverFlows: true
+  detectErrors: true
+
+safety:
+  allow: [navigation, tabs, menus, details, pagination, search, filter, forms, other]
+  block: [delete, payment, send, logout, irreversible, sensitive-data, external-navigation, form-submit]
