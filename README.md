@@ -485,8 +485,11 @@ Le résultat est un `stateId` lisible et stable, par exemple `parametres-securit
 - une fenêtre (`role=dialog`, `aria-modal`, `<dialog>`), un tiroir, un menu déroulant ou une liste d'options flottants (`role=menu` / `listbox`, `.cdk-overlay-pane`) sont détectés comme **premier plan** ;
 - un **overlay sans rôle ARIA** est aussi détecté : un calque `fixed`/`absolute` qui couvre la majeure partie de l'écran (fond grisé + boîte) ;
 - en mode exploration, les actions du premier plan sont essayées avant celles de la page derrière ;
+- les calques s'empilent : un calendrier ouvert depuis une fenêtre pose son propre fond (transparent) sur la fenêtre. Seul le calque du dessus est au premier plan ; un élément dont le point de clic tombe sur un autre calque est masqué et n'est pas cliqué ;
 - derrière un calque **modal**, la page est marquée masquée (`obscured`) et n'est pas cliquée tant que le calque est ouvert. Derrière un calque non modal (bandeau cookies), la page reste explorée ensuite ;
 - les éléments du premier plan sont gardés même au-delà de la limite d'éléments observés, et un overlay ouvert donne un état distinct.
+
+Après un échec, si l'écran de départ ne peut pas être retrouvé (fenêtre fermée par le rechargement), l'exploration repart de ce qui est réellement affiché au lieu d'essayer les actions de l'écran perdu.
 
 **Protection contre les boucles :**
 
