@@ -172,6 +172,8 @@ Scenarios written for the first version (`name`, `maxPages`, `maxUrlsPerRoute`, 
 
 The autonomous explorer decides by itself what to click. When a test must follow a precise path (log in, create a record through a wizard, check the confirmation), list the steps in `flows`. [`scenarios/demo-flows.yaml`](scenarios/demo-flows.yaml) is a complete example.
 
+> 🇫🇷 Guide complet en français : [docs/flows-fr.md](docs/flows-fr.md).
+
 ```yaml
 flows:
   - name: creer-un-devoir
