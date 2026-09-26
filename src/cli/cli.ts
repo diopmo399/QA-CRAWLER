@@ -1,9 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { AuthError } from '../auth/authenticator.js';
 import { ConfigError, loadConfigFile } from '../config/config-loader.js';
-import type { CrawlListener } from '../crawler/crawler.js';
-import { type Issue, type Severity } from '../model/issue.js';
-import { runScenario } from '../orchestrator.js';
+import type { ExplorationListener } from '../explorer/flow-explorer.js';
+import { actionLabel } from '../model/discovered-action.js';
+import type { Severity } from '../model/issue.js';
+import { runMission } from '../orchestrator.js';
+import { buildFlowTree, renderTextTree } from '../reporting/flow-tree.js';
 import { HELP_TEXT, parseCliArgs, UsageError } from './args.js';
 import { color, logger } from './logger.js';
 
@@ -38,7 +40,7 @@ export async function runCli(argv: string[]): Promise<number> {
     return EXIT.OK;
   }
   if (!args.configPath) {
-    logger.error('Error: no scenario file given.\n');
+    logger.error('Error: no mission file given.\n');
     logger.info(HELP_TEXT);
     return EXIT.USAGE;
   }
@@ -47,7 +49,8 @@ export async function runCli(argv: string[]): Promise<number> {
   try {
     loaded = await loadConfigFile(args.configPath, {
       ...(args.baseUrl !== undefined ? { baseUrl: args.baseUrl } : {}),
-      ...(args.maxPages !== undefined ? { maxPages: args.maxPages } : {}),
+      ...(args.maxStates !== undefined ? { maxStates: args.maxStates } : {}),
+      ...(args.maxActions !== undefined ? { maxActions: args.maxActions } : {}),
       ...(args.headless !== undefined ? { headless: args.headless } : {}),
       ...(args.reportsDir !== undefined ? { reportsDir: args.reportsDir } : {}),
       ...(args.screenshotsDir !== undefined ? { screenshotsDir: args.screenshotsDir } : {}),
@@ -61,40 +64,49 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 
   const { config, warnings } = loaded;
+  const { exploration, safety, goals } = config;
   const startUrl = new URL(config.target.startAt, config.target.baseUrl).toString();
-  logger.info(color.bold('QA Crawler'));
-  logger.info(`  Scenario : ${config.name} ${color.dim(`(${args.configPath})`)}`);
+  const enabledGoals = Object.entries(goals)
+    .filter(([, enabled]) => enabled)
+    .map(([goal]) => goal)
+    .join(', ');
+  logger.info(color.bold('QA Flow Explorer'));
+  logger.info(`  Mission  : ${config.mission.name} ${color.dim(`(${args.configPath})`)}`);
   logger.info(`  Target   : ${startUrl}`);
+  logger.info(`  Goals    : ${enabledGoals}`);
   logger.info(
-    `  Limits   : ${config.exploration.maxPages} pages, depth ${config.exploration.maxDepth}, ${config.exploration.maxUrlsPerRoute} URL(s) per route`,
+    `  Limits   : ${exploration.maxStates} states, ${exploration.maxActions} actions, depth ${exploration.maxDepth}, ${exploration.maxDurationMinutes} min`,
   );
   logger.info(
-    `  Safety   : allowed hosts [${config.safety.allowedHosts.join(', ')}], executable actions [${config.safety.allowedActionClasses.join(', ')}]`,
+    `  Safety   : executes [${safety.allowedActionClasses.join(', ')}] ${safety.allow.join('/')}; blocks ${safety.block.join(', ')}`,
   );
   for (const warning of warnings) logger.warn(`  ! ${warning}`);
   logger.info('');
 
   try {
-    const outcome = await runScenario(config, { listener: progressListener(args.quiet) });
+    const outcome = await runMission(config, { listener: progressListener(args.quiet) });
     const { result } = outcome;
-    const counts = result.stats.issuesBySeverity;
+    const { stats } = result;
+    const counts = stats.issuesBySeverity;
 
     logger.info('');
+    logger.info(color.bold('Discovered flow'));
+    logger.info(renderTextTree(buildFlowTree(result.states, result.transitions, result.states[0]?.id)));
+    logger.info('');
     logger.info(color.bold('Summary'));
+    logger.info(`  States        : ${stats.states} (max depth ${stats.maxDepth})`);
+    logger.info(`  Transitions   : ${stats.transitions}`);
     logger.info(
-      `  Pages visited : ${result.pagesVisited}${result.maxPagesReached ? color.dim(` (maxPages reached, ${result.pendingUrls} URL(s) not visited)`) : ''}`,
+      `  Actions       : ${stats.actionsExecuted} executed, ${stats.actionsBlocked} blocked, ${stats.actionsFailed} failed, ${stats.backtracks} backtrack(s)`,
     );
-    logger.info(`  Routes        : ${result.routes.length}`);
     logger.info(
       `  Issues        : ${result.issues.length} (${color.red(`${counts.CRITICAL} critical`)}, ${color.red(`${counts.ERROR} error`)}, ${color.yellow(`${counts.WARNING} warning`)}, ${counts.INFO} info)`,
     );
-    const actions = result.stats.actionsByClassification;
-    logger.info(
-      `  Actions found : ${actions.SAFE} safe, ${actions.MUTATION} mutation, ${actions.DANGEROUS} dangerous, ${actions.UNKNOWN} unknown (executed: ${result.stats.actionsExecuted})`,
-    );
-    logger.info(`  Duration      : ${(result.durationMs / 1000).toFixed(1)} s`);
+    logger.info(`  Stopped       : ${result.stopReason} after ${(result.durationMs / 1000).toFixed(1)} s`);
     if (result.artifacts.json) logger.info(`  JSON report   : ${result.artifacts.json}`);
     if (result.artifacts.html) logger.info(`  HTML report   : ${result.artifacts.html}`);
+    if (result.artifacts.flowGraph) logger.info(`  Flow graph    : ${result.artifacts.flowGraph}`);
+    if (result.artifacts.flowGraphHtml) logger.info(`  Flow graph UI : ${result.artifacts.flowGraphHtml}`);
     logger.info(`  Screenshots   : ${result.artifacts.screenshotsDir ?? '-'}`);
     logger.info('');
 
@@ -114,7 +126,7 @@ export async function runCli(argv: string[]): Promise<number> {
       return EXIT.RUNTIME;
     }
     const message = error instanceof Error ? error.message : String(error);
-    logger.error(`Crawl failed: ${message.split('\n')[0] ?? message}`);
+    logger.error(`Exploration failed: ${message.split('\n')[0] ?? message}`);
     if (/Executable doesn't exist|browserType\.launch/i.test(message)) {
       logger.error('Chromium is not installed. Run: npx playwright install chromium');
     }
@@ -122,35 +134,46 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 }
 
-function progressListener(quiet: boolean): CrawlListener {
+function progressListener(quiet: boolean): ExplorationListener {
+  let step = 0;
   return {
     onAuthenticated(description) {
       logger.info(`${color.green('✓')} Authenticated: ${description}`);
     },
-    onPageStart(item, sequence, queued) {
-      if (quiet) return;
+    onState(context, isNew) {
+      if (quiet || !isNew) return;
       logger.info(
-        `${color.cyan(`[${String(sequence).padStart(3, ' ')}]`)} ${item.url} ${color.dim(`(depth ${item.depth}, ${queued} queued)`)}`,
+        `${color.green('◆ new state')} ${color.bold(context.stateLabel)} ${color.dim(`${context.url} · ${context.actions.length} action(s) · depth ${context.metadata.depth}`)}`,
       );
     },
-    onPageDone(page, newIssues: Issue[]) {
+    onTransition(edge, action) {
       if (quiet) return;
-      const status = page.failed
-        ? color.red('FAILED')
-        : page.status !== undefined
-          ? String(page.status)
-          : '-';
-      const detail = `${status} · ${page.loadTimeMs} ms · ${page.links.queued} new link(s) · ${page.actions.length} action(s)`;
-      logger.info(`      ${color.dim(detail)}`);
-      for (const issue of newIssues) {
-        logger.info(
-          `      ${SEVERITY_COLOR[issue.severity](issue.severity.padEnd(8))} ${issue.type}: ${issue.message}`,
-        );
-      }
+      step += 1;
+      const target =
+        edge.result !== 'SUCCESS'
+          ? color.red(`${edge.result}: ${edge.reason ?? ''}`)
+          : edge.to === edge.from
+            ? color.dim('(same state)')
+            : edge.to;
+      logger.info(
+        `${color.cyan(`[${String(step).padStart(3, ' ')}]`)} ${action.type} "${actionLabel(action)}" → ${target}`,
+      );
     },
-    onActionExecuted(_pageUrl, label, outcome) {
+    onBlocked(_context, action, reason) {
       if (quiet) return;
-      logger.info(`      ${color.magenta('↳ action')} "${label}": ${outcome}`);
+      logger.info(
+        `      ${color.yellow('⛔ blocked')} ${action.type} "${actionLabel(action)}" ${color.dim(`(${action.classification}: ${reason})`)}`,
+      );
+    },
+    onBacktrack(_from, to, method) {
+      if (quiet) return;
+      logger.info(`      ${color.magenta('↩ backtrack')} ${to ?? ''} ${color.dim(`(${method})`)}`);
+    },
+    onIssue(issue, isNew) {
+      if (quiet || !isNew) return;
+      logger.info(
+        `      ${SEVERITY_COLOR[issue.severity](issue.severity.padEnd(8))} ${issue.type}: ${issue.message}`,
+      );
     },
   };
 }

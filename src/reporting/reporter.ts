@@ -1,28 +1,35 @@
 import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 import type { ScenarioConfig } from '../config/config.js';
-import type { CrawlResult } from '../model/crawl-result.js';
+import type { ExplorationResult } from '../model/exploration-result.js';
+import { FlowGraphHtmlReporter } from './flow-graph-html-reporter.js';
 import { HtmlReporter } from './html-reporter.js';
 import { JsonReporter } from './json-reporter.js';
 
-/** Writes a crawl result somewhere; returns the path of the produced file. */
+/** Writes an exploration result somewhere; returns the path of the produced file. */
 export interface Reporter {
   readonly format: string;
-  write(result: CrawlResult): Promise<string>;
+  write(result: ExplorationResult): Promise<string>;
 }
 
-/** Runs every enabled reporter and records the produced files in `result.artifacts`. */
+/**
+ * Runs every enabled reporter and records the produced files in `result.artifacts`.
+ * flow-graph.json itself is written by the FlowMemory.
+ */
 export async function writeReports(
-  result: CrawlResult,
+  result: ExplorationResult,
   output: ScenarioConfig['output'],
-): Promise<CrawlResult> {
+  flowGraphFile?: string,
+): Promise<ExplorationResult> {
   await mkdir(output.reportsDir, { recursive: true });
   result.artifacts.screenshotsDir = output.screenshotsDir;
-  // The HTML report is written first so the JSON can reference it.
-  if (output.html) {
-    result.artifacts.html = await new HtmlReporter(output.reportsDir, output.screenshotsDir).write(result);
+  if (flowGraphFile) result.artifacts.flowGraph = flowGraphFile;
+  if (output.flowGraphHtml) {
+    result.artifacts.flowGraphHtml = path.join(output.reportsDir, 'flow-graph.html');
   }
-  if (output.json) {
-    result.artifacts.json = await new JsonReporter(output.reportsDir).write(result);
-  }
+  if (output.json) result.artifacts.json = path.join(output.reportsDir, 'result.json');
+  if (output.html) result.artifacts.html = await new HtmlReporter(output.reportsDir).write(result);
+  if (output.flowGraphHtml) await new FlowGraphHtmlReporter(output.reportsDir).write(result);
+  if (output.json) await new JsonReporter(output.reportsDir).write(result);
   return result;
 }
