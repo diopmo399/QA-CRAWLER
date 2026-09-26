@@ -6,7 +6,7 @@ import type { UiSnapshot } from '../model/ui-snapshot.js';
 
 /** What distinguishes a state on its screen: open dialog, selected tab, or second heading (wizard step). */
 export function stateSubtitle(snapshot: UiSnapshot): string | undefined {
-  return snapshot.dialogs[0] ?? snapshot.selectedTabs[0] ?? snapshot.headings[1];
+  return snapshot.dialogs[0] ?? snapshot.overlay ?? snapshot.selectedTabs[0] ?? snapshot.headings[1];
 }
 
 export interface DetectedState {
@@ -75,6 +75,8 @@ export class StateDetector {
       `tabs=${snapshot.selectedTabs.map(mask).join('|')}`,
       `current=${snapshot.currentItems.map(mask).join('|')}`,
       `controls=${controls.join('|')}`,
+      // Only when present: states without an overlay keep their id.
+      ...(snapshot.overlay !== undefined ? [`overlay=${mask(snapshot.overlay)}`] : []),
     ];
     const hash = createHash('sha1').update(signature.join('\n')).digest('hex').slice(0, 8);
     const label = stateLabel(snapshot, route);

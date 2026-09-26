@@ -91,6 +91,10 @@ export interface DiscoveredAction {
   fallback?: LocatorDescriptor;
   /** Name of the dialog the element belongs to. */
   dialogName?: string;
+  /** In front of the screen (dialog, drawer, open menu, overlay): explored first. */
+  foreground?: boolean;
+  /** Behind a modal layer: not clickable while the layer is open. */
+  obscured?: boolean;
   /** Enclosing form, if any. */
   formIndex?: number;
   /** Link target outside the allowed hosts. */
