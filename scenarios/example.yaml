@@ -109,6 +109,7 @@ browserInteractions:
     promptValues: [] # [{ match: "Nom du dossier", value: "Dossier QA" }] or value: { env: NAME }
   popups:
     observe: true # new page on an allowed origin: recorded as a state, then closed
+    closeAfterMs: 0 # leave it open up to this long so it can finish on its own (SSO popup: 10000)
   permissions:
     grant: [] # geolocation, notifications, camera, microphone, clipboard-read, clipboard-write
 

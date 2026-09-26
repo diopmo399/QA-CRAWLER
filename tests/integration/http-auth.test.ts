@@ -66,6 +66,18 @@ describe('HTTP authentication (browser sign-in dialog)', () => {
         page('Espace instable');
         return;
       }
+      if (requestPath.startsWith('/siteminderagent')) {
+        // SiteMinder-like popup: native sign-in, then tells the application and closes itself.
+        if (header !== BASIC) {
+          challenge('SiteMinder');
+          return;
+        }
+        page(
+          'Connexion réussie',
+          "<script>window.opener.document.getElementById('etat').textContent = 'connecté'; setTimeout(() => window.close(), 200);</script>",
+        );
+        return;
+      }
       if (requestPath.startsWith('/loop')) {
         loopRealm += 1;
         challenge(`Loop-${String(loopRealm)}`);
@@ -73,7 +85,7 @@ describe('HTTP authentication (browser sign-in dialog)', () => {
       }
       page(
         'Accueil',
-        '<a href="/secure/">Espace sécurisé</a> <a href="/flaky/">Espace instable</a> <a href="/loop/">Espace en boucle</a>',
+        '<p id="etat">déconnecté</p><a href="/secure/">Espace sécurisé</a> <a href="/flaky/">Espace instable</a> <a href="/loop/">Espace en boucle</a> <button onclick="window.open(\'/siteminderagent/ntlm/smntlm.ntc?TARGET=app\')">Connexion SSO</button>',
       );
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -296,5 +308,43 @@ flows:
       runMission(login('login-origin', '  origin: https://sso.example.com\n'), { env }),
     ).rejects.toThrowError(/CREDENTIALS_NOT_ALLOWED.*auth\.origin/);
     expect(authorizations).toEqual([]);
+  });
+
+  it('sign-in dialog inside a popup (SiteMinder): caught, handled, and the popup finishes on its own', async () => {
+    const { result } = await runMission(
+      mission(
+        'popup-sso',
+        `
+credentials:
+  qa-default: { usernameEnv: QA_USERNAME, passwordEnv: QA_PASSWORD }
+browserInteractions:
+  httpAuth:
+    credentialProfile: qa-default
+  popups:
+    closeAfterMs: 5000
+flows:
+  - name: sso
+    steps:
+      - click: { role: button, name: Connexion SSO }
+      - expect: { text: connecté }
+`,
+      ),
+      { env },
+    );
+    expect(result.flows[0]?.status).toBe('PASSED');
+    const [auth] = auths(result.browserInteractions);
+    expect(auth).toMatchObject({
+      status: 'HANDLED',
+      outcome: 'AUTHENTICATED',
+      details: { realm: 'SiteMinder' },
+    });
+    expect(auth?.targetUrl).toContain('/siteminderagent/ntlm/smntlm.ntc');
+    const popup = result.browserInteractions.find((interaction) => interaction.type === 'POPUP');
+    expect(popup).toMatchObject({
+      status: 'HANDLED',
+      outcome: 'POPUP_CLOSED',
+      details: { closedByPage: true },
+    });
+    expect(authorizations).toContain(BASIC);
   });
 });

@@ -303,16 +303,17 @@ Un flow qui utilise `allow: MUTATION` modifie de vraies données : lance-le seul
 
 ### 5. Pièges fréquents
 
-| Problème                                                               | Solution                                                                                                               |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `élément introuvable` sur un champ dont le `<label>` n'est pas relié   | Utilise `css: 'input[formcontrolname="…"]'`                                                                            |
-| « Nouveau devoir » est BLOQUÉ                                          | « Nouveau » est un mot de modification : ajoute `allow: MUTATION`                                                      |
-| « Se connecter » est BLOQUÉ                                            | C'est un envoi de formulaire : ajoute `allow: MUTATION`, ou utilise le bloc `auth`                                     |
-| Deux champs « Classe » (filtre de la page et fenêtre)                  | Rien à faire : celui de la fenêtre ouverte est choisi                                                                  |
-| Tous les flows échouent, les écrans s'appellent « Opps!!! » ou « 404 » | Mauvaise application : vérifie `baseUrl` et que `QA_BASE_URL` n'est pas défini                                         |
-| Ça explore alors que `autonomous: false`                               | `thenExplore: true` explore quand même le dernier écran du flow : retire-le                                            |
-| La fenêtre grise « Connexion » du navigateur apparaît                  | Ce n'est pas un formulaire : utilise `auth: { type: http, origin: https://… }` ([Authentification](#authentification)) |
-| `expect` échoue alors que le texte est visible                         | Le texte doit être exact au caractère près (accents, tirets « — ») : essaie une partie plus courte                     |
+| Problème                                                                 | Solution                                                                                                               |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `élément introuvable` sur un champ dont le `<label>` n'est pas relié     | Utilise `css: 'input[formcontrolname="…"]'`                                                                            |
+| « Nouveau devoir » est BLOQUÉ                                            | « Nouveau » est un mot de modification : ajoute `allow: MUTATION`                                                      |
+| « Se connecter » est BLOQUÉ                                              | C'est un envoi de formulaire : ajoute `allow: MUTATION`, ou utilise le bloc `auth`                                     |
+| Deux champs « Classe » (filtre de la page et fenêtre)                    | Rien à faire : celui de la fenêtre ouverte est choisi                                                                  |
+| Tous les flows échouent, les écrans s'appellent « Opps!!! » ou « 404 »   | Mauvaise application : vérifie `baseUrl` et que `QA_BASE_URL` n'est pas défini                                         |
+| Ça explore alors que `autonomous: false`                                 | `thenExplore: true` explore quand même le dernier écran du flow : retire-le                                            |
+| La fenêtre grise « Connexion » du navigateur apparaît                    | Ce n'est pas un formulaire : utilise `auth: { type: http, origin: https://… }` ([Authentification](#authentification)) |
+| Cette fenêtre apparaît dans une **popup** SSO (SiteMinder `smntlm.ntc`…) | Voir [Connexion SSO dans une popup](#connexion-sso-dans-une-popup-siteminder-ntlm) et `scenarios/sso-popup.yaml`       |
+| `expect` échoue alors que le texte est visible                           | Le texte doit être exact au caractère près (accents, tirets « — ») : essaie une partie plus courte                     |
 
 ### 6. Ordre d'exécution
 
@@ -355,6 +356,27 @@ auth:
 ```
 
 Rien n'est tapé dans une page : cette fenêtre ne fait pas partie du DOM. Elle est détectée et traitée par le protocole du navigateur, via le `HttpAuthHandler` (voir [Interactions navigateur](#interactions-navigateur)). `auth.type: http` est un raccourci vers un profil d'identifiants nommé `auth`. Sans `origin`, les identifiants ne partent que vers la cible et ses hôtes autorisés. `AUTH_REQUIRED`, `AUTH_FAILED` ou `CREDENTIALS_NOT_ALLOWED` sur `checkUrl` arrête le run avec un message clair.
+
+### Connexion SSO dans une popup (SiteMinder, NTLM)
+
+Certaines applications ouvrent une **popup** vers le serveur SSO (par exemple `https://sso.example.com/siteminderagent/ntlm/smntlm.ntc?…`), et c'est dans cette popup que le navigateur affiche sa fenêtre « Se connecter ». La popup commence à charger avant que le crawler puisse s'y attacher : le défi est mémorisé, puis le chargement de la popup est rejoué une fois pour que le `HttpAuthHandler` y réponde.
+
+```yaml
+safety:
+  allowedHosts: [app.example.com, sso.example.com] # la popup SSO doit être autorisée
+
+credentials:
+  sso: { usernameEnv: QA_USERNAME, passwordEnv: QA_PASSWORD }
+
+browserInteractions:
+  httpAuth:
+    credentialProfile: sso
+    origins: [https://sso.example.com] # seul serveur qui reçoit les identifiants
+  popups:
+    closeAfterMs: 10000 # laisser la popup se connecter puis se refermer ou rediriger seule
+```
+
+Exemple complet : [`scenarios/sso-popup.yaml`](scenarios/sso-popup.yaml). Pour NTLM, le nom d'utilisateur peut devoir être au format `DOMAINE\utilisateur`.
 
 `FORM_AUTH` (un formulaire de connexion dans la page) reste dans le monde du DOM : `auth.type: form`, ou un flow imposé. `HTTP_AUTH` (la fenêtre du navigateur) est une interaction navigateur. Les deux mécanismes ne sont jamais mélangés.
 
@@ -401,7 +423,7 @@ browserInteractions:
     alert: accept # accept | dismiss
     confirm: dismiss # dismiss | accept-safe
     promptValues: [{ match: 'Nom du dossier', value: 'Dossier QA' }] # value : texte ou { env: NOM }
-  popups: { observe: true }
+  popups: { observe: true, closeAfterMs: 0 } # closeAfterMs : laisser une popup SSO finir seule (ex. 10000)
   permissions: { grant: [] } # geolocation, notifications, camera, microphone, clipboard-read, clipboard-write
 ```
 
@@ -760,7 +782,7 @@ npm run build            # dist/
 - Les actions qui modifient des données (créer, enregistrer, envoyer) ne sont jamais exécutées automatiquement. Leurs effets ne sont explorés que si elles sont explicitement autorisées, sur un environnement jetable.
 - Le retour en arrière par rejouée demande un chemin déterministe ; les états impossibles à restaurer sont ignorés.
 - Un seul rôle par run. La double authentification (MFA/OTP) et les sessions sauvegardées ne sont pas encore gérées.
-- Interactions navigateur : l'authentification HTTP est détectée via le protocole de Chromium (Chromium uniquement). Un défi déclenché par une popup avant son rattachement, par une iframe d'un autre domaine ou par un service worker n'est pas vu. NTLM/Kerberos dépendent du serveur. Les popups et nouveaux onglets sont observés puis fermés, pas explorés en parallèle. Les sélecteurs de fichier ne reçoivent jamais de fichier.
+- Interactions navigateur : l'authentification HTTP est détectée via le protocole de Chromium (Chromium uniquement). Quand une popup est défiée avant que le crawler s'y attache (SSO SiteMinder par exemple), son chargement est rejoué une fois pour capter le défi. Un défi venant d'une iframe d'un autre domaine ou d'un service worker n'est pas vu. NTLM/Kerberos dépendent du serveur. Les popups et nouveaux onglets sont observés puis fermés, pas explorés en parallèle. Les sélecteurs de fichier ne reçoivent jamais de fichier.
 - Le Shadow DOM et les iframes ne sont pas explorés.
 
 ## Feuille de route

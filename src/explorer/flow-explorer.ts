@@ -194,6 +194,7 @@ export class FlowExplorer {
       .register(
         new PopupHandler({
           observe: config.browserInteractions.popups.observe,
+          closeAfterMs: config.browserInteractions.popups.closeAfterMs,
           inspect: (page) => this.inspectNewPage(page),
         }),
       )
