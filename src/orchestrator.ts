@@ -41,7 +41,12 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     ...(options.env ? { env: options.env } : {}),
   });
   const outcome = await explorer.explore();
-  const result = await writeReports(buildResult(outcome, config), config.output, memory.location);
+  const result = await writeReports(
+    buildResult(outcome, config),
+    config.output,
+    memory.location,
+    config.report.language,
+  );
   const threshold = config.report.failOnSeverity;
   const failingIssues =
     threshold === 'NONE' ? [] : result.issues.filter((issue) => isAtLeast(issue.severity, threshold));

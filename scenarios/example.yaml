@@ -92,3 +92,4 @@ output:
 
 report:
   failOnSeverity: ERROR # INFO | WARNING | ERROR | CRITICAL | NONE — sets the CLI exit code
+  language: en # en | fr — language of index.html and flow-graph.html (result.json stays in English)

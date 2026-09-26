@@ -29,6 +29,9 @@ exploration:
   actionTimeoutMs: 10000
   settleTimeMs: 600
 
+report:
+  language: fr # rapports HTML en français
+
 flows:
   - name: creer-un-devoir
     description: Nouveau devoir → infos de base → contenu → enregistrer

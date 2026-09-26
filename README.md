@@ -349,6 +349,13 @@ Identical anomalies are merged into one issue, which counts its occurrences and 
 
 The reports use no JavaScript, framework or external asset.
 
+**French reports.** Set `report.language: fr` to get `index.html` and `flow-graph.html` in French: titles, columns, statuses (`RÉUSSI`, `ÉCHOUÉ`, `BLOQUÉ`, `IGNORÉ`), classes, severities and the safety policy's reasons. `result.json` and `flow-graph.json` always stay in English, so tools and CI read the same keys and values.
+
+```yaml
+report:
+  language: fr # en (default) | fr
+```
+
 ## Command line
 
 ```bash

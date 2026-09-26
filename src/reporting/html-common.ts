@@ -1,6 +1,7 @@
 import type { Severity } from '../model/issue.js';
 import type { FlowTreeNode } from './flow-tree.js';
 import { displayName } from './flow-tree.js';
+import { reportTexts, valueLabel, type ReportLanguage, type ReportTexts } from './i18n.js';
 
 export const SEVERITY_COLORS: Record<Severity, string> = {
   INFO: '#2563eb',
@@ -19,12 +20,13 @@ export function esc(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-export function severityBadge(severity: Severity): string {
-  return `<span class="sev" style="background:${SEVERITY_COLORS[severity]}">${severity}</span>`;
+export function severityBadge(severity: Severity, language: ReportLanguage = 'en'): string {
+  return `<span class="sev" style="background:${SEVERITY_COLORS[severity]}">${esc(valueLabel(language, severity))}</span>`;
 }
 
-export function classPill(classification: string): string {
-  return `<span class="pill ${esc(classification)}">${esc(classification)}</span>`;
+/** Colored pill for a status or class; the CSS class stays the English value, the text follows the language. */
+export function classPill(value: string, language: ReportLanguage = 'en'): string {
+  return `<span class="pill ${esc(value)}">${esc(valueLabel(language, value))}</span>`;
 }
 
 export function card(label: string, value: number | string, color?: string): string {
@@ -48,14 +50,15 @@ export function formatDate(iso: string): string {
 export function renderTreeHtml(
   tree: FlowTreeNode | undefined,
   issueCount: (stateId: string) => number,
+  t: ReportTexts = reportTexts('en'),
 ): string {
-  if (!tree) return '<p class="empty">No state discovered.</p>';
+  if (!tree) return `<p class="empty">${esc(t.noState)}</p>`;
   const item = (branch: FlowTreeNode): string => {
     const issues = issueCount(branch.node.id);
     const via = branch.via
-      ? `<span class="via">${esc(branch.via.action.type)} “${esc(branch.via.action.text ?? branch.via.action.label ?? '')}”</span> `
+      ? `<span class="via">${esc(valueLabel(t.lang, branch.via.action.type))} “${esc(branch.via.action.text ?? branch.via.action.label ?? '')}”</span> `
       : '';
-    const title = `${via}<b>${esc(displayName(branch.node))}</b> <code>${esc(branch.node.route)}</code> <span class="muted">#${esc(branch.node.id)}</span>${issues > 0 ? ` <span class="sev" style="background:${SEVERITY_COLORS.ERROR}">${issues} issue(s)</span>` : ''}`;
+    const title = `${via}<b>${esc(displayName(branch.node))}</b> <code>${esc(branch.node.route)}</code> <span class="muted">#${esc(branch.node.id)}</span>${issues > 0 ? ` <span class="sev" style="background:${SEVERITY_COLORS.ERROR}">${esc(t.issueCount(issues))}</span>` : ''}`;
     if (branch.children.length === 0) return `<li><span class="leaf">${title}</span></li>`;
     return `<li><details open><summary>${title}</summary><ul>${branch.children.map(item).join('')}</ul></details></li>`;
   };

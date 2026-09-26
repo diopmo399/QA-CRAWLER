@@ -15,6 +15,7 @@ import {
   severityBadge,
   SEVERITY_COLORS,
 } from './html-common.js';
+import { reportTexts, translateReason, valueLabel, type ReportLanguage, type ReportTexts } from './i18n.js';
 
 export { esc } from './html-common.js';
 
@@ -25,13 +26,14 @@ export class HtmlReporter implements Reporter {
   constructor(
     private readonly directory: string,
     private readonly fileName = 'index.html',
+    private readonly language: ReportLanguage = 'en',
   ) {}
 
   async write(result: ExplorationResult): Promise<string> {
     const target = path.join(this.directory, this.fileName);
     await writeFile(
       target,
-      renderHtml(result, (file) => relativeTo(this.directory, file)),
+      renderHtml(result, (file) => relativeTo(this.directory, file), this.language),
       'utf8',
     );
     return target;
@@ -47,7 +49,12 @@ export function relativeTo(directory: string, file: string): string {
 export function renderHtml(
   result: ExplorationResult,
   href: (file: string) => string = (file) => file,
+  language: ReportLanguage = 'en',
 ): string {
+  const t = reportTexts(language);
+  const c = t.columns;
+  const label = (value: string): string => valueLabel(language, value);
+  const reason = (text: string): string => translateReason(language, text);
   const stateNames = new Map(result.states.map((state) => [state.id, displayName(state)]));
   const nameOf = (stateId: string): string => stateNames.get(stateId) ?? stateId;
   const bySeverity = [...result.issues].sort(
@@ -62,118 +69,120 @@ export function renderHtml(
   const executed = result.transitions.filter((edge) => edge.result !== 'BLOCKED');
   const blocked = result.transitions.filter((edge) => edge.result === 'BLOCKED');
   const tree = buildFlowTree(result.states, result.transitions, result.states[0]?.id);
-  const status = overallStatus(result.stats.issuesBySeverity);
+  const status = overallStatus(result.stats.issuesBySeverity, t);
   const shots = result.states.filter((state) => state.screenshot);
   const actionText = (actionId: string | undefined): string => {
     if (!actionId) return '';
     const edge = result.transitions.find((candidate) => candidate.actionId === actionId);
-    return edge ? `${edge.action.type} “${edge.action.text ?? edge.action.label ?? ''}”` : actionId;
+    return edge ? `${label(edge.action.type)} “${edge.action.text ?? edge.action.label ?? ''}”` : actionId;
   };
 
   const issueTable = (title: string, issues: Issue[], withRequest: boolean): string => {
     if (issues.length === 0)
-      return `<section><h2>${esc(title)}</h2><p class="empty">None detected.</p></section>`;
+      return `<section><h2>${esc(title)}</h2><p class="empty">${esc(t.noneDetected)}</p></section>`;
     const rows = issues
       .map(
         (issue) => `<tr>
-        <td>${severityBadge(issue.severity)}<br><span class="muted">${esc(issue.type)}</span></td>
+        <td>${severityBadge(issue.severity, language)}<br><span class="muted">${esc(label(issue.type))}</span></td>
         ${withRequest ? `<td>${issue.status ?? ''}</td><td class="wrap">${esc([issue.method, issue.requestUrl].filter(Boolean).join(' '))}</td>` : ''}
-        <td class="wrap">${esc(issue.message)}</td>
-        <td class="wrap">${issue.stateId ? `<b>${esc(nameOf(issue.stateId))}</b>` : ''}${issue.actionId ? `<br><span class="muted">after ${esc(actionText(issue.actionId))}</span>` : ''}
+        <td class="wrap">${esc(issue.type === 'FLOW' ? reason(issue.message) : issue.message)}</td>
+        <td class="wrap">${issue.stateId ? `<b>${esc(nameOf(issue.stateId))}</b>` : ''}${issue.actionId ? `<br><span class="muted">${esc(t.after)} ${esc(actionText(issue.actionId))}</span>` : ''}
           ${issue.flow && issue.flow.length > 1 ? `<div class="flow">${issue.flow.map((id) => esc(nameOf(id))).join(' → ')}</div>` : ''}</td>
         <td>${issue.occurrences}</td>
-        <td>${issue.screenshot ? `<a href="${esc(href(issue.screenshot))}">view</a>` : ''}</td>
+        <td>${issue.screenshot ? `<a href="${esc(href(issue.screenshot))}">${esc(t.view)}</a>` : ''}</td>
       </tr>`,
       )
       .join('');
-    return `<section><h2>${esc(title)} (${issues.length})</h2><table><thead><tr><th>Severity</th>${withRequest ? '<th>Status</th><th>Request</th>' : ''}<th>Message</th><th>State · action · flow</th><th>Count</th><th>Shot</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    return `<section><h2>${esc(title)} (${issues.length})</h2><table><thead><tr><th>${c.severity}</th>${withRequest ? `<th>${c.status}</th><th>${c.request}</th>` : ''}<th>${c.message}</th><th>${c.stateActionFlow}</th><th>${c.count}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table></section>`;
   };
 
   return `<!doctype html>
-<html lang="en">
+<html lang="${language}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>QA Flow Explorer — ${esc(result.mission)}</title>
+<title>${esc(t.reportTitle)} — ${esc(result.mission)}</title>
 <style>${BASE_CSS}</style>
 </head>
 <body>
 <header>
   <h1>${esc(result.mission)}</h1>
-  <div class="meta">${esc(result.target.startUrl)} · ${esc(formatDate(result.startedAt))} · ${esc(formatDuration(result.durationMs))} · stopped: ${esc(result.stopReason)} · engine: ${esc(result.decisionEngine)}</div>
+  <div class="meta">${esc(result.target.startUrl)} · ${esc(formatDate(result.startedAt))} · ${esc(formatDuration(result.durationMs))} · ${esc(t.stopped)} : ${esc(label(result.stopReason))} · ${esc(t.engine)} : ${esc(label(result.decisionEngine))}</div>
   ${result.description ? `<div class="meta">${esc(result.description)}</div>` : ''}
   <span class="status" style="background:${status.color}">${esc(status.label)}</span>
-  <nav>${result.artifacts.flowGraphHtml ? `<a href="${esc(href(result.artifacts.flowGraphHtml))}">Flow graph →</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}</nav>
+  <nav>${result.artifacts.flowGraphHtml ? `<a href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}</nav>
 </header>
 <main>
   <div class="cards">
-    ${card('States', result.stats.states)}
-    ${card('Transitions', result.stats.transitions)}
-    ${card('Actions executed', result.stats.actionsExecuted)}
-    ${card('Actions blocked', result.stats.actionsBlocked)}
-    ${card('Max depth', result.stats.maxDepth)}
-    ${card('Backtracks', result.stats.backtracks)}
-    ${result.flows.length > 0 ? card('Flows passed', `${result.stats.flowsPassed}/${result.flows.length}`) : ''}
-    ${card('Issues', result.issues.length)}
+    ${card(t.cards.states, result.stats.states)}
+    ${card(t.cards.transitions, result.stats.transitions)}
+    ${card(t.cards.actionsExecuted, result.stats.actionsExecuted)}
+    ${card(t.cards.actionsBlocked, result.stats.actionsBlocked)}
+    ${card(t.cards.maxDepth, result.stats.maxDepth)}
+    ${card(t.cards.backtracks, result.stats.backtracks)}
+    ${result.flows.length > 0 ? card(t.cards.flowsPassed, `${result.stats.flowsPassed}/${result.flows.length}`) : ''}
+    ${card(t.cards.issues, result.issues.length)}
     ${SEVERITIES.slice()
       .reverse()
-      .map((severity) => card(severity, result.stats.issuesBySeverity[severity], SEVERITY_COLORS[severity]))
+      .map((severity) =>
+        card(label(severity), result.stats.issuesBySeverity[severity], SEVERITY_COLORS[severity]),
+      )
       .join('')}
-    ${card('Duration', formatDuration(result.durationMs))}
+    ${card(t.cards.duration, formatDuration(result.durationMs))}
   </div>
 
-  ${result.flows.length > 0 ? flowsSection(result, nameOf, href) : ''}
+  ${result.flows.length > 0 ? flowsSection(result, nameOf, href, t) : ''}
 
   <section>
-    <h2>Discovered flow</h2>
-    <p class="muted">Each state appears under the state from which it was first reached, with the action that led there.</p>
-    ${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length)}
+    <h2>${esc(t.discoveredFlow)}</h2>
+    <p class="muted">${esc(t.discoveredFlowHint)}</p>
+    ${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}
   </section>
 
-  ${flowIssues.length > 0 ? issueTable('Flow failures', flowIssues, false) : ''}
-  ${issueTable('HTTP errors & broken pages', httpIssues, true)}
-  ${issueTable('JavaScript errors', jsIssues, false)}
-  ${navigationIssues.length > 0 ? issueTable('Navigation problems', navigationIssues, true) : ''}
+  ${flowIssues.length > 0 ? issueTable(t.issueSections.flow, flowIssues, false) : ''}
+  ${issueTable(t.issueSections.http, httpIssues, true)}
+  ${issueTable(t.issueSections.js, jsIssues, false)}
+  ${navigationIssues.length > 0 ? issueTable(t.issueSections.navigation, navigationIssues, true) : ''}
 
   <section>
-    <h2>States (${result.states.length})</h2>
-    ${statesTable(result.states, href)}
+    <h2>${esc(t.statesTitle)} (${result.states.length})</h2>
+    ${statesTable(result.states, href, t)}
   </section>
 
   <section>
-    <h2>Executed actions (${executed.length})</h2>
+    <h2>${esc(t.executedTitle)} (${executed.length})</h2>
     ${
       executed.length === 0
-        ? '<p class="empty">No action executed.</p>'
-        : `<table><thead><tr><th>From</th><th>Action</th><th>To</th><th>Result</th><th>Duration</th></tr></thead><tbody>${executed
+        ? `<p class="empty">${esc(t.noExecuted)}</p>`
+        : `<table><thead><tr><th>${c.from}</th><th>${c.action}</th><th>${c.to}</th><th>${c.result}</th><th>${c.duration}</th></tr></thead><tbody>${executed
             .map(
               (edge) =>
-                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(edge.action.type)} “${esc(edge.action.text ?? edge.action.label ?? '')}” <span class="muted">${esc(edge.action.category)}</span></td><td>${edge.to === edge.from ? '<span class="muted">(same state)</span>' : esc(nameOf(edge.to))}</td><td>${classPill(edge.result)}${edge.reason ? `<br><span class="muted">${esc(edge.reason)}</span>` : ''}</td><td>${edge.durationMs ?? ''} ms</td></tr>`,
+                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(label(edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}” <span class="muted">${esc(label(edge.action.category))}</span></td><td>${edge.to === edge.from ? `<span class="muted">${esc(t.sameState)}</span>` : esc(nameOf(edge.to))}</td><td>${classPill(edge.result, language)}${edge.reason ? `<br><span class="muted">${esc(reason(edge.reason))}</span>` : ''}</td><td>${edge.durationMs ?? ''} ms</td></tr>`,
             )
             .join('')}</tbody></table>`
     }
   </section>
 
   <section>
-    <h2>Blocked actions (${blocked.length})</h2>
-    <p class="muted">Refused by the safety policy (after the decision engine chose them, before Playwright).</p>
+    <h2>${esc(t.blockedTitle)} (${blocked.length})</h2>
+    <p class="muted">${esc(t.blockedHint)}</p>
     ${
       blocked.length === 0
-        ? '<p class="empty">No action was blocked.</p>'
-        : `<table><thead><tr><th>State</th><th>Action</th><th>Class</th><th>Reason</th></tr></thead><tbody>${blocked
+        ? `<p class="empty">${esc(t.noBlocked)}</p>`
+        : `<table><thead><tr><th>${c.state}</th><th>${c.action}</th><th>${c.class}</th><th>${c.reason}</th></tr></thead><tbody>${blocked
             .map(
               (edge) =>
-                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(edge.action.type)} “${esc(edge.action.text ?? edge.action.label ?? '')}”</td><td>${classPill(edge.action.classification)}</td><td class="wrap">${esc(edge.reason ?? '')}</td></tr>`,
+                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(label(edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}”</td><td>${classPill(edge.action.classification, language)}</td><td class="wrap">${esc(reason(edge.reason ?? ''))}</td></tr>`,
             )
             .join('')}</tbody></table>`
     }
   </section>
 
   <section>
-    <h2>Screenshots (${shots.length})</h2>
+    <h2>${esc(t.screenshotsTitle)} (${shots.length})</h2>
     ${
       shots.length === 0
-        ? '<p class="empty">No screenshots were captured.</p>'
+        ? `<p class="empty">${esc(t.noScreenshots)}</p>`
         : `<div class="shots">${shots
             .map((state) => {
               const link = esc(href(state.screenshot ?? ''));
@@ -182,7 +191,7 @@ export function renderHtml(
             .join('')}</div>`
     }
   </section>
-  <p class="muted">Generated by qa-crawler (flow explorer) · ${esc(formatDate(result.finishedAt))}</p>
+  <p class="muted">${esc(t.generatedBy)} · ${esc(formatDate(result.finishedAt))}</p>
 </main>
 </body>
 </html>
@@ -193,55 +202,58 @@ function flowsSection(
   result: ExplorationResult,
   nameOf: (stateId: string) => string,
   href: (file: string) => string,
+  t: ReportTexts,
 ): string {
+  const c = t.columns;
   const runs = result.flows
     .map((flow) => {
       const rows = flow.steps
         .map(
           (step) =>
-            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.optional ? ' <span class="muted">(optional)</span>' : ''}</td><td>${step.classification ? classPill(step.classification) : ''}</td><td>${classPill(step.status)}</td><td class="wrap muted">${esc(step.reason ?? '')}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">view</a>` : ''}</td></tr>`,
+            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
         )
         .join('');
-      return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ' · last screen explored' : ''}</span></h3>
+      return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status, t.lang)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ` · ${esc(t.lastScreenExplored)}` : ''}</span></h3>
       ${flow.description ? `<p class="muted">${esc(flow.description)}</p>` : ''}
-      <table><thead><tr><th>#</th><th>Step</th><th>Class</th><th>Result</th><th>Reason</th><th>State</th><th>Duration</th><th>Shot</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      <table><thead><tr><th>#</th><th>${c.step}</th><th>${c.class}</th><th>${c.result}</th><th>${c.reason}</th><th>${c.state}</th><th>${c.duration}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
     })
     .join('');
   return `<section>
-    <h2>Imposed flows (${result.flows.length})</h2>
-    <p class="muted">Steps written in the mission, run in order. Each step still goes through the safety policy: DANGEROUS actions never run, MUTATION ones only with <code>allow: MUTATION</code>.</p>
+    <h2>${esc(t.flowsTitle)} (${result.flows.length})</h2>
+    <p class="muted">${t.flowsHint}</p>
     ${runs}
   </section>`;
 }
 
-function statesTable(states: StateReport[], href: (file: string) => string): string {
-  if (states.length === 0) return '<p class="empty">No state discovered.</p>';
+function statesTable(states: StateReport[], href: (file: string) => string, t: ReportTexts): string {
+  if (states.length === 0) return `<p class="empty">${esc(t.noState)}</p>`;
+  const c = t.columns;
   const rows = states
     .map((state) => {
       const counts = new Map<string, number>();
       for (const action of state.actionsDetail)
         counts.set(action.classification, (counts.get(action.classification) ?? 0) + 1);
       const actions = [...counts.entries()]
-        .map(([classification, count]) => `${classPill(classification)} ${count}`)
+        .map(([classification, count]) => `${classPill(classification, t.lang)} ${count}`)
         .join(' ');
       const details = state.actionsDetail
         .map(
           (action) =>
-            `<tr><td>${classPill(action.classification)}</td><td>${esc(action.type)}</td><td>${esc(action.category)}</td><td class="wrap">${esc(action.text ?? action.label ?? action.name ?? '(no label)')}</td><td class="wrap"><code>${esc(describe(action.locator))}</code></td><td class="wrap muted">${esc(action.reason)}</td></tr>`,
+            `<tr><td>${classPill(action.classification, t.lang)}</td><td>${esc(valueLabel(t.lang, action.type))}</td><td>${esc(valueLabel(t.lang, action.category))}</td><td class="wrap">${esc(action.text ?? action.label ?? action.name ?? t.noLabel)}</td><td class="wrap"><code>${esc(describe(action.locator))}</code></td><td class="wrap muted">${esc(translateReason(t.lang, action.reason))}</td></tr>`,
         )
         .join('');
       return `<tr>
         <td class="wrap"><b>${esc(displayName(state))}</b><br><span class="muted">${esc(state.id)}</span></td>
         <td class="wrap">${esc(state.url)}<br><code>${esc(state.route)}</code></td>
         <td>${state.depth}</td>
-        <td>${actions}${details ? `<details><summary>${state.actionsDetail.length} action(s)</summary><table><thead><tr><th>Class</th><th>Type</th><th>Category</th><th>Label</th><th>Locator</th><th>Reason</th></tr></thead><tbody>${details}</tbody></table></details>` : ''}</td>
+        <td>${actions}${details ? `<details><summary>${esc(t.actionCount(state.actionsDetail.length))}</summary><table><thead><tr><th>${c.class}</th><th>${c.type}</th><th>${c.category}</th><th>${c.label}</th><th>${c.locator}</th><th>${c.reason}</th></tr></thead><tbody>${details}</tbody></table></details>` : ''}</td>
         <td>${state.forms.filter((form) => form.index >= 0).length}</td>
         <td>${state.issueIds.length}</td>
-        <td>${state.screenshot ? `<a href="${esc(href(state.screenshot))}">view</a>` : ''}</td>
+        <td>${state.screenshot ? `<a href="${esc(href(state.screenshot))}">${esc(t.view)}</a>` : ''}</td>
       </tr>`;
     })
     .join('');
-  return `<table><thead><tr><th>State</th><th>URL · route</th><th>Depth</th><th>Actions</th><th>Forms</th><th>Issues</th><th>Shot</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>${c.state}</th><th>${c.urlRoute}</th><th>${c.depth}</th><th>${c.actions}</th><th>${c.forms}</th><th>${c.issues}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function describe(locator: StateReport['actionsDetail'][number]['locator']): string {
@@ -260,9 +272,9 @@ function describe(locator: StateReport['actionsDetail'][number]['locator']): str
   }
 }
 
-function overallStatus(counts: Record<Severity, number>): { label: string; color: string } {
-  if (counts.CRITICAL > 0) return { label: 'CRITICAL issues found', color: SEVERITY_COLORS.CRITICAL };
-  if (counts.ERROR > 0) return { label: 'Errors found', color: SEVERITY_COLORS.ERROR };
-  if (counts.WARNING > 0) return { label: 'Warnings only', color: SEVERITY_COLORS.WARNING };
-  return { label: 'No issues', color: '#15803d' };
+function overallStatus(counts: Record<Severity, number>, t: ReportTexts): { label: string; color: string } {
+  if (counts.CRITICAL > 0) return { label: t.status.critical, color: SEVERITY_COLORS.CRITICAL };
+  if (counts.ERROR > 0) return { label: t.status.errors, color: SEVERITY_COLORS.ERROR };
+  if (counts.WARNING > 0) return { label: t.status.warnings, color: SEVERITY_COLORS.WARNING };
+  return { label: t.status.none, color: '#15803d' };
 }
