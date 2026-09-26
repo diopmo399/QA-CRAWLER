@@ -87,6 +87,10 @@ export class BrowserEventDiscovery {
   private creatingOwnPage = 0;
   private readonly ownPages = new WeakSet<Page>();
   private readonly lastUrl = new WeakMap<Page, string>();
+  /** Pages whose sign-in challenge is answered by this discovery. */
+  private readonly authWatched = new WeakSet<Page>();
+  /** URLs whose sign-in challenge (WWW-Authenticate) came before the discovery could attach to their page. */
+  private readonly missedChallenge = new Set<string>();
   /** Recent downloadable responses: MIME type and size for DOWNLOAD records. */
   private readonly fileResponses = new Map<string, { mimeType?: string; size?: number }>();
 
@@ -109,6 +113,21 @@ export class BrowserEventDiscovery {
     await context.addInitScript({ content: PERMISSION_SCRIPT });
     context.on('page', (page) => {
       void this.onNewPage(page);
+    });
+    // A popup starts loading before anyone can attach to it: when its first document is a sign-in
+    // challenge, the native dialog would be missed. Remember it, to replay the challenge once attached.
+    context.on('response', (response) => {
+      if (!response.request().isNavigationRequest()) return;
+      const headers = response.headers();
+      if (headers['www-authenticate'] === undefined && headers['proxy-authenticate'] === undefined) return;
+      let page: Page | undefined;
+      try {
+        page = response.frame().page();
+      } catch {
+        page = undefined; // first request of a popup: its frame does not exist yet
+      }
+      if (page && (this.authWatched.has(page) || response.frame() !== page.mainFrame())) return;
+      this.missedChallenge.add(response.url());
     });
   }
 
@@ -158,6 +177,7 @@ export class BrowserEventDiscovery {
           { urlPattern: '*', resourceType: 'Document', requestStage: 'Response' },
         ],
       });
+      this.authWatched.add(page);
     } catch {
       return; // not Chromium, or the page is already gone
     }
@@ -230,6 +250,14 @@ export class BrowserEventDiscovery {
       .waitForLoadState('domcontentloaded', { timeout: this.options.popupLoadTimeoutMs })
       .catch(() => undefined);
     await this.attachPage(page).catch(() => undefined);
+    if (this.options.httpAuth && this.missedChallenge.has(page.url()) && !page.isClosed()) {
+      // The sign-in challenge happened before the page was watched: load it again, the
+      // challenge is now raised to the BrowserInteractionManager (HTTP_AUTH), then handled.
+      this.missedChallenge.delete(page.url());
+      await page
+        .reload({ waitUntil: 'domcontentloaded', timeout: this.options.popupLoadTimeoutMs * 3 })
+        .catch(() => undefined);
+    }
     // POPUP: the page can script its opener (window.open, target=_blank with opener).
     // NEW_TAB: no link back (rel="noopener", ctrl+click…), even when the browser knows who opened it.
     const scriptable = await page.evaluate(() => window.opener !== null).catch(() => false);

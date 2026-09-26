@@ -1,0 +1,44 @@
+# Application that opens an SSO popup (e.g. SiteMinder NTLM agent
+# /siteminderagent/ntlm/smntlm.ntc) in which the browser shows its native
+# "Sign in" dialog. Replace the host names with yours.
+#
+#   QA_USERNAME='DOMAINE\utilisateur' QA_PASSWORD='...' npm run qa -- scenarios/sso-popup.yaml --headed
+mission:
+  name: sso-popup
+  description: Sign in through the SSO popup, then check the application
+
+target:
+  baseUrl: https://app.example.com
+  startAt: /
+
+safety:
+  # The SSO popup must be on an allowed host, otherwise it is closed unexplored.
+  allowedHosts: [app.example.com, sso.example.com]
+
+credentials:
+  sso: { usernameEnv: QA_USERNAME, passwordEnv: QA_PASSWORD }
+
+browserInteractions:
+  httpAuth:
+    credentialProfile: sso
+    # The only server that may receive the credentials: the one shown in the sign-in dialog.
+    origins: [https://sso.example.com]
+  popups:
+    # Let the popup sign in, then redirect or close itself, before the crawler closes it.
+    closeAfterMs: 10000
+
+exploration:
+  autonomous: false # true: explore the application once signed in
+  actionTimeoutMs: 20000
+
+report:
+  language: fr
+
+flows:
+  - name: connexion-sso
+    description: The application opens the SSO popup by itself; the sign-in dialog is answered from the environment
+    steps:
+      # Wait for the application once the popup has signed in (adapt the text to your home page).
+      - expect: { text: Liste de tâches }
+        timeoutMs: 30000
+      - screenshot: connecte

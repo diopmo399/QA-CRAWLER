@@ -303,6 +303,12 @@ const browserInteractionsSchema = z
       .object({
         /** Record the new page as a state of the flow graph (allowed origins only), then close it. */
         observe: z.boolean().default(true),
+        /**
+         * Leave the new page open up to this long so it can finish on its own
+         * (an SSO popup that signs in, then redirects or closes itself). It is
+         * observed and closed afterwards, unless it closed itself. 0: at once.
+         */
+        closeAfterMs: z.number().int().min(0).max(60_000).default(0),
       })
       .strict()
       .default({}),

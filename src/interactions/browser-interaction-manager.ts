@@ -166,7 +166,11 @@ export class BrowserInteractionManager {
     attempt: number,
     crawl: InteractionContext,
   ): Promise<HandlerOutcome> {
-    const { timeoutMs, retry } = this.options.config;
+    const { retry, popups } = this.options.config;
+    // A popup may be left open for a while on purpose (popups.closeAfterMs).
+    const timeoutMs =
+      this.options.config.timeoutMs +
+      (interaction.type === 'POPUP' || interaction.type === 'NEW_TAB' ? popups.closeAfterMs : 0);
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<HandlerOutcome>((resolve) => {
       timer = setTimeout(() => {

@@ -15,6 +15,8 @@ export class PopupHandler implements BrowserInteractionHandler {
   constructor(
     private readonly options: {
       observe: boolean;
+      /** Leave the page open up to this long so it can finish on its own (SSO popup). */
+      closeAfterMs?: number;
       /** Records the page as a state; returns its id. Provided by the crawl engine. */
       inspect?: (page: Page) => Promise<string | undefined>;
     },
@@ -25,7 +27,24 @@ export class PopupHandler implements BrowserInteractionHandler {
     if (native.kind !== 'page') {
       return { status: 'FAILED', outcome: 'ERROR', success: false, reason: 'no page handle' };
     }
-    const targetUrl = native.page.url();
+    const page = native.page;
+    const wait = this.options.closeAfterMs ?? 0;
+    if (wait > 0 && !page.isClosed()) {
+      // e.g. SiteMinder: the popup signs in (HTTP_AUTH), then redirects or closes itself.
+      await page.waitForEvent('close', { timeout: wait }).catch(() => undefined);
+    }
+    if (page.isClosed()) {
+      return {
+        status: 'HANDLED',
+        outcome: 'POPUP_CLOSED',
+        action: 'WAIT',
+        success: true,
+        targetUrl: interaction.targetUrl ?? '',
+        details: { closedByPage: true },
+        reason: 'the page closed itself',
+      };
+    }
+    const targetUrl = page.url();
     let targetStateId: string | undefined;
     if (this.options.observe && this.options.inspect && !native.page.isClosed()) {
       targetStateId = await this.options.inspect(native.page).catch(() => undefined);
