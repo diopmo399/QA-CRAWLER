@@ -1,0 +1,163 @@
+import { readFile } from 'node:fs/promises';
+import { parse as parseYaml, YAMLParseError } from 'yaml';
+import { ZodError } from 'zod';
+import { scenarioSchema, type ScenarioConfig } from './config.js';
+
+/** Raised for any unreadable, malformed or invalid scenario. The message is safe to show to users. */
+export class ConfigError extends Error {
+  constructor(
+    message: string,
+    readonly details: string[] = [],
+  ) {
+    super(details.length > 0 ? `${message}\n  - ${details.join('\n  - ')}` : message);
+    this.name = 'ConfigError';
+  }
+}
+
+/** Values that take precedence over the YAML file (CLI flags, environment). */
+export interface ConfigOverrides {
+  baseUrl?: string;
+  maxPages?: number;
+  headless?: boolean;
+  reportsDir?: string;
+  screenshotsDir?: string;
+}
+
+export interface LoadedConfig {
+  config: ScenarioConfig;
+  /** Non-fatal remarks worth showing to the user. */
+  warnings: string[];
+  source: string;
+}
+
+/** Environment variable that overrides target.baseUrl (handy in CI: point the same scenario at a PR environment). */
+export const BASE_URL_ENV = 'QA_BASE_URL';
+
+export async function loadConfigFile(
+  filePath: string,
+  overrides: ConfigOverrides = {},
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<LoadedConfig> {
+  let text: string;
+  try {
+    text = await readFile(filePath, 'utf8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new ConfigError(
+      code === 'ENOENT' ? `Scenario file not found: ${filePath}` : `Cannot read scenario file: ${filePath}`,
+    );
+  }
+  return { ...parseConfig(text, overrides, env, filePath), source: filePath };
+}
+
+export function parseConfig(
+  yamlText: string,
+  overrides: ConfigOverrides = {},
+  env: NodeJS.ProcessEnv = process.env,
+  source = '<inline>',
+): Omit<LoadedConfig, 'source'> {
+  let raw: unknown;
+  try {
+    raw = parseYaml(yamlText);
+  } catch (error) {
+    const detail = error instanceof YAMLParseError ? error.message : String(error);
+    throw new ConfigError(`Invalid YAML in ${source}`, [detail]);
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ConfigError(`Scenario ${source} must be a YAML mapping (key: value)`);
+  }
+
+  const withOverrides = applyOverrides(raw as Record<string, unknown>, overrides, env);
+
+  let config: ScenarioConfig;
+  try {
+    config = scenarioSchema.parse(withOverrides);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw new ConfigError(`Invalid scenario ${source}`, formatZodIssues(error));
+    }
+    throw error;
+  }
+
+  return finalize(config);
+}
+
+function applyOverrides(
+  raw: Record<string, unknown>,
+  overrides: ConfigOverrides,
+  env: NodeJS.ProcessEnv,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...raw };
+  const section = (key: string): Record<string, unknown> => {
+    const current = result[key];
+    const copy =
+      current !== null && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {};
+    result[key] = copy;
+    return copy;
+  };
+
+  const baseUrl = overrides.baseUrl ?? nonBlank(env[BASE_URL_ENV]);
+  if (baseUrl !== undefined) section('target').baseUrl = baseUrl;
+  if (overrides.maxPages !== undefined) section('exploration').maxPages = overrides.maxPages;
+  if (overrides.headless !== undefined) section('browser').headless = overrides.headless;
+  if (overrides.reportsDir !== undefined) section('output').reportsDir = overrides.reportsDir;
+  if (overrides.screenshotsDir !== undefined) section('output').screenshotsDir = overrides.screenshotsDir;
+  return result;
+}
+
+function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
+  const warnings: string[] = [];
+  const baseHost = new URL(config.target.baseUrl).hostname;
+
+  if (!config.target.startAt.startsWith('/') && !/^https?:\/\//i.test(config.target.startAt)) {
+    config.target.startAt = `/${config.target.startAt}`;
+  }
+  if (config.safety.allowedHosts.length === 0) {
+    config.safety.allowedHosts = [baseHost];
+  } else if (!config.safety.allowedHosts.some((host) => hostMatches(baseHost, host))) {
+    warnings.push(
+      `safety.allowedHosts does not include the target host "${baseHost}": nothing will be crawled.`,
+    );
+  }
+  if (config.safety.allowedActionClasses.includes('DANGEROUS')) {
+    warnings.push(
+      'safety.allowedActionClasses includes DANGEROUS: destructive actions may be executed. Use only on disposable environments.',
+    );
+  }
+  if (config.safety.allowedActionClasses.includes('MUTATION')) {
+    warnings.push('safety.allowedActionClasses includes MUTATION: the crawler may modify data.');
+  }
+  if (config.auth.type === 'form' && !config.auth.successSelector && !config.auth.successUrlContains) {
+    warnings.push(
+      'auth: neither successSelector nor successUrlContains is set; login success cannot be verified.',
+    );
+  }
+  return { config, warnings };
+}
+
+/** `*.example.com` matches sub-domains (not the apex); anything else is an exact, case-insensitive match. */
+export function hostMatches(hostname: string, pattern: string): boolean {
+  const host = hostname.toLowerCase();
+  const expected = pattern.toLowerCase();
+  if (expected.startsWith('*.')) {
+    return host.endsWith(expected.slice(1));
+  }
+  return host === expected;
+}
+
+function formatZodIssues(error: ZodError): string[] {
+  return error.issues.map((issue) => {
+    const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+    if (issue.code === 'unrecognized_keys') {
+      const hint = issue.keys.some((key) => /pass(word)?|secret|token/i.test(key))
+        ? ' (credentials must come from environment variables, see auth.usernameEnv/passwordEnv)'
+        : '';
+      return `${path}: unknown key(s) ${issue.keys.map((key) => `"${key}"`).join(', ')}${hint}`;
+    }
+    return `${path}: ${issue.message}`;
+  });
+}
+
+function nonBlank(value: string | undefined): string | undefined {
+  return value !== undefined && value.trim() !== '' ? value.trim() : undefined;
+}
