@@ -27,6 +27,7 @@ No AI, no LLM, no API token, no GPU: same application, same exploration.
 - [How it works](#how-it-works)
 - [Mission (YAML)](#mission-yaml)
 - [Imposed flows](#imposed-flows)
+- [Authentication](#authentication)
 - [Safety](#safety)
 - [State detection and loop protection](#state-detection-and-loop-protection)
 - [Forms](#forms)
@@ -230,6 +231,33 @@ flows:
 - Flow transitions are stored in the flow graph, tagged with the flow name.
 - `index.html` has an _Imposed flows_ section; `result.json` has a `flows` array.
 
+## Authentication
+
+Credentials always come from environment variables (`QA_USERNAME` / `QA_PASSWORD` by default, see `usernameEnv` / `passwordEnv`), never from the mission file. They are never written to logs or reports.
+
+**Login page** (a form in the page, including SSO pages such as a SiteMinder `login.fcc` form):
+
+```yaml
+auth:
+  type: form
+  loginUrl: /login # or the app URL that redirects to the SSO page
+  usernameSelector: input[name="USER"]
+  passwordSelector: input[type="password"]
+  submitSelector: button[type="submit"]
+  successUrlContains: /app/ # back on the application = logged in
+```
+
+**Browser sign-in dialog** (the grey "Sign in" box of the browser: HTTP Basic, e.g. SiteMinder Basic scheme; NTLM depending on the server):
+
+```yaml
+auth:
+  type: http
+  origin: https://sso.example.com # only send the credentials to this server (recommended)
+  checkUrl: / # page loaded to check the login (default: target.startAt)
+```
+
+The browser answers the server's challenge itself; nothing is typed in a page. Without `origin`, the credentials are sent to any host that asks for them (a warning says so). A `401` on `checkUrl` stops the run with a clear message.
+
 ## Safety
 
 The explorer is meant to be pointed at real environments without breaking them.
@@ -407,12 +435,12 @@ The image is ready for a `Job` or `CronJob`:
   - the URL through `QA_BASE_URL`;
   - credentials from a `Secret` exposed as `QA_USERNAME` / `QA_PASSWORD`.
 
-| Variable                     | Purpose                                            |
-| ---------------------------- | -------------------------------------------------- |
-| `QA_BASE_URL`                | Target URL (overrides the mission)                 |
-| `QA_USERNAME`, `QA_PASSWORD` | Default credential variables for `auth.type: form` |
-| `PLAYWRIGHT_BROWSERS_PATH`   | Chromium location (set by the Playwright image)    |
-| `NO_COLOR`                   | Plain output (set in the image)                    |
+| Variable                     | Purpose                                                       |
+| ---------------------------- | ------------------------------------------------------------- |
+| `QA_BASE_URL`                | Target URL (overrides the mission)                            |
+| `QA_USERNAME`, `QA_PASSWORD` | Default credential variables for `auth.type: form` and `http` |
+| `PLAYWRIGHT_BROWSERS_PATH`   | Chromium location (set by the Playwright image)               |
+| `NO_COLOR`                   | Plain output (set in the image)                               |
 
 ## CI/CD
 
@@ -486,7 +514,7 @@ src/
 ├── anomaly/                      severity rules, issue collector
 ├── crawler/                      URL and route normalization
 ├── browser/                      Chromium lifecycle, screenshots
-├── auth/                         form authentication (credentials from env)
+├── auth/                         form and HTTP authentication (credentials from env)
 ├── reporting/                    result builder, JSON, HTML, flow graph HTML, flow tree
 ├── security/                     redaction
 └── model/                        PageContext, DiscoveredAction, LocatorDescriptor, FlowNode/Edge, Issue…
@@ -548,7 +576,7 @@ npm run build            # dist/
 - The rule-based engine cannot know what an unlabelled icon does, so icons are never clicked.
 - Mutating actions (create/save/submit) are never executed. Their effects are not explored unless explicitly allowed on a disposable environment.
 - Backtracking by replay needs the path to be deterministic; states that can't be restored are skipped.
-- Only one form of authentication, and a single role.
+- A single role per run. Login in a separate window, MFA/OTP and stored sessions are not supported yet.
 - Shadow DOM and iframes are not explored.
 
 ## Roadmap

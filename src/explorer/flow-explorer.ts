@@ -149,7 +149,12 @@ export class FlowExplorer {
     this.env = options.env ?? process.env;
     this.testData = options.testData ?? new DefaultTestDataProvider();
     this.screenshots = new ScreenshotService(config.output.screenshotsDir, config.checks.fullPageScreenshots);
-    this.authenticator = createAuthenticator(config.auth, config.target.baseUrl, options.env);
+    this.authenticator = createAuthenticator(
+      config.auth,
+      config.target.baseUrl,
+      options.env,
+      new URL(config.target.startAt, config.target.baseUrl).toString(),
+    );
     this.listener = options.listener ?? {};
     this.memory = options.memory;
     this.startUrl = new URL(config.target.startAt, config.target.baseUrl).toString();
@@ -171,7 +176,7 @@ export class FlowExplorer {
     const observers = this.createObservers();
     let stopReason: StopReason = 'exhausted';
     try {
-      const context = await browser.start();
+      const context = await browser.start(this.authenticator.contextOptions());
       // Never follow new windows: the exploration stays in one tab.
       context.on('page', (opened) => {
         void opened

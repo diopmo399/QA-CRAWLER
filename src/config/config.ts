@@ -188,9 +188,37 @@ const formAuthSchema = z
   })
   .strict();
 
+/**
+ * HTTP authentication handled by the browser itself (the grey "Sign in"
+ * dialog: Basic, e.g. SiteMinder Basic scheme; NTLM depending on the server).
+ * Playwright answers the server's challenge with these credentials.
+ */
+const httpAuthSchema = z
+  .object({
+    type: z.literal('http'),
+    /** Names of the environment variables holding the credentials — never the credentials themselves. */
+    usernameEnv: nonEmpty.default('QA_USERNAME'),
+    passwordEnv: nonEmpty.default('QA_PASSWORD'),
+    /**
+     * Only send the credentials to this origin (https://sso.example.com).
+     * Recommended; without it they are sent to any host that asks for them.
+     */
+    origin: z
+      .string()
+      .url()
+      .refine((value) => /^https?:\/\//i.test(value), 'origin must use http or https')
+      .transform((value) => new URL(value).origin)
+      .optional(),
+    /** Page loaded to check the login (default: target.startAt). */
+    checkUrl: nonEmpty.optional(),
+    timeoutMs: z.number().int().positive().default(15_000),
+  })
+  .strict();
+
 const authSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('none') }).strict(),
   formAuthSchema,
+  httpAuthSchema,
 ]);
 
 const outputSchema = z
@@ -260,5 +288,6 @@ export type ScenarioInput = z.input<typeof scenarioSchema>;
 /** Fully resolved scenario with defaults applied. */
 export type ScenarioConfig = z.output<typeof scenarioSchema>;
 export type FormAuthConfig = z.output<typeof formAuthSchema>;
+export type HttpAuthConfig = z.output<typeof httpAuthSchema>;
 export type AuthConfig = ScenarioConfig['auth'];
 export type QueryParamMode = ScenarioConfig['exploration']['queryParams']['mode'];

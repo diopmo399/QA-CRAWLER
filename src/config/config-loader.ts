@@ -191,6 +191,11 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
   if (!config.exploration.autonomous && config.flows.length === 0) {
     warnings.push('exploration.autonomous is false and no flow is defined: nothing will be tested.');
   }
+  if (config.auth.type === 'http' && config.auth.origin === undefined) {
+    warnings.push(
+      'auth.origin is not set: the HTTP credentials are sent to any host that asks for them. Set it to the login server (e.g. https://sso.example.com).',
+    );
+  }
   if (config.auth.type === 'form' && !config.auth.successSelector && !config.auth.successUrlContains) {
     warnings.push(
       'auth: neither successSelector nor successUrlContains is set; login success cannot be verified.',

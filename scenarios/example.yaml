@@ -76,6 +76,14 @@ safety:
 #   usernameEnv: QA_USERNAME
 #   passwordEnv: QA_PASSWORD
 #   successSelector: 'nav .user-menu'
+#
+# Browser sign-in dialog (HTTP Basic / NTLM, e.g. SiteMinder Basic scheme):
+# auth:
+#   type: http
+#   origin: https://sso.example.com   # only send the credentials there (recommended)
+#   usernameEnv: QA_USERNAME
+#   passwordEnv: QA_PASSWORD
+#   checkUrl: /                       # page loaded to check the login (default: target.startAt)
 auth:
   type: none
 
