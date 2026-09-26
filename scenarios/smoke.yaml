@@ -1,27 +1,25 @@
-# Minimal smoke test: crawl the application, report broken pages, HTTP errors
-# and JavaScript errors. Point it at another environment with
+# Smoke mission: explore the application from its home page and report
+# broken pages, HTTP/API errors and JavaScript errors. No steps are listed:
+# the explorer discovers screens and flows by itself.
 #   npm run qa -- scenarios/smoke.yaml --base-url https://my-pr-env.example.com
-# or the QA_BASE_URL environment variable.
-name: smoke-test
+mission:
+  name: smoke-test
 
 target:
   baseUrl: http://localhost:4200
   startAt: /
 
-browser:
-  headless: true
-
 exploration:
-  maxPages: 50
-  maxDepth: 5
-  navigationTimeoutMs: 15000
+  maxStates: 50
+  maxActions: 200
+  maxDepth: 6
+  maxDurationMinutes: 10
 
-checks:
-  consoleErrors: true
-  pageErrors: true
-  httpErrors: true
-  brokenLinks: true
-  screenshots: true
+goals:
+  discoverNavigation: true
+  discoverForms: false
+  discoverFlows: true
+  detectErrors: true
 
 http:
   failOnStatus: 400
@@ -29,8 +27,10 @@ http:
 safety:
   allowedHosts:
     - localhost
-
   ignoredPaths:
     - /logout
     - /payment
     - /delete
+  allow: [navigation, tabs, menus, details, pagination, search, filter, other]
+  block:
+    [delete, payment, send, logout, irreversible, sensitive-data, external-navigation, form-submit, download]

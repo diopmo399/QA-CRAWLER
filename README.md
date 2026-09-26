@@ -1,14 +1,20 @@
-# QA Crawler
+# QA Crawler — Autonomous QA Flow Explorer
 
-Deterministic, container-ready QA crawler for web applications.
+Deterministic, container-ready explorer that tests a web application **by using it**.
 
-Give it a URL and a YAML scenario: it explores the application with a real
-headless Chromium (Playwright), and reports broken pages, failing API calls,
-JavaScript errors and console errors. It also inventories every link, button
-and form it finds, and classifies each one by risk. It **never** triggers
-destructive actions on its own.
+Give it a URL and a mission in YAML. On each screen it runs the same loop:
 
-No AI, no LLM, no API token, no GPU: same input, same crawl.
+1. observes the screen and discovers every possible user action;
+2. decides what to try, then has the safety policy validate that choice;
+3. executes the action with Playwright and observes the new screen;
+4. records the transition in a **flow graph** of the application;
+5. backtracks to explore the other branches, until the mission's limits are reached.
+
+Along the way it reports broken pages, failing API calls and JavaScript errors. Each anomaly records the screen, the action and the path that reproduce it.
+
+The YAML never lists the buttons to click. The explorer finds the screens, tabs, dialogs and wizard steps by itself.
+
+No AI, no LLM, no API token, no GPU: same application, same exploration.
 
 - **Stack:** Node.js 20+ · TypeScript (strict) · Playwright 1.56 · Chromium headless · YAML · Docker
 - **Designed for:** CI/CD pipelines, Kubernetes / OpenShift (ARO), Angular and other single-page applications
@@ -18,16 +24,18 @@ No AI, no LLM, no API token, no GPU: same input, same crawl.
 ## Contents
 
 - [Quick start](#quick-start)
-- [Command line](#command-line)
-- [Docker](#docker)
-- [Scenario configuration (YAML)](#scenario-configuration-yaml)
+- [How it works](#how-it-works)
+- [Mission (YAML)](#mission-yaml)
 - [Safety](#safety)
+- [State detection and loop protection](#state-detection-and-loop-protection)
+- [Forms](#forms)
 - [What gets detected](#what-gets-detected)
 - [Reports](#reports)
-- [Architecture](#architecture)
-- [Authentication](#authentication)
+- [Command line](#command-line)
+- [Docker](#docker)
 - [Kubernetes / OpenShift](#kubernetes--openshift)
 - [CI/CD](#cicd)
+- [Architecture](#architecture)
 - [Development](#development)
 - [Limitations of this version](#limitations-of-this-version)
 - [Roadmap](#roadmap)
@@ -38,403 +46,393 @@ No AI, no LLM, no API token, no GPU: same input, same crawl.
 
 ```bash
 npm install
-npx playwright install chromium        # once: downloads the matching Chromium
+npx playwright install chromium            # once: downloads the matching Chromium
 
-npm run qa -- scenarios/smoke.yaml     # crawl http://localhost:4200 (edit the scenario or use --base-url)
+npm run qa -- scenarios/smoke.yaml --base-url http://localhost:4200
 ```
 
-Try it against the bundled demo site, which contains deliberate bugs and traps:
+Try it on the bundled demo applications:
 
 ```bash
-npm run demo:server                    # terminal 1: http://localhost:4173
-npm run qa -- scenarios/demo.yaml      # terminal 2
-open reports/index.html
+npm run demo:server                        # terminal 1: back-office on :4174, trap site on :4173
+npm run qa -- scenarios/demo.yaml          # terminal 2: discovers the back-office flows
+npm run qa -- scenarios/demo-traps.yaml    #             bug traps (404, 500, JS errors, loops…)
+open reports/index.html reports/flow-graph.html
 ```
 
-## Command line
+Example output on the demo back-office. It found the structure by itself, including the three steps of a wizard that never changes URL:
 
-```bash
-npm run qa -- scenarios/smoke.yaml
-npm run qa -- --config scenarios/smoke.yaml
-npm run qa -- --config scenarios/smoke.yaml --base-url https://pr-42.example.com --max-pages 20
-npm run qa -- --help
+```
+Tableau de bord
+├── Utilisateurs  ⟵ navigate "Gérer les utilisateurs"
+│   └── Utilisateur 1 › Profil  ⟵ navigate "Voir"
+│       └── Utilisateur 1 › Historique  ⟵ click "Historique"
+├── Dossiers  ⟵ navigate "Dossiers"
+│   └── Nouveau dossier › Étape 1 — Informations  ⟵ navigate "Nouveau dossier"
+│       └── Nouveau dossier › Étape 2 — Détails  ⟵ click "Suivant"          (same URL)
+│           └── Nouveau dossier › Étape 3 — Confirmation  ⟵ click "Suivant" (same URL)
+├── Paramètres › Général  ⟵ navigate "Paramètres"
+│   ├── Paramètres › Notifications  ⟵ click "Notifications"                 (tab)
+│   └── Paramètres › Sécurité  ⟵ click "Sécurité"                           (tab)
+└── Administration  ⟵ navigate "Administration"
+    └── Journal  ⟵ navigate "Journal"
 ```
 
-| Option                               | Description                                            |
-| ------------------------------------ | ------------------------------------------------------ |
-| `-c, --config <file>`                | Scenario file (or pass it as the first argument)       |
-| `--base-url <url>`                   | Overrides `target.baseUrl` (also `QA_BASE_URL`)        |
-| `--max-pages <n>`                    | Overrides `exploration.maxPages`                       |
-| `--headed`                           | Visible browser, for local debugging (needs a display) |
-| `--reports-dir`, `--screenshots-dir` | Output locations                                       |
-| `-q, --quiet`                        | Summary only                                           |
+## How it works
 
-The CLI prints:
+The fundamental loop:
 
-- the scenario and target URL;
-- the progress, page by page;
-- each new anomaly as it is found;
-- a final summary with the location of the reports.
-
-After the build (`npm run build`) the same CLI is available as `node dist/main.js` (or `qa-crawler`).
-
-**Exit codes** — usable directly as a CI gate:
-
-| Code | Meaning                                                        |
-| ---- | -------------------------------------------------------------- |
-| 0    | No issue at or above `report.failOnSeverity` (default `ERROR`) |
-| 1    | Failing issues found                                           |
-| 2    | Invalid usage or invalid scenario                              |
-| 3    | Runtime failure (Chromium could not start, login failed…)      |
-
-## Docker
-
-The image is based on the official Playwright image
-(`mcr.microsoft.com/playwright:v1.56.1-noble`), which bundles Chromium and its
-system libraries. It runs as the non-root `pwuser` and needs no GPU, no
-display, no extra capability and no `privileged` mode.
-
-```bash
-docker build -t qa-crawler .
-
-# Crawl an application reachable from the container, keep the reports on the host
-docker run --rm \
-  -e QA_BASE_URL=https://staging.example.com \
-  -v "$PWD/reports:/app/reports" -v "$PWD/screenshots:/app/screenshots" \
-  qa-crawler --config scenarios/smoke.yaml
-
-# Use your own scenario
-docker run --rm -v "$PWD/my-scenarios:/app/my-scenarios:ro" -v "$PWD/reports:/app/reports" \
-  qa-crawler --config my-scenarios/app.yaml
-
-# Application running on the host
-docker run --rm --add-host=host.docker.internal:host-gateway \
-  qa-crawler --config scenarios/smoke.yaml --base-url http://host.docker.internal:4200
+```
+OBSERVE → DISCOVER ACTIONS → DECIDE → SAFETY CHECK → EXECUTE WITH PLAYWRIGHT
+   ↑                                                              ↓
+REPEAT ← STORE TRANSITION ← ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ OBSERVE NEW STATE
 ```
 
-> Keep the `playwright` version in `package.json` and the image tag in the
-> `Dockerfile` identical: Playwright only drives the Chromium build it was released with.
+Each question is answered by exactly one component:
 
-## Scenario configuration (YAML)
+| Question               | Component                                    | Notes                                                                                                                                                                             |
+| ---------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Where am I?"          | `UIObserver` + `StateDetector`               | DOM, ARIA roles and accessible names, headings, dialogs, selected tabs, forms. Produces a `PageContext` and a stable `stateId`                                                    |
+| "What can I do?"       | `ActionDiscovery`                            | Links, buttons, `[role=button]`, `[routerLink]`, tabs, menus, inputs, textareas, selects, checkboxes, radios. Each action gets a serializable `LocatorDescriptor` and a stable id |
+| "What should I try?"   | `DecisionEngine` → `RuleBasedDecisionEngine` | Returns `EXECUTE`, `BACKTRACK` or `STOP`                                                                                                                                          |
+| "Is it allowed?"       | `SafetyPolicy.evaluate()`                    | Runs **after** the decision and **before** Playwright, whatever the engine                                                                                                        |
+| "Execute it."          | `PlaywrightActionExecutor`                   | Translates the descriptor into `getByRole(...).click()`, `fill`, `selectOption`, `setChecked`. It makes no decisions                                                              |
+| "What went wrong?"     | Network, console and page-error observers    | Every anomaly is tagged with `stateId`, `actionId` and the flow path                                                                                                              |
+| "What have I learned?" | `FlowGraph` + `FlowMemory`                   | States, transitions, what was tried. Persisted in `reports/flow-graph.json`                                                                                                       |
 
-Only `target.baseUrl` is required. [`scenarios/example.yaml`](scenarios/example.yaml)
-documents every key with its default value.
+`FlowExplorer` only sequences these components, keeps the navigation stack, backtracks and enforces the limits.
+
+**Backtracking.** When a screen has nothing left to explore, the explorer returns to the previous state. It tries the cheapest method first, and checks each attempt against the expected `stateId`:
+
+1. browser history (`goBack`);
+2. then the state's URL;
+3. then a **replay** of the recorded path from the start state. This is needed for states without their own URL: wizard steps, tabs, dialogs.
+
+When the whole path is exhausted, it jumps to any known state that still has unexplored actions.
+
+## Mission (YAML)
+
+The YAML describes a **mission**: a goal and limits, not steps. Only `target.baseUrl` is required.
+[`scenarios/example.yaml`](scenarios/example.yaml) documents every key with its default value.
 
 ```yaml
-name: smoke-test
+mission:
+  name: explore-application
 
 target:
   baseUrl: http://localhost:4200
   startAt: /
 
-browser:
-  headless: true
-
 exploration:
-  maxPages: 50
-  maxDepth: 5
-  navigationTimeoutMs: 15000
+  maxStates: 100
+  maxActions: 500
+  maxDepth: 10
+  maxDurationMinutes: 15
+  actionTimeoutMs: 10000
 
-checks:
-  consoleErrors: true
-  pageErrors: true
-  httpErrors: true
-  brokenLinks: true
-  screenshots: true
-
-http:
-  failOnStatus: 400
+goals:
+  discoverNavigation: true # follow links and routerLinks
+  discoverForms: true # fill forms with fake data before clicking their step buttons
+  discoverFlows: true # click tabs, menus, details, toggles, wizard steps
+  detectErrors: true # network / console / JavaScript observers
 
 safety:
-  allowedHosts:
-    - localhost
-  ignoredPaths:
-    - /logout
-    - /payment
-    - /delete
+  allow: [navigation, search, filter, pagination, tabs] # kinds of SAFE actions allowed
+  block: [delete, payment, external-navigation] # risks always refused
 ```
 
-| Section       | Key                                 | Default                     | Role                                                      |
-| ------------- | ----------------------------------- | --------------------------- | --------------------------------------------------------- |
-| `target`      | `baseUrl`                           | — (required)                | Application URL. `--base-url` / `QA_BASE_URL` override it |
-|               | `startAt`                           | `/`                         | First page                                                |
-| `browser`     | `headless`                          | `true`                      | Headless Chromium                                         |
-|               | `viewport`, `locale`, `userAgent`   | 1366×768                    | Browser context                                           |
-|               | `ignoreHttpsErrors`                 | `false`                     | Self-signed certificates on test environments             |
-|               | `args`                              | `[--disable-dev-shm-usage]` | Extra Chromium flags                                      |
-| `exploration` | `maxPages`                          | `50`                        | Hard cap on visited pages                                 |
-|               | `maxDepth`                          | `5`                         | Link distance from the start page                         |
-|               | `navigationTimeoutMs`               | `15000`                     | Per navigation                                            |
-|               | `waitUntil`                         | `load`                      | `load`, `domcontentloaded`, `networkidle`, `commit`       |
-|               | `settleTimeMs`                      | `500`                       | Extra wait so SPAs render and call their APIs             |
-|               | `maxUrlsPerRoute`                   | `2`                         | URLs visited per route pattern (`/users/:id`, `?page=`)   |
-|               | `queryParams.mode`                  | `pattern`                   | `pattern` / `ignore` / `keep` (see below)                 |
-|               | `queryParams.ignored`               | `utm_*`, `fbclid`…          | Params removed before comparing URLs                      |
-|               | `followRouterLinks`                 | `true`                      | Follow Angular `[routerLink]` on non-anchor elements      |
-|               | `clickSafeActions`                  | `false`                     | Let the decision engine click SAFE buttons                |
-|               | `maxActionsPerPage`                 | `5`                         | Click budget per page                                     |
-| `checks`      | `consoleErrors`, `consoleWarnings`  | `true`, `false`             | Console messages                                          |
-|               | `pageErrors`                        | `true`                      | Uncaught exceptions                                       |
-|               | `httpErrors`                        | `true`                      | Responses ≥ `http.failOnStatus`                           |
-|               | `requestFailures`                   | `true`                      | DNS / connection / CORS failures                          |
-|               | `brokenLinks`                       | `true`                      | Visited pages answering ≥ `failOnStatus`                  |
-|               | `screenshots`                       | `true`                      | Screenshot every page                                     |
-|               | `screenshotOnError`                 | `true`                      | Always screenshot pages with ERROR/CRITICAL issues        |
-| `http`        | `failOnStatus`                      | `400`                       | Status threshold                                          |
-|               | `ignoreStatus`, `ignoreUrlPatterns` | `[]`                        | Noise filters                                             |
-| `safety`      | `allowedHosts`                      | host of `baseUrl`           | Only these hosts are crawled (`*.example.com` allowed)    |
-|               | `ignoredPaths`                      | `/logout`, `/signout`…      | Never visited (prefix, `*`, `**`)                         |
-|               | `allowedActionClasses`              | `[SAFE]`                    | Action classes that may be executed                       |
-|               | `keywords.safe/mutation/dangerous`  | `[]`                        | Extra classification vocabulary                           |
-| `auth`        | `type`                              | `none`                      | `none` or `form` (see [Authentication](#authentication))  |
-| `output`      | `reportsDir`, `screenshotsDir`      | `reports`, `screenshots`    | Output folders                                            |
-| `report`      | `failOnSeverity`                    | `ERROR`                     | Exit code threshold (`NONE` disables)                     |
+| Key                                                                            | Default                        | Role                                                                                                                                  |
+| ------------------------------------------------------------------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `exploration.maxStates`                                                        | 100                            | Distinct functional states discovered                                                                                                 |
+| `exploration.maxActions`                                                       | 500                            | Actions executed                                                                                                                      |
+| `exploration.maxDepth`                                                         | 10                             | Transitions away from the start state                                                                                                 |
+| `exploration.maxDurationMinutes`                                               | 15                             | Wall-clock limit                                                                                                                      |
+| `exploration.actionTimeoutMs`                                                  | 10000                          | Locating and executing one action                                                                                                     |
+| `exploration.maxStatesPerRoute`                                                | 3                              | Samples per route pattern (`/users/:id`)                                                                                              |
+| `exploration.settleTimeMs`                                                     | 400                            | Wait after each action (SPA rendering, API calls)                                                                                     |
+| `exploration.queryParams.mode`                                                 | `pattern`                      | `?page=1..N` count as one route (`ignore` / `keep`)                                                                                   |
+| `goals.*`                                                                      | all `true`                     | What to explore (see above)                                                                                                           |
+| `safety.allowedActionClasses`                                                  | `[SAFE]`                       | Classes that may run: `SAFE`, `MUTATION`, `DANGEROUS`, `UNKNOWN`                                                                      |
+| `safety.allow`                                                                 | all kinds                      | `navigation`, `tabs`, `menus`, `details`, `pagination`, `search`, `filter`, `forms`, `other`                                          |
+| `safety.block`                                                                 | see below                      | `delete`, `payment`, `send`, `logout`, `irreversible`, `sensitive-data`, `external-navigation`, `form-submit`, `mutation`, `download` |
+| `safety.allowedHosts` / `ignoredPaths`                                         | host of `baseUrl` / `/logout`… | Where the explorer may go                                                                                                             |
+| `memory.resume`                                                                | `false`                        | Continue from the previous `flow-graph.json`, skipping actions already tried                                                          |
+| `checks.*`, `http.*`, `browser.*`, `auth`, `output.*`, `report.failOnSeverity` |                                | As in the example file                                                                                                                |
 
-Unknown keys are rejected, so a typo like `explorations:` fails instead of being silently ignored.
+Unknown keys are rejected, so a typo like `explorations:` fails instead of being ignored.
 
-**Query parameters.**
-
-- In `pattern` mode (the default), URLs are grouped by parameter _names_, so `?page=1`, `?page=2`… count as one route, capped by `maxUrlsPerRoute`.
-- `ignore` drops all parameters.
-- `keep` treats every query string as a distinct page, bounded only by `maxPages`.
+Scenarios written for the first version (`name`, `maxPages`, `maxUrlsPerRoute`, `clickSafeActions`) still load, with a deprecation warning.
 
 ## Safety
 
-The crawler is designed to be pointed at real environments without breaking them.
+The explorer is meant to be pointed at real environments without breaking them.
 
-**1. Every action is classified** by `SafetyPolicy` (`src/policies/safety-policy.ts`),
-using a French/English vocabulary. Matching is on whole words, without accents,
-and camelCase identifiers are split: `deleteUserButton` is matched as "delete user button".
+**1. Every action is classified** by `SafetyPolicy`:
 
-| Class       | Examples                                                                                        | Executed automatically?          |
-| ----------- | ----------------------------------------------------------------------------------------------- | -------------------------------- |
-| `SAFE`      | navigation links, pagination, tabs, filters, search                                             | only if `clickSafeActions: true` |
-| `MUTATION`  | create, save, edit, update, _Enregistrer_, _Nouvelle inscription_, any non-search form submit   | **never** by default             |
-| `DANGEROUS` | delete, _supprimer_, pay, _paiement_, checkout, send email/message, reset, logout, irreversible | **never** by default             |
-| `UNKNOWN`   | a button the rules cannot interpret (icon-only, unlabeled)                                      | **never**                        |
+- a French/English vocabulary, matched on whole words without accents;
+- the element's label, its link target, its `routerLink`, and the dialog it belongs to ("Confirmer" inside "Supprimer l'utilisateur ?" is DANGEROUS).
 
-The rules and their precedence:
+| Class       | Examples                                                                                                         | Executed?                             |
+| ----------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `SAFE`      | navigation, tabs, menus, details, pagination, search, filters, wizard "Suivant", filling a (non-sensitive) field | yes, if its kind is in `safety.allow` |
+| `MUTATION`  | créer, enregistrer, modifier, update, submit (form submission), oui/ok/confirmer                                 | **never** by default                  |
+| `DANGEROUS` | supprimer/delete, payer/payment, checkout, envoyer/send, réinitialiser, déconnexion/logout, sensitive fields     | **never** by default                  |
+| `UNKNOWN`   | controls without a readable label (`⚙`, `×`, icon-only)                                                          | **never**                             |
 
-- DANGEROUS takes precedence over MUTATION, which takes precedence over SAFE.
-- An unrecognised button is `UNKNOWN`, not `SAFE`: when in doubt, the crawler does not click.
-- `allowedActionClasses` controls what may be executed (default `[SAFE]`). Adding `MUTATION` or `DANGEROUS` prints a warning. It is meant for disposable environments only.
-- Right before a click, the element's live label is checked again. If it changed, the action is re-classified and refused unless it is still allowed.
+**2. The gate is enforced after the decision and before execution.** `SafetyPolicy.evaluate()` blocks an action in these cases:
 
-**2. Navigation is restricted** by `NavigationPolicy`. It never visits:
+- it is disabled or hidden;
+- it carries a blocked risk;
+- it navigates outside the allowed hosts, to an ignored path or to a download;
+- its class is not allowed;
+- its kind is not in `safety.allow`.
 
-- another host than `allowedHosts`;
-- `ignoredPaths`;
-- URLs containing a dangerous word (`/users/3/delete`, `/checkout`);
-- downloads (`.pdf`, `.zip`, …);
-- non-http schemes (`mailto:`, `javascript:`).
+A future decision engine, whether a local or a cloud LLM, cannot bypass it.
 
-**3. Forms are never submitted** (search forms excepted when `clickSafeActions` is on).
-Their structure is recorded instead.
+**3. Blocked actions are recorded** in the flow graph (`BLOCKED` transitions, with the reason) and shown in the reports.
 
-**4. No secrets in the output.** A redaction layer (`src/security/redactor.ts`) masks sensitive values in every log line, issue and report:
+**4. Sensitive data is never filled**, whatever the configuration:
 
-- password, token and API key values;
-- `Authorization` headers and `Bearer` tokens;
-- JWTs and cookies;
-- sensitive query parameters and `user:password@` in URLs.
+- passwords;
+- payment cards (`autocomplete="cc-*"`, card number, CVV, IBAN);
+- OTP codes, secrets, social security numbers.
 
-Request and response headers and bodies are never stored, and form field values are never read.
+**5. Browser dialogs** (`confirm`, `alert`, `prompt`) are always dismissed. New windows are closed.
 
-## What gets detected
+**6. No secrets in the output.** Tokens, passwords, `Authorization` headers, cookies, JWTs and sensitive query parameters are redacted in logs and reports. Headers, bodies and field values are never stored.
 
-| Issue type       | Source                                                            | Default severity                         |
-| ---------------- | ----------------------------------------------------------------- | ---------------------------------------- |
-| `HTTP`           | API/resource response ≥ `failOnStatus`                            | 5xx → ERROR, 4xx → WARNING               |
-| `BROKEN_LINK`    | a visited page answers ≥ `failOnStatus` (with the referring page) | 404/410/5xx → ERROR, other 4xx → WARNING |
-| `REQUEST_FAILED` | network failure (DNS, refused, CORS)                              | WARNING (ERROR for documents)            |
-| `CONSOLE`        | `console.error` (and `console.warn` if enabled)                   | ERROR (WARNING)                          |
-| `PAGE_ERROR`     | uncaught JavaScript exception                                     | ERROR                                    |
-| `PAGE_CRASH`     | renderer crash                                                    | CRITICAL                                 |
-| `NAVIGATION`     | timeout, redirect loop, redirect to another host                  | ERROR (external redirect: WARNING)       |
+## State detection and loop protection
 
-- All severity rules are in one place: `src/anomaly/severity-rules.ts`.
-- Identical anomalies are merged into one issue. The issue records its number of occurrences and the pages it was seen on.
-- Chrome's own "Failed to load resource" console echo is not reported a second time.
+A state is not a URL:
+
+- `/dossiers/create` can show steps 1, 2 and 3;
+- a tab or a dialog changes the screen without changing the route.
+
+`StateDetector` fingerprints each observation from several signals:
+
+- the route pattern;
+- the title and headings;
+- open dialogs, selected tabs and `aria-current` items;
+- the visible controls (role and name), excluding data links and menus;
+- the form fields.
+
+Numbers are masked, so `/users/1` and `/users/2` ("Utilisateur 1/2") are one state.
+
+The result is a readable, stable `stateId` such as `parametres-securite-f3a0baba`.
 
 **Loop protection:**
 
-- a visited set of normalized URLs;
-- `maxDepth` and `maxPages`;
-- route patterns: `/users/1`, `/users/2` become `/users/:id`; UUIDs, hashes, dates and tokens are normalized the same way;
-- a per-route budget;
-- removal of tracking parameters;
-- Chromium's redirect limit, which catches redirect loops.
+- every action tried from a state is remembered in the graph and never retried;
+- `maxStatesPerRoute` caps both the states and the navigations per route pattern, including UUIDs, hashes, dates and `?page=N`;
+- selected tabs and tabs already opened from a sibling state are skipped, and nothing is unchecked;
+- a link already followed from another state is not followed again;
+- reaching a state already in the current path shrinks the path, which handles circular navigation;
+- redirect loops are detected;
+- all mission limits apply.
 
-## Reports
+## Forms
 
-| File                                 | Content                                                                                                                                                       |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reports/result.json`                | Machine-readable result: summary, statistics, issues, visited pages with their actions and forms, route patterns, effective settings (without secrets)        |
-| `reports/index.html`                 | Static report (no JavaScript, no external assets): summary cards, HTTP errors, JS errors, navigation problems, pages, discovered actions, screenshots, routes |
-| `screenshots/NNN-<path>[-error].png` | One per visited page (if `checks.screenshots`), always for pages with ERROR/CRITICAL issues                                                                   |
+- **Discovery.** Every field is discovered with its constraints: `type`, `required`, `min`, `max`, `step`, `minlength`, `maxlength`, `pattern`, and select options.
+- **Filling.** When the engine decides to click a button inside a form (a wizard "Suivant", a search), the explorer first fills that form through the `TestDataProvider`. Each field goes through the `SafetyPolicy` first.
+- **`DefaultTestDataProvider`.** Its values are deterministic and obviously fake:
+  - emails `qa-crawler@example.test`, text `QA Test`;
+  - numbers within min/max/step, dates within bounds;
+  - required checkboxes checked, first real option of a select.
+- **Never filled:** sensitive fields. Mutating submissions stay blocked unless explicitly allowed.
 
-Each discovered action is stored in `result.json`, for example:
+## What gets detected
+
+| Issue type       | Source                                                           | Default severity           |
+| ---------------- | ---------------------------------------------------------------- | -------------------------- |
+| `HTTP`           | API/resource response ≥ `http.failOnStatus`                      | 5xx → ERROR, 4xx → WARNING |
+| `BROKEN_LINK`    | a screen whose document answers ≥ `failOnStatus`                 | 404/410/5xx → ERROR        |
+| `REQUEST_FAILED` | network failure (DNS, refused, CORS)                             | WARNING                    |
+| `CONSOLE`        | `console.error` (and `console.warn` if enabled)                  | ERROR (WARNING)            |
+| `PAGE_ERROR`     | uncaught JavaScript exception                                    | ERROR                      |
+| `PAGE_CRASH`     | renderer crash                                                   | CRITICAL                   |
+| `NAVIGATION`     | redirect loop, timeout, action leading outside the allowed hosts | ERROR (WARNING)            |
+
+Each issue is attributed so it can be reproduced:
 
 ```json
-{ "type": "button", "text": "Nouvelle inscription", "classification": "MUTATION", "reason": "matches mutation keyword \"inscription\"" }
-{ "type": "link", "text": "Utilisateurs", "href": "https://app.example.com/users", "classification": "SAFE", "reason": "navigation link" }
-```
-
-Each form field is stored with its constraints (`type`, `required`, `min`, `max`,
-`minlength`, `maxlength`, `pattern`, select options). This is the input for the
-future form-validation tests.
-
-## Architecture
-
-```
-                 Scenario YAML
-                       |
-                       v
-         Config loader (zod schema, defaults, overrides)
-                       |
-                       v
-                QA Orchestrator ─────────────────────────────┐
-                       |                                      |
-          +------------+-------------+                        |
-          |                          |                        |
-          v                          v                        |
-     Crawl Engine  <────────  Safety Policy                   |
-  (BFS queue, visited,        Navigation Policy               |
-   route budget, depth)       Decision Engine (rule-based)    |
-          |                                                   |
-          v                                                   |
-  Link / Action / Form discovery                              |
-          |                                                   |
-          v                                                   |
-   Playwright → Chromium headless → Web application           |
-          |                                                   |
-     +----+-----------+-------------+                         |
-     v                v             v                         |
-  Network        Console       Page errors                    |
-  observer       observer      observer                       |
-     +----+-----------+-------------+                         |
-          v                                                   |
-   Issue collector (severity rules, dedupe, redaction)        |
-          |                                                   v
-          +──────────────────────────────────────────>  Reporters
-                                                        /       \
-                                                     JSON       HTML
-```
-
-```
-src/
-├── main.ts                     entry point (node dist/main.js)
-├── orchestrator.ts             scenario → crawl → reports → verdict
-├── cli/                        argument parsing, console output, exit codes
-├── config/                     zod schema with defaults, YAML loader, overrides
-├── crawler/
-│   ├── crawler.ts              BFS crawl engine
-│   ├── queue.ts                frontier, visited set, per-route budget
-│   ├── url-normalizer.ts       URL resolution and canonical form
-│   ├── route-normalizer.ts     /users/1 → /users/:id, ?page=N grouping
-│   └── action-executor.ts      executes a decided action with a last safety check
-├── discovery/                  links (incl. routerLink), actions, forms — read-only DOM inspection
-├── browser/                    Chromium lifecycle, screenshots
-├── observers/                  network, console, pageerror/crash → issues
-├── policies/                   SafetyPolicy (action risk), NavigationPolicy (where to go)
-├── decision/                   DecisionEngine interface + RuleBasedDecisionEngine
-├── anomaly/                    severity rules, issue collector (dedupe)
-├── security/                   redaction of secrets
-├── auth/                       authenticators (none, form)
-├── reporting/                  Reporter interface, JSON and HTML reporters
-└── model/                      Issue, PageResult, DiscoveredAction, CrawlResult
-```
-
-### Decision engine (extension point for AI later)
-
-In-page interactions go through a `DecisionEngine`:
-
-```ts
-interface DecisionEngine {
-  nextAction(context: PageContext): Promise<Decision>; // { kind: 'click', action } | { kind: 'stop' }
+{
+  "type": "HTTP",
+  "severity": "ERROR",
+  "status": 500,
+  "requestUrl": "http://localhost:4174/api/logs",
+  "stateId": "journal-fd0e3d2c",
+  "actionId": "a-3f81c2d9e0",
+  "flow": ["tableau-de-bord-e511f0f8", "administration-316d9318", "journal-fd0e3d2c"]
 }
 ```
 
-The `PageContext` passed to the engine is plain, serializable data:
+Identical anomalies are merged into one issue, which counts its occurrences and lists every state where it was seen.
 
-- the page URL and route;
-- the classified actions and the forms;
-- the actions already executed and the remaining budget.
+## Reports
 
-This version ships `RuleBasedDecisionEngine`, which is fully deterministic. When `clickSafeActions` is enabled, it clicks allowed buttons and routerLink elements in document order, once each; this is how routes reachable only by clicking in a SPA get discovered.
+| File                                   | Content                                                                                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reports/result.json`                  | Mission summary and statistics. States with their full actions (locators, classification) and forms, transitions, attributed issues, effective settings     |
+| `reports/index.html`                   | Static report: summary cards, discovered flow tree, HTTP/JS/navigation anomalies (state · action · flow), states, executed and blocked actions, screenshots |
+| `reports/flow-graph.json`              | The flow graph, used as the explorer's memory (resumable with `memory.resume`)                                                                              |
+| `reports/flow-graph.html`              | Application map: collapsible tree, text tree, transitions between states, other attempts                                                                    |
+| `screenshots/NNN-<state>[-error…].png` | One per discovered state, plus one per ERROR/CRITICAL anomaly                                                                                               |
 
-A `LocalLLMDecisionEngine` or `CloudLLMDecisionEngine` can be added later behind the same interface. Whatever the engine, the crawl engine keeps enforcing `SafetyPolicy` on every decision, so an engine can only choose among allowed actions. This version contains no LLM code or dependency.
+The reports use no JavaScript, framework or external asset.
 
-## Authentication
-
-Credentials are never written in the scenario. The loader rejects keys such as `password:`. Credentials are read from environment variables:
-
-```yaml
-auth:
-  type: form
-  loginUrl: /login
-  usernameSelector: 'input[name="username"]'
-  passwordSelector: 'input[type="password"]'
-  submitSelector: 'button[type="submit"]'
-  usernameEnv: QA_USERNAME # default
-  passwordEnv: QA_PASSWORD # default
-  successSelector: 'nav .user-menu' # and/or successUrlContains: /dashboard
-```
+## Command line
 
 ```bash
-QA_USERNAME=qa-bot QA_PASSWORD=... npm run qa -- scenarios/app.yaml
+npm run qa -- scenarios/demo.yaml
+npm run qa -- --config scenarios/smoke.yaml --base-url https://pr-42.example.com --max-states 30 --max-actions 100
+npm run qa -- --help
 ```
 
-- The login runs once, before the crawl.
-- The session (cookies, storage) is then shared by every page.
-- Add `/logout` to `ignoredPaths` (it is there by default) so the crawler does not end its own session.
-- The `Authenticator` interface is where SSO/OIDC, token injection and multi-role runs will plug in.
+The CLI prints:
+
+- the mission, target, goals, limits and safety rules;
+- every new state, action (with its result), blocked action and backtrack;
+- the anomalies as they are found;
+- the discovered flow tree;
+- the summary and the location of the reports.
+
+**Exit codes:** `0` no issue at or above `report.failOnSeverity`, `1` failing issues, `2` invalid usage or mission, `3` runtime failure.
+
+## Docker
+
+The image is based on the official Playwright image (`mcr.microsoft.com/playwright:v1.56.1-noble`). It runs as the non-root `pwuser`, with no GPU, no display and no special privileges.
+
+```bash
+docker build -t qa-crawler .
+
+docker run --rm \
+  -e QA_BASE_URL=https://staging.example.com \
+  -v "$PWD/reports:/app/reports" -v "$PWD/screenshots:/app/screenshots" \
+  qa-crawler --config scenarios/smoke.yaml
+```
+
+> Keep the `playwright` version in `package.json` and the image tag in the `Dockerfile` identical.
 
 ## Kubernetes / OpenShift
 
-The image is ready to run as a `Job` or `CronJob`. No manifests are included yet. Points to plan:
+The image is ready for a `Job` or `CronJob`:
 
-- **Resources:** one headless Chromium tab.
+- **Resources:**
   - Requests: `cpu: 500m`, `memory: 1Gi`.
   - Limits: `cpu: 1–2`, `memory: 2Gi`.
   - Memory grows with heavy SPAs and full-page screenshots.
-- **Headless only:** no GPU, no X server, no `privileged`, no added capability. Chromium runs without its own sandbox, which is Playwright's default. That is what allows an unprivileged, arbitrary UID.
-- **Arbitrary UID (OpenShift):**
-  - The image runs as `pwuser`.
-  - `/app/reports` and `/app/screenshots` are group-0 writable.
-  - `HOME=/tmp`, so a random UID works under the `restricted-v2` SCC.
-- **Shared memory:** `--disable-dev-shm-usage` is on by default, so the small default `/dev/shm` is fine. Alternatively, mount an `emptyDir` with `medium: Memory` on `/dev/shm`.
-- **Network:** the pod needs:
-  - egress to the target application (and to its identity provider if you authenticate);
-  - no other egress: nothing is downloaded at runtime.
-- **Outputs:** write reports to a mounted volume (PVC or `emptyDir` copied out by a sidecar or next step). Override the paths with `--reports-dir` / `--screenshots-dir` if needed.
-- **Configuration:** mount scenarios from a `ConfigMap`. Pass the URL through `QA_BASE_URL`, and credentials through a `Secret` exposed as `QA_USERNAME` / `QA_PASSWORD`.
-- **Exit code:** 0 or 1 tells the pipeline whether the environment passed.
+- **Headless only:** no GPU, X server, `privileged` or added capability. Chromium runs without its own sandbox (Playwright's default), which allows an arbitrary UID.
+- **Arbitrary UID (OpenShift):** outputs are group-0 writable and `HOME=/tmp`, so the image works under `restricted-v2`.
+- **Shared memory:** `--disable-dev-shm-usage` is on by default. Alternatively, mount an `emptyDir` (`medium: Memory`) on `/dev/shm`.
+- **Network:** egress to the target application (and its identity provider when authenticating) only.
+- **Outputs:** write `reports/` and `screenshots/` to a mounted volume. Use `--reports-dir` / `--screenshots-dir` to change the paths.
+- **Configuration:**
+  - missions from a `ConfigMap`;
+  - the URL through `QA_BASE_URL`;
+  - credentials from a `Secret` exposed as `QA_USERNAME` / `QA_PASSWORD`.
 
-| Variable                     | Purpose                                                                 |
-| ---------------------------- | ----------------------------------------------------------------------- |
-| `QA_BASE_URL`                | Target URL (overrides the scenario)                                     |
-| `QA_USERNAME`, `QA_PASSWORD` | Default credential variables for `auth.type: form` (names configurable) |
-| `PLAYWRIGHT_BROWSERS_PATH`   | Chromium location (set by the Playwright image)                         |
-| `NO_COLOR`                   | Disable colored output (set in the image)                               |
+| Variable                     | Purpose                                            |
+| ---------------------------- | -------------------------------------------------- |
+| `QA_BASE_URL`                | Target URL (overrides the mission)                 |
+| `QA_USERNAME`, `QA_PASSWORD` | Default credential variables for `auth.type: form` |
+| `PLAYWRIGHT_BROWSERS_PATH`   | Chromium location (set by the Playwright image)    |
+| `NO_COLOR`                   | Plain output (set in the image)                    |
 
 ## CI/CD
 
 `.github/workflows/qa-crawler.yml` runs on every push and pull request, in this order:
 
-1. checkout
-2. `npm ci`
-3. typecheck
-4. lint
-5. format check
-6. unit tests
-7. build
-8. Chromium install and integration tests against the bundled local test site
+1. `npm ci`
+2. typecheck
+3. lint
+4. format check
+5. unit tests
+6. build
+7. Chromium install and integration tests against the two bundled applications
 
-A second job crawls a real environment, and uploads `reports/` and `screenshots/` as an artifact. It runs only when a target exists:
+An optional job explores a real environment and uploads the reports. It runs when the repository variable `TARGET_URL` is set, or on a manual run.
 
-- the repository variable `TARGET_URL`, or
-- a manual run with the `target_url` input.
+## Architecture
+
+```
+                         Mission YAML
+                              |
+                              v
+                      QA Orchestrator
+                              |
+               +--------------+--------------+
+               v                             v
+          Flow Explorer                 Safety Policy
+               |
+               v
+          UI Observation  (DOM · accessibility · URL/state)
+               |
+               v
+          Page Context ──> State Detector
+               |
+               v
+        Action Discovery  (link · button · tab · routerLink · input · select · checkbox…)
+               |
+               v
+        Decision Engine ──> Selected Action ──> Safety Policy ──> BLOCK (recorded)
+                                                     |
+                                                   ALLOW
+                                                     v
+                                    Playwright Action Executor ──> Chromium ──> Application
+                                                                                    |
+                                                          Network · Console · Page errors
+                                                                                    |
+                                                                          Anomaly collector
+                                                                                    |
+                                                                  State Detector (new state)
+                                                                                    |
+                                                                              Flow Graph
+                                                                              /        \
+                                                                     Flow Memory     Reporters
+                                                                (flow-graph.json)  JSON · HTML · Graph
+```
+
+```
+src/
+├── main.ts, orchestrator.ts      entry point; mission → explorer → reports → verdict
+├── cli/                          arguments, console output, exit codes
+├── config/                       mission schema (zod) with defaults, YAML loader, V1 migration
+├── explorer/flow-explorer.ts     the loop, navigation stack, backtracking, limits
+├── observation/                  UIObserver (DOM snapshot script), StateDetector
+├── discovery/                    ActionDiscovery (pure), locator builder
+├── decision/                     DecisionEngine interface, RuleBasedDecisionEngine
+├── policies/                     SafetyPolicy, NavigationPolicy, vocabulary
+├── execution/                    PlaywrightActionExecutor, locator resolver
+├── data/                         TestDataProvider, DefaultTestDataProvider
+├── graph/                        FlowGraph
+├── memory/                       FlowMemory interface, JsonFlowMemory
+├── observers/                    network, console, page errors (with attribution)
+├── anomaly/                      severity rules, issue collector
+├── crawler/                      URL and route normalization
+├── browser/                      Chromium lifecycle, screenshots
+├── auth/                         form authentication (credentials from env)
+├── reporting/                    result builder, JSON, HTML, flow graph HTML, flow tree
+├── security/                     redaction
+└── model/                        PageContext, DiscoveredAction, LocatorDescriptor, FlowNode/Edge, Issue…
+```
+
+### Replacing the decision engine
+
+```ts
+interface DecisionEngine {
+  readonly name: string;
+  decide(context: PageContext, graph: FlowGraph): Promise<ActionDecision>; // EXECUTE | BACKTRACK | STOP
+}
+```
+
+The engine receives only plain, serializable data:
+
+- the `PageContext`: URL, state, headings, text excerpt, classified actions with their locators, forms, known errors;
+- the `FlowGraph`.
+
+A `LocalLLMDecisionEngine` or `CloudLLMDecisionEngine` can be passed to `runMission(config, { decisionEngine })`. Nothing else changes: the explorer, the safety gate, the executor and the observers stay as they are.
+
+This version contains **no LLM code or dependency**.
 
 ## Development
 
@@ -443,41 +441,48 @@ npm run typecheck        # tsc --noEmit (strict)
 npm run lint             # ESLint, typescript-eslint strict type-checked
 npm run format:check     # Prettier
 npm test                 # unit tests (Vitest), no browser needed
-npm run test:integration # real Chromium against tests/fixtures/test-site.ts
+npm run test:integration # real Chromium against the two bundled applications
 npm run build            # dist/
 ```
 
-The test site (`tests/fixtures/test-site.ts`) is a small HTTP server full of traps:
+**Unit tests** cover:
 
-- a 404 page, a 500 page and an API call that fails;
-- a JavaScript exception and a `console.error` containing a token;
-- a redirect loop and a JavaScript redirect;
-- infinite pagination and `/users/:id` pages;
-- logout and delete links;
-- _Supprimer_ and _Enregistrer_ buttons that call "dangerous" endpoints;
-- forms with constraints, a routerLink element and a SPA-style `pushState` button.
+- `ActionDiscovery`, locator descriptors and their Playwright translation;
+- `StateDetector`, `FlowGraph` and `JsonFlowMemory`;
+- `SafetyPolicy`, `NavigationPolicy` and `RuleBasedDecisionEngine`;
+- `TestDataProvider` and route and URL normalization;
+- the config loader, redaction, the flow tree and the CLI arguments.
 
-The integration test checks that every trap is detected, and that no dangerous endpoint is ever reached.
+**Integration tests** explore two bundled applications:
+
+- `tests/fixtures/flow-app.ts`, a mini back-office. The test asserts that the explorer discovers:
+  - the screens;
+  - the tabs and the 3 wizard steps on one URL;
+  - the transitions, with backtracking;
+  - the expected tree.
+
+  It also checks that no destructive endpoint is ever reached and that the card field is never filled.
+
+- `tests/fixtures/test-site.ts`, a site full of bugs and traps. The test checks that every anomaly is detected and attributed, and that no secret leaks.
 
 ## Limitations of this version
 
-- One browser tab: pages are crawled sequentially.
-- Only one form of authentication, a single role and a single login.
-- In-page clicks are limited to SAFE buttons/routerLinks, and only when `clickSafeActions` is on. Links are followed through the queue.
-- Only the `href` values present in the DOM are checked, so links beyond `maxPages`/`maxDepth` are not validated.
-- Route normalization is heuristic: numeric ids, UUIDs, hashes, dates and long tokens. Custom route patterns are not configurable yet.
-- Keyword-based classification cannot know what an unlabeled icon button does. Such buttons are `UNKNOWN`, and therefore not clicked.
+- One browser tab: exploration is sequential.
+- The state fingerprint is heuristic: very dynamic screens can produce more states than expected (bounded by `maxStatesPerRoute`).
+- The rule-based engine cannot know what an unlabelled icon does, so icons are never clicked.
+- Mutating actions (create/save/submit) are never executed. Their effects are not explored unless explicitly allowed on a disposable environment.
+- Backtracking by replay needs the path to be deterministic; states that can't be restored are skipped.
+- Only one form of authentication, and a single role.
 - Shadow DOM and iframes are not explored.
 
 ## Roadmap
 
-- Multi-role authentication (one crawl per role, SSO/OIDC, stored session state)
-- Automatic form testing: required fields, invalid email, min/max and boundary values, auto-fill
-- Permission tests (what a role must _not_ reach)
+- Multi-role authentication (one exploration per role, SSO/OIDC, stored sessions)
+- Automatic form testing with the `TestDataProvider`: required fields, invalid email, min/max and boundary values
+- Permission tests (what a role must not reach)
 - OpenAPI import and API testing
-- Visual comparison between runs
-- Generation of Playwright tests from the discovered routes and actions
-- Decision engines: an optional local LLM, behind the `DecisionEngine` interface
-- Runs against per-pull-request environments
-- Automatic pull request comment with the report summary
-- Configurable route patterns, parallel pages, Kubernetes `Job` manifests
+- Visual comparison between runs (screenshots per state)
+- Generation of Playwright tests from the recorded flows (locators are already serializable)
+- Decision engines behind the `DecisionEngine` interface, including an optional local LLM
+- Runs against per-pull-request environments, with an automatic PR comment
+- Parallel exploration, SQLite/PostgreSQL `FlowMemory`, Kubernetes `Job` manifests

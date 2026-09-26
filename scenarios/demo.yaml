@@ -1,19 +1,29 @@
-# Targets the bundled demo site (full of deliberate bugs and traps):
-#   npm run demo:server           # terminal 1, serves http://localhost:4173
-#   npm run qa -- scenarios/demo.yaml
-name: demo-site
-description: Bundled demo site with broken links, API errors, JS errors and destructive actions
+# Mission on the bundled back-office demo. Nothing below says which buttons
+# to click: the explorer discovers screens, tabs and wizard steps by itself.
+#   npm run demo:server               # terminal 1
+#   npm run qa -- scenarios/demo.yaml # terminal 2
+mission:
+  name: explore-back-office
+  description: Discover the screens and flows of the demo back-office
 
 target:
-  baseUrl: http://localhost:4173
+  baseUrl: http://localhost:4174
+  startAt: /
 
 exploration:
-  maxPages: 40
-  maxDepth: 4
-  navigationTimeoutMs: 10000
-  settleTimeMs: 300
-  clickSafeActions: true
+  maxStates: 40
+  maxActions: 150
+  maxDepth: 10
+  maxDurationMinutes: 5
+  actionTimeoutMs: 5000
+  settleTimeMs: 200
+
+goals:
+  discoverNavigation: true
+  discoverForms: true
+  discoverFlows: true
+  detectErrors: true
 
 safety:
-  ignoredPaths:
-    - /logout
+  allow: [navigation, tabs, menus, details, pagination, search, filter, forms, other]
+  block: [delete, payment, send, logout, irreversible, sensitive-data, external-navigation, form-submit]

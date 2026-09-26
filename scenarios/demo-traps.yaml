@@ -1,0 +1,17 @@
+# Mission on the bundled trap site (broken pages, API errors, JS errors,
+# redirect loop, destructive links and buttons):
+#   npm run demo:server
+#   npm run qa -- scenarios/demo-traps.yaml
+mission:
+  name: demo-traps
+  description: Bundled site full of deliberate bugs and destructive actions
+
+target:
+  baseUrl: http://localhost:4173
+
+exploration:
+  maxStates: 40
+  maxActions: 120
+  maxDurationMinutes: 5
+  actionTimeoutMs: 5000
+  settleTimeMs: 200

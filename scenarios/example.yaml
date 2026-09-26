@@ -1,66 +1,72 @@
-# Fully documented scenario. Every key is optional except target.baseUrl;
+# Fully documented mission. Every key is optional except target.baseUrl;
 # the values below are the defaults unless stated otherwise.
-name: example-full
-description: Every available option, with its default value
+# The YAML never lists buttons to click: it gives a goal and limits.
+mission:
+  name: explore-application
+  description: Every available option, with its default value
 
 target:
   baseUrl: http://localhost:4200 # required — overridable with --base-url or QA_BASE_URL
-  startAt: / # first page, relative to baseUrl
-
-browser:
-  headless: true # false needs a display (debugging only)
-  viewport: { width: 1366, height: 768 }
-  # locale: fr-FR
-  # userAgent: qa-crawler/0.1
-  ignoreHttpsErrors: false # true for self-signed certificates on test environments
-  args: ['--disable-dev-shm-usage'] # extra Chromium flags; this one avoids crashes with a small /dev/shm in containers
-  slowMoMs: 0
+  startAt: / # first screen, relative to baseUrl
 
 exploration:
-  maxPages: 50 # hard cap on visited pages
-  maxDepth: 5 # link distance from the start page
+  maxStates: 100 # distinct functional states (screens, steps, tabs)
+  maxActions: 500 # actions executed (clicks, navigations, fills)
+  maxDepth: 10 # transitions away from the start state
+  maxDurationMinutes: 15
+  actionTimeoutMs: 10000 # locate + execute one action
   navigationTimeoutMs: 15000
   waitUntil: load # load | domcontentloaded | networkidle | commit
-  settleTimeMs: 500 # extra wait so SPAs render and fire their API calls
-  maxUrlsPerRoute: 2 # /users/1, /users/2 … share the route /users/:id: only 2 are visited
+  settleTimeMs: 400 # extra wait after each action (SPA rendering, API calls)
+  maxStatesPerRoute: 3 # /users/1, /users/2 … share the route /users/:id: 3 samples are enough
   queryParams:
-    mode: pattern # pattern: ?page=1..N share one route | ignore: drop params | keep: every query is a page
+    mode: pattern # pattern: ?page=1..N share one route | ignore | keep
     ignored: ['utm_*', 'fbclid', 'gclid', '_', 'ts', 'timestamp', 'cachebuster']
-  followRouterLinks: true # follow Angular [routerLink] on non-anchor elements
-  clickSafeActions: false # let the rule-based engine click SAFE buttons (SPA navigation)
-  maxActionsPerPage: 5
-  maxRecordedActions: 200
+  maxRecordedActions: 200 # actions recorded per state
+
+goals:
+  discoverNavigation: true # follow links and routerLinks
+  discoverForms: true # fill forms with fake test data before clicking their step buttons
+  discoverFlows: true # click tabs, menus, details, toggles, wizard steps
+  detectErrors: true # network, console and JavaScript observers
+
+browser:
+  headless: true
+  viewport: { width: 1366, height: 768 }
+  # locale: fr-FR
+  ignoreHttpsErrors: false
+  args: ['--disable-dev-shm-usage']
+  slowMoMs: 0
 
 checks:
   consoleErrors: true
   consoleWarnings: false
-  pageErrors: true # uncaught exceptions
+  pageErrors: true
   httpErrors: true # API/resource responses >= http.failOnStatus
-  requestFailures: true # DNS/connection/CORS failures
-  brokenLinks: true # visited pages answering >= http.failOnStatus
-  screenshots: true # every visited page
-  screenshotOnError: true # pages with ERROR/CRITICAL issues, even when screenshots is false
+  requestFailures: true
+  brokenLinks: true # screens whose document answers >= http.failOnStatus
+  screenshots: true # one per discovered state
+  screenshotOnError: true # when an ERROR/CRITICAL anomaly happens
   fullPageScreenshots: false
 
 http:
   failOnStatus: 400
-  ignoreStatus: [] # e.g. [401] for an optional session probe
-  ignoreUrlPatterns: [] # substrings, e.g. ['/analytics', 'googletagmanager']
+  ignoreStatus: []
+  ignoreUrlPatterns: [] # substrings, e.g. ['/analytics']
 
 safety:
-  allowedHosts: [] # default: the host of target.baseUrl. Wildcards: '*.example.com'
-  ignoredPaths: # prefix match, '*' within a segment, '**' across segments
-    - /logout
-    - /signout
-    - /sign-out
-    - /deconnexion
-  allowedActionClasses: [SAFE] # SAFE | MUTATION | DANGEROUS | UNKNOWN — keep SAFE outside disposable environments
-  keywords: # added to the built-in French/English vocabulary
+  allowedHosts: [] # default: host of target.baseUrl ('*.example.com' allowed)
+  ignoredPaths: [/logout, /signout, /sign-out, /deconnexion]
+  allowedActionClasses: [SAFE] # SAFE | MUTATION | DANGEROUS | UNKNOWN
+  allow: # kinds of SAFE actions the mission may execute
+    [navigation, tabs, menus, details, pagination, search, filter, forms, other]
+  block: # risks always blocked (sensitive-data is blocked even if omitted)
+    [delete, payment, send, logout, irreversible, sensitive-data, external-navigation, form-submit, download]
+  keywords: # extra vocabulary for the classification
     safe: []
     mutation: []
     dangerous: []
 
-# Form login, credentials read from environment variables only:
 # auth:
 #   type: form
 #   loginUrl: /login
@@ -70,15 +76,19 @@ safety:
 #   usernameEnv: QA_USERNAME
 #   passwordEnv: QA_PASSWORD
 #   successSelector: 'nav .user-menu'
-#   # successUrlContains: /dashboard
 auth:
   type: none
+
+memory:
+  # file: reports/flow-graph.json    # default: <reportsDir>/flow-graph.json
+  resume: false # true: continue from the previous graph, skip actions already tried
 
 output:
   reportsDir: reports
   screenshotsDir: screenshots
   json: true
   html: true
+  flowGraphHtml: true
 
 report:
   failOnSeverity: ERROR # INFO | WARNING | ERROR | CRITICAL | NONE — sets the CLI exit code
