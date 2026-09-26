@@ -1,55 +1,64 @@
+# Imposed flows on the bundled back-office demo: the mission lists the steps
+# to follow, the SafetyPolicy still checks each one before Playwright runs it.
+#   npm run demo:server                     # terminal 1
+#   QA_DEMO_PASSWORD=demo npm run qa -- scenarios/demo-flows.yaml   # terminal 2
 mission:
-  name: mosquee-flows
-  description: Flows imposés sur l'admin mosquée, puis exploration autonome
-
-report:
-  language: fr
-
-browser:
-  headless: false
-  slowMoMs: 2000 # 0,5 s avant chaque action
+  name: demo-flows
+  description: Imposed test flows on the demo back-office, then autonomous exploration
 
 target:
-  baseUrl: http://localhost:4200
-  startAt: /app/admin/dashboard
-
-auth: # connexion faite une fois, avant tout le reste
-  type: form
-  loginUrl: /login
-  usernameSelector: input[formcontrolname="identifiant"]
-  passwordSelector: input[type="password"]
-  submitSelector: button[type="submit"]
-  successUrlContains: /app/
+  baseUrl: http://localhost:4174
+  startAt: /
 
 exploration:
   maxStates: 40
   maxActions: 150
-  maxDurationMinutes: 15
-  actionTimeoutMs: 10000
-  settleTimeMs: 600
-  autonomous: false # false = seulement les flows
+  maxDurationMinutes: 5
+  actionTimeoutMs: 5000
+  settleTimeMs: 200
+  # false: run only the flows below.
+  autonomous: true
 
 flows:
-  - name: creer-un-devoir
-    startAt: /app/admin/devoirs
+  - name: connexion
+    description: Log in with credentials read from the environment
+    startAt: /login
     steps:
-      - click: { role: button, name: Nouveau devoir }
-        allow: MUTATION
-      - fill: { label: Titre, value: Devoir QA-CRAWLER }
-      - select: { label: Classe, option: M1 Dimanche }
-      - click: { role: button, name: Suivant }
-      - fill: { label: Description, value: Lire la sourate Al-Fatiha. }
-      - screenshot: etape-2
-      - click: { role: button, name: Enregistrer }
-        allow: MUTATION
-      - expect: { text: Devoir enregistré }
+      - fill: { label: Identifiant, value: agent.qa }
+      - fill: { label: Mot de passe, value: { env: QA_DEMO_PASSWORD } }
+      - click: { role: button, name: Se connecter }
+      - expect: { text: Bienvenue agent.qa }
 
-  - name: gestion-utilisateurs
-    startAt: /app/admin/fideles
-    thenExplore: true # explore aussi cet écran juste après
+  - name: nouveau-dossier
+    description: Fill the 3-step wizard up to the confirmation screen
+    startAt: /dossiers
     steps:
-      - expect: { text: Gestion des Utilisateurs }
-      - screenshot: utilisateurs
+      - click: { role: link, name: Nouveau dossier }
+      - fill: { label: Titre, value: Dossier QA }
+      - fill: { label: Email du demandeur, value: demandeur@example.test }
+      - click: { role: button, name: Suivant }
+      - expect: { text: Étape 2 — Détails }
+      - fill: { label: Montant, value: 250 }
+      - select: { label: Catégorie, option: Subvention }
+      - check: { label: J'accepte les conditions }
+      - click: { role: button, name: Suivant }
+      - expect: { text: Étape 3 — Confirmation }
+      - screenshot: confirmation
+      # Saving would modify data: this step only runs with "allow: MUTATION".
+      # It is optional here, so the refusal is reported as a warning.
+      - click: { role: button, name: Enregistrer le dossier }
+        optional: true
+
+  - name: fiche-utilisateur
+    description: Open a user, then let the explorer explore that screen
+    startAt: /users
+    # Explore /users/3 (tabs, sub-pages) right after the flow, without following the menu.
+    thenExplore: true
+    steps:
+      - click: { role: link, name: Voir, nth: 2 }
+      - expect: { url: /users/3 }
+      - click: { role: tab, name: Historique }
+      - expect: { text: Aucune activité. }
 
 safety:
   allow: [navigation, tabs, menus, details, pagination, search, filter, forms, other]

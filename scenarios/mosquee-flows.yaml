@@ -1,0 +1,64 @@
+# Flows imposés sur l'admin de mono-repo-mosquee (Angular, localhost:4200).
+#
+# ATTENTION : "creer-un-devoir" crée un vrai devoir (allow: MUTATION).
+# À lancer uniquement sur une base locale ou de test.
+#
+# Identifiants via variables d'environnement, jamais dans ce fichier :
+#   QA_USERNAME=admin@exemple.com QA_PASSWORD='...' npm run qa -- scenarios/mosquee-flows.yaml
+# browser.headless: false ouvre une fenêtre : nécessite un écran (pas en CI / Docker).
+mission:
+  name: mosquee-flows
+  description: Flows imposés sur l'admin mosquée (création de devoir, gestion des utilisateurs)
+
+report:
+  language: fr
+
+browser:
+  headless: false
+  slowMoMs: 2000 # 2 s avant chaque action (500 = 0,5 s)
+
+target:
+  baseUrl: http://localhost:4200
+  startAt: /app/admin/dashboard
+
+auth: # connexion faite une fois, avant tout le reste
+  type: form
+  loginUrl: /login
+  usernameSelector: input[formcontrolname="identifiant"]
+  passwordSelector: input[type="password"]
+  submitSelector: button[type="submit"]
+  successUrlContains: /app/
+
+exploration:
+  maxStates: 40
+  maxActions: 150
+  maxDurationMinutes: 15
+  actionTimeoutMs: 10000
+  settleTimeMs: 600
+  autonomous: false # false = seulement les flows
+
+flows:
+  - name: creer-un-devoir
+    startAt: /app/admin/devoirs
+    steps:
+      - click: { role: button, name: Nouveau devoir }
+        allow: MUTATION
+      - fill: { label: Titre, value: Devoir QA-CRAWLER }
+      - select: { label: Classe, option: M1 Dimanche }
+      - click: { role: button, name: Suivant }
+      - fill: { label: Description, value: Lire la sourate Al-Fatiha. }
+      - screenshot: etape-2
+      - click: { role: button, name: Enregistrer }
+        allow: MUTATION
+      - expect: { text: Devoir enregistré }
+
+  - name: gestion-utilisateurs
+    startAt: /app/admin/fideles
+    thenExplore: true # explore aussi cet écran juste après
+    steps:
+      - expect: { text: Gestion des Utilisateurs }
+      - screenshot: utilisateurs
+
+safety:
+  allow: [navigation, tabs, menus, details, pagination, search, filter, forms, other]
+  block: [delete, payment, send, logout, irreversible, sensitive-data, external-navigation, form-submit]
