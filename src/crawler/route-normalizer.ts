@@ -49,7 +49,8 @@ export function routePattern(path: string): string {
  */
 export function routeKey(url: URL | string, queryParamMode: QueryParamMode): string {
   const parsed = new URL(url.toString());
-  const path = routePattern(effectivePath(parsed));
+  const rawPath = effectivePath(parsed);
+  const path = routePattern(rawPath.length > 1 ? rawPath.replace(/\/+$/, '') : rawPath);
   if (queryParamMode !== 'pattern') {
     return queryParamMode === 'keep' && parsed.search ? `${path}${parsed.search}` : path;
   }

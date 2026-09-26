@@ -1,137 +1,271 @@
-import type { Page } from 'playwright';
-import type { DiscoveredAction, RawAction } from '../model/discovered-action.js';
+import { createHash } from 'node:crypto';
+import type {
+  ActionCategory,
+  ActionType,
+  DiscoveredAction,
+  FieldConstraints,
+} from '../model/discovered-action.js';
+import type { UiElement, UiSnapshot } from '../model/ui-snapshot.js';
+import {
+  DETAILS_KEYWORDS,
+  FILTER_KEYWORDS,
+  KeywordMatcher,
+  PAGINATION_KEYWORDS,
+  SEARCH_KEYWORDS,
+  STEP_KEYWORDS,
+} from '../policies/keywords.js';
 import type { SafetyPolicy } from '../policies/safety-policy.js';
-import { redactUrl } from '../security/redactor.js';
+import { buildLocators } from './locator-builder.js';
+
+const TEXT_INPUT_TYPES = new Set([
+  'text',
+  'email',
+  'tel',
+  'url',
+  'search',
+  'number',
+  'date',
+  'time',
+  'datetime-local',
+  'month',
+  'week',
+  'password',
+  'color',
+  'range',
+]);
+
+const pagination = new KeywordMatcher(PAGINATION_KEYWORDS);
+const details = new KeywordMatcher(DETAILS_KEYWORDS);
+const search = new KeywordMatcher(SEARCH_KEYWORDS);
+const filter = new KeywordMatcher(FILTER_KEYWORDS);
+const step = new KeywordMatcher(STEP_KEYWORDS);
 
 /**
- * Elements considered interactive. The index of an element in
- * `page.locator(ACTION_SELECTOR)` identifies it for later execution.
- */
-export const ACTION_SELECTOR = [
-  'a[href]',
-  'button',
-  '[role="button"]',
-  '[routerlink]',
-  '[ng-reflect-router-link]',
-  'input:not([type="hidden"])',
-  'select',
-  'textarea',
-].join(', ');
-
-/**
- * Inventories the interactive elements of a page and classifies each one
- * with the SafetyPolicy. Discovery only reads the DOM: nothing is clicked here.
+ * "What can I do on this screen?"
+ *
+ * Turns the UIObserver snapshot into DiscoveredActions: what the user can
+ * click, follow, fill, select or check, with a robust serializable locator,
+ * a stable id, a functional category and the SafetyPolicy classification.
+ * Pure function of the snapshot — it never touches the browser.
  */
 export class ActionDiscovery {
   constructor(
     private readonly safetyPolicy: SafetyPolicy,
-    private readonly maxRecorded: number,
+    private readonly maxActions = 200,
   ) {}
 
-  async discover(page: Page): Promise<DiscoveredAction[]> {
-    const raw = await extractRawActions(page, this.maxRecorded);
-    return raw.map((action) => {
-      const safeAction: RawAction = action.href ? { ...action, href: redactUrl(action.href) } : action;
-      return this.safetyPolicy.withClassification(safeAction);
+  discover(snapshot: UiSnapshot, stateId: string): DiscoveredAction[] {
+    const locators = buildLocators(snapshot.elements);
+    const actions: DiscoveredAction[] = [];
+    const ids = new Set<string>();
+
+    snapshot.elements.forEach((element, position) => {
+      if (actions.length >= this.maxActions) return;
+      const type = actionType(element, snapshot.url);
+      if (!type) return;
+      const locator = locators[position];
+      if (!locator) return;
+
+      const href = targetHref(element, snapshot.url);
+      const external =
+        href !== undefined && !this.safetyPolicy.navigation.isAllowedHost(new URL(href).hostname);
+      const category = actionCategory(element, type);
+      const label = element.label ?? (element.name !== element.text ? element.name : undefined);
+      const text = element.text || element.name || undefined;
+      const classification = this.safetyPolicy.classify({
+        type,
+        category,
+        ...(text ? { text } : {}),
+        ...(label ? { label } : {}),
+        ...(element.fieldName ? { name: element.fieldName } : {}),
+        ...(element.elementId ? { elementId: element.elementId } : {}),
+        ...(href ? { href } : {}),
+        ...(element.routerLink ? { routerLink: element.routerLink } : {}),
+        role: element.role,
+        ...(element.inputType ? { inputType: element.inputType } : {}),
+        ...(element.autocomplete ? { autocomplete: element.autocomplete } : {}),
+        ...(element.placeholder ? { placeholder: element.placeholder } : {}),
+        isSubmit: element.isSubmit,
+        inSearchForm: element.inSearchForm,
+        formHasAction: element.formHasAction,
+        ...(element.dialogName ? { dialogName: element.dialogName } : {}),
+        external,
+      });
+
+      const id = actionId(stateId, type, element.role, element.name, href, locator.nth);
+      if (ids.has(id)) return;
+      ids.add(id);
+
+      actions.push({
+        id,
+        stateId,
+        type,
+        category,
+        elementType: element.tag === 'input' ? `input[${element.inputType ?? 'text'}]` : element.tag,
+        ...(element.role ? { role: element.role } : {}),
+        ...(text ? { text } : {}),
+        ...(label ? { label } : {}),
+        ...(href ? { href } : {}),
+        ...(element.fieldName ? { name: element.fieldName } : {}),
+        disabled: element.disabled || element.readOnly,
+        ...(element.selected !== undefined ? { selected: element.selected } : {}),
+        visible: element.visible,
+        ...classification,
+        locator,
+        ...(locator.strategy !== 'css' ? { fallback: { strategy: 'css' as const, value: element.css } } : {}),
+        ...(element.dialogName ? { dialogName: element.dialogName } : {}),
+        ...(element.formIndex !== undefined ? { formIndex: element.formIndex } : {}),
+        ...(external ? { external } : {}),
+        ...(isField(type) ? { field: fieldConstraints(element) } : {}),
+      });
     });
+    return actions;
   }
 }
 
-/** Runs in the browser; must stay self-contained (no references to module-level code). */
-async function extractRawActions(page: Page, max: number): Promise<RawAction[]> {
-  return page.evaluate(
-    ({ selector, limit }: { selector: string; limit: number }) => {
-      const results: RawAction[] = [];
-      const seen = new Set<string>();
-      const elements = Array.from(document.querySelectorAll(selector));
+function isField(type: ActionType): boolean {
+  return type === 'fill' || type === 'select' || type === 'check' || type === 'uncheck';
+}
 
-      elements.forEach((element, index) => {
-        if (results.length >= limit) return;
-        const el = element as HTMLElement;
-        const tag = el.tagName.toLowerCase();
-        const inputType = (el.getAttribute('type') ?? (tag === 'button' ? 'submit' : '')).toLowerCase();
-        const routerLink =
-          el.getAttribute('routerlink') ?? el.getAttribute('ng-reflect-router-link') ?? undefined;
+function actionType(element: UiElement, pageUrl: string): ActionType | undefined {
+  const { tag, role, inputType } = element;
+  if (tag === 'a') {
+    if (targetHref(element, pageUrl)) return 'navigate';
+    // href="#section" only scrolls; href="#" / javascript: usually carries a click handler.
+    return isScrollAnchor(element.href, pageUrl) ? undefined : 'click';
+  }
+  if (element.routerLink && tag !== 'button') return 'navigate';
+  if (tag === 'select') return 'select';
+  if (tag === 'textarea') return element.readOnly ? undefined : 'fill';
+  if (tag === 'input') {
+    if (inputType === 'checkbox' || inputType === 'radio') {
+      if (element.checked) return inputType === 'checkbox' ? 'uncheck' : undefined;
+      return 'check';
+    }
+    if (inputType === 'reset' || inputType === 'file') return undefined;
+    if (['button', 'submit', 'image'].includes(inputType ?? '')) return 'click';
+    if (TEXT_INPUT_TYPES.has(inputType ?? 'text')) return element.readOnly ? undefined : 'fill';
+    return undefined;
+  }
+  if (role === 'checkbox' || role === 'switch' || role === 'menuitemcheckbox') {
+    return element.checked ? 'uncheck' : 'check';
+  }
+  if (role === 'radio' || role === 'menuitemradio') return element.checked ? undefined : 'check';
+  return 'click';
+}
 
-        let type: RawAction['type'];
-        if (tag === 'a') type = 'link';
-        else if (tag === 'select') type = 'select';
-        else if (tag === 'textarea') type = 'textarea';
-        else if (tag === 'input') {
-          type = ['submit', 'button', 'reset', 'image'].includes(inputType) ? 'button' : 'input';
-        } else if (tag === 'button' || el.getAttribute('role') === 'button') type = 'button';
-        else if (routerLink !== undefined) type = 'router-link';
-        else type = 'button';
+function isScrollAnchor(href: string | undefined, pageUrl: string): boolean {
+  if (!href) return false;
+  try {
+    const url = new URL(href, pageUrl);
+    const page = new URL(pageUrl);
+    return (
+      url.hash.length > 1 &&
+      !/^#!?\//.test(url.hash) &&
+      url.pathname === page.pathname &&
+      url.search === page.search
+    );
+  } catch {
+    return false;
+  }
+}
 
-        // Never read the value of data-entry fields (could be a password); only button labels.
-        const isButtonInput = tag === 'input' && type === 'button';
-        const labelFromFor = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null;
-        const rawText =
-          el.getAttribute('aria-label') ||
-          (type === 'input' || type === 'select' || type === 'textarea'
-            ? (labelFromFor as HTMLElement | null)?.innerText || el.closest('label')?.innerText || ''
-            : el.innerText) ||
-          (isButtonInput ? (el as HTMLInputElement).value : '') ||
-          el.getAttribute('title') ||
-          el.getAttribute('placeholder') ||
-          el.getAttribute('name') ||
-          '';
-        const text = rawText.replace(/\s+/g, ' ').trim().slice(0, 120);
+/** Absolute http(s) URL of a link or routerLink, if any. */
+function targetHref(element: UiElement, pageUrl: string): string | undefined {
+  const raw =
+    element.href ?? (element.routerLink && element.tag !== 'button' ? element.routerLink : undefined);
+  if (!raw) return undefined;
+  try {
+    const path = element.href
+      ? raw
+      : raw.includes(',')
+        ? raw
+            .split(',')
+            .join('/')
+            .replace(/\/{2,}/g, '/')
+        : raw;
+    const url = new URL(path, pageUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    // In-page anchors (#section) are not navigations; hash routes (#/users) are.
+    const page = new URL(pageUrl);
+    if (
+      url.hash &&
+      !/^#!?\//.test(url.hash) &&
+      url.pathname === page.pathname &&
+      url.search === page.search
+    ) {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
 
-        const form = el.closest('form');
-        const isSubmit =
-          form !== null &&
-          ((tag === 'button' && inputType === 'submit') ||
-            (tag === 'input' && (inputType === 'submit' || inputType === 'image')));
-        const inSearchForm =
-          form !== null &&
-          (form.getAttribute('role') === 'search' ||
-            ((form.getAttribute('method') ?? 'get').toLowerCase() === 'get' &&
-              form.querySelector('input[type="search"], input[name="q"], input[name="search"]') !== null));
+function actionCategory(element: UiElement, type: ActionType): ActionCategory {
+  const label = [element.name, element.text, element.label, element.fieldName].filter(Boolean).join(' ');
+  if (isField(type)) {
+    if (element.inputType === 'search' || element.role === 'searchbox' || element.inSearchForm)
+      return 'search';
+    if (type === 'select' && filter.match(label)) return 'filter';
+    return 'form-input';
+  }
+  if (element.role === 'tab') return 'tab';
+  if (element.role.startsWith('menuitem') || element.hasPopup) return 'menu';
+  if (type === 'navigate') {
+    if (pagination.match(label) || /^\d+$/.test(label.trim())) return 'pagination';
+    // Links of a navigation landmark (main menu, sidebar) are global entry points.
+    if (element.inNavigation) return 'menu';
+    if (details.match(label)) return 'details';
+    return 'navigation';
+  }
+  if (element.inSearchForm || search.match(label)) return 'search';
+  if (filter.match(label)) return 'filter';
+  if (element.formIndex !== undefined && step.match(label)) return 'form-step';
+  if (element.isSubmit) return 'submit';
+  if (pagination.match(label) || /^\d+$/.test(label.trim())) return 'pagination';
+  if (details.match(label)) return 'details';
+  if (element.expanded !== undefined) return 'toggle';
+  if (element.inNavigation) return 'navigation';
+  return 'other';
+}
 
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        const visible =
-          rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-        const disabled =
-          // .disabled only exists on form controls
-          ('disabled' in el && (el as HTMLButtonElement).disabled) ||
-          el.getAttribute('aria-disabled') === 'true';
+function fieldConstraints(element: UiElement): FieldConstraints {
+  const constraints: FieldConstraints = {
+    inputType: element.tag === 'input' ? (element.inputType ?? 'text') : element.tag,
+    required: element.required,
+  };
+  const optional: Partial<FieldConstraints> = {
+    min: element.min,
+    max: element.max,
+    step: element.step,
+    minLength: element.minLength,
+    maxLength: element.maxLength,
+    pattern: element.pattern,
+    options: element.options,
+    autocomplete: element.autocomplete,
+    name: element.fieldName,
+    label: element.label ?? element.name,
+    placeholder: element.placeholder,
+  };
+  for (const [key, value] of Object.entries(optional) as [keyof FieldConstraints, unknown][]) {
+    if (value !== undefined && value !== '') (constraints as unknown as Record<string, unknown>)[key] = value;
+  }
+  return constraints;
+}
 
-        const name = el.getAttribute('name') ?? undefined;
-        const elementId = el.id || undefined;
-        const cssHint = elementId
-          ? `${tag}#${elementId}`
-          : name
-            ? `${tag}[name="${name}"]`
-            : el.classList.length > 0
-              ? `${tag}.${Array.from(el.classList).slice(0, 2).join('.')}`
-              : tag;
-
-        const href = tag === 'a' ? (el as HTMLAnchorElement).href : undefined;
-        const key = [type, text, href ?? '', routerLink ?? '', cssHint].join('|');
-        if (seen.has(key)) return;
-        seen.add(key);
-
-        results.push({
-          type,
-          text,
-          ...(href ? { href } : {}),
-          ...(routerLink ? { routerLink } : {}),
-          tagName: tag,
-          ...(inputType ? { inputType } : {}),
-          ...(name ? { name } : {}),
-          ...(elementId ? { elementId } : {}),
-          selector: cssHint,
-          index,
-          visible,
-          disabled,
-          isSubmit,
-          inSearchForm,
-        });
-      });
-      return results;
-    },
-    { selector: ACTION_SELECTOR, limit: max },
-  );
+/**
+ * Stable action id: same state, same kind of action on the same element
+ * (role + accessible name + target) ⇒ same id, run after run.
+ */
+export function actionId(
+  stateId: string,
+  type: ActionType,
+  role: string,
+  name: string,
+  href: string | undefined,
+  nth: number | undefined,
+): string {
+  const key = [stateId, type, role, name.toLowerCase(), href ?? '', nth ?? 0].join('␟');
+  return `a-${createHash('sha1').update(key).digest('hex').slice(0, 10)}`;
 }
