@@ -1,0 +1,52 @@
+# Imposed flow on the mono-repo-mosquee Angular admin: create a homework
+# through the 2-step "Nouveau devoir" dialog.
+#
+# WARNING: this flow creates real data ("allow: MUTATION"). Run it only on a
+# local or test database, never in production.
+#
+# Credentials come from environment variables, never from this file:
+#   QA_USERNAME=admin@example.com QA_PASSWORD='...' npm run qa -- scenarios/mosquee-devoir.yaml
+# Other environment: --base-url https://my-test-env.example.com (or QA_BASE_URL).
+mission:
+  name: mosquee-creer-devoir
+  description: Create a homework through the 2-step dialog of the admin
+
+target:
+  baseUrl: http://localhost:4200
+  startAt: /app/admin/dashboard
+
+auth:
+  type: form
+  loginUrl: /login
+  usernameSelector: input[formcontrolname="identifiant"]
+  passwordSelector: input[type="password"]
+  submitSelector: button[type="submit"]
+  successUrlContains: /app/admin/dashboard
+
+exploration:
+  # true: explore the whole application (read-only) after the flow.
+  autonomous: false
+  actionTimeoutMs: 10000
+  settleTimeMs: 600
+
+flows:
+  - name: creer-un-devoir
+    description: Nouveau devoir → infos de base → contenu → enregistrer
+    startAt: /app/admin/devoirs
+    steps:
+      # "Nouveau" is a mutation keyword: the button only opens the dialog, but the policy cannot know it.
+      - click: { role: button, name: Nouveau devoir }
+        allow: MUTATION
+      - expect: { visible: { role: heading, name: Nouveau devoir } }
+      # Step 1 — Infos de base
+      - fill: { label: Titre, value: Devoir QA-CRAWLER }
+      # Must be an existing class of the database.
+      - select: { label: Classe, option: M1 Dimanche }
+      - click: { role: button, name: Suivant }
+      # Step 2 — Contenu
+      - fill: { label: Description, value: Lire la sourate Al-Fatiha à voix haute. }
+      - screenshot: etape-2
+      - click: { role: button, name: Enregistrer }
+        allow: MUTATION
+      - expect: { text: Devoir enregistré }
+      - screenshot: liste
