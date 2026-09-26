@@ -17,7 +17,8 @@ export class ConfigError extends Error {
 /** Values that take precedence over the YAML file (CLI flags, environment). */
 export interface ConfigOverrides {
   baseUrl?: string;
-  maxPages?: number;
+  maxStates?: number;
+  maxActions?: number;
   headless?: boolean;
   reportsDir?: string;
   screenshotsDir?: string;
@@ -67,7 +68,9 @@ export function parseConfig(
     throw new ConfigError(`Scenario ${source} must be a YAML mapping (key: value)`);
   }
 
-  const withOverrides = applyOverrides(raw as Record<string, unknown>, overrides, env);
+  const migrationWarnings: string[] = [];
+  const migrated = migrateLegacyKeys(raw as Record<string, unknown>, migrationWarnings);
+  const withOverrides = applyOverrides(migrated, overrides, env);
 
   let config: ScenarioConfig;
   try {
@@ -79,7 +82,55 @@ export function parseConfig(
     throw error;
   }
 
-  return finalize(config);
+  const finalized = finalize(config);
+  return { config: finalized.config, warnings: [...migrationWarnings, ...finalized.warnings] };
+}
+
+/**
+ * Scenarios written for the first (URL crawler) version keep working: their
+ * keys are mapped to the mission format, with a warning.
+ */
+function migrateLegacyKeys(raw: Record<string, unknown>, warnings: string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...raw };
+  const asObject = (value: unknown): Record<string, unknown> | undefined =>
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? { ...(value as Record<string, unknown>) }
+      : undefined;
+
+  if ('name' in result || 'description' in result) {
+    const mission = asObject(result.mission) ?? {};
+    if ('name' in result) mission.name ??= result.name;
+    if ('description' in result) mission.description ??= result.description;
+    result.mission = mission;
+    delete result.name;
+    delete result.description;
+    warnings.push('"name"/"description" are deprecated: use mission.name / mission.description.');
+  }
+
+  const exploration = asObject(result.exploration);
+  if (exploration) {
+    const renamed = new Map([
+      ['maxPages', 'maxStates'],
+      ['maxUrlsPerRoute', 'maxStatesPerRoute'],
+    ]);
+    const removed = new Set(['clickSafeActions', 'followRouterLinks', 'maxActionsPerPage']);
+    const migrated: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(exploration)) {
+      const newKey = renamed.get(key);
+      if (newKey !== undefined) {
+        warnings.push(`exploration.${key} is deprecated: use exploration.${newKey}.`);
+        if (!(newKey in exploration)) migrated[newKey] = value;
+      } else if (removed.has(key)) {
+        warnings.push(
+          `exploration.${key} is obsolete and ignored: the flow explorer always discovers links, routerLinks and buttons (see goals.* and safety.allow).`,
+        );
+      } else {
+        migrated[key] = value;
+      }
+    }
+    result.exploration = migrated;
+  }
+  return result;
 }
 
 function applyOverrides(
@@ -98,7 +149,8 @@ function applyOverrides(
 
   const baseUrl = overrides.baseUrl ?? nonBlank(env[BASE_URL_ENV]);
   if (baseUrl !== undefined) section('target').baseUrl = baseUrl;
-  if (overrides.maxPages !== undefined) section('exploration').maxPages = overrides.maxPages;
+  if (overrides.maxStates !== undefined) section('exploration').maxStates = overrides.maxStates;
+  if (overrides.maxActions !== undefined) section('exploration').maxActions = overrides.maxActions;
   if (overrides.headless !== undefined) section('browser').headless = overrides.headless;
   if (overrides.reportsDir !== undefined) section('output').reportsDir = overrides.reportsDir;
   if (overrides.screenshotsDir !== undefined) section('output').screenshotsDir = overrides.screenshotsDir;

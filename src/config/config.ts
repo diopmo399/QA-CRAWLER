@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import { ACTION_CLASSIFICATIONS } from '../model/discovered-action.js';
+import { ACTION_CLASSIFICATIONS, RISK_KINDS } from '../model/discovered-action.js';
 import { SEVERITIES } from '../model/issue.js';
 
 /**
- * Scenario configuration. Every behaviour of the crawler is driven from here;
- * all sections except `target.baseUrl` have defaults so a minimal scenario is
- * just a name and a URL.
+ * Mission configuration. The YAML describes *what to explore and within which
+ * limits* — never the list of buttons to click: the explorer discovers the
+ * screens and transitions by itself. Every section except `target.baseUrl`
+ * has defaults, so a minimal mission is just a URL.
  */
 
 const nonEmpty = z.string().trim().min(1);
@@ -35,7 +36,7 @@ const queryParamsSchema = z
      * - pattern: keep query params, but group URLs by param *names* for the per-route budget
      *   (?page=1, ?page=2 … count as the same route).
      * - ignore: drop every query param (each path is visited once).
-     * - keep: treat every distinct query string as a new page (bounded only by maxPages).
+     * - keep: treat every distinct query string as a new page (bounded only by maxStates).
      */
     mode: z.enum(['pattern', 'ignore', 'keep']).default('pattern'),
     /** Params always removed before comparing URLs (tracking, cache busters). `*` wildcard allowed. */
@@ -45,25 +46,54 @@ const queryParamsSchema = z
 
 const explorationSchema = z
   .object({
-    maxPages: z.number().int().positive().default(50),
-    maxDepth: z.number().int().min(0).default(5),
+    /** Distinct functional states (screens, steps, tabs) to discover at most. */
+    maxStates: z.number().int().positive().default(100),
+    /** Actions executed at most (clicks, navigations, fills). */
+    maxActions: z.number().int().positive().default(500),
+    /** Transitions away from the start state at most. */
+    maxDepth: z.number().int().min(0).default(10),
+    maxDurationMinutes: z.number().positive().default(15),
+    /** Timeout of a single action (locating + executing the element). */
+    actionTimeoutMs: z.number().int().positive().default(10_000),
     navigationTimeoutMs: z.number().int().positive().default(15_000),
     /** Playwright load state awaited after each navigation. */
     waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle', 'commit']).default('load'),
-    /** Extra wait after load so SPAs (Angular…) can render and fire their API calls. */
-    settleTimeMs: z.number().int().min(0).default(500),
-    /** Max concrete URLs visited per normalized route (/users/:id → only N users). */
-    maxUrlsPerRoute: z.number().int().positive().default(2),
+    /** Extra wait after each action so SPAs (Angular…) can render and fire their API calls. */
+    settleTimeMs: z.number().int().min(0).default(400),
+    /** Distinct states explored per route pattern (/users/:id → only N users). */
+    maxStatesPerRoute: z.number().int().positive().default(3),
     queryParams: queryParamsSchema.default({}),
-    /** Follow Angular [routerLink] attributes found on non-anchor elements. */
-    followRouterLinks: z.boolean().default(true),
-    /** Let the decision engine click SAFE buttons to discover SPA routes. Off by default. */
-    clickSafeActions: z.boolean().default(false),
-    maxActionsPerPage: z.number().int().min(0).default(5),
-    /** Cap on actions recorded per page in the report. */
+    /** Cap on actions recorded per state. */
     maxRecordedActions: z.number().int().positive().default(200),
   })
   .strict();
+
+const goalsSchema = z
+  .object({
+    /** Follow links and routerLinks. */
+    discoverNavigation: z.boolean().default(true),
+    /** Fill fields with test data (never sensitive ones) to explore forms and wizard steps. */
+    discoverForms: z.boolean().default(true),
+    /** Click in-page controls (tabs, menus, details, toggles, wizard steps). */
+    discoverFlows: z.boolean().default(true),
+    /** Report HTTP, JavaScript and navigation anomalies. */
+    detectErrors: z.boolean().default(true),
+  })
+  .strict();
+
+/** Categories of SAFE actions a mission can allow. */
+export const SAFE_ACTION_GROUPS = [
+  'navigation',
+  'tabs',
+  'menus',
+  'details',
+  'pagination',
+  'search',
+  'filter',
+  'forms',
+  'other',
+] as const;
+export type SafeActionGroup = (typeof SAFE_ACTION_GROUPS)[number];
 
 const checksSchema = z
   .object({
@@ -100,6 +130,25 @@ const safetySchema = z
     ignoredPaths: z.array(nonEmpty).default(['/logout', '/signout', '/sign-out', '/deconnexion']),
     /** Action classes the crawler may execute automatically. */
     allowedActionClasses: z.array(z.enum(ACTION_CLASSIFICATIONS)).default(['SAFE']),
+    /** Kinds of SAFE actions the mission may execute. Default: all of them. */
+    allow: z.array(z.enum(SAFE_ACTION_GROUPS)).default([...SAFE_ACTION_GROUPS]),
+    /**
+     * Risks that always block an action, whatever its class. `sensitive-data`
+     * (passwords, card numbers, secrets) is blocked even if omitted here.
+     */
+    block: z
+      .array(z.enum(RISK_KINDS))
+      .default([
+        'delete',
+        'payment',
+        'send',
+        'logout',
+        'irreversible',
+        'sensitive-data',
+        'external-navigation',
+        'form-submit',
+        'download',
+      ]),
     /** Extra keywords (any language) added to the built-in classification rules. */
     keywords: z
       .object({
@@ -142,6 +191,17 @@ const outputSchema = z
     screenshotsDir: nonEmpty.default('screenshots'),
     json: z.boolean().default(true),
     html: z.boolean().default(true),
+    /** reports/flow-graph.html */
+    flowGraphHtml: z.boolean().default(true),
+  })
+  .strict();
+
+const memorySchema = z
+  .object({
+    /** Where the flow graph is persisted. Default: <reportsDir>/flow-graph.json. */
+    file: nonEmpty.optional(),
+    /** Start from the graph of a previous run: actions already tried are not tried again. */
+    resume: z.boolean().default(false),
   })
   .strict();
 
@@ -154,8 +214,13 @@ const reportSchema = z
 
 export const scenarioSchema = z
   .object({
-    name: nonEmpty.default('qa-crawl'),
-    description: z.string().optional(),
+    mission: z
+      .object({
+        name: nonEmpty.default('explore-application'),
+        description: z.string().optional(),
+      })
+      .strict()
+      .default({}),
     target: z
       .object({
         baseUrl: z
@@ -167,11 +232,13 @@ export const scenarioSchema = z
       .strict(),
     browser: browserSchema.default({}),
     exploration: explorationSchema.default({}),
+    goals: goalsSchema.default({}),
     checks: checksSchema.default({}),
     http: httpSchema.default({}),
     safety: safetySchema.default({}),
     auth: authSchema.default({ type: 'none' }),
     output: outputSchema.default({}),
+    memory: memorySchema.default({}),
     report: reportSchema.default({}),
   })
   .strict();

@@ -16,7 +16,7 @@ export type SkipReason =
 export type NavigationDecision = { allowed: true } | { allowed: false; reason: SkipReason; detail: string };
 
 /** File types that are downloads/assets rather than pages to crawl. */
-const NON_HTML_EXTENSION =
+export const NON_HTML_EXTENSION =
   /\.(pdf|zip|gz|tgz|rar|7z|tar|exe|dmg|msi|apk|iso|csv|xlsx?|docx?|pptx?|odt|ods|png|jpe?g|gif|webp|svg|ico|bmp|tiff?|mp[34]|m4a|wav|ogg|webm|mov|avi|woff2?|ttf|eot|css|js|mjs|map|json|xml|txt)$/i;
 
 /**
