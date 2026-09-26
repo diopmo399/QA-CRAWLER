@@ -1,69 +1,70 @@
-# QA Crawler — Autonomous QA Flow Explorer
+# QA Crawler — explorateur autonome de flows QA
 
-Deterministic, container-ready explorer that tests a web application **by using it**.
+Explorateur déterministe, prêt pour les conteneurs, qui teste une application web **en l'utilisant**.
 
-Give it a URL and a mission in YAML. On each screen it runs the same loop:
+On lui donne une URL et une mission en YAML. Sur chaque écran, il exécute la même boucle :
 
-1. observes the screen and discovers every possible user action;
-2. decides what to try, then has the safety policy validate that choice;
-3. executes the action with Playwright and observes the new screen;
-4. records the transition in a **flow graph** of the application;
-5. backtracks to explore the other branches, until the mission's limits are reached.
+1. il observe l'écran et découvre toutes les actions possibles de l'utilisateur ;
+2. il décide quoi essayer, puis fait valider ce choix par la politique de sécurité ;
+3. il exécute l'action avec Playwright et observe le nouvel écran ;
+4. il enregistre la transition dans un **graphe des flows** de l'application ;
+5. il revient en arrière pour explorer les autres branches, jusqu'aux limites de la mission.
 
-Along the way it reports broken pages, failing API calls and JavaScript errors. Each anomaly records the screen, the action and the path that reproduce it.
+En chemin, il signale les pages cassées, les appels d'API en échec et les erreurs JavaScript. Chaque anomalie indique l'écran, l'action et le chemin qui permettent de la reproduire.
 
-The YAML never lists the buttons to click. The explorer finds the screens, tabs, dialogs and wizard steps by itself.
+Le YAML ne liste jamais les boutons à cliquer : l'explorateur trouve lui-même les écrans, les onglets, les fenêtres et les étapes des assistants. Quand un test doit suivre un chemin précis, on peut en plus lui **imposer des flows** (voir [Créer un flow de test imposé](#créer-un-flow-de-test-imposé)).
 
-No AI, no LLM, no API token, no GPU: same application, same exploration.
+Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 
-- **Stack:** Node.js 20+ · TypeScript (strict) · Playwright 1.56 · Chromium headless · YAML · Docker
-- **Designed for:** CI/CD pipelines, Kubernetes / OpenShift (ARO), Angular and other single-page applications
+- **Technologies :** Node.js 20+ · TypeScript (strict) · Playwright 1.56 · Chromium sans interface · YAML · Docker
+- **Conçu pour :** pipelines CI/CD, Kubernetes / OpenShift (ARO), Angular et autres applications monopages (SPA)
 
 ---
 
-## Contents
+## Sommaire
 
-- [Quick start](#quick-start)
-- [How it works](#how-it-works)
+- [Démarrage rapide](#démarrage-rapide)
+- [Fonctionnement](#fonctionnement)
 - [Mission (YAML)](#mission-yaml)
-- [Imposed flows](#imposed-flows)
-- [Authentication](#authentication)
-- [Browser interactions](#browser-interactions)
-- [Safety](#safety)
-- [State detection and loop protection](#state-detection-and-loop-protection)
-- [Forms](#forms)
-- [What gets detected](#what-gets-detected)
-- [Reports](#reports)
-- [Command line](#command-line)
+- [Créer un flow de test imposé](#créer-un-flow-de-test-imposé)
+- [Authentification](#authentification)
+- [Interactions navigateur](#interactions-navigateur)
+- [Sécurité](#sécurité)
+- [Détection des états et protection contre les boucles](#détection-des-états-et-protection-contre-les-boucles)
+- [Formulaires](#formulaires)
+- [Ce qui est détecté](#ce-qui-est-détecté)
+- [Rapports](#rapports)
+- [Ligne de commande](#ligne-de-commande)
 - [Docker](#docker)
 - [Kubernetes / OpenShift](#kubernetes--openshift)
 - [CI/CD](#cicd)
 - [Architecture](#architecture)
-- [Development](#development)
-- [Limitations of this version](#limitations-of-this-version)
-- [Roadmap](#roadmap)
+- [Développement](#développement)
+- [Limites de cette version](#limites-de-cette-version)
+- [Feuille de route](#feuille-de-route)
 
 ---
 
-## Quick start
+## Démarrage rapide
 
 ```bash
 npm install
-npx playwright install chromium            # once: downloads the matching Chromium
+npx playwright install chromium            # une fois : télécharge le Chromium correspondant
 
 npm run qa -- scenarios/smoke.yaml --base-url http://localhost:4200
 ```
 
-Try it on the bundled demo applications:
+Essai sur les applications de démo fournies :
 
 ```bash
-npm run demo:server                        # terminal 1: back-office on :4174, trap site on :4173
-npm run qa -- scenarios/demo.yaml          # terminal 2: discovers the back-office flows
-npm run qa -- scenarios/demo-traps.yaml    #             bug traps (404, 500, JS errors, loops…)
+npm run demo:server                        # terminal 1 : back-office sur :4174, site piège sur :4173
+npm run qa -- scenarios/demo.yaml          # terminal 2 : découvre les flows du back-office
+npm run qa -- scenarios/demo-traps.yaml    #              pièges (404, 500, erreurs JS, boucles…)
+QA_DEMO_PASSWORD=demo npm run qa -- scenarios/demo-flows.yaml   # flows imposés
 open reports/index.html reports/flow-graph.html
 ```
 
-Example output on the demo back-office. It found the structure by itself, including the three steps of a wizard that never changes URL:
+Exemple de résultat sur le back-office de démo. L'explorateur a trouvé seul la structure, y compris les trois étapes d'un assistant qui ne change jamais d'URL :
 
 ```
 Tableau de bord
@@ -72,51 +73,51 @@ Tableau de bord
 │       └── Utilisateur 1 › Historique  ⟵ click "Historique"
 ├── Dossiers  ⟵ navigate "Dossiers"
 │   └── Nouveau dossier › Étape 1 — Informations  ⟵ navigate "Nouveau dossier"
-│       └── Nouveau dossier › Étape 2 — Détails  ⟵ click "Suivant"          (same URL)
-│           └── Nouveau dossier › Étape 3 — Confirmation  ⟵ click "Suivant" (same URL)
+│       └── Nouveau dossier › Étape 2 — Détails  ⟵ click "Suivant"          (même URL)
+│           └── Nouveau dossier › Étape 3 — Confirmation  ⟵ click "Suivant" (même URL)
 ├── Paramètres › Général  ⟵ navigate "Paramètres"
-│   ├── Paramètres › Notifications  ⟵ click "Notifications"                 (tab)
-│   └── Paramètres › Sécurité  ⟵ click "Sécurité"                           (tab)
+│   ├── Paramètres › Notifications  ⟵ click "Notifications"                 (onglet)
+│   └── Paramètres › Sécurité  ⟵ click "Sécurité"                           (onglet)
 └── Administration  ⟵ navigate "Administration"
     └── Journal  ⟵ navigate "Journal"
 ```
 
-## How it works
+## Fonctionnement
 
-The fundamental loop:
+La boucle fondamentale :
 
 ```
-OBSERVE → DISCOVER ACTIONS → DECIDE → SAFETY CHECK → EXECUTE WITH PLAYWRIGHT
-   ↑                                                              ↓
-REPEAT ← STORE TRANSITION ← ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ OBSERVE NEW STATE
+OBSERVER → DÉCOUVRIR LES ACTIONS → DÉCIDER → CONTRÔLE DE SÉCURITÉ → EXÉCUTER AVEC PLAYWRIGHT
+   ↑                                                                          ↓
+RECOMMENCER ← ENREGISTRER LA TRANSITION ← ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ OBSERVER LE NOUVEL ÉTAT
 ```
 
-Each question is answered by exactly one component:
+Chaque question a exactement un composant pour y répondre :
 
-| Question               | Component                                    | Notes                                                                                                                                                                             |
-| ---------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "Where am I?"          | `UIObserver` + `StateDetector`               | DOM, ARIA roles and accessible names, headings, dialogs, selected tabs, forms. Produces a `PageContext` and a stable `stateId`                                                    |
-| "What can I do?"       | `ActionDiscovery`                            | Links, buttons, `[role=button]`, `[routerLink]`, tabs, menus, inputs, textareas, selects, checkboxes, radios. Each action gets a serializable `LocatorDescriptor` and a stable id |
-| "What should I try?"   | `DecisionEngine` → `RuleBasedDecisionEngine` | Returns `EXECUTE`, `BACKTRACK` or `STOP`                                                                                                                                          |
-| "Is it allowed?"       | `SafetyPolicy.evaluate()`                    | Runs **after** the decision and **before** Playwright, whatever the engine                                                                                                        |
-| "Execute it."          | `PlaywrightActionExecutor`                   | Translates the descriptor into `getByRole(...).click()`, `fill`, `selectOption`, `setChecked`. It makes no decisions                                                              |
-| "What went wrong?"     | Network, console and page-error observers    | Every anomaly is tagged with `stateId`, `actionId` and the flow path                                                                                                              |
-| "What have I learned?" | `FlowGraph` + `FlowMemory`                   | States, transitions, what was tried. Persisted in `reports/flow-graph.json`                                                                                                       |
+| Question                   | Composant                                    | Remarques                                                                                                                                                                       |
+| -------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| « Où suis-je ? »           | `UIObserver` + `StateDetector`               | DOM, rôles ARIA et noms accessibles, titres, fenêtres, onglets sélectionnés, formulaires. Produit un `PageContext` et un `stateId` stable                                       |
+| « Que puis-je faire ? »    | `ActionDiscovery`                            | Liens, boutons, `[role=button]`, `[routerLink]`, onglets, menus, champs, zones de texte, listes, cases à cocher, boutons radio. Chaque action a un `LocatorDescriptor` et un id |
+| « Que dois-je essayer ? »  | `DecisionEngine` → `RuleBasedDecisionEngine` | Renvoie `EXECUTE`, `BACKTRACK` ou `STOP`                                                                                                                                        |
+| « Est-ce autorisé ? »      | `SafetyPolicy.evaluate()`                    | S'exécute **après** la décision et **avant** Playwright, quel que soit le moteur                                                                                                |
+| « Exécute-le. »            | `PlaywrightActionExecutor`                   | Traduit le descripteur en `getByRole(...).click()`, `fill`, `selectOption`, `setChecked`. Il ne prend aucune décision                                                           |
+| « Qu'est-ce qui a raté ? » | Observateurs réseau, console et erreurs      | Chaque anomalie est rattachée au `stateId`, à l'`actionId` et au chemin du flow                                                                                                 |
+| « Qu'ai-je appris ? »      | `FlowGraph` + `FlowMemory`                   | États, transitions, ce qui a été essayé. Enregistré dans `reports/flow-graph.json`                                                                                              |
 
-`FlowExplorer` only sequences these components, keeps the navigation stack, backtracks and enforces the limits.
+`FlowExplorer` ne fait qu'enchaîner ces composants, gérer la pile de navigation, revenir en arrière et faire respecter les limites.
 
-**Backtracking.** When a screen has nothing left to explore, the explorer returns to the previous state. It tries the cheapest method first, and checks each attempt against the expected `stateId`:
+**Retour en arrière.** Quand un écran n'a plus rien à explorer, l'explorateur revient à l'état précédent. Il essaie d'abord la méthode la moins coûteuse, et vérifie chaque tentative avec le `stateId` attendu :
 
-1. browser history (`goBack`);
-2. then the state's URL;
-3. then a **replay** of the recorded path from the start state. This is needed for states without their own URL: wizard steps, tabs, dialogs.
+1. l'historique du navigateur (`goBack`) ;
+2. puis l'URL de l'état ;
+3. puis la **rejouée** du chemin enregistré depuis l'état de départ. C'est nécessaire pour les états sans URL propre : étapes d'assistant, onglets, fenêtres.
 
-When the whole path is exhausted, it jumps to any known state that still has unexplored actions.
+Quand tout le chemin est épuisé, il saute vers n'importe quel état connu qui a encore des actions inexplorées.
 
 ## Mission (YAML)
 
-The YAML describes a **mission**: a goal and limits. Only `target.baseUrl` is required. To make the explorer follow precise steps as well, add [imposed flows](#imposed-flows).
-[`scenarios/example.yaml`](scenarios/example.yaml) documents every key with its default value.
+Le YAML décrit une **mission** : un objectif et des limites. Seul `target.baseUrl` est obligatoire. Pour faire suivre en plus des étapes précises, ajoute des [flows imposés](#créer-un-flow-de-test-imposé).
+[`scenarios/example.yaml`](scenarios/example.yaml) documente chaque clé avec sa valeur par défaut.
 
 ```yaml
 mission:
@@ -134,282 +135,386 @@ exploration:
   actionTimeoutMs: 10000
 
 goals:
-  discoverNavigation: true # follow links and routerLinks
-  discoverForms: true # fill forms with fake data before clicking their step buttons
-  discoverFlows: true # click tabs, menus, details, toggles, wizard steps
-  detectErrors: true # network / console / JavaScript observers
+  discoverNavigation: true # suivre les liens et les routerLinks
+  discoverForms: true # remplir les formulaires avec des données factices avant leurs boutons d'étape
+  discoverFlows: true # cliquer onglets, menus, détails, bascules, étapes d'assistant
+  detectErrors: true # observateurs réseau / console / JavaScript
 
 safety:
-  allow: [navigation, search, filter, pagination, tabs] # kinds of SAFE actions allowed
-  block: [delete, payment, external-navigation] # risks always refused
+  allow: [navigation, search, filter, pagination, tabs] # types d'actions SAFE autorisés
+  block: [delete, payment, external-navigation] # risques toujours refusés
 ```
 
-| Key                                                                            | Default                        | Role                                                                                                                                  |
+| Clé                                                                            | Défaut                         | Rôle                                                                                                                                  |
 | ------------------------------------------------------------------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `exploration.maxStates`                                                        | 100                            | Distinct functional states discovered                                                                                                 |
-| `exploration.maxActions`                                                       | 500                            | Actions executed                                                                                                                      |
-| `exploration.maxDepth`                                                         | 10                             | Transitions away from the start state                                                                                                 |
-| `exploration.maxDurationMinutes`                                               | 15                             | Wall-clock limit                                                                                                                      |
-| `exploration.actionTimeoutMs`                                                  | 10000                          | Locating and executing one action                                                                                                     |
-| `exploration.maxStatesPerRoute`                                                | 3                              | Samples per route pattern (`/users/:id`)                                                                                              |
-| `exploration.settleTimeMs`                                                     | 400                            | Wait after each action (SPA rendering, API calls)                                                                                     |
-| `exploration.queryParams.mode`                                                 | `pattern`                      | `?page=1..N` count as one route (`ignore` / `keep`)                                                                                   |
-| `goals.*`                                                                      | all `true`                     | What to explore (see above)                                                                                                           |
-| `safety.allowedActionClasses`                                                  | `[SAFE]`                       | Classes that may run: `SAFE`, `MUTATION`, `DANGEROUS`, `UNKNOWN`                                                                      |
-| `safety.allow`                                                                 | all kinds                      | `navigation`, `tabs`, `menus`, `details`, `pagination`, `search`, `filter`, `forms`, `other`                                          |
-| `safety.block`                                                                 | see below                      | `delete`, `payment`, `send`, `logout`, `irreversible`, `sensitive-data`, `external-navigation`, `form-submit`, `mutation`, `download` |
-| `safety.allowedHosts` / `ignoredPaths`                                         | host of `baseUrl` / `/logout`… | Where the explorer may go                                                                                                             |
-| `exploration.autonomous`                                                       | `true`                         | Explore autonomously after the flows; `false` runs only the flows                                                                     |
-| `flows`                                                                        | `[]`                           | [Imposed flows](#imposed-flows), run before the autonomous exploration                                                                |
-| `memory.resume`                                                                | `false`                        | Continue from the previous `flow-graph.json`, skipping actions already tried                                                          |
-| `checks.*`, `http.*`, `browser.*`, `auth`, `output.*`, `report.failOnSeverity` |                                | As in the example file                                                                                                                |
+| `exploration.maxStates`                                                        | 100                            | États fonctionnels distincts découverts                                                                                               |
+| `exploration.maxActions`                                                       | 500                            | Actions exécutées                                                                                                                     |
+| `exploration.maxDepth`                                                         | 10                             | Transitions depuis l'état de départ                                                                                                   |
+| `exploration.maxDurationMinutes`                                               | 15                             | Durée maximale                                                                                                                        |
+| `exploration.actionTimeoutMs`                                                  | 10000                          | Localiser et exécuter une action                                                                                                      |
+| `exploration.maxStatesPerRoute`                                                | 3                              | Échantillons par modèle de route (`/users/:id`)                                                                                       |
+| `exploration.settleTimeMs`                                                     | 400                            | Attente après chaque action (rendu SPA, appels d'API)                                                                                 |
+| `exploration.queryParams.mode`                                                 | `pattern`                      | `?page=1..N` comptent comme une seule route (`ignore` / `keep`)                                                                       |
+| `exploration.autonomous`                                                       | `true`                         | Explorer seul après les flows ; `false` n'exécute que les flows                                                                       |
+| `goals.*`                                                                      | tous à `true`                  | Ce qu'il faut explorer (voir ci-dessus)                                                                                               |
+| `safety.allowedActionClasses`                                                  | `[SAFE]`                       | Classes exécutables : `SAFE`, `MUTATION`, `DANGEROUS`, `UNKNOWN`                                                                      |
+| `safety.allow`                                                                 | tous les types                 | `navigation`, `tabs`, `menus`, `details`, `pagination`, `search`, `filter`, `forms`, `other`                                          |
+| `safety.block`                                                                 | voir ci-dessous                | `delete`, `payment`, `send`, `logout`, `irreversible`, `sensitive-data`, `external-navigation`, `form-submit`, `mutation`, `download` |
+| `safety.allowedHosts` / `ignoredPaths`                                         | hôte de `baseUrl` / `/logout`… | Où l'explorateur peut aller                                                                                                           |
+| `flows`                                                                        | `[]`                           | [Flows imposés](#créer-un-flow-de-test-imposé), exécutés avant l'exploration autonome                                                 |
+| `credentials`, `browserInteractions`                                           |                                | [Interactions navigateur](#interactions-navigateur) (fenêtre d'authentification native, dialogues, popups…)                           |
+| `memory.resume`                                                                | `false`                        | Reprendre depuis le `flow-graph.json` précédent, sans refaire les actions déjà essayées                                               |
+| `report.language`                                                              | `en`                           | Langue des rapports HTML : `en` ou `fr`                                                                                               |
+| `checks.*`, `http.*`, `browser.*`, `auth`, `output.*`, `report.failOnSeverity` |                                | Comme dans le fichier d'exemple                                                                                                       |
 
-Unknown keys are rejected, so a typo like `explorations:` fails instead of being ignored.
+Les clés inconnues sont refusées : une faute de frappe comme `explorations:` échoue au lieu d'être ignorée.
 
-Scenarios written for the first version (`name`, `maxPages`, `maxUrlsPerRoute`, `clickSafeActions`) still load, with a deprecation warning.
+Les scénarios écrits pour la première version (`name`, `maxPages`, `maxUrlsPerRoute`, `clickSafeActions`) se chargent encore, avec un avertissement.
 
-## Imposed flows
+## Créer un flow de test imposé
 
-The autonomous explorer decides by itself what to click. When a test must follow a precise path (log in, create a record through a wizard, check the confirmation), list the steps in `flows`. [`scenarios/demo-flows.yaml`](scenarios/demo-flows.yaml) is a complete example.
+Par défaut, l'explorateur choisit lui-même quoi cliquer. Un **flow imposé** lui fait suivre des étapes précises, dans l'ordre : se connecter, remplir un formulaire, vérifier le résultat. La politique de sécurité continue de s'appliquer à chaque étape.
+
+Exemples complets :
+
+- [`scenarios/demo-flows.yaml`](scenarios/demo-flows.yaml) : le back-office de démo (`npm run demo:server`) ;
+- [`scenarios/mosquee-flows.yaml`](scenarios/mosquee-flows.yaml) et [`scenarios/mosquee-devoir.yaml`](scenarios/mosquee-devoir.yaml) : une application Angular réelle.
+
+### 1. Squelette d'une mission avec flow
+
+Crée un nouveau fichier dans `scenarios/`, par exemple `scenarios/mon-flow.yaml`. Ne modifie pas `demo-flows.yaml` : c'est la démo.
 
 ```yaml
+mission:
+  name: mon-flow
+
+target:
+  baseUrl: http://localhost:4200
+  startAt: /app/admin/dashboard
+
+auth: # connexion faite une fois, avant les flows
+  type: form
+  loginUrl: /login
+  usernameSelector: input[formcontrolname="identifiant"]
+  passwordSelector: input[type="password"]
+  submitSelector: button[type="submit"]
+  successUrlContains: /app/
+
+exploration:
+  autonomous: false # false = seulement les flows ; true = explore ensuite toute l'application
+
+report:
+  language: fr # rapport HTML en français
+
 flows:
   - name: creer-un-devoir
-    description: Create a homework through the 2-step dialog
-    startAt: /app/admin/devoirs # page loaded before the first step (default: target.startAt)
-    thenExplore: false # true: explore the last screen (and pages below it) right after the flow
+    description: Nouveau devoir via le dialogue en 2 étapes
+    startAt: /app/admin/devoirs # page chargée avant la première étape
     steps:
       - click: { role: button, name: Nouveau devoir }
+        allow: MUTATION
       - fill: { label: Titre, value: Devoir QA }
-      - select: { label: Classe, option: N1 10-12 Dimanche }
+      - select: { label: Classe, option: M1 Dimanche }
       - click: { role: button, name: Suivant }
       - expect: { text: Étape 2 }
       - screenshot: etape-2
       - click: { role: button, name: Enregistrer }
-        allow: MUTATION # explicit permission, for this step only
-      - expect: { text: Devoir créé }
+        allow: MUTATION
+      - expect: { text: Devoir enregistré }
 ```
 
-**Steps.** Each step has exactly one action.
+Les identifiants viennent **toujours** de variables d'environnement, jamais du fichier :
 
-| Step         | Example                                            | What it does                                                                            |
-| ------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `goto`       | `goto: /dossiers`                                  | Loads a page (relative to `target.baseUrl`)                                             |
-| `click`      | `click: { role: button, name: Suivant }`           | Clicks the element                                                                      |
-| `fill`       | `fill: { label: Titre, value: Dossier QA }`        | Types a value; `value: { env: NAME }` reads it from an environment variable             |
-| `select`     | `select: { label: Catégorie, option: Subvention }` | Native `<select>`, or a custom one (Angular Material): opens it and clicks the option   |
-| `check`      | `check: { label: J'accepte les conditions }`       | Checks a checkbox (`uncheck` unchecks it)                                               |
-| `expect`     | `expect: { text: Étape 2, url: /create }`          | Waits until it holds: `text`, `url` (contains), `visible: <target>`, `hidden: <target>` |
-| `screenshot` | `screenshot: confirmation`                         | Named screenshot, linked in the report                                                  |
+```bash
+# macOS / Linux
+QA_USERNAME=admin@exemple.com QA_PASSWORD='mot-de-passe' npm run qa -- scenarios/mon-flow.yaml
 
-**Targets** use one strategy, as in Playwright: `role` (+ `name`), `label`, `text`, `testId` or `css`. Add `exact: true` for an exact match and `nth: 2` to pick the third match. Without `nth`, when several elements match, the one inside an open dialog wins (the page behind a modal cannot be clicked).
+# Windows PowerShell
+$env:QA_USERNAME="admin@exemple.com"; $env:QA_PASSWORD="mot-de-passe"; npm run qa -- scenarios/mon-flow.yaml
+```
 
-**Common options** on any step: `name` (label in reports), `allow`, `optional: true` (a failure only warns and the flow goes on), `timeoutMs`.
+Pour regarder le navigateur travailler, ajoute `--headed` (et `browser.slowMoMs: 500` dans le YAML pour ralentir).
 
-**Safety still applies.** The YAML chooses the element, but the `SafetyPolicy` classifies it exactly as during autonomous exploration and decides:
+### 2. Les étapes
 
-| Target                                                                 | Runs?                                                                   |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `SAFE` (navigation, tab, "Suivant", non-sensitive field…)              | yes                                                                     |
-| `MUTATION` (créer, enregistrer, submit…)                               | only with `allow: MUTATION` on the step                                 |
-| `UNKNOWN` (icon-only control)                                          | only with `allow: UNKNOWN` on the step                                  |
-| `DANGEROUS` (supprimer, payer, envoyer, déconnexion…)                  | **never**                                                               |
-| Password, OTP, secret field                                            | only with `value: { env: NAME }`; the value never appears in the output |
-| Payment field (card, CVV, IBAN)                                        | **never**                                                               |
-| Link or `goto` outside `allowedHosts`, to an ignored or dangerous path | **never**                                                               |
+Chaque étape contient **une seule** action.
 
-**Run order.**
+| Étape               | Exemple                                          | Effet                                                                                     |
+| ------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `goto`              | `goto: /dossiers`                                | Charge une page (relative à `target.baseUrl`)                                             |
+| `click`             | `click: { role: button, name: Suivant }`         | Clique l'élément                                                                          |
+| `fill`              | `fill: { label: Titre, value: Devoir QA }`       | Saisit une valeur ; `value: { env: NOM }` la lit dans une variable d'environnement        |
+| `select`            | `select: { label: Classe, option: M1 Dimanche }` | Liste native `<select>`, ou `mat-select` Angular : ouvre la liste puis clique l'option    |
+| `check` / `uncheck` | `check: { label: J'accepte les conditions }`     | Coche / décoche une case                                                                  |
+| `expect`            | `expect: { text: Étape 2 }`                      | Attend que ce soit vrai : `text`, `url` (contient), `visible: <cible>`, `hidden: <cible>` |
+| `screenshot`        | `screenshot: confirmation`                       | Capture nommée, avec un lien dans le rapport                                              |
 
-1. Log in (`auth`) and load `target.startAt`.
-2. Run each flow in order, each from a freshly loaded `startAt`. A failed or blocked step stops its flow; the next steps are `SKIPPED`.
-3. With `thenExplore: true`, explore the flow's last screen right after the flow, even when `exploration.autonomous` is `false`. This exploration stays in that screen's section: in-page controls (tabs, buttons, details) and links to pages below its path (`/admin/fideles` → `/admin/fideles/12`). The global menu and other pages are left to step 4.
-4. With `exploration.autonomous: true` (default), explore the application from `target.startAt`.
+Options possibles sur **chaque** étape :
 
-**Results.**
+| Option           | Effet                                                                |
+| ---------------- | -------------------------------------------------------------------- |
+| `name`           | Libellé affiché dans le rapport à la place de la description auto    |
+| `allow`          | `MUTATION` et/ou `UNKNOWN` : autorisation pour cette étape seulement |
+| `optional: true` | Un échec donne seulement un avertissement, le flow continue          |
+| `timeoutMs`      | Délai maximum de l'étape (défaut : `exploration.actionTimeoutMs`)    |
 
-- Each flow is `PASSED`, `FAILED`, `BLOCKED` or `SKIPPED`; each step records its status, classification, reason, state and duration.
-- A failed or blocked step raises a `FLOW` issue (`ERROR`, or `WARNING` for an optional step) with a screenshot, so the run fails in CI like any other error.
-- Flow transitions are stored in the flow graph, tagged with the flow name.
-- `index.html` has an _Imposed flows_ section; `result.json` has a `flows` array.
+Options d'un flow :
 
-## Authentication
+| Option        | Effet                                                                                               |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| `name`        | Nom unique du flow                                                                                  |
+| `description` | Texte affiché dans le rapport                                                                       |
+| `startAt`     | Page chargée avant la première étape (défaut : `target.startAt`)                                    |
+| `thenExplore` | `true` : explore aussi le dernier écran du flow (onglets, boutons, sous-pages), sans suivre le menu |
 
-Credentials always come from environment variables (`QA_USERNAME` / `QA_PASSWORD` by default, see `usernameEnv` / `passwordEnv`), never from the mission file. They are never written to logs or reports.
+### 3. Désigner un élément (cible)
 
-**Login page** (a form in the page, including SSO pages such as a SiteMinder `login.fcc` form):
+Une seule stratégie par cible, comme dans Playwright :
+
+| Stratégie       | Exemple                                           | Quand l'utiliser                                                       |
+| --------------- | ------------------------------------------------- | ---------------------------------------------------------------------- |
+| `role` + `name` | `{ role: button, name: Enregistrer }`             | Boutons, liens (`role: link`), onglets (`role: tab`) : le plus robuste |
+| `label`         | `{ label: Titre }`                                | Champs avec un `<label>` relié ou un `mat-label`                       |
+| `text`          | `{ text: Voir le détail }`                        | Texte visible                                                          |
+| `testId`        | `{ testId: btn-save }`                            | Attribut `data-testid`                                                 |
+| `css`           | `{ css: 'input[formcontrolname="identifiant"]' }` | Dernier recours                                                        |
+
+- `exact: true` : correspondance exacte du texte (sinon, « contient ») ;
+- `nth: 2` : prend le 3ᵉ élément trouvé (le décompte commence à 0) ;
+- sans `nth`, si plusieurs éléments correspondent, celui qui est **dans la fenêtre (modale) ouverte** est choisi.
+
+Pour trouver le bon libellé : clic droit → **Inspecter** sur l'élément dans ton navigateur, ou lance le test avec `--headed`.
+
+### 4. La sécurité s'applique toujours
+
+Le YAML choisit l'élément, mais la `SafetyPolicy` le classe exactement comme pendant l'exploration automatique, et décide.
+
+| Élément ciblé                                                       | Exécuté ?                                            |
+| ------------------------------------------------------------------- | ---------------------------------------------------- |
+| SÛR : navigation, onglet, « Suivant », champ normal                 | oui                                                  |
+| MODIFICATION : créer, enregistrer, nouveau, envoi de formulaire     | seulement avec `allow: MUTATION` sur l'étape         |
+| Icône sans texte                                                    | seulement avec `allow: UNKNOWN` sur l'étape          |
+| DANGEREUX : supprimer, payer, envoyer, déconnexion                  | **jamais**                                           |
+| Mot de passe, code, secret                                          | seulement avec `value: { env: NOM }`, jamais affiché |
+| Carte bancaire, CVV, IBAN                                           | **jamais**                                           |
+| Lien ou `goto` hors des hôtes autorisés, chemin ignoré ou dangereux | **jamais**                                           |
+
+Un flow qui utilise `allow: MUTATION` modifie de vraies données : lance-le seulement sur une base locale ou de test.
+
+### 5. Pièges fréquents
+
+| Problème                                                               | Solution                                                                                                               |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `élément introuvable` sur un champ dont le `<label>` n'est pas relié   | Utilise `css: 'input[formcontrolname="…"]'`                                                                            |
+| « Nouveau devoir » est BLOQUÉ                                          | « Nouveau » est un mot de modification : ajoute `allow: MUTATION`                                                      |
+| « Se connecter » est BLOQUÉ                                            | C'est un envoi de formulaire : ajoute `allow: MUTATION`, ou utilise le bloc `auth`                                     |
+| Deux champs « Classe » (filtre de la page et fenêtre)                  | Rien à faire : celui de la fenêtre ouverte est choisi                                                                  |
+| Tous les flows échouent, les écrans s'appellent « Opps!!! » ou « 404 » | Mauvaise application : vérifie `baseUrl` et que `QA_BASE_URL` n'est pas défini                                         |
+| Ça explore alors que `autonomous: false`                               | `thenExplore: true` explore quand même le dernier écran du flow : retire-le                                            |
+| La fenêtre grise « Connexion » du navigateur apparaît                  | Ce n'est pas un formulaire : utilise `auth: { type: http, origin: https://… }` ([Authentification](#authentification)) |
+| `expect` échoue alors que le texte est visible                         | Le texte doit être exact au caractère près (accents, tirets « — ») : essaie une partie plus courte                     |
+
+### 6. Ordre d'exécution
+
+1. Connexion (`auth`), puis chargement de `target.startAt`.
+2. Chaque flow, dans l'ordre, depuis son propre `startAt`. Une étape échouée ou bloquée arrête ce flow ; ses étapes suivantes sont IGNORÉES. Les flows suivants s'exécutent quand même.
+3. Avec `thenExplore: true` : exploration du dernier écran du flow, même si `exploration.autonomous` vaut `false`. Elle reste dans la section de cet écran : contrôles de la page et pages sous son chemin (`/admin/fideles` → `/admin/fideles/12`), jamais le menu général.
+4. Avec `exploration.autonomous: true` (défaut) : exploration de toute l'application depuis `target.startAt`.
+
+### 7. Résultats
+
+- `reports/index.html`, section **Flows imposés** : chaque flow est RÉUSSI, ÉCHOUÉ, BLOQUÉ ou IGNORÉ ; chaque étape a son statut, sa classe, sa raison, l'état atteint, sa durée et sa capture.
+- Une étape échouée ou bloquée crée une anomalie `FLOW` (ERREUR, ou AVERTISSEMENT pour une étape `optional`) avec une capture : le run échoue avec le code 1, pratique en CI.
+- Les transitions des flows sont enregistrées dans le graphe, avec le nom du flow.
+- `reports/result.json` contient un tableau `flows` (en anglais, pour les outils).
+- Le terminal affiche chaque étape en direct : ✓ réussie, ✗ échouée, ⛔ bloquée, - ignorée.
+
+## Authentification
+
+Les identifiants viennent toujours de variables d'environnement (`QA_USERNAME` / `QA_PASSWORD` par défaut, voir `usernameEnv` / `passwordEnv`), jamais du fichier de mission. Ils ne sont jamais écrits dans les logs ni dans les rapports.
+
+**Page de connexion** (un formulaire dans la page, y compris une page SSO comme un formulaire SiteMinder `login.fcc`) :
 
 ```yaml
 auth:
   type: form
-  loginUrl: /login # or the app URL that redirects to the SSO page
+  loginUrl: /login # ou l'URL de l'application qui redirige vers la page SSO
   usernameSelector: input[name="USER"]
   passwordSelector: input[type="password"]
   submitSelector: button[type="submit"]
-  successUrlContains: /app/ # back on the application = logged in
+  successUrlContains: /app/ # retour sur l'application = connecté
 ```
 
-**Browser sign-in dialog** (the grey "Sign in" box of the browser: HTTP Basic, e.g. SiteMinder Basic scheme; NTLM depending on the server):
+**Fenêtre de connexion du navigateur** (la boîte grise « Connexion » : HTTP Basic, par exemple le schéma Basic de SiteMinder ; NTLM selon le serveur) :
 
 ```yaml
 auth:
   type: http
-  origin: https://sso.example.com # only send the credentials to this server (recommended)
-  checkUrl: / # page loaded to check the login (default: target.startAt)
+  origin: https://sso.example.com # n'envoyer les identifiants qu'à ce serveur (recommandé)
+  checkUrl: / # page chargée pour vérifier la connexion (défaut : target.startAt)
 ```
 
-Nothing is typed in a page: the dialog is not in the DOM. It is detected and answered through the browser protocol by the `HttpAuthHandler` (see [Browser interactions](#browser-interactions)); `auth.type: http` is a shortcut for a credential profile named `auth`. Without `origin`, the credentials only go to the target and its allowed hosts. `AUTH_REQUIRED`, `AUTH_FAILED` or `CREDENTIALS_NOT_ALLOWED` on `checkUrl` stops the run with a clear message.
+Rien n'est tapé dans une page : cette fenêtre ne fait pas partie du DOM. Elle est détectée et traitée par le protocole du navigateur, via le `HttpAuthHandler` (voir [Interactions navigateur](#interactions-navigateur)). `auth.type: http` est un raccourci vers un profil d'identifiants nommé `auth`. Sans `origin`, les identifiants ne partent que vers la cible et ses hôtes autorisés. `AUTH_REQUIRED`, `AUTH_FAILED` ou `CREDENTIALS_NOT_ALLOWED` sur `checkUrl` arrête le run avec un message clair.
 
-`FORM_AUTH` (a login form in the page) stays in the DOM world: `auth.type: form`, or an imposed flow. `HTTP_AUTH` (the browser's dialog) is a browser interaction. The two are never mixed.
+`FORM_AUTH` (un formulaire de connexion dans la page) reste dans le monde du DOM : `auth.type: form`, ou un flow imposé. `HTTP_AUTH` (la fenêtre du navigateur) est une interaction navigateur. Les deux mécanismes ne sont jamais mélangés.
 
-## Browser interactions
+## Interactions navigateur
 
-Some interactions come from the browser itself, not from the application's DOM: they cannot be found with locators, and they can block a flow silently. The `BrowserInteractionManager` detects them, classifies them, applies the safety policy, hands them to a handler, records what happened, and lets the crawl go on.
+Certaines interactions viennent du navigateur lui-même, pas du DOM de l'application : on ne peut pas les trouver avec des localisateurs, et elles peuvent bloquer un flow sans bruit. Le `BrowserInteractionManager` les détecte, les classe, applique la politique de sécurité, les confie à un gestionnaire (handler), enregistre ce qui s'est passé, puis laisse le crawl continuer.
 
 ```
 DOM ActionDiscovery ─────────────────────────────────────────────┐
                                                                  ├─► Playwright ─► Chromium
 Browser Event Discovery ─► BrowserInteractionManager ─► handlers ┘
- (Playwright events + CDP)   loop guard · SafetyPolicy ·           HttpAuth · Dialog · Popup ·
-                             retry · timeout · record              Download · FileChooser ·
+ (événements Playwright + CDP)  anti-boucle · SafetyPolicy ·       HttpAuth · Dialog · Popup ·
+                                retry · timeout · enregistrement   Download · FileChooser ·
                                                                    Permission · ExternalNavigation
 ```
 
-| Type                          | Source                                       | Default behaviour                                                                                              |
-| ----------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `HTTP_AUTH`                   | browser protocol (`Fetch.authRequired`)      | credentials from a profile, to trusted origins only; otherwise `AUTH_REQUIRED` and the transition is `BLOCKED` |
-| `JS_ALERT`                    | `page.on('dialog')`                          | accepted (OK)                                                                                                  |
-| `JS_CONFIRM`                  | `page.on('dialog')`                          | dismissed; with `confirm: accept-safe`, accepted only if the message is not destructive nor mutating           |
-| `JS_PROMPT`                   | `page.on('dialog')`                          | answered only with a value from `promptValues`; otherwise dismissed, `PROMPT_VALUE_REQUIRED`                   |
-| `POPUP` / `NEW_TAB`           | `context.on('page')` (with / without opener) | allowed origin: observed as a new state linked to the action (`CLICK → POPUP → page`), then closed             |
-| `DOWNLOAD`                    | `page.on('download')`                        | action, file name, MIME type and size recorded; the file is never saved nor opened                             |
-| `FILE_CHOOSER`                | `page.on('filechooser')`                     | never opens, no file picked: `FILE_INPUT_REQUIRED`                                                             |
-| `PERMISSION_REQUEST`          | init script around the permission APIs       | denied unless listed in `permissions.grant`                                                                    |
-| `EXTERNAL_NAVIGATION`         | main-frame navigation                        | classified (`SAME_ORIGIN`, `ALLOWED_ORIGIN`, `EXTERNAL_ORIGIN`, `BLOCKED_ORIGIN`), not explored                |
-| `UNKNOWN_BROWSER_INTERACTION` | e.g. `beforeunload` dialogs                  | `UNSUPPORTED`, safe fallback                                                                                   |
+| Type                          | Source                                         | Comportement par défaut                                                                                                   |
+| ----------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `HTTP_AUTH`                   | protocole du navigateur (`Fetch.authRequired`) | identifiants d'un profil, vers les origines de confiance seulement ; sinon `AUTH_REQUIRED` et la transition est `BLOCKED` |
+| `JS_ALERT`                    | `page.on('dialog')`                            | acceptée (OK)                                                                                                             |
+| `JS_CONFIRM`                  | `page.on('dialog')`                            | refusée ; avec `confirm: accept-safe`, acceptée seulement si le message n'est ni destructif ni modifiant                  |
+| `JS_PROMPT`                   | `page.on('dialog')`                            | répondu seulement avec une valeur de `promptValues` ; sinon refusé, `PROMPT_VALUE_REQUIRED`                               |
+| `POPUP` / `NEW_TAB`           | `context.on('page')` (avec / sans ouvreur)     | origine autorisée : observée comme nouvel état lié à l'action (`CLICK → POPUP → page`), puis fermée                       |
+| `DOWNLOAD`                    | `page.on('download')`                          | action, nom du fichier, type MIME et taille enregistrés ; le fichier n'est jamais sauvegardé ni ouvert                    |
+| `FILE_CHOOSER`                | `page.on('filechooser')`                       | ne s'ouvre jamais, aucun fichier choisi : `FILE_INPUT_REQUIRED`                                                           |
+| `PERMISSION_REQUEST`          | script d'initialisation autour des API         | refusée sauf si listée dans `permissions.grant`                                                                           |
+| `EXTERNAL_NAVIGATION`         | navigation de la page principale               | classée (`SAME_ORIGIN`, `ALLOWED_ORIGIN`, `EXTERNAL_ORIGIN`, `BLOCKED_ORIGIN`), non explorée                              |
+| `UNKNOWN_BROWSER_INTERACTION` | par exemple les dialogues `beforeunload`       | `UNSUPPORTED`, repli sûr                                                                                                  |
 
 ```yaml
-credentials: # names of environment variables only, never secrets
+credentials: # uniquement des NOMS de variables d'environnement, jamais de secrets
   qa-default: { usernameEnv: QA_USERNAME, passwordEnv: QA_PASSWORD }
 
 browserInteractions:
   enabled: true
-  timeoutMs: 15000 # longest time a handler may take
-  retry: { maxAttempts: 2 } # e.g. rejected credentials: 2 tries, then AUTH_FAILED
-  loopThreshold: 5 # same interaction (type, origin, action) more often: INTERACTION_LOOP_DETECTED
-  blockedOrigins: [] # never followed nor trusted
+  timeoutMs: 15000 # durée maximale d'un gestionnaire
+  retry: { maxAttempts: 2 } # ex. identifiants refusés : 2 essais, puis AUTH_FAILED
+  loopThreshold: 5 # même interaction (type, origine, action) plus souvent : INTERACTION_LOOP_DETECTED
+  blockedOrigins: [] # jamais suivies ni considérées comme de confiance
   httpAuth:
-    credentialProfile: qa-default # none: AUTH_REQUIRED
-    origins: [https://sso.example.com] # who may receive the credentials (default: target + allowed hosts)
+    credentialProfile: qa-default # aucun : AUTH_REQUIRED
+    origins: [https://sso.example.com] # qui peut recevoir les identifiants (défaut : cible + hôtes autorisés)
   dialogs:
     alert: accept # accept | dismiss
     confirm: dismiss # dismiss | accept-safe
-    promptValues: [{ match: 'Nom du dossier', value: 'Dossier QA' }] # value: text or { env: NAME }
+    promptValues: [{ match: 'Nom du dossier', value: 'Dossier QA' }] # value : texte ou { env: NOM }
   popups: { observe: true }
   permissions: { grant: [] } # geolocation, notifications, camera, microphone, clipboard-read, clipboard-write
 ```
 
-**Results.** Each interaction is recorded with its type, status (`DETECTED`, `HANDLED`, `BLOCKED`, `FAILED`, `SKIPPED`, `UNSUPPORTED`), outcome (`AUTHENTICATED`, `AUTH_REQUIRED`, `AUTH_FAILED`, `INTERACTION_LOOP_DETECTED`, `FILE_INPUT_REQUIRED`…), handler, action, source state and action, target, origin class, attempt and retry, and non-secret details.
+**Résultats.** Chaque interaction est enregistrée avec :
 
-- They appear in `result.json` (`browserInteractions`, `stats.interactionsByType` / `interactionsByStatus`), in `index.html` (_Browser interactions_ section) and in `flow-graph.json` (`interactions`). Popups and new tabs also add a transition to the observed page.
-- Blocking ones (`AUTH_REQUIRED`, `AUTH_FAILED`, `CREDENTIALS_NOT_ALLOWED`, loops) turn the transition into `BLOCKED` and raise an `ERROR` issue; `FILE_INPUT_REQUIRED`, `PROMPT_VALUE_REQUIRED` and unsupported interactions raise a `WARNING`.
-- The CLI prints one structured line per interaction: `[BROWSER_INTERACTION] type=HTTP_AUTH origin=https://… handler=HttpAuthHandler status=HANDLED outcome=AUTHENTICATED attempt=1`.
+- son type et son statut (`DETECTED`, `HANDLED`, `BLOCKED`, `FAILED`, `SKIPPED`, `UNSUPPORTED`) ;
+- son résultat (`AUTHENTICATED`, `AUTH_REQUIRED`, `AUTH_FAILED`, `INTERACTION_LOOP_DETECTED`, `FILE_INPUT_REQUIRED`…) ;
+- le gestionnaire et l'action, l'état et l'action d'origine, la cible, la classe d'origine, la tentative, et des détails sans secret.
 
-**Secrets.** Credentials are resolved by a `CredentialProvider` (environment variables today; a vault or secret manager can implement the same interface) only when a trusted origin asks for them, and are handed to the browser only. They never appear in the mission, the flow graph, logs, reports or screenshots; only the profile name (`credentialProfile: "qa-default"`) is recorded.
+Où les retrouver :
 
-**Extending.** A new interaction needs a source in `BrowserEventDiscovery`, a rule in `InteractionPolicy` and a `BrowserInteractionHandler` registered in the manager. The crawl engine does not change.
+- dans `result.json` (`browserInteractions`, `stats.interactionsByType` / `interactionsByStatus`), dans `index.html` (section _Interactions navigateur_) et dans `flow-graph.json` (`interactions`). Les popups et nouveaux onglets ajoutent aussi une transition vers la page observée ;
+- les interactions bloquantes (`AUTH_REQUIRED`, `AUTH_FAILED`, `CREDENTIALS_NOT_ALLOWED`, boucles) font passer la transition en `BLOCKED` et créent une anomalie `ERROR` ; `FILE_INPUT_REQUIRED`, `PROMPT_VALUE_REQUIRED` et les interactions non gérées créent un `WARNING` ;
+- le terminal affiche une ligne structurée par interaction : `[BROWSER_INTERACTION] type=HTTP_AUTH origin=https://… handler=HttpAuthHandler status=HANDLED outcome=AUTHENTICATED attempt=1`.
 
-## Safety
+**Secrets.** Les identifiants sont fournis par un `CredentialProvider` (aujourd'hui les variables d'environnement ; un coffre-fort ou un gestionnaire de secrets peut implémenter la même interface), seulement quand une origine de confiance les demande, et ne sont transmis qu'au navigateur. Ils n'apparaissent jamais dans la mission, le graphe des flows, les logs, les rapports ni les captures ; seul le nom du profil (`credentialProfile: "qa-default"`) est enregistré.
 
-The explorer is meant to be pointed at real environments without breaking them.
+**Extension.** Une nouvelle interaction demande une source dans `BrowserEventDiscovery`, une règle dans `InteractionPolicy` et un `BrowserInteractionHandler` enregistré dans le manager. Le crawl engine ne change pas.
 
-**1. Every action is classified** by `SafetyPolicy`:
+## Sécurité
 
-- a French/English vocabulary, matched on whole words without accents;
-- the element's label, its link target, its `routerLink`, and the dialog it belongs to ("Confirmer" inside "Supprimer l'utilisateur ?" is DANGEROUS).
+L'explorateur est fait pour être lancé sur de vrais environnements sans les casser.
 
-| Class       | Examples                                                                                                         | Executed?                             |
-| ----------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `SAFE`      | navigation, tabs, menus, details, pagination, search, filters, wizard "Suivant", filling a (non-sensitive) field | yes, if its kind is in `safety.allow` |
-| `MUTATION`  | créer, enregistrer, modifier, update, submit (form submission), oui/ok/confirmer                                 | **never** by default                  |
-| `DANGEROUS` | supprimer/delete, payer/payment, checkout, envoyer/send, réinitialiser, déconnexion/logout, sensitive fields     | **never** by default                  |
-| `UNKNOWN`   | controls without a readable label (`⚙`, `×`, icon-only)                                                          | **never**                             |
+**1. Chaque action est classée** par la `SafetyPolicy` :
 
-**2. The gate is enforced after the decision and before execution.** `SafetyPolicy.evaluate()` blocks an action in these cases:
+- un vocabulaire français/anglais, comparé sur des mots entiers sans accents ;
+- le libellé de l'élément, la cible du lien, son `routerLink` et la fenêtre qui le contient (« Confirmer » dans « Supprimer l'utilisateur ? » est DANGEROUS).
 
-- it is disabled or hidden;
-- it carries a blocked risk;
-- it navigates outside the allowed hosts, to an ignored path or to a download;
-- its class is not allowed;
-- its kind is not in `safety.allow`.
+| Classe      | Exemples                                                                                                              | Exécutée ?                               |
+| ----------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `SAFE`      | navigation, onglets, menus, détails, pagination, recherche, filtres, « Suivant » d'un assistant, champ (non sensible) | oui, si son type est dans `safety.allow` |
+| `MUTATION`  | créer, enregistrer, modifier, update, submit (envoi de formulaire), oui/ok/confirmer                                  | **jamais** par défaut                    |
+| `DANGEROUS` | supprimer/delete, payer/payment, checkout, envoyer/send, réinitialiser, déconnexion/logout, champs sensibles          | **jamais** par défaut                    |
+| `UNKNOWN`   | contrôles sans libellé lisible (`⚙`, `×`, icône seule)                                                                | **jamais**                               |
 
-A future decision engine, whether a local or a cloud LLM, cannot bypass it.
+**2. Le contrôle a lieu après la décision et avant l'exécution.** `SafetyPolicy.evaluate()` bloque une action dans ces cas :
 
-**3. Blocked actions are recorded** in the flow graph (`BLOCKED` transitions, with the reason) and shown in the reports.
+- elle est désactivée ou cachée ;
+- elle porte un risque bloqué ;
+- elle navigue hors des hôtes autorisés, vers un chemin ignoré ou vers un téléchargement ;
+- sa classe n'est pas autorisée ;
+- son type n'est pas dans `safety.allow`.
 
-**4. Sensitive data is never filled automatically**, whatever the configuration:
+Un futur moteur de décision, même un LLM local ou dans le cloud, ne peut pas contourner ce contrôle.
 
-- passwords;
-- payment cards (`autocomplete="cc-*"`, card number, CVV, IBAN);
-- OTP codes, secrets, social security numbers.
+**3. Les actions bloquées sont enregistrées** dans le graphe (transitions `BLOCKED`, avec la raison) et affichées dans les rapports.
 
-An [imposed flow](#imposed-flows) may fill a password or secret field only with a value read from an environment variable (`value: { env: NAME }`). Payment fields are never filled.
+**4. Les données sensibles ne sont jamais remplies automatiquement**, quelle que soit la configuration :
 
-**5. Browser dialogs** (`confirm`, `alert`, `prompt`) are always dismissed. New windows are closed.
+- mots de passe ;
+- cartes de paiement (`autocomplete="cc-*"`, numéro de carte, CVV, IBAN) ;
+- codes OTP, secrets, numéros de sécurité sociale.
 
-**6. No secrets in the output.** Tokens, passwords, `Authorization` headers, cookies, JWTs and sensitive query parameters are redacted in logs and reports. Headers, bodies and field values are never stored.
+Un [flow imposé](#créer-un-flow-de-test-imposé) peut remplir un mot de passe ou un secret seulement avec une valeur lue dans une variable d'environnement (`value: { env: NOM }`). Les champs de paiement ne sont jamais remplis.
 
-## State detection and loop protection
+**5. Les interactions du navigateur** (`alert`, `confirm`, `prompt`, nouvelles fenêtres, téléchargements…) passent par le [Browser Interaction Manager](#interactions-navigateur) : une confirmation destructive n'est jamais acceptée, aucune valeur n'est inventée, aucun fichier n'est choisi ni sauvegardé, et l'exploration reste dans un seul onglet.
 
-A state is not a URL:
+**6. Aucun secret dans les sorties.** Jetons, mots de passe, en-têtes `Authorization`, cookies, JWT et paramètres d'URL sensibles sont masqués dans les logs et les rapports. Les en-têtes, corps de requêtes et valeurs des champs ne sont jamais enregistrés.
 
-- `/dossiers/create` can show steps 1, 2 and 3;
-- a tab or a dialog changes the screen without changing the route.
+## Détection des états et protection contre les boucles
 
-`StateDetector` fingerprints each observation from several signals:
+Un état n'est pas une URL :
 
-- the route pattern;
-- the title and headings;
-- open dialogs, selected tabs and `aria-current` items;
-- the visible controls (role and name), excluding data links and menus;
-- the form fields.
+- `/dossiers/create` peut afficher les étapes 1, 2 et 3 ;
+- un onglet ou une fenêtre change l'écran sans changer la route.
 
-Numbers are masked, so `/users/1` and `/users/2` ("Utilisateur 1/2") are one state.
+Le `StateDetector` calcule une empreinte de chaque observation à partir de plusieurs signaux :
 
-The result is a readable, stable `stateId` such as `parametres-securite-f3a0baba`.
+- le modèle de route ;
+- le titre et les en-têtes ;
+- les fenêtres ouvertes, les onglets sélectionnés et les éléments `aria-current` ;
+- les contrôles visibles (rôle et nom), sans les liens de données ni les menus ;
+- les champs de formulaire.
 
-**Loop protection:**
+Les nombres sont masqués : `/users/1` et `/users/2` (« Utilisateur 1/2 ») sont un seul état.
 
-- every action tried from a state is remembered in the graph and never retried;
-- `maxStatesPerRoute` caps both the states and the navigations per route pattern, including UUIDs, hashes, dates and `?page=N`;
-- selected tabs and tabs already opened from a sibling state are skipped, and nothing is unchecked;
-- a link already followed from another state is not followed again;
-- reaching a state already in the current path shrinks the path, which handles circular navigation;
-- redirect loops are detected;
-- all mission limits apply.
+Le résultat est un `stateId` lisible et stable, par exemple `parametres-securite-f3a0baba`.
 
-## Forms
+**Protection contre les boucles :**
 
-- **Discovery.** Every field is discovered with its constraints: `type`, `required`, `min`, `max`, `step`, `minlength`, `maxlength`, `pattern`, and select options.
-- **Filling.** When the engine decides to click a button inside a form (a wizard "Suivant", a search), the explorer first fills that form through the `TestDataProvider`. Each field goes through the `SafetyPolicy` first.
-- **`DefaultTestDataProvider`.** Its values are deterministic and obviously fake:
-  - emails `qa-crawler@example.test`, text `QA Test`;
-  - numbers within min/max/step, dates within bounds;
-  - required checkboxes checked, first real option of a select.
-- **Never filled:** sensitive fields. Mutating submissions stay blocked unless explicitly allowed.
+- chaque action essayée depuis un état est mémorisée dans le graphe et jamais réessayée ;
+- `maxStatesPerRoute` limite à la fois les états et les navigations par modèle de route, y compris les UUID, empreintes, dates et `?page=N` ;
+- les onglets déjà sélectionnés et ceux déjà ouverts depuis un état voisin sont ignorés, et rien n'est décoché ;
+- un lien déjà suivi depuis un autre état n'est pas suivi à nouveau ;
+- revenir sur un état déjà présent dans le chemin raccourcit le chemin, ce qui gère la navigation circulaire ;
+- les boucles de redirection sont détectées ;
+- toutes les limites de la mission s'appliquent.
 
-## What gets detected
+## Formulaires
 
-| Issue type       | Source                                                           | Default severity           |
-| ---------------- | ---------------------------------------------------------------- | -------------------------- |
-| `HTTP`           | API/resource response ≥ `http.failOnStatus`                      | 5xx → ERROR, 4xx → WARNING |
-| `BROKEN_LINK`    | a screen whose document answers ≥ `failOnStatus`                 | 404/410/5xx → ERROR        |
-| `REQUEST_FAILED` | network failure (DNS, refused, CORS)                             | WARNING                    |
-| `CONSOLE`        | `console.error` (and `console.warn` if enabled)                  | ERROR (WARNING)            |
-| `PAGE_ERROR`     | uncaught JavaScript exception                                    | ERROR                      |
-| `PAGE_CRASH`     | renderer crash                                                   | CRITICAL                   |
-| `NAVIGATION`     | redirect loop, timeout, action leading outside the allowed hosts | ERROR (WARNING)            |
+- **Découverte.** Chaque champ est découvert avec ses contraintes : `type`, `required`, `min`, `max`, `step`, `minlength`, `maxlength`, `pattern` et les options des listes.
+- **Remplissage.** Quand le moteur décide de cliquer un bouton dans un formulaire (« Suivant » d'un assistant, une recherche), l'explorateur remplit d'abord ce formulaire avec le `TestDataProvider`. Chaque champ passe d'abord par la `SafetyPolicy`.
+- **`DefaultTestDataProvider`.** Ses valeurs sont déterministes et visiblement factices :
+  - e-mails `qa-crawler@example.test`, texte `QA Test` ;
+  - nombres dans min/max/step, dates dans les bornes ;
+  - cases obligatoires cochées, première vraie option d'une liste.
+- **Jamais remplis :** les champs sensibles. Les envois qui modifient des données restent bloqués sauf autorisation explicite.
 
-Each issue is attributed so it can be reproduced:
+## Ce qui est détecté
+
+| Type d'anomalie       | Source                                                             | Gravité par défaut          |
+| --------------------- | ------------------------------------------------------------------ | --------------------------- |
+| `HTTP`                | réponse d'API ou de ressource ≥ `http.failOnStatus`                | 5xx → ERROR, 4xx → WARNING  |
+| `BROKEN_LINK`         | un écran dont le document répond ≥ `failOnStatus`                  | 404/410/5xx → ERROR         |
+| `REQUEST_FAILED`      | échec réseau (DNS, refus, CORS)                                    | WARNING                     |
+| `CONSOLE`             | `console.error` (et `console.warn` si activé)                      | ERROR (WARNING)             |
+| `PAGE_ERROR`          | exception JavaScript non interceptée                               | ERROR                       |
+| `PAGE_CRASH`          | plantage du moteur de rendu                                        | CRITICAL                    |
+| `NAVIGATION`          | boucle de redirection, délai dépassé, action menant hors des hôtes | ERROR (WARNING)             |
+| `FLOW`                | étape d'un flow imposé échouée ou bloquée                          | ERROR (WARNING si optional) |
+| `BROWSER_INTERACTION` | interaction navigateur bloquante ou à traiter (`AUTH_REQUIRED`…)   | ERROR / WARNING             |
+
+Chaque anomalie est rattachée à son contexte pour pouvoir la reproduire :
 
 ```json
 {
@@ -423,48 +528,50 @@ Each issue is attributed so it can be reproduced:
 }
 ```
 
-Identical anomalies are merged into one issue, which counts its occurrences and lists every state where it was seen.
+Les anomalies identiques sont regroupées en une seule, qui compte ses occurrences et liste tous les états où elle a été vue.
 
-## Reports
+## Rapports
 
-| File                                   | Content                                                                                                                                                     |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reports/result.json`                  | Mission summary and statistics. States with their full actions (locators, classification) and forms, transitions, attributed issues, effective settings     |
-| `reports/index.html`                   | Static report: summary cards, discovered flow tree, HTTP/JS/navigation anomalies (state · action · flow), states, executed and blocked actions, screenshots |
-| `reports/flow-graph.json`              | The flow graph, used as the explorer's memory (resumable with `memory.resume`)                                                                              |
-| `reports/flow-graph.html`              | Application map: collapsible tree, text tree, transitions between states, other attempts                                                                    |
-| `screenshots/NNN-<state>[-error…].png` | One per discovered state, plus one per ERROR/CRITICAL anomaly                                                                                               |
+| Fichier                               | Contenu                                                                                                                                                                                       |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reports/result.json`                 | Résumé et statistiques de la mission. États avec leurs actions complètes (localisateurs, classe) et formulaires, transitions, flows, interactions navigateur, anomalies, paramètres effectifs |
+| `reports/index.html`                  | Rapport statique : cartes de synthèse, flows imposés, interactions navigateur, arbre des flows découverts, anomalies (état · action · flow), états, actions exécutées et bloquées, captures   |
+| `reports/flow-graph.json`             | Le graphe des flows, qui sert de mémoire à l'explorateur (reprise possible avec `memory.resume`)                                                                                              |
+| `reports/flow-graph.html`             | Carte de l'application : arbre dépliable, arbre texte, transitions entre états, autres tentatives                                                                                             |
+| `screenshots/NNN-<état>[-error…].png` | Une par état découvert, plus une par anomalie ERROR/CRITICAL et par étape `screenshot`                                                                                                        |
 
-The reports use no JavaScript, framework or external asset.
+Les rapports n'utilisent ni JavaScript, ni framework, ni ressource externe.
 
-**French reports.** Set `report.language: fr` to get `index.html` and `flow-graph.html` in French: titles, columns, statuses (`RÉUSSI`, `ÉCHOUÉ`, `BLOQUÉ`, `IGNORÉ`), classes, severities and the safety policy's reasons. `result.json` and `flow-graph.json` always stay in English, so tools and CI read the same keys and values.
+**Rapports en français.** Avec `report.language: fr`, `index.html` et `flow-graph.html` sont en français : titres, colonnes, statuts (`RÉUSSI`, `ÉCHOUÉ`, `BLOQUÉ`, `IGNORÉ`), classes, gravités et raisons de la politique de sécurité. `result.json` et `flow-graph.json` restent toujours en anglais, pour que les outils et la CI lisent les mêmes clés et valeurs.
 
 ```yaml
 report:
-  language: fr # en (default) | fr
+  language: fr # en (défaut) | fr
 ```
 
-## Command line
+## Ligne de commande
 
 ```bash
 npm run qa -- scenarios/demo.yaml
 npm run qa -- --config scenarios/smoke.yaml --base-url https://pr-42.example.com --max-states 30 --max-actions 100
+npm run qa -- scenarios/mon-flow.yaml --headed      # voir le navigateur (nécessite un écran)
 npm run qa -- --help
 ```
 
-The CLI prints:
+Le terminal affiche :
 
-- the mission, target, goals, limits and safety rules;
-- every new state, action (with its result), blocked action and backtrack;
-- the anomalies as they are found;
-- the discovered flow tree;
-- the summary and the location of the reports.
+- la mission, la cible, les objectifs, les limites, les règles de sécurité et les flows ;
+- chaque nouvel état, action (avec son résultat), action bloquée, retour en arrière et interaction navigateur ;
+- chaque étape des flows imposés ;
+- les anomalies au fur et à mesure ;
+- l'arbre des flows découverts ;
+- le résumé et l'emplacement des rapports.
 
-**Exit codes:** `0` no issue at or above `report.failOnSeverity`, `1` failing issues, `2` invalid usage or mission, `3` runtime failure.
+**Codes de sortie :** `0` aucune anomalie au niveau `report.failOnSeverity` ou au-dessus, `1` anomalies bloquantes, `2` usage ou mission invalide, `3` erreur d'exécution.
 
 ## Docker
 
-The image is based on the official Playwright image (`mcr.microsoft.com/playwright:v1.56.1-noble`). It runs as the non-root `pwuser`, with no GPU, no display and no special privileges.
+L'image est basée sur l'image officielle Playwright (`mcr.microsoft.com/playwright:v1.56.1-noble`). Elle s'exécute avec l'utilisateur non-root `pwuser`, sans GPU, sans écran et sans privilège particulier.
 
 ```bash
 docker build -t qa-crawler .
@@ -475,46 +582,46 @@ docker run --rm \
   qa-crawler --config scenarios/smoke.yaml
 ```
 
-> Keep the `playwright` version in `package.json` and the image tag in the `Dockerfile` identical.
+> Garde la version de `playwright` dans `package.json` et le tag de l'image dans le `Dockerfile` identiques.
 
 ## Kubernetes / OpenShift
 
-The image is ready for a `Job` or `CronJob`:
+L'image est prête pour un `Job` ou un `CronJob` :
 
-- **Resources:**
-  - Requests: `cpu: 500m`, `memory: 1Gi`.
-  - Limits: `cpu: 1–2`, `memory: 2Gi`.
-  - Memory grows with heavy SPAs and full-page screenshots.
-- **Headless only:** no GPU, X server, `privileged` or added capability. Chromium runs without its own sandbox (Playwright's default), which allows an arbitrary UID.
-- **Arbitrary UID (OpenShift):** outputs are group-0 writable and `HOME=/tmp`, so the image works under `restricted-v2`.
-- **Shared memory:** `--disable-dev-shm-usage` is on by default. Alternatively, mount an `emptyDir` (`medium: Memory`) on `/dev/shm`.
-- **Network:** egress to the target application (and its identity provider when authenticating) only.
-- **Outputs:** write `reports/` and `screenshots/` to a mounted volume. Use `--reports-dir` / `--screenshots-dir` to change the paths.
-- **Configuration:**
-  - missions from a `ConfigMap`;
-  - the URL through `QA_BASE_URL`;
-  - credentials from a `Secret` exposed as `QA_USERNAME` / `QA_PASSWORD`.
+- **Ressources :**
+  - requests : `cpu: 500m`, `memory: 1Gi` ;
+  - limits : `cpu: 1–2`, `memory: 2Gi` ;
+  - la mémoire augmente avec les SPA lourdes et les captures pleine page.
+- **Sans interface uniquement :** ni GPU, ni serveur X, ni `privileged`, ni capacité ajoutée. Chromium tourne sans son propre bac à sable (comportement par défaut de Playwright), ce qui permet un UID arbitraire.
+- **UID arbitraire (OpenShift) :** les sorties sont accessibles en écriture au groupe 0 et `HOME=/tmp`, donc l'image fonctionne sous `restricted-v2`.
+- **Mémoire partagée :** `--disable-dev-shm-usage` est activé par défaut. Sinon, monter un `emptyDir` (`medium: Memory`) sur `/dev/shm`.
+- **Réseau :** sortie uniquement vers l'application cible (et son fournisseur d'identité pour l'authentification).
+- **Sorties :** écrire `reports/` et `screenshots/` sur un volume monté. `--reports-dir` / `--screenshots-dir` changent les chemins.
+- **Configuration :**
+  - missions depuis une `ConfigMap` ;
+  - l'URL via `QA_BASE_URL` ;
+  - les identifiants depuis un `Secret` exposé en `QA_USERNAME` / `QA_PASSWORD`.
 
-| Variable                     | Purpose                                                       |
-| ---------------------------- | ------------------------------------------------------------- |
-| `QA_BASE_URL`                | Target URL (overrides the mission)                            |
-| `QA_USERNAME`, `QA_PASSWORD` | Default credential variables for `auth.type: form` and `http` |
-| `PLAYWRIGHT_BROWSERS_PATH`   | Chromium location (set by the Playwright image)               |
-| `NO_COLOR`                   | Plain output (set in the image)                               |
+| Variable                     | Rôle                                                                 |
+| ---------------------------- | -------------------------------------------------------------------- |
+| `QA_BASE_URL`                | URL cible (remplace celle de la mission)                             |
+| `QA_USERNAME`, `QA_PASSWORD` | Variables d'identifiants par défaut pour `auth.type: form` et `http` |
+| `PLAYWRIGHT_BROWSERS_PATH`   | Emplacement de Chromium (défini par l'image Playwright)              |
+| `NO_COLOR`                   | Sortie sans couleurs (défini dans l'image)                           |
 
 ## CI/CD
 
-`.github/workflows/qa-crawler.yml` runs on every push and pull request, in this order:
+`.github/workflows/qa-crawler.yml` s'exécute à chaque push et pull request, dans cet ordre :
 
 1. `npm ci`
-2. typecheck
+2. vérification des types
 3. lint
-4. format check
-5. unit tests
+4. vérification du formatage
+5. tests unitaires
 6. build
-7. Chromium install and integration tests against the two bundled applications
+7. installation de Chromium et tests d'intégration sur les applications de test fournies
 
-An optional job explores a real environment and uploads the reports. It runs when the repository variable `TARGET_URL` is set, or on a manual run.
+Un job optionnel explore un vrai environnement et publie les rapports. Il s'exécute quand la variable de dépôt `TARGET_URL` est définie, ou lors d'un lancement manuel.
 
 ## Architecture
 
@@ -529,59 +636,62 @@ An optional job explores a real environment and uploads the reports. It runs whe
           Flow Explorer                 Safety Policy
                |
                v
-          UI Observation  (DOM · accessibility · URL/state)
+          UI Observation  (DOM · accessibilité · URL/état)
                |
                v
           Page Context ──> State Detector
                |
-               v
-        Action Discovery  (link · button · tab · routerLink · input · select · checkbox…)
-               |
-               v
-        Decision Engine ──> Selected Action ──> Safety Policy ──> BLOCK (recorded)
-                                                     |
-                                                   ALLOW
-                                                     v
-                                    Playwright Action Executor ──> Chromium ──> Application
-                                                                                    |
-                                                          Network · Console · Page errors
-                                                                                    |
-                                                                          Anomaly collector
-                                                                                    |
-                                                                  State Detector (new state)
-                                                                                    |
-                                                                              Flow Graph
-                                                                              /        \
-                                                                     Flow Memory     Reporters
-                                                                (flow-graph.json)  JSON · HTML · Graph
+               +------------------------------------------+
+               v                                          v
+        Action Discovery (DOM)                 Browser Event Discovery
+        (lien · bouton · onglet · champ…)      (auth native · dialogues · popups…)
+               |                                          |
+               v                                          v
+        Decision Engine ──> Safety Policy     Browser Interaction Manager ──> handlers
+               |                                          |
+               +---------------------+--------------------+
+                                     v
+                    Playwright ──> Chromium ──> Application
+                                                    |
+                              Réseau · Console · Erreurs de page
+                                                    |
+                                          Anomaly collector
+                                                    |
+                                   State Detector (nouvel état)
+                                                    |
+                                               Flow Graph
+                                               /        \
+                                      Flow Memory     Reporters
+                                 (flow-graph.json)  JSON · HTML · Graphe
 ```
 
 ```
 src/
-├── main.ts, orchestrator.ts      entry point; mission → explorer → reports → verdict
-├── cli/                          arguments, console output, exit codes
-├── config/                       mission schema (zod) with defaults, YAML loader, V1 migration
-├── explorer/flow-explorer.ts     the loop, navigation stack, backtracking, limits
-├── observation/                  UIObserver (DOM snapshot script), StateDetector
-├── discovery/                    ActionDiscovery (pure), locator builder
-├── decision/                     DecisionEngine interface, RuleBasedDecisionEngine
-├── policies/                     SafetyPolicy, NavigationPolicy, AllowedOriginPolicy, InteractionPolicy, vocabulary
-├── execution/                    PlaywrightActionExecutor, locator resolver
+├── main.ts, orchestrator.ts      point d'entrée ; mission → explorateur → rapports → verdict
+├── cli/                          arguments, sortie console, codes de sortie
+├── config/                       schéma de mission (zod) avec défauts, chargeur YAML, flows, migration V1
+├── explorer/flow-explorer.ts     la boucle, pile de navigation, retour arrière, limites, flows imposés
+├── observation/                  UIObserver (script d'instantané du DOM), StateDetector
+├── discovery/                    ActionDiscovery (pure), construction des localisateurs
+├── decision/                     interface DecisionEngine, RuleBasedDecisionEngine
+├── policies/                     SafetyPolicy, NavigationPolicy, AllowedOriginPolicy, InteractionPolicy, vocabulaire
+├── execution/                    PlaywrightActionExecutor, résolution des localisateurs
+├── flows/                        exécution des étapes de flow, sécurité et périmètre de thenExplore
+├── interactions/                 BrowserEventDiscovery, BrowserInteractionManager, handlers, CredentialProvider
 ├── data/                         TestDataProvider, DefaultTestDataProvider
 ├── graph/                        FlowGraph
-├── memory/                       FlowMemory interface, JsonFlowMemory
-├── observers/                    network, console, page errors (with attribution)
-├── anomaly/                      severity rules, issue collector
-├── crawler/                      URL and route normalization
-├── browser/                      Chromium lifecycle, screenshots
-├── auth/                         form and HTTP authentication (credentials from env)
-├── interactions/                 BrowserEventDiscovery, BrowserInteractionManager, handlers, CredentialProvider
-├── reporting/                    result builder, JSON, HTML, flow graph HTML, flow tree
-├── security/                     redaction
+├── memory/                       interface FlowMemory, JsonFlowMemory
+├── observers/                    réseau, console, erreurs de page (avec rattachement)
+├── anomaly/                      règles de gravité, collecteur d'anomalies
+├── crawler/                      normalisation des URL et des routes
+├── browser/                      cycle de vie de Chromium, captures
+├── auth/                         authentification formulaire et HTTP (identifiants depuis l'environnement)
+├── reporting/                    construction du résultat, JSON, HTML, graphe HTML, arbre, traductions (en/fr)
+├── security/                     masquage des secrets
 └── model/                        PageContext, DiscoveredAction, LocatorDescriptor, FlowNode/Edge, Issue…
 ```
 
-### Replacing the decision engine
+### Remplacer le moteur de décision
 
 ```ts
 interface DecisionEngine {
@@ -590,65 +700,69 @@ interface DecisionEngine {
 }
 ```
 
-The engine receives only plain, serializable data:
+Le moteur ne reçoit que des données simples et sérialisables :
 
-- the `PageContext`: URL, state, headings, text excerpt, classified actions with their locators, forms, known errors;
-- the `FlowGraph`.
+- le `PageContext` : URL, état, titres, extrait de texte, actions classées avec leurs localisateurs, formulaires, erreurs connues ;
+- le `FlowGraph`.
 
-A `LocalLLMDecisionEngine` or `CloudLLMDecisionEngine` can be passed to `runMission(config, { decisionEngine })`. Nothing else changes: the explorer, the safety gate, the executor and the observers stay as they are.
+Un `LocalLLMDecisionEngine` ou un `CloudLLMDecisionEngine` peut être passé à `runMission(config, { decisionEngine })`. Rien d'autre ne change : l'explorateur, le contrôle de sécurité, l'exécuteur et les observateurs restent identiques.
 
-This version contains **no LLM code or dependency**.
+Cette version ne contient **aucun code ni dépendance LLM**.
 
-## Development
+## Développement
 
 ```bash
 npm run typecheck        # tsc --noEmit (strict)
 npm run lint             # ESLint, typescript-eslint strict type-checked
 npm run format:check     # Prettier
-npm test                 # unit tests (Vitest), no browser needed
-npm run test:integration # real Chromium against the two bundled applications
+npm test                 # tests unitaires (Vitest), sans navigateur
+npm run test:integration # vrai Chromium sur les applications de test fournies
 npm run build            # dist/
 ```
 
-**Unit tests** cover:
+**Les tests unitaires** couvrent :
 
-- `ActionDiscovery`, locator descriptors and their Playwright translation;
-- `StateDetector`, `FlowGraph` and `JsonFlowMemory`;
-- `SafetyPolicy`, `NavigationPolicy` and `RuleBasedDecisionEngine`;
-- `TestDataProvider` and route and URL normalization;
-- the config loader, redaction, the flow tree and the CLI arguments.
+- `ActionDiscovery`, les descripteurs de localisateurs et leur traduction Playwright ;
+- `StateDetector`, `FlowGraph` et `JsonFlowMemory` ;
+- `SafetyPolicy`, `NavigationPolicy` et `RuleBasedDecisionEngine` ;
+- le schéma des flows, leur sécurité et le périmètre de `thenExplore` ;
+- le `BrowserInteractionManager`, l'`InteractionPolicy`, l'`AllowedOriginPolicy` et les `Credentials` ;
+- le `TestDataProvider`, la normalisation des routes et des URL, les traductions ;
+- le chargeur de configuration, le masquage des secrets, l'arbre des flows et les arguments de la CLI.
 
-**Integration tests** explore two bundled applications:
+**Les tests d'intégration** utilisent de vraies pages locales :
 
-- `tests/fixtures/flow-app.ts`, a mini back-office. The test asserts that the explorer discovers:
-  - the screens;
-  - the tabs and the 3 wizard steps on one URL;
-  - the transitions, with backtracking;
-  - the expected tree.
+- `tests/fixtures/flow-app.ts`, un mini back-office. Le test vérifie que l'explorateur découvre :
+  - les écrans ;
+  - les onglets et les 3 étapes d'assistant sur une seule URL ;
+  - les transitions, avec retour en arrière ;
+  - l'arbre attendu.
 
-  It also checks that no destructive endpoint is ever reached and that the card field is never filled.
+  Il vérifie aussi qu'aucun point d'accès destructif n'est jamais appelé et que le champ de carte bancaire n'est jamais rempli.
 
-- `tests/fixtures/test-site.ts`, a site full of bugs and traps. The test checks that every anomaly is detected and attributed, and that no secret leaks.
+- `tests/fixtures/test-site.ts`, un site plein de bugs et de pièges : chaque anomalie doit être détectée et rattachée, sans fuite de secret.
+- les flows imposés (assistant, MUTATION, DANGEROUS, mot de passe depuis l'environnement, fenêtre modale, `thenExplore`) ;
+- l'authentification HTTP native (identifiants présents, absents, invalides, retry, boucle, origine interdite) et les autres interactions navigateur (dialogues, popup, nouvel onglet, téléchargement, fichier, permission, navigation externe).
 
-## Limitations of this version
+## Limites de cette version
 
-- One browser tab: exploration is sequential.
-- The state fingerprint is heuristic: very dynamic screens can produce more states than expected (bounded by `maxStatesPerRoute`).
-- The rule-based engine cannot know what an unlabelled icon does, so icons are never clicked.
-- Mutating actions (create/save/submit) are never executed. Their effects are not explored unless explicitly allowed on a disposable environment.
-- Backtracking by replay needs the path to be deterministic; states that can't be restored are skipped.
-- A single role per run. MFA/OTP and stored sessions are not supported yet.
-- Browser interactions: HTTP authentication is detected through the Chromium protocol (Chromium only); a challenge raised by a popup before it is attached, by a cross-origin iframe or by a service worker is not seen. NTLM/Kerberos negotiation depends on the server. Popups and new tabs are observed and closed, not explored in parallel. File choosers never receive a file.
-- Shadow DOM and iframes are not explored.
+- Un seul onglet de navigateur : l'exploration est séquentielle.
+- L'empreinte d'état est heuristique : des écrans très dynamiques peuvent produire plus d'états que prévu (limité par `maxStatesPerRoute`).
+- Le moteur à règles ne peut pas savoir ce que fait une icône sans libellé, donc les icônes ne sont jamais cliquées (sauf `allow: UNKNOWN` dans un flow).
+- Les actions qui modifient des données (créer, enregistrer, envoyer) ne sont jamais exécutées automatiquement. Leurs effets ne sont explorés que si elles sont explicitement autorisées, sur un environnement jetable.
+- Le retour en arrière par rejouée demande un chemin déterministe ; les états impossibles à restaurer sont ignorés.
+- Un seul rôle par run. La double authentification (MFA/OTP) et les sessions sauvegardées ne sont pas encore gérées.
+- Interactions navigateur : l'authentification HTTP est détectée via le protocole de Chromium (Chromium uniquement). Un défi déclenché par une popup avant son rattachement, par une iframe d'un autre domaine ou par un service worker n'est pas vu. NTLM/Kerberos dépendent du serveur. Les popups et nouveaux onglets sont observés puis fermés, pas explorés en parallèle. Les sélecteurs de fichier ne reçoivent jamais de fichier.
+- Le Shadow DOM et les iframes ne sont pas explorés.
 
-## Roadmap
+## Feuille de route
 
-- Multi-role authentication (one exploration per role, SSO/OIDC, stored sessions)
-- Automatic form testing with the `TestDataProvider`: required fields, invalid email, min/max and boundary values
-- Permission tests (what a role must not reach)
-- OpenAPI import and API testing
-- Visual comparison between runs (screenshots per state)
-- Generation of Playwright tests from the recorded flows (locators are already serializable)
-- Decision engines behind the `DecisionEngine` interface, including an optional local LLM
-- Runs against per-pull-request environments, with an automatic PR comment
-- Parallel exploration, SQLite/PostgreSQL `FlowMemory`, Kubernetes `Job` manifests
+- Authentification multi-rôles (une exploration par rôle, SSO/OIDC, sessions sauvegardées)
+- Tests automatiques des formulaires avec le `TestDataProvider` : champs obligatoires, e-mail invalide, valeurs min/max et limites
+- Tests de permissions (ce qu'un rôle ne doit pas atteindre)
+- Import OpenAPI et tests d'API
+- Comparaison visuelle entre runs (captures par état)
+- Génération de tests Playwright à partir des flows enregistrés (les localisateurs sont déjà sérialisables)
+- Moteurs de décision derrière l'interface `DecisionEngine`, dont un LLM local optionnel
+- Runs sur des environnements par pull request, avec un commentaire automatique sur la PR
+- Exploration parallèle, `FlowMemory` SQLite/PostgreSQL, manifestes `Job` Kubernetes
