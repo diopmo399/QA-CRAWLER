@@ -277,4 +277,37 @@ flows:
     expect(result.states[0]?.url).toBe(`${app.url}/`);
     expect(lastHits).toEqual([]);
   });
+
+  it('keeps thenExplore on the flow screen: no global menu, even with autonomous false', async () => {
+    const result = await run(
+      'then-explore-scope',
+      `
+flows:
+  - name: fiche-utilisateur
+    startAt: /users
+    thenExplore: true
+    steps:
+      - click: { role: link, name: Voir, nth: 2 }
+`,
+      false,
+    );
+    const report = flow(result, 'fiche-utilisateur');
+    expect(report.explored).toBe(true);
+    expect(result.stopReason).toBe('flows-only');
+    // The tabs of /users/3 were explored…
+    const user = result.states.filter((state) => state.route === '/users/:id');
+    expect(user.some((state) => state.subtitle?.includes('Historique'))).toBe(true);
+    // …but nothing the flow did not lead to: only the start page, the flow's pages and /users/3.
+    const executed = result.transitions.filter(
+      (edge) => edge.result === 'SUCCESS' && edge.flow === undefined,
+    );
+    expect(executed.length).toBeGreaterThan(0);
+    for (const edge of executed) {
+      expect(result.states.find((state) => state.id === edge.to)?.route, edge.action.text).toBe('/users/:id');
+    }
+    expect(result.states.some((state) => ['/settings', '/admin', '/dossiers'].includes(state.route))).toBe(
+      false,
+    );
+    expect(lastHits).toEqual([]);
+  });
 });

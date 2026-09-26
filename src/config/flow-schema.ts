@@ -166,7 +166,11 @@ export const flowSchema = z
     /** Page loaded before the first step (default: target.startAt). */
     startAt: nonEmpty.optional(),
     steps: z.array(stepSchema).min(1),
-    /** Explore autonomously from the flow's last screen once it passed. */
+    /**
+     * Once the flow passed, explore its last screen: in-page controls and
+     * pages below its path only (never the global menu). Runs even when
+     * exploration.autonomous is false.
+     */
     thenExplore: z.boolean().default(false),
   })
   .strict();

@@ -52,6 +52,7 @@ flows:
   - name: fiche-utilisateur
     description: Open a user, then let the explorer explore that screen
     startAt: /users
+    # Explore /users/3 (tabs, sub-pages) right after the flow, without following the menu.
     thenExplore: true
     steps:
       - click: { role: link, name: Voir, nth: 2 }

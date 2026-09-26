@@ -15,6 +15,7 @@ import {
   type ActionExecutionResult,
 } from '../execution/playwright-action-executor.js';
 import { evaluateFlowAction, evaluateFlowUrl } from '../flows/flow-safety.js';
+import { actionsInScope, isInScope, scopeOf, type ExplorationScope } from '../flows/flow-scope.js';
 import { FlowStepExecutor, type FlowElementAction } from '../flows/flow-step-executor.js';
 import { FlowGraph, summaryOf } from '../graph/flow-graph.js';
 import type { FlowMemory } from '../memory/flow-memory.js';
@@ -213,7 +214,7 @@ export class FlowExplorer {
           if (await this.goto(page, this.startUrl)) current = await this.observeState(page, 0);
         }
         this.stack = [{ stateId: current.stateId, url: current.url }];
-        const loop = await this.explorationLoop(page, browser, observers, current, true);
+        const loop = await this.explorationLoop(page, browser, observers, current);
         stopReason = loop.stopReason;
       }
     } finally {
@@ -225,24 +226,38 @@ export class FlowExplorer {
 
   /**
    * OBSERVE → DECIDE → SAFETY CHECK → EXECUTE → OBSERVE → STORE, from `current`
-   * until the engine stops, a limit is reached or nothing is left. With
-   * `allowJump` false, exploration stays below the states of the current
-   * stack (exploration of a flow's last screen).
+   * until the engine stops, a limit is reached or nothing is left. With a
+   * `scope` (exploration of a flow's last screen, `thenExplore`), only
+   * in-page controls and links to pages below that screen are considered,
+   * the global menu is ignored, a screen outside the scope is left at once,
+   * and the exploration never jumps to other states.
    */
   private async explorationLoop(
     page: Page,
     browser: BrowserManager,
     observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
     start: PageContext,
-    allowJump: boolean,
+    scope?: ExplorationScope,
   ): Promise<{ page: Page; stopReason: StopReason }> {
+    const allowJump = scope === undefined;
     this.allowJump = allowJump;
     let current = start;
     for (;;) {
       const limit = this.limitReached();
       if (limit) return { page, stopReason: limit };
 
-      const decision = await this.decisionEngine.decide(current, this.graph);
+      if (scope && !isInScope(scope, current.url)) {
+        // An in-page control led elsewhere: go back without exploring that screen here.
+        const restored = await this.backtrack(page, browser, observers.all, false);
+        page = restored.page;
+        if (!restored.context) return { page, stopReason: 'exhausted' };
+        current = restored.context;
+        continue;
+      }
+
+      // The engine only sees what the scope allows; other actions stay unexplored for later.
+      const candidates = scope ? { ...current, actions: actionsInScope(scope, current.actions) } : current;
+      const decision = await this.decisionEngine.decide(candidates, this.graph);
       this.listener.onDecision?.(current, decision);
 
       if (decision.decision === 'STOP') return { page, stopReason: 'engine-stop' };
@@ -631,9 +646,13 @@ export class FlowExplorer {
     if (report.status === 'PASSED' && flow.thenExplore && context && !stopReason) {
       report.explored = true;
       this.stack = [{ stateId: context.stateId, url: context.url }];
-      const loop = await this.explorationLoop(page, browser, observers, context, false);
+      const exhaustedBefore = new Set(this.exhausted);
+      const loop = await this.explorationLoop(page, browser, observers, context, scopeOf(context.url));
       page = loop.page;
       this.allowJump = true;
+      // "Nothing left" meant "nothing left in the scope": the autonomous exploration may still go further.
+      for (const stateId of [...this.exhausted])
+        if (!exhaustedBefore.has(stateId)) this.exhausted.delete(stateId);
       if (loop.stopReason !== 'exhausted' && loop.stopReason !== 'engine-stop') stopReason = loop.stopReason;
     } else if (!flow.thenExplore) {
       // States only the flow reaches are not explored autonomously later.
