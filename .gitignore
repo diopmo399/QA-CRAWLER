@@ -13,4 +13,4 @@ screenshots/*
 !screenshots/.gitkeep
 
 # learned baselines (screens and URLs of the tested application)
-baseline/
+/baseline/
