@@ -99,10 +99,10 @@ export class FlowStepExecutor {
           await locator.click({ timeout: timeoutMs });
           break;
         case 'check':
-          await locator.setChecked(true, { timeout: timeoutMs });
+          await this.setChecked(locator, true, timeoutMs);
           break;
         case 'uncheck':
-          await locator.setChecked(false, { timeout: timeoutMs });
+          await this.setChecked(locator, false, timeoutMs);
           break;
         case 'fill':
           await locator.fill(action.value, { timeout: timeoutMs });
@@ -173,12 +173,47 @@ export class FlowStepExecutor {
     await page.getByRole('option', { name: option }).first().click({ timeout: timeoutMs });
   }
 
+  /**
+   * Styled radios and checkboxes (Angular Material…) draw over their native
+   * input, which then never receives the click: after a short try, click its
+   * label like a user would, then force the input as a last resort. The state
+   * is checked each time.
+   */
+  private async setChecked(locator: Locator, checked: boolean, timeoutMs: number): Promise<void> {
+    try {
+      await locator.setChecked(checked, { timeout: Math.min(timeoutMs, QUICK_CHECK_MS) });
+      return;
+    } catch (error) {
+      const done = async (): Promise<boolean> =>
+        (await locator.isChecked().catch(() => !checked)) === checked;
+      if (await done()) return;
+      const viaLabel = await locator
+        .evaluate((el) => {
+          const label =
+            (el as HTMLInputElement).labels?.[0] ??
+            el.closest('label, mat-radio-button, mat-checkbox, [role="radio"], [role="checkbox"]');
+          if (!label || label === el) return false;
+          (label as HTMLElement).click();
+          return true;
+        })
+        .catch(() => false);
+      if (viaLabel) await locator.page().waitForTimeout(100);
+      if (await done()) return;
+      await locator.setChecked(checked, { force: true, timeout: timeoutMs }).catch(() => undefined);
+      if (await done()) return;
+      throw error;
+    }
+  }
+
   private async settle(page: Page, timeoutMs: number): Promise<void> {
     if (page.isClosed()) return;
     await page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => undefined);
     if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
   }
 }
+
+/** Time given to a plain check before trying the label (styled radios/checkboxes). */
+const QUICK_CHECK_MS = 3000;
 
 function firstLine(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
