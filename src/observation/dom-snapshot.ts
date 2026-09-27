@@ -388,18 +388,22 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
   /**
    * Le texte court le plus proche avant (ou après) un champ, dans son propre bloc : on
    * remonte tant que le parent ne contient que ce champ, et on s'arrête dès qu'un
-   * frère contient un autre champ (son texte est alors à ce champ-là).
+   * frère contient un autre champ (son texte est alors à ce champ-là). Assez haut pour
+   * sortir d'un mat-form-field (input › infix › flex › wrapper › mat-form-field › bloc).
+   * Un message d'erreur (« Ce champ est obligatoire ») n'est ni un libellé ni une aide.
    */
+  const NEAR_TEXT_DEPTH = 8;
   const nearText = (el: Element, direction: 'before' | 'after', max: number): string => {
     let node: Element = el;
-    for (let depth = 0; depth < 4; depth += 1) {
+    for (let depth = 0; depth < NEAR_TEXT_DEPTH; depth += 1) {
       for (
         let sibling = direction === 'before' ? node.previousElementSibling : node.nextElementSibling;
         sibling;
         sibling = direction === 'before' ? sibling.previousElementSibling : sibling.nextElementSibling
       ) {
         if (holdsField(sibling)) return '';
-        if (sibling.matches(ERROR_SELECTOR) || !isVisible(sibling)) continue;
+        if (sibling.matches(ERROR_SELECTOR) || sibling.querySelector(ERROR_SELECTOR) || !isVisible(sibling))
+          continue;
         const text = clean(nameText(sibling), max + 1)
           .replace(/^\*\s*/, '')
           .replace(/\s*\*$/, '');

@@ -16,6 +16,8 @@ import { testConfig } from '../helpers.js';
 /**
  * Une fenêtre de création faite de <div>, comme beaucoup de design systems :
  * - les libellés sont des <div> posés au-dessus des champs, sans <label for> ni aria ;
+ * - certains champs sont rangés comme dans Angular Material (input › infix › flex › wrapper ›
+ *   mat-form-field), avec « Ce champ est obligatoire » déjà affiché dessous ;
  * - l'aide « 99999 » est un <div> sous le champ ; ce champ a un masque de saisie qui
  *   n'accepte que de vraies frappes de chiffres (une valeur posée d'un coup est effacée) ;
  * - les radios sont pilotées par l'application : le clic sur l'input est annulé et
@@ -27,11 +29,19 @@ const DIALOG = `<h1>Accueil</h1>
   <h2>Nouvelle demande</h2>
   <div class="row">
     <div class="field"><div class="lbl">* Code agence</div>
-      <input id="f1" required maxlength="5">
+      <mat-form-field class="mat-mdc-form-field"><div class="mat-mdc-text-field-wrapper">
+        <div class="mat-mdc-form-field-flex"><div class="mat-mdc-form-field-infix">
+          <input id="f1" required maxlength="5" role="combobox" aria-autocomplete="list">
+        </div></div></div>
+        <div class="mat-mdc-form-field-subscript-wrapper"><mat-error>Ce champ est obligatoire</mat-error></div>
+      </mat-form-field>
       <div class="help">99999</div></div>
     <div class="field"><div class="lbl">Nom de l'agence</div><div>-</div></div>
   </div>
-  <div class="field"><div class="lbl">* Raison sociale</div><input id="f2" required></div>
+  <div class="field"><div class="lbl">* Raison sociale</div>
+    <mat-form-field class="mat-mdc-form-field"><div class="mat-mdc-text-field-wrapper">
+      <div class="mat-mdc-form-field-flex"><div class="mat-mdc-form-field-infix"><input id="f2" required></div></div>
+    </div><div class="mat-mdc-form-field-subscript-wrapper"></div></mat-form-field></div>
   <div class="field"><div class="lbl">Numéro de dossier</div><input id="f5" inputmode="numeric" maxlength="6"></div>
   <div class="row">
     <div class="field"><div class="lbl">* Prénom du contact</div><input id="f3" required></div>
@@ -57,6 +67,7 @@ const DIALOG = `<h1>Accueil</h1>
     input.addEventListener('input', () => {
       input.value = model;
       input.setAttribute('aria-invalid', model.length === 5 ? 'false' : 'true');
+      document.querySelector('mat-error').hidden = model.length === 5;
     });
   })();
   // Radios contrôlées : le clic natif est annulé, l'application coche un peu plus tard.
