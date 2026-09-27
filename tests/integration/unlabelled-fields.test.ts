@@ -16,7 +16,8 @@ import { testConfig } from '../helpers.js';
 /**
  * Une fenêtre de création faite de <div>, comme beaucoup de design systems :
  * - les libellés sont des <div> posés au-dessus des champs, sans <label for> ni aria ;
- * - l'aide « 99999 » est un <div> sous le champ ; ce champ n'accepte que des chiffres ;
+ * - l'aide « 99999 » est un <div> sous le champ ; ce champ a un masque de saisie qui
+ *   n'accepte que de vraies frappes de chiffres (une valeur posée d'un coup est effacée) ;
  * - les radios sont pilotées par l'application : le clic sur l'input est annulé et
  *   l'état n'est mis à jour qu'un peu plus tard (composant contrôlé).
  * Rien n'est envoyé : le bouton « Soumettre » reste bloqué par défaut.
@@ -26,7 +27,7 @@ const DIALOG = `<h1>Accueil</h1>
   <h2>Nouvelle demande</h2>
   <div class="row">
     <div class="field"><div class="lbl">* Code agence</div>
-      <input id="f1" required maxlength="5" oninput="this.value = this.value.replace(/\\D/g, '')">
+      <input id="f1" required maxlength="5">
       <div class="help">99999</div></div>
     <div class="field"><div class="lbl">Nom de l'agence</div><div>-</div></div>
   </div>
@@ -43,6 +44,21 @@ const DIALOG = `<h1>Accueil</h1>
   <button>Annuler</button> <button>Soumettre</button>
 </div>
 <script>
+  // Masque de saisie : la valeur ne se construit qu'à partir des vraies frappes ; une valeur
+  // posée d'un coup (sans touche) est effacée et le champ reste invalide.
+  (() => {
+    const input = document.getElementById('f1');
+    let model = '';
+    input.setAttribute('aria-invalid', 'true');
+    input.addEventListener('keydown', (event) => {
+      if (/^\\d$/.test(event.key) && model.length < 5) model += event.key;
+      else if (event.key === 'Backspace') model = model.slice(0, -1);
+    });
+    input.addEventListener('input', () => {
+      input.value = model;
+      input.setAttribute('aria-invalid', model.length === 5 ? 'false' : 'true');
+    });
+  })();
   // Radios contrôlées : le clic natif est annulé, l'application coche un peu plus tard.
   document.querySelectorAll('input[type=radio]').forEach((radio) =>
     radio.addEventListener('click', (event) => {
