@@ -752,6 +752,8 @@ const formsSchema = z
     validationTesting: z.boolean().default(false),
     maxValidationCasesPerField: z.number().int().positive().default(3),
     maxValidationCasesPerForm: z.number().int().positive().default(10),
+    /** Cas de validation au plus pour tout le run (budget central). */
+    maxValidationCasesPerRun: z.number().int().positive().default(200),
     /**
      * Boutons qui envoient un formulaire (« Soumettre », « Enregistrer »… dans un
      * formulaire ou une fenêtre avec des champs). true : permis comme toute
