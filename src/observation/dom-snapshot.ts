@@ -378,6 +378,39 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
         .join(' '),
       60,
     );
+  // ---- libellé et aide « visuels » : le texte posé juste avant / juste après un champ, sans lien HTML
+  // (pas de <label for>, pas d'aria) — courant dans les fenêtres faites de <div>.
+  const FIELD_LIKE = `${FIELD_SELECTOR}, [role="combobox"], [role="radio"], [role="checkbox"], [contenteditable]:not([contenteditable="false"])`;
+  const holdsField = (el: Element): boolean =>
+    el.matches(FIELD_LIKE) ||
+    el.querySelector(FIELD_LIKE) !== null ||
+    (el.shadowRoot !== null && el.shadowRoot.querySelector(FIELD_LIKE) !== null);
+  /**
+   * Le texte court le plus proche avant (ou après) un champ, dans son propre bloc : on
+   * remonte tant que le parent ne contient que ce champ, et on s'arrête dès qu'un
+   * frère contient un autre champ (son texte est alors à ce champ-là).
+   */
+  const nearText = (el: Element, direction: 'before' | 'after', max: number): string => {
+    let node: Element = el;
+    for (let depth = 0; depth < 4; depth += 1) {
+      for (
+        let sibling = direction === 'before' ? node.previousElementSibling : node.nextElementSibling;
+        sibling;
+        sibling = direction === 'before' ? sibling.previousElementSibling : sibling.nextElementSibling
+      ) {
+        if (holdsField(sibling)) return '';
+        if (sibling.matches(ERROR_SELECTOR) || !isVisible(sibling)) continue;
+        const text = clean(nameText(sibling), max + 1)
+          .replace(/^\*\s*/, '')
+          .replace(/\s*\*$/, '');
+        if (text) return text.length <= max ? text : '';
+      }
+      const parent = parentDeep(node);
+      if (!parent || parent === document.body || parent.querySelectorAll(FIELD_LIKE).length > 1) break;
+      node = parent;
+    }
+    return '';
+  };
   const describeField = (
     el: Element,
     tag: string,
@@ -406,6 +439,11 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
         60,
       );
     if (hint) info.hint = hint;
+    else {
+      // Aide affichée sous le champ sans lien HTML ("99999", "HH:MM").
+      const below = nearText(el, 'after', 40);
+      if (below) info.hint = below;
+    }
     if (
       /datepicker/i.test(el.className && typeof el.className === 'string' ? el.className : '') ||
       container?.querySelector('mat-datepicker-toggle, [class*="datepicker-toggle"]') ||
@@ -502,9 +540,16 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     const routerLink =
       el.getAttribute('routerlink') ?? el.getAttribute('ng-reflect-router-link') ?? undefined;
     const dialogName = dialogNameOf(el);
-    const label = isField || editable ? labelOf(el) : '';
-    // Nommé seulement par son composant (attribut label, slot) : le nom calculé par Playwright peut différer.
-    const labelledByHost = label !== '' && hostOf(el) !== null && label === hostLabel(el);
+    const linkedLabel = isField || editable ? labelOf(el) : '';
+    const fieldName = accessibleName(el, role);
+    // Aucun libellé relié : le texte posé juste avant le champ (« * Code agence » au-dessus).
+    const visual =
+      !linkedLabel && !fieldName && (isField || editable || role === 'combobox')
+        ? nearText(el, 'before', 60)
+        : '';
+    const label = linkedLabel || visual;
+    // Libellé deviné (texte voisin, composant autour) : Playwright ne le connaît pas, le localisateur sera CSS.
+    const labelGuessed = visual !== '' || (label !== '' && hostOf(el) !== null && label === hostLabel(el));
     // Le formulaire auquel appartient un élément : son <form>, sinon la fenêtre / le calque qui le contient (les
     // formulaires des fenêtres Angular Material n'ont souvent pas de <form>).
     const layer = layers.find((candidate) => containsDeep(candidate, el));
@@ -534,7 +579,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       index,
       tag,
       role,
-      name: accessibleName(el, role) || (editable ? label : ''),
+      name: fieldName || (editable ? label : ''),
       text: isField || editable ? '' : clean(nameText(el)),
       visible: true,
       disabled:
@@ -585,7 +630,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       editable: editable ? true : undefined,
       ...(editable ? { hasValue: clean((el as HTMLElement).innerText) !== '' } : {}),
       inShadow: hostOf(el) !== null ? true : undefined,
-      labelledByHost: labelledByHost ? true : undefined,
+      labelGuessed: labelGuessed ? true : undefined,
       flowTarget: el.hasAttribute(FLOW_TARGET_ATTRIBUTE) ? true : undefined,
       foreground: foreground ? true : undefined,
       // Derrière un calque modal : la page derrière ne peut pas recevoir le clic.

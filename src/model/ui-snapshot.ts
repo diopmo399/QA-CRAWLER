@@ -70,8 +70,8 @@ export interface UiElement {
   editable?: boolean;
   /** Dessiné dans le shadow root d'un composant web. */
   inShadow?: boolean;
-  /** Son libellé vient du composant qui l'entoure (attribut label, slot="label"). */
-  labelledByHost?: boolean;
+  /** Libellé deviné (texte voisin du champ, composant qui l'entoure) : Playwright ne le connaît pas. */
+  labelGuessed?: boolean;
   /** Le champ contient déjà une valeur (la valeur elle-même n'est jamais lue). */
   hasValue?: boolean;
   /** Texte d'aide du champ (mat-hint, aria-describedby) : "99999", "HH:MM"… */

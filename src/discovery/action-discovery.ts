@@ -16,7 +16,7 @@ import {
   SUBMIT_KEYWORDS,
 } from '../policies/keywords.js';
 import type { SafetyPolicy } from '../policies/safety-policy.js';
-import { buildLocators } from './locator-builder.js';
+import { buildLocators, locatorKey } from './locator-builder.js';
 
 const TEXT_INPUT_TYPES = new Set([
   'text',
@@ -130,7 +130,16 @@ export class ActionDiscovery {
         external,
       });
 
-      const id = actionId(stateId, type, element.role, element.name, href, locator.nth);
+      // Sans nom accessible, le localisateur (CSS) distingue les éléments : sinon, des champs
+      // sans nom du même rôle auraient le même id et seul le premier serait gardé.
+      const id = actionId(
+        stateId,
+        type,
+        element.role,
+        element.name || locatorKey(locator),
+        href,
+        locator.nth,
+      );
       if (ids.has(id)) return;
       ids.add(id);
 

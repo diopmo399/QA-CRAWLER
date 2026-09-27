@@ -30,9 +30,9 @@ const FIELD_TAGS = new Set(['input', 'select', 'textarea']);
  */
 export function buildLocator(element: UiElement): LocatorDescriptor {
   if (element.testId) return { strategy: 'testId', value: element.testId };
-  // Nommé par son composant web (attribut label, slot) : Playwright peut calculer un autre nom.
-  // Le chemin CSS traverse le shadow root du composant.
-  if (element.labelledByHost) return { strategy: 'css', value: element.css };
+  // Libellé deviné (texte voisin, attribut label ou slot d'un composant) : Playwright ne le
+  // connaît pas. Le chemin CSS (qui traverse les shadow roots) trouve l'élément lui-même.
+  if (element.labelGuessed) return { strategy: 'css', value: element.css };
   if (ROLE_LOCATABLE.has(element.role) && element.name) {
     return { strategy: 'role', role: element.role, name: element.name, exact: true };
   }
