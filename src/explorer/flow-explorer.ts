@@ -585,6 +585,7 @@ export class FlowExplorer {
       route: state.route,
       headings: snapshot.headings,
       ...(snapshot.textExcerpt ? { text: snapshot.textExcerpt } : {}),
+      ...(snapshot.structure ? { structure: snapshot.structure } : {}),
       dialogs: snapshot.dialogs,
       actions,
       forms: snapshot.forms,

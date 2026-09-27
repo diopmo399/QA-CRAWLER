@@ -114,6 +114,37 @@ export interface UiSnapshot {
   textExcerpt: string;
   elements: UiElement[];
   forms: FormSummary[];
+  /** Faits de structure de l'écran (tableaux, fil d'Ariane, régions…), pour reconnaître les motifs d'interface. */
+  structure?: PageStructure;
+}
+
+/**
+ * Ce que l'écran contient, en nombres et en noms courts : jamais de données affichées
+ * (les cellules des tableaux ne sont pas lues), seulement la forme de la page.
+ */
+export interface PageStructure {
+  /** Tableaux de données visibles (<table>, role=table/grid, mat-table). */
+  tables: number;
+  /** Lignes de données du plus grand tableau (sans l'en-tête). */
+  tableRows: number;
+  /** En-têtes de colonnes du plus grand tableau (8 au plus). */
+  columnHeaders: string[];
+  /** Listes d'éléments répétés (role=list/listbox hors navigation, ul de cartes…) de 3 éléments ou plus. */
+  lists: number;
+  /** Cartes / tuiles (mat-card, .card, .tile, role=article). */
+  cards: number;
+  /** Fil d'Ariane (nav[aria-label*=breadcrumb], .breadcrumb). */
+  breadcrumbs: string[];
+  /** Noms des régions et repères nommés (role=region/main/navigation avec aria-label). */
+  regions: string[];
+  /** Étapes d'un assistant (mat-stepper, role=tablist d'étapes, .stepper, « Étape 2 sur 3 »). */
+  wizardSteps: number;
+  /** Champs d'envoi de fichier (input type=file, zone de dépôt). */
+  fileInputs: number;
+  /** Un message d'état vide est affiché (« Aucun résultat », « No data »…). */
+  emptyMessage?: string;
+  /** Une barre de pagination est visible (mat-paginator, nav[aria-label*=pagination], .pagination). */
+  pagination: boolean;
 }
 
 /** Indices visibles de la façon dont une action s'est passée. */

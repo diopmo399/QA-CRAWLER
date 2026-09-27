@@ -1,0 +1,37 @@
+# Generic domain pack, loaded by default (domainPacks: [generic]).
+# A domain pack only brings vocabulary, synonyms, invariants and scoring hints:
+# never rules specific to one application.
+name: generic
+description: Vocabulary shared by most business applications (FR/EN).
+
+synonyms:
+  users:
+    [
+      user,
+      users,
+      utilisateur,
+      utilisateurs,
+      member,
+      members,
+      membre,
+      membres,
+      account,
+      accounts,
+      compte,
+      comptes,
+    ]
+  roles: [role, roles, rôle, rôles, profile, profil, profils]
+  permissions:
+    [permission, permissions, droit, droits, access, accès, habilitation, habilitations, authorization]
+  settings: [settings, preferences, préférences, configuration, paramètres, réglages]
+  reports: [report, reports, rapport, rapports, reporting, statistics, statistiques]
+  dashboard: [dashboard, home, accueil, tableau de bord, overview, aperçu]
+  search: [search, recherche, rechercher, find]
+  create: [create, add, new, ajouter, créer, nouveau, nouvelle]
+
+invariants:
+  - id: NO-SERVER-ERROR
+    description: No request answers with a server error (5xx)
+    severity: ERROR
+    when: { anyRequest: true }
+    expect: { statusBelow: 500 }
