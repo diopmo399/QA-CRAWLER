@@ -11,6 +11,7 @@ import { DomFormAnalyzer, formName } from './form-analyzer.js';
 import { ValidDataFillStrategy, type FormFillStrategy } from './form-fill-strategy.js';
 import type { DiscoveredForm, FormField, FormFillPlan } from './form-model.js';
 import { validityOf } from './validity.js';
+import type { GeneratedFormCase } from '../constraints/test-case-generators.js';
 
 export { formName };
 
@@ -46,6 +47,24 @@ export interface ValidationCase {
   message?: string;
 }
 
+/**
+ * Un cas de propriété : un formulaire rempli avec des valeurs générées (bornes,
+ * partitions d'équivalence), un champ variant à la fois. Propriétés : une valeur
+ * valide est acceptée (PASS si aucun champ n'est refusé), une invalide est refusée
+ * (PASS si le champ visé l'est). Une valeur invalide acceptée reste UNKNOWN — la
+ * validation peut n'avoir lieu qu'à l'envoi — et une valeur valide refusée est un FAIL.
+ */
+export interface PropertyCase {
+  id: string;
+  description: string;
+  expectation: 'ACCEPTED' | 'REJECTED';
+  outcome: 'ACCEPTED' | 'REJECTED' | 'NOT_ENTERED' | 'ERROR';
+  verdict: 'PASS' | 'FAIL' | 'UNKNOWN';
+  /** Champ visé, et le message affiché par l'application. */
+  field?: string;
+  message?: string;
+}
+
 export interface FormRun {
   group: string;
   name: string;
@@ -54,6 +73,7 @@ export interface FormRun {
   fields: FilledField[];
   problems: ValidationProblem[];
   validationCases: ValidationCase[];
+  propertyCases?: PropertyCase[];
 }
 
 export interface ValidationTestingLimits {
@@ -195,22 +215,7 @@ export class FormExerciser {
           formId: run.form.id,
           operations: [{ fieldId: field.id, operation, value: value.value ?? '' }],
         };
-        const [result] = await this.executor.executePlan(page, plan, () => action);
-        const base = toLocator(page, action.locator);
-        const locator = action.locator.nth !== undefined ? base.nth(action.locator.nth) : base.first();
-        const validity = result?.status === 'FAILED' ? undefined : await validityOf(locator);
-        const entered =
-          operation === 'fill'
-            ? await locator.inputValue({ timeout: 1000 }).catch(() => undefined)
-            : undefined;
-        const outcome: ValidationCase['outcome'] =
-          result?.status === 'FAILED'
-            ? 'ERROR'
-            : validity?.invalid
-              ? 'REJECTED'
-              : entered !== undefined && entered !== (value.value ?? '')
-                ? 'NOT_ENTERED'
-                : 'ACCEPTED';
+        const { outcome, message } = await this.tryValue(page, plan, action, operation, value.value ?? '');
         cases.push({
           fieldId: field.id,
           field: fieldLabel(field),
@@ -218,7 +223,7 @@ export class FormExerciser {
           value: value.value ?? '',
           outcome,
           verdict: outcome === 'REJECTED' || outcome === 'NOT_ENTERED' ? 'PASS' : 'UNKNOWN',
-          ...(validity?.message ? { message: validity.message } : {}),
+          ...(message ? { message } : {}),
         });
         // Retour à la valeur valide, pour les cas suivants et pour la suite.
         await this.executor.executePlan(page, { formId: run.form.id, operations: [planned] }, () => action);
@@ -226,6 +231,126 @@ export class FormExerciser {
     }
     return cases;
   }
+
+  /** Saisit une valeur dans un champ puis lit ce que l'application et le navigateur en disent. */
+  private async tryValue(
+    page: Page,
+    plan: FormFillPlan,
+    action: DiscoveredAction,
+    operation: 'fill' | 'uncheck' | 'select',
+    value: string,
+  ): Promise<TriedValue> {
+    const [result] = await this.executor.executePlan(page, plan, () => action);
+    const base = toLocator(page, action.locator);
+    const locator = action.locator.nth !== undefined ? base.nth(action.locator.nth) : base.first();
+    if (result?.status === 'FAILED') return { outcome: 'ERROR' };
+    const validity = await validityOf(locator);
+    const entered =
+      operation === 'fill' ? await locator.inputValue({ timeout: 1000 }).catch(() => undefined) : undefined;
+    const outcome: TriedValue['outcome'] = validity?.invalid
+      ? 'REJECTED'
+      : entered !== undefined && entered !== value
+        ? 'NOT_ENTERED'
+        : 'ACCEPTED';
+    return { outcome, ...(validity?.message ? { message: validity.message } : {}) };
+  }
+
+  /**
+   * Property-based testing : chaque cas généré (OneFactorPropertyTestGenerator) remplit
+   * les champs concernés, puis vérifie la propriété ; le formulaire revient ensuite à
+   * ses valeurs valides. Rien n'est envoyé.
+   */
+  async testProperties(
+    page: Page,
+    context: PageContext,
+    run: FormRun,
+    cases: readonly GeneratedFormCase[],
+  ): Promise<PropertyCase[]> {
+    const results: PropertyCase[] = [];
+    const actionOf = (fieldId: string): DiscoveredAction | undefined =>
+      context.actions.find((candidate) => candidate.id === fieldId && !candidate.obscured);
+    for (const generated of cases) {
+      const operations = Object.entries(generated.values)
+        .map(([fieldId, value]) => {
+          const field = run.form.fields.find((candidate) => candidate.id === fieldId);
+          const kind: 'fill' | 'select' =
+            field?.type === 'select' || field?.type === 'combobox' ? 'select' : 'fill';
+          return { fieldId, operation: kind, value };
+        })
+        .filter((operation) => actionOf(operation.fieldId) !== undefined);
+      if (operations.length === 0) continue;
+      const others = operations.filter((operation) => operation.fieldId !== generated.fieldId);
+      if (others.length > 0)
+        await this.executor.executePlan(page, { formId: run.form.id, operations: others }, actionOf);
+      let outcome: PropertyCase['outcome'] = 'ACCEPTED';
+      let message: string | undefined;
+      const target = generated.fieldId
+        ? operations.find((operation) => operation.fieldId === generated.fieldId)
+        : undefined;
+      const targetAction = target ? actionOf(target.fieldId) : undefined;
+      if (target && targetAction) {
+        const tried = await this.tryValue(
+          page,
+          { formId: run.form.id, operations: [target] },
+          targetAction,
+          target.operation,
+          target.value,
+        );
+        outcome = tried.outcome;
+        message = tried.message;
+      } else {
+        // Tous valides : aucun champ ne doit être refusé.
+        for (const operation of operations) {
+          const action = actionOf(operation.fieldId);
+          if (!action) continue;
+          const base = toLocator(page, action.locator);
+          const locator = action.locator.nth !== undefined ? base.nth(action.locator.nth) : base.first();
+          const validity = await validityOf(locator);
+          if (validity?.invalid) {
+            outcome = 'REJECTED';
+            message = validity.message;
+            break;
+          }
+        }
+      }
+      const rejected = outcome === 'REJECTED' || outcome === 'NOT_ENTERED';
+      const verdict: PropertyCase['verdict'] =
+        outcome === 'ERROR'
+          ? 'UNKNOWN'
+          : generated.expectation === 'REJECTED'
+            ? rejected
+              ? 'PASS'
+              : 'UNKNOWN'
+            : rejected
+              ? 'FAIL'
+              : 'PASS';
+      const field = generated.fieldId
+        ? run.form.fields.find((candidate) => candidate.id === generated.fieldId)
+        : undefined;
+      results.push({
+        id: generated.id,
+        description: generated.description,
+        expectation: generated.expectation,
+        outcome,
+        verdict,
+        ...(field ? { field: fieldLabel(field) } : {}),
+        ...(message ? { message } : {}),
+      });
+    }
+    // Retour aux valeurs valides du plan, pour la suite de l'exploration.
+    const restore = run.plan.operations.filter(
+      (operation) => operation.operation === 'fill' || operation.operation === 'select',
+    );
+    if (restore.length > 0)
+      await this.executor.executePlan(page, { formId: run.form.id, operations: restore }, actionOf);
+    return results;
+  }
+}
+
+/** Ce qui arrive à une valeur saisie : refusée par l'application, par le navigateur, acceptée, ou erreur. */
+interface TriedValue {
+  outcome: 'REJECTED' | 'NOT_ENTERED' | 'ACCEPTED' | 'ERROR';
+  message?: string;
 }
 
 function fieldLabel(field: FormField): string {

@@ -229,6 +229,7 @@ describe('auth.type: http', () => {
       validationTesting: false,
       maxValidationCasesPerField: 3,
       maxValidationCasesPerForm: 10,
+      maxValidationCasesPerRun: 200,
     });
     expect(byDefault.safety.block).toContain('form-submit');
     expect(byDefault.exploration.maxSimilarActions).toBe(2);

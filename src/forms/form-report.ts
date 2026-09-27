@@ -1,5 +1,5 @@
 import type { FieldType } from './form-model.js';
-import type { FormRun, ValidationCase } from './form-exerciser.js';
+import type { FormRun, PropertyCase, ValidationCase } from './form-exerciser.js';
 
 /** Ce que dit le rapport sur un formulaire : ses champs, ce qui a été rempli, ce que l'application a répondu. */
 export interface FormReport {
@@ -26,6 +26,8 @@ export interface FormReport {
   submitActions: string[];
   validationProblems: { field: string; message: string }[];
   validationCases: ValidationCase[];
+  /** Cas générés à partir des contraintes (bornes, partitions), quand propertyTesting est activé. */
+  propertyCases?: PropertyCase[];
 }
 
 export function formReportOf(run: FormRun, stateId: string, actionId?: string): FormReport {
@@ -70,5 +72,6 @@ export function formReportOf(run: FormRun, stateId: string, actionId?: string): 
       message: problem.message,
     })),
     validationCases: run.validationCases,
+    ...(run.propertyCases && run.propertyCases.length > 0 ? { propertyCases: run.propertyCases } : {}),
   };
 }
