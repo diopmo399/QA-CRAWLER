@@ -11,7 +11,7 @@ import { runMission } from '../../src/orchestrator.js';
 /**
  * Dashboard
  * ├── Users
- * │   ├── Detail  (a dialog opened in place: no URL of its own)
+ * │   ├── Detail  (une fenêtre ouverte sur place : pas d'URL propre)
  * │   └── Create
  * ├── Settings
  * └── Reports
@@ -67,7 +67,7 @@ output:
   });
 
   it('goes back only to screens that still have something to explore', () => {
-    // 5 transitions; after each leaf, one return to the closest state with work left.
+    // 5 transitions ; après chaque feuille, un retour à l'état le plus proche qui a encore du travail.
     expect(result.stats.transitions).toBe(5);
     expect(result.stats.backtracks).toBeLessThanOrEqual(4);
   });

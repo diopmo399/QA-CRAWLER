@@ -2,14 +2,14 @@ import { parseConfig } from '../src/config/config-loader.js';
 import type { ScenarioConfig } from '../src/config/config.js';
 import type { UiElement, UiSnapshot } from '../src/model/ui-snapshot.js';
 
-/** Fully-defaulted configuration for http://localhost:4200, with optional YAML additions. */
+/** Configuration complète, valeurs par défaut appliquées, pour http://localhost:4200, avec des ajouts YAML facultatifs. */
 export function testConfig(extraYaml = ''): ScenarioConfig {
   return parseConfig(`target:\n  baseUrl: http://localhost:4200\n${extraYaml}`, {}, {}).config;
 }
 
 let index = 0;
 
-/** UiElement with sensible defaults (a visible, enabled button). */
+/** UiElement avec des valeurs par défaut raisonnables (un bouton visible et actif). */
 export function element(overrides: Partial<UiElement>): UiElement {
   index += 1;
   return {

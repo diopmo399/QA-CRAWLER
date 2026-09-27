@@ -223,7 +223,12 @@ describe('auth.type: http', () => {
     ).config;
     expect(refused.safety.block).toEqual(['delete', 'form-submit']);
     const byDefault = parseConfig(minimal, {}, {}).config;
-    expect(byDefault.forms).toEqual({ exercise: true });
+    expect(byDefault.forms).toEqual({
+      exercise: true,
+      validationTesting: false,
+      maxValidationCasesPerField: 3,
+      maxValidationCasesPerForm: 10,
+    });
     expect(byDefault.safety.block).toContain('form-submit');
     expect(byDefault.exploration.maxSimilarActions).toBe(2);
   });

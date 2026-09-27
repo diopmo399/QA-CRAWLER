@@ -9,10 +9,10 @@ import type { ExplorationResult } from '../../src/model/exploration-result.js';
 import { runMission } from '../../src/orchestrator.js';
 
 /**
- * A request-creation dialog like an Angular Material one: no <form>, fields
- * with hints and error messages shown on blur, styled radios, a custom list
- * (role=combobox) opened in an overlay, a prefilled date, a password field,
- * and a "Soumettre" button that POSTs the request.
+ * Une fenêtre de création de demande comme celles d'Angular Material : pas de <form>,
+ * des champs avec aides et messages d'erreur affichés au blur, des radios stylées, une
+ * liste personnalisée (role=combobox) ouverte dans un calque, une date préremplie, un
+ * champ mot de passe, et un bouton « Soumettre » qui envoie la demande en POST.
  */
 const APP = `<!doctype html><html><head><meta charset="utf-8"><title>Demandes</title>
 <style>
@@ -169,7 +169,7 @@ describe('forms in a dialog (fill, check, never send by default)', () => {
     );
     expect(filled.length).toBeGreaterThanOrEqual(1);
     expect(filled[0]?.result).toBe('SUCCESS');
-    // Its fields are not tried again one by one.
+    // Ses champs ne sont pas retentés un par un.
     const fields = result.transitions.filter(
       (edge) => edge.result !== 'BLOCKED' && ['check', 'select'].includes(edge.action.type),
     );
@@ -183,10 +183,10 @@ describe('forms in a dialog (fill, check, never send by default)', () => {
       'form "Nouveau dossier": field "Numéro de dossier" (value "QA Test"): Format attendu : AB-1234',
     );
     expect(dossier?.severity).toBe('WARNING');
-    // Values that follow the hints are accepted: 99999 → 5 digits, HH:MM → 10:00.
+    // Les valeurs qui suivent les aides sont acceptées : 99999 → 5 chiffres, HH:MM → 10:00.
     expect(issues.find((issue) => issue.message.includes('Code agence'))).toBeUndefined();
     expect(issues.find((issue) => issue.message.includes('Heure'))).toBeUndefined();
-    // Sensitive fields are neither filled nor reported.
+    // Les champs sensibles ne sont ni remplis ni rapportés.
     expect(issues.find((issue) => issue.message.includes('Mot de passe'))).toBeUndefined();
   });
 
@@ -207,6 +207,7 @@ describe('forms with test data per field and forms.submit: true', () => {
       app.url,
       `forms: { submit: true }
 testData:
+  runId: t1
   fields:
     "Numéro de dossier": AB-1234
     "canal de contact": Courriel`,
@@ -219,14 +220,14 @@ testData:
   it('sends what a user would have typed, following the hints and the configured values', () => {
     expect(app.posts.length).toBeGreaterThanOrEqual(1);
     expect(app.posts[0]).toEqual({
-      agence: '12345', // hint "99999"
-      nom: 'QA Test',
+      agence: '12345', // aide "99999"
+      nom: 'QA-CRAWLER-t1', // raison sociale : marquée avec l'id du run
       dossier: 'AB-1234', // testData.fields
-      canal: 'courriel', // radio group, by its label
-      type: 'Ouverture', // custom list: first option
-      date: '2026-09-26', // prefilled: left as it is
-      heure: '10:00', // hint "HH:MM"
-      secret: '', // sensitive: never filled
+      canal: 'courriel', // groupe de radios, par son libellé
+      type: 'Ouverture', // liste personnalisée : première option
+      date: '2026-09-26', // prérempli : laissé tel quel
+      heure: '10:00', // aide "HH:MM"
+      secret: '', // sensible : jamais rempli
     });
   });
 });

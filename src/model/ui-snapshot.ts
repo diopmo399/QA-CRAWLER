@@ -1,28 +1,27 @@
-import type { DiscoveredForm } from './discovered-action.js';
+import type { FormSummary } from './discovered-action.js';
 
 /**
- * Facts about one interactive element, extracted from the DOM by the
- * UIObserver. Plain data: ActionDiscovery turns it into a DiscoveredAction
- * without needing a browser.
+ * Faits sur un élément interactif, extraits du DOM par l'UIObserver. Données
+ * simples : l'ActionDiscovery en fait une DiscoveredAction sans navigateur.
  */
 export interface UiElement {
-  /** Position among interactive elements (debugging only; never used to locate). */
+  /** Position parmi les éléments interactifs (débogage seulement ; jamais utilisée pour localiser). */
   index: number;
   tag: string;
-  /** Explicit or implicit ARIA role (button, link, tab, checkbox, combobox…), '' if none. */
+  /** Rôle ARIA explicite ou implicite (button, link, tab, checkbox, combobox…), '' s'il n'y en a pas. */
   role: string;
-  /** Accessible name (aria-label, aria-labelledby, label, text, title…). */
+  /** Nom accessible (aria-label, aria-labelledby, label, texte, title…). */
   name: string;
-  /** Visible text content, whitespace-collapsed. */
+  /** Texte visible, espaces réduits. */
   text: string;
-  /** Text of the associated <label>, for form fields. */
+  /** Texte du <label> associé, pour les champs de formulaire. */
   label?: string;
   testId?: string;
   inputType?: string;
-  /** name attribute. */
+  /** Attribut name. */
   fieldName?: string;
   elementId?: string;
-  /** Absolute URL of links. */
+  /** URL absolue des liens. */
   href?: string;
   target?: string;
   routerLink?: string;
@@ -32,24 +31,24 @@ export interface UiElement {
   disabled: boolean;
   readOnly: boolean;
   checked?: boolean;
-  /** aria-selected (tabs, options). */
+  /** aria-selected (onglets, options). */
   selected?: boolean;
-  /** aria-expanded (menus, accordions). */
+  /** aria-expanded (menus, accordéons). */
   expanded?: boolean;
   hasPopup: boolean;
   required: boolean;
-  /** Submits its form. */
+  /** Envoie son formulaire. */
   isSubmit: boolean;
-  /** Belongs to a search/filter form (role=search, GET form with a search field). */
+  /** Appartient à un formulaire de recherche/filtre (role=search, formulaire GET avec un champ de recherche). */
   inSearchForm: boolean;
-  /** Index of the enclosing <form>, if any. */
+  /** Index du <form> englobant, s'il y en a un. */
   formIndex?: number;
-  /** The enclosing form posts to a server URL (action attribute). */
+  /** Le formulaire englobant envoie vers une URL du serveur (attribut action). */
   formHasAction: boolean;
-  /** Inside <nav>, role=navigation, menu or tablist. */
+  /** Dans <nav>, role=navigation, menu ou tablist. */
   inNavigation: boolean;
   inDialog: boolean;
-  /** Name of the enclosing dialog, if any. */
+  /** Nom de la fenêtre englobante, s'il y en a une. */
   dialogName?: string;
   min?: string;
   max?: string;
@@ -57,50 +56,72 @@ export interface UiElement {
   minLength?: number;
   maxLength?: number;
   pattern?: string;
-  /** Option labels of a <select> (first 30). */
+  /** Libellés des options désactivées d'un <select>. */
+  disabledOptions?: string[];
+  /** Libellés des options d'un <select> (les 30 premières). */
   options?: string[];
-  /** The element targeted by the current imposed flow step. */
+  /** L'élément visé par l'étape de flow imposé en cours. */
   flowTarget?: boolean;
-  /** Form the element belongs to: `form:<index>` for a <form>, `layer:<name>` for a dialog/overlay. */
+  /** Formulaire auquel appartient l'élément : `form:<index>` pour un <form>, `layer:<nom>` pour une fenêtre/un calque. */
   formGroup?: string;
-  /** A select that is not a native <select> (role combobox/listbox: Angular Material…). */
+  /** Une liste qui n'est pas un <select> natif (role combobox/listbox : Angular Material…). */
   customSelect?: boolean;
-  /** The field already holds a value (the value itself is never read). */
+  /** Zone contenteditable (texte riche, champ personnalisé) : remplie comme un champ texte. */
+  editable?: boolean;
+  /** Dessiné dans le shadow root d'un composant web. */
+  inShadow?: boolean;
+  /** Son libellé vient du composant qui l'entoure (attribut label, slot="label"). */
+  labelledByHost?: boolean;
+  /** Le champ contient déjà une valeur (la valeur elle-même n'est jamais lue). */
   hasValue?: boolean;
-  /** Help text of the field (mat-hint, aria-describedby): "99999", "HH:MM"… */
+  /** Texte d'aide du champ (mat-hint, aria-describedby) : "99999", "HH:MM"… */
   hint?: string;
-  /** The field opens a date picker. */
+  /** Le champ ouvre un calendrier. */
   dateLike?: boolean;
-  /** Label of the group of a radio/checkbox ("Canal de contact"). */
+  /** Libellé du groupe d'une radio / case à cocher (« Canal de contact »). */
   groupLabel?: string;
-  /** Radios of the same choice share this key. */
+  /** Les radios d'un même choix partagent cette clé. */
   choiceGroup?: string;
-  /** Inside a toast, a live region or a timer: comes and goes, not part of the screen's identity. */
+  /** Dans un toast, une zone live ou un minuteur : va et vient, ne fait pas partie de l'identité de l'écran. */
   transient?: boolean;
-  /** In front of the screen: inside a dialog, drawer, open menu or overlay layer. */
+  /** Devant l'écran : dans une fenêtre, un tiroir, un menu ouvert ou un calque. */
   foreground?: boolean;
-  /** Behind a modal layer (backdrop, aria-modal): a click would land on the layer. */
+  /** Derrière un calque modal (fond, aria-modal) : un clic tomberait sur le calque. */
   obscured?: boolean;
-  /** Best-effort CSS selector (last-resort locator). */
+  /** Sélecteur CSS au mieux (localisateur de dernier recours). */
   css: string;
 }
 
-/** Structured view of the current screen — never the raw HTML. */
+/** Vue structurée de l'écran courant — jamais le HTML brut. */
 export interface UiSnapshot {
   url: string;
   title: string;
-  /** Visible h1–h3 / role=heading texts, in document order (max 12). */
+  /** Textes visibles h1–h3 / role=heading, dans l'ordre du document (12 au plus). */
   headings: string[];
-  /** Accessible names of visible dialogs (modal, drawer…). */
+  /** Noms accessibles des fenêtres visibles (modale, tiroir…). */
   dialogs: string[];
-  /** Name of the layer that covers the page (modal, full-screen overlay), if any. */
+  /** Ce que l'écran dit de la dernière action (lu par l'UIOracle). */
+  signals?: UiSignals;
+  /** Nom du calque qui recouvre la page (modale, calque plein écran), s'il y en a un. */
   overlay?: string;
-  /** Names of selected tabs (aria-selected=true). */
+  /** Noms des onglets sélectionnés (aria-selected=true). */
   selectedTabs: string[];
-  /** Elements marked aria-current (active step, active menu entry). */
+  /** Éléments marqués aria-current (étape active, entrée de menu active). */
   currentItems: string[];
-  /** Short excerpt of the visible text (max ~600 chars), for humans and future engines. */
+  /** Court extrait du texte visible (environ 600 caractères au plus), pour les humains et les futurs moteurs. */
   textExcerpt: string;
   elements: UiElement[];
-  forms: DiscoveredForm[];
+  forms: FormSummary[];
+}
+
+/** Indices visibles de la façon dont une action s'est passée. */
+export interface UiSignals {
+  /** Textes des alertes, bannières d'erreur et snackbars visibles (5 au plus). */
+  alerts: string[];
+  /** Une roue de chargement, une barre de progression ou une zone aria-busy est visible. */
+  busy: boolean;
+  /** Rien à lire ni à faire à l'écran. */
+  empty: boolean;
+  /** Champs marqués aria-invalid. */
+  invalidFields: number;
 }

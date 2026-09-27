@@ -16,7 +16,7 @@ export interface DiffTransition {
   actionId: string;
   action: { type: string; text?: string; href?: string };
   result: TransitionResult;
-  /** "POST /api/users 2xx", one per distinct exchange. */
+  /** "POST /api/users 2xx", un par échange distinct. */
   network: string[];
 }
 
@@ -27,7 +27,7 @@ export interface ChangedTransition {
   action: DiffTransition['action'];
   previous: Pick<DiffTransition, 'to' | 'toLabel' | 'result' | 'network'>;
   current: Pick<DiffTransition, 'to' | 'toLabel' | 'result' | 'network'>;
-  /** What changed, readable: "target: Create user → Error", "result: SUCCESS → FAILED", "network: + POST /api/users 5xx". */
+  /** Ce qui a changé, lisible : "target: Create user → Error", "result: SUCCESS → FAILED", "network: + POST /api/users 5xx". */
   changes: string[];
 }
 
@@ -47,12 +47,12 @@ export interface FlowDiff {
 }
 
 /**
- * Compares two flow graphs (a baseline and a new run). States are matched by
- * their fingerprint (stateId); transitions by where they start and which
- * action they run (from + actionId). A transition that still exists but
- * reaches another state, fails now, or calls other endpoints is "changed".
- * Only executed transitions count: blocked actions describe the mission's
- * safety settings, not the application.
+ * Compare deux graphes de flows (une baseline et un nouveau run). Les états sont
+ * appariés par leur empreinte (stateId) ; les transitions par leur point de départ
+ * et l'action qu'elles exécutent (from + actionId). Une transition qui existe encore
+ * mais mène à un autre état, échoue maintenant ou appelle d'autres points d'accès
+ * est « modifiée ». Seules les transitions exécutées comptent : les actions bloquées
+ * décrivent les réglages de sécurité de la mission, pas l'application.
  */
 export class FlowDiffEngine {
   compare(previous: FlowGraphData, current: FlowGraphData): FlowDiff {
@@ -118,7 +118,7 @@ export class FlowDiffEngine {
   }
 }
 
-/** True when nothing differs. */
+/** Vrai quand rien ne diffère. */
 export function isEmptyDiff(diff: FlowDiff): boolean {
   return Object.values(diff.summary).every((count) => count === 0);
 }
@@ -170,7 +170,7 @@ function indexGraph(data: FlowGraphData): {
   const transitions = new Map<string, DiffTransition>();
   for (const edge of data.edges) {
     if (edge.result === 'BLOCKED') continue;
-    // The last attempt wins (a resumed or replayed transition).
+    // La dernière tentative l'emporte (une transition reprise ou rejouée).
     transitions.set(transitionKey(edge), {
       from: edge.from,
       fromLabel: labelOf(edge.from),
@@ -190,9 +190,9 @@ function indexGraph(data: FlowGraphData): {
 }
 
 /**
- * Identity of a transition across runs and environments: its start state and
- * its control (type, label, kind of target). Action ids contain the full
- * URL, which changes from one environment to another.
+ * Identité d'une transition d'un run et d'un environnement à l'autre : son état de
+ * départ et son contrôle (type, libellé, genre de cible). Les id d'action contiennent
+ * l'URL complète, qui change d'un environnement à l'autre.
  */
 export function transitionKey(edge: Pick<FlowEdge, 'from' | 'action'>): string {
   let target = edge.action.href ?? '';
@@ -200,13 +200,13 @@ export function transitionKey(edge: Pick<FlowEdge, 'from' | 'action'>): string {
     try {
       target = routePattern(new URL(target).pathname);
     } catch {
-      // keep the href as recorded
+      // garder le href tel qu'enregistré
     }
   }
   return `${edge.from}::${edge.action.type}|${(edge.action.text ?? edge.action.label ?? '').toLowerCase()}|${target}`;
 }
 
-/** Distinct exchanges of a transition, without the data that changes on every run (ids, query, exact status). */
+/** Échanges distincts d'une transition, sans les données qui changent à chaque run (id, requête, statut exact). */
 export function networkSignature(edge: Pick<FlowEdge, 'network'>): string[] {
   const calls = new Set<string>();
   for (const exchange of edge.network ?? []) {
@@ -214,7 +214,7 @@ export function networkSignature(edge: Pick<FlowEdge, 'network'>): string[] {
     try {
       path = routePattern(new URL(exchange.url).pathname);
     } catch {
-      // keep the URL as recorded
+      // garder l'URL telle qu'enregistrée
     }
     const outcome =
       exchange.status !== undefined

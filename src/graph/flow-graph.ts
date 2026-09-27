@@ -16,15 +16,15 @@ export interface NodeInput {
 }
 
 /**
- * The functional map of the application, built during exploration:
- * nodes are states (screens, steps, tabs), edges are attempted actions.
- * It is also the explorer's memory of what was already tried, so the same
- * action is never retried from the same state.
+ * La carte fonctionnelle de l'application, construite pendant l'exploration : les
+ * nœuds sont des états (écrans, étapes, onglets), les arêtes des actions tentées.
+ * C'est aussi la mémoire de l'explorateur sur ce qui a déjà été essayé : la même
+ * action n'est jamais retentée depuis le même état.
  */
 export class FlowGraph {
   private readonly nodes = new Map<string, FlowNode>();
   private readonly edges: FlowEdge[] = [];
-  /** `${stateId}::${actionId}` of every attempted (or blocked) action. */
+  /** `${stateId}::${actionId}` de chaque action tentée (ou bloquée). */
   private readonly tried = new Set<string>();
   private readonly interactions: BrowserInteractionResult[] = [];
   private root: string | undefined;
@@ -51,7 +51,7 @@ export class FlowGraph {
     };
   }
 
-  /** Adds a state, or refreshes it (new actions, visit count) when already known. Returns true if new. */
+  /** Ajoute un état, ou le met à jour (nouvelles actions, nombre de visites) s'il est déjà connu. Renvoie true s'il est nouveau. */
   addNode(input: NodeInput): boolean {
     const now = input.timestamp ?? new Date().toISOString();
     const existing = this.nodes.get(input.id);
@@ -109,7 +109,7 @@ export class FlowGraph {
     return full;
   }
 
-  /** Records an action the SafetyPolicy refused: it is never proposed again from this state. */
+  /** Enregistre une action refusée par la SafetyPolicy : elle n'est plus jamais proposée depuis cet état. */
   recordBlocked(stateId: string, action: DiscoveredAction, reason: string): FlowEdge {
     return this.addEdge({
       from: stateId,
@@ -121,7 +121,7 @@ export class FlowGraph {
     });
   }
 
-  /** Stores a browser interaction (already free of secrets) with the flow. */
+  /** Enregistre une interaction du navigateur (déjà sans secret) avec le flow. */
   recordInteraction(result: BrowserInteractionResult): void {
     this.interactions.push({ ...result, details: { ...result.details } });
   }
@@ -138,8 +138,8 @@ export class FlowGraph {
     return this.nodes.get(stateId);
   }
 
-  /** True once the action was attempted (or blocked) from this state. */
-  /** An action handled without a transition of its own (a field filled with its whole form). */
+  /** Vrai une fois l'action tentée (ou bloquée) depuis cet état. */
+  /** Une action traitée sans transition propre (un champ rempli avec tout son formulaire). */
   markTried(stateId: string, actionId: string): void {
     this.tried.add(triedKey(stateId, actionId));
   }
@@ -148,23 +148,23 @@ export class FlowGraph {
     return this.tried.has(triedKey(from, actionId));
   }
 
-  /** Ids of actions discovered on the state and never attempted. */
+  /** Id des actions découvertes sur l'état et jamais tentées. */
   getUnexploredActions(stateId: string): string[] {
     const node = this.nodes.get(stateId);
     if (!node) return [];
     return node.discoveredActions.filter((actionId) => !this.tried.has(triedKey(stateId, actionId)));
   }
 
-  /** States whose route pattern is `route`. */
+  /** États dont le modèle de route est `route`. */
   statesForRoute(route: string): FlowNode[] {
     return [...this.nodes.values()].filter((node) => node.route === route);
   }
 
   /**
-   * Shortest successful path of transitions from the root to a state (empty
-   * for the root). A link validated from one state is also usable from any
-   * other state offering a link to the same target (a global menu entry): the
-   * path then uses that state's own action id, so it can be replayed.
+   * Plus court chemin de transitions réussies depuis la racine jusqu'à un état (vide
+   * pour la racine). Un lien validé depuis un état est aussi utilisable depuis tout
+   * autre état qui offre un lien vers la même cible (une entrée du menu global) : le
+   * chemin utilise alors l'id d'action propre à cet état, pour pouvoir être rejoué.
    */
   pathTo(stateId: string): FlowEdge[] {
     if (!this.root || stateId === this.root) return [];
@@ -213,7 +213,7 @@ export class FlowGraph {
     return [];
   }
 
-  /** State ids from the root to a state, for issue attribution and reports. */
+  /** Id des états depuis la racine jusqu'à un état, pour rattacher les anomalies et pour les rapports. */
   flowTo(stateId: string): string[] {
     if (!this.root) return [stateId];
     if (stateId === this.root) return [stateId];

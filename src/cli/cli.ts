@@ -156,6 +156,8 @@ export async function runCli(argv: string[]): Promise<number> {
     if (result.artifacts.html) logger.info(`  HTML report   : ${result.artifacts.html}`);
     if (result.artifacts.flowGraph) logger.info(`  Flow graph    : ${result.artifacts.flowGraph}`);
     if (result.artifacts.flowGraphHtml) logger.info(`  Flow graph UI : ${result.artifacts.flowGraphHtml}`);
+    if (result.artifacts.generatedFlows) logger.info(`  Flows (YAML)  : ${result.artifacts.generatedFlows}`);
+    if (result.artifacts.engineLog) logger.info(`  Engine log    : ${result.artifacts.engineLog}`);
     logger.info(`  Screenshots   : ${result.artifacts.screenshotsDir ?? '-'}`);
     if (result.artifacts.flowDiff) logger.info(`  Flow diff     : ${result.artifacts.flowDiff}`);
     logger.info('');
@@ -231,6 +233,18 @@ function progressListener(quiet: boolean): ExplorationListener {
       if (quiet) return;
       logger.info(`      ${color.magenta('↩ backtrack')} ${to ?? ''} ${color.dim(`(${method})`)}`);
     },
+    onRecovery(event) {
+      if (quiet) return;
+      const mark = event.success ? color.green('↻ recovered') : color.yellow('↻ recovery failed');
+      logger.info(
+        `      ${mark} ${event.strategy} ${color.dim(`(${event.failure}${event.message ? `: ${event.message}` : ''})`)}`,
+      );
+    },
+    onStuck(event) {
+      logger.info(
+        `      ${color.yellow('⟲ stuck')} ${event.kind}: ${event.message} ${color.dim('(branch left)')}`,
+      );
+    },
     onFlowStart(flow) {
       logger.info(
         `${color.bold(color.cyan('▶ flow'))} ${color.bold(flow.name)} ${color.dim(`(${flow.steps.length} steps)`)}`,
@@ -268,7 +282,7 @@ function progressListener(quiet: boolean): ExplorationListener {
       );
     },
     onInteractionLog(line) {
-      // Structured, without secrets: [BROWSER_INTERACTION] type=HTTP_AUTH origin=… handler=… status=… attempt=1
+      // Structuré, sans secret : [BROWSER_INTERACTION] type=HTTP_AUTH origin=… handler=… status=… attempt=1
       if (!quiet) logger.info(`      ${color.magenta(line)}`);
     },
     onIssue(issue, isNew) {

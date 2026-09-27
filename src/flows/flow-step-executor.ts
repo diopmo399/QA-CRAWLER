@@ -2,7 +2,7 @@ import type { Locator, Page } from 'playwright';
 import type { FlowExpectation, FlowTarget } from '../config/flow-schema.js';
 import { toLocator } from '../execution/locator-resolver.js';
 
-/** Attribute set on the targeted element so the UIObserver can recognise it (see dom-snapshot.ts). */
+/** Attribut posé sur l'élément ciblé pour que l'UIObserver le reconnaisse (voir dom-snapshot.ts). */
 export const FLOW_TARGET_ATTRIBUTE = 'data-qa-flow-target';
 
 export type FlowElementAction =
@@ -11,19 +11,19 @@ export type FlowElementAction =
   | { kind: 'select'; option: string };
 
 /**
- * Playwright side of imposed flow steps: finds the element the YAML
- * designates, performs the step and checks expectations. Like the
- * PlaywrightActionExecutor, it contains no safety rule: the explorer only
- * calls `perform` after the SafetyPolicy allowed the step.
+ * Côté Playwright des étapes de flow imposé : trouve l'élément désigné par le YAML,
+ * exécute l'étape et vérifie les attentes. Comme le PlaywrightActionExecutor, il ne
+ * contient aucune règle de sécurité : l'explorateur n'appelle `perform` qu'une fois
+ * l'étape permise par la SafetyPolicy.
  */
 export class FlowStepExecutor {
   constructor(private readonly settleTimeMs: number) {}
 
   /**
-   * The element, once visible; an error message otherwise. With `nth`, that
-   * match; without it, the first visible match inside an open dialog if any
-   * (what a user sees on top: the page behind a modal cannot be clicked),
-   * else the first match.
+   * L'élément, une fois visible ; un message d'erreur sinon. Avec `nth`, cette
+   * correspondance ; sans lui, la première correspondance visible dans une fenêtre
+   * ouverte s'il y en a une (ce que l'utilisateur voit au-dessus : la page derrière
+   * une fenêtre modale ne peut pas être cliquée), sinon la première correspondance.
    */
   async locate(page: Page, target: FlowTarget, timeoutMs: number): Promise<Locator | string> {
     const base = toLocator(page, {
@@ -59,8 +59,8 @@ export class FlowStepExecutor {
   }
 
   /**
-   * Marks the interactive element that will receive the action (the element
-   * itself, or the link/button that contains it) for the next observation.
+   * Marque l'élément interactif qui va recevoir l'action (l'élément lui-même, ou le
+   * lien/bouton qui le contient) pour la prochaine observation.
    */
   async mark(locator: Locator): Promise<void> {
     await locator.evaluate((el, attribute) => {
@@ -86,7 +86,7 @@ export class FlowStepExecutor {
       .catch(() => undefined);
   }
 
-  /** Runs the step on the element; returns an error message on failure. */
+  /** Exécute l'étape sur l'élément ; renvoie un message d'erreur en cas d'échec. */
   async perform(
     page: Page,
     locator: Locator,
@@ -119,7 +119,7 @@ export class FlowStepExecutor {
     }
   }
 
-  /** Waits until every expectation holds; returns what did not hold. */
+  /** Attend que chaque attente soit satisfaite ; renvoie ce qui ne l'est pas. */
   async expect(page: Page, expectation: FlowExpectation, timeoutMs: number): Promise<string | undefined> {
     const failures: string[] = [];
     if (expectation.url !== undefined) {
@@ -162,7 +162,7 @@ export class FlowStepExecutor {
     return failures.length > 0 ? failures.join('; ') : undefined;
   }
 
-  /** Native <select>: selectOption; custom selects (Angular Material, ARIA combobox): open it, then click the option. */
+  /** <select> natif : selectOption ; listes personnalisées (Angular Material, combobox ARIA) : l'ouvrir, puis cliquer sur l'option. */
   private async select(page: Page, locator: Locator, option: string, timeoutMs: number): Promise<void> {
     const tag = await locator.evaluate((el) => el.tagName.toLowerCase());
     if (tag === 'select') {
@@ -174,10 +174,10 @@ export class FlowStepExecutor {
   }
 
   /**
-   * Styled radios and checkboxes (Angular Material…) draw over their native
-   * input, which then never receives the click: after a short try, click its
-   * label like a user would, then force the input as a last resort. The state
-   * is checked each time.
+   * Les radios et cases stylées (Angular Material…) se dessinent par-dessus leur input
+   * natif, qui ne reçoit alors jamais le clic : après un court essai, cliquer sur leur
+   * libellé comme le ferait un utilisateur, puis forcer l'input en dernier recours.
+   * L'état est vérifié à chaque fois.
    */
   private async setChecked(locator: Locator, checked: boolean, timeoutMs: number): Promise<void> {
     try {
@@ -212,7 +212,7 @@ export class FlowStepExecutor {
   }
 }
 
-/** Time given to a plain check before trying the label (styled radios/checkboxes). */
+/** Temps laissé à un simple check avant d'essayer le libellé (radios/cases stylées). */
 const QUICK_CHECK_MS = 3000;
 
 function firstLine(error: unknown): string {

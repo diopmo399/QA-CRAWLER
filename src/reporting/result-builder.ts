@@ -5,10 +5,10 @@ import type { ExplorationResult, StateReport } from '../model/exploration-result
 import { ISSUE_TYPES, SEVERITIES, type IssueType, type Severity } from '../model/issue.js';
 import { redactUrl } from '../security/redactor.js';
 
-/** Turns what the explorer learned into the report model (result.json, index.html). */
+/** Transforme ce que l'explorateur a appris en modèle de rapport (result.json, index.html). */
 export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig): ExplorationResult {
   const { graph } = outcome;
-  // Shortest path known at the end of the run: the easiest way to reproduce each anomaly.
+  // Plus court chemin connu à la fin du run : la façon la plus simple de reproduire chaque anomalie.
   const issues = outcome.issues.map((issue) =>
     issue.stateId && graph.hasNode(issue.stateId) ? { ...issue, flow: graph.flowTo(issue.stateId) } : issue,
   );
@@ -80,6 +80,11 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     browserInteractions: outcome.interactions,
     issues,
     ...(outcome.verification ? { verification: outcome.verification } : {}),
+    runId: outcome.runId,
+    formReports: outcome.forms,
+    recovery: outcome.recovery,
+    mutations: outcome.mutations,
+    createdData: outcome.createdData,
     settings: {
       exploration,
       goals,
@@ -91,7 +96,7 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
       failOnSeverity: report.failOnSeverity,
       browserInteractions: {
         ...config.browserInteractions,
-        // Prompt answers are mission data: only their match is reported.
+        // Les réponses aux prompts sont des données de la mission : seule leur correspondance est rapportée.
         dialogs: {
           ...config.browserInteractions.dialogs,
           promptValues: config.browserInteractions.dialogs.promptValues.map((entry) => ({

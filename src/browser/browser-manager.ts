@@ -8,10 +8,10 @@ import {
 import type { ScenarioConfig } from '../config/config.js';
 
 /**
- * Owns the Chromium process. Headless by default and tuned for containers:
- * no GPU, no display server, no special privileges. Playwright launches
- * Chromium without its sandbox by default, which is what allows running as
- * an arbitrary non-root user (OpenShift) without extra capabilities.
+ * Possède le processus Chromium. Sans interface par défaut et réglé pour les
+ * conteneurs : pas de GPU, pas de serveur d'affichage, aucun privilège
+ * particulier. Playwright lance Chromium sans son sandbox par défaut, ce qui
+ * permet de tourner avec un utilisateur non root quelconque (OpenShift) sans capacité supplémentaire.
  */
 export class BrowserManager {
   private browser: Browser | undefined;
@@ -19,7 +19,7 @@ export class BrowserManager {
 
   constructor(private readonly options: ScenarioConfig['browser']) {}
 
-  /** `extra`: options set by the authenticator (HTTP credentials). */
+  /** `extra` : options fixées par l'authentificateur (identifiants HTTP). */
   async start(extra: BrowserContextOptions = {}): Promise<BrowserContext> {
     this.browser = await chromium.launch({
       headless: this.options.headless,
@@ -31,13 +31,13 @@ export class BrowserManager {
       ignoreHTTPSErrors: this.options.ignoreHttpsErrors,
       ...(this.options.locale ? { locale: this.options.locale } : {}),
       ...(this.options.userAgent ? { userAgent: this.options.userAgent } : {}),
-      // A download is never a page to crawl.
+      // Un téléchargement n'est jamais une page à explorer.
       acceptDownloads: false,
       ...extra,
     });
-    // Page scripts are serialized with Function#toString. When the crawler runs through a
-    // TypeScript loader that keeps function names (tsx/esbuild), those scripts reference a
-    // `__name` helper that does not exist in the page. Provide a no-op fallback.
+    // Les scripts de page sont sérialisés avec Function#toString. Quand le crawler passe par un
+    // chargeur TypeScript qui garde les noms de fonction (tsx/esbuild), ces scripts appellent un
+    // helper `__name` qui n'existe pas dans la page. On fournit un remplacement qui ne fait rien.
     await this.context.addInitScript({
       content:
         'if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',

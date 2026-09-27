@@ -16,10 +16,18 @@ import {
   SEVERITY_COLORS,
 } from './html-common.js';
 import { reportTexts, translateReason, valueLabel, type ReportLanguage, type ReportTexts } from './i18n.js';
+import {
+  authorizationSection,
+  dataSection,
+  formsSection,
+  oraclesSection,
+  qualityTexts,
+  recoverySection,
+} from './quality-sections.js';
 
 export { esc } from './html-common.js';
 
-/** reports/index.html — static, self-contained report (no JavaScript, no external assets). */
+/** reports/index.html — rapport statique et autonome (sans JavaScript ni ressource externe). */
 export class HtmlReporter implements Reporter {
   readonly format = 'html';
 
@@ -40,7 +48,7 @@ export class HtmlReporter implements Reporter {
   }
 }
 
-/** Path of a file relative to the report, so reports and screenshots can be published together. */
+/** Chemin d'un fichier relatif au rapport, pour publier rapports et captures ensemble. */
 export function relativeTo(directory: string, file: string): string {
   const relative = path.relative(directory, path.resolve(file));
   return relative.split(path.sep).map(encodeURIComponent).join('/');
@@ -67,6 +75,12 @@ export function renderHtml(
   const navigationIssues = bySeverity.filter((issue) => issue.type === 'NAVIGATION');
   const flowIssues = bySeverity.filter((issue) => issue.type === 'FLOW');
   const formIssues = bySeverity.filter((issue) => issue.type === 'FORM_VALIDATION');
+  const oracleIssues = bySeverity.filter((issue) =>
+    ['UI_ERROR', 'REGRESSION', 'CONTRACT'].includes(issue.type),
+  );
+  const accessibilityIssues = bySeverity.filter((issue) => issue.type === 'ACCESSIBILITY');
+  const authorizationIssues = bySeverity.filter((issue) => issue.type === 'AUTHORIZATION');
+  const q = qualityTexts(language);
   const executed = result.transitions.filter((edge) => edge.result !== 'BLOCKED');
   const blocked = result.transitions.filter((edge) => edge.result === 'BLOCKED');
   const tree = buildFlowTree(result.states, result.transitions, result.states[0]?.id);
@@ -112,7 +126,7 @@ export function renderHtml(
   ${result.description ? `<div class="meta">${esc(result.description)}</div>` : ''}
   <div class="meta">${esc(t.baselineTexts.mode)} : ${esc(label(result.mode))}${result.baseline ? ` · ${esc(t.baselineTexts.baseline)} : ${esc(baselineName(result.baseline))}` : ''}${result.learnedBaseline ? ` · ${esc(t.baselineTexts.learned)} : ${esc(baselineName(result.learnedBaseline))}` : ''}</div>
   <span class="status" style="background:${status.color}">${esc(status.label)}</span>
-  <nav>${result.artifacts.flowGraphHtml ? `<a href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}</nav>
+  <nav>${result.artifacts.flowGraphHtml ? `<a href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
 </header>
 <main>
   <div class="cards">
@@ -140,6 +154,14 @@ export function renderHtml(
 
   ${result.browserInteractions.length > 0 ? interactionsSection(result, nameOf, t) : ''}
 
+  ${oraclesSection(result, nameOf, language)}
+  ${oracleIssues.length > 0 ? issueTable(q.oracleFindings, oracleIssues, false) : ''}
+  ${formsSection(result, nameOf, language)}
+  ${authorizationSection(result, language)}
+  ${authorizationIssues.length > 0 ? issueTable(q.authorizationIssues, authorizationIssues, false) : ''}
+  ${recoverySection(result, nameOf, language)}
+  ${dataSection(result, nameOf, language)}
+
   <section>
     <h2>${esc(t.discoveredFlow)}</h2>
     <p class="muted">${esc(t.discoveredFlowHint)}</p>
@@ -151,6 +173,7 @@ export function renderHtml(
   ${issueTable(t.issueSections.http, httpIssues, true)}
   ${issueTable(t.issueSections.js, jsIssues, false)}
   ${navigationIssues.length > 0 ? issueTable(t.issueSections.navigation, navigationIssues, true) : ''}
+  ${accessibilityIssues.length > 0 ? issueTable(q.accessibility, accessibilityIssues, false) : ''}
 
   <section>
     <h2>${esc(t.statesTitle)} (${result.states.length})</h2>
@@ -273,7 +296,7 @@ function flowsSection(
   </section>`;
 }
 
-/** Element not found: the steps found on the screen, ready to paste, and what the screen shows. */
+/** Élément introuvable : les étapes trouvées à l'écran, prêtes à coller, et ce que montre l'écran. */
 function suggestionBlock(step: ExplorationResult['flows'][number]['steps'][number], t: ReportTexts): string {
   const parts: string[] = [];
   if (step.suggestions && step.suggestions.length > 0)
@@ -293,7 +316,7 @@ function baselineName(metadata: NonNullable<ExplorationResult['baseline']>): str
   return details.length > 0 ? `${metadata.runId} (${details.join(', ')})` : metadata.runId;
 }
 
-/** verify: each known transition replayed, regressions first. */
+/** verify : chaque transition connue rejouée, les régressions d'abord. */
 function verificationSection(result: ExplorationResult, t: ReportTexts): string {
   const verification = result.verification;
   if (!verification) return '';
@@ -316,7 +339,7 @@ function verificationSection(result: ExplorationResult, t: ReportTexts): string 
     <table><thead><tr><th>${c.result}</th><th>${c.from}</th><th>${c.action}</th><th>${esc(b.expected)}</th><th>${esc(b.actual)}</th><th>${c.reason}</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
-/** FLOW DIFF: what is new, gone or changed compared with the baseline. */
+/** FLOW DIFF : ce qui est nouveau, disparu ou modifié par rapport à la baseline. */
 function flowDiffSection(result: ExplorationResult, t: ReportTexts): string {
   const diff = result.flowDiff;
   if (!diff) return '';
@@ -372,7 +395,7 @@ function networkBlock(network: ExplorationResult['transitions'][number]['network
       const url = new URL(x.url);
       path = `${url.pathname}${url.search}`;
     } catch {
-      // keep the URL as recorded
+      // garder l'URL telle qu'enregistrée
     }
     return `${x.method} ${path} ${x.status ?? x.failure ?? '…'}${x.durationMs !== undefined ? ` ${x.durationMs} ms` : ''}`;
   });

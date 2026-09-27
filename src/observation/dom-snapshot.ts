@@ -1,18 +1,18 @@
-import type { DiscoveredForm } from '../model/discovered-action.js';
+import type { FormSummary } from '../model/discovered-action.js';
 import type { UiElement, UiSnapshot } from '../model/ui-snapshot.js';
 
 export type DomSnapshot = Omit<UiSnapshot, 'url' | 'title'>;
 
 /**
- * Runs inside the browser (serialized by Playwright): it must stay
- * self-contained — no imports, no references to module-level code.
+ * S'exécute dans le navigateur (sérialisé par Playwright) : il doit rester
+ * autonome — aucun import, aucune référence au code du module.
  *
- * Reads the DOM and computes, for each interactive element, its ARIA role
- * and an approximation of its accessible name (the same notions Playwright's
- * getByRole uses). Field values are never read.
+ * Lit le DOM et calcule, pour chaque élément interactif, son rôle ARIA et une
+ * approximation de son nom accessible (les mêmes notions que getByRole de
+ * Playwright). Les valeurs des champs ne sont jamais lues.
  */
 export function collectDomSnapshot(options: { maxElements: number }): DomSnapshot {
-  // Set by the flow runner on the element an imposed step targets (see FlowStepExecutor).
+  // Posé par l'exécuteur de flows sur l'élément visé par une étape imposée (voir FlowStepExecutor).
   const FLOW_TARGET_ATTRIBUTE = 'data-qa-flow-target';
   const CANDIDATES = [
     'a[href]',
@@ -36,11 +36,13 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     '[ng-reflect-router-link]',
     '[onclick]',
     '[tabindex="0"]',
+    // Texte riche et champs modifiables personnalisés.
+    '[contenteditable]:not([contenteditable="false"])',
   ].join(', ');
-  /** Toasts, live regions, timers: they come and go. */
+  /** Toasts, zones live, minuteurs : ils vont et viennent. */
   const TRANSIENT =
     '[aria-live]:not([aria-live="off"]), [role="status"], [role="alert"], [role="log"], [role="timer"], [role="marquee"], mat-snack-bar-container, .toast, .snackbar';
-  /** Candidates that are actions by themselves (everything but a bare tabindex="0"). */
+  /** Candidats qui sont des actions à eux seuls (tout sauf un simple tabindex="0"). */
   const ACTIONABLE = CANDIDATES.replace(/,\s*\[tabindex="0"\]/, '');
   const STRUCTURE_ROLES = new Set([
     'heading',
@@ -72,19 +74,58 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
   const clean = (value: string | null | undefined, max = 120): string =>
     (value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 
+  // ---- les shadow roots ouverts (composants web : Ionic, Shoelace, Lit, Stencil…) sont lus comme la page.
+  // Le contenu placé dans un slot reste dans le light DOM ; ce qu'un composant dessine lui-même vit dans son shadow root.
+  const hasShadow = Array.from(document.querySelectorAll('*')).some((el) => el.shadowRoot !== null);
+  /** Chaque élément correspondant, dans l'ordre du document, shadow roots compris (juste après leur hôte). */
+  const deepAll = (selector: string): Element[] => {
+    if (!hasShadow) return Array.from(document.querySelectorAll(selector));
+    const out: Element[] = [];
+    const visit = (root: Document | ShadowRoot): void => {
+      for (const el of Array.from(root.querySelectorAll('*'))) {
+        if (el.matches(selector)) out.push(el);
+        if (el.shadowRoot) visit(el.shadowRoot);
+      }
+    };
+    visit(document);
+    return out;
+  };
+  const hostOf = (node: Node): Element | null => {
+    const root = node.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  };
+  /** closest(), en continuant à travers les hôtes des shadow roots. */
+  const closestDeep = (el: Element | null, selector: string): Element | null => {
+    for (let current = el; current; current = hostOf(current)) {
+      const found = current.closest(selector);
+      if (found) return found;
+    }
+    return null;
+  };
+  const parentDeep = (el: Element): Element | null => el.parentElement ?? hostOf(el);
+  /** contains(), pour un élément qui peut se trouver dans le shadow root d'un descendant. */
+  const containsDeep = (container: Element, el: Element): boolean => {
+    for (let current: Element | null = el; current; current = hostOf(current))
+      if (container.contains(current)) return true;
+    return false;
+  };
+  const rootOf = (el: Element): Document | ShadowRoot => el.getRootNode() as Document | ShadowRoot;
+  const byId = (el: Element, id: string): Element | null =>
+    rootOf(el).getElementById(id) ?? document.getElementById(id);
+
   const isVisible = (el: Element): boolean => {
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return false;
     const style = window.getComputedStyle(el);
     if (style.visibility === 'hidden' || style.display === 'none') return false;
     if (style.opacity !== '0') return true;
-    // Styled checkboxes and radios (Angular Material…) hide the native input under their own drawing.
+    // Les cases et radios stylées (Angular Material…) cachent l'input natif sous leur propre dessin.
     return el.matches('input[type="checkbox"], input[type="radio"]') && el.parentElement !== null
       ? isVisible(el.parentElement)
       : false;
   };
 
-  /** Text used for accessible names: text nodes, skipping aria-hidden/hidden subtrees (no CSS text-transform). */
+  /** Texte utilisé pour les noms accessibles : nœuds texte, en sautant les sous-arbres aria-hidden/cachés (sans text-transform CSS). */
   const nameText = (node: Node): string => {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
@@ -95,6 +136,11 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     const style = window.getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden') return '';
     if (tag === 'img') return ` ${el.getAttribute('alt') ?? ''} `;
+    // Un <slot> montre les nœuds que la page y a placés (ses propres enfants ne sont qu'un repli).
+    if (tag === 'slot') {
+      const assigned = (el as HTMLSlotElement).assignedNodes({ flatten: true });
+      if (assigned.length > 0) return assigned.map((child) => nameText(child)).join('');
+    }
     const block = style.display !== 'inline' && style.display !== 'inline-block' ? ' ' : '';
     return (
       block +
@@ -107,9 +153,23 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
 
   const labelOf = (el: Element): string => {
     const id = el.getAttribute('id');
-    const byFor = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
-    const wrapping = el.closest('label');
-    return clean(byFor ? nameText(byFor) : wrapping ? nameText(wrapping) : '');
+    const byFor = id ? rootOf(el).querySelector(`label[for="${CSS.escape(id)}"]`) : null;
+    const wrapping = closestDeep(el, 'label');
+    return clean(byFor ? nameText(byFor) : wrapping ? nameText(wrapping) : '') || hostLabel(el);
+  };
+  /**
+   * Un champ dessiné dans un composant : le libellé que la page a donné au composant
+   * (attribut label="…", aria-label, contenu de slot="label", ou son propre <label>).
+   */
+  const hostLabel = (el: Element): string => {
+    const host = hostOf(el);
+    if (!host) return '';
+    const slotted = host.querySelector('[slot="label"]');
+    return (
+      clean(
+        host.getAttribute('label') ?? host.getAttribute('aria-label') ?? (slotted ? nameText(slotted) : ''),
+      ) || labelOf(host)
+    );
   };
 
   const implicitRole = (el: Element): string => {
@@ -140,7 +200,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       const text = labelledBy
         .split(/\s+/)
         .map((ref) => {
-          const target = document.getElementById(ref);
+          const target = byId(el, ref);
           return target ? nameText(target) : '';
         })
         .join(' ');
@@ -175,7 +235,10 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
 
   const cssPath = (el: Element): string => {
     const id = el.getAttribute('id');
-    if (id && document.querySelectorAll(`#${CSS.escape(id)}`).length === 1) return `#${CSS.escape(id)}`;
+    // Dans un shadow root : le chemin de l'hôte, puis le chemin à l'intérieur (le CSS de Playwright traverse les shadow roots ouverts).
+    const host = hostOf(el);
+    const prefix = host ? `${cssPath(host)} ` : '';
+    if (id && deepAll(`#${CSS.escape(id)}`).length === 1) return `${prefix}#${CSS.escape(id)}`;
     const parts: string[] = [];
     let current: Element | null = el;
     while (current && current !== document.body && parts.length < 6) {
@@ -186,33 +249,42 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
         : [];
       parts.unshift(siblings.length > 1 ? `${tag}:nth-of-type(${siblings.indexOf(current) + 1})` : tag);
       const parentId = parent?.getAttribute('id');
-      if (parentId && document.querySelectorAll(`#${CSS.escape(parentId)}`).length === 1) {
+      if (parentId && deepAll(`#${CSS.escape(parentId)}`).length === 1) {
         parts.unshift(`#${CSS.escape(parentId)}`);
         break;
       }
       current = parent;
     }
-    return parts.join(' > ');
+    return prefix + parts.join(' > ');
   };
 
   const dialogNameOf = (el: Element): string | undefined => {
-    const dialog = el.closest('[role="dialog"], [role="alertdialog"], dialog');
+    const dialog = closestDeep(el, '[role="dialog"], [role="alertdialog"], dialog');
     if (!dialog) return undefined;
     const heading = dialog.querySelector<HTMLElement>('h1, h2, h3, [role="heading"]');
     return clean(dialog.getAttribute('aria-label') ?? heading?.innerText ?? '') || 'dialog';
   };
 
-  const forms = Array.from(document.querySelectorAll('form'));
+  const forms = deepAll('form') as HTMLFormElement[];
   const searchForm = (form: HTMLFormElement | null): boolean =>
     form !== null &&
     (form.getAttribute('role') === 'search' ||
       ((form.getAttribute('method') ?? 'get').toLowerCase() === 'get' &&
         form.querySelector('input[type="search"], input[name="q"], input[name="search"]') !== null));
 
-  // ---- foreground: what is in front of the screen (modal, drawer, open menu, cookie banner…)
+  /** Contient un élément interactif, shadow roots de ses composants compris. */
+  let deepCandidates: Element[] | undefined;
+  const holdsCandidate = (el: Element): boolean => {
+    if (el.querySelector(CANDIDATES) !== null) return true;
+    if (!hasShadow) return false;
+    deepCandidates ??= deepAll(CANDIDATES);
+    return deepCandidates.some((candidate) => candidate !== el && containsDeep(el, candidate));
+  };
+
+  // ---- premier plan : ce qui est devant l'écran (modale, tiroir, menu ouvert, bannière de cookies…)
   const LAYERS =
     '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], .cdk-overlay-pane, [role="menu"], [role="listbox"]';
-  // A menu or listbox is in front only when it floats (dropdown), not when it is part of the page (sidebar).
+  // Un menu ou une liste n'est devant que s'il flotte (menu déroulant), pas s'il fait partie de la page (barre latérale).
   const floating = (el: Element): boolean => {
     let current: Element | null = el;
     for (let depth = 0; current && depth < 4; depth += 1, current = current.parentElement) {
@@ -221,15 +293,15 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     }
     return false;
   };
-  const layers = Array.from(document.querySelectorAll(LAYERS)).filter(
+  const layers = deepAll(LAYERS).filter(
     (el) =>
       isVisible(el) &&
-      el.querySelector(CANDIDATES) !== null &&
-      !el.parentElement?.closest(LAYERS) &&
+      holdsCandidate(el) &&
+      !closestDeep(parentDeep(el), LAYERS) &&
       (!el.matches('[role="menu"], [role="listbox"]') || floating(el)),
   );
-  // A layer that takes the pointer from the page behind: an aria-modal/<dialog> modal, or a
-  // fixed/absolute layer covering most of the viewport whatever its markup (backdrop + box).
+  // Un calque qui prend le pointeur à la page derrière : une modale aria-modal/<dialog>, ou un
+  // calque fixed/absolute qui couvre la plus grande partie de la fenêtre, quel que soit son balisage (fond + boîte).
   const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
   const coveringLayer = (): Element | undefined => {
     const points: [number, number][] = [
@@ -247,10 +319,10 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
           (position === 'fixed' || position === 'absolute') &&
           (rect.width * rect.height) / viewportArea >= 0.6
         )
-          covering = hit; // keep the outermost one: the backdrop's container holds the box
+          covering = hit; // garder le plus extérieur : le conteneur du fond contient la boîte
         hit = hit.parentElement;
       }
-      if (covering && covering.querySelector(CANDIDATES) !== null) return covering;
+      if (covering && holdsCandidate(covering)) return covering;
     }
     return undefined;
   };
@@ -258,10 +330,10 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     layers.find((el) => el.matches('[aria-modal="true"], dialog[open]:modal, [role="alertdialog"]')) ??
     coveringLayer();
   if (modal && !layers.includes(modal)) layers.push(modal);
-  const foregroundOf = (el: Element): boolean => layers.some((layer) => layer.contains(el));
-  // Layers stack: a date picker opened from a dialog puts its own backdrop over the dialog. An element
-  // is covered when the point a click would hit belongs to another layer (pane, backdrop, large
-  // fixed/absolute layer). Small sticky headers are not layers: Playwright scrolls around them.
+  const foregroundOf = (el: Element): boolean => layers.some((layer) => containsDeep(layer, el));
+  // Les calques s'empilent : un calendrier ouvert depuis une fenêtre pose son propre fond sur la fenêtre. Un élément
+  // est recouvert quand le point que viserait un clic appartient à un autre calque (panneau, fond, grand
+  // calque fixed/absolute). Les petits en-têtes collants ne sont pas des calques : Playwright défile autour.
   const BACKDROP = '.cdk-overlay-backdrop, [class*="backdrop"], [class*="Backdrop"]';
   const layerOf = (hit: Element): Element | undefined => {
     for (let current: Element | null = hit; current; current = current.parentElement) {
@@ -279,27 +351,28 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     const rect = el.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
-    if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return false; // off screen
+    if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return false; // hors de l'écran
     const hit = document.elementFromPoint(x, y);
-    if (!hit || el.contains(hit) || hit.contains(el)) return false;
+    // Un élément d'un shadow root est touché à travers son hôte (reciblage des événements).
+    if (!hit || el.contains(hit) || containsDeep(hit, el)) return false;
     const layer = layerOf(hit);
-    return layer !== undefined && !layer.contains(el);
+    return layer !== undefined && !containsDeep(layer, el);
   };
   const overlayName = (el: Element): string => {
     const heading = el.querySelector<HTMLElement>('h1, h2, h3, [role="heading"]');
     return clean(el.getAttribute('aria-label') ?? heading?.innerText ?? '', 80) || 'overlay';
   };
 
-  // ---- what a form field needs besides its constraints (the value itself is never read)
+  // ---- ce dont un champ a besoin en plus de ses contraintes (la valeur elle-même n'est jamais lue)
   const FIELD_CONTAINER =
     'mat-form-field, .mat-mdc-form-field, .mat-form-field, .form-group, .form-field, .field, .input-group';
   const ERROR_SELECTOR =
     'mat-error, .mat-mdc-form-field-error, .mat-error, .invalid-feedback, .error-message, .field-error, [role="alert"]';
-  const textOfIds = (ids: string | null): string =>
+  const textOfIds = (el: Element, ids: string | null): string =>
     clean(
       (ids ?? '')
         .split(/\s+/)
-        .map((ref) => (ref ? document.getElementById(ref) : null))
+        .map((ref) => (ref ? byId(el, ref) : null))
         .filter((target): target is HTMLElement => target !== null && !target.matches(ERROR_SELECTOR))
         .map((target) => nameText(target))
         .join(' '),
@@ -314,14 +387,14 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     const info: Partial<UiElement> = {};
     const input = el as HTMLInputElement;
     if (customSelect) {
-      // A custom select shows its placeholder until an option is chosen.
+      // Une liste personnalisée affiche son texte d'invite tant qu'aucune option n'est choisie.
       info.hasValue = el.querySelector('[class*="placeholder"]') === null && clean(nameText(el)) !== '';
     } else if (tag === 'input' || tag === 'textarea') {
       if (inputType !== 'checkbox' && inputType !== 'radio') info.hasValue = input.value !== '';
     }
-    const container = el.closest(FIELD_CONTAINER);
+    const container = closestDeep(el, FIELD_CONTAINER);
     const hint =
-      textOfIds(el.getAttribute('aria-describedby')) ||
+      textOfIds(el, el.getAttribute('aria-describedby')) ||
       clean(
         Array.from(
           container?.querySelectorAll(
@@ -344,33 +417,33 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       inputType === 'checkbox' ||
       el.matches('[role="radio"], [role="checkbox"]')
     ) {
-      const group = el.closest('[role="radiogroup"], mat-radio-group, fieldset, [role="group"]');
+      const group = closestDeep(el, '[role="radiogroup"], mat-radio-group, fieldset, [role="group"]');
       const groupName =
         clean(group?.getAttribute('aria-label')) ||
-        textOfIds(group?.getAttribute('aria-labelledby') ?? null) ||
+        textOfIds(el, group?.getAttribute('aria-labelledby') ?? null) ||
         clean(group?.querySelector('legend')?.textContent) ||
         clean(group?.previousElementSibling?.textContent, 80);
       if (groupName) info.groupLabel = groupName.replace(/^\*\s*/, '');
       const name = el.getAttribute('name');
-      // Radios of the same choice (one option per group); checkboxes stay independent.
+      // Radios d'un même choix (une option par groupe) ; les cases à cocher restent indépendantes.
       if (inputType === 'radio' || el.matches('[role="radio"]'))
         info.choiceGroup = name ? `name:${name}` : groupName ? `label:${groupName}` : undefined;
       if (
         group?.hasAttribute('required') ||
         group?.getAttribute('aria-required') === 'true' ||
-        (name !== null && document.querySelector(`input[name="${CSS.escape(name)}"][required]`) !== null)
+        (name !== null && rootOf(el).querySelector(`input[name="${CSS.escape(name)}"][required]`) !== null)
       )
         info.required = true;
     }
     return info;
   };
 
-  // ---- interactive elements
+  // ---- éléments interactifs
   const elements: UiElement[] = [];
-  const all = Array.from(document.querySelectorAll(CANDIDATES));
+  const all = deepAll(CANDIDATES);
   for (const [index, el] of all.entries()) {
     const inLayer = layers.length > 0 && foregroundOf(el);
-    // What is in front is always kept, even beyond maxElements (overlays are often last in the DOM).
+    // Ce qui est devant l'écran est toujours gardé, même au-delà de maxElements (les calques sont souvent en fin de DOM).
     if (elements.length >= options.maxElements && !el.hasAttribute(FLOW_TARGET_ATTRIBUTE) && !inLayer)
       continue;
     if (!isVisible(el)) continue;
@@ -378,25 +451,32 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     const foreground = inLayer && !covered;
     const tag = el.tagName.toLowerCase();
     const isField = ['input', 'select', 'textarea'].includes(tag);
-    // A clickable wrapper around another candidate (e.g. <li onclick><a href>): keep the innermost element.
+    // contenteditable (texte riche, champs personnalisés) : rempli comme un champ texte.
+    const editable = !isField && (el as HTMLElement).isContentEditable;
+    // Dans une zone modifiable : une partie du texte, pas une action.
+    if (editable && parentDeep(el) && (parentDeep(el) as HTMLElement).isContentEditable) continue;
+    // Un conteneur cliquable autour d'un autre candidat (par exemple <li onclick><a href>) : garder l'élément le plus intérieur.
     if (!isField && el.matches('[onclick], [tabindex="0"]') && el.querySelector(CANDIDATES) !== null)
       continue;
-    // Elements nested inside another interactive element are reached through it.
+    // Les éléments imbriqués dans un autre élément interactif sont atteints à travers lui.
+    const parent = parentDeep(el);
     if (
       !isField &&
-      el.parentElement?.closest(
-        'a[href], button, [role="button"], [role="link"], [role="tab"], [role="menuitem"]',
-      )
+      !editable &&
+      parent &&
+      closestDeep(parent, 'a[href], button, [role="button"], [role="link"], [role="tab"], [role="menuitem"]')
     )
       continue;
 
     const role =
       clean(el.getAttribute('role')) ||
       implicitRole(el) ||
+      (editable ? 'textbox' : '') ||
       (el.matches('[routerlink], [ng-reflect-router-link], [onclick], [tabindex="0"]') ? 'button' : '');
-    // Only focusable (tabindex="0"): a title, a dialog or a text block that takes the focus is not an
-    // action, unless it looks clickable (pointer cursor) or declares an interactive role.
+    // Seulement focalisable (tabindex="0") : un titre, une fenêtre ou un bloc de texte qui prend le focus n'est pas une
+    // action, sauf s'il a l'air cliquable (curseur pointeur) ou déclare un rôle interactif.
     if (
+      !editable &&
       !el.matches(ACTIONABLE) &&
       (/^h[1-6]$/.test(tag) ||
         STRUCTURE_ROLES.has(clean(el.getAttribute('role'))) ||
@@ -409,7 +489,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
         : tag === 'button'
           ? (el.getAttribute('type') ?? 'submit').toLowerCase()
           : undefined;
-    const form = el.closest('form');
+    const form = closestDeep(el, 'form') as HTMLFormElement | null;
     const formIndex = form ? forms.indexOf(form) : -1;
     const html = el as HTMLElement & Partial<HTMLInputElement>;
     const isSubmit =
@@ -422,11 +502,23 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     const routerLink =
       el.getAttribute('routerlink') ?? el.getAttribute('ng-reflect-router-link') ?? undefined;
     const dialogName = dialogNameOf(el);
-    const label = isField ? labelOf(el) : '';
-    // The form an element belongs to: its <form>, else the dialog/overlay that holds it (forms of
-    // Angular Material dialogs often have no <form>).
-    const layer = layers.find((candidate) => candidate.contains(el));
-    const formGroup = form ? `form:${formIndex}` : layer ? `layer:${overlayName(layer)}` : undefined;
+    const label = isField || editable ? labelOf(el) : '';
+    // Nommé seulement par son composant (attribut label, slot) : le nom calculé par Playwright peut différer.
+    const labelledByHost = label !== '' && hostOf(el) !== null && label === hostLabel(el);
+    // Le formulaire auquel appartient un élément : son <form>, sinon la fenêtre / le calque qui le contient (les
+    // formulaires des fenêtres Angular Material n'ont souvent pas de <form>).
+    const layer = layers.find((candidate) => containsDeep(candidate, el));
+    // Champs hors de tout <form>, fenêtre ou calque : la page elle-même peut être le formulaire (SPA sans <form>).
+    const formGroup = form
+      ? `form:${formIndex}`
+      : layer
+        ? `layer:${overlayName(layer)}`
+        : isField ||
+            editable ||
+            role === 'combobox' ||
+            el.matches('button, [role="button"], input[type="submit"]')
+          ? 'page'
+          : undefined;
     const customSelect = !isField && (role === 'combobox' || role === 'listbox');
     const fieldInfo = isField || customSelect ? describeField(el, tag, inputType, customSelect) : {};
     const numberAttr = (name: string): number | undefined => {
@@ -442,8 +534,8 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       index,
       tag,
       role,
-      name: accessibleName(el, role),
-      text: isField ? '' : clean(nameText(el)),
+      name: accessibleName(el, role) || (editable ? label : ''),
+      text: isField || editable ? '' : clean(nameText(el)),
       visible: true,
       disabled:
         ('disabled' in el && (el as HTMLButtonElement).disabled) ||
@@ -455,7 +547,8 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       inSearchForm: searchForm(form),
       formHasAction: form !== null && (form.getAttribute('action') ?? '').trim() !== '',
       inNavigation:
-        el.closest('nav, [role="navigation"], [role="menu"], [role="menubar"], [role="tablist"]') !== null,
+        closestDeep(el, 'nav, [role="navigation"], [role="menu"], [role="menubar"], [role="tablist"]') !==
+        null,
       inDialog: dialogName !== undefined,
       css: cssPath(el),
     };
@@ -487,11 +580,15 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       dialogName,
       formGroup,
       customSelect: customSelect ? true : undefined,
-      transient: el.closest(TRANSIENT) ? true : undefined,
+      transient: closestDeep(el, TRANSIENT) ? true : undefined,
       ...fieldInfo,
+      editable: editable ? true : undefined,
+      ...(editable ? { hasValue: clean((el as HTMLElement).innerText) !== '' } : {}),
+      inShadow: hostOf(el) !== null ? true : undefined,
+      labelledByHost: labelledByHost ? true : undefined,
       flowTarget: el.hasAttribute(FLOW_TARGET_ATTRIBUTE) ? true : undefined,
       foreground: foreground ? true : undefined,
-      // Behind a modal layer: the page behind cannot receive the click.
+      // Derrière un calque modal : la page derrière ne peut pas recevoir le clic.
       obscured: covered || (modal !== undefined && !inLayer) ? true : undefined,
       min: attr('min'),
       max: attr('max'),
@@ -499,6 +596,13 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       minLength: numberAttr('minlength'),
       maxLength: numberAttr('maxlength'),
       pattern: attr('pattern'),
+      disabledOptions:
+        tag === 'select'
+          ? Array.from((el as HTMLSelectElement).options)
+              .slice(0, 30)
+              .filter((option) => option.disabled)
+              .map((option) => clean(option.text))
+          : undefined,
       options:
         tag === 'select'
           ? Array.from((el as HTMLSelectElement).options)
@@ -512,12 +616,12 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     elements.push(element);
   }
 
-  // ---- forms (structure only)
-  const describeFields = (fields: Element[]): DiscoveredForm['fields'] =>
+  // ---- formulaires (structure seulement)
+  const describeFields = (fields: Element[]): FormSummary['fields'] =>
     fields.map((element) => {
       const el = element as HTMLInputElement;
       const tag = el.tagName.toLowerCase() as 'input' | 'select' | 'textarea';
-      const field: DiscoveredForm['fields'][number] = {
+      const field: FormSummary['fields'][number] = {
         tag,
         type: tag === 'input' ? (el.getAttribute('type') ?? 'text').toLowerCase() : tag,
         required: el.required || el.getAttribute('aria-required') === 'true',
@@ -548,12 +652,12 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       return field;
     });
 
-  const formResults: DiscoveredForm[] = forms.map((form, index) => {
+  const formResults: FormSummary[] = forms.map((form, index) => {
     const method = (form.getAttribute('method') ?? 'get').toLowerCase();
     const submit = form.querySelector<HTMLElement>(
       'button[type="submit"], button:not([type]), input[type="submit"]',
     );
-    const result: DiscoveredForm = {
+    const result: FormSummary = {
       index,
       method,
       isSearchForm: searchForm(form),
@@ -567,16 +671,16 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     if (submit) result.submitLabel = clean(submit.innerText || (submit as HTMLInputElement).value);
     return result;
   });
-  const orphans = Array.from(document.querySelectorAll(FIELD_SELECTOR)).filter(
-    (field) => field.closest('form') === null && isVisible(field),
+  const orphans = deepAll(FIELD_SELECTOR).filter(
+    (field) => closestDeep(field, 'form') === null && isVisible(field),
   );
   if (orphans.length > 0) {
     formResults.push({ index: -1, method: 'none', isSearchForm: false, fields: describeFields(orphans) });
   }
 
-  // ---- structural signals
+  // ---- signaux structurels
   const visibleTexts = (selector: string, max: number): string[] =>
-    Array.from(document.querySelectorAll(selector))
+    deepAll(selector)
       .filter((el) => isVisible(el))
       .map((el) => clean((el as HTMLElement).innerText || el.getAttribute('aria-label'), 80))
       .filter(Boolean)
@@ -584,7 +688,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
 
   return {
     headings: visibleTexts('h1, h2, h3, [role="heading"]', 12),
-    dialogs: Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], dialog[open]'))
+    dialogs: deepAll('[role="dialog"], [role="alertdialog"], dialog[open]')
       .filter((el) => isVisible(el))
       .map((el) => {
         const heading = el.querySelector<HTMLElement>('h1, h2, h3, [role="heading"]');
@@ -596,5 +700,22 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     textExcerpt: clean(document.body.innerText, 600),
     elements,
     forms: formResults,
+    signals: {
+      // Messages montrés à l'utilisateur : alertes, bannières d'erreur, snackbars/toasts.
+      alerts: deepAll(
+        '[role="alert"], [role="alertdialog"], mat-snack-bar-container, .mat-mdc-snack-bar-container, .snackbar, .toast, .alert-danger, .alert-error, .error-banner, .notification-error',
+      )
+        .filter((el) => isVisible(el))
+        .map((el) => clean((el as HTMLElement).innerText, 160))
+        .filter(Boolean)
+        .slice(0, 5),
+      // Chargement en cours : aria-busy, barres de progression et roues de chargement.
+      busy: deepAll(
+        '[aria-busy="true"], [role="progressbar"], mat-spinner, mat-progress-spinner, .spinner, .loading, .loader',
+      ).some((el) => isVisible(el)),
+      // Rien à voir ni à faire.
+      empty: clean(document.body.innerText, 40).length < 3 && elements.length === 0,
+      invalidFields: deepAll('[aria-invalid="true"]').filter((el) => isVisible(el)).length,
+    },
   };
 }

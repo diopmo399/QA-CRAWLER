@@ -260,7 +260,7 @@ describe('AllowedOriginPolicy', () => {
     const { origins } = setup('browserInteractions:\n  blockedOrigins: [https://blocked.example.net]\n');
     expect(origins.classify(`${TARGET}/x`)).toBe('SAME_ORIGIN');
     expect(origins.classify('https://api.example.com/v1')).toBe('ALLOWED_ORIGIN');
-    expect(origins.classify('http://app.example.com/')).toBe('ALLOWED_ORIGIN'); // other scheme = other origin
+    expect(origins.classify('http://app.example.com/')).toBe('ALLOWED_ORIGIN'); // autre schéma = autre origine
     expect(origins.classify('https://external-service.com/')).toBe('EXTERNAL_ORIGIN');
     expect(origins.classify('https://blocked.example.net/')).toBe('BLOCKED_ORIGIN');
     expect(origins.classify('about:blank')).toBeUndefined();

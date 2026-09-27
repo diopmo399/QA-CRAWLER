@@ -2,13 +2,17 @@ import type { BaselineMetadata } from '../baseline/baseline-store.js';
 import type { MissionMode } from '../config/config.js';
 import type { FlowDiff } from '../diff/flow-diff.js';
 import type { VerificationReport } from './verification.js';
-import type { ActionClassification, DiscoveredAction, DiscoveredForm } from './discovered-action.js';
+import type { ActionClassification, DiscoveredAction, FormSummary } from './discovered-action.js';
 import type { FlowEdge, FlowNode } from './flow.js';
 import type { FlowRunReport } from './flow-run.js';
 import type { BrowserInteractionResult } from '../interactions/types.js';
 import type { Issue, IssueType, Severity } from './issue.js';
+import type { FormReport } from '../forms/form-report.js';
+import type { RecoverySummary } from '../recovery/recovery-model.js';
+import type { CleanupReport, CreatedDataRecord } from '../data/created-data.js';
+import type { AuthorizationReport } from '../actors/authorization-observer.js';
 
-/** Why the exploration ended. */
+/** Pourquoi l'exploration s'est terminée. */
 export type StopReason =
   | 'exhausted'
   | 'flows-only'
@@ -33,22 +37,22 @@ export interface ExplorationStats {
   formsFound: number;
   flowsPassed: number;
   flowsFailed: number;
-  /** Browser interactions by type and by status. */
+  /** Interactions du navigateur par type et par statut. */
   interactionsByType: Record<string, number>;
   interactionsByStatus: Record<string, number>;
 }
 
-/** A state with everything observed on it. */
+/** Un état avec tout ce qui y a été observé. */
 export interface StateReport extends FlowNode {
   actionsDetail: DiscoveredAction[];
-  forms: DiscoveredForm[];
-  /** How to reach it from the start state. */
+  forms: FormSummary[];
+  /** Comment l'atteindre depuis l'état de départ. */
   flow: string[];
 }
 
 export interface ExplorationResult {
   mission: string;
-  /** learn, verify or explore. */
+  /** learn, verify ou explore. */
   mode: MissionMode;
   description?: string;
   target: {
@@ -63,20 +67,34 @@ export interface ExplorationResult {
   stats: ExplorationStats;
   states: StateReport[];
   transitions: FlowEdge[];
-  /** Imposed flows, in mission order. */
+  /** Flows imposés, dans l'ordre de la mission. */
   flows: FlowRunReport[];
-  /** Interactions raised by the browser outside the DOM (HTTP_AUTH, dialogs, popups, downloads…). */
+  /** Interactions levées par le navigateur hors du DOM (HTTP_AUTH, dialogues, popups, téléchargements…). */
   browserInteractions: BrowserInteractionResult[];
   issues: Issue[];
-  /** Baseline this run was compared with (verify, explore) or replaced (learn). */
+  /** Baseline avec laquelle ce run a été comparé (verify, explore) ou qu'il a remplacée (learn). */
   baseline?: BaselineMetadata;
-  /** learn: the baseline this run stored. */
+  /** learn : la baseline enregistrée par ce run. */
   learnedBaseline?: BaselineMetadata;
-  /** Differences with that baseline. */
+  /** Différences avec cette baseline. */
   flowDiff?: FlowDiff;
-  /** verify: every known transition of the baseline, replayed. */
+  /** verify : chaque transition connue de la baseline, rejouée. */
   verification?: VerificationReport;
-  /** Non-secret summary of the effective configuration. */
+  /** Id du run, porté par les données qu'il a créées (QA-CRAWLER-<runId>). */
+  runId?: string;
+  /** Formulaires trouvés et remplis, avec leurs cas de validation (jamais une valeur sensible). */
+  formReports?: FormReport[];
+  /** Tentatives de récupération, branches abandonnées, circuits ouverts. */
+  recovery?: RecoverySummary;
+  /** Actions de modification exécutées, et le budget (safety.mutations). */
+  mutations?: { enabled: boolean; executed: number; maxPerRun?: number };
+  /** Données que le run a probablement créées, marquées QA-CRAWLER-<runId> (jamais les valeurs). */
+  createdData?: CreatedDataRecord[];
+  /** Ce qui a été nettoyé, et ce qui reste à supprimer. */
+  cleanup?: CleanupReport;
+  /** actors : ce que chaque utilisateur atteint, les différences, les règles vérifiées. */
+  authorization?: AuthorizationReport;
+  /** Résumé non secret de la configuration effective. */
   settings: Record<string, unknown>;
   artifacts: {
     json?: string;
@@ -86,5 +104,9 @@ export interface ExplorationResult {
     screenshotsDir?: string;
     flowDiff?: string;
     baseline?: string;
+    /** Journal structuré du moteur (lignes JSON). */
+    engineLog?: string;
+    /** Flows imposés générés à partir des chemins trouvés (YAML). */
+    generatedFlows?: string;
   };
 }

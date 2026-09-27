@@ -4,9 +4,9 @@ import { redactUrl } from '../security/redactor.js';
 import type { PageObserver } from './observer.js';
 
 export interface NetworkTraceOptions {
-  /** Resource types kept (document, xhr, fetch…); images, fonts and styles only add noise. */
+  /** Types de ressources gardés (document, xhr, fetch…) ; images, polices et styles n'ajoutent que du bruit. */
   resourceTypes: readonly string[];
-  /** Cap per action (polling, analytics…). */
+  /** Plafond par action (interrogations périodiques, statistiques…). */
   maxRequestsPerAction: number;
 }
 
@@ -16,10 +16,10 @@ interface Pending {
 }
 
 /**
- * Opens a network window around each action: ACTION → NETWORK → STATE.
- * The explorer calls `start(actionId)` just before executing an action and
- * `stop()` once the next state is observed; the exchanges seen in between
- * are attached to the transition (FlowEdge.network).
+ * Ouvre une fenêtre réseau autour de chaque action : ACTION → RÉSEAU → ÉTAT.
+ * L'explorateur appelle `start(actionId)` juste avant d'exécuter une action et
+ * `stop()` une fois l'état suivant observé ; les échanges vus entre les deux sont
+ * attachés à la transition (FlowEdge.network).
  */
 export class NetworkTraceRecorder implements PageObserver {
   private current:
@@ -71,12 +71,12 @@ export class NetworkTraceRecorder implements PageObserver {
     page.off('requestfailed', this.onFailed);
   }
 
-  /** Opens the window of an action (closes the previous one, if left open). */
+  /** Ouvre la fenêtre d'une action (ferme la précédente si elle est restée ouverte). */
   start(actionId: string): void {
     this.current = { actionId, startedAt: new Date(), pending: new Map(), order: [] };
   }
 
-  /** Closes the window; the trace, if it belongs to `actionId` (or to any action when omitted). */
+  /** Ferme la fenêtre ; la trace, si elle appartient à `actionId` (ou à n'importe quelle action quand il est omis). */
   stop(actionId?: string): ActionNetworkTrace | undefined {
     const window = this.current;
     if (!window || (actionId !== undefined && window.actionId !== actionId)) return undefined;

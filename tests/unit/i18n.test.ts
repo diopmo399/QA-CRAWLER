@@ -46,7 +46,7 @@ describe('report language', () => {
         'Flow "connexion" — step 3 "click role=button[name="OK"]" blocked: submits a form',
       ),
     ).toBe('Flow « connexion » — étape 3 « click role=button[name="OK"] » bloquée : envoie un formulaire');
-    // Unknown text (browser messages) is left as is; English is never changed.
+    // Le texte inconnu (messages du navigateur) est laissé tel quel ; l'anglais n'est jamais modifié.
     expect(translateReason('fr', 'TypeError: x is undefined')).toBe('TypeError: x is undefined');
     expect(translateReason('en', 'step 1 failed')).toBe('step 1 failed');
   });

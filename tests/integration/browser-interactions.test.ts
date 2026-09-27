@@ -10,10 +10,10 @@ import type { ExplorationResult } from '../../src/model/exploration-result.js';
 import { runMission } from '../../src/orchestrator.js';
 
 /**
- * Browser interactions outside the DOM on a local page: each button raises
- * one of them. Imposed flows click the buttons (deterministic order); the
- * BrowserInteractionManager detects, classifies, applies the safety policy,
- * handles and records each interaction, and the flow goes on.
+ * Interactions du navigateur hors du DOM sur une page locale : chaque bouton en lève
+ * une. Les flows imposés cliquent sur les boutons (ordre déterministe) ; le
+ * BrowserInteractionManager détecte, classe, applique la politique de sécurité,
+ * traite et enregistre chaque interaction, et le flow continue.
  */
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Interactions</title></head><body>
 <h1>Interactions</h1>
@@ -50,7 +50,7 @@ describe('Browser interactions (outside the DOM)', () => {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end('<h1>Partenaire</h1>');
     });
-    // Another host (127.0.0.1 vs localhost) = another origin, outside allowedHosts.
+    // Un autre hôte (127.0.0.1 au lieu de localhost) = une autre origine, hors d'allowedHosts.
     const externalUrl = `http://127.0.0.1:${await listen(external)}/`;
     server = createServer((req, res) => {
       const html = (body: string): void => {
@@ -146,7 +146,7 @@ ${click('Site partenaire', '        optional: true\n')}
 
   it('keeps the flow going through every interaction', () => {
     const steps = result.flows[0]?.steps ?? [];
-    // Every step passed except the last one, which leaves the allowed origins.
+    // Chaque étape a réussi sauf la dernière, qui quitte les origines autorisées.
     expect(steps.slice(0, -1).map((step) => [step.description, step.status])).toEqual(
       steps.slice(0, -1).map((step) => [step.description, 'PASSED']),
     );

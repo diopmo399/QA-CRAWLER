@@ -13,7 +13,7 @@ import { runMission } from '../../src/orchestrator.js';
 const page = (body: string): string =>
   `<!doctype html><html><head><meta charset="utf-8"><title>Accueil</title></head><body>${body}</body></html>`;
 
-/** An overlay without any ARIA role: a fixed backdrop covering the page, with a box in the middle. */
+/** Un calque sans aucun rôle ARIA : un fond fixe qui couvre la page, avec une boîte au milieu. */
 const OVERLAY = `
 <div id="layer" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10">
   <div style="margin:30vh auto;width:320px;background:#fff;padding:16px">
@@ -69,7 +69,7 @@ describe('what is in front of the screen', () => {
     expect(snapshot.overlay).toBeUndefined();
     expect(byName('Accepter')).toMatchObject({ foreground: true });
     expect(byName('Contenu')?.obscured).toBeUndefined();
-    // A menu that is part of the page (not floating) is not "in front".
+    // Un menu qui fait partie de la page (qui ne flotte pas) n'est pas « devant ».
     expect(byName('Menu latéral')?.foreground).toBeUndefined();
     await tab.close();
   });
@@ -129,7 +129,7 @@ output:
   });
 });
 
-/** A date picker opened from a modal dialog: its transparent backdrop covers the dialog. */
+/** Un calendrier ouvert depuis une fenêtre modale : son fond transparent recouvre la fenêtre. */
 const STACKED = page(`
 <h1>Demandes</h1>
 <button onclick="document.getElementById('dlg').style.display='block'">Afficher le formulaire</button>
@@ -214,7 +214,7 @@ output:
   it('picks a day before touching the dialog behind, and no click is intercepted', () => {
     const opened = result.transitions.find((edge) => edge.action.text === 'Ouvrir le calendrier');
     expect(opened?.result).toBe('SUCCESS');
-    // Executed actions only (BLOCKED ones are listed, never run).
+    // Actions exécutées seulement (les BLOCKED sont listées, jamais exécutées).
     const next = result.transitions.find((edge) => edge.from === opened?.to && edge.result !== 'BLOCKED');
     expect(next?.action.text).toMatch(/^[12]$/);
     expect(result.transitions.filter((edge) => edge.result === 'FAILED')).toEqual([]);
@@ -226,8 +226,8 @@ describe('after a failure the state cannot be restored', () => {
   let result: ExplorationResult;
 
   beforeAll(async () => {
-    // The dialog opens only once (like a request that can be created once); in it, the first
-    // button is covered by a small element that takes the click: the action fails.
+    // La fenêtre ne s'ouvre qu'une fois (comme une demande qui ne peut être créée qu'une fois) ; dedans, le premier
+    // bouton est recouvert par un petit élément qui prend le clic : l'action échoue.
     const html = page(`
 <h1>Accueil</h1>
 <a href="/aide">Aide</a>
@@ -275,7 +275,7 @@ output:
   it('goes on from what is on screen, not from the actions of the lost state', () => {
     const trap = result.transitions.find((edge) => edge.action.text === 'Piège');
     expect(trap?.result).toBe('FAILED');
-    // The dialog is gone after the reload: none of its other actions is tried on a page that no longer shows it.
+    // La fenêtre a disparu après le rechargement : aucune de ses autres actions n'est essayée sur une page qui ne la montre plus.
     const failed = result.transitions.filter((edge) => edge.result === 'FAILED');
     expect(failed.map((edge) => edge.action.text)).toEqual(['Piège']);
   });

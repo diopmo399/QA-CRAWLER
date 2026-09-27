@@ -3,22 +3,23 @@ import type { DiscoveredAction } from '../model/discovered-action.js';
 import type { SafetyPolicy, SafetyVerdict } from '../policies/safety-policy.js';
 
 export interface FlowStepPermission {
-  /** Classes the step explicitly allows on top of SAFE. */
+  /** Classes que l'étape permet explicitement en plus de SAFE. */
   allow: readonly FlowAllowance[];
-  /** The value typed in the field comes from an environment variable. */
+  /** La valeur saisie dans le champ vient d'une variable d'environnement. */
   valueFromEnv?: boolean;
 }
 
 /**
- * Safety gate for imposed flow steps: the YAML chose the element, the
- * SafetyPolicy still decides whether it may run.
+ * Contrôle de sécurité des étapes de flow imposé : le YAML a choisi l'élément, la
+ * SafetyPolicy décide quand même s'il peut s'exécuter.
  *
- * - SAFE: runs.
- * - MUTATION / UNKNOWN: runs only when the step says `allow: MUTATION` / `allow: UNKNOWN`.
- * - DANGEROUS (delete, pay, send, logout, irreversible…): never runs.
- * - Links: allowed hosts and ignored paths still apply.
- * - Sensitive fields (password, OTP, secret): filled only from an environment
- *   variable; payment fields (card, IBAN…) are never filled.
+ * - SAFE : s'exécute.
+ * - MUTATION / UNKNOWN : seulement quand l'étape dit `allow: MUTATION` / `allow: UNKNOWN`.
+ * - DANGEROUS (supprimer, payer, envoyer, déconnexion, irréversible…) : seulement quand
+ *   l'étape dit `allow: DANGEROUS` ET que la mission liste DANGEROUS dans allowedActionClasses.
+ * - Liens : les hôtes autorisés et les chemins ignorés s'appliquent toujours.
+ * - Champs sensibles (mot de passe, OTP, secret) : remplis seulement à partir d'une
+ *   variable d'environnement ; les champs de paiement (carte, IBAN…) ne sont jamais remplis.
  */
 export function evaluateFlowAction(
   safety: SafetyPolicy,
@@ -49,7 +50,16 @@ export function evaluateFlowAction(
   }
 
   if (action.classification === 'DANGEROUS') {
-    return { verdict: 'BLOCK', reason: `DANGEROUS actions are never executed (${action.reason})` };
+    if (!safety.isExecutionAllowed('DANGEROUS'))
+      return {
+        verdict: 'BLOCK',
+        reason: `DANGEROUS actions are not allowed by the mission (${action.reason}): list DANGEROUS in safety.allowedActionClasses`,
+      };
+    if (!permission.allow.includes('DANGEROUS'))
+      return {
+        verdict: 'BLOCK',
+        reason: `DANGEROUS action (${action.reason}): add "allow: DANGEROUS" to this step to execute it`,
+      };
   }
   if (action.href && (action.type === 'navigate' || action.external === true)) {
     const verdict = evaluateFlowUrl(safety, action.href);
@@ -70,7 +80,7 @@ export function evaluateFlowAction(
   return { verdict: 'ALLOW', reason: action.reason };
 }
 
-/** A `goto` step or a link target: allowed hosts, ignored paths, dangerous URLs. */
+/** Une étape `goto` ou la cible d'un lien : hôtes autorisés, chemins ignorés, URL dangereuses. */
 export function evaluateFlowUrl(safety: SafetyPolicy, href: string): SafetyVerdict {
   let url: URL;
   try {

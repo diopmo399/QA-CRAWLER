@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 import { MISSION_MODES, type MissionMode } from '../config/config.js';
 
 export interface CliArgs {
-  /** learn / verify / explore; absent: mission.mode. */
+  /** learn / verify / explore ; absent : mission.mode. */
   mode?: MissionMode;
   baselineDir?: string;
   configPath?: string;

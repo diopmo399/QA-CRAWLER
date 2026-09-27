@@ -10,7 +10,7 @@ import type {
   OriginClass,
 } from './types.js';
 
-/** What a handler returns; the manager completes it into a BrowserInteractionResult. */
+/** Ce que renvoie un handler ; le gestionnaire le complète en BrowserInteractionResult. */
 export interface HandlerOutcome {
   status: InteractionStatus;
   outcome?: InteractionOutcome;
@@ -25,21 +25,21 @@ export interface HandlerOutcome {
   details?: InteractionDetails;
 }
 
-/** Everything a handler may use. Handlers never see the crawl engine. */
+/** Tout ce qu'un handler peut utiliser. Les handlers ne voient jamais le moteur d'exploration. */
 export interface HandlerContext {
-  /** Decision of the safety policy for this interaction (always ALLOW when the handler is called). */
+  /** Décision de la politique de sécurité pour cette interaction (toujours ALLOW quand le handler est appelé). */
   decision: InteractionDecision;
   credentials: CredentialProvider;
-  /** 1 for the first try; incremented when the browser raises the same interaction again. */
+  /** 1 pour le premier essai ; incrémenté quand le navigateur relève la même interaction. */
   attempt: number;
   maxAttempts: number;
   crawl: InteractionContext;
 }
 
 /**
- * Strategy for one or more kinds of browser interaction. Registering a new
- * handler is enough to support a new interaction: the crawl engine does not
- * change.
+ * Stratégie pour un ou plusieurs genres d'interaction du navigateur. Enregistrer un
+ * nouveau handler suffit à prendre en charge une nouvelle interaction : le moteur
+ * d'exploration ne change pas.
  */
 export interface BrowserInteractionHandler {
   readonly name: string;

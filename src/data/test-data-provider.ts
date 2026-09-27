@@ -1,43 +1,98 @@
-import type { DiscoveredAction, FieldConstraints } from '../model/discovered-action.js';
-import { KeywordMatcher, normalizeText, SENSITIVE_FIELD_KEYWORDS } from '../policies/keywords.js';
+import { fieldOf } from '../forms/form-analyzer.js';
+import { runTag, type FormField, type TestDataContext, type TestValue } from '../forms/form-model.js';
+import type { DiscoveredAction } from '../model/discovered-action.js';
+import { normalizeText } from '../policies/keywords.js';
 
-/** What to do with a field when a form is prepared. */
+/** Que faire d'un champ quand un formulaire est préparé (ancienne forme, utilisée par les flows et prepareForm). */
 export type FillInstruction =
   | { kind: 'fill'; value: string }
-  /** label '' : the first real option (the options of a custom list are only known once it is open). */
+  /** label '' : la première vraie option (les options d'une liste personnalisée ne sont connues qu'une fois ouverte). */
   | { kind: 'select'; label: string }
   | { kind: 'check' }
   | { kind: 'skip'; reason: string };
 
 /**
- * Provides values for form fields. Swappable (fixtures per application,
- * boundary-value generators, invalid-data generators for validation tests).
+ * « Quelles données synthétiques utiliser ? » Remplaçable : jeux de données par
+ * application, générateurs de valeurs limites, générateurs guidés par un contrat d'API…
  */
 export interface TestDataProvider {
+  generateValidValue(field: FormField, context: TestDataContext): Promise<TestValue>;
+  /** Valeurs que le formulaire devrait refuser (tests de validation), les plus parlantes d'abord. */
+  generateInvalidValues?(field: FormField, context: TestDataContext): Promise<TestValue[]>;
+  /** Identique à generateValidValue, pour une action découverte (synchrone). */
   instructionFor(action: DiscoveredAction): FillInstruction;
 }
 
-const sensitive = new KeywordMatcher(SENSITIVE_FIELD_KEYWORDS);
+/** Valeurs connues de la mission, par sens plutôt que par champ. */
+export type SemanticKey =
+  | 'firstName'
+  | 'lastName'
+  | 'name'
+  | 'email'
+  | 'phone'
+  | 'company'
+  | 'address'
+  | 'city'
+  | 'postalCode'
+  | 'country'
+  | 'url'
+  | 'text';
+
+export interface TestDataOptions {
+  /** Id court du run : les valeurs créées portent QA-CRAWLER-<runId>. */
+  runId?: string;
+  /** Valeurs par libellé, name ou placeholder du champ (majuscules, accents et « * » ignorés). */
+  fields?: Readonly<Record<string, string>>;
+  /** Valeurs par sens (firstName, email, country…), pour chaque champ qui a ce sens. */
+  defaults?: Readonly<Partial<Record<SemanticKey, string>>>;
+  today?: () => Date;
+}
 
 const YES = new Set(['true', 'oui', 'yes', '1', 'x', 'coche', 'checked']);
 
+/** Comment le name, le libellé ou le placeholder d'un champ dit ce qu'il signifie. L'ordre compte : « prénom » avant « nom ». */
+const SEMANTIC_RULES: readonly [SemanticKey, RegExp][] = [
+  ['email', /(e-?mail|courriel)/],
+  ['firstName', /(first ?name|given ?name|prenom|forename)/],
+  ['lastName', /(last ?name|surname|family ?name|nom de famille|^nom\b|\bnom$)/],
+  ['company', /(company|organi[sz]ation|entreprise|societe|raison sociale|employer)/],
+  ['phone', /(phone|telephone|mobile|cellulaire|\btel\b)/],
+  ['postalCode', /(zip|postal|code postal|\bcp\b)/],
+  ['city', /(city|ville|town)/],
+  ['country', /(country|pays)/],
+  ['address', /(address|adresse|street|rue)/],
+  ['url', /(website|site web|\burl\b)/],
+  ['name', /(\bname\b|title|titre|libelle|intitule|designation)/],
+];
+
 /**
- * Deterministic, obviously fake, valid-looking values — or the values the
- * mission gives per field (`testData.fields`, by label, name or placeholder).
- * Never fills passwords, payment or secret fields — even if asked to.
+ * Valeurs déterministes, visiblement synthétiques. Priorité :
+ *
+ *   1. configuration explicite (testData.fields, par libellé/name/placeholder)
+ *   2. règle propre au champ (testData.defaults par sens, aides de l'application : "99999", "HH:MM")
+ *   3. générateur propre au type (e-mail, nombre dans min/max, date…)
+ *   4. valeur de repli sûre ("QA Test")
+ *
+ * Noms, titres et entreprises portent QA-CRAWLER-<runId>, les e-mails
+ * qa-crawler-<runId>@example.test : ce que le crawler crée peut être retrouvé
+ * (et nettoyé) plus tard. Les champs sensibles (mots de passe, cartes, secrets)
+ * ne sont jamais remplis — même quand une valeur est configurée.
  */
 export class DefaultTestDataProvider implements TestDataProvider {
   private readonly fields: ReadonlyMap<string, string>;
+  private readonly defaults: Readonly<Partial<Record<SemanticKey, string>>>;
+  private readonly runId: string;
+  private readonly today: () => Date;
 
-  constructor(
-    private readonly today: () => Date = () => new Date(),
-    fields: Readonly<Record<string, string>> = {},
-  ) {
-    this.fields = new Map(Object.entries(fields).map(([key, value]) => [fieldKey(key), value]));
+  constructor(options: TestDataOptions = {}) {
+    this.fields = new Map(Object.entries(options.fields ?? {}).map(([key, value]) => [fieldKey(key), value]));
+    this.defaults = options.defaults ?? {};
+    this.runId = options.runId ?? 'run';
+    this.today = options.today ?? (() => new Date());
   }
 
-  /** Value the mission gives for this field, if any. */
-  configured(field: FieldConstraints): string | undefined {
+  /** Valeur donnée par la mission pour ce champ, s'il y en a une. */
+  configured(field: Pick<FormField, 'label' | 'groupLabel' | 'name' | 'placeholder'>): string | undefined {
     for (const key of [field.label, field.groupLabel, field.name, field.placeholder]) {
       if (!key) continue;
       const value = this.fields.get(fieldKey(key));
@@ -46,116 +101,212 @@ export class DefaultTestDataProvider implements TestDataProvider {
     return undefined;
   }
 
-  instructionFor(action: DiscoveredAction): FillInstruction {
-    const field = action.field;
-    if (!field) return { kind: 'skip', reason: 'not a form field' };
-    if (isSensitive(field)) return { kind: 'skip', reason: 'sensitive field: never filled automatically' };
+  generateValidValue(field: FormField, context: TestDataContext): Promise<TestValue> {
+    return Promise.resolve(this.validValue(field, context.runId));
+  }
 
-    const configured = this.configured(field);
-    if (configured === undefined && field.hasValue) return { kind: 'skip', reason: 'already filled' };
-    switch (action.type) {
+  generateInvalidValues(field: FormField): Promise<TestValue[]> {
+    return Promise.resolve(this.invalidValues(field));
+  }
+
+  instructionFor(action: DiscoveredAction): FillInstruction {
+    if (!action.field) return { kind: 'skip', reason: 'not a form field' };
+    if (action.type === 'uncheck') return { kind: 'skip', reason: 'already checked' };
+    const value = this.validValue(fieldOf(action), this.runId);
+    switch (value.kind) {
+      case 'fill':
+        return { kind: 'fill', value: value.value ?? '' };
+      case 'select':
+        return { kind: 'select', label: value.value ?? '' };
       case 'check':
-        if (field.choiceGroup !== undefined && field.groupLabel !== undefined && configured !== undefined) {
-          // "Canal de contact": "Téléphone" → this radio only if it is that option.
-          const own = [field.label, field.name].some((key) => key && fieldKey(key) === fieldKey(configured));
-          return own ? { kind: 'check' } : { kind: 'skip', reason: 'another option is configured' };
-        }
-        if (configured !== undefined)
-          return YES.has(fieldKey(configured))
-            ? { kind: 'check' }
-            : { kind: 'skip', reason: 'configured: unchecked' };
-        // Radios: one choice per group (the explorer checks the first option of each group).
-        // Checkboxes: only what the form requires.
-        return field.required || field.choiceGroup !== undefined
-          ? { kind: 'check' }
-          : { kind: 'skip', reason: 'optional choice' };
-      case 'uncheck':
-        return { kind: 'skip', reason: 'already checked' };
-      case 'select': {
-        if (configured !== undefined) return { kind: 'select', label: configured };
-        if (field.customSelect) return { kind: 'select', label: '' };
-        const option = (field.options ?? []).find(
-          (label) => label !== '' && !/^(-+|choisir|select|choose|--)/i.test(label),
-        );
-        return option ? { kind: 'select', label: option } : { kind: 'skip', reason: 'no usable option' };
-      }
-      case 'fill': {
-        const value = configured ?? this.valueFor(field);
-        return value === undefined
-          ? { kind: 'skip', reason: 'no valid value satisfies the constraints' }
-          : { kind: 'fill', value };
-      }
+        return { kind: 'check' };
       default:
-        return { kind: 'skip', reason: 'not a field action' };
+        return { kind: 'skip', reason: value.reason ?? 'skipped' };
     }
   }
 
-  valueFor(field: FieldConstraints): string | undefined {
-    const hint = `${field.name ?? ''} ${field.label ?? ''} ${field.placeholder ?? ''}`.toLowerCase();
-    const shown = `${field.hint ?? ''} ${field.placeholder ?? ''}`;
-    const today = this.today().toISOString().slice(0, 10);
-    if (field.inputType === 'text' || field.inputType === 'textarea') {
-      // Help text of the application: "99999" (5 digits), "HH:MM", "AAAA-MM-JJ", "JJ/MM/AAAA"…
-      const digits = /(?:^|[^\w])([9#]{2,})(?:$|[^\w])/.exec(shown)?.[1];
-      if (digits) return fitText('1234567890'.repeat(3).slice(0, digits.length), field);
-      if (/\b(HH|hh):(MM|mm)\b/.test(shown)) return fitText('10:00', field);
-      const date = dateFormat(shown);
-      if (date || field.dateLike) return fitText(formatDate(today, date ?? 'iso'), field);
+  /** La valeur valide d'un champ (cœur synchrone). */
+  validValue(field: FormField, runId = this.runId): TestValue {
+    if (field.sensitive || field.payment)
+      return { kind: 'skip', source: 'fallback', reason: 'sensitive field: never filled automatically' };
+    const configured = this.configured(field);
+    if (configured === undefined && field.hasValue)
+      return { kind: 'skip', source: 'fallback', reason: 'already filled' };
+
+    switch (field.type) {
+      case 'checkbox':
+      case 'radio':
+        if (field.choiceGroup !== undefined && field.groupLabel !== undefined && configured !== undefined) {
+          // « Canal de contact » : « Téléphone » → cette radio seulement si c'est cette option.
+          const own = [field.label, field.name].some((key) => key && fieldKey(key) === fieldKey(configured));
+          return own
+            ? { kind: 'check', source: 'configured' }
+            : { kind: 'skip', source: 'configured', reason: 'another option is configured' };
+        }
+        if (configured !== undefined)
+          return YES.has(fieldKey(configured))
+            ? { kind: 'check', source: 'configured' }
+            : { kind: 'skip', source: 'configured', reason: 'configured: unchecked' };
+        // Radios : un choix par groupe. Cases à cocher : seulement ce que le formulaire exige.
+        return field.required || field.choiceGroup !== undefined
+          ? { kind: 'check', source: 'type' }
+          : { kind: 'skip', source: 'type', reason: 'optional choice' };
+      case 'select':
+      case 'combobox': {
+        if (configured !== undefined) return { kind: 'select', value: configured, source: 'configured' };
+        const semantic = this.semantic(field, runId);
+        if (semantic && field.options?.some((option) => option.label === semantic.value))
+          return { kind: 'select', value: semantic.value, source: 'rule' };
+        if (field.type === 'combobox' && !field.options)
+          return {
+            kind: 'select',
+            value: '',
+            source: 'type',
+            reason: 'first real option once the list is open',
+          };
+        const option = field.options?.find((candidate) => !candidate.placeholder && !candidate.disabled);
+        return option
+          ? { kind: 'select', value: option.label, source: 'type' }
+          : { kind: 'skip', source: 'type', reason: 'no usable option' };
+      }
+      default: {
+        if (configured !== undefined) return { kind: 'fill', value: configured, source: 'configured' };
+        const hinted = this.fromHint(field);
+        if (hinted !== undefined) return fitted(hinted, field, 'rule');
+        const semantic = this.semantic(field, runId);
+        if (semantic) return fitted(semantic.value, field, 'rule');
+        const typed = this.byType(field, runId);
+        if (typed !== undefined) return fitted(typed, field, 'type');
+        return fitted('QA Test', field, 'fallback');
+      }
     }
-    let value: string;
-    switch (field.inputType) {
+  }
+
+  /**
+   * Valeurs que le formulaire devrait refuser, les plus parlantes d'abord : vide
+   * quand il est obligatoire, hors min/max, trop court/long, mauvais format. Jamais pour les champs sensibles.
+   */
+  invalidValues(field: FormField): TestValue[] {
+    if (field.sensitive || field.payment || field.disabled || field.readonly) return [];
+    if (['checkbox', 'radio', 'select', 'combobox'].includes(field.type)) {
+      return field.required && field.type === 'checkbox'
+        ? [{ kind: 'uncheck', source: 'type', case: 'required-unchecked' }]
+        : [];
+    }
+    const cases: TestValue[] = [];
+    const add = (value: string, name: string): void => {
+      cases.push({ kind: 'fill', value, source: 'type', case: name });
+    };
+    if (field.required) add('', 'empty');
+    switch (field.type) {
       case 'email':
-        value = 'qa-crawler@example.test';
-        break;
-      case 'tel':
-        value = '0100000000';
+        add('invalid-email', 'invalid-email');
         break;
       case 'url':
-        value = 'https://example.test';
+        add('not a url', 'invalid-url');
         break;
+      case 'number':
+      case 'range':
+        if (field.min !== undefined) add(String(field.min - (field.step ?? 1)), 'below-min');
+        if (field.max !== undefined) add(String(field.max + (field.step ?? 1)), 'above-max');
+        break;
+      default:
+        break;
+    }
+    if (field.minLength !== undefined && field.minLength > 1)
+      add('x'.repeat(field.minLength - 1), 'too-short');
+    if (field.maxLength !== undefined) add('x'.repeat(field.maxLength + 1), 'too-long');
+    if (field.pattern && !matches('QA invalid !', field.pattern)) add('QA invalid !', 'pattern-mismatch');
+    return cases;
+  }
+
+  /** testData.defaults, puis le sens intégré du champ (les noms portent le marqueur du run). */
+  private semantic(field: FormField, runId: string): { key: SemanticKey; value: string } | undefined {
+    const text = normalizeText(`${field.name ?? ''} ${field.label ?? ''} ${field.placeholder ?? ''}`);
+    const key =
+      field.type === 'email'
+        ? 'email'
+        : field.type === 'tel'
+          ? 'phone'
+          : field.type === 'url'
+            ? 'url'
+            : SEMANTIC_RULES.find(([, pattern]) => pattern.test(text))?.[0];
+    if (!key) return undefined;
+    const tag = runTag(runId);
+    const builtIn: Record<SemanticKey, string> = {
+      firstName: 'Qa',
+      lastName: 'Crawler',
+      name: tag,
+      email: `qa-crawler-${runId.toLowerCase()}@example.test`,
+      phone: '5550100',
+      company: tag,
+      address: '1 QA Street',
+      city: 'Testville',
+      postalCode: '75001',
+      country: 'Canada',
+      url: 'https://example.test',
+      text: 'QA Test',
+    };
+    return { key, value: this.defaults[key] ?? builtIn[key] };
+  }
+
+  /** Les aides de l'application elle-même : "99999" (5 chiffres), "HH:MM", "AAAA-MM-JJ", "JJ/MM/AAAA"… */
+  private fromHint(field: FormField): string | undefined {
+    if (field.type !== 'text' && field.type !== 'textarea' && field.type !== 'date') return undefined;
+    const shown = `${field.hint ?? ''} ${field.placeholder ?? ''}`;
+    const digits = /(?:^|[^\w])([9#]{2,})(?:$|[^\w])/.exec(shown)?.[1];
+    if (digits) return '1234567890'.repeat(3).slice(0, digits.length);
+    if (/\b(HH|hh):(MM|mm)\b/.test(shown)) return '10:00';
+    const format = dateFormat(shown);
+    if (format) return formatDate(this.isoToday(field), format);
+    return undefined;
+  }
+
+  private byType(field: FormField, runId: string): string | undefined {
+    const today = this.isoToday(field);
+    switch (field.type) {
+      case 'email':
+        return `qa-crawler-${runId.toLowerCase()}@example.test`;
+      case 'tel':
+        return '5550100';
+      case 'url':
+        return 'https://example.test';
       case 'number':
       case 'range':
         return numberWithin(field);
       case 'date':
-        return clampDate(this.today().toISOString().slice(0, 10), field);
-      case 'datetime-local':
-        return `${clampDate(this.today().toISOString().slice(0, 10), field)}T10:00`;
+        return today;
+      case 'datetime':
+        return `${today}T10:00`;
       case 'time':
-        value = '10:00';
-        break;
+        return '10:00';
       case 'month':
-        value = this.today().toISOString().slice(0, 7);
-        break;
+        return today.slice(0, 7);
       case 'week':
-        value = `${this.today().getUTCFullYear()}-W10`;
-        break;
+        return `${today.slice(0, 4)}-W10`;
       case 'color':
-        value = '#336699';
-        break;
+        return '#336699';
       case 'textarea':
-        value = 'QA crawler test content.';
-        break;
+        return `QA crawler test content (${runTag(runId)}).`;
       case 'search':
-        value = 'test';
-        break;
+        return 'test';
       default:
-        value = /mail/.test(hint)
-          ? 'qa-crawler@example.test'
-          : /(zip|postal|cp\b|code postal)/.test(hint)
-            ? '75001'
-            : /(city|ville)/.test(hint)
-              ? 'Testville'
-              : /(first|prenom|prénom)/.test(hint)
-                ? 'Qa'
-                : /(last|nom|name)/.test(hint)
-                  ? 'Crawler'
-                  : 'QA Test';
+        return undefined;
     }
-    return fitText(value, field);
+  }
+
+  /** Aujourd'hui, maintenu entre les dates min/max du champ. */
+  private isoToday(field: FormField): string {
+    const date = this.today().toISOString().slice(0, 10);
+    if (field.minText && /^\d{4}-\d{2}-\d{2}/.test(field.minText) && date < field.minText)
+      return field.minText;
+    if (field.maxText && /^\d{4}-\d{2}-\d{2}/.test(field.maxText) && date > field.maxText)
+      return field.maxText;
+    return date;
   }
 }
 
-/** Label as written in the YAML or on screen: case, accents, required marker "*" ignored. */
+/** Libellé tel qu'écrit dans le YAML ou à l'écran : majuscules, accents et marque d'obligation « * » ignorés. */
 function fieldKey(text: string): string {
   return normalizeText(text.replace(/\*/g, ' '));
 }
@@ -176,18 +327,9 @@ function formatDate(iso: string, format: DateFormat): string {
   return iso;
 }
 
-function isSensitive(field: FieldConstraints): boolean {
-  return (
-    field.inputType === 'password' ||
-    /^(cc-|current-password|new-password|one-time-code)/.test(field.autocomplete ?? '') ||
-    sensitive.match(field.name, field.label, field.placeholder) !== undefined
-  );
-}
-
-function numberWithin(field: FieldConstraints): string {
-  const min = field.min !== undefined && field.min !== '' ? Number(field.min) : undefined;
-  const max = field.max !== undefined && field.max !== '' ? Number(field.max) : undefined;
-  const step = field.step !== undefined && field.step !== '' && field.step !== 'any' ? Number(field.step) : 1;
+function numberWithin(field: FormField): string {
+  const { min, max } = field;
+  const step = field.step !== undefined && field.step > 0 ? field.step : 1;
   let value =
     min !== undefined && max !== undefined
       ? (min + max) / 2
@@ -203,24 +345,21 @@ function numberWithin(field: FieldConstraints): string {
   return String(Number(value.toFixed(6)));
 }
 
-function clampDate(date: string, field: FieldConstraints): string {
-  if (field.min && date < field.min) return field.min;
-  if (field.max && date > field.max) return field.max;
-  return date;
+function matches(text: string, pattern: string): boolean {
+  try {
+    return new RegExp(`^(?:${pattern})$`, 'v').test(text);
+  } catch {
+    return true;
+  }
 }
 
-/** Adjusts a text to minlength/maxlength and checks the pattern; undefined if impossible. */
-function fitText(value: string, field: FieldConstraints): string | undefined {
+/** Ajuste un texte à minlength/maxlength et vérifie le motif ; skip si c'est impossible. */
+function fitted(value: string, field: FormField, source: TestValue['source']): TestValue {
   let text = value;
   if (field.minLength !== undefined && text.length < field.minLength)
     text = text.padEnd(field.minLength, 'x');
   if (field.maxLength !== undefined && text.length > field.maxLength) text = text.slice(0, field.maxLength);
-  if (field.pattern) {
-    try {
-      if (!new RegExp(`^(?:${field.pattern})$`, 'v').test(text)) return undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  return text;
+  if (field.pattern && !matches(text, field.pattern))
+    return { kind: 'skip', source, reason: 'no valid value satisfies the constraints' };
+  return { kind: 'fill', value: text, source };
 }

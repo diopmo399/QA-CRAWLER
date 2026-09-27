@@ -3,7 +3,7 @@ import { parse as parseYaml, YAMLParseError } from 'yaml';
 import { ZodError } from 'zod';
 import { scenarioSchema, type ScenarioConfig } from './config.js';
 
-/** Raised for any unreadable, malformed or invalid scenario. The message is safe to show to users. */
+/** Levée pour tout scénario illisible, mal formé ou invalide. Le message peut être montré à l'utilisateur. */
 export class ConfigError extends Error {
   constructor(
     message: string,
@@ -14,7 +14,7 @@ export class ConfigError extends Error {
   }
 }
 
-/** Values that take precedence over the YAML file (CLI flags, environment). */
+/** Valeurs prioritaires sur le fichier YAML (options de la CLI, environnement). */
 export interface ConfigOverrides {
   baseUrl?: string;
   maxStates?: number;
@@ -26,12 +26,12 @@ export interface ConfigOverrides {
 
 export interface LoadedConfig {
   config: ScenarioConfig;
-  /** Non-fatal remarks worth showing to the user. */
+  /** Remarques non bloquantes à montrer à l'utilisateur. */
   warnings: string[];
   source: string;
 }
 
-/** Environment variable that overrides target.baseUrl (handy in CI: point the same scenario at a PR environment). */
+/** Variable d'environnement qui remplace target.baseUrl (pratique en CI : pointer le même scénario vers l'environnement d'une PR). */
 export const BASE_URL_ENV = 'QA_BASE_URL';
 
 export async function loadConfigFile(
@@ -87,8 +87,8 @@ export function parseConfig(
 }
 
 /**
- * Scenarios written for the first (URL crawler) version keep working: their
- * keys are mapped to the mission format, with a warning.
+ * Les scénarios écrits pour la première version (crawler d'URL) fonctionnent
+ * toujours : leurs clés sont traduites au format mission, avec un avertissement.
  */
 function migrateLegacyKeys(raw: Record<string, unknown>, warnings: string[]): Record<string, unknown> {
   const result: Record<string, unknown> = { ...raw };
@@ -172,11 +172,20 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
     );
   }
   if (config.safety.allowedActionClasses.includes('DANGEROUS')) {
+    const stillBlocked = config.safety.block.filter((risk) => risk !== 'sensitive-data');
     warnings.push(
-      'safety.allowedActionClasses includes DANGEROUS: destructive actions may be executed. Use only on disposable environments.',
+      `safety.allowedActionClasses includes DANGEROUS: destructive actions (delete, pay, send…) may be executed. Use only on disposable environments.${stillBlocked.length > 0 ? ` Risks still blocked by safety.block: ${stillBlocked.join(', ')}.` : ''} Sensitive fields are never filled.`,
     );
   }
-  if (config.safety.allowedActionClasses.includes('MUTATION')) {
+  if (config.safety.mutations.enabled) {
+    if (!config.safety.allowedActionClasses.includes('MUTATION'))
+      config.safety.allowedActionClasses = [...config.safety.allowedActionClasses, 'MUTATION'];
+    if (config.forms.submit !== false)
+      config.safety.block = config.safety.block.filter((risk) => risk !== 'form-submit');
+    warnings.push(
+      `safety.mutations.enabled: the crawler may create or modify data (at most ${config.safety.mutations.maxPerRun} per run, tagged QA-CRAWLER-<runId>). Use a test environment.`,
+    );
+  } else if (config.safety.allowedActionClasses.includes('MUTATION')) {
     warnings.push('safety.allowedActionClasses includes MUTATION: the crawler may modify data.');
   }
   for (const flow of config.flows) {
@@ -190,10 +199,26 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
   }
   const { discover } = config.goals;
   if (discover) {
-    // goals.discover is the short form of the discover* switches.
+    // goals.discover est la forme courte des interrupteurs discover*.
     if (discover.navigation !== undefined) config.goals.discoverNavigation = discover.navigation;
     if (discover.forms !== undefined) config.goals.discoverForms = discover.forms;
     if (discover.dialogs !== undefined) config.goals.discoverFlows = discover.dialogs;
+  }
+  if (config.forms.autoFill !== undefined) config.forms.exercise = config.forms.autoFill;
+  const actorNames = config.actors.map((actor) => actor.name);
+  const duplicates = actorNames.filter((name, index) => actorNames.indexOf(name) !== index);
+  if (duplicates.length > 0 || actorNames.includes(config.authorization.primaryActor)) {
+    throw new ConfigError('Invalid scenario', [
+      `actors: names must be unique and differ from authorization.primaryActor (${[...new Set([...duplicates, config.authorization.primaryActor].filter((name) => actorNames.includes(name)))].join(', ')})`,
+    ]);
+  }
+  const known = new Set([config.authorization.primaryActor, ...actorNames]);
+  for (const rule of config.authorization.rules) {
+    if (!known.has(rule.actor))
+      throw new ConfigError('Invalid scenario', [`authorization.rules: unknown actor "${rule.actor}"`]);
+  }
+  if (config.openapi.enabled && !config.openapi.source) {
+    throw new ConfigError('Invalid scenario', ['openapi.source: required when openapi.enabled is true']);
   }
   if (config.forms.submit === true) {
     config.safety.block = config.safety.block.filter((risk) => risk !== 'form-submit');
@@ -204,7 +229,7 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
     warnings.push('exploration.autonomous is false and no flow is defined: nothing will be tested.');
   }
   if (config.auth.type === 'http') {
-    // auth.type: http is a shortcut for a credential profile answered by the HttpAuthHandler.
+    // auth.type: http est un raccourci pour un profil d'identifiants traité par le HttpAuthHandler.
     const { httpAuth } = config.browserInteractions;
     if (!('auth' in config.credentials)) {
       config.credentials.auth = {
@@ -235,7 +260,7 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
   return { config, warnings };
 }
 
-/** `*.example.com` matches sub-domains (not the apex); anything else is an exact, case-insensitive match. */
+/** `*.example.com` couvre les sous-domaines (pas le domaine lui-même) ; sinon, correspondance exacte, sans tenir compte de la casse. */
 export function hostMatches(hostname: string, pattern: string): boolean {
   const host = hostname.toLowerCase();
   const expected = pattern.toLowerCase();

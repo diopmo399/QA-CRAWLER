@@ -3,9 +3,9 @@ import type { QueryParamMode } from '../config/config.js';
 const NON_NAVIGABLE_SCHEMES = /^(mailto|tel|sms|javascript|data|blob|file|ftp|about|chrome|intent):/i;
 
 /**
- * Resolves an href found in a page against the page URL.
- * Returns undefined for anything that is not an http(s) navigation target
- * (mailto:, javascript:, empty or fragment-only links, malformed URLs).
+ * Résout un href trouvé dans une page par rapport à l'URL de la page.
+ * Renvoie undefined pour tout ce qui n'est pas une cible de navigation http(s)
+ * (mailto:, javascript:, liens vides ou réduits à un fragment, URL mal formées).
  */
 export function resolveUrl(href: string, baseUrl: string): URL | undefined {
   const trimmed = href.trim();
@@ -22,17 +22,17 @@ export function resolveUrl(href: string, baseUrl: string): URL | undefined {
 
 export interface NormalizeOptions {
   queryParamMode: QueryParamMode;
-  /** Param names removed before comparison; `*` wildcard allowed (utm_*). */
+  /** Noms de paramètres retirés avant la comparaison ; joker `*` accepté (utm_*). */
   ignoredParams: readonly string[];
 }
 
 /**
- * Canonical form used to decide whether two URLs are the same page:
- * - lower-case scheme and host, default ports removed;
- * - fragment dropped, except hash routes (#/users, #!/users) used by SPAs;
- * - duplicate slashes collapsed, trailing slash removed (except root);
- * - ignored/tracking params removed, remaining params sorted
- *   (or all params removed in `ignore` mode).
+ * Forme canonique qui sert à décider si deux URL sont la même page :
+ * - schéma et hôte en minuscules, ports par défaut retirés ;
+ * - fragment retiré, sauf les routes par hash (#/users, #!/users) des SPA ;
+ * - barres obliques doublées fusionnées, barre finale retirée (sauf la racine) ;
+ * - paramètres ignorés ou de suivi retirés, les autres triés
+ *   (ou tous retirés en mode `ignore`).
  */
 export function normalizeUrl(input: URL | string, options: NormalizeOptions): string {
   const url = new URL(input.toString());
@@ -76,7 +76,7 @@ export function isIgnoredParam(name: string, ignored: readonly string[]): boolea
   });
 }
 
-/** Path shown in logs and used for ignoredPaths matching: the hash route for hash-routed SPAs. */
+/** Chemin affiché dans les logs et comparé aux ignoredPaths : la route par hash pour les SPA qui en utilisent. */
 export function effectivePath(url: URL | string): string {
   const parsed = new URL(url.toString());
   if (/^#!?\//.test(parsed.hash)) {

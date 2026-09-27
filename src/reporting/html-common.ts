@@ -10,7 +10,7 @@ export const SEVERITY_COLORS: Record<Severity, string> = {
   CRITICAL: '#7f1d1d',
 };
 
-/** HTML-escapes text and attribute values. */
+/** Échappe le texte et les valeurs d'attribut pour le HTML. */
 export function esc(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -24,7 +24,7 @@ export function severityBadge(severity: Severity, language: ReportLanguage = 'en
   return `<span class="sev" style="background:${SEVERITY_COLORS[severity]}">${esc(valueLabel(language, severity))}</span>`;
 }
 
-/** Colored pill for a status or class; the CSS class stays the English value, the text follows the language. */
+/** Pastille colorée pour un statut ou une classe ; la classe CSS reste la valeur anglaise, le texte suit la langue. */
 export function classPill(value: string, language: ReportLanguage = 'en'): string {
   return `<span class="pill ${esc(value)}">${esc(valueLabel(language, value))}</span>`;
 }
@@ -46,7 +46,7 @@ export function formatDate(iso: string): string {
   return iso.replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
 }
 
-/** Collapsible tree (nested <details>), with the action that led to each state. */
+/** Arbre repliable (<details> imbriqués), avec l'action qui a mené à chaque état. */
 export function renderTreeHtml(
   tree: FlowTreeNode | undefined,
   issueCount: (stateId: string) => number,

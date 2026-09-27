@@ -3,10 +3,10 @@ import type { BrowserInteractionHandler, HandlerOutcome } from '../handler.js';
 import type { BrowserInteraction } from '../types.js';
 
 /**
- * POPUP (window.open, target=_blank with opener) and NEW_TAB (no opener):
- * the new page is linked to the action that opened it. On an allowed origin
- * it is observed as a new state of the flow graph (a new crawl context the
- * explorer can come back to by URL), then closed: exploration stays in one tab.
+ * POPUP (window.open, target=_blank avec opener) et NEW_TAB (sans opener) : la
+ * nouvelle page est reliée à l'action qui l'a ouverte. Sur une origine autorisée, elle
+ * est observée comme un nouvel état du graphe (un nouveau contexte d'exploration où
+ * l'explorateur peut revenir par URL), puis fermée : l'exploration reste dans un seul onglet.
  */
 export class PopupHandler implements BrowserInteractionHandler {
   readonly name = 'PopupHandler';
@@ -15,9 +15,9 @@ export class PopupHandler implements BrowserInteractionHandler {
   constructor(
     private readonly options: {
       observe: boolean;
-      /** Leave the page open up to this long so it can finish on its own (SSO popup). */
+      /** Laisser la page ouverte jusqu'à cette durée pour qu'elle termine seule (popup SSO). */
       closeAfterMs?: number;
-      /** Records the page as a state; returns its id. Provided by the crawl engine. */
+      /** Enregistre la page comme un état ; renvoie son id. Fourni par le moteur d'exploration. */
       inspect?: (page: Page) => Promise<string | undefined>;
     },
   ) {}
@@ -30,7 +30,7 @@ export class PopupHandler implements BrowserInteractionHandler {
     const page = native.page;
     const wait = this.options.closeAfterMs ?? 0;
     if (wait > 0 && !page.isClosed()) {
-      // e.g. SiteMinder: the popup signs in (HTTP_AUTH), then redirects or closes itself.
+      // par exemple SiteMinder : la popup connecte (HTTP_AUTH), puis redirige ou se ferme.
       await page.waitForEvent('close', { timeout: wait }).catch(() => undefined);
     }
     if (page.isClosed()) {

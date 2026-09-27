@@ -12,38 +12,38 @@ export interface RuleBasedOptions {
   maxDepth: number;
   maxStatesPerRoute: number;
   queryParamMode: QueryParamMode;
-  /** Similar controls (same kind, same label once numbers are masked) tried at most this many times per state. */
+  /** Contrôles semblables (même genre, même libellé une fois les nombres masqués) essayés au plus ce nombre de fois par état. */
   maxSimilarActions?: number;
-  /** Mission name (reports). */
+  /** Nom de la mission (rapports). */
   missionName?: string;
-  /** Goal keywords: actions whose label or URL matches one are preferred. Default: goals.keywords. */
+  /** Mots-clés d'objectif : les actions dont le libellé ou l'URL en contient un sont préférées. Par défaut : goals.keywords. */
   keywords?: readonly string[];
-  /** Scoring weights (defaults + the mission's overrides). */
+  /** Poids du score (valeurs par défaut + surcharges de la mission). */
   weights?: ScoringWeights;
-  /** `stateId::actionId` known from the baseline (explore mode): new ground first. */
+  /** `stateId::actionId` connus par la baseline (mode explore) : le nouveau terrain d'abord. */
   knownActions?: ReadonlySet<string>;
 }
 
 export interface ScoredAction {
   action: DiscoveredAction;
   score: number;
-  /** Reasons joined, for logs and reports. */
+  /** Raisons réunies, pour les logs et les rapports. */
   why: string;
   reasons: string[];
 }
 
 /**
- * Deterministic strategy — same application, same mission, same exploration:
+ * Stratégie déterministe — même application, même mission, même exploration :
  *
- * 1. every action of the state is scored by the ActionScorer (see
- *    DEFAULT_SCORING_WEIGHTS): new states, goal keywords and what is in front
- *    of the screen first; actions already tried, blocked, disabled, covered
- *    by a modal or out of the goals are excluded;
- * 2. the best score wins (equal scores keep document order);
- * 3. nothing left → BACKTRACK; max depth reached → BACKTRACK.
+ * 1. chaque action de l'état reçoit un score de l'ActionScorer (voir
+ *    DEFAULT_SCORING_WEIGHTS) : les nouveaux états, les mots-clés d'objectif et
+ *    ce qui est devant l'écran d'abord ; les actions déjà essayées, bloquées,
+ *    désactivées, couvertes par une fenêtre modale ou hors objectifs sont exclues ;
+ * 2. le meilleur score gagne (à score égal, l'ordre du document est gardé) ;
+ * 3. plus rien → BACKTRACK ; profondeur maximale atteinte → BACKTRACK.
  *
- * Free-text fields are not filled one by one: the explorer fills a whole
- * form (FormExerciser) before its buttons are considered.
+ * Les champs de texte libre ne sont pas remplis un par un : l'explorateur remplit
+ * tout un formulaire (FormExerciser) avant de considérer ses boutons.
  */
 export class RuleBasedDecisionEngine implements DecisionEngine {
   readonly name = 'rule-based';
@@ -84,7 +84,7 @@ export class RuleBasedDecisionEngine implements DecisionEngine {
     });
   }
 
-  /** Candidates in decision order (exposed for tests and debugging). */
+  /** Candidates dans l'ordre de décision (exposées pour les tests et le débogage). */
   rank(context: PageContext, graph: FlowGraph): ScoredAction[] {
     const scored: ScoredAction[] = [];
     for (const action of context.actions) {
@@ -92,7 +92,7 @@ export class RuleBasedDecisionEngine implements DecisionEngine {
       if (score.excluded !== undefined) continue;
       scored.push({ action, score: score.score, why: score.reasons.join(', '), reasons: score.reasons });
     }
-    // Stable: equal scores keep document order.
+    // Stable : à score égal, l'ordre du document est gardé.
     return scored.sort((a, b) => b.score - a.score);
   }
 }

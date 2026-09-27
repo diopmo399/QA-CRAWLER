@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Page } from 'playwright';
 import { effectivePath } from '../crawler/url-normalizer.js';
 
-/** Files produced by this service: 001-home.png, 012-admin-users-error.png… */
+/** Fichiers produits par ce service : 001-home.png, 012-admin-users-error.png… */
 const SCREENSHOT_FILE = /^\d{3,}-[a-z0-9-]*\.png$/;
 
 export class ScreenshotService {
@@ -12,7 +12,7 @@ export class ScreenshotService {
     private readonly fullPage: boolean,
   ) {}
 
-  /** Creates the directory and removes screenshots left by a previous run (only files matching our naming scheme). */
+  /** Crée le dossier et supprime les captures d'un run précédent (seulement les fichiers qui suivent notre nommage). */
   async prepare(): Promise<void> {
     await mkdir(this.directory, { recursive: true });
     for (const file of await readdir(this.directory)) {
@@ -20,7 +20,7 @@ export class ScreenshotService {
     }
   }
 
-  /** Screenshot named after a state label; undefined when the page could not be captured. */
+  /** Capture nommée d'après le libellé d'un état ; undefined quand la page n'a pas pu être capturée. */
   async captureState(
     page: Page,
     sequence: number,
@@ -30,7 +30,7 @@ export class ScreenshotService {
     return this.write(page, stateScreenshotFileName(sequence, label, suffix));
   }
 
-  /** Returns the file path, or undefined when the page could not be captured (closed, crashed…). */
+  /** Renvoie le chemin du fichier, ou undefined quand la page n'a pas pu être capturée (fermée, plantée…). */
   async capture(page: Page, sequence: number, url: string, suffix?: string): Promise<string | undefined> {
     return this.write(page, screenshotFileName(sequence, url, suffix));
   }
@@ -51,7 +51,7 @@ export class ScreenshotService {
   }
 }
 
-/** Safe, sortable file name for a state: (3, "Users list", "error") → "003-users-list-error.png". */
+/** Nom de fichier sûr et triable pour un état : (3, "Users list", "error") → "003-users-list-error.png". */
 export function stateScreenshotFileName(sequence: number, label: string, suffix?: string): string {
   const slug =
     label
@@ -66,14 +66,14 @@ export function stateScreenshotFileName(sequence: number, label: string, suffix?
   return `${String(sequence).padStart(3, '0')}-${slug}${safeSuffix}.png`;
 }
 
-/** Safe, sortable file name derived from the page path: 3 → "003-admin-users-error.png". */
+/** Nom de fichier sûr et triable tiré du chemin de la page : 3 → "003-admin-users-error.png". */
 export function screenshotFileName(sequence: number, url: string, suffix?: string): string {
   let pagePath = '/';
   try {
     pagePath = effectivePath(url);
     pagePath = decodeURIComponent(pagePath);
   } catch {
-    // keep what we have: the slug below only keeps [a-z0-9-]
+    // on garde ce qu'on a : le slug ci-dessous ne garde que [a-z0-9-]
   }
   const slug =
     pagePath

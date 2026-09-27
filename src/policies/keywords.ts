@@ -1,12 +1,12 @@
 import type { RiskKind } from '../model/discovered-action.js';
 
 /**
- * Built-in vocabulary (French + English). Keywords are matched as whole
- * words/phrases on accent-free lower-case text, so "add" does not match
- * "address" and "pay" does not match "paysage".
+ * Vocabulaire intégré (français + anglais). Les mots-clés sont comparés comme des
+ * mots ou expressions entiers, sur du texte en minuscules sans accents : « add » ne
+ * correspond pas à « address » et « pay » ne correspond pas à « paysage ».
  */
 
-/** Risky intents, by kind. Any match makes an action DANGEROUS. */
+/** Intentions risquées, par genre. Toute correspondance rend une action DANGEROUS. */
 export const RISK_KEYWORDS: Partial<Record<RiskKind, readonly string[]>> = {
   delete: [
     'delete',
@@ -88,7 +88,7 @@ export const RISK_KEYWORDS: Partial<Record<RiskKind, readonly string[]>> = {
   ],
 };
 
-/** Data changes. */
+/** Modifications de données. */
 export const MUTATION_KEYWORDS = [
   'create',
   'add',
@@ -179,8 +179,8 @@ export const MUTATION_KEYWORDS = [
   'oui',
 ] as const;
 
-/** Moving between steps of a wizard (client-side, no data sent). */
-/** Buttons that send the form they belong to (inside a <form>, a dialog or an overlay with fields). */
+/** Passer d'une étape d'assistant à l'autre (côté client, aucune donnée envoyée). */
+/** Boutons qui envoient le formulaire auquel ils appartiennent (dans un <form>, une fenêtre ou un calque avec des champs). */
 export const SUBMIT_KEYWORDS = [
   'submit',
   'save',
@@ -206,7 +206,7 @@ export const SUBMIT_KEYWORDS = [
   'publier',
 ] as const;
 
-/** Files rather than screens: explored last. */
+/** Des fichiers plutôt que des écrans : explorés en dernier. */
 export const EXPORT_KEYWORDS = [
   'export',
   'exporter',
@@ -289,7 +289,7 @@ export const FILTER_KEYWORDS = [
   'rafraichir',
 ] as const;
 
-/** Fields that must never be filled automatically. */
+/** Champs qui ne doivent jamais être remplis automatiquement. */
 export const SENSITIVE_FIELD_KEYWORDS = [
   'password',
   'passwd',
@@ -322,9 +322,25 @@ export const SENSITIVE_FIELD_KEYWORDS = [
   'nir',
   'passport',
   'passeport',
+  'authorization',
+  'bearer',
+  'apikey',
+  'access key',
+  'private key',
+  'client secret',
+  'credential',
+  'credentials',
+  'bank account',
+  'account number',
+  'compte bancaire',
+  'numero de compte',
+  'sin',
+  'social insurance',
+  'nas',
+  'assurance sociale',
 ] as const;
 
-/** Payment fields: never filled, not even with a value from the environment. */
+/** Champs de paiement : jamais remplis, pas même avec une valeur de l'environnement. */
 export const PAYMENT_FIELD_KEYWORDS = [
   'card',
   'card number',
@@ -341,9 +357,13 @@ export const PAYMENT_FIELD_KEYWORDS = [
   'bic',
   'swift',
   'rib',
+  'bank account',
+  'account number',
+  'compte bancaire',
+  'numero de compte',
 ] as const;
 
-/** Lower-case, accent-free, camelCase split: "Supprimer l'élément" → "supprimer l'element", "deleteUser" → "delete user". */
+/** Minuscules, sans accents, camelCase séparé : « Supprimer l'élément » → « supprimer l'element », « deleteUser » → « delete user ». */
 export function normalizeText(text: string): string {
   return text
     .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -356,7 +376,7 @@ export function normalizeText(text: string): string {
     .trim();
 }
 
-/** Whole-word matcher; the longest keyword wins (so "confirmer paiement" beats "confirmer"). */
+/** Recherche par mots entiers ; le mot-clé le plus long l'emporte (« confirmer paiement » bat « confirmer »). */
 export class KeywordMatcher {
   private readonly patterns: { keyword: string; regex: RegExp }[];
 
@@ -385,7 +405,7 @@ function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Path and hash of a URL, decoded, for keyword matching ("/users/3/delete"). */
+/** Chemin et hash d'une URL, décodés, pour la recherche de mots-clés (« /users/3/delete »). */
 export function urlText(href: string): string {
   try {
     const url = new URL(href, 'http://placeholder.invalid');

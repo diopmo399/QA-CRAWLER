@@ -7,7 +7,7 @@ import type { ExplorationResult } from '../../src/model/exploration-result.js';
 import { runMission, type RunOutcome } from '../../src/orchestrator.js';
 import { startTestSite, type TestSite } from '../fixtures/test-site.js';
 
-/** Error detection and safety on a site full of deliberate bugs and traps. */
+/** Détection d'erreurs et sécurité sur un site plein de bugs et de pièges volontaires. */
 describe('FlowExplorer on the trap site', () => {
   let site: TestSite;
   let outcome: RunOutcome;

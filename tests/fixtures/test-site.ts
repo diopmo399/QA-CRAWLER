@@ -2,17 +2,17 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 
 /**
- * Small, deterministic website full of traps for the crawler:
- * broken links, failing API calls, JS errors, redirect loop, infinite
- * pagination, /users/:id routes, destructive links and buttons, forms
- * and SPA-like navigation. It records every request so tests can prove
- * that dangerous endpoints were never hit.
+ * Petit site déterministe plein de pièges pour le crawler : liens cassés, appels
+ * d'API en échec, erreurs JS, boucle de redirection, pagination infinie, routes
+ * /users/:id, liens et boutons destructifs, formulaires et navigation façon SPA. Il
+ * enregistre chaque requête pour que les tests prouvent que les points d'accès
+ * dangereux n'ont jamais été appelés.
  */
 export interface TestSite {
   url: string;
-  /** Paths requested, in order. */
+  /** Chemins demandés, dans l'ordre. */
   requests: string[];
-  /** Requests that reached an endpoint only a destructive action could trigger. */
+  /** Requêtes arrivées sur un point d'accès que seule une action destructive pouvait déclencher. */
   dangerousHits: string[];
   close(): Promise<void>;
 }

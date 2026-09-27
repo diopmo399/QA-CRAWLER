@@ -85,7 +85,7 @@ describe('RuleBasedDecisionEngine', () => {
     expect(limited.rank(context(actions), graph).map((entry) => entry.action.text)).toEqual([
       'Fermer le calendrier',
     ]);
-    // Two similar controls only: nothing to group.
+    // Seulement deux contrôles semblables : rien à regrouper.
     const two = [action('1'), action('2')];
     expect(limited.rank(context(two), graphWith('home', two))).toHaveLength(2);
   });

@@ -9,8 +9,8 @@ import { runMission } from '../../src/orchestrator.js';
 import { startFlowApp, type FlowApp } from '../fixtures/flow-app.js';
 
 /**
- * Imposed flows on the mini back-office: the mission lists the steps, the
- * explorer runs them in order — and the SafetyPolicy still has the last word.
+ * Flows imposés sur le mini back-office : la mission liste les étapes, l'explorateur
+ * les exécute dans l'ordre — et la SafetyPolicy a toujours le dernier mot.
  */
 describe('Imposed flows', () => {
   let app: FlowApp;
@@ -89,22 +89,22 @@ flows:
     expect(report.steps.map((step) => step.status)).toEqual(Array(11).fill('PASSED'));
     expect(report.status).toBe('PASSED');
     expect(result.stats.flowsPassed).toBe(1);
-    // The flow went through the three wizard steps (same URL, three states).
+    // Le flow est passé par les trois étapes de l'assistant (même URL, trois états).
     const headings = report.states.flatMap(
       (id) => result.states.find((state) => state.id === id)?.headings ?? [],
     );
     expect(headings).toEqual(expect.arrayContaining(['Étape 2 — Détails', 'Étape 3 — Confirmation']));
-    // Transitions are tagged with the flow in the graph.
+    // Les transitions portent le nom du flow dans le graphe.
     expect(
       result.transitions.filter((edge) => edge.flow === 'nouveau-dossier').length,
     ).toBeGreaterThanOrEqual(6);
-    // The named screenshot exists.
+    // La capture nommée existe.
     const shot = report.steps[10]?.screenshot;
     expect(shot).toBeDefined();
     await access(shot ?? '');
     expect(result.stopReason).toBe('flows-only');
     expect(lastHits).toEqual([]);
-    // The value read from the environment never appears in the reports.
+    // La valeur lue dans l'environnement n'apparaît jamais dans les rapports.
     const json = await readFile(path.join(outputDir, 'wizard', 'reports', 'result.json'), 'utf8');
     expect(json).not.toContain('demandeur@example.test');
     expect(json).toContain('${env:QA_FLOW_EMAIL}');
@@ -200,7 +200,7 @@ flows:
     expect(flow(result, 'membre').status).toBe('PASSED');
   });
 
-  it('never executes a DANGEROUS step, even with allow', async () => {
+  it('does not execute a DANGEROUS step the mission does not allow, whatever the step says', async () => {
     const result = await run(
       'dangerous',
       `
@@ -216,7 +216,7 @@ flows:
     const report = flow(result, 'supprimer');
     expect(report.status).toBe('BLOCKED');
     expect(report.steps[0]?.classification).toBe('DANGEROUS');
-    expect(report.steps[0]?.reason).toContain('never executed');
+    expect(report.steps[0]?.reason).toContain('not allowed by the mission');
     expect(lastHits).toEqual([]);
   });
 
@@ -252,7 +252,7 @@ flows:
     expect(severities.sort()).toEqual(['ERROR', 'WARNING']);
     const json = await readFile(path.join(outputDir, 'failures', 'reports', 'result.json'), 'utf8');
     expect(json).not.toContain('4111111111111111'.slice(4));
-    // report.language: fr — the HTML is in French, result.json stays in English.
+    // report.language: fr — le HTML est en français, result.json reste en anglais.
     const html = await readFile(path.join(outputDir, 'failures', 'reports', 'index.html'), 'utf8');
     expect(html).toContain('<html lang="fr">');
     for (const text of [
@@ -287,11 +287,11 @@ flows:
     const report = flow(result, 'fiche-utilisateur');
     expect(report.status).toBe('PASSED');
     expect(report.explored).toBe(true);
-    // The Historique tab of the user page was explored right after the flow…
+    // L'onglet Historique de la page utilisateur a été exploré juste après le flow…
     expect(
       result.states.some((state) => state.route === '/users/:id' && state.subtitle?.includes('Historique')),
     ).toBe(true);
-    // …and the autonomous exploration covered the rest of the application.
+    // …et l'exploration autonome a couvert le reste de l'application.
     expect(result.states.some((state) => state.headings.includes('Journal'))).toBe(true);
     expect(result.states[0]?.url).toBe(`${app.url}/`);
     expect(lastHits).toEqual([]);
@@ -313,10 +313,10 @@ flows:
     const report = flow(result, 'fiche-utilisateur');
     expect(report.explored).toBe(true);
     expect(result.stopReason).toBe('flows-only');
-    // The tabs of /users/3 were explored…
+    // Les onglets de /users/3 ont été explorés…
     const user = result.states.filter((state) => state.route === '/users/:id');
     expect(user.some((state) => state.subtitle?.includes('Historique'))).toBe(true);
-    // …but nothing the flow did not lead to: only the start page, the flow's pages and /users/3.
+    // …mais rien de ce que le flow n'atteignait pas : seulement la page de départ, les pages du flow et /users/3.
     const executed = result.transitions.filter(
       (edge) => edge.result === 'SUCCESS' && edge.flow === undefined,
     );

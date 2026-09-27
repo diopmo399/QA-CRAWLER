@@ -2,9 +2,9 @@ import type { BrowserInteractionHandler, HandlerOutcome } from '../handler.js';
 import type { BrowserInteraction } from '../types.js';
 
 /**
- * DOWNLOAD: records which action produced which file (name, type, size when
- * the server announced them). The browser context refuses downloads, so the
- * file is never written to disk, let alone opened or executed.
+ * DOWNLOAD : enregistre quelle action a produit quel fichier (nom, type, taille
+ * quand le serveur les a annoncés). Le contexte du navigateur refuse les
+ * téléchargements : le fichier n'est jamais écrit sur le disque, encore moins ouvert ou exécuté.
  */
 export class DownloadHandler implements BrowserInteractionHandler {
   readonly name = 'DownloadHandler';

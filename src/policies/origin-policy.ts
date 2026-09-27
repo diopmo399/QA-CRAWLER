@@ -2,12 +2,12 @@ import type { OriginClass } from '../interactions/types.js';
 import type { NavigationPolicy } from './navigation-policy.js';
 
 /**
- * Where a URL stands compared to the mission, reusing the NavigationPolicy's
- * allowed hosts:
- * - SAME_ORIGIN: the target application's origin;
- * - ALLOWED_ORIGIN: another origin on an allowed host (API, SSO declared in allowedHosts…);
- * - EXTERNAL_ORIGIN: anything else;
- * - BLOCKED_ORIGIN: explicitly blocked by the mission (browserInteractions.blockedOrigins).
+ * Où se situe une URL par rapport à la mission, à partir des hôtes autorisés de la
+ * NavigationPolicy :
+ * - SAME_ORIGIN : l'origine de l'application cible ;
+ * - ALLOWED_ORIGIN : une autre origine sur un hôte autorisé (API, SSO déclaré dans allowedHosts…) ;
+ * - EXTERNAL_ORIGIN : tout le reste ;
+ * - BLOCKED_ORIGIN : bloquée explicitement par la mission (browserInteractions.blockedOrigins).
  */
 export class AllowedOriginPolicy {
   private readonly blocked: ReadonlySet<string>;
@@ -34,7 +34,7 @@ export class AllowedOriginPolicy {
   }
 }
 
-/** Origin of an http(s) URL; undefined for anything else. */
+/** Origine d'une URL http(s) ; undefined pour tout le reste. */
 export function originOf(url: string): string | undefined {
   try {
     const parsed = new URL(url);

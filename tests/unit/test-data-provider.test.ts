@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { DefaultTestDataProvider } from '../../src/data/test-data-provider.js';
 import type { DiscoveredAction, FieldConstraints } from '../../src/model/discovered-action.js';
 
-const provider = new DefaultTestDataProvider(() => new Date('2026-09-26T12:00:00Z'));
+const provider = new DefaultTestDataProvider({
+  runId: 'abc123',
+  today: () => new Date('2026-09-26T12:00:00Z'),
+});
 const fieldAction = (field: FieldConstraints, type: DiscoveredAction['type'] = 'fill'): DiscoveredAction => ({
   id: 'a',
   stateId: 's',
@@ -22,7 +25,8 @@ describe('DefaultTestDataProvider', () => {
   it('produces valid values by type', () => {
     expect(provider.instructionFor(fieldAction({ inputType: 'email', required: true }))).toEqual({
       kind: 'fill',
-      value: 'qa-crawler@example.test',
+      // Porte l'id du run : les données créées pourront être retrouvées.
+      value: 'qa-crawler-abc123@example.test',
     });
     expect(provider.instructionFor(fieldAction({ inputType: 'text', required: true }))).toEqual({
       kind: 'fill',
@@ -106,17 +110,21 @@ describe('DefaultTestDataProvider', () => {
     expect(text({ hint: 'AAAA-MM-JJ' })).toEqual({ kind: 'fill', value: '2026-09-26' });
     expect(text({ placeholder: 'JJ/MM/AAAA' })).toEqual({ kind: 'fill', value: '26/09/2026' });
     expect(text({ dateLike: true })).toEqual({ kind: 'fill', value: '2026-09-26' });
-    // Already filled (prefilled date…): left as it is.
+    // Déjà rempli (date préremplie…) : laissé tel quel.
     expect(text({ hasValue: true }).kind).toBe('skip');
   });
 
   it('uses the values of the mission, by label, name or group label (case, accents, * ignored)', () => {
-    const configured = new DefaultTestDataProvider(() => new Date('2026-09-26T12:00:00Z'), {
-      'code agence': '81234',
-      'Canal de contact': 'Courriel',
-      'Type de dossier': 'Fermeture',
-      "M'assigner le dossier": 'oui',
-      'Mot de passe': 'secret',
+    const configured = new DefaultTestDataProvider({
+      runId: 'abc123',
+      today: () => new Date('2026-09-26T12:00:00Z'),
+      fields: {
+        'code agence': '81234',
+        'Canal de contact': 'Courriel',
+        'Type de dossier': 'Fermeture',
+        "M'assigner le dossier": 'oui',
+        'Mot de passe': 'secret',
+      },
     });
     const field = (extra: Partial<FieldConstraints>, type: DiscoveredAction['type'] = 'fill') =>
       configured.instructionFor(fieldAction({ inputType: 'text', required: true, ...extra }, type));
@@ -133,7 +141,7 @@ describe('DefaultTestDataProvider', () => {
     ).toEqual({
       kind: 'check',
     });
-    // Sensitive fields: never, even when listed.
+    // Champs sensibles : jamais, même listés.
     expect(field({ inputType: 'password', label: 'Mot de passe' }).kind).toBe('skip');
   });
 
@@ -148,7 +156,7 @@ describe('DefaultTestDataProvider', () => {
         fieldAction({ inputType: 'div', required: false, customSelect: true }, 'select'),
       ),
     ).toEqual({ kind: 'select', label: '' });
-    // An optional checkbox stays unchecked.
+    // Une case à cocher facultative reste décochée.
     expect(
       provider.instructionFor(
         fieldAction({ inputType: 'checkbox', required: false, label: 'Newsletter' }, 'check'),

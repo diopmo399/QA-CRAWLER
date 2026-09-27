@@ -2,21 +2,21 @@ import type { QueryParamMode } from '../config/config.js';
 import { effectivePath } from './url-normalizer.js';
 
 /**
- * Turns concrete URLs into route patterns so that /users/1, /users/2 … are
- * recognised as the same kind of page (/users/:id). The crawler then visits
- * only a few URLs per pattern instead of every record in the database.
+ * Transforme des URL concrètes en modèles de route pour que /users/1, /users/2 …
+ * soient reconnues comme le même genre de page (/users/:id). Le crawler ne visite
+ * alors que quelques URL par modèle au lieu de chaque enregistrement de la base.
  *
- * Deliberately simple heuristics, applied per path segment.
+ * Heuristiques volontairement simples, appliquées segment par segment.
  */
 const SEGMENT_RULES: readonly [RegExp, string][] = [
   [/^\d+$/, ':id'],
   [/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, ':uuid'],
-  // MongoDB ObjectId, hashes, hex ids
+  // ObjectId MongoDB, empreintes, id hexadécimaux
   [/^(?=.*\d)[0-9a-f]{12,}$/i, ':hash'],
   [/^\d{4}-\d{2}-\d{2}([t_ ]\d{2}[:-]\d{2}([:-]\d{2})?)?$/i, ':date'],
-  // Long opaque tokens mixing letters and digits (slugs with ids, base64 ids…)
+  // Longs jetons opaques mêlant lettres et chiffres (slugs avec id, id en base64…)
   [/^(?=.*\d)(?=.*[a-z])[a-z0-9_-]{20,}$/i, ':token'],
-  // "123-product-name" style slugs
+  // Slugs du genre « 123-nom-du-produit »
   [/^\d+-[a-z0-9-]+$/i, ':id-slug'],
 ];
 
@@ -26,7 +26,7 @@ export function normalizeSegment(segment: string): string {
   try {
     decoded = decodeURIComponent(segment);
   } catch {
-    // keep the raw segment
+    // garder le segment tel quel
   }
   for (const [pattern, replacement] of SEGMENT_RULES) {
     if (pattern.test(decoded)) return replacement;
@@ -43,9 +43,9 @@ export function routePattern(path: string): string {
 }
 
 /**
- * Route key of a (normalized) URL. In `pattern` mode query parameter *names*
- * are part of the key but not their values, so ?page=1 … ?page=500 share a
- * key and are capped by `maxUrlsPerRoute`.
+ * Clé de route d'une URL (normalisée). En mode `pattern`, les *noms* des
+ * paramètres de requête font partie de la clé mais pas leurs valeurs : ?page=1 …
+ * ?page=500 partagent une clé et sont limités par `maxUrlsPerRoute`.
  */
 export function routeKey(url: URL | string, queryParamMode: QueryParamMode): string {
   const parsed = new URL(url.toString());

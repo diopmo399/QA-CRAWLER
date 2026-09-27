@@ -3,10 +3,10 @@ import { SeverityRules } from '../anomaly/severity-rules.js';
 import { attributionOf, type ObservationContext, type PageObserver } from './observer.js';
 
 /**
- * Reports HTTP responses with status >= http.failOnStatus, failed requests,
- * broken pages (main document >= failOnStatus) and failed navigations
- * (redirect loops, DNS…). Only URL, method and status are kept — never
- * headers, cookies or bodies.
+ * Signale les réponses HTTP de statut >= http.failOnStatus, les requêtes en échec,
+ * les pages cassées (document principal >= failOnStatus) et les navigations en échec
+ * (boucles de redirection, DNS…). Seuls l'URL, la méthode et le statut sont gardés —
+ * jamais les en-têtes, cookies ou corps.
  */
 export class NetworkObserver implements PageObserver {
   private readonly onResponse = (response: Response): void => {
@@ -54,7 +54,7 @@ export class NetworkObserver implements PageObserver {
     });
   }
 
-  /** Main document of a screen reached by navigation: a failing status means a broken page/link. */
+  /** Document principal d'un écran atteint par navigation : un statut en échec veut dire une page / un lien cassé. */
   private handleDocument(response: Response, status: number): void {
     const { config, collector } = this.context;
     if (!config.checks.brokenLinks) return;
@@ -90,7 +90,7 @@ export class NetworkObserver implements PageObserver {
       });
       return;
     }
-    // Aborted requests are normal: navigation away, cancelled XHR, lazy images.
+    // Les requêtes annulées sont normales : départ de la page, XHR annulé, images chargées à la demande.
     if (/ERR_ABORTED|NS_BINDING_ABORTED|cancelled/i.test(failure)) return;
     if (this.isIgnoredUrl(request.url())) return;
 
@@ -114,7 +114,7 @@ function isMainFrameNavigation(request: Request): boolean {
   try {
     return request.isNavigationRequest() && request.frame().parentFrame() === null;
   } catch {
-    // frame() throws for service worker requests
+    // frame() lève une exception pour les requêtes des service workers
     return false;
   }
 }

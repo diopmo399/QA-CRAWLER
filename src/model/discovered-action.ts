@@ -1,20 +1,20 @@
 import type { LocatorDescriptor } from './locator.js';
 
 /**
- * How risky it is to trigger an action automatically.
- * - SAFE: read-only (navigation, tabs, details, pagination, search, filters, filling a field).
- * - MUTATION: changes data (create, save, edit, submit a form…).
- * - DANGEROUS: destructive or irreversible (delete, pay, send, logout, sensitive data…).
- * - UNKNOWN: not recognised; treated as unsafe and never executed automatically.
+ * À quel point il est risqué de déclencher une action automatiquement.
+ * - SAFE : lecture seule (navigation, onglets, détails, pagination, recherche, filtres, saisie d'un champ).
+ * - MUTATION : modifie des données (créer, enregistrer, modifier, envoyer un formulaire…).
+ * - DANGEROUS : destructive ou irréversible (supprimer, payer, envoyer, se déconnecter, données sensibles…).
+ * - UNKNOWN : non reconnue ; traitée comme risquée et jamais exécutée automatiquement.
  */
 export const ACTION_CLASSIFICATIONS = ['SAFE', 'MUTATION', 'DANGEROUS', 'UNKNOWN'] as const;
 export type ActionClassification = (typeof ACTION_CLASSIFICATIONS)[number];
 
-/** What the executor does with the element. */
+/** Ce que l'exécuteur fait de l'élément. */
 export const ACTION_TYPES = ['click', 'navigate', 'fill', 'select', 'check', 'uncheck'] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
-/** Functional intent, used by the decision engine (priorities) and the safety policy (mission allow-list). */
+/** Intention fonctionnelle, utilisée par le moteur de décision (priorités) et la politique de sécurité (liste permise par la mission). */
 export const ACTION_CATEGORIES = [
   'navigation',
   'tab',
@@ -31,7 +31,7 @@ export const ACTION_CATEGORIES = [
 ] as const;
 export type ActionCategory = (typeof ACTION_CATEGORIES)[number];
 
-/** Why an action is risky; names usable in the mission's `safety.block` list. */
+/** Pourquoi une action est risquée ; noms utilisables dans la liste `safety.block` de la mission. */
 export const RISK_KINDS = [
   'delete',
   'payment',
@@ -46,7 +46,7 @@ export const RISK_KINDS = [
 ] as const;
 export type RiskKind = (typeof RISK_KINDS)[number];
 
-/** HTML constraints of a form field — input of the TestDataProvider and of future validation tests. */
+/** Contraintes HTML d'un champ de formulaire — entrée du TestDataProvider et des tests de validation. */
 export interface FieldConstraints {
   inputType: string;
   required: boolean;
@@ -57,69 +57,71 @@ export interface FieldConstraints {
   maxLength?: number;
   pattern?: string;
   options?: string[];
+  /** Options qu'on ne peut pas choisir. */
+  disabledOptions?: string[];
   autocomplete?: string;
   name?: string;
   label?: string;
   placeholder?: string;
-  /** Help text shown with the field ("99999", "HH:MM"…). */
+  /** Texte d'aide affiché avec le champ ("99999", "HH:MM"…). */
   hint?: string;
-  /** The field already holds a value: left as it is. */
+  /** Le champ contient déjà une valeur : laissé tel quel. */
   hasValue?: boolean;
-  /** Text field that opens a date picker. */
+  /** Champ texte qui ouvre un calendrier. */
   dateLike?: boolean;
-  /** A select that is not a native <select> (Angular Material…). */
+  /** Une liste qui n'est pas un <select> natif (Angular Material…). */
   customSelect?: boolean;
-  /** Label of the group of a radio/checkbox. */
+  /** Libellé du groupe d'une radio / case à cocher. */
   groupLabel?: string;
-  /** Radios of the same choice share this key. */
+  /** Les radios d'un même choix partagent cette clé. */
   choiceGroup?: string;
 }
 
-/** A user action available on a given state. Plain, serializable data. */
+/** Une action utilisateur disponible sur un état donné. Données simples et sérialisables. */
 export interface DiscoveredAction {
-  /** Stable id: same state + same element ⇒ same id across runs. */
+  /** Id stable : même état + même élément ⇒ même id d'un run à l'autre. */
   id: string;
   stateId: string;
   type: ActionType;
   category: ActionCategory;
-  /** tag, or tag[type] for inputs (a, button, input[email], select…). */
+  /** balise, ou balise[type] pour les inputs (a, button, input[email], select…). */
   elementType: string;
   role?: string;
   text?: string;
   label?: string;
   href?: string;
-  /** name attribute of fields. */
+  /** Attribut name des champs. */
   name?: string;
   disabled: boolean;
   visible: boolean;
-  /** aria-selected (tabs): clicking a selected tab changes nothing. */
+  /** aria-selected (onglets) : cliquer sur un onglet sélectionné ne change rien. */
   selected?: boolean;
   classification: ActionClassification;
-  /** Why the SafetyPolicy chose this classification. */
+  /** Pourquoi la SafetyPolicy a choisi ce classement. */
   reason: string;
   risks: RiskKind[];
   locator: LocatorDescriptor;
-  /** CSS locator used when the preferred one no longer matches. */
+  /** Localisateur CSS utilisé quand le préféré ne correspond plus. */
   fallback?: LocatorDescriptor;
-  /** Name of the dialog the element belongs to. */
+  /** Nom de la fenêtre à laquelle appartient l'élément. */
   dialogName?: string;
-  /** Form the element belongs to (its <form>, or the dialog/overlay that holds it). */
+  /** Formulaire auquel appartient l'élément (son <form>, ou la fenêtre / le calque qui le contient). */
   formGroup?: string;
-  /** Button that sends its form (submit, "Soumettre", "Enregistrer"… inside a form). */
+  /** Bouton qui envoie son formulaire (submit, « Soumettre », « Enregistrer »… dans un formulaire). */
   submitsForm?: boolean;
-  /** In front of the screen (dialog, drawer, open menu, overlay): explored first. */
+  /** Devant l'écran (fenêtre, tiroir, menu ouvert, calque) : exploré en premier. */
   foreground?: boolean;
-  /** Behind a modal layer: not clickable while the layer is open. */
+  /** Derrière un calque modal : pas cliquable tant que le calque est ouvert. */
   obscured?: boolean;
-  /** Enclosing form, if any. */
+  /** Formulaire englobant, s'il y en a un. */
   formIndex?: number;
-  /** Link target outside the allowed hosts. */
+  /** Cible de lien hors des hôtes autorisés. */
   external?: boolean;
-  /** Constraints for fill/select/check actions. */
+  /** Contraintes des actions fill / select / check. */
   field?: FieldConstraints;
 }
 
-/** Short form of an action, stored in the flow graph and reports. */
+/** Forme courte d'une action, enregistrée dans le graphe des flows et les rapports. */
 export interface ActionSummary {
   type: ActionType;
   category: ActionCategory;
@@ -140,7 +142,7 @@ export function summarizeAction(action: DiscoveredAction): ActionSummary {
   };
 }
 
-/** Human label of an action for logs: its text, label or name. */
+/** Libellé lisible d'une action pour les logs : son texte, son libellé ou son nom. */
 export function actionLabel(
   action: Pick<DiscoveredAction, 'text' | 'label' | 'name' | 'elementType'>,
 ): string {
@@ -149,9 +151,9 @@ export function actionLabel(
 
 export type FieldTag = 'input' | 'select' | 'textarea';
 
-export interface FormField {
+export interface FormSummaryField {
   tag: FieldTag;
-  /** input type (text, email, number, checkbox, radio…), or the tag for select/textarea. */
+  /** type d'input (text, email, number, checkbox, radio…), ou la balise pour select/textarea. */
   type: string;
   name?: string;
   elementId?: string;
@@ -166,19 +168,19 @@ export interface FormField {
   minLength?: number;
   maxLength?: number;
   pattern?: string;
-  /** Option labels for select elements (truncated). */
+  /** Libellés des options des éléments select (tronqués). */
   options?: string[];
 }
 
-export interface DiscoveredForm {
-  /** Index among the page's forms; -1 groups fields that are not inside a <form>. */
+export interface FormSummary {
+  /** Index parmi les formulaires de la page ; -1 regroupe les champs qui ne sont dans aucun <form>. */
   index: number;
   name?: string;
   elementId?: string;
-  /** Redacted absolute action URL. */
+  /** URL d'action absolue, masquée. */
   action?: string;
   method: string;
   isSearchForm: boolean;
   submitLabel?: string;
-  fields: FormField[];
+  fields: FormSummaryField[];
 }

@@ -1,23 +1,24 @@
 import type { BrowserInteractionResult } from '../interactions/types.js';
+import type { OracleVerdict } from '../oracles/composite-oracle.js';
 import type { NetworkExchange } from './network.js';
 import type { ActionClassification, ActionSummary, ActionType, ActionCategory } from './discovered-action.js';
 
-/** A functional state of the application (a screen, a wizard step, a tab…). */
+/** Un état fonctionnel de l'application (un écran, une étape d'assistant, un onglet…). */
 export interface FlowNode {
   id: string;
-  /** Human-readable name derived from headings/route. */
+  /** Nom lisible tiré des titres / de la route. */
   label: string;
   url: string;
   route: string;
   title?: string;
   headings: string[];
-  /** What distinguishes this state on its screen: open dialog, selected tab or sub-heading (wizard step). */
+  /** Ce qui distingue cet état sur son écran : fenêtre ouverte, onglet sélectionné ou sous-titre (étape d'assistant). */
   subtitle?: string;
-  /** Depth (in transitions) at which the state was first reached. */
+  /** Profondeur (en transitions) à laquelle l'état a été atteint la première fois. */
   depth: number;
-  /** Ids of the actions available on this state. */
+  /** Id des actions disponibles sur cet état. */
   discoveredActions: string[];
-  /** Summary of each available action, by id. */
+  /** Résumé de chaque action disponible, par id. */
   actions: Record<string, ActionSummary>;
   firstSeenAt: string;
   lastSeenAt: string;
@@ -28,10 +29,10 @@ export interface FlowNode {
 
 export type TransitionResult = 'SUCCESS' | 'FAILED' | 'BLOCKED';
 
-/** One attempt to execute an action from a state. */
+/** Une tentative d'exécuter une action depuis un état. */
 export interface FlowEdge {
   from: string;
-  /** Resulting state (equal to `from` for blocked actions and actions without visible effect). */
+  /** État obtenu (égal à `from` pour les actions bloquées et les actions sans effet visible). */
   to: string;
   actionId: string;
   action: {
@@ -43,20 +44,22 @@ export interface FlowEdge {
     classification: ActionClassification;
   };
   result: TransitionResult;
-  /** Block or failure reason. */
+  /** Raison du blocage ou de l'échec. */
   reason?: string;
   timestamp: string;
   durationMs?: number;
   issueIds: string[];
-  /** Name of the imposed flow that executed this transition (absent for autonomous exploration). */
+  /** Nom du flow imposé qui a exécuté cette transition (absent pour l'exploration autonome). */
   flow?: string;
-  /** Browser interactions raised while this action ran (ids of FlowGraphData.interactions). */
+  /** Interactions du navigateur levées pendant cette action (id de FlowGraphData.interactions). */
   interactionIds?: string[];
-  /** Transition produced by a browser interaction itself (popup, new tab). */
+  /** Transition produite par une interaction du navigateur elle-même (popup, nouvel onglet). */
   interaction?: { id: string; type: string; status: string };
-  /** HTTP exchanges seen while the action ran: STATE A → ACTION → NETWORK → STATE B. */
+  /** Verdict des oracles de test sur cette action (PASS / FAIL / WARNING / UNKNOWN). */
+  oracle?: OracleVerdict;
+  /** Échanges HTTP vus pendant l'action : ÉTAT A → ACTION → RÉSEAU → ÉTAT B. */
   network?: NetworkExchange[];
-  /** Start and end of that network window. */
+  /** Début et fin de cette fenêtre réseau. */
   networkWindow?: { startedAt: string; finishedAt: string };
 }
 
@@ -65,6 +68,6 @@ export interface FlowGraphData {
   rootId?: string;
   nodes: FlowNode[];
   edges: FlowEdge[];
-  /** Browser interactions (HTTP_AUTH, dialogs, popups…). Never contains a secret. */
+  /** Interactions du navigateur (HTTP_AUTH, dialogues, popups…). Ne contient jamais de secret. */
   interactions?: BrowserInteractionResult[];
 }
