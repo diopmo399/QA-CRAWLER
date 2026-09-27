@@ -62,6 +62,8 @@ export interface ReportTexts {
   noLabel: string;
   sameState: string;
   optional: string;
+  suggestion: string;
+  onScreen: string;
   actionCount: (count: number) => string;
   issueCount: (count: number) => string;
   statesTitle: string;
@@ -169,6 +171,8 @@ const EN: ReportTexts = {
   noLabel: '(no label)',
   sameState: '(same state)',
   optional: '(optional)',
+  suggestion: 'Suggested step (element found on the screen, to paste in the YAML):',
+  onScreen: 'On the screen:',
   actionCount: (count) => `${count} action(s)`,
   issueCount: (count) => `${count} issue(s)`,
   statesTitle: 'States',
@@ -278,6 +282,8 @@ const FR: ReportTexts = {
   noLabel: '(sans libellé)',
   sameState: '(même état)',
   optional: '(optionnelle)',
+  suggestion: 'Étape suggérée (élément trouvé à l’écran, à copier dans le YAML) :',
+  onScreen: 'À l’écran :',
   actionCount: (count) => `${count} action(s)`,
   issueCount: (count) => `${count} anomalie(s)`,
   statesTitle: 'États',

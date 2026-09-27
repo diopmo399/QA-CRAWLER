@@ -18,6 +18,7 @@ import {
 import { evaluateFlowAction, evaluateFlowUrl } from '../flows/flow-safety.js';
 import { actionsInScope, isInScope, scopeOf, type ExplorationScope } from '../flows/flow-scope.js';
 import { FlowStepExecutor, type FlowElementAction } from '../flows/flow-step-executor.js';
+import { suggestTargets } from '../flows/target-suggester.js';
 import { FormExerciser, type FormRun } from '../forms/form-exerciser.js';
 import { FlowGraph, summaryOf } from '../graph/flow-graph.js';
 import { BrowserEventDiscovery } from '../interactions/browser-event-discovery.js';
@@ -992,9 +993,17 @@ export class FlowExplorer {
     // "Where is it?"
     const located = await this.flowSteps.locate(page, step.target, timeout);
     if (typeof located === 'string') {
+      // Look at the screen for what the YAML probably meant, and say how to write it.
+      const found = await suggestTargets(page, step).catch(() => undefined);
       return {
         page,
-        report: done('FAILED', { reason: located, stateId: context.stateId, url: context.url }),
+        report: done('FAILED', {
+          reason: located,
+          stateId: context.stateId,
+          url: context.url,
+          ...(found && found.suggestions.length > 0 ? { suggestions: found.suggestions } : {}),
+          ...(found && found.onScreen.length > 0 ? { onScreen: found.onScreen } : {}),
+        }),
       };
     }
 
