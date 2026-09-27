@@ -117,8 +117,20 @@ describe('StateDetector', () => {
     const client = detector.detect(step(['Client', 'Produit', 'Date'], ['Continuer', 'Annuler']));
     const summary = detector.detect(step([], ['Précédent', 'Confirmer']));
     expect(client.stateId).not.toBe(summary.stateId);
-    expect(client.signature).toContain(
-      'controls=button:annuler|button:continuer|textbox:client|textbox:date|textbox:produit',
-    );
+    expect(client.signature).toContain('controls=button:annuler|button:continuer');
+    expect(client.signature).toContain('fields=yes');
+    expect(summary.signature).toContain('fields=no');
+  });
+
+  it('answering « Oui » that shows more questions stays the same form, not a new state', () => {
+    const form = (fields: string[]) =>
+      snapshot({
+        url: 'http://localhost:4200/questionnaire',
+        headings: ['Questionnaire'],
+        elements: [...fields.map((label) => field(label)), button('Enregistrer')],
+      });
+    const closed = detector.detect(form(['Déjà client']));
+    const open = detector.detect(form(['Déjà client', 'Depuis quand', 'Numéro de client']));
+    expect(open.stateId).toBe(closed.stateId);
   });
 });

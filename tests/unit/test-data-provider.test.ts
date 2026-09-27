@@ -167,4 +167,15 @@ describe('DefaultTestDataProvider', () => {
       ),
     ).toEqual({ kind: 'skip', reason: 'optional choice' });
   });
+
+  it("« Nom de la société » est une entreprise ; le « : » final d'un libellé est ignoré", () => {
+    const fill = (label: string, fields?: Record<string, string>) =>
+      new DefaultTestDataProvider({ runId: 'abc123', fields }).instructionFor(
+        fieldAction({ inputType: 'text', required: true, label }),
+      );
+    expect(fill('Nom de la société')).toEqual({ kind: 'fill', value: 'QA-CRAWLER-abc123' });
+    expect(fill('Nom du contact')).toEqual({ kind: 'fill', value: 'Crawler' });
+    expect(fill('N° dossier :', { 'N° dossier': '123456' })).toEqual({ kind: 'fill', value: '123456' });
+    expect(fill('N° dossier', { 'N° dossier :': '123456' })).toEqual({ kind: 'fill', value: '123456' });
+  });
 });

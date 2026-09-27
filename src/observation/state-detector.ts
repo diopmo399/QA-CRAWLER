@@ -37,6 +37,19 @@ const STRUCTURAL_ROLES = new Set([
   'slider',
 ]);
 
+/** Champs de saisie : leur liste exacte change avec les réponses (questions conditionnelles). */
+const FIELD_ROLES = new Set([
+  'textbox',
+  'searchbox',
+  'combobox',
+  'listbox',
+  'spinbutton',
+  'checkbox',
+  'radio',
+  'switch',
+  'slider',
+]);
+
 /**
  * Décide si deux observations sont le même état fonctionnel.
  *
@@ -63,13 +76,22 @@ export class StateDetector {
         snapshot.elements
           .filter(
             // Toasts, zones live et minuteurs vont et viennent : ils ne font pas un autre écran.
-            (element) => STRUCTURAL_ROLES.has(element.role) && !element.inNavigation && !element.transient,
+            (element) =>
+              STRUCTURAL_ROLES.has(element.role) &&
+              !FIELD_ROLES.has(element.role) &&
+              !element.inNavigation &&
+              !element.transient,
           )
           .map(
             (element) => `${element.role}:${mask(element.name || element.fieldName || element.label || '')}`,
           ),
       ),
     ].sort();
+    // Les champs comptent seulement par leur présence : cocher « Oui » qui affiche deux questions de plus
+    // reste le même formulaire, pas un nouvel écran (sinon chaque combinaison d'options devient un état).
+    const hasFields = snapshot.elements.some(
+      (element) => FIELD_ROLES.has(element.role) && !element.inNavigation && !element.transient,
+    );
     const signature = [
       `route=${route}`,
       `title=${mask(snapshot.title)}`,
@@ -78,6 +100,7 @@ export class StateDetector {
       `tabs=${snapshot.selectedTabs.map(mask).join('|')}`,
       `current=${snapshot.currentItems.map(mask).join('|')}`,
       `controls=${controls.join('|')}`,
+      `fields=${hasFields ? 'yes' : 'no'}`,
       // Seulement quand il y en a un : les états sans calque gardent leur id.
       ...(snapshot.overlay !== undefined ? [`overlay=${mask(snapshot.overlay)}`] : []),
     ];
