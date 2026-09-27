@@ -22,6 +22,8 @@ export interface FormReport {
     value?: string;
     source?: string;
     error?: string;
+    /** Suggestion choisie après la saisie (champ à suggestions). */
+    suggestion?: string;
   }[];
   submitActions: string[];
   validationProblems: { field: string; message: string }[];
@@ -52,7 +54,7 @@ export function formReportOf(run: FormRun, stateId: string, actionId?: string): 
             ? operation.operation
             : operation.operation === 'check' || operation.operation === 'uncheck'
               ? operation.operation
-              : `${operation.operation} "${operation.value ?? ''}"`;
+              : `${operation.operation} "${operation.value ?? ''}"${filled?.suggestion !== undefined ? ` → "${filled.suggestion}"` : ''}`;
       return {
         id: field.id,
         label: label.replace(/\s*\*$/, ''),
@@ -64,6 +66,7 @@ export function formReportOf(run: FormRun, stateId: string, actionId?: string): 
         ...(operation?.value !== undefined && !field.sensitive ? { value: operation.value } : {}),
         ...(operation?.source ? { source: operation.source } : {}),
         ...(filled?.error ? { error: filled.error } : {}),
+        ...(filled?.suggestion !== undefined && !field.sensitive ? { suggestion: filled.suggestion } : {}),
       };
     }),
     submitActions: run.form.submitActions.map((action) => action.text ?? action.label ?? action.id),

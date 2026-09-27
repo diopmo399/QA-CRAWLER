@@ -23,6 +23,8 @@ export interface FilledField {
   /** Pourquoi le champ a été laissé tel quel, ou pourquoi son remplissage a échoué. */
   skipped?: string;
   error?: string;
+  /** Suggestion choisie dans un champ à suggestions (autocomplete). */
+  suggestion?: string;
 }
 
 /** Un champ encore invalide une fois le formulaire rempli : ce que l'application en dit. */
@@ -153,6 +155,7 @@ export class FormExerciser {
         action,
         ...(operation.value ? { value: operation.value } : {}),
         ...(result?.status === 'FAILED' ? { error: result.error ?? 'failed' } : {}),
+        ...(result?.suggestion !== undefined ? { suggestion: result.suggestion } : {}),
       });
     }
     return { group, name: form.name, form, plan, fields, problems: [], validationCases: [] };
