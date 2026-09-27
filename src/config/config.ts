@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ACTION_CLASSIFICATIONS, RISK_KINDS } from '../model/discovered-action.js';
 import { SEVERITIES } from '../model/issue.js';
 import { REPORT_LANGUAGES } from '../reporting/i18n.js';
+import { SCORING_WEIGHT_NAMES, type ScoringWeightName } from '../decision/scoring-weights.js';
 import { flowsSchema } from './flow-schema.js';
 
 /**
@@ -13,6 +14,12 @@ import { flowsSchema } from './flow-schema.js';
  */
 
 const nonEmpty = z.string().trim().min(1);
+
+/** learn: build the baseline; verify: check the application against it; explore: look for new ground. */
+export const MISSION_MODES = ['explore', 'learn', 'verify'] as const;
+export type MissionMode = (typeof MISSION_MODES)[number];
+
+const SCORING_WEIGHT_NAMES_TUPLE = SCORING_WEIGHT_NAMES as [ScoringWeightName, ...ScoringWeightName[]];
 
 const browserSchema = z
   .object({
@@ -91,6 +98,21 @@ const goalsSchema = z
     discoverFlows: z.boolean().default(true),
     /** Report HTTP, JavaScript and navigation anomalies. */
     detectErrors: z.boolean().default(true),
+    /**
+     * What the mission is after, in the application's words ("utilisateurs",
+     * "permissions"…): actions whose label or URL matches one are explored
+     * first. Deterministic (labels, texts, URLs), no model involved.
+     */
+    keywords: z.array(nonEmpty).default([]),
+    /** Short form of discover* (navigation, forms, dialogs → discoverFlows). */
+    discover: z
+      .object({
+        navigation: z.boolean().optional(),
+        forms: z.boolean().optional(),
+        dialogs: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -356,6 +378,48 @@ const reportSchema = z
   })
   .strict();
 
+const baselineSchema = z
+  .object({
+    /** Where learn stores the baseline (and its history, under runs/), and where verify/explore read it. */
+    dir: nonEmpty.default('baseline'),
+    /** Name of the application (default: mission.name). */
+    application: nonEmpty.optional(),
+    /** qa, staging… (default: QA_ENVIRONMENT). */
+    environment: nonEmpty.optional(),
+    /** Branch and commit of the tested build (default: QA_BRANCH/QA_COMMIT, then CI variables). */
+    branch: nonEmpty.optional(),
+    commit: nonEmpty.optional(),
+    /** Repository of the application, to read its branch/commit with git (optional). */
+    gitDir: nonEmpty.optional(),
+    /** Learned runs kept under runs/. */
+    keepRuns: z.number().int().positive().default(20),
+  })
+  .strict();
+
+const verifySchema = z
+  .object({
+    /** Exit code 1 when a known transition changed, fails, or cannot be reached any more. */
+    failOnRegression: z.boolean().default(true),
+  })
+  .strict();
+
+const networkSchema = z
+  .object({
+    /** Attach to each transition the HTTP exchanges its action caused (method, URL, status, duration). */
+    trace: z.boolean().default(true),
+    /** Resource types kept: images, fonts and styles only add noise. */
+    resourceTypes: z.array(nonEmpty).default(['document', 'xhr', 'fetch']),
+    maxRequestsPerAction: z.number().int().positive().default(50),
+  })
+  .strict();
+
+const scoringSchema = z
+  .object({
+    /** Overrides of DEFAULT_SCORING_WEIGHTS (newState, goalText, export…). */
+    weights: z.record(z.enum(SCORING_WEIGHT_NAMES_TUPLE), z.number()).default({}),
+  })
+  .strict();
+
 const formsSchema = z
   .object({
     /**
@@ -391,6 +455,8 @@ export const scenarioSchema = z
       .object({
         name: nonEmpty.default('explore-application'),
         description: z.string().optional(),
+        /** explore (default), learn (build the baseline) or verify (check against it). The CLI command wins. */
+        mode: z.enum(MISSION_MODES).default('explore'),
       })
       .strict()
       .default({}),
@@ -418,6 +484,10 @@ export const scenarioSchema = z
     credentials: credentialsSchema,
     browserInteractions: browserInteractionsSchema.default({}),
     forms: formsSchema.default({}),
+    scoring: scoringSchema.default({}),
+    network: networkSchema.default({}),
+    baseline: baselineSchema.default({}),
+    verify: verifySchema.default({}),
     testData: testDataSchema.default({}),
   })
   .strict();

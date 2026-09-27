@@ -97,6 +97,19 @@ describe('parseCliArgs', () => {
     });
   });
 
+  it('accepts the learn / verify / explore commands and a baseline directory', () => {
+    expect(parseCliArgs(['learn', 'm.yaml'])).toMatchObject({ mode: 'learn', configPath: 'm.yaml' });
+    expect(parseCliArgs(['verify', '-c', 'm.yaml', '--baseline-dir', 'b'])).toMatchObject({
+      mode: 'verify',
+      configPath: 'm.yaml',
+      baselineDir: 'b',
+    });
+    expect(parseCliArgs(['explore', 'm.yaml']).mode).toBe('explore');
+    expect(parseCliArgs(['m.yaml']).mode).toBeUndefined();
+    expect(parseCliArgs(['learn']).configPath).toBeUndefined();
+    expect(() => parseCliArgs(['learn', 'a.yaml', 'b.yaml'])).toThrowError(UsageError);
+  });
+
   it('rejects invalid usage', () => {
     expect(() => parseCliArgs(['a.yaml', 'b.yaml'])).toThrowError(UsageError);
     expect(() => parseCliArgs(['--max-states', 'zero'])).toThrowError(UsageError);

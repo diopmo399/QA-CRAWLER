@@ -75,6 +75,8 @@ export interface UiElement {
   groupLabel?: string;
   /** Radios of the same choice share this key. */
   choiceGroup?: string;
+  /** Inside a toast, a live region or a timer: comes and goes, not part of the screen's identity. */
+  transient?: boolean;
   /** In front of the screen: inside a dialog, drawer, open menu or overlay layer. */
   foreground?: boolean;
   /** Behind a modal layer (backdrop, aria-modal): a click would land on the layer. */

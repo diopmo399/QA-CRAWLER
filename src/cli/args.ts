@@ -1,6 +1,10 @@
 import { parseArgs } from 'node:util';
+import { MISSION_MODES, type MissionMode } from '../config/config.js';
 
 export interface CliArgs {
+  /** learn / verify / explore; absent: mission.mode. */
+  mode?: MissionMode;
+  baselineDir?: string;
   configPath?: string;
   help: boolean;
   version: boolean;
@@ -27,9 +31,14 @@ actions, decides what to try, checks it against the safety policy, executes
 it with Playwright and builds the flow graph of the application.
 
 Usage:
-  npm run qa -- <mission.yaml> [options]
+  npm run qa -- [learn|verify|explore] <mission.yaml> [options]
   npm run qa -- --config <mission.yaml> [options]
-  node dist/main.js --config <mission.yaml> [options]
+  qa-crawler learn <mission.yaml>      (node dist/main.js learn <mission.yaml>)
+
+Commands (default: mission.mode, else explore):
+  learn    Explore, then store the flow graph as the baseline (baseline/, with history)
+  verify   Replay every known transition of the baseline; report what changed
+  explore  Explore; the baseline, if any, is only a hint: new ground first
 
 Options:
   -c, --config <file>         Mission YAML file (or pass it as the first argument)
@@ -39,14 +48,15 @@ Options:
       --headed                Show the browser window (debugging; needs a display)
       --reports-dir <dir>     Override output.reportsDir (default: reports)
       --screenshots-dir <dir> Override output.screenshotsDir (default: screenshots)
+      --baseline-dir <dir>    Override baseline.dir (default: baseline)
   -q, --quiet                 Only print the summary
   -h, --help                  Show this help
   -v, --version               Show the version
 
 Exit codes:
   0  exploration finished, no issue at or above report.failOnSeverity
-  1  exploration finished with failing issues
-  2  invalid usage or invalid mission
+  1  exploration finished with failing issues, or verify found regressions
+  2  invalid usage, invalid mission, or no baseline to verify
   3  runtime failure (browser could not start, authentication failed...)
 
 Environment:
@@ -77,6 +87,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
         headed: { type: 'boolean', default: false },
         'reports-dir': { type: 'string' },
         'screenshots-dir': { type: 'string' },
+        'baseline-dir': { type: 'string' },
         quiet: { type: 'boolean', short: 'q', default: false },
         help: { type: 'boolean', short: 'h', default: false },
         version: { type: 'boolean', short: 'v', default: false },
@@ -85,8 +96,13 @@ export function parseCliArgs(argv: string[]): CliArgs {
   } catch (error) {
     throw new UsageError(error instanceof Error ? error.message : String(error));
   }
-  const { values, positionals } = parsed;
-
+  const { values } = parsed;
+  let { positionals } = parsed;
+  let mode: MissionMode | undefined;
+  if (positionals[0] !== undefined && (MISSION_MODES as readonly string[]).includes(positionals[0])) {
+    mode = positionals[0] as MissionMode;
+    positionals = positionals.slice(1);
+  }
   if (positionals.length > 1 || (positionals.length === 1 && values.config !== undefined)) {
     throw new UsageError('Provide a single mission file (positional argument or --config).');
   }
@@ -94,6 +110,8 @@ export function parseCliArgs(argv: string[]): CliArgs {
   const maxActions = positiveInteger('max-actions', values['max-actions']);
   const configPath = values.config ?? positionals[0];
   return {
+    ...(mode !== undefined ? { mode } : {}),
+    ...(values['baseline-dir'] !== undefined ? { baselineDir: values['baseline-dir'] } : {}),
     ...(configPath !== undefined ? { configPath } : {}),
     help: values.help,
     version: values.version,

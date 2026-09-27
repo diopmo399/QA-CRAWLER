@@ -33,7 +33,7 @@ export function renderFlowGraphHtml(result: ExplorationResult, language: ReportL
   const others = result.transitions.filter((edge) => !(edge.result === 'SUCCESS' && edge.from !== edge.to));
 
   const edgeRow = (edge: ExplorationResult['transitions'][number]): string =>
-    `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(valueLabel(language, edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}” ${classPill(edge.action.classification, language)}</td><td>${edge.from === edge.to ? `<span class="muted">${esc(t.sameState)}</span>` : `<b>${esc(nameOf(edge.to))}</b>`}</td><td>${classPill(edge.result, language)}${edge.reason ? ` <span class="muted">${esc(translateReason(language, edge.reason))}</span>` : ''}</td></tr>`;
+    `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(valueLabel(language, edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}” ${classPill(edge.action.classification, language)}</td><td>${edge.from === edge.to ? `<span class="muted">${esc(t.sameState)}</span>` : `<b>${esc(nameOf(edge.to))}</b>`}</td><td>${classPill(edge.result, language)}${edge.reason ? ` <span class="muted">${esc(translateReason(language, edge.reason))}</span>` : ''}${networkLines(edge)}</td></tr>`;
   const head = `<thead><tr><th>${c.from}</th><th>${c.action}</th><th>${c.to}</th><th>${c.result}</th></tr></thead>`;
 
   return `<!doctype html>
@@ -71,4 +71,22 @@ export function renderFlowGraphHtml(result: ExplorationResult, language: ReportL
 </body>
 </html>
 `;
+}
+
+/** ACTION → NETWORK: the HTTP exchanges of a transition, one per line (POST /api/users 201 184 ms). */
+function networkLines(edge: ExplorationResult['transitions'][number]): string {
+  if (!edge.network || edge.network.length === 0) return '';
+  const lines = edge.network.map((exchange) => {
+    let path = exchange.url;
+    try {
+      const url = new URL(exchange.url);
+      path = `${url.pathname}${url.search}`;
+    } catch {
+      // keep the URL as recorded
+    }
+    const outcome = exchange.status ?? exchange.failure ?? '…';
+    const duration = exchange.durationMs !== undefined ? ` ${exchange.durationMs} ms` : '';
+    return `${exchange.method} ${path} ${outcome}${duration}`;
+  });
+  return `<pre class="network">${esc(lines.join('\n'))}</pre>`;
 }

@@ -34,6 +34,9 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Formulaires](#formulaires)
 - [Ce qui est détecté](#ce-qui-est-détecté)
 - [Rapports](#rapports)
+- [Modes LEARN / VERIFY / EXPLORE](#modes-learn--verify--explore)
+- [Choix des actions (scoring) et objectifs](#choix-des-actions-scoring-et-objectifs)
+- [Corrélation réseau](#corrélation-réseau)
 - [Ligne de commande](#ligne-de-commande)
 - [Docker](#docker)
 - [Kubernetes / OpenShift](#kubernetes--openshift)
@@ -522,9 +525,13 @@ Le `StateDetector` calcule une empreinte de chaque observation à partir de plus
 - les contrôles visibles (rôle et nom), sans les liens de données ni les menus ;
 - les champs de formulaire.
 
-Les nombres sont masqués : `/users/1` et `/users/2` (« Utilisateur 1/2 ») sont un seul état.
+Ce qui change avec les données est masqué : identifiants générés (UUID, hash, jetons), e-mails, dates, heures, compteurs et numéros. `/users/1` et `/users/2` (« Utilisateur 1/2 »), « Commentaires (3) » et « Commentaires (12) » donnent le même état. Les notifications, régions `aria-live` et minuteurs, qui vont et viennent, ne comptent pas. L'ordre des contrôles non plus.
+
+Deux étapes d'un assistant sur la même URL restent deux états : `/dossiers/create` avec les champs Client, Produit, Date et les boutons Continuer, Annuler n'est pas le même état que le récapitulatif avec Précédent et Confirmer.
 
 Le résultat est un `stateId` lisible et stable, par exemple `parametres-securite-f3a0baba`.
+
+**Retour en arrière :** une pile logique du chemin parcouru est tenue. Quand un état n'a plus d'action intéressante, le moteur remonte vers le dernier état qui en a encore : les ancêtres épuisés sont sautés sans y retourner (le moteur de décision est consulté sur leur dernière observation). Pour y revenir : fermer le calque du dessus, puis `goBack()` en vérifiant le `stateId`, puis l'URL connue, puis le chemin connu du graphe rejoué depuis l'accueil.
 
 **Ce qui est devant l'écran passe en premier :**
 
@@ -628,10 +635,149 @@ report:
   language: fr # en (défaut) | fr
 ```
 
+## Modes LEARN / VERIFY / EXPLORE
+
+```bash
+npm run qa -- learn   scenarios/app.yaml   # construit la baseline
+npm run qa -- verify  scenarios/app.yaml   # rejoue la baseline, détecte les régressions
+npm run qa -- explore scenarios/app.yaml   # cherche du nouveau (la baseline n'est qu'un indice)
+```
+
+Sans commande, le mode est `mission.mode` (par défaut `explore`) : `npm run qa -- scenarios/app.yaml` se comporte comme avant tant qu'aucune baseline n'existe.
+
+| Mode      | Ce qu'il fait                                                                                                                                                                                                   | À la fin                                                                                                                   |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `learn`   | explore l'application et construit le graphe des flows                                                                                                                                                          | le graphe devient la **baseline** ; la précédente est conservée dans l'historique ; le diff avec la précédente est affiché |
+| `verify`  | lance les flows imposés, puis **rejoue chaque transition connue** de la baseline : rejoint l'état de départ (par son URL, sinon par le chemin connu depuis l'accueil), exécute l'action, compare l'état atteint | un statut par transition, le diff et le code de sortie `1` s'il y a des régressions                                        |
+| `explore` | explore ; les actions déjà connues de la baseline passent **après** les nouvelles (`knownInBaseline`), sans être interdites                                                                                     | le diff : ce qui est nouveau et ce qui a changé                                                                            |
+
+**Statuts de `verify` :**
+
+| Statut           | Signification                                                                  | Régression |
+| ---------------- | ------------------------------------------------------------------------------ | ---------- |
+| `PASSED`         | même action, même état d'arrivée                                               | non        |
+| `CHANGED`        | l'action mène maintenant à un autre état                                       | **oui**    |
+| `FAILED`         | l'action échoue                                                                | **oui**    |
+| `ACTION_MISSING` | l'état est là, l'action n'y est plus                                           | **oui**    |
+| `UNREACHABLE`    | l'état de départ n'est plus atteignable (la raison indique où le chemin casse) | **oui**    |
+| `BLOCKED`        | la politique de sécurité actuelle refuse l'action                              | non        |
+| `SKIPPED`        | limite de la mission atteinte avant                                            | non        |
+
+`verify.failOnRegression: false` désactive le code de sortie `1` sur régression.
+
+Une baseline apprise sur un environnement (QA) se vérifie sur un autre (environnement de PR, `--base-url`) : les URL de la baseline sont rapportées sur la cible, et une action est retrouvée par son libellé et son modèle de route même quand son URL exacte change (`/users/1` appris, `/users/2` atteint).
+
+### Baseline versionnée
+
+```text
+baseline/
+  flow-graph.json          ← dernière baseline (lue par verify et explore)
+  metadata.json
+  runs/<runId>/flow-graph.json, metadata.json   ← chaque learn, les 20 derniers (baseline.keepRuns)
+```
+
+```json
+{
+  "runId": "2026-09-27T10-32-05Z-1a2b3c4",
+  "application": "example",
+  "mission": "example",
+  "targetUrl": "https://app.example.com",
+  "createdAt": "2026-09-27T10:32:05.123Z",
+  "branch": "main",
+  "commit": "1a2b3c4d…",
+  "environment": "qa",
+  "states": 42,
+  "transitions": 97
+}
+```
+
+La branche et le commit sont ceux de **l'application testée**, tous facultatifs : `baseline.branch` / `baseline.commit` dans le YAML, sinon `QA_BRANCH` / `QA_COMMIT`, sinon les variables de CI (GitHub Actions, GitLab CI), sinon `git` dans `baseline.gitDir` si indiqué. L'environnement : `baseline.environment` ou `QA_ENVIRONMENT`.
+
+`baseline/` est dans le `.gitignore` : elle contient les écrans et les URL de l'application testée. Versionne-la dans ton propre dépôt si tu le souhaites.
+
+### Flow diff
+
+`FlowDiffEngine` compare deux graphes : états ajoutés et disparus (par empreinte), transitions ajoutées, disparues et modifiées. Une transition est identifiée par son état de départ et son contrôle (type, libellé, modèle de route de sa cible), donc de façon stable d'un environnement à l'autre. Elle est **modifiée** quand elle mène à un autre état, change de résultat, ou appelle d'autres API (même méthode + modèle de route + famille de statut : `GET /api/roles 2xx` → `5xx`).
+
+```text
+FLOW DIFF
+
++ Import users (/users/import)
++ Users → "Import" → Import users
+- Permissions (/settings/permissions)
+- Settings → "Permissions" → Permissions
+
+Changed:
+  Users → "Create user"
+    target: Create user → Error
+    network: + GET /api/roles 5xx, - GET /api/roles 2xx
+```
+
+Il est affiché dans le terminal, dans `index.html` (section _Différences de flows_) et écrit dans `reports/flow-diff.json`. En `explore`, seul ce qui est nouveau ou modifié est listé : ce qui n'a pas été revu n'a pas disparu pour autant. En `verify`, la comparaison porte sur les transitions rejouées.
+
+## Choix des actions (scoring) et objectifs
+
+Le moteur de décision ne prend pas la première action disponible : chaque action est notée par l'`ActionScorer`, et la meilleure note gagne (à égalité, l'ordre du document). Les poids sont centralisés dans `DEFAULT_SCORING_WEIGHTS` (`src/decision/scoring-weights.ts`) et modifiables par mission :
+
+| Règle                                                                              | Poids           | Règle                                     | Poids |
+| ---------------------------------------------------------------------------------- | --------------- | ----------------------------------------- | ----- |
+| mène à un état nouveau (route jamais vue, onglet jamais ouvert, étape d'assistant) | +100            | action déjà utilisée depuis un autre état | −100  |
+| jamais exécutée depuis cet état                                                    | +80             | route cible déjà bien explorée            | −40   |
+| fait avancer un formulaire                                                         | +70             | exporter / télécharger / imprimer         | −30   |
+| lien interne                                                                       | +60             | déconnexion                               | −100  |
+| onglet                                                                             | +50             | déjà connue de la baseline (`explore`)    | −50   |
+| voir le détail                                                                     | +40             | au premier plan (fenêtre, menu ouvert)    | +200  |
+| recherche / filtre / pagination                                                    | +30 / +20 / +10 | libellé qui correspond à un objectif      | +100  |
+| entrée du menu global                                                              | +20             | URL qui correspond à un objectif          | +80   |
+
+Ce qui ne doit jamais s'exécuter (suppression, paiement, navigation externe…) n'est pas une note : c'est exclu, comme les actions déjà essayées, désactivées ou couvertes par une fenêtre. Chaque décision garde ses raisons (`score 240: never executed from this state (+80), navigation link (+60), new route /users (+100)`).
+
+**Exploration dirigée par un objectif :**
+
+```yaml
+mission:
+  name: user-management
+  mode: explore
+
+goals:
+  keywords: [users, utilisateurs, administration, permissions]
+  discover: { navigation: true, forms: true, dialogs: true }
+
+scoring:
+  weights: { goalText: 150, export: 0 } # facultatif : ajuster une règle
+```
+
+Une action dont le libellé contient un mot-clé (« Utilisateurs ») passe devant (+100), une action dont seule l'URL correspond (`/admin/permissions`) aussi (+80) ; « Parking » ne gagne rien. La correspondance est déterministe (mots entiers, sans accents ni casse), sans modèle de langage.
+
+## Corrélation réseau
+
+Chaque action ouvre une fenêtre d'observation réseau, fermée une fois l'état suivant observé. Les échanges vus entre les deux sont attachés à la transition :
+
+```json
+{
+  "from": "users-list",
+  "action": { "type": "click", "text": "Nouvel utilisateur" },
+  "network": [
+    {
+      "method": "GET",
+      "url": "https://app.example.com/api/roles",
+      "status": 200,
+      "durationMs": 42,
+      "resourceType": "fetch"
+    }
+  ],
+  "to": "create-user"
+}
+```
+
+Seuls sont gardés la méthode, l'URL (passée au masquage des paramètres sensibles), le statut, la durée et le type de ressource. **Jamais** les en-têtes (Authorization, cookies), ni les corps, ni les mots de passe. Réglages : `network.trace` (par défaut `true`), `network.resourceTypes` (`[document, xhr, fetch]`), `network.maxRequestsPerAction` (50). Les échanges s'affichent sous chaque transition dans `flow-graph.html`.
+
 ## Ligne de commande
 
 ```bash
 npm run qa -- scenarios/demo.yaml
+npm run qa -- learn scenarios/demo.yaml
+npm run qa -- verify scenarios/demo.yaml --baseline-dir baselines/qa
 npm run qa -- --config scenarios/smoke.yaml --base-url https://pr-42.example.com --max-states 30 --max-actions 100
 npm run qa -- scenarios/mon-flow.yaml --headed      # voir le navigateur (nécessite un écran)
 npm run qa -- --help
@@ -646,7 +792,7 @@ Le terminal affiche :
 - l'arbre des flows découverts ;
 - le résumé et l'emplacement des rapports.
 
-**Codes de sortie :** `0` aucune anomalie au niveau `report.failOnSeverity` ou au-dessus, `1` anomalies bloquantes, `2` usage ou mission invalide, `3` erreur d'exécution.
+**Codes de sortie :** `0` aucune anomalie au niveau `report.failOnSeverity` ou au-dessus, `1` anomalies bloquantes ou régressions (`verify`), `2` usage ou mission invalide, ou `verify` sans baseline, `3` erreur d'exécution.
 
 ## Docker
 
@@ -725,7 +871,9 @@ Un job optionnel explore un vrai environnement et publie les rapports. Il s'exé
         Action Discovery (DOM)                 Browser Event Discovery
         (lien · bouton · onglet · champ…)      (auth native · dialogues · popups…)
                |                                          |
-               v                                          v
+               v                                          |
+        Action Scorer (poids · objectifs)                  |
+               |                                          v
         Decision Engine ──> Safety Policy     Browser Interaction Manager ──> handlers
                |                                          |
                +---------------------+--------------------+
@@ -738,11 +886,16 @@ Un job optionnel explore un vrai environnement et publie les rapports. Il s'exé
                                                     |
                                    State Detector (nouvel état)
                                                     |
-                                               Flow Graph
-                                               /        \
-                                      Flow Memory     Reporters
-                                 (flow-graph.json)  JSON · HTML · Graphe
+                                  Flow Graph (+ réseau par transition)
+                                  /         |            \
+                        Flow Memory    Baseline Store    Flow Diff Engine
+                   (flow-graph.json)  (learn / verify)  (verify · explore · learn)
+                                                    |
+                                                Reporters
+                                     JSON · HTML · Graphe · flow-diff.json
 ```
+
+Modes : **LEARN** (explorer, puis enregistrer la baseline), **VERIFY** (rejouer la baseline, détecter les régressions), **EXPLORE** (chercher du nouveau). Playwright reste uniquement le moteur d'exécution : la décision, le scoring, la sécurité, la mémoire et la comparaison n'en dépendent pas.
 
 ```
 src/
@@ -826,6 +979,8 @@ npm run build            # dist/
 ## Limites de cette version
 
 - Un seul onglet de navigateur : l'exploration est séquentielle.
+- `verify` rejoue les transitions de l'exploration autonome. Les flows imposés sont relancés tels quels ; un formulaire rempli n'est rejoué que s'il est sur le chemin d'un état ; les échecs déjà connus de la baseline ne sont pas rejoués.
+- Si l'empreinte d'un écran change (nouveau bouton, nouveau champ), ses transitions deviennent `UNREACHABLE` en `verify` : c'est voulu (l'écran a changé), le diff montre l'ancien et le nouvel état.
 - L'empreinte d'état est heuristique : des écrans très dynamiques peuvent produire plus d'états que prévu (limité par `maxStatesPerRoute`).
 - Le moteur à règles ne peut pas savoir ce que fait une icône sans libellé, donc les icônes ne sont jamais cliquées (sauf `allow: UNKNOWN` dans un flow).
 - Les actions qui modifient des données (créer, enregistrer, envoyer) ne sont jamais exécutées automatiquement. Leurs effets ne sont explorés que si elles sont explicitement autorisées, sur un environnement jetable.
@@ -842,6 +997,8 @@ npm run build            # dist/
 - Import OpenAPI et tests d'API
 - Comparaison visuelle entre runs (captures par état)
 - Génération de tests Playwright à partir des flows enregistrés (les localisateurs sont déjà sérialisables)
+- Reproduction de bug : à partir d'une anomalie, rejouer le chemin minimal (état → action → réseau) qui la déclenche
+- Plusieurs baselines comparées dans le temps (tendance des états, des régressions, des temps de réponse)
 - Moteurs de décision derrière l'interface `DecisionEngine`, dont un LLM local optionnel
 - Runs sur des environnements par pull request, avec un commentaire automatique sur la PR
 - Exploration parallèle, `FlowMemory` SQLite/PostgreSQL, manifestes `Job` Kubernetes

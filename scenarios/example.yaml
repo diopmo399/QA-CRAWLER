@@ -4,6 +4,7 @@
 mission:
   name: explore-application
   description: Every available option, with its default value
+  mode: explore # explore | learn | verify (the CLI command wins)
 
 target:
   baseUrl: http://localhost:4200 # required — overridable with --base-url or QA_BASE_URL
@@ -30,6 +31,27 @@ goals:
   discoverForms: true # fill forms with fake test data before clicking their step buttons
   discoverFlows: true # click tabs, menus, details, toggles, wizard steps
   detectErrors: true # network, console and JavaScript observers
+  keywords: [] # goal keywords, e.g. [users, utilisateurs, permissions]: matching actions are explored first
+  # discover: { navigation: true, forms: true, dialogs: true } # short form of discover*
+
+scoring:
+  weights: {} # overrides of DEFAULT_SCORING_WEIGHTS, e.g. { newState: 150, export: 0 }
+
+network:
+  trace: true # attach to each transition the HTTP exchanges of its action (no header, no body)
+  resourceTypes: [document, xhr, fetch]
+  maxRequestsPerAction: 50
+
+baseline:
+  dir: baseline # learn writes it (with history under runs/), verify and explore read it
+  # application: my-app      # default: mission.name
+  # environment: qa          # default: QA_ENVIRONMENT
+  # branch / commit          # default: QA_BRANCH / QA_COMMIT, then CI variables
+  # gitDir: ../my-app        # read branch/commit with git
+  keepRuns: 20
+
+verify:
+  failOnRegression: true # exit code 1 when a known transition changed, fails or is unreachable
 
 browser:
   headless: true

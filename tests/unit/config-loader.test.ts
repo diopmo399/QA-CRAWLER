@@ -25,7 +25,10 @@ describe('parseConfig', () => {
       discoverForms: true,
       discoverFlows: true,
       detectErrors: true,
+      keywords: [],
     });
+    expect(config.mission.mode).toBe('explore');
+    expect(config.scoring.weights).toEqual({});
     expect(config.http.failOnStatus).toBe(400);
     expect(config.safety.allowedHosts).toEqual(['localhost']);
     expect(config.safety.allowedActionClasses).toEqual(['SAFE']);

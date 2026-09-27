@@ -206,6 +206,19 @@ export const SUBMIT_KEYWORDS = [
   'publier',
 ] as const;
 
+/** Files rather than screens: explored last. */
+export const EXPORT_KEYWORDS = [
+  'export',
+  'exporter',
+  'download',
+  'telecharger',
+  'print',
+  'imprimer',
+  'csv',
+  'excel',
+  'pdf',
+] as const;
+
 export const STEP_KEYWORDS = [
   'next',
   'next step',

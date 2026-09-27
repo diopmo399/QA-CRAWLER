@@ -58,4 +58,67 @@ describe('StateDetector', () => {
       });
     expect(detector.detect(list(['Awa', 'Moussa'])).stateId).toBe(detector.detect(list(['Fatou'])).stateId);
   });
+
+  it('ignores generated ids, e-mails, tokens, dates, times and counters', () => {
+    const screen = (id: string, mail: string, when: string, count: number) =>
+      snapshot({
+        url: `http://localhost:4200/dossiers/${id}`,
+        title: `Dossier ${id} (${count})`,
+        headings: [`Dossier ${id}`, `Modifié le ${when} par ${mail}`],
+        elements: [button(`Commentaires (${count})`), button('Enregistrer'), field(`Réf. ${id}`)],
+      });
+    const one = detector.detect(
+      screen('0b8f6c1e-4d2a-4f3b-9a51-7c2d1e0f9a3b', 'awa@example.test', '2026-09-26 10:32', 3),
+    );
+    const two = detector.detect(
+      screen('9f1c2b3a-aaaa-4bbb-8ccc-1234567890ab', 'moussa@example.test', '2026-09-27 08:05', 12),
+    );
+    const three = detector.detect(
+      screen('c3d4e5f6-0000-4111-8222-abcdefabcdef', 'fatou@example.test', '2025-01-01 23:59', 0),
+    );
+    expect(two.stateId).toBe(one.stateId);
+    expect(three.stateId).toBe(one.stateId);
+  });
+
+  it('does not depend on the order of the controls', () => {
+    const screen = (names: string[]) =>
+      snapshot({
+        url: 'http://localhost:4200/users/new',
+        headings: ['Nouvel utilisateur'],
+        elements: names.map((name) => button(name)),
+      });
+    expect(detector.detect(screen(['Continuer', 'Annuler'])).stateId).toBe(
+      detector.detect(screen(['Annuler', 'Continuer'])).stateId,
+    );
+  });
+
+  it('ignores toasts and live regions, which come and go', () => {
+    const screen = (toast: boolean) =>
+      snapshot({
+        url: 'http://localhost:4200/users',
+        headings: ['Utilisateurs'],
+        elements: [
+          button('Nouvel utilisateur'),
+          ...(toast
+            ? [element({ tag: 'button', role: 'button', name: 'Fermer la notification', transient: true })]
+            : []),
+        ],
+      });
+    expect(detector.detect(screen(true)).stateId).toBe(detector.detect(screen(false)).stateId);
+  });
+
+  it('turns the same route with other fields and buttons into another state (/dossiers/create)', () => {
+    const step = (fields: string[], buttons: string[]) =>
+      snapshot({
+        url: 'http://localhost:4200/dossiers/create',
+        headings: ['Créer dossier'],
+        elements: [...fields.map((label) => field(label)), ...buttons.map((name) => button(name))],
+      });
+    const client = detector.detect(step(['Client', 'Produit', 'Date'], ['Continuer', 'Annuler']));
+    const summary = detector.detect(step([], ['Précédent', 'Confirmer']));
+    expect(client.stateId).not.toBe(summary.stateId);
+    expect(client.signature).toContain(
+      'controls=button:annuler|button:continuer|textbox:client|textbox:date|textbox:produit',
+    );
+  });
 });

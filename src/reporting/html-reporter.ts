@@ -110,6 +110,7 @@ export function renderHtml(
   <h1>${esc(result.mission)}</h1>
   <div class="meta">${esc(result.target.startUrl)} · ${esc(formatDate(result.startedAt))} · ${esc(formatDuration(result.durationMs))} · ${esc(t.stopped)} : ${esc(label(result.stopReason))} · ${esc(t.engine)} : ${esc(label(result.decisionEngine))}</div>
   ${result.description ? `<div class="meta">${esc(result.description)}</div>` : ''}
+  <div class="meta">${esc(t.baselineTexts.mode)} : ${esc(label(result.mode))}${result.baseline ? ` · ${esc(t.baselineTexts.baseline)} : ${esc(baselineName(result.baseline))}` : ''}${result.learnedBaseline ? ` · ${esc(t.baselineTexts.learned)} : ${esc(baselineName(result.learnedBaseline))}` : ''}</div>
   <span class="status" style="background:${status.color}">${esc(status.label)}</span>
   <nav>${result.artifacts.flowGraphHtml ? `<a href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}</nav>
 </header>
@@ -133,6 +134,9 @@ export function renderHtml(
   </div>
 
   ${result.flows.length > 0 ? flowsSection(result, nameOf, href, t) : ''}
+
+  ${result.verification ? verificationSection(result, t) : ''}
+  ${result.flowDiff ? flowDiffSection(result, t) : ''}
 
   ${result.browserInteractions.length > 0 ? interactionsSection(result, nameOf, t) : ''}
 
@@ -281,6 +285,98 @@ function suggestionBlock(step: ExplorationResult['flows'][number]['steps'][numbe
       `<div class="suggest">${esc(t.onScreen)} ${step.onScreen.map((label) => `<code>${esc(label)}</code>`).join(' · ')}</div>`,
     );
   return parts.join('');
+}
+
+/** "2026-09-27T10-32-05Z-1a2b3c4 (main, qa)" */
+function baselineName(metadata: NonNullable<ExplorationResult['baseline']>): string {
+  const details = [metadata.branch, metadata.commit?.slice(0, 7), metadata.environment].filter(Boolean);
+  return details.length > 0 ? `${metadata.runId} (${details.join(', ')})` : metadata.runId;
+}
+
+/** verify: each known transition replayed, regressions first. */
+function verificationSection(result: ExplorationResult, t: ReportTexts): string {
+  const verification = result.verification;
+  if (!verification) return '';
+  const b = t.baselineTexts;
+  const c = t.columns;
+  const order = ['FAILED', 'UNREACHABLE', 'ACTION_MISSING', 'CHANGED', 'BLOCKED', 'SKIPPED', 'PASSED'];
+  const rows = [...verification.transitions]
+    .sort((a, z) => order.indexOf(a.status) - order.indexOf(z.status))
+    .map(
+      (v) =>
+        `<tr><td>${classPill(v.status, t.lang)}</td><td>${esc(v.fromLabel)}</td><td class="wrap">${esc(valueLabel(t.lang, v.action.type))} “${esc(v.action.text ?? v.action.href ?? '')}”</td><td>${esc(v.expectedToLabel)}</td><td>${esc(v.actualToLabel ?? '')}</td><td class="wrap muted">${esc(translateReason(t.lang, v.reason ?? ''))}${networkBlock(v.network)}</td></tr>`,
+    )
+    .join('');
+  const counts = Object.entries(verification.summary)
+    .filter(([, count]) => count > 0)
+    .map(([status, count]) => `${classPill(status, t.lang)} ${count}`)
+    .join(' ');
+  return `<section><h2>${esc(b.verificationTitle)} — ${verification.regressions} ${esc(b.regressions)}</h2>
+    <p class="muted">${esc(b.verificationHint)}</p><p>${counts}</p>
+    <table><thead><tr><th>${c.result}</th><th>${c.from}</th><th>${c.action}</th><th>${esc(b.expected)}</th><th>${esc(b.actual)}</th><th>${c.reason}</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+}
+
+/** FLOW DIFF: what is new, gone or changed compared with the baseline. */
+function flowDiffSection(result: ExplorationResult, t: ReportTexts): string {
+  const diff = result.flowDiff;
+  if (!diff) return '';
+  const b = t.baselineTexts;
+  const hint =
+    result.mode === 'verify'
+      ? b.diffHintVerify
+      : result.mode === 'learn'
+        ? b.diffHintLearn
+        : b.diffHintExplore;
+  const list = (title: string, sign: string, items: string[]): string =>
+    items.length === 0
+      ? ''
+      : `<h3>${esc(title)} (${items.length})</h3><pre class="diff">${esc(items.map((item) => `${sign} ${item}`).join('\n'))}</pre>`;
+  const transition = (x: {
+    fromLabel: string;
+    toLabel: string;
+    action: { type: string; text?: string; href?: string };
+  }): string => `${x.fromLabel} → "${x.action.text ?? x.action.href ?? x.action.type}" → ${x.toLabel}`;
+  const changed =
+    diff.changedTransitions.length === 0
+      ? ''
+      : `<h3>${esc(b.changedTransitions)} (${diff.changedTransitions.length})</h3><pre class="diff">${esc(
+          diff.changedTransitions
+            .map(
+              (x) =>
+                `~ ${x.fromLabel} → "${x.action.text ?? x.action.href ?? x.action.type}"\n${x.changes.map((line) => `    ${line}`).join('\n')}`,
+            )
+            .join('\n'),
+        )}</pre>`;
+  const body =
+    list(
+      b.addedStates,
+      '+',
+      diff.addedStates.map((s) => `${s.label} (${s.route})`),
+    ) +
+    list(b.addedTransitions, '+', diff.addedTransitions.map(transition)) +
+    list(
+      b.removedStates,
+      '-',
+      diff.removedStates.map((s) => `${s.label} (${s.route})`),
+    ) +
+    list(b.removedTransitions, '-', diff.removedTransitions.map(transition)) +
+    changed;
+  return `<section><h2>${esc(b.diffTitle)}</h2><p class="muted">${esc(hint)}</p>${body || `<p class="empty">${esc(b.noDifference)}</p>`}</section>`;
+}
+
+function networkBlock(network: ExplorationResult['transitions'][number]['network']): string {
+  if (!network || network.length === 0) return '';
+  const lines = network.map((x) => {
+    let path = x.url;
+    try {
+      const url = new URL(x.url);
+      path = `${url.pathname}${url.search}`;
+    } catch {
+      // keep the URL as recorded
+    }
+    return `${x.method} ${path} ${x.status ?? x.failure ?? '…'}${x.durationMs !== undefined ? ` ${x.durationMs} ms` : ''}`;
+  });
+  return `<pre class="network">${esc(lines.join('\n'))}</pre>`;
 }
 
 function statesTable(states: StateReport[], href: (file: string) => string, t: ReportTexts): string {
