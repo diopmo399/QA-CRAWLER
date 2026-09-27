@@ -10,6 +10,7 @@ import type { Issue, IssueType, Severity } from './issue.js';
 import type { FormReport } from '../forms/form-report.js';
 import type { RecoverySummary } from '../recovery/recovery-model.js';
 import type { CleanupReport, CreatedDataRecord } from '../data/created-data.js';
+import type { AuthorizationReport } from '../actors/authorization-observer.js';
 
 /** Why the exploration ended. */
 export type StopReason =
@@ -91,6 +92,8 @@ export interface ExplorationResult {
   createdData?: CreatedDataRecord[];
   /** What was cleaned up, and what is left to remove. */
   cleanup?: CleanupReport;
+  /** actors: what each user reaches, the differences, the rules checked. */
+  authorization?: AuthorizationReport;
   /** Non-secret summary of the effective configuration. */
   settings: Record<string, unknown>;
   artifacts: {

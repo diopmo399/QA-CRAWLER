@@ -206,6 +206,18 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
     if (discover.dialogs !== undefined) config.goals.discoverFlows = discover.dialogs;
   }
   if (config.forms.autoFill !== undefined) config.forms.exercise = config.forms.autoFill;
+  const actorNames = config.actors.map((actor) => actor.name);
+  const duplicates = actorNames.filter((name, index) => actorNames.indexOf(name) !== index);
+  if (duplicates.length > 0 || actorNames.includes(config.authorization.primaryActor)) {
+    throw new ConfigError('Invalid scenario', [
+      `actors: names must be unique and differ from authorization.primaryActor (${[...new Set([...duplicates, config.authorization.primaryActor].filter((name) => actorNames.includes(name)))].join(', ')})`,
+    ]);
+  }
+  const known = new Set([config.authorization.primaryActor, ...actorNames]);
+  for (const rule of config.authorization.rules) {
+    if (!known.has(rule.actor))
+      throw new ConfigError('Invalid scenario', [`authorization.rules: unknown actor "${rule.actor}"`]);
+  }
   if (config.openapi.enabled && !config.openapi.source) {
     throw new ConfigError('Invalid scenario', ['openapi.source: required when openapi.enabled is true']);
   }

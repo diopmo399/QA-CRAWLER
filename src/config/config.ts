@@ -263,6 +263,41 @@ const authSchema = z.discriminatedUnion('type', [
   httpAuthSchema,
 ]);
 
+/**
+ * Other users of the application (reader, manager…). After the exploration,
+ * each one opens the screens found — plain page loads, never an action — to
+ * see what it may reach. Credentials: environment variable names only.
+ */
+const actorSchema = z
+  .object({
+    name: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/, 'letters, digits, dashes and underscores (40 max)'),
+    description: z.string().optional(),
+    auth: authSchema,
+  })
+  .strict();
+
+const authorizationRuleSchema = z
+  .object({
+    actor: nonEmpty,
+    /** Path prefix, `*` wildcard allowed (/admin/*). */
+    path: nonEmpty,
+    expect: z.enum(['allowed', 'denied']),
+  })
+  .strict();
+
+const authorizationSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Name of the mission's own user (auth) in the reports. */
+    primaryActor: nonEmpty.default('primary'),
+    rules: z.array(authorizationRuleSchema).default([]),
+    /** Screens opened per actor at most. */
+    maxTargets: z.number().int().min(1).default(50),
+    /** Words showing a refusal on a page answered 200 (added to the built-in ones). */
+    deniedTexts: z.array(nonEmpty).default([]),
+  })
+  .strict();
+
 /** Browser permissions (Playwright names) a mission may grant explicitly. */
 export const BROWSER_PERMISSIONS = [
   'geolocation',
@@ -649,6 +684,8 @@ export const scenarioSchema = z
     recovery: recoverySchema.default({}),
     accessibility: accessibilitySchema.default({}),
     logging: loggingSchema.default({}),
+    actors: z.array(actorSchema).default([]),
+    authorization: authorizationSchema.default({}),
     openapi: openApiSchema.default({}),
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),
@@ -664,4 +701,6 @@ export type FormAuthConfig = z.output<typeof formAuthSchema>;
 export type HttpAuthConfig = z.output<typeof httpAuthSchema>;
 export type BrowserInteractionsConfig = z.output<typeof browserInteractionsSchema>;
 export type AuthConfig = ScenarioConfig['auth'];
+export type ActorConfig = ScenarioConfig['actors'][number];
+export type AuthorizationConfig = ScenarioConfig['authorization'];
 export type QueryParamMode = ScenarioConfig['exploration']['queryParams']['mode'];

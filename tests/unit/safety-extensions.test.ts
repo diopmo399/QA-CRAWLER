@@ -157,3 +157,44 @@ describe('engine log', () => {
     expect(testConfig('logging: { level: debug }').logging.level).toBe('DEBUG');
   });
 });
+
+describe('actors configuration', () => {
+  const base = 'target: { baseUrl: http://localhost:4200 }\n';
+  const reader =
+    "  - name: reader\n    auth: { type: form, loginUrl: /login, usernameSelector: '#u', passwordSelector: '#p', submitSelector: button, usernameEnv: R_USER, passwordEnv: R_PASS }\n";
+
+  it('parses actors with environment variable names only', () => {
+    const { config } = parseConfig(`${base}actors:\n${reader}`, {}, {});
+    expect(config.actors[0]).toMatchObject({
+      name: 'reader',
+      auth: { usernameEnv: 'R_USER', passwordEnv: 'R_PASS' },
+    });
+    expect(config.authorization).toMatchObject({
+      enabled: true,
+      primaryActor: 'primary',
+      rules: [],
+      maxTargets: 50,
+    });
+  });
+
+  it('rejects a password in the file, unknown actors in rules and duplicate names', () => {
+    expect(() =>
+      parseConfig(
+        `${base}actors:\n  - name: x\n    auth: { type: form, loginUrl: /l, usernameSelector: a, passwordSelector: b, submitSelector: c, password: hunter2 }\n`,
+        {},
+        {},
+      ),
+    ).toThrowError(/Invalid scenario/);
+    expect(() =>
+      parseConfig(
+        `${base}actors:\n${reader}authorization:\n  rules: [{ actor: nobody, path: /admin, expect: denied }]\n`,
+        {},
+        {},
+      ),
+    ).toThrowError(/unknown actor "nobody"/);
+    expect(() => parseConfig(`${base}actors:\n${reader}${reader}`, {}, {})).toThrowError(/unique/);
+    expect(() => parseConfig(`${base}actors:\n${reader.replace('reader', 'primary')}`, {}, {})).toThrowError(
+      /unique/,
+    );
+  });
+});

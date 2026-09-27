@@ -433,6 +433,7 @@ const FR_VALUES: Record<string, string> = {
   REGRESSION: 'RÉGRESSION',
   CONTRACT: 'CONTRAT API',
   ACCESSIBILITY: 'ACCESSIBILITÉ',
+  AUTHORIZATION: 'AUTORISATION',
   // action types
   click: 'clic',
   navigate: 'navigation',

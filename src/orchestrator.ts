@@ -20,6 +20,7 @@ import { writeReports } from './reporting/reporter.js';
 import { redactUrl } from './security/redactor.js';
 import { ManualCleanup, type TestDataCleanup } from './data/created-data.js';
 import { combineListeners, EngineEventLog } from './logging/engine-log.js';
+import { AuthorizationObserver, type AuthorizationReport } from './actors/authorization-observer.js';
 
 export interface RunOutcome {
   result: ExplorationResult;
@@ -94,8 +95,20 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   const outcome = await explorer.explore();
   const current = outcome.graph.toJSON();
 
+  // Other actors open the screens found: what does each one reach?
+  let authorization: AuthorizationReport | undefined;
+  if (config.actors.length > 0 && config.authorization.enabled) {
+    const targets = outcome.graph
+      .allNodes()
+      .map((node) => ({ stateId: node.id, label: node.label, url: node.url }));
+    const observed = await new AuthorizationObserver(config, env).observe(targets);
+    authorization = observed.report;
+    outcome.issues.push(...observed.issues);
+  }
+
   const result = buildResult(outcome, config);
   result.mode = mode;
+  if (authorization) result.authorization = authorization;
   result.cleanup = await (options.cleanup ?? new ManualCleanup()).cleanup(outcome.createdData);
   if (config.logging.file) {
     await mkdir(config.output.reportsDir, { recursive: true });

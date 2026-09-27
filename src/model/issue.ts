@@ -24,6 +24,8 @@ export const ISSUE_TYPES = [
   'CONTRACT',
   /** AccessibilityChecker: missing names, image links without text, keyboard problems. */
   'ACCESSIBILITY',
+  /** AuthorizationObserver: an actor reaches a screen a rule says it must not (or the reverse). */
+  'AUTHORIZATION',
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 
