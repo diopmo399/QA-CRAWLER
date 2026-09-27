@@ -403,6 +403,40 @@ const verifySchema = z
   })
   .strict();
 
+const oraclesSchema = z
+  .object({
+    /** Judge every executed action (technical, UI, baseline, contract oracles). */
+    enabled: z.boolean().default(true),
+    technical: z
+      .object({
+        /** HTTP 404 from an API call: warning (default) or fail. */
+        api404: z.enum(['warning', 'fail']).default('warning'),
+      })
+      .strict()
+      .default({}),
+    ui: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Words that make a visible alert/banner/snackbar an error message (added to the built-in ones). */
+        errorTexts: z.array(nonEmpty).default([]),
+      })
+      .strict()
+      .default({}),
+    baseline: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
+const openApiSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    /** OpenAPI 3 file (YAML/JSON), or an URL on an allowed host. */
+    source: nonEmpty.optional(),
+  })
+  .strict();
+
 const networkSchema = z
   .object({
     /** Attach to each transition the HTTP exchanges its action caused (method, URL, status, duration). */
@@ -532,6 +566,8 @@ export const scenarioSchema = z
     forms: formsSchema.default({}),
     scoring: scoringSchema.default({}),
     network: networkSchema.default({}),
+    oracles: oraclesSchema.default({}),
+    openapi: openApiSchema.default({}),
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),
     testData: testDataSchema.default({}),

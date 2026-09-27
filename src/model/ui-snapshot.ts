@@ -95,6 +95,8 @@ export interface UiSnapshot {
   headings: string[];
   /** Accessible names of visible dialogs (modal, drawer…). */
   dialogs: string[];
+  /** What the screen tells about the last action (read by the UIOracle). */
+  signals?: UiSignals;
   /** Name of the layer that covers the page (modal, full-screen overlay), if any. */
   overlay?: string;
   /** Names of selected tabs (aria-selected=true). */
@@ -105,4 +107,16 @@ export interface UiSnapshot {
   textExcerpt: string;
   elements: UiElement[];
   forms: FormSummary[];
+}
+
+/** Visible hints of how an action went. */
+export interface UiSignals {
+  /** Texts of visible alerts, error banners, snackbars (5 max). */
+  alerts: string[];
+  /** A spinner, progress bar or aria-busy region is visible. */
+  busy: boolean;
+  /** Nothing to read nor to do on the screen. */
+  empty: boolean;
+  /** Fields marked aria-invalid. */
+  invalidFields: number;
 }

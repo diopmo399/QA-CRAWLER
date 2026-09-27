@@ -16,6 +16,12 @@ export const ISSUE_TYPES = [
   'BROWSER_INTERACTION',
   /** A form field is still invalid once filled with the test data (or could not be filled). */
   'FORM_VALIDATION',
+  /** UIOracle: an error message, empty screen or endless spinner after an action. */
+  'UI_ERROR',
+  /** BaselineOracle: the action no longer leads where the baseline says (regression potential). */
+  'REGRESSION',
+  /** ContractOracle: an API answer the contract (OpenAPI) does not declare. */
+  'CONTRACT',
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 

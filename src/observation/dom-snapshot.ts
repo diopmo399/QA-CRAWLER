@@ -610,5 +610,28 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     textExcerpt: clean(document.body.innerText, 600),
     elements,
     forms: formResults,
+    signals: {
+      // Messages shown to the user: alerts, error banners, snackbars/toasts.
+      alerts: Array.from(
+        document.querySelectorAll(
+          '[role="alert"], [role="alertdialog"], mat-snack-bar-container, .mat-mdc-snack-bar-container, .snackbar, .toast, .alert-danger, .alert-error, .error-banner, .notification-error',
+        ),
+      )
+        .filter((el) => isVisible(el))
+        .map((el) => clean((el as HTMLElement).innerText, 160))
+        .filter(Boolean)
+        .slice(0, 5),
+      // Still loading: aria-busy, progress bars and spinners.
+      busy: Array.from(
+        document.querySelectorAll(
+          '[aria-busy="true"], [role="progressbar"], mat-spinner, mat-progress-spinner, .spinner, .loading, .loader',
+        ),
+      ).some((el) => isVisible(el)),
+      // Nothing to see nor do.
+      empty: clean(document.body.innerText, 40).length < 3 && elements.length === 0,
+      invalidFields: Array.from(document.querySelectorAll('[aria-invalid="true"]')).filter((el) =>
+        isVisible(el),
+      ).length,
+    },
   };
 }

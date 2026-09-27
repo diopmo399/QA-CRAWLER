@@ -5,6 +5,8 @@ import { toLocator } from '../execution/locator-resolver.js';
 import type { DiscoveredAction } from '../model/discovered-action.js';
 import type { PageContext } from '../model/page-context.js';
 import type { SafetyPolicy } from '../policies/safety-policy.js';
+import type { ApiContract } from '../oracles/api-contract.js';
+import { enrichWithContract } from './contract-enrichment.js';
 import { DomFormAnalyzer, formName } from './form-analyzer.js';
 import { ValidDataFillStrategy, type FormFillStrategy } from './form-fill-strategy.js';
 import type { DiscoveredForm, FormField, FormFillPlan } from './form-model.js';
@@ -76,6 +78,8 @@ export class FormExerciser {
     safety: SafetyPolicy,
     runId: string,
     strategy?: FormFillStrategy,
+    /** API contract (OpenAPI) that completes what the page says about its fields. */
+    private readonly contract?: ApiContract,
   ) {
     this.strategy = strategy ?? new ValidDataFillStrategy(testData, safety, runId);
   }
@@ -101,7 +105,7 @@ export class FormExerciser {
 
   /** Fills every field of the form through a plan; nothing is sent. */
   async fill(page: Page, context: PageContext, group: string): Promise<FormRun> {
-    const form = this.formsOf(context).find((candidate) => candidate.group === group) ?? {
+    const found = this.formsOf(context).find((candidate) => candidate.group === group) ?? {
       id: `${context.stateId}:${group}`,
       stateId: context.stateId,
       group,
@@ -111,6 +115,7 @@ export class FormExerciser {
       validationMessages: [],
       foreground: false,
     };
+    const form = enrichWithContract(found, this.contract);
     const plan = await this.strategy.fill(form, context);
     const actionOf = (fieldId: string): DiscoveredAction | undefined =>
       context.actions.find((candidate) => candidate.id === fieldId);

@@ -5,7 +5,9 @@ import { sourceInfo } from './baseline/source-info.js';
 import type { MissionMode, ScenarioConfig } from './config/config.js';
 import type { DecisionEngine } from './decision/decision-engine.js';
 import type { TestDataProvider } from './data/test-data-provider.js';
+import { hostMatches } from './config/config-loader.js';
 import { FlowDiffEngine, type FlowDiff } from './diff/flow-diff.js';
+import { OpenApiContractProvider, type ApiContract } from './oracles/api-contract.js';
 import { FlowExplorer, type ExplorationListener } from './explorer/flow-explorer.js';
 import type { FlowMemory } from './memory/flow-memory.js';
 import { JsonFlowMemory } from './memory/json-flow-memory.js';
@@ -64,6 +66,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   const baseline = await store.load();
   if (mode === 'verify' && !baseline) throw new BaselineMissingError(store.directory);
 
+  const contract = config.openapi.enabled && config.openapi.source ? await loadContract(config) : undefined;
   const memory =
     options.memory ??
     new JsonFlowMemory(config.memory.file ?? path.join(config.output.reportsDir, 'flow-graph.json'));
@@ -74,6 +77,8 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     ...(options.listener ? { listener: options.listener } : {}),
     ...(options.env ? { env: options.env } : {}),
     ...(mode === 'explore' && baseline ? { knownActions: knownActionsOf(baseline) } : {}),
+    ...(baseline ? { baseline: baseline.graph } : {}),
+    ...(contract ? { contract } : {}),
     ...(mode === 'verify' && baseline
       ? {
           verifyBaseline: baseline.graph,
@@ -167,6 +172,19 @@ function reachedPart(graph: FlowGraphData): FlowGraphData {
     ...graph.edges.filter((edge) => edge.result !== 'BLOCKED').flatMap((edge) => [edge.from, edge.to]),
   ]);
   return { ...graph, nodes: graph.nodes.filter((node) => states.has(node.id)) };
+}
+
+/** The API contract (OpenAPI): a local file, or an URL on an allowed host only. */
+async function loadContract(config: ScenarioConfig): Promise<ApiContract> {
+  const provider = new OpenApiContractProvider(config.openapi.source ?? '', (url) => {
+    try {
+      const host = new URL(url).hostname;
+      return config.safety.allowedHosts.some((pattern) => hostMatches(host, pattern));
+    } catch {
+      return false;
+    }
+  });
+  return provider.load();
 }
 
 /** `stateId::actionId` of every transition the baseline executed. */

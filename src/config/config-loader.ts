@@ -196,6 +196,9 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
     if (discover.dialogs !== undefined) config.goals.discoverFlows = discover.dialogs;
   }
   if (config.forms.autoFill !== undefined) config.forms.exercise = config.forms.autoFill;
+  if (config.openapi.enabled && !config.openapi.source) {
+    throw new ConfigError('Invalid scenario', ['openapi.source: required when openapi.enabled is true']);
+  }
   if (config.forms.submit === true) {
     config.safety.block = config.safety.block.filter((risk) => risk !== 'form-submit');
   } else if (config.forms.submit === false && !config.safety.block.includes('form-submit')) {

@@ -48,7 +48,7 @@ import {
   type VerifiedTransition,
 } from '../model/verification.js';
 import type { FlowRunReport, FlowStatus, FlowStepReport } from '../model/flow-run.js';
-import { isAtLeast, type Issue } from '../model/issue.js';
+import { isAtLeast, type Issue, type IssueType } from '../model/issue.js';
 import type { PageContext } from '../model/page-context.js';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
@@ -57,6 +57,12 @@ import { ConsoleObserver } from '../observers/console-observer.js';
 import { NetworkObserver } from '../observers/network-observer.js';
 import type { IssueAttribution, ObservationContext, PageObserver } from '../observers/observer.js';
 import { NetworkTraceRecorder } from '../observers/network-trace-recorder.js';
+import type { ApiContract } from '../oracles/api-contract.js';
+import { BaselineOracle } from '../oracles/baseline-oracle.js';
+import { CompositeTestOracle, type OracleVerdict } from '../oracles/composite-oracle.js';
+import { ContractOracle } from '../oracles/contract-oracle.js';
+import { TechnicalOracle } from '../oracles/technical-oracle.js';
+import { DEFAULT_ERROR_TEXTS, UIOracle } from '../oracles/ui-oracle.js';
 import { PageErrorObserver } from '../observers/page-error-observer.js';
 import { SafetyPolicy } from '../policies/safety-policy.js';
 import { redactUrl } from '../security/redactor.js';
@@ -69,6 +75,8 @@ export interface ExplorationListener {
   onDecision?(context: PageContext, decision: ActionDecision): void;
   onBlocked?(context: PageContext, action: DiscoveredAction, reason: string): void;
   onTransition?(edge: FlowEdge, action: DiscoveredAction): void;
+  /** The test oracles judged an executed action. */
+  onOracle?(edge: FlowEdge, verdict: OracleVerdict): void;
   onBacktrack?(from: string, to: string | undefined, method: string): void;
   onIssue?(issue: Issue, isNew: boolean): void;
   onFlowStart?(flow: FlowConfig): void;
@@ -90,6 +98,10 @@ export interface FlowExplorerOptions {
   knownActions?: ReadonlySet<string>;
   /** Id of the run (default: testData.runId, else generated). */
   runId?: string;
+  /** Known transitions (the baseline), for the BaselineOracle. */
+  baseline?: FlowGraphData;
+  /** API contract (OpenAPI), for the ContractOracle and the form fields. */
+  contract?: ApiContract;
   /** verify: the known transitions of this baseline are replayed instead of exploring. */
   verifyBaseline?: FlowGraphData;
   /** Id of the baseline run being verified (reports). */
@@ -188,6 +200,8 @@ export class FlowExplorer {
   private readonly verifyBaseline: FlowGraphData | undefined;
   private readonly baselineRunId: string | undefined;
   private verification: VerificationReport | undefined;
+  /** Judges each executed action (undefined when oracles.enabled is false). */
+  private readonly oracle: CompositeTestOracle | undefined;
   /** Forms already filled, per state (`stateId|group`). */
   private readonly formsExercised = new Set<string>();
   /** Transitions that filled a form: id → form, to fill it again when a path is replayed. */
@@ -262,7 +276,23 @@ export class FlowExplorer {
         fields: config.testData.fields,
         defaults: config.testData.defaults,
       });
-    this.forms = new FormExerciser(this.executor, this.testData, this.safety, this.runId);
+    this.forms = new FormExerciser(
+      this.executor,
+      this.testData,
+      this.safety,
+      this.runId,
+      undefined,
+      options.contract,
+    );
+    const { oracles } = config;
+    this.oracle = oracles.enabled
+      ? new CompositeTestOracle([
+          new TechnicalOracle({ api404: oracles.technical.api404 }),
+          ...(oracles.ui.enabled ? [new UIOracle([...DEFAULT_ERROR_TEXTS, ...oracles.ui.errorTexts])] : []),
+          ...(oracles.baseline.enabled ? [new BaselineOracle(options.baseline)] : []),
+          new ContractOracle(options.contract),
+        ])
+      : undefined;
     this.networkTrace = new NetworkTraceRecorder(config.network);
     this.verifyBaseline = options.verifyBaseline;
     this.baselineRunId = options.baselineRunId;
@@ -544,12 +574,9 @@ export class FlowExplorer {
         .map((issue) => issue.id);
 
     const leftAllowedHosts = !this.isExplorablePage(page);
-    if (
-      result.status === 'FAILED' ||
-      blocking.length > 0 ||
-      leftAllowedHosts ||
-      observers.pageErrors.consumeCrash()
-    ) {
+    const crashed = observers.pageErrors.consumeCrash();
+    const beforeSignals = this.lastSnapshot?.signals;
+    if (result.status === 'FAILED' || blocking.length > 0 || leftAllowedHosts || crashed) {
       if (leftAllowedHosts && result.status === 'SUCCESS' && /^https?:/.test(page.url())) {
         this.collector.add({
           type: 'NAVIGATION',
@@ -579,6 +606,14 @@ export class FlowExplorer {
         issueIds: ids,
         ...interactionIds,
       });
+      if (blocking.length === 0) {
+        await this.judge(edge, from, action, undefined, {
+          error: edge.reason ?? 'failed',
+          crashed,
+          beforeSignals,
+        });
+        ids.push(...edge.issueIds.filter((id) => !ids.includes(id)));
+      }
       this.graph.attachIssues(from.stateId, ids);
       this.listener.onTransition?.(edge, action);
       await this.captureErrorScreenshot(page, from, ids);
@@ -614,6 +649,8 @@ export class FlowExplorer {
       issueIds: ids,
       ...interactionIds,
     });
+    await this.judge(edge, from, action, after, { crashed, beforeSignals });
+    ids.push(...edge.issueIds.filter((id) => !ids.includes(id)));
     // Issues of the new state now know which action and path led to them.
     for (const issue of this.collector.all()) {
       if (ids.includes(issue.id)) {
@@ -625,6 +662,70 @@ export class FlowExplorer {
     this.listener.onTransition?.(edge, action);
     this.pushState(after);
     return { page, context: { ...after, errors: this.collector.forState(after.stateId) } };
+  }
+
+  /**
+   * TEST ORACLE: judges an executed action from what was observed (network,
+   * anomalies, screen) and attaches the verdict to its transition. Warnings of
+   * the UI, baseline and contract oracles become anomalies (the technical
+   * failures already are: HTTP, JavaScript errors…).
+   */
+  private async judge(
+    edge: FlowEdge,
+    from: PageContext,
+    action: DiscoveredAction,
+    after: PageContext | undefined,
+    facts: { error?: string; crashed: boolean; beforeSignals: UiSnapshot['signals'] },
+  ): Promise<void> {
+    if (!this.oracle) return;
+    const issues = this.collector.all().filter((issue) => edge.issueIds.includes(issue.id));
+    const verdict = await this.oracle.evaluate(
+      from,
+      {
+        id: action.id,
+        type: action.type,
+        category: action.category,
+        classification: action.classification,
+        ...(action.text ? { text: action.text } : {}),
+        ...(action.href ? { href: action.href } : {}),
+        ...(action.submitsForm ? { submitsForm: true } : {}),
+        result: after ? 'SUCCESS' : 'FAILED',
+        ...(facts.error ? { error: facts.error } : {}),
+        ...(edge.durationMs !== undefined ? { durationMs: edge.durationMs } : {}),
+      },
+      after,
+      {
+        issues,
+        network: edge.network ?? [],
+        pageCrashed: facts.crashed,
+        ...(facts.beforeSignals ? { before: facts.beforeSignals } : {}),
+        ...(after && this.lastSnapshot?.signals ? { after: this.lastSnapshot.signals } : {}),
+        formFilledWithValidData:
+          action.formGroup !== undefined && this.formsExercised.has(`${from.stateId}|${action.formGroup}`),
+      },
+    );
+    edge.oracle = verdict;
+    const anomaly: Record<string, IssueType | undefined> = {
+      ui: 'UI_ERROR',
+      baseline: 'REGRESSION',
+      contract: 'CONTRACT',
+    };
+    for (const opinion of verdict.results) {
+      const type = anomaly[opinion.oracle];
+      if (!type || (opinion.status !== 'WARNING' && opinion.status !== 'FAIL')) continue;
+      for (const reason of opinion.reasons) {
+        const issue = this.collector.add({
+          type,
+          severity: opinion.status === 'FAIL' ? 'ERROR' : 'WARNING',
+          message: `"${actionLabel(action)}": ${reason.message}`,
+          pageUrl: from.url,
+          actionId: action.id,
+          stateId: after?.stateId ?? from.stateId,
+        });
+        if (!edge.issueIds.includes(issue.id)) edge.issueIds.push(issue.id);
+      }
+    }
+    this.listener.onOracle?.(edge, verdict);
   }
 
   /** Closes the network window of an action: what to spread into its FlowEdge. */

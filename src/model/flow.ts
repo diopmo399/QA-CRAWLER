@@ -1,4 +1,5 @@
 import type { BrowserInteractionResult } from '../interactions/types.js';
+import type { OracleVerdict } from '../oracles/composite-oracle.js';
 import type { NetworkExchange } from './network.js';
 import type { ActionClassification, ActionSummary, ActionType, ActionCategory } from './discovered-action.js';
 
@@ -54,6 +55,8 @@ export interface FlowEdge {
   interactionIds?: string[];
   /** Transition produced by a browser interaction itself (popup, new tab). */
   interaction?: { id: string; type: string; status: string };
+  /** Verdict of the test oracles on this action (PASS / FAIL / WARNING / UNKNOWN). */
+  oracle?: OracleVerdict;
   /** HTTP exchanges seen while the action ran: STATE A → ACTION → NETWORK → STATE B. */
   network?: NetworkExchange[];
   /** Start and end of that network window. */
