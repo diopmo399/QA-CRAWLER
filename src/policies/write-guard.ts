@@ -4,6 +4,16 @@ import { pathPatternToRegex } from './navigation-policy.js';
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/**
+ * Échanges d'authentification (OIDC, OAuth 2, SAML, SSO, connexion) : jamais bloqués.
+ * Ils arrivent en arrière-plan — pendant la fenêtre SSO, au renouvellement du jeton —
+ * et sans eux l'application reste non connectée (401 partout).
+ */
+const AUTH_PATH =
+  /\/(oauth2?|oidc|openid|openid-connect|saml2?|sso|auth|authorize|token|introspect|login|logon|signin|sign-in|session|connect)(\/|$|\.)/i;
+/** Corps d'une requête d'authentification (lu localement, jamais conservé). */
+const AUTH_BODY = /(^|&)(grant_type|client_assertion|SAMLRequest|SAMLResponse|refresh_token)=/;
+
 /** Une requête d'écriture annulée : méthode, URL (sans secret), et l'action en cours. */
 export interface BlockedWrite {
   method: string;
@@ -31,7 +41,8 @@ export interface WriteGuardOptions {
  *
  * Pourquoi : la SafetyPolicy classe les CLICS, pas ce que l'application envoie d'elle-
  * même. Remplir un champ de recherche peut déclencher un PUT (effet de bord d'une
- * saisie) ; la garde l'annule et le signale.
+ * saisie) ; la garde l'annule et le signale. Les échanges d'authentification (jeton
+ * OIDC/OAuth, SAML, SSO, session) ne sont jamais bloqués.
  */
 export class WriteGuard {
   private permission: { reason: string } | undefined;
@@ -83,7 +94,7 @@ export class WriteGuard {
   }
 
   /** Décide pour une requête (exposé pour les tests). */
-  decide(method: string, url: string): 'continue' | 'block' {
+  decide(method: string, url: string, body?: string | null): 'continue' | 'block' {
     if (!this.options.enabled || !WRITE_METHODS.has(method.toUpperCase()) || this.permission)
       return 'continue';
     let parsed: URL;
@@ -93,6 +104,8 @@ export class WriteGuard {
       return 'continue';
     }
     if (!/^https?:$/.test(parsed.protocol) || !this.options.isGuardedHost(parsed.hostname)) return 'continue';
+    // L'authentification n'écrit pas de données métier : jeton, session, SSO passent toujours.
+    if (AUTH_PATH.test(parsed.pathname) || (body && AUTH_BODY.test(body))) return 'continue';
     const upper = method.toUpperCase();
     if (
       this.allow.some(
@@ -105,7 +118,8 @@ export class WriteGuard {
 
   private async handle(route: Route): Promise<void> {
     const request = route.request();
-    if (this.decide(request.method(), request.url()) === 'continue') {
+    const body = WRITE_METHODS.has(request.method().toUpperCase()) ? request.postData() : null;
+    if (this.decide(request.method(), request.url(), body) === 'continue') {
       await route.fallback().catch(() => undefined);
       return;
     }
