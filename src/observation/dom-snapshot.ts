@@ -641,6 +641,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       minLength: numberAttr('minlength'),
       maxLength: numberAttr('maxlength'),
       pattern: attr('pattern'),
+      inputMode: attr('inputmode'),
       disabledOptions:
         tag === 'select'
           ? Array.from((el as HTMLSelectElement).options)

@@ -101,6 +101,7 @@ export function fieldOf(action: DiscoveredAction): FormField {
     minLength: field?.minLength,
     maxLength: field?.maxLength,
     pattern: field?.pattern,
+    inputMode: field?.inputMode,
     options,
     placeholder: field?.placeholder,
     hint: field?.hint,

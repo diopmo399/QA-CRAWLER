@@ -31,6 +31,7 @@ const DIALOG = `<h1>Accueil</h1>
     <div class="field"><div class="lbl">Nom de l'agence</div><div>-</div></div>
   </div>
   <div class="field"><div class="lbl">* Raison sociale</div><input id="f2" required></div>
+  <div class="field"><div class="lbl">Numéro de dossier</div><input id="f5" inputmode="numeric" maxlength="6"></div>
   <div class="row">
     <div class="field"><div class="lbl">* Prénom du contact</div><input id="f3" required></div>
     <div class="field"><div class="lbl">* Nom du contact</div><input id="f4" required></div>
@@ -95,10 +96,12 @@ output:
     expect(fields.map((action) => action.field?.label)).toEqual([
       'Code agence',
       'Raison sociale',
+      'Numéro de dossier',
       'Prénom du contact',
       'Nom du contact',
     ]);
-    expect(new Set(fields.map((action) => action.id)).size).toBe(4);
+    expect(new Set(fields.map((action) => action.id)).size).toBe(5);
+    expect(fields[2]?.field?.inputMode).toBe('numeric');
     expect(fields[0]?.field?.hint).toBe('99999');
     // Libellé deviné : Playwright ne le connaît pas, le localisateur est un CSS qui trouve le champ seul.
     expect(fields.every((action) => action.locator.strategy === 'css')).toBe(true);
@@ -112,6 +115,8 @@ output:
       expect.arrayContaining(['Code agence', 'Raison sociale', 'Prénom du contact', 'Nom du contact']),
     );
     expect(byLabel['Code agence']?.filled).toMatch(/^fill "\d{5}"$/);
+    // inputmode numeric : des chiffres à la longueur de maxlength, pas « QA Test ».
+    expect(byLabel['Numéro de dossier']?.filled).toBe('fill "123456"');
     for (const label of ['Raison sociale', 'Prénom du contact', 'Nom du contact'])
       expect(byLabel[label]?.filled, label).toMatch(/^fill "/);
     const radios = (form?.fields ?? []).filter((field) => field.type === 'radio');

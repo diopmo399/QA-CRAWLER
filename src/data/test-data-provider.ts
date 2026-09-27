@@ -174,6 +174,11 @@ export class DefaultTestDataProvider implements TestDataProvider {
         const hinted = this.fromHint(field);
         if (hinted !== undefined) return fitted(hinted, field, 'rule');
         const semantic = this.semantic(field, runId);
+        // Des chiffres attendus (inputmode numeric, motif de chiffres) : jamais un texte de repli.
+        if (field.type !== 'number' && field.type !== 'range' && expectsDigits(field)) {
+          if (semantic && /^\d+$/.test(semantic.value)) return fitted(semantic.value, field, 'rule');
+          return fitted(digitsFor(field), field, 'type');
+        }
         if (semantic) return fitted(semantic.value, field, 'rule');
         const typed = this.byType(field, runId);
         if (typed !== undefined) return fitted(typed, field, 'type');
@@ -252,7 +257,9 @@ export class DefaultTestDataProvider implements TestDataProvider {
 
   /** Les aides de l'application elle-même : "99999" (5 chiffres), "HH:MM", "AAAA-MM-JJ", "JJ/MM/AAAA"… */
   private fromHint(field: FormField): string | undefined {
-    if (field.type !== 'text' && field.type !== 'textarea' && field.type !== 'date') return undefined;
+    // Tout champ où l'on tape (texte, autocomplétion, recherche, date…) : l'aide de l'application prime.
+    if (!['text', 'textarea', 'date', 'autocomplete', 'search', 'other'].includes(field.type))
+      return undefined;
     const shown = `${field.hint ?? ''} ${field.placeholder ?? ''}`;
     const digits = /(?:^|[^\w])([9#]{2,})(?:$|[^\w])/.exec(shown)?.[1];
     if (digits) return '1234567890'.repeat(3).slice(0, digits.length);
@@ -354,6 +361,26 @@ function matches(text: string, pattern: string): boolean {
 }
 
 /** Ajuste un texte à minlength/maxlength et vérifie le motif ; skip si c'est impossible. */
+/** Motif réduit à des chiffres : \d{5}, [0-9]+, ^\d{3,6}$… ; renvoie la longueur imposée s'il y en a une. */
+const DIGITS_PATTERN = /^\^?(?:\\d|\[0-9\])(?:\{(\d+)(?:,(\d*))?\}|[*+])?\$?$/;
+
+/** Le champ attend des chiffres : inputmode numeric/decimal, ou un motif fait de chiffres. */
+export function expectsDigits(field: FormField): boolean {
+  const mode = (field.inputMode ?? '').toLowerCase();
+  return mode === 'numeric' || mode === 'decimal' || DIGITS_PATTERN.test(field.pattern ?? '');
+}
+
+/** Une suite de chiffres de la bonne longueur : celle du motif, sinon maxlength (≤ 10), sinon minlength, sinon 5. */
+function digitsFor(field: FormField): string {
+  const fromPattern = DIGITS_PATTERN.exec(field.pattern ?? '')?.[1];
+  const length = fromPattern
+    ? Number(fromPattern)
+    : field.maxLength !== undefined && field.maxLength <= 10
+      ? field.maxLength
+      : Math.max(field.minLength ?? 0, 5);
+  return '1234567890'.repeat(3).slice(0, Math.max(1, length));
+}
+
 function fitted(value: string, field: FormField, source: TestValue['source']): TestValue {
   let text = value;
   if (field.minLength !== undefined && text.length < field.minLength)
