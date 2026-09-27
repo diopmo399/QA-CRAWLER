@@ -5,6 +5,8 @@ import type { FormRun, ValidationCase } from './form-exerciser.js';
 export interface FormReport {
   formId: string;
   stateId: string;
+  /** Transition that filled it (form-…), to replay or turn into a flow. */
+  actionId?: string;
   name: string;
   group: string;
   fields: {
@@ -15,6 +17,9 @@ export interface FormReport {
     sensitive: boolean;
     /** What was done: value typed (never for a sensitive field), option chosen, checked, or why skipped. */
     filled: string;
+    /** What was done, and the value (never for a sensitive field). */
+    operation?: 'fill' | 'select' | 'check' | 'uncheck' | 'skip';
+    value?: string;
     source?: string;
     error?: string;
   }[];
@@ -23,11 +28,12 @@ export interface FormReport {
   validationCases: ValidationCase[];
 }
 
-export function formReportOf(run: FormRun, stateId: string): FormReport {
+export function formReportOf(run: FormRun, stateId: string, actionId?: string): FormReport {
   const byId = new Map(run.plan.operations.map((operation) => [operation.fieldId, operation]));
   return {
     formId: run.form.id,
     stateId,
+    ...(actionId ? { actionId } : {}),
     name: run.name,
     group: run.group,
     fields: run.form.fields.map((field) => {
@@ -52,6 +58,8 @@ export function formReportOf(run: FormRun, stateId: string): FormReport {
         required: field.required,
         sensitive: field.sensitive,
         filled: done,
+        ...(operation ? { operation: operation.operation } : {}),
+        ...(operation?.value !== undefined && !field.sensitive ? { value: operation.value } : {}),
         ...(operation?.source ? { source: operation.source } : {}),
         ...(filled?.error ? { error: filled.error } : {}),
       };

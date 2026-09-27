@@ -20,6 +20,8 @@ import { writeReports } from './reporting/reporter.js';
 import { redactUrl } from './security/redactor.js';
 import { ManualCleanup, type TestDataCleanup } from './data/created-data.js';
 import { combineListeners, EngineEventLog } from './logging/engine-log.js';
+import { flowsYaml, generateFlows } from './flows/flow-generator.js';
+import { DefaultTestDataProvider } from './data/test-data-provider.js';
 import { AuthorizationObserver, type AuthorizationReport } from './actors/authorization-observer.js';
 
 export interface RunOutcome {
@@ -110,6 +112,33 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   result.mode = mode;
   if (authorization) result.authorization = authorization;
   result.cleanup = await (options.cleanup ?? new ManualCleanup()).cleanup(outcome.createdData);
+  if (config.flowGeneration.enabled) {
+    const flows = generateFlows(
+      {
+        graph: outcome.graph,
+        details: outcome.details,
+        forms: outcome.forms,
+        testData:
+          options.testData ??
+          new DefaultTestDataProvider({
+            runId: outcome.runId,
+            fields: config.testData.fields,
+            defaults: config.testData.defaults,
+          }),
+      },
+      { maxFlows: config.flowGeneration.maxFlows },
+    );
+    if (flows.length > 0) {
+      await mkdir(config.output.reportsDir, { recursive: true });
+      const file = path.join(config.output.reportsDir, 'generated-flows.yaml');
+      await writeFile(
+        file,
+        flowsYaml(flows, { mission: config.mission.name, date: outcome.finishedAt.toISOString() }),
+        'utf8',
+      );
+      result.artifacts.generatedFlows = file;
+    }
+  }
   if (config.logging.file) {
     await mkdir(config.output.reportsDir, { recursive: true });
     const file = path.join(config.output.reportsDir, 'engine-log.jsonl');

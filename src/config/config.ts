@@ -528,6 +528,17 @@ const accessibilitySchema = z
   })
   .strict();
 
+/**
+ * After the exploration, write the paths found as imposed flows
+ * (reports/generated-flows.yaml), ready to be copied into a mission.
+ */
+const flowGenerationSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    maxFlows: z.number().int().min(1).max(500).default(30),
+  })
+  .strict();
+
 /** Engine log (reports/engine-log.jsonl): what the explorer did, step by step. */
 const loggingSchema = z
   .object({
@@ -684,6 +695,7 @@ export const scenarioSchema = z
     recovery: recoverySchema.default({}),
     accessibility: accessibilitySchema.default({}),
     logging: loggingSchema.default({}),
+    flowGeneration: flowGenerationSchema.default({}),
     actors: z.array(actorSchema).default([]),
     authorization: authorizationSchema.default({}),
     openapi: openApiSchema.default({}),

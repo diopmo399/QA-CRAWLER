@@ -37,6 +37,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Plusieurs acteurs et autorisations](#plusieurs-acteurs-et-autorisations)
 - [Accessibilité](#accessibilité)
 - [Données créées et budget de modifications](#données-créées-et-budget-de-modifications)
+- [Générer des flows YAML à partir de l'exploration](#générer-des-flows-yaml-à-partir-de-lexploration)
 - [Ce qui est détecté](#ce-qui-est-détecté)
 - [Rapports](#rapports)
 - [Modes LEARN / VERIFY / EXPLORE](#modes-learn--verify--explore)
@@ -301,15 +302,15 @@ Pour trouver le bon libellé : clic droit → **Inspecter** sur l'élément dans
 
 Le YAML choisit l'élément, mais la `SafetyPolicy` le classe exactement comme pendant l'exploration automatique, et décide.
 
-| Élément ciblé                                                       | Exécuté ?                                            |
-| ------------------------------------------------------------------- | ---------------------------------------------------- |
-| SÛR : navigation, onglet, « Suivant », champ normal                 | oui                                                  |
-| MODIFICATION : créer, enregistrer, nouveau, envoi de formulaire     | seulement avec `allow: MUTATION` sur l'étape         |
-| Icône sans texte                                                    | seulement avec `allow: UNKNOWN` sur l'étape          |
-| DANGEREUX : supprimer, payer, envoyer, déconnexion                  | **jamais**                                           |
-| Mot de passe, code, secret                                          | seulement avec `value: { env: NOM }`, jamais affiché |
-| Carte bancaire, CVV, IBAN                                           | **jamais**                                           |
-| Lien ou `goto` hors des hôtes autorisés, chemin ignoré ou dangereux | **jamais**                                           |
+| Élément ciblé                                                       | Exécuté ?                                                                                                         |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| SÛR : navigation, onglet, « Suivant », champ normal                 | oui                                                                                                               |
+| MODIFICATION : créer, enregistrer, nouveau, envoi de formulaire     | seulement avec `allow: MUTATION` sur l'étape                                                                      |
+| Icône sans texte                                                    | seulement avec `allow: UNKNOWN` sur l'étape                                                                       |
+| DANGEREUX : supprimer, payer, envoyer, déconnexion                  | seulement avec `allow: DANGEROUS` sur l'étape **et** `DANGEROUS` dans `safety.allowedActionClasses` de la mission |
+| Mot de passe, code, secret                                          | seulement avec `value: { env: NOM }`, jamais affiché                                                              |
+| Carte bancaire, CVV, IBAN                                           | **jamais**                                                                                                        |
+| Lien ou `goto` hors des hôtes autorisés, chemin ignoré ou dangereux | **jamais**                                                                                                        |
 
 Un flow qui utilise `allow: MUTATION` modifie de vraies données : lance-le seulement sur une base locale ou de test.
 
@@ -484,12 +485,12 @@ L'explorateur est fait pour être lancé sur de vrais environnements sans les ca
 - un vocabulaire français/anglais, comparé sur des mots entiers sans accents ;
 - le libellé de l'élément, la cible du lien, son `routerLink` et la fenêtre qui le contient (« Confirmer » dans « Supprimer l'utilisateur ? » est DANGEROUS).
 
-| Classe      | Exemples                                                                                                              | Exécutée ?                                                      |
-| ----------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `SAFE`      | navigation, onglets, menus, détails, pagination, recherche, filtres, « Suivant » d'un assistant, champ (non sensible) | oui, si son type est dans `safety.allow`                        |
-| `MUTATION`  | créer, enregistrer, modifier, update, submit (envoi de formulaire), oui/ok/confirmer                                  | **jamais** par défaut ; avec `safety.mutations`, dans un budget |
-| `DANGEROUS` | supprimer/delete, payer/payment, checkout, envoyer/send, réinitialiser, déconnexion/logout, champs sensibles          | **jamais**, même listée dans `allowedActionClasses`             |
-| `UNKNOWN`   | contrôles sans libellé lisible (`⚙`, `×`, icône seule)                                                                | **jamais**                                                      |
+| Classe      | Exemples                                                                                                              | Exécutée ?                                                                                                       |
+| ----------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `SAFE`      | navigation, onglets, menus, détails, pagination, recherche, filtres, « Suivant » d'un assistant, champ (non sensible) | oui, si son type est dans `safety.allow`                                                                         |
+| `MUTATION`  | créer, enregistrer, modifier, update, submit (envoi de formulaire), oui/ok/confirmer                                  | **jamais** par défaut ; avec `safety.mutations`, dans un budget                                                  |
+| `DANGEROUS` | supprimer/delete, payer/payment, checkout, envoyer/send, réinitialiser, déconnexion/logout, champs sensibles          | **jamais** par défaut ; seulement si listée dans `allowedActionClasses` (et son risque retiré de `safety.block`) |
+| `UNKNOWN`   | contrôles sans libellé lisible (`⚙`, `×`, icône seule)                                                                | **jamais**                                                                                                       |
 
 **2. Le contrôle a lieu après la décision et avant l'exécution.** `SafetyPolicy.evaluate()` bloque une action dans ces cas :
 
@@ -515,7 +516,13 @@ Un [flow imposé](#créer-un-flow-de-test-imposé) peut remplir un mot de passe 
 
 **6. Aucun secret dans les sorties.** Jetons, mots de passe, en-têtes `Authorization`, cookies, JWT et paramètres d'URL sensibles sont masqués dans les logs, le journal moteur et les rapports. Les en-têtes, corps de requêtes et valeurs des champs sensibles ne sont jamais enregistrés. Un test d'intégration dédié (`tests/integration/security-artifacts.test.ts`) vérifie qu'aucun mot de passe, cookie, jeton Bearer, clé d'API ou jeton d'URL n'apparaît dans `result.json`, `flow-graph.json`, les rapports HTML ou `engine-log.jsonl`.
 
-**7. Les actions DANGEROUS ne sont jamais exécutées automatiquement**, même si la mission ajoute `DANGEROUS` à `allowedActionClasses` (ignoré, avec un avertissement).
+**7. Les actions DANGEROUS ne sont exécutées que sur demande explicite.** Il faut ajouter `DANGEROUS` à `safety.allowedActionClasses` (un avertissement le rappelle à chaque run). Les risques encore listés dans `safety.block` restent bloqués : pour laisser l'explorateur supprimer, retirez aussi `delete` de `block`. Les champs sensibles (mot de passe, carte…) ne sont jamais remplis automatiquement, et les actions DANGEROUS comptent dans le budget de `safety.mutations`. Dans un flow imposé, l'étape doit en plus dire `allow: DANGEROUS`. À réserver aux environnements jetables.
+
+```yaml
+safety:
+  allowedActionClasses: [SAFE, MUTATION, DANGEROUS]
+  block: [payment, logout, sensitive-data, external-navigation, download] # delete retiré : les suppressions s'exécutent
+```
 
 ## Détection des états et protection contre les boucles
 
@@ -574,6 +581,7 @@ En exploration, un écran qui contient des champs est d'abord **rempli comme le 
 - **Tous les types de champ :** texte, nombre, date (saisie directe ou champ avec calendrier), heure, liste native `<select>`, liste Material (`mat-select`, `role=combobox`) ouverte puis choisie, groupe de boutons radio (une option par groupe), case à cocher (obligatoires seulement). Les radios et cases stylées (input natif masqué) sont gérées.
 - **Champ déjà rempli** (date proposée par défaut…) : laissé tel quel.
 - **Ce que le formulaire attend** (`FormAnalyzer`) : pour chaque champ, son type (texte, e-mail, téléphone, URL, nombre, date, heure, liste, liste Material, autocomplétion, case, radio…), obligatoire, désactivé, min/max, longueurs, motif, options (et celles désactivées ou « -- Choisir -- »), aide affichée, sensibilité. Les boutons qui l'envoient ou font avancer un assistant sont repérés. Avec un contrat OpenAPI (`openapi`), les contraintes que la page ne déclare pas (format e-mail, longueurs, bornes, valeurs permises) sont complétées ; le DOM reste la référence.
+- **Tous les types de formulaire.** `<form>` classique, fenêtres et calques sans `<form>`, pages sans `<form>` (SPA), Angular Material, et **composants web** (Ionic, Shoelace, Lit, Stencil…) : les champs dessinés dans un _shadow root_ ouvert sont trouvés et rattachés au `<form>` qui entoure le composant. Leur libellé vient du composant : `<label for>` interne, contenu de `<slot name="label">`, attribut `label="…"` ou `aria-label` du composant. Les zones `contenteditable` (texte riche, champs personnalisés) sont remplies comme des champs texte. Les _shadow roots_ fermés (`mode: 'closed'`) et les iframes restent hors de portée.
 - **Valeurs** (`TestDataProvider`), dans cet ordre de priorité :
   1. celles de la mission, par champ (`testData.fields`, texte ou `{ value: … }`) ;
   2. une règle selon le sens du champ : prénom, nom, entreprise, e-mail, téléphone, code postal, ville, pays, adresse, URL… (surchargeables avec `testData.defaults`), ou l'aide affichée par l'application : `99999` → 5 chiffres, `HH:MM` → `10:00`, `AAAA-MM-JJ` / `JJ/MM/AAAA` → date du jour dans ce format ;
@@ -711,7 +719,7 @@ Par défaut, rien n'est modifié. Sur un environnement de test, on peut autorise
 ```yaml
 safety:
   mutations:
-    enabled: true # MUTATION et envoi de formulaire autorisés ; DANGEROUS jamais
+    enabled: true # MUTATION et envoi de formulaire autorisés ; DANGEROUS seulement via allowedActionClasses
     maxPerRun: 10 # au-delà : bloqué (« mutation budget spent »)
 ```
 
@@ -730,6 +738,42 @@ safety: { mutations: { enabled: true, maxPerRun: 10 } }
 ```
 
 Sans aucun flow écrit à la main, l'explorateur ouvre l'application, trouve « Users » (mot-clé d'objectif), puis « Create user », analyse le formulaire, le remplit avec des données marquées, l'envoie (budget), observe `POST /api/users` et l'écran, juge le résultat avec les oracles, enregistre la transition, revient et continue. `scenarios/explore-users.yaml` et `tests/integration/acceptance.test.ts` en sont l'exemple complet.
+
+## Générer des flows YAML à partir de l'exploration
+
+À la fin de chaque run, les chemins trouvés sont écrits comme des **flows imposés** dans `reports/generated-flows.yaml`, prêts à être copiés sous `flows:` dans une mission. Ils servent de tests de non-régression écrits sans effort.
+
+- **Un flow par écran en bout de chemin** (les écrans intermédiaires sont couverts par les flows qui y passent), au plus `flowGeneration.maxFlows`.
+- **Les étapes rejouent le chemin enregistré :**
+  - les clics avec les mêmes cibles que l'explorateur (`testId`, `role` + `name`, `label`, `text`, `css`) ;
+  - les formulaires remplis avec les valeurs utilisées ;
+  - une vérification finale de l'écran atteint (`expect: { text: … }`).
+- **Permissions :** une action `MUTATION`, `UNKNOWN` ou `DANGEROUS` du chemin porte son `allow:`.
+- **Champs sensibles :** ils ne reçoivent jamais de valeur. Un mot de passe devient `value: { env: QA_FIELD_… }`, la variable à définir. Les champs de paiement sont laissés de côté.
+- **Validation :** chaque flow est vérifié avec le schéma des flows ; un chemin impossible à écrire est laissé de côté.
+- Le fichier reste dans `reports/`, qui n'est pas versionné : relisez-le avant de l'ajouter à une mission.
+
+```yaml
+flowGeneration:
+  enabled: true # défaut
+  maxFlows: 30
+```
+
+Exemple généré :
+
+```yaml
+flows:
+  - name: to-create-user
+    description: 'Recorded path: dashboard → Users → Create user'
+    startAt: /
+    steps:
+      - click: { role: link, name: Users, exact: true }
+      - click: { role: link, name: Create user, exact: true }
+      - fill: { role: textbox, name: Email, exact: true, value: qa-crawler-abc123@example.test }
+      - select: { role: combobox, name: Role, exact: true, option: Reader }
+      - name: on create-user
+        expect: { text: Create user }
+```
 
 ## Ce qui est détecté
 
@@ -775,6 +819,7 @@ Les anomalies identiques sont regroupées en une seule, qui compte ses occurrenc
 | `reports/index.html`                  | Rapport statique : cartes de synthèse, flows imposés, interactions navigateur, arbre des flows découverts, anomalies (état · action · flow), états, actions exécutées et bloquées, captures                                                                        |
 | `reports/flow-graph.json`             | Le graphe des flows, qui sert de mémoire à l'explorateur (reprise possible avec `memory.resume`)                                                                                                                                                                   |
 | `reports/flow-graph.html`             | Carte de l'application : arbre dépliable, arbre texte, transitions entre états, autres tentatives                                                                                                                                                                  |
+| `reports/generated-flows.yaml`        | Flows imposés générés à partir des chemins trouvés (voir [Générer des flows YAML](#générer-des-flows-yaml-à-partir-de-lexploration))                                                                                                                               |
 | `reports/engine-log.jsonl`            | Journal structuré du moteur, une ligne JSON par événement (`FLOW_STATE_DISCOVERED`, `ACTION_SELECTED`, `ACTION_BLOCKED`, `ACTION_EXECUTED`, `ORACLE_VERDICT`, `RECOVERY_ATTEMPT`, `STUCK_DETECTED`…), niveaux `ERROR` à `TRACE` (`logging.level`), secrets masqués |
 | `screenshots/NNN-<état>[-error…].png` | Une par état découvert, plus une par anomalie ERROR/CRITICAL et par étape `screenshot`                                                                                                                                                                             |
 
@@ -1064,7 +1109,7 @@ src/
 ├── decision/                     interface DecisionEngine, RuleBasedDecisionEngine
 ├── policies/                     SafetyPolicy, NavigationPolicy, AllowedOriginPolicy, InteractionPolicy, vocabulaire
 ├── execution/                    PlaywrightActionExecutor, résolution des localisateurs
-├── flows/                        exécution des étapes de flow, sécurité et périmètre de thenExplore
+├── flows/                        exécution des étapes de flow, sécurité, périmètre de thenExplore, génération de flows YAML
 ├── interactions/                 BrowserEventDiscovery, BrowserInteractionManager, handlers, CredentialProvider
 ├── data/                         TestDataProvider, DefaultTestDataProvider, données créées, TestDataCleanup
 ├── forms/                        FormAnalyzer, FormFillStrategy (plan), FormExerciser, tests de validation, OpenAPI
@@ -1156,7 +1201,7 @@ npm run build            # dist/
 - Le retour en arrière par rejouée demande un chemin déterministe ; les états impossibles à restaurer sont ignorés.
 - Une seule exploration par run (celle de l'utilisateur principal). La double authentification (MFA/OTP) et les sessions sauvegardées ne sont pas encore gérées.
 - Interactions navigateur : l'authentification HTTP est détectée via le protocole de Chromium (Chromium uniquement). Quand une popup est défiée avant que le crawler s'y attache (SSO SiteMinder par exemple), son chargement est rejoué une fois pour capter le défi. Un défi venant d'une iframe d'un autre domaine ou d'un service worker n'est pas vu. NTLM/Kerberos dépendent du serveur. Les popups et nouveaux onglets sont observés puis fermés, pas explorés en parallèle. Les sélecteurs de fichier ne reçoivent jamais de fichier.
-- Le Shadow DOM et les iframes ne sont pas explorés.
+- Les iframes et les _shadow roots_ fermés (`mode: 'closed'`) ne sont pas explorés ; les _shadow roots_ ouverts le sont.
 
 ## Feuille de route
 

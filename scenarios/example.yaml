@@ -80,7 +80,7 @@ http:
 safety:
   allowedHosts: [] # default: host of target.baseUrl ('*.example.com' allowed)
   ignoredPaths: [/logout, /signout, /sign-out, /deconnexion]
-  allowedActionClasses: [SAFE] # SAFE | MUTATION | DANGEROUS | UNKNOWN
+  allowedActionClasses: [SAFE] # SAFE | MUTATION | DANGEROUS | UNKNOWN (DANGEROUS: disposable environments only; risks in `block` still apply)
   allow: # kinds of SAFE actions the mission may execute
     [navigation, tabs, menus, details, pagination, search, filter, forms, other]
   block: # risks always blocked (sensitive-data is blocked even if omitted)
@@ -157,6 +157,11 @@ accessibility:
   enabled: true # missing names, image links without text, duplicate ids, clickable elements the keyboard cannot reach
   keyboardNavigation: false # true: also walk each new screen with Tab (keyboard trap, no focus)
   maxTabs: 30
+
+# After each run: the paths found, written as imposed flows (reports/generated-flows.yaml).
+flowGeneration:
+  enabled: true
+  maxFlows: 30
 
 logging:
   level: INFO # ERROR | WARN | INFO | DEBUG | TRACE → reports/engine-log.jsonl

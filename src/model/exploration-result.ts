@@ -106,5 +106,7 @@ export interface ExplorationResult {
     baseline?: string;
     /** Structured engine log (JSON lines). */
     engineLog?: string;
+    /** Imposed flows generated from the paths found (YAML). */
+    generatedFlows?: string;
   };
 }

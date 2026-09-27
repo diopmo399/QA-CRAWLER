@@ -156,6 +156,8 @@ export async function runCli(argv: string[]): Promise<number> {
     if (result.artifacts.html) logger.info(`  HTML report   : ${result.artifacts.html}`);
     if (result.artifacts.flowGraph) logger.info(`  Flow graph    : ${result.artifacts.flowGraph}`);
     if (result.artifacts.flowGraphHtml) logger.info(`  Flow graph UI : ${result.artifacts.flowGraphHtml}`);
+    if (result.artifacts.generatedFlows) logger.info(`  Flows (YAML)  : ${result.artifacts.generatedFlows}`);
+    if (result.artifacts.engineLog) logger.info(`  Engine log    : ${result.artifacts.engineLog}`);
     logger.info(`  Screenshots   : ${result.artifacts.screenshotsDir ?? '-'}`);
     if (result.artifacts.flowDiff) logger.info(`  Flow diff     : ${result.artifacts.flowDiff}`);
     logger.info('');

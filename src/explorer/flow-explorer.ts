@@ -1023,7 +1023,7 @@ export class FlowExplorer {
         maxCasesPerForm: forms.maxValidationCasesPerForm,
       });
     }
-    this.formReports.push(formReportOf(run, from.stateId));
+    this.formReports.push(formReportOf(run, from.stateId, actionId));
     // Its fields were handled with the form: not tried again one by one.
     for (const field of run.fields) this.graph.markTried(from.stateId, field.action.id);
     this.actionsExecuted += 1;
