@@ -322,6 +322,7 @@ function fieldConstraints(element: UiElement): FieldConstraints {
     minLength: element.minLength,
     maxLength: element.maxLength,
     pattern: element.pattern,
+    inputMode: element.inputMode,
     options: element.options,
     disabledOptions: element.disabledOptions,
     autocomplete: element.autocomplete,

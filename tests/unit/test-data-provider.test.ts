@@ -62,10 +62,14 @@ describe('DefaultTestDataProvider', () => {
     );
   });
 
-  it('gives up when a pattern cannot be satisfied', () => {
+  it('gives up when a pattern cannot be satisfied; a digits pattern gets digits', () => {
     expect(
-      provider.instructionFor(fieldAction({ inputType: 'text', required: true, pattern: '[0-9]{5}' })).kind,
+      provider.instructionFor(fieldAction({ inputType: 'text', required: true, pattern: '[A-Z]{2}\\d{4}' }))
+        .kind,
     ).toBe('skip');
+    expect(
+      provider.instructionFor(fieldAction({ inputType: 'text', required: true, pattern: '[0-9]{5}' })),
+    ).toEqual({ kind: 'fill', value: '12345' });
     expect(
       provider.instructionFor(
         fieldAction({ inputType: 'text', required: true, name: 'zip', pattern: '[0-9]{5}' }),

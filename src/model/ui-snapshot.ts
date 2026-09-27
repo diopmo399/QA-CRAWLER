@@ -56,6 +56,8 @@ export interface UiElement {
   minLength?: number;
   maxLength?: number;
   pattern?: string;
+  /** Attribut inputmode (numeric, decimal, tel…) : le clavier que le champ attend. */
+  inputMode?: string;
   /** Libellés des options désactivées d'un <select>. */
   disabledOptions?: string[];
   /** Libellés des options d'un <select> (les 30 premières). */

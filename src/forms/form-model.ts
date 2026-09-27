@@ -60,6 +60,8 @@ export interface FormField {
   minLength?: number;
   maxLength?: number;
   pattern?: string;
+  /** Attribut inputmode (numeric, decimal…) : des chiffres sont attendus. */
+  inputMode?: string;
   options?: SelectOption[];
   placeholder?: string;
   /** Texte d'aide affiché par l'application ("99999", "HH:MM"). */

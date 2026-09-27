@@ -56,6 +56,8 @@ export interface FieldConstraints {
   minLength?: number;
   maxLength?: number;
   pattern?: string;
+  /** Attribut inputmode (numeric, decimal…). */
+  inputMode?: string;
   options?: string[];
   /** Options qu'on ne peut pas choisir. */
   disabledOptions?: string[];

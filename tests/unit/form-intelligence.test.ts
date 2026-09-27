@@ -161,6 +161,30 @@ describe('TestDataProvider', () => {
     });
   });
 
+  it('donne des chiffres, jamais « QA Test », aux champs qui attendent des chiffres', () => {
+    // inputmode numeric, sans aide ni sens connu : chiffres à la longueur de maxlength.
+    expect(provider.validValue(field({ inputMode: 'numeric', maxLength: 5 }))).toMatchObject({
+      value: '12345',
+      source: 'type',
+    });
+    // Motif de chiffres : sa longueur.
+    expect(provider.validValue(field({ pattern: '\\d{7}' }))).toMatchObject({ value: '1234567' });
+    expect(provider.validValue(field({ type: 'autocomplete', pattern: '[0-9]+' }))).toMatchObject({
+      value: '12345',
+    });
+    // Un sens textuel (« Nom ») ne l'emporte pas sur les chiffres attendus…
+    expect(provider.validValue(field({ label: 'Nom', inputMode: 'numeric' }))).toMatchObject({
+      value: '12345',
+    });
+    // …mais un sens fait de chiffres est gardé.
+    expect(provider.validValue(field({ label: 'Code postal', inputMode: 'numeric' }))).toMatchObject({
+      value: '75001',
+      source: 'rule',
+    });
+    // Un vrai champ number garde ses bornes.
+    expect(provider.validValue(field({ type: 'number', min: 1, max: 9 }))).toMatchObject({ value: '5' });
+  });
+
   it('follows the priority: configuration, rule, type, fallback', () => {
     expect(provider.validValue(field({ type: 'email', name: 'email' }))).toMatchObject({
       value: 'qa@example.test',
