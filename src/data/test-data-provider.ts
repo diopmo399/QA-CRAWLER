@@ -252,7 +252,9 @@ export class DefaultTestDataProvider implements TestDataProvider {
 
   /** Les aides de l'application elle-même : "99999" (5 chiffres), "HH:MM", "AAAA-MM-JJ", "JJ/MM/AAAA"… */
   private fromHint(field: FormField): string | undefined {
-    if (field.type !== 'text' && field.type !== 'textarea' && field.type !== 'date') return undefined;
+    // Tout champ où l'on tape (texte, autocomplétion, recherche, date…) : l'aide de l'application prime.
+    if (!['text', 'textarea', 'date', 'autocomplete', 'search', 'other'].includes(field.type))
+      return undefined;
     const shown = `${field.hint ?? ''} ${field.placeholder ?? ''}`;
     const digits = /(?:^|[^\w])([9#]{2,})(?:$|[^\w])/.exec(shown)?.[1];
     if (digits) return '1234567890'.repeat(3).slice(0, digits.length);

@@ -144,6 +144,23 @@ describe('TestDataProvider', () => {
     ...extra,
   });
 
+  it("applique l'aide et le sens du libellé aussi aux champs d'autocomplétion", () => {
+    expect(provider.validValue(field({ type: 'autocomplete', hint: '99999', maxLength: 5 }))).toMatchObject({
+      kind: 'fill',
+      value: '12345',
+      source: 'rule',
+    });
+    expect(provider.validValue(field({ type: 'autocomplete', label: 'Prénom du contact' }))).toMatchObject({
+      value: 'Qa',
+      source: 'rule',
+    });
+    // Rien ne dit ce que le champ attend : la valeur de repli.
+    expect(provider.validValue(field({ type: 'autocomplete' }))).toMatchObject({
+      value: 'QA Test',
+      source: 'fallback',
+    });
+  });
+
   it('follows the priority: configuration, rule, type, fallback', () => {
     expect(provider.validValue(field({ type: 'email', name: 'email' }))).toMatchObject({
       value: 'qa@example.test',
