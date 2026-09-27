@@ -131,6 +131,7 @@ testData:
   defaults: {} # values per meaning, e.g. { firstName: QA, lastName: Crawler, country: Canada }
   fields: {} # value per field label/name/placeholder, e.g. { "Code agence": "12345", email: { value: qa@example.test } }
   # priority: fields > defaults / field rule > field type > safe fallback; sensitive fields are never filled
+  # fields expecting digits (inputmode numeric, digits pattern, hint "99999") get digits, never "QA Test"
 
 # Test oracles: every executed action gets PASS / FAIL / WARNING / UNKNOWN.
 # UNKNOWN is never turned into PASS; the business result stays unknown.
