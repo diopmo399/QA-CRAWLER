@@ -5,6 +5,7 @@ import { buildFlowTree, displayName, renderTextTree } from './flow-tree.js';
 import { BASE_CSS, card, classPill, esc, renderTreeHtml } from './html-common.js';
 import { reportTexts, translateReason, valueLabel, type ReportLanguage } from './i18n.js';
 import type { Reporter } from './reporter.js';
+import { renderFlowMap } from './flow-diagram.js';
 
 /** reports/flow-graph.html — la carte fonctionnelle : arbre, états et chaque transition. */
 export class FlowGraphHtmlReporter implements Reporter {
@@ -58,7 +59,7 @@ export function renderFlowGraphHtml(result: ExplorationResult, language: ReportL
     ${card(t.cards.failed, result.stats.actionsFailed)}
     ${card(t.cards.maxDepth, result.stats.maxDepth)}
   </div>
-  <section><h2>${esc(t.applicationMap)}</h2>${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}</section>
+  <section><h2>${esc(t.applicationMap)}</h2>${renderFlowMap(result, t.lang)}${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}</section>
   <section><h2>${esc(t.textView)}</h2><pre class="tree-text">${esc(renderTextTree(tree))}</pre></section>
   <section><h2>${esc(t.movesTitle)} (${moves.length})</h2>
     <table>${head}<tbody>${moves.map(edgeRow).join('')}</tbody></table>

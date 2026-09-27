@@ -24,6 +24,7 @@ import {
   qualityTexts,
   recoverySection,
 } from './quality-sections.js';
+import { renderFlowMap, renderFlowSteps } from './flow-diagram.js';
 
 export { esc } from './html-common.js';
 
@@ -165,6 +166,7 @@ export function renderHtml(
   <section>
     <h2>${esc(t.discoveredFlow)}</h2>
     <p class="muted">${esc(t.discoveredFlowHint)}</p>
+    ${renderFlowMap(result, language)}
     ${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}
   </section>
 
@@ -286,6 +288,7 @@ function flowsSection(
         .join('');
       return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status, t.lang)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ` · ${esc(t.lastScreenExplored)}` : ''}</span></h3>
       ${flow.description ? `<p class="muted">${esc(flow.description)}</p>` : ''}
+      ${renderFlowSteps(flow)}
       <table><thead><tr><th>#</th><th>${c.step}</th><th>${c.class}</th><th>${c.result}</th><th>${c.reason}</th><th>${c.state}</th><th>${c.duration}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
     })
     .join('');

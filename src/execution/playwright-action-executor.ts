@@ -2,6 +2,7 @@ import type { Locator, Page } from 'playwright';
 import type { FormFillPlan } from '../forms/form-model.js';
 import type { DiscoveredAction } from '../model/discovered-action.js';
 import { setCheckedRobust } from './checkable.js';
+import { validityOf } from '../forms/validity.js';
 import type { LocatorDescriptor } from '../model/locator.js';
 import { toLocator } from './locator-resolver.js';
 
@@ -132,14 +133,16 @@ export class PlaywrightActionExecutor {
         { ...action, type: operation.operation },
         operation.value !== undefined ? { value: operation.value } : {},
       );
-      if (operation.operation === 'fill' || operation.operation === 'select') {
-        await page
-          .evaluate(() => {
-            (document.activeElement as HTMLElement | null)?.blur();
-          })
-          .catch(() => undefined);
-        await page.waitForTimeout(BLUR_SETTLE_MS).catch(() => undefined);
-      }
+      if (operation.operation === 'fill' || operation.operation === 'select') await this.leaveField(page);
+      // Masques de saisie, champs à suggestions… : certains n'écoutent que les vraies frappes.
+      // Toujours invalide (ou valeur perdue) après fill : retaper touche par touche.
+      if (
+        executed.status === 'SUCCESS' &&
+        operation.operation === 'fill' &&
+        operation.value !== undefined &&
+        operation.value !== ''
+      )
+        await this.retypeIfRejected(page, action, operation.value);
       results.push({
         fieldId: operation.fieldId,
         status: executed.status,
@@ -147,6 +150,35 @@ export class PlaywrightActionExecutor {
       });
     }
     return results;
+  }
+
+  /** Quitte le champ comme un utilisateur (blur), pour que l'application le valide maintenant. */
+  private async leaveField(page: Page): Promise<void> {
+    await page
+      .evaluate(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+      })
+      .catch(() => undefined);
+    await page.waitForTimeout(BLUR_SETTLE_MS).catch(() => undefined);
+  }
+
+  /**
+   * `fill` pose la valeur d'un coup, sans événements clavier : un masque de saisie
+   * (ngx-mask…) ou un champ à suggestions peut l'ignorer et rester vide ou invalide.
+   * Dans ce cas seulement, le champ est vidé puis retapé touche par touche.
+   */
+  private async retypeIfRejected(page: Page, action: DiscoveredAction, value: string): Promise<void> {
+    const target = await this.resolve(page, action).catch(() => undefined);
+    if (!target) return;
+    const { locator } = target;
+    const current = await locator.inputValue({ timeout: 1000 }).catch(() => undefined);
+    const validity = await validityOf(locator);
+    if (current === value && !validity?.invalid) return;
+    await locator.click({ timeout: 2000 }).catch(() => undefined);
+    await locator.press('ControlOrMeta+a').catch(() => undefined);
+    await locator.press('Backspace').catch(() => undefined);
+    await locator.pressSequentially(value, { delay: TYPING_DELAY_MS, timeout: 5000 }).catch(() => undefined);
+    await this.leaveField(page);
   }
 
   /**
@@ -223,6 +255,8 @@ export class PlaywrightActionExecutor {
 
 /** Temps laissé à l'application pour afficher le message d'erreur d'un champ une fois quitté. */
 const BLUR_SETTLE_MS = 100;
+/** Délai entre deux frappes quand un champ doit être tapé touche par touche. */
+const TYPING_DELAY_MS = 30;
 
 export interface PlanOperationResult {
   fieldId: string;
