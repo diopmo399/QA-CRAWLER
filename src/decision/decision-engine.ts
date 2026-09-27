@@ -1,5 +1,6 @@
 import type { FlowGraph } from '../graph/flow-graph.js';
 import type { PageContext } from '../model/page-context.js';
+import type { ScoreBreakdown } from './score-breakdown.js';
 
 /**
  * - EXECUTE : essayer `actionId` (elle passe quand même par la SafetyPolicy).
@@ -10,6 +11,9 @@ export interface ActionDecision {
   decision: 'EXECUTE' | 'BACKTRACK' | 'STOP';
   actionId?: string;
   reason: string;
+  /** Score de l'action choisie et sa décomposition (ActionScorer V2), pour expliquer la décision. */
+  score?: number;
+  breakdown?: ScoreBreakdown;
 }
 
 /**

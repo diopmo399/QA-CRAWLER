@@ -30,6 +30,8 @@ export interface ScoringSignals {
   patternsOf(stateId: string): readonly DetectedPattern[];
   patternHints?: PatternRuleHints;
   goals?: GoalTracker;
+  /** Les objectifs du moment, quand ils sont planifiés après la création du scorer. */
+  currentGoals?(): GoalTracker | undefined;
   knowledge?: KnowledgeBase;
   coverage?: CoverageTracker;
   noveltyOf?(stateId: string): NoveltyScore | undefined;
@@ -77,7 +79,7 @@ export class AdvancedActionScorer implements ActionScorer {
     const signature = actionSignature(action);
 
     // ---- objectif
-    const goal = this.signals.goals?.relevance(action, context);
+    const goal = (this.signals.currentGoals?.() ?? this.signals.goals)?.relevance(action, context);
     if (goal)
       add({
         factor: 'goal',

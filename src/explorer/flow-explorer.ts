@@ -20,7 +20,7 @@ import { evaluateFlowAction, evaluateFlowUrl } from '../flows/flow-safety.js';
 import { actionsInScope, isInScope, scopeOf, type ExplorationScope } from '../flows/flow-scope.js';
 import { FlowStepExecutor, type FlowElementAction } from '../flows/flow-step-executor.js';
 import { suggestTargets } from '../flows/target-suggester.js';
-import { FormExerciser, type FormRun } from '../forms/form-exerciser.js';
+import { FormExerciser, formName, type FormRun } from '../forms/form-exerciser.js';
 import { formReportOf, type FormReport } from '../forms/form-report.js';
 import { FlowGraph, summaryOf } from '../graph/flow-graph.js';
 import { BrowserEventDiscovery } from '../interactions/browser-event-discovery.js';
@@ -48,7 +48,7 @@ import {
   type VerifiedTransition,
 } from '../model/verification.js';
 import type { FlowRunReport, FlowStatus, FlowStepReport } from '../model/flow-run.js';
-import { isAtLeast, type Issue, type IssueType } from '../model/issue.js';
+import { isAtLeast, type Issue, type IssueType, type Severity } from '../model/issue.js';
 import type { PageContext } from '../model/page-context.js';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
@@ -73,6 +73,29 @@ import { StuckDetector } from '../recovery/stuck-detector.js';
 import { AccessibilityChecker } from '../accessibility/accessibility-checker.js';
 import { CreatedDataRegistry, type CreatedDataRecord } from '../data/created-data.js';
 import { routeKey } from '../crawler/route-normalizer.js';
+import { RuleBasedActionScorer, optionKey } from '../decision/action-scorer.js';
+import { AdvancedActionScorer } from '../decision/advanced-action-scorer.js';
+import { CoverageTracker, type CoverageMap } from '../coverage/coverage-map.js';
+import { DomOpenApiConstraintExtractor } from '../constraints/constraints.js';
+import { OneFactorPropertyTestGenerator } from '../constraints/test-case-generators.js';
+import { DecisionTraceRecorder, type DecisionTrace } from '../exploration/decision-trace.js';
+import { BudgetTracker, budgetOf, type BudgetKind } from '../exploration/exploration-budget.js';
+import { ExplorationFrontier, type ExplorationStrategy } from '../exploration/frontier.js';
+import { GraphNoveltyDetector, type NoveltyScore } from '../exploration/novelty-detector.js';
+import { BestFirstExplorationStrategy, DepthFirstExplorationStrategy } from '../exploration/strategies.js';
+import { RuleBasedGoalMatcher } from '../goals/goal-matcher.js';
+import type { GoalState } from '../goals/goal-model.js';
+import { missionOf, RuleBasedGoalPlanner } from '../goals/goal-planner.js';
+import { GoalTracker } from '../goals/goal-tracker.js';
+import { JsonKnowledgeBase } from '../knowledge/json-knowledge-base.js';
+import type { KnowledgeBase } from '../knowledge/knowledge-model.js';
+import { actionSignature, stateSignature } from '../knowledge/signatures.js';
+import { HistoricalOracle, apiOperation } from '../oracles/historical-oracle.js';
+import { InvariantOracle, type InvariantEvaluation } from '../oracles/invariant-oracle.js';
+import { RuleBasedPatternDetector } from '../patterns/pattern-detector.js';
+import type { DetectedPattern } from '../patterns/ui-pattern.js';
+import { WriteGuard, type BlockedWrite } from '../policies/write-guard.js';
+import { semanticsOf, type Semantics } from '../semantics/domain-packs.js';
 
 /** Notifications de progression (sortie de la CLI, tests). */
 export interface ExplorationListener {
@@ -89,6 +112,8 @@ export interface ExplorationListener {
   /** L'exploration tournait en rond sur une branche et l'a quittée. */
   onStuck?(event: StuckEvent): void;
   onIssue?(issue: Issue, isNew: boolean): void;
+  /** Un objectif de la mission est atteint (preuve observable). */
+  onGoal?(goal: GoalState): void;
   onFlowStart?(flow: FlowConfig): void;
   onFlowStep?(flow: FlowConfig, step: FlowStepReport): void;
   onFlowEnd?(report: FlowRunReport): void;
@@ -116,6 +141,10 @@ export interface FlowExplorerOptions {
   verifyBaseline?: FlowGraphData;
   /** Id du run de baseline vérifié (rapports). */
   baselineRunId?: string;
+  /** Vocabulaire, packs de domaine, invariants des packs (par défaut : la mission seule). */
+  semantics?: Semantics;
+  /** Ce que le crawler a appris des runs précédents (par défaut : en mémoire, vide). */
+  knowledge?: KnowledgeBase;
 }
 
 /** Ce que sait l'explorateur après un run ; les reporters en font des fichiers. */
@@ -147,6 +176,21 @@ export interface ExplorationOutcome {
   createdData: CreatedDataRecord[];
   /** Mode verify : chaque transition connue de la baseline, rejouée. */
   verification?: VerificationReport;
+  /** Objectifs de la mission, avec leur statut et leurs preuves. */
+  goals: GoalState[];
+  /** Motifs d'interface reconnus, par état. */
+  patterns: Record<string, DetectedPattern[]>;
+  coverage: CoverageMap;
+  /** Actions choisies, dans l'ordre, avec leur score expliqué. */
+  decisions: ReturnType<DecisionTraceRecorder['selections']>;
+  /** Toutes les décisions (logging.decisionTrace). */
+  decisionTraces?: DecisionTrace[];
+  strategy: string;
+  /** Requêtes d'écriture annulées par la garde d'écriture. */
+  blockedWrites: BlockedWrite[];
+  /** Invariants jugés pendant le run. */
+  invariants: InvariantEvaluation[];
+  budget: Record<BudgetKind, { used: number; max: number }>;
 }
 
 interface StackEntry {
@@ -231,6 +275,29 @@ export class FlowExplorer {
   private pendingStuck: StuckEvent | undefined;
   private readonly accessibility: AccessibilityChecker | undefined;
   private readonly createdData: CreatedDataRegistry;
+  // ---- moteur de décision avancé
+  private readonly semantics: Semantics;
+  private readonly patternDetector: RuleBasedPatternDetector;
+  private readonly patternsByState = new Map<string, DetectedPattern[]>();
+  private readonly coverage = new CoverageTracker();
+  private readonly novelty: GraphNoveltyDetector;
+  private readonly noveltyByState = new Map<string, NoveltyScore>();
+  private readonly knowledge: KnowledgeBase;
+  private readonly goalMatcher: RuleBasedGoalMatcher;
+  private goals: GoalTracker | undefined;
+  /** Options de groupes déjà essayées pendant ce run (chaque option une fois au total). */
+  private readonly triedOptions = new Set<string>();
+  /** Pénalités des actions prises dans une boucle (`stateId::actionId`). */
+  private readonly loopPenalties = new Map<string, { points: number; detail: string }>();
+  private readonly frontier = new ExplorationFrontier();
+  private readonly strategy: ExplorationStrategy;
+  private readonly traces = new DecisionTraceRecorder();
+  private readonly budget: BudgetTracker;
+  private readonly writeGuard: WriteGuard;
+  private readonly invariantOracle: InvariantOracle | undefined;
+  private readonly contract: ApiContract | undefined;
+  /** Candidat pour lequel l'exploration vient de changer d'écran : il est exécuté en arrivant. */
+  private pendingCandidate: { stateId: string; actionId: string } | undefined;
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -240,19 +307,66 @@ export class FlowExplorer {
     this.safety = new SafetyPolicy(config.safety);
     this.stateDetector = new StateDetector(exploration.queryParams.mode, exploration.queryParams.ignored);
     this.discovery = new ActionDiscovery(this.safety, exploration.maxRecordedActions);
+    this.semantics = options.semantics ?? semanticsOf(config);
+    const { dictionary } = this.semantics;
+    this.patternDetector = new RuleBasedPatternDetector(dictionary);
+    this.novelty = new GraphNoveltyDetector(() => this.coverage.seenPatterns());
+    this.knowledge =
+      options.knowledge ??
+      JsonKnowledgeBase.inMemory(
+        { application: new URL(config.target.baseUrl).host },
+        {
+          halfLifeDays: config.knowledge.halfLifeDays,
+          minObservations: config.knowledge.minObservations,
+          dominance: config.knowledge.dominance,
+        },
+      );
+    this.goalMatcher = new RuleBasedGoalMatcher(dictionary);
+    this.strategy =
+      exploration.strategy === 'depth-first'
+        ? new DepthFirstExplorationStrategy()
+        : new BestFirstExplorationStrategy();
+    this.budget = new BudgetTracker(budgetOf(config));
+    this.writeGuard = new WriteGuard({
+      enabled: config.safety.writeGuard.enabled,
+      allow: config.safety.writeGuard.allow,
+      isGuardedHost: (host) => this.safety.navigation.isAllowedHost(host),
+    });
     this.decisionEngine =
       options.decisionEngine ??
-      new RuleBasedDecisionEngine(this.safety, {
-        maxSimilarActions: config.exploration.maxSimilarActions,
-        missionName: config.mission.name,
-        keywords: goals.keywords,
-        weights: scoringWeights(config.scoring.weights),
-        ...(options.knownActions ? { knownActions: options.knownActions } : {}),
-        goals,
-        maxDepth: exploration.maxDepth,
-        maxStatesPerRoute: exploration.maxStatesPerRoute,
-        queryParamMode: exploration.queryParams.mode,
-      });
+      new RuleBasedDecisionEngine(
+        this.safety,
+        {
+          maxSimilarActions: config.exploration.maxSimilarActions,
+          missionName: config.mission.name,
+          keywords: goals.keywords,
+          weights: scoringWeights(config.scoring.weights),
+          ...(options.knownActions ? { knownActions: options.knownActions } : {}),
+          triedOptions: this.triedOptions,
+          goals,
+          maxDepth: exploration.maxDepth,
+          maxStatesPerRoute: exploration.maxStatesPerRoute,
+          queryParamMode: exploration.queryParams.mode,
+        },
+        new AdvancedActionScorer(new RuleBasedActionScorer(this.safety), {
+          dictionary,
+          weights: {
+            goalWeight: exploration.goalWeight,
+            patternWeight: exploration.patternWeight,
+            noveltyWeight: exploration.noveltyWeight,
+            coverageWeight: exploration.coverageWeight,
+            historyWeight: exploration.historyWeight,
+          },
+          patternsOf: (stateId) => this.patternsByState.get(stateId) ?? [],
+          patternHints: this.semantics.patternRules,
+          currentGoals: () => this.goals,
+          knowledge: this.knowledge,
+          coverage: this.coverage,
+          noveltyOf: (stateId) => this.noveltyByState.get(stateId),
+          loopPenaltyOf: (stateId, actionId) => this.loopPenalties.get(`${stateId}::${actionId}`),
+          version: this.knowledge.identity.commit ?? this.knowledge.identity.appVersion ?? 'unversioned',
+        }),
+      );
     this.executor = new PlaywrightActionExecutor(exploration.actionTimeoutMs, exploration.settleTimeMs);
     this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs);
     this.env = options.env ?? process.env;
@@ -299,6 +413,7 @@ export class FlowExplorer {
         fields: config.testData.fields,
         defaults: config.testData.defaults,
       });
+    this.contract = options.contract;
     this.forms = new FormExerciser(
       this.executor,
       this.testData,
@@ -308,12 +423,33 @@ export class FlowExplorer {
       options.contract,
     );
     const { oracles } = config;
+    // Invariants : ceux des packs de domaine, puis ceux de la mission (même id : la mission l'emporte).
+    const invariants = [
+      ...this.semantics.invariants.filter((rule) => !config.invariants.some((own) => own.id === rule.id)),
+      ...config.invariants,
+    ];
+    this.invariantOracle =
+      invariants.length > 0 ? new InvariantOracle(invariants, config.authorization.primaryActor) : undefined;
     this.oracle = oracles.enabled
       ? new CompositeTestOracle([
           new TechnicalOracle({ api404: oracles.technical.api404 }),
           ...(oracles.ui.enabled ? [new UIOracle([...DEFAULT_ERROR_TEXTS, ...oracles.ui.errorTexts])] : []),
           ...(oracles.baseline.enabled ? [new BaselineOracle(options.baseline)] : []),
           new ContractOracle(options.contract),
+          ...(this.invariantOracle ? [this.invariantOracle] : []),
+          ...(config.knowledge.enabled
+            ? [
+                new HistoricalOracle(
+                  this.knowledge,
+                  {
+                    minObservations: config.knowledge.minObservations,
+                    dominance: config.knowledge.dominance,
+                    slowFactor: config.knowledge.slowFactor,
+                  },
+                  exploration.queryParams.mode,
+                ),
+              ]
+            : []),
         ])
       : undefined;
     this.networkTrace = new NetworkTraceRecorder(config.network);
@@ -356,6 +492,10 @@ export class FlowExplorer {
     let stopReason: StopReason = 'exhausted';
     try {
       const context = await browser.start(this.authenticator.contextOptions());
+      // Garde d'écriture : une requête POST/PUT/PATCH/DELETE que l'action en cours n'a pas le droit d'envoyer est annulée.
+      await this.writeGuard.attach(context, (write) => {
+        this.onBlockedWrite(write);
+      });
       // Les interactions du navigateur hors du DOM (nouvelles fenêtres, dialogues, fenêtre de connexion…) passent par le gestionnaire.
       if (this.config.browserInteractions.enabled) await this.browserEvents.attachContext(context);
       const { grant } = this.config.browserInteractions.permissions;
@@ -363,7 +503,8 @@ export class FlowExplorer {
       let page = await this.openPage(browser, observers.all);
 
       const loginMark = this.interactions.mark();
-      await this.authenticator.login(page);
+      // La connexion écrit (POST du formulaire) : permise.
+      await this.writeGuard.permit('sign-in', () => this.authenticator.login(page));
       if (this.config.auth.type === 'http') this.assertHttpLogin(loginMark);
       if (this.config.auth.type !== 'none') this.listener.onAuthenticated?.(this.authenticator.description);
 
@@ -383,6 +524,20 @@ export class FlowExplorer {
       }
       // L'état de départ est la racine du graphe des flows, quel que soit ce que les flows visitent d'abord.
       let current = await this.observeState(page, 0);
+      // GOAL PLANNER : des objectifs fonctionnels (jamais des clics), suivis pendant tout le run.
+      const blockedConcepts = new Set(
+        (['delete', 'logout'] as const).filter((risk) => this.config.safety.block.includes(risk)),
+      );
+      const plan = await new RuleBasedGoalPlanner(this.semantics.dictionary, { blockedConcepts }).plan(
+        missionOf(this.config),
+        current,
+        this.graph,
+        this.knowledge,
+      );
+      if (plan.goals.length > 0) {
+        this.goals = new GoalTracker(plan, this.goalMatcher);
+        this.observeGoals(current);
+      }
 
       // 1. Flows imposés, dans l'ordre de la mission.
       let flowsStop: StopReason | undefined;
@@ -460,8 +615,16 @@ export class FlowExplorer {
 
       // Le moteur ne voit que ce que le périmètre permet ; les autres actions restent inexplorées pour plus tard.
       const candidates = scope ? { ...current, actions: actionsInScope(scope, current.actions) } : current;
-      const decision = await this.decisionEngine.decide(candidates, this.graph);
+      const { decision, jumpTo } = await this.chooseNext(candidates, allowJump);
       this.listener.onDecision?.(current, decision);
+
+      if (jumpTo) {
+        // BEST-FIRST : un candidat nettement meilleur attend sur un autre écran — y aller, puis l'exécuter.
+        const moved = await this.jumpTo(page, browser, observers.all, current.stateId, jumpTo);
+        page = moved.page;
+        if (moved.context) current = moved.context;
+        continue;
+      }
 
       if (decision.decision === 'STOP') return { page, stopReason: 'engine-stop' };
       if (decision.decision === 'BACKTRACK') {
@@ -491,6 +654,9 @@ export class FlowExplorer {
       const verdict = this.safety.evaluate(action);
       if (verdict.verdict === 'BLOCK') {
         this.graph.recordBlocked(current.stateId, action, verdict.reason);
+        this.coverage.actionBlocked(current.stateId, action);
+        this.frontier.remove(current.stateId, action.id);
+        this.knowledge.recordActionResult({ actionSignature: actionSignature(action), result: 'BLOCKED' });
         this.listener.onBlocked?.(current, action, verdict.reason);
         continue;
       }
@@ -593,8 +759,54 @@ export class FlowExplorer {
       metadata: { depth: node?.depth ?? depth, timestamp: new Date().toISOString(), flow },
     };
     this.attribution = { stateId: state.stateId, flow };
+    // PATTERN RECOGNITION → nouveauté → couverture → objectifs.
+    const patterns = this.patternDetector.detect(context);
+    this.patternsByState.set(state.stateId, patterns);
+    if (isNew) {
+      this.noveltyByState.set(
+        state.stateId,
+        this.novelty.evaluate(
+          context,
+          this.graph,
+          this.knowledge,
+          patterns.map((pattern) => pattern.type),
+        ),
+      );
+      for (const action of actions)
+        this.knowledge.recordActionResult({ actionSignature: actionSignature(action), result: 'SEEN' });
+    }
+    this.coverage.observeState(context, patterns);
+    this.budget.set('states', this.graph.nodeCount);
+    this.observeGoals(context);
     this.listener.onState?.(context, isNew);
     return context;
+  }
+
+  /** Les objectifs prouvés par cet écran passent REACHED (avec leurs preuves). */
+  private observeGoals(context: PageContext): void {
+    if (!this.goals) return;
+    for (const goal of this.goals.observe(context, this.patternsByState.get(context.stateId) ?? []))
+      this.listener.onGoal?.(goal);
+  }
+
+  /** Une requête d'écriture annulée par la garde : une anomalie « effet de bord ». */
+  private onBlockedWrite(write: BlockedWrite): void {
+    let path = write.url;
+    try {
+      path = new URL(write.url).pathname;
+    } catch {
+      // URL déjà expurgée
+    }
+    const issue = this.collector.add({
+      type: 'WRITE_BLOCKED',
+      severity: 'WARNING',
+      message: `write request blocked: ${write.method} ${path} — side effect of ${write.during} (not allowed to change data)`,
+      pageUrl: this.currentUrl,
+      requestUrl: write.url,
+      ...(write.actionId ? { actionId: write.actionId } : {}),
+      ...(write.stateId ? { stateId: write.stateId } : {}),
+    });
+    if (write.stateId) this.graph.attachIssues(write.stateId, [issue.id]);
   }
 
   /** EXÉCUTER → OBSERVER LE NOUVEL ÉTAT → ENREGISTRER LA TRANSITION. */
@@ -611,6 +823,8 @@ export class FlowExplorer {
     // Les anomalies levées à partir de maintenant sont causées par cette action ; leur état est connu après l'observation.
     this.attribution = { actionId: action.id };
     this.currentAction = { stateId: from.stateId, actionId: action.id };
+    this.writeGuard.during(from.stateId, action.id, `${action.type} "${actionLabel(action)}"`);
+    this.frontier.remove(from.stateId, action.id);
     const interactionMark = this.interactions.mark();
 
     this.networkTrace.start(action.id);
@@ -715,6 +929,7 @@ export class FlowExplorer {
         });
         ids.push(...edge.issueIds.filter((id) => !ids.includes(id)));
       }
+      this.learn(edge, from, action, undefined);
       this.graph.attachIssues(from.stateId, ids);
       this.listener.onTransition?.(edge, action);
       await this.captureErrorScreenshot(page, from, ids);
@@ -759,6 +974,7 @@ export class FlowExplorer {
     });
     await this.judge(edge, from, action, after, { crashed, beforeSignals });
     ids.push(...edge.issueIds.filter((id) => !ids.includes(id)));
+    this.learn(edge, from, action, after);
     if (this.safety.changesData(action) && edge.network) {
       this.createdData.record({
         stateId: from.stateId,
@@ -771,11 +987,17 @@ export class FlowExplorer {
     const stuck = this.stuck?.observe({
       from: from.stateId,
       to: after.stateId,
+      actionId: action.id,
       requests: edge.network?.length ?? 0,
       busy: this.lastSnapshot?.signals?.busy ?? false,
     });
     if (stuck) {
-      this.pendingStuck = stuck;
+      // Boucle vue pour la première fois : ses actions perdent des points, l'exploration continue.
+      // Sinon (même boucle à nouveau, oscillation, actions sans effet, chargement sans fin) : quitter la branche.
+      if (stuck.response === 'penalize') {
+        for (const step of stuck.actions ?? [])
+          this.loopPenalties.set(`${step.stateId}::${step.actionId}`, { points: 80, detail: stuck.message });
+      } else this.pendingStuck = stuck;
       this.listener.onStuck?.(stuck);
     }
     // Les anomalies du nouvel état savent maintenant quelle action et quel chemin y ont mené.
@@ -908,8 +1130,8 @@ export class FlowExplorer {
   /** Se reconnecte après une expiration de session, dans la limite configurée. */
   private async reauthenticate(page: Page): Promise<boolean> {
     if (!this.recovery.mayReauthenticate()) return false;
-    return this.authenticator
-      .login(page)
+    return this.writeGuard
+      .permit('sign-in', () => this.authenticator.login(page))
       .then(() => true)
       .catch(() => false);
   }
@@ -952,6 +1174,9 @@ export class FlowExplorer {
         ...(after && this.lastSnapshot?.signals ? { after: this.lastSnapshot.signals } : {}),
         formFilledWithValidData:
           action.formGroup !== undefined && this.formsExercised.has(`${from.stateId}|${action.formGroup}`),
+        beforePatterns: this.patternsByState.get(from.stateId) ?? [],
+        ...(after ? { afterPatterns: this.patternsByState.get(after.stateId) ?? [] } : {}),
+        actor: this.config.authorization.primaryActor,
       },
     );
     edge.oracle = verdict;
@@ -959,23 +1184,87 @@ export class FlowExplorer {
       ui: 'UI_ERROR',
       baseline: 'REGRESSION',
       contract: 'CONTRACT',
+      historical: 'UNEXPECTED_BEHAVIOR',
+    };
+    const add = (type: IssueType, severity: Severity, message: string): void => {
+      const issue = this.collector.add({
+        type,
+        severity,
+        message: `"${actionLabel(action)}": ${message}`,
+        pageUrl: from.url,
+        actionId: action.id,
+        stateId: after?.stateId ?? from.stateId,
+      });
+      if (!edge.issueIds.includes(issue.id)) edge.issueIds.push(issue.id);
     };
     for (const opinion of verdict.results) {
+      if (opinion.oracle === 'invariant') {
+        // La sévérité vient de la règle elle-même (INFO … CRITICAL), jamais toutes bloquantes.
+        const severities: Record<string, Severity> = {
+          'invariant-critical': 'CRITICAL',
+          'invariant-error': 'ERROR',
+          'invariant-warning': 'WARNING',
+          'invariant-info': 'INFO',
+        };
+        for (const reason of opinion.reasons) {
+          const severity = severities[reason.code];
+          if (severity) add('INVARIANT', severity, reason.message);
+        }
+        continue;
+      }
       const type = anomaly[opinion.oracle];
       if (!type || (opinion.status !== 'WARNING' && opinion.status !== 'FAIL')) continue;
-      for (const reason of opinion.reasons) {
-        const issue = this.collector.add({
-          type,
-          severity: opinion.status === 'FAIL' ? 'ERROR' : 'WARNING',
-          message: `"${actionLabel(action)}": ${reason.message}`,
-          pageUrl: from.url,
-          actionId: action.id,
-          stateId: after?.stateId ?? from.stateId,
-        });
-        if (!edge.issueIds.includes(issue.id)) edge.issueIds.push(issue.id);
-      }
+      for (const reason of opinion.reasons)
+        add(
+          reason.code === 'performance-warning' ? 'PERFORMANCE' : type,
+          opinion.status === 'FAIL' ? 'ERROR' : 'WARNING',
+          reason.message,
+        );
     }
     this.listener.onOracle?.(edge, verdict);
+  }
+
+  /**
+   * APPRENTISSAGE : après le verdict (l'historique juge l'action AVANT de l'apprendre),
+   * la KnowledgeBase enregistre le résultat, la transition, les statuts d'API et les
+   * durées ; la couverture et les options essayées sont mises à jour.
+   */
+  private learn(
+    edge: FlowEdge,
+    from: PageContext,
+    action: DiscoveredAction,
+    after: PageContext | undefined,
+  ): void {
+    const signature = actionSignature(action);
+    const success = edge.result === 'SUCCESS';
+    this.knowledge.recordActionResult({
+      actionSignature: signature,
+      result: edge.result === 'BLOCKED' ? 'BLOCKED' : success ? 'SUCCESS' : 'FAILED',
+      ...(edge.durationMs !== undefined ? { durationMs: edge.durationMs } : {}),
+    });
+    if (edge.durationMs !== undefined) this.knowledge.recordDuration('action', signature, edge.durationMs);
+    if (after && success) {
+      this.knowledge.recordTransition({
+        fromStateSignature: stateSignature(from.stateLabel),
+        actionSignature: signature,
+        toStateSignature: stateSignature(after.stateLabel),
+        success: true,
+      });
+      this.knowledge.recordOutcomePatterns(
+        actionLabel(action),
+        (this.patternsByState.get(after.stateId) ?? []).map((pattern) => pattern.type),
+      );
+    }
+    for (const exchange of edge.network ?? []) {
+      if (exchange.resourceType === 'document' || exchange.status === undefined) continue;
+      const operation = apiOperation(exchange.method, exchange.url, this.config.exploration.queryParams.mode);
+      this.knowledge.recordApiCall(operation, exchange.status, exchange.durationMs);
+      if (exchange.durationMs !== undefined)
+        this.knowledge.recordDuration('request', operation, exchange.durationMs);
+    }
+    this.coverage.actionExecuted(from.stateId, action, success);
+    if (action.type === 'check' || action.type === 'select') this.triedOptions.add(optionKey(action));
+    this.budget.set('actions', this.actionsExecuted);
   }
 
   /** Ferme la fenêtre réseau d'une action : ce qu'il faut ajouter à sa FlowEdge. */
@@ -1015,15 +1304,37 @@ export class FlowExplorer {
     const started = Date.now();
 
     this.networkTrace.start(actionId);
+    this.writeGuard.during(from.stateId, actionId, `filling the form "${formName(group, from)}"`);
     const run = await this.forms.fill(page, from, group);
     run.problems = await this.forms.validate(page, run);
-    const { forms } = this.config;
-    if (forms.validationTesting) {
+    const { forms, propertyTesting } = this.config;
+    if (forms.validationTesting && this.budget.allows('validationCases')) {
       run.validationCases = await this.forms.testValidation(page, from, run, {
         maxCasesPerField: forms.maxValidationCasesPerField,
-        maxCasesPerForm: forms.maxValidationCasesPerForm,
+        maxCasesPerForm: Math.min(forms.maxValidationCasesPerForm, this.budget.remaining('validationCases')),
       });
+      this.budget.consume('validationCases', run.validationCases.length);
     }
+    // PROPERTY TESTING : bornes et partitions d'équivalence depuis les contraintes (DOM + OpenAPI).
+    if (propertyTesting.enabled && this.budget.allows('propertyCases')) {
+      const constraints = new DomOpenApiConstraintExtractor().extractForm(run.form, this.contract);
+      const cases = new OneFactorPropertyTestGenerator().generate(
+        run.form,
+        constraints,
+        Math.min(propertyTesting.maxCasesPerForm, this.budget.remaining('propertyCases')),
+      );
+      run.propertyCases = await this.forms.testProperties(page, from, run, cases);
+      this.budget.consume('propertyCases', run.propertyCases.length);
+      for (const failed of run.propertyCases.filter((entry) => entry.verdict === 'FAIL'))
+        this.collector.add({
+          type: 'FORM_VALIDATION',
+          severity: 'WARNING',
+          message: `form "${run.name}": valid value refused — ${failed.description}${failed.message ? `: ${failed.message}` : ''}`,
+          pageUrl: from.url,
+          actionId,
+        });
+    }
+    this.coverage.formExercised(from.stateId, from.forms[0]?.index ?? 0);
     this.formReports.push(formReportOf(run, from.stateId, actionId));
     // Ses champs ont été traités avec le formulaire : pas retentés un par un.
     for (const field of run.fields) this.graph.markTried(from.stateId, field.action.id);
@@ -1103,7 +1414,10 @@ export class FlowExplorer {
           : undefined;
     // Compté avant l'exécution : une action qui échoue à mi-chemin a peut-être déjà modifié des données.
     this.safety.recordExecuted(action);
-    return this.executor.execute(page, action, value !== undefined ? { value } : {});
+    const run = (): Promise<ActionExecutionResult> =>
+      this.executor.execute(page, action, value !== undefined ? { value } : {});
+    // Seule une action que la SafetyPolicy a permise ET qui modifie des données peut écrire côté serveur.
+    return this.safety.changesData(action) ? this.writeGuard.permit('mutation action', run) : run();
   }
 
   /**
@@ -1141,6 +1455,7 @@ export class FlowExplorer {
       const verdict = this.safety.evaluate(action);
       if (verdict.verdict === 'BLOCK' && !this.graph.hasTransition(stateId, action.id)) {
         this.graph.recordBlocked(stateId, action, verdict.reason);
+        this.coverage.actionBlocked(stateId, action);
       }
     }
   }
@@ -1541,7 +1856,14 @@ export class FlowExplorer {
     this.currentAction = { stateId: before.stateId, actionId: action.id, flow: flow.name };
     const interactionMark = this.interactions.mark();
     this.networkTrace.start(action.id);
-    const error = await this.flowSteps.perform(page, located, elementAction, timeout);
+    this.writeGuard.during(before.stateId, action.id, `flow "${flow.name}" step "${actionLabel(action)}"`);
+    // Une étape qui a le droit de modifier des données (allow), ou l'écran de connexion d'un flow, peut écrire.
+    const mayWrite =
+      step.allow.some((allowed) => allowed === 'MUTATION' || allowed === 'DANGEROUS') ||
+      (this.patternsByState.get(before.stateId) ?? []).some((pattern) => pattern.type === 'LOGIN');
+    const perform = (): Promise<string | undefined> =>
+      this.flowSteps.perform(page, located, elementAction, timeout);
+    const error = mayWrite ? await this.writeGuard.permit(`flow ${flow.name}`, perform) : await perform();
     this.actionsExecuted += 1;
     const raised = this.interactions.since(interactionMark);
     const blocking = raised.filter((interaction) => interaction.blocking);
@@ -1755,6 +2077,164 @@ export class FlowExplorer {
   }
 
   /**
+   * DÉCISION : le moteur classe les actions de l'écran (ActionScorer V2, chaque point
+   * expliqué), elles rejoignent la frontière d'exploration, et la stratégie choisit —
+   * best-first : le meilleur candidat où qu'il soit (en quittant l'écran seulement pour
+   * nettement mieux) ; depth-first : l'écran courant d'abord. Chaque décision est tracée.
+   */
+  private async chooseNext(
+    context: PageContext,
+    allowJump: boolean,
+  ): Promise<{ decision: ActionDecision; jumpTo?: string }> {
+    const at = new Date().toISOString();
+    const engine = this.decisionEngine instanceof RuleBasedDecisionEngine ? this.decisionEngine : undefined;
+    if (!engine || context.metadata.depth >= this.config.exploration.maxDepth) {
+      const decision = await this.decisionEngine.decide(context, this.graph);
+      this.traces.record({
+        at,
+        stateId: context.stateId,
+        strategy: engine ? this.strategy.name : this.decisionEngine.name,
+        candidates: [],
+        ...(decision.actionId ? { selectedActionId: decision.actionId } : {}),
+        decision: decision.decision,
+        reasons: [decision.reason],
+      });
+      return { decision };
+    }
+    const { ranked, excluded } = engine.rankWithExclusions(context, this.graph);
+    // La frontière garde les candidats de chaque écran visité ; ceux de cet écran sont rescorés.
+    this.frontier.removeState(context.stateId);
+    for (const entry of ranked)
+      this.frontier.add({
+        stateId: context.stateId,
+        actionId: entry.action.id,
+        score: entry.score,
+        depth: context.metadata.depth,
+        discoveredAt: at,
+        label: actionLabel(entry.action),
+        ...(entry.breakdown ? { breakdown: entry.breakdown } : {}),
+      });
+    const pending = this.pendingCandidate;
+    this.pendingCandidate = undefined;
+    const bestFirst = this.strategy.name === 'best-first' && allowJump;
+    let chosen =
+      pending?.stateId === context.stateId ? this.frontier.get(context.stateId, pending.actionId) : undefined;
+    chosen ??= bestFirst
+      ? (this.frontier.next(this.strategy, {
+          currentStateId: context.stateId,
+          agingBonus: this.config.exploration.agingBonus,
+          switchMargin: this.config.exploration.switchMargin,
+          travelCost: (stateId) => 15 + 5 * this.graph.flowTo(stateId).length,
+          isAllowed: (candidate) =>
+            candidate.stateId === context.stateId ||
+            (!this.exhausted.has(candidate.stateId) &&
+              !this.unreachable.has(candidate.stateId) &&
+              candidate.attempts < 2 &&
+              !this.graph.hasTransition(candidate.stateId, candidate.actionId) &&
+              (this.graph.getNode(candidate.stateId)?.depth ?? 0) < this.config.exploration.maxDepth),
+          ...(this.config.exploration.seed !== undefined ? { seed: this.config.exploration.seed } : {}),
+        }) ?? undefined)
+      : this.frontier.get(context.stateId, ranked[0]?.action.id ?? '');
+    this.frontier.tick(chosen);
+    const trace = (decision: ActionDecision): void => {
+      const own = ranked.slice(0, 40).map((entry) => ({
+        stateId: context.stateId,
+        actionId: entry.action.id,
+        label: actionLabel(entry.action),
+        score: entry.score,
+        ...(entry.breakdown ? { breakdown: entry.breakdown } : {}),
+      }));
+      const elsewhere =
+        chosen && chosen.stateId !== context.stateId
+          ? [
+              {
+                stateId: chosen.stateId,
+                actionId: chosen.actionId,
+                label: chosen.label ?? chosen.actionId,
+                score: chosen.score,
+                ...(chosen.breakdown ? { breakdown: chosen.breakdown } : {}),
+              },
+            ]
+          : [];
+      this.traces.record({
+        at,
+        stateId: context.stateId,
+        strategy: this.strategy.name,
+        candidates: [
+          ...own,
+          ...elsewhere,
+          ...excluded.slice(0, 20).map((entry) => ({
+            stateId: context.stateId,
+            actionId: entry.action.id,
+            label: actionLabel(entry.action),
+            score: 0,
+            excluded: entry.reason,
+          })),
+        ],
+        ...(decision.actionId ? { selectedActionId: decision.actionId } : {}),
+        ...(chosen ? { selectedStateId: chosen.stateId } : {}),
+        decision: decision.decision,
+        reasons: chosen?.breakdown?.reasons ?? [decision.reason],
+      });
+    };
+    if (!chosen) {
+      const decision: ActionDecision = {
+        decision: 'BACKTRACK',
+        reason:
+          ranked.length === 0
+            ? 'no unexplored action worth trying on this state'
+            : 'nothing better to do here',
+      };
+      trace(decision);
+      return { decision };
+    }
+    const decision: ActionDecision = {
+      decision: 'EXECUTE',
+      actionId: chosen.actionId,
+      reason:
+        chosen.stateId === context.stateId
+          ? `score ${chosen.score}: ${(chosen.breakdown?.reasons ?? []).join(', ')}`
+          : `best-first: "${chosen.label ?? chosen.actionId}" (score ${chosen.score}) on another screen`,
+      score: chosen.score,
+      ...(chosen.breakdown ? { breakdown: chosen.breakdown } : {}),
+    };
+    trace(decision);
+    if (chosen.stateId === context.stateId) return { decision };
+    chosen.attempts += 1;
+    this.pendingCandidate = { stateId: chosen.stateId, actionId: chosen.actionId };
+    return { decision, jumpTo: chosen.stateId };
+  }
+
+  /** Va sur l'état du meilleur candidat (la méthode la moins coûteuse d'abord), ou le déclare injoignable. */
+  private async jumpTo(
+    page: Page,
+    browser: BrowserManager,
+    observers: PageObserver[],
+    from: string,
+    stateId: string,
+  ): Promise<{ page: Page; context?: PageContext }> {
+    if (!/^https?:/.test(page.url()) || page.isClosed())
+      page = await this.recyclePage(browser, page, observers);
+    // Comme un saut du retour arrière : fermer le calque, l'URL, puis le chemin rejoué (jamais l'historique,
+    // qui peut ramener sur une page de connexion ou une étape périmée).
+    const context = await this.restore(page, stateId);
+    if (!context) {
+      this.unreachable.add(stateId);
+      this.frontier.removeState(stateId);
+      this.coverage.stateUnreachable(stateId);
+      this.pendingCandidate = undefined;
+      return { page };
+    }
+    this.backtracks += 1;
+    this.stuck?.reset();
+    this.stack = this.graph
+      .flowTo(stateId)
+      .map((id) => ({ stateId: id, url: this.graph.getNode(id)?.url ?? this.startUrl }));
+    this.listener.onBacktrack?.(from, stateId, 'best-first: better candidate on this screen');
+    return { page, context };
+  }
+
+  /**
    * Le moteur de décision exécuterait-il encore quelque chose sur cet état ? Demandé
    * avec la dernière observation de l'état, avant de payer le retour vers lui.
    * Inconnu (aucune observation gardée) : on suppose que oui.
@@ -1809,6 +2289,8 @@ export class FlowExplorer {
     const depth = node.depth;
     const matches = async (method: string): Promise<PageContext | undefined> => {
       if (!this.isExplorablePage(page)) return undefined;
+      // Retombé sur la page de connexion (session expirée) : ce n'est pas un écran de l'application.
+      if (this.onLoginPage(page) && !this.isLoginUrl(node.url)) return undefined;
       try {
         const context = await this.observeState(page, depth);
         if (context.stateId === stateId) {
@@ -1974,13 +2456,12 @@ export class FlowExplorer {
 
   // ---------------------------------------------------------------- utilitaires
 
+  /** Le budget central (états, actions, durée) : toutes les stratégies s'arrêtent au même endroit. */
   private limitReached(): StopReason | undefined {
-    const { exploration } = this.config;
-    if (this.graph.nodeCount >= exploration.maxStates) return 'max-states';
-    if (this.actionsExecuted >= exploration.maxActions) return 'max-actions';
-    if (Date.now() - this.startedAt.getTime() >= exploration.maxDurationMinutes * 60_000)
-      return 'max-duration';
-    return undefined;
+    this.budget.set('states', this.graph.nodeCount);
+    this.budget.set('actions', this.actionsExecuted);
+    this.budget.set('mutations', this.safety.mutationCount);
+    return this.budget.exhausted();
   }
 
   private createObservers(): { all: PageObserver[]; pageErrors: PageErrorObserver } {
@@ -2133,6 +2614,7 @@ export class FlowExplorer {
   }
 
   private outcome(stopReason: StopReason): ExplorationOutcome {
+    this.goals?.finalize(stopReason);
     return {
       graph: this.graph,
       issues: this.collector.all(),
@@ -2163,6 +2645,15 @@ export class FlowExplorer {
       },
       createdData: this.createdData.all(),
       ...(this.verification ? { verification: this.verification } : {}),
+      goals: this.goals ? [...this.goals.goals] : [],
+      patterns: Object.fromEntries(this.patternsByState),
+      coverage: this.coverage.map(),
+      decisions: this.traces.selections(),
+      ...(this.config.logging.decisionTrace ? { decisionTraces: this.traces.all() } : {}),
+      strategy: this.strategy.name,
+      blockedWrites: this.writeGuard.all(),
+      invariants: this.invariantOracle?.evaluations() ?? [],
+      budget: this.budget.usage(),
     };
   }
 
