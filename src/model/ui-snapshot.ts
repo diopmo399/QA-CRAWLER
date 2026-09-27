@@ -1,4 +1,4 @@
-import type { DiscoveredForm } from './discovered-action.js';
+import type { FormSummary } from './discovered-action.js';
 
 /**
  * Facts about one interactive element, extracted from the DOM by the
@@ -57,6 +57,8 @@ export interface UiElement {
   minLength?: number;
   maxLength?: number;
   pattern?: string;
+  /** Labels of the disabled options of a <select>. */
+  disabledOptions?: string[];
   /** Option labels of a <select> (first 30). */
   options?: string[];
   /** The element targeted by the current imposed flow step. */
@@ -102,5 +104,5 @@ export interface UiSnapshot {
   /** Short excerpt of the visible text (max ~600 chars), for humans and future engines. */
   textExcerpt: string;
   elements: UiElement[];
-  forms: DiscoveredForm[];
+  forms: FormSummary[];
 }

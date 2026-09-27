@@ -428,6 +428,15 @@ const formsSchema = z
      * is sent: see `submit`.
      */
     exercise: z.boolean().default(true),
+    /** Same as exercise (mission wording). */
+    autoFill: z.boolean().optional(),
+    /**
+     * Validation testing: a few invalid values per field (empty when required,
+     * out of min/max, too long, wrong format), each followed by the valid value.
+     */
+    validationTesting: z.boolean().default(false),
+    maxValidationCasesPerField: z.number().int().positive().default(3),
+    maxValidationCasesPerForm: z.number().int().positive().default(10),
     /**
      * Buttons that send a form ("Soumettre", "Enregistrer"… inside a form or a
      * dialog with fields). true: allowed like any MUTATION; false: never
@@ -445,7 +454,44 @@ const testDataSchema = z
      * ignored). For a list or a radio group: the option to choose. Sensitive
      * fields (passwords, cards, secrets) are never filled, even when listed here.
      */
-    fields: z.record(nonEmpty, z.string()).default({}),
+    fields: z
+      .record(nonEmpty, z.union([z.string(), z.object({ value: z.string() }).strict()]))
+      .default({})
+      .transform((fields) =>
+        Object.fromEntries(
+          Object.entries(fields).map(([key, value]) => [
+            key,
+            typeof value === 'string' ? value : value.value,
+          ]),
+        ),
+      ),
+    /**
+     * Values by meaning, for every field that means it: firstName, lastName,
+     * name, email, phone, company, address, city, postalCode, country, url, text.
+     */
+    defaults: z
+      .object({
+        firstName: z.string(),
+        lastName: z.string(),
+        name: z.string(),
+        email: z.string(),
+        phone: z.string(),
+        company: z.string(),
+        address: z.string(),
+        city: z.string(),
+        postalCode: z.string(),
+        country: z.string(),
+        url: z.string(),
+        text: z.string(),
+      })
+      .partial()
+      .strict()
+      .default({}),
+    /** Id of the run in the created data (QA-CRAWLER-<runId>); default: generated for each run. */
+    runId: z
+      .string()
+      .regex(/^[A-Za-z0-9-]{1,24}$/, 'letters, digits and dashes (24 max)')
+      .optional(),
   })
   .strict();
 

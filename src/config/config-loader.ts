@@ -195,6 +195,7 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
     if (discover.forms !== undefined) config.goals.discoverForms = discover.forms;
     if (discover.dialogs !== undefined) config.goals.discoverFlows = discover.dialogs;
   }
+  if (config.forms.autoFill !== undefined) config.forms.exercise = config.forms.autoFill;
   if (config.forms.submit === true) {
     config.safety.block = config.safety.block.filter((risk) => risk !== 'form-submit');
   } else if (config.forms.submit === false && !config.safety.block.includes('form-submit')) {

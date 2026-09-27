@@ -322,6 +322,22 @@ export const SENSITIVE_FIELD_KEYWORDS = [
   'nir',
   'passport',
   'passeport',
+  'authorization',
+  'bearer',
+  'apikey',
+  'access key',
+  'private key',
+  'client secret',
+  'credential',
+  'credentials',
+  'bank account',
+  'account number',
+  'compte bancaire',
+  'numero de compte',
+  'sin',
+  'social insurance',
+  'nas',
+  'assurance sociale',
 ] as const;
 
 /** Payment fields: never filled, not even with a value from the environment. */
@@ -341,6 +357,10 @@ export const PAYMENT_FIELD_KEYWORDS = [
   'bic',
   'swift',
   'rib',
+  'bank account',
+  'account number',
+  'compte bancaire',
+  'numero de compte',
 ] as const;
 
 /** Lower-case, accent-free, camelCase split: "Supprimer l'élément" → "supprimer l'element", "deleteUser" → "delete user". */

@@ -21,6 +21,7 @@ import { actionsInScope, isInScope, scopeOf, type ExplorationScope } from '../fl
 import { FlowStepExecutor, type FlowElementAction } from '../flows/flow-step-executor.js';
 import { suggestTargets } from '../flows/target-suggester.js';
 import { FormExerciser, type FormRun } from '../forms/form-exerciser.js';
+import { formReportOf, type FormReport } from '../forms/form-report.js';
 import { FlowGraph, summaryOf } from '../graph/flow-graph.js';
 import { BrowserEventDiscovery } from '../interactions/browser-event-discovery.js';
 import { BrowserInteractionManager } from '../interactions/browser-interaction-manager.js';
@@ -36,7 +37,7 @@ import type { BrowserInteractionResult, InteractionContext } from '../interactio
 import { InteractionPolicy } from '../policies/interaction-policy.js';
 import { AllowedOriginPolicy } from '../policies/origin-policy.js';
 import type { FlowMemory } from '../memory/flow-memory.js';
-import { actionLabel, type DiscoveredAction, type DiscoveredForm } from '../model/discovered-action.js';
+import { actionLabel, type DiscoveredAction, type FormSummary } from '../model/discovered-action.js';
 import type { StopReason } from '../model/exploration-result.js';
 import type { FlowEdge, FlowGraphData } from '../model/flow.js';
 import {
@@ -87,6 +88,8 @@ export interface FlowExplorerOptions {
   env?: NodeJS.ProcessEnv;
   /** `stateId::actionId` known from the baseline (explore mode): tried after new ground. */
   knownActions?: ReadonlySet<string>;
+  /** Id of the run (default: testData.runId, else generated). */
+  runId?: string;
   /** verify: the known transitions of this baseline are replayed instead of exploring. */
   verifyBaseline?: FlowGraphData;
   /** Id of the baseline run being verified (reports). */
@@ -98,7 +101,7 @@ export interface ExplorationOutcome {
   graph: FlowGraph;
   issues: Issue[];
   /** Latest full observation of each state (actions with locators, forms). */
-  details: Map<string, { actions: DiscoveredAction[]; forms: DiscoveredForm[] }>;
+  details: Map<string, { actions: DiscoveredAction[]; forms: FormSummary[] }>;
   /** Imposed flows, in mission order. */
   flows: FlowRunReport[];
   /** Browser interactions outside the DOM, in order. */
@@ -110,6 +113,10 @@ export interface ExplorationOutcome {
   backtracks: number;
   decisionEngine: string;
   startUrl: string;
+  /** Id of the run, carried by the data it created (QA-CRAWLER-<runId>). */
+  runId: string;
+  /** Forms found and filled. */
+  forms: FormReport[];
   /** verify mode: every known transition of the baseline, replayed. */
   verification?: VerificationReport;
 }
@@ -157,7 +164,7 @@ export class FlowExplorer {
   private readonly env: NodeJS.ProcessEnv;
 
   private graph = new FlowGraph();
-  private readonly details = new Map<string, { actions: DiscoveredAction[]; forms: DiscoveredForm[] }>();
+  private readonly details = new Map<string, { actions: DiscoveredAction[]; forms: FormSummary[] }>();
   private stack: StackEntry[] = [];
   /** States where the engine found nothing left to do. */
   private readonly exhausted = new Set<string>();
@@ -176,6 +183,8 @@ export class FlowExplorer {
   private readonly forms: FormExerciser;
   /** Network window of each action (FlowEdge.network). */
   private readonly networkTrace: NetworkTraceRecorder;
+  /** Id of this run, carried by the data it creates (QA-CRAWLER-<runId>). */
+  readonly runId: string;
   private readonly verifyBaseline: FlowGraphData | undefined;
   private readonly baselineRunId: string | undefined;
   private verification: VerificationReport | undefined;
@@ -183,6 +192,8 @@ export class FlowExplorer {
   private readonly formsExercised = new Set<string>();
   /** Transitions that filled a form: id → form, to fill it again when a path is replayed. */
   private readonly formActions = new Map<string, string>();
+  /** Every form filled, for the report (never a sensitive value). */
+  private readonly formReports: FormReport[] = [];
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -243,8 +254,15 @@ export class FlowExplorer {
       httpAuth: config.browserInteractions.enabled,
       popupLoadTimeoutMs: Math.min(config.exploration.navigationTimeoutMs, 5_000),
     });
-    this.testData = options.testData ?? new DefaultTestDataProvider(undefined, config.testData.fields);
-    this.forms = new FormExerciser(this.executor, this.testData, this.safety);
+    this.runId = options.runId ?? config.testData.runId ?? newRunId();
+    this.testData =
+      options.testData ??
+      new DefaultTestDataProvider({
+        runId: this.runId,
+        fields: config.testData.fields,
+        defaults: config.testData.defaults,
+      });
+    this.forms = new FormExerciser(this.executor, this.testData, this.safety, this.runId);
     this.networkTrace = new NetworkTraceRecorder(config.network);
     this.verifyBaseline = options.verifyBaseline;
     this.baselineRunId = options.baselineRunId;
@@ -648,6 +666,14 @@ export class FlowExplorer {
     this.networkTrace.start(actionId);
     const run = await this.forms.fill(page, from, group);
     run.problems = await this.forms.validate(page, run);
+    const { forms } = this.config;
+    if (forms.validationTesting) {
+      run.validationCases = await this.forms.testValidation(page, from, run, {
+        maxCasesPerField: forms.maxValidationCasesPerField,
+        maxCasesPerForm: forms.maxValidationCasesPerForm,
+      });
+    }
+    this.formReports.push(formReportOf(run, from.stateId));
     // Its fields were handled with the form: not tried again one by one.
     for (const field of run.fields) this.graph.markTried(from.stateId, field.action.id);
     this.actionsExecuted += 1;
@@ -1734,6 +1760,8 @@ export class FlowExplorer {
       backtracks: this.backtracks,
       decisionEngine: this.decisionEngine.name,
       startUrl: redactUrl(this.startUrl),
+      runId: this.runId,
+      forms: this.formReports,
       ...(this.verification ? { verification: this.verification } : {}),
     };
   }
@@ -1959,6 +1987,11 @@ export class FlowExplorer {
     if (context?.stateId === stateId) return context;
     return `reached ${context?.stateLabel ?? 'nothing'} instead`;
   }
+}
+
+/** Short, readable, unique enough: base-36 time (e.g. "mg3k2x1a"). */
+function newRunId(): string {
+  return Date.now().toString(36);
 }
 
 function skippedStep(step: FlowStep, index: number, reason: string): FlowStepReport {

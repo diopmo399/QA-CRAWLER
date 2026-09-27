@@ -1,4 +1,4 @@
-import type { DiscoveredAction, DiscoveredForm } from './discovered-action.js';
+import type { DiscoveredAction, FormSummary } from './discovered-action.js';
 import type { Issue } from './issue.js';
 
 /**
@@ -19,7 +19,7 @@ export interface PageContext {
   text?: string;
   dialogs: string[];
   actions: DiscoveredAction[];
-  forms: DiscoveredForm[];
+  forms: FormSummary[];
   /** Anomalies already observed on this state. */
   errors: Issue[];
   metadata: {

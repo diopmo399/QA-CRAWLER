@@ -72,9 +72,21 @@ export class ActionDiscovery {
         )
         .map((element) => element.choiceGroup),
     );
+    // Forms that hold fields. The page itself counts as a form (SPA without <form>) only with at
+    // least two text fields: a lone checkbox or list next to a "Create…" button is not a form.
+    const textFields = new Map<string, number>();
+    for (const element of snapshot.elements) {
+      if (element.formGroup !== undefined && isTextField(element))
+        textFields.set(element.formGroup, (textFields.get(element.formGroup) ?? 0) + 1);
+    }
     const groupsWithFields = new Set(
       snapshot.elements
-        .filter((element) => element.formGroup !== undefined && isFieldElement(element))
+        .filter(
+          (element) =>
+            element.formGroup !== undefined &&
+            isFieldElement(element) &&
+            (element.formGroup !== 'page' || (textFields.get('page') ?? 0) >= 2),
+        )
         .map((element) => element.formGroup),
     );
 
@@ -140,7 +152,9 @@ export class ActionDiscovery {
         locator,
         ...(locator.strategy !== 'css' ? { fallback: { strategy: 'css' as const, value: element.css } } : {}),
         ...(element.dialogName ? { dialogName: element.dialogName } : {}),
-        ...(element.formGroup ? { formGroup: element.formGroup } : {}),
+        ...(element.formGroup && groupsWithFields.has(element.formGroup)
+          ? { formGroup: element.formGroup }
+          : {}),
         ...(submitsForm ? { submitsForm: true } : {}),
         ...(element.foreground ? { foreground: true } : {}),
         ...(element.obscured ? { obscured: true } : {}),
@@ -159,6 +173,16 @@ export class ActionDiscovery {
     });
     return actions;
   }
+}
+
+/** Field where a value is typed (not a checkbox, radio or list). */
+function isTextField(element: UiElement): boolean {
+  if (element.tag === 'textarea') return true;
+  return (
+    element.tag === 'input' &&
+    TEXT_INPUT_TYPES.has(element.inputType ?? 'text') &&
+    element.inputType !== 'search'
+  );
 }
 
 function isFieldElement(element: UiElement): boolean {
@@ -285,6 +309,7 @@ function fieldConstraints(element: UiElement): FieldConstraints {
     maxLength: element.maxLength,
     pattern: element.pattern,
     options: element.options,
+    disabledOptions: element.disabledOptions,
     autocomplete: element.autocomplete,
     name: element.fieldName,
     label: element.label ?? element.name,

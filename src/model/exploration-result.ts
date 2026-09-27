@@ -2,7 +2,7 @@ import type { BaselineMetadata } from '../baseline/baseline-store.js';
 import type { MissionMode } from '../config/config.js';
 import type { FlowDiff } from '../diff/flow-diff.js';
 import type { VerificationReport } from './verification.js';
-import type { ActionClassification, DiscoveredAction, DiscoveredForm } from './discovered-action.js';
+import type { ActionClassification, DiscoveredAction, FormSummary } from './discovered-action.js';
 import type { FlowEdge, FlowNode } from './flow.js';
 import type { FlowRunReport } from './flow-run.js';
 import type { BrowserInteractionResult } from '../interactions/types.js';
@@ -41,7 +41,7 @@ export interface ExplorationStats {
 /** A state with everything observed on it. */
 export interface StateReport extends FlowNode {
   actionsDetail: DiscoveredAction[];
-  forms: DiscoveredForm[];
+  forms: FormSummary[];
   /** How to reach it from the start state. */
   flow: string[];
 }

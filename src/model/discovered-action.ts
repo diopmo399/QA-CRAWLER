@@ -57,6 +57,8 @@ export interface FieldConstraints {
   maxLength?: number;
   pattern?: string;
   options?: string[];
+  /** Options that cannot be chosen. */
+  disabledOptions?: string[];
   autocomplete?: string;
   name?: string;
   label?: string;
@@ -149,7 +151,7 @@ export function actionLabel(
 
 export type FieldTag = 'input' | 'select' | 'textarea';
 
-export interface FormField {
+export interface FormSummaryField {
   tag: FieldTag;
   /** input type (text, email, number, checkbox, radio…), or the tag for select/textarea. */
   type: string;
@@ -170,7 +172,7 @@ export interface FormField {
   options?: string[];
 }
 
-export interface DiscoveredForm {
+export interface FormSummary {
   /** Index among the page's forms; -1 groups fields that are not inside a <form>. */
   index: number;
   name?: string;
@@ -180,5 +182,5 @@ export interface DiscoveredForm {
   method: string;
   isSearchForm: boolean;
   submitLabel?: string;
-  fields: FormField[];
+  fields: FormSummaryField[];
 }

@@ -1,15 +1,21 @@
 import type { Page } from 'playwright';
-import type { FillInstruction, TestDataProvider } from '../data/test-data-provider.js';
+import type { TestDataProvider } from '../data/test-data-provider.js';
 import type { PlaywrightActionExecutor } from '../execution/playwright-action-executor.js';
 import { toLocator } from '../execution/locator-resolver.js';
 import type { DiscoveredAction } from '../model/discovered-action.js';
 import type { PageContext } from '../model/page-context.js';
 import type { SafetyPolicy } from '../policies/safety-policy.js';
+import { DomFormAnalyzer, formName } from './form-analyzer.js';
+import { ValidDataFillStrategy, type FormFillStrategy } from './form-fill-strategy.js';
+import type { DiscoveredForm, FormField, FormFillPlan } from './form-model.js';
+import { validityOf } from './validity.js';
+
+export { formName };
 
 /** A field filled (or left empty) while exercising a form. */
 export interface FilledField {
   action: DiscoveredAction;
-  /** Value typed or option chosen; undefined for a checkbox/radio, or when left empty. */
+  /** Value typed or option chosen; undefined for a checkbox/radio, a sensitive field, or when left empty. */
   value?: string;
   /** Why the field was left as it is, or why filling it failed. */
   skipped?: string;
@@ -22,89 +28,109 @@ export interface ValidationProblem {
   message: string;
 }
 
+/**
+ * One validation case: an invalid value typed in one field. REJECTED (the
+ * application says so) and NOT_ENTERED (the browser refused it) pass;
+ * ACCEPTED stays UNKNOWN — the application may validate when the form is
+ * sent, which the crawler does not do to find out.
+ */
+export interface ValidationCase {
+  fieldId: string;
+  field: string;
+  case: string;
+  value: string;
+  outcome: 'REJECTED' | 'NOT_ENTERED' | 'ACCEPTED' | 'ERROR';
+  verdict: 'PASS' | 'UNKNOWN';
+  message?: string;
+}
+
 export interface FormRun {
   group: string;
   name: string;
+  form: DiscoveredForm;
+  plan: FormFillPlan;
   fields: FilledField[];
   problems: ValidationProblem[];
+  validationCases: ValidationCase[];
 }
 
-/** Time given to the application to show a field's error message once the field is left. */
-const BLUR_SETTLE_MS = 100;
-
-const FIELD_TYPES = new Set<DiscoveredAction['type']>(['fill', 'select', 'check']);
+export interface ValidationTestingLimits {
+  maxCasesPerField: number;
+  maxCasesPerForm: number;
+}
 
 /**
- * Fills the forms of a screen the way a user would — a <form>, or the fields
- * of a dialog/overlay (Angular Material dialogs often have no <form>) — with
- * the mission's test data, then reads the validation messages the
- * application shows. It never clicks the button that sends the form: that
- * decision stays with the SafetyPolicy (`forms.submit`, `safety.block`).
+ * Orchestrates one form: FormAnalyzer (what does it expect?) →
+ * FormFillStrategy (which values?) → PlaywrightActionExecutor (fill) →
+ * validation messages, and optionally validation testing (invalid values,
+ * within limits). It never clicks the button that sends the form: that
+ * decision stays with the DecisionEngine and the SafetyPolicy.
  */
 export class FormExerciser {
+  private readonly analyzer = new DomFormAnalyzer();
+  private readonly strategy: FormFillStrategy;
+
   constructor(
     private readonly executor: PlaywrightActionExecutor,
     private readonly testData: TestDataProvider,
-    private readonly safety: SafetyPolicy,
-  ) {}
-
-  /** Forms of the screen that have at least one field to fill, what is in front first. */
-  groupsOf(context: PageContext): string[] {
-    const groups = new Map<string, boolean>();
-    for (const action of this.fieldsOf(context)) {
-      if (!action.formGroup || this.instruction(action).kind === 'skip') continue;
-      groups.set(action.formGroup, (groups.get(action.formGroup) ?? false) || action.foreground === true);
-    }
-    return [...groups.entries()].sort((a, b) => Number(b[1]) - Number(a[1])).map(([group]) => group);
+    safety: SafetyPolicy,
+    runId: string,
+    strategy?: FormFillStrategy,
+  ) {
+    this.strategy = strategy ?? new ValidDataFillStrategy(testData, safety, runId);
   }
 
-  /** Fills every field of the form; nothing is sent. */
+  /** Logical forms of the screen (the FormAnalyzer's view). */
+  formsOf(context: PageContext): DiscoveredForm[] {
+    return this.analyzer.formsOf(context);
+  }
+
+  /** Forms of the screen with at least one field to fill, what is in front first. */
+  groupsOf(context: PageContext): string[] {
+    return this.formsOf(context)
+      .filter((form) =>
+        form.fields.some((field) => {
+          const action = context.actions.find((candidate) => candidate.id === field.id);
+          return (
+            action !== undefined && !action.obscured && this.testData.instructionFor(action).kind !== 'skip'
+          );
+        }),
+      )
+      .map((form) => form.group);
+  }
+
+  /** Fills every field of the form through a plan; nothing is sent. */
   async fill(page: Page, context: PageContext, group: string): Promise<FormRun> {
+    const form = this.formsOf(context).find((candidate) => candidate.group === group) ?? {
+      id: `${context.stateId}:${group}`,
+      stateId: context.stateId,
+      group,
+      name: formName(group, context),
+      fields: [],
+      submitActions: [],
+      validationMessages: [],
+      foreground: false,
+    };
+    const plan = await this.strategy.fill(form, context);
+    const actionOf = (fieldId: string): DiscoveredAction | undefined =>
+      context.actions.find((candidate) => candidate.id === fieldId);
+    const results = await this.executor.executePlan(page, plan, actionOf);
     const fields: FilledField[] = [];
-    const answered = new Set<string>();
-    for (const action of this.fieldsOf(context, group)) {
-      if (this.safety.evaluate(action).verdict === 'BLOCK') {
-        fields.push({ action, skipped: 'not allowed by the mission' });
+    for (const operation of plan.operations) {
+      const action = actionOf(operation.fieldId);
+      if (!action) continue;
+      if (operation.operation === 'skip') {
+        fields.push({ action, skipped: operation.reason ?? 'skipped' });
         continue;
       }
-      const instruction = this.instruction(action);
-      if (instruction.kind === 'skip') {
-        fields.push({ action, skipped: instruction.reason });
-        continue;
-      }
-      // One option per radio group.
-      const choice = action.field?.choiceGroup;
-      if (action.type === 'check' && choice !== undefined && isRadio(action)) {
-        if (answered.has(choice)) {
-          fields.push({ action, skipped: 'another option of the group is chosen' });
-          continue;
-        }
-        answered.add(choice);
-      }
-      const value =
-        instruction.kind === 'fill'
-          ? instruction.value
-          : instruction.kind === 'select'
-            ? instruction.label
-            : undefined;
-      const result = await this.executor.execute(page, action, value !== undefined ? { value } : {});
-      if (action.type !== 'check') {
-        // Leave the field like a user: its error message appears now (blur), not in the middle of the
-        // next click, where it would move the next field under the pointer.
-        await page
-          .evaluate(() => {
-            (document.activeElement as HTMLElement | null)?.blur();
-          })
-          .catch(() => undefined);
-        await page.waitForTimeout(BLUR_SETTLE_MS).catch(() => undefined);
-      }
+      const result = results.find((candidate) => candidate.fieldId === operation.fieldId);
       fields.push({
         action,
-        ...(value ? { value } : {}),
-        ...(result.status === 'FAILED' ? { error: result.error ?? 'failed' } : {}),
+        ...(operation.value ? { value: operation.value } : {}),
+        ...(result?.status === 'FAILED' ? { error: result.error ?? 'failed' } : {}),
       });
     }
-    return { group, name: formName(group, context), fields, problems: [] };
+    return { group, name: form.name, form, plan, fields, problems: [], validationCases: [] };
   }
 
   /**
@@ -130,68 +156,77 @@ export class FormExerciser {
         await locator.focus({ timeout: 1000 }).catch(() => undefined);
         await locator.blur({ timeout: 1000 }).catch(() => undefined);
       }
-      const state = await locator.evaluate(readValidity).catch(() => undefined);
+      const state = await validityOf(locator);
       if (state?.invalid) problems.push({ field, message: state.message || 'invalid value' });
     }
     return problems;
   }
 
-  private fieldsOf(context: PageContext, group?: string): DiscoveredAction[] {
-    return context.actions.filter(
-      (action) =>
-        FIELD_TYPES.has(action.type) &&
-        action.formGroup !== undefined &&
-        (group === undefined || action.formGroup === group) &&
-        action.category !== 'search' &&
-        !action.disabled &&
-        !action.obscured,
-    );
+  /**
+   * Validation testing: for each field, a few invalid values (empty when
+   * required, out of min/max, too long, wrong format…), one at a time, each
+   * followed by the field's valid value again. Bounded per field and per form.
+   */
+  async testValidation(
+    page: Page,
+    context: PageContext,
+    run: FormRun,
+    limits: ValidationTestingLimits,
+  ): Promise<ValidationCase[]> {
+    if (!this.testData.generateInvalidValues) return [];
+    const cases: ValidationCase[] = [];
+    for (const field of run.form.fields) {
+      if (cases.length >= limits.maxCasesPerForm) break;
+      const action = context.actions.find((candidate) => candidate.id === field.id);
+      if (!action || action.obscured || field.sensitive || field.payment) continue;
+      const planned = run.plan.operations.find((operation) => operation.fieldId === field.id);
+      if (!planned || planned.operation === 'skip') continue;
+      const invalid = (
+        await this.testData.generateInvalidValues(field, { runId: '', formName: run.name })
+      ).slice(0, Math.min(limits.maxCasesPerField, limits.maxCasesPerForm - cases.length));
+      for (const value of invalid) {
+        const operation = value.kind === 'uncheck' ? 'uncheck' : 'fill';
+        const plan: FormFillPlan = {
+          formId: run.form.id,
+          operations: [{ fieldId: field.id, operation, value: value.value ?? '' }],
+        };
+        const [result] = await this.executor.executePlan(page, plan, () => action);
+        const base = toLocator(page, action.locator);
+        const locator = action.locator.nth !== undefined ? base.nth(action.locator.nth) : base.first();
+        const validity = result?.status === 'FAILED' ? undefined : await validityOf(locator);
+        const entered =
+          operation === 'fill'
+            ? await locator.inputValue({ timeout: 1000 }).catch(() => undefined)
+            : undefined;
+        const outcome: ValidationCase['outcome'] =
+          result?.status === 'FAILED'
+            ? 'ERROR'
+            : validity?.invalid
+              ? 'REJECTED'
+              : entered !== undefined && entered !== (value.value ?? '')
+                ? 'NOT_ENTERED'
+                : 'ACCEPTED';
+        cases.push({
+          fieldId: field.id,
+          field: fieldLabel(field),
+          case: value.case ?? 'invalid',
+          value: value.value ?? '',
+          outcome,
+          verdict: outcome === 'REJECTED' || outcome === 'NOT_ENTERED' ? 'PASS' : 'UNKNOWN',
+          ...(validity?.message ? { message: validity.message } : {}),
+        });
+        // Back to the valid value, for the next cases and for what follows.
+        await this.executor.executePlan(page, { formId: run.form.id, operations: [planned] }, () => action);
+      }
+    }
+    return cases;
   }
-
-  private instruction(action: DiscoveredAction): FillInstruction {
-    return this.testData.instructionFor(action);
-  }
 }
 
-function isRadio(action: DiscoveredAction): boolean {
-  return action.field?.inputType === 'radio' || action.role === 'radio';
-}
-
-/** Readable name of a form: the dialog's title, else the screen's. */
-export function formName(group: string, context: PageContext): string {
-  if (group.startsWith('layer:')) return group.slice('layer:'.length);
-  return context.dialogs[0] ?? context.headings[0] ?? context.title;
-}
-
-/**
- * Runs in the browser: is the field invalid, and which message does the
- * application show for it (mat-error, invalid-feedback, aria-errormessage…)?
- * The value itself is never read.
- */
-function readValidity(el: Element): { invalid: boolean; message: string } {
-  const ERRORS =
-    'mat-error, .mat-mdc-form-field-error, .mat-error, .invalid-feedback, .error-message, .field-error, [role="alert"]';
-  const CONTAINER =
-    'mat-form-field, .mat-mdc-form-field, .mat-form-field, .form-group, .form-field, .field, [role="radiogroup"], mat-radio-group, fieldset';
-  const visible = (node: Element): boolean => {
-    const rect = node.getBoundingClientRect();
-    const style = window.getComputedStyle(node);
-    return (rect.width > 0 || rect.height > 0) && style.visibility !== 'hidden' && style.display !== 'none';
-  };
-  const text = (node: Element | null): string =>
-    ((node as HTMLElement | null)?.innerText ?? '').replace(/\s+/g, ' ').trim();
-  const container = el.closest(CONTAINER) ?? el.parentElement;
-  const described = [el.getAttribute('aria-errormessage'), el.getAttribute('aria-describedby')]
-    .join(' ')
-    .split(/\s+/)
-    .map((id) => (id ? document.getElementById(id) : null))
-    .filter((node): node is HTMLElement => node !== null && node.matches(ERRORS) && visible(node));
-  const shown = [...described, ...Array.from(container?.querySelectorAll(ERRORS) ?? []).filter(visible)];
-  const message = [...new Set(shown.map((node) => text(node)).filter(Boolean))].join(' ').slice(0, 160);
-  const control = el as HTMLInputElement;
-  const invalid =
-    el.getAttribute('aria-invalid') === 'true' ||
-    (typeof control.checkValidity === 'function' && !control.checkValidity()) ||
-    message !== '';
-  return { invalid, message: message || control.validationMessage };
+function fieldLabel(field: FormField): string {
+  const name =
+    field.choiceGroup !== undefined && field.groupLabel
+      ? field.groupLabel
+      : (field.label ?? field.name ?? field.id);
+  return name.replace(/^\*\s*|\s*\*$/g, '');
 }

@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import type { FormFillPlan } from '../forms/form-model.js';
 import type { DiscoveredAction } from '../model/discovered-action.js';
 import type { LocatorDescriptor } from '../model/locator.js';
 import { toLocator } from './locator-resolver.js';
@@ -113,6 +114,46 @@ export class PlaywrightActionExecutor {
   }
 
   /**
+   * Executes a form fill plan (FormFillStrategy): each operation on the
+   * field's element, then the field is left like a user does (blur), so the
+   * application validates it now and not in the middle of the next click.
+   */
+  async executePlan(
+    page: Page,
+    plan: FormFillPlan,
+    actionOf: (fieldId: string) => DiscoveredAction | undefined,
+  ): Promise<PlanOperationResult[]> {
+    const results: PlanOperationResult[] = [];
+    for (const operation of plan.operations) {
+      if (operation.operation === 'skip') continue;
+      const action = actionOf(operation.fieldId);
+      if (!action) {
+        results.push({ fieldId: operation.fieldId, status: 'FAILED', error: 'field no longer on the page' });
+        continue;
+      }
+      const executed = await this.execute(
+        page,
+        { ...action, type: operation.operation },
+        operation.value !== undefined ? { value: operation.value } : {},
+      );
+      if (operation.operation === 'fill' || operation.operation === 'select') {
+        await page
+          .evaluate(() => {
+            (document.activeElement as HTMLElement | null)?.blur();
+          })
+          .catch(() => undefined);
+        await page.waitForTimeout(BLUR_SETTLE_MS).catch(() => undefined);
+      }
+      results.push({
+        fieldId: operation.fieldId,
+        status: executed.status,
+        ...(executed.error ? { error: executed.error } : {}),
+      });
+    }
+    return results;
+  }
+
+  /**
    * Clicks, failing fast with a clear reason when another layer (a date
    * picker's backdrop, a modal…) takes the click instead of the element.
    */
@@ -182,6 +223,15 @@ export class PlaywrightActionExecutor {
     await page.waitForLoadState('domcontentloaded', { timeout: this.actionTimeoutMs }).catch(() => undefined);
     if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
   }
+}
+
+/** Time given to the application to show a field's error message once the field is left. */
+const BLUR_SETTLE_MS = 100;
+
+export interface PlanOperationResult {
+  fieldId: string;
+  status: 'SUCCESS' | 'FAILED';
+  error?: string;
 }
 
 /** Time given to a click before telling that another layer takes it. */

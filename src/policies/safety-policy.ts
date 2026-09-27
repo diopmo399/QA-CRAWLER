@@ -6,16 +6,16 @@ import type {
   DiscoveredAction,
   RiskKind,
 } from '../model/discovered-action.js';
-import {
-  KeywordMatcher,
-  MUTATION_KEYWORDS,
-  PAYMENT_FIELD_KEYWORDS,
-  RISK_KEYWORDS,
-  SENSITIVE_FIELD_KEYWORDS,
-  STEP_KEYWORDS,
-  urlText,
-} from './keywords.js';
+import { KeywordMatcher, MUTATION_KEYWORDS, RISK_KEYWORDS, STEP_KEYWORDS, urlText } from './keywords.js';
 import { NavigationPolicy, NON_HTML_EXTENSION } from './navigation-policy.js';
+import { sensitivityOf, type FieldDescription } from './sensitive-fields.js';
+
+/** Keeps only the defined properties (exactOptionalPropertyTypes). */
+function stripUndefined(description: Record<string, string | undefined>): FieldDescription {
+  return Object.fromEntries(
+    Object.entries(description).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+}
 
 /** What the policy needs to know to classify an element (a subset of a DiscoveredAction). */
 export interface ClassifiableAction {
@@ -87,8 +87,6 @@ export class SafetyPolicy {
   private readonly risks: [RiskKind, KeywordMatcher][];
   private readonly mutation: KeywordMatcher;
   private readonly step: KeywordMatcher;
-  private readonly sensitive = new KeywordMatcher(SENSITIVE_FIELD_KEYWORDS);
-  private readonly payment = new KeywordMatcher(PAYMENT_FIELD_KEYWORDS);
   private readonly allowedClasses: ReadonlySet<ActionClassification>;
   private readonly allowedGroups: ReadonlySet<SafeActionGroup>;
   private readonly blocked: ReadonlySet<RiskKind>;
@@ -112,15 +110,18 @@ export class SafetyPolicy {
     const router = action.routerLink ?? '';
 
     if (isFieldAction(action.type)) {
-      const sensitive =
-        action.inputType === 'password' ||
-        /^(cc-|current-password|new-password|one-time-code)/.test(action.autocomplete ?? '') ||
-        this.sensitive.match(label, action.placeholder) !== undefined;
-      if (sensitive) {
+      const sensitivity = sensitivityOf({
+        ...(action.inputType !== undefined ? { inputType: action.inputType } : {}),
+        ...(action.autocomplete !== undefined ? { autocomplete: action.autocomplete } : {}),
+        label,
+        ...(action.placeholder !== undefined ? { placeholder: action.placeholder } : {}),
+      });
+      if (sensitivity.sensitive) {
         return {
           classification: 'DANGEROUS',
           reason: 'sensitive field (password, payment or secret data): never filled',
-          risks: ['sensitive-data'],
+          // Payment data also triggers the payment risk (blocked by default).
+          risks: sensitivity.payment ? ['sensitive-data', 'payment'] : ['sensitive-data'],
         };
       }
       return { classification: 'SAFE', reason: 'fills a field locally (nothing is sent)', risks: [] };
@@ -240,17 +241,15 @@ export class SafetyPolicy {
   /** Card, IBAN… fields: never filled, whatever the source of the value. */
   isPaymentField(action: DiscoveredAction): boolean {
     const field = action.field;
-    if (/^cc-/.test(field?.autocomplete ?? '')) return true;
-    return (
-      this.payment.match(
-        action.label,
-        action.text,
-        action.name,
-        field?.label,
-        field?.name,
-        field?.placeholder,
-      ) !== undefined
-    );
+    return [
+      {
+        autocomplete: field?.autocomplete,
+        name: field?.name,
+        label: field?.label,
+        placeholder: field?.placeholder,
+      },
+      { name: action.name, label: action.label ?? action.text },
+    ].some((description) => sensitivityOf(stripUndefined(description)).payment);
   }
 
   /** Whether an action class may run at all (used to pre-filter candidates). */

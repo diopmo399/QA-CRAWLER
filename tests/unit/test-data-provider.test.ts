@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { DefaultTestDataProvider } from '../../src/data/test-data-provider.js';
 import type { DiscoveredAction, FieldConstraints } from '../../src/model/discovered-action.js';
 
-const provider = new DefaultTestDataProvider(() => new Date('2026-09-26T12:00:00Z'));
+const provider = new DefaultTestDataProvider({
+  runId: 'abc123',
+  today: () => new Date('2026-09-26T12:00:00Z'),
+});
 const fieldAction = (field: FieldConstraints, type: DiscoveredAction['type'] = 'fill'): DiscoveredAction => ({
   id: 'a',
   stateId: 's',
@@ -22,7 +25,8 @@ describe('DefaultTestDataProvider', () => {
   it('produces valid values by type', () => {
     expect(provider.instructionFor(fieldAction({ inputType: 'email', required: true }))).toEqual({
       kind: 'fill',
-      value: 'qa-crawler@example.test',
+      // Carries the run id: created data can be found later.
+      value: 'qa-crawler-abc123@example.test',
     });
     expect(provider.instructionFor(fieldAction({ inputType: 'text', required: true }))).toEqual({
       kind: 'fill',
@@ -111,12 +115,16 @@ describe('DefaultTestDataProvider', () => {
   });
 
   it('uses the values of the mission, by label, name or group label (case, accents, * ignored)', () => {
-    const configured = new DefaultTestDataProvider(() => new Date('2026-09-26T12:00:00Z'), {
-      'code agence': '81234',
-      'Canal de contact': 'Courriel',
-      'Type de dossier': 'Fermeture',
-      "M'assigner le dossier": 'oui',
-      'Mot de passe': 'secret',
+    const configured = new DefaultTestDataProvider({
+      runId: 'abc123',
+      today: () => new Date('2026-09-26T12:00:00Z'),
+      fields: {
+        'code agence': '81234',
+        'Canal de contact': 'Courriel',
+        'Type de dossier': 'Fermeture',
+        "M'assigner le dossier": 'oui',
+        'Mot de passe': 'secret',
+      },
     });
     const field = (extra: Partial<FieldConstraints>, type: DiscoveredAction['type'] = 'fill') =>
       configured.instructionFor(fieldAction({ inputType: 'text', required: true, ...extra }, type));

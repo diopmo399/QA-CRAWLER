@@ -1,4 +1,4 @@
-import type { DiscoveredForm } from '../model/discovered-action.js';
+import type { FormSummary } from '../model/discovered-action.js';
 import type { UiElement, UiSnapshot } from '../model/ui-snapshot.js';
 
 export type DomSnapshot = Omit<UiSnapshot, 'url' | 'title'>;
@@ -426,7 +426,14 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     // The form an element belongs to: its <form>, else the dialog/overlay that holds it (forms of
     // Angular Material dialogs often have no <form>).
     const layer = layers.find((candidate) => candidate.contains(el));
-    const formGroup = form ? `form:${formIndex}` : layer ? `layer:${overlayName(layer)}` : undefined;
+    // Fields outside any <form>, dialog or overlay: the page itself may be the form (SPA without <form>).
+    const formGroup = form
+      ? `form:${formIndex}`
+      : layer
+        ? `layer:${overlayName(layer)}`
+        : isField || role === 'combobox' || el.matches('button, [role="button"], input[type="submit"]')
+          ? 'page'
+          : undefined;
     const customSelect = !isField && (role === 'combobox' || role === 'listbox');
     const fieldInfo = isField || customSelect ? describeField(el, tag, inputType, customSelect) : {};
     const numberAttr = (name: string): number | undefined => {
@@ -499,6 +506,13 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       minLength: numberAttr('minlength'),
       maxLength: numberAttr('maxlength'),
       pattern: attr('pattern'),
+      disabledOptions:
+        tag === 'select'
+          ? Array.from((el as HTMLSelectElement).options)
+              .slice(0, 30)
+              .filter((option) => option.disabled)
+              .map((option) => clean(option.text))
+          : undefined,
       options:
         tag === 'select'
           ? Array.from((el as HTMLSelectElement).options)
@@ -513,11 +527,11 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
   }
 
   // ---- forms (structure only)
-  const describeFields = (fields: Element[]): DiscoveredForm['fields'] =>
+  const describeFields = (fields: Element[]): FormSummary['fields'] =>
     fields.map((element) => {
       const el = element as HTMLInputElement;
       const tag = el.tagName.toLowerCase() as 'input' | 'select' | 'textarea';
-      const field: DiscoveredForm['fields'][number] = {
+      const field: FormSummary['fields'][number] = {
         tag,
         type: tag === 'input' ? (el.getAttribute('type') ?? 'text').toLowerCase() : tag,
         required: el.required || el.getAttribute('aria-required') === 'true',
@@ -548,12 +562,12 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       return field;
     });
 
-  const formResults: DiscoveredForm[] = forms.map((form, index) => {
+  const formResults: FormSummary[] = forms.map((form, index) => {
     const method = (form.getAttribute('method') ?? 'get').toLowerCase();
     const submit = form.querySelector<HTMLElement>(
       'button[type="submit"], button:not([type]), input[type="submit"]',
     );
-    const result: DiscoveredForm = {
+    const result: FormSummary = {
       index,
       method,
       isSearchForm: searchForm(form),

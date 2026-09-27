@@ -120,7 +120,8 @@ output:
     const card = result.states
       .flatMap((state) => state.actionsDetail)
       .find((action) => action.label?.includes('carte'));
-    expect(card).toMatchObject({ classification: 'DANGEROUS', risks: ['sensitive-data'] });
+    // A payment field is sensitive and also carries the payment risk (blocked by the SafetyPolicy).
+    expect(card).toMatchObject({ classification: 'DANGEROUS', risks: ['sensitive-data', 'payment'] });
     expect(result.transitions.some((edge) => edge.actionId === card?.id && edge.result === 'SUCCESS')).toBe(
       false,
     );

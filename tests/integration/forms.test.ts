@@ -207,6 +207,7 @@ describe('forms with test data per field and forms.submit: true', () => {
       app.url,
       `forms: { submit: true }
 testData:
+  runId: t1
   fields:
     "Numéro de dossier": AB-1234
     "canal de contact": Courriel`,
@@ -220,7 +221,7 @@ testData:
     expect(app.posts.length).toBeGreaterThanOrEqual(1);
     expect(app.posts[0]).toEqual({
       agence: '12345', // hint "99999"
-      nom: 'QA Test',
+      nom: 'QA-CRAWLER-t1', // company name: tagged with the run id
       dossier: 'AB-1234', // testData.fields
       canal: 'courriel', // radio group, by its label
       type: 'Ouverture', // custom list: first option
