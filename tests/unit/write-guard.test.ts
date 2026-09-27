@@ -15,11 +15,25 @@ describe('WriteGuard', () => {
     expect(writes.decide('GET', 'http://app.test/api/users')).toBe('continue');
     // Hôte hors de l'application (analytics, fournisseur d'identité) : pas gardé.
     expect(writes.decide('POST', 'https://sso.example.test/token')).toBe('continue');
-    await writes.permit('sign-in', () => {
-      expect(writes.decide('POST', 'http://app.test/login')).toBe('continue');
+    await writes.permit('mutation action', () => {
+      expect(writes.decide('POST', 'http://app.test/api/users')).toBe('continue');
       return Promise.resolve();
     });
-    expect(writes.decide('POST', 'http://app.test/login')).toBe('block');
+    expect(writes.decide('POST', 'http://app.test/api/users')).toBe('block');
+  });
+
+  it('authentication is never blocked: OIDC / OAuth token, SAML, SSO, session, by path or by body', () => {
+    const writes = guard();
+    expect(writes.decide('POST', 'http://app.test/sso/oidc/web-client/token')).toBe('continue');
+    expect(writes.decide('POST', 'http://app.test/oauth2/token')).toBe('continue');
+    expect(writes.decide('POST', 'http://app.test/saml2/acs')).toBe('continue');
+    expect(writes.decide('POST', 'http://app.test/api/session')).toBe('continue');
+    expect(
+      writes.decide('POST', 'http://app.test/idp/exchange', 'grant_type=authorization_code&code=x'),
+    ).toBe('continue');
+    // Une écriture métier reste bloquée, même si son chemin contient « auth » dans un mot.
+    expect(writes.decide('PUT', 'http://app.test/api/authors/3')).toBe('block');
+    expect(writes.decide('POST', 'http://app.test/api/tasks/QA%20Test/owner', '{"owner":"x"}')).toBe('block');
   });
 
   it('allow list: method + path with wildcards, or a path for any method', () => {

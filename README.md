@@ -1080,7 +1080,7 @@ Le `ConstraintExtractor` fusionne le DOM (prioritaire : ce que l'utilisateur peu
 
 ### Garde d'écriture, suggestions, options
 
-- **Garde d'écriture** (`safety.writeGuard`, activée par défaut) : toute requête `POST`/`PUT`/`PATCH`/`DELETE` vers l'application est annulée si l'action en cours n'a pas le droit de modifier des données (une saisie qui déclenche un `PUT`…), et signalée comme effet de bord. Permis : la connexion, les actions MUTATION/DANGEROUS autorisées, les étapes de flow avec `allow`, et `writeGuard.allow: ["POST /api/search", "/graphql"]`.
+- **Garde d'écriture** (`safety.writeGuard`, activée par défaut) : toute requête `POST`/`PUT`/`PATCH`/`DELETE` vers l'application est annulée si l'action en cours n'a pas le droit de modifier des données (une saisie qui déclenche un `PUT`…), et signalée comme effet de bord. Permis : la connexion, les échanges d'authentification (jeton OIDC / OAuth, SAML, SSO, session — reconnus par leur chemin `/oidc/`, `/oauth2/`, `/token`, `/saml2/`, `/sso/`, `/login`… ou leur corps `grant_type=`, `SAMLResponse=`), les actions MUTATION/DANGEROUS autorisées, les étapes de flow avec `allow`, et `writeGuard.allow: ["POST /api/search", "/graphql"]`. En dernier recours : `safety.writeGuard.enabled: false`.
 - **Champs à suggestions** (autocomplete, Angular Material) : après la saisie, la suggestion qui correspond est cliquée (sinon la première) ; le rapport l'indique (`fill "1000" → "10001 — Agence Nord"`).
 - **Options d'un groupe** (radios Oui/Non…) : chaque option n'est essayée qu'une fois par run, pas sur chaque écran où le groupe réapparaît.
 
