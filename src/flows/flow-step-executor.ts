@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import { setCheckedRobust } from '../execution/checkable.js';
 import type { FlowExpectation, FlowTarget } from '../config/flow-schema.js';
 import { toLocator } from '../execution/locator-resolver.js';
 
@@ -99,10 +100,10 @@ export class FlowStepExecutor {
           await locator.click({ timeout: timeoutMs });
           break;
         case 'check':
-          await this.setChecked(locator, true, timeoutMs);
+          await setCheckedRobust(locator, true, timeoutMs);
           break;
         case 'uncheck':
-          await this.setChecked(locator, false, timeoutMs);
+          await setCheckedRobust(locator, false, timeoutMs);
           break;
         case 'fill':
           await locator.fill(action.value, { timeout: timeoutMs });
@@ -173,47 +174,12 @@ export class FlowStepExecutor {
     await page.getByRole('option', { name: option }).first().click({ timeout: timeoutMs });
   }
 
-  /**
-   * Les radios et cases stylées (Angular Material…) se dessinent par-dessus leur input
-   * natif, qui ne reçoit alors jamais le clic : après un court essai, cliquer sur leur
-   * libellé comme le ferait un utilisateur, puis forcer l'input en dernier recours.
-   * L'état est vérifié à chaque fois.
-   */
-  private async setChecked(locator: Locator, checked: boolean, timeoutMs: number): Promise<void> {
-    try {
-      await locator.setChecked(checked, { timeout: Math.min(timeoutMs, QUICK_CHECK_MS) });
-      return;
-    } catch (error) {
-      const done = async (): Promise<boolean> =>
-        (await locator.isChecked().catch(() => !checked)) === checked;
-      if (await done()) return;
-      const viaLabel = await locator
-        .evaluate((el) => {
-          const label =
-            (el as HTMLInputElement).labels?.[0] ??
-            el.closest('label, mat-radio-button, mat-checkbox, [role="radio"], [role="checkbox"]');
-          if (!label || label === el) return false;
-          (label as HTMLElement).click();
-          return true;
-        })
-        .catch(() => false);
-      if (viaLabel) await locator.page().waitForTimeout(100);
-      if (await done()) return;
-      await locator.setChecked(checked, { force: true, timeout: timeoutMs }).catch(() => undefined);
-      if (await done()) return;
-      throw error;
-    }
-  }
-
   private async settle(page: Page, timeoutMs: number): Promise<void> {
     if (page.isClosed()) return;
     await page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => undefined);
     if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
   }
 }
-
-/** Temps laissé à un simple check avant d'essayer le libellé (radios/cases stylées). */
-const QUICK_CHECK_MS = 3000;
 
 function firstLine(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);

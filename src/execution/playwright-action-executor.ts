@@ -1,6 +1,7 @@
 import type { Locator, Page } from 'playwright';
 import type { FormFillPlan } from '../forms/form-model.js';
 import type { DiscoveredAction } from '../model/discovered-action.js';
+import { setCheckedRobust } from './checkable.js';
 import type { LocatorDescriptor } from '../model/locator.js';
 import { toLocator } from './locator-resolver.js';
 
@@ -95,14 +96,9 @@ export class PlaywrightActionExecutor {
           await this.select(page, target.locator, input.value, timeout);
           break;
         case 'check':
-          await target.locator.setChecked(true, { timeout }).catch(async (error: unknown) => {
-            // Case ou radio stylée (Angular Material) : le dessin recouvre l'input natif.
-            if (!interceptor(error)) throw error;
-            await target.locator.check({ force: true, timeout });
-          });
-          break;
         case 'uncheck':
-          await target.locator.setChecked(false, { timeout });
+          // Cases et radios stylées ou pilotées par un framework : libellé, relecture différée, clic forcé.
+          await setCheckedRobust(target.locator, action.type === 'check', timeout);
           break;
       }
       await this.settle(page);
