@@ -94,6 +94,8 @@ export const BASE_CSS = `
   .pill.BLOCKED, .pill.MUTATION { background:#fef3c7; color:#92400e; }
   .pill.SKIPPED, .pill.UNKNOWN { background:#f1f5f9; color:#475569; }
   .flow-run { margin-bottom:18px; }
+  .suggest { margin-top:6px; color:#1f2937; }
+  .suggest pre { margin:4px 0 0; padding:6px 8px; background:#fff7e6; border:1px solid #f0c36d; border-radius:6px; white-space:pre-wrap; word-break:break-all; font-size:12px; }
   .flow-run h3 { margin:0 0 6px; font-size:15px; }
   .SAFE, .SUCCESS { background:#dcfce7; } .MUTATION { background:#fef3c7; } .DANGEROUS, .BLOCKED { background:#fee2e2; } .UNKNOWN { background:#e5e7eb; } .FAILED { background:#fde68a; }
   .muted { color:var(--muted); }

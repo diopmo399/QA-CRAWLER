@@ -205,6 +205,12 @@ function progressListener(quiet: boolean): ExplorationListener {
       logger.info(
         `   ${mark} ${String(step.index).padStart(2, ' ')}. ${step.description}${step.status !== 'PASSED' ? ` ${step.status}` : ''}${reason}`,
       );
+      if (step.suggestions && step.suggestions.length > 0) {
+        logger.info(color.yellow('       Suggested step (found on the screen):'));
+        for (const line of step.suggestions) logger.info(`         ${line}`);
+      }
+      if (step.onScreen && step.onScreen.length > 0)
+        logger.info(color.dim(`       On the screen: ${step.onScreen.join(' · ')}`));
     },
     onFlowEnd(report) {
       const status =

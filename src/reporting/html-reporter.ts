@@ -254,7 +254,7 @@ function flowsSection(
       const rows = flow.steps
         .map(
           (step) =>
-            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
+            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
         )
         .join('');
       return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status, t.lang)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ` · ${esc(t.lastScreenExplored)}` : ''}</span></h3>
@@ -267,6 +267,20 @@ function flowsSection(
     <p class="muted">${t.flowsHint}</p>
     ${runs}
   </section>`;
+}
+
+/** Element not found: the steps found on the screen, ready to paste, and what the screen shows. */
+function suggestionBlock(step: ExplorationResult['flows'][number]['steps'][number], t: ReportTexts): string {
+  const parts: string[] = [];
+  if (step.suggestions && step.suggestions.length > 0)
+    parts.push(
+      `<div class="suggest"><b>${esc(t.suggestion)}</b><pre>${esc(step.suggestions.join('\n'))}</pre></div>`,
+    );
+  if (step.onScreen && step.onScreen.length > 0)
+    parts.push(
+      `<div class="suggest">${esc(t.onScreen)} ${step.onScreen.map((label) => `<code>${esc(label)}</code>`).join(' · ')}</div>`,
+    );
+  return parts.join('');
 }
 
 function statesTable(states: StateReport[], href: (file: string) => string, t: ReportTexts): string {

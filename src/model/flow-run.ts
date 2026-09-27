@@ -26,6 +26,10 @@ export interface FlowStepReport {
   url?: string;
   durationMs: number;
   screenshot?: string;
+  /** Element not found: ready-to-paste YAML steps found by inspecting the screen. */
+  suggestions?: string[];
+  /** Element not found: labels of the fields (or names of the buttons) on the screen. */
+  onScreen?: string[];
 }
 
 /** Outcome of one imposed flow. */

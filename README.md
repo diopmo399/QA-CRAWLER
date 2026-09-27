@@ -319,6 +319,26 @@ Un flow qui utilise `allow: MUTATION` modifie de vraies données : lance-le seul
 | Cette fenêtre apparaît dans une **popup** SSO (SiteMinder `smntlm.ntc`…) | Voir [Connexion SSO dans une popup](#connexion-sso-dans-une-popup-siteminder-ntlm) et `scenarios/sso-popup.yaml`       |
 | `expect` échoue alors que le texte est visible                           | Le texte doit être exact au caractère près (accents, tirets « — ») : essaie une partie plus courte                     |
 
+### Élément introuvable : la suggestion
+
+Quand une étape ne trouve pas son élément, le crawler **inspecte l'écran** (la fenêtre du dessus s'il y en a une) :
+
+- il cherche le texte de la cible (`label`, `name` ou `text`) et prend le champ, l'option ou le bouton qui va avec (le champ qui suit un libellé non relié, l'input d'une option radio…) ;
+- il propose l'étape corrigée, prête à copier, avec la cible la plus robuste qui ne trouve que cet élément : `testId`, `role` + `name`, `id`, `formcontrolname` / `name`, sinon un XPath ancré sur le texte ;
+- il liste aussi les libellés des champs (ou les noms des boutons) présents à l'écran.
+
+Dans le rapport HTML (sous la raison de l'étape) et dans la console :
+
+```text
+✗  5. fill label="Code agence" = "12345" FAILED (element not found within 20000 ms)
+   Suggested step (found on the screen):
+     - fill: { css: "input[formcontrolname=\"agence\"]", value: "12345" }
+     - fill: { css: "xpath=//*[text()[contains(normalize-space(.),'Code agence')]]/following::*[…][1]", value: "12345" }
+   On the screen: Code agence · Raison sociale · Téléphone · Courriel
+```
+
+Les valeurs des champs ne sont jamais lues.
+
 ### 6. Ordre d'exécution
 
 1. Connexion (`auth`), puis chargement de `target.startAt`.
