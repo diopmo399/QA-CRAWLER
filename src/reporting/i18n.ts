@@ -5,8 +5,30 @@
 export const REPORT_LANGUAGES = ['en', 'fr'] as const;
 export type ReportLanguage = (typeof REPORT_LANGUAGES)[number];
 
+export interface BaselineTexts {
+  mode: string;
+  baseline: string;
+  learned: string;
+  verificationTitle: string;
+  verificationHint: string;
+  regressions: string;
+  expected: string;
+  actual: string;
+  diffTitle: string;
+  diffHintExplore: string;
+  diffHintVerify: string;
+  diffHintLearn: string;
+  addedStates: string;
+  removedStates: string;
+  addedTransitions: string;
+  removedTransitions: string;
+  changedTransitions: string;
+  noDifference: string;
+}
+
 export interface ReportTexts {
   lang: ReportLanguage;
+  baselineTexts: BaselineTexts;
   reportTitle: string;
   stopped: string;
   engine: string;
@@ -103,6 +125,28 @@ export interface ReportTexts {
 }
 
 const EN: ReportTexts = {
+  baselineTexts: {
+    mode: 'Mode',
+    baseline: 'Baseline',
+    learned: 'Baseline stored',
+    verificationTitle: 'Verification of the baseline',
+    verificationHint:
+      'Every transition learned by the baseline, replayed: same start state, same action, is the same state reached?',
+    regressions: 'regression(s)',
+    expected: 'Expected',
+    actual: 'Reached',
+    diffTitle: 'Flow diff',
+    diffHintExplore:
+      'What this run found that the baseline did not know, and the known transitions that changed. What was not revisited is not listed: explore goes to new ground first.',
+    diffHintVerify: 'Compared with the baseline, from the transitions replayed.',
+    diffHintLearn: 'Compared with the previous baseline.',
+    addedStates: 'New states',
+    removedStates: 'States not found',
+    addedTransitions: 'New transitions',
+    removedTransitions: 'Transitions not found',
+    changedTransitions: 'Changed transitions',
+    noDifference: 'No difference.',
+  },
   lang: 'en',
   reportTitle: 'QA Flow Explorer',
   stopped: 'stopped',
@@ -214,6 +258,28 @@ const EN: ReportTexts = {
 };
 
 const FR: ReportTexts = {
+  baselineTexts: {
+    mode: 'Mode',
+    baseline: 'Baseline',
+    learned: 'Baseline enregistrée',
+    verificationTitle: 'Vérification de la baseline',
+    verificationHint:
+      'Chaque transition apprise par la baseline, rejouée : même état de départ, même action, arrive-t-on au même état ?',
+    regressions: 'régression(s)',
+    expected: 'Attendu',
+    actual: 'Atteint',
+    diffTitle: 'Différences de flows',
+    diffHintExplore:
+      'Ce que ce passage a trouvé et que la baseline ne connaissait pas, et les transitions connues qui ont changé. Ce qui n’a pas été revu n’est pas listé : explore va d’abord vers l’inconnu.',
+    diffHintVerify: 'Comparé à la baseline, d’après les transitions rejouées.',
+    diffHintLearn: 'Comparé à la baseline précédente.',
+    addedStates: 'Nouveaux états',
+    removedStates: 'États non retrouvés',
+    addedTransitions: 'Nouvelles transitions',
+    removedTransitions: 'Transitions non retrouvées',
+    changedTransitions: 'Transitions modifiées',
+    noDifference: 'Aucune différence.',
+  },
   lang: 'fr',
   reportTitle: 'Rapport QA',
   stopped: 'arrêt',
@@ -356,6 +422,12 @@ const FR_VALUES: Record<string, string> = {
   PAGE_CRASH: 'PLANTAGE',
   NAVIGATION: 'NAVIGATION',
   FLOW: 'FLOW',
+  learn: 'apprentissage',
+  verify: 'vérification',
+  explore: 'exploration',
+  CHANGED: 'MODIFIÉE',
+  ACTION_MISSING: 'ACTION ABSENTE',
+  UNREACHABLE: 'INACCESSIBLE',
   FORM_VALIDATION: 'FORMULAIRE',
   // action types
   click: 'clic',

@@ -188,6 +188,13 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
       warnings.push(`flow "${flow.name}": ${mutating} step(s) allow MUTATION and may modify data.`);
     }
   }
+  const { discover } = config.goals;
+  if (discover) {
+    // goals.discover is the short form of the discover* switches.
+    if (discover.navigation !== undefined) config.goals.discoverNavigation = discover.navigation;
+    if (discover.forms !== undefined) config.goals.discoverForms = discover.forms;
+    if (discover.dialogs !== undefined) config.goals.discoverFlows = discover.dialogs;
+  }
   if (config.forms.submit === true) {
     config.safety.block = config.safety.block.filter((risk) => risk !== 'form-submit');
   } else if (config.forms.submit === false && !config.safety.block.includes('form-submit')) {

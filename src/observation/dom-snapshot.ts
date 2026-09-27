@@ -37,6 +37,9 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     '[onclick]',
     '[tabindex="0"]',
   ].join(', ');
+  /** Toasts, live regions, timers: they come and go. */
+  const TRANSIENT =
+    '[aria-live]:not([aria-live="off"]), [role="status"], [role="alert"], [role="log"], [role="timer"], [role="marquee"], mat-snack-bar-container, .toast, .snackbar';
   /** Candidates that are actions by themselves (everything but a bare tabindex="0"). */
   const ACTIONABLE = CANDIDATES.replace(/,\s*\[tabindex="0"\]/, '');
   const STRUCTURE_ROLES = new Set([
@@ -484,6 +487,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       dialogName,
       formGroup,
       customSelect: customSelect ? true : undefined,
+      transient: el.closest(TRANSIENT) ? true : undefined,
       ...fieldInfo,
       flowTarget: el.hasAttribute(FLOW_TARGET_ATTRIBUTE) ? true : undefined,
       foreground: foreground ? true : undefined,

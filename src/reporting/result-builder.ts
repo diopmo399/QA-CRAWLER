@@ -44,6 +44,7 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
   const { exploration, goals, safety, checks, http, browser, auth, report } = config;
   return {
     mission: config.mission.name,
+    mode: config.mission.mode,
     ...(config.mission.description ? { description: config.mission.description } : {}),
     target: { baseUrl: redactUrl(config.target.baseUrl), startUrl: outcome.startUrl },
     startedAt: outcome.startedAt.toISOString(),
@@ -78,6 +79,7 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     flows: outcome.flows,
     browserInteractions: outcome.interactions,
     issues,
+    ...(outcome.verification ? { verification: outcome.verification } : {}),
     settings: {
       exploration,
       goals,

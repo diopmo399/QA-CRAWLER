@@ -10,6 +10,7 @@ import { describeStep, type FlowConfig, type FlowStep } from '../config/flow-sch
 import { DefaultTestDataProvider, type TestDataProvider } from '../data/test-data-provider.js';
 import type { ActionDecision, DecisionEngine } from '../decision/decision-engine.js';
 import { RuleBasedDecisionEngine } from '../decision/rule-based-decision-engine.js';
+import { scoringWeights } from '../decision/scoring-weights.js';
 import { ActionDiscovery } from '../discovery/action-discovery.js';
 import {
   PlaywrightActionExecutor,
@@ -37,7 +38,14 @@ import { AllowedOriginPolicy } from '../policies/origin-policy.js';
 import type { FlowMemory } from '../memory/flow-memory.js';
 import { actionLabel, type DiscoveredAction, type DiscoveredForm } from '../model/discovered-action.js';
 import type { StopReason } from '../model/exploration-result.js';
-import type { FlowEdge } from '../model/flow.js';
+import type { FlowEdge, FlowGraphData } from '../model/flow.js';
+import {
+  REGRESSION_STATUSES,
+  VERIFICATION_STATUSES,
+  type VerificationReport,
+  type VerificationStatus,
+  type VerifiedTransition,
+} from '../model/verification.js';
 import type { FlowRunReport, FlowStatus, FlowStepReport } from '../model/flow-run.js';
 import { isAtLeast, type Issue } from '../model/issue.js';
 import type { PageContext } from '../model/page-context.js';
@@ -47,9 +55,11 @@ import { UIObserver } from '../observation/ui-observer.js';
 import { ConsoleObserver } from '../observers/console-observer.js';
 import { NetworkObserver } from '../observers/network-observer.js';
 import type { IssueAttribution, ObservationContext, PageObserver } from '../observers/observer.js';
+import { NetworkTraceRecorder } from '../observers/network-trace-recorder.js';
 import { PageErrorObserver } from '../observers/page-error-observer.js';
 import { SafetyPolicy } from '../policies/safety-policy.js';
 import { redactUrl } from '../security/redactor.js';
+import { routeKey } from '../crawler/route-normalizer.js';
 
 /** Progress notifications (CLI output, tests). */
 export interface ExplorationListener {
@@ -75,6 +85,12 @@ export interface FlowExplorerOptions {
   testData?: TestDataProvider;
   listener?: ExplorationListener;
   env?: NodeJS.ProcessEnv;
+  /** `stateId::actionId` known from the baseline (explore mode): tried after new ground. */
+  knownActions?: ReadonlySet<string>;
+  /** verify: the known transitions of this baseline are replayed instead of exploring. */
+  verifyBaseline?: FlowGraphData;
+  /** Id of the baseline run being verified (reports). */
+  baselineRunId?: string;
 }
 
 /** What the explorer knows after one run; the reporters turn it into files. */
@@ -94,6 +110,8 @@ export interface ExplorationOutcome {
   backtracks: number;
   decisionEngine: string;
   startUrl: string;
+  /** verify mode: every known transition of the baseline, replayed. */
+  verification?: VerificationReport;
 }
 
 interface StackEntry {
@@ -156,6 +174,11 @@ export class FlowExplorer {
   /** Last raw observation (lets flow steps find the element they target). */
   private lastSnapshot: UiSnapshot | undefined;
   private readonly forms: FormExerciser;
+  /** Network window of each action (FlowEdge.network). */
+  private readonly networkTrace: NetworkTraceRecorder;
+  private readonly verifyBaseline: FlowGraphData | undefined;
+  private readonly baselineRunId: string | undefined;
+  private verification: VerificationReport | undefined;
   /** Forms already filled, per state (`stateId|group`). */
   private readonly formsExercised = new Set<string>();
   /** Transitions that filled a form: id → form, to fill it again when a path is replayed. */
@@ -173,6 +196,10 @@ export class FlowExplorer {
       options.decisionEngine ??
       new RuleBasedDecisionEngine(this.safety, {
         maxSimilarActions: config.exploration.maxSimilarActions,
+        missionName: config.mission.name,
+        keywords: goals.keywords,
+        weights: scoringWeights(config.scoring.weights),
+        ...(options.knownActions ? { knownActions: options.knownActions } : {}),
         goals,
         maxDepth: exploration.maxDepth,
         maxStatesPerRoute: exploration.maxStatesPerRoute,
@@ -218,6 +245,9 @@ export class FlowExplorer {
     });
     this.testData = options.testData ?? new DefaultTestDataProvider(undefined, config.testData.fields);
     this.forms = new FormExerciser(this.executor, this.testData, this.safety);
+    this.networkTrace = new NetworkTraceRecorder(config.network);
+    this.verifyBaseline = options.verifyBaseline;
+    this.baselineRunId = options.baselineRunId;
     this.screenshots = new ScreenshotService(config.output.screenshotsDir, config.checks.fullPageScreenshots);
     this.authenticator = createAuthenticator(
       config.auth,
@@ -283,9 +313,13 @@ export class FlowExplorer {
         flowsStop = flows.stopReason;
       }
 
-      // 2. Autonomous exploration from the start state.
+      // 2. verify: replay the known transitions of the baseline. Otherwise, autonomous exploration.
       if (flowsStop) {
         stopReason = flowsStop;
+      } else if (this.verifyBaseline) {
+        const verified = await this.verifyKnownTransitions(page, browser, observers, this.verifyBaseline);
+        page = verified.page;
+        stopReason = verified.stopReason;
       } else if (!this.config.exploration.autonomous) {
         stopReason = 'flows-only';
       } else {
@@ -477,6 +511,7 @@ export class FlowExplorer {
     this.currentAction = { stateId: from.stateId, actionId: action.id };
     const interactionMark = this.interactions.mark();
 
+    this.networkTrace.start(action.id);
     const result = await this.execute(page, from, action);
     this.actionsExecuted += 1;
     const raised = this.interactions.since(interactionMark);
@@ -514,6 +549,7 @@ export class FlowExplorer {
         to: from.stateId,
         actionId: action.id,
         action: summaryOf(action),
+        ...this.networkOf(action.id),
         // A browser interaction that could not be completed (e.g. AUTH_REQUIRED) blocks the transition.
         result: blocking.length > 0 ? 'BLOCKED' : 'FAILED',
         reason:
@@ -554,6 +590,7 @@ export class FlowExplorer {
       to: after.stateId,
       actionId: action.id,
       action: summaryOf(action),
+      ...this.networkOf(action.id),
       result: 'SUCCESS',
       durationMs: result.durationMs,
       issueIds: ids,
@@ -570,6 +607,16 @@ export class FlowExplorer {
     this.listener.onTransition?.(edge, action);
     this.pushState(after);
     return { page, context: { ...after, errors: this.collector.forState(after.stateId) } };
+  }
+
+  /** Closes the network window of an action: what to spread into its FlowEdge. */
+  private networkOf(actionId: string): Pick<FlowEdge, 'network' | 'networkWindow'> {
+    const trace = this.networkTrace.stop(actionId);
+    if (!trace) return {};
+    return {
+      network: trace.requests,
+      networkWindow: { startedAt: trace.startedAt, finishedAt: trace.finishedAt },
+    };
   }
 
   /** Next form of this state to fill, if the mission explores forms. */
@@ -598,6 +645,7 @@ export class FlowExplorer {
     this.currentAction = { stateId: from.stateId, actionId };
     const started = Date.now();
 
+    this.networkTrace.start(actionId);
     const run = await this.forms.fill(page, from, group);
     run.problems = await this.forms.validate(page, run);
     // Its fields were handled with the form: not tried again one by one.
@@ -643,6 +691,7 @@ export class FlowExplorer {
       to: after.stateId,
       actionId,
       action: summaryOf(action),
+      ...this.networkOf(actionId),
       result: filled === 0 && failures.length > 0 ? 'FAILED' : 'SUCCESS',
       reason:
         failures.length > 0
@@ -1112,6 +1161,7 @@ export class FlowExplorer {
     this.attribution = { actionId: action.id };
     this.currentAction = { stateId: before.stateId, actionId: action.id, flow: flow.name };
     const interactionMark = this.interactions.mark();
+    this.networkTrace.start(action.id);
     const error = await this.flowSteps.perform(page, located, elementAction, timeout);
     this.actionsExecuted += 1;
     const raised = this.interactions.since(interactionMark);
@@ -1133,6 +1183,7 @@ export class FlowExplorer {
         to: before.stateId,
         actionId: action.id,
         action: summaryOf(action),
+        ...this.networkOf(action.id),
         result: blocking.length > 0 ? 'BLOCKED' : 'FAILED',
         reason:
           blocking.length > 0
@@ -1166,6 +1217,7 @@ export class FlowExplorer {
       to: after.stateId,
       actionId: action.id,
       action: summaryOf(action),
+      ...this.networkOf(action.id),
       result: 'SUCCESS',
       issueIds: ids,
       flow: flow.name,
@@ -1283,6 +1335,11 @@ export class FlowExplorer {
       this.stack.pop();
       const target = this.stack[this.stack.length - 1];
       if (!target || this.exhausted.has(target.stateId) || this.unreachable.has(target.stateId)) continue;
+      // Nothing interesting left there: no need to go back to it, the path goes on shrinking.
+      if (!(await this.hasWorkLeft(target.stateId))) {
+        this.exhausted.add(target.stateId);
+        continue;
+      }
       if (!/^https?:/.test(page.url()) || page.isClosed())
         page = await this.recyclePage(browser, page, observers);
       const context = await this.restore(page, target.stateId, true);
@@ -1296,7 +1353,7 @@ export class FlowExplorer {
     // The current path is exhausted: look for any other state with unexplored actions.
     for (const node of allowJump ? this.graph.allNodes() : []) {
       if (this.exhausted.has(node.id) || this.unreachable.has(node.id)) continue;
-      if (this.graph.getUnexploredActions(node.id).length === 0) {
+      if (this.graph.getUnexploredActions(node.id).length === 0 || !(await this.hasWorkLeft(node.id))) {
         this.exhausted.add(node.id);
         continue;
       }
@@ -1316,6 +1373,32 @@ export class FlowExplorer {
     }
     this.listener.onBacktrack?.(from, undefined, 'nothing left to explore');
     return { page };
+  }
+
+  /**
+   * Would the decision engine still execute something on this state? Asked
+   * with the state's last observation, before paying for going back to it.
+   * Unknown (no observation kept): assume yes.
+   */
+  private async hasWorkLeft(stateId: string): Promise<boolean> {
+    const node = this.graph.getNode(stateId);
+    const detail = this.details.get(stateId);
+    if (!node || !detail) return true;
+    const context: PageContext = {
+      url: node.url,
+      title: node.title ?? '',
+      stateId,
+      stateLabel: node.label,
+      route: node.route,
+      headings: node.headings,
+      dialogs: [],
+      actions: detail.actions,
+      forms: detail.forms,
+      errors: [],
+      metadata: { depth: node.depth, timestamp: new Date().toISOString(), flow: [] },
+    };
+    const decision = await this.decisionEngine.decide(context, this.graph).catch(() => undefined);
+    return decision?.decision === 'EXECUTE';
   }
 
   /**
@@ -1496,9 +1579,10 @@ export class FlowExplorer {
       config: this.config,
     };
     const pageErrors = new PageErrorObserver(observation);
-    if (!this.config.goals.detectErrors) return { all: [], pageErrors };
+    const tracing = this.config.network.trace ? [this.networkTrace] : [];
+    if (!this.config.goals.detectErrors) return { all: tracing, pageErrors };
     return {
-      all: [new NetworkObserver(observation), new ConsoleObserver(observation), pageErrors],
+      all: [new NetworkObserver(observation), new ConsoleObserver(observation), pageErrors, ...tracing],
       pageErrors,
     };
   }
@@ -1650,7 +1734,230 @@ export class FlowExplorer {
       backtracks: this.backtracks,
       decisionEngine: this.decisionEngine.name,
       startUrl: redactUrl(this.startUrl),
+      ...(this.verification ? { verification: this.verification } : {}),
     };
+  }
+
+  // ---------------------------------------------------------------- verify
+
+  /**
+   * VERIFY: every transition the baseline learned is replayed — its start
+   * state is reached again (by its URL, else by the known path from the
+   * start), its action executed, and the state reached compared with the
+   * one the baseline recorded. The observations build the current graph,
+   * compared with the baseline afterwards (FlowDiffEngine).
+   */
+  private async verifyKnownTransitions(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    baseline: FlowGraphData,
+  ): Promise<{ page: Page; stopReason: StopReason }> {
+    const reference = FlowGraph.fromJSON(baseline);
+    const labelOf = (id: string): string => reference.getNode(id)?.label ?? id;
+    const depthOf = (id: string): number => reference.getNode(id)?.depth ?? 0;
+    // Autonomous transitions only: imposed flows run anyway, filled forms and popups are replayed with them.
+    const known = new Map<string, FlowEdge>();
+    for (const edge of baseline.edges) {
+      if (edge.result !== 'SUCCESS' || edge.flow || edge.interaction || edge.actionId.startsWith('form-'))
+        continue;
+      known.set(`${edge.from}::${edge.actionId}`, edge);
+    }
+    const queue = [...known.values()].sort((a, b) => depthOf(a.from) - depthOf(b.from));
+    const results: VerifiedTransition[] = [];
+    const record = (
+      edge: FlowEdge,
+      status: VerificationStatus,
+      extra: Partial<VerifiedTransition> = {},
+    ): void => {
+      results.push({
+        from: edge.from,
+        fromLabel: labelOf(edge.from),
+        actionId: edge.actionId,
+        action: {
+          type: edge.action.type,
+          ...(edge.action.text ? { text: edge.action.text } : {}),
+          ...(edge.action.href ? { href: edge.action.href } : {}),
+        },
+        expectedTo: edge.to,
+        expectedToLabel: labelOf(edge.to),
+        status,
+        ...extra,
+      });
+    };
+
+    let stopReason: StopReason = 'exhausted';
+    let current: PageContext | undefined;
+    for (const [position, edge] of queue.entries()) {
+      const limit = this.limitReached();
+      if (limit) {
+        stopReason = limit;
+        for (const skipped of queue.slice(position))
+          record(skipped, 'SKIPPED', { reason: `mission limit reached (${limit})` });
+        break;
+      }
+      if (!/^https?:/.test(page.url()) || page.isClosed()) {
+        page = await this.recyclePage(browser, page, observers.all);
+        current = undefined;
+      }
+      if (current?.stateId !== edge.from) {
+        const reached = await this.reachKnownState(page, reference, edge.from);
+        if (typeof reached === 'string') {
+          record(edge, 'UNREACHABLE', { reason: reached });
+          current = undefined;
+          continue;
+        }
+        current = reached;
+      }
+      const action = this.findKnownAction(current, edge);
+      if (!action) {
+        record(edge, 'ACTION_MISSING', { reason: 'the action is no longer on this state' });
+        continue;
+      }
+      const verdict = this.safety.evaluate(action);
+      if (verdict.verdict === 'BLOCK') {
+        record(edge, 'BLOCKED', { reason: verdict.reason });
+        continue;
+      }
+
+      // Execute and observe, like the exploration: anomalies and network are attributed to the action.
+      const from = current;
+      const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
+      this.attribution = { actionId: action.id };
+      this.currentAction = { stateId: from.stateId, actionId: action.id };
+      this.networkTrace.start(action.id);
+      const result = await this.execute(page, from, action);
+      this.actionsExecuted += 1;
+      this.currentAction = undefined;
+      const failed = result.status === 'FAILED' || !this.isExplorablePage(page);
+      const after = failed
+        ? undefined
+        : await this.observeState(page, from.metadata.depth + 1).catch(() => undefined);
+      const ids = this.collector
+        .all()
+        .filter((issue) => !issuesBefore.has(issue.id))
+        .map((issue) => issue.id);
+      const network = this.networkOf(action.id);
+      this.collector.assignState(ids, after?.stateId ?? from.stateId, from.metadata.flow);
+      const edgeRecorded = this.graph.addEdge({
+        from: from.stateId,
+        to: after?.stateId ?? from.stateId,
+        // The baseline's id: the transition is the same one, whatever record it was replayed on.
+        actionId: edge.actionId,
+        action: summaryOf(action),
+        ...network,
+        result: after ? 'SUCCESS' : 'FAILED',
+        ...(after ? {} : { reason: result.error ?? 'left the allowed hosts or the page crashed' }),
+        durationMs: result.durationMs,
+        issueIds: ids,
+      });
+      this.listener.onTransition?.(edgeRecorded, action);
+      if (!after) {
+        record(edge, 'FAILED', {
+          reason: edgeRecorded.reason ?? 'failed',
+          ...(network.network ? { network: network.network } : {}),
+        });
+        current = undefined;
+        continue;
+      }
+      record(edge, after.stateId === edge.to ? 'PASSED' : 'CHANGED', {
+        actualTo: after.stateId,
+        actualToLabel: after.stateLabel,
+        ...(after.stateId === edge.to ? {} : { reason: `now leads to ${after.stateLabel}` }),
+        ...(network.network ? { network: network.network } : {}),
+      });
+      current = after;
+    }
+
+    const summary = Object.fromEntries(VERIFICATION_STATUSES.map((status) => [status, 0])) as Record<
+      VerificationStatus,
+      number
+    >;
+    for (const verified of results) summary[verified.status] += 1;
+    this.verification = {
+      ...(this.baselineRunId ? { baselineRunId: this.baselineRunId } : {}),
+      transitions: results,
+      summary,
+      regressions: results.filter((verified) => REGRESSION_STATUSES.includes(verified.status)).length,
+    };
+    return { page, stopReason };
+  }
+
+  /**
+   * The action of a known transition on the current screen: same id, else
+   * the same control (type + text) towards the same kind of target — another
+   * record (/users/1 learned, /users/2 reached) or another environment
+   * (learned on QA, verified on a PR environment).
+   */
+  private findKnownAction(context: PageContext, edge: FlowEdge): DiscoveredAction | undefined {
+    const mode = this.config.exploration.queryParams.mode;
+    const sameTarget = (href: string | undefined): boolean => {
+      if (href === edge.action.href) return true;
+      if (href === undefined || edge.action.href === undefined) return false;
+      try {
+        return routeKey(href, mode) === routeKey(edge.action.href, mode);
+      } catch {
+        return false;
+      }
+    };
+    return (
+      context.actions.find((candidate) => candidate.id === edge.actionId) ??
+      context.actions.find(
+        (candidate) =>
+          candidate.type === edge.action.type &&
+          candidate.text === edge.action.text &&
+          sameTarget(candidate.href),
+      )
+    );
+  }
+
+  /** A URL of the baseline, on the target of this run (the baseline may come from another environment). */
+  private rebase(url: string, reference: FlowGraph): string {
+    try {
+      const learned = new URL(reference.getNode(reference.rootId ?? '')?.url ?? url);
+      const target = new URL(this.startUrl);
+      const parsed = new URL(url);
+      if (parsed.origin !== learned.origin || learned.origin === target.origin) return url;
+      return new URL(`${parsed.pathname}${parsed.search}${parsed.hash}`, target.origin).toString();
+    } catch {
+      return url;
+    }
+  }
+
+  /**
+   * Reaches a state of the baseline: by its own URL first, else by replaying
+   * the baseline's path from the start page. Returns the observed context, or
+   * why it could not be reached.
+   */
+  private async reachKnownState(
+    page: Page,
+    reference: FlowGraph,
+    stateId: string,
+  ): Promise<PageContext | string> {
+    const node = reference.getNode(stateId);
+    if (!node) return 'unknown state';
+    if (await this.goto(page, this.rebase(node.url, reference))) {
+      const context = await this.observeState(page, node.depth).catch(() => undefined);
+      if (context?.stateId === stateId) return context;
+    }
+    const root = reference.getNode(reference.rootId ?? '');
+    if (!(await this.goto(page, root ? this.rebase(root.url, reference) : this.startUrl)))
+      return 'start page unreachable';
+    let context = await this.observeState(page, 0).catch(() => undefined);
+    for (const step of reference.pathTo(stateId)) {
+      if (!context) return 'page could not be observed';
+      if (context.stateId !== step.from)
+        return `path broken: expected ${reference.getNode(step.from)?.label ?? step.from}, found ${context.stateLabel}`;
+      const action = this.findKnownAction(context, step);
+      if (!action)
+        return `path broken: "${step.action.text ?? step.action.href ?? step.actionId}" missing on ${context.stateLabel}`;
+      if (this.safety.evaluate(action).verdict === 'BLOCK') return 'path blocked by the safety policy';
+      const result = await this.execute(page, context, action);
+      if (result.status === 'FAILED') return `path broken: "${step.action.text ?? step.actionId}" failed`;
+      context = await this.observeState(page, reference.getNode(step.to)?.depth ?? 0).catch(() => undefined);
+    }
+    if (context?.stateId === stateId) return context;
+    return `reached ${context?.stateLabel ?? 'nothing'} instead`;
   }
 }
 

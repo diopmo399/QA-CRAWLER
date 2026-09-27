@@ -1,3 +1,7 @@
+import type { BaselineMetadata } from '../baseline/baseline-store.js';
+import type { MissionMode } from '../config/config.js';
+import type { FlowDiff } from '../diff/flow-diff.js';
+import type { VerificationReport } from './verification.js';
 import type { ActionClassification, DiscoveredAction, DiscoveredForm } from './discovered-action.js';
 import type { FlowEdge, FlowNode } from './flow.js';
 import type { FlowRunReport } from './flow-run.js';
@@ -44,6 +48,8 @@ export interface StateReport extends FlowNode {
 
 export interface ExplorationResult {
   mission: string;
+  /** learn, verify or explore. */
+  mode: MissionMode;
   description?: string;
   target: {
     baseUrl: string;
@@ -62,6 +68,14 @@ export interface ExplorationResult {
   /** Interactions raised by the browser outside the DOM (HTTP_AUTH, dialogs, popups, downloads…). */
   browserInteractions: BrowserInteractionResult[];
   issues: Issue[];
+  /** Baseline this run was compared with (verify, explore) or replaced (learn). */
+  baseline?: BaselineMetadata;
+  /** learn: the baseline this run stored. */
+  learnedBaseline?: BaselineMetadata;
+  /** Differences with that baseline. */
+  flowDiff?: FlowDiff;
+  /** verify: every known transition of the baseline, replayed. */
+  verification?: VerificationReport;
   /** Non-secret summary of the effective configuration. */
   settings: Record<string, unknown>;
   artifacts: {
@@ -70,5 +84,7 @@ export interface ExplorationResult {
     flowGraph?: string;
     flowGraphHtml?: string;
     screenshotsDir?: string;
+    flowDiff?: string;
+    baseline?: string;
   };
 }

@@ -124,7 +124,7 @@ describe('RuleBasedDecisionEngine', () => {
     expect(decision).toMatchObject({ decision: 'BACKTRACK' });
   });
 
-  it('prefers tabs, then content navigation, then other controls, then the global menu', () => {
+  it('prefers new states (content link, then tab, then global menu), then other controls', () => {
     const menu = action('Settings', {
       type: 'navigate',
       category: 'menu',
@@ -141,7 +141,7 @@ describe('RuleBasedDecisionEngine', () => {
     const ranked = engine
       .rank(context(actions), graphWith('home', actions))
       .map((scored) => scored.action.text);
-    expect(ranked).toEqual(['History', 'Users', 'Refresh view', 'Settings']);
+    expect(ranked).toEqual(['Users', 'History', 'Settings', 'Refresh view']);
   });
 
   it('skips actions already tried from this state, then backtracks', async () => {

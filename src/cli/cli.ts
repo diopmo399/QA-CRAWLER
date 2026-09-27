@@ -4,7 +4,8 @@ import { ConfigError, loadConfigFile } from '../config/config-loader.js';
 import type { ExplorationListener } from '../explorer/flow-explorer.js';
 import { actionLabel } from '../model/discovered-action.js';
 import type { Severity } from '../model/issue.js';
-import { runMission } from '../orchestrator.js';
+import { renderFlowDiffText } from '../diff/flow-diff.js';
+import { BaselineMissingError, runMission } from '../orchestrator.js';
 import { buildFlowTree, renderTextTree } from '../reporting/flow-tree.js';
 import { HELP_TEXT, parseCliArgs, UsageError } from './args.js';
 import { color, logger } from './logger.js';
@@ -64,14 +65,18 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 
   const { config, warnings } = loaded;
+  const mode = args.mode ?? config.mission.mode;
   const { exploration, safety, goals } = config;
   const startUrl = new URL(config.target.startAt, config.target.baseUrl).toString();
-  const enabledGoals = Object.entries(goals)
-    .filter(([, enabled]) => enabled)
-    .map(([goal]) => goal)
-    .join(', ');
+  const enabledGoals = [
+    ...Object.entries(goals)
+      .filter(([, enabled]) => enabled === true)
+      .map(([goal]) => goal),
+    ...(goals.keywords.length > 0 ? [`keywords: ${goals.keywords.join(', ')}`] : []),
+  ].join(', ');
   logger.info(color.bold('QA Flow Explorer'));
   logger.info(`  Mission  : ${config.mission.name} ${color.dim(`(${args.configPath})`)}`);
+  logger.info(`  Mode     : ${mode} ${color.dim(`(baseline: ${args.baselineDir ?? config.baseline.dir})`)}`);
   logger.info(`  Target   : ${startUrl}`);
   logger.info(`  Goals    : ${enabledGoals}`);
   logger.info(
@@ -89,7 +94,11 @@ export async function runCli(argv: string[]): Promise<number> {
   logger.info('');
 
   try {
-    const outcome = await runMission(config, { listener: progressListener(args.quiet) });
+    const outcome = await runMission(config, {
+      listener: progressListener(args.quiet),
+      mode,
+      ...(args.baselineDir !== undefined ? { baselineDir: args.baselineDir } : {}),
+    });
     const { result } = outcome;
     const { stats } = result;
     const counts = stats.issuesBySeverity;
@@ -120,17 +129,48 @@ export async function runCli(argv: string[]): Promise<number> {
         .join(', ');
       logger.info(`  Browser inter.: ${result.browserInteractions.length} (${byStatus})`);
     }
+    if (result.verification) {
+      const counts = Object.entries(result.verification.summary)
+        .filter(([, count]) => count > 0)
+        .map(([status, count]) => `${count} ${status.toLowerCase()}`)
+        .join(', ');
+      const regressions = result.verification.regressions;
+      logger.info(
+        `  Verification  : ${result.verification.transitions.length} known transition(s) replayed (${counts}) — ${regressions > 0 ? color.red(`${regressions} regression(s)`) : color.green('no regression')}`,
+      );
+      for (const verified of result.verification.transitions) {
+        if (verified.status === 'PASSED' || verified.status === 'SKIPPED' || verified.status === 'BLOCKED')
+          continue;
+        logger.info(
+          `    ${color.red(verified.status.padEnd(14))} ${verified.fromLabel} → "${verified.action.text ?? verified.action.href ?? verified.action.type}"${verified.reason ? color.dim(` (${verified.reason})`) : ''}`,
+        );
+      }
+    }
+    if (result.learnedBaseline)
+      logger.info(
+        `  Baseline      : stored ${result.learnedBaseline.runId} → ${result.artifacts.baseline ?? ''}`,
+      );
+    else if (result.baseline) logger.info(`  Baseline      : ${result.baseline.runId}`);
     logger.info(`  Stopped       : ${result.stopReason} after ${(result.durationMs / 1000).toFixed(1)} s`);
     if (result.artifacts.json) logger.info(`  JSON report   : ${result.artifacts.json}`);
     if (result.artifacts.html) logger.info(`  HTML report   : ${result.artifacts.html}`);
     if (result.artifacts.flowGraph) logger.info(`  Flow graph    : ${result.artifacts.flowGraph}`);
     if (result.artifacts.flowGraphHtml) logger.info(`  Flow graph UI : ${result.artifacts.flowGraphHtml}`);
     logger.info(`  Screenshots   : ${result.artifacts.screenshotsDir ?? '-'}`);
+    if (result.artifacts.flowDiff) logger.info(`  Flow diff     : ${result.artifacts.flowDiff}`);
     logger.info('');
+    if (result.flowDiff) {
+      logger.info(renderFlowDiffText(result.flowDiff));
+      logger.info('');
+    }
 
     if (outcome.passed) {
       logger.info(color.green(`PASSED — no issue at or above ${config.report.failOnSeverity}`));
       return EXIT.OK;
+    }
+    if (outcome.regressions > 0 && outcome.failingIssues.length === 0) {
+      logger.info(color.red(`FAILED — ${outcome.regressions} regression(s) compared with the baseline`));
+      return EXIT.ISSUES;
     }
     logger.info(
       color.red(
@@ -139,6 +179,10 @@ export async function runCli(argv: string[]): Promise<number> {
     );
     return EXIT.ISSUES;
   } catch (error) {
+    if (error instanceof BaselineMissingError) {
+      logger.error(`Error: ${error.message}`);
+      return EXIT.USAGE;
+    }
     if (error instanceof AuthError) {
       logger.error(`Authentication failed: ${error.message}`);
       return EXIT.RUNTIME;

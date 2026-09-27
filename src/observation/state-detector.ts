@@ -61,7 +61,10 @@ export class StateDetector {
     const controls = [
       ...new Set(
         snapshot.elements
-          .filter((element) => STRUCTURAL_ROLES.has(element.role) && !element.inNavigation)
+          .filter(
+            // Toasts, live regions and timers come and go: they do not make another screen.
+            (element) => STRUCTURAL_ROLES.has(element.role) && !element.inNavigation && !element.transient,
+          )
           .map(
             (element) => `${element.role}:${mask(element.name || element.fieldName || element.label || '')}`,
           ),
@@ -84,9 +87,21 @@ export class StateDetector {
   }
 }
 
-/** Masks digits so record ids, counters and dates do not create new states. */
-function mask(text: string): string {
-  return text.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim();
+/**
+ * Keeps only what names a screen: generated ids (UUIDs, hashes, tokens),
+ * e-mails, dates, times, counters and record ids are masked, so the same
+ * screen gets the same fingerprint whatever the data it shows.
+ */
+export function mask(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<id>')
+    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '<email>')
+    .replace(/\b(?=[a-z0-9_-]*\d)[a-z0-9_-]{16,}\b/g, '<id>')
+    .replace(/\b(?=[0-9a-f]*\d)[0-9a-f]{8,}\b/g, '<id>')
+    .replace(/\d+/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function safeRouteKey(url: string, mode: QueryParamMode, ignoredParams: readonly string[]): string {
@@ -108,9 +123,9 @@ function stateLabel(snapshot: UiSnapshot, route: string): string {
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
-    // Record ids, UUIDs, counters: words containing digits do not name a screen.
+    // Record ids, UUIDs, counters, e-mails: words containing digits or @ do not name a screen.
     .split(/\s+/)
-    .filter((word) => !/\d/.test(word))
+    .filter((word) => !/\d/.test(word) && !word.includes('@'))
     .join(' ')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')

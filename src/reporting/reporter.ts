@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ScenarioConfig } from '../config/config.js';
 import type { ExplorationResult } from '../model/exploration-result.js';
@@ -30,6 +30,10 @@ export async function writeReports(
     result.artifacts.flowGraphHtml = path.join(output.reportsDir, 'flow-graph.html');
   }
   if (output.json) result.artifacts.json = path.join(output.reportsDir, 'result.json');
+  if (result.flowDiff) {
+    result.artifacts.flowDiff = path.join(output.reportsDir, 'flow-diff.json');
+    await writeFile(result.artifacts.flowDiff, `${JSON.stringify(result.flowDiff, null, 2)}\n`, 'utf8');
+  }
   if (output.html)
     result.artifacts.html = await new HtmlReporter(output.reportsDir, 'index.html', language).write(result);
   if (output.flowGraphHtml)
