@@ -30,6 +30,12 @@ export interface ScoringMission {
   maxSimilarActions?: number;
   /** `stateId::actionId` déjà connus par la baseline (mode explore). */
   knownActions?: ReadonlySet<string>;
+  /**
+   * Options (radios, cases, listes) déjà essayées pendant ce run, par groupe + option
+   * (optionKey) : chaque option d'un groupe n'est essayée qu'une fois au total, pas sur
+   * chaque écran où le groupe réapparaît.
+   */
+  triedOptions?: ReadonlySet<string>;
 }
 
 /**
@@ -174,6 +180,7 @@ export class RuleBasedActionScorer implements ActionScorer {
       case 'select':
       case 'check':
         if (!goals.discoverForms) return exclude('forms not in the goals');
+        if (mission.triedOptions?.has(optionKey(action))) return exclude('option already tried in this run');
         add('neverExecuted', 'never executed from this state');
         add('formNeverExplored', `${action.type} may reveal more of the form`);
         break;
@@ -260,6 +267,19 @@ export function scoringMissionOf(config: ScenarioConfig, knownActions?: Readonly
     maxSimilarActions: config.exploration.maxSimilarActions,
     ...(knownActions ? { knownActions } : {}),
   };
+}
+
+/**
+ * Une option d'un groupe, identique d'un écran à l'autre : libellé du groupe (ou name,
+ * ou groupe de choix) + libellé de l'option. « Oui » de « Déjà client ? » et « Oui » de
+ * « Accepte les conditions ? » restent deux options différentes.
+ */
+export function optionKey(
+  action: Pick<DiscoveredAction, 'type' | 'text' | 'label' | 'name' | 'field'>,
+): string {
+  const group = action.field?.groupLabel ?? action.field?.name ?? action.field?.choiceGroup ?? '';
+  const option = action.text ?? action.label ?? action.name ?? '';
+  return `${action.type}|${group}|${option}`.toLowerCase().replace(/\d+/g, '#');
 }
 
 /** Même genre de contrôle, même libellé une fois les nombres masqués (« 12 » → « # », « 2026-09-12 » → « #-#-# »). */

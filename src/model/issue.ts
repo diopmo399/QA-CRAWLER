@@ -26,6 +26,14 @@ export const ISSUE_TYPES = [
   'ACCESSIBILITY',
   /** AuthorizationObserver : un acteur atteint un écran qu'une règle lui interdit (ou l'inverse). */
   'AUTHORIZATION',
+  /** InvariantOracle : une règle explicite (invariants) n'est pas respectée. */
+  'INVARIANT',
+  /** Garde d'écriture : une requête POST/PUT/PATCH/DELETE partie d'une action qui n'avait pas le droit d'écrire, annulée. */
+  'WRITE_BLOCKED',
+  /** HistoricalOracle : inhabituel par rapport aux runs précédents (transition, statut d'API) ; pas forcément un bug. */
+  'UNEXPECTED_BEHAVIOR',
+  /** Nettement plus lent que d'habitude (médiane / p95 historiques) ; jamais un échec à lui seul. */
+  'PERFORMANCE',
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 

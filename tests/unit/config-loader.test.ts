@@ -26,6 +26,7 @@ describe('parseConfig', () => {
       discoverFlows: true,
       detectErrors: true,
       keywords: [],
+      targets: [],
     });
     expect(config.mission.mode).toBe('explore');
     expect(config.scoring.weights).toEqual({});
@@ -228,6 +229,7 @@ describe('auth.type: http', () => {
       validationTesting: false,
       maxValidationCasesPerField: 3,
       maxValidationCasesPerForm: 10,
+      maxValidationCasesPerRun: 200,
     });
     expect(byDefault.safety.block).toContain('form-submit');
     expect(byDefault.exploration.maxSimilarActions).toBe(2);

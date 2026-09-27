@@ -47,8 +47,15 @@ export interface RecoveryEvent {
 export interface StuckEvent {
   at: string;
   stateId: string;
-  kind: 'oscillation' | 'no-op' | 'busy';
+  kind: 'oscillation' | 'cycle' | 'no-op' | 'busy';
   message: string;
+  /**
+   * Réponse choisie : `penalize` (la première fois qu'une boucle est vue, ses actions
+   * perdent des points et l'exploration continue) ou `backtrack` (la branche est quittée).
+   */
+  response?: 'penalize' | 'backtrack';
+  /** Les actions de la boucle (état + action), pénalisées au lieu d'abandonner tout de suite. */
+  actions?: { stateId: string; actionId: string }[];
 }
 
 /** Un échec vu assez souvent pour arrêter d'essayer. */

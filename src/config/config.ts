@@ -7,6 +7,7 @@ import { flowsSchema } from './flow-schema.js';
 import { RECOVERY_STRATEGIES } from '../recovery/recovery-model.js';
 import { ACCESSIBILITY_RULES } from '../accessibility/accessibility-checker.js';
 import { LOG_LEVELS } from '../logging/engine-log.js';
+import { UI_PATTERNS } from '../patterns/ui-pattern.js';
 
 /**
  * Configuration de la mission. Le YAML décrit *quoi explorer et dans quelles
@@ -81,6 +82,27 @@ const explorationSchema = z
      * « Voir » sur chaque ligne…) sont essayés au plus ce nombre de fois, pas un par un.
      */
     maxSimilarActions: z.number().int().positive().default(2),
+    /**
+     * best-first (défaut) : le meilleur candidat de toute la frontière d'exploration, même
+     * sur un autre écran quand il vaut nettement plus (switchMargin) ; depth-first : l'écran
+     * courant d'abord, retour arrière quand il n'y a plus rien (comportement historique).
+     */
+    strategy: z.enum(['best-first', 'depth-first']).default('best-first'),
+    /** Poids des composantes du score (déterministes). 0 désactive une composante. */
+    goalWeight: z.number().min(0).default(1.5),
+    patternWeight: z.number().min(0).default(1),
+    noveltyWeight: z.number().min(0).default(1),
+    coverageWeight: z.number().min(0).default(0.8),
+    historyWeight: z.number().min(0).default(0.5),
+    /** Écart de score au-delà duquel on quitte l'écran courant pour un meilleur candidat ailleurs. */
+    switchMargin: z.number().min(0).default(60),
+    /** Bonus d'ancienneté par décision d'attente d'un candidat (anti-starvation). */
+    agingBonus: z.number().min(0).default(2),
+    /**
+     * Graine d'un départage pseudo-aléatoire entre candidats de même score. Absente
+     * (défaut) : aucun hasard, l'ordre du document départage. Présente : run reproductible.
+     */
+    seed: z.number().int().optional(),
     /** Nombre maximal d'actions enregistrées par état. */
     maxRecordedActions: z.number().int().positive().default(200),
     /**
@@ -91,7 +113,22 @@ const explorationSchema = z
   })
   .strict();
 
-const goalsSchema = z
+/** Un objectif fonctionnel : « users », ou { id, description, keywords, priority }. */
+const goalTargetSchema = z.union([
+  nonEmpty,
+  z
+    .object({
+      id: nonEmpty,
+      description: z.string().optional(),
+      /** Mots qui prouvent l'objectif atteint (en plus de l'id et de ses synonymes). */
+      keywords: z.array(nonEmpty).default([]),
+      /** 1 (bas) … 10 (haut) ; par défaut, l'ordre de la liste. */
+      priority: z.number().int().min(1).max(10).optional(),
+    })
+    .strict(),
+]);
+
+const goalsObjectSchema = z
   .object({
     /** Suivre les liens et les routerLinks. */
     discoverNavigation: z.boolean().default(true),
@@ -116,8 +153,20 @@ const goalsSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * Objectifs fonctionnels (« users », « create-user », « permissions ») : le GoalPlanner
+     * en fait des sous-objectifs, le crawler trouve lui-même le chemin. Un objectif n'est
+     * atteint qu'avec une preuve observable (URL, titre, région…).
+     */
+    targets: z.array(goalTargetSchema).default([]),
   })
   .strict();
+
+/** `goals` : l'objet complet, ou directement la liste des objectifs fonctionnels. */
+const goalsSchema = z.preprocess(
+  (value) => (Array.isArray(value) ? { targets: value } : value),
+  goalsObjectSchema,
+);
 
 /** Catégories d'actions SAFE qu'une mission peut autoriser. */
 export const SAFE_ACTION_GROUPS = [
@@ -206,6 +255,21 @@ const safetySchema = z
         safe: z.array(nonEmpty).default([]),
         mutation: z.array(nonEmpty).default([]),
         dangerous: z.array(nonEmpty).default([]),
+      })
+      .strict()
+      .default({}),
+    /**
+     * Garde d'écriture : pendant l'exploration, toute requête POST, PUT, PATCH ou DELETE
+     * vers un hôte autorisé est interceptée et annulée, sauf si l'action en cours a le
+     * droit de modifier des données (MUTATION/DANGEROUS permise, étape de flow avec
+     * `allow`) ou si elle correspond à `allow`. Une requête bloquée est signalée comme
+     * effet de bord (une saisie qui écrit côté serveur…). La connexion n'est jamais gênée.
+     */
+    writeGuard: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Requêtes d'écriture toujours permises : « POST /api/search », « /graphql », « * /api/*\/query ». Joker `*`. */
+        allow: z.array(nonEmpty).default([]),
       })
       .strict()
       .default({}),
@@ -553,6 +617,8 @@ const loggingSchema = z
       )
       .default('INFO'),
     file: z.boolean().default(true),
+    /** Écrire reports/decision-trace.json : chaque décision avec tous ses candidats et leurs scores. */
+    decisionTrace: z.boolean().default(false),
   })
   .strict();
 
@@ -581,6 +647,97 @@ const scoringSchema = z
   })
   .strict();
 
+const semanticsSchema = z
+  .object({
+    /** Mots ajoutés aux concepts (create, delete, save, cancel…), ou nouveaux concepts. */
+    concepts: z.record(nonEmpty, z.array(nonEmpty)).default({}),
+    /** Synonymes des termes de la mission (users: [utilisateurs, membres]). */
+    synonyms: z.record(nonEmpty, z.array(nonEmpty)).default({}),
+  })
+  .strict();
+
+const knowledgeSchema = z
+  .object({
+    /**
+     * Base de connaissances : ce que le crawler apprend d'un run à l'autre (taux de
+     * succès des actions, transitions dominantes, statuts d'API, durées). Jamais de
+     * corps de requête ni de valeur saisie.
+     */
+    enabled: z.boolean().default(true),
+    /**
+     * Fichier JSON versionné (à garder hors du dépôt : il décrit l'application testée).
+     * Par défaut : knowledge/knowledge-base.json à côté du dossier des rapports.
+     */
+    file: nonEmpty.optional(),
+    /** Demi-vie des observations : une observation de cet âge compte moitié moins. */
+    halfLifeDays: z.number().positive().default(30),
+    /** Identité de l'application testée, pour ne pas mélanger les connaissances. Par défaut : l'hôte de target.baseUrl. */
+    application: nonEmpty.optional(),
+    environment: nonEmpty.optional(),
+    branch: nonEmpty.optional(),
+    /** Commit / version de l'application : une nouvelle version donne une nouvelle chance aux actions qui échouaient. */
+    commit: nonEmpty.optional(),
+    appVersion: nonEmpty.optional(),
+    /** Une transition doit avoir été vue au moins ce nombre de fois pour faire une attente historique. */
+    minObservations: z.number().int().positive().default(3),
+    /** Part minimale de la cible dominante pour qu'un écart soit signalé. */
+    dominance: z.number().min(0.5).max(1).default(0.8),
+    /** Action ou appel plus lent que ce multiple de la médiane historique : PERFORMANCE_WARNING. */
+    slowFactor: z.number().min(1).default(3),
+  })
+  .strict();
+
+export const invariantSchema = z
+  .object({
+    id: nonEmpty,
+    description: z.string().optional(),
+    severity: z.enum(SEVERITIES).default('ERROR'),
+    when: z
+      .object({
+        /** Chaque requête d'API de l'action. */
+        anyRequest: z.boolean().optional(),
+        /** Requêtes visées : « POST /api/users », « /api/*\/orders ». Joker `*`. */
+        request: nonEmpty.optional(),
+        /** Actions dont le libellé contient l'un de ces textes (accents et casse ignorés). */
+        actionMatches: z.array(nonEmpty).optional(),
+        /** Écrans de départ montrant ce motif. */
+        pattern: z.enum(UI_PATTERNS).optional(),
+        /** Rôle (acteur) concerné, pour les règles d'accès. */
+        actor: nonEmpty.optional(),
+        /** Chemin visé, joker `*` / `**`. */
+        path: nonEmpty.optional(),
+      })
+      .strict()
+      .default({}),
+    expect: z
+      .object({
+        /** Toutes les réponses sous ce statut (500 : aucune erreur serveur). */
+        statusBelow: z.number().int().optional(),
+        /** L'écran atteint montre l'un de ces motifs. */
+        resultingPattern: z.array(z.enum(UI_PATTERNS)).optional(),
+        /** Accès attendu pour l'acteur : allowed, denied, forbidden, login. */
+        access: z.array(z.enum(['allowed', 'denied', 'forbidden', 'login'])).optional(),
+        textPresent: z.array(nonEmpty).optional(),
+        textAbsent: z.array(nonEmpty).optional(),
+        /** Durée maximale de l'action. */
+        maxDurationMs: z.number().int().positive().optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+const propertyTestingSchema = z
+  .object({
+    /**
+     * Cas générés à partir des contraintes des champs (bornes, partitions d'équivalence) :
+     * les cas valides doivent être acceptés, les invalides refusés. Rien n'est envoyé.
+     */
+    enabled: z.boolean().default(false),
+    maxCasesPerForm: z.number().int().positive().default(15),
+    maxCasesPerRun: z.number().int().positive().default(100),
+  })
+  .strict();
+
 const formsSchema = z
   .object({
     /**
@@ -598,6 +755,8 @@ const formsSchema = z
     validationTesting: z.boolean().default(false),
     maxValidationCasesPerField: z.number().int().positive().default(3),
     maxValidationCasesPerForm: z.number().int().positive().default(10),
+    /** Cas de validation au plus pour tout le run (budget central). */
+    maxValidationCasesPerRun: z.number().int().positive().default(200),
     /**
      * Boutons qui envoient un formulaire (« Soumettre », « Enregistrer »… dans un
      * formulaire ou une fenêtre avec des champs). true : permis comme toute
@@ -704,6 +863,13 @@ export const scenarioSchema = z
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),
     testData: testDataSchema.default({}),
+    semantics: semanticsSchema.default({}),
+    /** Packs de domaine (vocabulaire, synonymes, invariants, indices de score) : nom intégré (generic, ecommerce, administration) ou chemin d'un fichier YAML. */
+    domainPacks: z.array(nonEmpty).default(['generic']),
+    knowledge: knowledgeSchema.default({}),
+    /** Invariants explicites : règles vérifiées sur chaque action, expliquées dans le rapport. */
+    invariants: z.array(invariantSchema).default([]),
+    propertyTesting: propertyTestingSchema.default({}),
   })
   .strict();
 
@@ -718,3 +884,6 @@ export type AuthConfig = ScenarioConfig['auth'];
 export type ActorConfig = ScenarioConfig['actors'][number];
 export type AuthorizationConfig = ScenarioConfig['authorization'];
 export type QueryParamMode = ScenarioConfig['exploration']['queryParams']['mode'];
+export type InvariantConfig = ScenarioConfig['invariants'][number];
+export type GoalTargetConfig = ScenarioConfig['goals']['targets'][number];
+export type KnowledgeConfig = ScenarioConfig['knowledge'];

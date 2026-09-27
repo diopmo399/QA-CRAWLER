@@ -5,6 +5,7 @@ import { setCheckedRobust } from './checkable.js';
 import { validityOf } from '../forms/validity.js';
 import type { LocatorDescriptor } from '../model/locator.js';
 import { toLocator } from './locator-resolver.js';
+import { normalizeText } from '../policies/keywords.js';
 
 /** Valeur à saisir/choisir pour les actions fill et select. */
 export interface ExecutionInput {
@@ -133,11 +134,16 @@ export class PlaywrightActionExecutor {
         { ...action, type: operation.operation },
         operation.value !== undefined ? { value: operation.value } : {},
       );
+      // Champ à suggestions (autocomplete, Angular Material…) : taper ne suffit pas, choisir une suggestion.
+      let chosen: string | undefined;
+      if (executed.status === 'SUCCESS' && operation.operation === 'fill' && isAutocomplete(action))
+        chosen = await this.pickSuggestion(page, action, operation.value ?? '');
       if (operation.operation === 'fill' || operation.operation === 'select') await this.leaveField(page);
       // Masques de saisie, champs à suggestions… : certains n'écoutent que les vraies frappes.
       // Toujours invalide (ou valeur perdue) après fill : retaper touche par touche.
       if (
         executed.status === 'SUCCESS' &&
+        chosen === undefined &&
         operation.operation === 'fill' &&
         operation.value !== undefined &&
         operation.value !== ''
@@ -147,9 +153,83 @@ export class PlaywrightActionExecutor {
         fieldId: operation.fieldId,
         status: executed.status,
         ...(executed.error ? { error: executed.error } : {}),
+        ...(chosen !== undefined ? { suggestion: chosen } : {}),
       });
     }
     return results;
+  }
+
+  /**
+   * Champ à suggestions : après la saisie, attendre la liste, puis cliquer la suggestion
+   * qui correspond à la valeur (sinon la première). Sans liste, la valeur est retapée
+   * touche par touche (certains champs ne filtrent qu'au clavier), puis on réessaie.
+   * Renvoie le texte de la suggestion choisie, ou undefined s'il n'y en avait aucune.
+   */
+  private async pickSuggestion(
+    page: Page,
+    action: DiscoveredAction,
+    value: string,
+  ): Promise<string | undefined> {
+    const target = await this.resolve(page, action).catch(() => undefined);
+    if (!target) return undefined;
+    const { locator } = target;
+    const listId = await locator
+      .evaluate((el) => el.getAttribute('aria-controls') ?? el.getAttribute('aria-owns') ?? '')
+      .catch(() => '');
+    const options = (): Locator =>
+      listId
+        ? page.locator(
+            `[id="${listId.replace(/"/g, '')}"] [role="option"], [id="${listId.replace(/"/g, '')}"] mat-option`,
+          )
+        : page.locator('[role="listbox"] [role="option"], mat-option, .mat-mdc-option, [role="option"]');
+    const visible = async (): Promise<Locator | undefined> => {
+      const list = options().filter({ visible: true });
+      try {
+        await list.first().waitFor({ state: 'visible', timeout: SUGGESTION_WAIT_MS });
+        return list;
+      } catch {
+        return undefined;
+      }
+    };
+    let list = await visible();
+    if (!list && value) {
+      await locator.press('ControlOrMeta+a').catch(() => undefined);
+      await locator.press('Backspace').catch(() => undefined);
+      await locator
+        .pressSequentially(value, { delay: TYPING_DELAY_MS, timeout: 5000 })
+        .catch(() => undefined);
+      list = await visible();
+    }
+    if (!list) {
+      // La valeur ne correspond à aucune suggestion : champ vidé, liste ouverte au clavier (↓), première suggestion.
+      await locator.fill('', { timeout: 2000 }).catch(() => undefined);
+      await locator.press('ArrowDown').catch(() => undefined);
+      list = await visible();
+    }
+    if (!list) return undefined;
+    const texts = (await list.allInnerTexts().catch(() => [])).map((text) => text.trim());
+    const wanted = normalizeText(value);
+    const enabled = async (index: number): Promise<boolean> =>
+      (await list
+        .nth(index)
+        .getAttribute('aria-disabled')
+        .catch(() => null)) !== 'true';
+    let index = texts.findIndex((text) => wanted !== '' && normalizeText(text).includes(wanted));
+    if (index < 0 || !(await enabled(index))) {
+      index = -1;
+      for (let candidate = 0; candidate < texts.length; candidate++)
+        if (texts[candidate] && (await enabled(candidate))) {
+          index = candidate;
+          break;
+        }
+    }
+    if (index < 0) return undefined;
+    const clicked = await list
+      .nth(index)
+      .click({ timeout: 2000 })
+      .then(() => true)
+      .catch(() => false);
+    return clicked ? (texts[index] ?? '') : undefined;
   }
 
   /** Quitte le champ comme un utilisateur (blur), pour que l'application le valide maintenant. */
@@ -257,11 +337,24 @@ export class PlaywrightActionExecutor {
 const BLUR_SETTLE_MS = 100;
 /** Délai entre deux frappes quand un champ doit être tapé touche par touche. */
 const TYPING_DELAY_MS = 30;
+/** Temps laissé à une liste de suggestions pour apparaître. */
+const SUGGESTION_WAIT_MS = 1500;
 
 export interface PlanOperationResult {
   fieldId: string;
   status: 'SUCCESS' | 'FAILED';
   error?: string;
+  /** Suggestion choisie dans un champ à suggestions (autocomplete). */
+  suggestion?: string;
+}
+
+/** Un champ où l'on tape et qui propose des suggestions (role combobox, aria-autocomplete, matAutocomplete). */
+export function isAutocomplete(action: DiscoveredAction): boolean {
+  return (
+    (action.type === 'fill' || action.type === 'select') &&
+    action.role === 'combobox' &&
+    !action.field?.customSelect
+  );
 }
 
 /** Temps laissé à un clic avant de signaler qu'un autre calque le prend. */

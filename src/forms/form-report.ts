@@ -1,5 +1,5 @@
 import type { FieldType } from './form-model.js';
-import type { FormRun, ValidationCase } from './form-exerciser.js';
+import type { FormRun, PropertyCase, ValidationCase } from './form-exerciser.js';
 
 /** Ce que dit le rapport sur un formulaire : ses champs, ce qui a été rempli, ce que l'application a répondu. */
 export interface FormReport {
@@ -22,10 +22,14 @@ export interface FormReport {
     value?: string;
     source?: string;
     error?: string;
+    /** Suggestion choisie après la saisie (champ à suggestions). */
+    suggestion?: string;
   }[];
   submitActions: string[];
   validationProblems: { field: string; message: string }[];
   validationCases: ValidationCase[];
+  /** Cas générés à partir des contraintes (bornes, partitions), quand propertyTesting est activé. */
+  propertyCases?: PropertyCase[];
 }
 
 export function formReportOf(run: FormRun, stateId: string, actionId?: string): FormReport {
@@ -50,7 +54,7 @@ export function formReportOf(run: FormRun, stateId: string, actionId?: string): 
             ? operation.operation
             : operation.operation === 'check' || operation.operation === 'uncheck'
               ? operation.operation
-              : `${operation.operation} "${operation.value ?? ''}"`;
+              : `${operation.operation} "${operation.value ?? ''}"${filled?.suggestion !== undefined ? ` → "${filled.suggestion}"` : ''}`;
       return {
         id: field.id,
         label: label.replace(/\s*\*$/, ''),
@@ -62,6 +66,7 @@ export function formReportOf(run: FormRun, stateId: string, actionId?: string): 
         ...(operation?.value !== undefined && !field.sensitive ? { value: operation.value } : {}),
         ...(operation?.source ? { source: operation.source } : {}),
         ...(filled?.error ? { error: filled.error } : {}),
+        ...(filled?.suggestion !== undefined && !field.sensitive ? { suggestion: filled.suggestion } : {}),
       };
     }),
     submitActions: run.form.submitActions.map((action) => action.text ?? action.label ?? action.id),
@@ -70,5 +75,6 @@ export function formReportOf(run: FormRun, stateId: string, actionId?: string): 
       message: problem.message,
     })),
     validationCases: run.validationCases,
+    ...(run.propertyCases && run.propertyCases.length > 0 ? { propertyCases: run.propertyCases } : {}),
   };
 }

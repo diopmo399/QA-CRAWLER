@@ -1,6 +1,6 @@
 node_modules/
 dist/
-coverage/
+/coverage/
 *.log
 .env
 .env.*
@@ -14,3 +14,6 @@ screenshots/*
 
 # learned baselines (screens and URLs of the tested application)
 /baseline/
+
+# knowledge learned across runs (describes the tested application)
+/knowledge/

@@ -1,0 +1,20 @@
+# Back-office / administration domain pack.
+name: administration
+description: User, role and permission management screens.
+
+concepts:
+  activate: [activate, enable, activer, réactiver]
+  deactivate: [deactivate, disable, suspend, désactiver, suspendre, bloquer]
+  assign: [assign, grant, attribuer, affecter, accorder]
+
+synonyms:
+  users: [user management, gestion des utilisateurs, collaborateurs, employees, employés, agents]
+  groups: [group, groups, groupe, groupes, team, teams, équipe, équipes]
+  audit: [audit, journal, logs, history, historique, traces]
+
+# Scoring hints: extra interest of a concept on a screen showing a pattern.
+patternRules:
+  CRUD_LIST:
+    assign: 20
+  DETAIL:
+    assign: 30

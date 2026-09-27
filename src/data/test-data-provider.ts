@@ -2,6 +2,7 @@ import { fieldOf } from '../forms/form-analyzer.js';
 import { runTag, type FormField, type TestDataContext, type TestValue } from '../forms/form-model.js';
 import type { DiscoveredAction } from '../model/discovered-action.js';
 import { normalizeText } from '../policies/keywords.js';
+import { SimpleBoundaryValueGenerator } from '../constraints/test-case-generators.js';
 
 /** Que faire d'un champ quand un formulaire est préparé (ancienne forme, utilisée par les flows et prepareForm). */
 export type FillInstruction =
@@ -47,6 +48,8 @@ export interface TestDataOptions {
   defaults?: Readonly<Partial<Record<SemanticKey, string>>>;
   today?: () => Date;
 }
+
+const boundaries = new SimpleBoundaryValueGenerator(12);
 
 const YES = new Set(['true', 'oui', 'yes', '1', 'x', 'coche', 'checked']);
 
@@ -204,24 +207,21 @@ export class DefaultTestDataProvider implements TestDataProvider {
       cases.push({ kind: 'fill', value, source: 'type', case: name });
     };
     if (field.required) add('', 'empty');
-    switch (field.type) {
-      case 'email':
-        add('invalid-email', 'invalid-email');
-        break;
-      case 'url':
-        add('not a url', 'invalid-url');
-        break;
-      case 'number':
-      case 'range':
-        if (field.min !== undefined) add(String(field.min - (field.step ?? 1)), 'below-min');
-        if (field.max !== undefined) add(String(field.max + (field.step ?? 1)), 'above-max');
-        break;
-      default:
-        break;
-    }
-    if (field.minLength !== undefined && field.minLength > 1)
-      add('x'.repeat(field.minLength - 1), 'too-short');
-    if (field.maxLength !== undefined) add('x'.repeat(field.maxLength + 1), 'too-long');
+    if (field.type === 'email') add('invalid-email', 'invalid-email');
+    if (field.type === 'url') add('not a url', 'invalid-url');
+    // Bornes : les valeurs invalides du générateur de bornes (min − pas, max + pas, longueurs).
+    const numeric = field.type === 'number' || field.type === 'range';
+    const invalid = boundaries
+      .generate({
+        ...(numeric && field.min !== undefined ? { min: field.min } : {}),
+        ...(numeric && field.max !== undefined ? { max: field.max } : {}),
+        ...(field.step !== undefined ? { step: field.step } : {}),
+        ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
+        ...(field.maxLength !== undefined ? { maxLength: field.maxLength } : {}),
+      })
+      .filter((entry) => !entry.valid);
+    for (const kind of ['below-min', 'above-max', 'too-short', 'too-long'])
+      for (const entry of invalid) if (entry.kind === kind) add(entry.value, kind);
     if (field.pattern && !matches('QA invalid !', field.pattern)) add('QA invalid !', 'pattern-mismatch');
     return cases;
   }

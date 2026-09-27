@@ -1,6 +1,10 @@
 import { parseConfig } from '../src/config/config-loader.js';
 import type { ScenarioConfig } from '../src/config/config.js';
-import type { UiElement, UiSnapshot } from '../src/model/ui-snapshot.js';
+import { ActionDiscovery } from '../src/discovery/action-discovery.js';
+import type { PageContext } from '../src/model/page-context.js';
+import type { PageStructure, UiElement, UiSnapshot } from '../src/model/ui-snapshot.js';
+import { StateDetector } from '../src/observation/state-detector.js';
+import { SafetyPolicy } from '../src/policies/safety-policy.js';
 
 /** Configuration complète, valeurs par défaut appliquées, pour http://localhost:4200, avec des ajouts YAML facultatifs. */
 export function testConfig(extraYaml = ''): ScenarioConfig {
@@ -53,6 +57,47 @@ export function snapshot(overrides: Partial<UiSnapshot>): UiSnapshot {
     textExcerpt: '',
     elements: [],
     forms: [],
+    ...overrides,
+  };
+}
+
+/**
+ * Un écran observé tel que le moteur le reçoit (StateDetector + ActionDiscovery →
+ * PageContext), à partir d'un instantané. `structure` : la forme de l'écran.
+ */
+export function screen(overrides: Partial<UiSnapshot>, config: ScenarioConfig = testConfig()): PageContext {
+  const shot = snapshot(overrides);
+  const state = new StateDetector(config.exploration.queryParams.mode).detect(shot);
+  const actions = new ActionDiscovery(new SafetyPolicy(config.safety)).discover(shot, state.stateId);
+  return {
+    url: shot.url,
+    title: shot.title,
+    stateId: state.stateId,
+    stateLabel: state.label,
+    route: state.route,
+    headings: shot.headings,
+    dialogs: shot.dialogs,
+    actions,
+    forms: shot.forms,
+    errors: [],
+    ...(shot.structure ? { structure: shot.structure } : {}),
+    metadata: { depth: 0, timestamp: '2026-09-27T10:00:00Z', flow: [state.stateId] },
+  };
+}
+
+/** Structure d'écran par défaut (rien), avec des surcharges. */
+export function structure(overrides: Partial<PageStructure> = {}): PageStructure {
+  return {
+    tables: 0,
+    tableRows: 0,
+    columnHeaders: [],
+    lists: 0,
+    cards: 0,
+    breadcrumbs: [],
+    regions: [],
+    wizardSteps: 0,
+    fileInputs: 0,
+    pagination: false,
     ...overrides,
   };
 }

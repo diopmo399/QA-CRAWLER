@@ -1,5 +1,6 @@
 import type { DiscoveredAction, FormSummary } from './discovered-action.js';
 import type { Issue } from './issue.js';
+import type { PageStructure } from './ui-snapshot.js';
 
 /**
  * État observable de l'écran courant, tel que donné au moteur de décision. Structuré
@@ -22,6 +23,8 @@ export interface PageContext {
   forms: FormSummary[];
   /** Anomalies déjà observées sur cet état. */
   errors: Issue[];
+  /** Forme de l'écran (tableaux, fil d'Ariane, régions…), quand elle a été observée. */
+  structure?: PageStructure;
   metadata: {
     depth: number;
     timestamp: string;

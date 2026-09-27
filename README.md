@@ -42,6 +42,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Rapports](#rapports)
 - [Modes LEARN / VERIFY / EXPLORE](#modes-learn--verify--explore)
 - [Choix des actions (scoring) et objectifs](#choix-des-actions-scoring-et-objectifs)
+- [Moteur de décision avancé](#moteur-de-décision-avancé)
 - [Corrélation réseau](#corrélation-réseau)
 - [Ligne de commande](#ligne-de-commande)
 - [Docker](#docker)
@@ -957,6 +958,133 @@ scoring:
 ```
 
 Une action dont le libellé contient un mot-clé (« Utilisateurs ») passe devant (+100), une action dont seule l'URL correspond (`/admin/permissions`) aussi (+80) ; « Parking » ne gagne rien. La correspondance est déterministe (mots entiers, sans accents ni casse), sans modèle de langage.
+
+## Moteur de décision avancé
+
+Le moteur reste **entièrement déterministe et local** : aucun modèle de langage, aucune dépendance OpenAI, Anthropic, Gemini, Ollama ou LangChain, aucun apprentissage automatique. L'« intelligence » vient de règles, de motifs, de contraintes, d'une recherche dans le graphe, de statistiques historiques, de la couverture, des invariants et du contrat OpenAPI. Playwright ne fait qu'exécuter les actions.
+
+```
+Mission → Goal Planner → Observation → Pattern Detector → Action Discovery → Goal Matcher
+       → Action Scorer V2 → Frontière + Best-First → Decision Engine → Safety Policy (+ garde d'écriture)
+       → Playwright → Observation → Oracles (technique, écran, contrat, baseline, invariants, historique)
+       → Flow Graph → Knowledge Base → run suivant
+```
+
+### Objectifs fonctionnels (Goal Planner)
+
+```yaml
+mission: { name: users, mode: explore }
+goals: [users, create-user, permissions] # ou la forme objet : goals: { targets: [...], keywords: [...] }
+```
+
+Le planner ne produit **jamais une liste de clics**, seulement des objectifs vérifiables :
+
+| Objectif      | Sous-objectifs                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------- |
+| `users`       | trouver « user » (URL, titre, région, fil d'Ariane) → explorer sa liste / sa fiche                |
+| `create-user` | trouver « user » → trouver l'action « créer » → atteindre le formulaire de création (CREATE_FORM) |
+| `delete-user` | … → **BLOCKED** dès le départ quand la SafetyPolicy bloque `delete`                               |
+
+Un objectif ne passe `REACHED` **qu'avec une preuve observable** (URL, titre, région nommée, fil d'Ariane, motif détecté) ; un bouton qui en parle rapproche mais ne prouve rien. Statuts : `PENDING`, `ACTIVE`, `REACHED`, `UNREACHABLE`, `BLOCKED`. La forme objet accepte `{ id, description, keywords, priority }`.
+
+### Vocabulaire, synonymes et packs de domaine
+
+```yaml
+semantics:
+  concepts: { create: [enrôler] } # s'ajoute aux concepts intégrés (create, delete, save, cancel, next…)
+  synonyms: { users: [utilisateurs, membres, agents] }
+domainPacks: [generic, administration] # ou un fichier : ./packs/mon-domaine.yaml
+```
+
+Le dictionnaire (FR/EN, accents et casse ignorés, pluriels simples) est utilisé par le PatternDetector, le GoalMatcher, l'ActionScorer et la SafetyPolicy — qui ne peut qu'y **ajouter** des mots à bloquer, jamais en retirer. Les packs livrés (`domain-packs/generic.yaml`, `administration.yaml`, `ecommerce.yaml`) n'apportent que du vocabulaire, des synonymes, des invariants et des indices de score ; jamais une règle propre à une application.
+
+### Motifs d'interface (Pattern Detector)
+
+`LOGIN`, `CRUD_LIST`, `CREATE_FORM`, `EDIT_FORM`, `DETAIL`, `SEARCH`, `FILTER`, `PAGINATION`, `WIZARD`, `CONFIRMATION_DIALOG`, `ERROR_PAGE`, `EMPTY_STATE`, `DASHBOARD`, `MASTER_DETAIL`, `TABS`, `MENU`, `UPLOAD` — chacun avec une confiance et ses preuves. **Le texte d'un bouton n'est jamais une preuve suffisante** : tableau + lignes + bouton « Ajouter » + pagination font une CRUD_LIST, pas un bouton seul. Les règles d'intérêt par motif sont centralisées dans `src/patterns/pattern-rules.ts` (CRUD_LIST : créer +80, détail +60, recherche +40, filtre +30, pagination +20, supprimer BLOCK ; WIZARD : suivant +80, précédent +20, annuler −40 ; ERROR_PAGE : retour +80, accueil +60, réessayer +20).
+
+### Score expliqué (Action Scorer V2) et best-first
+
+```
+score = base + objectif + motif + nouveauté + historique + couverture − risque − répétition
+```
+
+Chaque point a sa raison, rendue dans la langue du rapport :
+
+```
+ACTION CHOISIE   Nouvel utilisateur   score 535
++240 score de base (jamais exécutée depuis cet écran, lien de navigation, nouvelle route /users/new)
++118 pertinence pour l'objectif : atteindre l'écran « create » pour « user »
+ +76 CRUD_LIST : action create
+ +40 jamais explorée
+ +32 zone users peu couverte (0 %)
+```
+
+```yaml
+exploration:
+  strategy: best-first # ou depth-first (comportement historique)
+  goalWeight: 1.5
+  patternWeight: 1.0
+  noveltyWeight: 1.0
+  coverageWeight: 0.8
+  historyWeight: 0.5
+  switchMargin: 60 # quitter l'écran courant seulement pour nettement mieux
+  agingBonus: 2 # anti-famine : une branche faible finit toujours par passer
+  # seed: 42        # départage pseudo-aléatoire reproductible (absent : aucun hasard)
+logging:
+  decisionTrace: true # reports/decision-trace.json : chaque décision avec tous ses candidats
+```
+
+La **frontière d'exploration** garde les candidats de chaque écran visité (sans doublon) ; la stratégie best-first choisit le meilleur où qu'il soit, en payant le coût du déplacement. Les boucles `A → B → A` et `A → B → C → A` sont d'abord **pénalisées**, puis la branche est quittée si la boucle revient. Un budget central (`maxStates`, `maxActions`, mutations, cas de validation, cas de propriété, durée) s'applique à toutes les stratégies.
+
+### Base de connaissances (d'un run à l'autre)
+
+```yaml
+knowledge:
+  enabled: true # par défaut
+  file: knowledge/knowledge-base.json # par défaut : à côté du dossier des rapports (gardé hors du dépôt)
+  halfLifeDays: 30 # les observations anciennes comptent moins, sans être supprimées
+  minObservations: 3
+  dominance: 0.8
+  commit: ${QA_APP_COMMIT} # ou GITHUB_SHA / CI_COMMIT_SHA : une nouvelle version donne une nouvelle chance
+```
+
+Elle enregistre, par application et environnement, **des signatures et des compteurs seulement** (jamais un corps de requête, une valeur saisie ou une donnée affichée) : taux de succès des actions, cibles des transitions, statuts d'API par opération, durées (médiane, p95), indices appris (« Ajouter » → CREATE_FORM 12/13 : un indice, **jamais** une règle de sécurité). Format versionné avec migration.
+
+Elle alimente l'oracle **historique** : `UNEXPECTED_TRANSITION` quand « Utilisateurs → Créer » mène à la connexion alors qu'il menait au formulaire 18 fois sur 19 (une **attente historique**, jamais une attente métier), statut d'API jamais vu, `PERFORMANCE_WARNING` (jamais un échec à lui seul). En VERIFY, l'historique aide mais l'état courant est toujours vérifié.
+
+### Invariants
+
+```yaml
+invariants:
+  - id: USER-CREATE
+    severity: WARNING # INFO, WARNING, ERROR (défaut), CRITICAL
+    when: { actionMatches: [créer utilisateur, create user] }
+    expect: { resultingPattern: [CREATE_FORM] }
+  - id: ADMIN-ACCESS
+    severity: CRITICAL
+    when: { actor: user, path: /admin/** }
+    expect: { access: [denied, forbidden] }
+```
+
+`when` : `anyRequest`, `request` (« POST /api/users »), `actionMatches`, `pattern`, `actor`, `path`. `expect` : `statusBelow`, `resultingPattern`, `access`, `textPresent`, `textAbsent`, `maxDurationMs`. Chaque verdict dit la règle, l'attendu et l'observé. Les règles d'accès sont jugées sur les observations multi-acteurs.
+
+**Contrôle des faux positifs** : un comportement inhabituel n'est pas automatiquement un bug. Chaque verdict porte une catégorie — `CONFIRMED_FAILURE`, `CONTRACT_VIOLATION`, `INVARIANT_VIOLATION`, `POTENTIAL_REGRESSION`, `UNEXPECTED_BEHAVIOR`, `UNKNOWN` — et une source de confiance (invariant explicite > contrat OpenAPI > historique répété > observation unique / heuristique de texte).
+
+### Contraintes, bornes et property testing
+
+```yaml
+propertyTesting: { enabled: true, maxCasesPerForm: 15, maxCasesPerRun: 100 }
+```
+
+Le `ConstraintExtractor` fusionne le DOM (prioritaire : ce que l'utilisateur peut vraiment saisir) et OpenAPI (qui complète). Valeurs aux bornes (min 18 / max 65 → 17, 18, 19, 64, 65, 66), partitions d'équivalence (<18, 18..65, >65 : une valeur par partition), puis cas générés un champ à la fois : une valeur valide doit être acceptée, une invalide refusée. Rien n'est envoyé.
+
+### Garde d'écriture, suggestions, options
+
+- **Garde d'écriture** (`safety.writeGuard`, activée par défaut) : toute requête `POST`/`PUT`/`PATCH`/`DELETE` vers l'application est annulée si l'action en cours n'a pas le droit de modifier des données (une saisie qui déclenche un `PUT`…), et signalée comme effet de bord. Permis : la connexion, les actions MUTATION/DANGEROUS autorisées, les étapes de flow avec `allow`, et `writeGuard.allow: ["POST /api/search", "/graphql"]`.
+- **Champs à suggestions** (autocomplete, Angular Material) : après la saisie, la suggestion qui correspond est cliquée (sinon la première) ; le rapport l'indique (`fill "1000" → "10001 — Agence Nord"`).
+- **Options d'un groupe** (radios Oui/Non…) : chaque option n'est essayée qu'une fois par run, pas sur chaque écran où le groupe réapparaît.
+
+Le rapport HTML a une section **Moteur de décision** (en français avec `report.language: fr`) : objectifs et preuves, motifs, couverture par zone (DÉCOUVERT / EXÉCUTÉ / BLOQUÉ / INACCESSIBLE), actions choisies expliquées, catégories de verdict, invariants, écritures bloquées, cas de propriété. Démonstration : `tests/fixtures/decision-app.ts` et `tests/integration/decision-engine.test.ts`.
 
 ## Corrélation réseau
 

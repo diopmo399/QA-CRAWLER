@@ -128,13 +128,16 @@ output:
     const statuses = (outcome.result.verification?.transitions ?? []).map(
       (v) => `${v.fromLabel} → ${v.action.text ?? ''}: ${v.status}`,
     );
-    expect(statuses).toEqual([
-      'dashboard → Users: PASSED',
-      'dashboard → Settings: PASSED',
-      'users → User form: CHANGED',
-      'settings → Permissions: ACTION_MISSING',
-      'users-user-form → User form: UNREACHABLE',
-    ]);
+    // Les transitions sont rejouées dans l'ordre de la baseline, qui suit la stratégie d'exploration.
+    expect([...statuses].sort()).toEqual(
+      [
+        'dashboard → Users: PASSED',
+        'dashboard → Settings: PASSED',
+        'users → User form: CHANGED',
+        'settings → Permissions: ACTION_MISSING',
+        'users-user-form → User form: UNREACHABLE',
+      ].sort(),
+    );
     expect(outcome.regressions).toBe(3);
     expect(outcome.passed).toBe(false);
     const changed = outcome.result.flowDiff?.changedTransitions[0];

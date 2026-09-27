@@ -1,0 +1,26 @@
+# E-commerce domain pack.
+name: ecommerce
+description: Catalogue, cart and order screens.
+
+concepts:
+  add-to-cart: [add to cart, ajouter au panier, buy, acheter]
+  checkout: [checkout, passer commande, commander, paiement, payer]
+
+synonyms:
+  products: [product, products, produit, produits, article, articles, catalogue, catalog, item, items]
+  cart: [cart, basket, panier]
+  orders: [order, orders, commande, commandes, purchase, achats]
+  customers: [customer, customers, client, clients]
+
+patternRules:
+  CRUD_LIST:
+    add-to-cart: 10
+  DETAIL:
+    add-to-cart: 20
+
+invariants:
+  - id: CART-NO-CLIENT-ERROR
+    description: Adding to the cart never answers with a client error
+    severity: WARNING
+    when: { actionMatches: [add to cart, ajouter au panier] }
+    expect: { statusBelow: 400 }

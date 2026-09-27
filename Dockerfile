@@ -26,12 +26,13 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY scenarios ./scenarios
+COPY domain-packs ./domain-packs
 
 # Output directories writable by the group 0 as well, so the image also works
 # with the random UID OpenShift assigns (always member of group 0).
-RUN mkdir -p reports screenshots \
-    && chown -R pwuser:0 /app/reports /app/screenshots \
-    && chmod -R g=u /app/reports /app/screenshots
+RUN mkdir -p reports screenshots knowledge \
+    && chown -R pwuser:0 /app/reports /app/screenshots /app/knowledge \
+    && chmod -R g=u /app/reports /app/screenshots /app/knowledge
 
 # Non-root user shipped with the Playwright image.
 USER pwuser

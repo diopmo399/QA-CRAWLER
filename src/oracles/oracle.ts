@@ -3,6 +3,8 @@ import type { Issue } from '../model/issue.js';
 import type { NetworkExchange } from '../model/network.js';
 import type { PageContext } from '../model/page-context.js';
 import type { UiSignals } from '../model/ui-snapshot.js';
+import type { DetectedPattern } from '../patterns/ui-pattern.js';
+import type { ConfidenceSource, VerdictCategory } from './confidence.js';
 
 /**
  * PASS : les vérifications que cet oracle sait faire sont satisfaites.
@@ -28,6 +30,10 @@ export interface OracleResult {
    */
   confidence: number;
   reasons: OracleReason[];
+  /** D'où vient la confiance (invariant explicite, contrat OpenAPI, historique…). */
+  confidenceSource?: ConfidenceSource;
+  /** Catégorie d'un avis qui n'est pas PASS : un comportement inhabituel n'est pas forcément un bug. */
+  category?: VerdictCategory;
 }
 
 /** L'action telle qu'exécutée (aucune valeur saisie, aucun secret). */
@@ -57,6 +63,11 @@ export interface ActionObservations {
   after?: UiSignals;
   /** Le formulaire de cet écran vient d'être rempli avec des données valides. */
   formFilledWithValidData?: boolean;
+  /** Motifs d'interface de l'écran avant et après l'action. */
+  beforePatterns?: readonly DetectedPattern[];
+  afterPatterns?: readonly DetectedPattern[];
+  /** Acteur (utilisateur de la mission) qui exécute l'action. */
+  actor?: string;
 }
 
 /**

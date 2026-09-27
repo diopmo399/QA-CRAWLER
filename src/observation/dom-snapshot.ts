@@ -736,6 +736,90 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       .filter(Boolean)
       .slice(0, max);
 
+  /** Forme de l'écran, sans jamais lire les données affichées (seulement les en-têtes de colonnes). */
+  const structureOf = () => {
+    const shown = (selector: string): Element[] => deepAll(selector).filter((el) => isVisible(el));
+    const tables = shown('table, [role="table"], [role="grid"], [role="treegrid"], mat-table');
+    let tableRows = 0;
+    let columnHeaders: string[] = [];
+    for (const table of tables) {
+      const rows = Array.from(
+        table.querySelectorAll('tbody tr, [role="row"], mat-row, tr.mat-mdc-row'),
+      ).filter((row) => row.querySelector('th, [role="columnheader"]') === null);
+      if (rows.length >= tableRows) {
+        tableRows = rows.length;
+        columnHeaders = Array.from(table.querySelectorAll('th, [role="columnheader"], mat-header-cell'))
+          .map((cell) => clean((cell as HTMLElement).innerText, 40))
+          .filter(Boolean)
+          .slice(0, 8);
+      }
+    }
+    const lists = shown('[role="list"], [role="listbox"], ul, ol').filter(
+      (list) =>
+        closestDeep(list, 'nav, [role="navigation"], [role="menu"], [role="tablist"]') === null &&
+        list.children.length >= 3,
+    ).length;
+    const breadcrumb = shown(
+      'nav[aria-label*="breadcrumb" i], nav[aria-label*="fil" i], .breadcrumb, .breadcrumbs, [class*="breadcrumb"]',
+    )[0];
+    const breadcrumbs = breadcrumb
+      ? Array.from(breadcrumb.querySelectorAll('a, li, span'))
+          .map((item) => clean((item as HTMLElement).innerText, 40))
+          .filter((text, index, all) => text && text !== '/' && text !== '>' && all.indexOf(text) === index)
+          .slice(0, 6)
+      : [];
+    const regions = shown(
+      '[role="region"][aria-label], section[aria-label], main[aria-label], [role="main"][aria-label]',
+    )
+      .map((el) => clean(el.getAttribute('aria-label'), 60))
+      .filter(Boolean)
+      .slice(0, 8);
+    const stepHeaders = shown(
+      'mat-step-header, .mat-step-header, [class*="stepper"] [role="tab"], .step, .wizard-step',
+    );
+    const stepText = /\b(etape|étape|step)\s*\d+\s*(sur|of|\/)\s*\d+/i.exec(document.body.innerText);
+    const empty = shown(
+      '.empty-state, .no-data, .no-results, [class*="empty-state"], [class*="no-data"], [class*="no-results"], mat-empty',
+    )[0];
+    const emptyText =
+      /\b(aucun(e)? (resultat|résultat|donnee|donnée|element|élément|enregistrement)|no (results?|data|items?|records?)|nothing (here|found)|liste vide|empty)\b/i.exec(
+        clean(document.body.innerText, 2000),
+      );
+    const structure: {
+      tables: number;
+      tableRows: number;
+      columnHeaders: string[];
+      lists: number;
+      cards: number;
+      breadcrumbs: string[];
+      regions: string[];
+      wizardSteps: number;
+      fileInputs: number;
+      emptyMessage?: string;
+      pagination: boolean;
+    } = {
+      tables: tables.length,
+      tableRows,
+      columnHeaders,
+      lists,
+      cards: shown('mat-card, .mat-mdc-card, .card, .tile, [role="article"]').length,
+      breadcrumbs,
+      regions,
+      wizardSteps:
+        stepHeaders.length ||
+        (stepText ? Number(stepText[0].replace(/\D+/g, ' ').trim().split(' ').pop()) : 0),
+      fileInputs: deepAll('input[type="file"], [class*="dropzone"], [class*="drop-zone"], [class*="upload"]')
+        .length,
+      pagination:
+        shown(
+          'mat-paginator, .mat-mdc-paginator, nav[aria-label*="pagination" i], .pagination, [class*="paginat"]',
+        ).length > 0,
+    };
+    const emptyShown = empty ? clean((empty as HTMLElement).innerText, 80) : emptyText?.[0];
+    if (emptyShown) structure.emptyMessage = emptyShown;
+    return structure;
+  };
+
   return {
     headings: visibleTexts('h1, h2, h3, [role="heading"]', 12),
     dialogs: deepAll('[role="dialog"], [role="alertdialog"], dialog[open]')
@@ -748,6 +832,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     selectedTabs: visibleTexts('[role="tab"][aria-selected="true"]', 10),
     currentItems: visibleTexts('[aria-current]:not([aria-current="false"])', 10),
     textExcerpt: clean(document.body.innerText, 600),
+    structure: structureOf(),
     elements,
     forms: formResults,
     signals: {
