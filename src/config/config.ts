@@ -4,6 +4,7 @@ import { SEVERITIES } from '../model/issue.js';
 import { REPORT_LANGUAGES } from '../reporting/i18n.js';
 import { SCORING_WEIGHT_NAMES, type ScoringWeightName } from '../decision/scoring-weights.js';
 import { flowsSchema } from './flow-schema.js';
+import { RECOVERY_STRATEGIES } from '../recovery/recovery-model.js';
 
 /**
  * Mission configuration. The YAML describes *what to explore and within which
@@ -429,6 +430,44 @@ const oraclesSchema = z
   })
   .strict();
 
+/**
+ * What to do when an action fails or the exploration turns in circles.
+ * Strategies are tried in the order given; one left out is never used.
+ */
+const recoverySchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    strategies: z
+      .array(z.enum(RECOVERY_STRATEGIES))
+      .min(1)
+      .default([...RECOVERY_STRATEGIES]),
+    /** Retries of an action after a transient error (never an action that sends data). */
+    maxRetries: z.number().int().min(0).max(3).default(1),
+    /** Logins again after a session expiry, per run. */
+    maxReauthentications: z.number().int().min(0).max(10).default(2),
+    circuitBreaker: z
+      .object({
+        /** Same state + action + failure this many times: the action is not tried again. */
+        threshold: z.number().int().min(1).default(2),
+        /** Failures on one state before it is abandoned. */
+        maxFailuresPerState: z.number().int().min(1).default(5),
+      })
+      .strict()
+      .default({}),
+    stuck: z
+      .object({
+        /** A→B→A→B… this many times: the branch is abandoned. */
+        oscillationCycles: z.number().int().min(2).default(3),
+        /** Consecutive actions that change nothing (same state, no request). */
+        maxNoOpActions: z.number().int().min(2).default(15),
+        /** Consecutive screens still loading. */
+        maxBusyObservations: z.number().int().min(1).default(3),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
 const openApiSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -567,6 +606,7 @@ export const scenarioSchema = z
     scoring: scoringSchema.default({}),
     network: networkSchema.default({}),
     oracles: oraclesSchema.default({}),
+    recovery: recoverySchema.default({}),
     openapi: openApiSchema.default({}),
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),

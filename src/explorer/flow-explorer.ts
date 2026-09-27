@@ -66,6 +66,10 @@ import { DEFAULT_ERROR_TEXTS, UIOracle } from '../oracles/ui-oracle.js';
 import { PageErrorObserver } from '../observers/page-error-observer.js';
 import { SafetyPolicy } from '../policies/safety-policy.js';
 import { redactUrl } from '../security/redactor.js';
+import { CircuitBreaker } from '../recovery/circuit-breaker.js';
+import { RecoveryEngine, type RecoveryActions } from '../recovery/recovery-engine.js';
+import type { FailureKind, RecoveryEvent, RecoverySummary, StuckEvent } from '../recovery/recovery-model.js';
+import { StuckDetector } from '../recovery/stuck-detector.js';
 import { routeKey } from '../crawler/route-normalizer.js';
 
 /** Progress notifications (CLI output, tests). */
@@ -78,6 +82,10 @@ export interface ExplorationListener {
   /** The test oracles judged an executed action. */
   onOracle?(edge: FlowEdge, verdict: OracleVerdict): void;
   onBacktrack?(from: string, to: string | undefined, method: string): void;
+  /** A recovery strategy was tried after a failure. */
+  onRecovery?(event: RecoveryEvent): void;
+  /** The exploration turned in circles on a branch and left it. */
+  onStuck?(event: StuckEvent): void;
   onIssue?(issue: Issue, isNew: boolean): void;
   onFlowStart?(flow: FlowConfig): void;
   onFlowStep?(flow: FlowConfig, step: FlowStepReport): void;
@@ -129,6 +137,8 @@ export interface ExplorationOutcome {
   runId: string;
   /** Forms found and filled. */
   forms: FormReport[];
+  /** Recovery attempts, abandoned branches and open circuits. */
+  recovery: RecoverySummary;
   /** verify mode: every known transition of the baseline, replayed. */
   verification?: VerificationReport;
 }
@@ -208,6 +218,11 @@ export class FlowExplorer {
   private readonly formActions = new Map<string, string>();
   /** Every form filled, for the report (never a sensitive value). */
   private readonly formReports: FormReport[] = [];
+  private readonly recovery: RecoveryEngine;
+  private readonly breaker: CircuitBreaker | undefined;
+  private readonly stuck: StuckDetector | undefined;
+  /** The last action left the branch stuck: the loop leaves it. */
+  private pendingStuck: StuckEvent | undefined;
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -294,6 +309,10 @@ export class FlowExplorer {
         ])
       : undefined;
     this.networkTrace = new NetworkTraceRecorder(config.network);
+    const { recovery } = config;
+    this.recovery = new RecoveryEngine(recovery);
+    this.breaker = recovery.enabled ? new CircuitBreaker(recovery.circuitBreaker) : undefined;
+    this.stuck = recovery.enabled ? new StuckDetector(recovery.stuck) : undefined;
     this.verifyBaseline = options.verifyBaseline;
     this.baselineRunId = options.baselineRunId;
     this.screenshots = new ScreenshotService(config.output.screenshotsDir, config.checks.fullPageScreenshots);
@@ -468,6 +487,23 @@ export class FlowExplorer {
       page = step.page;
       current = step.context;
       await this.memory.save(this.graph);
+
+      const stuck = this.pendingStuck;
+      if (stuck) {
+        // Turning in circles: this branch is left, the exploration goes on elsewhere.
+        this.pendingStuck = undefined;
+        this.exhausted.add(current.stateId);
+        const restored = await this.backtrack(page, browser, observers.all, allowJump);
+        page = restored.page;
+        this.recovery.record(
+          { stateId: stuck.stateId, kind: 'stuck', message: stuck.message },
+          'abandon-branch',
+          restored.context,
+        );
+        this.emitRecovery();
+        if (!restored.context) return { page, stopReason: 'exhausted' };
+        current = restored.context;
+      }
     }
   }
 
@@ -552,16 +588,58 @@ export class FlowExplorer {
     observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
     from: PageContext,
     action: DiscoveredAction,
+    afterLogin = false,
   ): Promise<{ page: Page; context: PageContext }> {
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
+    const urlBefore = page.url();
     // Anomalies raised from now on are caused by this action; their state is known after observation.
     this.attribution = { actionId: action.id };
     this.currentAction = { stateId: from.stateId, actionId: action.id };
     const interactionMark = this.interactions.mark();
 
     this.networkTrace.start(action.id);
-    const result = await this.execute(page, from, action);
+    let result = await this.execute(page, from, action);
     this.actionsExecuted += 1;
+    // RETRY: a transient Playwright error (element re-rendered under the click), never an action sending data.
+    for (
+      let attempt = 0;
+      result.status === 'FAILED' && this.recovery.shouldRetry(result.error, action, attempt);
+      attempt++
+    ) {
+      await page.waitForTimeout(this.config.exploration.settleTimeMs).catch(() => undefined);
+      const failed = result.error;
+      result = await this.execute(page, from, action);
+      this.recovery.record(
+        {
+          stateId: from.stateId,
+          actionId: action.id,
+          kind: 'action-failed',
+          ...(failed ? { message: failed } : {}),
+        },
+        'retry',
+        result.status === 'SUCCESS' ? from : undefined,
+      );
+      this.emitRecovery();
+    }
+
+    // SESSION EXPIRED: the action landed on the login page. Log in again (bounded), come back, try once more.
+    let expired = false;
+    if (result.status === 'SUCCESS' && (await this.sessionExpired(page, from))) {
+      expired = true;
+      if (!afterLogin) {
+        this.networkTrace.stop(action.id);
+        const renewed = await this.reauthenticate(page);
+        const back = renewed ? await this.restore(page, from.stateId) : undefined;
+        this.recovery.record(
+          { stateId: from.stateId, actionId: action.id, kind: 'session-expired', message: 'session expired' },
+          'reauthenticate',
+          back,
+        );
+        this.emitRecovery();
+        if (back) return this.executeAndObserve(page, browser, observers, back, action, true);
+      }
+      result = { ...result, status: 'FAILED', error: 'session expired (login page shown)' };
+    }
     const raised = this.interactions.since(interactionMark);
     const blocking = raised.filter((interaction) => interaction.blocking);
     const interactionIds =
@@ -577,6 +655,13 @@ export class FlowExplorer {
     const crashed = observers.pageErrors.consumeCrash();
     const beforeSignals = this.lastSnapshot?.signals;
     if (result.status === 'FAILED' || blocking.length > 0 || leftAllowedHosts || crashed) {
+      const kind: FailureKind = expired
+        ? 'session-expired'
+        : crashed
+          ? 'page-crash'
+          : leftAllowedHosts
+            ? 'left-allowed-hosts'
+            : 'action-failed';
       if (leftAllowedHosts && result.status === 'SUCCESS' && /^https?:/.test(page.url())) {
         this.collector.add({
           type: 'NAVIGATION',
@@ -621,10 +706,17 @@ export class FlowExplorer {
       if (!/^https?:/.test(page.url()) || page.isClosed()) {
         page = await this.recyclePage(browser, page, observers.all);
       }
-      const restored = await this.restore(page, from.stateId);
-      if (restored) return { page, context: restored };
-      const fallback = await this.backtrack(page, browser, observers.all, this.allowJump);
-      if (fallback.context) return { page: fallback.page, context: fallback.context };
+      const recovered = await this.recoverFrom(page, browser, observers.all, from, {
+        stateId: from.stateId,
+        actionId: action.id,
+        kind,
+        message: edge.reason ?? 'failed',
+        navigated: page.url() !== urlBefore,
+        // A blocked interaction (AUTH_REQUIRED…) is not a failure of the action itself.
+        countFailure: blocking.length === 0,
+      });
+      if (recovered.context) return { page: recovered.page, context: recovered.context };
+      const fallback = { page: recovered.page };
       // The page is no longer in the state the action started from (e.g. a dialog closed by the
       // reload): go on from what is really on screen, not from the stale list of actions.
       if (this.isExplorablePage(fallback.page)) {
@@ -651,6 +743,16 @@ export class FlowExplorer {
     });
     await this.judge(edge, from, action, after, { crashed, beforeSignals });
     ids.push(...edge.issueIds.filter((id) => !ids.includes(id)));
+    const stuck = this.stuck?.observe({
+      from: from.stateId,
+      to: after.stateId,
+      requests: edge.network?.length ?? 0,
+      busy: this.lastSnapshot?.signals?.busy ?? false,
+    });
+    if (stuck) {
+      this.pendingStuck = stuck;
+      this.listener.onStuck?.(stuck);
+    }
     // Issues of the new state now know which action and path led to them.
     for (const issue of this.collector.all()) {
       if (ids.includes(issue.id)) {
@@ -662,6 +764,110 @@ export class FlowExplorer {
     this.listener.onTransition?.(edge, action);
     this.pushState(after);
     return { page, context: { ...after, errors: this.collector.forState(after.stateId) } };
+  }
+
+  /**
+   * RECOVERY after a failed action: the configured strategies in order
+   * (top layer, Escape, history, URL, replayed path, new login, another
+   * branch). A failure that keeps coming back opens the circuit: the action,
+   * or the whole state, is not tried again.
+   */
+  private async recoverFrom(
+    page: Page,
+    browser: BrowserManager,
+    observers: PageObserver[],
+    from: PageContext,
+    failure: {
+      stateId: string;
+      actionId: string;
+      kind: FailureKind;
+      message: string;
+      navigated: boolean;
+      countFailure: boolean;
+    },
+  ): Promise<{ page: Page; context?: PageContext }> {
+    let current = page;
+    const circuit = failure.countFailure
+      ? (this.breaker?.record(failure.stateId, failure.actionId, failure.message) ?? 'closed')
+      : 'closed';
+    const abandon = circuit === 'state-open';
+    if (abandon) this.exhausted.add(from.stateId);
+    const steps = this.restoreSteps(current, from.stateId);
+    this.attribution = {};
+    const actions: RecoveryActions = {
+      ...(steps && !abandon
+        ? {
+            // Only when a dialog, menu or picker was in front.
+            ...(this.lastSnapshot?.elements.some((element) => element.foreground)
+              ? { 'dismiss-dialog': steps.dismiss }
+              : {}),
+            // Nothing moved: Escape and a new look are enough. It moved: history first.
+            ...(failure.navigated ? { back: steps.back } : { escape: steps.escape }),
+            'known-url': steps.url,
+            'replay-path': steps.replay,
+          }
+        : {}),
+      ...(failure.kind === 'session-expired'
+        ? {
+            reauthenticate: async () =>
+              (await this.reauthenticate(current)) ? this.restore(current, from.stateId) : undefined,
+          }
+        : {}),
+      'abandon-branch': async () => {
+        this.exhausted.add(from.stateId);
+        const elsewhere = await this.backtrack(current, browser, observers, this.allowJump);
+        current = elsewhere.page;
+        this.stuck?.reset();
+        return elsewhere.context;
+      },
+    };
+    const recovered = await this.recovery.recover(
+      {
+        stateId: failure.stateId,
+        actionId: failure.actionId,
+        kind: abandon ? 'circuit-open' : failure.kind,
+        message: failure.message,
+      },
+      actions,
+    );
+    this.emitRecovery();
+    return { page: current, ...(recovered.context ? { context: recovered.context } : {}) };
+  }
+
+  /** Recovery events not yet given to the listener. */
+  private recoveryEmitted = 0;
+  private emitRecovery(): void {
+    const events = this.recovery.events();
+    for (const event of events.slice(this.recoveryEmitted)) this.listener.onRecovery?.(event);
+    this.recoveryEmitted = events.length;
+  }
+
+  /** Did the session expire? With a form login: the page shows the login page it did not ask for. */
+  private async sessionExpired(page: Page, from: PageContext): Promise<boolean> {
+    return Promise.resolve(this.onLoginPage(page) && !this.isLoginUrl(from.url));
+  }
+
+  private onLoginPage(page: Page): boolean {
+    return !page.isClosed() && this.isLoginUrl(page.url());
+  }
+
+  private isLoginUrl(url: string): boolean {
+    const { auth } = this.config;
+    if (auth.type !== 'form') return false;
+    try {
+      return new URL(url).pathname === new URL(auth.loginUrl, this.config.target.baseUrl).pathname;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Logs in again after a session expiry, within the configured limit. */
+  private async reauthenticate(page: Page): Promise<boolean> {
+    if (!this.recovery.mayReauthenticate()) return false;
+    return this.authenticator
+      .login(page)
+      .then(() => true)
+      .catch(() => false);
   }
 
   /**
@@ -1529,12 +1735,29 @@ export class FlowExplorer {
   }
 
   /**
-   * Brings the page back to a known state, cheapest method first:
-   * browser history (goBack), then its URL, then replaying the recorded path
-   * from the start state (for states without their own URL: wizard steps,
-   * tabs, dialogs). Each attempt is verified by comparing state ids.
+   * Brings the page back to a known state, cheapest method first: close the
+   * top layer, browser history (goBack), then its URL, then replaying the
+   * recorded path from the start state (for states without their own URL:
+   * wizard steps, tabs, dialogs). Each attempt is verified by comparing state ids.
    */
   private async restore(page: Page, stateId: string, tryHistory = false): Promise<PageContext | undefined> {
+    const steps = this.restoreSteps(page, stateId);
+    if (!steps) return undefined;
+    this.attribution = {};
+    for (const step of [steps.dismiss, ...(tryHistory ? [steps.back] : []), steps.url, steps.replay]) {
+      const context = await step();
+      if (context) return context;
+    }
+    return undefined;
+  }
+
+  /** The ways of reaching a known state again; each returns the state only when it is the expected one. */
+  private restoreSteps(
+    page: Page,
+    stateId: string,
+  ):
+    | Record<'dismiss' | 'escape' | 'back' | 'url' | 'replay', () => Promise<PageContext | undefined>>
+    | undefined {
     const node = this.graph.getNode(stateId);
     if (!node) return undefined;
     const depth = node.depth;
@@ -1551,36 +1774,41 @@ export class FlowExplorer {
       }
       return undefined;
     };
+    const settle = (): Promise<void> =>
+      page.waitForTimeout(this.config.exploration.settleTimeMs).catch(() => undefined);
 
-    this.attribution = {};
-    // A dialog, a date picker…: close the top layer first, the screen under it stays as it is.
-    if (await this.closeTopLayer(page)) {
-      const context = await matches('top layer closed');
-      if (context) return context;
-    }
-    if (tryHistory) {
-      const back = await page
-        .goBack({
-          waitUntil: this.config.exploration.waitUntil,
-          timeout: this.config.exploration.navigationTimeoutMs,
-        })
-        .catch(() => null);
-      if (back !== null) {
-        await page.waitForTimeout(this.config.exploration.settleTimeMs).catch(() => undefined);
-        const context = await matches('history back');
-        if (context) return context;
-      }
-    }
+    return {
+      // A dialog, a date picker…: close the top layer first, the screen under it stays as it is.
+      dismiss: async () => ((await this.closeTopLayer(page)) ? matches('top layer closed') : undefined),
+      escape: async () => {
+        if (!this.isExplorablePage(page)) return undefined;
+        await page.keyboard.press('Escape').catch(() => undefined);
+        await settle();
+        return matches('escape');
+      },
+      back: async () => {
+        const back = await page
+          .goBack({
+            waitUntil: this.config.exploration.waitUntil,
+            timeout: this.config.exploration.navigationTimeoutMs,
+          })
+          .catch(() => null);
+        if (back === null) return undefined;
+        await settle();
+        return matches('history back');
+      },
+      url: async () => ((await this.goto(page, node.url)) ? matches('url') : undefined),
+      replay: () => this.replayPath(page, stateId),
+    };
+  }
 
-    if (await this.goto(page, node.url)) {
-      const context = await matches('url');
-      if (context) return context;
-    }
-
-    // Replay the recorded transitions from the start state.
+  /** Replays the recorded transitions from the start state. */
+  private async replayPath(page: Page, stateId: string): Promise<PageContext | undefined> {
     const path = this.graph.pathTo(stateId);
     if (
       path.length === 0 ||
+      // A transition that keeps failing is not replayed again.
+      path.some((edge) => this.breaker?.isOpen(edge.from, edge.actionId)) ||
       !(await this.goto(page, this.graph.getNode(this.graph.rootId ?? '')?.url ?? this.startUrl))
     ) {
       return undefined;
@@ -1645,7 +1873,7 @@ export class FlowExplorer {
     return true;
   }
 
-  private async goto(page: Page, url: string): Promise<boolean> {
+  private async goto(page: Page, url: string, relogged = false): Promise<boolean> {
     const { exploration } = this.config;
     try {
       await page.goto(url, { waitUntil: exploration.waitUntil, timeout: exploration.navigationTimeoutMs });
@@ -1671,6 +1899,17 @@ export class FlowExplorer {
     }
     if (exploration.settleTimeMs > 0)
       await page.waitForTimeout(exploration.settleTimeMs).catch(() => undefined);
+    if (!relogged && this.onLoginPage(page) && !this.isLoginUrl(url)) {
+      // Sent to the login page: the session expired. Log in again (bounded), then go there again.
+      const renewed = await this.reauthenticate(page);
+      this.recovery.record(
+        { stateId: this.attribution.stateId ?? '', kind: 'session-expired', message: 'session expired' },
+        'reauthenticate',
+        renewed,
+      );
+      this.emitRecovery();
+      if (renewed) return this.goto(page, url, true);
+    }
     return this.isExplorablePage(page);
   }
 
@@ -1863,6 +2102,12 @@ export class FlowExplorer {
       startUrl: redactUrl(this.startUrl),
       runId: this.runId,
       forms: this.formReports,
+      recovery: {
+        events: this.recovery.events(),
+        stuck: this.stuck?.all() ?? [],
+        circuits: this.breaker?.circuits() ?? [],
+        reauthentications: this.recovery.reauthenticationCount,
+      },
       ...(this.verification ? { verification: this.verification } : {}),
     };
   }

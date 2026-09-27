@@ -231,6 +231,18 @@ function progressListener(quiet: boolean): ExplorationListener {
       if (quiet) return;
       logger.info(`      ${color.magenta('↩ backtrack')} ${to ?? ''} ${color.dim(`(${method})`)}`);
     },
+    onRecovery(event) {
+      if (quiet) return;
+      const mark = event.success ? color.green('↻ recovered') : color.yellow('↻ recovery failed');
+      logger.info(
+        `      ${mark} ${event.strategy} ${color.dim(`(${event.failure}${event.message ? `: ${event.message}` : ''})`)}`,
+      );
+    },
+    onStuck(event) {
+      logger.info(
+        `      ${color.yellow('⟲ stuck')} ${event.kind}: ${event.message} ${color.dim('(branch left)')}`,
+      );
+    },
     onFlowStart(flow) {
       logger.info(
         `${color.bold(color.cyan('▶ flow'))} ${color.bold(flow.name)} ${color.dim(`(${flow.steps.length} steps)`)}`,

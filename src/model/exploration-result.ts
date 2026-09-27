@@ -7,6 +7,8 @@ import type { FlowEdge, FlowNode } from './flow.js';
 import type { FlowRunReport } from './flow-run.js';
 import type { BrowserInteractionResult } from '../interactions/types.js';
 import type { Issue, IssueType, Severity } from './issue.js';
+import type { FormReport } from '../forms/form-report.js';
+import type { RecoverySummary } from '../recovery/recovery-model.js';
 
 /** Why the exploration ended. */
 export type StopReason =
@@ -76,6 +78,12 @@ export interface ExplorationResult {
   flowDiff?: FlowDiff;
   /** verify: every known transition of the baseline, replayed. */
   verification?: VerificationReport;
+  /** Id of the run, carried by the data it created (QA-CRAWLER-<runId>). */
+  runId?: string;
+  /** Forms found and filled, with their validation cases (never a sensitive value). */
+  formReports?: FormReport[];
+  /** Recovery attempts, abandoned branches, open circuits. */
+  recovery?: RecoverySummary;
   /** Non-secret summary of the effective configuration. */
   settings: Record<string, unknown>;
   artifacts: {

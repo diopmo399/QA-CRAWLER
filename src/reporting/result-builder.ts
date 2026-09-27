@@ -80,6 +80,9 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     browserInteractions: outcome.interactions,
     issues,
     ...(outcome.verification ? { verification: outcome.verification } : {}),
+    runId: outcome.runId,
+    formReports: outcome.forms,
+    recovery: outcome.recovery,
     settings: {
       exploration,
       goals,
