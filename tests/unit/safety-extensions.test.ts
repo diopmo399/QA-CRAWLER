@@ -55,14 +55,29 @@ describe('safety.mutations', () => {
     expect(policy.evaluate(action({ classification: 'DANGEROUS', risks: [] })).verdict).toBe('BLOCK');
   });
 
-  it('DANGEROUS in allowedActionClasses is ignored, with a warning', () => {
+  it('DANGEROUS in allowedActionClasses: executed, with a warning naming the risks still blocked', () => {
     const { config, warnings } = parseConfig(
-      'target: { baseUrl: http://localhost:4200 }\nsafety:\n  allowedActionClasses: [SAFE, DANGEROUS]\n',
+      'target: { baseUrl: http://localhost:4200 }\nsafety:\n  allowedActionClasses: [SAFE, DANGEROUS]\n  block: [payment]\n  mutations: { enabled: true, maxPerRun: 1 }\n',
       {},
       {},
     );
-    expect(config.safety.allowedActionClasses).toEqual(['SAFE']);
-    expect(warnings.some((warning) => warning.includes('never executed'))).toBe(true);
+    expect(config.safety.allowedActionClasses).toEqual(['SAFE', 'DANGEROUS', 'MUTATION']);
+    expect(
+      warnings.some((warning) => warning.includes('destructive actions') && warning.includes('payment')),
+    ).toBe(true);
+    const policy = new SafetyPolicy(config.safety);
+    const remove = action({ classification: 'DANGEROUS', text: 'Delete', risks: ['delete'] });
+    expect(policy.evaluate(remove).verdict).toBe('ALLOW');
+    expect(policy.evaluate(action({ classification: 'DANGEROUS', risks: ['payment'] })).verdict).toBe(
+      'BLOCK',
+    );
+    expect(
+      policy.evaluate(action({ type: 'fill', classification: 'DANGEROUS', risks: ['sensitive-data'] }))
+        .verdict,
+    ).toBe('BLOCK');
+    // It counts in the budget of actions changing data.
+    policy.recordExecuted(remove);
+    expect(policy.evaluate(remove).verdict).toBe('BLOCK');
   });
 });
 

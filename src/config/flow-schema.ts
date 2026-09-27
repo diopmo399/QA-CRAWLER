@@ -81,8 +81,11 @@ const expectSchema = z
     'expect needs at least one of text, url, visible, hidden',
   );
 
-/** Classes a step may execute on top of SAFE. DANGEROUS is never allowed. */
-export const FLOW_ALLOWANCES = ['MUTATION', 'UNKNOWN'] as const;
+/**
+ * Classes a step may execute on top of SAFE. DANGEROUS runs only when the
+ * mission also lists it in safety.allowedActionClasses.
+ */
+export const FLOW_ALLOWANCES = ['MUTATION', 'UNKNOWN', 'DANGEROUS'] as const;
 export type FlowAllowance = (typeof FLOW_ALLOWANCES)[number];
 
 const STEP_KINDS = ['goto', 'click', 'fill', 'select', 'check', 'uncheck', 'expect', 'screenshot'] as const;
@@ -102,8 +105,8 @@ const stepSchema = z
     screenshot: nonEmpty.optional(),
     /**
      * Explicit permission for this step only: MUTATION (create, save,
-     * submit…) and/or UNKNOWN (icon-only control). DANGEROUS actions
-     * (delete, pay, send, logout…) are never executed.
+     * submit…) and/or UNKNOWN (icon-only control). DANGEROUS (delete, pay,
+     * send…) also needs DANGEROUS in safety.allowedActionClasses.
      */
     allow: z
       .union([z.enum(FLOW_ALLOWANCES), z.array(z.enum(FLOW_ALLOWANCES))])

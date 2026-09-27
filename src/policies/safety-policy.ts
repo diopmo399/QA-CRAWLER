@@ -227,8 +227,6 @@ export class SafetyPolicy {
       }
     }
 
-    if (action.classification === 'DANGEROUS')
-      return { verdict: 'BLOCK', reason: `DANGEROUS actions are never executed (${action.reason})` };
     if (!this.allowedClasses.has(action.classification)) {
       return {
         verdict: 'BLOCK',
@@ -260,7 +258,9 @@ export class SafetyPolicy {
   changesData(action: DiscoveredAction): boolean {
     return (
       action.type === 'click' &&
-      (action.classification === 'MUTATION' || action.risks.includes('form-submit'))
+      (action.classification === 'MUTATION' ||
+        action.classification === 'DANGEROUS' ||
+        action.risks.includes('form-submit'))
     );
   }
 

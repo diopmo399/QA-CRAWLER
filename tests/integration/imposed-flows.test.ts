@@ -200,7 +200,7 @@ flows:
     expect(flow(result, 'membre').status).toBe('PASSED');
   });
 
-  it('never executes a DANGEROUS step, even with allow', async () => {
+  it('does not execute a DANGEROUS step the mission does not allow, whatever the step says', async () => {
     const result = await run(
       'dangerous',
       `
@@ -216,7 +216,7 @@ flows:
     const report = flow(result, 'supprimer');
     expect(report.status).toBe('BLOCKED');
     expect(report.steps[0]?.classification).toBe('DANGEROUS');
-    expect(report.steps[0]?.reason).toContain('never executed');
+    expect(report.steps[0]?.reason).toContain('not allowed by the mission');
     expect(lastHits).toEqual([]);
   });
 

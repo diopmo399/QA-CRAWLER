@@ -170,7 +170,7 @@ describe('SafetyPolicy.evaluate (gate between the decision engine and Playwright
     expect(restricted.evaluate(action({ category: 'search' })).verdict).toBe('ALLOW');
   });
 
-  it('always blocks sensitive data and DANGEROUS actions, even when every class is allowed', () => {
+  it('always blocks sensitive data, even when every class is allowed; DANGEROUS runs only when listed', () => {
     const permissive = new SafetyPolicy(
       testConfig('safety:\n  allowedActionClasses: [SAFE, MUTATION, DANGEROUS, UNKNOWN]\n  block: []\n')
         .safety,
@@ -180,6 +180,13 @@ describe('SafetyPolicy.evaluate (gate between the decision engine and Playwright
         .verdict,
     ).toBe('BLOCK');
     expect(permissive.evaluate(action({ classification: 'DANGEROUS', risks: ['delete'] })).verdict).toBe(
+      'ALLOW',
+    );
+    // Listed, but its risk still in safety.block: blocked.
+    const listedOnly = new SafetyPolicy(
+      testConfig('safety:\n  allowedActionClasses: [SAFE, DANGEROUS]\n').safety,
+    );
+    expect(listedOnly.evaluate(action({ classification: 'DANGEROUS', risks: ['delete'] })).verdict).toBe(
       'BLOCK',
     );
     expect(permissive.evaluate(action({ classification: 'MUTATION' })).verdict).toBe('ALLOW');

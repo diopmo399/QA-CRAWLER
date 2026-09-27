@@ -172,11 +172,10 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
     );
   }
   if (config.safety.allowedActionClasses.includes('DANGEROUS')) {
-    // Delete, payment, irreversible…: never executed automatically, whatever the mission says.
-    config.safety.allowedActionClasses = config.safety.allowedActionClasses.filter(
-      (value) => value !== 'DANGEROUS',
+    const stillBlocked = config.safety.block.filter((risk) => risk !== 'sensitive-data');
+    warnings.push(
+      `safety.allowedActionClasses includes DANGEROUS: destructive actions (delete, pay, send…) may be executed. Use only on disposable environments.${stillBlocked.length > 0 ? ` Risks still blocked by safety.block: ${stillBlocked.join(', ')}.` : ''} Sensitive fields are never filled.`,
     );
-    warnings.push('safety.allowedActionClasses: DANGEROUS actions are never executed; ignored.');
   }
   if (config.safety.mutations.enabled) {
     if (!config.safety.allowedActionClasses.includes('MUTATION'))

@@ -90,7 +90,7 @@ describe('flows schema', () => {
       /"name" is only valid with "role"/,
     );
     expect(() => steps('      - expect: {}\n')).toThrowError(/expect needs at least one/);
-    expect(() => steps('      - click: { role: button }\n        allow: DANGEROUS\n')).toThrowError(/allow/);
+    expect(() => steps('      - click: { role: button }\n        allow: DELETE\n')).toThrowError(/allow/);
     expect(() => steps('      - fill: { label: Titre }\n')).toThrowError(/value/);
     expect(() => flows('  - name: f\n    steps: []\n')).toThrowError(/steps/);
     expect(() =>
@@ -130,7 +130,7 @@ describe('evaluateFlowAction', () => {
   });
   const verdict = (
     overrides: Partial<DiscoveredAction>,
-    allow: ('MUTATION' | 'UNKNOWN')[] = [],
+    allow: ('MUTATION' | 'UNKNOWN' | 'DANGEROUS')[] = [],
     valueFromEnv = false,
   ) => evaluateFlowAction(policy, action(overrides), { allow, valueFromEnv }).verdict;
 
@@ -143,11 +143,18 @@ describe('evaluateFlowAction', () => {
     expect(verdict({ classification: 'UNKNOWN' }, ['MUTATION'])).toBe('BLOCK');
   });
 
-  it('never runs DANGEROUS steps', () => {
+  it('runs DANGEROUS steps only with allow: DANGEROUS and DANGEROUS allowed by the mission', () => {
     expect(verdict({ classification: 'DANGEROUS', risks: ['delete'] }, ['MUTATION', 'UNKNOWN'])).toBe(
       'BLOCK',
     );
-    expect(verdict({ classification: 'DANGEROUS', risks: ['logout'] }, ['MUTATION'])).toBe('BLOCK');
+    // The step allows it, the mission does not.
+    expect(verdict({ classification: 'DANGEROUS', risks: ['delete'] }, ['DANGEROUS'])).toBe('BLOCK');
+    const permissive = new SafetyPolicy(
+      testConfig('safety:\n  allowedActionClasses: [SAFE, DANGEROUS]\n').safety,
+    );
+    const dangerous = action({ classification: 'DANGEROUS', risks: ['delete'] });
+    expect(evaluateFlowAction(permissive, dangerous, { allow: [] }).verdict).toBe('BLOCK');
+    expect(evaluateFlowAction(permissive, dangerous, { allow: ['DANGEROUS'] }).verdict).toBe('ALLOW');
   });
 
   it('fills sensitive fields only from the environment, and payment fields never', () => {

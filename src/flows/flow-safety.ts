@@ -15,7 +15,8 @@ export interface FlowStepPermission {
  *
  * - SAFE: runs.
  * - MUTATION / UNKNOWN: runs only when the step says `allow: MUTATION` / `allow: UNKNOWN`.
- * - DANGEROUS (delete, pay, send, logout, irreversible…): never runs.
+ * - DANGEROUS (delete, pay, send, logout, irreversible…): runs only when the step
+ *   says `allow: DANGEROUS` AND the mission lists DANGEROUS in allowedActionClasses.
  * - Links: allowed hosts and ignored paths still apply.
  * - Sensitive fields (password, OTP, secret): filled only from an environment
  *   variable; payment fields (card, IBAN…) are never filled.
@@ -49,7 +50,16 @@ export function evaluateFlowAction(
   }
 
   if (action.classification === 'DANGEROUS') {
-    return { verdict: 'BLOCK', reason: `DANGEROUS actions are never executed (${action.reason})` };
+    if (!safety.isExecutionAllowed('DANGEROUS'))
+      return {
+        verdict: 'BLOCK',
+        reason: `DANGEROUS actions are not allowed by the mission (${action.reason}): list DANGEROUS in safety.allowedActionClasses`,
+      };
+    if (!permission.allow.includes('DANGEROUS'))
+      return {
+        verdict: 'BLOCK',
+        reason: `DANGEROUS action (${action.reason}): add "allow: DANGEROUS" to this step to execute it`,
+      };
   }
   if (action.href && (action.type === 'navigate' || action.external === true)) {
     const verdict = evaluateFlowUrl(safety, action.href);
