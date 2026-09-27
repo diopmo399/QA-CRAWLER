@@ -1,6 +1,7 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { FlowGraphData } from '../model/flow.js';
+import { writeFileAtomic } from '../memory/atomic-write.js';
 
 /** D'où vient une baseline. Branche, commit et environnement sont facultatifs. */
 export interface BaselineMetadata {
@@ -109,7 +110,5 @@ function safeName(name: string): string {
 }
 
 async function writeJson(file: string, value: unknown): Promise<void> {
-  const temporary = `${file}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await rename(temporary, file);
+  await writeFileAtomic(file, `${JSON.stringify(value, null, 2)}\n`);
 }
