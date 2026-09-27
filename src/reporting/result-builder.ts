@@ -85,6 +85,17 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     recovery: outcome.recovery,
     mutations: outcome.mutations,
     createdData: outcome.createdData,
+    intelligence: {
+      strategy: outcome.strategy,
+      goals: outcome.goals,
+      patterns: outcome.patterns,
+      coverage: outcome.coverage,
+      decisions: outcome.decisions,
+      budget: outcome.budget,
+      domainPacks: config.domainPacks,
+    },
+    ...(outcome.invariants.length > 0 ? { invariants: outcome.invariants } : {}),
+    ...(outcome.blockedWrites.length > 0 ? { blockedWrites: outcome.blockedWrites } : {}),
     settings: {
       exploration,
       goals,

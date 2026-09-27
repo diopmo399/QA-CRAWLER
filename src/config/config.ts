@@ -664,8 +664,11 @@ const knowledgeSchema = z
      * corps de requête ni de valeur saisie.
      */
     enabled: z.boolean().default(true),
-    /** Fichier JSON versionné (à garder hors du dépôt : il décrit l'application testée). */
-    file: nonEmpty.default('knowledge/knowledge-base.json'),
+    /**
+     * Fichier JSON versionné (à garder hors du dépôt : il décrit l'application testée).
+     * Par défaut : knowledge/knowledge-base.json à côté du dossier des rapports.
+     */
+    file: nonEmpty.optional(),
     /** Demi-vie des observations : une observation de cet âge compte moitié moins. */
     halfLifeDays: z.number().positive().default(30),
     /** Identité de l'application testée, pour ne pas mélanger les connaissances. Par défaut : l'hôte de target.baseUrl. */

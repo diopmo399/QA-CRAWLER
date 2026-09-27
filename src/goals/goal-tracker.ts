@@ -8,6 +8,9 @@ import type { ExplorationPlan, GoalState } from './goal-model.js';
 export interface GoalRelevance {
   goalId: string;
   description: string;
+  kind: GoalState['kind'];
+  subject?: string;
+  concept?: string;
   /** 0..1, pondéré par la priorité de l'objectif. */
   weight: number;
 }
@@ -79,7 +82,15 @@ export class GoalTracker {
       const relevance = this.matcher.relevance(goal, action, context);
       if (relevance <= 0) continue;
       const weight = relevance * (goal.priority / 10) * (goal.status === 'ACTIVE' ? 1.25 : 1);
-      if (!best || weight > best.weight) best = { goalId: goal.id, description: goal.description, weight };
+      if (!best || weight > best.weight)
+        best = {
+          goalId: goal.id,
+          description: goal.description,
+          kind: goal.kind,
+          ...(goal.subject !== undefined ? { subject: goal.subject } : {}),
+          ...(goal.concept !== undefined ? { concept: goal.concept } : {}),
+          weight,
+        };
     }
     return best;
   }

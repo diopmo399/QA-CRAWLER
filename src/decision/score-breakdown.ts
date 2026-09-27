@@ -1,3 +1,5 @@
+import { describeGoal, type GoalState } from '../goals/goal-model.js';
+
 /** Les composantes du score d'une action. */
 export const SCORE_FACTORS = [
   'base',
@@ -72,7 +74,29 @@ export type ScoreReasonCode = keyof typeof TEMPLATES;
 /** Le texte d'une raison, avec ses points : « +70 goal relevance: create user ». */
 export function renderReason(reason: ScoreReason, language: 'en' | 'fr' = 'en'): string {
   const template: string = TEMPLATES[reason.code][language];
-  const text = template.replace(/\{(\w+)\}/g, (_, key: string) => String(reason.params?.[key] ?? ''));
+  const params = { ...reason.params };
+  // L'objectif est décrit dans la langue du rapport (sa description est en anglais).
+  if (reason.code === 'goal-relevance' && typeof params.kind === 'string')
+    params.goal = describeGoal(
+      {
+        kind: params.kind as GoalState['kind'],
+        id: String(params.goal ?? ''),
+        ...(params.subject !== undefined ? { subject: String(params.subject) } : {}),
+        ...(params.concept !== undefined ? { concept: String(params.concept) } : {}),
+      },
+      language,
+    );
+  // Règle de catégorie (« category:menu ») : dite comme une catégorie d'action.
+  if (
+    reason.code === 'pattern-rule' &&
+    typeof params.rule === 'string' &&
+    params.rule.startsWith('category:')
+  )
+    params.rule =
+      language === 'fr'
+        ? `de catégorie ${params.rule.slice('category:'.length)}`
+        : `${params.rule.slice('category:'.length)} category`;
+  const text = template.replace(/\{(\w+)\}/g, (_, key: string) => String(params[key] ?? ''));
   return `${reason.points > 0 ? '+' : ''}${reason.points} ${text}`;
 }
 

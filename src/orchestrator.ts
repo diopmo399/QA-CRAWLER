@@ -23,6 +23,10 @@ import { combineListeners, EngineEventLog } from './logging/engine-log.js';
 import { flowsYaml, generateFlows } from './flows/flow-generator.js';
 import { DefaultTestDataProvider } from './data/test-data-provider.js';
 import { AuthorizationObserver, type AuthorizationReport } from './actors/authorization-observer.js';
+import { JsonKnowledgeBase, knowledgeFileOf, knowledgeIdentityOf } from './knowledge/json-knowledge-base.js';
+import { InvariantOracle } from './oracles/invariant-oracle.js';
+import { loadSemantics } from './semantics/domain-packs.js';
+import { IssueCollector } from './anomaly/issue-collector.js';
 
 export interface RunOutcome {
   result: ExplorationResult;
@@ -78,7 +82,28 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     options.memory ??
     new JsonFlowMemory(config.memory.file ?? path.join(config.output.reportsDir, 'flow-graph.json'));
   const engineLog = new EngineEventLog(config.logging.level);
+  // Vocabulaire et packs de domaine ; ce que le crawler a appris des runs précédents.
+  const semantics = await loadSemantics(config);
+  const knowledgeFile = config.knowledge.enabled ? knowledgeFileOf(config) : undefined;
+  const knowledge = new JsonKnowledgeBase(
+    knowledgeFile,
+    knowledgeIdentityOf(
+      config.knowledge,
+      config.target.baseUrl,
+      env,
+      (await crawlerVersion()).crawlerVersion,
+    ),
+    {
+      halfLifeDays: config.knowledge.halfLifeDays,
+      minObservations: config.knowledge.minObservations,
+      dominance: config.knowledge.dominance,
+    },
+  );
+  await knowledge.load();
+  knowledge.startRun();
   const explorer = new FlowExplorer(config, {
+    semantics,
+    knowledge,
     memory,
     ...(options.decisionEngine ? { decisionEngine: options.decisionEngine } : {}),
     ...(options.testData ? { testData: options.testData } : {}),
@@ -107,8 +132,48 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     authorization = observed.report;
     outcome.issues.push(...observed.issues);
   }
+  // Invariants d'accès (« l'acteur user n'accède pas à /admin/** ») : jugés sur ce que chaque acteur a vu.
+  const accessRules = [...semantics.invariants, ...config.invariants].filter(
+    (rule) => rule.when.actor && rule.expect.access,
+  );
+  if (accessRules.length > 0) {
+    const judged = new InvariantOracle(accessRules, config.authorization.primaryActor).evaluateAccess(
+      authorization,
+    );
+    outcome.invariants.push(...judged);
+    const collector = new IssueCollector();
+    for (const failed of judged.filter((entry) => entry.status === 'FAIL'))
+      outcome.issues.push({
+        ...collector.add({
+          type: 'INVARIANT',
+          severity: failed.severity,
+          message: `invariant ${failed.invariantId} (${failed.actor ?? ''}): expected ${failed.expected}, observed ${failed.observed}`,
+          pageUrl: failed.url ?? '',
+          ...(failed.stateId ? { stateId: failed.stateId } : {}),
+        }),
+        // Un préfixe propre : pas de collision avec les id de l'explorateur (ISSUE-0001…).
+        id: `ISSUE-INV-${String(collector.all().length).padStart(4, '0')}`,
+      });
+  }
+
+  if (config.knowledge.enabled) await knowledge.save();
 
   const result = buildResult(outcome, config);
+  if (result.intelligence) {
+    result.intelligence.domainPacks = semantics.packs;
+    result.intelligence.knowledge = {
+      identity: knowledge.identity,
+      runs: knowledge.snapshot.runs,
+      ...(knowledgeFile ? { file: knowledgeFile } : {}),
+    };
+  }
+  if (knowledgeFile) result.artifacts.knowledge = knowledgeFile;
+  if (config.logging.decisionTrace && outcome.decisionTraces) {
+    await mkdir(config.output.reportsDir, { recursive: true });
+    const file = path.join(config.output.reportsDir, 'decision-trace.json');
+    await writeFile(file, `${JSON.stringify(outcome.decisionTraces, null, 2)}\n`, 'utf8');
+    result.artifacts.decisionTrace = file;
+  }
   result.mode = mode;
   if (authorization) result.authorization = authorization;
   result.cleanup = await (options.cleanup ?? new ManualCleanup()).cleanup(outcome.createdData);

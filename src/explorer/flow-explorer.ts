@@ -94,7 +94,7 @@ import { HistoricalOracle, apiOperation } from '../oracles/historical-oracle.js'
 import { InvariantOracle, type InvariantEvaluation } from '../oracles/invariant-oracle.js';
 import { RuleBasedPatternDetector } from '../patterns/pattern-detector.js';
 import type { DetectedPattern } from '../patterns/ui-pattern.js';
-import { WriteGuard, type BlockedWrite } from '../policies/write-guard.js';
+import { WriteGuard, writePattern, type BlockedWrite } from '../policies/write-guard.js';
 import { semanticsOf, type Semantics } from '../semantics/domain-packs.js';
 
 /** Notifications de progression (sortie de la CLI, tests). */
@@ -791,18 +791,13 @@ export class FlowExplorer {
 
   /** Une requête d'écriture annulée par la garde : une anomalie « effet de bord ». */
   private onBlockedWrite(write: BlockedWrite): void {
-    let path = write.url;
-    try {
-      path = new URL(write.url).pathname;
-    } catch {
-      // URL déjà expurgée
-    }
+    // Le modèle de la requête : les écritures d'une même saisie (une par frappe) font une seule anomalie.
+    const path = writePattern(write.url);
     const issue = this.collector.add({
       type: 'WRITE_BLOCKED',
       severity: 'WARNING',
       message: `write request blocked: ${write.method} ${path} — side effect of ${write.during} (not allowed to change data)`,
       pageUrl: this.currentUrl,
-      requestUrl: write.url,
       ...(write.actionId ? { actionId: write.actionId } : {}),
       ...(write.stateId ? { stateId: write.stateId } : {}),
     });

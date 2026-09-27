@@ -324,6 +324,17 @@ export function migrateKnowledge(raw: unknown): KnowledgeFile | undefined {
   return { schemaVersion: KNOWLEDGE_SCHEMA_VERSION, applications: file.applications ?? {} };
 }
 
+/** Le fichier de la base : knowledge.file, sinon knowledge/knowledge-base.json à côté du dossier des rapports. */
+export function knowledgeFileOf(config: {
+  knowledge: KnowledgeConfig;
+  output: { reportsDir: string };
+}): string {
+  return (
+    config.knowledge.file ??
+    path.join(path.dirname(path.resolve(config.output.reportsDir)), 'knowledge', 'knowledge-base.json')
+  );
+}
+
 /** L'identité de l'application testée : la mission, sinon l'environnement de CI. */
 export function knowledgeIdentityOf(
   config: KnowledgeConfig,

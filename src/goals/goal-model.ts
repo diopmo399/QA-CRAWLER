@@ -72,3 +72,29 @@ export interface Mission {
   /** Mots-clés d'objectif historiques (goals.keywords). */
   keywords: string[];
 }
+
+/** Description lisible d'un objectif, en anglais ou en français (plan, rapports, raisons du score). */
+export function describeGoal(
+  goal: Pick<GoalState, 'kind' | 'id'> & { subject?: string | undefined; concept?: string | undefined },
+  language: 'en' | 'fr' = 'en',
+): string {
+  const subject = goal.subject ?? goal.id;
+  const concept = goal.concept ?? '';
+  const fr = language === 'fr';
+  switch (goal.kind) {
+    case 'mission':
+      return concept ? `${concept} ${subject}` : fr ? `explorer ${subject}` : `explore ${subject}`;
+    case 'locate':
+      return fr ? `trouver « ${subject} »` : `find "${subject}"`;
+    case 'explore':
+      return fr ? `explorer « ${subject} » (liste, fiche)` : `explore "${subject}" (list, detail)`;
+    case 'find-action':
+      return fr
+        ? `trouver l’action « ${concept} » pour « ${subject} »`
+        : `find the "${concept}" action for "${subject}"`;
+    case 'reach-pattern':
+      return fr
+        ? `atteindre l’écran « ${concept} » pour « ${subject} »`
+        : `reach the "${concept}" screen for "${subject}"`;
+  }
+}

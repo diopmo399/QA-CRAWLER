@@ -10,6 +10,7 @@ export type EngineEvent =
   | 'FLOW_STATE_DISCOVERED'
   | 'FLOW_STATE_REVISITED'
   | 'ACTION_SELECTED'
+  | 'GOAL_REACHED'
   | 'ACTION_BLOCKED'
   | 'ACTION_EXECUTED'
   | 'ACTION_FAILED'
@@ -105,9 +106,24 @@ export class EngineEventLog {
         );
       },
       onDecision: (context, decision) => {
-        this.log('DEBUG', 'ACTION_SELECTED', `${decision.decision}: ${decision.reason}`, {
-          stateId: context.stateId,
-          ...(decision.actionId ? { actionId: decision.actionId } : {}),
+        // Aucune décision opaque : le score et chaque raison sont journalisés.
+        this.log(
+          decision.decision === 'EXECUTE' ? 'INFO' : 'DEBUG',
+          'ACTION_SELECTED',
+          `${decision.decision}: ${decision.reason}`,
+          {
+            stateId: context.stateId,
+            ...(decision.actionId ? { actionId: decision.actionId } : {}),
+            ...(decision.breakdown
+              ? { data: { score: decision.breakdown.total, reasons: decision.breakdown.reasons.join('; ') } }
+              : {}),
+          },
+        );
+      },
+      onGoal: (goal) => {
+        this.log('INFO', 'GOAL_REACHED', `${goal.id}: ${goal.description}`, {
+          ...(goal.evidence[0] ? { stateId: goal.evidence[0].stateId } : {}),
+          data: { evidence: goal.evidence.map((entry) => `${entry.kind}: ${entry.value}`).join('; ') },
         });
       },
       onBlocked: (context, action, reason) => {
@@ -140,7 +156,14 @@ export class EngineEventLog {
           verdict.status === 'FAIL' ? 'ERROR' : verdict.status === 'WARNING' ? 'WARN' : 'INFO',
           'ORACLE_VERDICT',
           `${verdict.status}${verdict.reasons.length > 0 ? `: ${verdict.reasons.join('; ')}` : ''}`,
-          { stateId: edge.from, actionId: edge.actionId, data: { confidence: verdict.confidence } },
+          {
+            stateId: edge.from,
+            actionId: edge.actionId,
+            data: {
+              confidence: verdict.confidence,
+              ...(verdict.categories.length > 0 ? { categories: verdict.categories.join(', ') } : {}),
+            },
+          },
         );
       },
       onBacktrack: (from, to, method) => {

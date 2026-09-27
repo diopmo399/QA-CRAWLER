@@ -123,6 +123,25 @@ export async function runCli(argv: string[]): Promise<number> {
         `  Flows         : ${result.flows.length} (${color.green(`${statusCount('PASSED')} passed`)}, ${color.red(`${statusCount('FAILED')} failed`)}, ${color.yellow(`${statusCount('BLOCKED')} blocked`)}, ${statusCount('SKIPPED')} skipped)`,
       );
     }
+    const intelligence = result.intelligence;
+    if (intelligence) {
+      const missionGoals = intelligence.goals.filter((goal) => goal.kind === 'mission');
+      if (missionGoals.length > 0) {
+        const reached = missionGoals.filter((goal) => goal.status === 'REACHED').length;
+        logger.info(
+          `  Goals         : ${reached}/${missionGoals.length} reached (${missionGoals.map((goal) => `${goal.id} ${goal.status === 'REACHED' ? color.green(goal.status) : goal.status === 'BLOCKED' ? color.yellow(goal.status) : color.red(goal.status)}`).join(', ')})`,
+        );
+      }
+      const { actions } = intelligence.coverage;
+      const total = actions.DISCOVERED + actions.EXECUTED + actions.BLOCKED + actions.UNREACHABLE;
+      logger.info(
+        `  Coverage      : ${actions.EXECUTED}/${total} actions executed, ${actions.BLOCKED} blocked (${intelligence.strategy})`,
+      );
+    }
+    if (result.blockedWrites && result.blockedWrites.length > 0)
+      logger.info(
+        `  Writes blocked: ${color.yellow(String(result.blockedWrites.length))} (side effects, see the report)`,
+      );
     if (result.browserInteractions.length > 0) {
       const byStatus = Object.entries(stats.interactionsByStatus)
         .map(([status, count]) => `${count} ${status.toLowerCase()}`)
@@ -160,6 +179,11 @@ export async function runCli(argv: string[]): Promise<number> {
     else if (config.flowGeneration.enabled)
       logger.info(`  Flows (YAML)  : ${color.dim('none (no screen reached by a replayable click path)')}`);
     if (result.artifacts.engineLog) logger.info(`  Engine log    : ${result.artifacts.engineLog}`);
+    if (result.artifacts.decisionTrace) logger.info(`  Decisions     : ${result.artifacts.decisionTrace}`);
+    if (result.artifacts.knowledge)
+      logger.info(
+        `  Knowledge     : ${result.artifacts.knowledge}${intelligence?.knowledge ? color.dim(` (${intelligence.knowledge.runs} run(s))`) : ''}`,
+      );
     logger.info(`  Screenshots   : ${result.artifacts.screenshotsDir ?? '-'}`);
     if (result.artifacts.flowDiff) logger.info(`  Flow diff     : ${result.artifacts.flowDiff}`);
     logger.info('');

@@ -200,6 +200,12 @@ export class PlaywrightActionExecutor {
         .catch(() => undefined);
       list = await visible();
     }
+    if (!list) {
+      // La valeur ne correspond à aucune suggestion : champ vidé, liste ouverte au clavier (↓), première suggestion.
+      await locator.fill('', { timeout: 2000 }).catch(() => undefined);
+      await locator.press('ArrowDown').catch(() => undefined);
+      list = await visible();
+    }
     if (!list) return undefined;
     const texts = (await list.allInnerTexts().catch(() => [])).map((text) => text.trim());
     const wanted = normalizeText(value);

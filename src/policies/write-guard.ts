@@ -120,3 +120,19 @@ export class WriteGuard {
     await route.abort('blockedbyclient').catch(() => undefined);
   }
 }
+
+/**
+ * Le modèle d'une requête d'écriture, pour regrouper celles d'une même saisie
+ * (/api/users/draft/C, /api/users/draft/Cr… → /api/users/draft/*).
+ */
+export function writePattern(url: string): string {
+  let path = url;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    // déjà un chemin
+  }
+  const segments = path.split('/');
+  if (segments.length > 2) segments[segments.length - 1] = '*';
+  return segments.join('/').replace(/\/\d+(?=\/|$)/g, '/:id');
+}

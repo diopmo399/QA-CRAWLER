@@ -85,7 +85,12 @@ export class AdvancedActionScorer implements ActionScorer {
         factor: 'goal',
         points: weights.goalWeight * 70 * goal.weight,
         code: 'goal-relevance',
-        params: { goal: goal.description },
+        params: {
+          goal: goal.description,
+          kind: goal.kind,
+          ...(goal.subject !== undefined ? { subject: goal.subject } : {}),
+          ...(goal.concept !== undefined ? { concept: goal.concept } : {}),
+        },
       });
 
     // ---- motif de l'écran

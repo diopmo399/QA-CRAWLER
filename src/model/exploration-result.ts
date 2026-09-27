@@ -11,6 +11,14 @@ import type { FormReport } from '../forms/form-report.js';
 import type { RecoverySummary } from '../recovery/recovery-model.js';
 import type { CleanupReport, CreatedDataRecord } from '../data/created-data.js';
 import type { AuthorizationReport } from '../actors/authorization-observer.js';
+import type { CoverageMap } from '../coverage/coverage-map.js';
+import type { ScoreBreakdown } from '../decision/score-breakdown.js';
+import type { BudgetKind } from '../exploration/exploration-budget.js';
+import type { GoalState } from '../goals/goal-model.js';
+import type { KnowledgeIdentity } from '../knowledge/knowledge-model.js';
+import type { InvariantEvaluation } from '../oracles/invariant-oracle.js';
+import type { DetectedPattern } from '../patterns/ui-pattern.js';
+import type { BlockedWrite } from '../policies/write-guard.js';
 
 /** Pourquoi l'exploration s'est terminée. */
 export type StopReason =
@@ -94,6 +102,25 @@ export interface ExplorationResult {
   cleanup?: CleanupReport;
   /** actors : ce que chaque utilisateur atteint, les différences, les règles vérifiées. */
   authorization?: AuthorizationReport;
+  /** Moteur de décision : stratégie, objectifs, motifs, couverture, décisions expliquées, budget. */
+  intelligence?: {
+    strategy: string;
+    goals: GoalState[];
+    /** Motifs d'interface reconnus, par état. */
+    patterns: Record<string, DetectedPattern[]>;
+    coverage: CoverageMap;
+    /** Actions choisies, dans l'ordre, avec leur score expliqué. */
+    decisions: { at: string; stateId: string; label: string; score: number; breakdown?: ScoreBreakdown }[];
+    budget: Record<BudgetKind, { used: number; max: number }>;
+    /** Packs de domaine chargés. */
+    domainPacks: string[];
+    /** La base de connaissances : pour quelle application, combien de runs. */
+    knowledge?: { identity: KnowledgeIdentity; runs: number; file?: string };
+  };
+  /** Invariants jugés (actions et accès des acteurs), expliqués. */
+  invariants?: InvariantEvaluation[];
+  /** Requêtes d'écriture annulées par la garde d'écriture (effets de bord). */
+  blockedWrites?: BlockedWrite[];
   /** Résumé non secret de la configuration effective. */
   settings: Record<string, unknown>;
   artifacts: {
@@ -108,5 +135,9 @@ export interface ExplorationResult {
     engineLog?: string;
     /** Flows imposés générés à partir des chemins trouvés (YAML). */
     generatedFlows?: string;
+    /** Chaque décision du moteur avec ses candidats (logging.decisionTrace). */
+    decisionTrace?: string;
+    /** Base de connaissances mise à jour. */
+    knowledge?: string;
   };
 }
