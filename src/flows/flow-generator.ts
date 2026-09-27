@@ -41,22 +41,43 @@ export function generateFlows(input: FlowGenerationInput, options: FlowGeneratio
   const { graph } = input;
   const root = graph.rootId ? graph.getNode(graph.rootId) : undefined;
   if (!root) return [];
-  const paths = new Map<string, FlowEdge[]>();
+  // Points de départ : la racine, puis chaque écran atteint sans clic depuis un autre écran (après une
+  // connexion, un flow imposé ou un saut d'URL). Sans eux, une racine « Erreur 401 » d'avant la connexion
+  // ne mène nulle part et aucun flow n'est écrit.
+  const reached = new Set(
+    graph
+      .allEdges()
+      .filter((edge) => edge.result === 'SUCCESS' && edge.from !== edge.to)
+      .map((edge) => edge.to),
+  );
+  const entries = [
+    root,
+    ...graph
+      .allNodes()
+      .filter((node) => node.id !== root.id && !reached.has(node.id))
+      .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt)),
+  ];
+  const paths = new Map<string, { start: FlowNode; path: FlowEdge[] }>();
   for (const node of graph.allNodes()) {
-    if (node.id === root.id) continue;
-    const path = graph.pathTo(node.id);
-    if (path.length > 0) paths.set(node.id, path);
+    for (const start of entries) {
+      if (node.id === start.id) continue;
+      const path = graph.pathTo(node.id, start.id);
+      if (path.length > 0) {
+        paths.set(node.id, { start, path });
+        break;
+      }
+    }
   }
   // Un écran traversé par un autre chemin est déjà couvert.
   const onTheWay = new Set<string>();
-  for (const path of paths.values()) for (const edge of path.slice(1)) onTheWay.add(edge.from);
+  for (const { path } of paths.values()) for (const edge of path.slice(1)) onTheWay.add(edge.from);
   const flows: GeneratedFlow[] = [];
   const names = new Set<string>();
-  for (const [stateId, path] of paths) {
+  for (const [stateId, { start, path }] of paths) {
     if (onTheWay.has(stateId)) continue;
     const target = graph.getNode(stateId);
     if (!target) continue;
-    const flow = flowTo(input, root, target, path, names);
+    const flow = flowTo(input, start, target, path, names);
     if (flow) flows.push(flow);
     if (flows.length >= options.maxFlows) break;
   }

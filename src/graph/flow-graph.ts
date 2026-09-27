@@ -165,9 +165,11 @@ export class FlowGraph {
    * pour la racine). Un lien validé depuis un état est aussi utilisable depuis tout
    * autre état qui offre un lien vers la même cible (une entrée du menu global) : le
    * chemin utilise alors l'id d'action propre à cet état, pour pouvoir être rejoué.
+   * `from` : partir d'un autre état que la racine (écran atteint après une connexion).
    */
-  pathTo(stateId: string): FlowEdge[] {
-    if (!this.root || stateId === this.root) return [];
+  pathTo(stateId: string, from: string | undefined = this.root): FlowEdge[] {
+    const start = from;
+    if (!start || stateId === start) return [];
     const successes = this.edges.filter((edge) => edge.result === 'SUCCESS' && edge.from !== edge.to);
     const byTarget = new Map<string, FlowEdge>();
     for (const edge of successes) {
@@ -188,7 +190,7 @@ export class FlowGraph {
     };
 
     const previous = new Map<string, FlowEdge>();
-    const queue = [this.root];
+    const queue = [start];
     const seen = new Set(queue);
     while (queue.length > 0) {
       const current = queue.shift() as string;
@@ -199,7 +201,7 @@ export class FlowGraph {
         if (edge.to === stateId) {
           const path: FlowEdge[] = [];
           let cursor: string | undefined = stateId;
-          while (cursor && cursor !== this.root) {
+          while (cursor && cursor !== start) {
             const step = previous.get(cursor);
             if (!step) break;
             path.unshift(step);

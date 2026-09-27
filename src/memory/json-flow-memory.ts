@@ -1,7 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { FlowGraph } from '../graph/flow-graph.js';
 import type { FlowGraphData } from '../model/flow.js';
+import { writeFileAtomic } from './atomic-write.js';
 import type { FlowMemory } from './flow-memory.js';
 
 /** Enregistre le graphe des flows en JSON (reports/flow-graph.json). Les écritures sont atomiques (fichier temporaire + renommage). */
@@ -25,8 +26,6 @@ export class JsonFlowMemory implements FlowMemory {
 
   async save(graph: FlowGraph): Promise<void> {
     await mkdir(path.dirname(this.location), { recursive: true });
-    const temporary = `${this.location}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(graph.toJSON(), null, 2)}\n`, 'utf8');
-    await rename(temporary, this.location);
+    await writeFileAtomic(this.location, `${JSON.stringify(graph.toJSON(), null, 2)}\n`);
   }
 }

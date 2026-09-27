@@ -41,7 +41,7 @@ export type SemanticKey =
 export interface TestDataOptions {
   /** Id court du run : les valeurs créées portent QA-CRAWLER-<runId>. */
   runId?: string;
-  /** Valeurs par libellé, name ou placeholder du champ (majuscules, accents et « * » ignorés). */
+  /** Valeurs par libellé, name ou placeholder du champ (majuscules, accents, « * » et « : » final ignorés). */
   fields?: Readonly<Record<string, string>>;
   /** Valeurs par sens (firstName, email, country…), pour chaque champ qui a ce sens. */
   defaults?: Readonly<Partial<Record<SemanticKey, string>>>;
@@ -50,12 +50,13 @@ export interface TestDataOptions {
 
 const YES = new Set(['true', 'oui', 'yes', '1', 'x', 'coche', 'checked']);
 
-/** Comment le name, le libellé ou le placeholder d'un champ dit ce qu'il signifie. L'ordre compte : « prénom » avant « nom ». */
+/** Comment le name, le libellé ou le placeholder d'un champ dit ce qu'il signifie. L'ordre compte : « prénom » avant « nom », « entreprise » avant « nom ». */
 const SEMANTIC_RULES: readonly [SemanticKey, RegExp][] = [
   ['email', /(e-?mail|courriel)/],
   ['firstName', /(first ?name|given ?name|prenom|forename)/],
-  ['lastName', /(last ?name|surname|family ?name|nom de famille|^nom\b|\bnom$)/],
+  // « Nom de la société » est une entreprise, pas un nom de famille : company avant lastName.
   ['company', /(company|organi[sz]ation|entreprise|societe|raison sociale|employer)/],
+  ['lastName', /(last ?name|surname|family ?name|nom de famille|^nom\b|\bnom$)/],
   ['phone', /(phone|telephone|mobile|cellulaire|\btel\b)/],
   ['postalCode', /(zip|postal|code postal|\bcp\b)/],
   ['city', /(city|ville|town)/],
@@ -314,8 +315,9 @@ export class DefaultTestDataProvider implements TestDataProvider {
 }
 
 /** Libellé tel qu'écrit dans le YAML ou à l'écran : majuscules, accents et marque d'obligation « * » ignorés. */
+/** Clé de comparaison d'un libellé : sans « * », sans « : » final (« N° dossier : » = « N° dossier »). */
 function fieldKey(text: string): string {
-  return normalizeText(text.replace(/\*/g, ' '));
+  return normalizeText(text.replace(/\*/g, ' ')).replace(/[\s:]+$/, '');
 }
 
 type DateFormat = 'iso' | 'dmy' | 'mdy';
