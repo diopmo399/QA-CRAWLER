@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/config/config-loader.js';
 import { runMission } from '../../src/orchestrator.js';
 
-/** Every secret the application hands out, in every way it can reach the crawler. */
+/** Chaque secret que l'application distribue, de toutes les façons dont il peut atteindre le crawler. */
 const SECRETS = {
   password: 'login-pw-3e8a1f',
   cookie: 'cookie-val-9d2c7b',
@@ -69,7 +69,7 @@ describe('no secret in any artifact', () => {
         return;
       }
       if (url.pathname === '/api/me') {
-        // The error body echoes what it received: it must not reach the reports.
+        // Le corps d'erreur renvoie ce qu'il a reçu : cela ne doit pas atteindre les rapports.
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: `bad ${req.headers.authorization ?? ''}` }));
         return;
@@ -124,7 +124,7 @@ output:
       'engine-log.jsonl',
     ])
       expect(names).toContain(name);
-    // The traps were reached: the console error and the failing call were observed.
+    // Les pièges ont été atteints : l'erreur console et l'appel en échec ont été observés.
     const result = artifacts.find((artifact) => artifact.name === 'result.json')?.text ?? '';
     expect(result).toContain('/api/me');
     expect(result).toContain('refresh failed');

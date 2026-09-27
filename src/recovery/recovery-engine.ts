@@ -5,7 +5,7 @@ import type { FailureKind, RecoveryEvent, RecoveryStrategyName } from './recover
 
 export interface RecoveryOptions {
   enabled: boolean;
-  /** Tried in this order; a strategy left out is never used. */
+  /** Essayées dans cet ordre ; une stratégie absente n'est jamais utilisée. */
   strategies: readonly RecoveryStrategyName[];
   maxRetries: number;
   maxReauthentications: number;
@@ -19,19 +19,19 @@ export interface Failure {
 }
 
 /**
- * How the explorer carries out each strategy. Each attempt returns the
- * observed state when it worked (the explorer checks it is the expected one),
- * undefined otherwise. A strategy the explorer cannot apply here is absent.
+ * Comment l'explorateur réalise chaque stratégie. Chaque tentative renvoie l'état
+ * observé quand elle a marché (l'explorateur vérifie que c'est celui attendu),
+ * undefined sinon. Une stratégie que l'explorateur ne peut pas appliquer ici est absente.
  */
 export type RecoveryActions = Partial<
   Record<Exclude<RecoveryStrategyName, 'retry'>, () => Promise<PageContext | undefined>>
 >;
 
-/** Playwright errors worth one more try: the element moved under the click, not a real failure. */
+/** Erreurs Playwright qui méritent un nouvel essai : l'élément a bougé sous le clic, pas un vrai échec. */
 const TRANSIENT_ERROR =
   /detached|not attached|not stable|Execution context was destroyed|element is outside of the viewport/i;
 
-/** Without a recovery configuration: what the explorer always did (top layer, URL, replay, elsewhere). */
+/** Sans configuration de récupération : ce que l'explorateur a toujours fait (calque du dessus, URL, rejeu, ailleurs). */
 const MINIMAL: readonly RecoveryStrategyName[] = [
   'dismiss-dialog',
   'known-url',
@@ -40,10 +40,10 @@ const MINIMAL: readonly RecoveryStrategyName[] = [
 ];
 
 /**
- * RECOVERY: after a failure, tries the configured strategies in order until
- * one brings the exploration back to a known state, and records every
- * attempt. It decides nothing about the application; it only sequences what
- * the explorer knows how to do, within limits (retries, re-authentications).
+ * RÉCUPÉRATION : après un échec, essaie les stratégies configurées dans l'ordre
+ * jusqu'à ce que l'une ramène l'exploration à un état connu, et enregistre chaque
+ * tentative. Elle ne décide rien sur l'application ; elle ne fait qu'enchaîner ce que
+ * l'explorateur sait faire, dans des limites (nouvelles tentatives, reconnexions).
  */
 export class RecoveryEngine {
   private readonly log: RecoveryEvent[] = [];
@@ -55,7 +55,7 @@ export class RecoveryEngine {
     return this.options.enabled ? this.options.strategies : MINIMAL;
   }
 
-  /** Should this failed action be executed once more (attempt: retries already made)? */
+  /** Cette action en échec doit-elle être exécutée une fois de plus (attempt : nouvelles tentatives déjà faites) ? */
   shouldRetry(
     error: string | undefined,
     action: { classification: ActionClassification; submitsForm?: boolean },
@@ -65,14 +65,14 @@ export class RecoveryEngine {
       this.options.enabled &&
       this.options.strategies.includes('retry') &&
       attempt < this.options.maxRetries &&
-      // Never twice something that may send or change data.
+      // Jamais deux fois une action qui peut envoyer ou modifier des données.
       action.classification === 'SAFE' &&
       action.submitsForm !== true &&
       TRANSIENT_ERROR.test(error ?? '')
     );
   }
 
-  /** May the session be renewed once more? Counts the attempt when it may. */
+  /** La session peut-elle être renouvelée une fois de plus ? Compte la tentative quand c'est permis. */
   mayReauthenticate(): boolean {
     if (!this.options.enabled || !this.options.strategies.includes('reauthenticate')) return false;
     if (this.reauthentications >= this.options.maxReauthentications) return false;
@@ -84,13 +84,13 @@ export class RecoveryEngine {
     return this.reauthentications;
   }
 
-  /** Tries the strategies in order; the first that reaches a state wins. */
+  /** Essaie les stratégies dans l'ordre ; la première qui atteint un état gagne. */
   async recover(
     failure: Failure,
     actions: RecoveryActions,
   ): Promise<{ context?: PageContext; strategy?: RecoveryStrategyName }> {
     for (const strategy of this.strategies) {
-      if (strategy === 'retry') continue; // decided before the failure is recorded
+      if (strategy === 'retry') continue; // décidé avant l'enregistrement de l'échec
       if (strategy === 'reauthenticate' && failure.kind !== 'session-expired') continue;
       const attempt = actions[strategy];
       if (!attempt) continue;
@@ -106,7 +106,7 @@ export class RecoveryEngine {
     return {};
   }
 
-  /** `reached`: the state reached, or just whether it worked. */
+  /** `reached` : l'état atteint, ou simplement si cela a marché. */
   record(failure: Failure, strategy: RecoveryStrategyName, reached: PageContext | boolean | undefined): void {
     const success = typeof reached === 'boolean' ? reached : reached !== undefined;
     const state = typeof reached === 'object' ? reached : undefined;

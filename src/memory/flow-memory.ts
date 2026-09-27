@@ -1,13 +1,13 @@
 import type { FlowGraph } from '../graph/flow-graph.js';
 
 /**
- * Where the flow graph lives between steps and between runs. The explorer
- * only knows this interface, so a SQLite/PostgreSQL implementation can
- * replace the JSON file without touching it.
+ * Où vit le graphe des flows entre les étapes et entre les runs. L'explorateur ne
+ * connaît que cette interface : une implémentation SQLite/PostgreSQL peut remplacer
+ * le fichier JSON sans le toucher.
  */
 export interface FlowMemory {
   load(): Promise<FlowGraph>;
   save(graph: FlowGraph): Promise<void>;
-  /** Human-readable location (file path, connection name…). */
+  /** Emplacement lisible (chemin de fichier, nom de connexion…). */
   readonly location: string;
 }

@@ -27,7 +27,7 @@ import {
 
 export { esc } from './html-common.js';
 
-/** reports/index.html — static, self-contained report (no JavaScript, no external assets). */
+/** reports/index.html — rapport statique et autonome (sans JavaScript ni ressource externe). */
 export class HtmlReporter implements Reporter {
   readonly format = 'html';
 
@@ -48,7 +48,7 @@ export class HtmlReporter implements Reporter {
   }
 }
 
-/** Path of a file relative to the report, so reports and screenshots can be published together. */
+/** Chemin d'un fichier relatif au rapport, pour publier rapports et captures ensemble. */
 export function relativeTo(directory: string, file: string): string {
   const relative = path.relative(directory, path.resolve(file));
   return relative.split(path.sep).map(encodeURIComponent).join('/');
@@ -296,7 +296,7 @@ function flowsSection(
   </section>`;
 }
 
-/** Element not found: the steps found on the screen, ready to paste, and what the screen shows. */
+/** Élément introuvable : les étapes trouvées à l'écran, prêtes à coller, et ce que montre l'écran. */
 function suggestionBlock(step: ExplorationResult['flows'][number]['steps'][number], t: ReportTexts): string {
   const parts: string[] = [];
   if (step.suggestions && step.suggestions.length > 0)
@@ -316,7 +316,7 @@ function baselineName(metadata: NonNullable<ExplorationResult['baseline']>): str
   return details.length > 0 ? `${metadata.runId} (${details.join(', ')})` : metadata.runId;
 }
 
-/** verify: each known transition replayed, regressions first. */
+/** verify : chaque transition connue rejouée, les régressions d'abord. */
 function verificationSection(result: ExplorationResult, t: ReportTexts): string {
   const verification = result.verification;
   if (!verification) return '';
@@ -339,7 +339,7 @@ function verificationSection(result: ExplorationResult, t: ReportTexts): string 
     <table><thead><tr><th>${c.result}</th><th>${c.from}</th><th>${c.action}</th><th>${esc(b.expected)}</th><th>${esc(b.actual)}</th><th>${c.reason}</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
-/** FLOW DIFF: what is new, gone or changed compared with the baseline. */
+/** FLOW DIFF : ce qui est nouveau, disparu ou modifié par rapport à la baseline. */
 function flowDiffSection(result: ExplorationResult, t: ReportTexts): string {
   const diff = result.flowDiff;
   if (!diff) return '';
@@ -395,7 +395,7 @@ function networkBlock(network: ExplorationResult['transitions'][number]['network
       const url = new URL(x.url);
       path = `${url.pathname}${url.search}`;
     } catch {
-      // keep the URL as recorded
+      // garder l'URL telle qu'enregistrée
     }
     return `${x.method} ${path} ${x.status ?? x.failure ?? '…'}${x.durationMs !== undefined ? ` ${x.durationMs} ms` : ''}`;
   });

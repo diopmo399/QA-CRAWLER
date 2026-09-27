@@ -2,15 +2,15 @@ import type { FlowEdge, FlowNode } from '../model/flow.js';
 
 export interface FlowTreeNode {
   node: FlowNode;
-  /** Action that first led here from the parent. */
+  /** Action qui a mené ici depuis le parent la première fois. */
   via?: FlowEdge;
   children: FlowTreeNode[];
 }
 
 /**
- * Spanning tree of the flow graph: each state appears once, under the state
- * from which it was first reached. Good enough to read an application's
- * structure (Dashboard → Users → User detail…) without a graph library.
+ * Arbre couvrant du graphe des flows : chaque état apparaît une fois, sous l'état
+ * depuis lequel il a été atteint la première fois. Suffisant pour lire la structure
+ * d'une application (Tableau de bord → Utilisateurs → Détail…) sans bibliothèque de graphes.
  */
 export function buildFlowTree(
   nodes: readonly FlowNode[],
@@ -20,7 +20,7 @@ export function buildFlowTree(
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const root = rootId ? byId.get(rootId) : nodes[0];
   if (!root) return undefined;
-  // A state reached through a global menu entry belongs under the root when the root offers that entry.
+  // Un état atteint par une entrée du menu global va sous la racine quand la racine offre cette entrée.
   const rootMenu = new Set(
     Object.values(root.actions)
       .filter((action) => action.category === 'menu')
@@ -47,14 +47,14 @@ export function buildFlowTree(
       queue.push(branch);
     }
   }
-  // States reached only by jumps/replays still deserve a place.
+  // Les états atteints seulement par des sauts / rejeux méritent quand même une place.
   for (const node of nodes) {
     if (!placed.has(node.id)) tree.children.push({ node, children: [] });
   }
   return tree;
 }
 
-/** Plain-text tree, e.g. for the CLI:  Home ├── Users │   └── User detail └── Settings */
+/** Arbre en texte simple, par exemple pour la CLI :  Home ├── Users │   └── User detail └── Settings */
 export function renderTextTree(tree: FlowTreeNode | undefined): string {
   if (!tree) return '';
   const lines = [displayName(tree.node)];

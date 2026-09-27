@@ -1,6 +1,6 @@
 import { KeywordMatcher, PAYMENT_FIELD_KEYWORDS, SENSITIVE_FIELD_KEYWORDS } from './keywords.js';
 
-/** What a field says about itself, whatever the source (DOM snapshot, discovered action, OpenAPI). */
+/** Ce qu'un champ dit de lui-même, quelle que soit la source (instantané du DOM, action découverte, OpenAPI). */
 export interface FieldDescription {
   inputType?: string;
   autocomplete?: string;
@@ -11,11 +11,11 @@ export interface FieldDescription {
 }
 
 export interface Sensitivity {
-  /** Never logged, never reported with its value, never filled with real data, never stored. */
+  /** Jamais journalisé, jamais rapporté avec sa valeur, jamais rempli avec de vraies données, jamais enregistré. */
   sensitive: boolean;
-  /** Payment data (card, IBAN, bank account…): never filled at all, and the SafetyPolicy blocks it. */
+  /** Données de paiement (carte, IBAN, compte bancaire…) : jamais remplies du tout, et la SafetyPolicy les bloque. */
   payment: boolean;
-  /** Why (the keyword or attribute that matched). */
+  /** Pourquoi (le mot-clé ou l'attribut qui a correspondu). */
   reason?: string;
 }
 
@@ -25,10 +25,10 @@ const SENSITIVE_AUTOCOMPLETE = /^(cc-|current-password|new-password|one-time-cod
 const PAYMENT_AUTOCOMPLETE = /^cc-/;
 
 /**
- * The one place that decides whether a field is sensitive: passwords,
- * secrets, tokens, authorization, API keys, card numbers, CVV, bank
- * accounts, SIN/NAS, SSN… Used by the SafetyPolicy (classification), the
- * test data (never fill), the reports and the flow memory (never keep a value).
+ * Le seul endroit qui décide si un champ est sensible : mots de passe, secrets,
+ * jetons, autorisation, clés d'API, numéros de carte, CVV, comptes bancaires, NAS,
+ * SSN… Utilisé par la SafetyPolicy (classement), les données de test (ne jamais
+ * remplir), les rapports et la mémoire des flows (ne jamais garder une valeur).
  */
 export function sensitivityOf(field: FieldDescription): Sensitivity {
   const texts = [field.name, field.label, field.placeholder, field.elementId];

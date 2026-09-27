@@ -14,7 +14,7 @@ export const color = {
   cyan: wrap('36'),
 };
 
-/** Console output for the CLI. Everything is passed through the redactor. */
+/** Sortie console de la CLI. Tout passe par le masquage des secrets. */
 export const logger = {
   info(message: string): void {
     console.log(redactText(message));

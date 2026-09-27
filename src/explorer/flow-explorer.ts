@@ -74,27 +74,27 @@ import { AccessibilityChecker } from '../accessibility/accessibility-checker.js'
 import { CreatedDataRegistry, type CreatedDataRecord } from '../data/created-data.js';
 import { routeKey } from '../crawler/route-normalizer.js';
 
-/** Progress notifications (CLI output, tests). */
+/** Notifications de progression (sortie de la CLI, tests). */
 export interface ExplorationListener {
   onAuthenticated?(description: string): void;
   onState?(context: PageContext, isNew: boolean): void;
   onDecision?(context: PageContext, decision: ActionDecision): void;
   onBlocked?(context: PageContext, action: DiscoveredAction, reason: string): void;
   onTransition?(edge: FlowEdge, action: DiscoveredAction): void;
-  /** The test oracles judged an executed action. */
+  /** Les oracles de test ont jugé une action exécutée. */
   onOracle?(edge: FlowEdge, verdict: OracleVerdict): void;
   onBacktrack?(from: string, to: string | undefined, method: string): void;
-  /** A recovery strategy was tried after a failure. */
+  /** Une stratégie de récupération a été essayée après un échec. */
   onRecovery?(event: RecoveryEvent): void;
-  /** The exploration turned in circles on a branch and left it. */
+  /** L'exploration tournait en rond sur une branche et l'a quittée. */
   onStuck?(event: StuckEvent): void;
   onIssue?(issue: Issue, isNew: boolean): void;
   onFlowStart?(flow: FlowConfig): void;
   onFlowStep?(flow: FlowConfig, step: FlowStepReport): void;
   onFlowEnd?(report: FlowRunReport): void;
-  /** A browser interaction outside the DOM was handled (or refused). */
+  /** Une interaction du navigateur hors du DOM a été traitée (ou refusée). */
   onInteraction?(result: BrowserInteractionResult): void;
-  /** Structured log line of a browser interaction (no secret). */
+  /** Ligne de log structurée d'une interaction du navigateur (aucun secret). */
   onInteractionLog?(line: string): void;
 }
 
@@ -104,29 +104,29 @@ export interface FlowExplorerOptions {
   testData?: TestDataProvider;
   listener?: ExplorationListener;
   env?: NodeJS.ProcessEnv;
-  /** `stateId::actionId` known from the baseline (explore mode): tried after new ground. */
+  /** `stateId::actionId` connus par la baseline (mode explore) : essayés après le nouveau terrain. */
   knownActions?: ReadonlySet<string>;
-  /** Id of the run (default: testData.runId, else generated). */
+  /** Id du run (par défaut : testData.runId, sinon généré). */
   runId?: string;
-  /** Known transitions (the baseline), for the BaselineOracle. */
+  /** Transitions connues (la baseline), pour le BaselineOracle. */
   baseline?: FlowGraphData;
-  /** API contract (OpenAPI), for the ContractOracle and the form fields. */
+  /** Contrat d'API (OpenAPI), pour le ContractOracle et les champs de formulaire. */
   contract?: ApiContract;
-  /** verify: the known transitions of this baseline are replayed instead of exploring. */
+  /** verify : les transitions connues de cette baseline sont rejouées au lieu d'explorer. */
   verifyBaseline?: FlowGraphData;
-  /** Id of the baseline run being verified (reports). */
+  /** Id du run de baseline vérifié (rapports). */
   baselineRunId?: string;
 }
 
-/** What the explorer knows after one run; the reporters turn it into files. */
+/** Ce que sait l'explorateur après un run ; les reporters en font des fichiers. */
 export interface ExplorationOutcome {
   graph: FlowGraph;
   issues: Issue[];
-  /** Latest full observation of each state (actions with locators, forms). */
+  /** Dernière observation complète de chaque état (actions avec leurs localisateurs, formulaires). */
   details: Map<string, { actions: DiscoveredAction[]; forms: FormSummary[] }>;
-  /** Imposed flows, in mission order. */
+  /** Flows imposés, dans l'ordre de la mission. */
   flows: FlowRunReport[];
-  /** Browser interactions outside the DOM, in order. */
+  /** Interactions du navigateur hors du DOM, dans l'ordre. */
   interactions: BrowserInteractionResult[];
   stopReason: StopReason;
   startedAt: Date;
@@ -135,17 +135,17 @@ export interface ExplorationOutcome {
   backtracks: number;
   decisionEngine: string;
   startUrl: string;
-  /** Id of the run, carried by the data it created (QA-CRAWLER-<runId>). */
+  /** Id du run, porté par les données qu'il a créées (QA-CRAWLER-<runId>). */
   runId: string;
-  /** Forms found and filled. */
+  /** Formulaires trouvés et remplis. */
   forms: FormReport[];
-  /** Recovery attempts, abandoned branches and open circuits. */
+  /** Tentatives de récupération, branches abandonnées et circuits ouverts. */
   recovery: RecoverySummary;
-  /** Actions changing data: executed, and the budget (safety.mutations). */
+  /** Actions qui modifient des données : exécutées, et le budget (safety.mutations). */
   mutations: { enabled: boolean; executed: number; maxPerRun?: number };
-  /** Data the run probably created (to clean up), never the values sent. */
+  /** Données que le run a probablement créées (à nettoyer), jamais les valeurs envoyées. */
   createdData: CreatedDataRecord[];
-  /** verify mode: every known transition of the baseline, replayed. */
+  /** Mode verify : chaque transition connue de la baseline, rejouée. */
   verification?: VerificationReport;
 }
 
@@ -155,18 +155,18 @@ interface StackEntry {
 }
 
 /**
- * Orchestrates the exploration loop. Each responsibility belongs to one component:
+ * Orchestre la boucle d'exploration. Chaque responsabilité appartient à un composant :
  *
- *   UIObserver + StateDetector   "Where am I?"
- *   ActionDiscovery              "What can I do?"
- *   DecisionEngine               "What should I try?"
- *   SafetyPolicy                 "Is it allowed?"
- *   PlaywrightActionExecutor     "Execute it."
- *   Observers                    "What went wrong?"
- *   FlowGraph + FlowMemory       "What have I learned?"
+ *   UIObserver + StateDetector   « Où suis-je ? »
+ *   ActionDiscovery              « Que puis-je faire ? »
+ *   DecisionEngine               « Que dois-je essayer ? »
+ *   SafetyPolicy                 « Ai-je le droit ? »
+ *   PlaywrightActionExecutor     « Exécute. »
+ *   Observers                    « Qu'est-ce qui s'est mal passé ? »
+ *   FlowGraph + FlowMemory       « Qu'ai-je appris ? »
  *
- * The explorer only sequences them, keeps the navigation stack, backtracks,
- * and enforces the mission's limits.
+ * L'explorateur ne fait que les enchaîner, garder la pile de navigation, revenir
+ * en arrière et faire respecter les limites de la mission.
  */
 export class FlowExplorer {
   private readonly collector = new IssueCollector();
@@ -183,51 +183,51 @@ export class FlowExplorer {
   private readonly memory: FlowMemory;
   private readonly startUrl: string;
   private readonly flowSteps: FlowStepExecutor;
-  /** Browser interactions outside the DOM (native sign-in dialog, JS dialogs, popups, downloads…). */
+  /** Interactions du navigateur hors du DOM (fenêtre de connexion native, dialogues JS, popups, téléchargements…). */
   private readonly interactions: BrowserInteractionManager;
   private readonly browserEvents: BrowserEventDiscovery;
   private readonly credentials: EnvironmentCredentialProvider;
-  /** Action being executed, for interaction attribution and loop detection. */
+  /** Action en cours d'exécution, pour rattacher les interactions et détecter les boucles. */
   private currentAction: InteractionContext | undefined;
   private readonly env: NodeJS.ProcessEnv;
 
   private graph = new FlowGraph();
   private readonly details = new Map<string, { actions: DiscoveredAction[]; forms: FormSummary[] }>();
   private stack: StackEntry[] = [];
-  /** States where the engine found nothing left to do. */
+  /** États où le moteur n'a plus rien trouvé à faire. */
   private readonly exhausted = new Set<string>();
-  /** States the explorer could not return to. */
+  /** États où l'explorateur n'a pas pu revenir. */
   private readonly unreachable = new Set<string>();
   private currentUrl: string;
   private attribution: IssueAttribution = {};
-  /** False while exploring below a flow's last screen (thenExplore). */
+  /** Faux pendant l'exploration sous le dernier écran d'un flow (thenExplore). */
   private allowJump = true;
   private actionsExecuted = 0;
   private backtracks = 0;
   private startedAt = new Date();
   private readonly flowReports: FlowRunReport[] = [];
-  /** Last raw observation (lets flow steps find the element they target). */
+  /** Dernière observation brute (permet aux étapes de flow de trouver l'élément qu'elles visent). */
   private lastSnapshot: UiSnapshot | undefined;
   private readonly forms: FormExerciser;
-  /** Network window of each action (FlowEdge.network). */
+  /** Fenêtre réseau de chaque action (FlowEdge.network). */
   private readonly networkTrace: NetworkTraceRecorder;
-  /** Id of this run, carried by the data it creates (QA-CRAWLER-<runId>). */
+  /** Id de ce run, porté par les données qu'il crée (QA-CRAWLER-<runId>). */
   readonly runId: string;
   private readonly verifyBaseline: FlowGraphData | undefined;
   private readonly baselineRunId: string | undefined;
   private verification: VerificationReport | undefined;
-  /** Judges each executed action (undefined when oracles.enabled is false). */
+  /** Juge chaque action exécutée (undefined quand oracles.enabled vaut false). */
   private readonly oracle: CompositeTestOracle | undefined;
-  /** Forms already filled, per state (`stateId|group`). */
+  /** Formulaires déjà remplis, par état (`stateId|group`). */
   private readonly formsExercised = new Set<string>();
-  /** Transitions that filled a form: id → form, to fill it again when a path is replayed. */
+  /** Transitions qui ont rempli un formulaire : id → formulaire, pour le remplir à nouveau quand un chemin est rejoué. */
   private readonly formActions = new Map<string, string>();
-  /** Every form filled, for the report (never a sensitive value). */
+  /** Chaque formulaire rempli, pour le rapport (jamais une valeur sensible). */
   private readonly formReports: FormReport[] = [];
   private readonly recovery: RecoveryEngine;
   private readonly breaker: CircuitBreaker | undefined;
   private readonly stuck: StuckDetector | undefined;
-  /** The last action left the branch stuck: the loop leaves it. */
+  /** La dernière action a laissé la branche bloquée : la boucle la quitte. */
   private pendingStuck: StuckEvent | undefined;
   private readonly accessibility: AccessibilityChecker | undefined;
   private readonly createdData: CreatedDataRegistry;
@@ -356,7 +356,7 @@ export class FlowExplorer {
     let stopReason: StopReason = 'exhausted';
     try {
       const context = await browser.start(this.authenticator.contextOptions());
-      // Browser interactions outside the DOM (new windows, dialogs, sign-in dialog…) go through the manager.
+      // Les interactions du navigateur hors du DOM (nouvelles fenêtres, dialogues, fenêtre de connexion…) passent par le gestionnaire.
       if (this.config.browserInteractions.enabled) await this.browserEvents.attachContext(context);
       const { grant } = this.config.browserInteractions.permissions;
       if (grant.length > 0) await context.grantPermissions(grant, { origin: new URL(this.startUrl).origin });
@@ -370,7 +370,7 @@ export class FlowExplorer {
       const startMark = this.interactions.mark();
       const started = await this.goto(page, this.startUrl);
       if (started && this.interactions.blockingSince(startMark).length > 0) {
-        // e.g. AUTH_REQUIRED on the start page: recorded, nothing else can be explored.
+        // par exemple AUTH_REQUIRED sur la page de départ : enregistré, rien d'autre ne peut être exploré.
         this.skipFlows('the start page requires an interaction that cannot be completed');
         return this.outcome('unreachable-start');
       }
@@ -381,10 +381,10 @@ export class FlowExplorer {
           return this.outcome('unreachable-start');
         }
       }
-      // The start state is the root of the flow graph, whatever the flows visit first.
+      // L'état de départ est la racine du graphe des flows, quel que soit ce que les flows visitent d'abord.
       let current = await this.observeState(page, 0);
 
-      // 1. Imposed flows, in mission order.
+      // 1. Flows imposés, dans l'ordre de la mission.
       let flowsStop: StopReason | undefined;
       if (this.config.flows.length > 0) {
         const flows = await this.runFlows(page, browser, observers);
@@ -392,7 +392,7 @@ export class FlowExplorer {
         flowsStop = flows.stopReason;
       }
 
-      // 2. verify: replay the known transitions of the baseline. Otherwise, autonomous exploration.
+      // 2. verify : rejouer les transitions connues de la baseline. Sinon, exploration autonome.
       if (flowsStop) {
         stopReason = flowsStop;
       } else if (this.verifyBaseline) {
@@ -419,12 +419,12 @@ export class FlowExplorer {
   }
 
   /**
-   * OBSERVE → DECIDE → SAFETY CHECK → EXECUTE → OBSERVE → STORE, from `current`
-   * until the engine stops, a limit is reached or nothing is left. With a
-   * `scope` (exploration of a flow's last screen, `thenExplore`), only
-   * in-page controls and links to pages below that screen are considered,
-   * the global menu is ignored, a screen outside the scope is left at once,
-   * and the exploration never jumps to other states.
+   * OBSERVER → DÉCIDER → CONTRÔLE DE SÉCURITÉ → EXÉCUTER → OBSERVER → ENREGISTRER, depuis
+   * `current` jusqu'à ce que le moteur s'arrête, qu'une limite soit atteinte ou qu'il ne
+   * reste rien. Avec un `scope` (exploration du dernier écran d'un flow, `thenExplore`),
+   * seuls les contrôles de la page et les liens vers les pages sous cet écran sont
+   * considérés, le menu global est ignoré, un écran hors du périmètre est quitté aussitôt,
+   * et l'exploration ne saute jamais vers d'autres états.
    */
   private async explorationLoop(
     page: Page,
@@ -441,7 +441,7 @@ export class FlowExplorer {
       if (limit) return { page, stopReason: limit };
 
       if (scope && !isInScope(scope, current.url)) {
-        // An in-page control led elsewhere: go back without exploring that screen here.
+        // Un contrôle de la page a mené ailleurs : revenir sans explorer cet écran ici.
         const restored = await this.backtrack(page, browser, observers.all, false);
         page = restored.page;
         if (!restored.context) return { page, stopReason: 'exhausted' };
@@ -449,7 +449,7 @@ export class FlowExplorer {
         continue;
       }
 
-      // Forms first: a screen with fields (a dialog "Nouveau dossier"…) is filled, then checked.
+      // Les formulaires d'abord : un écran avec des champs (une fenêtre « Nouveau dossier »…) est rempli, puis vérifié.
       const form = this.formToExercise(current);
       if (form) {
         const step = await this.exerciseForm(page, current, form);
@@ -458,7 +458,7 @@ export class FlowExplorer {
         continue;
       }
 
-      // The engine only sees what the scope allows; other actions stay unexplored for later.
+      // Le moteur ne voit que ce que le périmètre permet ; les autres actions restent inexplorées pour plus tard.
       const candidates = scope ? { ...current, actions: actionsInScope(scope, current.actions) } : current;
       const decision = await this.decisionEngine.decide(candidates, this.graph);
       this.listener.onDecision?.(current, decision);
@@ -468,14 +468,14 @@ export class FlowExplorer {
         this.exhausted.add(current.stateId);
         const restored = await this.backtrack(page, browser, observers.all, allowJump);
         page = restored.page;
-        if (!restored.context) return { page, stopReason: 'exhausted' }; // nothing left anywhere
+        if (!restored.context) return { page, stopReason: 'exhausted' }; // plus rien nulle part
         current = restored.context;
         continue;
       }
 
       const action = current.actions.find((candidate) => candidate.id === decision.actionId);
       if (!action) {
-        // The engine proposed something that is not on screen: never retry it.
+        // Le moteur a proposé quelque chose qui n'est pas à l'écran : ne jamais le retenter.
         this.graph.addEdge({
           from: current.stateId,
           to: current.stateId,
@@ -487,7 +487,7 @@ export class FlowExplorer {
         continue;
       }
 
-      // "Is it allowed?" — after the decision, before Playwright, whatever the engine.
+      // « Ai-je le droit ? » — après la décision, avant Playwright, quel que soit le moteur.
       const verdict = this.safety.evaluate(action);
       if (verdict.verdict === 'BLOCK') {
         this.graph.recordBlocked(current.stateId, action, verdict.reason);
@@ -502,7 +502,7 @@ export class FlowExplorer {
 
       const stuck = this.pendingStuck;
       if (stuck) {
-        // Turning in circles: this branch is left, the exploration goes on elsewhere.
+        // On tourne en rond : cette branche est quittée, l'exploration continue ailleurs.
         this.pendingStuck = undefined;
         this.exhausted.add(current.stateId);
         const restored = await this.backtrack(page, browser, observers.all, allowJump);
@@ -519,9 +519,9 @@ export class FlowExplorer {
     }
   }
 
-  // ---------------------------------------------------------------- loop steps
+  // ---------------------------------------------------------------- étapes de la boucle
 
-  /** OBSERVE → STATE → DISCOVER → record the node. */
+  /** OBSERVER → ÉTAT → DÉCOUVRIR → enregistrer le nœud. */
   private async observeState(page: Page, depth: number): Promise<PageContext> {
     const snapshot = await this.observer.observe(page);
     this.lastSnapshot = snapshot;
@@ -542,7 +542,7 @@ export class FlowExplorer {
     this.currentUrl = snapshot.url;
 
     const flow = this.graph.flowTo(state.stateId);
-    // Issues raised while reaching this state belong to it.
+    // Les anomalies levées en atteignant cet état lui appartiennent.
     const pending = this.collector
       .all()
       .filter((issue) => issue.stateId === undefined)
@@ -596,7 +596,7 @@ export class FlowExplorer {
     return context;
   }
 
-  /** EXECUTE → OBSERVE NEW STATE → STORE TRANSITION. */
+  /** EXÉCUTER → OBSERVER LE NOUVEL ÉTAT → ENREGISTRER LA TRANSITION. */
   private async executeAndObserve(
     page: Page,
     browser: BrowserManager,
@@ -607,7 +607,7 @@ export class FlowExplorer {
   ): Promise<{ page: Page; context: PageContext }> {
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
     const urlBefore = page.url();
-    // Anomalies raised from now on are caused by this action; their state is known after observation.
+    // Les anomalies levées à partir de maintenant sont causées par cette action ; leur état est connu après l'observation.
     this.attribution = { actionId: action.id };
     this.currentAction = { stateId: from.stateId, actionId: action.id };
     const interactionMark = this.interactions.mark();
@@ -615,7 +615,7 @@ export class FlowExplorer {
     this.networkTrace.start(action.id);
     let result = await this.execute(page, from, action);
     this.actionsExecuted += 1;
-    // RETRY: a transient Playwright error (element re-rendered under the click), never an action sending data.
+    // RETRY : une erreur Playwright passagère (élément réaffiché sous le clic), jamais une action qui envoie des données.
     for (
       let attempt = 0;
       result.status === 'FAILED' && this.recovery.shouldRetry(result.error, action, attempt);
@@ -637,7 +637,7 @@ export class FlowExplorer {
       this.emitRecovery();
     }
 
-    // SESSION EXPIRED: the action landed on the login page. Log in again (bounded), come back, try once more.
+    // SESSION EXPIRÉE : l'action a abouti sur la page de connexion. Se reconnecter (dans une limite), revenir, réessayer une fois.
     let expired = false;
     if (result.status === 'SUCCESS' && (await this.sessionExpired(page, from))) {
       expired = true;
@@ -695,7 +695,7 @@ export class FlowExplorer {
         actionId: action.id,
         action: summaryOf(action),
         ...this.networkOf(action.id),
-        // A browser interaction that could not be completed (e.g. AUTH_REQUIRED) blocks the transition.
+        // Une interaction du navigateur qui n'a pas pu aboutir (par exemple AUTH_REQUIRED) bloque la transition.
         result: blocking.length > 0 ? 'BLOCKED' : 'FAILED',
         reason:
           blocking.length > 0
@@ -717,7 +717,7 @@ export class FlowExplorer {
       this.graph.attachIssues(from.stateId, ids);
       this.listener.onTransition?.(edge, action);
       await this.captureErrorScreenshot(page, from, ids);
-      // Come back to where we were, on a fresh page if the current one is broken.
+      // Revenir là où on était, sur une page neuve si la page courante est cassée.
       if (!/^https?:/.test(page.url()) || page.isClosed()) {
         page = await this.recyclePage(browser, page, observers.all);
       }
@@ -727,13 +727,13 @@ export class FlowExplorer {
         kind,
         message: edge.reason ?? 'failed',
         navigated: page.url() !== urlBefore,
-        // A blocked interaction (AUTH_REQUIRED…) is not a failure of the action itself.
+        // Une interaction bloquée (AUTH_REQUIRED…) n'est pas un échec de l'action elle-même.
         countFailure: blocking.length === 0,
       });
       if (recovered.context) return { page: recovered.page, context: recovered.context };
       const fallback = { page: recovered.page };
-      // The page is no longer in the state the action started from (e.g. a dialog closed by the
-      // reload): go on from what is really on screen, not from the stale list of actions.
+      // La page n'est plus dans l'état d'où partait l'action (par exemple une fenêtre fermée par le
+      // rechargement) : continuer à partir de ce qui est vraiment à l'écran, pas de l'ancienne liste d'actions.
       if (this.isExplorablePage(fallback.page)) {
         const current = await this.observeState(fallback.page, from.metadata.depth).catch(() => undefined);
         if (current) return { page: fallback.page, context: current };
@@ -741,7 +741,7 @@ export class FlowExplorer {
       return { page: fallback.page, context: from };
     }
 
-    // Global menu entries are reachable from the start state: one step deep, wherever they were clicked.
+    // Les entrées du menu global sont atteignables depuis l'état de départ : un niveau de profondeur, où qu'on ait cliqué dessus.
     const depth = action.category === 'menu' ? 1 : from.metadata.depth + 1;
     const after = await this.observeState(page, depth);
     const ids = newIssues();
@@ -777,7 +777,7 @@ export class FlowExplorer {
       this.pendingStuck = stuck;
       this.listener.onStuck?.(stuck);
     }
-    // Issues of the new state now know which action and path led to them.
+    // Les anomalies du nouvel état savent maintenant quelle action et quel chemin y ont mené.
     for (const issue of this.collector.all()) {
       if (ids.includes(issue.id)) {
         issue.actionId ??= action.id;
@@ -791,10 +791,10 @@ export class FlowExplorer {
   }
 
   /**
-   * RECOVERY after a failed action: the configured strategies in order
-   * (top layer, Escape, history, URL, replayed path, new login, another
-   * branch). A failure that keeps coming back opens the circuit: the action,
-   * or the whole state, is not tried again.
+   * RÉCUPÉRATION après une action en échec : les stratégies configurées dans l'ordre
+   * (calque au premier plan, Escape, historique, URL, chemin rejoué, nouvelle connexion,
+   * autre branche). Un échec qui revient ouvre le circuit : l'action, ou tout l'état,
+   * n'est plus retentée.
    */
   private async recoverFrom(
     page: Page,
@@ -821,11 +821,11 @@ export class FlowExplorer {
     const actions: RecoveryActions = {
       ...(steps && !abandon
         ? {
-            // Only when a dialog, menu or picker was in front.
+            // Seulement quand une fenêtre, un menu ou un sélecteur était devant l'écran.
             ...(this.lastSnapshot?.elements.some((element) => element.foreground)
               ? { 'dismiss-dialog': steps.dismiss }
               : {}),
-            // Nothing moved: Escape and a new look are enough. It moved: history first.
+            // Rien n'a bougé : Escape et un nouveau regard suffisent. La page a changé : l'historique d'abord.
             ...(failure.navigated ? { back: steps.back } : { escape: steps.escape }),
             'known-url': steps.url,
             'replay-path': steps.replay,
@@ -858,7 +858,7 @@ export class FlowExplorer {
     return { page: current, ...(recovered.context ? { context: recovered.context } : {}) };
   }
 
-  /** ACCESSIBILITY: basic checks on a new screen, reported as anomalies of that state. */
+  /** ACCESSIBILITÉ : vérifications de base sur un nouvel écran, signalées comme anomalies de cet état. */
   private async checkAccessibility(page: Page, url: string, stateId: string, flow: string[]): Promise<void> {
     if (!this.accessibility || page.isClosed()) return;
     const findings = await this.accessibility.check(page).catch(() => []);
@@ -877,7 +877,7 @@ export class FlowExplorer {
     if (ids.length > 0) this.graph.attachIssues(stateId, ids);
   }
 
-  /** Recovery events not yet given to the listener. */
+  /** Événements de récupération pas encore transmis au listener. */
   private recoveryEmitted = 0;
   private emitRecovery(): void {
     const events = this.recovery.events();
@@ -885,7 +885,7 @@ export class FlowExplorer {
     this.recoveryEmitted = events.length;
   }
 
-  /** Did the session expire? With a form login: the page shows the login page it did not ask for. */
+  /** La session a-t-elle expiré ? Avec une connexion par formulaire : la page montre la page de connexion qu'elle n'a pas demandée. */
   private async sessionExpired(page: Page, from: PageContext): Promise<boolean> {
     return Promise.resolve(this.onLoginPage(page) && !this.isLoginUrl(from.url));
   }
@@ -904,7 +904,7 @@ export class FlowExplorer {
     }
   }
 
-  /** Logs in again after a session expiry, within the configured limit. */
+  /** Se reconnecte après une expiration de session, dans la limite configurée. */
   private async reauthenticate(page: Page): Promise<boolean> {
     if (!this.recovery.mayReauthenticate()) return false;
     return this.authenticator
@@ -914,10 +914,10 @@ export class FlowExplorer {
   }
 
   /**
-   * TEST ORACLE: judges an executed action from what was observed (network,
-   * anomalies, screen) and attaches the verdict to its transition. Warnings of
-   * the UI, baseline and contract oracles become anomalies (the technical
-   * failures already are: HTTP, JavaScript errors…).
+   * ORACLE DE TEST : juge une action exécutée à partir de ce qui a été observé (réseau,
+   * anomalies, écran) et attache le verdict à sa transition. Les avertissements des
+   * oracles écran, baseline et contrat deviennent des anomalies (les échecs techniques
+   * en sont déjà : HTTP, erreurs JavaScript…).
    */
   private async judge(
     edge: FlowEdge,
@@ -977,7 +977,7 @@ export class FlowExplorer {
     this.listener.onOracle?.(edge, verdict);
   }
 
-  /** Closes the network window of an action: what to spread into its FlowEdge. */
+  /** Ferme la fenêtre réseau d'une action : ce qu'il faut ajouter à sa FlowEdge. */
   private networkOf(actionId: string): Pick<FlowEdge, 'network' | 'networkWindow'> {
     const trace = this.networkTrace.stop(actionId);
     if (!trace) return {};
@@ -987,7 +987,7 @@ export class FlowExplorer {
     };
   }
 
-  /** Next form of this state to fill, if the mission explores forms. */
+  /** Prochain formulaire de cet état à remplir, si la mission explore les formulaires. */
   private formToExercise(context: PageContext): string | undefined {
     if (!this.config.forms.exercise || !this.config.goals.discoverForms) return undefined;
     return this.forms
@@ -996,9 +996,9 @@ export class FlowExplorer {
   }
 
   /**
-   * FILL A FORM → CHECK ITS VALIDATION → STORE THE TRANSITION. Nothing is
-   * sent: the button that sends the form is an action like any other, under
-   * the SafetyPolicy (forms.submit / safety.block).
+   * REMPLIR UN FORMULAIRE → VÉRIFIER SA VALIDATION → ENREGISTRER LA TRANSITION. Rien
+   * n'est envoyé : le bouton qui envoie le formulaire est une action comme les autres,
+   * soumise à la SafetyPolicy (forms.submit / safety.block).
    */
   private async exerciseForm(
     page: Page,
@@ -1024,7 +1024,7 @@ export class FlowExplorer {
       });
     }
     this.formReports.push(formReportOf(run, from.stateId, actionId));
-    // Its fields were handled with the form: not tried again one by one.
+    // Ses champs ont été traités avec le formulaire : pas retentés un par un.
     for (const field of run.fields) this.graph.markTried(from.stateId, field.action.id);
     this.actionsExecuted += 1;
     this.currentAction = undefined;
@@ -1083,7 +1083,7 @@ export class FlowExplorer {
     return { page, context: { ...after, errors: this.collector.forState(after.stateId) } };
   }
 
-  /** Prepares the form if needed, then lets the executor act. */
+  /** Prépare le formulaire si besoin, puis laisse l'exécuteur agir. */
   private async execute(
     page: Page,
     context: PageContext,
@@ -1100,15 +1100,15 @@ export class FlowExplorer {
         : instruction?.kind === 'select'
           ? instruction.label
           : undefined;
-    // Counted before it runs: an action that fails half-way may still have changed data.
+    // Compté avant l'exécution : une action qui échoue à mi-chemin a peut-être déjà modifié des données.
     this.safety.recordExecuted(action);
     return this.executor.execute(page, action, value !== undefined ? { value } : {});
   }
 
   /**
-   * Fills a form with test data before clicking one of its buttons (wizard
-   * "Suivant", search…). Each field goes through the SafetyPolicy: sensitive
-   * fields (passwords, payment data, secrets) are never filled.
+   * Remplit un formulaire avec des données de test avant de cliquer sur l'un de ses
+   * boutons (« Suivant » d'un assistant, recherche…). Chaque champ passe par la
+   * SafetyPolicy : les champs sensibles (mots de passe, données de paiement, secrets) ne sont jamais remplis.
    */
   private async prepareForm(page: Page, context: PageContext, formIndex: number): Promise<void> {
     const fields = context.actions.filter(
@@ -1131,8 +1131,8 @@ export class FlowExplorer {
   }
 
   /**
-   * Risky actions refused by the SafetyPolicy are recorded as BLOCKED right
-   * away, so reports show them and no engine proposes them again.
+   * Les actions risquées refusées par la SafetyPolicy sont enregistrées BLOCKED tout
+   * de suite : les rapports les montrent et aucun moteur ne les propose à nouveau.
    */
   private recordRefusedActions(stateId: string, actions: readonly DiscoveredAction[]): void {
     for (const action of actions) {
@@ -1144,9 +1144,9 @@ export class FlowExplorer {
     }
   }
 
-  // ---------------------------------------------------------------- imposed flows
+  // ---------------------------------------------------------------- flows imposés
 
-  /** Runs every imposed flow in order. Returns a stop reason when a mission limit ended the run. */
+  /** Exécute chaque flow imposé dans l'ordre. Renvoie une raison d'arrêt quand une limite de la mission a mis fin au run. */
   private async runFlows(
     page: Page,
     browser: BrowserManager,
@@ -1168,7 +1168,7 @@ export class FlowExplorer {
     return { page };
   }
 
-  /** Reports every flow not run yet as SKIPPED. */
+  /** Signale SKIPPED chaque flow pas encore exécuté. */
   private skipFlows(reason: string): void {
     const done = new Set(this.flowReports.map((report) => report.name));
     for (const flow of this.config.flows) {
@@ -1213,7 +1213,7 @@ export class FlowExplorer {
     const knownStates = new Set(this.graph.allNodes().map((node) => node.id));
     let stopReason: StopReason | undefined;
 
-    // Every flow starts from a freshly loaded page.
+    // Chaque flow part d'une page fraîchement chargée.
     const flowStart = new URL(
       flow.startAt ?? this.config.target.startAt,
       this.config.target.baseUrl,
@@ -1268,7 +1268,7 @@ export class FlowExplorer {
       await this.memory.save(this.graph);
     }
 
-    // Explore the flow's last screen (often reachable only through the flow).
+    // Explorer le dernier écran du flow (souvent atteignable seulement par le flow).
     if (report.status === 'PASSED' && flow.thenExplore && context && !stopReason) {
       report.explored = true;
       this.stack = [{ stateId: context.stateId, url: context.url }];
@@ -1276,12 +1276,12 @@ export class FlowExplorer {
       const loop = await this.explorationLoop(page, browser, observers, context, scopeOf(context.url));
       page = loop.page;
       this.allowJump = true;
-      // "Nothing left" meant "nothing left in the scope": the autonomous exploration may still go further.
+      // « Plus rien » voulait dire « plus rien dans le périmètre » : l'exploration autonome peut encore aller plus loin.
       for (const stateId of [...this.exhausted])
         if (!exhaustedBefore.has(stateId)) this.exhausted.delete(stateId);
       if (loop.stopReason !== 'exhausted' && loop.stopReason !== 'engine-stop') stopReason = loop.stopReason;
     } else if (!flow.thenExplore) {
-      // States only the flow reaches are not explored autonomously later.
+      // Les états que seul le flow atteint ne sont pas explorés en autonomie ensuite.
       for (const stateId of report.states) if (!knownStates.has(stateId)) this.exhausted.add(stateId);
     }
 
@@ -1294,7 +1294,7 @@ export class FlowExplorer {
     return stopReason ? { page, stopReason } : { page };
   }
 
-  /** One step: locate → classify → SafetyPolicy → execute → observe → store. */
+  /** Une étape : trouver → classer → SafetyPolicy → exécuter → observer → enregistrer. */
   private async runFlowStep(
     page: Page,
     browser: BrowserManager,
@@ -1417,10 +1417,10 @@ export class FlowExplorer {
     finish: (status: FlowStatus, extra?: Partial<FlowStepReport>) => FlowStepReport,
   ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
     let done = finish;
-    // "Where is it?"
+    // « Où est-il ? »
     const located = await this.flowSteps.locate(page, step.target, timeout);
     if (typeof located === 'string') {
-      // Look at the screen for what the YAML probably meant, and say how to write it.
+      // Chercher à l'écran ce que le YAML voulait probablement dire, et indiquer comment l'écrire.
       const found = await suggestTargets(page, step).catch(() => undefined);
       return {
         page,
@@ -1434,7 +1434,7 @@ export class FlowExplorer {
       };
     }
 
-    // "What is it?" — the same observation and classification as autonomous exploration.
+    // « Qu'est-ce que c'est ? » — la même observation et le même classement que l'exploration autonome.
     let before: PageContext;
     let action: DiscoveredAction | undefined;
     try {
@@ -1459,7 +1459,7 @@ export class FlowExplorer {
       await this.flowSteps.unmark(page);
     }
     if (!action) {
-      // Not an interactive element (plain text, div…): classified from its visible text.
+      // Pas un élément interactif (texte simple, div…) : classé d'après son texte visible.
       const text = ((await located.innerText({ timeout }).catch(() => '')) || '')
         .replace(/\s+/g, ' ')
         .trim()
@@ -1467,7 +1467,7 @@ export class FlowExplorer {
       action = this.syntheticAction(before.stateId, step, text);
     }
     if (action.risks.includes('sensitive-data')) {
-      // Never show what is typed in a sensitive field, even a literal value from the mission.
+      // Ne jamais montrer ce qui est saisi dans un champ sensible, même une valeur littérale de la mission.
       const masked = describeStep(step, true);
       done = (status, extra = {}) => ({ ...finish(status, extra), description: masked });
     }
@@ -1483,7 +1483,7 @@ export class FlowExplorer {
       };
     }
 
-    // "Is it allowed?" — before Playwright, whatever the YAML says.
+    // « Ai-je le droit ? » — avant Playwright, quoi que dise le YAML.
     const value = step.kind === 'fill' ? step.value : undefined;
     const verdict = evaluateFlowAction(this.safety, action, {
       allow: step.allow,
@@ -1534,7 +1534,7 @@ export class FlowExplorer {
       elementAction = { kind: step.kind };
     }
 
-    // "Execute it."
+    // « Exécute. »
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
     this.attribution = { actionId: action.id };
     this.currentAction = { stateId: before.stateId, actionId: action.id, flow: flow.name };
@@ -1587,7 +1587,7 @@ export class FlowExplorer {
       };
     }
 
-    // "What happened?"
+    // « Que s'est-il passé ? »
     const after = await this.observeState(page, before.metadata.depth + 1);
     const ids = newIssues();
     const edge = this.graph.addEdge({
@@ -1620,7 +1620,7 @@ export class FlowExplorer {
     };
   }
 
-  /** Classification of an element the observer does not list (plain text, container…). */
+  /** Classement d'un élément que l'observateur ne liste pas (texte simple, conteneur…). */
   private syntheticAction(
     stateId: string,
     step: Extract<FlowStep, { target: unknown }>,
@@ -1651,7 +1651,7 @@ export class FlowExplorer {
     };
   }
 
-  /** A FLOW issue for a failed or blocked step (ERROR, WARNING for optional steps), with a screenshot. */
+  /** Une anomalie FLOW pour une étape échouée ou bloquée (ERROR, WARNING pour les étapes optionnelles), avec une capture. */
   private async flowIssue(
     flow: FlowConfig,
     step: FlowStepReport | undefined,
@@ -1690,7 +1690,7 @@ export class FlowExplorer {
   private pushState(context: PageContext): void {
     const index = this.stack.findIndex((entry) => entry.stateId === context.stateId);
     if (index >= 0) {
-      // Back on a state already in the path (cycle): the path shrinks to it.
+      // De retour sur un état déjà dans le chemin (cycle) : le chemin se réduit jusqu'à lui.
       this.stack = this.stack.slice(0, index + 1);
     } else {
       this.stack.push({ stateId: context.stateId, url: context.url });
@@ -1698,9 +1698,9 @@ export class FlowExplorer {
   }
 
   /**
-   * BACKTRACK: return to the closest ancestor that still has something to
-   * explore; when the whole path is exhausted, jump to any known state with
-   * unexplored actions. Returns no context when there is nothing left.
+   * RETOUR ARRIÈRE : revenir à l'ancêtre le plus proche qui a encore quelque chose à
+   * explorer ; quand tout le chemin est épuisé, sauter vers n'importe quel état connu
+   * avec des actions inexplorées. Ne renvoie aucun contexte quand il ne reste rien.
    */
   private async backtrack(
     page: Page,
@@ -1713,7 +1713,7 @@ export class FlowExplorer {
       this.stack.pop();
       const target = this.stack[this.stack.length - 1];
       if (!target || this.exhausted.has(target.stateId) || this.unreachable.has(target.stateId)) continue;
-      // Nothing interesting left there: no need to go back to it, the path goes on shrinking.
+      // Plus rien d'intéressant là-bas : inutile d'y retourner, le chemin continue de se réduire.
       if (!(await this.hasWorkLeft(target.stateId))) {
         this.exhausted.add(target.stateId);
         continue;
@@ -1728,7 +1728,7 @@ export class FlowExplorer {
       this.unreachable.add(target.stateId);
     }
 
-    // The current path is exhausted: look for any other state with unexplored actions.
+    // Le chemin courant est épuisé : chercher un autre état avec des actions inexplorées.
     for (const node of allowJump ? this.graph.allNodes() : []) {
       if (this.exhausted.has(node.id) || this.unreachable.has(node.id)) continue;
       if (this.graph.getUnexploredActions(node.id).length === 0 || !(await this.hasWorkLeft(node.id))) {
@@ -1754,9 +1754,9 @@ export class FlowExplorer {
   }
 
   /**
-   * Would the decision engine still execute something on this state? Asked
-   * with the state's last observation, before paying for going back to it.
-   * Unknown (no observation kept): assume yes.
+   * Le moteur de décision exécuterait-il encore quelque chose sur cet état ? Demandé
+   * avec la dernière observation de l'état, avant de payer le retour vers lui.
+   * Inconnu (aucune observation gardée) : on suppose que oui.
    */
   private async hasWorkLeft(stateId: string): Promise<boolean> {
     const node = this.graph.getNode(stateId);
@@ -1780,10 +1780,10 @@ export class FlowExplorer {
   }
 
   /**
-   * Brings the page back to a known state, cheapest method first: close the
-   * top layer, browser history (goBack), then its URL, then replaying the
-   * recorded path from the start state (for states without their own URL:
-   * wizard steps, tabs, dialogs). Each attempt is verified by comparing state ids.
+   * Ramène la page à un état connu, la méthode la moins coûteuse d'abord : fermer le
+   * calque du dessus, historique du navigateur (goBack), puis son URL, puis rejouer
+   * le chemin enregistré depuis l'état de départ (pour les états sans URL propre :
+   * étapes d'assistant, onglets, fenêtres). Chaque tentative est vérifiée en comparant les id d'état.
    */
   private async restore(page: Page, stateId: string, tryHistory = false): Promise<PageContext | undefined> {
     const steps = this.restoreSteps(page, stateId);
@@ -1796,7 +1796,7 @@ export class FlowExplorer {
     return undefined;
   }
 
-  /** The ways of reaching a known state again; each returns the state only when it is the expected one. */
+  /** Les façons d'atteindre à nouveau un état connu ; chacune ne renvoie l'état que si c'est celui attendu. */
   private restoreSteps(
     page: Page,
     stateId: string,
@@ -1815,7 +1815,7 @@ export class FlowExplorer {
           return context;
         }
       } catch {
-        // page navigated while being observed
+        // la page a navigué pendant l'observation
       }
       return undefined;
     };
@@ -1823,7 +1823,7 @@ export class FlowExplorer {
       page.waitForTimeout(this.config.exploration.settleTimeMs).catch(() => undefined);
 
     return {
-      // A dialog, a date picker…: close the top layer first, the screen under it stays as it is.
+      // Une fenêtre, un calendrier… : fermer d'abord le calque du dessus, l'écran dessous reste tel quel.
       dismiss: async () => ((await this.closeTopLayer(page)) ? matches('top layer closed') : undefined),
       escape: async () => {
         if (!this.isExplorablePage(page)) return undefined;
@@ -1847,12 +1847,12 @@ export class FlowExplorer {
     };
   }
 
-  /** Replays the recorded transitions from the start state. */
+  /** Rejoue les transitions enregistrées depuis l'état de départ. */
   private async replayPath(page: Page, stateId: string): Promise<PageContext | undefined> {
     const path = this.graph.pathTo(stateId);
     if (
       path.length === 0 ||
-      // A transition that keeps failing is not replayed again.
+      // Une transition qui échoue sans cesse n'est plus rejouée.
       path.some((edge) => this.breaker?.isOpen(edge.from, edge.actionId)) ||
       !(await this.goto(page, this.graph.getNode(this.graph.rootId ?? '')?.url ?? this.startUrl))
     ) {
@@ -1863,7 +1863,7 @@ export class FlowExplorer {
       if (!context || context.stateId !== edge.from) return undefined;
       const form = this.formActions.get(edge.actionId);
       if (form !== undefined) {
-        // A filled form: fill it again (same test data), without reporting it twice.
+        // Un formulaire rempli : le remplir à nouveau (mêmes données de test), sans le signaler deux fois.
         await this.forms.fill(page, context, form);
         context = await this.observeState(page, this.graph.getNode(edge.to)?.depth ?? 0).catch(
           () => undefined,
@@ -1888,9 +1888,9 @@ export class FlowExplorer {
   }
 
   /**
-   * Closes what is in front of the screen (date picker, menu, dialog) with
-   * Escape, else with its "Close"/"Fermer" button when it is SAFE. Returns
-   * whether something was in front.
+   * Ferme ce qui est devant l'écran (calendrier, menu, fenêtre) avec Escape, sinon
+   * avec son bouton « Close »/« Fermer » quand il est SAFE. Indique si quelque chose
+   * était devant.
    */
   private async closeTopLayer(page: Page): Promise<boolean> {
     const snapshot = this.lastSnapshot;
@@ -1901,7 +1901,7 @@ export class FlowExplorer {
     await page.keyboard.press('Escape').catch(() => undefined);
     await page.waitForTimeout(this.config.exploration.settleTimeMs).catch(() => undefined);
     const after = await this.observer.observe(page).catch(() => undefined);
-    // Escape closed it: done. Otherwise, its "Close" button.
+    // Escape l'a fermé : terminé. Sinon, son bouton « Fermer ».
     if (!after || this.stateDetector.detect(after).stateId !== this.stateDetector.detect(before).stateId)
       return true;
     const close = this.discovery
@@ -1924,7 +1924,7 @@ export class FlowExplorer {
       await page.goto(url, { waitUntil: exploration.waitUntil, timeout: exploration.navigationTimeoutMs });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // A redirect started by the page itself (auth guard…) is not a failure.
+      // Une redirection lancée par la page elle-même (garde d'authentification…) n'est pas un échec.
       if (!/interrupted by another navigation to/i.test(message) || /chrome-error:/i.test(message)) {
         const kind = /timeout/i.test(message)
           ? 'timeout'
@@ -1945,7 +1945,7 @@ export class FlowExplorer {
     if (exploration.settleTimeMs > 0)
       await page.waitForTimeout(exploration.settleTimeMs).catch(() => undefined);
     if (!relogged && this.onLoginPage(page) && !this.isLoginUrl(url)) {
-      // Sent to the login page: the session expired. Log in again (bounded), then go there again.
+      // Renvoyé vers la page de connexion : la session a expiré. Se reconnecter (dans une limite), puis y retourner.
       const renewed = await this.reauthenticate(page);
       this.recovery.record(
         { stateId: this.attribution.stateId ?? '', kind: 'session-expired', message: 'session expired' },
@@ -1971,7 +1971,7 @@ export class FlowExplorer {
     }
   }
 
-  // ---------------------------------------------------------------- helpers
+  // ---------------------------------------------------------------- utilitaires
 
   private limitReached(): StopReason | undefined {
     const { exploration } = this.config;
@@ -2002,7 +2002,7 @@ export class FlowExplorer {
     if (!this.config.browserInteractions.enabled) {
       const page = await browser.newPage();
       page.setDefaultTimeout(this.config.exploration.actionTimeoutMs);
-      // Browser interactions disabled: dialogs are dismissed and new windows closed, nothing is recorded.
+      // Interactions du navigateur désactivées : les dialogues sont refusés et les nouvelles fenêtres fermées, rien n'est enregistré.
       page.on('dialog', (dialog) => {
         void dialog.dismiss().catch(() => undefined);
       });
@@ -2014,15 +2014,15 @@ export class FlowExplorer {
     }
     const page = await this.browserEvents.openOwnPage(() => browser.newPage());
     page.setDefaultTimeout(this.config.exploration.actionTimeoutMs);
-    // Dialogs, downloads, file choosers, the native sign-in dialog…: BrowserEventDiscovery → BrowserInteractionManager.
+    // Dialogues, téléchargements, sélecteurs de fichier, fenêtre de connexion native… : BrowserEventDiscovery → BrowserInteractionManager.
     await this.browserEvents.attachPage(page);
     for (const observer of observers) observer.attach(page);
     return page;
   }
 
-  // ---------------------------------------------------------------- browser interactions
+  // ---------------------------------------------------------------- interactions du navigateur
 
-  /** auth.type: http — the recorded HTTP_AUTH interaction tells whether the login worked. */
+  /** auth.type: http — l'interaction HTTP_AUTH enregistrée dit si la connexion a réussi. */
   private assertHttpLogin(mark: number): void {
     const blocking = this.interactions.blockingSince(mark).find((result) => result.type === 'HTTP_AUTH');
     if (!blocking) return;
@@ -2041,11 +2041,11 @@ export class FlowExplorer {
     );
   }
 
-  /** Every interaction result: flow graph (persisted without secrets), popup transitions, issues, listener. */
+  /** Chaque résultat d'interaction : graphe des flows (enregistré sans secret), transitions de popup, anomalies, listener. */
   private onInteractionResult(result: BrowserInteractionResult): void {
     this.graph.recordInteraction(result);
     if (result.targetStateId && result.stateId && (result.type === 'POPUP' || result.type === 'NEW_TAB')) {
-      // CLICK "Voir le document" → POPUP → new page: the relation stays in the flow graph.
+      // CLIC « Voir le document » → POPUP → nouvelle page : la relation reste dans le graphe des flows.
       this.graph.addEdge({
         from: result.stateId,
         to: result.targetStateId,
@@ -2075,7 +2075,7 @@ export class FlowExplorer {
     this.listener.onInteraction?.(result);
   }
 
-  /** A popup / new tab on an allowed origin becomes a state of the graph (a crawl context reachable by URL). */
+  /** Une popup / un nouvel onglet sur une origine autorisée devient un état du graphe (un contexte d'exploration atteignable par URL). */
   private async inspectNewPage(page: Page): Promise<string | undefined> {
     if (!/^https?:/.test(page.url())) return undefined;
     const snapshot = await this.observer.observe(page);
@@ -2106,7 +2106,7 @@ export class FlowExplorer {
     return state.stateId;
   }
 
-  /** Replaces a crashed page or one stuck on an error page (pending error navigation). */
+  /** Remplace une page plantée ou bloquée sur une page d'erreur (navigation d'erreur en attente). */
   private async recyclePage(browser: BrowserManager, page: Page, observers: PageObserver[]): Promise<Page> {
     for (const observer of observers) observer.detach(page);
     await page.close().catch(() => undefined);
@@ -2168,11 +2168,11 @@ export class FlowExplorer {
   // ---------------------------------------------------------------- verify
 
   /**
-   * VERIFY: every transition the baseline learned is replayed — its start
-   * state is reached again (by its URL, else by the known path from the
-   * start), its action executed, and the state reached compared with the
-   * one the baseline recorded. The observations build the current graph,
-   * compared with the baseline afterwards (FlowDiffEngine).
+   * VERIFY : chaque transition apprise par la baseline est rejouée — son état de
+   * départ est atteint à nouveau (par son URL, sinon par le chemin connu depuis le
+   * départ), son action exécutée, et l'état atteint comparé à celui enregistré par la
+   * baseline. Les observations construisent le graphe courant, comparé ensuite à la
+   * baseline (FlowDiffEngine).
    */
   private async verifyKnownTransitions(
     page: Page,
@@ -2183,7 +2183,7 @@ export class FlowExplorer {
     const reference = FlowGraph.fromJSON(baseline);
     const labelOf = (id: string): string => reference.getNode(id)?.label ?? id;
     const depthOf = (id: string): number => reference.getNode(id)?.depth ?? 0;
-    // Autonomous transitions only: imposed flows run anyway, filled forms and popups are replayed with them.
+    // Transitions autonomes seulement : les flows imposés s'exécutent de toute façon, les formulaires remplis et les popups sont rejoués avec elles.
     const known = new Map<string, FlowEdge>();
     for (const edge of baseline.edges) {
       if (edge.result !== 'SUCCESS' || edge.flow || edge.interaction || edge.actionId.startsWith('form-'))
@@ -2247,7 +2247,7 @@ export class FlowExplorer {
         continue;
       }
 
-      // Execute and observe, like the exploration: anomalies and network are attributed to the action.
+      // Exécuter et observer, comme l'exploration : anomalies et réseau sont attribués à l'action.
       const from = current;
       const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
       this.attribution = { actionId: action.id };
@@ -2269,7 +2269,7 @@ export class FlowExplorer {
       const edgeRecorded = this.graph.addEdge({
         from: from.stateId,
         to: after?.stateId ?? from.stateId,
-        // The baseline's id: the transition is the same one, whatever record it was replayed on.
+        // L'id de la baseline : c'est la même transition, quel que soit l'enregistrement sur lequel elle a été rejouée.
         actionId: edge.actionId,
         action: summaryOf(action),
         ...network,
@@ -2311,10 +2311,10 @@ export class FlowExplorer {
   }
 
   /**
-   * The action of a known transition on the current screen: same id, else
-   * the same control (type + text) towards the same kind of target — another
-   * record (/users/1 learned, /users/2 reached) or another environment
-   * (learned on QA, verified on a PR environment).
+   * L'action d'une transition connue sur l'écran courant : même id, sinon le même
+   * contrôle (type + texte) vers le même genre de cible — un autre enregistrement
+   * (/users/1 appris, /users/2 atteint) ou un autre environnement (appris en QA,
+   * vérifié sur l'environnement d'une PR).
    */
   private findKnownAction(context: PageContext, edge: FlowEdge): DiscoveredAction | undefined {
     const mode = this.config.exploration.queryParams.mode;
@@ -2338,7 +2338,7 @@ export class FlowExplorer {
     );
   }
 
-  /** A URL of the baseline, on the target of this run (the baseline may come from another environment). */
+  /** Une URL de la baseline, sur la cible de ce run (la baseline peut venir d'un autre environnement). */
   private rebase(url: string, reference: FlowGraph): string {
     try {
       const learned = new URL(reference.getNode(reference.rootId ?? '')?.url ?? url);
@@ -2352,9 +2352,9 @@ export class FlowExplorer {
   }
 
   /**
-   * Reaches a state of the baseline: by its own URL first, else by replaying
-   * the baseline's path from the start page. Returns the observed context, or
-   * why it could not be reached.
+   * Atteint un état de la baseline : par sa propre URL d'abord, sinon en rejouant le
+   * chemin de la baseline depuis la page de départ. Renvoie le contexte observé, ou
+   * la raison pour laquelle il n'a pas pu être atteint.
    */
   private async reachKnownState(
     page: Page,
@@ -2388,7 +2388,7 @@ export class FlowExplorer {
   }
 }
 
-/** Short, readable, unique enough: base-36 time (e.g. "mg3k2x1a"). */
+/** Court, lisible, assez unique : le temps en base 36 (par exemple "mg3k2x1a"). */
 function newRunId(): string {
   return Date.now().toString(36);
 }
@@ -2405,17 +2405,17 @@ function skippedStep(step: FlowStep, index: number, reason: string): FlowStepRep
   };
 }
 
-/** Reason of a transition blocked by browser interactions (e.g. "HTTP_AUTH AUTH_REQUIRED: …"). */
-/** Buttons that close a layer (dialog, date picker, panel). */
+/** Raison d'une transition bloquée par des interactions du navigateur (par exemple "HTTP_AUTH AUTH_REQUIRED: …"). */
+/** Boutons qui ferment un calque (fenêtre, calendrier, panneau). */
 const CLOSE_LABEL =
   /^(close|fermer|close calendar|fermer le calendrier|close dialog|fermer la fen[eê]tre|[×✕✖x])$/i;
 
-/** Name of a form field in reports: its label, the label of its group, else its name. */
+/** Nom d'un champ de formulaire dans les rapports : son libellé, le libellé de son groupe, sinon son name. */
 function fieldName(action: DiscoveredAction): string {
   const field = action.field;
   const own = field?.label ?? action.label ?? action.text ?? field?.name ?? '?';
   const name = field?.groupLabel && field.choiceGroup !== undefined ? field.groupLabel : own;
-  return name.replace(/^\*\s*|\s*\*$/g, ''); // required marker
+  return name.replace(/^\*\s*|\s*\*$/g, ''); // marque d'obligation
 }
 
 /** `form "Nouveau dossier": field "Code agence" (value "12345"): Ce champ est obligatoire` */

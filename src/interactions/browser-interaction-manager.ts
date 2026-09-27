@@ -16,32 +16,32 @@ export interface BrowserInteractionManagerOptions {
   config: BrowserInteractionsConfig;
   policy: InteractionPolicy;
   credentials: CredentialProvider;
-  /** Where the crawl is (state, action, flow), for attribution and loop detection. */
+  /** Où en est l'exploration (état, action, flow), pour rattacher les interactions et détecter les boucles. */
   crawlContext?: () => InteractionContext;
-  /** Called with every recorded result (flow graph, issues, CLI). */
+  /** Appelé avec chaque résultat enregistré (graphe des flows, anomalies, CLI). */
   onResult?: (result: BrowserInteractionResult) => void;
-  /** Structured log line, e.g. `[BROWSER_INTERACTION] type=HTTP_AUTH status=HANDLED …`. Never contains a secret. */
+  /** Ligne de log structurée, par exemple `[BROWSER_INTERACTION] type=HTTP_AUTH status=HANDLED …`. Ne contient jamais de secret. */
   log?: (line: string) => void;
   now?: () => Date;
 }
 
 /**
- * Central place for everything the browser raises outside the DOM.
+ * Point central pour tout ce que le navigateur lève hors du DOM.
  *
- *   detect (BrowserEventDiscovery) → loop guard → handler lookup →
- *   SafetyPolicy (InteractionPolicy) → handler (with retry count and
- *   timeout) → record → the crawl engine resumes.
+ *   détection (BrowserEventDiscovery) → garde anti-boucle → choix du handler →
+ *   SafetyPolicy (InteractionPolicy) → handler (avec compte des essais et
+ *   délai) → enregistrement → l'exploration reprend.
  *
- * The crawl engine never talks to handlers: it only reads the results
- * (e.g. to stop a flow on AUTH_REQUIRED). New interactions are supported by
- * registering a handler.
+ * Le moteur d'exploration ne parle jamais aux handlers : il lit seulement les
+ * résultats (par exemple pour arrêter un flow sur AUTH_REQUIRED). Une nouvelle
+ * interaction se prend en charge en enregistrant un handler.
  */
 export class BrowserInteractionManager {
   private readonly handlers: BrowserInteractionHandler[] = [];
   private readonly recorded: BrowserInteractionResult[] = [];
-  /** Occurrences per (type, origin, action): loop detection. */
+  /** Occurrences par (type, origine, action) : détection des boucles. */
   private readonly occurrences = new Map<string, number>();
-  /** Tries per (type, origin, realm, action) and the last result: retry accounting. */
+  /** Essais par (type, origine, domaine, action) et dernier résultat : compte des nouvelles tentatives. */
   private readonly attempts = new Map<string, { count: number; last: BrowserInteractionResult }>();
   private sequence = 0;
 
@@ -65,7 +65,7 @@ export class BrowserInteractionManager {
     const crawl = this.options.crawlContext?.() ?? {};
     const origin = interaction.origin ?? originOf(interaction.targetUrl ?? interaction.sourceUrl);
 
-    // 1. Loop protection: the same interaction over and over is never retried forever.
+    // 1. Protection contre les boucles : la même interaction répétée n'est jamais retentée indéfiniment.
     const loopKey = [interaction.type, origin ?? '', crawl.actionId ?? crawl.stateId ?? ''].join('|');
     const occurrences = (this.occurrences.get(loopKey) ?? 0) + 1;
     this.occurrences.set(loopKey, occurrences);
@@ -81,7 +81,7 @@ export class BrowserInteractionManager {
       });
     }
 
-    // 2. Retry accounting: the browser raising the same interaction again means the previous answer failed.
+    // 2. Compte des essais : le navigateur qui relève la même interaction veut dire que la réponse précédente a échoué.
     const attemptKey = [loopKey, String(interaction.details.realm ?? '')].join('|');
     const previous = this.attempts.get(attemptKey);
     const attempt = (previous?.count ?? 0) + 1;
@@ -90,7 +90,7 @@ export class BrowserInteractionManager {
       previous.last.reason = 'credentials rejected by the server';
     }
 
-    // 3. Handler lookup.
+    // 3. Choix du handler.
     const handler = this.handlerFor(interaction.type);
     if (!handler) {
       await this.safely(interaction.fallback());
@@ -107,7 +107,7 @@ export class BrowserInteractionManager {
       );
     }
 
-    // 4. Safety policy.
+    // 4. Politique de sécurité.
     const decision = this.options.policy.evaluate(interaction);
     if (decision.verdict === 'BLOCK') {
       await this.safely(interaction.fallback());
@@ -131,7 +131,7 @@ export class BrowserInteractionManager {
       );
     }
 
-    // 5. Handler, bounded in time.
+    // 5. Handler, limité dans le temps.
     const outcome = await this.runHandler(handler, interaction, decision, attempt, crawl);
     return this.remember(
       attemptKey,
@@ -140,12 +140,12 @@ export class BrowserInteractionManager {
     );
   }
 
-  /** Every recorded result, in order. */
+  /** Chaque résultat enregistré, dans l'ordre. */
   results(): BrowserInteractionResult[] {
     return [...this.recorded];
   }
 
-  /** Position to pass to `since` / `blockingSince` (take it before an action). */
+  /** Position à passer à `since` / `blockingSince` (à prendre avant une action). */
   mark(): number {
     return this.recorded.length;
   }
@@ -154,7 +154,7 @@ export class BrowserInteractionManager {
     return this.recorded.slice(mark);
   }
 
-  /** Interactions since `mark` that prevent the flow from going on normally. */
+  /** Interactions depuis `mark` qui empêchent le flow de continuer normalement. */
   blockingSince(mark: number): BrowserInteractionResult[] {
     return this.since(mark).filter((result) => result.blocking);
   }
@@ -167,7 +167,7 @@ export class BrowserInteractionManager {
     crawl: InteractionContext,
   ): Promise<HandlerOutcome> {
     const { retry, popups } = this.options.config;
-    // A popup may be left open for a while on purpose (popups.closeAfterMs).
+    // Une popup peut être laissée ouverte un moment volontairement (popups.closeAfterMs).
     const timeoutMs =
       this.options.config.timeoutMs +
       (interaction.type === 'POPUP' || interaction.type === 'NEW_TAB' ? popups.closeAfterMs : 0);

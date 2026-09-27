@@ -2,30 +2,30 @@ import type { DiscoveredAction, FormSummary } from './discovered-action.js';
 import type { Issue } from './issue.js';
 
 /**
- * Observable state of the current screen, as given to the decision engine.
- * Structured and compact — no raw HTML — so that a future engine (local or
- * cloud model) can receive it as-is.
+ * État observable de l'écran courant, tel que donné au moteur de décision. Structuré
+ * et compact — pas de HTML brut — pour qu'un futur moteur (local ou dans le cloud)
+ * puisse le recevoir tel quel.
  */
 export interface PageContext {
   url: string;
   title: string;
   stateId: string;
-  /** Human-readable name of the state (e.g. "users-list"). */
+  /** Nom lisible de l'état (par exemple "users-list"). */
   stateLabel: string;
-  /** Normalized route pattern (/users/:id). */
+  /** Modèle de route normalisé (/users/:id). */
   route: string;
   headings: string[];
-  /** Short visible text excerpt. */
+  /** Court extrait du texte visible. */
   text?: string;
   dialogs: string[];
   actions: DiscoveredAction[];
   forms: FormSummary[];
-  /** Anomalies already observed on this state. */
+  /** Anomalies déjà observées sur cet état. */
   errors: Issue[];
   metadata: {
     depth: number;
     timestamp: string;
-    /** State ids from the start state to this one. */
+    /** Id des états depuis l'état de départ jusqu'à celui-ci. */
     flow: string[];
   };
 }

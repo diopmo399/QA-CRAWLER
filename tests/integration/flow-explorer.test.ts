@@ -9,10 +9,10 @@ import { runMission } from '../../src/orchestrator.js';
 import { startFlowApp, type FlowApp } from '../fixtures/flow-app.js';
 
 /**
- * Main acceptance test: only a start URL and a general mission — no list of
- * buttons. The explorer must observe, discover, decide, pass the safety
- * policy, execute with Playwright, record transitions, backtrack and build
- * the flow graph of the back-office by itself.
+ * Test d'acceptation principal : seulement une URL de départ et une mission générale —
+ * aucune liste de boutons. L'explorateur doit observer, découvrir, décider, passer la
+ * politique de sécurité, exécuter avec Playwright, enregistrer les transitions, revenir
+ * en arrière et construire seul le graphe des flows du back-office.
  */
 describe('FlowExplorer on the mini back-office', () => {
   let app: FlowApp;
@@ -116,11 +116,11 @@ output:
         'Déconnexion',
       ]),
     );
-    // The card number field is never filled.
+    // Le champ du numéro de carte n'est jamais rempli.
     const card = result.states
       .flatMap((state) => state.actionsDetail)
       .find((action) => action.label?.includes('carte'));
-    // A payment field is sensitive and also carries the payment risk (blocked by the SafetyPolicy).
+    // Un champ de paiement est sensible et porte aussi le risque payment (bloqué par la SafetyPolicy).
     expect(card).toMatchObject({ classification: 'DANGEROUS', risks: ['sensitive-data', 'payment'] });
     expect(result.transitions.some((edge) => edge.actionId === card?.id && edge.result === 'SUCCESS')).toBe(
       false,
@@ -143,7 +143,7 @@ output:
     expect(logs?.stateId).toBe(journal?.id);
     expect(logs?.actionId).toBeDefined();
     expect(logs?.flow?.at(-1)).toBe(journal?.id);
-    // Shortest reproduction path: start → Administration → Journal.
+    // Plus court chemin de reproduction : départ → Administration → Journal.
     expect(logs?.flow?.length).toBe(3);
   });
 

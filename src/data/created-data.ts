@@ -1,20 +1,20 @@
 import { runTag } from '../forms/form-model.js';
 
 /**
- * Data the run probably created: an action changing data (form sent,
- * "Save"…) answered by a successful POST/PUT/PATCH. Only what identifies it —
- * never the values sent, which carry the run's tag (QA-CRAWLER-<runId>).
+ * Données que le run a probablement créées : une action qui modifie des données
+ * (formulaire envoyé, « Enregistrer »…) suivie d'un POST/PUT/PATCH réussi. Seulement
+ * ce qui les identifie — jamais les valeurs envoyées, qui portent le marqueur du run (QA-CRAWLER-<runId>).
  */
 export interface CreatedDataRecord {
   runId: string;
-  /** What to search for in the application to find the data. */
+  /** Ce qu'il faut chercher dans l'application pour retrouver les données. */
   tag: string;
   stateId: string;
   actionId: string;
-  /** Visible label of the action ("Save"). */
+  /** Libellé visible de l'action (« Enregistrer »). */
   action: string;
   form?: string;
-  /** Calls that created or changed something (URL redacted, no body). */
+  /** Appels qui ont créé ou modifié quelque chose (URL masquée, sans corps). */
   requests: { method: string; url: string; status: number }[];
   at: string;
 }
@@ -26,7 +26,7 @@ export class CreatedDataRegistry {
 
   constructor(private readonly runId: string) {}
 
-  /** Keeps the action when one of its calls wrote something successfully. */
+  /** Garde l'action quand l'un de ses appels a écrit quelque chose avec succès. */
   record(entry: {
     stateId: string;
     actionId: string;
@@ -65,24 +65,24 @@ export class CreatedDataRegistry {
 
 export interface CleanupReport {
   cleaner: string;
-  /** Records the cleaner took care of. */
+  /** Enregistrements pris en charge par le nettoyage. */
   cleaned: number;
-  /** Still to delete (by hand, or by a cleaner able to). */
+  /** Encore à supprimer (à la main, ou par un nettoyage qui en est capable). */
   pending: CreatedDataRecord[];
   notes: string[];
 }
 
 /**
- * Removes what a run created. The explorer never deletes anything by itself
- * (deleting is DANGEROUS); an implementation for a given application (API
- * call, SQL script on a test database…) can be plugged in here.
+ * Supprime ce qu'un run a créé. L'explorateur ne supprime jamais rien de lui-même
+ * (supprimer est DANGEROUS) ; une implémentation propre à une application (appel
+ * d'API, script SQL sur une base de test…) peut être branchée ici.
  */
 export interface TestDataCleanup {
   readonly name: string;
   cleanup(records: readonly CreatedDataRecord[]): Promise<CleanupReport>;
 }
 
-/** Default: deletes nothing, lists what to remove and how to find it. */
+/** Par défaut : ne supprime rien, liste ce qu'il faut retirer et comment le retrouver. */
 export class ManualCleanup implements TestDataCleanup {
   readonly name = 'manual';
 

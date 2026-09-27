@@ -1,24 +1,24 @@
 /**
- * Serializable description of how to find an element again. Never a
- * Playwright Locator: decisions, graphs and reports must stay plain data
- * (storable in JSON, sendable to a future decision engine).
+ * Description sérialisable de la façon de retrouver un élément. Jamais un Locator
+ * Playwright : décisions, graphes et rapports doivent rester des données simples
+ * (enregistrables en JSON, transmissibles à un futur moteur de décision).
  *
- * Preference order when building one: testId → role + accessible name →
- * label → text → css (last resort).
+ * Ordre de préférence à la construction : testId → rôle + nom accessible →
+ * libellé → texte → css (dernier recours).
  */
 export type LocatorStrategy = 'testId' | 'role' | 'label' | 'text' | 'css';
 
 export interface LocatorDescriptor {
   strategy: LocatorStrategy;
-  /** ARIA role, for the `role` strategy. */
+  /** Rôle ARIA, pour la stratégie `role`. */
   role?: string;
-  /** Accessible name, for the `role` strategy. */
+  /** Nom accessible, pour la stratégie `role`. */
   name?: string;
-  /** testId, label text, visible text or CSS selector, depending on the strategy. */
+  /** testId, texte du libellé, texte visible ou sélecteur CSS, selon la stratégie. */
   value?: string;
-  /** Exact (case-sensitive, whole string) match. */
+  /** Correspondance exacte (casse respectée, chaîne entière). */
   exact?: boolean;
-  /** 0-based index when the descriptor matches several elements on the page. */
+  /** Index à partir de 0 quand le descripteur correspond à plusieurs éléments de la page. */
   nth?: number;
 }
 

@@ -9,7 +9,7 @@ import { parseConfig } from '../../src/config/config-loader.js';
 import type { MissionMode } from '../../src/config/config.js';
 import { BaselineMissingError, runMission, type RunOutcome } from '../../src/orchestrator.js';
 
-/** The same application, before and after a release. */
+/** La même application, avant et après une livraison. */
 let version = 1;
 const page = (title: string, body: string): string =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
@@ -108,7 +108,7 @@ output:
     version = 1;
     const outcome = await run('verify', 'verify-same');
     const verification = outcome.result.verification;
-    // Users, Settings, User form, Permissions — and User form again, from the open form (same state).
+    // Users, Settings, User form, Permissions — et User form à nouveau, depuis le formulaire ouvert (même état).
     expect(verification?.transitions.length).toBe(5);
     expect(verification?.regressions).toBe(0);
     expect(verification?.summary.PASSED).toBe(5);
@@ -159,7 +159,7 @@ output:
     expect(result.flowDiff?.addedStates.map((state) => state.label)).toEqual(
       expect.arrayContaining(['audit']),
     );
-    // explore never replaces the baseline.
+    // explore ne remplace jamais la baseline.
     expect((await readdir(path.join(baselineDir, 'runs'))).length).toBe(1);
   });
 });

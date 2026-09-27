@@ -7,35 +7,35 @@ import { EXPORT_KEYWORDS, KeywordMatcher, RISK_KEYWORDS } from '../policies/keyw
 import type { SafetyPolicy } from '../policies/safety-policy.js';
 import { scoringWeights, type ScoringWeightName, type ScoringWeights } from './scoring-weights.js';
 
-/** Why an action got its score; excluded actions are never proposed. */
+/** Pourquoi une action a reçu son score ; les actions exclues ne sont jamais proposées. */
 export interface ActionScore {
   actionId: string;
   score: number;
-  /** Readable reasons, with the weight of each ("new route /users (+100)"). */
+  /** Raisons lisibles, avec le poids de chacune (« new route /users (+100) »). */
   reasons: string[];
-  /** Never proposed from this state: already tried, blocked, disabled, out of the goals… */
+  /** Jamais proposée depuis cet état : déjà essayée, bloquée, désactivée, hors des objectifs… */
   excluded?: string;
 }
 
-/** What the mission wants from the exploration, as the scorer needs it. */
+/** Ce que la mission attend de l'exploration, tel que le scorer en a besoin. */
 export interface ScoringMission {
   name: string;
   goals: ScenarioConfig['goals'];
-  /** Deterministic goal keywords (labels, texts, URLs): "utilisateurs", "permissions"… */
+  /** Mots-clés d'objectif déterministes (libellés, textes, URL) : « utilisateurs », « permissions »… */
   keywords: readonly string[];
   weights: ScoringWeights;
   maxStatesPerRoute: number;
   queryParamMode: QueryParamMode;
-  /** Similar controls (same kind, same label once numbers are masked) tried at most this many times per state. */
+  /** Contrôles semblables (même genre, même libellé une fois les nombres masqués) essayés au plus ce nombre de fois par état. */
   maxSimilarActions?: number;
-  /** `stateId::actionId` already known from the baseline (explore mode). */
+  /** `stateId::actionId` déjà connus par la baseline (mode explore). */
   knownActions?: ReadonlySet<string>;
 }
 
 /**
- * "How interesting is this action, here and now?" A pure function of plain
- * data: the action, the current state, the graph built so far and the
- * mission. The DecisionEngine only sorts by it.
+ * « À quel point cette action est-elle intéressante, ici et maintenant ? » Une
+ * fonction pure de données simples : l'action, l'état courant, le graphe construit
+ * jusqu'ici et la mission. Le DecisionEngine se contente de trier selon ce score.
  */
 export interface ActionScorer {
   score(
@@ -46,7 +46,7 @@ export interface ActionScorer {
   ): ActionScore;
 }
 
-/** Link categories and the weight that expresses them. */
+/** Catégories de liens et le poids qui les exprime. */
 const NAVIGATION_WEIGHT: Partial<Record<ActionCategory, ScoringWeightName>> = {
   navigation: 'internalNavigation',
   details: 'details',
@@ -55,7 +55,7 @@ const NAVIGATION_WEIGHT: Partial<Record<ActionCategory, ScoringWeightName>> = {
   search: 'search',
   filter: 'filter',
 };
-/** In-page controls and the weight that expresses them. */
+/** Contrôles de la page et le poids qui les exprime. */
 const CLICK_WEIGHT: Record<ActionCategory, ScoringWeightName | undefined> = {
   tab: 'tab',
   menu: 'menu',
@@ -74,7 +74,7 @@ const CLICK_WEIGHT: Record<ActionCategory, ScoringWeightName | undefined> = {
 const exportWords = new KeywordMatcher(EXPORT_KEYWORDS);
 const logoutWords = new KeywordMatcher(RISK_KEYWORDS.logout ?? []);
 
-/** What the scorer needs to know about the graph for one state (computed once per state and graph size). */
+/** Ce que le scorer doit savoir du graphe pour un état (calculé une fois par état et par taille du graphe). */
 interface GraphFacts {
   key: string;
   executedElsewhere: Set<string>;
@@ -85,9 +85,9 @@ interface GraphFacts {
 }
 
 /**
- * Deterministic scoring — same application, same mission, same scores.
- * Every number comes from ScoringWeights (DEFAULT_SCORING_WEIGHTS + the
- * mission's `scoring.weights`).
+ * Score déterministe — même application, même mission, mêmes scores.
+ * Chaque nombre vient des ScoringWeights (DEFAULT_SCORING_WEIGHTS + le
+ * `scoring.weights` de la mission).
  */
 export class RuleBasedActionScorer implements ActionScorer {
   private facts: GraphFacts | undefined;
@@ -112,9 +112,9 @@ export class RuleBasedActionScorer implements ActionScorer {
     const { goals } = mission;
     const facts = this.factsFor(context, graph, mission);
 
-    // ---- never proposed
+    // ---- jamais proposée
     if (action.disabled || !action.visible) return exclude('disabled or hidden');
-    // Behind a modal layer: the click would land on the layer, not on the element.
+    // Derrière un calque modal : le clic tomberait sur le calque, pas sur l'élément.
     if (action.obscured) return exclude('covered by a modal layer');
     if (action.classification === 'DANGEROUS') return exclude(`dangerous (${action.reason})`);
     if (graph.hasTransition(context.stateId, action.id)) return exclude('already tried from this state');
@@ -129,7 +129,7 @@ export class RuleBasedActionScorer implements ActionScorer {
     )
       return exclude(`${maxSimilar} similar controls already tried`);
 
-    // ---- what it is
+    // ---- ce qu'elle est
     switch (action.type) {
       case 'navigate': {
         if (!goals.discoverNavigation || !action.href) return exclude('navigation not in the goals');
@@ -137,10 +137,10 @@ export class RuleBasedActionScorer implements ActionScorer {
         const route = safeRoute(action.href, mission.queryParamMode);
         const known = graph.statesForRoute(route).length;
         const visits = facts.navigationsPerRoute.get(route) ?? 0;
-        // /users/1, /users/2 … : a few samples per route pattern are enough.
+        // /users/1, /users/2 … : quelques exemples par modèle de route suffisent.
         if (known >= mission.maxStatesPerRoute || visits >= mission.maxStatesPerRoute)
           return exclude(`route ${route} explored enough`);
-        // The same link followed from another state leads to a known place: nothing to learn.
+        // Le même lien suivi depuis un autre état mène à un endroit connu : rien à apprendre.
         if (facts.executedElsewhere.has(signature(action.type, action.text, action.href)))
           return exclude('link already followed from another state');
         add('neverExecuted', 'never executed from this state');
@@ -151,7 +151,7 @@ export class RuleBasedActionScorer implements ActionScorer {
       }
       case 'click': {
         if (action.category === 'tab') {
-          // A selected tab changes nothing; a tab already opened from a sibling state leads to a known state.
+          // Un onglet déjà sélectionné ne change rien ; un onglet déjà ouvert depuis un état voisin mène à un état connu.
           if (action.selected === true) return exclude('tab already selected');
           if (facts.tabsTriedOnRoute.has(`${context.route}|${(action.text ?? '').toLowerCase()}`))
             return exclude('tab already opened on this route');
@@ -162,14 +162,14 @@ export class RuleBasedActionScorer implements ActionScorer {
         add('neverExecuted', 'never executed from this state');
         const weight = CLICK_WEIGHT[action.category];
         if (weight) add(weight, `${action.category} control`);
-        // A tab never opened or a wizard step shows a screen not seen yet.
+        // Un onglet jamais ouvert ou une étape d'assistant montre un écran pas encore vu.
         if (action.category === 'tab' || isStep) add('newState', 'may show a new state');
         if (facts.executedElsewhere.has(signature(action.type, action.text, action.href)))
           add('alreadyExplored', 'already used from another state');
         break;
       }
       case 'uncheck':
-        // Unchecking only undoes a check: nothing new to learn.
+        // Décocher ne fait qu'annuler une coche : rien de nouveau à apprendre.
         return exclude('unchecking undoes a check');
       case 'select':
       case 'check':
@@ -178,11 +178,11 @@ export class RuleBasedActionScorer implements ActionScorer {
         add('formNeverExplored', `${action.type} may reveal more of the form`);
         break;
       case 'fill':
-        // Filled together with the form (FormExerciser), never one by one.
+        // Rempli avec le formulaire (FormExerciser), jamais un par un.
         return exclude('filled with its form');
     }
 
-    // ---- what the mission is after, and what is less interesting
+    // ---- ce que cherche la mission, et ce qui est moins intéressant
     const label = [action.text, action.label, action.name].filter(Boolean).join(' ');
     const goal = this.goalKeyword(mission, label);
     if (goal) add('goalText', `matches the goal "${goal}"`);
@@ -195,7 +195,7 @@ export class RuleBasedActionScorer implements ActionScorer {
     if (logoutWords.match(label, action.href ? urlWords(action.href) : undefined)) add('logout', 'logout');
     if (mission.knownActions?.has(`${context.stateId}::${action.id}`))
       add('knownInBaseline', 'known from the baseline');
-    // What is in front of the screen first (dialog, drawer, open menu, overlay): it is what a user sees.
+    // Ce qui est devant l'écran d'abord (fenêtre, tiroir, menu ouvert, calque) : c'est ce que voit l'utilisateur.
     if (action.foreground) add('foreground', 'in front of the screen');
     return result;
   }
@@ -208,7 +208,7 @@ export class RuleBasedActionScorer implements ActionScorer {
     return this.goalMatcher.matcher.match(text);
   }
 
-  /** Facts about the graph for this state, recomputed only when the state or the graph changes. */
+  /** Faits sur le graphe pour cet état, recalculés seulement quand l'état ou le graphe change. */
   private factsFor(context: PageContext, graph: FlowGraph, mission: ScoringMission): GraphFacts {
     const edges = graph.allEdges();
     const key = `${context.stateId}|${edges.length}|${context.actions.length}`;
@@ -248,7 +248,7 @@ export class RuleBasedActionScorer implements ActionScorer {
   }
 }
 
-/** The mission's scoring settings, from the configuration. */
+/** Les réglages de score de la mission, tirés de la configuration. */
 export function scoringMissionOf(config: ScenarioConfig, knownActions?: ReadonlySet<string>): ScoringMission {
   return {
     name: config.mission.name,
@@ -262,14 +262,14 @@ export function scoringMissionOf(config: ScenarioConfig, knownActions?: Readonly
   };
 }
 
-/** Same kind of control, same label once numbers are masked ("12" → "#", "2026-09-12" → "#-#-#"). */
+/** Même genre de contrôle, même libellé une fois les nombres masqués (« 12 » → « # », « 2026-09-12 » → « #-#-# »). */
 function similarKey(type: string, category: string, text: string | undefined): string | undefined {
   if (type !== 'click' && type !== 'navigate') return undefined;
   const label = (text ?? '').trim().toLowerCase().replace(/\d+/g, '#');
   return label ? `${type}|${category}|${label}` : undefined;
 }
 
-/** Words of a URL's path: /admin/user-permissions → "admin user permissions". */
+/** Mots du chemin d'une URL : /admin/user-permissions → « admin user permissions ». */
 function urlWords(href: string): string {
   try {
     return decodeURIComponent(new URL(href).pathname).replace(/[/_-]+/g, ' ');

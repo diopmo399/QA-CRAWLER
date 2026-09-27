@@ -1,18 +1,18 @@
 import type { Page } from 'playwright';
 import type { FlowStep, FlowTarget } from '../config/flow-schema.js';
 
-/** What a failed flow step can be replaced with, found by inspecting the screen. */
+/** Ce par quoi une étape de flow en échec peut être remplacée, trouvé en inspectant l'écran. */
 export interface TargetSuggestions {
-  /** Ready-to-paste YAML steps, most robust first. */
+  /** Étapes YAML prêtes à coller, les plus robustes d'abord. */
   suggestions: string[];
-  /** Labels of the fields (or names of the buttons) visible on the screen. */
+  /** Libellés des champs (ou noms des boutons) visibles à l'écran. */
   onScreen: string[];
 }
 
 type ElementStep = Extract<FlowStep, { target: FlowTarget }>;
 type Kind = 'field' | 'choice' | 'clickable';
 
-/** A target as written in the YAML (exactly one strategy). */
+/** Une cible telle qu'écrite dans le YAML (exactement une stratégie). */
 type Suggested =
   | { testId: string }
   | { role: string; name: string }
@@ -21,12 +21,12 @@ type Suggested =
   | { css: string };
 
 /**
- * When a flow step cannot find its element, looks at the screen for what the
- * YAML probably meant: the text of the target (label, name or text) is
- * searched on the screen — in the dialog in front, if any — and the field or
- * control next to it is described with the most robust target that finds it
- * alone (testId, role + name, id, form attribute, else an XPath anchored on
- * that text). Field values are never read.
+ * Quand une étape de flow ne trouve pas son élément, cherche à l'écran ce que le YAML
+ * voulait probablement dire : le texte de la cible (label, name ou text) est cherché à
+ * l'écran — dans la fenêtre au premier plan s'il y en a une — et le champ ou contrôle
+ * à côté est décrit avec la cible la plus robuste qui le trouve seul (testId, role +
+ * name, id, attribut du formulaire, sinon un XPath ancré sur ce texte). Les valeurs
+ * des champs ne sont jamais lues.
  */
 export async function suggestTargets(page: Page, step: ElementStep): Promise<TargetSuggestions> {
   const wanted = step.target.name ?? step.target.value ?? '';
@@ -40,7 +40,7 @@ export async function suggestTargets(page: Page, step: ElementStep): Promise<Tar
   const suggestions: string[] = [];
   for (const target of found.targets) {
     if ('role' in target) {
-      // Several elements with that name: not a good target.
+      // Plusieurs éléments portent ce nom : pas une bonne cible.
       const count = await page
         .getByRole(target.role as Parameters<Page['getByRole']>[0], { name: target.name, exact: true })
         .count()
@@ -65,7 +65,7 @@ export function toYaml(step: ElementStep, target: Suggested): string {
   return `- ${step.kind}: { ${parts.join(', ')} }`;
 }
 
-/** YAML scalar: plain when safe, else double-quoted (JSON string syntax is valid YAML). */
+/** Scalaire YAML : brut quand c'est sûr, sinon entre guillemets doubles (la syntaxe des chaînes JSON est du YAML valide). */
 function quote(value: string): string {
   return /^[\p{L}\p{N}][\p{L}\p{N} _.-]*$/u.test(value) &&
     !/^(true|false|null|yes|no|on|off|\d+)$/i.test(value)
@@ -74,7 +74,7 @@ function quote(value: string): string {
 }
 
 /**
- * Runs in the browser (serialized by Playwright): self-contained.
+ * S'exécute dans le navigateur (sérialisé par Playwright) : autonome.
  */
 function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
   targets: Suggested[];
@@ -121,7 +121,7 @@ function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
       (el) => visible(el) || (el.parentElement !== null && visible(el.parentElement)),
     );
 
-  // ---- texts of the screen that look like the wanted one
+  // ---- textes de l'écran qui ressemblent à celui cherché
   const w = norm(wanted);
   const anchors = w
     ? Array.from(root.querySelectorAll('*'))
@@ -133,7 +133,7 @@ function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
         .map(({ el }) => el)
     : [];
 
-  // ---- the control that goes with a text
+  // ---- le contrôle qui va avec un texte
   const controlFor = (anchor: Element): Element | undefined => {
     if (kind === 'clickable') {
       const clickable = anchor.closest(CLICK);
@@ -146,7 +146,7 @@ function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
     for (let depth = 0; scope && depth < 5; depth += 1, scope = scope.parentElement) {
       const inside = controls(scope);
       if (kind === 'choice') {
-        // The option's own input: just before or just after its text.
+        // L'input propre à l'option : juste avant ou juste après son texte.
         const near =
           inside.find((el) => follows(anchor, el)) ?? [...inside].reverse().find((el) => follows(el, anchor));
         if (near) return near;
@@ -159,7 +159,7 @@ function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
     return undefined;
   };
 
-  // ---- the most robust target that finds only this element
+  // ---- la cible la plus robuste qui ne trouve que cet élément
   const IMPLICIT: Record<string, string> = {
     textarea: 'textbox',
     select: 'combobox',
@@ -234,7 +234,7 @@ function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
         out.push({ css: `${tag}[${attribute}="${value}"]` });
     }
     if (anchor) {
-      // Longest piece of the text without quote: usable in an XPath literal.
+      // Plus long morceau du texte sans guillemet : utilisable dans un littéral XPath.
       const text = clean(ownText(anchor))
         .split(/['"]/)
         .sort((a, b) => b.length - a.length)[0]
@@ -247,7 +247,7 @@ function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
             kind === 'field'
               ? "*[self::input[not(@type='hidden')] or self::textarea or self::select or @role='combobox']"
               : "*[self::input[@type='radio' or @type='checkbox'] or @role='radio' or @role='checkbox']";
-          // The control right after the text (a radio can also be right before it).
+          // Le contrôle juste après le texte (une radio peut aussi être juste avant).
           for (const axis of kind === 'choice' ? ['following', 'preceding'] : ['following']) {
             const xpath = `//*[text()[contains(normalize-space(.),'${text}')]]/${axis}::${what}[1]`;
             if (xpathFinds(xpath, el)) {
@@ -270,7 +270,7 @@ function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
     targets.push(...describe(control, anchor));
     if (seen.size >= 2) break;
   }
-  // No text found: controls whose own attributes look like the wanted text.
+  // Aucun texte trouvé : les contrôles dont les attributs ressemblent au texte cherché.
   if (targets.length === 0 && w) {
     const byAttribute = controls(root).filter((el) =>
       ['aria-label', 'placeholder', 'title', 'name', 'formcontrolname', 'id']
@@ -280,7 +280,7 @@ function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
     for (const el of byAttribute.slice(0, 2)) targets.push(...describe(el, undefined));
   }
 
-  // ---- what is on the screen: text before each field, names of buttons
+  // ---- ce qui est à l'écran : texte avant chaque champ, noms des boutons
   const onScreen: string[] = [];
   for (const el of controls(root).slice(0, 25)) {
     let label = nameOf(el);

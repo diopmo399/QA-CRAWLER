@@ -3,7 +3,7 @@ import type { OracleStatus } from '../oracles/oracle.js';
 import { esc } from './html-common.js';
 import type { ReportLanguage } from './i18n.js';
 
-/** Texts of the quality sections (oracles, forms, recovery, authorization, data). */
+/** Textes des sections qualité (oracles, formulaires, récupération, autorisations, données). */
 interface QualityTexts {
   oraclesTitle: string;
   oraclesHint: string;
@@ -209,7 +209,7 @@ export function qualityTexts(language: ReportLanguage): QualityTexts {
   return language === 'fr' ? FR : EN;
 }
 
-/** Verdicts of the test oracles, the most worrying first. */
+/** Verdicts des oracles de test, les plus inquiétants d'abord. */
 export function oraclesSection(
   result: ExplorationResult,
   nameOf: (stateId: string) => string,
@@ -237,7 +237,7 @@ export function oraclesSection(
   </section>`;
 }
 
-/** Forms found, how they were filled, what the validation said. */
+/** Formulaires trouvés, comment ils ont été remplis, ce qu'a dit la validation. */
 export function formsSection(
   result: ExplorationResult,
   nameOf: (stateId: string) => string,
@@ -267,7 +267,7 @@ export function formsSection(
   return `<section><h2>${esc(t.formsTitle)} (${forms.length})</h2><p class="muted">${esc(t.formsHint)}</p>${blocks.join('')}</section>`;
 }
 
-/** Recovery attempts, abandoned branches, circuits open. */
+/** Tentatives de récupération, branches abandonnées, circuits ouverts. */
 export function recoverySection(
   result: ExplorationResult,
   nameOf: (stateId: string) => string,
@@ -314,7 +314,7 @@ export function recoverySection(
   </section>`;
 }
 
-/** What each actor reaches, the differences, the rules. */
+/** Ce qu'atteint chaque acteur, les différences, les règles. */
 export function authorizationSection(result: ExplorationResult, language: ReportLanguage): string {
   const report = result.authorization;
   if (!report) return '';
@@ -339,7 +339,7 @@ export function authorizationSection(result: ExplorationResult, language: Report
   </section>`;
 }
 
-/** Mutation budget, data created, what is left to clean up. */
+/** Budget de modifications, données créées, ce qui reste à nettoyer. */
 export function dataSection(
   result: ExplorationResult,
   nameOf: (stateId: string) => string,

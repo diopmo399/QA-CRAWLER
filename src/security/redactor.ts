@@ -1,22 +1,22 @@
 /**
- * Removes secrets from anything that ends up in logs or reports: URLs
- * (query parameters and embedded user:password), bearer tokens, JWTs,
- * Authorization/Cookie headers and `password=` style assignments.
+ * Retire les secrets de tout ce qui finit dans les logs ou les rapports : URL
+ * (paramètres de requête et user:password intégrés), jetons Bearer, JWT, en-têtes
+ * Authorization/Cookie et affectations du genre `password=`.
  */
 
 export const REDACTED = '[REDACTED]';
 
-/** Query parameter names whose values are always hidden. */
+/** Noms de paramètres de requête dont les valeurs sont toujours masquées. */
 const SENSITIVE_PARAM =
   /(pass(word|wd)?|pwd|secret|token|api[-_]?key|access[-_]?key|auth|session|sid|jwt|signature|sig|code|credential|otp)/i;
 
 const TEXT_RULES: readonly [RegExp, string][] = [
-  // Authorization / Cookie headers copied into messages
+  // En-têtes Authorization / Cookie recopiés dans des messages
   [
     /\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key)\s*[:=]\s*[^\n\r;,]+/gi,
     `$1: ${REDACTED}`,
   ],
-  // Bearer / Basic credentials
+  // Identifiants Bearer / Basic
   [/\b(bearer|basic)\s+[a-z0-9._~+/=-]{6,}/gi, `$1 ${REDACTED}`],
   // JSON Web Tokens
   [/\beyJ[a-zA-Z0-9_-]{5,}\.[a-zA-Z0-9_-]{5,}\.[a-zA-Z0-9_-]{5,}\b/g, REDACTED],
@@ -35,7 +35,7 @@ export function redactText(text: string): string {
   return result;
 }
 
-/** Redacts credentials and sensitive query params of a single URL. Non-URLs are returned text-redacted. */
+/** Masque les identifiants et les paramètres de requête sensibles d'une URL. Ce qui n'est pas une URL est masqué comme du texte. */
 export function redactUrl(value: string): string {
   let url: URL;
   try {
@@ -58,7 +58,7 @@ export function redactUrl(value: string): string {
     return changed;
   };
   redactParams(url.searchParams);
-  // Hash-routed SPAs (#/reset?token=...) carry params in the fragment.
+  // Les SPA routées par hash (#/reset?token=...) portent des paramètres dans le fragment.
   const queryInHash = url.hash.indexOf('?');
   if (queryInHash >= 0) {
     const hashParams = new URLSearchParams(url.hash.slice(queryInHash + 1));

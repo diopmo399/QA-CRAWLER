@@ -114,7 +114,7 @@ output:
     expect(result.createdData?.[0]?.requests[0]).toMatchObject({ method: 'POST', status: 201 });
     expect(result.cleanup).toMatchObject({ cleaner: 'manual', cleaned: 0 });
     expect(result.cleanup?.pending).toHaveLength(1);
-    // The values sent are never stored.
+    // Les valeurs envoyées ne sont jamais enregistrées.
     expect(JSON.stringify(result.createdData)).not.toContain('@example.test');
   });
 

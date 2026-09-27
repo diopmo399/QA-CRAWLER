@@ -4,22 +4,22 @@ import { routeKey } from '../crawler/route-normalizer.js';
 import { normalizeUrl } from '../crawler/url-normalizer.js';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 
-/** What distinguishes a state on its screen: open dialog, selected tab, or second heading (wizard step). */
+/** Ce qui distingue un état sur son écran : fenêtre ouverte, onglet sélectionné, ou second titre (étape d'assistant). */
 export function stateSubtitle(snapshot: UiSnapshot): string | undefined {
   return snapshot.dialogs[0] ?? snapshot.overlay ?? snapshot.selectedTabs[0] ?? snapshot.headings[1];
 }
 
 export interface DetectedState {
-  /** Stable id: readable slug + fingerprint hash, e.g. "users-list-3fa2c1d0". */
+  /** Id stable : slug lisible + empreinte, par exemple "users-list-3fa2c1d0". */
   stateId: string;
-  /** Readable part, e.g. "users-list". */
+  /** Partie lisible, par exemple "users-list". */
   label: string;
   route: string;
-  /** Everything that went into the fingerprint (kept for debugging). */
+  /** Tout ce qui a servi à l'empreinte (gardé pour le débogage). */
   signature: string[];
 }
 
-/** Roles whose presence and names describe what a screen *is* (links excluded: they are mostly data). */
+/** Rôles dont la présence et les noms décrivent ce qu'*est* un écran (liens exclus : ce sont surtout des données). */
 const STRUCTURAL_ROLES = new Set([
   'button',
   'tab',
@@ -38,21 +38,21 @@ const STRUCTURAL_ROLES = new Set([
 ]);
 
 /**
- * Decides whether two observations are the same functional state.
+ * Décide si deux observations sont le même état fonctionnel.
  *
- * The URL alone is not enough: /dossiers/create can show step 1, 2 and 3
- * without changing, and a tab switch or a dialog changes the screen but not
- * the route. The fingerprint combines:
- *   route pattern · title · headings · open dialogs · selected tabs ·
- *   aria-current items · visible controls (role + name) · form fields
- * with numbers masked, so /users/1 and /users/2 ("Utilisateur 1/2") are one
- * state while "Étape 1" and "Étape 2" of a wizard differ through their
- * fields and buttons.
+ * L'URL seule ne suffit pas : /dossiers/create peut montrer les étapes 1, 2 et 3
+ * sans changer, et un changement d'onglet ou une fenêtre change l'écran mais pas
+ * la route. L'empreinte combine :
+ *   modèle de route · titre · titres · fenêtres ouvertes · onglets sélectionnés ·
+ *   éléments aria-current · contrôles visibles (rôle + nom) · champs de formulaire
+ * avec les nombres masqués : /users/1 et /users/2 (« Utilisateur 1/2 ») sont un seul
+ * état, alors que « Étape 1 » et « Étape 2 » d'un assistant diffèrent par leurs
+ * champs et leurs boutons.
  */
 export class StateDetector {
   constructor(
     private readonly queryParamMode: QueryParamMode,
-    /** Tracking/cache-buster params ignored when comparing URLs (utm_*…). */
+    /** Paramètres de suivi / anti-cache ignorés en comparant des URL (utm_*…). */
     private readonly ignoredParams: readonly string[] = [],
   ) {}
 
@@ -62,7 +62,7 @@ export class StateDetector {
       ...new Set(
         snapshot.elements
           .filter(
-            // Toasts, live regions and timers come and go: they do not make another screen.
+            // Toasts, zones live et minuteurs vont et viennent : ils ne font pas un autre écran.
             (element) => STRUCTURAL_ROLES.has(element.role) && !element.inNavigation && !element.transient,
           )
           .map(
@@ -78,7 +78,7 @@ export class StateDetector {
       `tabs=${snapshot.selectedTabs.map(mask).join('|')}`,
       `current=${snapshot.currentItems.map(mask).join('|')}`,
       `controls=${controls.join('|')}`,
-      // Only when present: states without an overlay keep their id.
+      // Seulement quand il y en a un : les états sans calque gardent leur id.
       ...(snapshot.overlay !== undefined ? [`overlay=${mask(snapshot.overlay)}`] : []),
     ];
     const hash = createHash('sha1').update(signature.join('\n')).digest('hex').slice(0, 8);
@@ -88,9 +88,9 @@ export class StateDetector {
 }
 
 /**
- * Keeps only what names a screen: generated ids (UUIDs, hashes, tokens),
- * e-mails, dates, times, counters and record ids are masked, so the same
- * screen gets the same fingerprint whatever the data it shows.
+ * Ne garde que ce qui nomme un écran : les id générés (UUID, empreintes, jetons),
+ * e-mails, dates, heures, compteurs et id d'enregistrement sont masqués, pour que le
+ * même écran ait la même empreinte quelles que soient les données qu'il affiche.
  */
 export function mask(text: string): string {
   return text
@@ -112,7 +112,7 @@ function safeRouteKey(url: string, mode: QueryParamMode, ignoredParams: readonly
   }
 }
 
-/** "Utilisateurs" + tab "Profil" → "utilisateurs-profil"; falls back on the route. */
+/** "Utilisateurs" + onglet "Profil" → "utilisateurs-profil" ; à défaut, la route. */
 function stateLabel(snapshot: UiSnapshot, route: string): string {
   const base = snapshot.headings[0] ?? snapshot.title;
   const parts = [base || route.replace(/[/:?&]+/g, ' ')];
@@ -123,7 +123,7 @@ function stateLabel(snapshot: UiSnapshot, route: string): string {
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
-    // Record ids, UUIDs, counters, e-mails: words containing digits or @ do not name a screen.
+    // Id d'enregistrement, UUID, compteurs, e-mails : les mots qui contiennent des chiffres ou @ ne nomment pas un écran.
     .split(/\s+/)
     .filter((word) => !/\d/.test(word) && !word.includes('@'))
     .join(' ')

@@ -1,7 +1,7 @@
 import type { DiscoveredAction } from '../model/discovered-action.js';
 import type { LocatorDescriptor } from '../model/locator.js';
 
-/** Kind of value a field expects. */
+/** Genre de valeur qu'attend un champ. */
 export const FIELD_TYPES = [
   'text',
   'textarea',
@@ -30,22 +30,22 @@ export type FieldType = (typeof FIELD_TYPES)[number];
 export interface SelectOption {
   label: string;
   disabled: boolean;
-  /** "--", "Choose…": not a real choice. */
+  /** « -- », « Choisir… » : pas un vrai choix. */
   placeholder: boolean;
 }
 
 /**
- * One field of a logical form, as the form expects it. Its value is never
- * read; sensitive fields are marked and never filled with real data.
+ * Un champ d'un formulaire logique, tel que le formulaire l'attend. Sa valeur n'est
+ * jamais lue ; les champs sensibles sont marqués et jamais remplis avec de vraies données.
  */
 export interface FormField {
-  /** Stable within the form (the id of the action that fills it). */
+  /** Stable dans le formulaire (l'id de l'action qui le remplit). */
   id: string;
   name?: string;
   label?: string;
-  /** Label of the group (radio buttons: "Contact channel"). */
+  /** Libellé du groupe (boutons radio : « Canal de contact »). */
   groupLabel?: string;
-  /** Radios sharing one choice. */
+  /** Radios qui partagent un même choix. */
   choiceGroup?: string;
   type: FieldType;
   required: boolean;
@@ -53,7 +53,7 @@ export interface FormField {
   readonly: boolean;
   min?: number;
   max?: number;
-  /** min/max as written (dates, times: "2026-01-01"). */
+  /** min/max tels qu'écrits (dates, heures : "2026-01-01"). */
   minText?: string;
   maxText?: string;
   step?: number;
@@ -62,82 +62,82 @@ export interface FormField {
   pattern?: string;
   options?: SelectOption[];
   placeholder?: string;
-  /** Help text shown by the application ("99999", "HH:MM"). */
+  /** Texte d'aide affiché par l'application ("99999", "HH:MM"). */
   hint?: string;
-  /** Holds a value already (the value itself is never read). */
+  /** Contient déjà une valeur (la valeur elle-même n'est jamais lue). */
   hasValue: boolean;
   sensitive: boolean;
-  /** Card, IBAN, bank account…: never filled, whatever the source. */
+  /** Carte, IBAN, compte bancaire… : jamais rempli, quelle que soit la source. */
   payment: boolean;
   locator: LocatorDescriptor;
 }
 
-/** A message the application shows about a field ("This field is required"). */
+/** Un message que l'application affiche à propos d'un champ (« Ce champ est obligatoire »). */
 export interface ValidationMessage {
   fieldId: string;
   message: string;
 }
 
 /**
- * One logical form: the fields a user fills together and the buttons that
- * send or move it forward — a <form>, a dialog, an overlay, or the page
- * itself when a single-page application has no <form> at all.
+ * Un formulaire logique : les champs qu'un utilisateur remplit ensemble et les
+ * boutons qui l'envoient ou le font avancer — un <form>, une fenêtre, un calque, ou
+ * la page elle-même quand une application monopage n'a aucun <form>.
  */
 export interface DiscoveredForm {
   /** `<stateId>:<group>` */
   id: string;
   stateId: string;
-  /** form:<index>, layer:<name> or page. */
+  /** form:<index>, layer:<nom> ou page. */
   group: string;
-  /** Readable name: the dialog's title, else the screen's. */
+  /** Nom lisible : le titre de la fenêtre, sinon celui de l'écran. */
   name: string;
   fields: FormField[];
-  /** Buttons that send the form or move a wizard forward. */
+  /** Boutons qui envoient le formulaire ou font avancer un assistant. */
   submitActions: DiscoveredAction[];
   validationMessages: ValidationMessage[];
-  /** In front of the screen (dialog, drawer). */
+  /** Devant l'écran (fenêtre, tiroir). */
   foreground: boolean;
 }
 
-/** One step of a fill plan. Sensitive fields never get a value here. */
+/** Une étape d'un plan de remplissage. Les champs sensibles n'y reçoivent jamais de valeur. */
 export interface FormFillOperation {
   fieldId: string;
   operation: 'fill' | 'select' | 'check' | 'uncheck' | 'skip';
-  /** Typed value or option label ('' = first real option). Never set for a sensitive field. */
+  /** Valeur saisie ou libellé de l'option ('' = première vraie option). Jamais définie pour un champ sensible. */
   value?: string;
-  /** Where the value comes from. */
+  /** D'où vient la valeur. */
   source?: TestValueSource;
   reason?: string;
 }
 
-/** What to do with a form: computed by a FormFillStrategy, executed by the PlaywrightActionExecutor. */
+/** Que faire d'un formulaire : calculé par une FormFillStrategy, exécuté par le PlaywrightActionExecutor. */
 export interface FormFillPlan {
   formId: string;
   operations: FormFillOperation[];
 }
 
-/** configured (testData.fields) > rule (testData.defaults, semantic rules) > type > fallback. */
+/** configured (testData.fields) > rule (testData.defaults, règles de sens) > type > fallback. */
 export type TestValueSource = 'configured' | 'rule' | 'type' | 'fallback';
 
-/** A value for a field, and why. `skip`: left as it is. */
+/** Une valeur pour un champ, et pourquoi. `skip` : laissé tel quel. */
 export interface TestValue {
   kind: 'fill' | 'select' | 'check' | 'uncheck' | 'skip';
   value?: string;
   source: TestValueSource;
   reason?: string;
-  /** Validation cases: what makes the value invalid ("empty", "above-max"…). */
+  /** Cas de validation : ce qui rend la valeur invalide ("empty", "above-max"…). */
   case?: string;
 }
 
-/** What a TestDataProvider may know about the run. */
+/** Ce qu'un TestDataProvider peut savoir du run. */
 export interface TestDataContext {
-  /** Short id of the run; every created value carries QA-CRAWLER-<runId> when possible. */
+  /** Id court du run ; chaque valeur créée porte QA-CRAWLER-<runId> quand c'est possible. */
   runId: string;
   formName?: string;
   stateId?: string;
 }
 
-/** The tag that makes created data identifiable (and, later, cleanable). */
+/** Le marqueur qui rend les données créées identifiables (et, plus tard, nettoyables). */
 export function runTag(runId: string): string {
   return `QA-CRAWLER-${runId}`;
 }

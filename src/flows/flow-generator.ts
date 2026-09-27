@@ -10,11 +10,11 @@ import { normalizeText } from '../policies/keywords.js';
 
 export interface FlowGenerationInput {
   graph: FlowGraph;
-  /** Latest observation of each state: its actions, with their locators. */
+  /** Dernière observation de chaque état : ses actions, avec leurs localisateurs. */
   details: ReadonlyMap<string, { actions: DiscoveredAction[] }>;
-  /** Forms filled during the exploration (values used, never a sensitive one). */
+  /** Formulaires remplis pendant l'exploration (valeurs utilisées, jamais une valeur sensible). */
   forms: readonly FormReport[];
-  /** Values of single fields filled outside a form. */
+  /** Valeurs des champs isolés remplis hors d'un formulaire. */
   testData: TestDataProvider;
 }
 
@@ -22,20 +22,20 @@ export interface FlowGenerationOptions {
   maxFlows: number;
 }
 
-/** A flow as written in the YAML (the flow schema's input shape). */
+/** Un flow tel qu'écrit dans le YAML (la forme d'entrée du schéma des flows). */
 export type GeneratedFlow = Record<string, unknown> & { name: string; steps: Record<string, unknown>[] };
 
-/** Whatever the page shows is copied as-is, never interpreted: at most this long. */
+/** Ce que montre la page est recopié tel quel, jamais interprété : au plus cette longueur. */
 const MAX_TEXT = 80;
 
 /**
- * FLOW GENERATION: turns what the exploration learned into imposed flows
- * (YAML), one per screen at the end of a path — the screens on the way are
- * covered by the flows going through them. Each flow replays the recorded
- * path (clicks, forms filled with the values used) and ends by checking the
- * screen reached. Sensitive fields are never given a value: they read an
- * environment variable to set. Every flow is checked against the flow
- * schema; one that does not fit is left out.
+ * GÉNÉRATION DE FLOWS : transforme ce que l'exploration a appris en flows imposés
+ * (YAML), un par écran en bout de chemin — les écrans intermédiaires sont couverts
+ * par les flows qui y passent. Chaque flow rejoue le chemin enregistré (clics,
+ * formulaires remplis avec les valeurs utilisées) et se termine par une vérification
+ * de l'écran atteint. Les champs sensibles ne reçoivent jamais de valeur : ils lisent
+ * une variable d'environnement à définir. Chaque flow est vérifié avec le schéma des
+ * flows ; celui qui ne passe pas est laissé de côté.
  */
 export function generateFlows(input: FlowGenerationInput, options: FlowGenerationOptions): GeneratedFlow[] {
   const { graph } = input;
@@ -47,7 +47,7 @@ export function generateFlows(input: FlowGenerationInput, options: FlowGeneratio
     const path = graph.pathTo(node.id);
     if (path.length > 0) paths.set(node.id, path);
   }
-  // A screen passed through by another path is already covered.
+  // Un écran traversé par un autre chemin est déjà couvert.
   const onTheWay = new Set<string>();
   for (const path of paths.values()) for (const edge of path.slice(1)) onTheWay.add(edge.from);
   const flows: GeneratedFlow[] = [];
@@ -71,7 +71,7 @@ function flowTo(
   names: Set<string>,
 ): GeneratedFlow | undefined {
   const steps: Record<string, unknown>[] = [];
-  // Filling a form leaves the screen as it is: its fields are filled on that screen, before leaving it.
+  // Remplir un formulaire laisse l'écran tel quel : ses champs sont remplis sur cet écran, avant de le quitter.
   const formsOn = (stateId: string): FormReport[] => {
     const seen = new Set<string>();
     return input.forms.filter((report) => {
@@ -87,9 +87,9 @@ function flowTo(
   for (const edge of path) {
     const actions = input.details.get(edge.from)?.actions ?? [];
     fillForms(edge.from);
-    if (input.forms.some((report) => report.actionId === edge.actionId)) continue; // the fill itself
+    if (input.forms.some((report) => report.actionId === edge.actionId)) continue; // le remplissage lui-même
     const action = actions.find((candidate) => candidate.id === edge.actionId);
-    if (!action) return undefined; // not replayable as a written step
+    if (!action) return undefined; // impossible à rejouer sous forme d'étape écrite
     const step = actionStep(action, input.testData);
     if (!step) return undefined;
     steps.push(step);
@@ -113,7 +113,7 @@ function flowTo(
   return flow;
 }
 
-/** Fields of a filled form, in order, with the values used. */
+/** Champs d'un formulaire rempli, dans l'ordre, avec les valeurs utilisées. */
 function formSteps(form: FormReport, actions: readonly DiscoveredAction[]): Record<string, unknown>[] {
   const steps: Record<string, unknown>[] = [];
   for (const field of form.fields) {
@@ -151,7 +151,7 @@ function actionStep(
     case 'uncheck':
       return { [action.type]: target };
     case 'fill': {
-      if (action.risks.includes('payment')) return undefined; // never written, never filled
+      if (action.risks.includes('payment')) return undefined; // jamais écrit, jamais rempli
       if (action.risks.includes('sensitive-data'))
         return { fill: { ...target, value: { env: envName(action.label ?? action.text ?? action.id) } } };
       const instruction = testData.instructionFor(action);
@@ -166,7 +166,7 @@ function actionStep(
   }
 }
 
-/** The flow target of a recorded locator (same strategies, same names). */
+/** La cible de flow d'un localisateur enregistré (mêmes stratégies, mêmes noms). */
 function targetOf(locator: LocatorDescriptor): Record<string, unknown> {
   const target: Record<string, unknown> =
     locator.strategy === 'role'
@@ -177,7 +177,7 @@ function targetOf(locator: LocatorDescriptor): Record<string, unknown> {
   return target;
 }
 
-/** The screen reached: its main heading, else its URL. */
+/** L'écran atteint : son titre principal, sinon son URL. */
 function expectation(node: FlowNode): Record<string, unknown> | undefined {
   const heading = node.subtitle ?? node.headings[0];
   if (heading) return { text: heading.slice(0, MAX_TEXT) };
@@ -217,12 +217,12 @@ function slug(text: string): string {
   );
 }
 
-/** QA_FIELD_CURRENT_PASSWORD: the variable to set for a sensitive field. */
+/** QA_FIELD_CURRENT_PASSWORD : la variable à définir pour un champ sensible. */
 function envName(label: string): string {
   return `QA_FIELD_${slug(label).replace(/-/g, '_').toUpperCase()}`;
 }
 
-/** The YAML file: a header saying where it comes from, then `flows:`. */
+/** Le fichier YAML : un en-tête qui dit d'où il vient, puis `flows:`. */
 export function flowsYaml(
   flows: readonly GeneratedFlow[],
   source: { mission: string; date: string },

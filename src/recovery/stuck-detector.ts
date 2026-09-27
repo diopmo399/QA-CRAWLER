@@ -1,27 +1,27 @@
 import type { StuckEvent } from './recovery-model.js';
 
 export interface StuckDetectorOptions {
-  /** A→B→A→B… repeated this many times (A→B→A = one cycle). */
+  /** A→B→A→B… répété ce nombre de fois (A→B→A = un cycle). */
   oscillationCycles: number;
-  /** Consecutive actions that change nothing (same state, no network call). */
+  /** Actions consécutives qui ne changent rien (même état, aucun appel réseau). */
   maxNoOpActions: number;
-  /** Consecutive observations with a spinner still turning. */
+  /** Observations consécutives avec une roue de chargement qui tourne encore. */
   maxBusyObservations: number;
 }
 
 export interface ObservedTransition {
   from: string;
   to: string;
-  /** HTTP exchanges the action caused. */
+  /** Échanges HTTP causés par l'action. */
   requests: number;
-  /** A spinner or aria-busy after the action. */
+  /** Une roue de chargement ou aria-busy après l'action. */
   busy: boolean;
 }
 
 /**
- * Notices when the exploration turns in circles: two states visited in
- * alternation, a series of actions that change nothing, or a screen that
- * keeps loading. The explorer then abandons the branch and goes elsewhere.
+ * Remarque quand l'exploration tourne en rond : deux états visités en alternance,
+ * une série d'actions qui ne changent rien, ou un écran qui charge sans fin.
+ * L'explorateur abandonne alors la branche et va ailleurs.
  */
 export class StuckDetector {
   private readonly visits: string[] = [];
@@ -37,7 +37,7 @@ export class StuckDetector {
     return event;
   }
 
-  /** The exploration moved on elsewhere (backtrack, jump): patterns start over. */
+  /** L'exploration est passée ailleurs (retour arrière, saut) : les motifs repartent de zéro. */
   reset(): void {
     this.visits.length = 0;
     this.noOps = 0;

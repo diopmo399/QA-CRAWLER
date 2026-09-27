@@ -2,17 +2,17 @@ import type { ActionObservations, ExecutedAction, OracleReason, OracleResult, Te
 import { result } from './oracle.js';
 
 export interface TechnicalOracleOptions {
-  /** HTTP 404 from an API call: a warning (default) or a failure. */
+  /** HTTP 404 d'un appel d'API : un avertissement (défaut) ou un échec. */
   api404: 'warning' | 'fail';
 }
 
 const API_TYPES = new Set(['xhr', 'fetch']);
 
 /**
- * Confirmed technical failures: action impossible, page crash, uncaught
- * JavaScript exception, HTTP 5xx. Warnings: unexpected API 404, failed API
- * calls, navigation problems. A console message alone is at most a
- * low-confidence warning.
+ * Échecs techniques confirmés : action impossible, plantage de la page, exception
+ * JavaScript non interceptée, HTTP 5xx. Avertissements : 404 d'API inattendu,
+ * appels d'API en échec, problèmes de navigation. Un message console seul est au plus
+ * un avertissement de faible confiance.
  */
 export class TechnicalOracle implements TestOracle {
   readonly name = 'technical';

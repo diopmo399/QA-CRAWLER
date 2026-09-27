@@ -8,25 +8,25 @@ import type {
   TestOracle,
 } from './oracle.js';
 
-/** The verdict on one executed action: every oracle's opinion, and a summary. */
+/** Le verdict sur une action exécutée : l'avis de chaque oracle, et un résumé. */
 export interface OracleVerdict {
   /**
-   * FAIL if an oracle failed, else WARNING if one warned, else PASS if at least
-   * one oracle passed; UNKNOWN when no oracle could tell. UNKNOWN opinions
-   * (business result, baseline without this transition…) never count as PASS.
+   * FAIL si un oracle a échoué, sinon WARNING si l'un a averti, sinon PASS si au
+   * moins un oracle a réussi ; UNKNOWN quand aucun oracle n'a pu dire. Les avis UNKNOWN
+   * (résultat métier, baseline sans cette transition…) ne comptent jamais comme PASS.
    */
   status: OracleStatus;
   confidence: number;
   reasons: string[];
   results: OracleResult[];
-  /** Observed assertions: "✓ no HTTP 5xx", "✗ POST /api/users returned HTTP 500", "? business result unknown". */
+  /** Assertions observées : "✓ no HTTP 5xx", "✗ POST /api/users returned HTTP 500", "? business result unknown". */
   assertions: string[];
 }
 
 /**
- * Aggregates several oracles (technical, UI, baseline, contract, and any
- * SemanticOracle added later). The business result stays UNKNOWN unless an
- * oracle knows the business expectation.
+ * Agrège plusieurs oracles (technique, écran, baseline, contrat, et tout
+ * SemanticOracle ajouté plus tard). Le résultat métier reste UNKNOWN sauf si un
+ * oracle connaît l'attente métier.
  */
 export class CompositeTestOracle {
   constructor(private readonly oracles: readonly TestOracle[]) {}
@@ -67,7 +67,7 @@ export class CompositeTestOracle {
       `${entry.status === 'PASS' ? '✓' : entry.status === 'UNKNOWN' ? '?' : '✗'} ${reason.message}`;
     const assertions = [
       ...results.flatMap((entry) => entry.reasons.map((reason) => mark(entry, reason))),
-      // No business expectation is known without a SemanticOracle: say so.
+      // Aucune attente métier n'est connue sans SemanticOracle : on le dit.
       ...(results.some((entry) => entry.oracle === 'semantic') ? [] : ['? business result unknown']),
     ];
     return { status, confidence, reasons, results, assertions };

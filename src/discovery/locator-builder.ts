@@ -1,7 +1,7 @@
 import type { LocatorDescriptor } from '../model/locator.js';
 import type { UiElement } from '../model/ui-snapshot.js';
 
-/** Roles Playwright's getByRole can target reliably. */
+/** Rôles que getByRole de Playwright peut cibler de façon fiable. */
 const ROLE_LOCATABLE = new Set([
   'button',
   'link',
@@ -24,14 +24,14 @@ const ROLE_LOCATABLE = new Set([
 const FIELD_TAGS = new Set(['input', 'select', 'textarea']);
 
 /**
- * Most robust serializable locator for an element:
- * 1. testId (data-testid & co), 2. role + accessible name,
- * 3. label (form fields), 4. visible text, 5. CSS as last resort.
+ * Localisateur sérialisable le plus robuste pour un élément :
+ * 1. testId (data-testid et apparentés), 2. rôle + nom accessible,
+ * 3. libellé (champs de formulaire), 4. texte visible, 5. CSS en dernier recours.
  */
 export function buildLocator(element: UiElement): LocatorDescriptor {
   if (element.testId) return { strategy: 'testId', value: element.testId };
-  // Named through its web component (label attribute, slot): Playwright may compute another name.
-  // The CSS path pierces the component's shadow root.
+  // Nommé par son composant web (attribut label, slot) : Playwright peut calculer un autre nom.
+  // Le chemin CSS traverse le shadow root du composant.
   if (element.labelledByHost) return { strategy: 'css', value: element.css };
   if (ROLE_LOCATABLE.has(element.role) && element.name) {
     return { strategy: 'role', role: element.role, name: element.name, exact: true };
@@ -43,14 +43,14 @@ export function buildLocator(element: UiElement): LocatorDescriptor {
   return { strategy: 'css', value: element.css };
 }
 
-/** Canonical key of a descriptor (without nth), used to detect ambiguous locators. */
+/** Clé canonique d'un descripteur (sans nth), pour détecter les localisateurs ambigus. */
 export function locatorKey(locator: LocatorDescriptor): string {
   return [locator.strategy, locator.role ?? '', locator.name ?? '', locator.value ?? ''].join('|');
 }
 
 /**
- * Builds locators for all elements of a snapshot, adding `nth` when several
- * elements share the same descriptor (e.g. ten "Voir" buttons in a table).
+ * Construit les localisateurs de tous les éléments d'un instantané, en ajoutant
+ * `nth` quand plusieurs éléments partagent le même descripteur (par exemple dix boutons « Voir » dans un tableau).
  */
 export function buildLocators(elements: readonly UiElement[]): LocatorDescriptor[] {
   const descriptors = elements.map((element) => buildLocator(element));

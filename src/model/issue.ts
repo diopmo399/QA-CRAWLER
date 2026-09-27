@@ -1,4 +1,4 @@
-/** Ordered from least to most severe. */
+/** Du moins grave au plus grave. */
 export const SEVERITIES = ['INFO', 'WARNING', 'ERROR', 'CRITICAL'] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
@@ -10,60 +10,60 @@ export const ISSUE_TYPES = [
   'PAGE_ERROR',
   'PAGE_CRASH',
   'NAVIGATION',
-  /** An imposed flow step failed or was blocked. */
+  /** Une étape de flow imposé a échoué ou a été bloquée. */
   'FLOW',
-  /** A browser interaction outside the DOM needs attention (AUTH_REQUIRED, loop, file requested…). */
+  /** Une interaction du navigateur hors du DOM demande de l'attention (AUTH_REQUIRED, boucle, fichier demandé…). */
   'BROWSER_INTERACTION',
-  /** A form field is still invalid once filled with the test data (or could not be filled). */
+  /** Un champ de formulaire est encore invalide une fois rempli avec les données de test (ou n'a pas pu être rempli). */
   'FORM_VALIDATION',
-  /** UIOracle: an error message, empty screen or endless spinner after an action. */
+  /** UIOracle : un message d'erreur, un écran vide ou un chargement sans fin après une action. */
   'UI_ERROR',
-  /** BaselineOracle: the action no longer leads where the baseline says (regression potential). */
+  /** BaselineOracle : l'action ne mène plus là où la baseline le dit (régression potentielle). */
   'REGRESSION',
-  /** ContractOracle: an API answer the contract (OpenAPI) does not declare. */
+  /** ContractOracle : une réponse d'API que le contrat (OpenAPI) ne déclare pas. */
   'CONTRACT',
-  /** AccessibilityChecker: missing names, image links without text, keyboard problems. */
+  /** AccessibilityChecker : noms manquants, liens-images sans texte, problèmes au clavier. */
   'ACCESSIBILITY',
-  /** AuthorizationObserver: an actor reaches a screen a rule says it must not (or the reverse). */
+  /** AuthorizationObserver : un acteur atteint un écran qu'une règle lui interdit (ou l'inverse). */
   'AUTHORIZATION',
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 
 /**
- * An anomaly observed while crawling. Identical anomalies (same type, message,
- * request, status) are merged: `occurrences` counts them and `pages` lists
- * every page on which they were seen.
+ * Une anomalie observée pendant l'exploration. Les anomalies identiques (même type,
+ * message, requête, statut) sont fusionnées : `occurrences` les compte et `pages`
+ * liste chaque page où elles ont été vues.
  */
 export interface Issue {
   id: string;
   type: IssueType;
   severity: Severity;
   message: string;
-  /** Page on which the anomaly was first observed. */
+  /** Page où l'anomalie a été observée la première fois. */
   pageUrl: string;
-  /** All pages on which this anomaly was observed. */
+  /** Toutes les pages où cette anomalie a été observée. */
   pages: string[];
   requestUrl?: string;
   method?: string;
   status?: number;
-  /** Page that linked to a broken page. */
+  /** Page qui renvoyait vers une page cassée. */
   referrerUrl?: string;
-  /** Functional state (see StateDetector) on which the anomaly was first observed. */
+  /** État fonctionnel (voir StateDetector) où l'anomalie a été observée la première fois. */
   stateId?: string;
-  /** Action whose execution triggered the anomaly (undefined when seen while loading a state). */
+  /** Action dont l'exécution a déclenché l'anomalie (undefined quand elle a été vue au chargement d'un état). */
   actionId?: string;
-  /** Path of state ids from the start state to `stateId`: how to reproduce the problem. */
+  /** Chemin d'id d'états depuis l'état de départ jusqu'à `stateId` : comment reproduire le problème. */
   flow?: string[];
-  /** All states on which this anomaly was observed. */
+  /** Tous les états où cette anomalie a été observée. */
   states: string[];
-  /** ISO timestamp of the first occurrence. */
+  /** Horodatage ISO de la première occurrence. */
   timestamp: string;
   occurrences: number;
-  /** Screenshot path relative to the working directory, when one was captured. */
+  /** Chemin de la capture, relatif au dossier de travail, quand une capture a été prise. */
   screenshot?: string;
 }
 
-/** Data needed to report a new anomaly; bookkeeping fields are filled by the collector. */
+/** Données nécessaires pour signaler une nouvelle anomalie ; les champs de suivi sont remplis par le collecteur. */
 export type IssueInput = Omit<Issue, 'id' | 'pages' | 'states' | 'timestamp' | 'occurrences' | 'severity'> & {
   severity?: Severity;
 };

@@ -1,7 +1,7 @@
 import type { BrowserContextOptions, Page } from 'playwright';
 import type { AuthConfig, FormAuthConfig, HttpAuthConfig } from '../config/config.js';
 
-/** Authentication failure. Messages never contain credentials. */
+/** Échec d'authentification. Les messages ne contiennent jamais d'identifiants. */
 export class AuthError extends Error {
   constructor(message: string) {
     super(message);
@@ -9,10 +9,10 @@ export class AuthError extends Error {
   }
 }
 
-/** Logs the browser context in before the crawl starts; cookies/storage are then shared by every page. */
+/** Connecte le contexte du navigateur avant l'exploration ; cookies et stockage sont ensuite partagés par toutes les pages. */
 export interface Authenticator {
   readonly description: string;
-  /** Options of the browser context, set before any page opens (HTTP credentials). */
+  /** Options du contexte du navigateur, fixées avant l'ouverture de toute page (identifiants HTTP). */
   contextOptions(): BrowserContextOptions;
   login(page: Page): Promise<void>;
 }
@@ -23,7 +23,7 @@ class NoAuthenticator implements Authenticator {
     return {};
   }
   async login(): Promise<void> {
-    // nothing to do
+    // rien à faire
   }
 }
 
@@ -44,8 +44,8 @@ function readCredentials(
 }
 
 /**
- * Fills a login form with credentials read from environment variables
- * (never from the scenario file) and waits for a success signal.
+ * Remplit un formulaire de connexion avec des identifiants lus dans des
+ * variables d'environnement (jamais dans le fichier de scénario) et attend un signal de réussite.
  */
 export class FormAuthenticator implements Authenticator {
   readonly description: string;
@@ -91,7 +91,7 @@ export class FormAuthenticator implements Authenticator {
         await page.waitForLoadState('load', { timeout: timeoutMs });
       }
     } catch (error) {
-      // Playwright messages may echo selectors and URLs, never the filled values.
+      // Les messages de Playwright peuvent reprendre des sélecteurs et des URL, jamais les valeurs saisies.
       const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
       throw new AuthError(`Form login failed: ${reason}`);
     }
@@ -99,11 +99,11 @@ export class FormAuthenticator implements Authenticator {
 }
 
 /**
- * HTTP authentication: the browser's own sign-in dialog. It is answered by
- * the HttpAuthHandler of the BrowserInteractionManager (auth.type: http is
- * mapped to a credential profile by the config loader); this authenticator
- * only opens the page that triggers the challenge. The crawl engine then
- * checks the recorded interaction (AUTHENTICATED, AUTH_REQUIRED, AUTH_FAILED…).
+ * Authentification HTTP : la fenêtre de connexion du navigateur lui-même. Elle
+ * reçoit sa réponse du HttpAuthHandler du BrowserInteractionManager (auth.type:
+ * http est traduit en profil d'identifiants par le chargeur de configuration) ;
+ * cet authentificateur ouvre seulement la page qui déclenche le défi. Le moteur
+ * vérifie ensuite l'interaction enregistrée (AUTHENTICATED, AUTH_REQUIRED, AUTH_FAILED…).
  */
 export class HttpAuthenticator implements Authenticator {
   readonly description: string;

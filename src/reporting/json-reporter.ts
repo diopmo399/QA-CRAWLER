@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ExplorationResult } from '../model/exploration-result.js';
 import type { Reporter } from './reporter.js';
 
-/** reports/result.json — machine-readable result (CI gates, dashboards, future decision engines). */
+/** reports/result.json — résultat lisible par les machines (portes de CI, tableaux de bord, futurs moteurs de décision). */
 export class JsonReporter implements Reporter {
   readonly format = 'json';
 

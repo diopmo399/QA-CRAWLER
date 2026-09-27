@@ -7,15 +7,15 @@ import { HtmlReporter } from './html-reporter.js';
 import type { ReportLanguage } from './i18n.js';
 import { JsonReporter } from './json-reporter.js';
 
-/** Writes an exploration result somewhere; returns the path of the produced file. */
+/** Écrit un résultat d'exploration quelque part ; renvoie le chemin du fichier produit. */
 export interface Reporter {
   readonly format: string;
   write(result: ExplorationResult): Promise<string>;
 }
 
 /**
- * Runs every enabled reporter and records the produced files in `result.artifacts`.
- * flow-graph.json itself is written by the FlowMemory.
+ * Exécute chaque reporter activé et enregistre les fichiers produits dans `result.artifacts`.
+ * flow-graph.json lui-même est écrit par la FlowMemory.
  */
 export async function writeReports(
   result: ExplorationResult,

@@ -2,10 +2,10 @@ import type { BrowserInteractionHandler, HandlerOutcome } from '../handler.js';
 import type { BrowserInteraction } from '../types.js';
 
 /**
- * PERMISSION_REQUEST (geolocation, notifications, camera, microphone,
- * clipboard). Only permissions listed in browserInteractions.permissions.grant
- * are granted (to the target origin, when the browser context starts);
- * every other request is denied by the browser and recorded as such.
+ * PERMISSION_REQUEST (géolocalisation, notifications, caméra, micro, presse-papiers).
+ * Seules les permissions listées dans browserInteractions.permissions.grant sont
+ * accordées (à l'origine cible, au démarrage du contexte du navigateur) ; toute autre
+ * demande est refusée par le navigateur et enregistrée comme telle.
  */
 export class PermissionHandler implements BrowserInteractionHandler {
   readonly name = 'PermissionHandler';

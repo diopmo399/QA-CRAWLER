@@ -2,11 +2,11 @@ import type { BrowserInteractionResult } from '../interactions/types.js';
 import type { Severity } from '../model/issue.js';
 
 /**
- * Single place where anomalies get their severity, so the policy can be
- * reviewed and tuned without touching observers or the crawl engine.
+ * Seul endroit où les anomalies reçoivent leur gravité : la politique peut être
+ * relue et ajustée sans toucher aux observateurs ni au moteur d'exploration.
  */
 export const SeverityRules = {
-  /** HTTP response on a sub-resource (API call, script, image...). */
+  /** Réponse HTTP d'une sous-ressource (appel d'API, script, image…). */
   httpResponse(status: number): Severity {
     if (status >= 500) return 'ERROR';
     if (status === 401 || status === 403) return 'WARNING';
@@ -14,7 +14,7 @@ export const SeverityRules = {
     return 'INFO';
   },
 
-  /** Main document of a visited page. A missing or failing page is always an error. */
+  /** Document principal d'une page visitée. Une page absente ou en échec est toujours une erreur. */
   pageResponse(status: number): Severity {
     if (status >= 500) return 'ERROR';
     if (status === 404 || status === 410) return 'ERROR';
@@ -22,12 +22,12 @@ export const SeverityRules = {
     return 'INFO';
   },
 
-  /** Network failure (DNS, connection refused, CORS, aborted...). */
+  /** Échec réseau (DNS, connexion refusée, CORS, annulation…). */
   requestFailed(isDocument: boolean): Severity {
     return isDocument ? 'ERROR' : 'WARNING';
   },
 
-  /** A field still invalid once the form is filled: wrong test data, or a validation bug. */
+  /** Un champ encore invalide une fois le formulaire rempli : mauvaises données de test, ou bug de validation. */
   formValidation(): Severity {
     return 'WARNING';
   },
@@ -40,26 +40,26 @@ export const SeverityRules = {
     return 'WARNING';
   },
 
-  /** Uncaught exception in the page. */
+  /** Exception non interceptée dans la page. */
   pageError(): Severity {
     return 'ERROR';
   },
 
-  /** Renderer process crashed. */
+  /** Plantage du processus de rendu. */
   pageCrash(): Severity {
     return 'CRITICAL';
   },
 
-  /** An imposed flow step failed or was blocked; optional steps only warn. */
+  /** Une étape de flow imposé a échoué ou a été bloquée ; les étapes optionnelles ne font qu'avertir. */
   flowStep(optional: boolean): Severity {
     return optional ? 'WARNING' : 'ERROR';
   },
 
   /**
-   * Browser interaction outside the DOM. Blocking ones (authentication
-   * required or refused, loop) are errors; things the crawler must not do by
-   * itself (pick a file, answer a prompt) and unknown interactions are
-   * warnings; the rest is only recorded.
+   * Interaction du navigateur hors du DOM. Les bloquantes (authentification
+   * requise ou refusée, boucle) sont des erreurs ; ce que le crawler ne doit pas
+   * faire seul (choisir un fichier, répondre à un prompt) et les interactions
+   * inconnues sont des avertissements ; le reste est seulement enregistré.
    */
   browserInteraction(result: BrowserInteractionResult): Severity | undefined {
     if (result.blocking) return 'ERROR';
@@ -73,7 +73,7 @@ export const SeverityRules = {
     return undefined;
   },
 
-  /** Navigation that could not complete (timeout, redirect loop, redirect off-site...). */
+  /** Navigation qui n'a pas pu aboutir (délai dépassé, boucle de redirection, redirection hors du site…). */
   navigationFailure(kind: 'timeout' | 'redirect-loop' | 'external-redirect' | 'other'): Severity {
     return kind === 'external-redirect' ? 'WARNING' : 'ERROR';
   },

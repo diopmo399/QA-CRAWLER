@@ -1,11 +1,11 @@
 import type { FieldType } from './form-model.js';
 import type { FormRun, ValidationCase } from './form-exerciser.js';
 
-/** What the report says about a form: its fields, what was filled, what the application said. */
+/** Ce que dit le rapport sur un formulaire : ses champs, ce qui a été rempli, ce que l'application a répondu. */
 export interface FormReport {
   formId: string;
   stateId: string;
-  /** Transition that filled it (form-…), to replay or turn into a flow. */
+  /** Transition qui l'a rempli (form-…), pour le rejouer ou en faire un flow. */
   actionId?: string;
   name: string;
   group: string;
@@ -15,9 +15,9 @@ export interface FormReport {
     type: FieldType;
     required: boolean;
     sensitive: boolean;
-    /** What was done: value typed (never for a sensitive field), option chosen, checked, or why skipped. */
+    /** Ce qui a été fait : valeur saisie (jamais pour un champ sensible), option choisie, case cochée, ou la raison de l'avoir ignoré. */
     filled: string;
-    /** What was done, and the value (never for a sensitive field). */
+    /** Ce qui a été fait, et la valeur (jamais pour un champ sensible). */
     operation?: 'fill' | 'select' | 'check' | 'uncheck' | 'skip';
     value?: string;
     source?: string;

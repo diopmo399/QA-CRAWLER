@@ -71,7 +71,7 @@ describe('multiple actors: who reaches what', () => {
         else html(403, '<h1>Forbidden</h1>');
       } else if (url === '/admin/audit') {
         if (role === 'admin') html(200, '<h1>Admin audit</h1>');
-        else redirect('/'); // refused by sending back home
+        else redirect('/'); // refusé en renvoyant vers l'accueil
       } else html(404, 'Not found');
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -126,9 +126,9 @@ output:
     expect(result.authorization?.actors).toEqual(['admin', 'reader', 'guest']);
     expect(access('admin', 'admin-users')).toBe('ALLOWED');
     expect(access('reader', 'admin-users')).toBe('DENIED'); // HTTP 403
-    expect(access('reader', 'admin-audit')).toBe('DENIED'); // sent back home
+    expect(access('reader', 'admin-audit')).toBe('DENIED'); // renvoyé vers l'accueil
     expect(access('reader', 'reports')).toBe('ALLOWED');
-    expect(access('guest', 'reports')).toBe('DENIED'); // no session: sent to the login page
+    expect(access('guest', 'reports')).toBe('DENIED'); // pas de session : renvoyé vers la page de connexion
     expect(result.authorization?.errors).toEqual([]);
   });
 

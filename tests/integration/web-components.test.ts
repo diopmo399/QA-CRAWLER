@@ -10,10 +10,10 @@ import { SafetyPolicy } from '../../src/policies/safety-policy.js';
 import { testConfig } from '../helpers.js';
 
 /**
- * A form built with web components: fields drawn inside open shadow roots,
- * labels given through the component (label attribute, <slot name="label">),
- * a <select> inside a component, a contenteditable field, and a button drawn
- * by a component — all inside a plain <form>.
+ * Un formulaire construit avec des composants web : des champs dessinés dans des
+ * shadow roots ouverts, des libellés donnés par le composant (attribut label,
+ * <slot name="label">), un <select> dans un composant, un champ contenteditable, et
+ * un bouton dessiné par un composant — le tout dans un simple <form>.
  */
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Components</title>
 <script>

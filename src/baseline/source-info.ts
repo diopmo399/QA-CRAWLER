@@ -3,18 +3,18 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 
-/** Branch and commit of the application under test, when known. */
+/** Branche et commit de l'application testée, quand ils sont connus. */
 export interface SourceInfo {
   branch?: string;
   commit?: string;
 }
 
 /**
- * Where the tested build comes from. The crawler usually does not run inside
- * the application's repository, so the explicit values win: the mission
- * (`baseline.branch` / `baseline.commit`), then QA_BRANCH / QA_COMMIT, then
- * the usual CI variables (GitHub Actions, GitLab CI), then `git` in
- * `baseline.gitDir` when given. Everything is optional.
+ * D'où vient le build testé. Le crawler ne tourne généralement pas dans le
+ * dépôt de l'application, donc les valeurs explicites l'emportent : la mission
+ * (`baseline.branch` / `baseline.commit`), puis QA_BRANCH / QA_COMMIT, puis
+ * les variables de CI habituelles (GitHub Actions, GitLab CI), puis `git` dans
+ * `baseline.gitDir` s'il est donné. Tout est facultatif.
  */
 export async function sourceInfo(
   explicit: SourceInfo & { gitDir?: string },

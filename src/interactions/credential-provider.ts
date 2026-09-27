@@ -1,9 +1,9 @@
 import { inspect } from 'node:util';
 
-/** What is being asked for, without any secret: lets a provider choose the right credentials. */
+/** Ce qui est demandé, sans aucun secret : permet à un fournisseur de choisir les bons identifiants. */
 export interface AuthContext {
   type: 'HTTP_AUTH';
-  /** Logical profile chosen by the policy (e.g. "qa-default"). */
+  /** Profil logique choisi par la politique (par exemple "qa-default"). */
   profile: string;
   origin?: string;
   realm?: string;
@@ -11,8 +11,8 @@ export interface AuthContext {
 }
 
 /**
- * A username/password pair that cannot leak by accident: JSON.stringify,
- * console.log and template strings only show the profile name.
+ * Une paire identifiant/mot de passe qui ne peut pas fuir par accident :
+ * JSON.stringify, console.log et les gabarits de chaîne ne montrent que le nom du profil.
  */
 export class Credentials {
   readonly #username: string;
@@ -49,23 +49,23 @@ export class Credentials {
 }
 
 /**
- * Source of secrets. The crawler asks, never invents: `undefined` means no
- * authorized credentials, and the interaction is recorded as AUTH_REQUIRED.
- * Implementations can read environment variables (CI secrets, Kubernetes
- * secrets mounted as env), a vault, a secret manager…
+ * Source des secrets. Le crawler demande, n'invente jamais : `undefined` veut dire
+ * aucun identifiant autorisé, et l'interaction est enregistrée AUTH_REQUIRED. Les
+ * implémentations peuvent lire des variables d'environnement (secrets de CI, secrets
+ * Kubernetes montés en variables), un coffre, un gestionnaire de secrets…
  */
 export interface CredentialProvider {
   readonly name: string;
   resolve(context: AuthContext): Promise<Credentials | undefined>;
 }
 
-/** Names of the environment variables of a profile — never the values. */
+/** Noms des variables d'environnement d'un profil — jamais les valeurs. */
 export interface EnvironmentProfile {
   usernameEnv: string;
   passwordEnv: string;
 }
 
-/** Reads each profile from environment variables (GitHub Secrets, Kubernetes env, .env loaded by the shell…). */
+/** Lit chaque profil dans les variables d'environnement (GitHub Secrets, env Kubernetes, .env chargé par le shell…). */
 export class EnvironmentCredentialProvider implements CredentialProvider {
   readonly name = 'environment';
 
@@ -83,7 +83,7 @@ export class EnvironmentCredentialProvider implements CredentialProvider {
     return Promise.resolve(new Credentials(context.profile, username, password));
   }
 
-  /** Environment variables a profile needs and that are not set (for clear messages). */
+  /** Variables d'environnement dont un profil a besoin et qui ne sont pas définies (pour des messages clairs). */
   missingVariables(profileName: string): string[] {
     const profile = this.profiles[profileName];
     if (!profile) return [];

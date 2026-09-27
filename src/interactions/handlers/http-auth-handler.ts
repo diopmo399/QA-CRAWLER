@@ -2,11 +2,10 @@ import type { BrowserInteractionHandler, HandlerContext, HandlerOutcome } from '
 import type { BrowserInteraction } from '../types.js';
 
 /**
- * HTTP_AUTH: the browser's own sign-in dialog (Basic, NTLM…). Answered
- * through the browser protocol with credentials from the CredentialProvider;
- * never with locators, clicks, keyboard or selectors (the dialog is not in
- * the DOM). No credentials, or too many tries: the challenge is cancelled and
- * the flow is marked blocked.
+ * HTTP_AUTH : la fenêtre de connexion du navigateur lui-même (Basic, NTLM…). Répondue
+ * via le protocole du navigateur avec les identifiants du CredentialProvider ; jamais
+ * avec des localisateurs, clics, clavier ou sélecteurs (la fenêtre n'est pas dans le
+ * DOM). Pas d'identifiants, ou trop d'essais : le défi est annulé et le flow est marqué bloqué.
  */
 export class HttpAuthHandler implements BrowserInteractionHandler {
   readonly name = 'HttpAuthHandler';

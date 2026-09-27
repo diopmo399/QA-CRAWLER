@@ -8,7 +8,7 @@ import { parseConfig } from '../../src/config/config-loader.js';
 import type { FlowRunReport } from '../../src/model/flow-run.js';
 import { runMission } from '../../src/orchestrator.js';
 
-/** Labels shown above the fields but not tied to them (no <label for>, no aria): getByLabel finds nothing. */
+/** Libellés affichés au-dessus des champs mais pas reliés à eux (pas de <label for>, pas d'aria) : getByLabel ne trouve rien. */
 const APP = `<!doctype html><html><head><meta charset="utf-8"><title>Dossiers</title></head><body>
 <h1>Dossiers</h1>
 <div role="dialog" aria-label="Nouveau dossier">
@@ -69,7 +69,7 @@ ${steps}
   });
 
   it('the suggested steps work once pasted in the YAML', async () => {
-    // optional: both steps run, so both get a suggestion.
+    // optional : les deux étapes s'exécutent, donc les deux reçoivent une suggestion.
     const first = await run(`      - fill: { label: Raison sociale, value: QA }
         optional: true
       - check: { role: radio, name: Courriel }

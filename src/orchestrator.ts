@@ -26,9 +26,9 @@ import { AuthorizationObserver, type AuthorizationReport } from './actors/author
 
 export interface RunOutcome {
   result: ExplorationResult;
-  /** Issues at or above report.failOnSeverity. */
+  /** Anomalies de gravité report.failOnSeverity ou plus. */
   failingIssues: Issue[];
-  /** verify: known transitions that changed, fail or cannot be reached any more. */
+  /** verify : transitions connues qui ont changé, échouent ou ne peuvent plus être atteintes. */
   regressions: number;
   passed: boolean;
 }
@@ -39,15 +39,15 @@ export interface RunOptions {
   testData?: TestDataProvider;
   memory?: FlowMemory;
   env?: NodeJS.ProcessEnv;
-  /** learn / verify / explore; default: mission.mode. */
+  /** learn / verify / explore ; par défaut : mission.mode. */
   mode?: MissionMode;
-  /** Where the baseline lives; default: baseline.dir. */
+  /** Où se trouve la baseline ; par défaut : baseline.dir. */
   baselineDir?: string;
-  /** Removes what the run created; default: deletes nothing and lists it. */
+  /** Supprime ce que le run a créé ; par défaut : ne supprime rien et le liste. */
   cleanup?: TestDataCleanup;
 }
 
-/** verify needs a baseline: `learn` first. */
+/** verify a besoin d'une baseline : `learn` d'abord. */
 export class BaselineMissingError extends Error {
   constructor(directory: string) {
     super(`no baseline in ${directory}: run "learn" first`);
@@ -56,15 +56,15 @@ export class BaselineMissingError extends Error {
 }
 
 /**
- * QA orchestrator: mission → flow explorer → reports → verdict.
- * Independent from the CLI so it can be embedded (tests, other runners).
+ * Orchestrateur QA : mission → explorateur de flows → rapports → verdict.
+ * Indépendant de la CLI pour pouvoir être intégré (tests, autres exécuteurs).
  *
- * - learn: explores, then stores the flow graph as the new baseline (the
- *   previous ones stay in the baseline's history);
- * - verify: replays the known transitions of the baseline and reports what
- *   changed (regressions);
- * - explore: explores, using the baseline (if any) as a hint only — known
- *   actions come after new ground — and reports what is new.
+ * - learn : explore, puis enregistre le graphe des flows comme nouvelle baseline (les
+ *   précédentes restent dans l'historique de la baseline) ;
+ * - verify : rejoue les transitions connues de la baseline et signale ce qui a
+ *   changé (régressions) ;
+ * - explore : explore, en utilisant la baseline (s'il y en a une) seulement comme
+ *   indice — les actions connues passent après le nouveau terrain — et signale ce qui est nouveau.
  */
 export async function runMission(config: ScenarioConfig, options: RunOptions = {}): Promise<RunOutcome> {
   const mode = options.mode ?? config.mission.mode;
@@ -97,7 +97,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   const outcome = await explorer.explore();
   const current = outcome.graph.toJSON();
 
-  // Other actors open the screens found: what does each one reach?
+  // Les autres acteurs ouvrent les écrans trouvés : qu'atteint chacun ?
   let authorization: AuthorizationReport | undefined;
   if (config.actors.length > 0 && config.authorization.enabled) {
     const targets = outcome.graph
@@ -146,13 +146,13 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     result.artifacts.engineLog = file;
   }
   if (baseline) {
-    // verify only replays some transitions (not filled forms, known failures, blocked ones):
-    // it is compared with that part of the baseline only.
+    // verify ne rejoue qu'une partie des transitions (pas les formulaires remplis, les échecs connus, les bloquées) :
+    // il n'est comparé qu'avec cette partie de la baseline.
     const verification = mode === 'verify' ? outcome.verification : undefined;
     const reference = verification ? replayedPart(baseline.graph, verification) : baseline.graph;
-    // …and with the states its transitions reached (not the screens only seen on the way).
+    // …et avec les états atteints par ses transitions (pas les écrans seulement vus en chemin).
     const diff = new FlowDiffEngine().compare(reference, verification ? reachedPart(current) : current);
-    // explore follows new ground first: what it did not revisit is not gone. Only what is new or changed.
+    // explore suit d'abord le nouveau terrain : ce qu'il n'a pas revisité n'a pas disparu. Seulement ce qui est nouveau ou modifié.
     result.flowDiff = mode === 'explore' ? onlyNewAndChanged(diff) : diff;
     if (baseline.metadata) result.baseline = baseline.metadata;
   }
@@ -192,7 +192,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   };
 }
 
-/** The transitions of the baseline that verify replayed, and the states they link. */
+/** Les transitions de la baseline que verify a rejouées, et les états qu'elles relient. */
 function replayedPart(graph: FlowGraphData, verification: VerificationReport): FlowGraphData {
   const replayed = new Set(
     verification.transitions
@@ -218,17 +218,17 @@ function onlyNewAndChanged(diff: FlowDiff): FlowDiff {
   };
 }
 
-/** States that are the start or the end of a transition, and the root. */
+/** États qui sont le début ou la fin d'une transition, et la racine. */
 function reachedPart(graph: FlowGraphData): FlowGraphData {
   const states = new Set([
     ...(graph.rootId ? [graph.rootId] : []),
-    // Blocked actions are recorded on screens only seen on the way: they reach nothing.
+    // Les actions bloquées sont enregistrées sur des écrans seulement vus en chemin : elles n'atteignent rien.
     ...graph.edges.filter((edge) => edge.result !== 'BLOCKED').flatMap((edge) => [edge.from, edge.to]),
   ]);
   return { ...graph, nodes: graph.nodes.filter((node) => states.has(node.id)) };
 }
 
-/** The API contract (OpenAPI): a local file, or an URL on an allowed host only. */
+/** Le contrat d'API (OpenAPI) : un fichier local, ou une URL sur un hôte autorisé seulement. */
 async function loadContract(config: ScenarioConfig): Promise<ApiContract> {
   const provider = new OpenApiContractProvider(config.openapi.source ?? '', (url) => {
     try {
@@ -241,7 +241,7 @@ async function loadContract(config: ScenarioConfig): Promise<ApiContract> {
   return provider.load();
 }
 
-/** `stateId::actionId` of every transition the baseline executed. */
+/** `stateId::actionId` de chaque transition exécutée par la baseline. */
 function knownActionsOf(baseline: Baseline): Set<string> {
   return new Set(
     baseline.graph.edges

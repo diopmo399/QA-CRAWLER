@@ -2,17 +2,17 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 
 /**
- * Mini back-office application used to prove that the FlowExplorer
- * discovers screens and flows by itself:
+ * Mini application de back-office qui sert à prouver que le FlowExplorer découvre
+ * seul les écrans et les flows :
  *
  *   Tableau de bord
- *   ├── Utilisateurs ── Utilisateur N (tabs Profil / Historique)
- *   ├── Dossiers ── Nouveau dossier: wizard, 3 steps on the SAME URL
- *   ├── Paramètres (tabs Général / Notifications / Sécurité, no URL change)
+ *   ├── Utilisateurs ── Utilisateur N (onglets Profil / Historique)
+ *   ├── Dossiers ── Nouveau dossier : assistant, 3 étapes sur la MÊME URL
+ *   ├── Paramètres (onglets Général / Notifications / Sécurité, sans changement d'URL)
  *   └── Administration ── Journal
  *
- * Destructive endpoints (/logout, /api/danger/*) record every hit so tests
- * can prove they were never reached.
+ * Les points d'accès destructifs (/logout, /api/danger/*) enregistrent chaque appel
+ * pour que les tests prouvent qu'ils n'ont jamais été atteints.
  */
 export interface FlowApp {
   url: string;
@@ -44,7 +44,7 @@ ${body}
 ${script ? `<script>${script}</script>` : ''}
 </body></html>`;
 
-/** Generic tab behaviour: clicking a [role=tab] shows its panel. */
+/** Comportement générique des onglets : cliquer sur un [role=tab] affiche son panneau. */
 const TABS_SCRIPT = `
 document.querySelectorAll('[role=tab]').forEach((tab) => tab.addEventListener('click', () => {
   document.querySelectorAll('[role=tab]').forEach((other) => other.setAttribute('aria-selected', String(other === tab)));
@@ -148,7 +148,7 @@ show(1);`,
        <button type="button" onclick="fetch('/api/danger/purge',{method:'POST'})">Vider le cache</button>
        <a href="https://external.example.com/docs">Documentation externe</a>`,
     ),
-  // Not linked from the menu: only reached by imposed flows.
+  // Pas relié au menu : atteint seulement par les flows imposés.
   '/login': () =>
     layout(
       'Connexion',
@@ -160,7 +160,7 @@ show(1);`,
       </form>`,
       "document.querySelector('#connexion').addEventListener('click', () => { const ok = document.querySelector('#mdp').value.length > 0; document.querySelector('#message').textContent = ok ? 'Bienvenue ' + document.querySelector('#identifiant').value : 'Mot de passe requis'; });",
     ),
-  // A field of the page with the same label as a field of the open modal dialog.
+  // Un champ de la page avec le même libellé qu'un champ de la fenêtre modale ouverte.
   '/equipe': () =>
     layout(
       'Équipe',

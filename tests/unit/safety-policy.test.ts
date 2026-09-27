@@ -182,7 +182,7 @@ describe('SafetyPolicy.evaluate (gate between the decision engine and Playwright
     expect(permissive.evaluate(action({ classification: 'DANGEROUS', risks: ['delete'] })).verdict).toBe(
       'ALLOW',
     );
-    // Listed, but its risk still in safety.block: blocked.
+    // Listée, mais son risque est encore dans safety.block : bloquée.
     const listedOnly = new SafetyPolicy(
       testConfig('safety:\n  allowedActionClasses: [SAFE, DANGEROUS]\n').safety,
     );
@@ -203,7 +203,7 @@ describe('normalizeText', () => {
     const sent = policy.classify({ type: 'click', category: 'other', text: 'Soumettre', submitsForm: true });
     expect(sent).toMatchObject({ classification: 'MUTATION', risks: ['form-submit'] });
     expect(policy.evaluate(action({ text: 'Soumettre', ...sent, submitsForm: true })).verdict).toBe('BLOCK');
-    // A wizard step stays a step.
+    // Une étape d'assistant reste une étape.
     expect(click('Suivant', { submitsForm: true })).toBe('SAFE');
   });
 });

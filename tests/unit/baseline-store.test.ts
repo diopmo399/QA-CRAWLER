@@ -51,7 +51,7 @@ describe('BaselineStore', () => {
     const latest = await store.load();
     expect(latest?.graph.nodes).toHaveLength(3);
     expect(latest?.metadata).toMatchObject({ runId: '2026-09-27T08-00-00Z', environment: 'qa' });
-    // History: newest first, only keepRuns kept.
+    // Historique : les plus récents d'abord, seulement keepRuns conservés.
     expect((await store.runs()).map((run) => run.runId)).toEqual([
       '2026-09-27T08-00-00Z',
       '2026-09-26T08-00-00Z',

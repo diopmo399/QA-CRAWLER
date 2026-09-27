@@ -3,7 +3,7 @@ import { parse as parseYaml, YAMLParseError } from 'yaml';
 import { ZodError } from 'zod';
 import { scenarioSchema, type ScenarioConfig } from './config.js';
 
-/** Raised for any unreadable, malformed or invalid scenario. The message is safe to show to users. */
+/** Levée pour tout scénario illisible, mal formé ou invalide. Le message peut être montré à l'utilisateur. */
 export class ConfigError extends Error {
   constructor(
     message: string,
@@ -14,7 +14,7 @@ export class ConfigError extends Error {
   }
 }
 
-/** Values that take precedence over the YAML file (CLI flags, environment). */
+/** Valeurs prioritaires sur le fichier YAML (options de la CLI, environnement). */
 export interface ConfigOverrides {
   baseUrl?: string;
   maxStates?: number;
@@ -26,12 +26,12 @@ export interface ConfigOverrides {
 
 export interface LoadedConfig {
   config: ScenarioConfig;
-  /** Non-fatal remarks worth showing to the user. */
+  /** Remarques non bloquantes à montrer à l'utilisateur. */
   warnings: string[];
   source: string;
 }
 
-/** Environment variable that overrides target.baseUrl (handy in CI: point the same scenario at a PR environment). */
+/** Variable d'environnement qui remplace target.baseUrl (pratique en CI : pointer le même scénario vers l'environnement d'une PR). */
 export const BASE_URL_ENV = 'QA_BASE_URL';
 
 export async function loadConfigFile(
@@ -87,8 +87,8 @@ export function parseConfig(
 }
 
 /**
- * Scenarios written for the first (URL crawler) version keep working: their
- * keys are mapped to the mission format, with a warning.
+ * Les scénarios écrits pour la première version (crawler d'URL) fonctionnent
+ * toujours : leurs clés sont traduites au format mission, avec un avertissement.
  */
 function migrateLegacyKeys(raw: Record<string, unknown>, warnings: string[]): Record<string, unknown> {
   const result: Record<string, unknown> = { ...raw };
@@ -199,7 +199,7 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
   }
   const { discover } = config.goals;
   if (discover) {
-    // goals.discover is the short form of the discover* switches.
+    // goals.discover est la forme courte des interrupteurs discover*.
     if (discover.navigation !== undefined) config.goals.discoverNavigation = discover.navigation;
     if (discover.forms !== undefined) config.goals.discoverForms = discover.forms;
     if (discover.dialogs !== undefined) config.goals.discoverFlows = discover.dialogs;
@@ -229,7 +229,7 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
     warnings.push('exploration.autonomous is false and no flow is defined: nothing will be tested.');
   }
   if (config.auth.type === 'http') {
-    // auth.type: http is a shortcut for a credential profile answered by the HttpAuthHandler.
+    // auth.type: http est un raccourci pour un profil d'identifiants traité par le HttpAuthHandler.
     const { httpAuth } = config.browserInteractions;
     if (!('auth' in config.credentials)) {
       config.credentials.auth = {
@@ -260,7 +260,7 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
   return { config, warnings };
 }
 
-/** `*.example.com` matches sub-domains (not the apex); anything else is an exact, case-insensitive match. */
+/** `*.example.com` couvre les sous-domaines (pas le domaine lui-même) ; sinon, correspondance exacte, sans tenir compte de la casse. */
 export function hostMatches(hostname: string, pattern: string): boolean {
   const host = hostname.toLowerCase();
   const expected = pattern.toLowerCase();

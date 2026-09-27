@@ -101,7 +101,7 @@ describe('leaving a date picker keeps the dialog under it', () => {
   let result: ExplorationResult;
 
   beforeAll(async () => {
-    // The dialog opens only once: reloading the page would lose it for good.
+    // La fenêtre ne s'ouvre qu'une fois : recharger la page la perdrait pour de bon.
     app = await serve(
       page(`<h1>Dossiers</h1>
 <button id="open" onclick="localStorage.setItem('opened','1');document.getElementById('dlg').style.display='block'">Afficher le dossier</button>

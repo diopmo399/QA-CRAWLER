@@ -3,27 +3,27 @@ import type { BrowserInteraction, InteractionOutcome, OriginClass } from '../int
 import type { AllowedOriginPolicy } from './origin-policy.js';
 import type { SafetyPolicy } from './safety-policy.js';
 
-/** Safety decision for a browser interaction, taken before any handler runs. */
+/** Décision de sécurité pour une interaction du navigateur, prise avant l'exécution de tout handler. */
 export interface InteractionDecision {
   verdict: 'ALLOW' | 'BLOCK';
   reason: string;
-  /** Outcome recorded when the interaction is blocked. */
+  /** Résultat enregistré quand l'interaction est bloquée. */
   outcome?: InteractionOutcome;
   originClass?: OriginClass;
-  /** HTTP_AUTH: credential profile the handler may use. */
+  /** HTTP_AUTH : profil d'identifiants que le handler peut utiliser. */
   credentialProfile?: string;
-  /** Dialogs: what to answer. */
+  /** Dialogues : quoi répondre. */
   dialog?: { accept: boolean; value?: string | { env: string } };
 }
 
 /**
- * The SafetyPolicy's rules applied to interactions that do not come from the
- * DOM. Nothing is accepted "just to keep crawling":
- * - credentials go only to allowed origins, from a configured profile;
- * - confirm() is never accepted when its message sounds destructive or mutating;
- * - prompt() is only answered with a value written in the mission;
- * - file choosers never get a file; permissions are denied unless granted by the mission;
- * - popups and navigations to external or blocked origins are not followed.
+ * Les règles de la SafetyPolicy appliquées aux interactions qui ne viennent pas du
+ * DOM. Rien n'est accepté « juste pour continuer l'exploration » :
+ * - les identifiants ne vont qu'aux origines autorisées, depuis un profil configuré ;
+ * - confirm() n'est jamais accepté quand son message semble destructif ou modificateur ;
+ * - prompt() n'est répondu qu'avec une valeur écrite dans la mission ;
+ * - les sélecteurs de fichier ne reçoivent jamais de fichier ; les permissions sont refusées sauf si la mission les accorde ;
+ * - les popups et navigations vers des origines externes ou bloquées ne sont pas suivies.
  */
 export class InteractionPolicy {
   constructor(

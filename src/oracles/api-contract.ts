@@ -2,16 +2,16 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
-/** One operation of an API contract: what the server may answer. */
+/** Une opération d'un contrat d'API : ce que le serveur peut répondre. */
 export interface ContractOperation {
   method: string;
-  /** Path template as written (/users/{id}). */
+  /** Modèle de chemin tel qu'écrit (/users/{id}). */
   path: string;
-  /** Matches concrete paths (with or without the servers' base path). */
+  /** Correspond aux chemins concrets (avec ou sans le chemin de base des serveurs). */
   matcher: RegExp;
-  /** Declared statuses: "201", "4XX", "default"… */
+  /** Statuts déclarés : "201", "4XX", "default"… */
   responses: string[];
-  /** Properties of the JSON request body, when described. */
+  /** Propriétés du corps JSON de la requête, quand elles sont décrites. */
   requestFields: Record<string, ContractFieldSchema>;
 }
 
@@ -32,15 +32,15 @@ export interface ApiContract {
   operations: ContractOperation[];
 }
 
-/** Where the API contract comes from (OpenAPI file, internal URL…). */
+/** D'où vient le contrat d'API (fichier OpenAPI, URL interne…). */
 export interface ApiContractProvider {
   load(): Promise<ApiContract>;
 }
 
 /**
- * OpenAPI 3 (YAML or JSON), from a local file or an allowed URL. A URL is
- * fetched only when its host is allowed by the mission (never an external
- * site); no credential is sent.
+ * OpenAPI 3 (YAML ou JSON), depuis un fichier local ou une URL autorisée. Une URL
+ * n'est lue que si son hôte est autorisé par la mission (jamais un site externe) ;
+ * aucun identifiant n'est envoyé.
  */
 export class OpenApiContractProvider implements ApiContractProvider {
   constructor(
@@ -149,7 +149,7 @@ export function parseOpenApi(text: string, source = 'openapi'): ApiContract {
   return { source, operations };
 }
 
-/** Is this status declared ("201", "2XX", "default")? */
+/** Ce statut est-il déclaré ("201", "2XX", "default") ? */
 export function declares(responses: readonly string[], status: number): boolean {
   const code = String(status);
   return responses.some(

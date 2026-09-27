@@ -141,7 +141,7 @@ describe('TechnicalOracle', () => {
     const strict = new TechnicalOracle({ api404: 'fail' });
     expect((await strict.evaluate(page('a'), action(), page('b'), notFound)).status).toBe('FAIL');
 
-    // A 404 on a document is a broken link for the collector, not an API failure.
+    // Un 404 sur un document est un lien cassé pour le collecteur, pas un échec d'API.
     const document = observed({ network: [call('GET', 'http://app.test/old', 404, 'document')] });
     expect((await oracle.evaluate(page('a'), action(), page('b'), document)).status).toBe('PASS');
 

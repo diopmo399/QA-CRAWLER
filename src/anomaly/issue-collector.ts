@@ -2,8 +2,8 @@ import { SEVERITIES, type Issue, type IssueInput, type Severity } from '../model
 import { redactText, redactUrl } from '../security/redactor.js';
 
 /**
- * Collects anomalies from every observer, redacts them and merges duplicates:
- * the same error thrown on 30 pages is one issue with 30 occurrences, not 30 issues.
+ * Collecte les anomalies de tous les observateurs, les masque et fusionne les doublons :
+ * la même erreur levée sur 30 pages est une anomalie avec 30 occurrences, pas 30 anomalies.
  */
 export class IssueCollector {
   private readonly issues: Issue[] = [];
@@ -62,7 +62,7 @@ export class IssueCollector {
     return this.issues.filter((issue) => issue.states.includes(stateId));
   }
 
-  /** Attaches issues first seen before their state was known (e.g. while a page was loading). */
+  /** Rattache les anomalies vues avant que leur état soit connu (par exemple pendant le chargement d'une page). */
   assignState(issueIds: readonly string[], stateId: string, flow: readonly string[]): void {
     for (const issue of this.issues) {
       if (!issueIds.includes(issue.id)) continue;
@@ -89,9 +89,9 @@ export class IssueCollector {
 }
 
 /**
- * Two anomalies are "the same" when they have the same nature and target,
- * regardless of the page they were seen on. Numbers inside messages (line
- * numbers, ids, durations) are ignored so near-identical errors merge too.
+ * Deux anomalies sont « les mêmes » quand elles ont la même nature et la même
+ * cible, quelle que soit la page où elles ont été vues. Les nombres des messages
+ * (numéros de ligne, id, durées) sont ignorés pour fusionner aussi les erreurs presque identiques.
  */
 function dedupeKey(issue: IssueInput): string {
   const message = issue.message.replace(/\d+/g, '#').slice(0, 300);

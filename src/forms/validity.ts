@@ -1,9 +1,9 @@
 import type { Locator } from 'playwright';
 
 /**
- * Runs in the browser: is the field invalid, and which message does the
- * application show for it (mat-error, invalid-feedback, aria-errormessage…)?
- * The value itself is never read.
+ * S'exécute dans le navigateur : le champ est-il invalide, et quel message
+ * l'application affiche-t-elle pour lui (mat-error, invalid-feedback, aria-errormessage…) ?
+ * La valeur elle-même n'est jamais lue.
  */
 export function readValidity(el: Element): { invalid: boolean; message: string } {
   const ERRORS =
@@ -33,7 +33,7 @@ export function readValidity(el: Element): { invalid: boolean; message: string }
   return { invalid, message: message || control.validationMessage };
 }
 
-/** Validity of a field on the page; undefined when it cannot be read. */
+/** Validité d'un champ sur la page ; undefined quand elle ne peut pas être lue. */
 export async function validityOf(
   locator: Locator,
 ): Promise<{ invalid: boolean; message: string } | undefined> {

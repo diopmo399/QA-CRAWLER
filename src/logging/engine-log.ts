@@ -24,8 +24,8 @@ export type EngineEvent =
   | 'BROWSER_INTERACTION';
 
 /**
- * One line of the engine log (engine-log.jsonl). Only ids, labels and
- * redacted URLs: never a typed value, header, cookie or secret.
+ * Une ligne du journal du moteur (engine-log.jsonl). Seulement des id, des libellés
+ * et des URL masquées : jamais une valeur saisie, un en-tête, un cookie ni un secret.
  */
 export interface EngineLogEntry {
   at: string;
@@ -37,14 +37,14 @@ export interface EngineLogEntry {
   data?: Record<string, string | number | boolean>;
 }
 
-/** Stops recording beyond this many lines (a very long run stays readable). */
+/** Arrête l'enregistrement au-delà de ce nombre de lignes (un run très long reste lisible). */
 const MAX_ENTRIES = 50_000;
 
 /**
- * Structured log of what the engine did, filtered by level: ERROR (failures,
- * crashes), WARN (blocked, recovery, stuck), INFO (states, transitions,
- * verdicts), DEBUG (decisions, backtracks), TRACE (revisited states, every
- * issue occurrence).
+ * Journal structuré de ce qu'a fait le moteur, filtré par niveau : ERROR (échecs,
+ * plantages), WARN (blocages, récupération, blocage en boucle), INFO (états,
+ * transitions, verdicts), DEBUG (décisions, retours arrière), TRACE (états revisités,
+ * chaque occurrence d'anomalie).
  */
 export class EngineEventLog {
   private readonly lines: EngineLogEntry[] = [];
@@ -66,7 +66,7 @@ export class EngineEventLog {
       this.dropped += 1;
       return;
     }
-    // Messages quote pages and errors: whatever they contain, no secret goes out.
+    // Les messages citent des pages et des erreurs : quoi qu'ils contiennent, aucun secret ne sort.
     this.lines.push({ at: new Date().toISOString(), level, event, message: redactText(message), ...extra });
   }
 
@@ -74,7 +74,7 @@ export class EngineEventLog {
     return [...this.lines];
   }
 
-  /** JSON lines, one entry per line. */
+  /** Lignes JSON, une entrée par ligne. */
   toJsonLines(): string {
     const tail =
       this.dropped > 0
@@ -83,7 +83,7 @@ export class EngineEventLog {
     return [...this.lines.map((entry) => JSON.stringify(entry)), ...tail].join('\n') + '\n';
   }
 
-  /** The explorer's events, as log lines. */
+  /** Les événements de l'explorateur, sous forme de lignes de journal. */
   listener(): ExplorationListener {
     return {
       onAuthenticated: (description) => {
@@ -199,7 +199,7 @@ export class EngineEventLog {
   }
 }
 
-/** Every listener receives every event, in order. */
+/** Chaque listener reçoit chaque événement, dans l'ordre. */
 export function combineListeners(...listeners: (ExplorationListener | undefined)[]): ExplorationListener {
   const present = listeners.filter((listener): listener is ExplorationListener => listener !== undefined);
   const combined: Record<string, (...args: unknown[]) => void> = {};

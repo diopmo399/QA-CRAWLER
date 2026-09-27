@@ -4,12 +4,12 @@ import { redactText, redactUrl } from '../security/redactor.js';
 import { collectDomSnapshot } from './dom-snapshot.js';
 
 /**
- * Observes the current screen: URL, title, interactive elements (with ARIA
- * role and accessible name), forms, headings, dialogs, selected tabs and a
- * short text excerpt. Reads only — never clicks or types.
+ * Observe l'écran courant : URL, titre, éléments interactifs (avec rôle ARIA et nom
+ * accessible), formulaires, titres, fenêtres, onglets sélectionnés et un court extrait
+ * de texte. Lecture seule — ne clique ni ne tape jamais.
  *
- * Extension point: a screenshot/vision observer can later enrich the
- * snapshot without changing the explorer.
+ * Point d'extension : un observateur de captures / de vision pourra plus tard enrichir
+ * l'instantané sans changer l'explorateur.
  */
 export class UIObserver {
   constructor(private readonly maxElements = 400) {}

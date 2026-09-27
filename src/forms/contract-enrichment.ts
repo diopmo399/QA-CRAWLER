@@ -3,10 +3,10 @@ import { normalizeText } from '../policies/keywords.js';
 import type { DiscoveredForm, FormField } from './form-model.js';
 
 /**
- * Completes a form with what the API contract says about the matching
- * request fields (format email, lengths, bounds, pattern, allowed values).
- * The DOM stays the reference: a constraint is only added when the page does
- * not declare one, and the field type only becomes more precise (text → email).
+ * Complète un formulaire avec ce que le contrat d'API dit des champs de requête
+ * correspondants (format e-mail, longueurs, bornes, motif, valeurs permises). Le DOM
+ * reste la référence : une contrainte n'est ajoutée que si la page n'en déclare pas,
+ * et le type du champ ne peut que devenir plus précis (texte → e-mail).
  */
 export function enrichWithContract(form: DiscoveredForm, contract: ApiContract | undefined): DiscoveredForm {
   if (!contract) return form;
@@ -41,7 +41,7 @@ function enrichField(field: FormField, properties: ReadonlyMap<string, ContractF
   ) as unknown as FormField;
 }
 
-/** "Email", "email", "e_mail", "userEmail"… compared without case, accents nor separators. */
+/** "Email", "email", "e_mail", "userEmail"… comparés sans tenir compte de la casse, des accents ni des séparateurs. */
 function key(name: string): string {
   return normalizeText(name).replace(/[^a-z0-9]/g, '');
 }

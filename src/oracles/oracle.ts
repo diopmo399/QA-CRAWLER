@@ -5,16 +5,16 @@ import type { PageContext } from '../model/page-context.js';
 import type { UiSignals } from '../model/ui-snapshot.js';
 
 /**
- * PASS: the checks this oracle knows how to make hold.
- * FAIL: a confirmed failure (HTTP 5xx, crash, action impossible…).
- * WARNING: something looks wrong but may be expected (baseline difference, error banner…).
- * UNKNOWN: not enough information. Never turned into PASS.
+ * PASS : les vérifications que cet oracle sait faire sont satisfaites.
+ * FAIL : un échec confirmé (HTTP 5xx, plantage, action impossible…).
+ * WARNING : quelque chose semble anormal mais peut être attendu (différence de baseline, bannière d'erreur…).
+ * UNKNOWN : pas assez d'informations. Jamais transformé en PASS.
  */
 export const ORACLE_STATUSES = ['PASS', 'FAIL', 'WARNING', 'UNKNOWN'] as const;
 export type OracleStatus = (typeof ORACLE_STATUSES)[number];
 
 export interface OracleReason {
-  /** Stable code (http-5xx, page-crash, baseline-differs…). */
+  /** Code stable (http-5xx, page-crash, baseline-differs…). */
   code: string;
   message: string;
 }
@@ -23,14 +23,14 @@ export interface OracleResult {
   oracle: string;
   status: OracleStatus;
   /**
-   * 0..1: how sure the oracle is. A way to rank observations, not a
-   * scientific measure.
+   * 0..1 : à quel point l'oracle est sûr. Un moyen de classer les observations, pas
+   * une mesure scientifique.
    */
   confidence: number;
   reasons: OracleReason[];
 }
 
-/** The action as executed (no value typed, no secret). */
+/** L'action telle qu'exécutée (aucune valeur saisie, aucun secret). */
 export interface ExecutedAction {
   id: string;
   type: ActionType;
@@ -38,30 +38,31 @@ export interface ExecutedAction {
   classification: ActionClassification;
   text?: string;
   href?: string;
-  /** Sends a form (submit, "Save"… in a form). */
+  /** Envoie un formulaire (submit, « Enregistrer »… dans un formulaire). */
   submitsForm?: boolean;
   result: 'SUCCESS' | 'FAILED';
   error?: string;
   durationMs?: number;
 }
 
-/** What the observers saw while the action ran. */
+/** Ce que les observateurs ont vu pendant l'action. */
 export interface ActionObservations {
-  /** Anomalies raised during the action (HTTP, JS errors, console…). */
+  /** Anomalies levées pendant l'action (HTTP, erreurs JS, console…). */
   issues: Issue[];
-  /** HTTP exchanges of the action's network window. */
+  /** Échanges HTTP de la fenêtre réseau de l'action. */
   network: NetworkExchange[];
   pageCrashed: boolean;
-  /** UI hints before and after (alerts, spinner, empty screen, invalid fields). */
+  /** Indices de l'écran avant et après (alertes, chargement, écran vide, champs invalides). */
   before?: UiSignals;
   after?: UiSignals;
-  /** The form of this screen was just filled with valid data. */
+  /** Le formulaire de cet écran vient d'être rempli avec des données valides. */
   formFilledWithValidData?: boolean;
 }
 
 /**
- * "Does the result look correct?" An oracle judges one executed action from
- * plain data. It must answer UNKNOWN when it cannot tell — never invent a PASS.
+ * « Le résultat semble-t-il correct ? » Un oracle juge une action exécutée à partir
+ * de données simples. Il doit répondre UNKNOWN quand il ne peut pas savoir — jamais
+ * inventer un PASS.
  */
 export interface TestOracle {
   readonly name: string;
@@ -74,10 +75,10 @@ export interface TestOracle {
 }
 
 /**
- * Extension point for business meaning ("the invoice was created with the
- * right total"). No implementation ships: without an explicit business
- * expectation, the business result is UNKNOWN. A future implementation
- * (rules, contracts, or a model) plugs in here without touching the explorer.
+ * Point d'extension pour le sens métier (« la facture a été créée avec le bon
+ * total »). Aucune implémentation n'est fournie : sans attente métier explicite, le
+ * résultat métier est UNKNOWN. Une future implémentation (règles, contrats, ou un
+ * modèle) se branche ici sans toucher à l'explorateur.
  */
 export type SemanticOracle = TestOracle;
 

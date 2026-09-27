@@ -21,11 +21,11 @@ export const DEFAULT_ERROR_TEXTS = [
 ] as const;
 
 /**
- * What the screen shows after the action: an error banner, alert or
- * snackbar that just appeared, a form still invalid after valid data, an
- * empty screen, a spinner that does not stop. Only warnings: a banner may be
- * the expected answer. Nothing visible does not prove success — PASS with a
- * low confidence.
+ * Ce que montre l'écran après l'action : une bannière d'erreur, une alerte ou une
+ * snackbar qui vient d'apparaître, un formulaire encore invalide après des données
+ * valides, un écran vide, un chargement qui ne s'arrête pas. Seulement des
+ * avertissements : une bannière peut être la réponse attendue. Rien de visible ne
+ * prouve pas le succès — PASS avec une faible confiance.
  */
 export class UIOracle implements TestOracle {
   readonly name = 'ui';

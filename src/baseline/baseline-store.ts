@@ -2,9 +2,9 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import path from 'node:path';
 import type { FlowGraphData } from '../model/flow.js';
 
-/** Where a baseline comes from. Branch, commit and environment are optional. */
+/** D'où vient une baseline. Branche, commit et environnement sont facultatifs. */
 export interface BaselineMetadata {
-  /** Id of the run that produced it (also its folder under runs/). */
+  /** Id du run qui l'a produite (aussi son dossier sous runs/). */
   runId: string;
   application: string;
   mission: string;
@@ -24,15 +24,15 @@ export interface Baseline {
 }
 
 /**
- * The reference knowledge of the application, versioned:
+ * La connaissance de référence de l'application, versionnée :
  *
  *   baseline/
- *     flow-graph.json       ← latest baseline (what verify and explore compare with)
+ *     flow-graph.json       ← dernière baseline (celle que verify et explore comparent)
  *     metadata.json
- *     runs/<runId>/flow-graph.json, metadata.json   ← every learned run, newest kept
+ *     runs/<runId>/flow-graph.json, metadata.json   ← chaque run appris, les plus récents conservés
  *
- * Saving never overwrites history: the previous baselines stay in runs/
- * (up to `keepRuns`).
+ * L'enregistrement n'écrase jamais l'historique : les baselines précédentes
+ * restent dans runs/ (jusqu'à `keepRuns`).
  */
 export class BaselineStore {
   constructor(
@@ -44,7 +44,7 @@ export class BaselineStore {
     return path.join(this.directory, 'flow-graph.json');
   }
 
-  /** The latest baseline, or undefined when none was learned yet. */
+  /** La dernière baseline, ou undefined quand aucune n'a encore été apprise. */
   async load(): Promise<Baseline | undefined> {
     let text: string;
     try {
@@ -62,7 +62,7 @@ export class BaselineStore {
     return { graph: graph as FlowGraphData, ...(metadata ? { metadata } : {}) };
   }
 
-  /** Stores a new baseline: it becomes the latest, and is archived under runs/. */
+  /** Enregistre une nouvelle baseline : elle devient la dernière et est archivée sous runs/. */
   async save(graph: FlowGraphData, metadata: BaselineMetadata): Promise<string> {
     const runDir = path.join(this.directory, 'runs', safeName(metadata.runId));
     await mkdir(runDir, { recursive: true });
@@ -74,7 +74,7 @@ export class BaselineStore {
     return runDir;
   }
 
-  /** Metadata of the archived runs, newest first. */
+  /** Métadonnées des runs archivés, les plus récents d'abord. */
   async runs(): Promise<BaselineMetadata[]> {
     const root = path.join(this.directory, 'runs');
     const names = await readdir(root).catch(() => [] as string[]);

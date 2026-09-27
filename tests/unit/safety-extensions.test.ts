@@ -45,12 +45,12 @@ describe('safety.mutations', () => {
     const submit = action({ id: 'a-2', classification: 'MUTATION', risks: ['form-submit'] });
     expect(policy.evaluate(save).verdict).toBe('ALLOW');
     policy.recordExecuted(save);
-    policy.recordExecuted(action({ text: 'Users' })); // SAFE: not counted
+    policy.recordExecuted(action({ text: 'Users' })); // SAFE : pas compté
     expect(policy.evaluate(submit).verdict).toBe('ALLOW');
     policy.recordExecuted(submit);
     expect(policy.mutationCount).toBe(2);
     expect(policy.evaluate(save)).toEqual({ verdict: 'BLOCK', reason: 'mutation budget spent (2/2)' });
-    // Safe actions go on.
+    // Les actions sûres continuent.
     expect(policy.evaluate(action({ text: 'Users' })).verdict).toBe('ALLOW');
     expect(policy.evaluate(action({ classification: 'DANGEROUS', risks: [] })).verdict).toBe('BLOCK');
   });
@@ -75,7 +75,7 @@ describe('safety.mutations', () => {
       policy.evaluate(action({ type: 'fill', classification: 'DANGEROUS', risks: ['sensitive-data'] }))
         .verdict,
     ).toBe('BLOCK');
-    // It counts in the budget of actions changing data.
+    // Elle compte dans le budget des actions qui modifient des données.
     policy.recordExecuted(remove);
     expect(policy.evaluate(remove).verdict).toBe('BLOCK');
   });
@@ -140,8 +140,8 @@ describe('engine log', () => {
     const log = new EngineEventLog('INFO');
     const listener = log.listener();
     listener.onState?.(context, true);
-    listener.onState?.(context, false); // TRACE: not kept
-    listener.onBacktrack?.('users', 'home', 'url'); // DEBUG: not kept
+    listener.onState?.(context, false); // TRACE : pas gardé
+    listener.onBacktrack?.('users', 'home', 'url'); // DEBUG : pas gardé
     listener.onStuck?.({
       at: '',
       stateId: 'users',

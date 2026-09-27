@@ -4,18 +4,18 @@ import type { SafetyPolicy } from '../policies/safety-policy.js';
 import type { DiscoveredForm, FormFillOperation, FormFillPlan } from './form-model.js';
 
 /**
- * "What goes into this form?" Produces a plan — which field gets which
- * value, and why — without touching the browser. The PlaywrightActionExecutor
- * executes the plan; the FormExerciser orchestrates.
+ * « Que met-on dans ce formulaire ? » Produit un plan — quel champ reçoit quelle
+ * valeur, et pourquoi — sans toucher au navigateur. Le PlaywrightActionExecutor
+ * exécute le plan ; le FormExerciser orchestre.
  */
 export interface FormFillStrategy {
   fill(form: DiscoveredForm, context: PageContext): Promise<FormFillPlan>;
 }
 
 /**
- * Every field gets the valid value of the TestDataProvider; one option per
- * radio group; fields the SafetyPolicy refuses and sensitive fields are
- * skipped, without any value in the plan.
+ * Chaque champ reçoit la valeur valide du TestDataProvider ; une option par groupe
+ * de radios ; les champs refusés par la SafetyPolicy et les champs sensibles sont
+ * ignorés, sans aucune valeur dans le plan.
  */
 export class ValidDataFillStrategy implements FormFillStrategy {
   constructor(
@@ -56,7 +56,7 @@ export class ValidDataFillStrategy implements FormFillStrategy {
         });
         continue;
       }
-      // One option per radio group.
+      // Une option par groupe de radios.
       if (field.type === 'radio' && field.choiceGroup !== undefined) {
         if (answered.has(field.choiceGroup)) {
           operations.push({

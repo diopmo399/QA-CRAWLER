@@ -12,7 +12,7 @@ import type { RecoverySummary } from '../recovery/recovery-model.js';
 import type { CleanupReport, CreatedDataRecord } from '../data/created-data.js';
 import type { AuthorizationReport } from '../actors/authorization-observer.js';
 
-/** Why the exploration ended. */
+/** Pourquoi l'exploration s'est terminée. */
 export type StopReason =
   | 'exhausted'
   | 'flows-only'
@@ -37,22 +37,22 @@ export interface ExplorationStats {
   formsFound: number;
   flowsPassed: number;
   flowsFailed: number;
-  /** Browser interactions by type and by status. */
+  /** Interactions du navigateur par type et par statut. */
   interactionsByType: Record<string, number>;
   interactionsByStatus: Record<string, number>;
 }
 
-/** A state with everything observed on it. */
+/** Un état avec tout ce qui y a été observé. */
 export interface StateReport extends FlowNode {
   actionsDetail: DiscoveredAction[];
   forms: FormSummary[];
-  /** How to reach it from the start state. */
+  /** Comment l'atteindre depuis l'état de départ. */
   flow: string[];
 }
 
 export interface ExplorationResult {
   mission: string;
-  /** learn, verify or explore. */
+  /** learn, verify ou explore. */
   mode: MissionMode;
   description?: string;
   target: {
@@ -67,34 +67,34 @@ export interface ExplorationResult {
   stats: ExplorationStats;
   states: StateReport[];
   transitions: FlowEdge[];
-  /** Imposed flows, in mission order. */
+  /** Flows imposés, dans l'ordre de la mission. */
   flows: FlowRunReport[];
-  /** Interactions raised by the browser outside the DOM (HTTP_AUTH, dialogs, popups, downloads…). */
+  /** Interactions levées par le navigateur hors du DOM (HTTP_AUTH, dialogues, popups, téléchargements…). */
   browserInteractions: BrowserInteractionResult[];
   issues: Issue[];
-  /** Baseline this run was compared with (verify, explore) or replaced (learn). */
+  /** Baseline avec laquelle ce run a été comparé (verify, explore) ou qu'il a remplacée (learn). */
   baseline?: BaselineMetadata;
-  /** learn: the baseline this run stored. */
+  /** learn : la baseline enregistrée par ce run. */
   learnedBaseline?: BaselineMetadata;
-  /** Differences with that baseline. */
+  /** Différences avec cette baseline. */
   flowDiff?: FlowDiff;
-  /** verify: every known transition of the baseline, replayed. */
+  /** verify : chaque transition connue de la baseline, rejouée. */
   verification?: VerificationReport;
-  /** Id of the run, carried by the data it created (QA-CRAWLER-<runId>). */
+  /** Id du run, porté par les données qu'il a créées (QA-CRAWLER-<runId>). */
   runId?: string;
-  /** Forms found and filled, with their validation cases (never a sensitive value). */
+  /** Formulaires trouvés et remplis, avec leurs cas de validation (jamais une valeur sensible). */
   formReports?: FormReport[];
-  /** Recovery attempts, abandoned branches, open circuits. */
+  /** Tentatives de récupération, branches abandonnées, circuits ouverts. */
   recovery?: RecoverySummary;
-  /** Actions changing data executed, and the budget (safety.mutations). */
+  /** Actions de modification exécutées, et le budget (safety.mutations). */
   mutations?: { enabled: boolean; executed: number; maxPerRun?: number };
-  /** Data the run probably created, tagged QA-CRAWLER-<runId> (never the values). */
+  /** Données que le run a probablement créées, marquées QA-CRAWLER-<runId> (jamais les valeurs). */
   createdData?: CreatedDataRecord[];
-  /** What was cleaned up, and what is left to remove. */
+  /** Ce qui a été nettoyé, et ce qui reste à supprimer. */
   cleanup?: CleanupReport;
-  /** actors: what each user reaches, the differences, the rules checked. */
+  /** actors : ce que chaque utilisateur atteint, les différences, les règles vérifiées. */
   authorization?: AuthorizationReport;
-  /** Non-secret summary of the effective configuration. */
+  /** Résumé non secret de la configuration effective. */
   settings: Record<string, unknown>;
   artifacts: {
     json?: string;
@@ -104,9 +104,9 @@ export interface ExplorationResult {
     screenshotsDir?: string;
     flowDiff?: string;
     baseline?: string;
-    /** Structured engine log (JSON lines). */
+    /** Journal structuré du moteur (lignes JSON). */
     engineLog?: string;
-    /** Imposed flows generated from the paths found (YAML). */
+    /** Flows imposés générés à partir des chemins trouvés (YAML). */
     generatedFlows?: string;
   };
 }

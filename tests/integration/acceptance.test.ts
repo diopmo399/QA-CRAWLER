@@ -13,9 +13,9 @@ import {
 } from '../fixtures/acceptance-app.js';
 
 /**
- * The acceptance mission of the specification: goals, forms and a mutation
- * budget — no flow, no click written by hand. Learned once on variant A,
- * then explored on variant B (a changed screen).
+ * La mission d'acceptation de la spécification : objectifs, formulaires et un budget
+ * de modifications — aucun flow, aucun clic écrit à la main. Apprise une fois sur la
+ * variante A, puis explorée sur la variante B (un écran modifié).
  */
 describe('acceptance: autonomous exploration of the local application', () => {
   let app: AcceptanceApp;
@@ -83,11 +83,11 @@ output:
     expect(fields.find((field) => field.label === 'Email')?.filled).toBe(
       'fill "qa-crawler-acc@example.test"',
     );
-    // Names follow the defaults (QA / Crawler); the email carries the run's tag.
+    // Les noms suivent les valeurs par défaut (QA / Crawler) ; l'e-mail porte le marqueur du run.
     expect(fields.find((field) => field.label === 'Last name')?.filled).toBe('fill "Crawler"');
-    // The placeholder option is never chosen.
+    // L'option d'invite n'est jamais choisie.
     expect(fields.find((field) => field.label === 'Role')?.filled).toMatch(/select "(Reader|Editor)"/);
-    // The form was sent (mutations allowed) with tagged data: POST /api/users.
+    // Le formulaire a été envoyé (modifications permises) avec des données marquées : POST /api/users.
     const sent = app.posts.filter((post) => post.path === '/api/users');
     expect(sent.length).toBeGreaterThan(0);
     expect(sent.every((post) => post.body.toLowerCase().includes('qa-crawler-acc'))).toBe(true);
@@ -111,7 +111,7 @@ output:
       ),
     );
     expect(failed?.oracle?.status).toBe('FAIL');
-    // A JavaScript error is a failure too.
+    // Une erreur JavaScript est aussi un échec.
     expect(
       result.transitions.some((edge) =>
         edge.oracle?.results.some((entry) =>
@@ -119,7 +119,7 @@ output:
         ),
       ),
     ).toBe(true);
-    // Business result: never invented.
+    // Résultat métier : jamais inventé.
     expect(
       result.transitions
         .filter((edge) => edge.oracle)
@@ -156,7 +156,7 @@ output:
     ).toBe(true);
     for (const screen of ['dashboard', 'users', 'settings', 'dialog', 'statistics'])
       expect(labels()).toContain(screen);
-    // Destructive actions are never executed.
+    // Les actions destructives ne sont jamais exécutées.
     expect(
       result.transitions.some((edge) => edge.action.text === 'Delete user' && edge.result !== 'BLOCKED'),
     ).toBe(false);

@@ -1,7 +1,7 @@
 import type { BrowserInteractionHandler, HandlerContext, HandlerOutcome } from '../handler.js';
 import type { BrowserInteraction } from '../types.js';
 
-/** JS_ALERT / JS_CONFIRM / JS_PROMPT: answered as the InteractionPolicy decided. */
+/** JS_ALERT / JS_CONFIRM / JS_PROMPT : répondus comme l'a décidé l'InteractionPolicy. */
 export class DialogHandler implements BrowserInteractionHandler {
   readonly name = 'DialogHandler';
   readonly handles = ['JS_ALERT', 'JS_CONFIRM', 'JS_PROMPT'] as const;
@@ -37,7 +37,7 @@ export class DialogHandler implements BrowserInteractionHandler {
         };
       }
       await native.dialog.accept(value);
-      // The value itself is never recorded.
+      // La valeur elle-même n'est jamais enregistrée.
       return {
         status: 'HANDLED',
         outcome: 'PROMPT_ANSWERED',

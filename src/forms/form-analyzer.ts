@@ -10,13 +10,13 @@ const FIELD_ACTIONS = new Set<DiscoveredAction['type']>(['fill', 'select', 'chec
 const PLACEHOLDER_OPTION = /^(-+|(choisir|choose|select|sélectionner|selectionner|aucun|none)\b)/i;
 
 /**
- * "What does this form expect?"
+ * « Qu'attend ce formulaire ? »
  *
- * Turns the fields and buttons already discovered on a screen into logical
- * forms — a <form>, a dialog, an overlay, or the page itself when a
- * single-page application has no <form> — with each field's type,
- * constraints, options and sensitivity. With a page, it also reads the
- * validation messages currently shown. It never fills nor clicks anything.
+ * Transforme les champs et boutons déjà découverts sur un écran en formulaires
+ * logiques — un <form>, une fenêtre, un calque, ou la page elle-même quand une
+ * application monopage n'a pas de <form> — avec le type, les contraintes, les
+ * options et la sensibilité de chaque champ. Avec une page, il lit aussi les messages
+ * de validation affichés. Il ne remplit et ne clique jamais rien.
  */
 export interface FormAnalyzer {
   analyze(page: Page | undefined, context: PageContext): Promise<DiscoveredForm[]>;
@@ -29,7 +29,7 @@ export class DomFormAnalyzer implements FormAnalyzer {
     return forms;
   }
 
-  /** The logical forms of a screen, from what was discovered on it (no browser needed). */
+  /** Les formulaires logiques d'un écran, à partir de ce qui y a été découvert (sans navigateur). */
   formsOf(context: PageContext): DiscoveredForm[] {
     const groups = new Map<string, DiscoveredAction[]>();
     for (const action of context.actions) {
@@ -60,18 +60,18 @@ export class DomFormAnalyzer implements FormAnalyzer {
         foreground: actions.some((action) => action.foreground === true),
       });
     }
-    // What is in front of the screen first.
+    // Ce qui est devant l'écran d'abord.
     return forms.sort((a, b) => Number(b.foreground) - Number(a.foreground));
   }
 }
 
-/** Readable name of a form: the dialog's title, else the screen's. */
+/** Nom lisible d'un formulaire : le titre de la fenêtre, sinon celui de l'écran. */
 export function formName(group: string, context: PageContext): string {
   if (group.startsWith('layer:')) return group.slice('layer:'.length);
   return context.dialogs[0] ?? context.headings[0] ?? context.title;
 }
 
-/** The field a discovered action fills, as the form expects it. */
+/** Le champ qu'une action découverte remplit, tel que le formulaire l'attend. */
 export function fieldOf(action: DiscoveredAction): FormField {
   const field = action.field;
   const sensitivity = sensitivityOf({
@@ -122,7 +122,7 @@ export function fieldOf(action: DiscoveredAction): FormField {
   return result;
 }
 
-/** ARIA and HTML semantics first, framework hints (Material datepicker…) as a fallback. */
+/** La sémantique ARIA et HTML d'abord, les indices des frameworks (datepicker Material…) en repli. */
 export function fieldTypeOf(action: DiscoveredAction): FieldType {
   const field = action.field;
   const input = field?.inputType ?? '';

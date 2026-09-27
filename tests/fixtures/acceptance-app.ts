@@ -2,28 +2,28 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 /**
- * Local application of the acceptance tests:
+ * Application locale des tests d'acceptation :
  *
  * Login
  *  ↓
  * Dashboard
- *  ├── Users ── List, Create form (POST /api/users), Detail
- *  ├── Wizard ── Step 1 → Step 2 → Confirmation
+ *  ├── Users ── liste, formulaire de création (POST /api/users), détail
+ *  ├── Wizard ── étape 1 → étape 2 → confirmation
  *  ├── Dialog
- *  ├── Broken API (HTTP 500 on load and on refresh)
- *  ├── History (a broken branch: the page itself answers 500)
- *  ├── Pages (endless pagination: a loop to avoid)
- *  └── Settings (a button throwing a JavaScript error)
+ *  ├── Broken API (HTTP 500 au chargement et au rafraîchissement)
+ *  ├── History (une branche cassée : la page elle-même répond 500)
+ *  ├── Pages (pagination sans fin : une boucle à éviter)
+ *  └── Settings (un bouton qui lève une erreur JavaScript)
  *
- * Simulates: successful API, HTTP 400, HTTP 500, JS error, session
- * expiration, dialog, form validation, wizard. `variant: 'B'` changes the
- * user detail screen (a difference with a baseline learned on 'A').
+ * Simule : API qui réussit, HTTP 400, HTTP 500, erreur JS, expiration de session,
+ * fenêtre, validation de formulaire, assistant. `variant: 'B'` change l'écran de
+ * détail d'un utilisateur (une différence avec une baseline apprise sur 'A').
  */
 export interface AcceptanceApp {
   url: string;
-  /** Bodies of the POST requests received, in order. */
+  /** Corps des requêtes POST reçues, dans l'ordre. */
   posts: { path: string; body: string }[];
-  /** Successful logins (the first one, then one per session expiry). */
+  /** Connexions réussies (la première, puis une par expiration de session). */
   logins: () => number;
   setVariant(variant: 'A' | 'B'): void;
   close(): Promise<void>;
@@ -105,7 +105,7 @@ function screens(variant: 'A' | 'B'): Record<string, string> {
   };
 }
 
-/** Page loads a session allows before it expires (then: back to the login page). */
+/** Chargements de page qu'une session permet avant d'expirer (ensuite : retour à la page de connexion). */
 const PAGES_PER_SESSION = 25;
 
 export async function startAcceptanceApp(): Promise<AcceptanceApp> {
@@ -185,7 +185,7 @@ export async function startAcceptanceApp(): Promise<AcceptanceApp> {
       return;
     }
 
-    // A page load uses up the session.
+    // Un chargement de page consomme la session.
     sessions.set(sid, left - 1);
     if (url.pathname === '/history') {
       html(500, page('<h1>Server error</h1><p>The history is broken.</p>'));

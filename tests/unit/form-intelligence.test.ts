@@ -27,7 +27,7 @@ const input = (label: string, extra: Partial<UiElement> = {}): UiElement =>
     ...extra,
   });
 
-/** "Créer utilisateur" without <form>: Nom *, Email *, Rôle *, Actif, [Annuler] [Enregistrer]. */
+/** « Créer utilisateur » sans <form> : Nom *, Email *, Rôle *, Actif, [Annuler] [Enregistrer]. */
 const createUser = (): PageContext => {
   const shot = snapshot({
     url: 'http://localhost:4200/users/new',
@@ -120,11 +120,11 @@ describe('FormFillStrategy', () => {
     const plan = await strategy.fill(form, context);
     expect(plan.formId).toBe('create-user:page');
     expect(plan.operations.map(({ operation, value, source }) => ({ operation, value, source }))).toEqual([
-      { operation: 'fill', value: 'Tester', source: 'rule' }, // testData.defaults.lastName ("Nom")
-      { operation: 'fill', value: 'qa-crawler-abc123@example.test', source: 'rule' }, // tagged with the run id
-      { operation: 'select', value: 'USER', source: 'type' }, // no placeholder, no disabled option
-      { operation: 'skip', value: undefined, source: 'type' }, // optional checkbox
-      { operation: 'skip', value: undefined, source: undefined }, // password: never filled, no value
+      { operation: 'fill', value: 'Tester', source: 'rule' }, // testData.defaults.lastName (« Nom »)
+      { operation: 'fill', value: 'qa-crawler-abc123@example.test', source: 'rule' }, // marqué avec l'id du run
+      { operation: 'select', value: 'USER', source: 'type' }, // ni option d'invite, ni option désactivée
+      { operation: 'skip', value: undefined, source: 'type' }, // case à cocher facultative
+      { operation: 'skip', value: undefined, source: undefined }, // mot de passe : jamais rempli, aucune valeur
     ]);
   });
 });

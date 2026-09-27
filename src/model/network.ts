@@ -1,21 +1,21 @@
 /**
- * One HTTP exchange seen while an action ran. Only what explains the
- * transition is kept — never headers (Authorization, cookies), bodies,
- * passwords or secrets; the URL goes through the redactor.
+ * Un échange HTTP vu pendant une action. Seul ce qui explique la transition est
+ * gardé — jamais les en-têtes (Authorization, cookies), les corps, les mots de
+ * passe ni les secrets ; l'URL passe par le masquage.
  */
 export interface NetworkExchange {
   method: string;
   url: string;
-  /** Absent when the request failed or had not answered when the window closed. */
+  /** Absent quand la requête a échoué ou n'avait pas répondu à la fermeture de la fenêtre. */
   status?: number;
   durationMs?: number;
   /** document, xhr, fetch… */
   resourceType: string;
-  /** Network error (ERR_CONNECTION_REFUSED…), when the request failed. */
+  /** Erreur réseau (ERR_CONNECTION_REFUSED…), quand la requête a échoué. */
   failure?: string;
 }
 
-/** The network window of one action: from just before it runs until the next state is observed. */
+/** La fenêtre réseau d'une action : de juste avant son exécution jusqu'à l'observation de l'état suivant. */
 export interface ActionNetworkTrace {
   actionId: string;
   startedAt: string;

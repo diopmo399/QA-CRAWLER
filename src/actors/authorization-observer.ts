@@ -12,13 +12,13 @@ import { UIObserver } from '../observation/ui-observer.js';
 import { redactUrl } from '../security/redactor.js';
 
 /**
- * ALLOWED: the screen opened. DENIED: HTTP 401/403, sent back to the login
- * page, or a refusal message. NOT_FOUND: HTTP 404. ERROR: HTTP 5xx or the
- * page did not load.
+ * ALLOWED : l'écran s'est ouvert. DENIED : HTTP 401/403, renvoi vers la page
+ * de connexion, ou message de refus. NOT_FOUND : HTTP 404. ERROR : HTTP 5xx
+ * ou la page ne s'est pas chargée.
  */
 export type Access = 'ALLOWED' | 'DENIED' | 'NOT_FOUND' | 'ERROR';
 
-/** A screen found by the exploration, to open as each actor. */
+/** Un écran trouvé par l'exploration, à ouvrir avec chaque acteur. */
 export interface AccessTarget {
   stateId: string;
   label: string;
@@ -32,14 +32,14 @@ export interface AccessObservation {
   url: string;
   access: Access;
   status?: number;
-  /** Screen the actor saw, when allowed. */
+  /** Écran vu par l'acteur, quand l'accès est permis. */
   observedLabel?: string;
-  /** It saw the same screen as the primary actor. */
+  /** Il a vu le même écran que l'acteur principal. */
   sameScreen?: boolean;
   reason?: string;
 }
 
-/** A screen the actors do not reach the same way. */
+/** Un écran que les acteurs n'atteignent pas de la même façon. */
 export interface AccessDifference {
   stateId: string;
   label: string;
@@ -52,7 +52,7 @@ export interface AuthorizationRuleResult {
   actor: string;
   path: string;
   expect: 'allowed' | 'denied';
-  /** PASS: every matching screen as expected; FAIL: one is not; UNKNOWN: no screen matched. */
+  /** PASS : chaque écran concerné est comme attendu ; FAIL : l'un ne l'est pas ; UNKNOWN : aucun écran concerné. */
   status: 'PASS' | 'FAIL' | 'UNKNOWN';
   checked: number;
   violations: string[];
@@ -64,7 +64,7 @@ export interface AuthorizationReport {
   observations: AccessObservation[];
   differences: AccessDifference[];
   rules: AuthorizationRuleResult[];
-  /** Actors that could not log in (no secret in the message). */
+  /** Acteurs qui n'ont pas pu se connecter (aucun secret dans le message). */
   errors: { actor: string; message: string }[];
 }
 
@@ -82,11 +82,12 @@ const DENIED_TEXTS = [
 ];
 
 /**
- * AUTHORIZATION OBSERVATION: opens the screens the exploration found as each
- * other actor (plain page loads — no click, no form, nothing sent), records
- * what each one reaches, the differences with the primary actor, and checks
- * the mission's rules (reader → /admin/* denied). An access difference is an
- * observation; only a rule turns it into PASS or FAIL.
+ * OBSERVATION DES AUTORISATIONS : ouvre les écrans trouvés par l'exploration
+ * avec chaque autre acteur (simples chargements de page — aucun clic, aucun
+ * formulaire, rien d'envoyé), note ce que chacun atteint, les différences avec
+ * l'acteur principal, et vérifie les règles de la mission (reader → /admin/*
+ * refusé). Une différence d'accès est une observation ; seule une règle la
+ * transforme en PASS ou FAIL.
  */
 export class AuthorizationObserver {
   private readonly safety: SafetyPolicy;
@@ -162,7 +163,7 @@ export class AuthorizationObserver {
     };
   }
 
-  /** One screen per URL, inside the mission's scope, within the limit. */
+  /** Un écran par URL, dans le périmètre de la mission, dans la limite fixée. */
   private targetsOf(targets: readonly AccessTarget[]): AccessTarget[] {
     const seen = new Set<string>();
     const kept: AccessTarget[] = [];
@@ -201,7 +202,7 @@ export class AuthorizationObserver {
     }
   }
 
-  /** auth.type http: the browser answers the server's challenge with the actor's credentials. */
+  /** auth.type http : le navigateur répond au défi du serveur avec les identifiants de l'acteur. */
   private contextOptions(actor: ActorConfig): BrowserContextOptions {
     if (actor.auth.type !== 'http') return {};
     const username = this.env[actor.auth.usernameEnv];
@@ -251,7 +252,7 @@ export class AuthorizationObserver {
     const refusal = this.denied.match([snapshot.title, ...snapshot.headings, ...snapshot.dialogs].join(' '));
     if (refusal) return { ...base, ...withStatus, access: 'DENIED', reason: `"${refusal}" shown` };
     const state = this.detector.detect(snapshot);
-    // Sent elsewhere (often the home page) instead of the screen asked for: a refusal.
+    // Envoyé ailleurs (souvent l'accueil) au lieu de l'écran demandé : un refus.
     if (pathOf(page.url()) !== pathOf(target.url) && state.label !== target.label)
       return {
         ...base,
@@ -316,7 +317,7 @@ function evaluateRule(
       return false;
     }
   });
-  // An error says nothing about the permission: it is not counted either way.
+  // Une erreur ne dit rien de la permission : elle n'est comptée dans aucun sens.
   const judged = matching.filter(
     (observation) => observation.access === 'ALLOWED' || observation.access === 'DENIED',
   );

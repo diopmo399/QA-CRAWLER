@@ -282,7 +282,7 @@ function progressListener(quiet: boolean): ExplorationListener {
       );
     },
     onInteractionLog(line) {
-      // Structured, without secrets: [BROWSER_INTERACTION] type=HTTP_AUTH origin=… handler=… status=… attempt=1
+      // Structuré, sans secret : [BROWSER_INTERACTION] type=HTTP_AUTH origin=… handler=… status=… attempt=1
       if (!quiet) logger.info(`      ${color.magenta(line)}`);
     },
     onIssue(issue, isNew) {

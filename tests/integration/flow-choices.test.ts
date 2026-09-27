@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/config/config-loader.js';
 import { runMission } from '../../src/orchestrator.js';
 
-/** Styled radios: the drawing (a positioned span) covers the native input and takes the click. */
+/** Radios stylées : le dessin (un span positionné) recouvre l'input natif et prend le clic. */
 const APP = `<!doctype html><html><head><meta charset="utf-8"><title>Dossier</title></head><body>
 <h1>Dossier</h1>
 <div role="radiogroup" aria-label="Canal de contact">
@@ -61,7 +61,7 @@ flows:
     );
     const flow = (await runMission(config)).result.flows[0];
     expect(flow?.steps.map((step) => step.status)).toEqual(['PASSED', 'PASSED']);
-    // Well before the action timeout.
+    // Bien avant le délai de l'action.
     expect(flow?.steps[0]?.durationMs).toBeLessThan(8000);
   });
 });

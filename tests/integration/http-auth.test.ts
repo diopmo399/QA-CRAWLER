@@ -11,15 +11,15 @@ import type { FlowGraphData } from '../../src/model/flow.js';
 import { runMission } from '../../src/orchestrator.js';
 
 /**
- * The browser's own sign-in dialog (HTTP Basic, e.g. SiteMinder Basic
- * scheme). It is not in the DOM: it is detected through the browser
- * protocol and answered by the HttpAuthHandler with credentials from the
- * environment — never with locators, clicks or keyboard.
+ * La fenêtre de connexion du navigateur lui-même (HTTP Basic, par exemple le schéma
+ * Basic de SiteMinder). Elle n'est pas dans le DOM : elle est détectée via le
+ * protocole du navigateur et répondue par le HttpAuthHandler avec des identifiants de
+ * l'environnement — jamais avec des localisateurs, des clics ou le clavier.
  *
- *   /            public page with links to protected areas
- *   /secure/     Basic realm "Secure", accepts USER:PASSWORD
- *   /flaky/      rejects the first valid answer, then accepts (retry)
- *   /loop/       asks again forever with a new realm (loop)
+ *   /            page publique avec des liens vers des zones protégées
+ *   /secure/     realm Basic "Secure", accepte USER:PASSWORD
+ *   /flaky/      refuse la première réponse valide, puis accepte (nouvelle tentative)
+ *   /loop/       redemande sans fin avec un nouveau realm (boucle)
  */
 const USER = 'agent.qa';
 const PASSWORD = 'Basic-S3cret!';
@@ -29,7 +29,7 @@ describe('HTTP authentication (browser sign-in dialog)', () => {
   let server: Server;
   let url = '';
   let outputDir = '';
-  /** Authorization headers received (to prove what was — or was not — sent). */
+  /** En-têtes Authorization reçus (pour prouver ce qui a été — ou non — envoyé). */
   let authorizations: string[] = [];
   let flakyRejections = 0;
   let loopRealm = 0;
@@ -67,7 +67,7 @@ describe('HTTP authentication (browser sign-in dialog)', () => {
         return;
       }
       if (requestPath.startsWith('/siteminderagent')) {
-        // SiteMinder-like popup: native sign-in, then tells the application and closes itself.
+        // Popup façon SiteMinder : connexion native, puis prévient l'application et se ferme.
         if (header !== BASIC) {
           challenge('SiteMinder');
           return;
@@ -126,7 +126,7 @@ ${yaml}`,
       {},
     ).config;
 
-  /** A crawl with a credential profile and one imposed flow opening `target`. */
+  /** Une exploration avec un profil d'identifiants et un flow imposé qui ouvre `target`. */
   const crawl = (name: string, target: string, extra = '') =>
     mission(
       name,
@@ -168,7 +168,7 @@ flows:
       details: { scheme: 'basic', realm: 'Secure' },
     });
     expect(authorizations).toContain(BASIC);
-    // Never any secret in the persisted flow nor in the reports.
+    // Jamais aucun secret dans le flow enregistré ni dans les rapports.
     for (const file of ['result.json', 'index.html', 'flow-graph.html', 'flow-graph.json']) {
       const text = await readFile(path.join(outputDir, 'login', 'reports', file), 'utf8');
       expect(text, file).not.toContain(PASSWORD);
@@ -187,7 +187,7 @@ flows:
     expect(auth).toMatchObject({ outcome: 'AUTHENTICATED', flow: 'zone' });
     expect(auth?.actionId).toBeDefined();
     expect(result.states.some((state) => state.headings.includes('Espace sécurisé'))).toBe(true);
-    // The transition that went through the dialog references it.
+    // La transition qui est passée par la fenêtre y fait référence.
     const edge = result.transitions.find((transition) => transition.interactionIds?.includes(auth?.id ?? ''));
     expect(edge?.result).toBe('SUCCESS');
   });
@@ -233,7 +233,7 @@ flows:
       [2, 'HANDLED', 'AUTHENTICATED'],
       [3, 'FAILED', 'AUTH_FAILED'],
     ]);
-    expect(attempts[0]?.success).toBe(false); // rejected by the server, so retried
+    expect(attempts[0]?.success).toBe(false); // refusé par le serveur, donc retenté
     expect(attempts[1]?.retryAttempted).toBe(true);
     expect(attempts[2]?.blocking).toBe(true);
     expect(result.flows[0]?.status).toBe('BLOCKED');

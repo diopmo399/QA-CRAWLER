@@ -10,7 +10,7 @@ import { runMission } from '../../src/orchestrator.js';
 
 const PASSWORD = 'pw-never-in-reports-9f3';
 
-/** Pages served to a valid session; a session only lasts a few page loads. */
+/** Pages servies à une session valide ; une session ne dure que quelques chargements de page. */
 const PAGES: Record<string, string> = {
   '/': '<h1>Dashboard</h1><a href="/users">Users</a> <a href="/settings">Settings</a> <a href="/reports">Reports</a> <a href="/audit">Audit</a>',
   '/users': `<h1>Users</h1><a href="/users/new">Create</a>
@@ -100,7 +100,7 @@ output:
       {},
     );
     ({ result } = await runMission(config, { env: { QA_USERNAME: 'tester', QA_PASSWORD: PASSWORD } }));
-    // Every file written (JSON, HTML, flow graph…), to look for the secret in all of them.
+    // Chaque fichier écrit (JSON, HTML, graphe des flows…), pour y chercher le secret partout.
     const files = await readdir(outputDir, { recursive: true, withFileTypes: true });
     const texts = await Promise.all(
       files

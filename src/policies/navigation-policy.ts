@@ -15,14 +15,14 @@ export type SkipReason =
 
 export type NavigationDecision = { allowed: true } | { allowed: false; reason: SkipReason; detail: string };
 
-/** File types that are downloads/assets rather than pages to crawl. */
+/** Types de fichiers qui sont des téléchargements / ressources plutôt que des pages à explorer. */
 export const NON_HTML_EXTENSION =
   /\.(pdf|zip|gz|tgz|rar|7z|tar|exe|dmg|msi|apk|iso|csv|xlsx?|docx?|pptx?|odt|ods|png|jpe?g|gif|webp|svg|ico|bmp|tiff?|mp[34]|m4a|wav|ogg|webm|mov|avi|woff2?|ttf|eot|css|js|mjs|map|json|xml|txt)$/i;
 
 /**
- * Decides whether a URL may be visited: same allowed host, http(s) only,
- * not an ignored or dangerous path, not a file download. Depth and
- * per-route limits are enforced by the crawl engine and queue.
+ * Décide si une URL peut être visitée : même hôte autorisé, http(s) seulement, pas
+ * un chemin ignoré ou dangereux, pas un téléchargement de fichier. La profondeur et
+ * les limites par route sont appliquées par le moteur d'exploration et sa file.
  */
 export class NavigationPolicy {
   private readonly allowedHosts: readonly string[];
@@ -64,8 +64,8 @@ export class NavigationPolicy {
 }
 
 /**
- * `/logout` matches /logout, /logout/ and /logout/anything (prefix on a segment boundary).
- * `*` matches within a segment, `**` across segments: /admin/*\/delete, /api/**.
+ * `/logout` couvre /logout, /logout/ et /logout/nimporte-quoi (préfixe sur une limite de segment).
+ * `*` couvre l'intérieur d'un segment, `**` plusieurs segments : /admin/*\/delete, /api/**.
  */
 export function pathPatternToRegex(pattern: string): RegExp {
   const normalized = pattern.startsWith('/') ? pattern : `/${pattern}`;

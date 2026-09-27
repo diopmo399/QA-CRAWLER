@@ -1,6 +1,6 @@
 /**
- * Languages of the HTML reports. result.json and flow-graph.json always stay
- * in English (stable keys and values for tools and CI).
+ * Langues des rapports HTML. result.json et flow-graph.json restent toujours en
+ * anglais (clés et valeurs stables pour les outils et la CI).
  */
 export const REPORT_LANGUAGES = ['en', 'fr'] as const;
 export type ReportLanguage = (typeof REPORT_LANGUAGES)[number];
@@ -395,25 +395,25 @@ export function reportTexts(language: ReportLanguage = 'en'): ReportTexts {
   return language === 'fr' ? FR : EN;
 }
 
-/** French labels of the enum values shown in the reports (statuses, classes, severities…). */
+/** Libellés français des valeurs d'énumération affichées dans les rapports (statuts, classes, gravités…). */
 const FR_VALUES: Record<string, string> = {
-  // flow and transition results
+  // résultats des flows et des transitions
   PASSED: 'RÉUSSI',
   FAILED: 'ÉCHOUÉ',
   BLOCKED: 'BLOQUÉ',
   SKIPPED: 'IGNORÉ',
   SUCCESS: 'RÉUSSIE',
-  // classifications
+  // classements
   SAFE: 'SÛRE',
   MUTATION: 'MODIFICATION',
   DANGEROUS: 'DANGEREUSE',
   UNKNOWN: 'INCONNUE',
-  // severities
+  // gravités
   INFO: 'INFO',
   WARNING: 'AVERTISSEMENT',
   ERROR: 'ERREUR',
   CRITICAL: 'CRITIQUE',
-  // issue types
+  // types d'anomalies
   HTTP: 'HTTP',
   REQUEST_FAILED: 'REQUÊTE ÉCHOUÉE',
   BROKEN_LINK: 'LIEN CASSÉ',
@@ -434,18 +434,18 @@ const FR_VALUES: Record<string, string> = {
   CONTRACT: 'CONTRAT API',
   ACCESSIBILITY: 'ACCESSIBILITÉ',
   AUTHORIZATION: 'AUTORISATION',
-  // action types
+  // types d'actions
   click: 'clic',
   navigate: 'navigation',
   fill: 'saisie',
   select: 'sélection',
   check: 'cocher',
   uncheck: 'décocher',
-  // step kinds
+  // genres d'étapes
   goto: 'aller à',
   expect: 'vérification',
   screenshot: 'capture',
-  // categories
+  // catégories
   navigation: 'navigation',
   tab: 'onglet',
   menu: 'menu',
@@ -458,11 +458,11 @@ const FR_VALUES: Record<string, string> = {
   submit: 'envoi',
   toggle: 'bascule',
   other: 'autre',
-  // browser interaction statuses
+  // statuts des interactions du navigateur
   HANDLED: 'TRAITÉE',
   DETECTED: 'DÉTECTÉE',
   UNSUPPORTED: 'NON GÉRÉE',
-  // stop reasons
+  // raisons d'arrêt
   exhausted: 'tout exploré',
   'flows-only': 'flows uniquement',
   'max-states': 'nombre max d’états atteint',
@@ -473,16 +473,16 @@ const FR_VALUES: Record<string, string> = {
   'rule-based': 'à règles',
 };
 
-/** Display label of an enum value (status, class, severity, action type…). */
+/** Libellé affiché d'une valeur d'énumération (statut, classe, gravité, type d'action…). */
 export function valueLabel(language: ReportLanguage, value: string): string {
   return language === 'fr' ? (FR_VALUES[value] ?? value) : value;
 }
 
 /**
- * French wording of the reasons produced by the SafetyPolicy, the flow
- * runner and the explorer. Applied on the whole text, so nested reasons
- * ("MUTATION action (matches mutation keyword "x"): …") are translated too.
- * Unknown text (browser messages…) is left as is.
+ * Formulation française des raisons produites par la SafetyPolicy, l'exécuteur de
+ * flows et l'explorateur. Appliquée à tout le texte, pour traduire aussi les raisons
+ * imbriquées (« MUTATION action (matches mutation keyword "x"): … »). Le texte
+ * inconnu (messages du navigateur…) est laissé tel quel.
  */
 const FR_REASONS: [RegExp, string | ((...groups: string[]) => string)][] = [
   [
@@ -566,7 +566,7 @@ const FR_REASONS: [RegExp, string | ((...groups: string[]) => string)][] = [
   [/action not available on this state/g, 'action absente de cet état'],
   [/invalid link target/g, 'cible de lien invalide'],
   [/invalid URL/g, 'URL invalide'],
-  // forms
+  // formulaires
   [/form "(.*?)": field "(.*?)" \(value "(.*?)"\): /g, 'formulaire « $1 » : champ « $2 » (valeur « $3 ») : '],
   [/form "(.*?)": field "(.*?)" \(left empty\): /g, 'formulaire « $1 » : champ « $2 » (laissé vide) : '],
   [/form "(.*?)": field "(.*?)" \(filled\): /g, 'formulaire « $1 » : champ « $2 » (rempli) : '],
@@ -596,7 +596,7 @@ const FR_REASONS: [RegExp, string | ((...groups: string[]) => string)][] = [
   [/wizard step "(.*?)" \(client-side form\)/g, 'étape d’assistant « $1 » (formulaire côté client)'],
   [/\bplain navigation\b/g, 'navigation simple'],
   [/\bnavigation allowed\b/g, 'navigation autorisée'],
-  // browser interactions
+  // interactions du navigateur
   [/confirm\(\) is dismissed by default/g, 'confirm() est refusé par défaut'],
   [/never confirmed automatically: /g, 'jamais confirmé automatiquement : '],
   [/harmless confirmation/g, 'confirmation sans risque'],
@@ -646,7 +646,7 @@ const FR_REASONS: [RegExp, string | ((...groups: string[]) => string)][] = [
   ],
 ];
 
-/** Reason or message in the report language. */
+/** Raison ou message dans la langue du rapport. */
 export function translateReason(language: ReportLanguage, text: string): string {
   if (language !== 'fr') return text;
   let result = text;

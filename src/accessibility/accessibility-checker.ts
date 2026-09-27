@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import type { Severity } from '../model/issue.js';
 import { redactText } from '../security/redactor.js';
 
-/** Basic checks, from the DOM alone. Not an audit: a first signal, to confirm with a dedicated tool. */
+/** Vérifications de base, à partir du DOM seul. Pas un audit : un premier signal, à confirmer avec un outil dédié. */
 export const ACCESSIBILITY_RULES = [
   'field-without-name',
   'button-without-name',
@@ -20,13 +20,13 @@ export interface AccessibilityFinding {
   severity: Severity;
   message: string;
   count: number;
-  /** Up to 3 elements, described by tag, id, name or visible text — never a field value. */
+  /** Jusqu'à 3 éléments, décrits par leur balise, id, name ou texte visible — jamais la valeur d'un champ. */
   examples: string[];
 }
 
 export interface AccessibilityOptions {
   rules: readonly AccessibilityRule[];
-  /** Also walk the page with Tab (focus moves, no trap). */
+  /** Parcourir aussi la page avec Tab (le focus bouge, pas de piège). */
   keyboardNavigation: boolean;
   maxTabs: number;
 }
@@ -69,8 +69,8 @@ interface RawFinding {
 }
 
 /**
- * Runs inside the browser (serialized by Playwright): self-contained, no
- * imports. Reads attributes and visible text only, never a field value.
+ * S'exécute dans le navigateur (sérialisé par Playwright) : autonome, sans
+ * import. Lit seulement les attributs et le texte visible, jamais la valeur d'un champ.
  */
 export function collectAccessibility(): RawFinding[] {
   const findings: Record<string, { count: number; examples: string[] }> = {};
@@ -169,9 +169,9 @@ export function collectAccessibility(): RawFinding[] {
 }
 
 /**
- * ACCESSIBILITY: basic checks on each new screen (missing names, image
- * links without alternative text, duplicate ids, clickable elements the
- * keyboard cannot reach) and, optionally, a walk with the Tab key.
+ * ACCESSIBILITÉ : vérifications de base sur chaque nouvel écran (noms
+ * manquants, liens-images sans texte alternatif, id en double, éléments
+ * cliquables inaccessibles au clavier) et, en option, un parcours avec Tab.
  */
 export class AccessibilityChecker {
   constructor(private readonly options: AccessibilityOptions) {}
@@ -188,7 +188,7 @@ export class AccessibilityChecker {
       }));
   }
 
-  /** Presses Tab and follows the focus: does it move, and does it get stuck? */
+  /** Appuie sur Tab et suit le focus : bouge-t-il, et reste-t-il bloqué ? */
   private async keyboardWalk(page: Page): Promise<RawFinding[]> {
     const focused = (): Promise<string> =>
       page

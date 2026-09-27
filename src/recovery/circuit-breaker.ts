@@ -1,18 +1,18 @@
 import type { OpenCircuit } from './recovery-model.js';
 
 export interface CircuitBreakerOptions {
-  /** Same state, same action, same failure this many times: the action is not tried again. */
+  /** Même état, même action, même échec ce nombre de fois : l'action n'est plus retentée. */
   threshold: number;
-  /** Failures of any action on one state before the whole state is abandoned. */
+  /** Échecs de n'importe quelle action sur un état avant que tout l'état soit abandonné. */
   maxFailuresPerState: number;
 }
 
 export type CircuitState = 'closed' | 'action-open' | 'state-open';
 
 /**
- * Stops the exploration from hitting the same wall: a failure that repeats
- * (same state, same action, same kind of error) opens the circuit of that
- * action; a state where too many actions fail is abandoned.
+ * Empêche l'exploration de se heurter au même mur : un échec qui se répète (même
+ * état, même action, même genre d'erreur) ouvre le circuit de cette action ; un état
+ * où trop d'actions échouent est abandonné.
  */
 export class CircuitBreaker {
   private readonly failures = new Map<
@@ -72,7 +72,7 @@ export class CircuitBreaker {
   }
 }
 
-/** The kind of an error, without what changes from one occurrence to the next (timings, ids, selectors). */
+/** Le genre d'une erreur, sans ce qui change d'une occurrence à l'autre (durées, id, sélecteurs). */
 export function failureKind(error: string): string {
   const line = (error.split('\n')[0] ?? error).trim();
   return line

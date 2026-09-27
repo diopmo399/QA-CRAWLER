@@ -4,11 +4,11 @@ import { FlowGraph } from '../graph/flow-graph.js';
 import type { FlowGraphData } from '../model/flow.js';
 import type { FlowMemory } from './flow-memory.js';
 
-/** Stores the flow graph as JSON (reports/flow-graph.json). Writes are atomic (temp file + rename). */
+/** Enregistre le graphe des flows en JSON (reports/flow-graph.json). Les écritures sont atomiques (fichier temporaire + renommage). */
 export class JsonFlowMemory implements FlowMemory {
   constructor(readonly location: string) {}
 
-  /** The persisted graph, or an empty one when there is none (or it is unreadable). */
+  /** Le graphe enregistré, ou un graphe vide quand il n'y en a pas (ou qu'il est illisible). */
   async load(): Promise<FlowGraph> {
     let text: string;
     try {

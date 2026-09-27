@@ -10,14 +10,14 @@ import { KeywordMatcher, MUTATION_KEYWORDS, RISK_KEYWORDS, STEP_KEYWORDS, urlTex
 import { NavigationPolicy, NON_HTML_EXTENSION } from './navigation-policy.js';
 import { sensitivityOf, type FieldDescription } from './sensitive-fields.js';
 
-/** Keeps only the defined properties (exactOptionalPropertyTypes). */
+/** Ne garde que les propriétés définies (exactOptionalPropertyTypes). */
 function stripUndefined(description: Record<string, string | undefined>): FieldDescription {
   return Object.fromEntries(
     Object.entries(description).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
 }
 
-/** What the policy needs to know to classify an element (a subset of a DiscoveredAction). */
+/** Ce que la politique doit savoir pour classer un élément (un sous-ensemble d'une DiscoveredAction). */
 export interface ClassifiableAction {
   type: ActionType;
   category: ActionCategory;
@@ -32,12 +32,12 @@ export interface ClassifiableAction {
   autocomplete?: string;
   placeholder?: string;
   isSubmit?: boolean;
-  /** Sends the form it belongs to (inside a <form>, a dialog or an overlay with fields). */
+  /** Envoie le formulaire auquel il appartient (dans un <form>, une fenêtre ou un calque avec des champs). */
   submitsForm?: boolean;
   inSearchForm?: boolean;
-  /** The enclosing form posts to a server URL. */
+  /** Le formulaire englobant envoie vers une URL du serveur. */
   formHasAction?: boolean;
-  /** Name of the dialog containing the element ("Supprimer l'utilisateur ?"). */
+  /** Nom de la fenêtre qui contient l'élément (« Supprimer l'utilisateur ? »). */
   dialogName?: string;
   external?: boolean;
 }
@@ -53,7 +53,7 @@ export interface SafetyVerdict {
   reason: string;
 }
 
-/** Risks blocked whatever the configuration says. */
+/** Risques bloqués quoi que dise la configuration. */
 const ALWAYS_BLOCKED: readonly RiskKind[] = ['sensitive-data'];
 
 const GROUP_OF_CATEGORY: Record<ActionCategory, SafeActionGroup | undefined> = {
@@ -72,15 +72,16 @@ const GROUP_OF_CATEGORY: Record<ActionCategory, SafeActionGroup | undefined> = {
 };
 
 /**
- * Central safety rules.
+ * Règles de sécurité centrales.
  *
- * - `classify()` tells how risky an action is (SAFE / MUTATION / DANGEROUS /
- *   UNKNOWN) and why; ActionDiscovery stores the result on each action.
- * - `evaluate()` is the gate between the decision engine and Playwright:
- *   whatever engine chose the action, it is executed only on ALLOW.
+ * - `classify()` dit à quel point une action est risquée (SAFE / MUTATION / DANGEROUS /
+ *   UNKNOWN) et pourquoi ; l'ActionDiscovery enregistre le résultat sur chaque action.
+ * - `evaluate()` est le passage obligé entre le moteur de décision et Playwright :
+ *   quel que soit le moteur qui a choisi l'action, elle ne s'exécute que sur ALLOW.
  *
- * Defaults: only SAFE actions run; DANGEROUS ones, sensitive fields,
- * external navigation, form submission, logout… are always blocked.
+ * Par défaut : seules les actions SAFE s'exécutent ; les DANGEROUS (sauf si la mission
+ * les liste dans allowedActionClasses), la navigation externe, l'envoi de formulaire, la
+ * déconnexion… sont bloqués. Les champs sensibles ne sont jamais remplis.
  */
 export class SafetyPolicy {
   readonly navigation: NavigationPolicy;
@@ -90,7 +91,7 @@ export class SafetyPolicy {
   private readonly allowedClasses: ReadonlySet<ActionClassification>;
   private readonly allowedGroups: ReadonlySet<SafeActionGroup>;
   private readonly blocked: ReadonlySet<RiskKind>;
-  /** Budget of actions changing data, when safety.mutations is on. */
+  /** Budget des actions qui modifient des données, quand safety.mutations est activé. */
   private readonly maxMutations: number | undefined;
   private mutations = 0;
 
@@ -124,7 +125,7 @@ export class SafetyPolicy {
         return {
           classification: 'DANGEROUS',
           reason: 'sensitive field (password, payment or secret data): never filled',
-          // Payment data also triggers the payment risk (blocked by default).
+          // Les données de paiement déclenchent aussi le risque payment (bloqué par défaut).
           risks: sensitivity.payment ? ['sensitive-data', 'payment'] : ['sensitive-data'],
         };
       }
@@ -154,7 +155,7 @@ export class SafetyPolicy {
       return { classification: 'SAFE', reason: 'navigation (GET, no data change)', risks: [] };
     }
 
-    // click: buttons, tabs, menus, routerLink elements…
+    // clic : boutons, onglets, menus, éléments routerLink…
     const stepWord = this.step.match(label);
     if ((action.isSubmit || action.submitsForm) && !action.inSearchForm) {
       if (stepWord && !action.formHasAction) {
@@ -173,7 +174,7 @@ export class SafetyPolicy {
     if (action.isSubmit && action.inSearchForm) {
       return { classification: 'SAFE', reason: 'submits a search form', risks: [] };
     }
-    // Symbols and icons ("⚙", "×", "…") say nothing about what the control does.
+    // Les symboles et icônes (« ⚙ », « × », « … ») ne disent rien de ce que fait le contrôle.
     if (!/[\p{L}\p{N}]{2,}/u.test(label)) {
       return {
         classification: 'UNKNOWN',
@@ -188,7 +189,7 @@ export class SafetyPolicy {
     };
   }
 
-  /** Classifies a URL the explorer may navigate to (e.g. /users/3/delete). */
+  /** Classe une URL vers laquelle l'explorateur peut naviguer (par exemple /users/3/delete). */
   classifyUrl(url: string): Classification {
     for (const [kind, matcher] of this.risks) {
       const match = matcher.match(urlText(url));
@@ -204,8 +205,8 @@ export class SafetyPolicy {
   }
 
   /**
-   * Final gate before execution. Runs after the decision engine and before
-   * Playwright, so no engine can bypass it.
+   * Dernier contrôle avant l'exécution. S'exécute après le moteur de décision et avant
+   * Playwright : aucun moteur ne peut le contourner.
    */
   evaluate(action: DiscoveredAction): SafetyVerdict {
     if (action.disabled) return { verdict: 'BLOCK', reason: 'element is disabled' };
@@ -244,17 +245,17 @@ export class SafetyPolicy {
     return { verdict: 'ALLOW', reason: action.reason };
   }
 
-  /** Counts an executed action against the mutation budget. */
+  /** Compte une action exécutée dans le budget de modifications. */
   recordExecuted(action: DiscoveredAction): void {
     if (this.changesData(action)) this.mutations += 1;
   }
 
-  /** Actions changing data executed so far. */
+  /** Actions de modification exécutées jusqu'ici. */
   get mutationCount(): number {
     return this.mutations;
   }
 
-  /** A click that may create, change or send data. */
+  /** Un clic qui peut créer, modifier ou envoyer des données. */
   changesData(action: DiscoveredAction): boolean {
     return (
       action.type === 'click' &&
@@ -264,7 +265,7 @@ export class SafetyPolicy {
     );
   }
 
-  /** Card, IBAN… fields: never filled, whatever the source of the value. */
+  /** Champs de carte, IBAN… : jamais remplis, quelle que soit la source de la valeur. */
   isPaymentField(action: DiscoveredAction): boolean {
     const field = action.field;
     return [
@@ -278,7 +279,7 @@ export class SafetyPolicy {
     ].some((description) => sensitivityOf(stripUndefined(description)).payment);
   }
 
-  /** Whether an action class may run at all (used to pre-filter candidates). */
+  /** Si une classe d'action peut s'exécuter tout court (sert à pré-filtrer les candidates). */
   isExecutionAllowed(classification: ActionClassification): boolean {
     return this.allowedClasses.has(classification);
   }

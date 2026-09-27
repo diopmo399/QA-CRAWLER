@@ -14,27 +14,27 @@ import { validityOf } from './validity.js';
 
 export { formName };
 
-/** A field filled (or left empty) while exercising a form. */
+/** Un champ rempli (ou laissé vide) en exerçant un formulaire. */
 export interface FilledField {
   action: DiscoveredAction;
-  /** Value typed or option chosen; undefined for a checkbox/radio, a sensitive field, or when left empty. */
+  /** Valeur saisie ou option choisie ; undefined pour une case/radio, un champ sensible, ou un champ laissé vide. */
   value?: string;
-  /** Why the field was left as it is, or why filling it failed. */
+  /** Pourquoi le champ a été laissé tel quel, ou pourquoi son remplissage a échoué. */
   skipped?: string;
   error?: string;
 }
 
-/** A field still invalid once the form is filled: what the application says about it. */
+/** Un champ encore invalide une fois le formulaire rempli : ce que l'application en dit. */
 export interface ValidationProblem {
   field: FilledField;
   message: string;
 }
 
 /**
- * One validation case: an invalid value typed in one field. REJECTED (the
- * application says so) and NOT_ENTERED (the browser refused it) pass;
- * ACCEPTED stays UNKNOWN — the application may validate when the form is
- * sent, which the crawler does not do to find out.
+ * Un cas de validation : une valeur invalide saisie dans un champ. REJECTED
+ * (l'application le dit) et NOT_ENTERED (le navigateur l'a refusée) passent ;
+ * ACCEPTED reste UNKNOWN — l'application peut valider à l'envoi du formulaire, ce
+ * que le crawler ne fait pas pour le savoir.
  */
 export interface ValidationCase {
   fieldId: string;
@@ -62,11 +62,11 @@ export interface ValidationTestingLimits {
 }
 
 /**
- * Orchestrates one form: FormAnalyzer (what does it expect?) →
- * FormFillStrategy (which values?) → PlaywrightActionExecutor (fill) →
- * validation messages, and optionally validation testing (invalid values,
- * within limits). It never clicks the button that sends the form: that
- * decision stays with the DecisionEngine and the SafetyPolicy.
+ * Orchestre un formulaire : FormAnalyzer (qu'attend-il ?) → FormFillStrategy
+ * (quelles valeurs ?) → PlaywrightActionExecutor (remplir) → messages de validation,
+ * et en option les tests de validation (valeurs invalides, dans des limites). Il ne
+ * clique jamais sur le bouton qui envoie le formulaire : cette décision reste au
+ * DecisionEngine et à la SafetyPolicy.
  */
 export class FormExerciser {
   private readonly analyzer = new DomFormAnalyzer();
@@ -78,18 +78,18 @@ export class FormExerciser {
     safety: SafetyPolicy,
     runId: string,
     strategy?: FormFillStrategy,
-    /** API contract (OpenAPI) that completes what the page says about its fields. */
+    /** Contrat d'API (OpenAPI) qui complète ce que la page dit de ses champs. */
     private readonly contract?: ApiContract,
   ) {
     this.strategy = strategy ?? new ValidDataFillStrategy(testData, safety, runId);
   }
 
-  /** Logical forms of the screen (the FormAnalyzer's view). */
+  /** Formulaires logiques de l'écran (la vue du FormAnalyzer). */
   formsOf(context: PageContext): DiscoveredForm[] {
     return this.analyzer.formsOf(context);
   }
 
-  /** Forms of the screen with at least one field to fill, what is in front first. */
+  /** Formulaires de l'écran avec au moins un champ à remplir, ce qui est devant l'écran d'abord. */
   groupsOf(context: PageContext): string[] {
     return this.formsOf(context)
       .filter((form) =>
@@ -103,7 +103,7 @@ export class FormExerciser {
       .map((form) => form.group);
   }
 
-  /** Fills every field of the form through a plan; nothing is sent. */
+  /** Remplit chaque champ du formulaire à partir d'un plan ; rien n'est envoyé. */
   async fill(page: Page, context: PageContext, group: string): Promise<FormRun> {
     const found = this.formsOf(context).find((candidate) => candidate.group === group) ?? {
       id: `${context.stateId}:${group}`,
@@ -139,15 +139,15 @@ export class FormExerciser {
   }
 
   /**
-   * Leaves each field (the application validates on blur: Angular "touched"),
-   * then reads what is still invalid and the message shown next to it.
+   * Quitte chaque champ (l'application valide au blur : « touched » d'Angular), puis
+   * relève ce qui reste invalide et le message affiché à côté.
    */
   async validate(page: Page, run: FormRun): Promise<ValidationProblem[]> {
     const problems: ValidationProblem[] = [];
     const seen = new Set<string>();
     for (const field of run.fields) {
       const { action } = field;
-      // Sensitive fields (never filled) and fields the mission forbids are not judged.
+      // Les champs sensibles (jamais remplis) et ceux que la mission interdit ne sont pas jugés.
       if (action.risks.includes('sensitive-data') || field.skipped === 'not allowed by the mission') continue;
       const choice = action.field?.choiceGroup;
       if (choice !== undefined) {
@@ -168,9 +168,9 @@ export class FormExerciser {
   }
 
   /**
-   * Validation testing: for each field, a few invalid values (empty when
-   * required, out of min/max, too long, wrong format…), one at a time, each
-   * followed by the field's valid value again. Bounded per field and per form.
+   * Tests de validation : pour chaque champ, quelques valeurs invalides (vide quand il
+   * est obligatoire, hors min/max, trop long, mauvais format…), une à la fois, chacune
+   * suivie à nouveau de la valeur valide du champ. Bornés par champ et par formulaire.
    */
   async testValidation(
     page: Page,
@@ -220,7 +220,7 @@ export class FormExerciser {
           verdict: outcome === 'REJECTED' || outcome === 'NOT_ENTERED' ? 'PASS' : 'UNKNOWN',
           ...(validity?.message ? { message: validity.message } : {}),
         });
-        // Back to the valid value, for the next cases and for what follows.
+        // Retour à la valeur valide, pour les cas suivants et pour la suite.
         await this.executor.executePlan(page, { formId: run.form.id, operations: [planned] }, () => action);
       }
     }

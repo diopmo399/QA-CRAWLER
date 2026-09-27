@@ -43,12 +43,12 @@ const step = new KeywordMatcher(STEP_KEYWORDS);
 const submitWords = new KeywordMatcher(SUBMIT_KEYWORDS);
 
 /**
- * "What can I do on this screen?"
+ * « Que puis-je faire sur cet écran ? »
  *
- * Turns the UIObserver snapshot into DiscoveredActions: what the user can
- * click, follow, fill, select or check, with a robust serializable locator,
- * a stable id, a functional category and the SafetyPolicy classification.
- * Pure function of the snapshot — it never touches the browser.
+ * Transforme l'instantané de l'UIObserver en DiscoveredActions : ce que
+ * l'utilisateur peut cliquer, suivre, remplir, choisir ou cocher, avec un
+ * localisateur sérialisable robuste, un id stable, une catégorie fonctionnelle et
+ * le classement de la SafetyPolicy. Fonction pure de l'instantané — elle ne touche jamais le navigateur.
  */
 export class ActionDiscovery {
   constructor(
@@ -60,8 +60,8 @@ export class ActionDiscovery {
     const locators = buildLocators(snapshot.elements);
     const actions: DiscoveredAction[] = [];
     const ids = new Set<string>();
-    // Forms (a <form>, or a dialog/overlay) that hold at least one field.
-    // Radio groups where an option is already chosen: left as they are.
+    // Formulaires (un <form>, ou une fenêtre/un calque) qui contiennent au moins un champ.
+    // Groupes de radios où une option est déjà choisie : laissés tels quels.
     const answered = new Set(
       snapshot.elements
         .filter(
@@ -72,8 +72,8 @@ export class ActionDiscovery {
         )
         .map((element) => element.choiceGroup),
     );
-    // Forms that hold fields. The page itself counts as a form (SPA without <form>) only with at
-    // least two text fields: a lone checkbox or list next to a "Create…" button is not a form.
+    // Formulaires qui contiennent des champs. La page elle-même compte comme formulaire (SPA sans <form>) seulement avec
+    // au moins deux champs texte : une case isolée ou une liste à côté d'un bouton « Créer… » n'est pas un formulaire.
     const textFields = new Map<string, number>();
     for (const element of snapshot.elements) {
       if (element.formGroup !== undefined && isTextField(element))
@@ -175,7 +175,7 @@ export class ActionDiscovery {
   }
 }
 
-/** Field where a value is typed (not a checkbox, radio or list). */
+/** Champ où l'on tape une valeur (pas une case à cocher, une radio ni une liste). */
 function isTextField(element: UiElement): boolean {
   if (element.tag === 'textarea' || element.editable === true) return true;
   return (
@@ -201,7 +201,7 @@ function actionType(element: UiElement, pageUrl: string): ActionType | undefined
   const { tag, role, inputType } = element;
   if (tag === 'a') {
     if (targetHref(element, pageUrl)) return 'navigate';
-    // href="#section" only scrolls; href="#" / javascript: usually carries a click handler.
+    // href="#section" ne fait que défiler ; href="#" / javascript: porte en général un gestionnaire de clic.
     return isScrollAnchor(element.href, pageUrl) ? undefined : 'click';
   }
   if (element.routerLink && tag !== 'button') return 'navigate';
@@ -240,7 +240,7 @@ function isScrollAnchor(href: string | undefined, pageUrl: string): boolean {
   }
 }
 
-/** Absolute http(s) URL of a link or routerLink, if any. */
+/** URL http(s) absolue d'un lien ou d'un routerLink, s'il y en a une. */
 function targetHref(element: UiElement, pageUrl: string): string | undefined {
   const raw =
     element.href ?? (element.routerLink && element.tag !== 'button' ? element.routerLink : undefined);
@@ -256,7 +256,7 @@ function targetHref(element: UiElement, pageUrl: string): string | undefined {
         : raw;
     const url = new URL(path, pageUrl);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
-    // In-page anchors (#section) are not navigations; hash routes (#/users) are.
+    // Les ancres de la page (#section) ne sont pas des navigations ; les routes par hash (#/users) en sont.
     const page = new URL(pageUrl);
     if (
       url.hash &&
@@ -284,7 +284,7 @@ function actionCategory(element: UiElement, type: ActionType): ActionCategory {
   if (element.role.startsWith('menuitem') || element.hasPopup) return 'menu';
   if (type === 'navigate') {
     if (pagination.match(label) || /^\d+$/.test(label.trim())) return 'pagination';
-    // Links of a navigation landmark (main menu, sidebar) are global entry points.
+    // Les liens d'une zone de navigation (menu principal, barre latérale) sont des points d'entrée globaux.
     if (element.inNavigation) return 'menu';
     if (details.match(label)) return 'details';
     return 'navigation';
@@ -333,8 +333,8 @@ function fieldConstraints(element: UiElement): FieldConstraints {
 }
 
 /**
- * Stable action id: same state, same kind of action on the same element
- * (role + accessible name + target) ⇒ same id, run after run.
+ * Id d'action stable : même état, même genre d'action sur le même élément
+ * (rôle + nom accessible + cible) ⇒ même id, d'un run à l'autre.
  */
 export function actionId(
   stateId: string,

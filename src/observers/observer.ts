@@ -2,30 +2,30 @@ import type { Page } from 'playwright';
 import type { IssueCollector } from '../anomaly/issue-collector.js';
 import type { ScenarioConfig } from '../config/config.js';
 
-/** Where an anomaly comes from in the exploration: reproducible through `flow` + `actionId`. */
+/** D'où vient une anomalie dans l'exploration : reproductible grâce à `flow` + `actionId`. */
 export interface IssueAttribution {
   stateId?: string;
   actionId?: string;
   flow?: string[];
 }
 
-/** What observers need to know about the exploration in progress. */
+/** Ce que les observateurs doivent savoir de l'exploration en cours. */
 export interface ObservationContext {
-  /** URL of the page being explored; anomalies are attributed to it. */
+  /** URL de la page explorée ; les anomalies lui sont attribuées. */
   currentPageUrl(): string;
-  /** State and action in progress. */
+  /** État et action en cours. */
   currentAttribution(): IssueAttribution;
   collector: IssueCollector;
   config: ScenarioConfig;
 }
 
-/** Listens to Playwright page events and reports anomalies. */
+/** Écoute les événements de page Playwright et signale les anomalies. */
 export interface PageObserver {
   attach(page: Page): void;
   detach(page: Page): void;
 }
 
-/** Attribution fields ready to spread into an IssueInput. */
+/** Champs de rattachement prêts à être ajoutés à un IssueInput. */
 export function attributionOf(context: ObservationContext): IssueAttribution {
   const { stateId, actionId, flow } = context.currentAttribution();
   return {

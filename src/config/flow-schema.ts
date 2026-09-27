@@ -1,33 +1,33 @@
 import { z } from 'zod';
 
 /**
- * Imposed test flows: an ordered list of steps the mission requires
- * (log in, open a screen, fill a form, check the result). Unlike the
- * autonomous exploration, *the YAML* decides what to click here — but every
- * step still goes through the SafetyPolicy before Playwright runs it.
+ * Flows de test imposés : une liste ordonnée d'étapes exigées par la mission
+ * (se connecter, ouvrir un écran, remplir un formulaire, vérifier le résultat).
+ * Contrairement à l'exploration autonome, c'est *le YAML* qui décide où cliquer —
+ * mais chaque étape passe quand même par la SafetyPolicy avant que Playwright l'exécute.
  */
 
 const nonEmpty = z.string().trim().min(1);
 
-/** Keys that choose how to find the element; exactly one is required. */
+/** Clés qui choisissent comment trouver l'élément ; exactement une est obligatoire. */
 export const TARGET_STRATEGIES = ['testId', 'role', 'label', 'text', 'css'] as const;
 
 const targetShape = {
-  /** ARIA role (button, link, tab, textbox, combobox…), usually with `name`. */
+  /** Rôle ARIA (button, link, tab, textbox, combobox…), en général avec `name`. */
   role: nonEmpty.optional(),
-  /** Accessible name, with `role`. */
+  /** Nom accessible, avec `role`. */
   name: z.string().optional(),
-  /** Text of the field's <label>. */
+  /** Texte du <label> du champ. */
   label: nonEmpty.optional(),
-  /** Visible text. */
+  /** Texte visible. */
   text: nonEmpty.optional(),
-  /** data-testid attribute. */
+  /** Attribut data-testid. */
   testId: nonEmpty.optional(),
-  /** CSS selector, as a last resort. */
+  /** Sélecteur CSS, en dernier recours. */
   css: nonEmpty.optional(),
-  /** Exact (case-sensitive, whole string) match of name/label/text. */
+  /** Correspondance exacte (casse respectée, chaîne entière) de name/label/text. */
   exact: z.boolean().optional(),
-  /** 0-based index when several elements match. */
+  /** Index à partir de 0 quand plusieurs éléments correspondent. */
   nth: z.number().int().min(0).optional(),
 };
 
@@ -48,7 +48,7 @@ function checkTarget(target: TargetInput, ctx: z.RefinementCtx): void {
 
 const targetSchema = z.object(targetShape).strict().superRefine(checkTarget);
 
-/** A value typed in a field: literal, or read from an environment variable (never logged). */
+/** Valeur saisie dans un champ : littérale, ou lue dans une variable d'environnement (jamais journalisée). */
 const valueSchema = z.union([z.string(), z.number().transform(String), z.object({ env: nonEmpty }).strict()]);
 
 const fillSchema = z
@@ -62,13 +62,13 @@ const selectSchema = z
 
 const expectSchema = z
   .object({
-    /** Text visible somewhere on the page. */
+    /** Texte visible quelque part sur la page. */
     text: nonEmpty.optional(),
-    /** The URL contains this string. */
+    /** L'URL contient cette chaîne. */
     url: nonEmpty.optional(),
-    /** This element is visible. */
+    /** Cet élément est visible. */
     visible: targetSchema.optional(),
-    /** This element is absent or hidden. */
+    /** Cet élément est absent ou caché. */
     hidden: targetSchema.optional(),
   })
   .strict()
@@ -82,8 +82,8 @@ const expectSchema = z
   );
 
 /**
- * Classes a step may execute on top of SAFE. DANGEROUS runs only when the
- * mission also lists it in safety.allowedActionClasses.
+ * Classes qu'une étape peut exécuter en plus de SAFE. DANGEROUS ne s'exécute
+ * que si la mission la liste aussi dans safety.allowedActionClasses.
  */
 export const FLOW_ALLOWANCES = ['MUTATION', 'UNKNOWN', 'DANGEROUS'] as const;
 export type FlowAllowance = (typeof FLOW_ALLOWANCES)[number];
@@ -92,7 +92,7 @@ const STEP_KINDS = ['goto', 'click', 'fill', 'select', 'check', 'uncheck', 'expe
 
 const stepSchema = z
   .object({
-    /** Short description shown in reports (default: generated from the step). */
+    /** Courte description affichée dans les rapports (par défaut : générée à partir de l'étape). */
     name: nonEmpty.optional(),
     goto: nonEmpty.optional(),
     click: targetSchema.optional(),
@@ -101,20 +101,20 @@ const stepSchema = z
     check: targetSchema.optional(),
     uncheck: targetSchema.optional(),
     expect: expectSchema.optional(),
-    /** Named screenshot of the current screen. */
+    /** Capture nommée de l'écran courant. */
     screenshot: nonEmpty.optional(),
     /**
-     * Explicit permission for this step only: MUTATION (create, save,
-     * submit…) and/or UNKNOWN (icon-only control). DANGEROUS (delete, pay,
-     * send…) also needs DANGEROUS in safety.allowedActionClasses.
+     * Permission explicite pour cette étape seulement : MUTATION (créer, enregistrer,
+     * envoyer…) et/ou UNKNOWN (contrôle réduit à une icône). DANGEROUS (supprimer,
+     * payer, envoyer…) exige aussi DANGEROUS dans safety.allowedActionClasses.
      */
     allow: z
       .union([z.enum(FLOW_ALLOWANCES), z.array(z.enum(FLOW_ALLOWANCES))])
       .optional()
       .transform((value) => (value === undefined ? [] : Array.isArray(value) ? value : [value])),
-    /** A failure of this step is reported as a WARNING and the flow goes on. */
+    /** Un échec de cette étape est signalé comme WARNING et le flow continue. */
     optional: z.boolean().default(false),
-    /** Timeout of this step (default: exploration.actionTimeoutMs). */
+    /** Délai de cette étape (par défaut : exploration.actionTimeoutMs). */
     timeoutMs: z.number().int().positive().optional(),
   })
   .strict()
@@ -166,13 +166,13 @@ export const flowSchema = z
   .object({
     name: nonEmpty,
     description: z.string().optional(),
-    /** Page loaded before the first step (default: target.startAt). */
+    /** Page chargée avant la première étape (par défaut : target.startAt). */
     startAt: nonEmpty.optional(),
     steps: z.array(stepSchema).min(1),
     /**
-     * Once the flow passed, explore its last screen: in-page controls and
-     * pages below its path only (never the global menu). Runs even when
-     * exploration.autonomous is false.
+     * Une fois le flow réussi, explorer son dernier écran : seulement les contrôles
+     * de la page et les pages sous son chemin (jamais le menu global). S'exécute
+     * même quand exploration.autonomous vaut false.
      */
     thenExplore: z.boolean().default(false),
   })
@@ -197,11 +197,11 @@ export const flowsSchema = z
 
 export interface FlowTarget {
   strategy: (typeof TARGET_STRATEGIES)[number];
-  /** role, for the role strategy. */
+  /** role, pour la stratégie role. */
   role?: string;
-  /** Accessible name, for the role strategy. */
+  /** Nom accessible, pour la stratégie role. */
   name?: string;
-  /** testId, label, text or CSS selector. */
+  /** testId, libellé, texte ou sélecteur CSS. */
   value?: string;
   exact?: boolean;
   nth?: number;
@@ -263,7 +263,7 @@ function toTarget(input: {
   return { strategy: 'css', value: input.css ?? '', ...options };
 }
 
-/** Human description of a target, for logs and reports: role=button[name="Suivant"]. */
+/** Description lisible d'une cible, pour les logs et les rapports : role=button[name="Suivant"]. */
 export function describeTarget(target: FlowTarget): string {
   const nth = target.nth !== undefined && target.nth > 0 ? ` [${target.nth}]` : '';
   switch (target.strategy) {
@@ -281,8 +281,8 @@ export function describeTarget(target: FlowTarget): string {
 }
 
 /**
- * Human description of a step. Values read from the environment are never
- * shown; `maskValue` hides literal values too (sensitive fields).
+ * Description lisible d'une étape. Les valeurs lues dans l'environnement ne sont
+ * jamais affichées ; `maskValue` masque aussi les valeurs littérales (champs sensibles).
  */
 export function describeStep(step: FlowStep, maskValue = false): string {
   if (step.name) return step.name;

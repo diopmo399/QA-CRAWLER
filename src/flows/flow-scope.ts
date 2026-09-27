@@ -2,12 +2,12 @@ import { effectivePath } from '../crawler/url-normalizer.js';
 import type { DiscoveredAction } from '../model/discovered-action.js';
 
 /**
- * Where `thenExplore` may go: the flow's last screen and the pages below it
- * (/admin/fideles → /admin/fideles, /admin/fideles/12…). The global menu and
- * links elsewhere are left to the autonomous exploration.
+ * Où `thenExplore` peut aller : le dernier écran du flow et les pages sous lui
+ * (/admin/fideles → /admin/fideles, /admin/fideles/12…). Le menu global et les
+ * liens ailleurs sont laissés à l'exploration autonome.
  */
 export interface ExplorationScope {
-  /** Path prefix, without trailing slash ('' for the site root). */
+  /** Préfixe de chemin, sans barre oblique finale ('' pour la racine du site). */
   path: string;
 }
 
@@ -20,7 +20,7 @@ export function isInScope(scope: ExplorationScope, url: string): boolean {
   return path === scope.path || path.startsWith(`${scope.path}/`);
 }
 
-/** Actions that keep the exploration inside the scope: in-page controls and links to pages below it. */
+/** Actions qui gardent l'exploration dans le périmètre : contrôles de la page et liens vers les pages sous lui. */
 export function actionsInScope(
   scope: ExplorationScope,
   actions: readonly DiscoveredAction[],

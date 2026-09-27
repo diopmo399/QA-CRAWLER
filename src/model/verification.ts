@@ -1,13 +1,13 @@
 import type { NetworkExchange } from './network.js';
 
 /**
- * - PASSED: the known transition still leads to the same state.
- * - CHANGED: it now leads to another state.
- * - FAILED: the action fails now.
- * - ACTION_MISSING: its start state is there, the action is not.
- * - UNREACHABLE: its start state cannot be reached any more.
- * - BLOCKED: the current safety policy refuses the action (not a regression).
- * - SKIPPED: not verified (mission limit reached).
+ * - PASSED : la transition connue mène toujours au même état.
+ * - CHANGED : elle mène maintenant à un autre état.
+ * - FAILED : l'action échoue maintenant.
+ * - ACTION_MISSING : son état de départ est là, pas l'action.
+ * - UNREACHABLE : son état de départ ne peut plus être atteint.
+ * - BLOCKED : la politique de sécurité actuelle refuse l'action (pas une régression).
+ * - SKIPPED : pas vérifiée (limite de la mission atteinte).
  */
 export const VERIFICATION_STATUSES = [
   'PASSED',
@@ -20,7 +20,7 @@ export const VERIFICATION_STATUSES = [
 ] as const;
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
 
-/** Statuses that mean the application no longer behaves like the baseline. */
+/** Statuts qui veulent dire que l'application ne se comporte plus comme la baseline. */
 export const REGRESSION_STATUSES: readonly VerificationStatus[] = [
   'CHANGED',
   'FAILED',
@@ -28,7 +28,7 @@ export const REGRESSION_STATUSES: readonly VerificationStatus[] = [
   'UNREACHABLE',
 ];
 
-/** One known transition of the baseline, replayed. */
+/** Une transition connue de la baseline, rejouée. */
 export interface VerifiedTransition {
   from: string;
   fromLabel: string;
@@ -44,10 +44,10 @@ export interface VerifiedTransition {
 }
 
 export interface VerificationReport {
-  /** Baseline run that was verified. */
+  /** Run de baseline vérifié. */
   baselineRunId?: string;
   transitions: VerifiedTransition[];
   summary: Record<VerificationStatus, number>;
-  /** Number of transitions in a regression status. */
+  /** Nombre de transitions dans un statut de régression. */
   regressions: number;
 }

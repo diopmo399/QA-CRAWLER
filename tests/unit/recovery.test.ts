@@ -176,7 +176,7 @@ describe('StuckDetector', () => {
   it('detects repeated actions that change nothing, and a screen that keeps loading', () => {
     const stuck = detector();
     expect(stuck.observe(move('a', 'a', 0))).toBeUndefined();
-    expect(stuck.observe(move('a', 'a', 1))).toBeUndefined(); // a request: something happened
+    expect(stuck.observe(move('a', 'a', 1))).toBeUndefined(); // une requête : il s'est passé quelque chose
     expect(stuck.observe(move('a', 'a', 0))).toBeUndefined();
     expect(stuck.observe(move('a', 'a', 0))).toBeUndefined();
     expect(stuck.observe(move('a', 'a', 0))).toMatchObject({ kind: 'no-op' });

@@ -5,9 +5,9 @@ import type { ActionObservations, ExecutedAction, OracleResult, TestOracle } fro
 import { result } from './oracle.js';
 
 /**
- * Compares the result with what the baseline learned for the same action
- * from the same state. A difference is a REGRESSION POTENTIAL — a warning,
- * never a confirmed failure: the application may simply have changed.
+ * Compare le résultat avec ce que la baseline a appris pour la même action depuis
+ * le même état. Une différence est une RÉGRESSION POTENTIELLE — un avertissement,
+ * jamais un échec confirmé : l'application a peut-être simplement changé.
  */
 export class BaselineOracle implements TestOracle {
   readonly name = 'baseline';

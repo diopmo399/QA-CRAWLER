@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import { SeverityRules } from '../anomaly/severity-rules.js';
 import { attributionOf, type ObservationContext, type PageObserver } from './observer.js';
 
-/** Reports uncaught JavaScript exceptions (`pageerror`) and renderer crashes. */
+/** Signale les exceptions JavaScript non interceptées (`pageerror`) et les plantages du rendu. */
 export class PageErrorObserver implements PageObserver {
   private crashed = false;
 
@@ -45,7 +45,7 @@ export class PageErrorObserver implements PageObserver {
     page.off('crash', this.onCrash);
   }
 
-  /** True once the page crashed; the engine must then open a new page. */
+  /** Vrai une fois la page plantée ; le moteur doit alors ouvrir une nouvelle page. */
   consumeCrash(): boolean {
     const crashed = this.crashed;
     this.crashed = false;

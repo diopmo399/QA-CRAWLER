@@ -2,9 +2,9 @@ import type { FlowGraph } from '../graph/flow-graph.js';
 import type { PageContext } from '../model/page-context.js';
 
 /**
- * - EXECUTE: try `actionId` (it still goes through the SafetyPolicy).
- * - BACKTRACK: nothing more worth doing here; go back to a previous state.
- * - STOP: end the exploration.
+ * - EXECUTE : essayer `actionId` (elle passe quand même par la SafetyPolicy).
+ * - BACKTRACK : plus rien d'intéressant ici ; revenir à un état précédent.
+ * - STOP : terminer l'exploration.
  */
 export interface ActionDecision {
   decision: 'EXECUTE' | 'BACKTRACK' | 'STOP';
@@ -13,15 +13,15 @@ export interface ActionDecision {
 }
 
 /**
- * "What should I try next?"
+ * « Que dois-je essayer ensuite ? »
  *
- * Receives only plain data (the PageContext and the FlowGraph built so far)
- * and returns a decision. It never touches Playwright and cannot bypass the
- * SafetyPolicy, which the FlowExplorer applies to every chosen action.
+ * Ne reçoit que des données simples (le PageContext et le FlowGraph construit
+ * jusqu'ici) et renvoie une décision. Il ne touche jamais Playwright et ne peut
+ * pas contourner la SafetyPolicy, que le FlowExplorer applique à chaque action choisie.
  *
- * Implementations: RuleBasedDecisionEngine (deterministic, this version).
- * Planned: LocalLLMDecisionEngine, CloudLLMDecisionEngine — same interface,
- * no change needed in the explorer, the executor or the safety policy.
+ * Implémentations : RuleBasedDecisionEngine (déterministe, cette version).
+ * D'autres moteurs peuvent implémenter la même interface sans rien changer à
+ * l'explorateur, à l'exécuteur ni à la politique de sécurité.
  */
 export interface DecisionEngine {
   readonly name: string;

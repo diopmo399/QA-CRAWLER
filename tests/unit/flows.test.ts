@@ -147,7 +147,7 @@ describe('evaluateFlowAction', () => {
     expect(verdict({ classification: 'DANGEROUS', risks: ['delete'] }, ['MUTATION', 'UNKNOWN'])).toBe(
       'BLOCK',
     );
-    // The step allows it, the mission does not.
+    // L'étape le permet, la mission non.
     expect(verdict({ classification: 'DANGEROUS', risks: ['delete'] }, ['DANGEROUS'])).toBe('BLOCK');
     const permissive = new SafetyPolicy(
       testConfig('safety:\n  allowedActionClasses: [SAFE, DANGEROUS]\n').safety,

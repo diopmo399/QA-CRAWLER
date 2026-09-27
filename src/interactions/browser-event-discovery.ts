@@ -13,13 +13,13 @@ import { originOf } from '../policies/origin-policy.js';
 import type { BrowserInteractionManager } from './browser-interaction-manager.js';
 import type { BrowserInteraction, BrowserInteractionType, InteractionDetails } from './types.js';
 
-/** Page → crawler bridge for permission requests (the browser raises no event for them). */
+/** Pont page → crawler pour les demandes de permission (le navigateur ne lève aucun événement pour elles). */
 const BINDING = '__qaBrowserInteraction';
 
 /**
- * Reports permission requests. Runs in every page before its own scripts;
- * it only observes and calls the original API (which the browser denies
- * unless the mission granted the permission).
+ * Signale les demandes de permission. S'exécute dans chaque page avant ses propres
+ * scripts ; il ne fait qu'observer et appeler l'API d'origine (que le navigateur
+ * refuse, sauf si la mission a accordé la permission).
  */
 const PERMISSION_SCRIPT = `(() => {
   const report = (permission) => { try { window.${BINDING}?.({ type: 'PERMISSION_REQUEST', permission }); } catch {} };
@@ -62,36 +62,36 @@ interface FetchAuthRequired {
 
 export interface BrowserEventDiscoveryOptions {
   origins: AllowedOriginPolicy;
-  /** Watch for the browser's sign-in dialog (HTTP_AUTH) through the browser protocol. */
+  /** Surveiller la fenêtre de connexion du navigateur (HTTP_AUTH) via le protocole du navigateur. */
   httpAuth: boolean;
-  /** Longest wait for a new page to load before it is classified. */
+  /** Attente maximale du chargement d'une nouvelle page avant de la classer. */
   popupLoadTimeoutMs: number;
 }
 
 /**
- * "Browser Event Discovery": the counterpart of the DOM ActionDiscovery for
- * everything the DOM does not show. Listens to Playwright and to the
- * browser protocol, turns each event into a BrowserInteraction and hands it
- * to the BrowserInteractionManager. It never decides anything.
+ * « Browser Event Discovery » : le pendant de l'ActionDiscovery du DOM pour tout ce
+ * que le DOM ne montre pas. Écoute Playwright et le protocole du navigateur,
+ * transforme chaque événement en BrowserInteraction et le confie au
+ * BrowserInteractionManager. Elle ne décide jamais rien.
  *
- * Sources:
- * - HTTP_AUTH: Chromium's `Fetch.authRequired` (the native sign-in dialog), not the page's status code;
- * - JS_ALERT / JS_CONFIRM / JS_PROMPT (and unknown dialogs such as beforeunload): `page.on('dialog')`;
- * - POPUP / NEW_TAB: `context.on('page')`, with or without opener;
- * - DOWNLOAD: `page.on('download')`; FILE_CHOOSER: `page.on('filechooser')`;
- * - PERMISSION_REQUEST: an init script around the permission APIs;
- * - EXTERNAL_NAVIGATION: main-frame navigations leaving the allowed origins.
+ * Sources :
+ * - HTTP_AUTH : `Fetch.authRequired` de Chromium (la fenêtre de connexion native), pas le code de statut de la page ;
+ * - JS_ALERT / JS_CONFIRM / JS_PROMPT (et les dialogues inconnus comme beforeunload) : `page.on('dialog')` ;
+ * - POPUP / NEW_TAB : `context.on('page')`, avec ou sans opener ;
+ * - DOWNLOAD : `page.on('download')` ; FILE_CHOOSER : `page.on('filechooser')` ;
+ * - PERMISSION_REQUEST : un script d'initialisation autour des API de permission ;
+ * - EXTERNAL_NAVIGATION : les navigations du cadre principal qui quittent les origines autorisées.
  */
 export class BrowserEventDiscovery {
-  /** Pages opened by the crawler itself (not popups). */
+  /** Pages ouvertes par le crawler lui-même (pas des popups). */
   private creatingOwnPage = 0;
   private readonly ownPages = new WeakSet<Page>();
   private readonly lastUrl = new WeakMap<Page, string>();
-  /** Pages whose sign-in challenge is answered by this discovery. */
+  /** Pages dont le défi de connexion reçoit sa réponse de cette découverte. */
   private readonly authWatched = new WeakSet<Page>();
-  /** URLs whose sign-in challenge (WWW-Authenticate) came before the discovery could attach to their page. */
+  /** URL dont le défi de connexion (WWW-Authenticate) est arrivé avant que la découverte puisse s'attacher à leur page. */
   private readonly missedChallenge = new Set<string>();
-  /** Recent downloadable responses: MIME type and size for DOWNLOAD records. */
+  /** Réponses téléchargeables récentes : type MIME et taille pour les enregistrements DOWNLOAD. */
   private readonly fileResponses = new Map<string, { mimeType?: string; size?: number }>();
 
   constructor(
@@ -114,8 +114,8 @@ export class BrowserEventDiscovery {
     context.on('page', (page) => {
       void this.onNewPage(page);
     });
-    // A popup starts loading before anyone can attach to it: when its first document is a sign-in
-    // challenge, the native dialog would be missed. Remember it, to replay the challenge once attached.
+    // Une popup commence à se charger avant que quiconque puisse s'y attacher : quand son premier document est un défi
+    // de connexion, la fenêtre native serait manquée. On le retient, pour rejouer le défi une fois attaché.
     context.on('response', (response) => {
       if (!response.request().isNavigationRequest()) return;
       const headers = response.headers();
@@ -124,14 +124,14 @@ export class BrowserEventDiscovery {
       try {
         page = response.frame().page();
       } catch {
-        page = undefined; // first request of a popup: its frame does not exist yet
+        page = undefined; // première requête d'une popup : son cadre n'existe pas encore
       }
       if (page && (this.authWatched.has(page) || response.frame() !== page.mainFrame())) return;
       this.missedChallenge.add(response.url());
     });
   }
 
-  /** Opens a page for the crawler itself: it is not reported as a popup/new tab. */
+  /** Ouvre une page pour le crawler lui-même : elle n'est pas signalée comme popup / nouvel onglet. */
   async openOwnPage(open: () => Promise<Page>): Promise<Page> {
     this.creatingOwnPage += 1;
     try {
@@ -143,7 +143,7 @@ export class BrowserEventDiscovery {
     }
   }
 
-  /** Listens to one page (crawler pages and popups). */
+  /** Écoute une page (pages du crawler et popups). */
   async attachPage(page: Page): Promise<void> {
     page.on('dialog', (dialog) => {
       void this.onDialog(page, dialog);
@@ -173,15 +173,15 @@ export class BrowserEventDiscovery {
         handleAuthRequests: true,
         patterns: [
           { urlPattern: '*' },
-          // Documents are also paused once their headers arrive: a download's name, type and size.
+          // Les documents sont aussi mis en pause à l'arrivée de leurs en-têtes : nom, type et taille d'un téléchargement.
           { urlPattern: '*', resourceType: 'Document', requestStage: 'Response' },
         ],
       });
       this.authWatched.add(page);
     } catch {
-      return; // not Chromium, or the page is already gone
+      return; // pas Chromium, ou la page a déjà disparu
     }
-    // Every request is paused by Fetch.enable: let it go on untouched.
+    // Chaque requête est mise en pause par Fetch.enable : la laisser continuer telle quelle.
     session.on('Fetch.requestPaused', (event: FetchRequestPaused) => {
       if (event.responseStatusCode === undefined) {
         void session.send('Fetch.continueRequest', { requestId: event.requestId }).catch(() => undefined);
@@ -238,7 +238,7 @@ export class BrowserEventDiscovery {
     await this.dispatch(type, page, {
       details: { dialog: kind, message: dialog.message() },
       native: { kind: 'dialog', dialog },
-      // beforeunload: let the page go (the crawler decided to leave); anything else: dismiss.
+      // beforeunload : laisser partir la page (le crawler a décidé de la quitter) ; tout le reste : refuser.
       fallback: () => (kind === 'beforeunload' ? dialog.accept() : dialog.dismiss()).catch(() => undefined),
     });
   }
@@ -251,15 +251,15 @@ export class BrowserEventDiscovery {
       .catch(() => undefined);
     await this.attachPage(page).catch(() => undefined);
     if (this.options.httpAuth && this.missedChallenge.has(page.url()) && !page.isClosed()) {
-      // The sign-in challenge happened before the page was watched: load it again, the
-      // challenge is now raised to the BrowserInteractionManager (HTTP_AUTH), then handled.
+      // Le défi de connexion a eu lieu avant que la page soit surveillée : la recharger, le
+      // défi est maintenant remonté au BrowserInteractionManager (HTTP_AUTH), puis traité.
       this.missedChallenge.delete(page.url());
       await page
         .reload({ waitUntil: 'domcontentloaded', timeout: this.options.popupLoadTimeoutMs * 3 })
         .catch(() => undefined);
     }
-    // POPUP: the page can script its opener (window.open, target=_blank with opener).
-    // NEW_TAB: no link back (rel="noopener", ctrl+click…), even when the browser knows who opened it.
+    // POPUP : la page peut piloter sa page d'origine (window.open, target=_blank avec opener).
+    // NEW_TAB : aucun lien de retour (rel="noopener", ctrl+clic…), même quand le navigateur sait qui l'a ouverte.
     const scriptable = await page.evaluate(() => window.opener !== null).catch(() => false);
     const type = opener && scriptable ? 'POPUP' : 'NEW_TAB';
     await this.dispatch(type, opener ?? page, {
@@ -293,7 +293,7 @@ export class BrowserEventDiscovery {
     await this.dispatch('FILE_CHOOSER', page, {
       details: { multiple: chooser.isMultiple(), ...(accept ? { accept } : {}) },
       native: { kind: 'file-chooser', chooser },
-      // Nothing to do: the intercepted chooser never opens and no file is set.
+      // Rien à faire : le sélecteur intercepté ne s'ouvre jamais et aucun fichier n'est choisi.
     });
   }
 
@@ -304,7 +304,7 @@ export class BrowserEventDiscovery {
     this.lastUrl.set(page, url);
     const originClass = this.options.origins.classify(url);
     if (originClass !== 'EXTERNAL_ORIGIN' && originClass !== 'BLOCKED_ORIGIN') return;
-    if (previous !== undefined && originOf(previous) === originOf(url)) return; // already reported
+    if (previous !== undefined && originOf(previous) === originOf(url)) return; // déjà signalé
     void this.dispatch('EXTERNAL_NAVIGATION', page, {
       ...(previous ? { sourceUrl: previous } : {}),
       targetUrl: url,
@@ -340,7 +340,7 @@ export class BrowserEventDiscovery {
     }
   }
 
-  // ------------------------------------------------------------------ dispatch
+  // ------------------------------------------------------------------ répartition
 
   private async dispatch(
     type: BrowserInteractionType,

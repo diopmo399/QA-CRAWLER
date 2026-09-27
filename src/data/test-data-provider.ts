@@ -3,27 +3,27 @@ import { runTag, type FormField, type TestDataContext, type TestValue } from '..
 import type { DiscoveredAction } from '../model/discovered-action.js';
 import { normalizeText } from '../policies/keywords.js';
 
-/** What to do with a field when a form is prepared (legacy form, used by flows and prepareForm). */
+/** Que faire d'un champ quand un formulaire est préparé (ancienne forme, utilisée par les flows et prepareForm). */
 export type FillInstruction =
   | { kind: 'fill'; value: string }
-  /** label '' : the first real option (the options of a custom list are only known once it is open). */
+  /** label '' : la première vraie option (les options d'une liste personnalisée ne sont connues qu'une fois ouverte). */
   | { kind: 'select'; label: string }
   | { kind: 'check' }
   | { kind: 'skip'; reason: string };
 
 /**
- * "Which synthetic data should I use?" Swappable: fixtures per application,
- * boundary-value generators, generators driven by an API contract…
+ * « Quelles données synthétiques utiliser ? » Remplaçable : jeux de données par
+ * application, générateurs de valeurs limites, générateurs guidés par un contrat d'API…
  */
 export interface TestDataProvider {
   generateValidValue(field: FormField, context: TestDataContext): Promise<TestValue>;
-  /** Values the form should reject (validation testing), most telling first. */
+  /** Valeurs que le formulaire devrait refuser (tests de validation), les plus parlantes d'abord. */
   generateInvalidValues?(field: FormField, context: TestDataContext): Promise<TestValue[]>;
-  /** Same as generateValidValue, for a discovered action (synchronous). */
+  /** Identique à generateValidValue, pour une action découverte (synchrone). */
   instructionFor(action: DiscoveredAction): FillInstruction;
 }
 
-/** Known values of the mission, by meaning rather than by field. */
+/** Valeurs connues de la mission, par sens plutôt que par champ. */
 export type SemanticKey =
   | 'firstName'
   | 'lastName'
@@ -39,18 +39,18 @@ export type SemanticKey =
   | 'text';
 
 export interface TestDataOptions {
-  /** Short id of the run: created values carry QA-CRAWLER-<runId>. */
+  /** Id court du run : les valeurs créées portent QA-CRAWLER-<runId>. */
   runId?: string;
-  /** Values by field label, name or placeholder (case, accents and "*" ignored). */
+  /** Valeurs par libellé, name ou placeholder du champ (majuscules, accents et « * » ignorés). */
   fields?: Readonly<Record<string, string>>;
-  /** Values by meaning (firstName, email, country…), for every field that means it. */
+  /** Valeurs par sens (firstName, email, country…), pour chaque champ qui a ce sens. */
   defaults?: Readonly<Partial<Record<SemanticKey, string>>>;
   today?: () => Date;
 }
 
 const YES = new Set(['true', 'oui', 'yes', '1', 'x', 'coche', 'checked']);
 
-/** How a field's name, label or placeholder tells what it means. Order matters: "prénom" before "nom". */
+/** Comment le name, le libellé ou le placeholder d'un champ dit ce qu'il signifie. L'ordre compte : « prénom » avant « nom ». */
 const SEMANTIC_RULES: readonly [SemanticKey, RegExp][] = [
   ['email', /(e-?mail|courriel)/],
   ['firstName', /(first ?name|given ?name|prenom|forename)/],
@@ -66,17 +66,17 @@ const SEMANTIC_RULES: readonly [SemanticKey, RegExp][] = [
 ];
 
 /**
- * Deterministic, obviously synthetic values. Priority:
+ * Valeurs déterministes, visiblement synthétiques. Priorité :
  *
- *   1. explicit configuration (testData.fields, by label/name/placeholder)
- *   2. field-specific rule (testData.defaults by meaning, the app's hints: "99999", "HH:MM")
- *   3. type-specific generator (email, number within min/max, date…)
- *   4. safe fallback ("QA Test")
+ *   1. configuration explicite (testData.fields, par libellé/name/placeholder)
+ *   2. règle propre au champ (testData.defaults par sens, aides de l'application : "99999", "HH:MM")
+ *   3. générateur propre au type (e-mail, nombre dans min/max, date…)
+ *   4. valeur de repli sûre ("QA Test")
  *
- * Names, titles and companies carry QA-CRAWLER-<runId>, e-mails
- * qa-crawler-<runId>@example.test: what the crawler creates can be found
- * (and cleaned) later. Sensitive fields (passwords, cards, secrets) are
- * never filled — even when a value is configured.
+ * Noms, titres et entreprises portent QA-CRAWLER-<runId>, les e-mails
+ * qa-crawler-<runId>@example.test : ce que le crawler crée peut être retrouvé
+ * (et nettoyé) plus tard. Les champs sensibles (mots de passe, cartes, secrets)
+ * ne sont jamais remplis — même quand une valeur est configurée.
  */
 export class DefaultTestDataProvider implements TestDataProvider {
   private readonly fields: ReadonlyMap<string, string>;
@@ -91,7 +91,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
     this.today = options.today ?? (() => new Date());
   }
 
-  /** Value the mission gives for this field, if any. */
+  /** Valeur donnée par la mission pour ce champ, s'il y en a une. */
   configured(field: Pick<FormField, 'label' | 'groupLabel' | 'name' | 'placeholder'>): string | undefined {
     for (const key of [field.label, field.groupLabel, field.name, field.placeholder]) {
       if (!key) continue;
@@ -125,7 +125,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
     }
   }
 
-  /** The valid value of a field (synchronous core). */
+  /** La valeur valide d'un champ (cœur synchrone). */
   validValue(field: FormField, runId = this.runId): TestValue {
     if (field.sensitive || field.payment)
       return { kind: 'skip', source: 'fallback', reason: 'sensitive field: never filled automatically' };
@@ -137,7 +137,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
       case 'checkbox':
       case 'radio':
         if (field.choiceGroup !== undefined && field.groupLabel !== undefined && configured !== undefined) {
-          // "Contact channel": "Phone" → this radio only if it is that option.
+          // « Canal de contact » : « Téléphone » → cette radio seulement si c'est cette option.
           const own = [field.label, field.name].some((key) => key && fieldKey(key) === fieldKey(configured));
           return own
             ? { kind: 'check', source: 'configured' }
@@ -147,7 +147,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
           return YES.has(fieldKey(configured))
             ? { kind: 'check', source: 'configured' }
             : { kind: 'skip', source: 'configured', reason: 'configured: unchecked' };
-        // Radios: one choice per group. Checkboxes: only what the form requires.
+        // Radios : un choix par groupe. Cases à cocher : seulement ce que le formulaire exige.
         return field.required || field.choiceGroup !== undefined
           ? { kind: 'check', source: 'type' }
           : { kind: 'skip', source: 'type', reason: 'optional choice' };
@@ -183,8 +183,8 @@ export class DefaultTestDataProvider implements TestDataProvider {
   }
 
   /**
-   * Values the form should reject, most telling first: empty when required,
-   * out of min/max, too short/long, wrong format. Never for sensitive fields.
+   * Valeurs que le formulaire devrait refuser, les plus parlantes d'abord : vide
+   * quand il est obligatoire, hors min/max, trop court/long, mauvais format. Jamais pour les champs sensibles.
    */
   invalidValues(field: FormField): TestValue[] {
     if (field.sensitive || field.payment || field.disabled || field.readonly) return [];
@@ -220,7 +220,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
     return cases;
   }
 
-  /** testData.defaults, then the built-in meaning of the field (names carry the run tag). */
+  /** testData.defaults, puis le sens intégré du champ (les noms portent le marqueur du run). */
   private semantic(field: FormField, runId: string): { key: SemanticKey; value: string } | undefined {
     const text = normalizeText(`${field.name ?? ''} ${field.label ?? ''} ${field.placeholder ?? ''}`);
     const key =
@@ -250,7 +250,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
     return { key, value: this.defaults[key] ?? builtIn[key] };
   }
 
-  /** The application's own hints: "99999" (5 digits), "HH:MM", "AAAA-MM-JJ", "JJ/MM/AAAA"… */
+  /** Les aides de l'application elle-même : "99999" (5 chiffres), "HH:MM", "AAAA-MM-JJ", "JJ/MM/AAAA"… */
   private fromHint(field: FormField): string | undefined {
     if (field.type !== 'text' && field.type !== 'textarea' && field.type !== 'date') return undefined;
     const shown = `${field.hint ?? ''} ${field.placeholder ?? ''}`;
@@ -295,7 +295,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
     }
   }
 
-  /** Today, kept within the field's min/max dates. */
+  /** Aujourd'hui, maintenu entre les dates min/max du champ. */
   private isoToday(field: FormField): string {
     const date = this.today().toISOString().slice(0, 10);
     if (field.minText && /^\d{4}-\d{2}-\d{2}/.test(field.minText) && date < field.minText)
@@ -306,7 +306,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
   }
 }
 
-/** Label as written in the YAML or on screen: case, accents, required marker "*" ignored. */
+/** Libellé tel qu'écrit dans le YAML ou à l'écran : majuscules, accents et marque d'obligation « * » ignorés. */
 function fieldKey(text: string): string {
   return normalizeText(text.replace(/\*/g, ' '));
 }
@@ -353,7 +353,7 @@ function matches(text: string, pattern: string): boolean {
   }
 }
 
-/** Adjusts a text to minlength/maxlength and checks the pattern; skip if impossible. */
+/** Ajuste un texte à minlength/maxlength et vérifie le motif ; skip si c'est impossible. */
 function fitted(value: string, field: FormField, source: TestValue['source']): TestValue {
   let text = value;
   if (field.minLength !== undefined && text.length < field.minLength)

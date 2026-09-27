@@ -1,56 +1,56 @@
 /**
- * Every number the action scoring uses, in one place. The mission can
- * override any of them (`scoring.weights` in the YAML); nothing else in the
- * code hard-codes a priority.
+ * Tous les nombres qu'utilise le score des actions, au même endroit. La mission
+ * peut surcharger chacun d'eux (`scoring.weights` dans le YAML) ; rien d'autre
+ * dans le code n'impose une priorité en dur.
  *
- * Positive weights make an action more attractive, negative ones less.
- * What must never run (delete, payment, external navigation…) is not a
- * weight: the SafetyPolicy blocks it and the scorer excludes it.
+ * Les poids positifs rendent une action plus attirante, les négatifs moins.
+ * Ce qui ne doit jamais s'exécuter (suppression, paiement, navigation externe…)
+ * n'est pas un poids : la SafetyPolicy le bloque et le scorer l'exclut.
  */
 export const DEFAULT_SCORING_WEIGHTS = {
-  // ---- what the action may bring
-  /** Leads to a state never seen: a link to a new route, a tab never opened, a wizard step. */
+  // ---- ce que l'action peut apporter
+  /** Mène à un état jamais vu : un lien vers une nouvelle route, un onglet jamais ouvert, une étape d'assistant. */
   newState: 100,
-  /** Not executed yet from this state (every candidate: others are excluded). */
+  /** Pas encore exécutée depuis cet état (toutes les candidates : les autres sont exclues). */
   neverExecuted: 80,
-  /** Moves a form forward (wizard step) or changes one of its choices. */
+  /** Fait avancer un formulaire (étape d'assistant) ou change l'un de ses choix. */
   formNeverExplored: 70,
-  /** Link inside the page content. */
+  /** Lien dans le contenu de la page. */
   internalNavigation: 60,
   tab: 50,
   details: 40,
   search: 30,
   filter: 20,
   pagination: 10,
-  /** Button opening a menu or a panel. */
+  /** Bouton qui ouvre un menu ou un panneau. */
   menu: 45,
-  /** Show/hide control (accordion, "more"…). */
+  /** Contrôle afficher/masquer (accordéon, « plus »…). */
   toggle: 25,
-  /** Any other safe in-page control. */
+  /** Tout autre contrôle sûr de la page. */
   other: 15,
-  /** Entry of the global menu (navigation landmark): the page itself first. */
+  /** Entrée du menu global (zone de navigation) : la page elle-même d'abord. */
   globalMenu: 20,
 
-  // ---- what the mission is after (goals.keywords)
-  /** The label of the action matches a goal keyword ("Utilisateurs"). */
+  // ---- ce que cherche la mission (goals.keywords)
+  /** Le libellé de l'action contient un mot-clé d'objectif (« Utilisateurs »). */
   goalText: 100,
-  /** Only its target URL matches a goal keyword (/admin/users). */
+  /** Seule son URL cible contient un mot-clé d'objectif (/admin/users). */
   goalUrl: 80,
 
-  // ---- what makes it less interesting
-  /** The same control was already used from another state. */
+  // ---- ce qui la rend moins intéressante
+  /** Le même contrôle a déjà été utilisé depuis un autre état. */
   alreadyExplored: -100,
-  /** Its target route already has known states. */
+  /** Sa route cible a déjà des états connus. */
   targetWellExplored: -40,
-  /** Export, download, print: files, not screens. */
+  /** Exporter, télécharger, imprimer : des fichiers, pas des écrans. */
   export: -30,
-  /** Logout (blocked by the SafetyPolicy anyway). */
+  /** Déconnexion (bloquée de toute façon par la SafetyPolicy). */
   logout: -100,
-  /** Already known from the baseline (explore mode): new ground first, without ignoring it. */
+  /** Déjà connue par la baseline (mode explore) : le nouveau terrain d'abord, sans l'ignorer. */
   knownInBaseline: -50,
 
-  // ---- what is in front of the user
-  /** Inside the dialog, drawer or open menu in front of the screen. */
+  // ---- ce qui est devant l'utilisateur
+  /** Dans la fenêtre, le tiroir ou le menu ouvert devant l'écran. */
   foreground: 200,
 } as const;
 
@@ -59,7 +59,7 @@ export type ScoringWeights = Record<ScoringWeightName, number>;
 
 export const SCORING_WEIGHT_NAMES = Object.keys(DEFAULT_SCORING_WEIGHTS) as ScoringWeightName[];
 
-/** Defaults, with the mission's overrides. */
+/** Valeurs par défaut, avec les surcharges de la mission. */
 export function scoringWeights(overrides: Partial<Record<ScoringWeightName, number>> = {}): ScoringWeights {
   return { ...DEFAULT_SCORING_WEIGHTS, ...overrides };
 }

@@ -4,7 +4,7 @@ import type { DiscoveredAction } from '../model/discovered-action.js';
 import type { LocatorDescriptor } from '../model/locator.js';
 import { toLocator } from './locator-resolver.js';
 
-/** Value to type/select for fill and select actions. */
+/** Valeur à saisir/choisir pour les actions fill et select. */
 export interface ExecutionInput {
   value?: string;
 }
@@ -15,17 +15,17 @@ export interface ActionExecutionResult {
   urlBefore: string;
   urlAfter: string;
   durationMs: number;
-  /** The preferred locator did not match; the CSS fallback was used. */
+  /** Le localisateur préféré n'a rien trouvé ; le CSS de repli a été utilisé. */
   usedFallback: boolean;
-  /** The element opened a new window (handled by the BrowserInteractionManager). */
+  /** L'élément a ouvert une nouvelle fenêtre (gérée par le BrowserInteractionManager). */
   openedPopup: boolean;
 }
 
 /**
- * "Execute it." Translates the chosen action into Playwright calls
- * (getByRole(...).click(), fill, selectOption, setChecked) and waits for the
- * page to settle. It contains no decision logic and no safety rules: it is
- * only ever called with an action the SafetyPolicy allowed.
+ * « Exécute. » Traduit l'action choisie en appels Playwright
+ * (getByRole(...).click(), fill, selectOption, setChecked) et attend que la
+ * page se stabilise. Aucune logique de décision ni règle de sécurité ici : il n'est
+ * appelé qu'avec une action que la SafetyPolicy a permise.
  */
 export class PlaywrightActionExecutor {
   constructor(
@@ -80,8 +80,8 @@ export class PlaywrightActionExecutor {
           }
           if (opened) {
             openedPopup = true;
-            // The new window itself is handled by the BrowserInteractionManager (recorded, observed, closed).
-            // A link opening a new window: reach its target in the current page too.
+            // La nouvelle fenêtre elle-même est gérée par le BrowserInteractionManager (enregistrée, observée, fermée).
+            // Un lien qui ouvre une nouvelle fenêtre : atteindre aussi sa cible dans la page courante.
             if (action.type === 'navigate' && action.href) {
               await page.goto(action.href, { timeout, waitUntil: 'domcontentloaded' });
             }
@@ -96,7 +96,7 @@ export class PlaywrightActionExecutor {
           break;
         case 'check':
           await target.locator.setChecked(true, { timeout }).catch(async (error: unknown) => {
-            // Styled checkbox/radio (Angular Material): the drawing covers the native input.
+            // Case ou radio stylée (Angular Material) : le dessin recouvre l'input natif.
             if (!interceptor(error)) throw error;
             await target.locator.check({ force: true, timeout });
           });
@@ -114,9 +114,9 @@ export class PlaywrightActionExecutor {
   }
 
   /**
-   * Executes a form fill plan (FormFillStrategy): each operation on the
-   * field's element, then the field is left like a user does (blur), so the
-   * application validates it now and not in the middle of the next click.
+   * Exécute un plan de remplissage (FormFillStrategy) : chaque opération sur
+   * l'élément du champ, puis le champ est quitté comme le ferait un utilisateur (blur),
+   * pour que l'application le valide maintenant et pas au milieu du clic suivant.
    */
   async executePlan(
     page: Page,
@@ -154,8 +154,8 @@ export class PlaywrightActionExecutor {
   }
 
   /**
-   * Clicks, failing fast with a clear reason when another layer (a date
-   * picker's backdrop, a modal…) takes the click instead of the element.
+   * Clique, en échouant vite avec une raison claire quand un autre calque (le fond
+   * d'un calendrier, une fenêtre modale…) prend le clic à la place de l'élément.
    */
   private async click(locator: Locator, timeout: number): Promise<void> {
     try {
@@ -163,12 +163,12 @@ export class PlaywrightActionExecutor {
     } catch (error) {
       const blocker = interceptor(error);
       if (blocker) throw new Error(`click intercepted by ${blocker}: another layer covers the element`);
-      // Not ready yet (animation, loading…): the real click below waits for it.
+      // Pas encore prêt (animation, chargement…) : le vrai clic ci-dessous l'attend.
     }
     await locator.click({ timeout });
   }
 
-  /** Native <select>: selectOption; custom list (Angular Material, ARIA combobox): open it, pick the option. */
+  /** <select> natif : selectOption ; liste personnalisée (Angular Material, combobox ARIA) : l'ouvrir, choisir l'option. */
   private async select(
     page: Page,
     locator: Locator,
@@ -186,12 +186,12 @@ export class PlaywrightActionExecutor {
     if (label) {
       await page.getByRole('option', { name: label }).first().click({ timeout });
     } else {
-      // The first real option: placeholders ("--", "Choisir…") are skipped.
+      // La première vraie option : les options d'invite (« -- », « Choisir… ») sont sautées.
       const texts = await options.allInnerTexts();
       const index = texts.findIndex((text) => text.trim() !== '' && !PLACEHOLDER_OPTION.test(text.trim()));
       await options.nth(Math.max(index, 0)).click({ timeout });
     }
-    // A multiple-choice list stays open: close it.
+    // Une liste à choix multiples reste ouverte : la fermer.
     if (
       await options
         .first()
@@ -201,7 +201,7 @@ export class PlaywrightActionExecutor {
       await page.keyboard.press('Escape');
   }
 
-  /** Preferred locator, else the CSS fallback; `nth` applied when several elements match. */
+  /** Localisateur préféré, sinon le CSS de repli ; `nth` appliqué quand plusieurs éléments correspondent. */
   private async resolve(
     page: Page,
     action: DiscoveredAction,
@@ -225,7 +225,7 @@ export class PlaywrightActionExecutor {
   }
 }
 
-/** Time given to the application to show a field's error message once the field is left. */
+/** Temps laissé à l'application pour afficher le message d'erreur d'un champ une fois quitté. */
 const BLUR_SETTLE_MS = 100;
 
 export interface PlanOperationResult {
@@ -234,11 +234,11 @@ export interface PlanOperationResult {
   error?: string;
 }
 
-/** Time given to a click before telling that another layer takes it. */
+/** Temps laissé à un clic avant de signaler qu'un autre calque le prend. */
 const TRIAL_CLICK_MS = 2500;
 const PLACEHOLDER_OPTION = /^(-+|choisir|select|choose|aucun|none)/i;
 
-/** The element that took the click instead of the target, from Playwright's call log. */
+/** L'élément qui a pris le clic à la place de la cible, d'après le journal d'appels de Playwright. */
 export function interceptor(error: unknown): string | undefined {
   const message = error instanceof Error ? error.message : String(error);
   const match = /(<[^\n]*?>)(?: from <[^\n]*?> subtree)? intercepts pointer events/.exec(message);

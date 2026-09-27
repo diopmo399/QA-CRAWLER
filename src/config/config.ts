@@ -9,16 +9,16 @@ import { ACCESSIBILITY_RULES } from '../accessibility/accessibility-checker.js';
 import { LOG_LEVELS } from '../logging/engine-log.js';
 
 /**
- * Mission configuration. The YAML describes *what to explore and within which
- * limits*: the explorer discovers the screens and transitions by itself.
- * Optional `flows` impose ordered test steps on top of that (still checked by
- * the SafetyPolicy). Every section except `target.baseUrl` has defaults, so a
- * minimal mission is just a URL.
+ * Configuration de la mission. Le YAML décrit *quoi explorer et dans quelles
+ * limites* : l'explorateur découvre lui-même les écrans et les transitions.
+ * Les `flows` facultatifs imposent en plus des étapes de test ordonnées
+ * (toujours contrôlées par la SafetyPolicy). Chaque section sauf `target.baseUrl`
+ * a des valeurs par défaut : une mission minimale, c'est juste une URL.
  */
 
 const nonEmpty = z.string().trim().min(1);
 
-/** learn: build the baseline; verify: check the application against it; explore: look for new ground. */
+/** learn : construire la baseline ; verify : vérifier l'application par rapport à elle ; explore : chercher du nouveau. */
 export const MISSION_MODES = ['explore', 'learn', 'verify'] as const;
 export type MissionMode = (typeof MISSION_MODES)[number];
 
@@ -37,7 +37,7 @@ const browserSchema = z
     locale: nonEmpty.optional(),
     userAgent: nonEmpty.optional(),
     ignoreHttpsErrors: z.boolean().default(false),
-    /** Extra Chromium flags. `--disable-dev-shm-usage` avoids crashes with the small /dev/shm of containers. */
+    /** Options Chromium supplémentaires. `--disable-dev-shm-usage` évite les plantages dus au petit /dev/shm des conteneurs. */
     args: z.array(nonEmpty).default(['--disable-dev-shm-usage']),
     slowMoMs: z.number().int().min(0).default(0),
   })
@@ -46,46 +46,46 @@ const browserSchema = z
 const queryParamsSchema = z
   .object({
     /**
-     * - pattern: keep query params, but group URLs by param *names* for the per-route budget
-     *   (?page=1, ?page=2 … count as the same route).
-     * - ignore: drop every query param (each path is visited once).
-     * - keep: treat every distinct query string as a new page (bounded only by maxStates).
+     * - pattern : garder les paramètres de requête, mais regrouper les URL par *noms* de paramètres pour le budget par route
+     *   (?page=1, ?page=2 … comptent comme la même route).
+     * - ignore : supprimer tous les paramètres de requête (chaque chemin est visité une fois).
+     * - keep : chaque chaîne de requête distincte est une nouvelle page (limité seulement par maxStates).
      */
     mode: z.enum(['pattern', 'ignore', 'keep']).default('pattern'),
-    /** Params always removed before comparing URLs (tracking, cache busters). `*` wildcard allowed. */
+    /** Paramètres toujours retirés avant de comparer des URL (suivi, anti-cache). Joker `*` accepté. */
     ignored: z.array(nonEmpty).default(['utm_*', 'fbclid', 'gclid', '_', 'ts', 'timestamp', 'cachebuster']),
   })
   .strict();
 
 const explorationSchema = z
   .object({
-    /** Distinct functional states (screens, steps, tabs) to discover at most. */
+    /** Nombre maximal d'états fonctionnels distincts (écrans, étapes, onglets) à découvrir. */
     maxStates: z.number().int().positive().default(100),
-    /** Actions executed at most (clicks, navigations, fills). */
+    /** Nombre maximal d'actions exécutées (clics, navigations, saisies). */
     maxActions: z.number().int().positive().default(500),
-    /** Transitions away from the start state at most. */
+    /** Nombre maximal de transitions depuis l'état de départ. */
     maxDepth: z.number().int().min(0).default(10),
     maxDurationMinutes: z.number().positive().default(15),
-    /** Timeout of a single action (locating + executing the element). */
+    /** Délai d'une seule action (trouver l'élément + l'exécuter). */
     actionTimeoutMs: z.number().int().positive().default(10_000),
     navigationTimeoutMs: z.number().int().positive().default(15_000),
-    /** Playwright load state awaited after each navigation. */
+    /** État de chargement Playwright attendu après chaque navigation. */
     waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle', 'commit']).default('load'),
-    /** Extra wait after each action so SPAs (Angular…) can render and fire their API calls. */
+    /** Attente supplémentaire après chaque action, pour que les SPA (Angular…) affichent l'écran et lancent leurs appels d'API. */
     settleTimeMs: z.number().int().min(0).default(400),
-    /** Distinct states explored per route pattern (/users/:id → only N users). */
+    /** États distincts explorés par modèle de route (/users/:id → seulement N utilisateurs). */
     maxStatesPerRoute: z.number().int().positive().default(3),
     queryParams: queryParamsSchema.default({}),
     /**
-     * Similar controls of a screen (days of a date picker, page numbers, "Voir"
-     * on every row…) are tried this many times at most, not one by one.
+     * Les contrôles semblables d'un écran (jours d'un calendrier, numéros de page,
+     * « Voir » sur chaque ligne…) sont essayés au plus ce nombre de fois, pas un par un.
      */
     maxSimilarActions: z.number().int().positive().default(2),
-    /** Cap on actions recorded per state. */
+    /** Nombre maximal d'actions enregistrées par état. */
     maxRecordedActions: z.number().int().positive().default(200),
     /**
-     * Explore the application autonomously from target.startAt. Set to false
-     * to run only the imposed `flows`.
+     * Explorer l'application en autonomie à partir de target.startAt. Mettre false
+     * pour exécuter seulement les `flows` imposés.
      */
     autonomous: z.boolean().default(true),
   })
@@ -93,21 +93,21 @@ const explorationSchema = z
 
 const goalsSchema = z
   .object({
-    /** Follow links and routerLinks. */
+    /** Suivre les liens et les routerLinks. */
     discoverNavigation: z.boolean().default(true),
-    /** Fill fields with test data (never sensitive ones) to explore forms and wizard steps. */
+    /** Remplir les champs avec des données de test (jamais les sensibles) pour explorer les formulaires et les étapes d'assistant. */
     discoverForms: z.boolean().default(true),
-    /** Click in-page controls (tabs, menus, details, toggles, wizard steps). */
+    /** Cliquer sur les contrôles de la page (onglets, menus, détails, bascules, étapes d'assistant). */
     discoverFlows: z.boolean().default(true),
-    /** Report HTTP, JavaScript and navigation anomalies. */
+    /** Signaler les anomalies HTTP, JavaScript et de navigation. */
     detectErrors: z.boolean().default(true),
     /**
-     * What the mission is after, in the application's words ("utilisateurs",
-     * "permissions"…): actions whose label or URL matches one are explored
-     * first. Deterministic (labels, texts, URLs), no model involved.
+     * Ce que cherche la mission, avec les mots de l'application (« utilisateurs »,
+     * « permissions »…) : les actions dont le libellé ou l'URL en contient un sont
+     * explorées en premier. Déterministe (libellés, textes, URL), aucun modèle.
      */
     keywords: z.array(nonEmpty).default([]),
-    /** Short form of discover* (navigation, forms, dialogs → discoverFlows). */
+    /** Forme courte de discover* (navigation, forms, dialogs → discoverFlows). */
     discover: z
       .object({
         navigation: z.boolean().optional(),
@@ -119,7 +119,7 @@ const goalsSchema = z
   })
   .strict();
 
-/** Categories of SAFE actions a mission can allow. */
+/** Catégories d'actions SAFE qu'une mission peut autoriser. */
 export const SAFE_ACTION_GROUPS = [
   'navigation',
   'tabs',
@@ -141,9 +141,9 @@ const checksSchema = z
     httpErrors: z.boolean().default(true),
     requestFailures: z.boolean().default(true),
     brokenLinks: z.boolean().default(true),
-    /** Screenshot every visited page. */
+    /** Capturer chaque page visitée. */
     screenshots: z.boolean().default(true),
-    /** Screenshot pages with ERROR/CRITICAL issues even when `screenshots` is false. */
+    /** Capturer les pages avec une anomalie ERROR/CRITICAL même quand `screenshots` vaut false. */
     screenshotOnError: z.boolean().default(true),
     fullPageScreenshots: z.boolean().default(false),
   })
@@ -151,28 +151,28 @@ const checksSchema = z
 
 const httpSchema = z
   .object({
-    /** Responses with a status >= this value are reported. */
+    /** Les réponses dont le statut est >= à cette valeur sont signalées. */
     failOnStatus: z.number().int().min(100).max(599).default(400),
-    /** Statuses never reported (e.g. 401 on an optional session check). */
+    /** Statuts jamais signalés (par exemple un 401 sur une vérification de session facultative). */
     ignoreStatus: z.array(z.number().int().min(100).max(599)).default([]),
-    /** Request URLs containing one of these substrings are never reported. */
+    /** Les URL de requête contenant l'une de ces sous-chaînes ne sont jamais signalées. */
     ignoreUrlPatterns: z.array(nonEmpty).default([]),
   })
   .strict();
 
 const safetySchema = z
   .object({
-    /** Hostnames the crawler may visit. Defaults to the host of target.baseUrl. `*.example.com` allowed. */
+    /** Noms d'hôte que le crawler peut visiter. Par défaut : l'hôte de target.baseUrl. `*.example.com` accepté. */
     allowedHosts: z.array(nonEmpty).default([]),
-    /** Paths never visited. Prefix match; `*` wildcard allowed (e.g. /admin/*\/delete). */
+    /** Chemins jamais visités. Correspondance par préfixe ; joker `*` accepté (par exemple /admin/*\/delete). */
     ignoredPaths: z.array(nonEmpty).default(['/logout', '/signout', '/sign-out', '/deconnexion']),
-    /** Action classes the crawler may execute automatically. */
+    /** Classes d'actions que le crawler peut exécuter automatiquement. */
     allowedActionClasses: z.array(z.enum(ACTION_CLASSIFICATIONS)).default(['SAFE']),
-    /** Kinds of SAFE actions the mission may execute. Default: all of them. */
+    /** Types d'actions SAFE que la mission peut exécuter. Par défaut : tous. */
     allow: z.array(z.enum(SAFE_ACTION_GROUPS)).default([...SAFE_ACTION_GROUPS]),
     /**
-     * Risks that always block an action, whatever its class. `sensitive-data`
-     * (passwords, card numbers, secrets) is blocked even if omitted here.
+     * Risques qui bloquent toujours une action, quelle que soit sa classe.
+     * `sensitive-data` (mots de passe, numéros de carte, secrets) est bloqué même s'il est absent d'ici.
      */
     block: z
       .array(z.enum(RISK_KINDS))
@@ -188,9 +188,10 @@ const safetySchema = z
         'download',
       ]),
     /**
-     * Actions that change data (create, save, send a form). Off by default;
-     * when on, MUTATION actions and form submission are allowed, within a
-     * budget per run. DANGEROUS actions (delete, payment…) stay blocked.
+     * Actions qui modifient des données (créer, enregistrer, envoyer un formulaire).
+     * Désactivé par défaut ; activé, les actions MUTATION et l'envoi de formulaire
+     * sont permis, dans un budget par run. Les actions DANGEROUS (supprimer,
+     * payer…) ne s'exécutent que si DANGEROUS est dans allowedActionClasses, et comptent dans ce budget.
      */
     mutations: z
       .object({
@@ -199,7 +200,7 @@ const safetySchema = z
       })
       .strict()
       .default({}),
-    /** Extra keywords (any language) added to the built-in classification rules. */
+    /** Mots-clés supplémentaires (toute langue) ajoutés aux règles de classement intégrées. */
     keywords: z
       .object({
         safe: z.array(nonEmpty).default([]),
@@ -214,36 +215,36 @@ const safetySchema = z
 const formAuthSchema = z
   .object({
     type: z.literal('form'),
-    /** Login page, absolute or relative to target.baseUrl. */
+    /** Page de connexion, absolue ou relative à target.baseUrl. */
     loginUrl: nonEmpty,
     usernameSelector: nonEmpty,
     passwordSelector: nonEmpty,
     submitSelector: nonEmpty,
-    /** Names of the environment variables holding the credentials — never the credentials themselves. */
+    /** Noms des variables d'environnement qui contiennent les identifiants — jamais les identifiants eux-mêmes. */
     usernameEnv: nonEmpty.default('QA_USERNAME'),
     passwordEnv: nonEmpty.default('QA_PASSWORD'),
-    /** Login succeeded when this selector appears… */
+    /** La connexion a réussi quand ce sélecteur apparaît… */
     successSelector: nonEmpty.optional(),
-    /** …or when the URL contains this string. */
+    /** …ou quand l'URL contient cette chaîne. */
     successUrlContains: nonEmpty.optional(),
     timeoutMs: z.number().int().positive().default(15_000),
   })
   .strict();
 
 /**
- * HTTP authentication handled by the browser itself (the grey "Sign in"
- * dialog: Basic, e.g. SiteMinder Basic scheme; NTLM depending on the server).
- * Playwright answers the server's challenge with these credentials.
+ * Authentification HTTP gérée par le navigateur lui-même (la fenêtre grise
+ * « Se connecter » : Basic, par exemple le schéma Basic de SiteMinder ; NTLM
+ * selon le serveur). Playwright répond au défi du serveur avec ces identifiants.
  */
 const httpAuthSchema = z
   .object({
     type: z.literal('http'),
-    /** Names of the environment variables holding the credentials — never the credentials themselves. */
+    /** Noms des variables d'environnement qui contiennent les identifiants — jamais les identifiants eux-mêmes. */
     usernameEnv: nonEmpty.default('QA_USERNAME'),
     passwordEnv: nonEmpty.default('QA_PASSWORD'),
     /**
-     * Only send the credentials to this origin (https://sso.example.com).
-     * Recommended; without it they are sent to any host that asks for them.
+     * N'envoyer les identifiants qu'à cette origine (https://sso.example.com).
+     * Recommandé ; sans elle, ils sont envoyés à tout hôte qui les demande.
      */
     origin: z
       .string()
@@ -251,7 +252,7 @@ const httpAuthSchema = z
       .refine((value) => /^https?:\/\//i.test(value), 'origin must use http or https')
       .transform((value) => new URL(value).origin)
       .optional(),
-    /** Page loaded to check the login (default: target.startAt). */
+    /** Page chargée pour vérifier la connexion (par défaut : target.startAt). */
     checkUrl: nonEmpty.optional(),
     timeoutMs: z.number().int().positive().default(15_000),
   })
@@ -264,9 +265,10 @@ const authSchema = z.discriminatedUnion('type', [
 ]);
 
 /**
- * Other users of the application (reader, manager…). After the exploration,
- * each one opens the screens found — plain page loads, never an action — to
- * see what it may reach. Credentials: environment variable names only.
+ * Autres utilisateurs de l'application (lecteur, gestionnaire…). Après
+ * l'exploration, chacun ouvre les écrans trouvés — simples chargements de page,
+ * jamais une action — pour voir ce qu'il peut atteindre. Identifiants : noms de
+ * variables d'environnement seulement.
  */
 const actorSchema = z
   .object({
@@ -279,7 +281,7 @@ const actorSchema = z
 const authorizationRuleSchema = z
   .object({
     actor: nonEmpty,
-    /** Path prefix, `*` wildcard allowed (/admin/*). */
+    /** Préfixe de chemin, joker `*` accepté (/admin/*). */
     path: nonEmpty,
     expect: z.enum(['allowed', 'denied']),
   })
@@ -288,17 +290,17 @@ const authorizationRuleSchema = z
 const authorizationSchema = z
   .object({
     enabled: z.boolean().default(true),
-    /** Name of the mission's own user (auth) in the reports. */
+    /** Nom de l'utilisateur de la mission (auth) dans les rapports. */
     primaryActor: nonEmpty.default('primary'),
     rules: z.array(authorizationRuleSchema).default([]),
-    /** Screens opened per actor at most. */
+    /** Nombre maximal d'écrans ouverts par acteur. */
     maxTargets: z.number().int().min(1).default(50),
-    /** Words showing a refusal on a page answered 200 (added to the built-in ones). */
+    /** Mots qui montrent un refus sur une page répondue 200 (ajoutés à ceux intégrés). */
     deniedTexts: z.array(nonEmpty).default([]),
   })
   .strict();
 
-/** Browser permissions (Playwright names) a mission may grant explicitly. */
+/** Permissions du navigateur (noms Playwright) qu'une mission peut accorder explicitement. */
 export const BROWSER_PERMISSIONS = [
   'geolocation',
   'notifications',
@@ -316,53 +318,53 @@ const httpOrigin = z
   .transform((value) => new URL(value).origin);
 
 /**
- * Named credential profiles: only the NAMES of the environment variables
- * holding the secrets (CI secrets, Kubernetes env…), never the secrets.
+ * Profils d'identifiants nommés : seulement les NOMS des variables
+ * d'environnement qui contiennent les secrets (secrets de CI, env Kubernetes…), jamais les secrets.
  */
 const credentialsSchema = z
   .record(nonEmpty, z.object({ usernameEnv: nonEmpty, passwordEnv: nonEmpty }).strict())
   .default({});
 
 /**
- * Interactions raised by the browser itself, outside the application's DOM
- * (native sign-in dialog, alert/confirm/prompt, popups, downloads, file
- * chooser, permission requests, navigation to another origin).
+ * Interactions levées par le navigateur lui-même, hors du DOM de l'application
+ * (fenêtre de connexion native, alert/confirm/prompt, popups, téléchargements,
+ * sélecteur de fichier, demandes de permission, navigation vers une autre origine).
  */
 const browserInteractionsSchema = z
   .object({
     enabled: z.boolean().default(true),
-    /** Longest time a handler may take before its interaction is abandoned. */
+    /** Durée maximale d'un handler avant l'abandon de son interaction. */
     timeoutMs: z.number().int().positive().default(15_000),
     retry: z
       .object({
-        /** Tries when the browser raises the same interaction again (e.g. rejected credentials). */
+        /** Essais quand le navigateur relève la même interaction (par exemple des identifiants refusés). */
         maxAttempts: z.number().int().min(1).max(5).default(2),
       })
       .strict()
       .default({}),
-    /** Same interaction (type, origin, action) seen more than this many times: INTERACTION_LOOP_DETECTED. */
+    /** Même interaction (type, origine, action) vue plus de ce nombre de fois : INTERACTION_LOOP_DETECTED. */
     loopThreshold: z.number().int().min(2).default(5),
-    /** Origins never visited nor trusted (popups, redirects, credentials). */
+    /** Origines jamais visitées ni considérées de confiance (popups, redirections, identifiants). */
     blockedOrigins: z.array(httpOrigin).default([]),
     httpAuth: z
       .object({
-        /** Profile of `credentials` used to answer the browser's sign-in dialog. None: AUTH_REQUIRED. */
+        /** Profil de `credentials` utilisé pour répondre à la fenêtre de connexion du navigateur. Aucun : AUTH_REQUIRED. */
         credentialProfile: nonEmpty.optional(),
-        /** Origins that may receive the credentials. Default: the target and allowed hosts. */
+        /** Origines qui peuvent recevoir les identifiants. Par défaut : la cible et les hôtes autorisés. */
         origins: z.array(httpOrigin).default([]),
       })
       .strict()
       .default({}),
     dialogs: z
       .object({
-        /** alert(): accept (OK) or dismiss. */
+        /** alert() : accepter (OK) ou fermer. */
         alert: z.enum(['accept', 'dismiss']).default('accept'),
         /**
-         * confirm(): dismiss (default), or accept-safe: accept only when the
-         * message has no destructive or mutating wording.
+         * confirm() : refuser (défaut), ou accept-safe : accepter seulement quand le
+         * message ne contient aucune formulation destructive ou de modification.
          */
         confirm: z.enum(['dismiss', 'accept-safe']).default('dismiss'),
-        /** Answers for prompt() whose message contains `match`. Other prompts are dismissed. */
+        /** Réponses aux prompt() dont le message contient `match`. Les autres sont refusés. */
         promptValues: z
           .array(
             z
@@ -378,12 +380,12 @@ const browserInteractionsSchema = z
       .default({}),
     popups: z
       .object({
-        /** Record the new page as a state of the flow graph (allowed origins only), then close it. */
+        /** Enregistrer la nouvelle page comme un état du graphe (origines autorisées seulement), puis la fermer. */
         observe: z.boolean().default(true),
         /**
-         * Leave the new page open up to this long so it can finish on its own
-         * (an SSO popup that signs in, then redirects or closes itself). It is
-         * observed and closed afterwards, unless it closed itself. 0: at once.
+         * Laisser la nouvelle page ouverte jusqu'à cette durée pour qu'elle termine
+         * seule (une popup SSO qui connecte, puis redirige ou se ferme). Elle est
+         * observée puis fermée ensuite, sauf si elle s'est fermée seule. 0 : tout de suite.
          */
         closeAfterMs: z.number().int().min(0).max(60_000).default(0),
       })
@@ -391,7 +393,7 @@ const browserInteractionsSchema = z
       .default({}),
     permissions: z
       .object({
-        /** Permissions granted to the target origin. Default: none (every request is denied). */
+        /** Permissions accordées à l'origine cible. Par défaut : aucune (toute demande est refusée). */
         grant: z.array(z.enum(BROWSER_PERMISSIONS)).default([]),
       })
       .strict()
@@ -412,54 +414,54 @@ const outputSchema = z
 
 const memorySchema = z
   .object({
-    /** Where the flow graph is persisted. Default: <reportsDir>/flow-graph.json. */
+    /** Où le graphe des flows est enregistré. Par défaut : <reportsDir>/flow-graph.json. */
     file: nonEmpty.optional(),
-    /** Start from the graph of a previous run: actions already tried are not tried again. */
+    /** Repartir du graphe d'un run précédent : les actions déjà essayées ne le sont pas à nouveau. */
     resume: z.boolean().default(false),
   })
   .strict();
 
 const reportSchema = z
   .object({
-    /** The CLI exits with code 1 when an issue at or above this severity is found. NONE disables it. */
+    /** La CLI sort avec le code 1 quand une anomalie de cette gravité ou plus est trouvée. NONE désactive cette règle. */
     failOnSeverity: z.enum([...SEVERITIES, 'NONE']).default('ERROR'),
-    /** Language of the HTML reports (index.html, flow-graph.html). result.json stays in English. */
+    /** Langue des rapports HTML (index.html, flow-graph.html). result.json reste en anglais. */
     language: z.enum(REPORT_LANGUAGES).default('en'),
   })
   .strict();
 
 const baselineSchema = z
   .object({
-    /** Where learn stores the baseline (and its history, under runs/), and where verify/explore read it. */
+    /** Où learn enregistre la baseline (et son historique, sous runs/), et où verify/explore la lisent. */
     dir: nonEmpty.default('baseline'),
-    /** Name of the application (default: mission.name). */
+    /** Nom de l'application (par défaut : mission.name). */
     application: nonEmpty.optional(),
-    /** qa, staging… (default: QA_ENVIRONMENT). */
+    /** qa, staging… (par défaut : QA_ENVIRONMENT). */
     environment: nonEmpty.optional(),
-    /** Branch and commit of the tested build (default: QA_BRANCH/QA_COMMIT, then CI variables). */
+    /** Branche et commit du build testé (par défaut : QA_BRANCH/QA_COMMIT, puis les variables de CI). */
     branch: nonEmpty.optional(),
     commit: nonEmpty.optional(),
-    /** Repository of the application, to read its branch/commit with git (optional). */
+    /** Dépôt de l'application, pour lire sa branche et son commit avec git (facultatif). */
     gitDir: nonEmpty.optional(),
-    /** Learned runs kept under runs/. */
+    /** Runs appris conservés sous runs/. */
     keepRuns: z.number().int().positive().default(20),
   })
   .strict();
 
 const verifySchema = z
   .object({
-    /** Exit code 1 when a known transition changed, fails, or cannot be reached any more. */
+    /** Code de sortie 1 quand une transition connue a changé, échoue ou n'est plus atteignable. */
     failOnRegression: z.boolean().default(true),
   })
   .strict();
 
 const oraclesSchema = z
   .object({
-    /** Judge every executed action (technical, UI, baseline, contract oracles). */
+    /** Juger chaque action exécutée (oracles technique, écran, baseline, contrat). */
     enabled: z.boolean().default(true),
     technical: z
       .object({
-        /** HTTP 404 from an API call: warning (default) or fail. */
+        /** HTTP 404 d'un appel d'API : avertissement (défaut) ou échec. */
         api404: z.enum(['warning', 'fail']).default('warning'),
       })
       .strict()
@@ -467,7 +469,7 @@ const oraclesSchema = z
     ui: z
       .object({
         enabled: z.boolean().default(true),
-        /** Words that make a visible alert/banner/snackbar an error message (added to the built-in ones). */
+        /** Mots qui font d'une alerte, bannière ou snackbar visible un message d'erreur (ajoutés à ceux intégrés). */
         errorTexts: z.array(nonEmpty).default([]),
       })
       .strict()
@@ -480,8 +482,8 @@ const oraclesSchema = z
   .strict();
 
 /**
- * What to do when an action fails or the exploration turns in circles.
- * Strategies are tried in the order given; one left out is never used.
+ * Que faire quand une action échoue ou que l'exploration tourne en rond.
+ * Les stratégies sont essayées dans l'ordre donné ; une stratégie absente n'est jamais utilisée.
  */
 const recoverySchema = z
   .object({
@@ -490,26 +492,26 @@ const recoverySchema = z
       .array(z.enum(RECOVERY_STRATEGIES))
       .min(1)
       .default([...RECOVERY_STRATEGIES]),
-    /** Retries of an action after a transient error (never an action that sends data). */
+    /** Nouvelles tentatives d'une action après une erreur passagère (jamais une action qui envoie des données). */
     maxRetries: z.number().int().min(0).max(3).default(1),
-    /** Logins again after a session expiry, per run. */
+    /** Nouvelles connexions après expiration de la session, par run. */
     maxReauthentications: z.number().int().min(0).max(10).default(2),
     circuitBreaker: z
       .object({
-        /** Same state + action + failure this many times: the action is not tried again. */
+        /** Même état + action + échec ce nombre de fois : l'action n'est plus retentée. */
         threshold: z.number().int().min(1).default(2),
-        /** Failures on one state before it is abandoned. */
+        /** Échecs sur un état avant de l'abandonner. */
         maxFailuresPerState: z.number().int().min(1).default(5),
       })
       .strict()
       .default({}),
     stuck: z
       .object({
-        /** A→B→A→B… this many times: the branch is abandoned. */
+        /** A→B→A→B… ce nombre de fois : la branche est abandonnée. */
         oscillationCycles: z.number().int().min(2).default(3),
-        /** Consecutive actions that change nothing (same state, no request). */
+        /** Actions consécutives qui ne changent rien (même état, aucune requête). */
         maxNoOpActions: z.number().int().min(2).default(15),
-        /** Consecutive screens still loading. */
+        /** Écrans consécutifs encore en chargement. */
         maxBusyObservations: z.number().int().min(1).default(3),
       })
       .strict()
@@ -517,20 +519,20 @@ const recoverySchema = z
   })
   .strict();
 
-/** Basic accessibility checks on each new screen (a first signal, not an audit). */
+/** Vérifications d'accessibilité de base sur chaque nouvel écran (un premier signal, pas un audit). */
 const accessibilitySchema = z
   .object({
     enabled: z.boolean().default(true),
     rules: z.array(z.enum(ACCESSIBILITY_RULES)).default([...ACCESSIBILITY_RULES]),
-    /** Also walk each new screen with the Tab key (focus moves, no keyboard trap). */
+    /** Parcourir aussi chaque nouvel écran avec la touche Tab (le focus bouge, pas de piège clavier). */
     keyboardNavigation: z.boolean().default(false),
     maxTabs: z.number().int().min(1).max(200).default(30),
   })
   .strict();
 
 /**
- * After the exploration, write the paths found as imposed flows
- * (reports/generated-flows.yaml), ready to be copied into a mission.
+ * Après l'exploration, écrire les chemins trouvés comme des flows imposés
+ * (reports/generated-flows.yaml), prêts à être copiés dans une mission.
  */
 const flowGenerationSchema = z
   .object({
@@ -539,7 +541,7 @@ const flowGenerationSchema = z
   })
   .strict();
 
-/** Engine log (reports/engine-log.jsonl): what the explorer did, step by step. */
+/** Journal du moteur (reports/engine-log.jsonl) : ce que l'explorateur a fait, étape par étape. */
 const loggingSchema = z
   .object({
     level: z
@@ -557,16 +559,16 @@ const loggingSchema = z
 const openApiSchema = z
   .object({
     enabled: z.boolean().default(false),
-    /** OpenAPI 3 file (YAML/JSON), or an URL on an allowed host. */
+    /** Fichier OpenAPI 3 (YAML/JSON), ou une URL sur un hôte autorisé. */
     source: nonEmpty.optional(),
   })
   .strict();
 
 const networkSchema = z
   .object({
-    /** Attach to each transition the HTTP exchanges its action caused (method, URL, status, duration). */
+    /** Attacher à chaque transition les échanges HTTP causés par son action (méthode, URL, statut, durée). */
     trace: z.boolean().default(true),
-    /** Resource types kept: images, fonts and styles only add noise. */
+    /** Types de ressources conservés : images, polices et styles n'ajoutent que du bruit. */
     resourceTypes: z.array(nonEmpty).default(['document', 'xhr', 'fetch']),
     maxRequestsPerAction: z.number().int().positive().default(50),
   })
@@ -574,7 +576,7 @@ const networkSchema = z
 
 const scoringSchema = z
   .object({
-    /** Overrides of DEFAULT_SCORING_WEIGHTS (newState, goalText, export…). */
+    /** Surcharges de DEFAULT_SCORING_WEIGHTS (newState, goalText, export…). */
     weights: z.record(z.enum(SCORING_WEIGHT_NAMES_TUPLE), z.number()).default({}),
   })
   .strict();
@@ -582,25 +584,25 @@ const scoringSchema = z
 const formsSchema = z
   .object({
     /**
-     * Fill the forms of each screen (fields of a <form>, of a dialog or of an
-     * overlay) with test data, then report their validation messages. Nothing
-     * is sent: see `submit`.
+     * Remplir les formulaires de chaque écran (champs d'un <form>, d'une fenêtre
+     * ou d'un calque) avec des données de test, puis signaler leurs messages de
+     * validation. Rien n'est envoyé : voir `submit`.
      */
     exercise: z.boolean().default(true),
-    /** Same as exercise (mission wording). */
+    /** Identique à exercise (vocabulaire de la mission). */
     autoFill: z.boolean().optional(),
     /**
-     * Validation testing: a few invalid values per field (empty when required,
-     * out of min/max, too long, wrong format), each followed by the valid value.
+     * Tests de validation : quelques valeurs invalides par champ (vide quand il est
+     * obligatoire, hors min/max, trop long, mauvais format), chacune suivie de la valeur valide.
      */
     validationTesting: z.boolean().default(false),
     maxValidationCasesPerField: z.number().int().positive().default(3),
     maxValidationCasesPerForm: z.number().int().positive().default(10),
     /**
-     * Buttons that send a form ("Soumettre", "Enregistrer"… inside a form or a
-     * dialog with fields). true: allowed like any MUTATION; false: never
-     * clicked by the exploration. Unset: `safety.block` decides (form-submit,
-     * blocked by default). Imposed flow steps with `allow: MUTATION` always may.
+     * Boutons qui envoient un formulaire (« Soumettre », « Enregistrer »… dans un
+     * formulaire ou une fenêtre avec des champs). true : permis comme toute
+     * MUTATION ; false : jamais cliqués par l'exploration. Non défini : `safety.block`
+     * décide (form-submit, bloqué par défaut). Les étapes de flow avec `allow: MUTATION` le peuvent toujours.
      */
     submit: z.boolean().optional(),
   })
@@ -609,9 +611,9 @@ const formsSchema = z
 const testDataSchema = z
   .object({
     /**
-     * Value per field, by label, name or placeholder (case and accents
-     * ignored). For a list or a radio group: the option to choose. Sensitive
-     * fields (passwords, cards, secrets) are never filled, even when listed here.
+     * Valeur par champ, par libellé, name ou placeholder (majuscules et accents
+     * ignorés). Pour une liste ou un groupe de radios : l'option à choisir. Les champs
+     * sensibles (mots de passe, cartes, secrets) ne sont jamais remplis, même listés ici.
      */
     fields: z
       .record(nonEmpty, z.union([z.string(), z.object({ value: z.string() }).strict()]))
@@ -625,7 +627,7 @@ const testDataSchema = z
         ),
       ),
     /**
-     * Values by meaning, for every field that means it: firstName, lastName,
+     * Valeurs par sens, pour chaque champ qui a ce sens : firstName, lastName,
      * name, email, phone, company, address, city, postalCode, country, url, text.
      */
     defaults: z
@@ -646,7 +648,7 @@ const testDataSchema = z
       .partial()
       .strict()
       .default({}),
-    /** Id of the run in the created data (QA-CRAWLER-<runId>); default: generated for each run. */
+    /** Id du run dans les données créées (QA-CRAWLER-<runId>) ; par défaut : généré à chaque run. */
     runId: z
       .string()
       .regex(/^[A-Za-z0-9-]{1,24}$/, 'letters, digits and dashes (24 max)')
@@ -660,7 +662,7 @@ export const scenarioSchema = z
       .object({
         name: nonEmpty.default('explore-application'),
         description: z.string().optional(),
-        /** explore (default), learn (build the baseline) or verify (check against it). The CLI command wins. */
+        /** explore (défaut), learn (construire la baseline) ou verify (vérifier par rapport à elle). La commande de la CLI l'emporte. */
         mode: z.enum(MISSION_MODES).default('explore'),
       })
       .strict()
@@ -684,7 +686,7 @@ export const scenarioSchema = z
     output: outputSchema.default({}),
     memory: memorySchema.default({}),
     report: reportSchema.default({}),
-    /** Imposed test flows, run before the autonomous exploration. */
+    /** Flows de test imposés, exécutés avant l'exploration autonome. */
     flows: flowsSchema,
     credentials: credentialsSchema,
     browserInteractions: browserInteractionsSchema.default({}),
@@ -705,9 +707,9 @@ export const scenarioSchema = z
   })
   .strict();
 
-/** Scenario as written in YAML (defaults not applied yet). */
+/** Scénario tel qu'écrit en YAML (valeurs par défaut pas encore appliquées). */
 export type ScenarioInput = z.input<typeof scenarioSchema>;
-/** Fully resolved scenario with defaults applied. */
+/** Scénario complet, valeurs par défaut appliquées. */
 export type ScenarioConfig = z.output<typeof scenarioSchema>;
 export type FormAuthConfig = z.output<typeof formAuthSchema>;
 export type HttpAuthConfig = z.output<typeof httpAuthSchema>;

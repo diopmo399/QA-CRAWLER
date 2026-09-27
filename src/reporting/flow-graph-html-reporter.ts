@@ -6,7 +6,7 @@ import { BASE_CSS, card, classPill, esc, renderTreeHtml } from './html-common.js
 import { reportTexts, translateReason, valueLabel, type ReportLanguage } from './i18n.js';
 import type { Reporter } from './reporter.js';
 
-/** reports/flow-graph.html — the functional map: tree, states and every transition. */
+/** reports/flow-graph.html — la carte fonctionnelle : arbre, états et chaque transition. */
 export class FlowGraphHtmlReporter implements Reporter {
   readonly format = 'flow-graph-html';
 
@@ -73,7 +73,7 @@ export function renderFlowGraphHtml(result: ExplorationResult, language: ReportL
 `;
 }
 
-/** ACTION → NETWORK: the HTTP exchanges of a transition, one per line (POST /api/users 201 184 ms). */
+/** ACTION → RÉSEAU : les échanges HTTP d'une transition, un par ligne (POST /api/users 201 184 ms). */
 function networkLines(edge: ExplorationResult['transitions'][number]): string {
   if (!edge.network || edge.network.length === 0) return '';
   const lines = edge.network.map((exchange) => {
@@ -82,7 +82,7 @@ function networkLines(edge: ExplorationResult['transitions'][number]): string {
       const url = new URL(exchange.url);
       path = `${url.pathname}${url.search}`;
     } catch {
-      // keep the URL as recorded
+      // garder l'URL telle qu'enregistrée
     }
     const outcome = exchange.status ?? exchange.failure ?? '…';
     const duration = exchange.durationMs !== undefined ? ` ${exchange.durationMs} ms` : '';

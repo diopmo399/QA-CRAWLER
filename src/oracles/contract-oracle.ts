@@ -4,9 +4,9 @@ import { result } from './oracle.js';
 import { pathOf } from './technical-oracle.js';
 
 /**
- * Compares each API call of the action with the contract (OpenAPI): a status
- * the operation does not declare is a potential contract violation. Calls
- * the contract does not describe are ignored; with none described, UNKNOWN.
+ * Compare chaque appel d'API de l'action avec le contrat (OpenAPI) : un statut que
+ * l'opération ne déclare pas est une violation potentielle du contrat. Les appels que
+ * le contrat ne décrit pas sont ignorés ; si aucun n'est décrit, UNKNOWN.
  */
 export class ContractOracle implements TestOracle {
   readonly name = 'contract';

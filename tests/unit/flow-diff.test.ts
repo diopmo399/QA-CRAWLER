@@ -85,7 +85,7 @@ describe('FlowDiffEngine', () => {
       'target: Create user → Error',
       'network: + GET /api/roles 5xx, - GET /api/roles 2xx',
     ]);
-    // Blocked actions describe the mission's safety settings, not the application.
+    // Les actions bloquées décrivent les réglages de sécurité de la mission, pas l'application.
     expect(diff.removedTransitions.some((t) => t.action.text === 'Logout')).toBe(false);
     expect(diff.summary).toEqual({
       addedStates: 2,

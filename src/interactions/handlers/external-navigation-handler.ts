@@ -2,9 +2,9 @@ import type { BrowserInteractionHandler, HandlerOutcome } from '../handler.js';
 import type { BrowserInteraction } from '../types.js';
 
 /**
- * EXTERNAL_NAVIGATION: the page left the allowed origins. The safety policy
- * blocks it (the crawl engine goes back); this handler records the
- * navigation if a mission ever allows it.
+ * EXTERNAL_NAVIGATION : la page a quitté les origines autorisées. La politique de
+ * sécurité la bloque (le moteur revient en arrière) ; ce handler enregistre la
+ * navigation au cas où une mission l'autoriserait un jour.
  */
 export class ExternalNavigationHandler implements BrowserInteractionHandler {
   readonly name = 'ExternalNavigationHandler';
