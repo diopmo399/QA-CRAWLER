@@ -83,6 +83,8 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     runId: outcome.runId,
     formReports: outcome.forms,
     recovery: outcome.recovery,
+    mutations: outcome.mutations,
+    createdData: outcome.createdData,
     settings: {
       exploration,
       goals,

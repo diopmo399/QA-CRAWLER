@@ -9,6 +9,7 @@ import type { BrowserInteractionResult } from '../interactions/types.js';
 import type { Issue, IssueType, Severity } from './issue.js';
 import type { FormReport } from '../forms/form-report.js';
 import type { RecoverySummary } from '../recovery/recovery-model.js';
+import type { CleanupReport, CreatedDataRecord } from '../data/created-data.js';
 
 /** Why the exploration ended. */
 export type StopReason =
@@ -84,6 +85,12 @@ export interface ExplorationResult {
   formReports?: FormReport[];
   /** Recovery attempts, abandoned branches, open circuits. */
   recovery?: RecoverySummary;
+  /** Actions changing data executed, and the budget (safety.mutations). */
+  mutations?: { enabled: boolean; executed: number; maxPerRun?: number };
+  /** Data the run probably created, tagged QA-CRAWLER-<runId> (never the values). */
+  createdData?: CreatedDataRecord[];
+  /** What was cleaned up, and what is left to remove. */
+  cleanup?: CleanupReport;
   /** Non-secret summary of the effective configuration. */
   settings: Record<string, unknown>;
   artifacts: {
@@ -94,5 +101,7 @@ export interface ExplorationResult {
     screenshotsDir?: string;
     flowDiff?: string;
     baseline?: string;
+    /** Structured engine log (JSON lines). */
+    engineLog?: string;
   };
 }

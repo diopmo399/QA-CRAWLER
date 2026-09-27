@@ -70,7 +70,8 @@ describe('recovery: expired session, failing action', () => {
       const left = sid ? (sessions.get(sid) ?? 0) : 0;
       if (!sid || left <= 0) {
         res.writeHead(302, { location: '/login' });
-        return res.end();
+        res.end();
+        return;
       }
       sessions.set(sid, left - 1);
       send(200, body);

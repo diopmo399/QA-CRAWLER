@@ -70,6 +70,8 @@ import { CircuitBreaker } from '../recovery/circuit-breaker.js';
 import { RecoveryEngine, type RecoveryActions } from '../recovery/recovery-engine.js';
 import type { FailureKind, RecoveryEvent, RecoverySummary, StuckEvent } from '../recovery/recovery-model.js';
 import { StuckDetector } from '../recovery/stuck-detector.js';
+import { AccessibilityChecker } from '../accessibility/accessibility-checker.js';
+import { CreatedDataRegistry, type CreatedDataRecord } from '../data/created-data.js';
 import { routeKey } from '../crawler/route-normalizer.js';
 
 /** Progress notifications (CLI output, tests). */
@@ -139,6 +141,10 @@ export interface ExplorationOutcome {
   forms: FormReport[];
   /** Recovery attempts, abandoned branches and open circuits. */
   recovery: RecoverySummary;
+  /** Actions changing data: executed, and the budget (safety.mutations). */
+  mutations: { enabled: boolean; executed: number; maxPerRun?: number };
+  /** Data the run probably created (to clean up), never the values sent. */
+  createdData: CreatedDataRecord[];
   /** verify mode: every known transition of the baseline, replayed. */
   verification?: VerificationReport;
 }
@@ -223,6 +229,8 @@ export class FlowExplorer {
   private readonly stuck: StuckDetector | undefined;
   /** The last action left the branch stuck: the loop leaves it. */
   private pendingStuck: StuckEvent | undefined;
+  private readonly accessibility: AccessibilityChecker | undefined;
+  private readonly createdData: CreatedDataRegistry;
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -313,6 +321,10 @@ export class FlowExplorer {
     this.recovery = new RecoveryEngine(recovery);
     this.breaker = recovery.enabled ? new CircuitBreaker(recovery.circuitBreaker) : undefined;
     this.stuck = recovery.enabled ? new StuckDetector(recovery.stuck) : undefined;
+    this.accessibility = config.accessibility.enabled
+      ? new AccessibilityChecker(config.accessibility)
+      : undefined;
+    this.createdData = new CreatedDataRegistry(this.runId);
     this.verifyBaseline = options.verifyBaseline;
     this.baselineRunId = options.baselineRunId;
     this.screenshots = new ScreenshotService(config.output.screenshotsDir, config.checks.fullPageScreenshots);
@@ -542,7 +554,10 @@ export class FlowExplorer {
       errors.map((issue) => issue.id),
     );
 
-    if (isNew) this.recordRefusedActions(state.stateId, actions);
+    if (isNew) {
+      this.recordRefusedActions(state.stateId, actions);
+      await this.checkAccessibility(page, snapshot.url, state.stateId, flow);
+    }
 
     const node = this.graph.getNode(state.stateId);
     if (isNew && node) {
@@ -743,6 +758,15 @@ export class FlowExplorer {
     });
     await this.judge(edge, from, action, after, { crashed, beforeSignals });
     ids.push(...edge.issueIds.filter((id) => !ids.includes(id)));
+    if (this.safety.changesData(action) && edge.network) {
+      this.createdData.record({
+        stateId: from.stateId,
+        actionId: action.id,
+        action: actionLabel(action),
+        ...(action.formGroup ? { form: action.formGroup } : {}),
+        requests: edge.network,
+      });
+    }
     const stuck = this.stuck?.observe({
       from: from.stateId,
       to: after.stateId,
@@ -832,6 +856,25 @@ export class FlowExplorer {
     );
     this.emitRecovery();
     return { page: current, ...(recovered.context ? { context: recovered.context } : {}) };
+  }
+
+  /** ACCESSIBILITY: basic checks on a new screen, reported as anomalies of that state. */
+  private async checkAccessibility(page: Page, url: string, stateId: string, flow: string[]): Promise<void> {
+    if (!this.accessibility || page.isClosed()) return;
+    const findings = await this.accessibility.check(page).catch(() => []);
+    const ids: string[] = [];
+    for (const finding of findings) {
+      const issue = this.collector.add({
+        type: 'ACCESSIBILITY',
+        severity: finding.severity,
+        message: finding.message,
+        pageUrl: redactUrl(url),
+        stateId,
+        flow,
+      });
+      ids.push(issue.id);
+    }
+    if (ids.length > 0) this.graph.attachIssues(stateId, ids);
   }
 
   /** Recovery events not yet given to the listener. */
@@ -1057,6 +1100,8 @@ export class FlowExplorer {
         : instruction?.kind === 'select'
           ? instruction.label
           : undefined;
+    // Counted before it runs: an action that fails half-way may still have changed data.
+    this.safety.recordExecuted(action);
     return this.executor.execute(page, action, value !== undefined ? { value } : {});
   }
 
@@ -2108,6 +2153,14 @@ export class FlowExplorer {
         circuits: this.breaker?.circuits() ?? [],
         reauthentications: this.recovery.reauthenticationCount,
       },
+      mutations: {
+        enabled: this.config.safety.mutations.enabled,
+        executed: this.safety.mutationCount,
+        ...(this.config.safety.mutations.enabled
+          ? { maxPerRun: this.config.safety.mutations.maxPerRun }
+          : {}),
+      },
+      createdData: this.createdData.all(),
       ...(this.verification ? { verification: this.verification } : {}),
     };
   }

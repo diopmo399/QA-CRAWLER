@@ -22,6 +22,8 @@ export const ISSUE_TYPES = [
   'REGRESSION',
   /** ContractOracle: an API answer the contract (OpenAPI) does not declare. */
   'CONTRACT',
+  /** AccessibilityChecker: missing names, image links without text, keyboard problems. */
+  'ACCESSIBILITY',
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 

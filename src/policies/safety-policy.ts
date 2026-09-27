@@ -90,6 +90,9 @@ export class SafetyPolicy {
   private readonly allowedClasses: ReadonlySet<ActionClassification>;
   private readonly allowedGroups: ReadonlySet<SafeActionGroup>;
   private readonly blocked: ReadonlySet<RiskKind>;
+  /** Budget of actions changing data, when safety.mutations is on. */
+  private readonly maxMutations: number | undefined;
+  private mutations = 0;
 
   constructor(safety: ScenarioConfig['safety']) {
     this.risks = Object.entries(RISK_KEYWORDS).map(([kind, words]) => [
@@ -102,6 +105,7 @@ export class SafetyPolicy {
     this.allowedGroups = new Set(safety.allow);
     this.blocked = new Set([...safety.block, ...ALWAYS_BLOCKED]);
     this.navigation = new NavigationPolicy(safety, this);
+    this.maxMutations = safety.mutations.enabled ? safety.mutations.maxPerRun : undefined;
   }
 
   classify(action: ClassifiableAction): Classification {
@@ -223,6 +227,8 @@ export class SafetyPolicy {
       }
     }
 
+    if (action.classification === 'DANGEROUS')
+      return { verdict: 'BLOCK', reason: `DANGEROUS actions are never executed (${action.reason})` };
     if (!this.allowedClasses.has(action.classification)) {
       return {
         verdict: 'BLOCK',
@@ -235,7 +241,27 @@ export class SafetyPolicy {
         return { verdict: 'BLOCK', reason: `the mission does not allow "${group}" actions` };
       }
     }
+    if (this.changesData(action) && this.maxMutations !== undefined && this.mutations >= this.maxMutations)
+      return { verdict: 'BLOCK', reason: `mutation budget spent (${this.mutations}/${this.maxMutations})` };
     return { verdict: 'ALLOW', reason: action.reason };
+  }
+
+  /** Counts an executed action against the mutation budget. */
+  recordExecuted(action: DiscoveredAction): void {
+    if (this.changesData(action)) this.mutations += 1;
+  }
+
+  /** Actions changing data executed so far. */
+  get mutationCount(): number {
+    return this.mutations;
+  }
+
+  /** A click that may create, change or send data. */
+  changesData(action: DiscoveredAction): boolean {
+    return (
+      action.type === 'click' &&
+      (action.classification === 'MUTATION' || action.risks.includes('form-submit'))
+    );
   }
 
   /** Card, IBAN… fields: never filled, whatever the source of the value. */

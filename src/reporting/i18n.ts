@@ -429,6 +429,10 @@ const FR_VALUES: Record<string, string> = {
   ACTION_MISSING: 'ACTION ABSENTE',
   UNREACHABLE: 'INACCESSIBLE',
   FORM_VALIDATION: 'FORMULAIRE',
+  UI_ERROR: 'ERREUR ÉCRAN',
+  REGRESSION: 'RÉGRESSION',
+  CONTRACT: 'CONTRAT API',
+  ACCESSIBILITY: 'ACCESSIBILITÉ',
   // action types
   click: 'clic',
   navigate: 'navigation',

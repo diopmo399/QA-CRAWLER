@@ -5,6 +5,8 @@ import { REPORT_LANGUAGES } from '../reporting/i18n.js';
 import { SCORING_WEIGHT_NAMES, type ScoringWeightName } from '../decision/scoring-weights.js';
 import { flowsSchema } from './flow-schema.js';
 import { RECOVERY_STRATEGIES } from '../recovery/recovery-model.js';
+import { ACCESSIBILITY_RULES } from '../accessibility/accessibility-checker.js';
+import { LOG_LEVELS } from '../logging/engine-log.js';
 
 /**
  * Mission configuration. The YAML describes *what to explore and within which
@@ -185,6 +187,18 @@ const safetySchema = z
         'form-submit',
         'download',
       ]),
+    /**
+     * Actions that change data (create, save, send a form). Off by default;
+     * when on, MUTATION actions and form submission are allowed, within a
+     * budget per run. DANGEROUS actions (delete, payment…) stay blocked.
+     */
+    mutations: z
+      .object({
+        enabled: z.boolean().default(false),
+        maxPerRun: z.number().int().min(0).default(10),
+      })
+      .strict()
+      .default({}),
     /** Extra keywords (any language) added to the built-in classification rules. */
     keywords: z
       .object({
@@ -468,6 +482,32 @@ const recoverySchema = z
   })
   .strict();
 
+/** Basic accessibility checks on each new screen (a first signal, not an audit). */
+const accessibilitySchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    rules: z.array(z.enum(ACCESSIBILITY_RULES)).default([...ACCESSIBILITY_RULES]),
+    /** Also walk each new screen with the Tab key (focus moves, no keyboard trap). */
+    keyboardNavigation: z.boolean().default(false),
+    maxTabs: z.number().int().min(1).max(200).default(30),
+  })
+  .strict();
+
+/** Engine log (reports/engine-log.jsonl): what the explorer did, step by step. */
+const loggingSchema = z
+  .object({
+    level: z
+      .enum(LOG_LEVELS)
+      .or(
+        z
+          .enum(['error', 'warn', 'info', 'debug', 'trace'])
+          .transform((value) => value.toUpperCase() as (typeof LOG_LEVELS)[number]),
+      )
+      .default('INFO'),
+    file: z.boolean().default(true),
+  })
+  .strict();
+
 const openApiSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -607,6 +647,8 @@ export const scenarioSchema = z
     network: networkSchema.default({}),
     oracles: oraclesSchema.default({}),
     recovery: recoverySchema.default({}),
+    accessibility: accessibilitySchema.default({}),
+    logging: loggingSchema.default({}),
     openapi: openApiSchema.default({}),
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),

@@ -172,11 +172,21 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
     );
   }
   if (config.safety.allowedActionClasses.includes('DANGEROUS')) {
-    warnings.push(
-      'safety.allowedActionClasses includes DANGEROUS: destructive actions may be executed. Use only on disposable environments.',
+    // Delete, payment, irreversible…: never executed automatically, whatever the mission says.
+    config.safety.allowedActionClasses = config.safety.allowedActionClasses.filter(
+      (value) => value !== 'DANGEROUS',
     );
+    warnings.push('safety.allowedActionClasses: DANGEROUS actions are never executed; ignored.');
   }
-  if (config.safety.allowedActionClasses.includes('MUTATION')) {
+  if (config.safety.mutations.enabled) {
+    if (!config.safety.allowedActionClasses.includes('MUTATION'))
+      config.safety.allowedActionClasses = [...config.safety.allowedActionClasses, 'MUTATION'];
+    if (config.forms.submit !== false)
+      config.safety.block = config.safety.block.filter((risk) => risk !== 'form-submit');
+    warnings.push(
+      `safety.mutations.enabled: the crawler may create or modify data (at most ${config.safety.mutations.maxPerRun} per run, tagged QA-CRAWLER-<runId>). Use a test environment.`,
+    );
+  } else if (config.safety.allowedActionClasses.includes('MUTATION')) {
     warnings.push('safety.allowedActionClasses includes MUTATION: the crawler may modify data.');
   }
   for (const flow of config.flows) {

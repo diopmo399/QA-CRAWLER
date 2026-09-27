@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { BaselineStore, runIdOf, type Baseline, type BaselineMetadata } from './baseline/baseline-store.js';
 import { sourceInfo } from './baseline/source-info.js';
@@ -18,6 +18,8 @@ import { isAtLeast, type Issue } from './model/issue.js';
 import { buildResult } from './reporting/result-builder.js';
 import { writeReports } from './reporting/reporter.js';
 import { redactUrl } from './security/redactor.js';
+import { ManualCleanup, type TestDataCleanup } from './data/created-data.js';
+import { combineListeners, EngineEventLog } from './logging/engine-log.js';
 
 export interface RunOutcome {
   result: ExplorationResult;
@@ -38,6 +40,8 @@ export interface RunOptions {
   mode?: MissionMode;
   /** Where the baseline lives; default: baseline.dir. */
   baselineDir?: string;
+  /** Removes what the run created; default: deletes nothing and lists it. */
+  cleanup?: TestDataCleanup;
 }
 
 /** verify needs a baseline: `learn` first. */
@@ -70,11 +74,12 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   const memory =
     options.memory ??
     new JsonFlowMemory(config.memory.file ?? path.join(config.output.reportsDir, 'flow-graph.json'));
+  const engineLog = new EngineEventLog(config.logging.level);
   const explorer = new FlowExplorer(config, {
     memory,
     ...(options.decisionEngine ? { decisionEngine: options.decisionEngine } : {}),
     ...(options.testData ? { testData: options.testData } : {}),
-    ...(options.listener ? { listener: options.listener } : {}),
+    listener: combineListeners(options.listener, engineLog.listener()),
     ...(options.env ? { env: options.env } : {}),
     ...(mode === 'explore' && baseline ? { knownActions: knownActionsOf(baseline) } : {}),
     ...(baseline ? { baseline: baseline.graph } : {}),
@@ -91,6 +96,13 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
 
   const result = buildResult(outcome, config);
   result.mode = mode;
+  result.cleanup = await (options.cleanup ?? new ManualCleanup()).cleanup(outcome.createdData);
+  if (config.logging.file) {
+    await mkdir(config.output.reportsDir, { recursive: true });
+    const file = path.join(config.output.reportsDir, 'engine-log.jsonl');
+    await writeFile(file, engineLog.toJsonLines(), 'utf8');
+    result.artifacts.engineLog = file;
+  }
   if (baseline) {
     // verify only replays some transitions (not filled forms, known failures, blocked ones):
     // it is compared with that part of the baseline only.
