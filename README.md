@@ -32,6 +32,11 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Sécurité](#sécurité)
 - [Détection des états et protection contre les boucles](#détection-des-états-et-protection-contre-les-boucles)
 - [Formulaires](#formulaires)
+- [Oracles de test](#oracles-de-test)
+- [Récupération après un problème](#récupération-après-un-problème)
+- [Plusieurs acteurs et autorisations](#plusieurs-acteurs-et-autorisations)
+- [Accessibilité](#accessibilité)
+- [Données créées et budget de modifications](#données-créées-et-budget-de-modifications)
 - [Ce qui est détecté](#ce-qui-est-détecté)
 - [Rapports](#rapports)
 - [Modes LEARN / VERIFY / EXPLORE](#modes-learn--verify--explore)
@@ -479,12 +484,12 @@ L'explorateur est fait pour être lancé sur de vrais environnements sans les ca
 - un vocabulaire français/anglais, comparé sur des mots entiers sans accents ;
 - le libellé de l'élément, la cible du lien, son `routerLink` et la fenêtre qui le contient (« Confirmer » dans « Supprimer l'utilisateur ? » est DANGEROUS).
 
-| Classe      | Exemples                                                                                                              | Exécutée ?                               |
-| ----------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| `SAFE`      | navigation, onglets, menus, détails, pagination, recherche, filtres, « Suivant » d'un assistant, champ (non sensible) | oui, si son type est dans `safety.allow` |
-| `MUTATION`  | créer, enregistrer, modifier, update, submit (envoi de formulaire), oui/ok/confirmer                                  | **jamais** par défaut                    |
-| `DANGEROUS` | supprimer/delete, payer/payment, checkout, envoyer/send, réinitialiser, déconnexion/logout, champs sensibles          | **jamais** par défaut                    |
-| `UNKNOWN`   | contrôles sans libellé lisible (`⚙`, `×`, icône seule)                                                                | **jamais**                               |
+| Classe      | Exemples                                                                                                              | Exécutée ?                                                      |
+| ----------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `SAFE`      | navigation, onglets, menus, détails, pagination, recherche, filtres, « Suivant » d'un assistant, champ (non sensible) | oui, si son type est dans `safety.allow`                        |
+| `MUTATION`  | créer, enregistrer, modifier, update, submit (envoi de formulaire), oui/ok/confirmer                                  | **jamais** par défaut ; avec `safety.mutations`, dans un budget |
+| `DANGEROUS` | supprimer/delete, payer/payment, checkout, envoyer/send, réinitialiser, déconnexion/logout, champs sensibles          | **jamais**, même listée dans `allowedActionClasses`             |
+| `UNKNOWN`   | contrôles sans libellé lisible (`⚙`, `×`, icône seule)                                                                | **jamais**                                                      |
 
 **2. Le contrôle a lieu après la décision et avant l'exécution.** `SafetyPolicy.evaluate()` bloque une action dans ces cas :
 
@@ -508,7 +513,9 @@ Un [flow imposé](#créer-un-flow-de-test-imposé) peut remplir un mot de passe 
 
 **5. Les interactions du navigateur** (`alert`, `confirm`, `prompt`, nouvelles fenêtres, téléchargements…) passent par le [Browser Interaction Manager](#interactions-navigateur) : une confirmation destructive n'est jamais acceptée, aucune valeur n'est inventée, aucun fichier n'est choisi ni sauvegardé, et l'exploration reste dans un seul onglet.
 
-**6. Aucun secret dans les sorties.** Jetons, mots de passe, en-têtes `Authorization`, cookies, JWT et paramètres d'URL sensibles sont masqués dans les logs et les rapports. Les en-têtes, corps de requêtes et valeurs des champs ne sont jamais enregistrés.
+**6. Aucun secret dans les sorties.** Jetons, mots de passe, en-têtes `Authorization`, cookies, JWT et paramètres d'URL sensibles sont masqués dans les logs, le journal moteur et les rapports. Les en-têtes, corps de requêtes et valeurs des champs sensibles ne sont jamais enregistrés. Un test d'intégration dédié (`tests/integration/security-artifacts.test.ts`) vérifie qu'aucun mot de passe, cookie, jeton Bearer, clé d'API ou jeton d'URL n'apparaît dans `result.json`, `flow-graph.json`, les rapports HTML ou `engine-log.jsonl`.
+
+**7. Les actions DANGEROUS ne sont jamais exécutées automatiquement**, même si la mission ajoute `DANGEROUS` à `allowedActionClasses` (ignoré, avec un avertissement).
 
 ## Détection des états et protection contre les boucles
 
@@ -566,10 +573,27 @@ En exploration, un écran qui contient des champs est d'abord **rempli comme le 
 - **Un formulaire, même sans `<form>`.** Les champs d'un `<form>`, ou ceux d'une fenêtre ou d'un calque (les fenêtres Angular Material n'ont souvent pas de `<form>`), forment un formulaire. Ce qui est devant l'écran est rempli en premier.
 - **Tous les types de champ :** texte, nombre, date (saisie directe ou champ avec calendrier), heure, liste native `<select>`, liste Material (`mat-select`, `role=combobox`) ouverte puis choisie, groupe de boutons radio (une option par groupe), case à cocher (obligatoires seulement). Les radios et cases stylées (input natif masqué) sont gérées.
 - **Champ déjà rempli** (date proposée par défaut…) : laissé tel quel.
-- **Valeurs :**
-  1. celles de la mission, par champ (`testData.fields`) ;
-  2. sinon, d'après l'aide affichée par l'application : `99999` → 5 chiffres, `HH:MM` → `10:00`, `AAAA-MM-JJ` / `JJ/MM/AAAA` → date du jour dans ce format ;
-  3. sinon, des valeurs factices déterministes : e-mail `qa-crawler@example.test`, texte `QA Test`, nombres dans min/max/step, dates dans les bornes, première vraie option d'une liste.
+- **Ce que le formulaire attend** (`FormAnalyzer`) : pour chaque champ, son type (texte, e-mail, téléphone, URL, nombre, date, heure, liste, liste Material, autocomplétion, case, radio…), obligatoire, désactivé, min/max, longueurs, motif, options (et celles désactivées ou « -- Choisir -- »), aide affichée, sensibilité. Les boutons qui l'envoient ou font avancer un assistant sont repérés. Avec un contrat OpenAPI (`openapi`), les contraintes que la page ne déclare pas (format e-mail, longueurs, bornes, valeurs permises) sont complétées ; le DOM reste la référence.
+- **Valeurs** (`TestDataProvider`), dans cet ordre de priorité :
+  1. celles de la mission, par champ (`testData.fields`, texte ou `{ value: … }`) ;
+  2. une règle selon le sens du champ : prénom, nom, entreprise, e-mail, téléphone, code postal, ville, pays, adresse, URL… (surchargeables avec `testData.defaults`), ou l'aide affichée par l'application : `99999` → 5 chiffres, `HH:MM` → `10:00`, `AAAA-MM-JJ` / `JJ/MM/AAAA` → date du jour dans ce format ;
+  3. une valeur selon le type : nombres dans min/max/step, dates dans les bornes, première vraie option d'une liste ;
+  4. une valeur de repli sûre (`QA Test`).
+- **Données reconnaissables.** Les valeurs créées portent l'identifiant du run quand c'est possible : e-mail `qa-crawler-<runId>@example.test`, noms `QA-CRAWLER-<runId>` (`testData.runId`, sinon généré à chaque run). Elles pourront être retrouvées et nettoyées.
+- **Un plan, puis l'exécution.** La `FormFillStrategy` produit un plan (champ → remplir / choisir / cocher / ignorer, et pourquoi), exécuté par le `PlaywrightActionExecutor`. Le rapport montre ce plan : ce qui a été saisi (jamais une valeur sensible), la source de la valeur et la réponse de l'application.
+
+```yaml
+testData:
+  defaults: # par sens de champ
+    firstName: QA
+    lastName: Crawler
+  fields: # libellé, name ou placeholder ; majuscules, accents et « * » ignorés
+    email:
+      value: qa@example.test
+    country: Canada
+```
+
+- **Tests de validation** (`forms.validationTesting: true`) : après le remplissage valide, quelques valeurs invalides sont essayées champ par champ — vide pour un champ obligatoire, e-mail ou URL mal formés, sous le minimum, au-dessus du maximum, trop court, trop long, motif non respecté, case obligatoire décochée — puis la valeur valide est remise. Un refus de l'application est un `PASS` ; une valeur invalide acceptée reste `UNKNOWN` (l'application peut la corriger plus tard), jamais un échec inventé. Limites : `maxValidationCasesPerField` (3) et `maxValidationCasesPerForm` (10). Les champs sensibles ne sont jamais testés.
 
 ```yaml
 testData:
@@ -582,9 +606,130 @@ testData:
 ```
 
 - **Validation.** Chaque champ est quitté (comme un utilisateur, ce qui déclenche la validation Angular), puis le crawler relève ce qui reste invalide (`aria-invalid`, `mat-error`, `invalid-feedback`, validation HTML…). Chaque champ refusé devient une anomalie `FORM_VALIDATION` (WARNING) : formulaire, champ, valeur saisie et message de l'application, par exemple `formulaire « Nouveau dossier » : champ « Numéro de dossier » (valeur « QA Test ») : Format attendu : AB-1234`. Elles sont listées dans la section _Validation des formulaires_ du rapport.
-- **Rien n'est envoyé.** Un bouton qui envoie son formulaire (`submit`, ou « Soumettre », « Enregistrer », « Valider », « Créer »… dans un formulaire ou une fenêtre qui contient des champs) porte le risque `form-submit`, bloqué par défaut, même quand `MUTATION` est autorisé. Pour l'autoriser : `forms.submit: true`, ou `allow: MUTATION` sur l'étape d'un flow imposé. « Suivant » d'un assistant reste une étape.
+- **Rien n'est envoyé par défaut.** Un bouton qui envoie son formulaire (`submit`, ou « Soumettre », « Enregistrer », « Valider », « Créer »… dans un formulaire ou une fenêtre qui contient des champs) porte le risque `form-submit`, bloqué par défaut. Pour l'autoriser : `safety.mutations.enabled: true` (dans un budget, voir [Données créées](#données-créées-et-budget-de-modifications)), `forms.submit: true`, ou `allow: MUTATION` sur l'étape d'un flow imposé. « Suivant » d'un assistant reste une étape.
 - **Jamais remplis :** les champs sensibles (mot de passe, carte, IBAN, secret, OTP), même listés dans `testData.fields`.
 - Une fois le formulaire rempli, ses champs ne sont pas réessayés un par un. Quand un chemin est rejoué, le formulaire est rempli à nouveau avec les mêmes valeurs.
+
+## Oracles de test
+
+« Le résultat semble-t-il correct ? » Chaque action exécutée est jugée par plusieurs oracles ; leur avis est attaché à la transition (`transitions[].oracle` dans `result.json`) et résumé dans le rapport.
+
+| Oracle      | Ce qu'il regarde                                                                                             | Verdicts                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `technical` | action impossible, plantage, exception JavaScript, HTTP 5xx, 404 d'API, appel en échec, message console      | FAIL (confirmé) · WARNING · PASS                                          |
+| `ui`        | message d'erreur apparu, formulaire encore invalide après des données valides, écran vide, chargement infini | WARNING · PASS (confiance faible : rien de visible ne prouve le succès)   |
+| `baseline`  | même action, même état de départ : mène-t-elle au même écran que dans la baseline ?                          | PASS · WARNING « régression potentielle » · UNKNOWN (transition inconnue) |
+| `contract`  | statut HTTP de chaque appel décrit par le contrat OpenAPI                                                    | PASS · WARNING (statut non déclaré) · UNKNOWN (aucun appel décrit)        |
+
+Le `CompositeTestOracle` agrège : FAIL l'emporte sur WARNING, WARNING sur PASS ; sans avis, **UNKNOWN**. Un UNKNOWN n'est jamais transformé en PASS. Chaque verdict a une **confiance** (0 à 1, un ordre de grandeur, pas une mesure) et des **assertions observées** :
+
+```text
+✓ action executable
+✓ no HTTP 5xx
+✗ POST /api/users returned HTTP 500
+? this transition is not in the baseline
+? business result unknown
+```
+
+Sans attente métier connue, le résultat métier reste `? business result unknown`. L'interface `SemanticOracle` est prévue pour brancher plus tard des règles métier (ou un modèle), sans toucher à l'explorateur ; aucune implémentation n'est fournie.
+
+Les avertissements des oracles écran, baseline et contrat deviennent des anomalies `UI_ERROR`, `REGRESSION` et `CONTRACT`.
+
+```yaml
+oracles:
+  technical: { api404: warning } # warning | fail
+  ui: { errorTexts: [refusé] } # mots qui font d'une alerte visible un message d'erreur
+openapi:
+  enabled: true
+  source: openapi.yaml # fichier, ou URL sur un hôte autorisé (aucun identifiant envoyé)
+```
+
+## Récupération après un problème
+
+Après un échec, le `RecoveryEngine` essaie des stratégies dans l'ordre configuré, jusqu'à retrouver un état connu. Chaque tentative est enregistrée (rapport, `result.json`, journal moteur).
+
+| Stratégie        | Quand                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------- |
+| `retry`          | erreur passagère (élément détaché, pas stable), une fois, jamais pour une action qui envoie des données |
+| `dismiss-dialog` | un dialogue, un menu ou un calendrier était devant l'écran                                              |
+| `escape`         | l'action n'a pas changé de page                                                                         |
+| `back`           | l'action a changé de page                                                                               |
+| `known-url`      | recharger l'URL de l'état de départ                                                                     |
+| `replay-path`    | rejouer le chemin enregistré depuis l'écran de départ                                                   |
+| `reauthenticate` | la session a expiré (renvoi vers la page de connexion) : nouvelle connexion, dans une limite            |
+| `abandon-branch` | abandonner cet état et continuer ailleurs                                                               |
+
+- **Session expirée.** Avec `auth.type: form`, une action ou une navigation qui aboutit sur la page de connexion déclenche une nouvelle connexion (`maxReauthentications`), le retour à l'écran, puis l'action est retentée une fois.
+- **Coupe-circuit.** Le même échec sur la même action du même état deux fois (`circuitBreaker.threshold`) : l'action n'est plus retentée, même dans un chemin rejoué. Trop d'échecs sur un état (`maxFailuresPerState`) : l'état est abandonné.
+- **Détection de blocage.** Deux états visités en alternance (A → B → A → B…), une série d'actions qui ne changent rien, un écran qui charge sans fin : la branche est abandonnée et signalée (_Branches abandonnées_).
+
+```yaml
+recovery:
+  strategies: [retry, dismiss-dialog, escape, back, known-url, replay-path, reauthenticate, abandon-branch]
+  maxRetries: 1
+  maxReauthentications: 2
+  circuitBreaker: { threshold: 2, maxFailuresPerState: 5 }
+  stuck: { oscillationCycles: 3, maxNoOpActions: 15, maxBusyObservations: 3 }
+```
+
+## Plusieurs acteurs et autorisations
+
+La mission explore avec son utilisateur (`auth`). D'autres acteurs peuvent être déclarés : après l'exploration, chacun se connecte dans son propre navigateur et **ouvre les écrans trouvés** — de simples chargements de page, jamais un clic ni un envoi.
+
+Pour chaque écran et chaque acteur : `ALLOWED`, `DENIED` (HTTP 401/403, renvoi vers la connexion ou vers un autre écran, message de refus), `NOT_FOUND` ou `ERROR`. Les différences entre acteurs sont des **observations** (`ACCESS DIFFERENCE`). Seules des règles les transforment en PASS ou FAIL ; une règle en échec est une anomalie `AUTHORIZATION` (ERROR).
+
+```yaml
+actors:
+  - name: reader
+    auth:
+      {
+        type: form,
+        loginUrl: /login,
+        usernameSelector: '#user',
+        passwordSelector: '#pass',
+        submitSelector: 'button[type=submit]',
+        usernameEnv: QA_READER_USER,
+        passwordEnv: QA_READER_PASSWORD,
+      }
+authorization:
+  primaryActor: admin # nom de l'utilisateur de la mission dans les rapports
+  rules:
+    - { actor: reader, path: /admin/*, expect: denied }
+    - { actor: reader, path: /reports, expect: allowed }
+```
+
+Comme pour `auth`, seuls les **noms** des variables d'environnement figurent dans le YAML.
+
+## Accessibilité
+
+Chaque nouvel écran passe des vérifications de base (un premier signal, pas un audit) : champ ou bouton sans nom accessible, lien qui ne montre qu'une image sans texte alternatif, image sans `alt`, identifiant en double, élément cliquable inaccessible au clavier. Avec `accessibility.keyboardNavigation: true`, l'écran est aussi parcouru avec Tab : le focus doit bouger et ne pas rester piégé. Les constats sont des anomalies `ACCESSIBILITY` (INFO ou WARNING).
+
+## Données créées et budget de modifications
+
+Par défaut, rien n'est modifié. Sur un environnement de test, on peut autoriser les actions qui créent ou modifient des données, dans un budget :
+
+```yaml
+safety:
+  mutations:
+    enabled: true # MUTATION et envoi de formulaire autorisés ; DANGEROUS jamais
+    maxPerRun: 10 # au-delà : bloqué (« mutation budget spent »)
+```
+
+- Chaque action de modification exécutée est comptée (`result.mutations`).
+- Les écritures réussies (POST/PUT/PATCH 2xx) sont listées dans `result.createdData`, avec le marqueur du run (`QA-CRAWLER-<runId>`) — jamais les valeurs envoyées.
+- **Rien n'est supprimé automatiquement.** L'interface `TestDataCleanup` permet de brancher un nettoyage propre à l'application ; par défaut, le rapport liste ce qui reste à supprimer et comment le retrouver.
+
+### Exemple : la mission d'acceptation
+
+```yaml
+mission: { name: explore-users, mode: explore }
+target: { baseUrl: http://application }
+goals: { keywords: [users, utilisateurs] }
+forms: { autoFill: true, validationTesting: true }
+safety: { mutations: { enabled: true, maxPerRun: 10 } }
+```
+
+Sans aucun flow écrit à la main, l'explorateur ouvre l'application, trouve « Users » (mot-clé d'objectif), puis « Create user », analyse le formulaire, le remplit avec des données marquées, l'envoie (budget), observe `POST /api/users` et l'écran, juge le résultat avec les oracles, enregistre la transition, revient et continue. `scenarios/explore-users.yaml` et `tests/integration/acceptance.test.ts` en sont l'exemple complet.
 
 ## Ce qui est détecté
 
@@ -599,6 +744,12 @@ testData:
 | `NAVIGATION`          | boucle de redirection, délai dépassé, action menant hors des hôtes | ERROR (WARNING)             |
 | `FLOW`                | étape d'un flow imposé échouée ou bloquée                          | ERROR (WARNING si optional) |
 | `BROWSER_INTERACTION` | interaction navigateur bloquante ou à traiter (`AUTH_REQUIRED`…)   | ERROR / WARNING             |
+| `FORM_VALIDATION`     | champ encore refusé après des données valides                      | WARNING                     |
+| `UI_ERROR`            | oracle écran : message d'erreur, écran vide, chargement infini     | WARNING                     |
+| `REGRESSION`          | oracle baseline : l'action ne mène plus au même écran              | WARNING                     |
+| `CONTRACT`            | oracle contrat : statut HTTP non déclaré par l'OpenAPI             | WARNING                     |
+| `ACCESSIBILITY`       | vérifications d'accessibilité de base, parcours clavier            | INFO / WARNING              |
+| `AUTHORIZATION`       | règle d'autorisation en échec, acteur impossible à connecter       | ERROR / WARNING             |
 
 Chaque anomalie est rattachée à son contexte pour pouvoir la reproduire :
 
@@ -618,13 +769,16 @@ Les anomalies identiques sont regroupées en une seule, qui compte ses occurrenc
 
 ## Rapports
 
-| Fichier                               | Contenu                                                                                                                                                                                       |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reports/result.json`                 | Résumé et statistiques de la mission. États avec leurs actions complètes (localisateurs, classe) et formulaires, transitions, flows, interactions navigateur, anomalies, paramètres effectifs |
-| `reports/index.html`                  | Rapport statique : cartes de synthèse, flows imposés, interactions navigateur, arbre des flows découverts, anomalies (état · action · flow), états, actions exécutées et bloquées, captures   |
-| `reports/flow-graph.json`             | Le graphe des flows, qui sert de mémoire à l'explorateur (reprise possible avec `memory.resume`)                                                                                              |
-| `reports/flow-graph.html`             | Carte de l'application : arbre dépliable, arbre texte, transitions entre états, autres tentatives                                                                                             |
-| `screenshots/NNN-<état>[-error…].png` | Une par état découvert, plus une par anomalie ERROR/CRITICAL et par étape `screenshot`                                                                                                        |
+| Fichier                               | Contenu                                                                                                                                                                                                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reports/result.json`                 | Résumé et statistiques de la mission. États avec leurs actions complètes (localisateurs, classe) et formulaires, transitions, flows, interactions navigateur, anomalies, paramètres effectifs                                                                      |
+| `reports/index.html`                  | Rapport statique : cartes de synthèse, flows imposés, interactions navigateur, arbre des flows découverts, anomalies (état · action · flow), états, actions exécutées et bloquées, captures                                                                        |
+| `reports/flow-graph.json`             | Le graphe des flows, qui sert de mémoire à l'explorateur (reprise possible avec `memory.resume`)                                                                                                                                                                   |
+| `reports/flow-graph.html`             | Carte de l'application : arbre dépliable, arbre texte, transitions entre états, autres tentatives                                                                                                                                                                  |
+| `reports/engine-log.jsonl`            | Journal structuré du moteur, une ligne JSON par événement (`FLOW_STATE_DISCOVERED`, `ACTION_SELECTED`, `ACTION_BLOCKED`, `ACTION_EXECUTED`, `ORACLE_VERDICT`, `RECOVERY_ATTEMPT`, `STUCK_DETECTED`…), niveaux `ERROR` à `TRACE` (`logging.level`), secrets masqués |
+| `screenshots/NNN-<état>[-error…].png` | Une par état découvert, plus une par anomalie ERROR/CRITICAL et par étape `screenshot`                                                                                                                                                                             |
+
+`index.html` montre aussi, quand il y a lieu : les verdicts des oracles (FAIL d'abord, décompte PASS / FAIL / WARNING / UNKNOWN, assertions observées), les formulaires découverts (champs, saisie, source, cas de validation), les événements de récupération, les branches abandonnées, les différences d'accès et les règles d'autorisation, les données créées et le budget de modifications, les anomalies d'accessibilité. Chaque anomalie garde son chemin de reproduction (états → action) et sa capture.
 
 Les rapports n'utilisent ni JavaScript, ni framework, ni ressource externe.
 
@@ -895,6 +1049,8 @@ Un job optionnel explore un vrai environnement et publie les rapports. Il s'exé
                                      JSON · HTML · Graphe · flow-diff.json
 ```
 
+Chaque composant répond à une seule question : `UIObserver` (que vois-je ?), `ActionDiscovery` (que puis-je faire ?), `FormAnalyzer` (qu'attend ce formulaire ?), `TestDataProvider` (quelles données synthétiques ?), `ActionScorer` (qu'est-ce qui est intéressant ?), `DecisionEngine` (que dois-je essayer ?), `SafetyPolicy` (ai-je le droit ?), `PlaywrightActionExecutor` (exécute), observateurs (que s'est-il passé techniquement ?), `StateDetector` (dans quel état suis-je ?), `TestOracle` (le résultat semble-t-il correct ?), `FlowGraph` (qu'ai-je découvert ?), `RecoveryEngine` (comment continuer après un problème ?), `FlowMemory` (que connaissais-je déjà ?), reporters (comment l'expliquer ?).
+
 Modes : **LEARN** (explorer, puis enregistrer la baseline), **VERIFY** (rejouer la baseline, détecter les régressions), **EXPLORE** (chercher du nouveau). Playwright reste uniquement le moteur d'exécution : la décision, le scoring, la sécurité, la mémoire et la comparaison n'en dépendent pas.
 
 ```
@@ -910,7 +1066,14 @@ src/
 ├── execution/                    PlaywrightActionExecutor, résolution des localisateurs
 ├── flows/                        exécution des étapes de flow, sécurité et périmètre de thenExplore
 ├── interactions/                 BrowserEventDiscovery, BrowserInteractionManager, handlers, CredentialProvider
-├── data/                         TestDataProvider, DefaultTestDataProvider
+├── data/                         TestDataProvider, DefaultTestDataProvider, données créées, TestDataCleanup
+├── forms/                        FormAnalyzer, FormFillStrategy (plan), FormExerciser, tests de validation, OpenAPI
+├── oracles/                      TestOracle : technique, écran, baseline, contrat (OpenAPI), CompositeTestOracle
+├── recovery/                     RecoveryEngine, CircuitBreaker, StuckDetector
+├── actors/                       AuthorizationObserver (plusieurs acteurs, règles d'accès)
+├── accessibility/                vérifications de base, parcours clavier
+├── logging/                      journal structuré du moteur (engine-log.jsonl)
+├── visual/                       interface VisualComparator (sans implémentation)
 ├── graph/                        FlowGraph
 ├── memory/                       interface FlowMemory, JsonFlowMemory
 ├── observers/                    réseau, console, erreurs de page (avec rattachement)
@@ -939,7 +1102,7 @@ Le moteur ne reçoit que des données simples et sérialisables :
 
 Un `LocalLLMDecisionEngine` ou un `CloudLLMDecisionEngine` peut être passé à `runMission(config, { decisionEngine })`. Rien d'autre ne change : l'explorateur, le contrôle de sécurité, l'exécuteur et les observateurs restent identiques.
 
-Cette version ne contient **aucun code ni dépendance LLM**.
+Cette version ne contient **aucun code ni dépendance LLM** (ni OpenAI, ni Anthropic, ni Gemini, ni Ollama, ni LangChain). Les points d'extension sont des interfaces : `DecisionEngine` (choix de l'action), `FormFillStrategy` et `TestDataProvider` (raisonnement sur un formulaire), `SemanticOracle` (résultat métier), `VisualComparator`, `TestDataCleanup`.
 
 ## Développement
 
@@ -974,7 +1137,10 @@ npm run build            # dist/
 
 - `tests/fixtures/test-site.ts`, un site plein de bugs et de pièges : chaque anomalie doit être détectée et rattachée, sans fuite de secret.
 - les flows imposés (assistant, MUTATION, DANGEROUS, mot de passe depuis l'environnement, fenêtre modale, `thenExplore`) ;
-- l'authentification HTTP native (identifiants présents, absents, invalides, retry, boucle, origine interdite) et les autres interactions navigateur (dialogues, popup, nouvel onglet, téléchargement, fichier, permission, navigation externe).
+- l'authentification HTTP native (identifiants présents, absents, invalides, retry, boucle, origine interdite) et les autres interactions navigateur (dialogues, popup, nouvel onglet, téléchargement, fichier, permission, navigation externe) ;
+- `tests/fixtures/acceptance-app.ts`, l'application d'acceptation (connexion, tableau de bord, utilisateurs liste/création/détail, assistant, dialogue, API cassée, branche cassée, pagination sans fin, erreur JavaScript, session qui expire). Avec la mission d'acceptation, sans flow écrit à la main, le test vérifie que l'explorateur : découvre le formulaire, génère les données, remplit les champs, suit l'assistant, détecte le HTTP 500, produit un FAIL via le `TechnicalOracle`, détecte une différence avec la baseline, se rétablit (échec, session expirée), évite la boucle et continue après une branche cassée ;
+- la récupération, le coupe-circuit et la détection de blocage, plusieurs acteurs et leurs règles, l'accessibilité, le budget de modifications, le journal moteur ;
+- l'absence de tout secret (mot de passe, cookie, jeton Bearer, clé d'API, jeton d'URL) dans tous les fichiers produits.
 
 ## Limites de cette version
 
@@ -983,19 +1149,21 @@ npm run build            # dist/
 - Si l'empreinte d'un écran change (nouveau bouton, nouveau champ), ses transitions deviennent `UNREACHABLE` en `verify` : c'est voulu (l'écran a changé), le diff montre l'ancien et le nouvel état.
 - L'empreinte d'état est heuristique : des écrans très dynamiques peuvent produire plus d'états que prévu (limité par `maxStatesPerRoute`).
 - Le moteur à règles ne peut pas savoir ce que fait une icône sans libellé, donc les icônes ne sont jamais cliquées (sauf `allow: UNKNOWN` dans un flow).
-- Les actions qui modifient des données (créer, enregistrer, envoyer) ne sont jamais exécutées automatiquement. Leurs effets ne sont explorés que si elles sont explicitement autorisées, sur un environnement jetable.
+- Les actions qui modifient des données (créer, enregistrer, envoyer) ne sont exécutées qu'avec `safety.mutations.enabled`, dans un budget, sur un environnement de test. Rien n'est supprimé automatiquement.
+- Les oracles ne connaissent pas le métier : sans `SemanticOracle`, le résultat métier reste `UNKNOWN`. Les avertissements écran/baseline/contrat sont des signaux à confirmer.
+- Les vérifications d'accessibilité sont un premier signal, pas un audit (contrastes, ARIA avancé et lecteurs d'écran non couverts).
+- Les autres acteurs ne font qu'ouvrir les écrans trouvés par l'utilisateur principal : ce qu'ils peuvent faire sur ces écrans n'est pas exploré.
 - Le retour en arrière par rejouée demande un chemin déterministe ; les états impossibles à restaurer sont ignorés.
-- Un seul rôle par run. La double authentification (MFA/OTP) et les sessions sauvegardées ne sont pas encore gérées.
+- Une seule exploration par run (celle de l'utilisateur principal). La double authentification (MFA/OTP) et les sessions sauvegardées ne sont pas encore gérées.
 - Interactions navigateur : l'authentification HTTP est détectée via le protocole de Chromium (Chromium uniquement). Quand une popup est défiée avant que le crawler s'y attache (SSO SiteMinder par exemple), son chargement est rejoué une fois pour capter le défi. Un défi venant d'une iframe d'un autre domaine ou d'un service worker n'est pas vu. NTLM/Kerberos dépendent du serveur. Les popups et nouveaux onglets sont observés puis fermés, pas explorés en parallèle. Les sélecteurs de fichier ne reçoivent jamais de fichier.
 - Le Shadow DOM et les iframes ne sont pas explorés.
 
 ## Feuille de route
 
-- Authentification multi-rôles (une exploration par rôle, SSO/OIDC, sessions sauvegardées)
-- Tests automatiques des formulaires avec le `TestDataProvider` : champs obligatoires, e-mail invalide, valeurs min/max et limites
-- Tests de permissions (ce qu'un rôle ne doit pas atteindre)
-- Import OpenAPI et tests d'API
-- Comparaison visuelle entre runs (captures par état)
+- Une exploration complète par acteur (SSO/OIDC, sessions sauvegardées)
+- Tests d'API à partir du contrat OpenAPI
+- Comparaison visuelle entre runs : une implémentation de `VisualComparator` (captures par état)
+- Nettoyage automatique des données créées, par une implémentation de `TestDataCleanup` propre à l'application
 - Génération de tests Playwright à partir des flows enregistrés (les localisateurs sont déjà sérialisables)
 - Reproduction de bug : à partir d'une anomalie, rejouer le chemin minimal (état → action → réseau) qui la déclenche
 - Plusieurs baselines comparées dans le temps (tendance des états, des régressions, des temps de réponse)

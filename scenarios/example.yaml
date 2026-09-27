@@ -89,6 +89,9 @@ safety:
     safe: []
     mutation: []
     dangerous: []
+  mutations: # actions changing data (create, save, send a form); DANGEROUS ones are never executed
+    enabled: false # true: MUTATION and form submission allowed, within the budget
+    maxPerRun: 10
 
 # auth:
 #   type: form
@@ -117,11 +120,59 @@ credentials: {}
 # Interactions raised by the browser outside the DOM (native sign-in dialog,
 # alert/confirm/prompt, popups, downloads, file chooser, permissions, external navigation).
 forms:
-  exercise: true # fill the forms of each screen (even without <form>), then report validation messages
+  autoFill: true # fill the forms of each screen (even without <form>), then report validation messages (alias: exercise)
   # submit: false # buttons that send a form: false never, true like any MUTATION; unset: safety.block decides
+  validationTesting: false # true: also type invalid values (empty, bad email, out of bounds…) and check they are refused
+  maxValidationCasesPerField: 3
+  maxValidationCasesPerForm: 10
 
 testData:
-  fields: {} # value per field label/name/placeholder, e.g. { "Code agence": "12345", "Canal de contact": Courriel }
+  # runId: abc123 # tag of the created data (QA-CRAWLER-<runId>); default: generated for each run
+  defaults: {} # values per meaning, e.g. { firstName: QA, lastName: Crawler, country: Canada }
+  fields: {} # value per field label/name/placeholder, e.g. { "Code agence": "12345", email: { value: qa@example.test } }
+  # priority: fields > defaults / field rule > field type > safe fallback; sensitive fields are never filled
+
+# Test oracles: every executed action gets PASS / FAIL / WARNING / UNKNOWN.
+# UNKNOWN is never turned into PASS; the business result stays unknown.
+oracles:
+  enabled: true
+  technical: { api404: warning } # warning | fail
+  ui: { enabled: true, errorTexts: [] } # extra words making a visible alert an error message
+  baseline: { enabled: true } # compare with the transition learned in the baseline
+
+openapi:
+  enabled: false
+  # source: openapi.yaml # file, or a URL on an allowed host: statuses checked, form fields completed
+
+# After a failure: strategies tried in this order (one left out is never used).
+recovery:
+  enabled: true
+  strategies: [retry, dismiss-dialog, escape, back, known-url, replay-path, reauthenticate, abandon-branch]
+  maxRetries: 1 # transient errors only, never an action sending data
+  maxReauthentications: 2 # after a session expiry
+  circuitBreaker: { threshold: 2, maxFailuresPerState: 5 }
+  stuck: { oscillationCycles: 3, maxNoOpActions: 15, maxBusyObservations: 3 }
+
+accessibility:
+  enabled: true # missing names, image links without text, duplicate ids, clickable elements the keyboard cannot reach
+  keyboardNavigation: false # true: also walk each new screen with Tab (keyboard trap, no focus)
+  maxTabs: 30
+
+logging:
+  level: INFO # ERROR | WARN | INFO | DEBUG | TRACE → reports/engine-log.jsonl
+  file: true
+
+# Other users: after the exploration, each one opens the screens found (page loads only).
+actors: []
+#  - name: reader
+#    auth: { type: form, loginUrl: /login, usernameSelector: '#user', passwordSelector: '#pass',
+#            submitSelector: 'button[type=submit]', usernameEnv: QA_READER_USER, passwordEnv: QA_READER_PASSWORD }
+authorization:
+  enabled: true
+  primaryActor: primary # name of the mission's own user (auth) in the reports
+  rules: [] # e.g. [{ actor: reader, path: /admin/*, expect: denied }]
+  maxTargets: 50
+  deniedTexts: [] # extra words showing a refusal on a page answered 200
 
 browserInteractions:
   enabled: true

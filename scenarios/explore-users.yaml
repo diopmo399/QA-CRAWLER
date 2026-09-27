@@ -1,0 +1,24 @@
+# The acceptance mission: goals, forms and a mutation budget. No flow and no
+# click are written here: the explorer finds "Users", "Create user", fills the
+# form with tagged test data, sends it (within the budget), judges the result
+# with the test oracles, then goes on exploring.
+mission:
+  name: explore-users
+  mode: explore
+
+target:
+  baseUrl: http://localhost:4200
+
+goals:
+  keywords:
+    - users
+    - utilisateurs
+
+forms:
+  autoFill: true
+  validationTesting: true
+
+safety:
+  mutations:
+    enabled: true # only on a test environment: data is created (tagged QA-CRAWLER-<runId>)
+    maxPerRun: 10
