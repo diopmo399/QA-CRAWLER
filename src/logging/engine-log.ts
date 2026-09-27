@@ -1,6 +1,6 @@
 import type { ExplorationListener } from '../explorer/flow-explorer.js';
 import { actionLabel } from '../model/discovered-action.js';
-import { redactUrl } from '../security/redactor.js';
+import { redactText, redactUrl } from '../security/redactor.js';
 
 export const LOG_LEVELS = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -66,7 +66,8 @@ export class EngineEventLog {
       this.dropped += 1;
       return;
     }
-    this.lines.push({ at: new Date().toISOString(), level, event, message, ...extra });
+    // Messages quote pages and errors: whatever they contain, no secret goes out.
+    this.lines.push({ at: new Date().toISOString(), level, event, message: redactText(message), ...extra });
   }
 
   entries(): EngineLogEntry[] {

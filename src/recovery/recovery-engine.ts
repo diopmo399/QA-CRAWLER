@@ -1,5 +1,6 @@
 import type { ActionClassification } from '../model/discovered-action.js';
 import type { PageContext } from '../model/page-context.js';
+import { redactText } from '../security/redactor.js';
 import type { FailureKind, RecoveryEvent, RecoveryStrategyName } from './recovery-model.js';
 
 export interface RecoveryOptions {
@@ -114,7 +115,7 @@ export class RecoveryEngine {
       stateId: failure.stateId,
       ...(failure.actionId ? { actionId: failure.actionId } : {}),
       failure: failure.kind,
-      ...(failure.message ? { message: firstLine(failure.message) } : {}),
+      ...(failure.message ? { message: redactText(firstLine(failure.message)) } : {}),
       strategy,
       success,
       ...(state ? { reachedStateId: state.stateId } : {}),

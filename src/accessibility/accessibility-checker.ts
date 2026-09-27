@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { Severity } from '../model/issue.js';
+import { redactText } from '../security/redactor.js';
 
 /** Basic checks, from the DOM alone. Not an audit: a first signal, to confirm with a dedicated tool. */
 export const ACCESSIBILITY_RULES = [
@@ -56,7 +57,9 @@ const MESSAGE: Record<AccessibilityRule, string> = {
 function messageOf(finding: RawFinding): string {
   const counted = finding.rule !== 'keyboard-trap' && finding.rule !== 'no-keyboard-focus';
   const examples = finding.examples.length > 0 ? ` (${finding.examples.join(', ')})` : '';
-  return `Accessibility: ${counted ? `${finding.count} ` : ''}${MESSAGE[finding.rule]}${examples}`;
+  return redactText(
+    `Accessibility: ${counted ? `${finding.count} ` : ''}${MESSAGE[finding.rule]}${examples}`,
+  );
 }
 
 interface RawFinding {
