@@ -1,4 +1,5 @@
 import type { PageContext } from '../model/page-context.js';
+import { categoryOf, type VerdictCategory } from './confidence.js';
 import type {
   ActionObservations,
   ExecutedAction,
@@ -21,6 +22,11 @@ export interface OracleVerdict {
   results: OracleResult[];
   /** Assertions observées : "✓ no HTTP 5xx", "✗ POST /api/users returned HTTP 500", "? business result unknown". */
   assertions: string[];
+  /**
+   * Catégories des avis décisifs (CONFIRMED_FAILURE, CONTRACT_VIOLATION,
+   * INVARIANT_VIOLATION, POTENTIAL_REGRESSION, UNEXPECTED_BEHAVIOR, UNKNOWN), la plus grave d'abord.
+   */
+  categories: VerdictCategory[];
 }
 
 /**
@@ -40,7 +46,9 @@ export class CompositeTestOracle {
     const results: OracleResult[] = [];
     for (const oracle of this.oracles) {
       try {
-        results.push(await oracle.evaluate(before, action, after, observations));
+        const judged = await oracle.evaluate(before, action, after, observations);
+        const category = judged.category ?? categoryOf(judged.oracle, judged.status);
+        results.push(category ? { ...judged, category } : judged);
       } catch (error) {
         results.push({
           oracle: oracle.name,
@@ -70,6 +78,19 @@ export class CompositeTestOracle {
       // Aucune attente métier n'est connue sans SemanticOracle : on le dit.
       ...(results.some((entry) => entry.oracle === 'semantic') ? [] : ['? business result unknown']),
     ];
-    return { status, confidence, reasons, results, assertions };
+    const order: readonly VerdictCategory[] = [
+      'CONFIRMED_FAILURE',
+      'INVARIANT_VIOLATION',
+      'CONTRACT_VIOLATION',
+      'POTENTIAL_REGRESSION',
+      'UNEXPECTED_BEHAVIOR',
+      'UNKNOWN',
+    ];
+    const categories = [
+      ...new Set(
+        decisive.map((entry) => entry.category).filter((entry): entry is VerdictCategory => !!entry),
+      ),
+    ].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    return { status, confidence, reasons, results, assertions, categories };
   }
 }

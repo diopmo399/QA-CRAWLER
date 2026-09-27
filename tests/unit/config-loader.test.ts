@@ -26,6 +26,7 @@ describe('parseConfig', () => {
       discoverFlows: true,
       detectErrors: true,
       keywords: [],
+      targets: [],
     });
     expect(config.mission.mode).toBe('explore');
     expect(config.scoring.weights).toEqual({});
