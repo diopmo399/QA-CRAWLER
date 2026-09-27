@@ -177,7 +177,7 @@ export class ActionDiscovery {
 
 /** Field where a value is typed (not a checkbox, radio or list). */
 function isTextField(element: UiElement): boolean {
-  if (element.tag === 'textarea') return true;
+  if (element.tag === 'textarea' || element.editable === true) return true;
   return (
     element.tag === 'input' &&
     TEXT_INPUT_TYPES.has(element.inputType ?? 'text') &&
@@ -186,7 +186,11 @@ function isTextField(element: UiElement): boolean {
 }
 
 function isFieldElement(element: UiElement): boolean {
-  return ['input', 'select', 'textarea'].includes(element.tag) || element.customSelect === true;
+  return (
+    ['input', 'select', 'textarea'].includes(element.tag) ||
+    element.customSelect === true ||
+    element.editable === true
+  );
 }
 
 function isField(type: ActionType): boolean {
@@ -202,7 +206,7 @@ function actionType(element: UiElement, pageUrl: string): ActionType | undefined
   }
   if (element.routerLink && tag !== 'button') return 'navigate';
   if (tag === 'select' || element.customSelect) return 'select';
-  if (tag === 'textarea') return element.readOnly ? undefined : 'fill';
+  if (tag === 'textarea' || element.editable) return element.readOnly ? undefined : 'fill';
   if (tag === 'input') {
     if (inputType === 'checkbox' || inputType === 'radio') {
       if (element.checked) return inputType === 'checkbox' ? 'uncheck' : undefined;
@@ -298,7 +302,8 @@ function actionCategory(element: UiElement, type: ActionType): ActionCategory {
 
 function fieldConstraints(element: UiElement): FieldConstraints {
   const constraints: FieldConstraints = {
-    inputType: element.tag === 'input' ? (element.inputType ?? 'text') : element.tag,
+    inputType:
+      element.tag === 'input' ? (element.inputType ?? 'text') : element.editable ? 'textarea' : element.tag,
     required: element.required,
   };
   const optional: Partial<FieldConstraints> = {

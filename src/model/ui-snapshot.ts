@@ -67,6 +67,12 @@ export interface UiElement {
   formGroup?: string;
   /** A select that is not a native <select> (role combobox/listbox: Angular Material…). */
   customSelect?: boolean;
+  /** contenteditable region (rich text, custom field): filled like a text field. */
+  editable?: boolean;
+  /** Drawn inside the shadow root of a web component. */
+  inShadow?: boolean;
+  /** Its label comes from the component around it (label attribute, slot="label"). */
+  labelledByHost?: boolean;
   /** The field already holds a value (the value itself is never read). */
   hasValue?: boolean;
   /** Help text of the field (mat-hint, aria-describedby): "99999", "HH:MM"… */
