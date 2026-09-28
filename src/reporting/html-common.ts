@@ -92,6 +92,7 @@ export const BASE_CSS = `
   .pill.UNSUPPORTED { background:#f1f5f9; color:#475569; }
   .pill.FAILED, .pill.DANGEROUS { background:#fee2e2; color:#991b1b; }
   .pill.BLOCKED, .pill.MUTATION { background:#fef3c7; color:#92400e; }
+  .pill.MANUAL { background:#fef3c7; color:#92400e; }
   .pill.SKIPPED, .pill.UNKNOWN { background:#f1f5f9; color:#475569; }
   .flow-run { margin-bottom:18px; }
   .suggest { margin-top:6px; color:#1f2937; }

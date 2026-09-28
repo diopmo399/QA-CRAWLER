@@ -402,6 +402,7 @@ const FR_VALUES: Record<string, string> = {
   FAILED: 'ÉCHOUÉ',
   BLOCKED: 'BLOQUÉ',
   SKIPPED: 'IGNORÉ',
+  MANUAL: 'À VÉRIFIER',
   SUCCESS: 'RÉUSSIE',
   // classements
   SAFE: 'SÛRE',

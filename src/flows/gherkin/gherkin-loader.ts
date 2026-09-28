@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { AstBuilder, compile, GherkinClassicTokenMatcher, Parser } from '@cucumber/gherkin';
 import { IdGenerator, PickleStepType, type GherkinDocument, type Pickle } from '@cucumber/messages';
+import { labelOf } from '../flow-includes.js';
 import { GherkinStepDictionary, type CustomGherkinStep, type RawStep } from './gherkin-steps.js';
 
 /**
@@ -77,8 +78,15 @@ export function gherkinFlows(
     const parser = new Parser(new AstBuilder(IdGenerator.incrementing()), new GherkinClassicTokenMatcher());
     document = parser.parse(text);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     throw new GherkinError(`Invalid Gherkin in ${display}`, [
-      error instanceof Error ? error.message : String(error),
+      message,
+      // L'oubli le plus fréquent : un fichier qui commence directement par Given / Étant donné.
+      ...(/#FeatureLine/.test(message)
+        ? [
+            'the file must start with "Feature:" (or "Fonctionnalité:" after "# language: fr"), then "Scenario:" / "Scenario Outline:" (with Examples) before the steps',
+          ]
+        : []),
     ]);
   }
   const pickles = compile(document, display, IdGenerator.incrementing());
@@ -116,14 +124,14 @@ export function gherkinFlows(
         continue;
       }
       const label = `${keyword} ${sentence}`.trim();
-      translated.forEach((raw, index) => {
+      translated.forEach((raw) => {
         // « Alors je suis sur "/x" » vérifie l'adresse ; « Étant donné que je suis sur "/x" » y va.
         const checked =
           step.type === PickleStepType.OUTCOME && typeof raw.goto === 'string'
             ? { expect: { url: raw.goto } }
             : raw;
         flowSteps.push({
-          name: translated.length > 1 ? `${label} (${describe(raw, index)})` : label,
+          name: translated.length > 1 ? `${label} (${describe(raw)})` : label,
           ...checked,
           ...(allow.length > 0 ? { allow } : {}),
           ...(optional ? { optional: true } : {}),
@@ -199,9 +207,9 @@ function exampleRow(document: GherkinDocument, rowId: string | undefined): strin
   return undefined;
 }
 
-function describe(raw: RawStep, index: number): string {
-  const fill = raw.fill as { label?: string } | undefined;
-  return fill?.label ?? `#${index + 1}`;
+function describe(raw: RawStep): string {
+  const fill = raw.fill as { label?: unknown } | undefined;
+  return typeof fill?.label === 'string' ? fill.label : labelOf(raw);
 }
 
 function normalizeTag(tag: string): string {

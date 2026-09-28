@@ -850,7 +850,24 @@ export const scenarioSchema = z
     /** Phrases Gherkin propres à l'équipe (en plus des phrases intégrées) pour `flows: - gherkin: …`. */
     gherkin: z
       .object({
-        steps: z.array(z.object({ pattern: nonEmpty, step: z.record(z.unknown()) }).strict()).default([]),
+        steps: z
+          .array(
+            z
+              .object({
+                pattern: nonEmpty,
+                step: z.record(z.unknown()).optional(),
+                steps: z.array(z.record(z.unknown())).min(1).optional(),
+                manual: z.literal(true).optional(),
+                allow: z.union([z.string(), z.array(z.string())]).optional(),
+              })
+              .strict()
+              .refine(
+                (entry) =>
+                  [entry.step, entry.steps, entry.manual].filter((value) => value !== undefined).length === 1,
+                'a gherkin step needs exactly one of step, steps, manual',
+              ),
+          )
+          .default([]),
       })
       .strict()
       .default({}),

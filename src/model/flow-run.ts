@@ -5,8 +5,10 @@ import type { ActionClassification } from './discovered-action.js';
  * - FAILED : élément introuvable, erreur d'action, attente non satisfaite.
  * - BLOCKED : refusé par la SafetyPolicy (DANGEROUS, MUTATION sans `allow`…).
  * - SKIPPED : pas exécuté parce qu'une étape précédente a arrêté le flow, ou qu'une limite a été atteinte.
+ * - MANUAL : vérification que le robot ne sait pas faire (étape `manual`), à faire à la main ;
+ *   n'arrête pas le flow et ne change pas son statut.
  */
-export const FLOW_STATUSES = ['PASSED', 'FAILED', 'BLOCKED', 'SKIPPED'] as const;
+export const FLOW_STATUSES = ['PASSED', 'FAILED', 'BLOCKED', 'SKIPPED', 'MANUAL'] as const;
 export type FlowStatus = (typeof FLOW_STATUSES)[number];
 
 /** Résultat d'une étape d'un flow imposé. */

@@ -6,21 +6,31 @@
  *
  * Un modèle s'écrit comme la phrase, avec des emplacements nommés : `je clique sur {cible}`.
  * `{élément}` devant une cible (« le bouton », « le lien », « l'onglet »…) choisit le rôle.
+ * Dans les phrases de l'équipe, `{x:mot}` accepte aussi un mot sans guillemets (`112310`)
+ * et `{x:texte}` n'importe quel texte (le plus court possible).
  */
 
 /** Une étape de flow brute, validée ensuite par le schéma des flows (comme une étape écrite en YAML). */
 export type RawStep = Record<string, unknown>;
 
-/** Une phrase personnalisée de la mission : `pattern` avec des `{emplacements}`, et l'étape produite. */
+/**
+ * Une phrase personnalisée de la mission : `pattern` avec des `{emplacements}`, et ce
+ * qu'elle produit — une étape (`step`), plusieurs (`steps`, dont `run: <flow>` pour
+ * rejouer un flow), ou une vérification manuelle (`manual: true`). `allow` s'ajoute à
+ * chaque étape produite (MUTATION pour une phrase qui enregistre).
+ */
 export interface CustomGherkinStep {
   pattern: string;
-  step: RawStep;
+  step?: RawStep;
+  steps?: RawStep[];
+  manual?: boolean;
+  allow?: string | string[];
 }
 
 interface Definition {
   regex: RegExp;
   names: string[];
-  build(values: Record<string, string>, table: string[][] | undefined): RawStep[];
+  build(values: Record<string, string>, table: string[][] | undefined, sentence: string): RawStep[];
 }
 
 /** Types d'éléments nommés dans une phrase → rôle ARIA. */
@@ -36,6 +46,10 @@ const ELEMENT_ROLES: [RegExp, string][] = [
 ];
 
 const QUOTED = String.raw`(?:"([^"]*)"|«\s*([^»]*?)\s*»|“([^”]*)”|'([^']*)')`;
+/** Une valeur entre guillemets, ou un mot sans guillemets (la 4e forme remplace '…'). */
+const WORD = String.raw`(?:"([^"]*)"|«\s*([^»]*?)\s*»|“([^”]*)”|([^\s"«“]+))`;
+/** Une valeur entre guillemets, ou n'importe quel texte. */
+const TEXT = String.raw`(?:"([^"]*)"|«\s*([^»]*?)\s*»|“([^”]*)”|(.+?))`;
 const ELEMENT = String.raw`(?:(le bouton|le lien|l['’]onglet|le menu|l['’]élément de menu|la case à cocher|la case|le bouton radio|l['’]option|le champ|la zone de texte|la liste déroulante|la liste|the button|the link|the tab|the menu item|the menu|the checkbox|the radio button|the option|the field|the text box|the dropdown|the list|button|link|tab|checkbox|field|dropdown)\s+)?`;
 
 /**
@@ -55,9 +69,11 @@ export function compilePattern(pattern: string): { regex: RegExp; names: string[
       names.push('élément');
       source += ELEMENT;
     } else if (slot?.[1]) {
-      // Quatre groupes : une valeur par forme de guillemets.
-      names.push(slot[1], '', '', '');
-      source += QUOTED;
+      // Quatre groupes : une valeur par forme de guillemets (ou sans guillemets pour :mot et :texte).
+      const [name = '', type] = slot[1].split(':').map((piece) => piece.trim());
+      names.push(name, '', '', '');
+      source +=
+        type === 'mot' || type === 'word' ? WORD : type === 'texte' || type === 'text' ? TEXT : QUOTED;
     } else {
       source += part
         .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -270,6 +286,48 @@ const BUILTIN: [string[], Builder][] = [
   ],
   [
     [
+      "aucun message d'erreur n'est affiché",
+      "aucun message d'erreur ne s'affiche",
+      "aucune erreur n'est affichée",
+      "aucun message d'erreur n'est affiché à l'utilisateur",
+      "je ne vois aucun message d'erreur",
+      'no error message is displayed',
+      'no error message is shown',
+      'no error is displayed',
+      'I see no error message',
+      'I should not see any error message',
+    ],
+    () => ({ expect: { noError: true } }),
+  ],
+  [
+    [
+      'la requête {méthode:mot} {url} réussit',
+      'la requête {url} réussit',
+      "l'appel {méthode:mot} {url} réussit",
+      "l'appel {url} réussit",
+      'la requête {méthode:mot} {url} répond {statut:mot}',
+      'la requête {url} répond {statut:mot}',
+      'the request {méthode:mot} {url} succeeds',
+      'the request {url} succeeds',
+      'the call {méthode:mot} {url} succeeds',
+      'the call {url} succeeds',
+      'the request {méthode:mot} {url} responds {statut:mot}',
+      'the request {url} responds {statut:mot}',
+    ],
+    (values) => ({
+      expect: {
+        response: {
+          ...(values.méthode ? { method: values.méthode.toUpperCase() } : {}),
+          url: values.url,
+          ...(values.statut
+            ? { status: /^\d+$/.test(values.statut) ? Number(values.statut) : values.statut.toLowerCase() }
+            : {}),
+        },
+      },
+    }),
+  ],
+  [
+    [
       'je prends une capture {nom}',
       "je prends une capture d'écran {nom}",
       "je fais une capture d'écran {nom}",
@@ -283,9 +341,12 @@ const BUILTIN: [string[], Builder][] = [
 /** Remplace `{emplacement}` par sa valeur dans toutes les chaînes d'une étape personnalisée. */
 function substitute(template: unknown, values: Record<string, string>): unknown {
   if (typeof template === 'string') {
+    // `{code}` ou `{code:mot}` : le nom de l'emplacement, sans son type.
+    const nameOf = (slot: string): string => slot.split(':')[0]?.trim() ?? slot;
     const whole = /^\{([^}]+)\}$/.exec(template);
-    if (whole?.[1] !== undefined && values[whole[1]] !== undefined) return valueOf(values[whole[1]] ?? '');
-    return template.replace(/\{([^}]+)\}/g, (all, name: string) => values[name] ?? all);
+    const wholeValue = whole?.[1] !== undefined ? values[nameOf(whole[1])] : undefined;
+    if (wholeValue !== undefined) return valueOf(wholeValue);
+    return template.replace(/\{([^}]+)\}/g, (all, slot: string) => values[nameOf(slot)] ?? all);
   }
   if (Array.isArray(template)) return template.map((item) => substitute(item, values));
   if (template !== null && typeof template === 'object')
@@ -296,6 +357,19 @@ function substitute(template: unknown, values: Record<string, string>): unknown 
       ]),
     );
   return template;
+}
+
+/** Les étapes d'une phrase de l'équipe, avec ses valeurs, et son `allow` ajouté à chacune. */
+function customSteps(entry: CustomGherkinStep, values: Record<string, string>, sentence: string): RawStep[] {
+  if (entry.manual) return [{ manual: sentence }];
+  const templates = entry.steps ?? (entry.step ? [entry.step] : []);
+  const allow = entry.allow === undefined ? [] : Array.isArray(entry.allow) ? entry.allow : [entry.allow];
+  return templates.map((template) => {
+    const step = substitute(template, values) as RawStep;
+    if (allow.length === 0) return step;
+    const own = step.allow === undefined ? [] : Array.isArray(step.allow) ? step.allow : [step.allow];
+    return { ...step, allow: [...new Set([...(own as string[]), ...allow])] };
+  });
 }
 
 /**
@@ -310,7 +384,7 @@ export class GherkinStepDictionary {
     for (const entry of custom)
       this.definitions.push({
         ...compilePattern(entry.pattern),
-        build: (values) => [substitute(entry.step, values) as RawStep],
+        build: (values, _table, sentence) => customSteps(entry, values, sentence),
       });
     for (const [patterns, builder] of BUILTIN)
       for (const pattern of patterns)
@@ -327,7 +401,7 @@ export class GherkinStepDictionary {
     const sentence = text.trim().replace(/\s+/g, ' ');
     for (const definition of this.definitions) {
       const match = definition.regex.exec(sentence);
-      if (match) return definition.build(valuesOf(match, definition.names), table);
+      if (match) return definition.build(valuesOf(match, definition.names), table, sentence);
     }
     return undefined;
   }
