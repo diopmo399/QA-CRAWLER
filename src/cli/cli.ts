@@ -291,6 +291,7 @@ function progressListener(quiet: boolean): ExplorationListener {
       logger.info(
         `   ${mark} ${String(step.index).padStart(2, ' ')}. ${step.description}${step.status !== 'PASSED' ? ` ${step.status}` : ''}${reason}`,
       );
+      if (step.interpretation) logger.info(color.dim(`       ↳ ${step.interpretation}`));
       if (step.suggestions && step.suggestions.length > 0) {
         logger.info(color.yellow('       Suggested step (found on the screen):'));
         for (const line of step.suggestions) logger.info(`         ${line}`);

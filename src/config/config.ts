@@ -850,6 +850,11 @@ export const scenarioSchema = z
     /** Phrases Gherkin propres à l'équipe (en plus des phrases intégrées) pour `flows: - gherkin: …`. */
     gherkin: z
       .object({
+        /**
+         * Mode automatique : une phrase inconnue n'est plus une erreur ; elle est interprétée sur
+         * l'écran à l'exécution (noms cités, libellés de champs, valeurs), ou notée « À VÉRIFIER ».
+         */
+        auto: z.boolean().default(false),
         steps: z
           .array(
             z
