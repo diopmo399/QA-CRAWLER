@@ -847,6 +847,13 @@ export const scenarioSchema = z
     report: reportSchema.default({}),
     /** Flows de test imposés, exécutés avant l'exploration autonome. */
     flows: flowsSchema,
+    /** Phrases Gherkin propres à l'équipe (en plus des phrases intégrées) pour `flows: - gherkin: …`. */
+    gherkin: z
+      .object({
+        steps: z.array(z.object({ pattern: nonEmpty, step: z.record(z.unknown()) }).strict()).default([]),
+      })
+      .strict()
+      .default({}),
     credentials: credentialsSchema,
     browserInteractions: browserInteractionsSchema.default({}),
     forms: formsSchema.default({}),
