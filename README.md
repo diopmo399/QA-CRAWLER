@@ -27,6 +27,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Fonctionnement](#fonctionnement)
 - [Mission (YAML)](#mission-yaml)
 - [Créer un flow de test imposé](#créer-un-flow-de-test-imposé)
+- [Scénarios Gherkin](#scénarios-gherkin)
 - [Authentification](#authentification)
 - [Interactions navigateur](#interactions-navigateur)
 - [Sécurité](#sécurité)
@@ -363,6 +364,84 @@ Les valeurs des champs ne sont jamais lues.
 - Les transitions des flows sont enregistrées dans le graphe, avec le nom du flow.
 - `reports/result.json` contient un tableau `flows` (en anglais, pour les outils).
 - Le terminal affiche chaque étape en direct : ✓ réussie, ✗ échouée, ⛔ bloquée, - ignorée.
+
+## Scénarios Gherkin
+
+Les scénarios écrits par l'équipe QA (fichiers `.feature`, en français ou en anglais) s'exécutent comme des flows imposés, sans les réécrire en YAML :
+
+```yaml
+flows:
+  - gherkin: ./features/clients.feature # chemin relatif au fichier de mission
+  - gherkin: ./features/recherche.feature
+    scenarios: ['Recherche par nom'] # facultatif : seulement ces scénarios
+    tags: ['@smoke'] # facultatif : seulement les scénarios qui ont l'un de ces tags
+    thenExplore: true # facultatif : explorer le dernier écran de chaque scénario
+  - name: accueil # un flow YAML classique peut suivre
+    steps:
+      - goto: /
+```
+
+```gherkin
+# language: fr
+Fonctionnalité: Clients
+
+  Contexte:
+    Étant donné que je suis sur "/clients"
+
+  @mutation
+  Scénario: Création d'un client
+    Quand je clique sur le bouton "Nouveau client"
+    Et je remplis le formulaire :
+      | champ        | valeur              |
+      | Nom          | Dupont              |
+      | Mot de passe | <env:APP_PASSWORD>  |
+    Et je choisis "Entreprise" dans "Type"
+    Et je coche la case "J'accepte les conditions"
+    Et je clique sur le bouton "Enregistrer"
+    Alors je vois "Client créé"
+    Et l'URL contient "/clients/"
+    Et je prends une capture "fiche" (optionnel)
+```
+
+- Chaque **scénario** devient un flow. Le **Contexte** est joué au début de chaque scénario. Un **Plan du scénario** donne un flow par ligne d'**Exemples** (`Recherche [Dupont, 1 client]`).
+- Les **valeurs** sont entre guillemets : `"…"`, `« … »` ou `'…'`. Un secret s'écrit `<env:NOM_DE_VARIABLE>` : il est lu dans l'environnement, jamais écrit dans le fichier ni dans les rapports.
+- Une phrase **inconnue** n'est jamais devinée : le chargement échoue avec le fichier et la ligne (`clients.feature:14: "Quand je fais quelque chose"`).
+- Le rapport montre chaque phrase avec son statut (réussie, échouée, bloquée, ignorée). Les règles de sécurité sont celles des flows YAML : une phrase qui crée ou modifie des données exige le tag `@mutation`.
+
+| Phrase (FR)                                                                        | Phrase (EN)                                                 | Étape                                 |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------- |
+| `je suis sur "/x"`, `je vais sur "/x"`, `j'ouvre la page "/x"`                     | `I am on "/x"`, `I go to "/x"`, `I visit "/x"`              | `goto` (dans un Alors : `expect.url`) |
+| `je clique sur [le bouton / le lien / l'onglet / le menu] "X"`, `j'appuie sur "X"` | `I click [on] [the button / link / tab] "X"`, `I press "X"` | `click` (sans type : texte visible)   |
+| `je saisis "v" dans "Champ"`, `je remplis [le champ] "Champ" avec "v"`             | `I type "v" into "Field"`, `I fill in "Field" with "v"`     | `fill`                                |
+| `je remplis le formulaire :` + tableau `\| champ \| valeur \|`                     | `I fill in the form:` + table                               | un `fill` par ligne                   |
+| `je choisis "Option" dans [la liste] "Champ"`                                      | `I select "Option" from "Field"`                            | `select`                              |
+| `je coche [la case] "X"`, `je décoche "X"`                                         | `I check "X"`, `I uncheck "X"`                              | `check` / `uncheck`                   |
+| `je vois "Texte"`, `le bouton "X" est visible`, `le message "X" s'affiche`         | `I should see "Text"`, `the button "X" is visible`          | `expect` (texte ou élément)           |
+| `je ne vois pas "Texte"`                                                           | `I should not see "Text"`                                   | `expect.hidden`                       |
+| `l'URL contient "/x"`, `je suis redirigé vers "/x"`                                | `the URL contains "/x"`, `I am redirected to "/x"`          | `expect.url`                          |
+| `je prends une capture "nom"`                                                      | `I take a screenshot "nom"`                                 | `screenshot`                          |
+
+| Tag                                   | Effet                                                                                    |
+| ------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `@mutation`, `@dangerous`, `@unknown` | `allow` sur les étapes du scénario (DANGEROUS exige aussi `safety.allowedActionClasses`) |
+| `@explorer`                           | `thenExplore: true`                                                                      |
+| `@ignore`, `@skip`, `@wip`            | scénario non exécuté                                                                     |
+| `(optionnel)` en fin de phrase        | cette étape seulement : un échec est un AVERTISSEMENT, le flow continue                  |
+
+Les tags se placent sur la fonctionnalité (tous ses scénarios), un scénario ou un bloc d'exemples.
+
+**Phrases de l'équipe** : une phrase propre au projet s'ajoute dans la mission ; elle passe avant les phrases intégrées. `{nom}` capture une valeur entre guillemets et se réutilise dans l'étape :
+
+```yaml
+gherkin:
+  steps:
+    - pattern: "j'ouvre le dossier {numéro}"
+      step: { click: { role: link, name: 'Dossier {numéro}' } }
+    - pattern: 'je me connecte en tant que {profil}'
+      step: { click: { role: button, name: '{profil}' } }
+```
+
+Aucune IA : le fichier est lu par le lecteur officiel de Cucumber (`@cucumber/gherkin`), puis chaque phrase est comparée aux modèles, un à un.
 
 ## Authentification
 
@@ -1249,6 +1328,7 @@ src/
 ├── policies/                     SafetyPolicy, NavigationPolicy, AllowedOriginPolicy, InteractionPolicy, vocabulaire
 ├── execution/                    PlaywrightActionExecutor, résolution des localisateurs
 ├── flows/                        exécution des étapes de flow, sécurité, périmètre de thenExplore, génération de flows YAML
+│   └── gherkin/                  scénarios .feature → flows (lecteur Cucumber, phrases types FR/EN)
 ├── interactions/                 BrowserEventDiscovery, BrowserInteractionManager, handlers, CredentialProvider
 ├── data/                         TestDataProvider, DefaultTestDataProvider, données créées, TestDataCleanup
 ├── forms/                        FormAnalyzer, FormFillStrategy (plan), FormExerciser, tests de validation, OpenAPI

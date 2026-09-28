@@ -1,6 +1,9 @@
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { parse as parseYaml, YAMLParseError } from 'yaml';
 import { ZodError } from 'zod';
+import { GherkinError, gherkinFlows, isGherkinEntry } from '../flows/gherkin/gherkin-loader.js';
+import type { CustomGherkinStep } from '../flows/gherkin/gherkin-steps.js';
 import { scenarioSchema, type ScenarioConfig } from './config.js';
 
 /** Levée pour tout scénario illisible, mal formé ou invalide. Le message peut être montré à l'utilisateur. */
@@ -70,7 +73,11 @@ export function parseConfig(
 
   const migrationWarnings: string[] = [];
   const migrated = migrateLegacyKeys(raw as Record<string, unknown>, migrationWarnings);
-  const withOverrides = applyOverrides(migrated, overrides, env);
+  const expanded = expandGherkinFlows(
+    migrated,
+    source === '<inline>' ? process.cwd() : path.dirname(path.resolve(source)),
+  );
+  const withOverrides = applyOverrides(expanded, overrides, env);
 
   let config: ScenarioConfig;
   try {
@@ -84,6 +91,46 @@ export function parseConfig(
 
   const finalized = finalize(config);
   return { config: finalized.config, warnings: [...migrationWarnings, ...finalized.warnings] };
+}
+
+/**
+ * `flows: - gherkin: ./x.feature` : chaque scénario du fichier devient un flow, avant la
+ * validation (le même schéma qu'un flow écrit dans le YAML). Les chemins sont relatifs
+ * au fichier de mission.
+ */
+function expandGherkinFlows(raw: Record<string, unknown>, baseDir: string): Record<string, unknown> {
+  if (!Array.isArray(raw.flows) || !raw.flows.some(isGherkinEntry)) return raw;
+  const gherkin = raw.gherkin as { steps?: unknown } | undefined;
+  // Les phrases mal formées sont signalées ensuite par le schéma (gherkin.steps) ; ici, seulement les bonnes.
+  const custom = (
+    Array.isArray(gherkin?.steps) ? (gherkin.steps as { pattern?: unknown; step?: unknown }[]) : []
+  ).filter(
+    (step): step is CustomGherkinStep =>
+      typeof step.pattern === 'string' && step.step !== null && typeof step.step === 'object',
+  );
+  const flows: unknown[] = [];
+  for (const entry of raw.flows as unknown[]) {
+    if (!isGherkinEntry(entry)) {
+      flows.push(entry);
+      continue;
+    }
+    if (typeof entry.gherkin !== 'string' || entry.gherkin.trim() === '')
+      throw new ConfigError('Invalid scenario', ['flows[].gherkin: the path of a .feature file is required']);
+    const extra = Object.keys(entry).filter(
+      (key) => !['gherkin', 'scenarios', 'tags', 'thenExplore', 'startAt'].includes(key),
+    );
+    if (extra.length > 0)
+      throw new ConfigError('Invalid scenario', [
+        `flows[] (gherkin ${entry.gherkin}): unknown key(s) ${extra.join(', ')} — allowed: scenarios, tags, thenExplore, startAt`,
+      ]);
+    try {
+      flows.push(...gherkinFlows(entry, baseDir, custom));
+    } catch (error) {
+      if (error instanceof GherkinError) throw new ConfigError(error.message, error.details);
+      throw error;
+    }
+  }
+  return { ...raw, flows };
 }
 
 /**
