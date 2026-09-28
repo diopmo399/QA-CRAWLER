@@ -70,6 +70,22 @@ const expectSchema = z
     visible: targetSchema.optional(),
     /** Cet élément est absent ou caché. */
     hidden: targetSchema.optional(),
+    /** Aucun message d'erreur visible (mat-error, .invalid-feedback, [role=alert]…). */
+    noError: z.literal(true).optional(),
+    /**
+     * Une requête vue depuis le début du flow : méthode facultative, URL (sous-chaîne, ou
+     * chemin avec * et **) et statut attendu (un code, ou une classe « 2xx » ; 2xx par défaut).
+     */
+    response: z
+      .object({
+        method: nonEmpty.optional(),
+        url: nonEmpty,
+        status: z
+          .union([z.number().int().min(100).max(599), z.enum(['2xx', '3xx', '4xx', '5xx'])])
+          .default('2xx'),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine(
@@ -77,8 +93,10 @@ const expectSchema = z
       expectation.text !== undefined ||
       expectation.url !== undefined ||
       expectation.visible !== undefined ||
-      expectation.hidden !== undefined,
-    'expect needs at least one of text, url, visible, hidden',
+      expectation.hidden !== undefined ||
+      expectation.noError !== undefined ||
+      expectation.response !== undefined,
+    'expect needs at least one of text, url, visible, hidden, noError, response',
   );
 
 /**
@@ -88,7 +106,17 @@ const expectSchema = z
 export const FLOW_ALLOWANCES = ['MUTATION', 'UNKNOWN', 'DANGEROUS'] as const;
 export type FlowAllowance = (typeof FLOW_ALLOWANCES)[number];
 
-const STEP_KINDS = ['goto', 'click', 'fill', 'select', 'check', 'uncheck', 'expect', 'screenshot'] as const;
+const STEP_KINDS = [
+  'goto',
+  'click',
+  'fill',
+  'select',
+  'check',
+  'uncheck',
+  'expect',
+  'screenshot',
+  'manual',
+] as const;
 
 const stepSchema = z
   .object({
@@ -103,6 +131,8 @@ const stepSchema = z
     expect: expectSchema.optional(),
     /** Capture nommée de l'écran courant. */
     screenshot: nonEmpty.optional(),
+    /** Vérification que le robot ne sait pas faire : notée « à vérifier manuellement » dans le rapport, sans arrêter le flow. */
+    manual: nonEmpty.optional(),
     /**
      * Permission explicite pour cette étape seulement : MUTATION (créer, enregistrer,
      * envoyer…) et/ou UNKNOWN (contrôle réduit à une icône). DANGEROUS (supprimer,
@@ -147,7 +177,7 @@ const stepSchema = z
     if (step.check !== undefined) return { ...common, kind: 'check', target: toTarget(step.check) };
     if (step.uncheck !== undefined) return { ...common, kind: 'uncheck', target: toTarget(step.uncheck) };
     if (step.expect !== undefined) {
-      const { text, url, visible, hidden } = step.expect;
+      const { text, url, visible, hidden, noError, response } = step.expect;
       return {
         ...common,
         kind: 'expect',
@@ -156,9 +186,20 @@ const stepSchema = z
           ...(url !== undefined ? { url } : {}),
           ...(visible !== undefined ? { visible: toTarget(visible) } : {}),
           ...(hidden !== undefined ? { hidden: toTarget(hidden) } : {}),
+          ...(noError ? { noError } : {}),
+          ...(response
+            ? {
+                response: {
+                  ...(response.method !== undefined ? { method: response.method.toUpperCase() } : {}),
+                  url: response.url,
+                  status: response.status,
+                },
+              }
+            : {}),
         },
       };
     }
+    if (step.manual !== undefined) return { ...common, kind: 'manual', text: step.manual };
     return { ...common, kind: 'screenshot', label: step.screenshot ?? 'screenshot' };
   });
 
@@ -214,6 +255,8 @@ export interface FlowExpectation {
   url?: string;
   visible?: FlowTarget;
   hidden?: FlowTarget;
+  noError?: true;
+  response?: { method?: string; url: string; status: number | '2xx' | '3xx' | '4xx' | '5xx' };
 }
 
 interface StepCommon {
@@ -231,6 +274,7 @@ export type FlowStep = StepCommon &
     | { kind: 'select'; target: FlowTarget; option: string }
     | { kind: 'expect'; expect: FlowExpectation }
     | { kind: 'screenshot'; label: string }
+    | { kind: 'manual'; text: string }
   );
 
 export type FlowConfig = z.output<typeof flowSchema>;
@@ -301,6 +345,8 @@ export function describeStep(step: FlowStep, maskValue = false): string {
       return `expect ${describeExpectation(step.expect)}`;
     case 'screenshot':
       return `screenshot "${step.label}"`;
+    case 'manual':
+      return `manual check: ${step.text}`;
   }
 }
 
@@ -314,5 +360,10 @@ export function describeExpectation(expectation: FlowExpectation): string {
   if (expectation.url !== undefined) parts.push(`url contains "${expectation.url}"`);
   if (expectation.visible) parts.push(`visible ${describeTarget(expectation.visible)}`);
   if (expectation.hidden) parts.push(`hidden ${describeTarget(expectation.hidden)}`);
+  if (expectation.noError) parts.push('no error message');
+  if (expectation.response)
+    parts.push(
+      `response ${expectation.response.method ? `${expectation.response.method} ` : ''}"${expectation.response.url}" ${String(expectation.response.status)}`,
+    );
   return parts.join(', ');
 }

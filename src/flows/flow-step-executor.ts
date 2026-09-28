@@ -2,6 +2,25 @@ import type { Locator, Page } from 'playwright';
 import { setCheckedRobust } from '../execution/checkable.js';
 import type { FlowExpectation, FlowTarget } from '../config/flow-schema.js';
 import { toLocator } from '../execution/locator-resolver.js';
+import type { NetworkExchange } from '../model/network.js';
+import { pathPatternToRegex } from '../policies/navigation-policy.js';
+
+/**
+ * Messages d'erreur visibles : les mêmes que ceux que l'UIObserver associe aux champs
+ * (dom-snapshot.ts), plus les alertes ARIA et les notifications d'erreur courantes.
+ */
+const ERROR_MESSAGE_SELECTOR = [
+  'mat-error',
+  '.mat-mdc-form-field-error',
+  '.mat-error',
+  '.invalid-feedback',
+  '.error-message',
+  '.field-error',
+  '[role="alert"]',
+  '.alert-danger',
+  '.toast-error',
+  '.mat-mdc-snack-bar-container.error',
+].join(', ');
 
 /** Attribut posé sur l'élément ciblé pour que l'UIObserver le reconnaisse (voir dom-snapshot.ts). */
 export const FLOW_TARGET_ATTRIBUTE = 'data-qa-flow-target';
@@ -121,8 +140,34 @@ export class FlowStepExecutor {
   }
 
   /** Attend que chaque attente soit satisfaite ; renvoie ce qui ne l'est pas. */
-  async expect(page: Page, expectation: FlowExpectation, timeoutMs: number): Promise<string | undefined> {
+  async expect(
+    page: Page,
+    expectation: FlowExpectation,
+    timeoutMs: number,
+    network: readonly NetworkExchange[] = [],
+  ): Promise<string | undefined> {
     const failures: string[] = [];
+    if (expectation.response) {
+      const failure = responseFailure(expectation.response, network);
+      if (failure) failures.push(failure);
+    }
+    if (expectation.noError) {
+      // Laisser le temps à un message d'erreur d'apparaître, sans attendre le délai complet.
+      await page.waitForTimeout(Math.min(timeoutMs, 500)).catch(() => undefined);
+      const shown = await page
+        .locator(ERROR_MESSAGE_SELECTOR)
+        .filter({ visible: true })
+        .allInnerTexts()
+        .catch(() => [] as string[]);
+      const messages = shown.map((text) => text.replace(/\s+/g, ' ').trim()).filter(Boolean);
+      if (messages.length > 0)
+        failures.push(
+          `error message shown: ${messages
+            .slice(0, 3)
+            .map((text) => `"${text.slice(0, 120)}"`)
+            .join(', ')}`,
+        );
+    }
     if (expectation.url !== undefined) {
       const expected = expectation.url;
       try {
@@ -178,6 +223,51 @@ export class FlowStepExecutor {
     if (page.isClosed()) return;
     await page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => undefined);
     if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
+  }
+}
+
+/**
+ * La dernière requête du flow qui correspond (méthode, URL) a-t-elle le statut attendu ?
+ * Renvoie la raison de l'échec, ou undefined.
+ */
+export function responseFailure(
+  expected: NonNullable<FlowExpectation['response']>,
+  network: readonly NetworkExchange[],
+): string | undefined {
+  const pattern = expected.url.includes('*') ? pathPatternToRegex(expected.url) : undefined;
+  const matches = network.filter((exchange) => {
+    if (expected.method && exchange.method.toUpperCase() !== expected.method.toUpperCase()) return false;
+    if (!pattern) return exchange.url.includes(expected.url);
+    try {
+      return pattern.test(new URL(exchange.url).pathname);
+    } catch {
+      return false;
+    }
+  });
+  const label = `${expected.method ? `${expected.method} ` : ''}"${expected.url}"`;
+  const last = matches.at(-1);
+  if (!last) {
+    const seen = network
+      .filter((exchange) => exchange.resourceType !== 'document')
+      .slice(-5)
+      .map((exchange) => `${exchange.method} ${pathOf(exchange.url)}`);
+    return `no request ${label} seen during the flow${seen.length > 0 ? ` (last: ${seen.join(', ')})` : ''}`;
+  }
+  const status = last.status;
+  const ok =
+    status !== undefined &&
+    (typeof expected.status === 'number'
+      ? status === expected.status
+      : Math.floor(status / 100) === Number(expected.status[0]));
+  if (ok) return undefined;
+  return `${label} answered ${status ?? last.failure ?? 'nothing'} (expected ${String(expected.status)})`;
+}
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
   }
 }
 

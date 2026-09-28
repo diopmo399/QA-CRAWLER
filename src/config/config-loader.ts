@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml, YAMLParseError } from 'yaml';
 import { ZodError } from 'zod';
+import { FlowIncludeError, resolveFlowRuns } from '../flows/flow-includes.js';
 import { GherkinError, gherkinFlows, isGherkinEntry } from '../flows/gherkin/gherkin-loader.js';
 import type { CustomGherkinStep } from '../flows/gherkin/gherkin-steps.js';
 import { scenarioSchema, type ScenarioConfig } from './config.js';
@@ -73,7 +74,7 @@ export function parseConfig(
 
   const migrationWarnings: string[] = [];
   const migrated = migrateLegacyKeys(raw as Record<string, unknown>, migrationWarnings);
-  const expanded = expandGherkinFlows(
+  const expanded = expandFlows(
     migrated,
     source === '<inline>' ? process.cwd() : path.dirname(path.resolve(source)),
   );
@@ -94,22 +95,40 @@ export function parseConfig(
 }
 
 /**
- * `flows: - gherkin: ./x.feature` : chaque scénario du fichier devient un flow, avant la
- * validation (le même schéma qu'un flow écrit dans le YAML). Les chemins sont relatifs
- * au fichier de mission.
+ * Avant la validation : `flows: - gherkin: ./x.feature` devient un flow par scénario (le
+ * même schéma qu'un flow écrit dans le YAML ; chemins relatifs au fichier de mission),
+ * puis chaque étape `run: <flow>` est remplacée par les étapes de ce flow.
  */
-function expandGherkinFlows(raw: Record<string, unknown>, baseDir: string): Record<string, unknown> {
-  if (!Array.isArray(raw.flows) || !raw.flows.some(isGherkinEntry)) return raw;
-  const gherkin = raw.gherkin as { steps?: unknown } | undefined;
+function expandFlows(raw: Record<string, unknown>, baseDir: string): Record<string, unknown> {
+  if (!Array.isArray(raw.flows)) return raw;
+  try {
+    return {
+      ...raw,
+      flows: resolveFlowRuns(expandGherkinFlows(raw.flows as unknown[], raw.gherkin, baseDir)),
+    };
+  } catch (error) {
+    if (error instanceof FlowIncludeError) throw new ConfigError('Invalid scenario', [error.message]);
+    throw error;
+  }
+}
+
+function expandGherkinFlows(entries: unknown[], gherkinConfig: unknown, baseDir: string): unknown[] {
+  if (!entries.some(isGherkinEntry)) return entries;
+  const gherkin = gherkinConfig as { steps?: unknown } | undefined;
   // Les phrases mal formées sont signalées ensuite par le schéma (gherkin.steps) ; ici, seulement les bonnes.
   const custom = (
-    Array.isArray(gherkin?.steps) ? (gherkin.steps as { pattern?: unknown; step?: unknown }[]) : []
+    Array.isArray(gherkin?.steps)
+      ? (gherkin.steps as { pattern?: unknown; step?: unknown; steps?: unknown; manual?: unknown }[])
+      : []
   ).filter(
     (step): step is CustomGherkinStep =>
-      typeof step.pattern === 'string' && step.step !== null && typeof step.step === 'object',
+      typeof step.pattern === 'string' &&
+      ((step.step !== null && typeof step.step === 'object') ||
+        Array.isArray(step.steps) ||
+        step.manual === true),
   );
   const flows: unknown[] = [];
-  for (const entry of raw.flows as unknown[]) {
+  for (const entry of entries) {
     if (!isGherkinEntry(entry)) {
       flows.push(entry);
       continue;
@@ -130,7 +149,7 @@ function expandGherkinFlows(raw: Record<string, unknown>, baseDir: string): Reco
       throw error;
     }
   }
-  return { ...raw, flows };
+  return flows;
 }
 
 /**

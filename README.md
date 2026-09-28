@@ -254,15 +254,19 @@ Pour regarder le navigateur travailler, ajoute `--headed` (et `browser.slowMoMs:
 
 Chaque étape contient **une seule** action.
 
-| Étape               | Exemple                                          | Effet                                                                                     |
-| ------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `goto`              | `goto: /dossiers`                                | Charge une page (relative à `target.baseUrl`)                                             |
-| `click`             | `click: { role: button, name: Suivant }`         | Clique l'élément                                                                          |
-| `fill`              | `fill: { label: Titre, value: Devoir QA }`       | Saisit une valeur ; `value: { env: NOM }` la lit dans une variable d'environnement        |
-| `select`            | `select: { label: Classe, option: M1 Dimanche }` | Liste native `<select>`, ou `mat-select` Angular : ouvre la liste puis clique l'option    |
-| `check` / `uncheck` | `check: { label: J'accepte les conditions }`     | Coche / décoche une case                                                                  |
-| `expect`            | `expect: { text: Étape 2 }`                      | Attend que ce soit vrai : `text`, `url` (contient), `visible: <cible>`, `hidden: <cible>` |
-| `screenshot`        | `screenshot: confirmation`                       | Capture nommée, avec un lien dans le rapport                                              |
+| Étape               | Exemple                                                            | Effet                                                                                           |
+| ------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `goto`              | `goto: /dossiers`                                                  | Charge une page (relative à `target.baseUrl`)                                                   |
+| `click`             | `click: { role: button, name: Suivant }`                           | Clique l'élément                                                                                |
+| `fill`              | `fill: { label: Titre, value: Devoir QA }`                         | Saisit une valeur ; `value: { env: NOM }` la lit dans une variable d'environnement              |
+| `select`            | `select: { label: Classe, option: M1 Dimanche }`                   | Liste native `<select>`, ou `mat-select` Angular : ouvre la liste puis clique l'option          |
+| `check` / `uncheck` | `check: { label: J'accepte les conditions }`                       | Coche / décoche une case                                                                        |
+| `expect`            | `expect: { text: Étape 2 }`                                        | Attend que ce soit vrai : `text`, `url` (contient), `visible: <cible>`, `hidden: <cible>`       |
+| `expect.noError`    | `expect: { noError: true }`                                        | Aucun message d'erreur visible (`mat-error`, `.invalid-feedback`, `[role=alert]`…)              |
+| `expect.response`   | `expect: { response: { method: PUT, url: /api/dossiers/*/code } }` | La dernière requête du flow qui correspond a répondu `status` (défaut `2xx` ; ou `201`, `4xx`…) |
+| `screenshot`        | `screenshot: confirmation`                                         | Capture nommée, avec un lien dans le rapport                                                    |
+| `manual`            | `manual: aucune autre donnée n'est modifiée`                       | Vérification à faire à la main : « À VÉRIFIER » dans le rapport, le flow continue               |
+| `run`               | `run: creer-dossier`                                               | Rejoue ici les étapes d'un autre flow (une précondition écrite une fois)                        |
 
 Options possibles sur **chaque** étape :
 
@@ -281,6 +285,7 @@ Options d'un flow :
 | `description` | Texte affiché dans le rapport                                                                       |
 | `startAt`     | Page chargée avant la première étape (défaut : `target.startAt`)                                    |
 | `thenExplore` | `true` : explore aussi le dernier écran du flow (onglets, boutons, sous-pages), sans suivre le menu |
+| `reusable`    | `true` : flow rejoué seulement par `run`, jamais exécuté seul                                       |
 
 ### 3. Désigner un élément (cible)
 
@@ -430,16 +435,45 @@ Fonctionnalité: Clients
 
 Les tags se placent sur la fonctionnalité (tous ses scénarios), un scénario ou un bloc d'exemples.
 
-**Phrases de l'équipe** : une phrase propre au projet s'ajoute dans la mission ; elle passe avant les phrases intégrées. `{nom}` capture une valeur entre guillemets et se réutilise dans l'étape :
+**Phrases de l'équipe** : les phrases métier (« une demande est créée », « l'utilisateur modifie le code de <ancien> à <nouveau> ») se traduisent une fois dans la mission ; elles passent avant les phrases intégrées.
+
+| Emplacement | Accepte                                                |
+| ----------- | ------------------------------------------------------ |
+| `{x}`       | une valeur entre guillemets : `"Dupont"`, `« Dupont »` |
+| `{x:mot}`   | la même chose, ou un mot sans guillemets : `112310`    |
+| `{x:texte}` | la même chose, ou n'importe quel texte (le plus court) |
 
 ```yaml
+flows:
+  - name: creer-dossier
+    reusable: true # rejoué par « run », jamais exécuté seul
+    steps:
+      - click: { role: button, name: Nouveau dossier }
+        allow: MUTATION
+      - fill: { label: Nom, value: Essai }
+      - click: { role: button, name: Enregistrer }
+        allow: MUTATION
+  - gherkin: ./features/code.feature
+
 gherkin:
   steps:
-    - pattern: "j'ouvre le dossier {numéro}"
-      step: { click: { role: link, name: 'Dossier {numéro}' } }
-    - pattern: 'je me connecte en tant que {profil}'
-      step: { click: { role: button, name: '{profil}' } }
+    # une précondition : rejouer un flow
+    - pattern: un dossier est créé avec succès
+      steps: [{ run: creer-dossier }]
+    # plusieurs étapes, valeurs d'exemples sans guillemets, droit d'écrire pour ces étapes
+    - pattern: "l'utilisateur modifie le code de {ancien:mot} à {nouveau:mot}"
+      steps:
+        - fill: { label: Code, value: '{nouveau}' }
+        - click: { role: button, name: Valider le code }
+      allow: MUTATION
+    - pattern: 'le code {code:mot} est affiché dans le dossier'
+      step: { expect: { text: 'Code : {code}' } }
+    # ce que le robot ne sait pas vérifier : « À VÉRIFIER » dans le rapport, le flow continue
+    - pattern: "aucune autre donnée du dossier n'est modifiée"
+      manual: true
 ```
+
+Phrases intégrées en plus : `aucun message d'erreur n'est affiché` (→ `expect.noError`), `la requête PUT "/api/dossiers/*/code" réussit` / `répond 201` (→ `expect.response`, sur les requêtes vues depuis le début du scénario). Un fichier sans `Feature:` / `Fonctionnalité:` est refusé avec l'explication.
 
 Aucune IA : le fichier est lu par le lecteur officiel de Cucumber (`@cucumber/gherkin`), puis chaque phrase est comparée aux modèles, un à un.
 

@@ -282,9 +282,11 @@ function progressListener(quiet: boolean): ExplorationListener {
           ? color.green('✓')
           : step.status === 'SKIPPED'
             ? color.dim('-')
-            : step.status === 'BLOCKED'
-              ? color.yellow('⛔')
-              : color.red('✗');
+            : step.status === 'MANUAL'
+              ? color.yellow('?')
+              : step.status === 'BLOCKED'
+                ? color.yellow('⛔')
+                : color.red('✗');
       const reason = step.reason ? ` ${color.dim(`(${step.reason})`)}` : '';
       logger.info(
         `   ${mark} ${String(step.index).padStart(2, ' ')}. ${step.description}${step.status !== 'PASSED' ? ` ${step.status}` : ''}${reason}`,

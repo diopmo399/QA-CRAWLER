@@ -49,6 +49,7 @@ import {
 } from '../model/verification.js';
 import type { FlowRunReport, FlowStatus, FlowStepReport } from '../model/flow-run.js';
 import { isAtLeast, type Issue, type IssueType, type Severity } from '../model/issue.js';
+import type { NetworkExchange } from '../model/network.js';
 import type { PageContext } from '../model/page-context.js';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
@@ -310,6 +311,8 @@ export class FlowExplorer {
   private readonly contract: ApiContract | undefined;
   /** Candidat pour lequel l'exploration vient de changer d'écran : il est exécuté en arrivant. */
   private pendingCandidate: { stateId: string; actionId: string } | undefined;
+  /** Requêtes vues depuis le début du flow en cours (expect.response). */
+  private flowNetwork: NetworkExchange[] = [];
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -1280,6 +1283,9 @@ export class FlowExplorer {
   private networkOf(actionId: string): Pick<FlowEdge, 'network' | 'networkWindow'> {
     const trace = this.networkTrace.stop(actionId);
     if (!trace) return {};
+    // Les requêtes du flow en cours, pour `expect.response` (plafonnées : un flow ne fait pas des milliers d'appels).
+    this.flowNetwork.push(...trace.requests);
+    if (this.flowNetwork.length > 500) this.flowNetwork.splice(0, this.flowNetwork.length - 500);
     return {
       network: trace.requests,
       networkWindow: { startedAt: trace.startedAt, finishedAt: trace.finishedAt },
@@ -1533,6 +1539,7 @@ export class FlowExplorer {
       explored: false,
     };
     this.flowReports.push(report);
+    this.flowNetwork = [];
     this.listener.onFlowStart?.(flow);
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
     const knownStates = new Set(this.graph.allNodes().map((node) => node.id));
@@ -1641,7 +1648,7 @@ export class FlowExplorer {
 
     switch (step.kind) {
       case 'expect': {
-        const failure = await this.flowSteps.expect(page, step.expect, timeout);
+        const failure = await this.flowSteps.expect(page, step.expect, timeout, this.flowNetwork);
         return {
           page,
           report: failure
@@ -1653,6 +1660,16 @@ export class FlowExplorer {
             : done('PASSED', { stateId: context.stateId, url: redactUrl(page.url()) }),
         };
       }
+      case 'manual':
+        // Le robot ne sait pas le vérifier : noté pour une personne, le flow continue.
+        return {
+          page,
+          report: done('MANUAL', {
+            reason: `to check manually: ${step.text}`,
+            stateId: context.stateId,
+            url: context.url,
+          }),
+        };
       case 'screenshot': {
         const file = await this.screenshots.captureState(
           page,
