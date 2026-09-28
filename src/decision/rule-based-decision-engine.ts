@@ -30,6 +30,8 @@ export interface RuleBasedOptions {
   knownActions?: ReadonlySet<string>;
   /** Options de groupes déjà essayées pendant le run (partagé avec l'explorateur, qui le remplit). */
   triedOptions?: ReadonlySet<string>;
+  /** Actions déjà tentées sur un écran jumeau (partagé avec l'explorateur, qui le remplit). */
+  triedOnTwin?: ReadonlySet<string>;
 }
 
 export interface ScoredAction {
@@ -80,6 +82,7 @@ export class RuleBasedDecisionEngine implements DecisionEngine {
       ...(options.maxSimilarActions !== undefined ? { maxSimilarActions: options.maxSimilarActions } : {}),
       ...(options.knownActions ? { knownActions: options.knownActions } : {}),
       ...(options.triedOptions ? { triedOptions: options.triedOptions } : {}),
+      ...(options.triedOnTwin ? { triedOnTwin: options.triedOnTwin } : {}),
     };
   }
 
