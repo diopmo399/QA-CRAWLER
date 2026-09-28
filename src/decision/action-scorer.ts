@@ -36,6 +36,11 @@ export interface ScoringMission {
    * chaque écran où le groupe réapparaît.
    */
   triedOptions?: ReadonlySet<string>;
+  /**
+   * `stateId::actionId` déjà tentés sur l'écran jumeau que celui-ci remplace (même écran
+   * retrouvé avec un autre id après une page cassée) : ils comptent comme déjà essayés ici.
+   */
+  triedOnTwin?: ReadonlySet<string>;
 }
 
 /**
@@ -123,7 +128,11 @@ export class RuleBasedActionScorer implements ActionScorer {
     // Derrière un calque modal : le clic tomberait sur le calque, pas sur l'élément.
     if (action.obscured) return exclude('covered by a modal layer');
     if (action.classification === 'DANGEROUS') return exclude(`dangerous (${action.reason})`);
-    if (graph.hasTransition(context.stateId, action.id)) return exclude('already tried from this state');
+    if (
+      graph.hasTransition(context.stateId, action.id) ||
+      mission.triedOnTwin?.has(`${context.stateId}::${action.id}`)
+    )
+      return exclude('already tried from this state');
     if (this.safetyPolicy.evaluate(action).verdict === 'BLOCK')
       return exclude('blocked by the safety policy');
     const similar = similarKey(action.type, action.category, action.text);

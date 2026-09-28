@@ -97,6 +97,14 @@ import type { DetectedPattern } from '../patterns/ui-pattern.js';
 import { WriteGuard, writePattern, type BlockedWrite } from '../policies/write-guard.js';
 import { semanticsOf, type Semantics } from '../semantics/domain-packs.js';
 
+/** Part des contrôles en commun à partir de laquelle un écran retrouvé est le jumeau de l'écran attendu. */
+const TWIN_SIMILARITY = 0.75;
+
+/** L'empreinte d'un état sans la liste de ses contrôles : ce qui doit être identique chez un jumeau. */
+function frameOf(signature: readonly string[]): string {
+  return signature.filter((line) => !line.startsWith('controls=')).join('\n');
+}
+
 /** Notifications de progression (sortie de la CLI, tests). */
 export interface ExplorationListener {
   onAuthenticated?(description: string): void;
@@ -287,6 +295,10 @@ export class FlowExplorer {
   private goals: GoalTracker | undefined;
   /** Options de groupes déjà essayées pendant ce run (chaque option une fois au total). */
   private readonly triedOptions = new Set<string>();
+  /** `stateId::actionId` déjà tentés sur l'écran qu'un jumeau remplace (voir `isTwinOf`). */
+  private readonly triedOnTwin = new Set<string>();
+  /** Le cadre de chaque état : son empreinte sans les contrôles (route, titres, fenêtres, onglets…). */
+  private readonly frames = new Map<string, string>();
   /** Pénalités des actions prises dans une boucle (`stateId::actionId`). */
   private readonly loopPenalties = new Map<string, { points: number; detail: string }>();
   private readonly frontier = new ExplorationFrontier();
@@ -343,6 +355,7 @@ export class FlowExplorer {
           weights: scoringWeights(config.scoring.weights),
           ...(options.knownActions ? { knownActions: options.knownActions } : {}),
           triedOptions: this.triedOptions,
+          triedOnTwin: this.triedOnTwin,
           goals,
           maxDepth: exploration.maxDepth,
           maxStatesPerRoute: exploration.maxStatesPerRoute,
@@ -692,6 +705,7 @@ export class FlowExplorer {
     const snapshot = await this.observer.observe(page);
     this.lastSnapshot = snapshot;
     const state = this.stateDetector.detect(snapshot);
+    this.frames.set(state.stateId, frameOf(state.signature));
     const actions = this.discovery.discover(snapshot, state.stateId);
     const isNew = this.graph.addNode({
       id: state.stateId,
@@ -2058,17 +2072,100 @@ export class FlowExplorer {
       const context = await this.restore(page, node.id);
       if (context) {
         this.backtracks += 1;
-        this.stack = this.graph.flowTo(node.id).map((stateId) => ({
+        this.stack = this.graph.flowTo(context.stateId).map((stateId) => ({
           stateId,
           url: this.graph.getNode(stateId)?.url ?? this.startUrl,
         }));
-        this.listener.onBacktrack?.(from, node.id, 'jump to a state with unexplored actions');
+        this.listener.onBacktrack?.(from, context.stateId, 'jump to a state with unexplored actions');
         return { page, context };
       }
       this.unreachable.add(node.id);
     }
-    this.listener.onBacktrack?.(from, undefined, 'nothing left to explore');
+    this.listener.onBacktrack?.(from, undefined, this.nothingLeftReason());
     return { page };
+  }
+
+  /**
+   * « Plus rien à explorer », avec les écrans abandonnés faute d'avoir pu y revenir : leurs
+   * actions n'ont pas été essayées, et le log dit lesquelles plutôt que de se taire.
+   */
+  private nothingLeftReason(): string {
+    const lost = [...this.unreachable]
+      .map((stateId) => ({ stateId, left: this.untriedActions(stateId) }))
+      .filter((entry) => entry.left.length > 0);
+    if (lost.length === 0) return 'nothing left to explore';
+    const list = lost
+      .slice(0, 5)
+      .map(
+        ({ stateId, left }) =>
+          `${stateId}: ${left
+            .slice(0, 3)
+            .map((action) => `"${actionLabel(action)}"`)
+            .join(', ')}${left.length > 3 ? '…' : ''}`,
+      )
+      .join('; ');
+    return `nothing left to explore; ${lost.length} screen(s) could not be reached again, actions not tried: ${list}`;
+  }
+
+  /** Les actions visibles et actives d'un état qui n'y ont jamais été tentées (ni sur son jumeau). */
+  private untriedActions(stateId: string): DiscoveredAction[] {
+    return (this.details.get(stateId)?.actions ?? []).filter(
+      (action) =>
+        action.visible &&
+        !action.disabled &&
+        action.type !== 'fill' &&
+        !this.graph.hasTransition(stateId, action.id) &&
+        !this.triedOnTwin.has(`${stateId}::${action.id}`),
+    );
+  }
+
+  /**
+   * ÉCRAN JUMEAU : en revenant sur un écran, la page montre le même écran avec un autre id —
+   * un bouton apparu ou disparu depuis (une page cassée, une réservation, une bannière). C'est le
+   * même écran quand tout sauf les contrôles est identique (route, titre, titres, fenêtres,
+   * onglets, champs présents), que ses contrôles se ressemblent (au moins TWIN_SIMILARITY
+   * en commun) et que ce qu'il restait à y faire y est.
+   */
+  private isTwinOf(originalId: string, context: PageContext): boolean {
+    if (context.stateId === originalId) return false;
+    const frame = this.frames.get(originalId);
+    if (!frame || frame !== this.frames.get(context.stateId)) return false;
+    const signatures = new Set((this.details.get(originalId)?.actions ?? []).map(actionSignature));
+    const observed = new Set(context.actions.map(actionSignature));
+    const shared = [...signatures].filter((signature) => observed.has(signature)).length;
+    const union = new Set([...signatures, ...observed]).size;
+    if (union === 0 || shared / union < TWIN_SIMILARITY) return false;
+    return this.untriedActions(originalId).some((action) => observed.has(actionSignature(action)));
+  }
+
+  /** Le jumeau reprend le travail de l'écran : ce qui y a été tenté l'est aussi ici, le reste continue ici. */
+  private adoptTwin(originalId: string, twin: PageContext): void {
+    const actions = this.details.get(originalId)?.actions ?? [];
+    const tried = new Set(
+      actions
+        .filter(
+          (action) =>
+            this.graph.hasTransition(originalId, action.id) ||
+            this.triedOnTwin.has(`${originalId}::${action.id}`),
+        )
+        .map(actionSignature),
+    );
+    for (const action of twin.actions)
+      if (tried.has(actionSignature(action))) this.triedOnTwin.add(`${twin.stateId}::${action.id}`);
+    this.exhausted.add(originalId);
+    this.frontier.removeState(originalId);
+    // Le chemin de retour passe désormais par le jumeau.
+    this.stack = this.stack.map((entry) =>
+      entry.stateId === originalId ? { stateId: twin.stateId, url: twin.url } : entry,
+    );
+    // Le candidat qui justifiait le retour est exécuté sur le jumeau.
+    const pending = this.pendingCandidate;
+    if (pending?.stateId === originalId) {
+      const wanted = actions.find((action) => action.id === pending.actionId);
+      const same =
+        wanted && twin.actions.find((action) => actionSignature(action) === actionSignature(wanted));
+      this.pendingCandidate = same ? { stateId: twin.stateId, actionId: same.id } : undefined;
+    }
   }
 
   /**
@@ -2223,9 +2320,9 @@ export class FlowExplorer {
     this.backtracks += 1;
     this.stuck?.reset();
     this.stack = this.graph
-      .flowTo(stateId)
+      .flowTo(context.stateId)
       .map((id) => ({ stateId: id, url: this.graph.getNode(id)?.url ?? this.startUrl }));
-    this.listener.onBacktrack?.(from, stateId, 'best-first: better candidate on this screen');
+    this.listener.onBacktrack?.(from, context.stateId, 'best-first: better candidate on this screen');
     return { page, context };
   }
 
@@ -2290,6 +2387,16 @@ export class FlowExplorer {
         const context = await this.observeState(page, depth);
         if (context.stateId === stateId) {
           this.listener.onBacktrack?.(this.stack[this.stack.length - 1]?.stateId ?? '', stateId, method);
+          return context;
+        }
+        // Le même écran, retrouvé avec un autre id (un contrôle apparu ou disparu depuis) : il le remplace.
+        if (this.isTwinOf(stateId, context)) {
+          this.adoptTwin(stateId, context);
+          this.listener.onBacktrack?.(
+            this.stack[this.stack.length - 1]?.stateId ?? '',
+            context.stateId,
+            `${method}, same screen as ${stateId}`,
+          );
           return context;
         }
       } catch {
@@ -2557,6 +2664,7 @@ export class FlowExplorer {
     if (!/^https?:/.test(page.url())) return undefined;
     const snapshot = await this.observer.observe(page);
     const state = this.stateDetector.detect(snapshot);
+    this.frames.set(state.stateId, frameOf(state.signature));
     const actions = this.discovery.discover(snapshot, state.stateId);
     const sourceDepth = this.currentAction?.stateId
       ? (this.graph.getNode(this.currentAction.stateId)?.depth ?? 0)
