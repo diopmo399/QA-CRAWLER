@@ -116,6 +116,7 @@ const STEP_KINDS = [
   'expect',
   'screenshot',
   'manual',
+  'auto',
 ] as const;
 
 const stepSchema = z
@@ -133,6 +134,14 @@ const stepSchema = z
     screenshot: nonEmpty.optional(),
     /** Vérification que le robot ne sait pas faire : notée « à vérifier manuellement » dans le rapport, sans arrêter le flow. */
     manual: nonEmpty.optional(),
+    /** Phrase Gherkin interprétée sur l'écran à l'exécution (mode automatique, `gherkin.auto`). */
+    auto: z
+      .object({
+        sentence: nonEmpty,
+        type: z.enum(['Context', 'Action', 'Outcome', 'Unknown']).default('Unknown'),
+      })
+      .strict()
+      .optional(),
     /**
      * Permission explicite pour cette étape seulement : MUTATION (créer, enregistrer,
      * envoyer…) et/ou UNKNOWN (contrôle réduit à une icône). DANGEROUS (supprimer,
@@ -200,6 +209,8 @@ const stepSchema = z
       };
     }
     if (step.manual !== undefined) return { ...common, kind: 'manual', text: step.manual };
+    if (step.auto !== undefined)
+      return { ...common, kind: 'auto', sentence: step.auto.sentence, type: step.auto.type };
     return { ...common, kind: 'screenshot', label: step.screenshot ?? 'screenshot' };
   });
 
@@ -275,6 +286,7 @@ export type FlowStep = StepCommon &
     | { kind: 'expect'; expect: FlowExpectation }
     | { kind: 'screenshot'; label: string }
     | { kind: 'manual'; text: string }
+    | { kind: 'auto'; sentence: string; type: 'Context' | 'Action' | 'Outcome' | 'Unknown' }
   );
 
 export type FlowConfig = z.output<typeof flowSchema>;
@@ -347,6 +359,8 @@ export function describeStep(step: FlowStep, maskValue = false): string {
       return `screenshot "${step.label}"`;
     case 'manual':
       return `manual check: ${step.text}`;
+    case 'auto':
+      return `auto: ${step.sentence}`;
   }
 }
 

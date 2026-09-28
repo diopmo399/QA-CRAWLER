@@ -475,7 +475,28 @@ gherkin:
 
 Phrases intégrées en plus : `aucun message d'erreur n'est affiché` (→ `expect.noError`), `la requête PUT "/api/dossiers/*/code" réussit` / `répond 201` (→ `expect.response`, sur les requêtes vues depuis le début du scénario). Un fichier sans `Feature:` / `Fonctionnalité:` est refusé avec l'explication.
 
-Aucune IA : le fichier est lu par le lecteur officiel de Cucumber (`@cucumber/gherkin`), puis chaque phrase est comparée aux modèles, un à un.
+### Mode automatique (sans traduction)
+
+```yaml
+gherkin:
+  auto: true # ou, pour un seul fichier : flows: - gherkin: ./x.feature \n auto: true
+```
+
+Une phrase que ni les phrases intégrées ni celles de l'équipe ne reconnaissent n'est plus une erreur : elle est **interprétée sur l'écran, au moment de l'exécution**. Les phrases intégrées et celles de l'équipe passent toujours en premier.
+
+| Phrase                                                                                               | Interprétation (sur l'écran courant)                                                                                                                                    |
+| ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| verbe de navigation + noms entre guillemets : `accède à l'onglet "Profil" et à la section "Adresse"` | un clic par nom, dans l'ordre ; un nom pas encore affiché (section d'un panneau fermé) est réessayé après les clics suivants ; « l'onglet », « le bouton »… départagent |
+| verbe de saisie + libellé d'un champ de l'écran + valeur : `modifie le code postal de 11111 à 22222` | `fill` du champ dont le libellé est dans la phrase (le plus long gagne), valeur entre guillemets, après le dernier « à / avec / to », ou dernier mot avec des chiffres  |
+| `choisit "Canada" comme pays`, `coche j'accepte les conditions`                                      | `select` / `check` du champ nommé                                                                                                                                       |
+| **Alors** avec des valeurs : `le code 22222 est affiché`, `le taux demeure à 60`                     | chaque valeur visible (entre guillemets, avec des chiffres, ou après « demeure / reste / vaut »)                                                                        |
+| **Alors** … `avec succès`                                                                            | aucun message d'erreur, et la dernière écriture (POST/PUT/…) du scénario a répondu 2xx                                                                                  |
+| **Alors** `aucun message d'erreur…` / `"X" n'est pas affiché`                                        | aucun message d'erreur / texte absent                                                                                                                                   |
+| tout le reste (`une demande est créée`, `aucune autre donnée n'est modifiée`…)                       | **À VÉRIFIER**, avec la raison ; jamais une action devinée                                                                                                              |
+
+Le rapport et le terminal montrent sous chaque phrase ce qu'elle est devenue (`↳ click tab "Profil" → click button "Adresse"`). Les actions passent par la même SafetyPolicy et la même garde d'écriture que les étapes YAML : un clic « Enregistrer » exige `@mutation` sur le scénario. Si une interprétation ne convient pas, écrire la phrase dans `gherkin.steps` : elle passe alors avant le mode automatique.
+
+Aucune IA : le fichier est lu par le lecteur officiel de Cucumber (`@cucumber/gherkin`), puis chaque phrase est comparée aux modèles, un à un ; le mode automatique n'utilise que des listes de verbes (FR/EN), les valeurs de la phrase et les libellés présents à l'écran.
 
 ## Authentification
 

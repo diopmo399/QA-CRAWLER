@@ -136,14 +136,16 @@ function expandGherkinFlows(entries: unknown[], gherkinConfig: unknown, baseDir:
     if (typeof entry.gherkin !== 'string' || entry.gherkin.trim() === '')
       throw new ConfigError('Invalid scenario', ['flows[].gherkin: the path of a .feature file is required']);
     const extra = Object.keys(entry).filter(
-      (key) => !['gherkin', 'scenarios', 'tags', 'thenExplore', 'startAt'].includes(key),
+      (key) => !['gherkin', 'scenarios', 'tags', 'thenExplore', 'startAt', 'auto'].includes(key),
     );
     if (extra.length > 0)
       throw new ConfigError('Invalid scenario', [
-        `flows[] (gherkin ${entry.gherkin}): unknown key(s) ${extra.join(', ')} — allowed: scenarios, tags, thenExplore, startAt`,
+        `flows[] (gherkin ${entry.gherkin}): unknown key(s) ${extra.join(', ')} — allowed: scenarios, tags, thenExplore, startAt, auto`,
       ]);
     try {
-      flows.push(...gherkinFlows(entry, baseDir, custom));
+      flows.push(
+        ...gherkinFlows(entry, baseDir, custom, (gherkin as { auto?: unknown } | undefined)?.auto === true),
+      );
     } catch (error) {
       if (error instanceof GherkinError) throw new ConfigError(error.message, error.details);
       throw error;

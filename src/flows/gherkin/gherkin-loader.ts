@@ -20,6 +20,8 @@ export interface GherkinFlowEntry {
   tags?: string[];
   thenExplore?: boolean;
   startAt?: string;
+  /** Mode automatique pour ce fichier (par défaut : gherkin.auto de la mission). */
+  auto?: boolean;
 }
 
 /** Tags reconnus sur un scénario (ou la fonctionnalité, ou une ligne d'exemples). */
@@ -60,7 +62,9 @@ export function gherkinFlows(
   entry: GherkinFlowEntry,
   baseDir: string,
   custom: readonly CustomGherkinStep[] = [],
+  autoByDefault = false,
 ): Record<string, unknown>[] {
+  const auto = entry.auto ?? autoByDefault;
   const file = path.resolve(baseDir, entry.gherkin);
   // Le chemin tel qu'écrit dans la mission : c'est celui que l'utilisateur reconnaît.
   const display = entry.gherkin.replace(/^\.\//, '');
@@ -119,6 +123,10 @@ export function gherkinFlows(
         unknown.push(`${display}:${line ?? '?'}: "${sentence}": ${(error as Error).message}`);
         continue;
       }
+      if (!translated && auto) {
+        // Mode automatique : la phrase sera interprétée sur l'écran, à l'exécution.
+        translated = [{ auto: { sentence, type: step.type ?? 'Unknown' } }];
+      }
       if (!translated) {
         unknown.push(`${display}:${line ?? '?'}: "${keyword} ${sentence}"`);
         continue;
@@ -152,7 +160,7 @@ export function gherkinFlows(
   if (unknown.length > 0)
     throw new GherkinError(`Unrecognised Gherkin sentence(s) in ${display}`, [
       ...unknown,
-      'write it with one of the built-in sentences (see the README, "Scénarios Gherkin"), or add it under gherkin.steps in the mission',
+      'write it with one of the built-in sentences (see the README, "Scénarios Gherkin"), add it under gherkin.steps in the mission, or set gherkin.auto: true to interpret it on the screen',
     ]);
   if (wanted) {
     const found = new Set(pickles.map((pickle) => pickle.name));

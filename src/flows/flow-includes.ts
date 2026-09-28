@@ -19,7 +19,18 @@
 type RawFlow = Record<string, unknown>;
 type RawStep = Record<string, unknown>;
 
-const STEP_KINDS = ['goto', 'click', 'fill', 'select', 'check', 'uncheck', 'expect', 'screenshot', 'manual'];
+const STEP_KINDS = [
+  'goto',
+  'click',
+  'fill',
+  'select',
+  'check',
+  'uncheck',
+  'expect',
+  'screenshot',
+  'manual',
+  'auto',
+];
 
 export class FlowIncludeError extends Error {}
 
@@ -81,7 +92,7 @@ export function labelOf(step: RawStep): string {
   const value = step[kind];
   if (typeof value === 'string') return `${kind} ${value}`;
   if (isObject(value)) {
-    const target = ['name', 'label', 'text', 'testId', 'css', 'url']
+    const target = ['name', 'label', 'text', 'testId', 'css', 'url', 'sentence']
       .map((key) => value[key])
       .find((candidate) => typeof candidate === 'string');
     if (typeof target === 'string') return `${kind} "${target}"`;

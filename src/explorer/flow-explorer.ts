@@ -6,7 +6,15 @@ import { AuthError, createAuthenticator, type Authenticator } from '../auth/auth
 import { BrowserManager } from '../browser/browser-manager.js';
 import { ScreenshotService } from '../browser/screenshot-service.js';
 import type { ScenarioConfig } from '../config/config.js';
-import { describeStep, type FlowConfig, type FlowStep } from '../config/flow-schema.js';
+import {
+  describeStep,
+  type FlowConfig,
+  type FlowExpectation,
+  type FlowStep,
+  type FlowTarget,
+} from '../config/flow-schema.js';
+import { findByName, planAutoStep } from '../flows/gherkin/auto-step.js';
+import { normalizeText } from '../policies/keywords.js';
 import { DefaultTestDataProvider, type TestDataProvider } from '../data/test-data-provider.js';
 import type { ActionDecision, DecisionEngine } from '../decision/decision-engine.js';
 import { RuleBasedDecisionEngine } from '../decision/rule-based-decision-engine.js';
@@ -1660,6 +1668,8 @@ export class FlowExplorer {
             : done('PASSED', { stateId: context.stateId, url: redactUrl(page.url()) }),
         };
       }
+      case 'auto':
+        return this.runAutoStep(page, browser, observers, flow, step, context, timeout, done);
       case 'manual':
         // Le robot ne sait pas le vérifier : noté pour une personne, le flow continue.
         return {
@@ -1745,6 +1755,166 @@ export class FlowExplorer {
       case 'fill':
       case 'select':
         return this.runFlowElementStep(page, browser, observers, flow, step, context, timeout, done);
+    }
+  }
+
+  /**
+   * MODE AUTOMATIQUE : la phrase est interprétée sur l'écran courant (auto-step.ts), puis
+   * exécutée avec les étapes ordinaires — même localisation, même SafetyPolicy, même garde
+   * d'écriture. Ce qui n'est pas sûr devient « À VÉRIFIER », jamais une action devinée.
+   */
+  private async runAutoStep(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    flow: FlowConfig,
+    step: Extract<FlowStep, { kind: 'auto' }>,
+    context: PageContext,
+    timeout: number,
+    done: (status: FlowStatus, extra?: Partial<FlowStepReport>) => FlowStepReport,
+  ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
+    const plan = planAutoStep(step.sentence, step.type, context.actions);
+    const where = { stateId: context.stateId, url: context.url };
+    const targetOf = (action: DiscoveredAction): FlowTarget => ({ ...action.locator });
+    const common = { allow: step.allow, optional: false };
+
+    switch (plan.kind) {
+      case 'manual':
+        return {
+          page,
+          report: done('MANUAL', { reason: `not understood automatically: ${plan.reason}`, ...where }),
+        };
+      case 'verify': {
+        const checks: string[] = [];
+        const failures: string[] = [];
+        const check = async (label: string, expectation: FlowExpectation): Promise<void> => {
+          checks.push(label);
+          const failure = await this.flowSteps.expect(page, expectation, timeout, this.flowNetwork);
+          if (failure) failures.push(failure);
+        };
+        for (const text of plan.texts) await check(`text "${text}"`, { text });
+        for (const text of plan.hidden)
+          await check(`no text "${text}"`, { hidden: { strategy: 'text', value: text } });
+        if (plan.noError) await check('no error message', { noError: true });
+        if (plan.lastWriteOk) {
+          const write = this.flowNetwork.filter((exchange) => exchange.method !== 'GET').at(-1);
+          if (write) {
+            checks.push(`last write ${write.method} answered 2xx`);
+            if (write.status === undefined || Math.floor(write.status / 100) !== 2)
+              failures.push(
+                `last write ${write.method} ${new URL(write.url).pathname} answered ${write.status ?? write.failure ?? 'nothing'}`,
+              );
+          }
+        }
+        const interpretation = `check ${checks.join(', ')}`;
+        return {
+          page,
+          report:
+            failures.length > 0
+              ? done('FAILED', {
+                  reason: `expectation not met: ${failures.join('; ')}`,
+                  interpretation,
+                  ...where,
+                })
+              : done('PASSED', { interpretation, ...where }),
+        };
+      }
+      case 'field': {
+        const target = targetOf(plan.field);
+        const concrete: Extract<FlowStep, { target: unknown }> =
+          plan.action === 'fill'
+            ? { ...common, kind: 'fill', target, value: plan.value }
+            : plan.action === 'select'
+              ? { ...common, kind: 'select', target, option: plan.value }
+              : { ...common, kind: plan.action, target };
+        const outcome = await this.runFlowElementStep(
+          page,
+          browser,
+          observers,
+          flow,
+          concrete,
+          context,
+          timeout,
+          done,
+        );
+        const interpretation =
+          plan.action === 'fill' && plan.field.risks.includes('sensitive-data')
+            ? describeStep(concrete, true)
+            : describeStep(concrete);
+        return { ...outcome, report: { ...outcome.report, interpretation } };
+      }
+      case 'navigate': {
+        // Chaque nom cité, dans l'ordre de la phrase ; un nom pas encore à l'écran (la section d'un
+        // panneau fermé) est réessayé après les clics suivants.
+        let current = context;
+        let remaining = [...plan.mentions];
+        const steps: string[] = [];
+        for (let progress = true; remaining.length > 0 && progress;) {
+          progress = false;
+          for (const mention of remaining) {
+            const found = findByName(current.actions, mention);
+            const onScreen =
+              !found &&
+              [current.title, ...current.headings, ...current.dialogs].some(
+                (text) => normalizeText(text) === normalizeText(mention.text),
+              );
+            if (!found && !onScreen) continue;
+            remaining = remaining.filter((other) => other !== mention);
+            progress = true;
+            if (!found || found.selected) {
+              steps.push(`"${mention.text}" already shown`);
+              break;
+            }
+            const click: Extract<FlowStep, { target: unknown }> = {
+              ...common,
+              kind: 'click',
+              target: targetOf(found),
+            };
+            const outcome = await this.runFlowElementStep(
+              page,
+              browser,
+              observers,
+              flow,
+              click,
+              current,
+              timeout,
+              done,
+            );
+            page = outcome.page;
+            current = outcome.context ?? current;
+            steps.push(`click ${found.role ?? found.type} "${actionLabel(found)}"`);
+            if (outcome.report.status !== 'PASSED')
+              return { ...outcome, report: { ...outcome.report, interpretation: steps.join(' → ') } };
+            break;
+          }
+        }
+        const interpretation = steps.join(' → ');
+        if (remaining.length > 0) {
+          const names = current.actions
+            .filter(
+              (action) =>
+                action.visible && !action.disabled && (action.type === 'click' || action.type === 'navigate'),
+            )
+            .map((action) => actionLabel(action))
+            .slice(0, 15);
+          return {
+            page,
+            context: current,
+            report: done('FAILED', {
+              reason: `not found on the screen: ${remaining.map((mention) => `"${mention.text}"`).join(', ')}`,
+              ...(interpretation ? { interpretation } : {}),
+              onScreen: names,
+              stateId: current.stateId,
+              url: current.url,
+            }),
+          };
+        }
+        return {
+          page,
+          context: current,
+          report: done('PASSED', { interpretation, stateId: current.stateId, url: current.url }),
+        };
+      }
     }
   }
 
