@@ -650,6 +650,8 @@ export class FlowExplorer {
         stopReason = loop.stopReason;
       }
     } finally {
+      // Un nouvel onglet, une fenêtre ou un téléchargement encore en traitement (machine lente) : les attendre.
+      await this.browserEvents.settle().catch(() => undefined);
       await browser.close();
     }
     await this.memory.save(this.graph);
