@@ -1,6 +1,12 @@
 import type { ScenarioConfig } from '../config/config.js';
 import type { KnowledgeIdentity } from '../knowledge/knowledge-model.js';
+import type { AdvancedActionScorer } from '../decision/advanced-action-scorer.js';
+import type { ActionScorer } from '../decision/action-scorer.js';
+import type { CoverageTracker } from '../coverage/coverage-map.js';
+import type { KnowledgeBase } from '../knowledge/knowledge-model.js';
+import { AdaptiveActionScorer } from './adaptive-scoring.js';
 import { DeterministicConfidenceEngine, type ConfidenceEngine } from './confidence-engine.js';
+import type { AgingOptions } from './knowledge-aging.js';
 import { viewportClassOf, type KnowledgeContext } from './knowledge-context.js';
 
 /** L'application dans la connaissance et le stockage : son identité, séparée par environnement. */
@@ -32,17 +38,57 @@ export function knowledgeContextOf(config: ScenarioConfig, identity: KnowledgeId
 export function confidenceEngineOf(config: ScenarioConfig, now?: () => string): ConfidenceEngine | undefined {
   const { intelligence } = config;
   if (!intelligence.enabled || !intelligence.confidence.enabled) return undefined;
+  const aging = agingOf(config);
   return new DeterministicConfidenceEngine({
     sampleHalfPoint: intelligence.confidence.sampleHalfPoint,
-    ...(intelligence.aging.enabled
-      ? {
-          aging: {
-            halfLifeDays: intelligence.aging.halfLifeDays ?? config.knowledge.halfLifeDays,
-            minWeight: intelligence.aging.minWeight,
-          },
-        }
-      : {}),
+    ...(aging ? { aging } : {}),
     compareContext: intelligence.context.enabled,
     ...(now ? { now } : {}),
+  });
+}
+
+/** Vieillissement de la connaissance (intelligence.aging), ou rien s'il est désactivé. */
+export function agingOf(config: ScenarioConfig): AgingOptions | undefined {
+  const { aging } = config.intelligence;
+  if (!aging.enabled) return undefined;
+  return { halfLifeDays: aging.halfLifeDays ?? config.knowledge.halfLifeDays, minWeight: aging.minWeight };
+}
+
+/**
+ * Le scorer de la mission : l'AdvancedActionScorer tel quel, ou enveloppé par
+ * l'AdaptiveActionScorer (intelligence.enabled + intelligence.adaptiveScoring.enabled).
+ * historyAvailable: false → impact historique nul, même activé.
+ */
+export function adaptiveScorerOf(
+  config: ScenarioConfig,
+  inner: AdvancedActionScorer,
+  signals: {
+    knowledge: KnowledgeBase;
+    coverage?: CoverageTracker;
+    historyAvailable: boolean;
+    now?: () => string;
+  },
+): ActionScorer {
+  const { intelligence } = config;
+  if (!intelligence.enabled || !intelligence.adaptiveScoring.enabled) return inner;
+  const aging = agingOf(config);
+  const { enabled: stabilityEnabled, ...stability } = intelligence.stability;
+  return new AdaptiveActionScorer(inner, {
+    historyAvailable: signals.historyAvailable,
+    weights: {
+      confidenceWeight: intelligence.adaptiveScoring.confidenceWeight,
+      noveltyWeight: intelligence.adaptiveScoring.noveltyWeight,
+      stabilityWeight: intelligence.adaptiveScoring.stabilityWeight,
+    },
+    sampleHalfPoint: intelligence.confidence.sampleHalfPoint,
+    novelty: { enabled: intelligence.novelty.enabled, ...(aging ? { aging } : {}) },
+    stability: {
+      enabled: stabilityEnabled,
+      sampleHalfPoint: intelligence.confidence.sampleHalfPoint,
+      ...stability,
+    },
+    knowledge: signals.knowledge,
+    ...(signals.coverage ? { coverage: signals.coverage } : {}),
+    ...(signals.now ? { now: signals.now } : {}),
   });
 }

@@ -99,7 +99,7 @@ import { GoalTracker } from '../goals/goal-tracker.js';
 import { JsonKnowledgeBase } from '../knowledge/json-knowledge-base.js';
 import type { KnowledgeBase, TransitionKnowledge } from '../knowledge/knowledge-model.js';
 import type { ConfidenceResult } from '../intelligence/confidence-engine.js';
-import { confidenceEngineOf, knowledgeContextOf } from '../intelligence/intelligence.js';
+import { adaptiveScorerOf, confidenceEngineOf, knowledgeContextOf } from '../intelligence/intelligence.js';
 import { actionSignature, stateSignature } from '../knowledge/signatures.js';
 import { HistoricalOracle, apiOperation } from '../oracles/historical-oracle.js';
 import { InvariantOracle, type InvariantEvaluation } from '../oracles/invariant-oracle.js';
@@ -150,6 +150,11 @@ export interface FlowExplorerOptions {
   env?: NodeJS.ProcessEnv;
   /** `stateId::actionId` connus par la baseline (mode explore) : essayés après le nouveau terrain. */
   knownActions?: ReadonlySet<string>;
+  /**
+   * La mémoire de travail contient-elle l'historique d'anciens runs ? (base de connaissances
+   * fichier, ou préchargement de la persistance). false : l'AdaptiveScoring n'a aucun effet.
+   */
+  historyAvailable?: boolean;
   /** Id du run (par défaut : testData.runId, sinon généré). */
   runId?: string;
   /** Transitions connues (la baseline), pour le BaselineOracle. */
@@ -374,24 +379,32 @@ export class FlowExplorer {
           maxStatesPerRoute: exploration.maxStatesPerRoute,
           queryParamMode: exploration.queryParams.mode,
         },
-        new AdvancedActionScorer(new RuleBasedActionScorer(this.safety), {
-          dictionary,
-          weights: {
-            goalWeight: exploration.goalWeight,
-            patternWeight: exploration.patternWeight,
-            noveltyWeight: exploration.noveltyWeight,
-            coverageWeight: exploration.coverageWeight,
-            historyWeight: exploration.historyWeight,
+        adaptiveScorerOf(
+          config,
+          new AdvancedActionScorer(new RuleBasedActionScorer(this.safety), {
+            dictionary,
+            weights: {
+              goalWeight: exploration.goalWeight,
+              patternWeight: exploration.patternWeight,
+              noveltyWeight: exploration.noveltyWeight,
+              coverageWeight: exploration.coverageWeight,
+              historyWeight: exploration.historyWeight,
+            },
+            patternsOf: (stateId) => this.patternsByState.get(stateId) ?? [],
+            patternHints: this.semantics.patternRules,
+            currentGoals: () => this.goals,
+            knowledge: this.knowledge,
+            coverage: this.coverage,
+            noveltyOf: (stateId) => this.noveltyByState.get(stateId),
+            loopPenaltyOf: (stateId, actionId) => this.loopPenalties.get(`${stateId}::${actionId}`),
+            version: this.knowledge.identity.commit ?? this.knowledge.identity.appVersion ?? 'unversioned',
+          }),
+          {
+            knowledge: this.knowledge,
+            coverage: this.coverage,
+            historyAvailable: options.historyAvailable ?? false,
           },
-          patternsOf: (stateId) => this.patternsByState.get(stateId) ?? [],
-          patternHints: this.semantics.patternRules,
-          currentGoals: () => this.goals,
-          knowledge: this.knowledge,
-          coverage: this.coverage,
-          noveltyOf: (stateId) => this.noveltyByState.get(stateId),
-          loopPenaltyOf: (stateId, actionId) => this.loopPenalties.get(`${stateId}::${actionId}`),
-          version: this.knowledge.identity.commit ?? this.knowledge.identity.appVersion ?? 'unversioned',
-        }),
+        ),
       );
     this.executor = new PlaywrightActionExecutor(exploration.actionTimeoutMs, exploration.settleTimeMs);
     this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs);

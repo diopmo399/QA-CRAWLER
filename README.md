@@ -1371,6 +1371,29 @@ Niveaux : VERY_LOW < 0,2 ≤ LOW < 0,4 ≤ MEDIUM < 0,6 ≤ HIGH < 0,8 ≤ VERY_
 
 Le rapport ajoute une section « Connaissance historique (confiance) » : contexte courant, nombre de connaissances par niveau, vieillies, vues dans un autre contexte, et les plus observées avec le détail de leur confiance. Les événements `KNOWLEDGE_LOADED`, `CONFIDENCE_EVALUATED` et `KNOWLEDGE_AGED` sont écrits dans le journal du moteur.
 
+### Nouveauté, stabilité et score adaptatif
+
+Trois capacités de plus sous `intelligence`, chacune avec son interrupteur :
+
+```yaml
+intelligence:
+  enabled: true
+  novelty: { enabled: true }
+  stability: { enabled: true, minDurationSamples: 5, variabilityRatio: 3, minConfidence: 0.4 }
+  adaptiveScoring: { enabled: false, confidenceWeight: 1, noveltyWeight: 1, stabilityWeight: 1 }
+```
+
+- **NoveltyScore** : `k / (k + exécutions passées pondérées par la récence + exécutions de ce run)`. NEW (jamais exécutée), RARE (≥ 0,5), KNOWN (≥ 0,2), FAMILIAR. 500 exécutions vieilles de 10 mois redeviennent RARE ; 80 exécutions d'hier sont FAMILIAR.
+- **StabilityScore** : `résultat (taux de succès) × destination (part dominante) × durée (p95 / p50)`. p50 et p95 viennent **uniquement d'échantillons réels** (au moins `minDurationSamples`) ; jamais d'une moyenne. Sans assez d'échantillons, la durée n'entre pas dans le score, et c'est dit. En dessous de `minConfidence` (peu d'observations) : UNCERTAIN, jamais UNSTABLE.
+- **AdaptiveScoring** (désactivé par défaut, car il change les décisions) : un facteur `adaptive` de plus dans la décomposition du score, borné entre −60 et +30 :
+  - le succès historique ne compte qu'à hauteur de sa confiance (2 succès ne valent pas 200) ;
+  - une action peu explorée dans les runs précédents gagne un peu ;
+  - une action instable, avec assez d'observations, perd un peu.
+
+  Sans historique (`memory.enabled: false`, ou aucune base de connaissances), l'impact est **nul**. Une action exclue (SafetyPolicy, motif BLOCK, déjà essayée) le reste : le score classe, il n'autorise jamais.
+
+Chaque score s'explique : le rapport montre l'équation (`264 = base 240 + history 20 + adaptive 4`) sous chaque décision, puis chaque raison (« -14 succès historique pris à 0.286 (2 exécution(s)) »).
+
 ### Repli (failureMode)
 
 - `fail` : base inutilisable → le run s'arrête avec une erreur claire (code de sortie 3).

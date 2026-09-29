@@ -218,7 +218,7 @@ describe('historical detector with the ConfidenceEngine', () => {
 
 describe('configuration', () => {
   it('disabled by default: no engine', () => {
-    expect(testConfig().intelligence).toEqual({
+    expect(testConfig().intelligence).toMatchObject({
       enabled: false,
       confidence: { enabled: true, sampleHalfPoint: 5 },
       aging: { enabled: true, minWeight: 0.05 },

@@ -1,5 +1,5 @@
 import { COVERAGE_STATUSES } from '../coverage/coverage-map.js';
-import { renderReason } from '../decision/score-breakdown.js';
+import { renderReason, scoreEquation } from '../decision/score-breakdown.js';
 import type { ExplorationResult } from '../model/exploration-result.js';
 import { VERDICT_CATEGORIES } from '../oracles/confidence.js';
 import { classPill, esc } from './html-common.js';
@@ -68,6 +68,8 @@ const TEXTS = {
     destination: 'Usual destination',
     confidence: 'Confidence',
     lastSeen: 'Last seen',
+    adaptive: (count: number) =>
+      `Adaptive scoring adjusted ${count} decision(s): historical success weighted by its confidence, rarely explored actions, unstable history (factor « adaptive »).`,
   },
   fr: {
     title: 'Moteur de décision',
@@ -127,6 +129,8 @@ const TEXTS = {
     destination: 'Destination habituelle',
     confidence: 'Confiance',
     lastSeen: 'Vue le',
+    adaptive: (count: number) =>
+      `Le score adaptatif a nuancé ${count} décision(s) : succès historique pondéré par sa confiance, actions peu explorées, historique instable (facteur « adaptive »).`,
   },
 } as const;
 
@@ -219,7 +223,7 @@ export function intelligenceSection(
       `<h3>${esc(t.decisions)}</h3><table><tr><th>#</th><th>${esc(t.screen)}</th><th>${esc(t.action)}</th><th>${esc(t.score)}</th><th>${esc(t.reasons)}</th></tr>${shown
         .map(
           (decision, index) =>
-            `<tr><td>${index + 1}</td><td>${esc(nameOf(decision.stateId))}</td><td><strong>${esc(decision.label)}</strong></td><td>${decision.score}</td><td>${
+            `<tr><td>${index + 1}</td><td>${esc(nameOf(decision.stateId))}</td><td><strong>${esc(decision.label)}</strong></td><td>${decision.score}${decision.breakdown ? `<br><span class="muted">${esc(scoreEquation(decision.breakdown))}</span>` : ''}</td><td>${
               decision.breakdown
                 ? decision.breakdown.details
                     .map((reason) => esc(tr(renderReason(reason, language))))
@@ -231,6 +235,8 @@ export function intelligenceSection(
     );
     if (intelligence.decisions.length > MAX_DECISIONS)
       parts.push(`<p class="muted">${esc(t.more(intelligence.decisions.length - MAX_DECISIONS))}</p>`);
+    const adjusted = intelligence.decisions.filter((decision) => (decision.breakdown?.adaptive ?? 0) !== 0);
+    if (adjusted.length > 0) parts.push(`<p class="muted">${esc(t.adaptive(adjusted.length))}</p>`);
   }
 
   // ---- catégories de verdict
