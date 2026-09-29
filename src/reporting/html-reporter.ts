@@ -12,7 +12,9 @@ import {
   esc,
   formatDate,
   formatDuration,
+  layoutSections,
   renderTreeHtml,
+  type ReportSection,
   severityBadge,
   SEVERITY_COLORS,
 } from './html-common.js';
@@ -116,6 +118,114 @@ export function renderHtml(
     return `<section><h2>${esc(title)} (${issues.length})</h2><table><thead><tr><th>${c.severity}</th>${withRequest ? `<th>${c.status}</th><th>${c.request}</th>` : ''}<th>${c.message}</th><th>${c.stateActionFlow}</th><th>${c.count}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table></section>`;
   };
 
+  const alerting = (html: string, issues: Issue[]): ReportSection => ({ html, alert: issues.length > 0 });
+  const layout = layoutSections(
+    [
+      {
+        title: t.layout.results,
+        collapsed: false,
+        sections: [
+          result.flows.length > 0 ? flowsSection(result, nameOf, href, t) : '',
+          result.verification ? verificationSection(result, t) : '',
+          result.flowDiff ? flowDiffSection(result, t) : '',
+          alerting(issueTable(t.issueSections.http, httpIssues, true), httpIssues),
+          alerting(issueTable(t.issueSections.js, jsIssues, false), jsIssues),
+          flowIssues.length > 0
+            ? alerting(issueTable(t.issueSections.flow, flowIssues, false), flowIssues)
+            : '',
+          formIssues.length > 0
+            ? alerting(issueTable(t.issueSections.forms, formIssues, false), formIssues)
+            : '',
+          navigationIssues.length > 0
+            ? alerting(issueTable(t.issueSections.navigation, navigationIssues, true), navigationIssues)
+            : '',
+          oracleIssues.length > 0
+            ? alerting(issueTable(q.oracleFindings, oracleIssues, false), oracleIssues)
+            : '',
+          accessibilityIssues.length > 0
+            ? alerting(issueTable(q.accessibility, accessibilityIssues, false), accessibilityIssues)
+            : '',
+          authorizationIssues.length > 0
+            ? alerting(issueTable(q.authorizationIssues, authorizationIssues, false), authorizationIssues)
+            : '',
+        ],
+      },
+      {
+        title: t.layout.exploration,
+        collapsed: false,
+        sections: [
+          `<section>
+    <h2>${esc(t.discoveredFlow)}</h2>
+    <p class="muted">${esc(t.discoveredFlowHint)}</p>
+    ${renderFlowMap(result, language)}
+    ${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}
+  </section>`,
+          `<section>
+    <h2>${esc(t.statesTitle)} (${result.states.length})</h2>
+    ${statesTable(result.states, href, t)}
+  </section>`,
+          `<section>
+    <h2>${esc(t.executedTitle)} (${executed.length})</h2>
+    ${
+      executed.length === 0
+        ? `<p class="empty">${esc(t.noExecuted)}</p>`
+        : `<table><thead><tr><th>${c.from}</th><th>${c.action}</th><th>${c.to}</th><th>${c.result}</th><th>${c.duration}</th></tr></thead><tbody>${executed
+            .map(
+              (edge) =>
+                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(label(edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}” <span class="muted">${esc(label(edge.action.category))}</span></td><td>${edge.to === edge.from ? `<span class="muted">${esc(t.sameState)}</span>` : esc(nameOf(edge.to))}</td><td>${classPill(edge.result, language)}${edge.reason ? `<br><span class="muted">${esc(reason(edge.reason))}</span>` : ''}</td><td>${edge.durationMs !== undefined ? `${edge.durationMs} ms` : ''}</td></tr>`,
+            )
+            .join('')}</tbody></table>`
+    }
+  </section>`,
+          `<section>
+    <h2>${esc(t.blockedTitle)} (${blocked.length})</h2>
+    <p class="muted">${esc(t.blockedHint)}</p>
+    ${
+      blocked.length === 0
+        ? `<p class="empty">${esc(t.noBlocked)}</p>`
+        : `<table><thead><tr><th>${c.state}</th><th>${c.action}</th><th>${c.class}</th><th>${c.reason}</th></tr></thead><tbody>${blocked
+            .map(
+              (edge) =>
+                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(label(edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}”</td><td>${classPill(edge.action.classification, language)}</td><td class="wrap">${esc(reason(edge.reason ?? ''))}</td></tr>`,
+            )
+            .join('')}</tbody></table>`
+    }
+  </section>`,
+          `<section>
+    <h2>${esc(t.screenshotsTitle)} (${shots.length})</h2>
+    ${
+      shots.length === 0
+        ? `<p class="empty">${esc(t.noScreenshots)}</p>`
+        : `<div class="shots">${shots
+            .map((state) => {
+              const link = esc(href(state.screenshot ?? ''));
+              return `<figure><a href="${link}"><img loading="lazy" src="${link}" alt="${esc(displayName(state))}"></a><figcaption><b>${esc(displayName(state))}</b><br>${esc(state.url)}</figcaption></figure>`;
+            })
+            .join('')}</div>`
+    }
+  </section>`,
+        ],
+      },
+      {
+        title: t.layout.analysis,
+        hint: t.layout.analysisHint,
+        collapsed: true,
+        sections: [
+          intelligenceSection(result, nameOf, language),
+          regressionSection(result, language),
+          persistenceSection(result, language),
+          oraclesSection(result, nameOf, language),
+          formsSection(result, nameOf, language),
+          authorizationSection(result, language),
+          recoverySection(result, nameOf, language),
+          dataSection(result, nameOf, language),
+          result.browserInteractions.length > 0 ? interactionsSection(result, nameOf, t) : '',
+        ],
+      },
+    ],
+    t.layout.contents,
+  );
+
   return `<!doctype html>
 <html lang="${language}">
 <head>
@@ -133,15 +243,9 @@ export function renderHtml(
   <span class="status" style="background:${status.color}">${esc(status.label)}</span>
   <nav>${result.artifacts.flowGraphHtml ? `<a href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
 </header>
-<main>
+<div class="layout">
+<div class="summary">
   <div class="cards">
-    ${card(t.cards.states, result.stats.states)}
-    ${card(t.cards.transitions, result.stats.transitions)}
-    ${card(t.cards.actionsExecuted, result.stats.actionsExecuted)}
-    ${card(t.cards.actionsBlocked, result.stats.actionsBlocked)}
-    ${card(t.cards.maxDepth, result.stats.maxDepth)}
-    ${card(t.cards.backtracks, result.stats.backtracks)}
-    ${result.flows.length > 0 ? card(t.cards.flowsPassed, `${result.stats.flowsPassed}/${result.flows.length}`) : ''}
     ${card(t.cards.issues, result.issues.length)}
     ${SEVERITIES.slice()
       .reverse()
@@ -149,90 +253,25 @@ export function renderHtml(
         card(label(severity), result.stats.issuesBySeverity[severity], SEVERITY_COLORS[severity]),
       )
       .join('')}
+    ${result.flows.length > 0 ? card(t.cards.flowsPassed, `${result.stats.flowsPassed}/${result.flows.length}`) : ''}
+  </div>
+  <div class="cards secondary">
+    ${card(t.cards.states, result.stats.states)}
+    ${card(t.cards.transitions, result.stats.transitions)}
+    ${card(t.cards.actionsExecuted, result.stats.actionsExecuted)}
+    ${card(t.cards.actionsBlocked, result.stats.actionsBlocked)}
+    ${card(t.cards.maxDepth, result.stats.maxDepth)}
+    ${card(t.cards.backtracks, result.stats.backtracks)}
     ${card(t.cards.duration, formatDuration(result.durationMs))}
   </div>
+</div>
+${layout.toc}
+<main>
 
-  ${result.flows.length > 0 ? flowsSection(result, nameOf, href, t) : ''}
-
-  ${result.verification ? verificationSection(result, t) : ''}
-  ${result.flowDiff ? flowDiffSection(result, t) : ''}
-
-  ${result.browserInteractions.length > 0 ? interactionsSection(result, nameOf, t) : ''}
-
-  ${intelligenceSection(result, nameOf, language)}
-  ${regressionSection(result, language)}
-  ${persistenceSection(result, language)}
-  ${oraclesSection(result, nameOf, language)}
-  ${oracleIssues.length > 0 ? issueTable(q.oracleFindings, oracleIssues, false) : ''}
-  ${formsSection(result, nameOf, language)}
-  ${authorizationSection(result, language)}
-  ${authorizationIssues.length > 0 ? issueTable(q.authorizationIssues, authorizationIssues, false) : ''}
-  ${recoverySection(result, nameOf, language)}
-  ${dataSection(result, nameOf, language)}
-
-  <section>
-    <h2>${esc(t.discoveredFlow)}</h2>
-    <p class="muted">${esc(t.discoveredFlowHint)}</p>
-    ${renderFlowMap(result, language)}
-    ${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}
-  </section>
-
-  ${flowIssues.length > 0 ? issueTable(t.issueSections.flow, flowIssues, false) : ''}
-  ${formIssues.length > 0 ? issueTable(t.issueSections.forms, formIssues, false) : ''}
-  ${issueTable(t.issueSections.http, httpIssues, true)}
-  ${issueTable(t.issueSections.js, jsIssues, false)}
-  ${navigationIssues.length > 0 ? issueTable(t.issueSections.navigation, navigationIssues, true) : ''}
-  ${accessibilityIssues.length > 0 ? issueTable(q.accessibility, accessibilityIssues, false) : ''}
-
-  <section>
-    <h2>${esc(t.statesTitle)} (${result.states.length})</h2>
-    ${statesTable(result.states, href, t)}
-  </section>
-
-  <section>
-    <h2>${esc(t.executedTitle)} (${executed.length})</h2>
-    ${
-      executed.length === 0
-        ? `<p class="empty">${esc(t.noExecuted)}</p>`
-        : `<table><thead><tr><th>${c.from}</th><th>${c.action}</th><th>${c.to}</th><th>${c.result}</th><th>${c.duration}</th></tr></thead><tbody>${executed
-            .map(
-              (edge) =>
-                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(label(edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}” <span class="muted">${esc(label(edge.action.category))}</span></td><td>${edge.to === edge.from ? `<span class="muted">${esc(t.sameState)}</span>` : esc(nameOf(edge.to))}</td><td>${classPill(edge.result, language)}${edge.reason ? `<br><span class="muted">${esc(reason(edge.reason))}</span>` : ''}</td><td>${edge.durationMs ?? ''} ms</td></tr>`,
-            )
-            .join('')}</tbody></table>`
-    }
-  </section>
-
-  <section>
-    <h2>${esc(t.blockedTitle)} (${blocked.length})</h2>
-    <p class="muted">${esc(t.blockedHint)}</p>
-    ${
-      blocked.length === 0
-        ? `<p class="empty">${esc(t.noBlocked)}</p>`
-        : `<table><thead><tr><th>${c.state}</th><th>${c.action}</th><th>${c.class}</th><th>${c.reason}</th></tr></thead><tbody>${blocked
-            .map(
-              (edge) =>
-                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(label(edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}”</td><td>${classPill(edge.action.classification, language)}</td><td class="wrap">${esc(reason(edge.reason ?? ''))}</td></tr>`,
-            )
-            .join('')}</tbody></table>`
-    }
-  </section>
-
-  <section>
-    <h2>${esc(t.screenshotsTitle)} (${shots.length})</h2>
-    ${
-      shots.length === 0
-        ? `<p class="empty">${esc(t.noScreenshots)}</p>`
-        : `<div class="shots">${shots
-            .map((state) => {
-              const link = esc(href(state.screenshot ?? ''));
-              return `<figure><a href="${link}"><img loading="lazy" src="${link}" alt="${esc(displayName(state))}"></a><figcaption><b>${esc(displayName(state))}</b><br>${esc(state.url)}</figcaption></figure>`;
-            })
-            .join('')}</div>`
-    }
-  </section>
+  ${layout.body}
   <p class="muted">${esc(t.generatedBy)} · ${esc(formatDate(result.finishedAt))}</p>
 </main>
+</div>
 </body>
 </html>
 `;
