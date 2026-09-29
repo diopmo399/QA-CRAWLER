@@ -172,6 +172,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     listener: combineListeners(options.listener, engineLog.listener(), recorder?.listener()),
     ...(options.env ? { env: options.env } : {}),
     ...(mode === 'explore' && baseline ? { knownActions: knownActionsOf(baseline) } : {}),
+    historyAvailable: memoryMode === 'historical' || (memoryMode === 'legacy' && knowledgeFile !== undefined),
     ...(baseline ? { baseline: baseline.graph } : {}),
     ...(contract ? { contract } : {}),
     ...(mode === 'verify' && baseline

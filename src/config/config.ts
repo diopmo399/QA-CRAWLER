@@ -569,6 +569,36 @@ const intelligenceSchema = z
       .object({ enabled: z.boolean().default(true) })
       .strict()
       .default({}),
+    /** NoveltyScore : exécutions passées pondérées par la récence (demi-point : confidence.sampleHalfPoint). */
+    novelty: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
+    /** StabilityScore : succès, destinations, p50 / p95 des durées RÉELLES (jamais d'une moyenne). */
+    stability: z
+      .object({
+        enabled: z.boolean().default(true),
+        minDurationSamples: z.number().int().min(2).default(5),
+        variabilityRatio: z.number().min(1).default(3),
+        /** En dessous : UNCERTAIN, jamais « instable ». */
+        minConfidence: z.number().min(0).max(1).default(0.4),
+      })
+      .strict()
+      .default({}),
+    /**
+     * AdaptiveScoring : le score des actions nuancé par la confiance, la nouveauté et la
+     * stabilité de l'historique. Désactivé par défaut (il change les décisions) ; sans
+     * historique (memory.enabled: false), il n'a aucun effet.
+     */
+    adaptiveScoring: z
+      .object({
+        enabled: z.boolean().default(false),
+        confidenceWeight: z.number().min(0).max(2).default(1),
+        noveltyWeight: z.number().min(0).max(2).default(1),
+        stabilityWeight: z.number().min(0).max(2).default(1),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 

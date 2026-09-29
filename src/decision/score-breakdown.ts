@@ -10,6 +10,7 @@ export const SCORE_FACTORS = [
   'coverage',
   'risk',
   'repetition',
+  'adaptive',
 ] as const;
 export type ScoreFactor = (typeof SCORE_FACTORS)[number];
 
@@ -35,6 +36,8 @@ export interface ScoreBreakdown {
   coverage: number;
   risk: number;
   repetition: number;
+  /** AdaptiveScoring (intelligence.adaptiveScoring) : 0 quand désactivé ou sans historique. */
+  adaptive: number;
   total: number;
   /** Raisons lisibles (anglais), dans l'ordre des composantes. */
   reasons: string[];
@@ -68,6 +71,18 @@ const TEMPLATES = {
   'submit-risk': { en: 'submits a form', fr: 'envoie un formulaire' },
   'loop-penalty': { en: 'loop detected ({detail})', fr: 'boucle détectée ({detail})' },
   'already-used': { en: 'already used {count}× in this run', fr: 'déjà utilisée {count}× pendant ce run' },
+  'history-confidence': {
+    en: 'historical success trusted at {confidence} ({observations} execution(s))',
+    fr: 'succès historique pris à {confidence} ({observations} exécution(s))',
+  },
+  'rarely-explored': {
+    en: 'rarely explored before (novelty {novelty}: {detail})',
+    fr: 'peu explorée auparavant (nouveauté {novelty} : {detail})',
+  },
+  'unstable-history': {
+    en: 'unstable history (stability {stability}, confidence {confidence}: {detail})',
+    fr: 'historique instable (stabilité {stability}, confiance {confidence} : {detail})',
+  },
 } as const satisfies Record<string, { en: string; fr: string }>;
 export type ScoreReasonCode = keyof typeof TEMPLATES;
 
@@ -114,4 +129,19 @@ export function breakdownOf(details: readonly ScoreReason[]): ScoreBreakdown {
     reasons: ordered.map((reason) => renderReason(reason)),
     details: ordered,
   };
+}
+
+/** Le total et ses composantes non nulles : « 312 = base 200 + goal 88 − adaptive 12 ». */
+export function scoreEquation(breakdown: ScoreBreakdown): string {
+  const terms = SCORE_FACTORS.filter((factor) => breakdown[factor] !== 0).map((factor, index) => {
+    const sign = breakdown[factor] < 0 ? '−' : '+';
+    return `${index === 0 ? (sign === '−' ? '−' : '') : `${sign} `}${factor} ${Math.abs(breakdown[factor])}`;
+  });
+  return `${breakdown.total} = ${terms.join(' ') || '0'}`;
+}
+
+/** L'explication complète d'un score : l'équation, puis chaque raison (anglais ou français). */
+export function explainScore(breakdown: ScoreBreakdown, language: 'en' | 'fr' = 'en'): string {
+  const reasons = breakdown.details.map((reason) => renderReason(reason, language));
+  return `${scoreEquation(breakdown)}${reasons.length > 0 ? ` — ${reasons.join('; ')}` : ''}`;
 }

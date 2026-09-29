@@ -25,7 +25,7 @@ mission: { name: users, mode: explore }
 target: { baseUrl: ${app.url} }
 goals: [users, create-user]
 exploration: { maxStates: 15, maxActions: 30, actionTimeoutMs: 2000, settleTimeMs: 100 }
-knowledge: { file: ${path.join(root, name, 'knowledge.json')} }
+knowledge: { file: ${path.join(root, name.startsWith('history') ? 'history' : name, 'knowledge.json')} }
 report: { language: en, failOnSeverity: NONE }
 output:
   reportsDir: ${path.join(root, name, 'reports')}
@@ -43,6 +43,16 @@ ${extra}`,
     results.defaults = await run('defaults', '');
     results.disabled = await run('disabled', 'memory: { enabled: false }\nintelligence: { enabled: false }');
     results.enabled = await run('enabled', 'memory: { enabled: false }\nintelligence: { enabled: true }');
+    results.adaptiveIsolated = await run(
+      'adaptive-isolated',
+      'memory: { enabled: false }\nintelligence: { enabled: true, adaptiveScoring: { enabled: true } }',
+    );
+    // Deux runs qui partagent la base de connaissances : le second a un historique.
+    await run('history-first', '');
+    results.adaptiveHistory = await run(
+      'history-second',
+      'intelligence: { enabled: true, adaptiveScoring: { enabled: true } }',
+    );
   }, 240_000);
   afterAll(async () => {
     await app.close();
@@ -61,6 +71,8 @@ ${extra}`,
     expect(reference.length).toBeGreaterThan(3);
     expect(decisions(results.disabled)).toEqual(reference);
     expect(decisions(results.enabled)).toEqual(reference);
+    // AdaptiveScoring activé sans historique (memory.enabled: false) : impact historique nul.
+    expect(decisions(results.adaptiveIsolated)).toEqual(reference);
     expect(results.disabled?.issues.map((issue) => `${issue.type} ${issue.severity}`).sort()).toEqual(
       results.defaults?.issues.map((issue) => `${issue.type} ${issue.severity}`).sort(),
     );
@@ -89,5 +101,25 @@ ${extra}`,
     expect(html).toContain('Historical knowledge (confidence)');
     const plain = await readFile(path.join(root, 'disabled', 'reports', 'index.html'), 'utf8');
     expect(plain).not.toContain('Historical knowledge (confidence)');
+  });
+
+  it('adaptive scoring with a history: adjustments in their own factor, explained and bounded', async () => {
+    const adjusted = (results.adaptiveHistory?.intelligence?.decisions ?? []).filter(
+      (decision) => (decision.breakdown?.adaptive ?? 0) !== 0,
+    );
+    expect(adjusted.length).toBeGreaterThan(0);
+    for (const decision of adjusted) {
+      const reasons = decision.breakdown?.details.filter((detail) => detail.factor === 'adaptive') ?? [];
+      expect(reasons.length).toBeGreaterThan(0);
+      expect(
+        reasons.every((reason) =>
+          ['history-confidence', 'rarely-explored', 'unstable-history'].includes(reason.code),
+        ),
+      ).toBe(true);
+      expect(decision.breakdown?.adaptive).toBeGreaterThanOrEqual(-60);
+      expect(decision.breakdown?.adaptive).toBeLessThanOrEqual(30);
+    }
+    const html = await readFile(path.join(root, 'history-second', 'reports', 'index.html'), 'utf8');
+    expect(html).toMatch(/Adaptive scoring adjusted \d+ decision\(s\)/);
   });
 });
