@@ -6,6 +6,7 @@ import { FlowIncludeError, resolveFlowRuns } from '../flows/flow-includes.js';
 import { GherkinError, gherkinFlows, isGherkinEntry } from '../flows/gherkin/gherkin-loader.js';
 import type { CustomGherkinStep } from '../flows/gherkin/gherkin-steps.js';
 import { scenarioSchema, type ScenarioConfig } from './config.js';
+import { brokenEnums } from './schema-guard.js';
 
 /** Levée pour tout scénario illisible, mal formé ou invalide. Le message peut être montré à l'utilisateur. */
 export class ConfigError extends Error {
@@ -104,6 +105,7 @@ export function parseConfig(
   );
   const withOverrides = applyOverrides(expanded, overrides, env);
 
+  checkSchema();
   let config: ScenarioConfig;
   try {
     config = scenarioSchema.parse(withOverrides);
@@ -305,6 +307,23 @@ function applyPersistenceOverrides(
     }
   }
   if (overrides.memory !== undefined) section('memory').enabled = overrides.memory;
+}
+
+let schemaChecked = false;
+
+/**
+ * Une fois par processus : un enum du schéma sans valeurs (constante absente à l'import)
+ * ferait planter zod sans dire où. On le nomme plutôt.
+ */
+function checkSchema(): void {
+  if (schemaChecked) return;
+  const broken = brokenEnums(scenarioSchema);
+  if (broken.length > 0)
+    throw new ConfigError(
+      'The configuration schema is broken: these enums received no values (a constant is missing at import: a local file out of date, a renamed export or an import cycle)',
+      broken,
+    );
+  schemaChecked = true;
 }
 
 /** Jamais d'identifiants de base de données dans le YAML : seulement le nom de leur variable d'environnement. */
