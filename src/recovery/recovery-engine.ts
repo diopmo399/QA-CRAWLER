@@ -1,5 +1,6 @@
 import type { ActionClassification } from '../model/discovered-action.js';
 import type { PageContext } from '../model/page-context.js';
+import { classifyPlaywrightError } from '../navigation/navigation-guard.js';
 import { redactText } from '../security/redactor.js';
 import type { FailureKind, RecoveryEvent, RecoveryStrategyName } from './recovery-model.js';
 
@@ -27,9 +28,12 @@ export type RecoveryActions = Partial<
   Record<Exclude<RecoveryStrategyName, 'retry'>, () => Promise<PageContext | undefined>>
 >;
 
-/** Erreurs Playwright qui méritent un nouvel essai : l'élément a bougé sous le clic, pas un vrai échec. */
-const TRANSIENT_ERROR =
-  /detached|not attached|not stable|Execution context was destroyed|element is outside of the viewport/i;
+/**
+ * Erreurs Playwright qui méritent un nouvel essai : l'élément a bougé sous le clic, pas un vrai échec.
+ * Une NAVIGATION (contexte détruit, cadre remplacé) n'en fait pas partie : l'action a très
+ * probablement eu lieu, la rejouer pourrait l'exécuter deux fois (voir NavigationGuard).
+ */
+const TRANSIENT_ERROR = /not attached|not stable|element is outside of the viewport|element.*detached/i;
 
 /** Sans configuration de récupération : ce que l'explorateur a toujours fait (calque du dessus, URL, rejeu, ailleurs). */
 const MINIMAL: readonly RecoveryStrategyName[] = [
@@ -68,6 +72,7 @@ export class RecoveryEngine {
       // Jamais deux fois une action qui peut envoyer ou modifier des données.
       action.classification === 'SAFE' &&
       action.submitsForm !== true &&
+      !classifyPlaywrightError(error ?? '').navigation &&
       TRANSIENT_ERROR.test(error ?? '')
     );
   }

@@ -1,3 +1,4 @@
+import { navigationLogLines } from '../navigation/navigation-guard.js';
 import { readFile } from 'node:fs/promises';
 import { AuthError } from '../auth/authenticator.js';
 import { ConfigError, loadConfigFile } from '../config/config-loader.js';
@@ -331,6 +332,15 @@ function progressListener(quiet: boolean): ExplorationListener {
       logger.info(
         `${color.bold(color.cyan('■ flow'))} ${report.name}: ${status} ${color.dim(`${(report.durationMs / 1000).toFixed(1)} s${report.explored ? ', last screen explored' : ''}`)}`,
       );
+    },
+    onNavigation(event) {
+      // Événement technique, jamais une anomalie : [NAVIGATION] detected / recovering / recovered, [NAVIGATION_RECOVERY_FAILED].
+      if (quiet && event.type !== 'NAVIGATION_RECOVERY_FAILED') return;
+      for (const line of navigationLogLines(event)) {
+        logger.info(
+          `      ${event.type === 'NAVIGATION_RECOVERY_FAILED' ? color.yellow(line) : color.dim(line)}`,
+        );
+      }
     },
     onInteractionLog(line) {
       // Structuré, sans secret : [BROWSER_INTERACTION] type=HTTP_AUTH origin=… handler=… status=… attempt=1

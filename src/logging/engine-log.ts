@@ -33,7 +33,10 @@ export type EngineEvent =
   | 'ANOMALY_CREATED'
   | 'ANOMALY_RESOLVED'
   | 'ANOMALY_REOPENED'
-  | 'ANOMALY_FLAKY';
+  | 'ANOMALY_FLAKY'
+  | 'NAVIGATION_DETECTED'
+  | 'NAVIGATION_RECOVERED'
+  | 'NAVIGATION_RECOVERY_FAILED';
 
 /**
  * Une ligne du journal du moteur (engine-log.jsonl). Seulement des id, des libellés
@@ -191,6 +194,15 @@ export class EngineEventLog {
             stateId: event.stateId,
             ...(event.actionId ? { actionId: event.actionId } : {}),
           },
+        );
+      },
+      onNavigation: (event) => {
+        // Technique, pas une anomalie : une navigation a interrompu une lecture de la page.
+        this.log(
+          event.type === 'NAVIGATION_RECOVERY_FAILED' ? 'WARN' : 'DEBUG',
+          event.type,
+          `${event.operation}: ${event.previousUrl} → ${event.currentUrl} (${event.reason}${event.retries !== undefined ? `, ${String(event.retries)} retries` : ''}${event.durationMs !== undefined ? `, ${String(event.durationMs)} ms` : ''}${event.cause ? `: ${event.cause}` : ''})`,
+          { ...(event.actionId ? { actionId: event.actionId } : {}) },
         );
       },
       onStuck: (event) => {
