@@ -12,6 +12,7 @@ import {
   esc,
   formatDate,
   formatDuration,
+  issuesCard,
   layoutSections,
   renderTreeHtml,
   type ReportSection,
@@ -101,7 +102,7 @@ export function renderHtml(
 
   const issueTable = (title: string, issues: Issue[], withRequest: boolean): string => {
     if (issues.length === 0)
-      return `<section><h2>${esc(title)}</h2><p class="empty">${esc(t.noneDetected)}</p></section>`;
+      return `<section><h2>${esc(title)}</h2><p class="empty ok">${esc(t.noneDetected)}</p></section>`;
     const rows = issues
       .map(
         (issue) => `<tr>
@@ -236,17 +237,27 @@ export function renderHtml(
 </head>
 <body>
 <header>
-  <h1>${esc(result.mission)}</h1>
-  <div class="meta">${esc(result.target.startUrl)} · ${esc(formatDate(result.startedAt))} · ${esc(formatDuration(result.durationMs))} · ${esc(t.stopped)} : ${esc(label(result.stopReason))} · ${esc(t.engine)} : ${esc(label(result.decisionEngine))}</div>
-  ${result.description ? `<div class="meta">${esc(result.description)}</div>` : ''}
-  <div class="meta">${esc(t.baselineTexts.mode)} : ${esc(label(result.mode))}${result.baseline ? ` · ${esc(t.baselineTexts.baseline)} : ${esc(baselineName(result.baseline))}` : ''}${result.learnedBaseline ? ` · ${esc(t.baselineTexts.learned)} : ${esc(baselineName(result.learnedBaseline))}` : ''}</div>
-  <span class="status" style="background:${status.color}">${esc(status.label)}</span>
-  <nav>${result.artifacts.flowGraphHtml ? `<a href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
+  <div class="hero">
+    <div class="eyebrow">${esc(t.reportTitle)}</div>
+    <div class="hero-title"><h1>${esc(result.mission)}</h1><span class="status" style="--status:${status.color}">${esc(status.label)}</span></div>
+    ${result.description ? `<p class="hero-desc">${esc(result.description)}</p>` : ''}
+    <div class="chips">
+      <span class="chip url">${esc(result.target.startUrl)}</span>
+      <span class="chip">${esc(formatDate(result.startedAt))}</span>
+      <span class="chip">${esc(formatDuration(result.durationMs))}</span>
+      <span class="chip"><span>${esc(t.stopped)}</span> ${esc(label(result.stopReason))}</span>
+      <span class="chip"><span>${esc(t.engine)}</span> ${esc(label(result.decisionEngine))}</span>
+      <span class="chip"><span>${esc(t.baselineTexts.mode)}</span> ${esc(label(result.mode))}</span>
+      ${result.baseline ? `<span class="chip"><span>${esc(t.baselineTexts.baseline)}</span> ${esc(baselineName(result.baseline))}</span>` : ''}
+      ${result.learnedBaseline ? `<span class="chip"><span>${esc(t.baselineTexts.learned)}</span> ${esc(baselineName(result.learnedBaseline))}</span>` : ''}
+    </div>
+    <nav class="links">${result.artifacts.flowGraphHtml ? `<a class="primary" href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
+  </div>
 </header>
 <div class="layout">
 <div class="summary">
   <div class="cards">
-    ${card(t.cards.issues, result.issues.length)}
+    ${issuesCard(t.cards.issues, result.stats.issuesBySeverity, label)}
     ${SEVERITIES.slice()
       .reverse()
       .map((severity) =>
@@ -269,7 +280,7 @@ ${layout.toc}
 <main>
 
   ${layout.body}
-  <p class="muted">${esc(t.generatedBy)} · ${esc(formatDate(result.finishedAt))}</p>
+  <p class="muted report-footer">${esc(t.generatedBy)} · ${esc(formatDate(result.finishedAt))}</p>
 </main>
 </div>
 </body>

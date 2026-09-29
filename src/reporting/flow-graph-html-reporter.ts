@@ -47,9 +47,12 @@ export function renderFlowGraphHtml(result: ExplorationResult, language: ReportL
 </head>
 <body>
 <header>
-  <h1>${esc(t.flowGraphTitle)} — ${esc(result.mission)}</h1>
-  <div class="meta">${esc(result.target.startUrl)}</div>
-  <nav><a href="index.html">${esc(t.backToReport)}</a><a href="flow-graph.json">flow-graph.json</a></nav>
+  <div class="hero">
+    <div class="eyebrow">${esc(t.flowGraphTitle)}</div>
+    <div class="hero-title"><h1>${esc(result.mission)}</h1></div>
+    <div class="chips"><span class="chip url">${esc(result.target.startUrl)}</span></div>
+    <nav class="links"><a class="primary" href="index.html">${esc(t.backToReport)}</a><a href="flow-graph.json">flow-graph.json</a></nav>
+  </div>
 </header>
 <main>
   <div class="cards">
