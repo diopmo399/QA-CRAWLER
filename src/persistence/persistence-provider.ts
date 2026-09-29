@@ -1,4 +1,5 @@
 import type {
+  KeyedRecord,
   CrawlRunRecord,
   CrawlRunUpdate,
   PersistenceHealth,
@@ -48,6 +49,16 @@ export interface KnowledgeRepository {
   ): Promise<TransitionKnowledgeRecord[]>;
 }
 
+/**
+ * Une ligne par élément, mise à jour sur place (évolution des flows, anomalies) :
+ * `save` crée ou remplace par (applicationId, key), tout ou rien.
+ */
+export interface KeyedRepository {
+  save(records: readonly KeyedRecord[]): Promise<void>;
+  /** Les enregistrements d'une application, les plus récemment vus d'abord, au plus `limit`. */
+  load(applicationId: string, limit: number): Promise<KeyedRecord[]>;
+}
+
 export type PersistenceKind = 'memory' | 'file' | 'database';
 
 export interface PersistenceProvider {
@@ -62,4 +73,8 @@ export interface PersistenceProvider {
   readonly states: StateRepository;
   readonly transitions: TransitionRepository;
   readonly knowledge: KnowledgeRepository;
+  /** Évolution des états, transitions et flows d'une version à l'autre (une ligne par élément). */
+  readonly evolution: KeyedRepository;
+  /** Cycle de vie des anomalies : NEW, KNOWN, RESOLVED, REOPENED, FLAKY (une ligne par anomalie). */
+  readonly anomalies: KeyedRepository;
 }

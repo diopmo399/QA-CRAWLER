@@ -1437,7 +1437,7 @@ Une même action peut mener à plusieurs écrans (« Users + Create » → formu
 
 ### Migrations
 
-`qa_schema_migrations` garde les migrations appliquées (`001_initial_schema`, `002_add_transition_knowledge`, `003_add_knowledge_context` : colonne `transition_knowledge.last_context_json`, nullable) ; la version du schéma est leur nombre (affichée dans le rapport). Chaque migration est appliquée une fois, dans une transaction, et ne fait qu'**ajouter** (tables, index) : jamais de suppression au démarrage. Avec `migrate: false`, une base en retard est une erreur claire (à appliquer par un compte autorisé à créer des tables) ; une base plus récente que le crawler n'est jamais modifiée.
+`qa_schema_migrations` garde les migrations appliquées (`001_initial_schema`, `002_add_transition_knowledge`, `003_add_knowledge_context` : colonne `transition_knowledge.last_context_json`, nullable ; `004_add_evolution_and_anomalies` : tables `flow_evolution` et `anomaly_lifecycle`) ; la version du schéma est leur nombre (affichée dans le rapport). Chaque migration est appliquée une fois, dans une transaction, et ne fait qu'**ajouter** (tables, index) : jamais de suppression au démarrage. Avec `migrate: false`, une base en retard est une erreur claire (à appliquer par un compte autorisé à créer des tables) ; une base plus récente que le crawler n'est jamais modifiée.
 
 ### Mémoire de travail et mémoire long terme
 
@@ -1507,6 +1507,66 @@ intelligence:
   Sans historique (`memory.enabled: false`, ou aucune base de connaissances), l'impact est **nul**. Une action exclue (SafetyPolicy, motif BLOCK, déjà essayée) le reste : le score classe, il n'autorise jamais.
 
 Chaque score s'explique : le rapport montre l'équation (`264 = base 240 + history 20 + adaptive 4`) sous chaque décision, puis chaque raison (« -14 succès historique pris à 0.286 (2 exécution(s)) »).
+
+### Régression d'une version à l'autre (`regression`)
+
+Désactivée par défaut. Elle exige la persistance (`persistence.enabled: true`), et une mémoire qui n'est pas coupée (`memory.enabled` différent de `false`). Sinon, le rapport indique pourquoi rien n'a été calculé.
+
+```yaml
+regression:
+  flowEvolution: { enabled: true, historyLimit: 20 }
+  anomalyLifecycle: { enabled: true, resolveAfterChecks: 3, flakyAfterFlips: 2 }
+intelligence:
+  enabled: true
+  flakyDetection: { enabled: true, stableAt: 0.95, mostlyStableAt: 0.8, unstableAt: 0.5, minConfidence: 0.4 }
+```
+
+**Évolution des flows** : on ne compare plus seulement une baseline au run courant, on suit la suite v1 → v2 → v3 → v4.
+
+- **Stockage** : une ligne par état, par transition et par flow imposé (table `flow_evolution`, ou fichier `flow-evolution.json`), mise à jour à chaque run. Les graphes ne sont jamais copiés.
+- **Comparaison** : le FlowDiffEngine existant compare le run à une référence reconstruite depuis ces lignes.
+- **Questions auxquelles l'historique répond** :
+  - quand cet état est-il apparu ? (`firstSeen`, avec la version) ;
+  - quand cette action a-t-elle disparu ? (`disappeared`) ;
+  - depuis quand cette transition mène-t-elle ailleurs ? (`targetSince`) ;
+  - combien de versions ce flow a-t-il traversées ? (`versionCount`, avec les changements de chemin).
+- **Prudence** : une exploration partielle ne prouve rien.
+  - Une action n'est déclarée disparue que si son écran a été revu sans elle.
+  - Un état n'est déclaré disparu qu'après une exploration complète (`stopReason: exhausted`).
+
+**Détection d'instabilité (flaky)** : chaque transition connue est classée par le StabilityScore (taux de réussite × part de la destination dominante).
+
+| Classe          | Score  |
+| --------------- | ------ |
+| STABLE          | ≥ 0,95 |
+| MOSTLY_STABLE   | ≥ 0,8  |
+| UNSTABLE        | ≥ 0,5  |
+| HIGHLY_UNSTABLE | < 0,5  |
+
+- Exemple : « Search → Results », 72 réussites et 28 échecs sur 100 observations, est UNSTABLE.
+- Avec trop peu d'observations, la classe est UNKNOWN.
+- Une transition instable n'est jamais un bug en soi : quand elle change, l'oracle historique donne `UNEXPECTED_BEHAVIOR` (WARNING) si elle est UNSTABLE, et `UNKNOWN` si elle est HIGHLY_UNSTABLE, jamais `POTENTIAL_REGRESSION`.
+- Une transition stable qui change garde les règles habituelles.
+- Le rapport affiche la répartition.
+
+**Cycle de vie des anomalies** : chaque anomalie est suivie de run en run.
+
+- **Clé** : celle du regroupement existant (même type, même requête, même message, nombres masqués).
+- **Stockage** : table `anomaly_lifecycle`, ou fichier `anomaly-lifecycle.json`.
+
+| Statut   | Règle                                                                                                                                                       |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NEW      | vue pour la première fois                                                                                                                                   |
+| KNOWN    | revue                                                                                                                                                       |
+| RESOLVED | absente pendant `resolveAfterChecks` vérifications **consécutives** : son écran a été revisité et son action rejouée. Ne pas repasser par là ne prouve rien |
+| REOPENED | revenue après RESOLVED                                                                                                                                      |
+| FLAKY    | elle va et vient (`flakyAfterFlips` allers-retours)                                                                                                         |
+
+- **Informations gardées** : première et dernière observation (date, run, version), nombre d'occurrences, runs, environnements, acteurs, chemin de reproduction.
+- **Dans le rapport** : chaque anomalie du run porte son statut (`issues[].lifecycle`).
+- **Journal du moteur** : `ANOMALY_CREATED`, `ANOMALY_RESOLVED`, `ANOMALY_REOPENED`, `ANOMALY_FLAKY` et `FLOW_EVOLVED`, sans aucune valeur saisie.
+
+La migration `004_add_evolution_and_anomalies` ajoute les deux tables, en mode ajout seulement ; le schéma passe en version 4.
 
 ### Repli (failureMode)
 

@@ -1,3 +1,4 @@
+import type { FlakinessResult } from '../intelligence/flakiness.js';
 import { routeKey } from '../crawler/route-normalizer.js';
 import {
   apiStatusAnomaly,
@@ -24,6 +25,8 @@ export interface HistoricalOracleOptions {
   slowFactor: number;
   /** ConfidenceEngine (intelligence.confidence) ; absent : le barème d'avant. */
   confidence?: (knowledge: TransitionKnowledge) => ConfidenceResult;
+  /** Flaky detection (intelligence.flakyDetection) ; absent : le comportement d'avant. */
+  flakiness?: (knowledge: TransitionKnowledge) => FlakinessResult;
 }
 
 /**

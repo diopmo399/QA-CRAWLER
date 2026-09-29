@@ -17,7 +17,7 @@ import type { VerificationReport } from './model/verification.js';
 import { isAtLeast, type Issue } from './model/issue.js';
 import { buildResult } from './reporting/result-builder.js';
 import { writeReports } from './reporting/reporter.js';
-import { redactUrl } from './security/redactor.js';
+import { redactText, redactUrl } from './security/redactor.js';
 import { ManualCleanup, type TestDataCleanup } from './data/created-data.js';
 import { combineListeners, EngineEventLog } from './logging/engine-log.js';
 import { flowsYaml, generateFlows } from './flows/flow-generator.js';
@@ -31,9 +31,17 @@ import { randomUUID } from 'node:crypto';
 import { KnowledgeService } from './persistence/knowledge-service.js';
 import { openPersistence, type PersistenceSession } from './persistence/persistence-manager.js';
 import { PersistenceRecorder } from './persistence/persistence-recorder.js';
+import type { PersistenceProvider } from './persistence/persistence-provider.js';
 import type { MemoryReport, PersistenceReport } from './model/persistence-report.js';
-import { applicationIdOf, confidenceEngineOf, knowledgeContextOf } from './intelligence/intelligence.js';
+import {
+  applicationIdOf,
+  confidenceEngineOf,
+  flakinessOf,
+  knowledgeContextOf,
+} from './intelligence/intelligence.js';
+import { FLAKINESS_CLASSES, type FlakinessClass } from './intelligence/flakiness.js';
 import { summarizeKnowledge } from './intelligence/knowledge-summary.js';
+import { runRegression, type RegressionInput, type RegressionReport } from './regression/regression-store.js';
 import { isSemanticSignature, learnFrom } from './semantics/resolution/semantic-knowledge.js';
 
 export interface RunOutcome {
@@ -206,7 +214,6 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   // RUN_FINISHED : ce qui attend est écrit, le run est clos, la connexion fermée.
   recorder?.recordBlockedEdges(outcome.graph.toJSON().edges);
   await recorder?.finish('COMPLETED');
-  await persistence.provider?.close().catch(() => undefined);
   const current = outcome.graph.toJSON();
 
   // Les autres acteurs ouvrent les écrans trouvés : qu'atteint chacun ?
@@ -243,9 +250,35 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       });
   }
 
+  // RÉGRESSION : l'évolution des flows et le cycle de vie des anomalies, d'un run à l'autre
+  // (persistance active, mémoire non coupée). Une erreur de stockage n'arrête jamais le run.
+  const regression = await regressionOf(config, persistence.provider, memoryMode, {
+    applicationId,
+    graph: current,
+    flows: outcome.flows,
+    issues: outcome.issues,
+    run: {
+      at: outcome.finishedAt.toISOString(),
+      run: recorder?.run.id ?? outcome.runId,
+      version: identity.commit ?? identity.appVersion ?? 'unversioned',
+      complete: outcome.stopReason === 'exhausted',
+      ...(identity.environment ? { environment: identity.environment } : {}),
+      actor: config.authorization.primaryActor,
+    },
+    log: engineLog,
+  });
+  await persistence.provider?.close().catch(() => undefined);
+
   if (knowledgeFile) await knowledge.save();
 
   const result = buildResult(outcome, config);
+  if (regression) {
+    result.regression = regression;
+    for (const issue of result.issues) {
+      const lifecycle = regression.anomalies?.byIssue[issue.id];
+      if (lifecycle) issue.lifecycle = lifecycle;
+    }
+  }
   if (result.intelligence) {
     result.intelligence.domainPacks = semantics.packs;
     result.intelligence.knowledge = {
@@ -264,6 +297,17 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       confidence,
       knowledgeContext,
     );
+    const flaky = flakinessOf(config);
+    if (flaky) {
+      const transitions = Object.values(knowledge.snapshot.transitions).filter(
+        (entry) => !isSemanticSignature(entry.actionSignature),
+      );
+      summary.flakiness = Object.fromEntries(FLAKINESS_CLASSES.map((kind) => [kind, 0])) as Record<
+        FlakinessClass,
+        number
+      >;
+      for (const entry of transitions) summary.flakiness[flaky(entry).class] += 1;
+    }
     result.intelligence.historicalKnowledge = summary;
     engineLog.log('INFO', 'CONFIDENCE_EVALUATED', `${summary.transitions} transition(s) evaluated`, {
       data: { ...summary.levels, transitions: summary.transitions },
@@ -484,5 +528,53 @@ async function crawlerVersion(): Promise<{ crawlerVersion?: string }> {
     return pkg.version ? { crawlerVersion: pkg.version } : {};
   } catch {
     return {};
+  }
+}
+
+/**
+ * Évolution des flows et cycle de vie des anomalies. Rien quand ils sont désactivés ; une
+ * raison claire quand ils ne peuvent pas s'appliquer (pas de persistance, mémoire coupée).
+ */
+async function regressionOf(
+  config: ScenarioConfig,
+  provider: PersistenceProvider | undefined,
+  memoryMode: MemoryReport['mode'],
+  input: Omit<RegressionInput, 'provider' | 'config'> & { log: EngineEventLog },
+): Promise<RegressionReport | undefined> {
+  const { flowEvolution, anomalyLifecycle } = config.regression;
+  if (!flowEvolution.enabled && !anomalyLifecycle.enabled) return undefined;
+  if (!provider) return { skipped: 'regression needs persistence.enabled: true (an available provider)' };
+  if (memoryMode === 'isolated') return { skipped: 'memory.enabled is false: no history is used' };
+  const { log, ...rest } = input;
+  try {
+    const report = await runRegression({ ...rest, provider, config });
+    for (const event of report.anomalies?.events ?? [])
+      log.log(
+        event.kind === 'ANOMALY_CREATED' ? 'INFO' : 'WARN',
+        event.kind,
+        `${event.anomalyId} ${event.type}: ${event.detail}`,
+        {
+          data: { anomalyId: event.anomalyId, type: event.type },
+        },
+      );
+    if (report.evolution)
+      log.log(
+        'INFO',
+        'FLOW_EVOLVED',
+        `${report.evolution.changes.length} change(s) since the previous runs`,
+        {
+          data: {
+            changes: report.evolution.changes.length,
+            states: report.evolution.tracked.STATE,
+            transitions: report.evolution.tracked.TRANSITION,
+            disappeared: report.evolution.disappeared,
+          },
+        },
+      );
+    return report;
+  } catch (error) {
+    const message = error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
+    log.log('WARN', 'FLOW_EVOLVED', `regression history not updated: ${message}`);
+    return { skipped: `history storage failed: ${redactText(message)}` };
   }
 }

@@ -1,4 +1,5 @@
 import { describeConfidence, type ConfidenceResult } from '../intelligence/confidence-engine.js';
+import type { FlakinessResult } from '../intelligence/flakiness.js';
 import { confidenceOf, type VerdictCategory } from '../oracles/confidence.js';
 import type {
   ApiKnowledge,
@@ -24,6 +25,8 @@ export interface TransitionAnomaly {
   message: string;
   /** ConfidenceEngine (intelligence.confidence) : le détail de la confiance. */
   confidenceResult?: ConfidenceResult;
+  /** Flaky detection (intelligence.flakyDetection) : le classement de l'historique. */
+  flakiness?: FlakinessResult;
 }
 
 export interface TransitionAnomalyDetector {
@@ -47,6 +50,8 @@ export class HistoricalTransitionAnomalyDetector implements TransitionAnomalyDet
       dominance: number;
       /** ConfidenceEngine : confiance progressive et expliquée au lieu du barème fixe. */
       confidence?: (knowledge: TransitionKnowledge) => ConfidenceResult;
+      /** Flaky detection : une transition historiquement instable qui change n'est pas une régression. */
+      flakiness?: (knowledge: TransitionKnowledge) => FlakinessResult;
     },
   ) {}
 
@@ -67,14 +72,26 @@ export class HistoricalTransitionAnomalyDetector implements TransitionAnomalyDet
     const suspicious =
       SUSPICIOUS_TARGET.test(observed.toStateSignature) &&
       (!engine || (engine.level !== 'VERY_LOW' && engine.level !== 'LOW'));
+    // Historiquement instable : le changement est dans l'ordre des choses (WARNING), ou
+    // indéchiffrable (UNKNOWN) — jamais une régression potentielle.
+    const flaky = this.options.flakiness?.(knowledge);
+    const category: VerdictCategory =
+      flaky?.class === 'HIGHLY_UNSTABLE'
+        ? 'UNKNOWN'
+        : flaky?.class === 'UNSTABLE'
+          ? 'UNEXPECTED_BEHAVIOR'
+          : suspicious
+            ? 'POTENTIAL_REGRESSION'
+            : 'UNEXPECTED_BEHAVIOR';
     return {
       kind: 'UNEXPECTED_TRANSITION',
       expectation: { target, share: Math.round(share * 100) / 100, observations: total, confidence },
       observed: observed.toStateSignature,
       confidence,
-      category: suspicious ? 'POTENTIAL_REGRESSION' : 'UNEXPECTED_BEHAVIOR',
-      message: `historically "${observed.actionSignature}" led to "${target}" (${count}/${total}), this time to "${observed.toStateSignature}"${engine ? `; confidence ${describeConfidence(engine)}` : ''}`,
+      category,
+      message: `historically "${observed.actionSignature}" led to "${target}" (${count}/${total}), this time to "${observed.toStateSignature}"${engine ? `; confidence ${describeConfidence(engine)}` : ''}${flaky && flaky.class !== 'UNKNOWN' ? `; history ${flaky.class} (${flaky.reason})` : ''}`,
       ...(engine ? { confidenceResult: engine } : {}),
+      ...(flaky ? { flakiness: flaky } : {}),
     };
   }
 }

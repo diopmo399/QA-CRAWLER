@@ -9,6 +9,8 @@ export interface DiffState {
 }
 
 export interface DiffTransition {
+  /** Identité stable de la transition (transitionKey) : état de départ + contrôle. */
+  key: string;
   from: string;
   fromLabel: string;
   to: string;
@@ -21,6 +23,7 @@ export interface DiffTransition {
 }
 
 export interface ChangedTransition {
+  key: string;
   from: string;
   fromLabel: string;
   actionId: string;
@@ -83,6 +86,7 @@ export class FlowDiffEngine {
       }
       if (changes.length === 0) continue;
       changedTransitions.push({
+        key,
         from: transition.from,
         fromLabel: transition.fromLabel,
         actionId: transition.actionId,
@@ -171,7 +175,9 @@ function indexGraph(data: FlowGraphData): {
   for (const edge of data.edges) {
     if (edge.result === 'BLOCKED') continue;
     // La dernière tentative l'emporte (une transition reprise ou rejouée).
-    transitions.set(transitionKey(edge), {
+    const key = transitionKey(edge);
+    transitions.set(key, {
+      key,
       from: edge.from,
       fromLabel: labelOf(edge.from),
       to: edge.to,

@@ -3,7 +3,8 @@ import type { KnowledgeIdentity } from '../knowledge/knowledge-model.js';
 import type { AdvancedActionScorer } from '../decision/advanced-action-scorer.js';
 import type { ActionScorer } from '../decision/action-scorer.js';
 import type { CoverageTracker } from '../coverage/coverage-map.js';
-import type { KnowledgeBase } from '../knowledge/knowledge-model.js';
+import type { KnowledgeBase, TransitionKnowledge } from '../knowledge/knowledge-model.js';
+import { classifyFlakiness, DEFAULT_FLAKINESS, type FlakinessResult } from './flakiness.js';
 import { AdaptiveActionScorer } from './adaptive-scoring.js';
 import { DeterministicConfidenceEngine, type ConfidenceEngine } from './confidence-engine.js';
 import type { AgingOptions } from './knowledge-aging.js';
@@ -91,4 +92,22 @@ export function adaptiveScorerOf(
     ...(signals.coverage ? { coverage: signals.coverage } : {}),
     ...(signals.now ? { now: signals.now } : {}),
   });
+}
+
+/**
+ * Le classement d'instabilité (intelligence.enabled + intelligence.flakyDetection.enabled),
+ * ou rien : l'oracle historique garde alors son comportement d'avant.
+ */
+export function flakinessOf(
+  config: ScenarioConfig,
+): ((knowledge: TransitionKnowledge) => FlakinessResult) | undefined {
+  const { intelligence } = config;
+  if (!intelligence.enabled || !intelligence.flakyDetection.enabled) return undefined;
+  const { enabled: _enabled, ...thresholds } = intelligence.flakyDetection;
+  const options = {
+    ...DEFAULT_FLAKINESS,
+    ...thresholds,
+    sampleHalfPoint: intelligence.confidence.sampleHalfPoint,
+  };
+  return (knowledge) => classifyFlakiness(knowledge, options);
 }

@@ -69,6 +69,8 @@ export interface Issue {
   occurrences: number;
   /** Chemin de la capture, relatif au dossier de travail, quand une capture a été prise. */
   screenshot?: string;
+  /** Cycle de vie (regression.anomalyLifecycle) : l'anomalie suivie de run en run. */
+  lifecycle?: { anomalyId: string; status: 'NEW' | 'KNOWN' | 'RESOLVED' | 'REOPENED' | 'FLAKY' };
 }
 
 /** Données nécessaires pour signaler une nouvelle anomalie ; les champs de suivi sont remplis par le collecteur. */
