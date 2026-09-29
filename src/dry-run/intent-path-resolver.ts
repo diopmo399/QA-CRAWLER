@@ -152,14 +152,16 @@ export class IntentPathResolver {
           const replay = await this.replay(candidate, targets);
           if (replay.blocked) blocked ??= replay.blocked;
           if (replay.found !== undefined) {
-            // Une alternative est un autre chemin : aucune action en commun avec celui qui a été utilisé.
-            const others = known
-              .filter(
-                (path, index) =>
-                  index !== rank && path.actions.every((action) => !candidate.actions.includes(action)),
-              )
-              .map((path) => path.actions);
-            alternatives.push(...others);
+            // Une alternative est un autre chemin (aucune action en commun avec celui utilisé), vu dans CE run :
+            // un chemin seulement historique est cité, jamais présenté comme valide.
+            const others = known.filter(
+              (path, index) =>
+                index !== rank && path.actions.every((action) => !candidate.actions.includes(action)),
+            );
+            alternatives.push(
+              ...others.filter((path) => path.source === 'graph').map((path) => path.actions),
+            );
+            const unconfirmed = others.filter((path) => path.source === 'historical');
             return {
               status: 'FOUND',
               targetIndex: replay.found,
@@ -172,6 +174,11 @@ export class IntentPathResolver {
                 `known path (${candidate.source === 'historical' ? 'historical' : 'this run'}): ${candidate.actions.join(' → ')}`,
                 `${candidate.source === 'historical' ? 'historical frequency' : 'observations'}: ${String(candidate.observations)}${candidate.share !== undefined ? ` (${String(Math.round(candidate.share * 100))}% of the observed runs, not a probability)` : ''}`,
                 'actual UI confirmed every step',
+                ...(unconfirmed.length > 0
+                  ? [
+                      `other historical path(s), not confirmed in this run: ${unconfirmed.map((path) => path.actions.join(' → ')).join(' | ')}`,
+                    ]
+                  : []),
                 ...(targetIndex > 0 ? [`reached a later intent: ${target.label}`] : []),
               ],
             };

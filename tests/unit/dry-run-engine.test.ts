@@ -253,7 +253,8 @@ describe('DryRunEngine + reconciliation, on synthetic applications', () => {
       {
         history: {
           'dash>utilisateurs': [
-            { actions: ['click:acces-rapide'], source: 'historical', observations: 3, share: 0.03 },
+            // Vu dans ce run (graphe) : un autre chemin valide.
+            { actions: ['click:acces-rapide'], source: 'graph', observations: 3, share: 0.03 },
             { actions: ['click:administration'], source: 'historical', observations: 97, share: 0.97 },
           ],
         },
@@ -269,6 +270,30 @@ describe('DryRunEngine + reconciliation, on synthetic applications', () => {
     // Une fréquence observée, jamais présentée comme une probabilité.
     expect(reconciliation.entries[1]?.reasons.join('\n')).toContain(
       '97% of the observed runs, not a probability',
+    );
+  });
+
+  it('an alternative only known from history is named, not presented as valid', async () => {
+    const app = new SyntheticApp(
+      {
+        dash: { label: 'Tableau de bord', actions: [{ label: 'Administration', to: 'admin' }] },
+        admin: { label: 'Administration', actions: [{ label: 'Utilisateurs', to: 'users' }] },
+        users: { label: 'Utilisateurs' },
+      },
+      'dash',
+      {
+        history: {
+          'dash>utilisateurs': [
+            { actions: ['click:administration'], source: 'historical', observations: 97 },
+            { actions: ['click:acces-rapide'], source: 'historical', observations: 3 },
+          ],
+        },
+      },
+    );
+    const { reconciliation } = await dryRun(app, expectedFlow('hist', [['CLICK', 'Utilisateurs']]));
+    expect(rows(reconciliation)).toEqual(['Administration INSERTED', 'Utilisateurs MATCHED']);
+    expect(reconciliation.entries[1]?.reasons.join('\n')).toContain(
+      'other historical path(s), not confirmed in this run: click:acces-rapide',
     );
   });
 

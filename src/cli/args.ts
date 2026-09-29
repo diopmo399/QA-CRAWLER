@@ -42,6 +42,9 @@ Commands (default: mission.mode, else explore):
   learn    Explore, then store the flow graph as the baseline (baseline/, with history)
   verify   Replay every known transition of the baseline; report what changed
   explore  Explore; the baseline, if any, is only a hint: new ground first
+  dry-run  Check a scenario (.feature or flow.yaml) against the application and
+           suggest the complete observed flow: qa-crawler dry-run <file> -c <mission>
+           (qa-crawler dry-run --help for its options)
 
 Options:
   -c, --config <file>         Mission YAML file (or pass it as the first argument)

@@ -28,6 +28,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Mission (YAML)](#mission-yaml)
 - [Créer un flow de test imposé](#créer-un-flow-de-test-imposé)
 - [Scénarios Gherkin](#scénarios-gherkin)
+- [Dry Run : confronter un scénario à l'application](#dry-run--confronter-un-scénario-à-lapplication)
 - [Authentification](#authentification)
 - [Interactions navigateur](#interactions-navigateur)
 - [Sécurité](#sécurité)
@@ -622,6 +623,106 @@ Aucune valeur saisie n'est écrite : le type de la valeur (`EMAIL`) peut l'être
 | 500    | ≈ 22 ms        | ≈ 55 ms                |
 
 Autres exemples : `tests/fixtures/features/semantic-users.feature` (création, tableau, assistant) et `semantic-users-en.feature` (phrases anglaises sur un écran français).
+
+## Dry Run : confronter un scénario à l'application
+
+`qa-crawler dry-run` prend le scénario d'un développeur (`.feature` ou `flow.yaml`) et vérifie s'il correspond **vraiment** à l'application. Le scénario n'est pas une suite d'actions à rejouer aveuglément : c'est une liste ordonnée d'**intentions**, des points de passage. Quand une étape ne correspond pas, l'analyse **ne s'arrête pas** : exploration guidée vers cette étape ou les suivantes, puis, à la fin seulement, **une** réconciliation et **un** flow suggéré complet. Le fichier d'origine n'est jamais modifié.
+
+```bash
+npm run qa -- dry-run features/create-user.feature -c mission.yaml
+npm run qa -- dry-run flows/create-user.flow.yaml -c mission.yaml --output-format both
+npm run qa -- dry-run create-user.feature --base-url https://qa.example.com --no-history --max-actions 60
+npm run qa -- dry-run --help
+```
+
+```
+flow du développeur (EXPECTED) → FlowIntentGraph → application réelle (OBSERVED)
+      → réconciliation → flow suggéré (SUGGESTED) → suggested.feature + suggested.flow.yaml
+```
+
+Les trois restent séparés : **EXPECTED** (le scénario), **OBSERVED** (ce que l'application a montré), **SUGGESTED** (la proposition).
+
+**Exemple.** Le scénario dit :
+
+```gherkin
+Étant donné que je suis connecté
+Quand je vais dans Utilisateurs
+Et je crée un utilisateur
+Alors l'utilisateur apparaît dans la liste
+```
+
+L'application passe par le tableau de bord, l'administration et un assistant en trois écrans :
+
+```
+Original                        Suggested
+─────────────────────────────────────────────────────────
+je suis connecté           ✓    je suis connecté
+                           +    Administration
+Utilisateurs               ✓    Utilisateurs
+Créer un utilisateur       ✓    Créer un utilisateur
+                           +    (formulaire) Suivant
+                           +    (formulaire) Suivant
+                           +    Confirmer la création
+Utilisateur créé           ✓    Utilisateur créé
+
+Scenario status : PARTIALLY_MATCHED · 4 matched · 4 inserted · 0 possibly obsolete
+```
+
+Le test de bout en bout `tests/integration/dry-run.test.ts` le vérifie dans Chromium, en Gherkin et en YAML : même flow suggéré.
+
+**Une étape à la fois, sans jamais conclure trop tôt :**
+
+1. L'intention est-elle sur l'écran ? (SemanticResolver pour une phrase d'intention, localisateur pour une étape YAML, lecture seule pour une vérification.) Oui : elle est exécutée, avec la SafetyPolicy des flows imposés.
+2. Non : **exploration guidée** vers elle et vers les 3 suivantes. D'abord une étape suivante déjà à l'écran (l'attendue est dépassée). Ensuite les **chemins connus** (graphe du run, graphe mémorisé, KnowledgeBase) : la mémoire propose, l'application confirme, chaque pas est rejoué sur l'écran réel. Enfin une recherche best-first, les écrans les plus proches d'abord.
+3. Une intention dépassée est mise de côté, réessayée après chaque étape trouvée (**réordonnancement**), puis qualifiée à la fin.
+
+**Score de l'exploration guidée :** le score du moteur de décision existant (ActionScorer, AdaptiveScoring), plus la proximité avec l'intention cherchée (mots, concepts du dictionnaire, adresse du lien), le premier pas d'un chemin connu, la progression (un bouton de formulaire vers un résultat attendu) et la nouveauté ; moins la répétition, l'instabilité et le risque. Un couple (écran, intention) déjà cherché ne l'est jamais deux fois.
+
+**Sécurité, toujours :** une étape du scénario passe par la SafetyPolicy des flows (`allow`, tags `@mutation`…). Une étape **insérée**, que le développeur n'a pas écrite, passe par la SafetyPolicy **de la mission** ET les permissions du scénario. Une action refusée pour une étape attendue n'est jamais exécutée par l'exploration guidée non plus. Une piste qui exige une action refusée donne `BLOCKED_BY_POLICY`, jamais `UNREACHABLE`.
+
+| Statut               | Signification                                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `MATCHED`            | l'étape du scénario, retrouvée et exécutée                                                                             |
+| `INSERTED`           | une étape de l'application absente du scénario (observée)                                                              |
+| `REORDERED`          | l'étape existe, ailleurs dans l'ordre                                                                                  |
+| `ALTERNATIVE`        | une étape d'un autre chemin valide, **vu dans ce run** ; celui qui a été utilisé est proposé, l'autre est cité         |
+| `POSSIBLY_OBSOLETE`  | introuvable, les étapes suivantes ont été trouvées sans elle ; **jamais supprimée** : gardée en commentaire pour revue |
+| `MISSING`            | la cible existe dans l'application (vue ailleurs pendant le run), mais pas à cet endroit du flow                       |
+| `UNREACHABLE`        | tout l'espace accessible (profondeur et politique permises) a été parcouru sans la trouver                             |
+| `AMBIGUOUS`          | plusieurs cibles possibles : jamais choisie au hasard                                                                  |
+| `ASSERTION_MISMATCH` | la vérification ne se vérifie pas (le résultat attendu n'est pas observé)                                              |
+| `BLOCKED_BY_POLICY`  | la cible, ou le seul chemin trouvé, exige une action refusée : jamais exécutée                                         |
+| `NOT_VERIFIED`       | budget épuisé, vérification manuelle, ou page de départ inaccessible                                                   |
+
+Chaque ligne donne sa **confiance**, ses **raisons** et ses **preuves** (écran, action, provenance, champs remplis). Pour `POSSIBLY_OBSOLETE`, l'historique change la confiance : une étape vue lors de runs précédents a peut-être seulement bougé (0,4) ; jamais vue (0,7) ; sans mémoire (0,6). Une fréquence historique (« 97 % des runs ») est une fréquence observée, jamais une probabilité d'être correcte.
+
+**Statut global** (jamais un booléen) : `FULLY_MATCHED` (le scénario tel quel), `PARTIALLY_MATCHED` (tout est retrouvé, avec des étapes en plus, ailleurs ou alternatives), `DIVERGED` (une étape introuvable, obsolète ou un résultat différent), `BLOCKED`, `INCONCLUSIVE` (budget, ambiguïté).
+
+**Flow suggéré.** Chaque étape a sa **provenance** : `ORIGINAL` (l'étape du scénario), `OBSERVED` (vue pendant ce run) ou `HISTORICAL_CONFIRMED` (proposée par la mémoire et confirmée sur l'application). Une étape seulement historique n'est jamais présentée comme observée. Un clic qui a rempli un formulaire avec des données de test est précédé de « je remplis le formulaire » (intention `FILL_FORM`, qui exige `gherkin.semanticResolution.enabled: true`). Les deux formats viennent du même `SuggestedFlowGraph`, quelle que soit l'entrée :
+
+- `suggested.feature` : les phrases du projet (phrases intégrées et d'intention, FR ou EN selon le `.feature` d'origine ou `report.language`), les phrases d'origine reprises telles qu'écrites, `@mutation` si besoin, jamais un sélecteur CSS/XPath ;
+- `suggested.flow.yaml` : le schéma des flows du projet (validé par `flowSchema`), statut et provenance en commentaire.
+
+**Fichiers** (`<reportsDir>/dry-run/<scénario>/`) : `expected-flow.json` (sans les valeurs saisies), `observed-flow.json`, `suggested-flow.json`, `reconciliation.json`, `suggested.feature`, `suggested.flow.yaml`, `dry-run-events.jsonl`, `index.html` (original et suggéré côte à côte, explication de chaque différence), et `exploration/` (le rapport du run sous-jacent : graphe, journal, captures). Un fichier avec plusieurs scénarios, ou un Plan du scénario, donne un sous-dossier par flow.
+
+**Événements** (journal du moteur, masqués comme les autres) : `DRY_RUN_STARTED`, `FLOW_INTENT_PARSED`, `INTENT_MATCHED`, `INTENT_MISMATCH`, `GUIDED_EXPLORATION_STARTED`, `PATH_DISCOVERED`, `FLOW_STEP_INSERTED`, `FLOW_STEP_POSSIBLY_OBSOLETE`, `FLOW_STEP_REORDERED`, `FLOW_STEP_AMBIGUOUS`, `FLOW_RECONCILIATION_COMPLETED`, `SUGGESTED_FLOW_GENERATED`, `DRY_RUN_COMPLETED`.
+
+```yaml
+dryRun:
+  continueAfterMismatch: true # false : arrêt au premier écart (le reste : NOT_VERIFIED)
+  useHistoricalKnowledge: true # chemins connus d'abord (mémoire activée) ; --use-history / --no-history
+  maxDepth: 15 # actions au plus entre deux intentions retrouvées
+  maxActions: 100 # actions de l'exploration guidée au plus
+  maxDurationMs: 120000
+  maxAlternativePaths: 5 # actions essayées au plus par écran, chemins connus rejoués au plus
+  suggestion: { generateGherkin: true, generateYaml: true } # --output-format gherkin | yaml | both
+```
+
+La mission donne la cible, la connexion, la sécurité, `gherkin.steps` et les flows `reusable` ; ses autres flows sont ignorés. Sans mission : `--base-url` (ou `QA_BASE_URL`). Sans mémoire ni persistance, le Dry Run n'utilise que l'exploration courante : aucune base de données n'est nécessaire.
+
+**Codes de sortie :** `0` FULLY_MATCHED ou PARTIALLY_MATCHED, `1` DIVERGED, BLOCKED ou INCONCLUSIVE, `2` usage ou scénario invalide, `3` erreur d'exécution.
+
+**Limites.** Une exploration peut ne pas suffire : `POSSIBLY_OBSOLETE` n'est jamais une suppression. Une étape déjà sur l'écran courant peut dépasser une étape attendue plus loin (elle est alors réessayée après chaque étape trouvée). L'exploration guidée remplit un formulaire avant son bouton avec les données de test, mais ne remplit pas de champ isolé. Une action de modification exécutée pendant la recherche n'est pas annulée : elle n'est permise qu'avec `@mutation` (ou `allow: MUTATION`) ET une mission qui l'autorise, et compte dans le budget de modifications.
 
 ## Authentification
 
@@ -1655,6 +1756,7 @@ npm run qa -- learn scenarios/demo.yaml
 npm run qa -- verify scenarios/demo.yaml --baseline-dir baselines/qa
 npm run qa -- --config scenarios/smoke.yaml --base-url https://pr-42.example.com --max-states 30 --max-actions 100
 npm run qa -- scenarios/mon-flow.yaml --headed      # voir le navigateur (nécessite un écran)
+npm run qa -- dry-run features/create-user.feature -c scenarios/demo.yaml   # voir « Dry Run »
 npm run qa -- --help
 ```
 
@@ -1787,6 +1889,8 @@ src/
 ├── execution/                    PlaywrightActionExecutor, résolution des localisateurs
 ├── flows/                        exécution des étapes de flow, sécurité, périmètre de thenExplore, génération de flows YAML
 │   └── gherkin/                  scénarios .feature → flows (lecteur Cucumber, phrases types FR/EN)
+├── dry-run/                      Dry Run : FlowIntentGraph, DryRunEngine, IntentPathResolver, alignement,
+│                                 réconciliation, flow suggéré (.feature / flow.yaml), rapport, orchestrateur
 ├── interactions/                 BrowserEventDiscovery, BrowserInteractionManager, handlers, CredentialProvider
 ├── data/                         TestDataProvider, DefaultTestDataProvider, données créées, TestDataCleanup
 ├── forms/                        FormAnalyzer, FormFillStrategy (plan), FormExerciser, tests de validation, OpenAPI
