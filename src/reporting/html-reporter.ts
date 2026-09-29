@@ -12,7 +12,10 @@ import {
   esc,
   formatDate,
   formatDuration,
+  issuesCard,
+  layoutSections,
   renderTreeHtml,
+  type ReportSection,
   severityBadge,
   SEVERITY_COLORS,
 } from './html-common.js';
@@ -99,7 +102,7 @@ export function renderHtml(
 
   const issueTable = (title: string, issues: Issue[], withRequest: boolean): string => {
     if (issues.length === 0)
-      return `<section><h2>${esc(title)}</h2><p class="empty">${esc(t.noneDetected)}</p></section>`;
+      return `<section><h2>${esc(title)}</h2><p class="empty ok">${esc(t.noneDetected)}</p></section>`;
     const rows = issues
       .map(
         (issue) => `<tr>
@@ -116,80 +119,53 @@ export function renderHtml(
     return `<section><h2>${esc(title)} (${issues.length})</h2><table><thead><tr><th>${c.severity}</th>${withRequest ? `<th>${c.status}</th><th>${c.request}</th>` : ''}<th>${c.message}</th><th>${c.stateActionFlow}</th><th>${c.count}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table></section>`;
   };
 
-  return `<!doctype html>
-<html lang="${language}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(t.reportTitle)} — ${esc(result.mission)}</title>
-<style>${BASE_CSS}</style>
-</head>
-<body>
-<header>
-  <h1>${esc(result.mission)}</h1>
-  <div class="meta">${esc(result.target.startUrl)} · ${esc(formatDate(result.startedAt))} · ${esc(formatDuration(result.durationMs))} · ${esc(t.stopped)} : ${esc(label(result.stopReason))} · ${esc(t.engine)} : ${esc(label(result.decisionEngine))}</div>
-  ${result.description ? `<div class="meta">${esc(result.description)}</div>` : ''}
-  <div class="meta">${esc(t.baselineTexts.mode)} : ${esc(label(result.mode))}${result.baseline ? ` · ${esc(t.baselineTexts.baseline)} : ${esc(baselineName(result.baseline))}` : ''}${result.learnedBaseline ? ` · ${esc(t.baselineTexts.learned)} : ${esc(baselineName(result.learnedBaseline))}` : ''}</div>
-  <span class="status" style="background:${status.color}">${esc(status.label)}</span>
-  <nav>${result.artifacts.flowGraphHtml ? `<a href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
-</header>
-<main>
-  <div class="cards">
-    ${card(t.cards.states, result.stats.states)}
-    ${card(t.cards.transitions, result.stats.transitions)}
-    ${card(t.cards.actionsExecuted, result.stats.actionsExecuted)}
-    ${card(t.cards.actionsBlocked, result.stats.actionsBlocked)}
-    ${card(t.cards.maxDepth, result.stats.maxDepth)}
-    ${card(t.cards.backtracks, result.stats.backtracks)}
-    ${result.flows.length > 0 ? card(t.cards.flowsPassed, `${result.stats.flowsPassed}/${result.flows.length}`) : ''}
-    ${card(t.cards.issues, result.issues.length)}
-    ${SEVERITIES.slice()
-      .reverse()
-      .map((severity) =>
-        card(label(severity), result.stats.issuesBySeverity[severity], SEVERITY_COLORS[severity]),
-      )
-      .join('')}
-    ${card(t.cards.duration, formatDuration(result.durationMs))}
-  </div>
-
-  ${result.flows.length > 0 ? flowsSection(result, nameOf, href, t) : ''}
-
-  ${result.verification ? verificationSection(result, t) : ''}
-  ${result.flowDiff ? flowDiffSection(result, t) : ''}
-
-  ${result.browserInteractions.length > 0 ? interactionsSection(result, nameOf, t) : ''}
-
-  ${intelligenceSection(result, nameOf, language)}
-  ${regressionSection(result, language)}
-  ${persistenceSection(result, language)}
-  ${oraclesSection(result, nameOf, language)}
-  ${oracleIssues.length > 0 ? issueTable(q.oracleFindings, oracleIssues, false) : ''}
-  ${formsSection(result, nameOf, language)}
-  ${authorizationSection(result, language)}
-  ${authorizationIssues.length > 0 ? issueTable(q.authorizationIssues, authorizationIssues, false) : ''}
-  ${recoverySection(result, nameOf, language)}
-  ${dataSection(result, nameOf, language)}
-
-  <section>
+  const alerting = (html: string, issues: Issue[]): ReportSection => ({ html, alert: issues.length > 0 });
+  const layout = layoutSections(
+    [
+      {
+        title: t.layout.results,
+        collapsed: false,
+        sections: [
+          result.flows.length > 0 ? flowsSection(result, nameOf, href, t) : '',
+          result.verification ? verificationSection(result, t) : '',
+          result.flowDiff ? flowDiffSection(result, t) : '',
+          alerting(issueTable(t.issueSections.http, httpIssues, true), httpIssues),
+          alerting(issueTable(t.issueSections.js, jsIssues, false), jsIssues),
+          flowIssues.length > 0
+            ? alerting(issueTable(t.issueSections.flow, flowIssues, false), flowIssues)
+            : '',
+          formIssues.length > 0
+            ? alerting(issueTable(t.issueSections.forms, formIssues, false), formIssues)
+            : '',
+          navigationIssues.length > 0
+            ? alerting(issueTable(t.issueSections.navigation, navigationIssues, true), navigationIssues)
+            : '',
+          oracleIssues.length > 0
+            ? alerting(issueTable(q.oracleFindings, oracleIssues, false), oracleIssues)
+            : '',
+          accessibilityIssues.length > 0
+            ? alerting(issueTable(q.accessibility, accessibilityIssues, false), accessibilityIssues)
+            : '',
+          authorizationIssues.length > 0
+            ? alerting(issueTable(q.authorizationIssues, authorizationIssues, false), authorizationIssues)
+            : '',
+        ],
+      },
+      {
+        title: t.layout.exploration,
+        collapsed: false,
+        sections: [
+          `<section>
     <h2>${esc(t.discoveredFlow)}</h2>
     <p class="muted">${esc(t.discoveredFlowHint)}</p>
     ${renderFlowMap(result, language)}
     ${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}
-  </section>
-
-  ${flowIssues.length > 0 ? issueTable(t.issueSections.flow, flowIssues, false) : ''}
-  ${formIssues.length > 0 ? issueTable(t.issueSections.forms, formIssues, false) : ''}
-  ${issueTable(t.issueSections.http, httpIssues, true)}
-  ${issueTable(t.issueSections.js, jsIssues, false)}
-  ${navigationIssues.length > 0 ? issueTable(t.issueSections.navigation, navigationIssues, true) : ''}
-  ${accessibilityIssues.length > 0 ? issueTable(q.accessibility, accessibilityIssues, false) : ''}
-
-  <section>
+  </section>`,
+          `<section>
     <h2>${esc(t.statesTitle)} (${result.states.length})</h2>
     ${statesTable(result.states, href, t)}
-  </section>
-
-  <section>
+  </section>`,
+          `<section>
     <h2>${esc(t.executedTitle)} (${executed.length})</h2>
     ${
       executed.length === 0
@@ -197,13 +173,12 @@ export function renderHtml(
         : `<table><thead><tr><th>${c.from}</th><th>${c.action}</th><th>${c.to}</th><th>${c.result}</th><th>${c.duration}</th></tr></thead><tbody>${executed
             .map(
               (edge) =>
-                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(label(edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}” <span class="muted">${esc(label(edge.action.category))}</span></td><td>${edge.to === edge.from ? `<span class="muted">${esc(t.sameState)}</span>` : esc(nameOf(edge.to))}</td><td>${classPill(edge.result, language)}${edge.reason ? `<br><span class="muted">${esc(reason(edge.reason))}</span>` : ''}</td><td>${edge.durationMs ?? ''} ms</td></tr>`,
+                `<tr><td>${esc(nameOf(edge.from))}</td><td class="wrap">${esc(label(edge.action.type))} “${esc(edge.action.text ?? edge.action.label ?? '')}” <span class="muted">${esc(label(edge.action.category))}</span></td><td>${edge.to === edge.from ? `<span class="muted">${esc(t.sameState)}</span>` : esc(nameOf(edge.to))}</td><td>${classPill(edge.result, language)}${edge.reason ? `<br><span class="muted">${esc(reason(edge.reason))}</span>` : ''}</td><td>${edge.durationMs !== undefined ? `${edge.durationMs} ms` : ''}</td></tr>`,
             )
             .join('')}</tbody></table>`
     }
-  </section>
-
-  <section>
+  </section>`,
+          `<section>
     <h2>${esc(t.blockedTitle)} (${blocked.length})</h2>
     <p class="muted">${esc(t.blockedHint)}</p>
     ${
@@ -216,9 +191,8 @@ export function renderHtml(
             )
             .join('')}</tbody></table>`
     }
-  </section>
-
-  <section>
+  </section>`,
+          `<section>
     <h2>${esc(t.screenshotsTitle)} (${shots.length})</h2>
     ${
       shots.length === 0
@@ -230,9 +204,85 @@ export function renderHtml(
             })
             .join('')}</div>`
     }
-  </section>
-  <p class="muted">${esc(t.generatedBy)} · ${esc(formatDate(result.finishedAt))}</p>
+  </section>`,
+        ],
+      },
+      {
+        title: t.layout.analysis,
+        hint: t.layout.analysisHint,
+        collapsed: true,
+        sections: [
+          intelligenceSection(result, nameOf, language),
+          regressionSection(result, language),
+          persistenceSection(result, language),
+          oraclesSection(result, nameOf, language),
+          formsSection(result, nameOf, language),
+          authorizationSection(result, language),
+          recoverySection(result, nameOf, language),
+          dataSection(result, nameOf, language),
+          result.browserInteractions.length > 0 ? interactionsSection(result, nameOf, t) : '',
+        ],
+      },
+    ],
+    t.layout.contents,
+  );
+
+  return `<!doctype html>
+<html lang="${language}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(t.reportTitle)} — ${esc(result.mission)}</title>
+<style>${BASE_CSS}</style>
+</head>
+<body>
+<header>
+  <div class="hero">
+    <div class="eyebrow">${esc(t.reportTitle)}</div>
+    <div class="hero-title"><h1>${esc(result.mission)}</h1><span class="status" style="--status:${status.color}">${esc(status.label)}</span></div>
+    ${result.description ? `<p class="hero-desc">${esc(result.description)}</p>` : ''}
+    <div class="chips">
+      <span class="chip url">${esc(result.target.startUrl)}</span>
+      <span class="chip">${esc(formatDate(result.startedAt))}</span>
+      <span class="chip">${esc(formatDuration(result.durationMs))}</span>
+      <span class="chip"><span>${esc(t.stopped)}</span> ${esc(label(result.stopReason))}</span>
+      <span class="chip"><span>${esc(t.engine)}</span> ${esc(label(result.decisionEngine))}</span>
+      <span class="chip"><span>${esc(t.baselineTexts.mode)}</span> ${esc(label(result.mode))}</span>
+      ${result.baseline ? `<span class="chip"><span>${esc(t.baselineTexts.baseline)}</span> ${esc(baselineName(result.baseline))}</span>` : ''}
+      ${result.learnedBaseline ? `<span class="chip"><span>${esc(t.baselineTexts.learned)}</span> ${esc(baselineName(result.learnedBaseline))}</span>` : ''}
+    </div>
+    <nav class="links">${result.artifacts.flowGraphHtml ? `<a class="primary" href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
+  </div>
+</header>
+<div class="layout">
+<div class="summary">
+  <div class="cards">
+    ${issuesCard(t.cards.issues, result.stats.issuesBySeverity, label)}
+    ${SEVERITIES.slice()
+      .reverse()
+      .map((severity) =>
+        card(label(severity), result.stats.issuesBySeverity[severity], SEVERITY_COLORS[severity]),
+      )
+      .join('')}
+    ${result.flows.length > 0 ? card(t.cards.flowsPassed, `${result.stats.flowsPassed}/${result.flows.length}`) : ''}
+  </div>
+  <div class="cards secondary">
+    ${card(t.cards.states, result.stats.states)}
+    ${card(t.cards.transitions, result.stats.transitions)}
+    ${card(t.cards.actionsExecuted, result.stats.actionsExecuted)}
+    ${card(t.cards.actionsBlocked, result.stats.actionsBlocked)}
+    ${card(t.cards.maxDepth, result.stats.maxDepth)}
+    ${card(t.cards.backtracks, result.stats.backtracks)}
+    ${card(t.cards.duration, formatDuration(result.durationMs))}
+  </div>
+</div>
+${layout.toc}
+<main>
+
+  ${layout.body}
+  <p class="muted report-footer">${esc(t.generatedBy)} · ${esc(formatDate(result.finishedAt))}</p>
 </main>
+</div>
 </body>
 </html>
 `;
