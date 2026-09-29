@@ -16,6 +16,8 @@ const FILES: Record<keyof MemoryTables, string> = {
   states: 'run-states.json',
   transitions: 'run-transitions.json',
   knowledge: 'transition-knowledge.json',
+  evolution: 'flow-evolution.json',
+  anomalies: 'anomaly-lifecycle.json',
 };
 
 /**

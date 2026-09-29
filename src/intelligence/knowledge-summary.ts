@@ -5,6 +5,7 @@ import {
   type ConfidenceLevel,
   type ConfidenceResult,
 } from './confidence-engine.js';
+import type { FlakinessClass } from './flakiness.js';
 import type { KnowledgeContext } from './knowledge-context.js';
 
 /** Une connaissance de transition évaluée : ce qu'on sait, et à quel point on peut s'y fier. */
@@ -30,6 +31,8 @@ export interface HistoricalKnowledgeSummary {
   otherContext: number;
   /** Les plus observées, avec le détail de leur confiance. */
   entries: EvaluatedKnowledge[];
+  /** Flaky detection : la répartition STABLE … HIGHLY_UNSTABLE, UNKNOWN. */
+  flakiness?: Record<FlakinessClass, number>;
 }
 
 /**

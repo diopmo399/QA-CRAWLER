@@ -28,7 +28,12 @@ export type EngineEvent =
   | 'CONFIDENCE_EVALUATED'
   | 'SEMANTIC_RESOLUTION_SUCCEEDED'
   | 'SEMANTIC_RESOLUTION_FAILED'
-  | 'SEMANTIC_RESOLUTION_AMBIGUOUS';
+  | 'SEMANTIC_RESOLUTION_AMBIGUOUS'
+  | 'FLOW_EVOLVED'
+  | 'ANOMALY_CREATED'
+  | 'ANOMALY_RESOLVED'
+  | 'ANOMALY_REOPENED'
+  | 'ANOMALY_FLAKY';
 
 /**
  * Une ligne du journal du moteur (engine-log.jsonl). Seulement des id, des libellés

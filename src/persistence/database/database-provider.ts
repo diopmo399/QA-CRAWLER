@@ -1,4 +1,6 @@
 import {
+  validateKeyedRecord,
+  type KeyedRecord,
   combineObservations,
   mergeObservation,
   PERSISTENCE_SCHEMA_VERSION,
@@ -12,6 +14,7 @@ import {
   type TransitionObservation,
 } from '../model.js';
 import type {
+  KeyedRepository,
   KnowledgeRepository,
   PersistenceKind,
   PersistenceProvider,
@@ -254,6 +257,74 @@ export class DatabasePersistenceProvider implements PersistenceProvider {
       return rows.map((row) => this.knowledgeOf(row));
     },
   };
+
+  readonly evolution: KeyedRepository = this.keyed('flow_evolution');
+  readonly anomalies: KeyedRepository = this.keyed('anomaly_lifecycle');
+
+  /**
+   * Une ligne par (application, clé) : lue en la bloquant, remplacée ou insérée, dans une
+   * transaction (la même règle que les autres providers : la dernière écriture l'emporte).
+   */
+  private keyed(table: 'flow_evolution' | 'anomaly_lifecycle'): KeyedRepository {
+    return {
+      save: async (records) => {
+        records.forEach(validateKeyedRecord);
+        if (records.length === 0) return;
+        const { dialect } = this.adapter;
+        await this.transactionWithRetry(async (tx) => {
+          for (const record of records) {
+            const [row] = await tx.query(
+              `SELECT id FROM ${dialect.lockedTable(table)} WHERE application_id = ${this.p(1)} AND record_key = ${this.p(2)}${dialect.lockSuffix}`,
+              [record.applicationId, record.key],
+            );
+            const values = {
+              status: record.status,
+              first_seen_at: record.firstSeenAt,
+              last_seen_at: record.lastSeenAt,
+              record_json: JSON.stringify(record.data),
+            };
+            if (row)
+              await tx.query(
+                `UPDATE ${table} SET status = ${this.p(1)}, first_seen_at = ${this.p(2)}, last_seen_at = ${this.p(3)}, record_json = ${this.p(4)} WHERE id = ${this.p(5)}`,
+                [
+                  values.status,
+                  values.first_seen_at,
+                  values.last_seen_at,
+                  values.record_json,
+                  textOf(row.id),
+                ],
+              );
+            else {
+              const { sql, params } = this.insert(table, {
+                id: randomUUID(),
+                application_id: record.applicationId,
+                record_key: record.key,
+                ...values,
+              });
+              await tx.query(sql, params);
+            }
+          }
+        });
+      },
+      load: async (applicationId, limit) => {
+        const rows = await this.adapter.query(
+          this.adapter.dialect.limit(
+            `SELECT * FROM ${table} WHERE application_id = ${this.p(1)} ORDER BY last_seen_at DESC, record_key`,
+            limit,
+          ),
+          [applicationId],
+        );
+        return rows.map((row): KeyedRecord => ({
+          applicationId: textOf(row.application_id),
+          key: textOf(row.record_key),
+          status: textOf(row.status),
+          firstSeenAt: this.adapter.dialect.fromTimestamp(row.first_seen_at),
+          lastSeenAt: this.adapter.dialect.fromTimestamp(row.last_seen_at),
+          data: this.adapter.dialect.fromJson(row.record_json),
+        }));
+      },
+    };
+  }
 
   // ---- lignes → enregistrements (les colonnes NULL deviennent des champs absents)
 

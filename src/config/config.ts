@@ -586,6 +586,22 @@ const intelligenceSchema = z
       .strict()
       .default({}),
     /**
+     * FLAKY DETECTION : les transitions historiquement instables (réussites, destinations).
+     * Une transition instable qui change n'est jamais une régression potentielle : WARNING,
+     * ou UNKNOWN si elle est très instable.
+     */
+    flakyDetection: z
+      .object({
+        enabled: z.boolean().default(true),
+        stableAt: z.number().min(0).max(1).default(0.95),
+        mostlyStableAt: z.number().min(0).max(1).default(0.8),
+        unstableAt: z.number().min(0).max(1).default(0.5),
+        /** En dessous de cette confiance (peu d'observations) : UNKNOWN. */
+        minConfidence: z.number().min(0).max(1).default(0.4),
+      })
+      .strict()
+      .default({}),
+    /**
      * AdaptiveScoring : le score des actions nuancé par la confiance, la nouveauté et la
      * stabilité de l'historique. Désactivé par défaut (il change les décisions) ; sans
      * historique (memory.enabled: false), il n'a aucun effet.
@@ -606,6 +622,38 @@ const intelligenceSchema = z
  * PERSISTANCE : OÙ les runs, états, transitions et connaissances sont stockés. Désactivée
  * par défaut ; QA-CRAWLER n'exige jamais de base de données.
  */
+/**
+ * RÉGRESSION : l'historique d'une version à l'autre. Désactivé par défaut ; exige la
+ * persistance (persistence.enabled) et une mémoire non coupée (memory.enabled ≠ false).
+ */
+const regressionSchema = z
+  .object({
+    /** Quand un état est apparu, quand une action a disparu, depuis quand une transition mène ailleurs. */
+    flowEvolution: z
+      .object({
+        enabled: z.boolean().default(false),
+        /** Événements gardés par élément. */
+        historyLimit: z.number().int().min(1).max(200).default(20),
+        /** Éléments chargés au plus. */
+        loadLimit: z.number().int().positive().default(20_000),
+      })
+      .strict()
+      .default({}),
+    /** NEW → KNOWN → RESOLVED → REOPENED (et FLAKY) : chaque anomalie suivie de run en run. */
+    anomalyLifecycle: z
+      .object({
+        enabled: z.boolean().default(false),
+        /** Vérifications consécutives sans l'anomalie (son écran revisité) pour la déclarer RESOLVED. */
+        resolveAfterChecks: z.number().int().min(1).max(100).default(3),
+        /** Allers-retours (absente puis présente) pour la déclarer FLAKY. */
+        flakyAfterFlips: z.number().int().min(1).max(100).default(2),
+        loadLimit: z.number().int().positive().default(5_000),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
 const persistenceSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -999,6 +1047,7 @@ export const scenarioSchema = z
     output: outputSchema.default({}),
     memory: memorySchema.default({}),
     persistence: persistenceSchema.default({}),
+    regression: regressionSchema.default({}),
     report: reportSchema.default({}),
     /** Flows de test imposés, exécutés avant l'exploration autonome. */
     flows: flowsSchema,

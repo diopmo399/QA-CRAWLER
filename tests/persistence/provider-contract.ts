@@ -300,6 +300,36 @@ export function persistenceProviderContract(name: string, target: ContractTarget
       expect(none?.lastContext).toBeUndefined();
     });
 
+    it('evolution / anomalies: one row per key, replaced in place, most recent first, per application', async () => {
+      for (const repository of [provider.evolution, provider.anomalies]) {
+        const record = (key: string, lastSeenAt: string, status = 'PRESENT', applicationId = app) => ({
+          applicationId,
+          key,
+          status,
+          firstSeenAt: '2026-01-01T00:00:00.000Z',
+          lastSeenAt,
+          data: { label: `élément ${key}`, history: [{ change: 'APPEARED', run: 'r1' }], versions: ['v1'] },
+        });
+        await repository.save([
+          record('STATE:a', '2026-02-01T00:00:00.000Z'),
+          record('STATE:b', '2026-03-01T00:00:00.000Z'),
+        ]);
+        await repository.save([record('STATE:a', '2026-04-01T00:00:00.000Z', 'DISAPPEARED')]);
+        await repository.save([record('STATE:z', '2026-05-01T00:00:00.000Z', 'PRESENT', other)]);
+        const rows = await repository.load(app, 10);
+        expect(rows.map((row) => [row.key, row.status])).toEqual([
+          ['STATE:a', 'DISAPPEARED'],
+          ['STATE:b', 'PRESENT'],
+        ]);
+        expect(rows[0]).toEqual(record('STATE:a', '2026-04-01T00:00:00.000Z', 'DISAPPEARED'));
+        expect((await repository.load(app, 1)).length).toBe(1);
+        await expect(
+          repository.save([record('x'.repeat(500), '2026-06-01T00:00:00.000Z')]),
+        ).rejects.toThrow();
+        expect((await repository.load(app, 10)).length).toBe(2);
+      }
+    });
+
     if (target.durable)
       it('durable: a new provider on the same storage sees everything', async () => {
         const again = await target.create();

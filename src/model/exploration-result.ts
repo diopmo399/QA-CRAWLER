@@ -1,3 +1,4 @@
+import type { RegressionReport } from '../regression/regression-store.js';
 import type { HistoricalKnowledgeSummary } from '../intelligence/knowledge-summary.js';
 import type { PersistenceReport } from './persistence-report.js';
 import type { BaselineMetadata } from '../baseline/baseline-store.js';
@@ -82,6 +83,8 @@ export interface ExplorationResult {
   /** Interactions levées par le navigateur hors du DOM (HTTP_AUTH, dialogues, popups, téléchargements…). */
   browserInteractions: BrowserInteractionResult[];
   issues: Issue[];
+  /** Régression intelligente : évolution des flows, cycle de vie des anomalies. */
+  regression?: RegressionReport;
   /** Baseline avec laquelle ce run a été comparé (verify, explore) ou qu'il a remplacée (learn). */
   baseline?: BaselineMetadata;
   /** learn : la baseline enregistrée par ce run. */

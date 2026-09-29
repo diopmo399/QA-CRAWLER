@@ -7,7 +7,7 @@ import type { ObservedKnowledgeContext } from '../knowledge/knowledge-model.js';
  */
 
 /** Version du schéma de données (le nombre de migrations de la base). */
-export const PERSISTENCE_SCHEMA_VERSION = 3;
+export const PERSISTENCE_SCHEMA_VERSION = 4;
 
 /** Cible d'une transition sans nouvel état (bloquée, échouée) : la clé de connaissance reste non nulle. */
 export const NO_TARGET = '(none)';
@@ -123,6 +123,32 @@ export interface PersistenceHealth {
   schemaVersion?: number;
   /** Raison lisible, jamais d'identifiants. */
   detail?: string;
+}
+
+/**
+ * UN ENREGISTREMENT « UNE LIGNE PAR ÉLÉMENT » (évolution des flows, cycle de vie des
+ * anomalies) : une clé, un statut, les dates de première et de dernière observation, et le
+ * reste en JSON (historique borné). Mis à jour sur place : jamais une copie par run.
+ */
+export interface KeyedRecord {
+  applicationId: string;
+  /** 1..200 caractères (les clés plus longues sont réduites par l'appelant). */
+  key: string;
+  status: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  data: Record<string, unknown>;
+}
+
+/** Refuse un enregistrement invalide avant toute écriture (tous les providers de la même façon). */
+export function validateKeyedRecord(record: KeyedRecord): void {
+  for (const field of ['applicationId', 'key'] as const) {
+    const value = record[field];
+    if (typeof value !== 'string' || value.length === 0 || value.length > LIMITS.signature)
+      throw new Error(`invalid record: ${field} must be 1..${LIMITS.signature} characters`);
+  }
+  if (typeof record.status !== 'string' || record.status.length === 0 || record.status.length > LIMITS.name)
+    throw new Error(`invalid record: status must be 1..${LIMITS.name} characters`);
 }
 
 /** Longueurs maximales des colonnes texte (les mêmes pour toutes les bases). */

@@ -93,7 +93,8 @@ export class IssueCollector {
  * cible, quelle que soit la page où elles ont été vues. Les nombres des messages
  * (numéros de ligne, id, durées) sont ignorés pour fusionner aussi les erreurs presque identiques.
  */
-function dedupeKey(issue: IssueInput): string {
+/** La clé d'une anomalie : la même d'une occurrence à l'autre, et d'un run à l'autre. */
+export function dedupeKey(issue: IssueInput): string {
   const message = issue.message.replace(/\d+/g, '#').slice(0, 300);
   return [issue.type, issue.method ?? '', issue.requestUrl ?? '', issue.status ?? '', message].join('|');
 }

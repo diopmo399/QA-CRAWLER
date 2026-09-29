@@ -1,4 +1,6 @@
 import {
+  validateKeyedRecord,
+  type KeyedRecord,
   combineObservations,
   knowledgeKey,
   mergeObservation,
@@ -12,6 +14,7 @@ import {
   validateObservation,
 } from '../model.js';
 import type {
+  KeyedRepository,
   KnowledgeRepository,
   PersistenceKind,
   PersistenceProvider,
@@ -26,10 +29,12 @@ export interface MemoryTables {
   states: RunStateRecord[];
   transitions: RunTransitionRecord[];
   knowledge: TransitionKnowledgeRecord[];
+  evolution: KeyedRecord[];
+  anomalies: KeyedRecord[];
 }
 
 export function emptyTables(): MemoryTables {
-  return { runs: [], states: [], transitions: [], knowledge: [] };
+  return { runs: [], states: [], transitions: [], knowledge: [], evolution: [], anomalies: [] };
 }
 
 /**
@@ -133,6 +138,33 @@ export class InMemoryPersistenceProvider implements PersistenceProvider {
           .map((record) => structuredClone(record)),
       ),
   };
+
+  readonly evolution: KeyedRepository = this.keyed('evolution');
+  readonly anomalies: KeyedRepository = this.keyed('anomalies');
+
+  /** Une ligne par (applicationId, key), remplacée sur place ; tout ou rien. */
+  private keyed(table: 'evolution' | 'anomalies'): KeyedRepository {
+    return {
+      save: (records) =>
+        this.write(table, () => {
+          records.forEach(validateKeyedRecord);
+          const byKey = new Map(
+            this.tables[table].map((record) => [`${record.applicationId}|${record.key}`, record]),
+          );
+          for (const record of records)
+            byKey.set(`${record.applicationId}|${record.key}`, structuredClone(record));
+          this.tables[table] = [...byKey.values()];
+        }),
+      load: (applicationId, limit) =>
+        Promise.resolve(
+          this.tables[table]
+            .filter((record) => record.applicationId === applicationId)
+            .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt) || a.key.localeCompare(b.key))
+            .slice(0, limit)
+            .map((record) => structuredClone(record)),
+        ),
+    };
+  }
 
   initialize(): Promise<void> {
     return Promise.resolve();

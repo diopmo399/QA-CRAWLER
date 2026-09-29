@@ -104,7 +104,13 @@ import { GoalTracker } from '../goals/goal-tracker.js';
 import { JsonKnowledgeBase } from '../knowledge/json-knowledge-base.js';
 import type { KnowledgeBase, TransitionKnowledge } from '../knowledge/knowledge-model.js';
 import type { ConfidenceResult } from '../intelligence/confidence-engine.js';
-import { adaptiveScorerOf, confidenceEngineOf, knowledgeContextOf } from '../intelligence/intelligence.js';
+import {
+  adaptiveScorerOf,
+  confidenceEngineOf,
+  flakinessOf,
+  knowledgeContextOf,
+} from '../intelligence/intelligence.js';
+import type { FlakinessResult } from '../intelligence/flakiness.js';
 import { SemanticResolver, type SemanticResolution } from '../semantics/resolution/semantic-resolver.js';
 import { describeIntent, type GherkinIntent } from '../semantics/resolution/intent.js';
 import {
@@ -881,11 +887,16 @@ export class FlowExplorer {
    */
   private confidenceOption(config: ScenarioConfig): {
     confidence?: (knowledge: TransitionKnowledge) => ConfidenceResult;
+    flakiness?: (knowledge: TransitionKnowledge) => FlakinessResult;
   } {
+    const flakiness = flakinessOf(config);
     const engine = confidenceEngineOf(config);
-    if (!engine) return {};
+    if (!engine) return flakiness ? { flakiness } : {};
     const context = knowledgeContextOf(config, this.knowledge.identity);
-    return { confidence: (knowledge) => engine.evaluate(knowledge, context) };
+    return {
+      confidence: (knowledge) => engine.evaluate(knowledge, context),
+      ...(flakiness ? { flakiness } : {}),
+    };
   }
 
   /** Une requête d'écriture annulée par la garde : une anomalie « effet de bord ». */

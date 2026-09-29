@@ -98,6 +98,14 @@ export function sanitizingProvider(provider: PersistenceProvider): PersistencePr
         provider.transitions.add(transitions.map((transition) => sanitizeRecord(transition))),
       listByRun: (runId) => provider.transitions.listByRun(runId),
     },
+    evolution: {
+      save: (records) => provider.evolution.save(records.map((record) => sanitizeRecord(record))),
+      load: (applicationId, limit) => provider.evolution.load(sanitizeText(applicationId), limit),
+    },
+    anomalies: {
+      save: (records) => provider.anomalies.save(records.map((record) => sanitizeRecord(record))),
+      load: (applicationId, limit) => provider.anomalies.load(sanitizeText(applicationId), limit),
+    },
     knowledge: {
       record: (observations) =>
         provider.knowledge.record(observations.map((observation) => sanitizeRecord(observation))),

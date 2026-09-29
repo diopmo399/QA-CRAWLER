@@ -117,6 +117,57 @@ export const MIGRATIONS: readonly Migration[] = [
     id: '003_add_knowledge_context',
     statements: (d) => [d.addColumn('transition_knowledge', 'last_context_json', d.types.json)],
   },
+  {
+    // Une ligne par élément (état, transition, flow ; anomalie), mise à jour sur place :
+    // l'évolution d'une version à l'autre sans copier les graphes.
+    id: '004_add_evolution_and_anomalies',
+    statements: (d) => [
+      d.createTableIfMissing(
+        'flow_evolution',
+        `id ${d.types.id} NOT NULL PRIMARY KEY,
+        application_id ${d.types.signature} NOT NULL,
+        record_key ${d.types.signature} NOT NULL,
+        status ${d.types.name} NOT NULL,
+        first_seen_at ${d.types.timestamp} NOT NULL,
+        last_seen_at ${d.types.timestamp} NOT NULL,
+        record_json ${d.types.json} NOT NULL`,
+      ),
+      d.createIndexIfMissing(
+        'ux_flow_evolution_key',
+        'flow_evolution',
+        ['application_id', 'record_key'],
+        true,
+      ),
+      d.createIndexIfMissing(
+        'ix_flow_evolution_recent',
+        'flow_evolution',
+        ['application_id', 'last_seen_at'],
+        false,
+      ),
+      d.createTableIfMissing(
+        'anomaly_lifecycle',
+        `id ${d.types.id} NOT NULL PRIMARY KEY,
+        application_id ${d.types.signature} NOT NULL,
+        record_key ${d.types.signature} NOT NULL,
+        status ${d.types.name} NOT NULL,
+        first_seen_at ${d.types.timestamp} NOT NULL,
+        last_seen_at ${d.types.timestamp} NOT NULL,
+        record_json ${d.types.json} NOT NULL`,
+      ),
+      d.createIndexIfMissing(
+        'ux_anomaly_lifecycle_key',
+        'anomaly_lifecycle',
+        ['application_id', 'record_key'],
+        true,
+      ),
+      d.createIndexIfMissing(
+        'ix_anomaly_lifecycle_recent',
+        'anomaly_lifecycle',
+        ['application_id', 'last_seen_at'],
+        false,
+      ),
+    ],
+  },
 ];
 
 export interface MigrationResult {
