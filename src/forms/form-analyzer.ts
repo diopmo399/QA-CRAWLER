@@ -105,13 +105,16 @@ export function fieldOf(action: DiscoveredAction): FormField {
     options,
     placeholder: field?.placeholder,
     hint: field?.hint,
+    requiredBy: field?.requiredBy,
+    multiple: field?.multiple,
+    ariaInvalid: field?.ariaInvalid,
   };
   const result: FormField = {
     id: action.id,
     type: fieldTypeOf(action),
     required: field?.required ?? false,
     disabled: action.disabled,
-    readonly: false,
+    readonly: field?.readOnly ?? false,
     hasValue: field?.hasValue ?? false,
     sensitive: sensitivity.sensitive || action.risks.includes('sensitive-data'),
     payment: sensitivity.payment,

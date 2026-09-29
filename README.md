@@ -1327,7 +1327,7 @@ invariants:
 propertyTesting: { enabled: true, maxCasesPerForm: 15, maxCasesPerRun: 100 }
 ```
 
-Le `ConstraintExtractor` fusionne le DOM (prioritaire : ce que l'utilisateur peut vraiment saisir) et OpenAPI (qui complète). Valeurs aux bornes (min 18 / max 65 → 17, 18, 19, 64, 65, 66), partitions d'équivalence (<18, 18..65, >65 : une valeur par partition), puis cas générés un champ à la fois : une valeur valide doit être acceptée, une invalide refusée. Rien n'est envoyé.
+Le `ConstraintExtractor` fusionne ce que la page déclare (attributs HTML : `required`, `min`, `max`, `step`, `minlength`, `maxlength`, `pattern`, type, `multiple`, `disabled`, `readonly` ; ARIA : `aria-required`, et `aria-invalid` comme constat) et le contrat OpenAPI (`required`, `nullable`, type, format, `minimum`/`maximum`, `exclusiveMinimum`/`exclusiveMaximum` en 3.0 comme en 3.1, `minLength`/`maxLength`, `pattern`, `enum`). Chaque contrainte garde ses sources (`maxLength` → HTML, OPENAPI) et une confiance, plus haute quand les sources s'accordent. Quand elles se contredisent (page `maxlength=100`, API `maxLength: 80`), rien n'est départagé en silence : un conflit `CONSTRAINT_MISMATCH` garde les deux valeurs, et la valeur de la page reste celle qu'on teste par l'interface, puisque l'utilisateur ne peut rien saisir d'autre. Ce que le contrat a ajouté à un champ n'est jamais pris pour une déclaration de la page. Valeurs aux bornes (min 18 / max 65 → 17, 18, 19, 64, 65, 66), partitions d'équivalence (<18, 18..65, >65 : une valeur par partition), puis cas générés un champ à la fois : une valeur valide doit être acceptée, une invalide refusée. Rien n'est envoyé.
 
 ### Garde d'écriture, suggestions, options
 

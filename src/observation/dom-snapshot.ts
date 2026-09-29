@@ -470,12 +470,17 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       // Radios d'un même choix (une option par groupe) ; les cases à cocher restent indépendantes.
       if (inputType === 'radio' || el.matches('[role="radio"]'))
         info.choiceGroup = name ? `name:${name}` : groupName ? `label:${groupName}` : undefined;
-      if (
+      const groupHtml =
         group?.hasAttribute('required') ||
-        group?.getAttribute('aria-required') === 'true' ||
-        (name !== null && rootOf(el).querySelector(`input[name="${CSS.escape(name)}"][required]`) !== null)
-      )
+        (name !== null && rootOf(el).querySelector(`input[name="${CSS.escape(name)}"][required]`) !== null);
+      const groupAria = group?.getAttribute('aria-required') === 'true';
+      if (groupHtml || groupAria) {
         info.required = true;
+        info.requiredBy = [
+          ...(groupHtml ? (['HTML'] as const) : []),
+          ...(groupAria ? (['ARIA'] as const) : []),
+        ];
+      }
     }
     return info;
   };
@@ -570,6 +575,10 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
           : undefined;
     const customSelect = !isField && (role === 'combobox' || role === 'listbox');
     const fieldInfo = isField || customSelect ? describeField(el, tag, inputType, customSelect) : {};
+    const requiredBy: ('HTML' | 'ARIA')[] = [
+      ...(el.hasAttribute('required') ? (['HTML'] as const) : []),
+      ...(el.getAttribute('aria-required') === 'true' ? (['ARIA'] as const) : []),
+    ];
     const numberAttr = (name: string): number | undefined => {
       const value = el.getAttribute(name);
       return value !== null && value !== '' && !Number.isNaN(Number(value)) ? Number(value) : undefined;
@@ -630,6 +639,10 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       formGroup,
       customSelect: customSelect ? true : undefined,
       transient: closestDeep(el, TRANSIENT) ? true : undefined,
+      // D'où vient « obligatoire » (attribut HTML, aria-required) : le modèle de contraintes garde l'origine.
+      requiredBy: requiredBy.length > 0 ? requiredBy : undefined,
+      multiple: el.hasAttribute('multiple') ? true : undefined,
+      ariaInvalid: el.getAttribute('aria-invalid') === 'true' ? true : undefined,
       ...fieldInfo,
       editable: editable ? true : undefined,
       ...(editable ? { hasValue: clean((el as HTMLElement).innerText) !== '' } : {}),

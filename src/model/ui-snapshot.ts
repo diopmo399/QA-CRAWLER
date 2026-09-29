@@ -37,6 +37,12 @@ export interface UiElement {
   expanded?: boolean;
   hasPopup: boolean;
   required: boolean;
+  /** Qui déclare le champ obligatoire : l'attribut HTML required, aria-required, ou les deux. */
+  requiredBy?: ('HTML' | 'ARIA')[];
+  /** Attribut multiple (select, file, email). */
+  multiple?: boolean;
+  /** aria-invalid="true" au moment de l'observation. */
+  ariaInvalid?: boolean;
   /** Envoie son formulaire. */
   isSubmit: boolean;
   /** Appartient à un formulaire de recherche/filtre (role=search, formulaire GET avec un champ de recherche). */
