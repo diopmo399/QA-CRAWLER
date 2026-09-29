@@ -1,3 +1,5 @@
+import type { ObservedKnowledgeContext } from '../knowledge/knowledge-model.js';
+
 /**
  * Modèle de données V1 de la persistance : des données simples, identiques pour tous
  * les providers (mémoire, fichier, base de données). Aucun secret, aucune valeur
@@ -5,7 +7,7 @@
  */
 
 /** Version du schéma de données (le nombre de migrations de la base). */
-export const PERSISTENCE_SCHEMA_VERSION = 2;
+export const PERSISTENCE_SCHEMA_VERSION = 3;
 
 /** Cible d'une transition sans nouvel état (bloquée, échouée) : la clé de connaissance reste non nulle. */
 export const NO_TARGET = '(none)';
@@ -92,6 +94,8 @@ export interface TransitionKnowledgeRecord {
   averageDurationMs?: number;
   firstSeenAt: string;
   lastSeenAt: string;
+  /** Contexte de la dernière observation (compact : une seule colonne JSON, pas une ligne par contexte). */
+  lastContext?: ObservedKnowledgeContext;
 }
 
 /** Des observations à ajouter à la mémoire historique (des incréments, jamais des totaux). */
@@ -109,6 +113,7 @@ export interface TransitionObservation {
   durationCount: number;
   firstSeenAt: string;
   lastSeenAt: string;
+  lastContext?: ObservedKnowledgeContext;
 }
 
 export interface PersistenceHealth {
@@ -193,6 +198,7 @@ export function mergeObservation(
     failureCount: (existing?.failureCount ?? 0) + observation.failure,
     blockedCount: (existing?.blockedCount ?? 0) + observation.blocked,
     ...(averageDurationMs !== undefined ? { averageDurationMs } : {}),
+    ...(newestContext(existing, observation) ? { lastContext: newestContext(existing, observation) } : {}),
     firstSeenAt:
       existing && existing.firstSeenAt < observation.firstSeenAt
         ? existing.firstSeenAt
@@ -219,7 +225,21 @@ export function combineObservations(observations: readonly TransitionObservation
     current.durationTotalMs += observation.durationTotalMs;
     current.durationCount += observation.durationCount;
     if (observation.firstSeenAt < current.firstSeenAt) current.firstSeenAt = observation.firstSeenAt;
-    if (observation.lastSeenAt > current.lastSeenAt) current.lastSeenAt = observation.lastSeenAt;
+    if (observation.lastSeenAt >= current.lastSeenAt) {
+      current.lastSeenAt = observation.lastSeenAt;
+      if (observation.lastContext) current.lastContext = observation.lastContext;
+    }
   }
   return [...byKey.values()];
+}
+
+/** Le contexte de l'observation la plus récente (la ligne existante ou la nouvelle observation). */
+function newestContext(
+  existing: TransitionKnowledgeRecord | undefined,
+  observation: TransitionObservation,
+): ObservedKnowledgeContext | undefined {
+  if (!existing) return observation.lastContext;
+  return observation.lastSeenAt >= existing.lastSeenAt
+    ? (observation.lastContext ?? existing.lastContext)
+    : (existing.lastContext ?? observation.lastContext);
 }

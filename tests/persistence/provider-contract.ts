@@ -268,6 +268,38 @@ export function persistenceProviderContract(name: string, target: ContractTarget
       expect((await provider.knowledge.load(app, 100)).every((row) => row.applicationId === app)).toBe(true);
     });
 
+    it('transition_knowledge: the context of the most recent observation round-trips (migration 003)', async () => {
+      const context = { environment: 'test', actor: 'admin', version: 'v1', browser: 'chromium' };
+      await provider.knowledge.record([
+        observation({
+          fromStateSignature: 'ctx',
+          lastSeenAt: '2026-05-02T00:00:00.000Z',
+          lastContext: { ...context, viewportClass: 'desktop' },
+        }),
+      ]);
+      // Une observation plus ancienne ne remplace pas le contexte le plus récent.
+      await provider.knowledge.record([
+        observation({
+          fromStateSignature: 'ctx',
+          lastSeenAt: '2026-05-01T00:00:00.000Z',
+          lastContext: { ...context, actor: 'user' },
+        }),
+      ]);
+      const [row] = await provider.knowledge.find(app, 'ctx', 'click:create');
+      expect(row?.lastContext).toEqual({ ...context, viewportClass: 'desktop' });
+      await provider.knowledge.record([
+        observation({
+          fromStateSignature: 'ctx',
+          lastSeenAt: '2026-05-03T00:00:00.000Z',
+          lastContext: { ...context, version: 'v2' },
+        }),
+      ]);
+      const [newer] = await provider.knowledge.find(app, 'ctx', 'click:create');
+      expect(newer).toMatchObject({ seenCount: 3, lastContext: { ...context, version: 'v2' } });
+      const [none] = await provider.knowledge.find(app, 'users', 'click:create');
+      expect(none?.lastContext).toBeUndefined();
+    });
+
     if (target.durable)
       it('durable: a new provider on the same storage sees everything', async () => {
         const again = await target.create();

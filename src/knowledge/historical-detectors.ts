@@ -1,3 +1,4 @@
+import { describeConfidence, type ConfidenceResult } from '../intelligence/confidence-engine.js';
 import { confidenceOf, type VerdictCategory } from '../oracles/confidence.js';
 import type {
   ApiKnowledge,
@@ -21,6 +22,8 @@ export interface TransitionAnomaly {
   confidence: number;
   category: VerdictCategory;
   message: string;
+  /** ConfidenceEngine (intelligence.confidence) : le détail de la confiance. */
+  confidenceResult?: ConfidenceResult;
 }
 
 export interface TransitionAnomalyDetector {
@@ -38,7 +41,14 @@ const SUSPICIOUS_TARGET =
  * une POTENTIAL_REGRESSION ; sinon un UNEXPECTED_BEHAVIOR.
  */
 export class HistoricalTransitionAnomalyDetector implements TransitionAnomalyDetector {
-  constructor(private readonly options: { minObservations: number; dominance: number }) {}
+  constructor(
+    private readonly options: {
+      minObservations: number;
+      dominance: number;
+      /** ConfidenceEngine : confiance progressive et expliquée au lieu du barème fixe. */
+      confidence?: (knowledge: TransitionKnowledge) => ConfidenceResult;
+    },
+  ) {}
 
   evaluate(observed: ObservedTransition, knowledge: TransitionKnowledge): TransitionAnomaly | null {
     const total = Object.values(knowledge.targets).reduce((sum, count) => sum + count, 0);
@@ -49,15 +59,22 @@ export class HistoricalTransitionAnomalyDetector implements TransitionAnomalyDet
     if (share < this.options.dominance || target === observed.toStateSignature) return null;
     // Une cible déjà vue plusieurs fois n'est pas inattendue, juste rare.
     if ((knowledge.targets[observed.toStateSignature] ?? 0) >= 2) return null;
-    const confidence = Math.round(confidenceOf('repeated-history', total) * share * 100) / 100;
-    const suspicious = SUSPICIOUS_TARGET.test(observed.toStateSignature);
+    const engine = this.options.confidence?.(knowledge);
+    const confidence = engine
+      ? engine.score
+      : Math.round(confidenceOf('repeated-history', total) * share * 100) / 100;
+    // Une confiance faible ne suffit jamais à parler de régression potentielle.
+    const suspicious =
+      SUSPICIOUS_TARGET.test(observed.toStateSignature) &&
+      (!engine || (engine.level !== 'VERY_LOW' && engine.level !== 'LOW'));
     return {
       kind: 'UNEXPECTED_TRANSITION',
       expectation: { target, share: Math.round(share * 100) / 100, observations: total, confidence },
       observed: observed.toStateSignature,
       confidence,
       category: suspicious ? 'POTENTIAL_REGRESSION' : 'UNEXPECTED_BEHAVIOR',
-      message: `historically "${observed.actionSignature}" led to "${target}" (${count}/${total}), this time to "${observed.toStateSignature}"`,
+      message: `historically "${observed.actionSignature}" led to "${target}" (${count}/${total}), this time to "${observed.toStateSignature}"${engine ? `; confidence ${describeConfidence(engine)}` : ''}`,
+      ...(engine ? { confidenceResult: engine } : {}),
     };
   }
 }

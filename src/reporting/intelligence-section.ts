@@ -57,6 +57,17 @@ const TEXTS = {
     expectation: 'Expected',
     outcome: 'Outcome',
     verdict: 'Verdict',
+    historical: 'Historical knowledge (confidence)',
+    historicalHint:
+      'What past runs taught, and how far it can be trusted: confidence = sample × stability × recency × context. A historical probability is never a functional certainty; old knowledge weighs less but is never deleted.',
+    context: 'Current context',
+    transitions: 'Transitions known',
+    aged: 'Aged (recency < 0.5)',
+    otherContext: 'Seen in another context',
+    transition: 'Transition',
+    destination: 'Usual destination',
+    confidence: 'Confidence',
+    lastSeen: 'Last seen',
   },
   fr: {
     title: 'Moteur de décision',
@@ -105,6 +116,17 @@ const TEXTS = {
     expectation: 'Attendu',
     outcome: 'Résultat',
     verdict: 'Verdict',
+    historical: 'Connaissance historique (confiance)',
+    historicalHint:
+      "Ce que les runs passés ont appris, et à quel point s'y fier : confiance = échantillon × stabilité × récence × contexte. Une probabilité historique n'est jamais une certitude fonctionnelle ; une connaissance ancienne pèse moins mais n'est jamais supprimée.",
+    context: 'Contexte courant',
+    transitions: 'Transitions connues',
+    aged: 'Vieillies (récence < 0,5)',
+    otherContext: 'Vues dans un autre contexte',
+    transition: 'Transition',
+    destination: 'Destination habituelle',
+    confidence: 'Confiance',
+    lastSeen: 'Vue le',
   },
 } as const;
 
@@ -308,6 +330,40 @@ export function intelligenceSection(
         )
         .join('')}</table>`,
     );
+
+  // ---- connaissance historique (ConfidenceEngine)
+  const historical = intelligence.historicalKnowledge;
+  if (historical) {
+    const ctx = historical.context;
+    const contextText = [
+      ctx.applicationId,
+      ctx.environment,
+      ctx.actor,
+      ctx.version,
+      ctx.browser,
+      ctx.viewportClass,
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join(' · ');
+    const levels = Object.entries(historical.levels)
+      .map(([level, count]) => `${esc(level)} ${count}`)
+      .join(' · ');
+    parts.push(`<h3>${esc(t.historical)}</h3><p class="muted">${esc(t.historicalHint)}</p>
+      <p><strong>${esc(t.context)}</strong> : ${esc(contextText)}<br>
+         <strong>${esc(t.transitions)}</strong> : ${historical.transitions} · ${levels}<br>
+         <strong>${esc(t.aged)}</strong> : ${historical.aged} · <strong>${esc(t.otherContext)}</strong> : ${historical.otherContext}</p>`);
+    if (historical.entries.length > 0)
+      parts.push(
+        `<table><tr><th>${esc(t.transition)}</th><th>${esc(t.destination)}</th><th>${esc(t.confidence)}</th><th>${esc(t.reasons)}</th><th>${esc(t.lastSeen)}</th></tr>${historical.entries
+          .map(
+            (entry) =>
+              `<tr><td>${esc(entry.fromStateSignature)}<br><span class="muted">${esc(entry.actionSignature)}</span></td><td>${entry.dominantTarget ? `${esc(entry.dominantTarget)} (${Math.round(entry.dominantShare * 100)} %)` : '—'}</td><td>${entry.confidence.score} ${esc(entry.confidence.level)}</td><td>${entry.confidence.reasons
+                .map((reason) => `${esc(reason.factor)} ${reason.value} — ${esc(reason.detail)}`)
+                .join('<br>')}</td><td>${esc(entry.lastSeenAt.slice(0, 10))}</td></tr>`,
+          )
+          .join('')}</table>`,
+      );
+  }
 
   return `<section><h2>${esc(t.title)}</h2>${parts.join('\n')}</section>`;
 }

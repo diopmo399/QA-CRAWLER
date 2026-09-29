@@ -45,7 +45,11 @@ export function sanitizeRecord<T extends object>(record: T): T {
   return Object.fromEntries(
     Object.entries(record).map(([key, value]) => [
       key,
-      key === 'context' ? sanitizeValue(value) : typeof value === 'string' ? sanitizeText(value) : value,
+      key === 'context' || (value !== null && typeof value === 'object')
+        ? sanitizeValue(value)
+        : typeof value === 'string'
+          ? sanitizeText(value)
+          : value,
     ]),
   ) as T;
 }

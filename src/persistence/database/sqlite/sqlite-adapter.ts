@@ -34,6 +34,8 @@ export const SQLITE_DIALECT: SqlDialect = {
   createTableIfMissing: (table, columns) => `CREATE TABLE IF NOT EXISTS ${table} (${columns})`,
   createIndexIfMissing: (name, table, columns, unique) =>
     `CREATE ${unique ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS ${name} ON ${table} (${columns.join(', ')})`,
+  // Appliquée une seule fois (qa_schema_migrations) : SQLite n'a pas de IF NOT EXISTS pour une colonne.
+  addColumn: (table, column, type) => `ALTER TABLE ${table} ADD COLUMN ${column} ${type}`,
   isUniqueViolation: (error) => /UNIQUE constraint failed/i.test(error instanceof Error ? error.message : ''),
   fromTimestamp: isoOf,
   fromJson: jsonOf,

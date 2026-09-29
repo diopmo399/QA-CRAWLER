@@ -1,0 +1,30 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`non-regression: memory and intelligence disabled keep the current decisions > snapshot of the decisions (intelligence off) 1`] = `
+[
+  "Utilisateurs 431",
+  "Nouvel utilisateur 535",
+  "Voir 469",
+  "Voir 396",
+  "Voir 396",
+  "Voir 210",
+  "Paramètres 276",
+  "Rapports 268",
+  "Flux cassé 271",
+  "Paramètres 300",
+  "Paramètres 283",
+  "Paramètres 282",
+  "Rapports 276",
+  "Retour 200",
+  "Flux cassé 268",
+  "Oui 233",
+  "Non 230",
+  "Tableau de bord 154",
+  "Tableau de bord 169",
+  "Tableau de bord 157",
+  "Tableau de bord 168",
+  "Tableau de bord 151",
+  "Tableau de bord 162",
+  "Accueil 162",
+]
+`;

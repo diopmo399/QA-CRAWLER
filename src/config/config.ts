@@ -539,6 +539,40 @@ const databaseSchema = z
   .strict();
 
 /**
+ * INTELLIGENCE DÉTERMINISTE (Phase 2) : exploiter la connaissance historique de façon
+ * explicable. Tout est désactivé par défaut : une mission existante garde exactement son
+ * comportement. Chaque capacité a son interrupteur (comparaisons A/B déterministes).
+ * Aucune ne peut autoriser une action que la SafetyPolicy bloque.
+ */
+const intelligenceSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    confidence: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Nombre d'observations pour une confiance d'échantillon de 0,5 (n / (n + k)). */
+        sampleHalfPoint: z.number().positive().default(5),
+      })
+      .strict()
+      .default({}),
+    aging: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Demi-vie du poids de décision ; par défaut knowledge.halfLifeDays. Le stockage n'est jamais purgé. */
+        halfLifeDays: z.number().positive().optional(),
+        /** Poids plancher d'une connaissance très ancienne. */
+        minWeight: z.number().min(0).max(1).default(0.05),
+      })
+      .strict()
+      .default({}),
+    context: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
+/**
  * PERSISTANCE : OÙ les runs, états, transitions et connaissances sont stockés. Désactivée
  * par défaut ; QA-CRAWLER n'exige jamais de base de données.
  */
@@ -987,6 +1021,7 @@ export const scenarioSchema = z
     /** Packs de domaine (vocabulaire, synonymes, invariants, indices de score) : nom intégré (generic, ecommerce, administration) ou chemin d'un fichier YAML. */
     domainPacks: z.array(nonEmpty).default(['generic']),
     knowledge: knowledgeSchema.default({}),
+    intelligence: intelligenceSchema.default({}),
     /** Invariants explicites : règles vérifiées sur chaque action, expliquées dans le rapport. */
     invariants: z.array(invariantSchema).default([]),
     propertyTesting: propertyTestingSchema.default({}),
@@ -998,6 +1033,7 @@ export type ScenarioInput = z.input<typeof scenarioSchema>;
 /** Scénario complet, valeurs par défaut appliquées. */
 export type ScenarioConfig = z.output<typeof scenarioSchema>;
 export type PersistenceConfig = ScenarioConfig['persistence'];
+export type IntelligenceConfig = ScenarioConfig['intelligence'];
 export type MemoryConfig = ScenarioConfig['memory'];
 export type FormAuthConfig = z.output<typeof formAuthSchema>;
 export type HttpAuthConfig = z.output<typeof httpAuthSchema>;

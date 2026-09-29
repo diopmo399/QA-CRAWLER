@@ -5,7 +5,8 @@ import {
   performanceAnomaly,
   type TransitionAnomalyDetector,
 } from '../knowledge/historical-detectors.js';
-import type { KnowledgeBase } from '../knowledge/knowledge-model.js';
+import type { KnowledgeBase, TransitionKnowledge } from '../knowledge/knowledge-model.js';
+import type { ConfidenceResult } from '../intelligence/confidence-engine.js';
 import { actionSignature, stateSignature } from '../knowledge/signatures.js';
 import type { PageContext } from '../model/page-context.js';
 import {
@@ -21,6 +22,8 @@ export interface HistoricalOracleOptions {
   minObservations: number;
   dominance: number;
   slowFactor: number;
+  /** ConfidenceEngine (intelligence.confidence) ; absent : le barème d'avant. */
+  confidence?: (knowledge: TransitionKnowledge) => ConfidenceResult;
 }
 
 /**

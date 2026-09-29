@@ -135,6 +135,7 @@ async function storeEverywhere(provider: PersistenceProvider): Promise<string> {
       durationCount: 0,
       firstSeenAt: '2026-01-01T10:00:00.000Z',
       lastSeenAt: '2026-01-01T10:00:00.000Z',
+      lastContext: { actor: 'admin', version: `v1 ${SECRETS.bearer}` },
     },
   ]);
   const stored = JSON.stringify({
