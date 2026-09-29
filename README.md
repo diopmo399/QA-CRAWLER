@@ -499,6 +499,120 @@ Le rapport et le terminal montrent sous chaque phrase ce qu'elle est devenue (`�
 
 Aucune IA : le fichier est lu par le lecteur officiel de Cucumber (`@cucumber/gherkin`), puis chaque phrase est comparée aux modèles, un à un ; le mode automatique n'utilise que des listes de verbes (FR/EN), les valeurs de la phrase et les libellés présents à l'écran.
 
+### Résolution sémantique (intentions sans sélecteur)
+
+Un scénario exprime une **intention fonctionnelle**, sans connaître les libellés exacts, les sélecteurs CSS ni les attributs HTML :
+
+```gherkin
+# language: fr
+@mutation
+Fonctionnalité: Utilisateurs
+  Scénario: Création utilisateur
+    Étant donné que je suis sur la page des utilisateurs
+    Quand je clique sur "Créer un utilisateur"
+    Et je renseigne le prénom avec "Mohamed"
+    Et je renseigne le nom avec "Diop"
+    Et je renseigne le courriel avec "mohamed@example.com"
+    Et je sélectionne "Administrateur" comme rôle
+    Et je valide le formulaire
+    Alors un message de confirmation est affiché
+    Et l'utilisateur doit apparaître dans la liste
+```
+
+Ce scénario remplit un formulaire dont les champs s'appellent `givenName`, `familyName`, `electronicMail` et `accountType`, et dont le courriel est libellé « Adresse électronique ». Le test d'intégration `tests/integration/semantic-resolution.test.ts` le vérifie sur une vraie page.
+
+```yaml
+gherkin:
+  semanticResolution:
+    enabled: true # désactivée par défaut : les scénarios existants se traduisent comme avant
+    autoResolveThreshold: 0.85 # score minimal pour agir seul
+    ambiguityMargin: 0.15 # écart minimal avec le deuxième candidat
+    minCandidateScore: 0.25 # en dessous : pas un candidat
+    historicalKnowledge: true # les résolutions réussies des runs précédents départagent
+    explain: true # l'explication dans le rapport
+    vocabulary:
+      fields: { matricule: [matricule, numéro d'employé, employee id] }
+      actions: { submit: [soumettre la demande] }
+```
+
+**Chemin d'une phrase** : Gherkin → intention (`FILL prénom`, sans sélecteur) → écran observé (ActionDiscovery, FormAnalyzer) → SemanticResolver → candidats → score → décision → localisateur → **SafetyPolicy** → exécution → ExplorationListener → KnowledgeBase. Le resolver ne clique, ne remplit et ne navigue jamais : il trouve une cible. L'exécution reste celle des flows. Une action interdite reste interdite : `je valide le formulaire` exige `@mutation`, comme `je clique sur "Enregistrer"`.
+
+**Phrases reconnues** (FR et EN, seulement quand aucune phrase de l'équipe ni phrase intégrée ne correspond) :
+
+| Intention   | Exemples                                                                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NAVIGATE`  | je suis sur la page des utilisateurs · j'ouvre les paramètres · j'accède à la gestion des rôles · I go to the settings                                        |
+| `CLICK`     | je clique sur le bouton créer · I click on new user                                                                                                           |
+| `FILL`      | je renseigne le prénom avec "X" · je saisis "X" dans le courriel · I fill in the first name with "X" · I enter "X" in the email field                         |
+| `SELECT`    | je sélectionne "Administrateur" comme rôle · je choisis "Annuel" pour la fréquence · I select "Admin" as role                                                 |
+| `CHECK`     | je coche la case compte actif · je décoche les notifications · I check terms                                                                                  |
+| `SUBMIT`    | je valide le formulaire · j'enregistre · j'annule · je passe à l'étape suivante · je reviens en arrière · I save · I cancel · I continue                      |
+| `FILL_FORM` | je remplis le formulaire utilisateur avec : (tableau \| champ \| valeur \|) · je remplis le formulaire utilisateur (données synthétiques du TestDataProvider) |
+| `ASSERT`    | la page Utilisateurs est affichée · un message de confirmation est affiché · l'utilisateur doit apparaître dans la liste · l'utilisateur doit être créé       |
+| `UPLOAD`    | je joins "cv.pdf" dans le curriculum (reconnue pour être **refusée** : jamais de téléversement automatique)                                                   |
+
+**Score d'un champ** : chaque composante est affichée avec ses points. Le score vaut `points / 80`, borné à [0, 1]. L'écart avec le deuxième candidat se mesure sur les points bruts.
+
+| Composante                                                                           | Points                                                 |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| libellé réel identique (normalisé : casse, accents, ponctuation, camelCase, pluriel) | +70                                                    |
+| libellé qui contient l'intention                                                     | +40 − 5 par mot en trop (au moins +20)                 |
+| alias du vocabulaire (« courriel » → email ← libellé « Adresse électronique »)       | +70 si le libellé est l'alias, +30 s'il le contient    |
+| libellé d'un autre concept (« Prénom » pour « nom »)                                 | −20                                                    |
+| attribut `name`, `id` stable ou `placeholder` qui nomme ou signifie l'intention      | +12 à +25                                              |
+| `autocomplete` normalisé (`given-name` → prénom)                                     | +25                                                    |
+| type attendu par le concept (email, tel, date, number…)                              | +15, ou −30 pour un type contraire                     |
+| valeur compatible avec le type (`test@example.com` → `type=email`)                   | +15                                                    |
+| valeur que le champ refuserait (un texte dans une date)                              | −120                                                   |
+| la valeur et le champ ont le même sens (un courriel dans le champ courriel)          | +30, sinon −15                                         |
+| genre de champ (une liste pour SELECT, une case pour CHECK)                          | +10, ou −30                                            |
+| option trouvée dans la liste                                                         | +15 ; introuvable −40                                  |
+| même formulaire que l'étape précédente · premier plan                                | +5 · +3                                                |
+| historique (ConfidenceEngine)                                                        | jusqu'à +15, seulement pour un candidat déjà plausible |
+
+**Priorité des preuves** : la phrase du scénario, puis le libellé réel et l'accessibilité, les attributs HTML, le type, la valeur, le contexte, et l'historique en dernier. L'historique départage des candidats ; il ne renverse jamais une preuve forte du DOM. Quand l'interface change (`email` devient `contactEmail`, avec un libellé clair), la nouvelle cible est choisie.
+
+**Règle d'ambiguïté** (la même pour les champs, les options, les boutons et la navigation) :
+
+- `meilleur ≥ autoResolveThreshold` et `meilleur − deuxième ≥ ambiguityMargin` → `RESOLVED` ;
+- aucun candidat au-dessus de `minCandidateScore` → `NOT_FOUND` ;
+- sinon → `AMBIGUOUS`. Avec « Adresse principale » et « Adresse de facturation », la phrase « je renseigne l'adresse » donne `AMBIGUOUS_FIELD`, jamais le premier champ ;
+- un champ de paiement ou un téléversement donne `BLOCKED`.
+
+Une étape non résolue échoue avec l'explication et les candidats.
+
+**Formulaire complet** : le tableau est résolu en entier **avant** la première saisie, par un appariement global déterministe (les paires les plus sûres d'abord, un champ par ligne). Deux lignes qui revendiquent le même champ avec des scores proches sont `AMBIGUOUS`. Le plan est converti en `FormFillPlan`, compatible avec la FormFillStrategy.
+
+**Vérifications** :
+
+- « la page … est affichée » : `PASSED` si un titre de section, le titre ou le libellé de l'écran nomme la page. Une simple mention donne `MANUAL`, et une autre page `FAILED`.
+- « un message de confirmation » : une alerte, un statut ou une notification classés confirmation ou erreur.
+- « … apparaît dans la liste » : les valeurs d'identité saisies (noms, sinon courriel) sont visibles.
+- « … doit être créé » : la dernière écriture a réussi, sans message d'erreur.
+
+Une preuve faible reste `À VÉRIFIER`, jamais un PASS.
+
+**Mémoire** : chaque résolution exécutée devient une transition de connaissance `écran —intent:fill:courriel→ cible`. La cible est enregistrée par sa signature sémantique (libellé, name, type, autocomplete), jamais par un id DOM généré comme `#mat-input-23`. Cette transition va dans la KnowledgeBase en mémoire (fichier de connaissance) et, avec la persistance, dans `transition_knowledge`, sans nouvelle table. Au run suivant, le ConfidenceEngine note ce signal : 147 réussites sur 148 donnent un signal fort (+14), 1 sur 1 un signal faible (+3). Le resolver ne fait aucune requête SQL. Avec `memory.enabled: false`, seul le run courant compte, et PostgreSQL ou SQL Server ne sont jamais nécessaires.
+
+**Traçabilité** :
+
+- Le journal `engine-log.jsonl` reçoit `SEMANTIC_RESOLUTION_SUCCEEDED`, `…_FAILED` et `…_AMBIGUOUS`.
+- `result.json` contient `flows[].steps[].resolution` : statut, cible, score, niveau, type de valeur, raisons, candidats et explication.
+- Le rapport HTML affiche la « Résolution Gherkin » de chaque étape.
+
+Aucune valeur saisie n'est écrite : le type de la valeur (`EMAIL`) peut l'être, et une variable d'environnement donne `Value: [REDACTED]`.
+
+**Performance** : tout le matching se fait en mémoire. Temps mesurés (`tests/unit/semantic-assertions-bench.test.ts`) :
+
+| Champs | Une résolution | Un tableau de 5 lignes |
+| ------ | -------------- | ---------------------- |
+| 10     | ≈ 1 ms         | ≈ 3 ms                 |
+| 50     | ≈ 3 ms         | ≈ 6 ms                 |
+| 100    | ≈ 5 ms         | ≈ 12 ms                |
+| 500    | ≈ 22 ms        | ≈ 55 ms                |
+
+Autres exemples : `tests/fixtures/features/semantic-users.feature` (création, tableau, assistant) et `semantic-users-en.feature` (phrases anglaises sur un écran français).
+
 ## Authentification
 
 Les identifiants viennent toujours de variables d'environnement (`QA_USERNAME` / `QA_PASSWORD` par défaut, voir `usernameEnv` / `passwordEnv`), jamais du fichier de mission. Ils ne sont jamais écrits dans les logs ni dans les rapports.

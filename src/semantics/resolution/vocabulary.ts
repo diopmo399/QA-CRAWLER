@@ -168,6 +168,7 @@ export interface ConceptMatch {
 export class SemanticVocabulary {
   private readonly aliases: Alias[] = [];
   private readonly actionWords = new Map<FormActionKind, Alias[]>();
+  private readonly concepts = new Map<string, ConceptMatch | undefined>();
 
   constructor(dictionary: SemanticDictionary | undefined, input: VocabularyInput = {}) {
     const fields: Record<string, string[]> = {};
@@ -207,6 +208,16 @@ export class SemanticVocabulary {
    * → lastName ; « Prénom » → firstName (jamais lastName : « nom » n'est pas un mot de « prénom »).
    */
   conceptOf(text: string | undefined): ConceptMatch | undefined {
+    if (!text) return undefined;
+    if (this.concepts.has(text)) return this.concepts.get(text);
+    const found = this.findConcept(text);
+    // Mémoire bornée : les mêmes libellés reviennent à chaque résolution.
+    if (this.concepts.size >= 5_000) this.concepts.clear();
+    this.concepts.set(text, found);
+    return found;
+  }
+
+  private findConcept(text: string): ConceptMatch | undefined {
     const tokens = normalizeForMatch(text).tokens;
     if (tokens.length === 0) return undefined;
     for (const alias of this.aliases)

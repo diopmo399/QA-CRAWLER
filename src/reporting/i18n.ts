@@ -86,6 +86,7 @@ export interface ReportTexts {
   optional: string;
   suggestion: string;
   onScreen: string;
+  resolution: string;
   actionCount: (count: number) => string;
   issueCount: (count: number) => string;
   statesTitle: string;
@@ -217,6 +218,7 @@ const EN: ReportTexts = {
   optional: '(optional)',
   suggestion: 'Suggested step (element found on the screen, to paste in the YAML):',
   onScreen: 'On the screen:',
+  resolution: 'Gherkin resolution',
   actionCount: (count) => `${count} action(s)`,
   issueCount: (count) => `${count} issue(s)`,
   statesTitle: 'States',
@@ -350,6 +352,7 @@ const FR: ReportTexts = {
   optional: '(optionnelle)',
   suggestion: 'Étape suggérée (élément trouvé à l’écran, à copier dans le YAML) :',
   onScreen: 'À l’écran :',
+  resolution: 'Résolution Gherkin',
   actionCount: (count) => `${count} action(s)`,
   issueCount: (count) => `${count} anomalie(s)`,
   statesTitle: 'États',
