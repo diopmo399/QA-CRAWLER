@@ -129,9 +129,9 @@ export function gherkinFlows(
       if (!translated && intents) {
         // Résolution sémantique : après les phrases de l'équipe et les phrases intégrées, jamais avant.
         try {
-          const intent = intents.parse(sentence, stepTypeOf(step.type), table);
-          if (intent) {
-            translated = [{ intent }];
+          const found = intents.parseAll(sentence, stepTypeOf(step.type), table);
+          if (found) {
+            translated = found.map((intent) => ({ intent }));
             failure = undefined;
           }
         } catch (error) {

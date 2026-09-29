@@ -551,6 +551,16 @@ gherkin:
 | `ASSERT`    | la page Utilisateurs est affichée · un message de confirmation est affiché · l'utilisateur doit apparaître dans la liste · l'utilisateur doit être créé       |
 | `UPLOAD`    | je joins "cv.pdf" dans le curriculum (reconnue pour être **refusée** : jamais de téléversement automatique)                                                   |
 
+**Phrases métier** : elles sont aussi reconnues à la 3e personne ou sans sujet, telles que le métier les écrit.
+
+| Phrase                                                                                           | Intention                                                          |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `l'utilisateur renseigne le prénom avec "Julie"`, `Et valide le formulaire` (sujet sous-entendu) | la même que `je renseigne…`, `je valide…` (liste fermée de verbes) |
+| `modifie le code de catégorie de <Code> à <Nouveau code>` (aussi `en`, `pour`, `remplace … par`) | `FILL` du champ avec la **nouvelle** valeur                        |
+| `accède à l'étape "Analyse" à l'onglet "Détails" et à la section "Activité"`                     | trois `NAVIGATE`, dans l'ordre                                     |
+
+Les valeurs d'**Exemples** s'écrivent sans guillemets. Dans un `Étant donné`, « un dossier est créé » est une précondition : elle se traduit dans `gherkin.steps` (`run: creer-dossier`), jamais en vérification. Avec `auto: true` en plus, les phrases que la résolution sémantique ne reconnaît pas (« le code 222 est affiché ») passent au mode automatique.
+
 **Score d'un champ** : chaque composante est affichée avec ses points. Le score vaut `points / 80`, borné à [0, 1]. L'écart avec le deuxième candidat se mesure sur les points bruts.
 
 | Composante                                                                           | Points                                                 |
