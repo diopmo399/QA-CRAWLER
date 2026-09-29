@@ -94,6 +94,9 @@ export class BrowserEventDiscovery {
   /** Réponses téléchargeables récentes : type MIME et taille pour les enregistrements DOWNLOAD. */
   private readonly fileResponses = new Map<string, { mimeType?: string; size?: number }>();
 
+  /** Les traitements d'événements en cours (nouvel onglet, fenêtre, téléchargement…). */
+  private readonly inFlight = new Set<Promise<unknown>>();
+
   constructor(
     private readonly manager: BrowserInteractionManager,
     private readonly options: BrowserEventDiscoveryOptions,
@@ -105,14 +108,16 @@ export class BrowserEventDiscovery {
         payload && typeof payload === 'object' && 'permission' in payload
           ? String(payload.permission)
           : 'unknown';
-      void this.dispatch('PERMISSION_REQUEST', source.page, {
-        native: { kind: 'none' },
-        details: { permission },
-      });
+      this.track(
+        this.dispatch('PERMISSION_REQUEST', source.page, {
+          native: { kind: 'none' },
+          details: { permission },
+        }),
+      );
     });
     await context.addInitScript({ content: PERMISSION_SCRIPT });
     context.on('page', (page) => {
-      void this.onNewPage(page);
+      this.track(this.onNewPage(page));
     });
     // Une popup commence à se charger avant que quiconque puisse s'y attacher : quand son premier document est un défi
     // de connexion, la fenêtre native serait manquée. On le retient, pour rejouer le défi une fois attaché.
@@ -131,6 +136,30 @@ export class BrowserEventDiscovery {
     });
   }
 
+  /**
+   * Attend les événements du navigateur encore en traitement (au plus `timeoutMs`) : sur une
+   * machine lente, un nouvel onglet peut n'être traité qu'après la dernière étape ; fermer le
+   * navigateur avant le perdrait.
+   */
+  async settle(timeoutMs = 5_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.inFlight.size > 0 && Date.now() < deadline) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        Promise.allSettled([...this.inFlight]),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
+        }),
+      ]);
+      clearTimeout(timer);
+    }
+  }
+
+  private track(task: Promise<unknown>): void {
+    this.inFlight.add(task);
+    void task.finally(() => this.inFlight.delete(task)).catch(() => undefined);
+  }
+
   /** Ouvre une page pour le crawler lui-même : elle n'est pas signalée comme popup / nouvel onglet. */
   async openOwnPage(open: () => Promise<Page>): Promise<Page> {
     this.creatingOwnPage += 1;
@@ -146,13 +175,13 @@ export class BrowserEventDiscovery {
   /** Écoute une page (pages du crawler et popups). */
   async attachPage(page: Page): Promise<void> {
     page.on('dialog', (dialog) => {
-      void this.onDialog(page, dialog);
+      this.track(this.onDialog(page, dialog));
     });
     page.on('download', (download) => {
-      void this.onDownload(page, download);
+      this.track(this.onDownload(page, download));
     });
     page.on('filechooser', (chooser) => {
-      void this.onFileChooser(page, chooser);
+      this.track(this.onFileChooser(page, chooser));
     });
     page.on('response', (response) => {
       this.rememberFileResponse(response);
@@ -206,22 +235,24 @@ export class BrowserEventDiscovery {
           .catch(() => undefined);
       };
       const cancel = (): Promise<void> => answer({ response: 'CancelAuth' });
-      void this.dispatch('HTTP_AUTH', page, {
-        targetUrl: event.request.url,
-        origin: event.authChallenge.origin,
-        details: {
-          scheme: event.authChallenge.scheme,
-          realm: event.authChallenge.realm,
-          source: event.authChallenge.source ?? 'Server',
-        },
-        native: {
-          kind: 'http-auth',
-          provideCredentials: (username, password) =>
-            answer({ response: 'ProvideCredentials', username, password }),
-          cancel,
-        },
-        fallback: cancel,
-      });
+      this.track(
+        this.dispatch('HTTP_AUTH', page, {
+          targetUrl: event.request.url,
+          origin: event.authChallenge.origin,
+          details: {
+            scheme: event.authChallenge.scheme,
+            realm: event.authChallenge.realm,
+            source: event.authChallenge.source ?? 'Server',
+          },
+          native: {
+            kind: 'http-auth',
+            provideCredentials: (username, password) =>
+              answer({ response: 'ProvideCredentials', username, password }),
+            cancel,
+          },
+          fallback: cancel,
+        }),
+      );
     });
   }
 
@@ -305,13 +336,15 @@ export class BrowserEventDiscovery {
     const originClass = this.options.origins.classify(url);
     if (originClass !== 'EXTERNAL_ORIGIN' && originClass !== 'BLOCKED_ORIGIN') return;
     if (previous !== undefined && originOf(previous) === originOf(url)) return; // déjà signalé
-    void this.dispatch('EXTERNAL_NAVIGATION', page, {
-      ...(previous ? { sourceUrl: previous } : {}),
-      targetUrl: url,
-      ...(originOf(url) ? { origin: originOf(url) } : {}),
-      details: {},
-      native: { kind: 'none' },
-    });
+    this.track(
+      this.dispatch('EXTERNAL_NAVIGATION', page, {
+        ...(previous ? { sourceUrl: previous } : {}),
+        targetUrl: url,
+        ...(originOf(url) ? { origin: originOf(url) } : {}),
+        details: {},
+        native: { kind: 'none' },
+      }),
+    );
   }
 
   private rememberFileResponse(response: Response): void {
