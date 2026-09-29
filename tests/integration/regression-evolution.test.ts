@@ -32,7 +32,7 @@ describe('regression across versions: flow evolution and anomaly lifecycle', () 
 mission: { name: regression }
 target: { baseUrl: ${url} }
 exploration: { maxStates: 10, maxActions: 20, actionTimeoutMs: 3000, settleTimeMs: 100 }
-knowledge: { appVersion: v${n}, file: ${path.join(root, 'knowledge.json')} }
+knowledge: { commit: v${n}, file: ${path.join(root, 'knowledge.json')} }
 persistence: { enabled: true, provider: file, file: { directory: ${path.join(root, 'history')} } }
 regression:
   flowEvolution: { enabled: true }
