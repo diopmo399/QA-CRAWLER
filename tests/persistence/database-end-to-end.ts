@@ -80,7 +80,7 @@ output:
       expect(first.persistence).toMatchObject({
         status: 'CONNECTED',
         actual: { provider: 'database', database: name },
-        schemaVersion: 2,
+        schemaVersion: 3,
         memory: { mode: 'historical', historicalTransitionsLoaded: 0 },
         writeErrors: [],
       });

@@ -1312,18 +1312,18 @@ Pas de `RETURNING` / `OUTPUT` ni d'`ON CONFLICT` / `MERGE` : les identifiants so
 
 ### Modèle de données (V1)
 
-| Table                  | Contenu                                                                                                                                                                                 |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `crawl_run`            | un lancement : application, mission, environnement, branche, commit, version du crawler, mode, début / fin, statut, nombres d'états, d'actions, de transitions, d'anomalies             |
-| `run_state`            | un état du run : signature (celle du StateDetector, via `knowledge/signatures`), id, route, URL (secrets masqués), titre, profondeur, première / dernière vue, `context_json` normalisé |
-| `run_transition`       | ÉTAT A → ACTION → ÉTAT B (B nul si BLOQUÉE ou ÉCHOUÉE) : signature et libellé de l'action, statut, classe et décision de sécurité, verdict des oracles, durée                           |
-| `transition_knowledge` | la mémoire historique : **une ligne par destination** (écran + action + destination), compteurs vu / succès / échec / bloqué, durée moyenne, première / dernière vue                    |
+| Table                  | Contenu                                                                                                                                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crawl_run`            | un lancement : application, mission, environnement, branche, commit, version du crawler, mode, début / fin, statut, nombres d'états, d'actions, de transitions, d'anomalies                               |
+| `run_state`            | un état du run : signature (celle du StateDetector, via `knowledge/signatures`), id, route, URL (secrets masqués), titre, profondeur, première / dernière vue, `context_json` normalisé                   |
+| `run_transition`       | ÉTAT A → ACTION → ÉTAT B (B nul si BLOQUÉE ou ÉCHOUÉE) : signature et libellé de l'action, statut, classe et décision de sécurité, verdict des oracles, durée                                             |
+| `transition_knowledge` | la mémoire historique : **une ligne par destination** (écran + action + destination), compteurs vu / succès / échec / bloqué, durée moyenne, première / dernière vue, contexte de la dernière observation |
 
 Une même action peut mener à plusieurs écrans (« Users + Create » → formulaire 97 fois, connexion 2 fois, erreur 1 fois) : les trois lignes sont gardées, et les probabilités sont calculées à partir des observations (aucun apprentissage automatique).
 
 ### Migrations
 
-`qa_schema_migrations` garde les migrations appliquées (`001_initial_schema`, `002_add_transition_knowledge`) ; la version du schéma est leur nombre (affichée dans le rapport). Chaque migration est appliquée une fois, dans une transaction, et ne fait qu'**ajouter** (tables, index) : jamais de suppression au démarrage. Avec `migrate: false`, une base en retard est une erreur claire (à appliquer par un compte autorisé à créer des tables) ; une base plus récente que le crawler n'est jamais modifiée.
+`qa_schema_migrations` garde les migrations appliquées (`001_initial_schema`, `002_add_transition_knowledge`, `003_add_knowledge_context` : colonne `transition_knowledge.last_context_json`, nullable) ; la version du schéma est leur nombre (affichée dans le rapport). Chaque migration est appliquée une fois, dans une transaction, et ne fait qu'**ajouter** (tables, index) : jamais de suppression au démarrage. Avec `migrate: false`, une base en retard est une erreur claire (à appliquer par un compte autorisé à créer des tables) ; une base plus récente que le crawler n'est jamais modifiée.
 
 ### Mémoire de travail et mémoire long terme
 
@@ -1337,6 +1337,39 @@ pendant le run : action → StateDetector → oracles → FlowGraph → Explorat
 - Les **écritures** sont des incréments (l'historique préchargé n'est jamais recompté), groupées toutes les `flushEvery` observations, puis à la fin du run. Un crash peut perdre au plus les observations pas encore écrites ; une écriture qui échoue est gardée pour la suivante et signalée dans le rapport, sans arrêter le crawl.
 
 **L'historique n'est jamais une vérité métier.** « Users + Create » a mené 19 fois sur 20 au formulaire et, cette fois, à une page d'erreur : l'oracle historique donne `UNEXPECTED_TRANSITION`, catégorie `POTENTIAL_REGRESSION` (ou `UNEXPECTED_BEHAVIOR`), statut WARNING — jamais un bug confirmé. L'application a pu changer légitimement.
+
+### Confiance, vieillissement et contexte (`intelligence`)
+
+Désactivé par défaut : sans `intelligence.enabled: true`, les décisions et les verdicts sont exactement ceux d'avant (test de non-régression dédié).
+
+```yaml
+intelligence:
+  enabled: true
+  confidence: { enabled: true, sampleHalfPoint: 5 } # confiance d'échantillon n / (n + 5)
+  aging: { enabled: true, minWeight: 0.05 } # halfLifeDays : par défaut knowledge.halfLifeDays
+  context: { enabled: true } # comparer environnement, acteur, version, navigateur, classe d'écran
+```
+
+**ConfidenceEngine** — déterministe, sans apprentissage automatique :
+
+```
+confiance = échantillon × stabilité × récence × similarité du contexte
+```
+
+| Composante  | Calcul                                                                                                                                                                   | Exemple                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| échantillon | n / (n + k) : croît progressivement, jamais 1                                                                                                                            | 1 obs. 0,17 · 5 → 0,5 · 20 → 0,8 · 100 → 0,95 |
+| stabilité   | part de la destination dominante                                                                                                                                         | 19/20 → 0,95                                  |
+| récence     | poids de vieillissement (demi-vie), plancher `minWeight`                                                                                                                 | aujourd'hui 1 · une demi-vie 0,5              |
+| contexte    | produit des poids des dimensions différentes (acteur 0,5, environnement 0,7, version 0,85, classe d'écran 0,9, navigateur 0,95) ; une dimension inconnue ne pénalise pas | acteur admin ≠ user → 0,5                     |
+
+Niveaux : VERY_LOW < 0,2 ≤ LOW < 0,4 ≤ MEDIUM < 0,6 ≤ HIGH < 0,8 ≤ VERY_HIGH. **Des données faibles ne donnent jamais une certitude forte** : 2 observations identiques restent LOW, et l'oracle historique ne classe une transition inattendue `POTENTIAL_REGRESSION` qu'à partir du niveau MEDIUM ; en dessous, elle reste `UNEXPECTED_BEHAVIOR`. Chaque message d'anomalie historique donne le détail (« confidence 0.76 HIGH (20 observation(s); stability 0.95; recency 1; context 1) »).
+
+**Vieillissement** : le stockage garde tout ; seul le poids dans la décision décroît. 500 observations vieilles de 10 mois (demi-vie 30 j) pèsent moins de 1 observation effective ; 80 observations d'hier en pèsent environ 78.
+
+**Contexte** : chaque connaissance garde le contexte de sa dernière observation (`last_context_json`, nettoyé comme tout ce qui part vers un provider). Une connaissance vue pour un autre acteur ne contredit pas la connaissance courante : elle s'applique moins.
+
+Le rapport ajoute une section « Connaissance historique (confiance) » : contexte courant, nombre de connaissances par niveau, vieillies, vues dans un autre contexte, et les plus observées avec le détail de leur confiance. Les événements `KNOWLEDGE_LOADED`, `CONFIDENCE_EVALUATED` et `KNOWLEDGE_AGED` sont écrits dans le journal du moteur.
 
 ### Repli (failureMode)
 

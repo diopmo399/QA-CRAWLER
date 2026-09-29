@@ -1,3 +1,4 @@
+import type { HistoricalKnowledgeSummary } from '../intelligence/knowledge-summary.js';
 import type { PersistenceReport } from './persistence-report.js';
 import type { BaselineMetadata } from '../baseline/baseline-store.js';
 import type { MissionMode } from '../config/config.js';
@@ -119,6 +120,8 @@ export interface ExplorationResult {
     domainPacks: string[];
     /** La base de connaissances : pour quelle application, combien de runs. */
     knowledge?: { identity: KnowledgeIdentity; runs: number; file?: string };
+    /** intelligence.enabled : la connaissance historique évaluée (confiance, vieillissement, contexte). */
+    historicalKnowledge?: HistoricalKnowledgeSummary;
   };
   /** Invariants jugés (actions et accès des acteurs), expliqués. */
   invariants?: InvariantEvaluation[];

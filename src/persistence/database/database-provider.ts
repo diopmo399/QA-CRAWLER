@@ -213,7 +213,7 @@ export class DatabasePersistenceProvider implements PersistenceProvider {
           const merged = mergeObservation(existing, observation);
           if (row) {
             await tx.query(
-              `UPDATE transition_knowledge SET seen_count = ${this.p(1)}, success_count = ${this.p(2)}, failure_count = ${this.p(3)}, blocked_count = ${this.p(4)}, average_duration_ms = ${this.p(5)}, first_seen_at = ${this.p(6)}, last_seen_at = ${this.p(7)} WHERE id = ${this.p(8)}`,
+              `UPDATE transition_knowledge SET seen_count = ${this.p(1)}, success_count = ${this.p(2)}, failure_count = ${this.p(3)}, blocked_count = ${this.p(4)}, average_duration_ms = ${this.p(5)}, first_seen_at = ${this.p(6)}, last_seen_at = ${this.p(7)}, last_context_json = ${this.p(8)} WHERE id = ${this.p(9)}`,
               [
                 merged.seenCount,
                 merged.successCount,
@@ -222,6 +222,7 @@ export class DatabasePersistenceProvider implements PersistenceProvider {
                 merged.averageDurationMs ?? null,
                 merged.firstSeenAt,
                 merged.lastSeenAt,
+                merged.lastContext ? JSON.stringify(merged.lastContext) : null,
                 textOf(row.id),
               ],
             );
@@ -330,6 +331,9 @@ export class DatabasePersistenceProvider implements PersistenceProvider {
       ...(isNull(row.average_duration_ms) ? {} : { averageDurationMs: Number(row.average_duration_ms) }),
       firstSeenAt: fromTimestamp(row.first_seen_at),
       lastSeenAt: fromTimestamp(row.last_seen_at),
+      ...(isNull(row.last_context_json)
+        ? {}
+        : { lastContext: this.adapter.dialect.fromJson(row.last_context_json) }),
     };
   }
 }
@@ -411,5 +415,6 @@ function knowledgeRow(record: TransitionKnowledgeRecord): Record<string, SqlValu
     average_duration_ms: record.averageDurationMs ?? null,
     first_seen_at: record.firstSeenAt,
     last_seen_at: record.lastSeenAt,
+    last_context_json: record.lastContext ? JSON.stringify(record.lastContext) : null,
   };
 }

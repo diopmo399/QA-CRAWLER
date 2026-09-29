@@ -40,6 +40,8 @@ export const SQLSERVER_DIALECT: SqlDialect = {
     `IF OBJECT_ID(N'${table}', N'U') IS NULL CREATE TABLE ${table} (${columns})`,
   createIndexIfMissing: (name, table, columns, unique) =>
     `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'${name}' AND object_id = OBJECT_ID(N'${table}')) CREATE ${unique ? 'UNIQUE ' : ''}INDEX ${name} ON ${table} (${columns.join(', ')})`,
+  addColumn: (table, column, type) =>
+    `IF COL_LENGTH(N'${table}', N'${column}') IS NULL ALTER TABLE ${table} ADD ${column} ${type} NULL`,
   isUniqueViolation: (error) => {
     const number =
       (error as { number?: unknown; originalError?: { info?: { number?: unknown } } } | null) ?? {};

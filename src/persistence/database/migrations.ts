@@ -111,6 +111,12 @@ export const MIGRATIONS: readonly Migration[] = [
       ),
     ],
   },
+  {
+    // Contexte de la dernière observation (environnement, acteur, version, navigateur, écran) :
+    // une colonne JSON, pas une ligne par contexte.
+    id: '003_add_knowledge_context',
+    statements: (d) => [d.addColumn('transition_knowledge', 'last_context_json', d.types.json)],
+  },
 ];
 
 export interface MigrationResult {

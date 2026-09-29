@@ -48,6 +48,20 @@ export interface TransitionKnowledge {
   failureCount: number;
   firstSeenAt: string;
   lastSeenAt: string;
+  /**
+   * Contexte de la dernière observation (environnement, acteur, version, navigateur,
+   * classe d'écran) : une connaissance vue dans un autre contexte s'applique moins.
+   */
+  lastContext?: ObservedKnowledgeContext;
+}
+
+/** Contexte d'observation, sans l'application (déjà dans la clé). Toutes les dimensions sont facultatives. */
+export interface ObservedKnowledgeContext {
+  environment?: string;
+  actor?: string;
+  version?: string;
+  browser?: string;
+  viewportClass?: 'mobile' | 'tablet' | 'desktop';
 }
 
 /** Statuts HTTP observés d'une opération d'API (méthode + modèle de chemin). Jamais de corps. */

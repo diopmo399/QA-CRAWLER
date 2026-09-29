@@ -32,7 +32,8 @@ import { KnowledgeService } from './persistence/knowledge-service.js';
 import { openPersistence, type PersistenceSession } from './persistence/persistence-manager.js';
 import { PersistenceRecorder } from './persistence/persistence-recorder.js';
 import type { MemoryReport, PersistenceReport } from './model/persistence-report.js';
-import type { KnowledgeIdentity } from './knowledge/knowledge-model.js';
+import { applicationIdOf, confidenceEngineOf, knowledgeContextOf } from './intelligence/intelligence.js';
+import { summarizeKnowledge } from './intelligence/knowledge-summary.js';
 
 export interface RunOutcome {
   result: ExplorationResult;
@@ -115,10 +116,29 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   await knowledge.load();
   knowledge.startRun();
   const applicationId = applicationIdOf(identity);
+  // Contexte des observations (environnement, acteur, version, navigateur, écran) : stocké avec la
+  // persistance ; dans la base de connaissances fichier seulement avec intelligence.enabled.
+  const knowledgeContext = knowledgeContextOf(config, identity);
+  const { applicationId: _application, ...observedContext } = knowledgeContext;
+  if (config.intelligence.enabled) knowledge.setObservationContext(observedContext);
   const knowledgeService = persistence.provider
-    ? new KnowledgeService(persistence.provider.knowledge, applicationId, knowledge)
+    ? new KnowledgeService(persistence.provider.knowledge, applicationId, knowledge, observedContext)
     : undefined;
-  if (knowledgeService && memoryMode === 'historical') await knowledgeService.preload(config.memory.preload);
+  if (knowledgeService && memoryMode === 'historical') {
+    const loaded = await knowledgeService.preload(config.memory.preload);
+    engineLog.log(
+      'INFO',
+      'KNOWLEDGE_LOADED',
+      `${loaded.transitions} transition(s), ${loaded.states} state(s) preloaded`,
+      {
+        data: {
+          transitions: loaded.transitions,
+          states: loaded.states,
+          maxTransitions: config.memory.preload.maxTransitions,
+        },
+      },
+    );
+  }
   const recorder =
     persistence.provider &&
     new PersistenceRecorder(
@@ -221,6 +241,27 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     };
   }
   if (knowledgeFile) result.artifacts.knowledge = knowledgeFile;
+  const confidence = confidenceEngineOf(config);
+  if (confidence && result.intelligence) {
+    const summary = summarizeKnowledge(
+      Object.values(knowledge.snapshot.transitions),
+      confidence,
+      knowledgeContext,
+    );
+    result.intelligence.historicalKnowledge = summary;
+    engineLog.log('INFO', 'CONFIDENCE_EVALUATED', `${summary.transitions} transition(s) evaluated`, {
+      data: { ...summary.levels, transitions: summary.transitions },
+    });
+    if (summary.aged > 0)
+      engineLog.log(
+        'INFO',
+        'KNOWLEDGE_AGED',
+        `${summary.aged} transition(s) weigh less than half (older knowledge)`,
+        {
+          data: { aged: summary.aged },
+        },
+      );
+  }
   result.persistence = persistenceReportOf(
     config,
     persistence,
@@ -327,11 +368,6 @@ function memoryModeOf(config: ScenarioConfig, persistence: PersistenceSession): 
   if (config.memory.enabled === undefined) return 'legacy';
   if (!config.memory.enabled) return 'isolated';
   return persistence.provider && config.memory.historicalKnowledge ? 'historical' : 'current-run';
-}
-
-/** L'application dans le stockage : son identité, séparée par environnement (jamais mélangés). */
-function applicationIdOf(identity: KnowledgeIdentity): string {
-  return identity.environment ? `${identity.application}@${identity.environment}` : identity.application;
 }
 
 function persistenceReportOf(

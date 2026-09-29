@@ -22,7 +22,10 @@ export type EngineEvent =
   | 'FLOW_STARTED'
   | 'FLOW_STEP'
   | 'FLOW_FINISHED'
-  | 'BROWSER_INTERACTION';
+  | 'BROWSER_INTERACTION'
+  | 'KNOWLEDGE_LOADED'
+  | 'KNOWLEDGE_AGED'
+  | 'CONFIDENCE_EVALUATED';
 
 /**
  * Une ligne du journal du moteur (engine-log.jsonl). Seulement des id, des libellés

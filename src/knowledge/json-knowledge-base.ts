@@ -13,6 +13,7 @@ import {
   type KnowledgeData,
   type KnowledgeIdentity,
   type LearnedHint,
+  type ObservedKnowledgeContext,
   type PerformanceKnowledge,
   type TransitionInput,
   type TransitionKnowledge,
@@ -30,6 +31,7 @@ export interface HistoricalTransitionRecord {
   averageDurationMs?: number;
   firstSeenAt: string;
   lastSeenAt: string;
+  lastContext?: ObservedKnowledgeContext;
 }
 
 /** Destination d'une transition sans nouvel état (bloquée, échouée) dans l'historique. */
@@ -140,7 +142,10 @@ export class JsonKnowledgeBase implements KnowledgeBase {
         entry.executionCount += record.successCount;
         entry.successCount += record.successCount;
         if (record.firstSeenAt < entry.firstSeenAt) entry.firstSeenAt = record.firstSeenAt;
-        if (record.lastSeenAt > entry.lastSeenAt) entry.lastSeenAt = record.lastSeenAt;
+        if (record.lastSeenAt >= entry.lastSeenAt) {
+          entry.lastSeenAt = record.lastSeenAt;
+          if (record.lastContext) entry.lastContext = { ...record.lastContext };
+        }
       }
       const action = (this.data.actions[record.actionSignature] ??= {
         actionSignature: record.actionSignature,
@@ -225,6 +230,13 @@ export class JsonKnowledgeBase implements KnowledgeBase {
     }
   }
 
+  /** Contexte des observations de ce run (stampé sur chaque transition enregistrée). */
+  private observationContext: ObservedKnowledgeContext | undefined;
+
+  setObservationContext(context: ObservedKnowledgeContext | undefined): void {
+    this.observationContext = context;
+  }
+
   recordTransition(input: TransitionInput): void {
     const at = input.at ?? this.stamp();
     const key = `${input.fromStateSignature}::${input.actionSignature}`;
@@ -243,6 +255,7 @@ export class JsonKnowledgeBase implements KnowledgeBase {
     else entry.failureCount += 1;
     entry.targets[input.toStateSignature] = (entry.targets[input.toStateSignature] ?? 0) + 1;
     entry.lastSeenAt = at;
+    if (this.observationContext) entry.lastContext = { ...this.observationContext };
   }
 
   recordApiCall(operation: string, status: number, durationMs?: number, at = this.stamp()): void {

@@ -97,7 +97,9 @@ import type { GoalState } from '../goals/goal-model.js';
 import { missionOf, RuleBasedGoalPlanner } from '../goals/goal-planner.js';
 import { GoalTracker } from '../goals/goal-tracker.js';
 import { JsonKnowledgeBase } from '../knowledge/json-knowledge-base.js';
-import type { KnowledgeBase } from '../knowledge/knowledge-model.js';
+import type { KnowledgeBase, TransitionKnowledge } from '../knowledge/knowledge-model.js';
+import type { ConfidenceResult } from '../intelligence/confidence-engine.js';
+import { confidenceEngineOf, knowledgeContextOf } from '../intelligence/intelligence.js';
 import { actionSignature, stateSignature } from '../knowledge/signatures.js';
 import { HistoricalOracle, apiOperation } from '../oracles/historical-oracle.js';
 import { InvariantOracle, type InvariantEvaluation } from '../oracles/invariant-oracle.js';
@@ -469,6 +471,7 @@ export class FlowExplorer {
                     minObservations: config.knowledge.minObservations,
                     dominance: config.knowledge.dominance,
                     slowFactor: config.knowledge.slowFactor,
+                    ...this.confidenceOption(config),
                   },
                   exploration.queryParams.mode,
                 ),
@@ -812,6 +815,19 @@ export class FlowExplorer {
     if (!this.goals) return;
     for (const goal of this.goals.observe(context, this.patternsByState.get(context.stateId) ?? []))
       this.listener.onGoal?.(goal);
+  }
+
+  /**
+   * ConfidenceEngine (intelligence.enabled + intelligence.confidence.enabled) : la confiance
+   * de l'oracle historique devient progressive et expliquée. Sinon : rien, le barème d'avant.
+   */
+  private confidenceOption(config: ScenarioConfig): {
+    confidence?: (knowledge: TransitionKnowledge) => ConfidenceResult;
+  } {
+    const engine = confidenceEngineOf(config);
+    if (!engine) return {};
+    const context = knowledgeContextOf(config, this.knowledge.identity);
+    return { confidence: (knowledge) => engine.evaluate(knowledge, context) };
   }
 
   /** Une requête d'écriture annulée par la garde : une anomalie « effet de bord ». */

@@ -38,6 +38,8 @@ export interface SqlDialect {
   readonly lockSuffix: string;
   createTableIfMissing(table: string, columns: string): string;
   createIndexIfMissing(name: string, table: string, columns: readonly string[], unique: boolean): string;
+  /** Ajoute une colonne NULLable (migrations additives seulement). */
+  addColumn(table: string, column: string, type: string): string;
   /** Violation d'unicité (deux crawlers écrivent la même ligne en même temps) : la transaction est rejouée. */
   isUniqueViolation(error: unknown): boolean;
   /** Valeur lue d'une colonne de date → ISO 8601 UTC. */

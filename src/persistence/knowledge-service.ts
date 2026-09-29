@@ -1,5 +1,5 @@
 import type { HistoricalTransitionRecord } from '../knowledge/json-knowledge-base.js';
-import type { TransitionKnowledge } from '../knowledge/knowledge-model.js';
+import type { ObservedKnowledgeContext, TransitionKnowledge } from '../knowledge/knowledge-model.js';
 import { fit, knowledgeKey, LIMITS, NO_TARGET, type TransitionObservation } from './model.js';
 import type { KnowledgeRepository } from './persistence-provider.js';
 
@@ -70,6 +70,8 @@ export class KnowledgeService {
     private readonly repository: KnowledgeRepository,
     readonly applicationId: string,
     private readonly memory: WorkingMemory,
+    /** Contexte des observations de ce run (acteur, version, navigateur…), gardé comme « dernier contexte ». */
+    private readonly context?: ObservedKnowledgeContext,
   ) {}
 
   /**
@@ -132,6 +134,7 @@ export class KnowledgeService {
       durationCount: observed.result !== 'BLOCKED' && observed.durationMs !== undefined ? 1 : 0,
       firstSeenAt: observed.at,
       lastSeenAt: observed.at,
+      ...(this.context ? { lastContext: { ...this.context } } : {}),
     };
     const key = knowledgeKey(observation);
     if (!this.knownTransitions.has(key)) {
