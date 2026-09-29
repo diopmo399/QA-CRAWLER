@@ -55,7 +55,12 @@ import {
   type VerificationStatus,
   type VerifiedTransition,
 } from '../model/verification.js';
-import type { FlowRunReport, FlowStatus, FlowStepReport } from '../model/flow-run.js';
+import type {
+  FlowRunReport,
+  FlowStatus,
+  FlowStepReport,
+  SemanticResolutionReport,
+} from '../model/flow-run.js';
 import { isAtLeast, type Issue, type IssueType, type Severity } from '../model/issue.js';
 import type { NetworkExchange } from '../model/network.js';
 import type { PageContext } from '../model/page-context.js';
@@ -100,6 +105,9 @@ import { JsonKnowledgeBase } from '../knowledge/json-knowledge-base.js';
 import type { KnowledgeBase, TransitionKnowledge } from '../knowledge/knowledge-model.js';
 import type { ConfidenceResult } from '../intelligence/confidence-engine.js';
 import { adaptiveScorerOf, confidenceEngineOf, knowledgeContextOf } from '../intelligence/intelligence.js';
+import { SemanticResolver, type SemanticResolution } from '../semantics/resolution/semantic-resolver.js';
+import type { GherkinIntent } from '../semantics/resolution/intent.js';
+import { ValidDataFillStrategy } from '../forms/form-fill-strategy.js';
 import { actionSignature, stateSignature } from '../knowledge/signatures.js';
 import { HistoricalOracle, apiOperation } from '../oracles/historical-oracle.js';
 import { InvariantOracle, type InvariantEvaluation } from '../oracles/invariant-oracle.js';
@@ -301,6 +309,10 @@ export class FlowExplorer {
   private readonly createdData: CreatedDataRegistry;
   // ---- moteur de décision avancé
   private readonly semantics: Semantics;
+  /** Résolution sémantique des phrases d'intention (gherkin.semanticResolution.enabled). */
+  private readonly semanticResolver: SemanticResolver | undefined;
+  /** Le scénario en cours : le formulaire rempli, les valeurs saisies (non sensibles) pour les vérifications. */
+  private scenario: { formGroup?: string; values: string[] } = { values: [] };
   private readonly patternDetector: RuleBasedPatternDetector;
   private readonly patternsByState = new Map<string, DetectedPattern[]>();
   private readonly coverage = new CoverageTracker();
@@ -338,6 +350,15 @@ export class FlowExplorer {
     this.stateDetector = new StateDetector(exploration.queryParams.mode, exploration.queryParams.ignored);
     this.discovery = new ActionDiscovery(this.safety, exploration.maxRecordedActions);
     this.semantics = options.semantics ?? semanticsOf(config);
+    const semantic = config.gherkin.semanticResolution;
+    this.semanticResolver = semantic.enabled
+      ? new SemanticResolver(this.semantics.dictionary, {
+          autoResolveThreshold: semantic.autoResolveThreshold,
+          ambiguityMargin: semantic.ambiguityMargin,
+          minCandidateScore: semantic.minCandidateScore,
+          vocabulary: semantic.vocabulary,
+        })
+      : undefined;
     const { dictionary } = this.semantics;
     this.patternDetector = new RuleBasedPatternDetector(dictionary);
     this.novelty = new GraphNoveltyDetector(() => this.coverage.seenPatterns());
@@ -1577,6 +1598,7 @@ export class FlowExplorer {
     };
     this.flowReports.push(report);
     this.flowNetwork = [];
+    this.scenario = { values: [] };
     this.listener.onFlowStart?.(flow);
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
     const knownStates = new Set(this.graph.allNodes().map((node) => node.id));
@@ -1699,6 +1721,8 @@ export class FlowExplorer {
       }
       case 'auto':
         return this.runAutoStep(page, browser, observers, flow, step, context, timeout, done);
+      case 'intent':
+        return this.runIntentStep(page, browser, observers, flow, step, context, timeout, done);
       case 'manual':
         // Le robot ne sait pas le vérifier : noté pour une personne, le flow continue.
         return {
@@ -1945,6 +1969,210 @@ export class FlowExplorer {
         };
       }
     }
+  }
+
+  /**
+   * RÉSOLUTION SÉMANTIQUE : l'intention de la phrase (« FILL prénom ») est résolue sur
+   * l'écran courant (SemanticResolver : candidats, scores, ambiguïté), puis exécutée comme
+   * une étape ordinaire — même localisation, même SafetyPolicy, même garde d'écriture.
+   * Ambigu ou introuvable : l'étape échoue avec l'explication, jamais une cible devinée.
+   */
+  private async runIntentStep(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    flow: FlowConfig,
+    step: Extract<FlowStep, { kind: 'intent' }>,
+    context: PageContext,
+    timeout: number,
+    done: (status: FlowStatus, extra?: Partial<FlowStepReport>) => FlowStepReport,
+  ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
+    const where = { stateId: context.stateId, url: context.url };
+    const intent = step.intent;
+    const resolver = this.semanticResolver;
+    if (!resolver)
+      return { page, report: done('MANUAL', { reason: 'gherkin.semanticResolution is disabled', ...where }) };
+    if (intent.kind === 'ASSERT')
+      return {
+        page,
+        report: done('MANUAL', { reason: `to check manually: ${describeStep(step)}`, ...where }),
+      };
+    const resolution = resolver.resolve(intent, context, {
+      stateSignature: stateSignature(context.stateLabel),
+      ...(this.scenario.formGroup ? { previousFormGroup: this.scenario.formGroup } : {}),
+      ...(step.name ? { sentence: step.name } : {}),
+      ...(intent.kind === 'FILL' && typeof intent.value !== 'string' ? { sensitiveValue: true } : {}),
+    });
+    const report = this.resolutionReport(resolution);
+    const common = { allow: step.allow, optional: false };
+    const targetOf = (action: DiscoveredAction): FlowTarget => ({ ...action.locator });
+    const interpretation = resolution.explanation.slice(0, 4).join(' · ');
+
+    if (resolution.status !== 'RESOLVED' || !resolution.target) {
+      const reason = `${failureCode(intent, resolution.status)}: ${resolution.reasons[0] ?? 'not resolved'}`;
+      return {
+        page,
+        report: done(resolution.status === 'BLOCKED' ? 'BLOCKED' : 'FAILED', {
+          reason,
+          interpretation,
+          resolution: report,
+          onScreen: resolution.candidates.map((candidate) => `${candidate.label} (${candidate.score})`),
+          ...where,
+        }),
+      };
+    }
+    const target = resolution.target;
+    const run = async (
+      concrete: Extract<FlowStep, { target: unknown }>,
+      current: PageContext,
+      currentPage: Page,
+    ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> =>
+      this.runFlowElementStep(currentPage, browser, observers, flow, concrete, current, timeout, done);
+    const finish = (outcome: { page: Page; context?: PageContext; report: FlowStepReport }) => ({
+      ...outcome,
+      report: { ...outcome.report, interpretation, resolution: report },
+    });
+
+    switch (target.kind) {
+      case 'here':
+        return { page, report: done('PASSED', { interpretation, resolution: report, ...where }) };
+      case 'action':
+        return finish(
+          await run({ ...common, kind: 'click', target: targetOf(target.action) }, context, page),
+        );
+      case 'field': {
+        const field = target.field;
+        const concrete: Extract<FlowStep, { target: unknown }> =
+          target.operation === 'fill' && intent.kind === 'FILL'
+            ? { ...common, kind: 'fill', target: targetOf(field.action), value: intent.value }
+            : target.operation === 'select'
+              ? { ...common, kind: 'select', target: targetOf(field.action), option: target.option ?? '' }
+              : {
+                  ...common,
+                  kind: target.operation === 'uncheck' ? 'uncheck' : 'check',
+                  target: targetOf(field.action),
+                };
+        const outcome = await run(concrete, context, page);
+        if (outcome.report.status === 'PASSED') this.remember(field, intent);
+        return finish(outcome);
+      }
+      case 'form': {
+        let current = context;
+        let currentPage = page;
+        const done_: string[] = [];
+        for (const mapping of target.plan.mappings) {
+          const action = targetOf(mapping.field.action);
+          const concrete: Extract<FlowStep, { target: unknown }> =
+            mapping.operation === 'fill'
+              ? { ...common, kind: 'fill', target: action, value: mapping.value }
+              : mapping.operation === 'select'
+                ? {
+                    ...common,
+                    kind: 'select',
+                    target: action,
+                    option: mapping.option ?? (typeof mapping.value === 'string' ? mapping.value : ''),
+                  }
+                : { ...common, kind: mapping.operation, target: action };
+          const outcome = await run(concrete, current, currentPage);
+          currentPage = outcome.page;
+          current = outcome.context ?? current;
+          done_.push(`"${mapping.intent}" → "${mapping.target}" ${mapping.confidence}`);
+          if (outcome.report.status !== 'PASSED')
+            return finish({
+              ...outcome,
+              report: {
+                ...outcome.report,
+                reason: `"${mapping.intent}": ${outcome.report.reason ?? outcome.report.status}`,
+              },
+            });
+          if (mapping.operation === 'fill')
+            this.remember(mapping.field, { kind: 'FILL', field: mapping.intent, value: mapping.value });
+          else this.scenario.formGroup = mapping.field.formGroup ?? this.scenario.formGroup;
+        }
+        return {
+          page: currentPage,
+          context: current,
+          report: done('PASSED', {
+            interpretation: done_.join(' · '),
+            resolution: report,
+            stateId: current.stateId,
+            url: current.url,
+          }),
+        };
+      }
+      case 'synthetic-form': {
+        const plan = await new ValidDataFillStrategy(this.testData, this.safety, this.runId).fill(
+          target.form,
+          context,
+        );
+        let current = context;
+        let currentPage = page;
+        const filled: string[] = [];
+        for (const operation of plan.operations) {
+          if (operation.operation === 'skip') continue;
+          const field = target.form.fields.find((entry) => entry.id === operation.fieldId);
+          if (!field) continue;
+          const locator: FlowTarget = { ...field.locator };
+          const concrete: Extract<FlowStep, { target: unknown }> =
+            operation.operation === 'fill'
+              ? { ...common, kind: 'fill', target: locator, value: operation.value ?? '' }
+              : operation.operation === 'select'
+                ? { ...common, kind: 'select', target: locator, option: operation.value ?? '' }
+                : { ...common, kind: operation.operation, target: locator };
+          const outcome = await run(concrete, current, currentPage);
+          currentPage = outcome.page;
+          current = outcome.context ?? current;
+          filled.push(`${field.label ?? field.name ?? field.id} (${operation.source ?? 'type'})`);
+          if (outcome.report.status !== 'PASSED') return finish(outcome);
+        }
+        this.scenario.formGroup = target.form.group;
+        return {
+          page: currentPage,
+          context: current,
+          report: done('PASSED', {
+            interpretation: `form "${target.form.name}": ${filled.length} field(s) with synthetic data — ${filled.join(', ')}`,
+            resolution: report,
+            stateId: current.stateId,
+            url: current.url,
+          }),
+        };
+      }
+    }
+  }
+
+  /** Le formulaire du scénario, et les valeurs non sensibles saisies (pour « … apparaît dans la liste »). */
+  private remember(
+    field: { formGroup?: string; sensitive: boolean; type: string },
+    intent: GherkinIntent,
+  ): void {
+    if (field.formGroup) this.scenario.formGroup = field.formGroup;
+    if (
+      intent.kind === 'FILL' &&
+      typeof intent.value === 'string' &&
+      !field.sensitive &&
+      intent.value.trim().length >= 2 &&
+      this.scenario.values.length < 20
+    )
+      this.scenario.values.push(intent.value.trim());
+  }
+
+  private resolutionReport(resolution: SemanticResolution): SemanticResolutionReport {
+    const selected = resolution.explanation
+      .find((line) => line.startsWith('Status: '))
+      ?.match(/→ "(.*)" ·/)?.[1];
+    return {
+      status: resolution.status,
+      intent: resolution.description,
+      ...(selected ? { selected } : {}),
+      score: resolution.score,
+      confidence: resolution.confidence,
+      ...(resolution.valueType ? { valueType: resolution.valueType } : {}),
+      reasons: resolution.reasons.slice(0, 12),
+      candidates: resolution.candidates
+        .slice(0, 5)
+        .map((candidate) => ({ label: candidate.label, score: candidate.score })),
+      ...(this.config.gherkin.semanticResolution.explain ? { explanation: resolution.explanation } : {}),
+    };
   }
 
   private async runFlowElementStep(
@@ -3243,4 +3471,19 @@ function blockingReason(results: readonly BrowserInteractionResult[]): string {
         `${result.type} ${result.outcome ?? result.status}${result.reason ? `: ${result.reason}` : ''}`,
     )
     .join('; ');
+}
+
+/** « AMBIGUOUS_FIELD », « ACTION_NOT_FOUND »… : le code d'une résolution qui n'aboutit pas. */
+function failureCode(intent: GherkinIntent, status: string): string {
+  const kind =
+    intent.kind === 'FILL' || intent.kind === 'SELECT' || intent.kind === 'CHECK' || intent.kind === 'UPLOAD'
+      ? 'FIELD'
+      : intent.kind === 'NAVIGATE'
+        ? 'PAGE'
+        : intent.kind === 'FILL_FORM'
+          ? 'FORM'
+          : 'ACTION';
+  if (status === 'AMBIGUOUS') return `AMBIGUOUS_${kind}`;
+  if (status === 'BLOCKED') return `${kind}_BLOCKED`;
+  return `${kind}_NOT_FOUND`;
 }

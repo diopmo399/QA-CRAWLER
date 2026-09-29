@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ASSERTION_KINDS, describeIntent, type GherkinIntent } from '../semantics/resolution/intent.js';
 
 /**
  * Flows de test imposés : une liste ordonnée d'étapes exigées par la mission
@@ -117,7 +118,45 @@ const STEP_KINDS = [
   'screenshot',
   'manual',
   'auto',
+  'intent',
 ] as const;
+
+const intentValueSchema = z.union([z.string(), z.object({ env: nonEmpty }).strict()]);
+
+/**
+ * Une INTENTION Gherkin (gherkin.semanticResolution) : ce que la phrase demande, sans
+ * sélecteur. La cible est trouvée à l'écran au moment de l'exécution.
+ */
+const intentSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('NAVIGATE'), target: nonEmpty, precondition: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('CLICK'), target: nonEmpty, role: nonEmpty.optional() }).strict(),
+  z.object({ kind: z.literal('FILL'), field: nonEmpty, value: intentValueSchema }).strict(),
+  z.object({ kind: z.literal('SELECT'), field: nonEmpty, option: nonEmpty }).strict(),
+  z.object({ kind: z.literal('CHECK'), field: nonEmpty, checked: z.boolean() }).strict(),
+  z.object({ kind: z.literal('UPLOAD'), field: nonEmpty, file: z.string() }).strict(),
+  z
+    .object({
+      kind: z.literal('SUBMIT'),
+      action: z.enum(['submit', 'cancel', 'next', 'previous']),
+      verb: nonEmpty.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('FILL_FORM'),
+      form: nonEmpty.optional(),
+      rows: z.array(z.object({ field: nonEmpty, value: intentValueSchema }).strict()).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('ASSERT'),
+      assertion: z.enum(ASSERTION_KINDS),
+      subject: nonEmpty.optional(),
+      message: z.enum(['confirmation', 'error', 'any']).optional(),
+    })
+    .strict(),
+]);
 
 const stepSchema = z
   .object({
@@ -142,6 +181,8 @@ const stepSchema = z
       })
       .strict()
       .optional(),
+    /** Intention Gherkin résolue sur l'écran à l'exécution (gherkin.semanticResolution). */
+    intent: intentSchema.optional(),
     /**
      * Permission explicite pour cette étape seulement : MUTATION (créer, enregistrer,
      * envoyer…) et/ou UNKNOWN (contrôle réduit à une icône). DANGEROUS (supprimer,
@@ -211,6 +252,7 @@ const stepSchema = z
     if (step.manual !== undefined) return { ...common, kind: 'manual', text: step.manual };
     if (step.auto !== undefined)
       return { ...common, kind: 'auto', sentence: step.auto.sentence, type: step.auto.type };
+    if (step.intent !== undefined) return { ...common, kind: 'intent', intent: step.intent };
     return { ...common, kind: 'screenshot', label: step.screenshot ?? 'screenshot' };
   });
 
@@ -287,6 +329,7 @@ export type FlowStep = StepCommon &
     | { kind: 'screenshot'; label: string }
     | { kind: 'manual'; text: string }
     | { kind: 'auto'; sentence: string; type: 'Context' | 'Action' | 'Outcome' | 'Unknown' }
+    | { kind: 'intent'; intent: GherkinIntent }
   );
 
 export type FlowConfig = z.output<typeof flowSchema>;
@@ -361,6 +404,8 @@ export function describeStep(step: FlowStep, maskValue = false): string {
       return `manual check: ${step.text}`;
     case 'auto':
       return `auto: ${step.sentence}`;
+    case 'intent':
+      return `intent: ${describeIntent(step.intent)}`;
   }
 }
 

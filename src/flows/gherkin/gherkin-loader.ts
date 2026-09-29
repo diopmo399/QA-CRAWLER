@@ -3,6 +3,7 @@ import path from 'node:path';
 import { AstBuilder, compile, GherkinClassicTokenMatcher, Parser } from '@cucumber/gherkin';
 import { IdGenerator, PickleStepType, type GherkinDocument, type Pickle } from '@cucumber/messages';
 import { labelOf } from '../flow-includes.js';
+import { GherkinIntentParser } from './gherkin-intents.js';
 import { GherkinStepDictionary, type CustomGherkinStep, type RawStep } from './gherkin-steps.js';
 
 /**
@@ -63,6 +64,7 @@ export function gherkinFlows(
   baseDir: string,
   custom: readonly CustomGherkinStep[] = [],
   autoByDefault = false,
+  semantic = false,
 ): Record<string, unknown>[] {
   const auto = entry.auto ?? autoByDefault;
   const file = path.resolve(baseDir, entry.gherkin);
@@ -96,6 +98,7 @@ export function gherkinFlows(
   const pickles = compile(document, display, IdGenerator.incrementing());
   const steps = stepIndex(document);
   const dictionary = new GherkinStepDictionary(custom);
+  const intents = semantic ? new GherkinIntentParser() : undefined;
   const wanted = entry.scenarios ? new Set(entry.scenarios) : undefined;
   const wantedTags = entry.tags?.map((tag) => normalizeTag(tag));
   const unknown: string[] = [];
@@ -117,10 +120,26 @@ export function gherkinFlows(
       const sentence = step.text.replace(OPTIONAL_SUFFIX, '');
       const table = step.argument?.dataTable?.rows.map((row) => row.cells.map((cell) => cell.value));
       let translated: RawStep[] | undefined;
+      let failure: string | undefined;
       try {
         translated = dictionary.translate(sentence, table);
       } catch (error) {
-        unknown.push(`${display}:${line ?? '?'}: "${sentence}": ${(error as Error).message}`);
+        failure = (error as Error).message;
+      }
+      if (!translated && intents) {
+        // Résolution sémantique : après les phrases de l'équipe et les phrases intégrées, jamais avant.
+        try {
+          const intent = intents.parse(sentence, stepTypeOf(step.type), table);
+          if (intent) {
+            translated = [{ intent }];
+            failure = undefined;
+          }
+        } catch (error) {
+          failure ??= (error as Error).message;
+        }
+      }
+      if (failure !== undefined) {
+        unknown.push(`${display}:${line ?? '?'}: "${sentence}": ${failure}`);
         continue;
       }
       if (!translated && auto) {
@@ -218,6 +237,19 @@ function exampleRow(document: GherkinDocument, rowId: string | undefined): strin
 function describe(raw: RawStep): string {
   const fill = raw.fill as { label?: unknown } | undefined;
   return typeof fill?.label === 'string' ? fill.label : labelOf(raw);
+}
+
+function stepTypeOf(type: PickleStepType | undefined): 'Context' | 'Action' | 'Outcome' | 'Unknown' {
+  switch (type) {
+    case PickleStepType.CONTEXT:
+      return 'Context';
+    case PickleStepType.ACTION:
+      return 'Action';
+    case PickleStepType.OUTCOME:
+      return 'Outcome';
+    default:
+      return 'Unknown';
+  }
 }
 
 function normalizeTag(tag: string): string {

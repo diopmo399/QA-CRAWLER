@@ -45,6 +45,13 @@ export interface FieldTarget {
   radios?: FieldDescriptor[];
 }
 
+/** Une cible évaluée : le candidat, la cible, et l'option choisie (SELECT). */
+export interface ScoredTarget {
+  candidate: ResolutionCandidate;
+  target: FieldTarget;
+  option?: OptionResolution & { radio?: FieldDescriptor };
+}
+
 export interface FieldResolution {
   status: ResolutionStatus;
   intent: string;
@@ -112,7 +119,7 @@ export class FieldMatcher {
     const value =
       intent.kind === 'FILL' && typeof intent.value === 'string' ? classifyValue(intent.value) : undefined;
     const targets = targetsFor(intent, fields);
-    const scored = targets.map((target) => this.score(intent, target, value, context, intentKey));
+    const scored = targets.map((target) => this.scoreTarget(intent, target, value, context, intentKey));
     const candidates = rank(scored.map((entry) => entry.candidate));
     const decision = decide(candidates, this.thresholds);
     const best = decision.best ? scored.find((entry) => entry.candidate.id === decision.best?.id) : undefined;
@@ -165,7 +172,8 @@ export class FieldMatcher {
     };
   }
 
-  private score(
+  /** Le score d'une cible pour une intention, composante par composante (utilisé aussi par le FormIntentResolver). */
+  scoreTarget(
     intent: FieldIntent,
     target: FieldTarget,
     value: ValueClassification | undefined,
