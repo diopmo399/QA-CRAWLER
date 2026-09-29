@@ -96,6 +96,15 @@ export class BrowserEventDiscovery {
 
   /** Les traitements d'événements en cours (nouvel onglet, fenêtre, téléchargement…). */
   private readonly inFlight = new Set<Promise<unknown>>();
+  /**
+   * Onglets ouverts par une page que Playwright n'a pas encore annoncés : il n'émet
+   * l'événement 'page' qu'après la première réponse du nouvel onglet (serveur ou machine
+   * lents). Chromium les signale dès leur création ; `settle` les attend aussi.
+   */
+  private readonly openingTargets = new Set<string>();
+  private readonly knownTargets = new Set<string>();
+  /** Contextes de navigateur suivis : les onglets des autres contextes ne sont pas attendus ici. */
+  private readonly contextIds = new Set<string>();
 
   constructor(
     private readonly manager: BrowserInteractionManager,
@@ -119,6 +128,7 @@ export class BrowserEventDiscovery {
     context.on('page', (page) => {
       this.track(this.onNewPage(page));
     });
+    await this.watchOpeningTabs(context).catch(() => undefined);
     // Une popup commence à se charger avant que quiconque puisse s'y attacher : quand son premier document est un défi
     // de connexion, la fenêtre native serait manquée. On le retient, pour rejouer le défi une fois attaché.
     context.on('response', (response) => {
@@ -143,10 +153,13 @@ export class BrowserEventDiscovery {
    */
   async settle(timeoutMs = 5_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    while (this.inFlight.size > 0 && Date.now() < deadline) {
+    while ((this.inFlight.size > 0 || this.openingTargets.size > 0) && Date.now() < deadline) {
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
-        Promise.allSettled([...this.inFlight]),
+        // Un onglet qui s'ouvre n'est pas encore un traitement en cours : revenir voir sous peu.
+        this.inFlight.size > 0
+          ? Promise.allSettled([...this.inFlight])
+          : new Promise<void>((resolve) => setTimeout(resolve, 50)),
         new Promise<void>((resolve) => {
           timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
         }),
@@ -158,6 +171,36 @@ export class BrowserEventDiscovery {
   private track(task: Promise<unknown>): void {
     this.inFlight.add(task);
     void task.finally(() => this.inFlight.delete(task)).catch(() => undefined);
+  }
+
+  /** Chromium signale chaque onglet ouvert par une page (openerId) dès sa création. */
+  private async watchOpeningTabs(context: BrowserContext): Promise<void> {
+    const browser = context.browser();
+    if (!browser || browser.browserType().name() !== 'chromium') return;
+    const session = await browser.newBrowserCDPSession();
+    session.on('Target.targetCreated', ({ targetInfo }) => {
+      const { targetId, type, openerId, browserContextId } = targetInfo;
+      if (type !== 'page' || !openerId || this.knownTargets.has(targetId)) return;
+      if (browserContextId && this.contextIds.size > 0 && !this.contextIds.has(browserContextId)) return;
+      this.openingTargets.add(targetId);
+    });
+    session.on('Target.targetDestroyed', ({ targetId }) => {
+      this.openingTargets.delete(targetId);
+    });
+    await session.send('Target.setDiscoverTargets', { discover: true });
+  }
+
+  /** L'onglet est annoncé par Playwright : il n'est plus « en train de s'ouvrir ». */
+  private async markKnown(page: Page): Promise<void> {
+    const session = await page.context().newCDPSession(page);
+    try {
+      const { targetInfo } = await session.send('Target.getTargetInfo');
+      this.knownTargets.add(targetInfo.targetId);
+      this.openingTargets.delete(targetInfo.targetId);
+      if (targetInfo.browserContextId) this.contextIds.add(targetInfo.browserContextId);
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
   }
 
   /** Ouvre une page pour le crawler lui-même : elle n'est pas signalée comme popup / nouvel onglet. */
@@ -275,7 +318,9 @@ export class BrowserEventDiscovery {
   }
 
   private async onNewPage(page: Page): Promise<void> {
-    if (this.creatingOwnPage > 0 || this.ownPages.has(page)) return;
+    const own = this.creatingOwnPage > 0 || this.ownPages.has(page);
+    await this.markKnown(page).catch(() => undefined);
+    if (own) return;
     const opener = await page.opener().catch(() => null);
     await page
       .waitForLoadState('domcontentloaded', { timeout: this.options.popupLoadTimeoutMs })

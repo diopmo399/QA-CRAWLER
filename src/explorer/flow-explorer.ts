@@ -656,8 +656,18 @@ export class FlowExplorer {
         stopReason = loop.stopReason;
       }
     } finally {
-      // Un nouvel onglet, une fenêtre ou un téléchargement encore en traitement (machine lente) : les attendre.
-      await this.browserEvents.settle().catch(() => undefined);
+      // Un nouvel onglet, une fenêtre ou un téléchargement encore en traitement (machine lente) : les attendre,
+      // le temps de charger la page (popupLoadTimeoutMs), de l'observer et de la laisser ouverte si demandé.
+      const { exploration, browserInteractions } = this.config;
+      const popupLoad = Math.min(exploration.navigationTimeoutMs, 5_000);
+      await this.browserEvents
+        .settle(
+          Math.max(
+            5_000,
+            2 * popupLoad + exploration.actionTimeoutMs + browserInteractions.popups.closeAfterMs,
+          ),
+        )
+        .catch(() => undefined);
       await browser.close();
     }
     await this.memory.save(this.graph);
