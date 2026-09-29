@@ -168,7 +168,14 @@ function expandGherkinFlows(entries: unknown[], gherkinConfig: unknown, baseDir:
       ]);
     try {
       flows.push(
-        ...gherkinFlows(entry, baseDir, custom, (gherkin as { auto?: unknown } | undefined)?.auto === true),
+        ...gherkinFlows(
+          entry,
+          baseDir,
+          custom,
+          (gherkin as { auto?: unknown } | undefined)?.auto === true,
+          (gherkin as { semanticResolution?: { enabled?: unknown } } | undefined)?.semanticResolution
+            ?.enabled === true,
+        ),
       );
     } catch (error) {
       if (error instanceof GherkinError) throw new ConfigError(error.message, error.details);

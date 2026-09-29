@@ -34,6 +34,22 @@ export interface FlowStepReport {
   suggestions?: string[];
   /** Élément introuvable : libellés des champs (ou noms des boutons) à l'écran. */
   onScreen?: string[];
+  /** Résolution sémantique d'une phrase d'intention : cible, confiance, raisons, candidats (jamais une valeur). */
+  resolution?: SemanticResolutionReport;
+}
+
+/** Ce que le rapport garde d'une résolution sémantique. */
+export interface SemanticResolutionReport {
+  status: 'RESOLVED' | 'AMBIGUOUS' | 'NOT_FOUND' | 'BLOCKED';
+  intent: string;
+  selected?: string;
+  score: number;
+  confidence: string;
+  valueType?: string;
+  reasons: string[];
+  candidates: { label: string; score: number }[];
+  /** GHERKIN RESOLUTION en clair (gherkin.semanticResolution.explain). */
+  explanation?: string[];
 }
 
 /** Résultat d'un flow imposé. */

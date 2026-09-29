@@ -34,6 +34,7 @@ import { PersistenceRecorder } from './persistence/persistence-recorder.js';
 import type { MemoryReport, PersistenceReport } from './model/persistence-report.js';
 import { applicationIdOf, confidenceEngineOf, knowledgeContextOf } from './intelligence/intelligence.js';
 import { summarizeKnowledge } from './intelligence/knowledge-summary.js';
+import { isSemanticSignature, learnFrom } from './semantics/resolution/semantic-knowledge.js';
 
 export interface RunOutcome {
   result: ExplorationResult;
@@ -169,7 +170,19 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     memory,
     ...(options.decisionEngine ? { decisionEngine: options.decisionEngine } : {}),
     ...(options.testData ? { testData: options.testData } : {}),
-    listener: combineListeners(options.listener, engineLog.listener(), recorder?.listener()),
+    listener: combineListeners(
+      options.listener,
+      engineLog.listener(),
+      recorder?.listener(),
+      // Les résolutions sémantiques enrichissent la mémoire de travail (et, par elle, le fichier de connaissance).
+      config.gherkin.semanticResolution.enabled
+        ? {
+            onSemanticResolution: (event) => {
+              learnFrom(knowledge, event);
+            },
+          }
+        : undefined,
+    ),
     ...(options.env ? { env: options.env } : {}),
     ...(mode === 'explore' && baseline ? { knownActions: knownActionsOf(baseline) } : {}),
     historyAvailable: memoryMode === 'historical' || (memoryMode === 'legacy' && knowledgeFile !== undefined),
@@ -245,7 +258,9 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   const confidence = confidenceEngineOf(config);
   if (confidence && result.intelligence) {
     const summary = summarizeKnowledge(
-      Object.values(knowledge.snapshot.transitions),
+      Object.values(knowledge.snapshot.transitions).filter(
+        (entry) => !isSemanticSignature(entry.actionSignature),
+      ),
       confidence,
       knowledgeContext,
     );

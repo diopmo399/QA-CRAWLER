@@ -1010,6 +1010,45 @@ export const scenarioSchema = z
          * l'écran à l'exécution (noms cités, libellés de champs, valeurs), ou notée « À VÉRIFIER ».
          */
         auto: z.boolean().default(false),
+        /**
+         * RÉSOLUTION SÉMANTIQUE : des phrases qui nomment un champ, une page ou une action par
+         * ce qu'ils signifient (« je renseigne le prénom avec "X" », « je valide le formulaire »).
+         * La cible est trouvée à l'écran (libellé, alias FR/EN, attributs, type, valeur, historique),
+         * choisie seulement avec une confiance suffisante, et exécutée après la SafetyPolicy.
+         * Désactivée par défaut : les scénarios existants se traduisent exactement comme avant.
+         */
+        semanticResolution: z
+          .object({
+            enabled: z.boolean().default(false),
+            /** Score minimal pour agir seul (0..1). */
+            autoResolveThreshold: z.number().min(0.5).max(1).default(0.85),
+            /** Écart minimal avec le deuxième candidat : sinon AMBIGUOUS. */
+            ambiguityMargin: z.number().min(0).max(0.5).default(0.15),
+            /** En dessous : pas un candidat. */
+            minCandidateScore: z.number().min(0).max(0.8).default(0.25),
+            /** Les résolutions réussies des runs précédents départagent (signal borné, jamais une vérité). */
+            historicalKnowledge: z.boolean().default(true),
+            /** L'explication de chaque résolution dans le rapport et le journal du moteur. */
+            explain: z.boolean().default(true),
+            /** Vocabulaire ajouté : alias de champs par concept, mots d'action. */
+            vocabulary: z
+              .object({
+                fields: z.record(z.array(nonEmpty)).default({}),
+                actions: z
+                  .object({
+                    submit: z.array(nonEmpty).default([]),
+                    cancel: z.array(nonEmpty).default([]),
+                    next: z.array(nonEmpty).default([]),
+                    previous: z.array(nonEmpty).default([]),
+                  })
+                  .strict()
+                  .default({}),
+              })
+              .strict()
+              .default({}),
+          })
+          .strict()
+          .default({}),
         steps: z
           .array(
             z

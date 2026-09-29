@@ -342,10 +342,14 @@ export class JsonKnowledgeBase implements KnowledgeBase {
   }
 
   actionsLeadingTo(predicate: (stateSignature: string) => boolean): string[] {
-    return Object.values(this.data.transitions)
-      .filter((entry) => Object.keys(entry.targets).some(predicate))
-      .sort((a, b) => b.successCount - a.successCount)
-      .map((entry) => entry.actionSignature);
+    return (
+      Object.values(this.data.transitions)
+        // Les résolutions sémantiques (« intent:… ») ne sont pas des actions de l'écran.
+        .filter((entry) => !entry.actionSignature.startsWith('intent:'))
+        .filter((entry) => Object.keys(entry.targets).some(predicate))
+        .sort((a, b) => b.successCount - a.successCount)
+        .map((entry) => entry.actionSignature)
+    );
   }
 
   /** La version de l'application testée : commit, sinon version, sinon « unversioned ». */

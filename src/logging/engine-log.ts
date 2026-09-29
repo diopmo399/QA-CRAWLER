@@ -25,7 +25,10 @@ export type EngineEvent =
   | 'BROWSER_INTERACTION'
   | 'KNOWLEDGE_LOADED'
   | 'KNOWLEDGE_AGED'
-  | 'CONFIDENCE_EVALUATED';
+  | 'CONFIDENCE_EVALUATED'
+  | 'SEMANTIC_RESOLUTION_SUCCEEDED'
+  | 'SEMANTIC_RESOLUTION_FAILED'
+  | 'SEMANTIC_RESOLUTION_AMBIGUOUS';
 
 /**
  * Une ligne du journal du moteur (engine-log.jsonl). Seulement des id, des libellés
@@ -220,6 +223,33 @@ export class EngineEventLog {
       },
       onInteraction: (result) => {
         this.log('INFO', 'BROWSER_INTERACTION', `${result.type} ${result.status}`);
+      },
+      onSemanticResolution: (event) => {
+        const kind =
+          event.outcome === 'SUCCEEDED'
+            ? 'SEMANTIC_RESOLUTION_SUCCEEDED'
+            : event.outcome === 'AMBIGUOUS'
+              ? 'SEMANTIC_RESOLUTION_AMBIGUOUS'
+              : 'SEMANTIC_RESOLUTION_FAILED';
+        this.log(
+          event.outcome === 'SUCCEEDED' ? 'INFO' : 'WARN',
+          kind,
+          `${event.intent}${event.selected ? ` → "${event.selected}"` : ''} ${event.outcome} (${event.score} ${event.confidence})`,
+          {
+            stateId: event.stateId,
+            data: {
+              flow: event.flow,
+              outcome: event.outcome,
+              intentKey: event.intentKey,
+              score: event.score,
+              confidence: event.confidence,
+              candidates: redactText(
+                event.candidates.map((candidate) => `${candidate.label} ${candidate.score}`).join(' | '),
+              ),
+              ...(event.reason ? { reason: redactText(event.reason) } : {}),
+            },
+          },
+        );
       },
     };
   }

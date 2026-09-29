@@ -1,3 +1,4 @@
+import { redactText } from '../security/redactor.js';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ExplorationResult, StateReport } from '../model/exploration-result.js';
@@ -314,6 +315,18 @@ function suggestionBlock(step: ExplorationResult['flows'][number]['steps'][numbe
     parts.push(
       `<div class="suggest">${esc(t.onScreen)} ${step.onScreen.map((label) => `<code>${esc(label)}</code>`).join(' · ')}</div>`,
     );
+  const resolution = step.resolution;
+  if (resolution) {
+    // L'explication : l'intention, la cible, la confiance, les raisons, les autres candidats — jamais une valeur.
+    const lines = resolution.explanation ?? [
+      `Intent: ${resolution.intent}`,
+      `Status: ${resolution.status}${resolution.selected ? ` → "${resolution.selected}"` : ''} · Confidence: ${resolution.score} ${resolution.confidence}`,
+      ...resolution.reasons.map((reason) => `  ${reason}`),
+    ];
+    parts.push(
+      `<details class="suggest"><summary>${esc(t.resolution)} : ${esc(resolution.status)}${resolution.selected ? ` → ${esc(resolution.selected)}` : ''} · ${resolution.score} ${esc(resolution.confidence)}</summary><pre>${esc(lines.map((line) => redactText(line)).join('\n'))}</pre></details>`,
+    );
+  }
   return parts.join('');
 }
 

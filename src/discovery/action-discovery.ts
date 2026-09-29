@@ -165,6 +165,7 @@ export class ActionDiscovery {
           ? { formGroup: element.formGroup }
           : {}),
         ...(submitsForm ? { submitsForm: true } : {}),
+        ...(submitsForm && element.isSubmit ? { nativeSubmit: true } : {}),
         ...(element.foreground ? { foreground: true } : {}),
         ...(element.obscured ? { obscured: true } : {}),
         ...(element.formIndex !== undefined ? { formIndex: element.formIndex } : {}),
@@ -335,6 +336,8 @@ function fieldConstraints(element: UiElement): FieldConstraints {
     customSelect: element.customSelect,
     groupLabel: element.groupLabel,
     choiceGroup: element.choiceGroup,
+    elementId: element.elementId,
+    accessibleName: element.name && element.name !== (element.label ?? '') ? element.name : undefined,
   };
   for (const [key, value] of Object.entries(optional) as [keyof FieldConstraints, unknown][]) {
     if (value !== undefined && value !== '') (constraints as unknown as Record<string, unknown>)[key] = value;

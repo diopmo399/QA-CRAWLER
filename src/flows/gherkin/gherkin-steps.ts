@@ -85,7 +85,7 @@ export function compilePattern(pattern: string): { regex: RegExp; names: string[
 }
 
 /** Les valeurs capturées, par nom d'emplacement (la première alternative de guillemets qui a capturé). */
-function valuesOf(match: RegExpExecArray, names: string[]): Record<string, string> {
+export function valuesOf(match: RegExpExecArray, names: string[]): Record<string, string> {
   const values: Record<string, string> = {};
   names.forEach((name, index) => {
     if (!name) return;

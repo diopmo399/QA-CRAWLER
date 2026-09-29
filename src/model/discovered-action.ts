@@ -77,6 +77,10 @@ export interface FieldConstraints {
   groupLabel?: string;
   /** Les radios d'un même choix partagent cette clé. */
   choiceGroup?: string;
+  /** Attribut id du DOM (jamais utilisé pour localiser ; ignoré par la résolution sémantique s'il est généré). */
+  elementId?: string;
+  /** Nom accessible (aria-label, aria-labelledby…), quand il diffère du libellé. */
+  accessibleName?: string;
 }
 
 /** Une action utilisateur disponible sur un état donné. Données simples et sérialisables. */
@@ -111,6 +115,8 @@ export interface DiscoveredAction {
   formGroup?: string;
   /** Bouton qui envoie son formulaire (submit, « Soumettre », « Enregistrer »… dans un formulaire). */
   submitsForm?: boolean;
+  /** Bouton d'envoi natif (button/input type=submit) : l'action principale de son formulaire. */
+  nativeSubmit?: boolean;
   /** Devant l'écran (fenêtre, tiroir, menu ouvert, calque) : exploré en premier. */
   foreground?: boolean;
   /** Derrière un calque modal : pas cliquable tant que le calque est ouvert. */
