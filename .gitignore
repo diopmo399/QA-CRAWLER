@@ -17,3 +17,6 @@ screenshots/*
 
 # knowledge learned across runs (describes the tested application)
 /knowledge/
+
+# persistence: runs, states, transitions and knowledge (file provider, local SQLite)
+/.qa-crawler/

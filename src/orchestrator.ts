@@ -27,6 +27,12 @@ import { JsonKnowledgeBase, knowledgeFileOf, knowledgeIdentityOf } from './knowl
 import { InvariantOracle } from './oracles/invariant-oracle.js';
 import { loadSemantics } from './semantics/domain-packs.js';
 import { IssueCollector } from './anomaly/issue-collector.js';
+import { randomUUID } from 'node:crypto';
+import { KnowledgeService } from './persistence/knowledge-service.js';
+import { openPersistence, type PersistenceSession } from './persistence/persistence-manager.js';
+import { PersistenceRecorder } from './persistence/persistence-recorder.js';
+import type { MemoryReport, PersistenceReport } from './model/persistence-report.js';
+import type { KnowledgeIdentity } from './knowledge/knowledge-model.js';
 
 export interface RunOutcome {
   result: ExplorationResult;
@@ -49,6 +55,8 @@ export interface RunOptions {
   baselineDir?: string;
   /** Supprime ce que le run a créé ; par défaut : ne supprime rien et le liste. */
   cleanup?: TestDataCleanup;
+  /** Avertissements d'exécution (repli de la persistance…) ; par défaut : stderr. */
+  onWarning?: (message: string) => void;
 }
 
 /** verify a besoin d'une baseline : `learn` d'abord. */
@@ -84,30 +92,64 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   const engineLog = new EngineEventLog(config.logging.level);
   // Vocabulaire et packs de domaine ; ce que le crawler a appris des runs précédents.
   const semantics = await loadSemantics(config);
-  const knowledgeFile = config.knowledge.enabled ? knowledgeFileOf(config) : undefined;
-  const knowledge = new JsonKnowledgeBase(
-    knowledgeFile,
-    knowledgeIdentityOf(
-      config.knowledge,
-      config.target.baseUrl,
-      env,
-      (await crawlerVersion()).crawlerVersion,
-    ),
-    {
-      halfLifeDays: config.knowledge.halfLifeDays,
-      minObservations: config.knowledge.minObservations,
-      dominance: config.knowledge.dominance,
-    },
+  // PERSISTANCE (où enregistrer) et MÉMOIRE (l'historique influence-t-il ce run ?) : indépendantes.
+  const persistence = await openPersistence(config.persistence, env, {
+    warn: options.onWarning ?? ((message) => process.stderr.write(`WARNING: ${message}\n`)),
+  });
+  const identity = knowledgeIdentityOf(
+    config.knowledge,
+    config.target.baseUrl,
+    env,
+    (await crawlerVersion()).crawlerVersion,
   );
+  const memoryMode = memoryModeOf(config, persistence);
+  // Mode historique (legacy) : la base de connaissances fichier, exactement comme avant. Sinon, la
+  // mémoire de travail ne lit ni n'écrit le fichier : seulement le run courant, plus l'historique préchargé.
+  const knowledgeFile =
+    memoryMode === 'legacy' && config.knowledge.enabled ? knowledgeFileOf(config) : undefined;
+  const knowledge = new JsonKnowledgeBase(knowledgeFile, identity, {
+    halfLifeDays: config.knowledge.halfLifeDays,
+    minObservations: config.knowledge.minObservations,
+    dominance: config.knowledge.dominance,
+  });
   await knowledge.load();
   knowledge.startRun();
+  const applicationId = applicationIdOf(identity);
+  const knowledgeService = persistence.provider
+    ? new KnowledgeService(persistence.provider.knowledge, applicationId, knowledge)
+    : undefined;
+  if (knowledgeService && memoryMode === 'historical') await knowledgeService.preload(config.memory.preload);
+  const recorder =
+    persistence.provider &&
+    new PersistenceRecorder(
+      persistence.provider,
+      {
+        id: randomUUID(),
+        applicationId,
+        missionName: config.mission.name,
+        ...(identity.environment ? { environment: identity.environment } : {}),
+        ...(identity.branch ? { branch: identity.branch } : {}),
+        ...(identity.commit ? { commitSha: identity.commit } : {}),
+        ...(identity.crawlerVersion ? { crawlerVersion: identity.crawlerVersion } : {}),
+        mode,
+        startedAt: new Date().toISOString(),
+        status: 'RUNNING',
+        statesCount: 0,
+        actionsCount: 0,
+        transitionsCount: 0,
+        anomaliesCount: 0,
+      },
+      knowledgeService,
+      { flushEvery: config.persistence.flushEvery },
+    );
+  await recorder?.start();
   const explorer = new FlowExplorer(config, {
     semantics,
     knowledge,
     memory,
     ...(options.decisionEngine ? { decisionEngine: options.decisionEngine } : {}),
     ...(options.testData ? { testData: options.testData } : {}),
-    listener: combineListeners(options.listener, engineLog.listener()),
+    listener: combineListeners(options.listener, engineLog.listener(), recorder?.listener()),
     ...(options.env ? { env: options.env } : {}),
     ...(mode === 'explore' && baseline ? { knownActions: knownActionsOf(baseline) } : {}),
     ...(baseline ? { baseline: baseline.graph } : {}),
@@ -119,7 +161,18 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
         }
       : {}),
   });
-  const outcome = await explorer.explore();
+  let outcome: Awaited<ReturnType<FlowExplorer['explore']>>;
+  try {
+    outcome = await explorer.explore();
+  } catch (error) {
+    await recorder?.finish('FAILED');
+    await persistence.provider?.close().catch(() => undefined);
+    throw error;
+  }
+  // RUN_FINISHED : ce qui attend est écrit, le run est clos, la connexion fermée.
+  recorder?.recordBlockedEdges(outcome.graph.toJSON().edges);
+  await recorder?.finish('COMPLETED');
+  await persistence.provider?.close().catch(() => undefined);
   const current = outcome.graph.toJSON();
 
   // Les autres acteurs ouvrent les écrans trouvés : qu'atteint chacun ?
@@ -156,7 +209,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       });
   }
 
-  if (config.knowledge.enabled) await knowledge.save();
+  if (knowledgeFile) await knowledge.save();
 
   const result = buildResult(outcome, config);
   if (result.intelligence) {
@@ -168,6 +221,14 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     };
   }
   if (knowledgeFile) result.artifacts.knowledge = knowledgeFile;
+  result.persistence = persistenceReportOf(
+    config,
+    persistence,
+    memoryMode,
+    knowledgeService,
+    recorder,
+    applicationId,
+  );
   if (config.logging.decisionTrace && outcome.decisionTraces) {
     await mkdir(config.output.reportsDir, { recursive: true });
     const file = path.join(config.output.reportsDir, 'decision-trace.json');
@@ -254,6 +315,54 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     failingIssues,
     regressions,
     passed: failingIssues.length === 0 && !regressionFails,
+  };
+}
+
+/**
+ * La mémoire de ce run :
+ * - memory.enabled absent : le comportement d'avant (base de connaissances fichier `knowledge`) ;
+ * - false : isolé ; true : historique préchargé si la persistance est active, sinon run courant seulement.
+ */
+function memoryModeOf(config: ScenarioConfig, persistence: PersistenceSession): MemoryReport['mode'] {
+  if (config.memory.enabled === undefined) return 'legacy';
+  if (!config.memory.enabled) return 'isolated';
+  return persistence.provider && config.memory.historicalKnowledge ? 'historical' : 'current-run';
+}
+
+/** L'application dans le stockage : son identité, séparée par environnement (jamais mélangés). */
+function applicationIdOf(identity: KnowledgeIdentity): string {
+  return identity.environment ? `${identity.application}@${identity.environment}` : identity.application;
+}
+
+function persistenceReportOf(
+  config: ScenarioConfig,
+  session: PersistenceSession,
+  mode: MemoryReport['mode'],
+  knowledge: KnowledgeService | undefined,
+  recorder: PersistenceRecorder | undefined,
+  applicationId: string,
+): PersistenceReport {
+  const stats = knowledge?.statistics;
+  const { status } = session;
+  return {
+    enabled: status.enabled,
+    status: status.status,
+    ...(status.configured ? { configured: status.configured } : {}),
+    ...(status.actual ? { actual: status.actual } : {}),
+    ...(status.reason ? { reason: status.reason } : {}),
+    ...(status.latencyMs !== undefined ? { latencyMs: status.latencyMs } : {}),
+    ...(status.schemaVersion !== undefined ? { schemaVersion: status.schemaVersion } : {}),
+    ...(recorder ? { runId: recorder.run.id, applicationId } : {}),
+    writeErrors: [...status.writeErrors, ...(recorder?.errors ?? [])],
+    memory: {
+      mode,
+      enabled: config.memory.enabled ?? config.knowledge.enabled,
+      historicalKnowledge: mode === 'historical' || (mode === 'legacy' && config.knowledge.enabled),
+      historicalStatesLoaded: stats?.historicalStatesLoaded ?? 0,
+      historicalTransitionsLoaded: stats?.historicalTransitionsLoaded ?? 0,
+      newStatesLearned: stats?.newStatesLearned ?? 0,
+      newTransitionsLearned: stats?.newTransitionsLearned ?? 0,
+    },
   };
 }
 

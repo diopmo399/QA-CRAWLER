@@ -26,6 +26,7 @@ import {
 } from './quality-sections.js';
 import { renderFlowMap, renderFlowSteps } from './flow-diagram.js';
 import { intelligenceSection } from './intelligence-section.js';
+import { persistenceSection } from './persistence-section.js';
 
 export { esc } from './html-common.js';
 
@@ -157,6 +158,7 @@ export function renderHtml(
   ${result.browserInteractions.length > 0 ? interactionsSection(result, nameOf, t) : ''}
 
   ${intelligenceSection(result, nameOf, language)}
+  ${persistenceSection(result, language)}
   ${oraclesSection(result, nameOf, language)}
   ${oracleIssues.length > 0 ? issueTable(q.oracleFindings, oracleIssues, false) : ''}
   ${formsSection(result, nameOf, language)}

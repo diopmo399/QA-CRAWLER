@@ -19,6 +19,22 @@ import {
 } from './knowledge-model.js';
 import { decayFactor } from './statistics.js';
 
+/** Une ligne d'historique préchargée (même forme que transition_knowledge de la persistance). */
+export interface HistoricalTransitionRecord {
+  fromStateSignature: string;
+  actionSignature: string;
+  toStateSignature: string;
+  successCount: number;
+  failureCount: number;
+  blockedCount: number;
+  averageDurationMs?: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+/** Destination d'une transition sans nouvel état (bloquée, échouée) dans l'historique. */
+export const NO_HISTORY_TARGET = '(none)';
+
 /** Durées gardées par clé (les plus récentes). */
 const MAX_DURATIONS = 50;
 
@@ -98,6 +114,60 @@ export class JsonKnowledgeBase implements KnowledgeBase {
 
   get snapshot(): Readonly<KnowledgeData> {
     return this.data;
+  }
+
+  /**
+   * Ajoute à la mémoire de travail l'historique préchargé depuis la persistance (une ligne
+   * par destination). Les transitions réussies donnent les cibles connues ; succès, échecs,
+   * blocages et durées donnent les statistiques des actions. Rien n'est écrit ailleurs.
+   */
+  importHistory(records: readonly HistoricalTransitionRecord[]): void {
+    for (const record of records) {
+      if (record.successCount > 0 && record.toStateSignature !== NO_HISTORY_TARGET) {
+        const key = `${record.fromStateSignature}::${record.actionSignature}`;
+        const entry = (this.data.transitions[key] ??= {
+          fromStateSignature: record.fromStateSignature,
+          actionSignature: record.actionSignature,
+          targets: {},
+          executionCount: 0,
+          successCount: 0,
+          failureCount: 0,
+          firstSeenAt: record.firstSeenAt,
+          lastSeenAt: record.lastSeenAt,
+        });
+        entry.targets[record.toStateSignature] =
+          (entry.targets[record.toStateSignature] ?? 0) + record.successCount;
+        entry.executionCount += record.successCount;
+        entry.successCount += record.successCount;
+        if (record.firstSeenAt < entry.firstSeenAt) entry.firstSeenAt = record.firstSeenAt;
+        if (record.lastSeenAt > entry.lastSeenAt) entry.lastSeenAt = record.lastSeenAt;
+      }
+      const action = (this.data.actions[record.actionSignature] ??= {
+        actionSignature: record.actionSignature,
+        seenCount: 0,
+        executionCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        blockedCount: 0,
+        weightedSuccess: 0,
+        weightedFailure: 0,
+      });
+      const executed = record.successCount + record.failureCount;
+      if (record.averageDurationMs !== undefined && executed > 0)
+        action.averageDurationMs = Math.round(
+          ((action.averageDurationMs ?? 0) * action.executionCount + record.averageDurationMs * executed) /
+            (action.executionCount + executed),
+        );
+      action.executionCount += executed;
+      action.successCount += record.successCount;
+      action.failureCount += record.failureCount;
+      action.blockedCount += record.blockedCount;
+      action.weightedSuccess = (action.weightedSuccess ?? 0) + record.successCount;
+      action.weightedFailure = (action.weightedFailure ?? 0) + record.failureCount;
+      if (!action.lastExecutedAt || record.lastSeenAt > action.lastExecutedAt)
+        action.lastExecutedAt = record.lastSeenAt;
+      if (!action.lastSeenAt || record.lastSeenAt > action.lastSeenAt) action.lastSeenAt = record.lastSeenAt;
+    }
   }
 
   getActionKnowledge(actionSignature: string): ActionKnowledge | undefined {

@@ -1,0 +1,39 @@
+# Persistance dans PostgreSQL. Aucun identifiant ici : seulement le NOM des variables
+# d'environnement qui les contiennent.
+#   export QA_DB_HOST=localhost QA_DB_PORT=5432 QA_DB_NAME=qa_crawler
+#   export QA_DB_USERNAME=qa
+#   read -s QA_DB_PASSWORD && export QA_DB_PASSWORD
+#   npm run qa -- scenarios/persistence-postgres.yaml --base-url http://localhost:4200
+mission:
+  name: persistence-postgres
+
+target:
+  baseUrl: http://localhost:4200
+
+exploration:
+  maxStates: 50
+  maxActions: 200
+
+persistence:
+  enabled: true
+  provider: database
+  database:
+    type: postgres
+    hostEnv: QA_DB_HOST
+    portEnv: QA_DB_PORT
+    databaseEnv: QA_DB_NAME
+    usernameEnv: QA_DB_USERNAME
+    passwordEnv: QA_DB_PASSWORD
+    migrate: true # crée les tables manquantes (jamais de suppression)
+  # Base indisponible : avertissement, puis fichiers JSON ; le rapport dit lequel a servi.
+  failureMode: fallback
+  fallback:
+    provider: file
+    directory: .qa-crawler/memory
+
+memory:
+  enabled: true
+  historicalKnowledge: true
+  preload:
+    maxStates: 1000
+    maxTransitions: 5000

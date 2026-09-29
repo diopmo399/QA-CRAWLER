@@ -1,3 +1,4 @@
+import type { PersistenceReport } from './persistence-report.js';
 import type { BaselineMetadata } from '../baseline/baseline-store.js';
 import type { MissionMode } from '../config/config.js';
 import type { FlowDiff } from '../diff/flow-diff.js';
@@ -102,6 +103,8 @@ export interface ExplorationResult {
   cleanup?: CleanupReport;
   /** actors : ce que chaque utilisateur atteint, les différences, les règles vérifiées. */
   authorization?: AuthorizationReport;
+  /** Persistance (où ce run est enregistré) et mémoire (l'historique a-t-il servi ?). */
+  persistence?: PersistenceReport;
   /** Moteur de décision : stratégie, objectifs, motifs, couverture, décisions expliquées, budget. */
   intelligence?: {
     strategy: string;

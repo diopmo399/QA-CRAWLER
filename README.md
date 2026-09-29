@@ -44,6 +44,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Modes LEARN / VERIFY / EXPLORE](#modes-learn--verify--explore)
 - [Choix des actions (scoring) et objectifs](#choix-des-actions-scoring-et-objectifs)
 - [Moteur de décision avancé](#moteur-de-décision-avancé)
+- [Persistance et mémoire](#persistance-et-mémoire)
 - [Corrélation réseau](#corrélation-réseau)
 - [Ligne de commande](#ligne-de-commande)
 - [Docker](#docker)
@@ -1221,6 +1222,154 @@ Le `ConstraintExtractor` fusionne le DOM (prioritaire : ce que l'utilisateur peu
 
 Le rapport HTML a une section **Moteur de décision** (en français avec `report.language: fr`) : objectifs et preuves, motifs, couverture par zone (DÉCOUVERT / EXÉCUTÉ / BLOQUÉ / INACCESSIBLE), actions choisies expliquées, catégories de verdict, invariants, écritures bloquées, cas de propriété. Démonstration : `tests/fixtures/decision-app.ts` et `tests/integration/decision-engine.test.ts`.
 
+## Persistance et mémoire
+
+**Persistance ≠ mémoire** : deux réglages indépendants.
+
+- **Persistance** : _où_ les runs, états, transitions et connaissances sont enregistrés (mémoire, fichiers JSON, base de données).
+- **Mémoire** : _est-ce que_ les runs précédents influencent le run actuel.
+
+| `persistence.enabled` | `memory.enabled` | Résultat                                                                                     |
+| --------------------- | ---------------- | -------------------------------------------------------------------------------------------- |
+| false                 | false            | run complètement isolé                                                                       |
+| true                  | false            | le run est enregistré, l'historique n'influence **aucune** décision                          |
+| true                  | true             | enregistré, et l'historique est préchargé dans la mémoire de travail                         |
+| false                 | true             | mémoire du run courant seulement                                                             |
+| (absent)              | (absent)         | **comportement d'avant**, inchangé : base de connaissances fichier `knowledge.*` (ci-dessus) |
+
+Par défaut, rien n'est persisté et **QA-CRAWLER n'exige jamais de base de données**. Une mission sans bloc `persistence` fonctionne exactement comme avant ; aucun pilote de base de données n'est chargé.
+
+### Configuration
+
+```yaml
+persistence:
+  enabled: true
+  provider: database # memory | file | database
+  database:
+    type: postgres # postgres | sqlserver | sqlite (mysql : prévu, pas encore implémenté)
+    hostEnv: QA_DB_HOST # noms de variables d'environnement (valeurs par défaut)
+    portEnv: QA_DB_PORT
+    databaseEnv: QA_DB_NAME
+    usernameEnv: QA_DB_USERNAME
+    passwordEnv: QA_DB_PASSWORD
+    migrate: true # applique les migrations manquantes (uniquement des ajouts)
+    # tls: { enabled: true, trustServerCertificate: false }
+  failureMode: fallback # fail : arrêt clair ; fallback : avertissement + repli
+  fallback: { provider: file, directory: .qa-crawler/memory }
+  flushEvery: 25 # écritures par lots
+
+memory:
+  enabled: true
+  historicalKnowledge: true
+  preload: { maxStates: 1000, maxTransitions: 5000 } # jamais toute la base
+```
+
+Exemples complets : `scenarios/persistence-file.yaml`, `scenarios/persistence-postgres.yaml`, `scenarios/persistence-sqlserver.yaml`.
+
+**Priorité** : ligne de commande → variables d'environnement → YAML → valeurs par défaut (comme `--base-url` / `QA_BASE_URL`).
+
+| Ligne de commande                                                                     | Variable d'environnement                                                     |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `--persistence memory \| file \| postgres \| sqlserver \| sqlite`, `--no-persistence` | `QA_PERSISTENCE_ENABLED`, `QA_PERSISTENCE_PROVIDER`, `QA_DB_TYPE`            |
+| `--memory`, `--no-memory`                                                             | `QA_MEMORY_ENABLED`                                                          |
+| —                                                                                     | `QA_DB_HOST`, `QA_DB_PORT`, `QA_DB_NAME`, `QA_DB_USERNAME`, `QA_DB_PASSWORD` |
+
+```bash
+npm run qa -- mission.yaml --persistence postgres
+npm run qa -- mission.yaml --persistence sqlserver --no-memory
+npm run qa -- mission.yaml --no-persistence
+```
+
+**Jamais d'identifiants dans le YAML** : `password`, `username`, `connectionString` sous `persistence.database` sont refusés au chargement. Hôte, port et nom de base peuvent être écrits (`host`, `port`, `database`) ou lus dans l'environnement ; l'utilisateur et le mot de passe viennent **toujours** de l'environnement. Les messages d'erreur de connexion n'affichent jamais les identifiants.
+
+### Providers
+
+| Provider               | Stockage                                     | Testé                                                    |
+| ---------------------- | -------------------------------------------- | -------------------------------------------------------- |
+| `memory`               | RAM (rien ne survit au processus)            | contrat commun                                           |
+| `file`                 | un fichier JSON par table, écriture atomique | contrat commun                                           |
+| `database` / postgres  | PostgreSQL (pilote `pg`)                     | contrat commun + migrations/transactions + crawl complet |
+| `database` / sqlserver | SQL Server (pilote `mssql`)                  | contrat commun + migrations/transactions + crawl complet |
+| `database` / sqlite    | SQLite (`node:sqlite`, Node.js 22.5+)        | contrat commun + migrations/transactions                 |
+| `database` / mysql     | —                                            | **non implémenté** : signalé comme indisponible          |
+
+Les pilotes `pg` et `mssql` sont des dépendances **facultatives**, chargées seulement à la connexion. Passer de PostgreSQL à SQL Server ne change que `database.type` : aucun composant du moteur (FlowExplorer, DecisionEngine, FlowGraph, oracles, SafetyPolicy) ne connaît le stockage. L'enregistrement passe par un `ExplorationListener` (le même mécanisme d'événements que le journal du moteur), la lecture par la mémoire de travail.
+
+Différences gérées par le dialecte (`SqlDialect`, un seul fichier par moteur) :
+
+| PostgreSQL               | SQL Server                                | SQLite            |
+| ------------------------ | ----------------------------------------- | ----------------- |
+| `VARCHAR`                | `NVARCHAR` (Unicode)                      | `TEXT`            |
+| `JSONB`                  | `NVARCHAR(MAX)`                           | `TEXT`            |
+| `TIMESTAMPTZ`            | `DATETIMEOFFSET(3)`                       | texte ISO 8601    |
+| `DOUBLE PRECISION`       | `FLOAT`                                   | `REAL`            |
+| `$1`                     | `@p1` (types explicites)                  | `?`               |
+| `LIMIT n`                | `OFFSET 0 ROWS FETCH NEXT n ROWS ONLY`    | `LIMIT n`         |
+| `SELECT … FOR UPDATE`    | `WITH (UPDLOCK, HOLDLOCK)`                | `BEGIN IMMEDIATE` |
+| `CREATE … IF NOT EXISTS` | `IF OBJECT_ID(…) IS NULL` / `sys.indexes` | `IF NOT EXISTS`   |
+
+Pas de `RETURNING` / `OUTPUT` ni d'`ON CONFLICT` / `MERGE` : les identifiants sont des UUID générés par le crawler (aucun auto-incrément), et les écritures de connaissance lisent la ligne en la bloquant (lock), la fusionnent (une seule règle en TypeScript, la même pour tous les providers), puis la mettent à jour ou l'insèrent — dans une transaction, rejouée si un autre crawler a créé la même ligne au même moment.
+
+### Modèle de données (V1)
+
+| Table                  | Contenu                                                                                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crawl_run`            | un lancement : application, mission, environnement, branche, commit, version du crawler, mode, début / fin, statut, nombres d'états, d'actions, de transitions, d'anomalies             |
+| `run_state`            | un état du run : signature (celle du StateDetector, via `knowledge/signatures`), id, route, URL (secrets masqués), titre, profondeur, première / dernière vue, `context_json` normalisé |
+| `run_transition`       | ÉTAT A → ACTION → ÉTAT B (B nul si BLOQUÉE ou ÉCHOUÉE) : signature et libellé de l'action, statut, classe et décision de sécurité, verdict des oracles, durée                           |
+| `transition_knowledge` | la mémoire historique : **une ligne par destination** (écran + action + destination), compteurs vu / succès / échec / bloqué, durée moyenne, première / dernière vue                    |
+
+Une même action peut mener à plusieurs écrans (« Users + Create » → formulaire 97 fois, connexion 2 fois, erreur 1 fois) : les trois lignes sont gardées, et les probabilités sont calculées à partir des observations (aucun apprentissage automatique).
+
+### Migrations
+
+`qa_schema_migrations` garde les migrations appliquées (`001_initial_schema`, `002_add_transition_knowledge`) ; la version du schéma est leur nombre (affichée dans le rapport). Chaque migration est appliquée une fois, dans une transaction, et ne fait qu'**ajouter** (tables, index) : jamais de suppression au démarrage. Avec `migrate: false`, une base en retard est une erreur claire (à appliquer par un compte autorisé à créer des tables) ; une base plus récente que le crawler n'est jamais modifiée.
+
+### Mémoire de travail et mémoire long terme
+
+```
+début du run : provider → KnowledgeRepository → préchargement (budget) → mémoire de travail (RAM) → DecisionEngine
+pendant le run : action → StateDetector → oracles → FlowGraph → ExplorationListener → tampon → écriture par lots
+```
+
+- La **mémoire de travail** est la base de connaissances du moteur, en RAM : le DecisionEngine, le scorer et l'oracle historique la lisent sans jamais interroger la base (pas de requête SQL par bouton comparé).
+- Le **préchargement** respecte le budget : au plus `maxTransitions` lignes, les plus récentes, et seulement celles des `maxStates` écrans les plus récemment vus.
+- Les **écritures** sont des incréments (l'historique préchargé n'est jamais recompté), groupées toutes les `flushEvery` observations, puis à la fin du run. Un crash peut perdre au plus les observations pas encore écrites ; une écriture qui échoue est gardée pour la suivante et signalée dans le rapport, sans arrêter le crawl.
+
+**L'historique n'est jamais une vérité métier.** « Users + Create » a mené 19 fois sur 20 au formulaire et, cette fois, à une page d'erreur : l'oracle historique donne `UNEXPECTED_TRANSITION`, catégorie `POTENTIAL_REGRESSION` (ou `UNEXPECTED_BEHAVIOR`), statut WARNING — jamais un bug confirmé. L'application a pu changer légitimement.
+
+### Repli (failureMode)
+
+- `fail` : base inutilisable → le run s'arrête avec une erreur claire (code de sortie 3).
+- `fallback` (défaut) : AVERTISSEMENT, puis le provider de repli (`file` ou `memory`), et le crawl continue. Le rapport et le terminal indiquent :
+
+```
+Persistence   : file (fallback)  configured database (SQL Server) — SQL Server connection failed: …
+```
+
+### Sécurité
+
+Chaque écriture passe par le masquage du crawler (URL, Bearer, JWT, Authorization, Cookie, `password=`…) puis par des règles propres au stockage long terme (numéros de carte validés par Luhn, IBAN) ; les clés sensibles (`password`, `token`, `cookie`, `otp`…) sont retirées de `context_json`. Aucune valeur saisie dans un formulaire n'est jamais enregistrée. Des tests interrogent directement chaque provider (et les fichiers sur disque) pour vérifier l'absence de secrets.
+
+### Rapport
+
+Section **Persistance et mémoire** du rapport HTML (et `persistence` dans `result.json`) : persistance activée, provider configuré et réellement utilisé, raison du repli, état, latence, version du schéma, id du run ; mémoire activée, mode, états et transitions historiques chargés, nouveaux états et transitions appris.
+
+### CI/CD
+
+Sans configuration, rien ne change : pas de base, pas de pilote. Pour garder l'historique entre les pipelines, pointer `QA_DB_*` vers une base partagée (secrets de la CI) avec `--persistence postgres` ou `--persistence sqlserver` ; avec `failureMode: fallback`, une base indisponible ne bloque pas le pipeline. Le job `persistence` du workflow lance les tests de contrat et un crawl complet contre de vrais PostgreSQL et SQL Server (conteneurs de service) :
+
+```bash
+# PostgreSQL et SQL Server locaux (conteneurs jetables)
+docker run -d --name qa-pg -e POSTGRES_USER=qa -e POSTGRES_PASSWORD=<test> -e POSTGRES_DB=qa_crawler -p 55432:5432 postgres:16-alpine
+docker run -d --name qa-mssql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=<Test-1> -p 51433:1433 mcr.microsoft.com/mssql/server:2022-latest
+export QA_TEST_PG_HOST=127.0.0.1 QA_TEST_PG_PORT=55432 QA_TEST_PG_DATABASE=qa_crawler QA_TEST_PG_USERNAME=qa QA_TEST_PG_PASSWORD=<test>
+export QA_TEST_MSSQL_HOST=127.0.0.1 QA_TEST_MSSQL_PORT=51433 QA_TEST_MSSQL_DATABASE=qa_crawler QA_TEST_MSSQL_USERNAME=sa QA_TEST_MSSQL_PASSWORD=<Test-1> QA_TEST_MSSQL_TRUST_CERT=true
+npx vitest run tests/integration/persistence-postgres.test.ts tests/integration/persistence-sqlserver.test.ts
+```
+
+Sans ces variables, ces tests sont ignorés (et l'indiquent) ; les providers mémoire, fichier et SQLite sont testés à chaque `npm test`.
+
 ## Corrélation réseau
 
 Chaque action ouvre une fenêtre d'observation réseau, fermée une fois l'état suivant observé. Les échanges vus entre les deux sont attachés à la transition :
@@ -1395,6 +1544,8 @@ src/
 ├── visual/                       interface VisualComparator (sans implémentation)
 ├── graph/                        FlowGraph
 ├── memory/                       interface FlowMemory, JsonFlowMemory
+├── persistence/                  PersistenceProvider (mémoire, fichier, base), repositories, KnowledgeService, enregistreur
+│   └── database/                 DatabaseAdapter + SqlDialect (PostgreSQL, SQL Server, SQLite), migrations
 ├── observers/                    réseau, console, erreurs de page (avec rattachement)
 ├── anomaly/                      règles de gravité, collecteur d'anomalies
 ├── crawler/                      normalisation des URL et des routes

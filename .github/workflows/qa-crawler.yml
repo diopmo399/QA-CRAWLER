@@ -49,6 +49,60 @@ jobs:
       - name: Integration tests (local test site)
         run: npm run test:integration
 
+  # Persistence against real databases: the same contract tests and an end-to-end
+  # crawl for PostgreSQL and SQL Server (throwaway service containers, CI-only passwords).
+  persistence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: qa
+          POSTGRES_PASSWORD: qa-ci-only
+          POSTGRES_DB: qa_crawler
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U qa" --health-interval 5s --health-timeout 5s --health-retries 20
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Qa-ci-only-1
+          MSSQL_PID: Developer
+        ports: ['1433:1433']
+    env:
+      QA_TEST_PG_HOST: 127.0.0.1
+      QA_TEST_PG_PORT: '5432'
+      QA_TEST_PG_DATABASE: qa_crawler
+      QA_TEST_PG_USERNAME: qa
+      QA_TEST_PG_PASSWORD: qa-ci-only
+      QA_TEST_MSSQL_HOST: 127.0.0.1
+      QA_TEST_MSSQL_PORT: '1433'
+      QA_TEST_MSSQL_DATABASE: qa_crawler
+      QA_TEST_MSSQL_USERNAME: sa
+      QA_TEST_MSSQL_PASSWORD: Qa-ci-only-1
+      # Conteneur local au certificat auto-signé : accepté pour ce test seulement.
+      QA_TEST_MSSQL_TRUST_CERT: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Wait for SQL Server
+        run: |
+          for attempt in $(seq 1 60); do
+            docker exec ${{ job.services.sqlserver.id }} /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "$QA_TEST_MSSQL_PASSWORD" -C -Q "SELECT 1" > /dev/null && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: Persistence tests (PostgreSQL, SQL Server)
+        run: npx vitest run tests/integration/persistence-postgres.test.ts tests/integration/persistence-sqlserver.test.ts
+
   # Real smoke test, only when a target is available (repository variable
   # TARGET_URL or a manual run with target_url). Never runs against nothing.
   smoke:
