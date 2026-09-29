@@ -115,6 +115,8 @@ export interface DiscoveredAction {
   formGroup?: string;
   /** Bouton qui envoie son formulaire (submit, « Soumettre », « Enregistrer »… dans un formulaire). */
   submitsForm?: boolean;
+  /** Bouton d'envoi natif (button/input type=submit) : l'action principale de son formulaire. */
+  nativeSubmit?: boolean;
   /** Devant l'écran (fenêtre, tiroir, menu ouvert, calque) : exploré en premier. */
   foreground?: boolean;
   /** Derrière un calque modal : pas cliquable tant que le calque est ouvert. */

@@ -165,6 +165,7 @@ export class ActionDiscovery {
           ? { formGroup: element.formGroup }
           : {}),
         ...(submitsForm ? { submitsForm: true } : {}),
+        ...(submitsForm && element.isSubmit ? { nativeSubmit: true } : {}),
         ...(element.foreground ? { foreground: true } : {}),
         ...(element.obscured ? { obscured: true } : {}),
         ...(element.formIndex !== undefined ? { formIndex: element.formIndex } : {}),
