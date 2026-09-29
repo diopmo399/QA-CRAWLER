@@ -74,6 +74,7 @@ export class DryRunEngine {
   /** (écran, intention) déjà cherchées sans succès : jamais cherchées à nouveau depuis le même écran. */
   private readonly searched = new Set<string>();
   private flow = '';
+  private resolver: IntentPathResolver | undefined;
 
   constructor(
     private readonly driver: DryRunDriver,
@@ -86,6 +87,7 @@ export class DryRunEngine {
     this.flow = graph.name;
     const budget = new DryRunBudget(this.options.budget, () => this.driver.now());
     const resolver = new IntentPathResolver(this.driver, budget, this.dictionary);
+    this.resolver = resolver;
     this.emit('DRY_RUN_STARTED', `dry run of "${graph.name}" (${graph.source.type})`);
     this.emit('FLOW_INTENT_PARSED', `${String(graph.intents.length)} intent(s)`);
 
@@ -268,10 +270,20 @@ export class DryRunEngine {
     }
     const reached = resolution.targetIndex ?? 0;
     const alternatives = resolution.alternatives.length > 0 ? resolution.alternatives : undefined;
-    for (const step of resolution.path) this.guided(step, alternatives);
+    // Un chemin connu qui se termine par l'action de l'intention elle-même : ce dernier pas EST l'intention.
+    const path = [...resolution.path];
+    const last = path.at(-1);
+    const reachedIntent = targets[reached];
+    if (
+      last &&
+      reachedIntent?.type === 'NAVIGATE' &&
+      slug(last.action.label) === reachedIntent.semanticTarget
+    )
+      path.pop();
+    for (const step of path) this.guided(step, alternatives);
     this.emit(
       'PATH_DISCOVERED',
-      `${resolution.path.map((step) => step.action.label).join(' → ') || '(same screen)'} → ${targets[reached]?.label ?? ''}`,
+      `${path.map((step) => step.action.label).join(' → ') || '(same screen)'} → ${targets[reached]?.label ?? ''}`,
       intent.id,
     );
     // Les intentions dépassées sont mises de côté : obsolètes, ou réordonnées si on les retrouve plus loin.
@@ -406,6 +418,8 @@ export class DryRunEngine {
       evidence,
       ...(searchExhausted !== undefined ? { searchExhausted } : {}),
     });
+    // Refusée pour cette étape : l'exploration guidée ne l'exécutera pas non plus.
+    if (outcome === 'BLOCKED_BY_POLICY') this.resolver?.forbid(intent.semanticTarget);
     if (outcome === 'AMBIGUOUS' || outcome === 'MATCHED') return;
     if (outcome !== 'NOT_FOUND')
       this.emit('INTENT_MISMATCH', `${describeFlowIntent(intent)}: ${outcome}`, intent.id);

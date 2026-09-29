@@ -7,7 +7,7 @@ import type { DiscoveredForm, FieldType, FormField, SelectOption, ValidationMess
 import { validityOf } from './validity.js';
 
 const FIELD_ACTIONS = new Set<DiscoveredAction['type']>(['fill', 'select', 'check', 'uncheck']);
-const PLACEHOLDER_OPTION = /^(-+|(choisir|choose|select|sélectionner|selectionner|aucun|none)\b)/i;
+const PLACEHOLDER_OPTION = /^([-–—…_.]+|(choisir|choose|select|sélectionner|selectionner|aucun|none)\b)/i;
 
 /**
  * « Qu'attend ce formulaire ? »

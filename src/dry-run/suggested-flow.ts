@@ -45,6 +45,7 @@ export function buildSuggestedFlow(
         status: entry.status,
         step: intent.step,
         originalText: intent.sourceReference.text,
+        ...(intent.sourceReference.line !== undefined ? { sourceLine: intent.sourceReference.line } : {}),
         label: intent.label,
       };
       if (REVIEW_ONLY.has(entry.status))
@@ -207,8 +208,19 @@ export function suggestedFeature(
     previous = kind;
     return word;
   };
+  let previousSentence: string | undefined;
   for (const item of suggested.steps) {
     const note = `${item.status} · ${item.provenance}${item.review ? ` · ${oneLine(item.review)}` : ''}`;
+    // Une phrase de l'équipe qui donne plusieurs étapes (« je suis connecté ») : écrite une seule fois.
+    const sentenceKey =
+      suggested.source.type === 'GHERKIN' && item.provenance === 'ORIGINAL' && item.originalText
+        ? `${String(item.sourceLine ?? '')}|${withoutPart(item.originalText)}`
+        : undefined;
+    if (sentenceKey !== undefined && sentenceKey === previousSentence) {
+      if (item.status !== 'MATCHED') lines.push(`    # ${note}`);
+      continue;
+    }
+    previousSentence = sentenceKey;
     lines.push(`    # ${note}`);
     const commented = item.review !== undefined && REVIEW_ONLY.has(item.status);
     const sentences: [Kind, string][] = [];
@@ -218,12 +230,14 @@ export function suggestedFeature(
       const original =
         suggested.source.type === 'GHERKIN' && item.provenance === 'ORIGINAL' ? item.originalText : undefined;
       const kind = kindOf(item.step);
-      const sentence = original ? stripKeyword(original) : sentenceOf(item.step, language);
+      const sentence = original ? stripKeyword(withoutPart(original)) : sentenceOf(item.step, language);
       if (sentence) sentences.push([kind, sentence]);
       else lines.push(`    # (no Gherkin sentence for this step without a selector: ${item.label})`);
     }
     const verbatim =
-      suggested.source.type === 'GHERKIN' && item.provenance === 'ORIGINAL' ? item.originalText : undefined;
+      suggested.source.type === 'GHERKIN' && item.provenance === 'ORIGINAL' && item.originalText
+        ? withoutPart(item.originalText)
+        : undefined;
     for (const [kind, sentence] of sentences) {
       // Une phrase à revoir est recopiée telle qu'écrite dans le scénario, en commentaire.
       if (commented) lines.push(`    # ${verbatim ?? `${KEYWORDS[language][kind]} ${sentence}`}`);
@@ -245,6 +259,11 @@ function kindOf(step: FlowStep): Kind {
 
 const ORIGINAL_KEYWORD =
   /^(Étant donné qu['’]|Étant donné que|Étant donné|Etant donné que|Soit|Quand|Lorsque|Lorsqu['’]|Alors|Et que|Et|Mais|Given|When|Then|And|But)\s*/i;
+
+/** « Et je suis connecté (goto /login) » → « Et je suis connecté » : la partie ajoutée par le chargeur. */
+function withoutPart(text: string): string {
+  return text.replace(/\s+\([^()]*\)$/, '').trim();
+}
 
 function stripKeyword(text: string): string {
   return text.replace(ORIGINAL_KEYWORD, '').trim();

@@ -204,8 +204,11 @@ function targetLabel(target: FlowTarget): string {
 function locator(featureText: string): (text: string) => number | undefined {
   const lines = featureText.split(/\r?\n/).map((line) => line.trim().replace(/\s+/g, ' '));
   let after = 0;
+  let previous: { wanted: string; line: number } | undefined;
   return (text) => {
     const wanted = text.replace(/\s+\([^()]*\)$/, '').trim();
+    // Une phrase qui donne plusieurs étapes (phrase de l'équipe) : la même ligne pour chacune.
+    if (previous && previous.wanted === wanted) return previous.line;
     const find = (test: (line: string) => boolean): number | undefined => {
       for (let index = after; index < lines.length; index++) if (test(lines[index] ?? '')) return index;
       return undefined;
@@ -222,6 +225,7 @@ function locator(featureText: string): (text: string) => number | undefined {
       });
     if (found === undefined) return undefined;
     after = found + 1;
+    previous = { wanted, line: found + 1 };
     return found + 1;
   };
 }

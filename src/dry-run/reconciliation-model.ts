@@ -167,6 +167,8 @@ export interface SuggestedStep {
   step?: FlowStep;
   /** Le texte d'origine (phrase Gherkin, étape YAML) pour une étape du scénario. */
   originalText?: string;
+  /** Sa ligne dans le fichier : une phrase de l'équipe qui donne plusieurs étapes n'est écrite qu'une fois. */
+  sourceLine?: number;
   label: string;
   /** Étape gardée pour revue, jamais supprimée automatiquement (POSSIBLY_OBSOLETE…). */
   review?: string;

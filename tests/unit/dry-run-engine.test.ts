@@ -393,6 +393,31 @@ describe('DryRunEngine + reconciliation, on synthetic applications', () => {
     expect(app.executed).not.toContain('Clôturer');
   });
 
+  it('an action refused for an expected step is never executed by the guided exploration either', async () => {
+    const app = new SyntheticApp(
+      {
+        login: { label: 'Connexion', actions: [{ label: 'Se connecter', to: 'dash', role: 'button' }] },
+        dash: { label: 'Tableau de bord', actions: [{ label: 'Utilisateurs', to: 'users' }] },
+        users: { label: 'Utilisateurs' },
+      },
+      'login',
+      { stepBlocked: ['Se connecter'] },
+    );
+    const { reconciliation } = await dryRun(
+      app,
+      expectedFlow('refused', [
+        ['CLICK', 'Se connecter'],
+        ['CLICK', 'Utilisateurs'],
+      ]),
+    );
+    expect(rows(reconciliation)).toEqual([
+      'Se connecter BLOCKED_BY_POLICY',
+      'Utilisateurs BLOCKED_BY_POLICY',
+    ]);
+    expect(reconciliation.entries[1]?.evidence).toContain('blocked action: "Se connecter"');
+    expect(app.executed).toEqual([]);
+  });
+
   it('budget exhausted: NOT_VERIFIED and EXPLORATION_BUDGET_EXHAUSTED, never UNREACHABLE', async () => {
     // Un écran à 5 branches, profond : la cible est hors de portée d'un budget de 3 actions.
     const screens: Record<string, SyntheticScreen> = {};

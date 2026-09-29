@@ -142,6 +142,8 @@ export interface KnowledgeBase {
   expectationFor(fromStateSignature: string, actionSignature: string): HistoricalExpectation | undefined;
   /** Signatures d'actions qui ont mené à un écran dont la signature contient ce terme. */
   actionsLeadingTo(predicate: (stateSignature: string) => boolean): string[];
+  /** Toutes les transitions connues (lecture seule) : chemins historiques du Dry Run. */
+  transitions(): readonly TransitionKnowledge[];
   load(): Promise<void>;
   save(): Promise<void>;
   readonly identity: KnowledgeIdentity;

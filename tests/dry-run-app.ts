@@ -48,6 +48,8 @@ export class SyntheticApp implements DryRunDriver {
       history?: Record<string, KnownPath[]>;
       msPerAction?: number;
       historicalObservations?: Record<string, number>;
+      /** Actions refusées pour les étapes du scénario seulement (leur `allow` ne suffit pas). */
+      stepBlocked?: string[];
     } = {},
   ) {
     this.screen = startScreen;
@@ -116,6 +118,13 @@ export class SyntheticApp implements DryRunDriver {
         status: 'BLOCKED',
         target: match.label,
         reason: match.blocked,
+        confidence: 0.9,
+      });
+    if (this.options.stepBlocked?.includes(match.label))
+      return Promise.resolve({
+        status: 'BLOCKED',
+        target: match.label,
+        reason: 'MUTATION action: add "allow: MUTATION" to this step',
         confidence: 0.9,
       });
     return Promise.resolve({

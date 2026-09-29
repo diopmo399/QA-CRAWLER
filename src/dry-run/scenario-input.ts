@@ -18,6 +18,8 @@ export interface LoadedDryRunScenario {
   config: ScenarioConfig;
   graphs: FlowIntentGraph[];
   source: { type: FlowSourceType; file: string };
+  /** Langue d'un `.feature` (`# language: fr`) ; absente pour un flow YAML. */
+  language?: 'fr' | 'en';
   warnings: string[];
 }
 
@@ -57,7 +59,15 @@ export function loadDryRunScenario(input: DryRunInput): LoadedDryRunScenario {
       ...(type === 'GHERKIN' ? { featureText: scenarioText } : {}),
     }),
   );
-  return { config, graphs, source: { type, file: input.scenarioFile }, warnings };
+  const language =
+    type === 'GHERKIN' ? (/^\s*#\s*language:\s*fr\b/im.test(scenarioText) ? 'fr' : 'en') : undefined;
+  return {
+    config,
+    graphs,
+    source: { type, file: input.scenarioFile },
+    ...(language ? { language } : {}),
+    warnings,
+  };
 }
 
 function readMission(file: string): Record<string, unknown> {

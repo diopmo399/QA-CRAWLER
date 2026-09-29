@@ -1,3 +1,4 @@
+import { slug } from '../knowledge/signatures.js';
 import { normalizeForMatch, tokenOverlap } from '../semantics/resolution/normalize.js';
 import type { SemanticDictionary } from '../semantics/semantic-dictionary.js';
 import type { DryRunCandidate, DryRunDriver, KnownPath } from './dry-run-driver.js';
@@ -96,12 +97,26 @@ export class IntentPathResolver {
   /** Actions déjà prises (état::action) et celles qui ont échoué : pénalités de répétition et d'instabilité. */
   private readonly taken = new Set<string>();
   private readonly failed = new Set<string>();
+  /**
+   * Cibles d'intentions refusées par la SafetyPolicy : l'exploration guidée ne les exécute
+   * jamais, même si les permissions d'une autre étape l'autoriseraient.
+   */
+  private readonly forbidden = new Set<string>();
 
   constructor(
     private readonly driver: DryRunDriver,
     private readonly budget: DryRunBudget,
     private readonly dictionary?: SemanticDictionary,
   ) {}
+
+  forbid(semanticTarget: string): void {
+    this.forbidden.add(semanticTarget);
+  }
+
+  /** Le verdict d'une action pour l'exploration guidée : celui de la SafetyPolicy, ou refusée si sa cible l'est. */
+  private refused(candidate: DryRunCandidate): boolean {
+    return candidate.verdict === 'BLOCK' || this.forbidden.has(slug(candidate.label));
+  }
 
   async resolvePath(targets: readonly FlowIntent[]): Promise<PathResolution> {
     const start = this.driver.current();
@@ -137,7 +152,13 @@ export class IntentPathResolver {
           const replay = await this.replay(candidate, targets);
           if (replay.blocked) blocked ??= replay.blocked;
           if (replay.found !== undefined) {
-            const others = known.filter((_, index) => index !== rank).map((path) => path.actions);
+            // Une alternative est un autre chemin : aucune action en commun avec celui qui a été utilisé.
+            const others = known
+              .filter(
+                (path, index) =>
+                  index !== rank && path.actions.every((action) => !candidate.actions.includes(action)),
+              )
+              .map((path) => path.actions);
             alternatives.push(...others);
             return {
               status: 'FOUND',
@@ -164,6 +185,7 @@ export class IntentPathResolver {
     const frontier: Frontier[] = [{ state: start, path: [] }];
     // Par identifiant d'état (empreinte) : deux écrans de même signature restent distincts pendant une recherche.
     const visited = new Set<string>([start.id]);
+    const refusedLabels = new Set<string>();
     while (frontier.length > 0) {
       if (this.budget.exhausted()) return this.exhaustedResult(alternatives, blocked);
       const node = frontier.shift();
@@ -176,13 +198,21 @@ export class IntentPathResolver {
       const candidates = this.driver.actions();
       // Une action qui mène sans doute à la cible mais que la politique refuse : BLOCKED_BY_POLICY, pas UNREACHABLE.
       for (const candidate of candidates) {
-        if (candidate.verdict !== 'BLOCK') continue;
+        if (!this.refused(candidate)) continue;
+        refusedLabels.add(candidate.label);
         const best = this.bestSimilarity(candidate, targets);
-        if (best.similarity >= 0.6)
+        if (this.forbidden.has(slug(candidate.label)))
+          // Une étape du scénario, refusée : le scénario dit lui-même que le chemin passe par elle.
+          blocked ??= {
+            action: candidate.label,
+            reason: 'refused for an expected step of this scenario',
+            target: best.target,
+          };
+        else if (best.similarity >= 0.6)
           blocked ??= { action: candidate.label, reason: candidate.reason, target: best.target };
       }
       const ranked = candidates
-        .filter((candidate) => candidate.verdict === 'ALLOW' && isNavigationalAction(candidate))
+        .filter((candidate) => !this.refused(candidate) && isNavigationalAction(candidate))
         .map((candidate) => ({ candidate, ...this.explorationScore(candidate, targets, node.state) }))
         .sort((a, b) => b.score - a.score || a.candidate.label.localeCompare(b.candidate.label))
         .slice(0, this.budget.limits.maxAlternativePaths);
@@ -269,6 +299,9 @@ export class IntentPathResolver {
       searchExhausted: true,
       reasons: [
         `explored ${String(visited.size)} screen(s) up to ${String(this.budget.limits.maxDepth)} action(s) deep without finding it`,
+        ...(refusedLabels.size > 0
+          ? [`not followed (refused by the safety policy): ${[...refusedLabels].join(', ')}`]
+          : []),
       ],
     };
   }
@@ -342,10 +375,17 @@ export class IntentPathResolver {
       const from = this.driver.current();
       const candidate = this.driver.actions().find((action) => action.signature === signature);
       if (!candidate) return { path };
-      if (candidate.verdict === 'BLOCK')
+      if (this.refused(candidate))
         return {
           path,
-          blocked: { action: candidate.label, reason: candidate.reason, target: targets[0]?.label ?? '' },
+          blocked: {
+            action: candidate.label,
+            reason:
+              candidate.verdict === 'BLOCK'
+                ? candidate.reason
+                : 'refused for an expected step of this scenario',
+            target: targets[0]?.label ?? '',
+          },
         };
       const result = await this.driver.take(candidate.id);
       this.budget.spend();
