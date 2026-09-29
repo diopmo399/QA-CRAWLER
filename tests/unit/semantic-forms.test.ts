@@ -291,3 +291,74 @@ flows:
     expect(classic(true)).toEqual(classic(false));
   });
 });
+
+describe('a business Scenario Outline in the third person, with gherkin.semanticResolution', () => {
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'qa-semantic-outline-'));
+    await writeFile(
+      path.join(dir, 'code.feature'),
+      `# language: fr
+@mutation
+Fonctionnalité: Code de catégorie
+  Plan du scénario: Modifier le code de catégorie d'un dossier
+    Étant donné qu'un dossier est créé avec succès
+    Quand l'utilisateur accède à l'étape "Analyse" à l'onglet "Détails" et à la section "Activité"
+    Et modifie le code de catégorie de <Code> à <Nouveau code>
+    Et valide le formulaire
+    Alors le code <Nouveau code> est affiché dans le dossier
+
+    Exemples:
+      | Code | Nouveau code |
+      | 111  | 222          |
+      | 333  | 444          |
+`,
+    );
+  });
+
+  const load = () =>
+    parseConfig(
+      `target: { baseUrl: http://localhost:4200 }
+gherkin:
+  semanticResolution: { enabled: true }
+  steps:
+    - pattern: un dossier est créé avec succès
+      steps: [{ run: creer-dossier }]
+    - pattern: 'le code {code:mot} est affiché dans le dossier'
+      step: { expect: { text: '{code}' } }
+flows:
+  - name: creer-dossier
+    reusable: true
+    steps:
+      - goto: /dossiers/nouveau
+  - gherkin: ${path.join(dir, 'code.feature')}
+`,
+    ).config;
+
+  it('one flow per example; each business sentence becomes intents, the new value is typed', () => {
+    const flows = load().flows;
+    expect(flows).toHaveLength(2);
+    const [first, second] = flows;
+    const intents = (flow: typeof first) =>
+      flow?.steps.flatMap((step) => (step.kind === 'intent' ? [step.intent] : [])) ?? [];
+    expect(intents(first)).toEqual([
+      { kind: 'NAVIGATE', target: 'Analyse' },
+      { kind: 'NAVIGATE', target: 'Détails' },
+      { kind: 'NAVIGATE', target: 'Activité' },
+      { kind: 'FILL', field: 'code de catégorie', value: '222' },
+      { kind: 'SUBMIT', action: 'submit', verb: 'valider' },
+    ]);
+    expect(intents(second)).toContainEqual({ kind: 'FILL', field: 'code de catégorie', value: '444' });
+    // Les phrases de l'équipe passent avant : la précondition rejoue le flow, la vérification cherche la valeur.
+    expect(first?.steps.map((step) => step.kind)).toEqual([
+      'goto',
+      'intent',
+      'intent',
+      'intent',
+      'intent',
+      'intent',
+      'expect',
+    ]);
+  });
+});

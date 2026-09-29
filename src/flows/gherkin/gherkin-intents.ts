@@ -226,7 +226,9 @@ const INTENT_SENTENCES: [string[], Build][] = [
       '{entité:texte} is saved',
       '{entité:texte} has been saved',
     ],
-    assertion('ENTITY_CREATED'),
+    // Dans un « Étant donné », « un dossier est créé » est une précondition, pas une vérification.
+    (values, table, type) =>
+      type === 'Context' ? undefined : assertion('ENTITY_CREATED')(values, table, type),
   ],
   // ---- choix
   [
@@ -263,6 +265,25 @@ const INTENT_SENTENCES: [string[], Build][] = [
     ],
     (values) => ({ kind: 'UPLOAD', field: cleanName(values.champ ?? '').name, file: values.fichier ?? '' }),
   ],
+  // ---- modification d'une valeur : « de l'ancienne à la nouvelle » (la nouvelle est saisie)
+  [
+    [
+      'je modifie {champ:texte} de {ancien:mot} à {nouveau:texte}',
+      'je modifie {champ:texte} de {ancien:mot} en {nouveau:texte}',
+      'je modifie {champ:texte} de {ancien:mot} pour {nouveau:texte}',
+      'je change {champ:texte} de {ancien:mot} à {nouveau:texte}',
+      'je change {champ:texte} de {ancien:mot} en {nouveau:texte}',
+      'je change {champ:texte} de {ancien:mot} pour {nouveau:texte}',
+      'je remplace {champ:texte} {ancien:mot} par {nouveau:texte}',
+      'I change {champ:texte} from {ancien:mot} to {nouveau:texte}',
+      'I modify {champ:texte} from {ancien:mot} to {nouveau:texte}',
+      'I update {champ:texte} from {ancien:mot} to {nouveau:texte}',
+    ],
+    (values, _table, type) =>
+      type === 'Outcome'
+        ? undefined
+        : { kind: 'FILL', field: cleanName(values.champ ?? '').name, value: valueOf(values.nouveau ?? '') },
+  ],
   // ---- saisie
   [
     [
@@ -290,6 +311,7 @@ const INTENT_SENTENCES: [string[], Build][] = [
       'je remplis {champ:texte} avec {valeur:texte}',
       'je complète {champ:texte} avec {valeur:texte}',
       'je renseigne {champ:texte} à {valeur}',
+      'je modifie {champ:texte} avec {valeur:texte}',
       'I fill in {champ:texte} with {valeur:texte}',
       'I fill {champ:texte} with {valeur:texte}',
       'I set {champ:texte} to {valeur:texte}',
@@ -387,17 +409,171 @@ interface IntentDefinition {
   build: Build;
 }
 
+/**
+ * Les verbes d'action à la 3e personne et leur forme à la 1re : « l'utilisateur accède à… »
+ * se lit « j'accède à… ». Une liste fermée : un verbe absent n'est jamais conjugué au hasard.
+ */
+const FR_FIRST_PERSON: Record<string, string> = {
+  accède: "j'accède",
+  ouvre: "j'ouvre",
+  entre: "j'entre",
+  écrit: "j'écris",
+  enregistre: "j'enregistre",
+  appuie: "j'appuie",
+  annule: "j'annule",
+  envoie: "j'envoie",
+  va: 'je vais',
+  saisit: 'je saisis',
+  choisit: 'je choisis',
+  remplit: 'je remplis',
+  complète: 'je complète',
+  renseigne: 'je renseigne',
+  sélectionne: 'je sélectionne',
+  clique: 'je clique',
+  coche: 'je coche',
+  décoche: 'je décoche',
+  tape: 'je tape',
+  met: 'je mets',
+  valide: 'je valide',
+  soumet: 'je soumets',
+  confirme: 'je confirme',
+  sauvegarde: 'je sauvegarde',
+  navigue: 'je navigue',
+  consulte: 'je consulte',
+  joint: 'je joins',
+  téléverse: 'je téléverse',
+  passe: 'je passe',
+  continue: 'je continue',
+  revient: 'je reviens',
+  modifie: 'je modifie',
+  change: 'je change',
+  remplace: 'je remplace',
+};
+const EN_FIRST_PERSON: Record<string, string> = {
+  goes: 'go',
+  opens: 'open',
+  navigates: 'navigate',
+  visits: 'visit',
+  accesses: 'access',
+  clicks: 'click',
+  presses: 'press',
+  fills: 'fill',
+  types: 'type',
+  enters: 'enter',
+  puts: 'put',
+  sets: 'set',
+  selects: 'select',
+  chooses: 'choose',
+  checks: 'check',
+  unchecks: 'uncheck',
+  ticks: 'tick',
+  unticks: 'untick',
+  submits: 'submit',
+  validates: 'validate',
+  saves: 'save',
+  confirms: 'confirm',
+  cancels: 'cancel',
+  continues: 'continue',
+  proceeds: 'proceed',
+  uploads: 'upload',
+  attaches: 'attach',
+  changes: 'change',
+  modifies: 'modify',
+  updates: 'update',
+};
+const FR_SUBJECT =
+  /^(?:l['’]\s*(?:utilisateur|utilisatrice|usager|usagère|agent|employée?|opérateur|opératrice)|le\s+(?:conseiller|client|gestionnaire|testeur)|la\s+(?:conseillère|cliente|gestionnaire|testeuse)|il|elle|on)\s+/i;
+const EN_SUBJECT = /^(?:the\s+(?:user|agent|advisor|adviser|customer|client|employee|operator)|he|she)\s+/i;
+
+/**
+ * « l'utilisateur modifie le code… », « Et modifie le code… » (sujet sous-entendu) →
+ * « je modifie le code… » : les phrases métier écrites à la 3e personne se lisent comme
+ * les phrases à la 1re. Sans verbe connu juste après, la phrase est rendue telle quelle.
+ */
+export function firstPerson(sentence: string): string {
+  const en = EN_SUBJECT.exec(sentence);
+  if (en) {
+    const rest = sentence.slice(en[0].length);
+    const verb = /^\S+/.exec(rest)?.[0] ?? '';
+    const base = EN_FIRST_PERSON[verb.toLowerCase()];
+    return base ? `I ${base}${rest.slice(verb.length)}` : sentence;
+  }
+  const fr = FR_SUBJECT.exec(sentence);
+  const rest = fr ? sentence.slice(fr[0].length) : sentence;
+  const verb = /^\S+/.exec(rest)?.[0] ?? '';
+  const first = FR_FIRST_PERSON[verb.toLowerCase()];
+  return first ? `${first}${rest.slice(verb.length)}` : sentence;
+}
+
+const NAVIGATION_VERB = /^(?:j['’]accède|je vais|je navigue|j['’]ouvre|I go|I navigate|I access|I open)\s+/i;
+const NAMED_PLACE =
+  /(?:(?:étape|onglet|sous-onglet|section|rubrique|page|écran|menu|module|panneau|volet|step|tab|screen|panel)\s+)?(?:"([^"]+)"|«\s*([^»]+?)\s*»|“([^”]+)”)/gi;
+/** Ce qui peut séparer les lieux nommés : prépositions, articles, « et », « puis », virgules. */
+const PLACE_GLUE = new Set(
+  (
+    'à au aux dans vers sur la le les l de du des d et puis ensuite ' +
+    'to the in on of and then step tab section page screen menu panel'
+  ).split(' '),
+);
+const onlyGlue = (text: string): boolean =>
+  text
+    .toLowerCase()
+    .split(/[\s,;'’]+/)
+    .every((word) => word === '' || PLACE_GLUE.has(word));
+
+/**
+ * « j'accède à l'étape "A", à l'onglet "B" et à la section "C" » → trois NAVIGATE, dans
+ * l'ordre. Seulement quand la phrase ne contient QUE des lieux nommés entre guillemets et
+ * des mots de liaison : sinon elle n'est pas découpée.
+ */
+function navigationChain(sentence: string, type: StepType): GherkinIntent[] | undefined {
+  if (type === 'Outcome') return undefined;
+  const verb = NAVIGATION_VERB.exec(sentence);
+  if (!verb) return undefined;
+  const rest = sentence.slice(verb[0].length);
+  const targets: string[] = [];
+  let glue = '';
+  let last = 0;
+  for (const match of rest.matchAll(NAMED_PLACE)) {
+    glue += rest.slice(last, match.index);
+    last = match.index + match[0].length;
+    const name = (match[1] ?? match[2] ?? match[3] ?? '').trim();
+    if (name) targets.push(name);
+  }
+  glue += rest.slice(last);
+  if (targets.length < 2 || !onlyGlue(glue)) return undefined;
+  return targets.map((target) => ({ kind: 'NAVIGATE', target }));
+}
+
 /** Traduit une phrase Gherkin en intention ; undefined quand aucune phrase d'intention ne correspond. */
 export class GherkinIntentParser {
   private readonly definitions: IntentDefinition[] = INTENT_SENTENCES.flatMap(([patterns, build]) =>
     patterns.map((pattern) => ({ ...compilePattern(pattern), build })),
   );
 
+  /**
+   * Les intentions d'une phrase : une seule en général, plusieurs pour une navigation en
+   * plusieurs lieux (« à l'étape "A" et à l'onglet "B" »).
+   */
+  parseAll(text: string, type: StepType = 'Unknown', table?: string[][]): GherkinIntent[] | undefined {
+    const chain = navigationChain(firstPerson(normalizeSentence(text)), type);
+    if (chain) return chain;
+    const intent = this.parse(text, type, table);
+    return intent ? [intent] : undefined;
+  }
+
   parse(text: string, type: StepType = 'Unknown', table?: string[][]): GherkinIntent | undefined {
-    const sentence = text
-      .trim()
-      .replace(/\s+/g, ' ')
-      .replace(/[.!]+$/, '');
+    const sentence = normalizeSentence(text);
+    return this.match(sentence, type, table) ?? this.matchRewritten(sentence, type, table);
+  }
+
+  /** La phrase à la 3e personne (ou sans sujet), relue à la 1re. */
+  private matchRewritten(sentence: string, type: StepType, table?: string[][]): GherkinIntent | undefined {
+    const rewritten = firstPerson(sentence);
+    return rewritten === sentence ? undefined : this.match(rewritten, type, table);
+  }
+
+  private match(sentence: string, type: StepType, table?: string[][]): GherkinIntent | undefined {
     for (const definition of this.definitions) {
       const match = definition.regex.exec(sentence);
       if (!match) continue;
@@ -406,6 +582,13 @@ export class GherkinIntentParser {
     }
     return undefined;
   }
+}
+
+function normalizeSentence(text: string): string {
+  return text
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[.!]+$/, '');
 }
 
 /** Une intention sans nom de champ ou de cible n'en est pas une. */

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { cleanName, cleanPage, GherkinIntentParser } from '../../src/flows/gherkin/gherkin-intents.js';
+import {
+  cleanName,
+  cleanPage,
+  firstPerson,
+  GherkinIntentParser,
+} from '../../src/flows/gherkin/gherkin-intents.js';
 import { describeIntent } from '../../src/semantics/resolution/intent.js';
 import {
   containsPhrase,
@@ -214,6 +219,81 @@ describe('Gherkin intents: what the scenario asks, never how', () => {
     expect(describeIntent({ kind: 'FILL', field: 'mot de passe', value: 'secret' })).toBe(
       'FILL "mot de passe"',
     );
+  });
+
+  it('business sentences in the third person, or without subject, read like the first person', () => {
+    expect(firstPerson('l\'utilisateur accède à l\'onglet "Détails"')).toBe(
+      'j\'accède à l\'onglet "Détails"',
+    );
+    expect(firstPerson('modifie le code de catégorie de 111 à 222')).toBe(
+      'je modifie le code de catégorie de 111 à 222',
+    );
+    expect(firstPerson('la conseillère saisit "Essai" dans le nom')).toBe('je saisis "Essai" dans le nom');
+    expect(firstPerson('the user selects "Admin" as role')).toBe('I select "Admin" as role');
+    // Sans verbe d'action connu : la phrase reste telle quelle (jamais une conjugaison devinée).
+    expect(firstPerson("l'utilisateur doit être créé")).toBe("l'utilisateur doit être créé");
+    expect(firstPerson("l'utilisateur rêve")).toBe("l'utilisateur rêve");
+
+    expect(parse('l\'utilisateur renseigne le prénom avec "Julie"')).toEqual({
+      kind: 'FILL',
+      field: 'prénom',
+      value: 'Julie',
+    });
+    expect(parse('Le conseiller valide le formulaire')).toEqual({
+      kind: 'SUBMIT',
+      action: 'submit',
+      verb: 'valider',
+    });
+    expect(parse('the user clicks on new record')).toEqual({ kind: 'CLICK', target: 'new record' });
+    // Les vérifications gardent leur sujet.
+    expect(parse("l'utilisateur doit être créé", 'Outcome')).toMatchObject({ assertion: 'ENTITY_CREATED' });
+  });
+
+  it('a value changed "from old to new": the new value is typed', () => {
+    const expected = { kind: 'FILL', field: 'code de catégorie', value: '222' };
+    expect(parse('je modifie le code de catégorie de 111 à 222')).toEqual(expected);
+    expect(parse('l\'utilisateur modifie le code de catégorie de "111" à "222"')).toEqual(expected);
+    expect(parse('modifie le code de catégorie de 111 en 222')).toEqual(expected);
+    expect(parse('je change le code de catégorie de 111 pour 222')).toEqual(expected);
+    expect(parse('je remplace le code de catégorie 111 par 222')).toEqual(expected);
+    expect(parse('I change the category code from 111 to 222')).toEqual({
+      kind: 'FILL',
+      field: 'category code',
+      value: '222',
+    });
+    expect(parse('l\'utilisateur modifie le code de catégorie avec "222"')).toEqual(expected);
+    expect(parse('je modifie le code de catégorie de 111 à 222', 'Outcome')).toBeUndefined();
+  });
+
+  it('a navigation through several named places: one NAVIGATE per place, in order', () => {
+    expect(
+      parser.parseAll(
+        'l\'utilisateur accède à l\'étape "Analyse" à l\'onglet "Détails" et à la section "Activité"',
+        'Action',
+      ),
+    ).toEqual([
+      { kind: 'NAVIGATE', target: 'Analyse' },
+      { kind: 'NAVIGATE', target: 'Détails' },
+      { kind: 'NAVIGATE', target: 'Activité' },
+    ]);
+    expect(parser.parseAll('I go to the "Details" tab, then to the "Activity" section', 'Action')).toEqual([
+      { kind: 'NAVIGATE', target: 'Details' },
+      { kind: 'NAVIGATE', target: 'Activity' },
+    ]);
+    // Un seul lieu : l'intention habituelle.
+    expect(parser.parseAll('j\'accède à l\'onglet "Détails"', 'Action')).toEqual([
+      { kind: 'NAVIGATE', target: 'Détails' },
+    ]);
+    // Autre chose que des lieux nommés : pas de découpage.
+    expect(
+      parser.parseAll('j\'accède à l\'onglet "Détails" pour vérifier le montant "12"', 'Action'),
+    ).toHaveLength(1);
+    expect(parser.parseAll('j\'accède à l\'étape "A" et à l\'onglet "B"', 'Outcome')).toBeUndefined();
+  });
+
+  it('in a Given, "a record is created" is a precondition, not a check', () => {
+    expect(parse('un dossier est créé', 'Context')).toBeUndefined();
+    expect(parse('un dossier est créé', 'Outcome')).toMatchObject({ assertion: 'ENTITY_CREATED' });
   });
 
   it('names are cleaned of articles and element words', () => {

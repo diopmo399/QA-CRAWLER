@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Frame, Page } from 'playwright';
 
 /**
  * Ce qu'une erreur Playwright dit de la page. Seules les trois premières sont des
@@ -128,7 +128,11 @@ export interface NavigationMark {
  * - `outcome` : après une ACTION, dit si elle a navigué. Une action n'est jamais rejouée ici.
  */
 export class NavigationGuard {
-  private readonly counts = new WeakMap<Page, number>();
+  /**
+   * Navigations vues, par cadre principal : il est le même pour la page et pour tout objet
+   * qui l'enveloppe (Proxy, sous-classe de test), alors que l'objet Page peut différer.
+   */
+  private readonly counts = new WeakMap<Frame, number>();
   private readonly maxAttempts: number;
   private readonly readyTimeoutMs: number;
 
@@ -139,22 +143,27 @@ export class NavigationGuard {
 
   /** Suit les navigations du cadre principal de la page (une seule fois par page). */
   watch(page: Page): void {
-    if (this.counts.has(page)) return;
-    this.counts.set(page, 0);
+    const main = page.mainFrame();
+    if (this.counts.has(main)) return;
+    this.counts.set(main, 0);
     page.on('framenavigated', (frame) => {
-      if (frame === page.mainFrame()) this.counts.set(page, (this.counts.get(page) ?? 0) + 1);
+      if (frame === main) this.counts.set(main, (this.counts.get(main) ?? 0) + 1);
     });
+  }
+
+  private navigations(page: Page): number | undefined {
+    return this.counts.get(page.mainFrame());
   }
 
   /** Repère à prendre juste avant une action. */
   mark(page: Page): NavigationMark {
-    return { url: safeUrl(page), navigations: this.counts.get(page) ?? 0 };
+    return { url: safeUrl(page), navigations: this.navigations(page) ?? 0 };
   }
 
   /** L'action a-t-elle navigué depuis le repère (nouveau document, redirection, route SPA) ? */
   outcome(page: Page, mark: NavigationMark, error?: unknown): NavigationOutcome {
     const currentUrl = page.isClosed() ? mark.url : safeUrl(page);
-    const navigated = (this.counts.get(page) ?? 0) !== mark.navigations || currentUrl !== mark.url;
+    const navigated = (this.navigations(page) ?? 0) !== mark.navigations || currentUrl !== mark.url;
     const destroyed = error !== undefined && classifyPlaywrightError(error).navigation;
     return {
       navigationOccurred: navigated || destroyed,
@@ -171,10 +180,13 @@ export class NavigationGuard {
   async read<T>(page: Page, operation: string, read: () => Promise<T>, actionId?: string): Promise<T> {
     const started = Date.now();
     const previousUrl = safeUrl(page);
+    // Une page lue sans avoir été suivie l'est dès maintenant : sans compteur, l'attente du
+    // nouveau document serait sautée et la relecture retomberait dans l'ancien.
+    if (!page.isClosed()) this.watch(page);
     let last: ClassifiedError | undefined;
     for (let attempt = 1; ; attempt++) {
       // Navigations du cadre principal vues avant cette lecture : dit si la nouvelle page a déjà remplacé l'ancienne.
-      const seen = this.counts.get(page);
+      const seen = this.navigations(page);
       try {
         const value = await read();
         if (last)
@@ -215,7 +227,7 @@ export class NavigationGuard {
     // Le contexte est détruit mais le nouveau document n'est peut-être pas encore là : sans cela,
     // domcontentloaded répondrait tout de suite pour l'ancien, et la lecture suivante retomberait
     // dans la navigation en cours. Attendre l'événement (jamais une pause), brièvement.
-    if (seen !== undefined && this.counts.get(page) === seen) {
+    if (seen !== undefined && this.navigations(page) === seen) {
       await page
         .waitForEvent('framenavigated', {
           predicate: (frame) => frame === page.mainFrame(),
