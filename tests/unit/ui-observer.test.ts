@@ -15,7 +15,11 @@ const DOM = {
 /** Une page dont les premières lectures tombent pendant une navigation (redirections d'une connexion unique). */
 function navigatingPage(failures: string[]): { page: Page; waits: number } {
   const state = { waits: 0 };
+  const main = {};
   const page = {
+    mainFrame: () => main,
+    on: () => page,
+    waitForEvent: () => Promise.resolve(main),
     evaluate: () => {
       const message = failures.shift();
       return message === undefined ? Promise.resolve(DOM) : Promise.reject(new Error(message));

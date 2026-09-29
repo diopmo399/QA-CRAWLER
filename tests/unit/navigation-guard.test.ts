@@ -20,7 +20,9 @@ function fakePage(urls: string[] = ['https://app.test/a', 'https://app.test/b'])
 } {
   let waits = 0;
   let index = 0;
+  const main = {};
   const page = {
+    mainFrame: () => main,
     url: () => urls[Math.min(index, urls.length - 1)] ?? '',
     isClosed: () => false,
     waitForLoadState: () => {
@@ -28,6 +30,8 @@ function fakePage(urls: string[] = ['https://app.test/a', 'https://app.test/b'])
       index += 1;
       return Promise.resolve();
     },
+    // Le nouveau document arrive : l'attente de son engagement répond aussitôt.
+    waitForEvent: () => Promise.resolve(main),
     on: () => page,
   } as unknown as Page;
   return { page, waits: () => waits };
