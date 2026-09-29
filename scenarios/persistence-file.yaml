@@ -1,0 +1,24 @@
+# Persistance dans des fichiers JSON (aucune base de données) : chaque run, ses états,
+# ses transitions et la connaissance historique dans .qa-crawler/memory/.
+#   npm run qa -- scenarios/persistence-file.yaml --base-url http://localhost:4200
+mission:
+  name: persistence-file
+
+target:
+  baseUrl: http://localhost:4200
+
+exploration:
+  maxStates: 50
+  maxActions: 200
+
+persistence:
+  enabled: true
+  provider: file
+  file:
+    directory: .qa-crawler/memory
+
+memory:
+  enabled: true # l'historique des runs précédents est préchargé dans la mémoire de travail
+  preload:
+    maxStates: 1000
+    maxTransitions: 5000

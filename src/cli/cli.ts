@@ -7,6 +7,7 @@ import type { Severity } from '../model/issue.js';
 import { renderFlowDiffText } from '../diff/flow-diff.js';
 import { BaselineMissingError, runMission } from '../orchestrator.js';
 import { buildFlowTree, renderTextTree } from '../reporting/flow-tree.js';
+import { storageLabel } from '../reporting/persistence-section.js';
 import { HELP_TEXT, parseCliArgs, UsageError } from './args.js';
 import { color, logger } from './logger.js';
 
@@ -55,6 +56,8 @@ export async function runCli(argv: string[]): Promise<number> {
       ...(args.headless !== undefined ? { headless: args.headless } : {}),
       ...(args.reportsDir !== undefined ? { reportsDir: args.reportsDir } : {}),
       ...(args.screenshotsDir !== undefined ? { screenshotsDir: args.screenshotsDir } : {}),
+      ...(args.persistence !== undefined ? { persistence: args.persistence } : {}),
+      ...(args.memory !== undefined ? { memory: args.memory } : {}),
     });
   } catch (error) {
     if (error instanceof ConfigError) {
@@ -184,6 +187,25 @@ export async function runCli(argv: string[]): Promise<number> {
       logger.info(
         `  Knowledge     : ${result.artifacts.knowledge}${intelligence?.knowledge ? color.dim(` (${intelligence.knowledge.runs} run(s))`) : ''}`,
       );
+    const persistence = result.persistence;
+    if (persistence?.enabled) {
+      const actual = storageLabel(persistence.actual);
+      logger.info(
+        persistence.status === 'FALLBACK'
+          ? `  Persistence   : ${color.yellow(`${actual} (fallback)`)} ${color.dim(`configured ${storageLabel(persistence.configured)} — ${persistence.reason ?? ''}`)}`
+          : `  Persistence   : ${actual} ${color.dim(`CONNECTED${persistence.latencyMs !== undefined ? ` latency=${persistence.latencyMs}ms` : ''}`)}`,
+      );
+      if (persistence.writeErrors.length > 0)
+        logger.info(`  Persist. errors: ${color.yellow(persistence.writeErrors.slice(0, 3).join(' · '))}`);
+    }
+    if (persistence && (persistence.memory.mode === 'isolated' || persistence.memory.mode === 'current-run'))
+      logger.info(`  Memory        : ${persistence.memory.mode} ${color.dim('(no history used)')}`);
+    else if (persistence?.memory.mode === 'historical') {
+      const memory = persistence.memory;
+      logger.info(
+        `  Memory        : ${memory.mode} ${color.dim(`(loaded ${memory.historicalStatesLoaded} state(s), ${memory.historicalTransitionsLoaded} transition(s); learned ${memory.newStatesLearned} new state(s), ${memory.newTransitionsLearned} new transition(s))`)}`,
+      );
+    }
     logger.info(`  Screenshots   : ${result.artifacts.screenshotsDir ?? '-'}`);
     if (result.artifacts.flowDiff) logger.info(`  Flow diff     : ${result.artifacts.flowDiff}`);
     logger.info('');

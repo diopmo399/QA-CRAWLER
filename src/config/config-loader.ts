@@ -26,7 +26,30 @@ export interface ConfigOverrides {
   headless?: boolean;
   reportsDir?: string;
   screenshotsDir?: string;
+  /** --persistence <off|memory|file|postgres|sqlserver|sqlite|mysql>, --no-persistence (off). */
+  persistence?: PersistenceChoice;
+  /** --memory / --no-memory. */
+  memory?: boolean;
 }
+
+export const PERSISTENCE_CHOICES = [
+  'off',
+  'memory',
+  'file',
+  'postgres',
+  'sqlserver',
+  'sqlite',
+  'mysql',
+] as const;
+export type PersistenceChoice = (typeof PERSISTENCE_CHOICES)[number];
+
+/** Variables d'environnement de la persistance (entre la CLI et le YAML). */
+export const PERSISTENCE_ENV = {
+  enabled: 'QA_PERSISTENCE_ENABLED',
+  provider: 'QA_PERSISTENCE_PROVIDER',
+  databaseType: 'QA_DB_TYPE',
+  memory: 'QA_MEMORY_ENABLED',
+} as const;
 
 export interface LoadedConfig {
   config: ScenarioConfig;
@@ -72,6 +95,7 @@ export function parseConfig(
     throw new ConfigError(`Scenario ${source} must be a YAML mapping (key: value)`);
   }
 
+  refuseInlineCredentials(raw as Record<string, unknown>);
   const migrationWarnings: string[] = [];
   const migrated = migrateLegacyKeys(raw as Record<string, unknown>, migrationWarnings);
   const expanded = expandFlows(
@@ -222,7 +246,70 @@ function applyOverrides(
   if (overrides.headless !== undefined) section('browser').headless = overrides.headless;
   if (overrides.reportsDir !== undefined) section('output').reportsDir = overrides.reportsDir;
   if (overrides.screenshotsDir !== undefined) section('output').screenshotsDir = overrides.screenshotsDir;
+  applyPersistenceOverrides(section, overrides, env);
   return result;
+}
+
+/**
+ * Persistance et mémoire : CLI, puis environnement, puis YAML, puis valeurs par défaut —
+ * la même priorité que target.baseUrl (--base-url, QA_BASE_URL). Les identifiants de base de
+ * données ne passent jamais par ici : ils sont lus au moment de la connexion (…Env).
+ */
+function applyPersistenceOverrides(
+  section: (key: string) => Record<string, unknown>,
+  overrides: ConfigOverrides,
+  env: NodeJS.ProcessEnv,
+): void {
+  const flag = (name: string): boolean | undefined => {
+    const value = nonBlank(env[name])?.toLowerCase();
+    if (value === undefined) return undefined;
+    if (['true', '1', 'yes', 'on'].includes(value)) return true;
+    if (['false', '0', 'no', 'off'].includes(value)) return false;
+    throw new ConfigError(`${name} must be true or false (got "${value}")`);
+  };
+  const database = (persistence: Record<string, unknown>): Record<string, unknown> => {
+    const current = persistence.database;
+    const copy =
+      current !== null && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {};
+    persistence.database = copy;
+    return copy;
+  };
+
+  const envEnabled = flag(PERSISTENCE_ENV.enabled);
+  const envProvider = nonBlank(env[PERSISTENCE_ENV.provider]);
+  const envType = nonBlank(env[PERSISTENCE_ENV.databaseType]);
+  if (envEnabled !== undefined) section('persistence').enabled = envEnabled;
+  if (envProvider !== undefined) section('persistence').provider = envProvider;
+  if (envType !== undefined) database(section('persistence')).type = envType;
+  const envMemory = flag(PERSISTENCE_ENV.memory);
+  if (envMemory !== undefined) section('memory').enabled = envMemory;
+
+  const choice = overrides.persistence;
+  if (choice !== undefined) {
+    const persistence = section('persistence');
+    if (choice === 'off') persistence.enabled = false;
+    else {
+      persistence.enabled = true;
+      if (choice === 'memory' || choice === 'file') persistence.provider = choice;
+      else {
+        persistence.provider = 'database';
+        database(persistence).type = choice;
+      }
+    }
+  }
+  if (overrides.memory !== undefined) section('memory').enabled = overrides.memory;
+}
+
+/** Jamais d'identifiants de base de données dans le YAML : seulement le nom de leur variable d'environnement. */
+function refuseInlineCredentials(raw: Record<string, unknown>): void {
+  const persistence = raw.persistence as { database?: unknown } | undefined;
+  const database = persistence?.database;
+  if (database === null || typeof database !== 'object') return;
+  const inline = ['password', 'username', 'user', 'connectionString', 'url'].filter((key) => key in database);
+  if (inline.length > 0)
+    throw new ConfigError('Invalid scenario', [
+      `persistence.database.${inline.join(', ')}: never write database credentials in the YAML; set usernameEnv / passwordEnv to the names of environment variables (default QA_DB_USERNAME / QA_DB_PASSWORD)`,
+    ]);
 }
 
 function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
@@ -293,6 +380,12 @@ function finalize(config: ScenarioConfig): Omit<LoadedConfig, 'source'> {
   } else if (config.forms.submit === false && !config.safety.block.includes('form-submit')) {
     config.safety.block = [...config.safety.block, 'form-submit'];
   }
+  if (!config.memory.cache.enabled)
+    warnings.push(
+      'memory.cache.enabled: false is ignored: decisions always read the working memory (RAM), never the database directly.',
+    );
+  if (config.memory.enabled === true && !config.persistence.enabled)
+    warnings.push('memory.enabled without persistence: only the memory of the current run is used.');
   if (!config.exploration.autonomous && config.flows.length === 0) {
     warnings.push('exploration.autonomous is false and no flow is defined: nothing will be tested.');
   }

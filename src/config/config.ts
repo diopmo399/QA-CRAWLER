@@ -482,8 +482,98 @@ const memorySchema = z
     file: nonEmpty.optional(),
     /** Repartir du graphe d'un run précédent : les actions déjà essayées ne le sont pas à nouveau. */
     resume: z.boolean().default(false),
+    /**
+     * MÉMOIRE : les connaissances des anciens runs influencent-elles le run actuel ?
+     * - absent : comportement historique (la base de connaissances `knowledge`, fichier JSON) ;
+     * - false : run isolé, seulement la mémoire de travail du run courant ;
+     * - true : avec la persistance, l'historique du provider est préchargé dans la mémoire de
+     *   travail ; sans persistance, mémoire du run courant seulement.
+     */
+    enabled: z.boolean().optional(),
+    /** Précharger la connaissance historique des transitions (memory.enabled: true et persistance active). */
+    historicalKnowledge: z.boolean().default(true),
+    /** Budget du préchargement : jamais toute la base. */
+    preload: z
+      .object({
+        maxStates: z.number().int().positive().default(1000),
+        maxTransitions: z.number().int().positive().default(5000),
+      })
+      .strict()
+      .default({}),
+    /** Mémoire de travail en RAM : le moteur de décision n'interroge jamais la base directement. */
+    cache: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
   })
   .strict();
+
+/** Connexion à une base : hôte / port / nom lus dans l'environnement (ou le YAML) ; identifiants dans l'environnement seulement. */
+const databaseSchema = z
+  .object({
+    type: z.enum(['postgres', 'sqlserver', 'mysql', 'sqlite']),
+    host: nonEmpty.optional(),
+    hostEnv: nonEmpty.default('QA_DB_HOST'),
+    port: z.number().int().positive().optional(),
+    portEnv: nonEmpty.default('QA_DB_PORT'),
+    database: nonEmpty.optional(),
+    databaseEnv: nonEmpty.default('QA_DB_NAME'),
+    usernameEnv: nonEmpty.default('QA_DB_USERNAME'),
+    passwordEnv: nonEmpty.default('QA_DB_PASSWORD'),
+    /** SQLite : fichier de la base. */
+    file: nonEmpty.optional(),
+    fileEnv: nonEmpty.default('QA_DB_FILE'),
+    /** Appliquer les migrations manquantes (uniquement des ajouts). false : une base en retard est une erreur. */
+    migrate: z.boolean().default(true),
+    connectTimeoutMs: z.number().int().positive().default(5000),
+    tls: z
+      .object({
+        /** Absent : le choix du pilote (PostgreSQL sans TLS, SQL Server chiffré). */
+        enabled: z.boolean().optional(),
+        /** Accepter un certificat auto-signé : base de développement locale seulement. */
+        trustServerCertificate: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
+/**
+ * PERSISTANCE : OÙ les runs, états, transitions et connaissances sont stockés. Désactivée
+ * par défaut ; QA-CRAWLER n'exige jamais de base de données.
+ */
+const persistenceSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    provider: z.enum(['memory', 'file', 'database']).default('file'),
+    file: z
+      .object({ directory: nonEmpty.default('.qa-crawler/memory') })
+      .strict()
+      .default({}),
+    database: databaseSchema.optional(),
+    /** Stockage inutilisable : fail arrête le run avec une erreur claire ; fallback continue avec le repli. */
+    failureMode: z.enum(['fail', 'fallback']).default('fallback'),
+    fallback: z
+      .object({
+        provider: z.enum(['file', 'memory']).default('file'),
+        /** Par défaut : persistence.file.directory. */
+        directory: nonEmpty.optional(),
+      })
+      .strict()
+      .default({}),
+    /** Écritures par lots : états, transitions et connaissances enregistrés toutes les N observations. */
+    flushEvery: z.number().int().positive().default(25),
+  })
+  .strict()
+  .superRefine((persistence, ctx) => {
+    if (persistence.provider === 'database' && !persistence.database)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['database'],
+        message:
+          'persistence.database (type: postgres | sqlserver | sqlite) is required when provider is database',
+      });
+  });
 
 const reportSchema = z
   .object({
@@ -844,6 +934,7 @@ export const scenarioSchema = z
     auth: authSchema.default({ type: 'none' }),
     output: outputSchema.default({}),
     memory: memorySchema.default({}),
+    persistence: persistenceSchema.default({}),
     report: reportSchema.default({}),
     /** Flows de test imposés, exécutés avant l'exploration autonome. */
     flows: flowsSchema,
@@ -906,6 +997,8 @@ export const scenarioSchema = z
 export type ScenarioInput = z.input<typeof scenarioSchema>;
 /** Scénario complet, valeurs par défaut appliquées. */
 export type ScenarioConfig = z.output<typeof scenarioSchema>;
+export type PersistenceConfig = ScenarioConfig['persistence'];
+export type MemoryConfig = ScenarioConfig['memory'];
 export type FormAuthConfig = z.output<typeof formAuthSchema>;
 export type HttpAuthConfig = z.output<typeof httpAuthSchema>;
 export type BrowserInteractionsConfig = z.output<typeof browserInteractionsSchema>;

@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { MISSION_MODES, type MissionMode } from '../config/config.js';
+import { PERSISTENCE_CHOICES, type PersistenceChoice } from '../config/config-loader.js';
 
 export interface CliArgs {
   /** learn / verify / explore ; absent : mission.mode. */
@@ -14,6 +15,8 @@ export interface CliArgs {
   headless?: boolean;
   reportsDir?: string;
   screenshotsDir?: string;
+  persistence?: PersistenceChoice;
+  memory?: boolean;
   quiet: boolean;
 }
 
@@ -49,6 +52,10 @@ Options:
       --reports-dir <dir>     Override output.reportsDir (default: reports)
       --screenshots-dir <dir> Override output.screenshotsDir (default: screenshots)
       --baseline-dir <dir>    Override baseline.dir (default: baseline)
+      --persistence <p>       Where runs and knowledge are stored: memory, file, postgres,
+                              sqlserver, sqlite (also: QA_PERSISTENCE_*, QA_DB_TYPE)
+      --no-persistence        Store nothing (the default without a persistence block)
+      --memory / --no-memory  Use / ignore the knowledge of previous runs (QA_MEMORY_ENABLED)
   -q, --quiet                 Only print the summary
   -h, --help                  Show this help
   -v, --version               Show the version
@@ -62,6 +69,12 @@ Exit codes:
 Environment:
   QA_BASE_URL                Overrides target.baseUrl
   QA_USERNAME / QA_PASSWORD  Default credential variables for auth.type: form | http
+  QA_PERSISTENCE_ENABLED     true | false (overrides persistence.enabled)
+  QA_PERSISTENCE_PROVIDER    memory | file | database
+  QA_DB_TYPE                 postgres | sqlserver | sqlite
+  QA_DB_HOST, QA_DB_PORT, QA_DB_NAME, QA_DB_USERNAME, QA_DB_PASSWORD
+                             Database connection (credentials only ever from the environment)
+  QA_MEMORY_ENABLED          true | false (overrides memory.enabled)
   PLAYWRIGHT_BROWSERS_PATH   Where Playwright finds Chromium
 `;
 
@@ -88,6 +101,10 @@ export function parseCliArgs(argv: string[]): CliArgs {
         'reports-dir': { type: 'string' },
         'screenshots-dir': { type: 'string' },
         'baseline-dir': { type: 'string' },
+        persistence: { type: 'string' },
+        'no-persistence': { type: 'boolean', default: false },
+        memory: { type: 'boolean' },
+        'no-memory': { type: 'boolean', default: false },
         quiet: { type: 'boolean', short: 'q', default: false },
         help: { type: 'boolean', short: 'h', default: false },
         version: { type: 'boolean', short: 'v', default: false },
@@ -109,6 +126,16 @@ export function parseCliArgs(argv: string[]): CliArgs {
   const maxStates = positiveInteger('max-states', values['max-states']);
   const maxActions = positiveInteger('max-actions', values['max-actions']);
   const configPath = values.config ?? positionals[0];
+  const persistenceValue = values['no-persistence'] ? 'off' : values.persistence;
+  if (values['no-persistence'] && values.persistence !== undefined)
+    throw new UsageError('Use either --persistence or --no-persistence.');
+  if (
+    persistenceValue !== undefined &&
+    !(PERSISTENCE_CHOICES as readonly string[]).includes(persistenceValue)
+  )
+    throw new UsageError(`--persistence must be one of ${PERSISTENCE_CHOICES.join(', ')}.`);
+  if (values['no-memory'] && values.memory) throw new UsageError('Use either --memory or --no-memory.');
+  const memory = values['no-memory'] ? false : values.memory;
   return {
     ...(mode !== undefined ? { mode } : {}),
     ...(values['baseline-dir'] !== undefined ? { baselineDir: values['baseline-dir'] } : {}),
@@ -122,5 +149,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     ...(values.headed ? { headless: false } : {}),
     ...(values['reports-dir'] !== undefined ? { reportsDir: values['reports-dir'] } : {}),
     ...(values['screenshots-dir'] !== undefined ? { screenshotsDir: values['screenshots-dir'] } : {}),
+    ...(persistenceValue !== undefined ? { persistence: persistenceValue as PersistenceChoice } : {}),
+    ...(memory !== undefined ? { memory } : {}),
   };
 }

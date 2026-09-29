@@ -1,0 +1,36 @@
+# Persistance dans SQL Server. Aucun identifiant ici : seulement le NOM des variables
+# d'environnement qui les contiennent.
+#   export QA_DB_HOST=sqlserver.example.test QA_DB_PORT=1433 QA_DB_NAME=qa_crawler
+#   export QA_DB_USERNAME=qa
+#   read -s QA_DB_PASSWORD && export QA_DB_PASSWORD
+#   npm run qa -- scenarios/persistence-sqlserver.yaml --base-url http://localhost:4200
+mission:
+  name: persistence-sqlserver
+
+target:
+  baseUrl: http://localhost:4200
+
+exploration:
+  maxStates: 50
+  maxActions: 200
+
+persistence:
+  enabled: true
+  provider: database
+  database:
+    type: sqlserver
+    hostEnv: QA_DB_HOST
+    portEnv: QA_DB_PORT
+    databaseEnv: QA_DB_NAME
+    usernameEnv: QA_DB_USERNAME
+    passwordEnv: QA_DB_PASSWORD
+    migrate: true
+    # Connexion chiffrée (par défaut). Seulement pour une base de développement locale au
+    # certificat auto-signé : tls: { trustServerCertificate: true }
+  failureMode: fail # la base est obligatoire pour ce run : arrêt clair si elle est absente
+
+memory:
+  enabled: true
+  preload:
+    maxStates: 1000
+    maxTransitions: 5000
