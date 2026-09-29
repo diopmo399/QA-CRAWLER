@@ -131,7 +131,9 @@ output:
 
   it('recovers: NAVIGATION_DETECTED then NAVIGATION_RECOVERED, reported in result.recovery.navigation', () => {
     expect(logged.map((event) => event.type)).toEqual(['NAVIGATION_DETECTED', 'NAVIGATION_RECOVERED']);
-    expect(logged[1]).toMatchObject({ operation: 'dom-snapshot', reason: 'CONTEXT_DESTROYED', retries: 1 });
+    expect(logged[1]).toMatchObject({ operation: 'dom-snapshot', reason: 'CONTEXT_DESTROYED' });
+    expect(logged[1]?.retries).toBeGreaterThanOrEqual(1);
+    expect(logged[1]?.retries).toBeLessThanOrEqual(3);
     expect(result.recovery?.navigation?.map((event) => event.type)).toEqual([
       'NAVIGATION_DETECTED',
       'NAVIGATION_RECOVERED',

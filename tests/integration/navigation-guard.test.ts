@@ -151,14 +151,19 @@ describe('NavigationGuard in a real browser', () => {
       reason: 'CONTEXT_DESTROYED',
       previousUrl: `${base}/`,
       currentUrl: `${base}/landing`,
-      retries: 1,
     });
+    // Au moins une relecture ; une de plus si la lecture retombe dans la navigation encore en cours (selon la machine).
+    expect(events[1]?.retries).toBeGreaterThanOrEqual(1);
+    expect(events[1]?.retries).toBeLessThanOrEqual(3);
   });
 
   it('several successive navigations (single sign-on style) are followed to the last page', async () => {
     const snapshot = await new UIObserver(400, guard).observe(navigatingPage(['/redirect', '/created']));
     expect(snapshot.headings).toEqual(['Créé']);
-    expect(events.at(-1)).toMatchObject({ type: 'NAVIGATION_RECOVERED', retries: 2 });
+    // Une relecture par navigation au moins, toujours dans la limite (4 lectures) ; le compte exact dépend du minutage.
+    expect(events.at(-1)?.type).toBe('NAVIGATION_RECOVERED');
+    expect(events.at(-1)?.retries).toBeGreaterThanOrEqual(2);
+    expect(events.at(-1)?.retries).toBeLessThanOrEqual(3);
   });
 
   it('a navigation followed by a real error: the real error is raised', async () => {

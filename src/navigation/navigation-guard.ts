@@ -173,6 +173,8 @@ export class NavigationGuard {
     const previousUrl = safeUrl(page);
     let last: ClassifiedError | undefined;
     for (let attempt = 1; ; attempt++) {
+      // Navigations du cadre principal vues avant cette lecture : dit si la nouvelle page a déjà remplacé l'ancienne.
+      const seen = this.counts.get(page);
       try {
         const value = await read();
         if (last)
@@ -198,7 +200,7 @@ export class NavigationGuard {
           });
           throw new NavigationRecoveryError(operation, classified, attempt - 1);
         }
-        await this.waitUntilUsable(page);
+        await this.waitUntilUsable(page, seen);
       }
     }
   }
@@ -208,8 +210,19 @@ export class NavigationGuard {
    * (domcontentloaded). Pas de networkidle (une application monopage peut ne jamais
    * l'atteindre) ni de pause fixe : la lecture suivante vérifie elle-même la page.
    */
-  async waitUntilUsable(page: Page): Promise<void> {
+  async waitUntilUsable(page: Page, seen?: number): Promise<void> {
     if (page.isClosed()) return;
+    // Le contexte est détruit mais le nouveau document n'est peut-être pas encore là : sans cela,
+    // domcontentloaded répondrait tout de suite pour l'ancien, et la lecture suivante retomberait
+    // dans la navigation en cours. Attendre l'événement (jamais une pause), brièvement.
+    if (seen !== undefined && this.counts.get(page) === seen) {
+      await page
+        .waitForEvent('framenavigated', {
+          predicate: (frame) => frame === page.mainFrame(),
+          timeout: Math.min(this.readyTimeoutMs, COMMIT_WAIT_MS),
+        })
+        .catch(() => undefined);
+    }
     await page.waitForLoadState('domcontentloaded', { timeout: this.readyTimeoutMs }).catch(() => undefined);
   }
 
@@ -235,6 +248,9 @@ export class NavigationGuard {
     });
   }
 }
+
+/** Attente au plus de l'arrivée du nouveau document quand elle n'a pas encore été vue. */
+const COMMIT_WAIT_MS = 2_000;
 
 function safeUrl(page: Page): string {
   try {
