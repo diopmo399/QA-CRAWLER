@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ExplorationListener } from '../explorer/flow-explorer.js';
+import { observationOf } from '../semantics/resolution/semantic-knowledge.js';
 import { actionSignature, stateSignature } from '../knowledge/signatures.js';
 import { actionLabel, type DiscoveredAction } from '../model/discovered-action.js';
 import type { FlowEdge } from '../model/flow.js';
@@ -54,6 +55,14 @@ export class PersistenceRecorder {
     return {
       onState: (context) => {
         this.onState(context);
+      },
+      onSemanticResolution: (event) => {
+        // Une résolution réussie (ou échouée) est une connaissance de plus : transition_knowledge, via le KnowledgeService.
+        const observed = observationOf(event);
+        if (observed) {
+          this.knowledge?.observeTransition(observed);
+          this.maybeFlush();
+        }
       },
       onTransition: (edge, action) => {
         this.onTransition(edge, action);

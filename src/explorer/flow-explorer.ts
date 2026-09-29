@@ -107,6 +107,12 @@ import type { ConfidenceResult } from '../intelligence/confidence-engine.js';
 import { adaptiveScorerOf, confidenceEngineOf, knowledgeContextOf } from '../intelligence/intelligence.js';
 import { SemanticResolver, type SemanticResolution } from '../semantics/resolution/semantic-resolver.js';
 import type { GherkinIntent } from '../semantics/resolution/intent.js';
+import {
+  KnowledgeSemanticHistory,
+  type SemanticOutcome,
+  type SemanticResolutionEvent,
+} from '../semantics/resolution/semantic-knowledge.js';
+import { DeterministicConfidenceEngine, type ConfidenceEngine } from '../intelligence/confidence-engine.js';
 import { ValidDataFillStrategy } from '../forms/form-fill-strategy.js';
 import { actionSignature, stateSignature } from '../knowledge/signatures.js';
 import { HistoricalOracle, apiOperation } from '../oracles/historical-oracle.js';
@@ -148,6 +154,11 @@ export interface ExplorationListener {
   onInteraction?(result: BrowserInteractionResult): void;
   /** Ligne de log structurée d'une interaction du navigateur (aucun secret). */
   onInteractionLog?(line: string): void;
+  /**
+   * Une phrase d'intention Gherkin a été résolue (ou non) puis exécutée :
+   * SEMANTIC_RESOLUTION_SUCCEEDED / FAILED / AMBIGUOUS. Jamais une valeur saisie.
+   */
+  onSemanticResolution?(event: SemanticResolutionEvent): void;
 }
 
 export interface FlowExplorerOptions {
@@ -313,6 +324,7 @@ export class FlowExplorer {
   private readonly semanticResolver: SemanticResolver | undefined;
   /** Le scénario en cours : le formulaire rempli, les valeurs saisies (non sensibles) pour les vérifications. */
   private scenario: { formGroup?: string; values: string[] } = { values: [] };
+  private semanticEngine: ConfidenceEngine | undefined;
   private readonly patternDetector: RuleBasedPatternDetector;
   private readonly patternsByState = new Map<string, DetectedPattern[]>();
   private readonly coverage = new CoverageTracker();
@@ -1997,8 +2009,11 @@ export class FlowExplorer {
         page,
         report: done('MANUAL', { reason: `to check manually: ${describeStep(step)}`, ...where }),
       };
+    const signature = stateSignature(context.stateLabel);
+    const history = this.semanticHistory(signature);
     const resolution = resolver.resolve(intent, context, {
-      stateSignature: stateSignature(context.stateLabel),
+      stateSignature: signature,
+      ...(history ? { history } : {}),
       ...(this.scenario.formGroup ? { previousFormGroup: this.scenario.formGroup } : {}),
       ...(step.name ? { sentence: step.name } : {}),
       ...(intent.kind === 'FILL' && typeof intent.value !== 'string' ? { sensitiveValue: true } : {}),
@@ -2008,8 +2023,44 @@ export class FlowExplorer {
     const targetOf = (action: DiscoveredAction): FlowTarget => ({ ...action.locator });
     const interpretation = resolution.explanation.slice(0, 4).join(' · ');
 
+    const emit = (
+      outcome: SemanticOutcome,
+      extra: {
+        intentKey?: string;
+        targetSignature?: string;
+        selected?: string;
+        score?: number;
+        reason?: string;
+      } = {},
+    ): void =>
+      this.listener.onSemanticResolution?.({
+        at: new Date().toISOString(),
+        flow: flow.name,
+        stateId: context.stateId,
+        stateSignature: signature,
+        intentKey: extra.intentKey ?? resolution.intentKey,
+        intent: resolution.description,
+        outcome,
+        ...((extra.targetSignature ?? resolution.targetSignature)
+          ? { targetSignature: extra.targetSignature ?? resolution.targetSignature }
+          : {}),
+        ...((extra.selected ?? report.selected) ? { selected: extra.selected ?? report.selected } : {}),
+        score: extra.score ?? resolution.score,
+        confidence: resolution.confidence,
+        candidates: report.candidates,
+        ...(extra.reason ? { reason: extra.reason } : {}),
+      });
+
     if (resolution.status !== 'RESOLVED' || !resolution.target) {
       const reason = `${failureCode(intent, resolution.status)}: ${resolution.reasons[0] ?? 'not resolved'}`;
+      emit(
+        resolution.status === 'AMBIGUOUS'
+          ? 'AMBIGUOUS'
+          : resolution.status === 'BLOCKED'
+            ? 'BLOCKED'
+            : 'NOT_FOUND',
+        { reason },
+      );
       return {
         page,
         report: done(resolution.status === 'BLOCKED' ? 'BLOCKED' : 'FAILED', {
@@ -2028,10 +2079,13 @@ export class FlowExplorer {
       currentPage: Page,
     ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> =>
       this.runFlowElementStep(currentPage, browser, observers, flow, concrete, current, timeout, done);
-    const finish = (outcome: { page: Page; context?: PageContext; report: FlowStepReport }) => ({
-      ...outcome,
-      report: { ...outcome.report, interpretation, resolution: report },
-    });
+    const finish = (outcome: { page: Page; context?: PageContext; report: FlowStepReport }) => {
+      if (target.kind === 'action' || target.kind === 'field')
+        emit(outcome.report.status === 'PASSED' ? 'SUCCEEDED' : 'FAILED', {
+          ...(outcome.report.reason ? { reason: outcome.report.reason } : {}),
+        });
+      return { ...outcome, report: { ...outcome.report, interpretation, resolution: report } };
+    };
 
     switch (target.kind) {
       case 'here':
@@ -2077,6 +2131,12 @@ export class FlowExplorer {
           currentPage = outcome.page;
           current = outcome.context ?? current;
           done_.push(`"${mapping.intent}" → "${mapping.target}" ${mapping.confidence}`);
+          emit(outcome.report.status === 'PASSED' ? 'SUCCEEDED' : 'FAILED', {
+            intentKey: mapping.intentKey,
+            targetSignature: mapping.targetSignature,
+            selected: mapping.target,
+            score: mapping.confidence,
+          });
           if (outcome.report.status !== 'PASSED')
             return finish({
               ...outcome,
@@ -2138,6 +2198,26 @@ export class FlowExplorer {
         };
       }
     }
+  }
+
+  /**
+   * L'historique des résolutions pour cet écran (gherkin.semanticResolution.historicalKnowledge) :
+   * la KnowledgeBase EN MÉMOIRE, notée par le ConfidenceEngine — jamais une requête au stockage.
+   */
+  private semanticHistory(stateSignatureOf: string): KnowledgeSemanticHistory | undefined {
+    if (!this.config.gherkin.semanticResolution.historicalKnowledge) return undefined;
+    this.semanticEngine ??=
+      confidenceEngineOf(this.config) ??
+      new DeterministicConfidenceEngine({
+        sampleHalfPoint: this.config.intelligence.confidence.sampleHalfPoint,
+        aging: { halfLifeDays: this.config.knowledge.halfLifeDays, minWeight: 0.05 },
+      });
+    return new KnowledgeSemanticHistory(
+      this.knowledge,
+      stateSignatureOf,
+      this.semanticEngine,
+      knowledgeContextOf(this.config, this.knowledge.identity),
+    );
   }
 
   /** Le formulaire du scénario, et les valeurs non sensibles saisies (pour « … apparaît dans la liste »). */
