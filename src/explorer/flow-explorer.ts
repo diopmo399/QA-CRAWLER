@@ -500,6 +500,7 @@ export class FlowExplorer {
         runId: this.runId,
         fields: config.testData.fields,
         defaults: config.testData.defaults,
+        language: config.report.language,
       });
     this.contract = options.contract;
     this.forms = new FormExerciser(

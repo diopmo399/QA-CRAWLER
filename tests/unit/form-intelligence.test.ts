@@ -121,7 +121,7 @@ describe('FormFillStrategy', () => {
     expect(plan.formId).toBe('create-user:page');
     expect(plan.operations.map(({ operation, value, source }) => ({ operation, value, source }))).toEqual([
       { operation: 'fill', value: 'Tester', source: 'rule' }, // testData.defaults.lastName (« Nom »)
-      { operation: 'fill', value: 'qa-crawler-abc123@example.test', source: 'rule' }, // marqué avec l'id du run
+      { operation: 'fill', value: 'emily.clark.qa-crawler-abc123@example.test', source: 'rule' }, // la personne du run, marquée avec l'id du run
       { operation: 'select', value: 'USER', source: 'type' }, // ni option d'invite, ni option désactivée
       { operation: 'skip', value: undefined, source: 'type' }, // case à cocher facultative
       { operation: 'skip', value: undefined, source: undefined }, // mot de passe : jamais rempli, aucune valeur
@@ -151,17 +151,17 @@ describe('TestDataProvider', () => {
       source: 'rule',
     });
     expect(provider.validValue(field({ type: 'autocomplete', label: 'Prénom du contact' }))).toMatchObject({
-      value: 'Qa',
+      value: 'Emily',
       source: 'rule',
     });
     // Rien ne dit ce que le champ attend : la valeur de repli.
     expect(provider.validValue(field({ type: 'autocomplete' }))).toMatchObject({
-      value: 'QA Test',
+      value: 'Test value',
       source: 'fallback',
     });
   });
 
-  it('donne des chiffres, jamais « QA Test », aux champs qui attendent des chiffres', () => {
+  it('donne des chiffres, jamais un texte de repli, aux champs qui attendent des chiffres', () => {
     // inputmode numeric, sans aide ni sens connu : chiffres à la longueur de maxlength.
     expect(provider.validValue(field({ inputMode: 'numeric', maxLength: 5 }))).toMatchObject({
       value: '12345',
@@ -176,10 +176,15 @@ describe('TestDataProvider', () => {
     expect(provider.validValue(field({ label: 'Nom', inputMode: 'numeric' }))).toMatchObject({
       value: '12345',
     });
-    // …mais un sens fait de chiffres est gardé.
-    expect(provider.validValue(field({ label: 'Code postal', inputMode: 'numeric' }))).toMatchObject({
-      value: '75001',
+    // …un sens fait de chiffres est gardé (téléphone)…
+    expect(provider.validValue(field({ label: 'Téléphone', inputMode: 'numeric' }))).toMatchObject({
+      value: '4165550101',
       source: 'rule',
+    });
+    // …mais un code postal avec des lettres (M5V 2T6) n'est pas forcé dans un champ de chiffres.
+    expect(provider.validValue(field({ label: 'Code postal', inputMode: 'numeric' }))).toMatchObject({
+      value: '12345',
+      source: 'type',
     });
     // Un vrai champ number garde ses bornes.
     expect(provider.validValue(field({ type: 'number', min: 1, max: 9 }))).toMatchObject({ value: '5' });
@@ -191,7 +196,7 @@ describe('TestDataProvider', () => {
       source: 'configured',
     });
     expect(provider.validValue(field({ label: 'Titre' }))).toMatchObject({
-      value: 'QA-CRAWLER-abc123',
+      value: 'Test QA-CRAWLER-abc123',
       source: 'rule',
     });
     expect(provider.validValue(field({ type: 'number', min: 1, max: 100 }))).toMatchObject({
@@ -199,7 +204,7 @@ describe('TestDataProvider', () => {
       source: 'type',
     });
     expect(provider.validValue(field({ label: 'Commentaire libre' }))).toMatchObject({
-      value: 'QA Test',
+      value: 'Test value',
       source: 'fallback',
     });
     expect(provider.validValue(field({ type: 'checkbox', required: true }))).toMatchObject({ kind: 'check' });

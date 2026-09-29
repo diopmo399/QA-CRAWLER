@@ -351,6 +351,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
             runId: outcome.runId,
             fields: config.testData.fields,
             defaults: config.testData.defaults,
+            language: config.report.language,
           }),
       },
       { maxFlows: config.flowGeneration.maxFlows },

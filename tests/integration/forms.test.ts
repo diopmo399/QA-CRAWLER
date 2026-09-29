@@ -180,7 +180,7 @@ describe('forms in a dialog (fill, check, never send by default)', () => {
     const issues = result.issues.filter((issue) => issue.type === 'FORM_VALIDATION');
     const dossier = issues.find((issue) => issue.message.includes('Numéro de dossier'));
     expect(dossier?.message).toBe(
-      'form "Nouveau dossier": field "Numéro de dossier" (value "QA Test"): Format attendu : AB-1234',
+      'form "Nouveau dossier": field "Numéro de dossier" (value "Test value"): Format attendu : AB-1234',
     );
     expect(dossier?.severity).toBe('WARNING');
     // Les valeurs qui suivent les aides sont acceptées : 99999 → 5 chiffres, HH:MM → 10:00.
@@ -221,7 +221,7 @@ testData:
     expect(app.posts.length).toBeGreaterThanOrEqual(1);
     expect(app.posts[0]).toEqual({
       agence: '12345', // aide "99999"
-      nom: 'QA-CRAWLER-t1', // raison sociale : marquée avec l'id du run
+      nom: 'Test Company QA-CRAWLER-t1', // raison sociale : lisible, marquée avec l'id du run
       dossier: 'AB-1234', // testData.fields
       canal: 'courriel', // groupe de radios, par son libellé
       type: 'Ouverture', // liste personnalisée : première option
