@@ -836,8 +836,9 @@ En exploration, un écran qui contient des champs est d'abord **rempli comme le 
   1. celles de la mission, par champ (`testData.fields`, texte ou `{ value: … }`) ;
   2. une règle selon le sens du champ : prénom, nom, entreprise, e-mail, téléphone, code postal, ville, pays, adresse, URL… (surchargeables avec `testData.defaults`), ou l'aide affichée par l'application : `99999` → 5 chiffres, `HH:MM` → `10:00`, `AAAA-MM-JJ` / `JJ/MM/AAAA` → date du jour dans ce format ;
   3. une valeur selon le type : nombres dans min/max/step, dates dans les bornes, première vraie option d'une liste ;
-  4. une valeur de repli sûre (`QA Test`), sauf pour un champ qui attend des chiffres (voir ci-dessous).
-- **Champs qui attendent des chiffres** sans être `type="number"` : attribut `inputmode="numeric"` ou `"decimal"`, `pattern` fait de chiffres (`\d{5}`, `[0-9]+`), ou aide affichée (`99999`). Ils reçoivent une suite de chiffres de la bonne longueur — celle du motif, sinon le `maxlength` (jusqu'à 10), sinon 5 — et jamais `QA Test`. Un sens qui donne des chiffres (code postal, téléphone) est gardé. L'aide affichée vaut pour tous les champs où l'on tape, autocomplétion comprise.
+  4. une valeur de repli lisible (`Valeur de test` / `Test value`), sauf pour un champ qui attend des chiffres (voir ci-dessous).
+- **Des données cohérentes et compréhensibles.** Chaque run utilise une personne fictive dont toutes les valeurs vont ensemble, dans la langue du rapport (`report.language`) : prénom, nom, e-mail, téléphone, adresse, ville, code postal et pays (par exemple Julie Tremblay, `julie.tremblay.qa-crawler-<runId>@example.test`, 514 555-0101, 1250 rue Principale, Montréal, H2X 1Y4, Canada). Le même run garde toujours la même personne ; les numéros sont réservés à la fiction (555-01xx) et le domaine `example.test` aux tests. Une date de naissance est dans le passé (35 ans), toujours dans les bornes du champ ; les autres dates restent celles du jour. Les textes sont lisibles (`Texte de test`, `Donnée de test saisie automatiquement par QA-Crawler (QA-CRAWLER-<runId>).`).
+- **Champs qui attendent des chiffres** sans être `type="number"` : attribut `inputmode="numeric"` ou `"decimal"`, `pattern` fait de chiffres (`\d{5}`, `[0-9]+`), ou aide affichée (`99999`). Ils reçoivent une suite de chiffres de la bonne longueur — celle du motif, sinon le `maxlength` (jusqu'à 10), sinon 5 — et jamais un texte. Un sens qui donne des chiffres (téléphone) est gardé ; un code postal avec des lettres ne l'est pas. L'aide affichée vaut pour tous les champs où l'on tape, autocomplétion comprise.
 - **Un champ qui n'accepte que des chiffres sans le dire** (filtrage en JavaScript, sans `inputmode`, `pattern` ni aide) ou **qui doit contenir une valeur existante** (code d'une agence, numéro de dossier connu de l'application) : donnez sa valeur dans la mission.
 
 ```yaml
@@ -847,7 +848,7 @@ testData:
     Numéro de dossier: { value: '000123' }
 ```
 
-- **Données reconnaissables.** Les valeurs créées portent l'identifiant du run quand c'est possible : e-mail `qa-crawler-<runId>@example.test`, noms `QA-CRAWLER-<runId>` (`testData.runId`, sinon généré à chaque run). Elles pourront être retrouvées et nettoyées.
+- **Données reconnaissables.** Les valeurs créées portent l'identifiant du run quand c'est possible : e-mail `prenom.nom.qa-crawler-<runId>@example.test`, titres et entreprises `Test QA-CRAWLER-<runId>` / `Entreprise Test QA-CRAWLER-<runId>` (`testData.runId`, sinon généré à chaque run). Elles pourront être retrouvées et nettoyées.
 - **Un plan, puis l'exécution.** La `FormFillStrategy` produit un plan (champ → remplir / choisir / cocher / ignorer, et pourquoi), exécuté par le `PlaywrightActionExecutor`. Le rapport montre ce plan : ce qui a été saisi (jamais une valeur sensible), la source de la valeur et la réponse de l'application.
 
 ```yaml

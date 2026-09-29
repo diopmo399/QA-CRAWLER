@@ -46,8 +46,164 @@ export interface TestDataOptions {
   fields?: Readonly<Record<string, string>>;
   /** Valeurs par sens (firstName, email, country…), pour chaque champ qui a ce sens. */
   defaults?: Readonly<Partial<Record<SemanticKey, string>>>;
+  /** Langue des données générées (report.language) : une personne, une adresse et des textes cohérents dans cette langue. */
+  language?: 'fr' | 'en';
   today?: () => Date;
 }
+
+/** Une personne fictive et son adresse : toutes les valeurs d'un run vont ensemble. */
+interface Persona {
+  firstName: string;
+  lastName: string;
+  phone: string;
+  address: string;
+  city: string;
+  postalCode: string;
+  country: string;
+}
+
+/**
+ * Personnes fictives aux noms courants, adresses plausibles et numéros réservés à la
+ * fiction (555-01xx). Choisie par l'id du run : le même run donne toujours la même.
+ */
+const PERSONAS: Record<'fr' | 'en', readonly Persona[]> = {
+  fr: [
+    {
+      firstName: 'Julie',
+      lastName: 'Tremblay',
+      phone: '5145550101',
+      address: '1250 rue Principale',
+      city: 'Montréal',
+      postalCode: 'H2X 1Y4',
+      country: 'Canada',
+    },
+    {
+      firstName: 'Marc',
+      lastName: 'Gagnon',
+      phone: '4185550102',
+      address: '45 avenue des Érables',
+      city: 'Québec',
+      postalCode: 'G1R 2K5',
+      country: 'Canada',
+    },
+    {
+      firstName: 'Sophie',
+      lastName: 'Roy',
+      phone: '8195550103',
+      address: '300 boulevard Laurier',
+      city: 'Gatineau',
+      postalCode: 'J8T 3R7',
+      country: 'Canada',
+    },
+    {
+      firstName: 'Olivier',
+      lastName: 'Côté',
+      phone: '4505550104',
+      address: '88 rue Saint-Charles',
+      city: 'Longueuil',
+      postalCode: 'J4H 1C8',
+      country: 'Canada',
+    },
+    {
+      firstName: 'Émilie',
+      lastName: 'Bouchard',
+      phone: '8195550105',
+      address: '17 rue King Ouest',
+      city: 'Sherbrooke',
+      postalCode: 'J1H 1N9',
+      country: 'Canada',
+    },
+    {
+      firstName: 'Mathieu',
+      lastName: 'Gauthier',
+      phone: '4185550106',
+      address: '560 rue Racine',
+      city: 'Saguenay',
+      postalCode: 'G7H 1S2',
+      country: 'Canada',
+    },
+  ],
+  en: [
+    {
+      firstName: 'Emily',
+      lastName: 'Clark',
+      phone: '4165550101',
+      address: '120 Main Street',
+      city: 'Toronto',
+      postalCode: 'M5V 2T6',
+      country: 'Canada',
+    },
+    {
+      firstName: 'James',
+      lastName: 'Wilson',
+      phone: '6045550102',
+      address: '45 Maple Avenue',
+      city: 'Vancouver',
+      postalCode: 'V6B 1A1',
+      country: 'Canada',
+    },
+    {
+      firstName: 'Sarah',
+      lastName: 'Miller',
+      phone: '6135550103',
+      address: '300 Bank Street',
+      city: 'Ottawa',
+      postalCode: 'K2P 1X8',
+      country: 'Canada',
+    },
+    {
+      firstName: 'Daniel',
+      lastName: 'Brown',
+      phone: '4035550104',
+      address: '88 Centre Street',
+      city: 'Calgary',
+      postalCode: 'T2G 5K3',
+      country: 'Canada',
+    },
+    {
+      firstName: 'Olivia',
+      lastName: 'Taylor',
+      phone: '7805550105',
+      address: '17 Jasper Avenue',
+      city: 'Edmonton',
+      postalCode: 'T5J 1W8',
+      country: 'Canada',
+    },
+    {
+      firstName: 'Ryan',
+      lastName: 'Anderson',
+      phone: '9025550106',
+      address: '560 Barrington Street',
+      city: 'Halifax',
+      postalCode: 'B3J 1Z1',
+      country: 'Canada',
+    },
+  ],
+};
+
+/** Textes génériques, lisibles et reconnaissables comme des données de test. */
+const TEXTS: Record<
+  'fr' | 'en',
+  { text: string; title: string; company: string; paragraph: string; fallback: string }
+> = {
+  fr: {
+    text: 'Texte de test',
+    title: 'Test',
+    company: 'Entreprise Test',
+    paragraph: 'Donnée de test saisie automatiquement par QA-Crawler',
+    fallback: 'Valeur de test',
+  },
+  en: {
+    text: 'Test text',
+    title: 'Test',
+    company: 'Test Company',
+    paragraph: 'Test data entered automatically by QA-Crawler',
+    fallback: 'Test value',
+  },
+};
+
+/** Date de naissance, d'embauche… : ce sens appelle une date passée, pas aujourd'hui. */
+const BIRTH_DATE = /(birth|naissance|\bdob\b|\bne le\b|\bnee le\b)/;
 
 const boundaries = new SimpleBoundaryValueGenerator(12);
 
@@ -70,29 +226,41 @@ const SEMANTIC_RULES: readonly [SemanticKey, RegExp][] = [
 ];
 
 /**
- * Valeurs déterministes, visiblement synthétiques. Priorité :
+ * Valeurs déterministes, cohérentes et lisibles. Priorité :
  *
  *   1. configuration explicite (testData.fields, par libellé/name/placeholder)
  *   2. règle propre au champ (testData.defaults par sens, aides de l'application : "99999", "HH:MM")
  *   3. générateur propre au type (e-mail, nombre dans min/max, date…)
- *   4. valeur de repli sûre ("QA Test")
+ *   4. valeur de repli sûre (« Valeur de test »)
  *
- * Noms, titres et entreprises portent QA-CRAWLER-<runId>, les e-mails
- * qa-crawler-<runId>@example.test : ce que le crawler crée peut être retrouvé
- * (et nettoyé) plus tard. Les champs sensibles (mots de passe, cartes, secrets)
- * ne sont jamais remplis — même quand une valeur est configurée.
+ * Une personne fictive par run (prénom, nom, e-mail, téléphone, adresse, ville, code
+ * postal et pays qui vont ensemble), dans la langue du rapport ; une date de naissance
+ * est dans le passé. Titres, entreprises et textes longs portent QA-CRAWLER-<runId>, les
+ * e-mails prenom.nom.qa-crawler-<runId>@example.test : ce que le crawler crée peut être retrouvé
+ * (et nettoyé) plus tard. Les champs sensibles (mots de passe, cartes, secrets) ne sont
+ * jamais remplis — même quand une valeur est configurée.
  */
 export class DefaultTestDataProvider implements TestDataProvider {
   private readonly fields: ReadonlyMap<string, string>;
   private readonly defaults: Readonly<Partial<Record<SemanticKey, string>>>;
   private readonly runId: string;
   private readonly today: () => Date;
+  private readonly language: 'fr' | 'en';
 
   constructor(options: TestDataOptions = {}) {
     this.fields = new Map(Object.entries(options.fields ?? {}).map(([key, value]) => [fieldKey(key), value]));
     this.defaults = options.defaults ?? {};
     this.runId = options.runId ?? 'run';
     this.today = options.today ?? (() => new Date());
+    this.language = options.language ?? 'en';
+  }
+
+  /** La personne fictive du run : la même pour tous les champs, d'un formulaire à l'autre. */
+  private persona(runId: string): Persona {
+    const pool = PERSONAS[this.language];
+    let hash = 0;
+    for (const char of runId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+    return pool[hash % pool.length] ?? (pool[0] as Persona);
   }
 
   /** Valeur donnée par la mission pour ce champ, s'il y en a une. */
@@ -186,7 +354,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
         if (semantic) return fitted(semantic.value, field, 'rule');
         const typed = this.byType(field, runId);
         if (typed !== undefined) return fitted(typed, field, 'type');
-        return fitted('QA Test', field, 'fallback');
+        return fitted(TEXTS[this.language].fallback, field, 'fallback');
       }
     }
   }
@@ -239,19 +407,23 @@ export class DefaultTestDataProvider implements TestDataProvider {
             : SEMANTIC_RULES.find(([, pattern]) => pattern.test(text))?.[0];
     if (!key) return undefined;
     const tag = runTag(runId);
+    const person = this.persona(runId);
+    const texts = TEXTS[this.language];
+    // Une personne cohérente (nom, e-mail, téléphone, adresse vont ensemble) ; ce qui nomme
+    // une donnée créée (titre, entreprise) garde le marqueur du run, pour la retrouver et la nettoyer.
     const builtIn: Record<SemanticKey, string> = {
-      firstName: 'Qa',
-      lastName: 'Crawler',
-      name: tag,
-      email: `qa-crawler-${runId.toLowerCase()}@example.test`,
-      phone: '5550100',
-      company: tag,
-      address: '1 QA Street',
-      city: 'Testville',
-      postalCode: '75001',
-      country: 'Canada',
+      firstName: person.firstName,
+      lastName: person.lastName,
+      name: `${texts.title} ${tag}`,
+      email: emailOf(person, runId),
+      phone: person.phone,
+      company: `${texts.company} ${tag}`,
+      address: person.address,
+      city: person.city,
+      postalCode: person.postalCode,
+      country: person.country,
       url: 'https://example.test',
-      text: 'QA Test',
+      text: texts.text,
     };
     return { key, value: this.defaults[key] ?? builtIn[key] };
   }
@@ -266,17 +438,17 @@ export class DefaultTestDataProvider implements TestDataProvider {
     if (digits) return '1234567890'.repeat(3).slice(0, digits.length);
     if (/\b(HH|hh):(MM|mm)\b/.test(shown)) return '10:00';
     const format = dateFormat(shown);
-    if (format) return formatDate(this.isoToday(field), format);
+    if (format) return formatDate(this.dateFor(field), format);
     return undefined;
   }
 
   private byType(field: FormField, runId: string): string | undefined {
-    const today = this.isoToday(field);
+    const today = this.dateFor(field);
     switch (field.type) {
       case 'email':
-        return `qa-crawler-${runId.toLowerCase()}@example.test`;
+        return emailOf(this.persona(runId), runId);
       case 'tel':
-        return '5550100';
+        return this.persona(runId).phone;
       case 'url':
         return 'https://example.test';
       case 'number':
@@ -295,7 +467,7 @@ export class DefaultTestDataProvider implements TestDataProvider {
       case 'color':
         return '#336699';
       case 'textarea':
-        return `QA crawler test content (${runTag(runId)}).`;
+        return `${TEXTS[this.language].paragraph} (${runTag(runId)}).`;
       case 'search':
         return 'test';
       default:
@@ -303,9 +475,18 @@ export class DefaultTestDataProvider implements TestDataProvider {
     }
   }
 
-  /** Aujourd'hui, maintenu entre les dates min/max du champ. */
-  private isoToday(field: FormField): string {
-    const date = this.today().toISOString().slice(0, 10);
+  /** La date d'un champ : aujourd'hui, ou il y a 35 ans pour une date de naissance ; toujours dans ses bornes. */
+  private dateFor(field: FormField): string {
+    const text = normalizeText(`${field.name ?? ''} ${field.label ?? ''} ${field.placeholder ?? ''}`);
+    const now = this.today();
+    const date = BIRTH_DATE.test(text)
+      ? `${now.getUTCFullYear() - 35}${now.toISOString().slice(4, 10)}`.replace(/-02-29$/, '-02-28')
+      : now.toISOString().slice(0, 10);
+    return this.withinBounds(field, date);
+  }
+
+  /** Une date maintenue entre les dates min/max du champ. */
+  private withinBounds(field: FormField, date: string): string {
     if (field.minText && /^\d{4}-\d{2}-\d{2}/.test(field.minText) && date < field.minText)
       return field.minText;
     if (field.maxText && /^\d{4}-\d{2}-\d{2}/.test(field.maxText) && date > field.maxText)
@@ -327,6 +508,15 @@ function dateFormat(text: string): DateFormat | undefined {
   if (/\b(JJ|DD|jj|dd)\/(MM|mm)\/(AAAA|YYYY|aaaa|yyyy)\b/.test(text)) return 'dmy';
   if (/\b(MM|mm)\/(JJ|DD|jj|dd)\/(AAAA|YYYY|aaaa|yyyy)\b/.test(text)) return 'mdy';
   return undefined;
+}
+
+/** prenom.nom.qa-crawler-<runId>@example.test : lisible, cohérent avec la personne, retrouvable, domaine réservé aux tests. */
+function emailOf(person: Persona, runId: string): string {
+  const ascii = (text: string): string =>
+    normalizeText(text)
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+  return `${ascii(person.firstName)}.${ascii(person.lastName)}.qa-crawler-${ascii(runId)}@example.test`;
 }
 
 function formatDate(iso: string, format: DateFormat): string {

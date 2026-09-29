@@ -81,10 +81,10 @@ output:
     const fields = createForm()?.fields ?? [];
     expect(fields.every((field) => !field.error)).toBe(true);
     expect(fields.find((field) => field.label === 'Email')?.filled).toBe(
-      'fill "qa-crawler-acc@example.test"',
+      'fill "james.wilson.qa-crawler-acc@example.test"',
     );
-    // Les noms suivent les valeurs par défaut (QA / Crawler) ; l'e-mail porte le marqueur du run.
-    expect(fields.find((field) => field.label === 'Last name')?.filled).toBe('fill "Crawler"');
+    // Une personne fictive cohérente (James Wilson) ; l'e-mail porte aussi le marqueur du run.
+    expect(fields.find((field) => field.label === 'Last name')?.filled).toBe('fill "Wilson"');
     // L'option d'invite n'est jamais choisie.
     expect(fields.find((field) => field.label === 'Role')?.filled).toMatch(/select "(Reader|Editor)"/);
     // Le formulaire a été envoyé (modifications permises) avec des données marquées : POST /api/users.
