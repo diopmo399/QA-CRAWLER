@@ -49,8 +49,16 @@ export interface FormField {
   choiceGroup?: string;
   type: FieldType;
   required: boolean;
+  /** Qui déclare le champ obligatoire : attribut HTML required, aria-required. */
+  requiredBy?: ('HTML' | 'ARIA')[];
   disabled: boolean;
   readonly: boolean;
+  /** Attribut multiple (select, file, email). */
+  multiple?: boolean;
+  /** aria-invalid="true" au moment de l'observation. */
+  ariaInvalid?: boolean;
+  /** Propriétés ajoutées par le contrat d'API (enrichWithContract) : la page ne les déclare pas. */
+  contractFilled?: (keyof FormField)[];
   min?: number;
   max?: number;
   /** min/max tels qu'écrits (dates, heures : "2026-01-01"). */

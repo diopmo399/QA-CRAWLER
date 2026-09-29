@@ -50,6 +50,12 @@ export type RiskKind = (typeof RISK_KINDS)[number];
 export interface FieldConstraints {
   inputType: string;
   required: boolean;
+  /** Qui déclare le champ obligatoire (attribut HTML, aria-required). */
+  requiredBy?: ('HTML' | 'ARIA')[];
+  readOnly?: boolean;
+  multiple?: boolean;
+  /** aria-invalid="true" au moment de l'observation. */
+  ariaInvalid?: boolean;
   min?: string;
   max?: string;
   step?: string;

@@ -43,21 +43,34 @@ paths:
 describe('ConstraintExtractor', () => {
   const extractor = new DomOpenApiConstraintExtractor();
 
-  it('DOM first: what the user can really type; OpenAPI completes', () => {
+  it('keeps every source; the page value is the one tested, a disagreement is a CONSTRAINT_MISMATCH', () => {
     const age = extractor.extract(field({ name: 'age', type: 'number', min: 21 }), contract);
     expect(age).toMatchObject({
       min: 21,
       max: 65,
-      format: 'number',
-      sources: { min: 'dom', max: 'openapi', format: 'dom' },
+      format: 'integer',
+      type: 'integer',
+      sources: { min: ['HTML'], max: ['OPENAPI'], format: ['HTML', 'OPENAPI'], type: ['HTML', 'OPENAPI'] },
     });
+    expect(age.conflicts).toEqual([
+      expect.objectContaining({
+        kind: 'CONSTRAINT_MISMATCH',
+        constraint: 'min',
+        values: [
+          { source: 'HTML', value: 21 },
+          { source: 'OPENAPI', value: 18 },
+        ],
+        effective: 'HTML',
+      }),
+    ]);
     const email = extractor.extract(field({ label: 'E-mail', name: 'email', maxLength: 50 }), contract);
     expect(email).toMatchObject({
       required: true,
       maxLength: 50,
       format: 'email',
-      sources: { maxLength: 'dom', required: 'openapi' },
+      sources: { maxLength: ['HTML'], required: ['OPENAPI'], format: ['OPENAPI'] },
     });
+    expect(email.conflicts?.map((conflict) => conflict.constraint)).toEqual(['maxLength']);
     const role = extractor.extract(
       field({
         name: 'role',
@@ -69,10 +82,13 @@ describe('ConstraintExtractor', () => {
       }),
       contract,
     );
+    // Un choix à l'écran, deux dans l'API : le nombre de choix diffère.
     expect(role.enum).toEqual(['Lecteur']);
+    expect(role.conflicts?.[0]).toMatchObject({ constraint: 'enum', effective: 'HTML' });
     expect(extractor.extract(field({ pattern: '[0-9]{5}', required: true }))).toMatchObject({
       pattern: '[0-9]{5}',
       required: true,
+      sources: { pattern: ['HTML'], required: ['HTML'] },
     });
   });
 

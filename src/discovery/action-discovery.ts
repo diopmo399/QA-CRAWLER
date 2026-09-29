@@ -317,6 +317,10 @@ function fieldConstraints(element: UiElement): FieldConstraints {
     required: element.required,
   };
   const optional: Partial<FieldConstraints> = {
+    requiredBy: element.requiredBy,
+    readOnly: element.readOnly || undefined,
+    multiple: element.multiple,
+    ariaInvalid: element.ariaInvalid,
     min: element.min,
     max: element.max,
     step: element.step,

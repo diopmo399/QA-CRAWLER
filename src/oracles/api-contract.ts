@@ -25,6 +25,11 @@ export interface ContractFieldSchema {
   pattern?: string;
   enum?: string[];
   required?: boolean;
+  /** Borne exclue : la valeur doit être strictement supérieure (OpenAPI 3.1, ou 3.0 avec exclusiveMinimum: true). */
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  /** null est accepté (OpenAPI 3.0 nullable: true, ou 3.1 type: [..., "null"]). */
+  nullable?: boolean;
 }
 
 export interface ApiContract {
@@ -75,7 +80,10 @@ interface OpenApiOperation {
 }
 interface Schema {
   $ref?: string;
-  type?: string;
+  type?: string | string[];
+  nullable?: boolean;
+  exclusiveMinimum?: number | boolean;
+  exclusiveMaximum?: number | boolean;
   format?: string;
   minLength?: number;
   maxLength?: number;
@@ -126,12 +134,11 @@ export function parseOpenApi(text: string, source = 'openapi'): ApiContract {
         const schema = resolve(raw);
         if (!schema) continue;
         requestFields[name] = {
-          ...(schema.type ? { type: schema.type } : {}),
+          ...fieldType(schema),
           ...(schema.format ? { format: schema.format } : {}),
           ...(schema.minLength !== undefined ? { minLength: schema.minLength } : {}),
           ...(schema.maxLength !== undefined ? { maxLength: schema.maxLength } : {}),
-          ...(schema.minimum !== undefined ? { minimum: schema.minimum } : {}),
-          ...(schema.maximum !== undefined ? { maximum: schema.maximum } : {}),
+          ...bounds(schema),
           ...(schema.pattern ? { pattern: schema.pattern } : {}),
           ...(schema.enum ? { enum: schema.enum.map(String) } : {}),
           ...(body?.required?.includes(name) ? { required: true } : {}),
@@ -156,4 +163,32 @@ export function declares(responses: readonly string[], status: number): boolean 
     (declared) =>
       declared === 'default' || declared === code || (/^\dXX$/i.test(declared) && declared[0] === code[0]),
   );
+}
+
+/** type (3.1 : ["string", "null"]) et nullable. */
+function fieldType(schema: Schema): Pick<ContractFieldSchema, 'type' | 'nullable'> {
+  const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  const type = types.find((candidate) => candidate !== 'null');
+  const nullable = schema.nullable === true || types.includes('null');
+  return { ...(type ? { type } : {}), ...(nullable ? { nullable: true } : {}) };
+}
+
+/**
+ * minimum / maximum, et leurs versions exclues : en 3.1 exclusiveMinimum est la borne
+ * elle-même ; en 3.0 c'est un booléen qui rend `minimum` exclusif.
+ */
+function bounds(
+  schema: Schema,
+): Pick<ContractFieldSchema, 'minimum' | 'maximum' | 'exclusiveMinimum' | 'exclusiveMaximum'> {
+  const result: Pick<ContractFieldSchema, 'minimum' | 'maximum' | 'exclusiveMinimum' | 'exclusiveMaximum'> =
+    {};
+  if (typeof schema.exclusiveMinimum === 'number') result.exclusiveMinimum = schema.exclusiveMinimum;
+  else if (schema.exclusiveMinimum === true && schema.minimum !== undefined)
+    result.exclusiveMinimum = schema.minimum;
+  else if (schema.minimum !== undefined) result.minimum = schema.minimum;
+  if (typeof schema.exclusiveMaximum === 'number') result.exclusiveMaximum = schema.exclusiveMaximum;
+  else if (schema.exclusiveMaximum === true && schema.maximum !== undefined)
+    result.exclusiveMaximum = schema.maximum;
+  else if (schema.maximum !== undefined) result.maximum = schema.maximum;
+  return result;
 }
