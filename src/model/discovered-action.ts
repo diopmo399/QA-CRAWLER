@@ -77,6 +77,10 @@ export interface FieldConstraints {
   groupLabel?: string;
   /** Les radios d'un même choix partagent cette clé. */
   choiceGroup?: string;
+  /** Attribut id du DOM (jamais utilisé pour localiser ; ignoré par la résolution sémantique s'il est généré). */
+  elementId?: string;
+  /** Nom accessible (aria-label, aria-labelledby…), quand il diffère du libellé. */
+  accessibleName?: string;
 }
 
 /** Une action utilisateur disponible sur un état donné. Données simples et sérialisables. */
