@@ -92,6 +92,9 @@ export class SyntheticApp implements DryRunDriver {
           : { status: 'NOT_FOUND', reason: 'no such field', confidence: 0 },
       );
     }
+    // Une adresse (goto) : toujours possible, elle ramène à l'écran de départ.
+    if (intent.type === 'NAVIGATE' && intent.label.startsWith('/'))
+      return Promise.resolve({ status: 'RESOLVED', target: intent.label, reason: 'address', confidence: 1 });
     if (intent.type === 'NAVIGATE' && slug(screen.label) === intent.semanticTarget)
       return Promise.resolve({
         status: 'RESOLVED',
@@ -134,7 +137,8 @@ export class SyntheticApp implements DryRunDriver {
     const action = (this.screens[this.screen]?.actions ?? []).find(
       (candidate) => slug(candidate.label) === intent.semanticTarget,
     );
-    if (action && intent.type !== 'ASSERT' && intent.type !== 'FILL') {
+    if (intent.type === 'NAVIGATE' && intent.label.startsWith('/')) this.screen = this.startScreen;
+    else if (action && intent.type !== 'ASSERT' && intent.type !== 'FILL') {
       this.executed.push(action.label);
       this.screen = action.to;
     }
