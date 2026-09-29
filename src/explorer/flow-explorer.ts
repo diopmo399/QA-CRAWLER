@@ -67,6 +67,11 @@ import type { PageContext } from '../model/page-context.js';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
 import { UIObserver } from '../observation/ui-observer.js';
+import {
+  NavigationGuard,
+  NavigationRecoveryError,
+  type NavigationEvent,
+} from '../navigation/navigation-guard.js';
 import { ConsoleObserver } from '../observers/console-observer.js';
 import { NetworkObserver } from '../observers/network-observer.js';
 import type { IssueAttribution, ObservationContext, PageObserver } from '../observers/observer.js';
@@ -156,6 +161,8 @@ export interface ExplorationListener {
   onBacktrack?(from: string, to: string | undefined, method: string): void;
   /** Une stratégie de récupération a été essayée après un échec. */
   onRecovery?(event: RecoveryEvent): void;
+  /** Une navigation a interrompu une lecture de la page : détectée, récupérée, ou non (événement technique, jamais une anomalie). */
+  onNavigation?(event: NavigationEvent): void;
   /** L'exploration tournait en rond sur une branche et l'a quittée. */
   onStuck?(event: StuckEvent): void;
   onIssue?(issue: Issue, isNew: boolean): void;
@@ -177,6 +184,11 @@ export interface ExplorationListener {
 
 export interface FlowExplorerOptions {
   memory: FlowMemory;
+  /**
+   * Observation de l'écran (point d'extension : vision, captures, tests). Reçoit le garde de
+   * navigation de l'explorateur, pour que ses lectures soient relues après une navigation.
+   */
+  observer?: (navigation: NavigationGuard) => UIObserver;
   decisionEngine?: DecisionEngine;
   testData?: TestDataProvider;
   listener?: ExplorationListener;
@@ -272,7 +284,10 @@ interface StackEntry {
 export class FlowExplorer {
   private readonly collector = new IssueCollector();
   private readonly safety: SafetyPolicy;
-  private readonly observer = new UIObserver();
+  /** Le seul endroit qui sait qu'une navigation n'est pas une erreur ; partagé par l'observation et l'exécution. */
+  private readonly navigation: NavigationGuard;
+  private readonly navigationEvents: NavigationEvent[] = [];
+  private readonly observer: UIObserver;
   private readonly stateDetector: StateDetector;
   private readonly discovery: ActionDiscovery;
   private readonly decisionEngine: DecisionEngine;
@@ -455,7 +470,19 @@ export class FlowExplorer {
           },
         ),
       );
-    this.executor = new PlaywrightActionExecutor(exploration.actionTimeoutMs, exploration.settleTimeMs);
+    this.navigation = new NavigationGuard({
+      // Attente d'une nouvelle page utilisable, par tentative : jamais plus que le délai de navigation de la mission.
+      readyTimeoutMs: Math.min(exploration.navigationTimeoutMs, 10_000),
+      onEvent: (event) => {
+        this.onNavigation(event);
+      },
+    });
+    this.observer = options.observer?.(this.navigation) ?? new UIObserver(400, this.navigation);
+    this.executor = new PlaywrightActionExecutor(
+      exploration.actionTimeoutMs,
+      exploration.settleTimeMs,
+      this.navigation,
+    );
     this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs);
     this.env = options.env ?? process.env;
     const origins = new AllowedOriginPolicy(
@@ -763,7 +790,27 @@ export class FlowExplorer {
         continue;
       }
 
-      const step = await this.executeAndObserve(page, browser, observers, current, action);
+      let step: { page: Page; context: PageContext };
+      try {
+        step = await this.executeAndObserve(page, browser, observers, current, action);
+      } catch (error) {
+        if (!(error instanceof NavigationRecoveryError)) throw error;
+        // La page n'a pas cessé de naviguer pendant qu'on la lisait (NAVIGATION_RECOVERY_FAILED, déjà
+        // journalisé) : l'action a eu lieu et n'est jamais rejouée (marquée comme essayée) ; revenir à
+        // l'état d'où elle partait, sinon à un autre état connu, et continuer l'exploration.
+        this.currentAction = undefined;
+        this.graph.markTried(current.stateId, action.id);
+        const back = await this.restore(page, current.stateId).catch(() => undefined);
+        if (back) {
+          current = back;
+          continue;
+        }
+        const restored = await this.backtrack(page, browser, observers.all, allowJump);
+        page = restored.page;
+        if (!restored.context) return { page, stopReason: 'exhausted' };
+        current = restored.context;
+        continue;
+      }
       page = step.page;
       current = step.context;
       await this.memory.save(this.graph);
@@ -1222,6 +1269,17 @@ export class FlowExplorer {
     const events = this.recovery.events();
     for (const event of events.slice(this.recoveryEmitted)) this.listener.onRecovery?.(event);
     this.recoveryEmitted = events.length;
+  }
+
+  /** Événement technique du garde de navigation : journalisé, transmis, résumé dans le rapport — jamais une anomalie. */
+  private onNavigation(event: NavigationEvent): void {
+    const redacted = {
+      ...event,
+      previousUrl: redactUrl(event.previousUrl),
+      currentUrl: redactUrl(event.currentUrl),
+    };
+    this.navigationEvents.push(redacted);
+    this.listener.onNavigation?.(redacted);
   }
 
   /** La session a-t-elle expiré ? Avec une connexion par formulaire : la page montre la page de connexion qu'elle n'a pas demandée. */
@@ -3291,9 +3349,11 @@ export class FlowExplorer {
         void popup.close().catch(() => undefined);
       });
       for (const observer of observers) observer.attach(page);
+      this.navigation.watch(page);
       return page;
     }
     const page = await this.browserEvents.openOwnPage(() => browser.newPage());
+    this.navigation.watch(page);
     page.setDefaultTimeout(this.config.exploration.actionTimeoutMs);
     // Dialogues, téléchargements, sélecteurs de fichier, fenêtre de connexion native… : BrowserEventDiscovery → BrowserInteractionManager.
     await this.browserEvents.attachPage(page);
@@ -3435,6 +3495,7 @@ export class FlowExplorer {
         stuck: this.stuck?.all() ?? [],
         circuits: this.breaker?.circuits() ?? [],
         reauthentications: this.recovery.reauthenticationCount,
+        ...(this.navigationEvents.length > 0 ? { navigation: [...this.navigationEvents] } : {}),
       },
       mutations: {
         enabled: this.config.safety.mutations.enabled,

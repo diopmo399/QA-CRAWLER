@@ -8,7 +8,11 @@ import type { TestDataProvider } from './data/test-data-provider.js';
 import { hostMatches } from './config/config-loader.js';
 import { FlowDiffEngine, type FlowDiff } from './diff/flow-diff.js';
 import { OpenApiContractProvider, type ApiContract } from './oracles/api-contract.js';
-import { FlowExplorer, type ExplorationListener } from './explorer/flow-explorer.js';
+import {
+  FlowExplorer,
+  type ExplorationListener,
+  type FlowExplorerOptions,
+} from './explorer/flow-explorer.js';
 import type { FlowMemory } from './memory/flow-memory.js';
 import { JsonFlowMemory } from './memory/json-flow-memory.js';
 import type { ExplorationResult } from './model/exploration-result.js';
@@ -57,6 +61,8 @@ export interface RunOptions {
   listener?: ExplorationListener;
   decisionEngine?: DecisionEngine;
   testData?: TestDataProvider;
+  /** Observation de l'écran (point d'extension ; par défaut l'UIObserver). */
+  observer?: FlowExplorerOptions['observer'];
   memory?: FlowMemory;
   env?: NodeJS.ProcessEnv;
   /** learn / verify / explore ; par défaut : mission.mode. */
@@ -178,6 +184,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     memory,
     ...(options.decisionEngine ? { decisionEngine: options.decisionEngine } : {}),
     ...(options.testData ? { testData: options.testData } : {}),
+    ...(options.observer ? { observer: options.observer } : {}),
     listener: combineListeners(
       options.listener,
       engineLog.listener(),

@@ -2,6 +2,7 @@ import type { Page } from 'playwright';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import { collectDomSnapshot } from './dom-snapshot.js';
+import { classifyPlaywrightError, NavigationGuard } from '../navigation/navigation-guard.js';
 
 /**
  * Observe l'écran courant : URL, titre, éléments interactifs (avec rôle ARIA et nom
@@ -12,10 +13,17 @@ import { collectDomSnapshot } from './dom-snapshot.js';
  * l'instantané sans changer l'explorateur.
  */
 export class UIObserver {
-  constructor(private readonly maxElements = 400) {}
+  constructor(
+    private readonly maxElements = 400,
+    /** Une navigation pendant la lecture (redirection, route, envoi) : la page est relue, pas la mission arrêtée. */
+    private readonly navigation: NavigationGuard = new NavigationGuard(),
+  ) {}
 
   async observe(page: Page): Promise<UiSnapshot> {
-    const dom = await this.readDom(page);
+    // Une LECTURE sans effet : le garde peut la refaire sur la nouvelle page si le document change pendant qu'elle court.
+    const dom = await this.navigation.read(page, 'dom-snapshot', () =>
+      page.evaluate(collectDomSnapshot, { maxElements: this.maxElements }),
+    );
     const title = await page.title().catch(() => '');
     return {
       ...dom,
@@ -28,33 +36,9 @@ export class UIObserver {
       forms: dom.forms.map((form) => (form.action ? { ...form, action: redactUrl(form.action) } : form)),
     };
   }
-
-  /**
-   * Lit le DOM. Si la page navigue pendant la lecture (redirections d'une connexion
-   * unique, application qui recharge sa route), le contexte d'exécution est détruit :
-   * attendre que la nouvelle page soit chargée puis relire, quelques fois au plus.
-   */
-  private async readDom(page: Page): Promise<Awaited<ReturnType<typeof collectDomSnapshot>>> {
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await page.evaluate(collectDomSnapshot, { maxElements: this.maxElements });
-      } catch (error) {
-        if (attempt >= MAX_READ_ATTEMPTS || !isNavigationError(error)) throw error;
-        await page
-          .waitForLoadState('domcontentloaded', { timeout: NAVIGATION_WAIT_MS })
-          .catch(() => undefined);
-      }
-    }
-  }
 }
-
-const MAX_READ_ATTEMPTS = 4;
-const NAVIGATION_WAIT_MS = 10_000;
 
 /** La page a navigué (ou navigue encore) pendant la lecture : relire a un sens. */
 export function isNavigationError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /Execution context was destroyed|Cannot find context with specified id|because of a navigation|Frame was detached/i.test(
-    message,
-  );
+  return classifyPlaywrightError(error).navigation;
 }

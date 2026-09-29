@@ -941,6 +941,17 @@ recovery:
   stuck: { oscillationCycles: 3, maxNoOpActions: 15, maxBusyObservations: 3 }
 ```
 
+### Navigations pendant une lecture (Navigation Guard)
+
+Une redirection (connexion unique), un envoi de formulaire, un rechargement ou un changement de route peuvent remplacer le document pendant que le crawler le lit : Playwright répond `page.evaluate: Execution context was destroyed, most likely because of a navigation`. Ce n'est pas une panne de l'application, c'est un changement d'état du navigateur ; le `NavigationGuard` le traite comme tel, à un seul endroit.
+
+- **Il distingue les erreurs** : contexte détruit, cadre détaché, navigation interrompue (récupérables) ; page fermée, délai dépassé, erreur fonctionnelle (propagées telles quelles, jamais masquées).
+- **Il est passif** quand rien ne navigue : il compte les navigations du cadre principal (`framenavigated` : chargement, redirection, envoi de formulaire, route d'application monopage par l'API history), sans attente ni pause.
+- **Une LECTURE est refaite** (instantané du DOM, puis découverte des actions) : la lecture interrompue est abandonnée, le garde attend que la nouvelle page soit utilisable (`domcontentloaded`, jamais `networkidle` ni une pause fixe), puis relit — 4 lectures au plus. L'état, l'instantané et les actions de l'ancien document ne sont jamais réutilisés : le nouvel écran est observé, identifié et exploré.
+- **Une ACTION n'est jamais rejouée.** Si le document change pendant un clic, c'est ce clic qui a navigué : il a eu lieu, la nouvelle page est observée, jamais un second clic. Une saisie dont le champ a disparu est un échec récupérable, pas une nouvelle tentative. Cela vaut pour toutes les classes (SAFE, MUTATION, DANGEROUS, UNKNOWN) : un formulaire n'est jamais envoyé deux fois par la récupération, et la SafetyPolicy reste appliquée à chaque action de la nouvelle page.
+- **Si la page ne cesse pas de naviguer**, `NAVIGATION_RECOVERY_FAILED` est signalé avec la cause d'origine ; l'action est marquée comme essayée et l'exploration repart de l'état d'où elle partait (sinon d'un autre état connu), sans arrêter la mission.
+- **Journal** : `[NAVIGATION] detected / recovering / DOM ready / snapshot invalidated / recovered` (URL précédente et actuelle, raison, nouvelles lectures, durée) ou `[NAVIGATION_RECOVERY_FAILED]`, dans la console et dans `engine-log.jsonl`. Les événements sont dans `result.json` (`recovery.navigation`, seulement quand il y en a eu). Une navigation récupérée n'est jamais une anomalie de l'application.
+
 ## Plusieurs acteurs et autorisations
 
 La mission explore avec son utilisateur (`auth`). D'autres acteurs peuvent être déclarés : après l'exploration, chacun se connecte dans son propre navigateur et **ouvre les écrans trouvés** — de simples chargements de page, jamais un clic ni un envoi.

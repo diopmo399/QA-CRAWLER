@@ -25,6 +25,7 @@ function navigatingPage(failures: string[]): { page: Page; waits: number } {
       return Promise.resolve();
     },
     title: () => Promise.resolve('Accueil'),
+    isClosed: () => false,
     url: () => 'https://app.test/accueil',
   } as unknown as Page;
   return {

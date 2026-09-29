@@ -1,3 +1,4 @@
+import type { NavigationEvent } from '../navigation/navigation-guard.js';
 /**
  * Façons de remettre l'exploration sur pied après un échec, dans l'ordre où elles
  * sont essayées par défaut (les moins coûteuses et les moins intrusives d'abord).
@@ -72,4 +73,6 @@ export interface RecoverySummary {
   stuck: StuckEvent[];
   circuits: OpenCircuit[];
   reauthentications: number;
+  /** Navigations qui ont interrompu une lecture de la page (NAVIGATION_RECOVERED…) ; absent quand il n'y en a eu aucune. */
+  navigation?: NavigationEvent[];
 }

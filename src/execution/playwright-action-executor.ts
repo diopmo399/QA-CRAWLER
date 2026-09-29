@@ -6,6 +6,7 @@ import { validityOf } from '../forms/validity.js';
 import type { LocatorDescriptor } from '../model/locator.js';
 import { toLocator } from './locator-resolver.js';
 import { normalizeText } from '../policies/keywords.js';
+import { classifyPlaywrightError, NavigationGuard } from '../navigation/navigation-guard.js';
 
 /** Valeur à saisir/choisir pour les actions fill et select. */
 export interface ExecutionInput {
@@ -22,6 +23,18 @@ export interface ActionExecutionResult {
   usedFallback: boolean;
   /** L'élément a ouvert une nouvelle fenêtre (gérée par le BrowserInteractionManager). */
   openedPopup: boolean;
+  /**
+   * L'action a navigué (nouveau document, redirection, envoi de formulaire, route
+   * d'application monopage) : l'état, l'instantané et les actions d'avant sont périmés.
+   */
+  navigationOccurred?: boolean;
+  /** Le document a changé pendant l'action (contexte d'exécution détruit, cadre remplacé). */
+  contextChanged?: boolean;
+  /**
+   * L'erreur vient d'une navigation, pas de l'application : la page peut être relue.
+   * Jamais une raison de rejouer l'action : elle a très probablement eu lieu.
+   */
+  recoverable?: boolean;
 }
 
 /**
@@ -34,6 +47,8 @@ export class PlaywrightActionExecutor {
   constructor(
     private readonly actionTimeoutMs: number,
     private readonly settleTimeMs: number,
+    /** Sait si une action a navigué ; partagé avec l'UIObserver. */
+    private readonly navigation: NavigationGuard = new NavigationGuard(),
   ) {}
 
   async execute(
@@ -43,18 +58,25 @@ export class PlaywrightActionExecutor {
   ): Promise<ActionExecutionResult> {
     const started = Date.now();
     const urlBefore = page.url();
+    const mark = this.navigation.mark(page);
     const result = (
       status: 'SUCCESS' | 'FAILED',
       extra: Partial<ActionExecutionResult> = {},
-    ): ActionExecutionResult => ({
-      status,
-      urlBefore,
-      urlAfter: page.isClosed() ? urlBefore : page.url(),
-      durationMs: Date.now() - started,
-      usedFallback: false,
-      openedPopup: false,
-      ...extra,
-    });
+      error?: unknown,
+    ): ActionExecutionResult => {
+      const outcome = this.navigation.outcome(page, mark, error);
+      return {
+        status,
+        urlBefore,
+        urlAfter: page.isClosed() ? urlBefore : page.url(),
+        durationMs: Date.now() - started,
+        usedFallback: false,
+        openedPopup: false,
+        navigationOccurred: outcome.navigationOccurred,
+        contextChanged: outcome.contextChanged,
+        ...extra,
+      };
+    };
 
     let target: { locator: Locator; usedFallback: boolean } | undefined;
     try {
@@ -107,7 +129,27 @@ export class PlaywrightActionExecutor {
       return result('SUCCESS', { usedFallback: target.usedFallback, openedPopup });
     } catch (error) {
       await this.settle(page).catch(() => undefined);
-      return result('FAILED', { error: firstLine(error), usedFallback: target.usedFallback, openedPopup });
+      const after = actionOutcomeAfterError(action.type, error);
+      if (after === 'PERFORMED') {
+        // Le clic a déclenché la navigation qui a détruit le document : l'action a eu lieu.
+        // Attendre la nouvelle page ; l'explorateur l'observera. Jamais un second clic.
+        await this.navigation.waitUntilUsable(page);
+        return result(
+          'SUCCESS',
+          { usedFallback: target.usedFallback, openedPopup, recoverable: true },
+          error,
+        );
+      }
+      return result(
+        'FAILED',
+        {
+          error: firstLine(error),
+          usedFallback: target.usedFallback,
+          openedPopup,
+          ...(after === 'INTERRUPTED' ? { recoverable: true } : {}),
+        },
+        error,
+      );
     }
   }
 
@@ -373,4 +415,20 @@ export function interceptor(error: unknown): string | undefined {
 function firstLine(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return (message.split('\n')[0] ?? message).trim();
+}
+
+/**
+ * Ce que veut dire une erreur Playwright pendant une action :
+ * - PERFORMED : un clic (ou un lien) interrompu par une navigation ; c'est lui qui l'a
+ *   déclenchée, l'action a eu lieu : on observe la nouvelle page, on ne reclique pas ;
+ * - INTERRUPTED : une saisie ou un choix dont le champ a disparu avec le document : échec
+ *   récupérable (la page est relue), jamais rejoué automatiquement ;
+ * - FAILED : une vraie erreur.
+ */
+export function actionOutcomeAfterError(
+  type: DiscoveredAction['type'],
+  error: unknown,
+): 'PERFORMED' | 'INTERRUPTED' | 'FAILED' {
+  if (!classifyPlaywrightError(error).navigation) return 'FAILED';
+  return type === 'click' || type === 'navigate' ? 'PERFORMED' : 'INTERRUPTED';
 }
