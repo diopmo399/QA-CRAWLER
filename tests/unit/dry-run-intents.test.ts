@@ -244,3 +244,30 @@ describe('dry run of a business scenario: unknown sentences never block the anal
     );
   });
 });
+
+describe('dry run of a mission file: its own flows, target and sign-in', () => {
+  it('dry-run mission.yaml checks the flows of the mission with its target (reusable flows stay reusable)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'qa-dry-run-mission-'));
+    await writeFile(
+      path.join(dir, 'mission.yaml'),
+      `mission: { name: dossiers }
+target: { baseUrl: http://localhost:4200 }
+flows:
+  - name: ouvrir
+    reusable: true
+    steps: [{ goto: /liste }]
+  - name: traiter
+    steps:
+      - run: ouvrir
+      - click: { role: button, name: Traiter }
+`,
+    );
+    const loaded = loadDryRunScenario({ scenarioFile: path.join(dir, 'mission.yaml'), env: {} });
+    expect(loaded.config.target.baseUrl).toBe('http://localhost:4200');
+    expect(loaded.graphs.map((graph) => graph.name)).toEqual(['traiter']);
+    expect(loaded.graphs[0]?.intents.map((intent) => `${intent.type} ${intent.label}`)).toEqual([
+      'NAVIGATE /liste',
+      'CLICK Traiter',
+    ]);
+  });
+});

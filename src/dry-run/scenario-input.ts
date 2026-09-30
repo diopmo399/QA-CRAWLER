@@ -39,14 +39,20 @@ export function loadDryRunScenario(input: DryRunInput): LoadedDryRunScenario {
     throw new ConfigError(`Scenario file not found: ${input.scenarioFile}`);
   }
 
-  const mission = input.missionFile ? readMission(input.missionFile) : {};
+  // Une mission donnée comme scénario (`dry-run mission.yaml`) : ses flows sont vérifiés, avec sa cible,
+  // sa connexion et sa sécurité.
+  const missionFile =
+    input.missionFile ?? (type === 'YAML' && isMissionText(scenarioText) ? scenarioFile : undefined);
+  const mission = missionFile ? readMission(missionFile) : {};
   const reusable = (Array.isArray(mission.flows) ? (mission.flows as unknown[]) : []).filter(
     (flow) => isObject(flow) && flow.reusable === true,
   );
   const scenarioFlows =
-    type === 'GHERKIN' ? [{ gherkin: scenarioFile }] : yamlFlows(scenarioText, scenarioFile);
+    type === 'GHERKIN'
+      ? [{ gherkin: scenarioFile }]
+      : yamlFlows(scenarioText, scenarioFile).filter((flow) => !(isObject(flow) && flow.reusable === true));
   const raw = { ...mission, gherkin: dryRunGherkin(mission.gherkin), flows: [...reusable, ...scenarioFlows] };
-  const source = input.missionFile ? path.resolve(input.missionFile) : scenarioFile;
+  const source = missionFile ? path.resolve(missionFile) : scenarioFile;
   const hasTarget =
     input.overrides?.baseUrl !== undefined ||
     (input.env ?? process.env).QA_BASE_URL !== undefined ||
@@ -91,6 +97,16 @@ function dryRunGherkin(gherkin: unknown): Record<string, unknown> {
     auto: given.auto ?? true,
     semanticResolution: { ...semantic, enabled: semantic.enabled ?? true },
   };
+}
+
+/** Un fichier YAML qui décrit une mission (cible, mission…) et pas seulement des flows. */
+function isMissionText(text: string): boolean {
+  try {
+    const raw: unknown = parseYaml(text);
+    return isObject(raw) && (raw.target !== undefined || raw.mission !== undefined);
+  } catch {
+    return false;
+  }
 }
 
 function readMission(file: string): Record<string, unknown> {
