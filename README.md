@@ -1059,6 +1059,17 @@ recovery:
   stuck: { oscillationCycles: 3, maxNoOpActions: 15, maxBusyObservations: 3 }
 ```
 
+### Revenir à un écran (applications monopages)
+
+Pour revenir à un écran déjà vu (retour arrière de l'exploration, essais successifs de l'exploration guidée du Dry Run), dans cet ordre :
+
+1. fermer la fenêtre ou le calque du dessus ;
+2. **l'historique du navigateur** (`Précédent`) : dans une application monopage (`history.pushState`, routes par `#`), la page n'est **pas rechargée**, l'état de l'application est gardé ;
+3. l'adresse de l'écran (rechargement complet) ;
+4. rejouer le chemin depuis l'accueil, **sans jamais rejouer une action qui modifie des données** (création, enregistrement, envoi) : si le chemin en contient une, l'écran est déclaré inaccessible plutôt que de créer une seconde fois.
+
+Un rechargement ne supprime rien côté serveur (c'est une lecture), mais il perd ce qui n'est qu'à l'écran : saisie non enregistrée, filtre, page d'une liste. Au début du Dry Run, la page que la mission vient d'ouvrir n'est pas rechargée une seconde fois.
+
 ### Navigations pendant une lecture (Navigation Guard)
 
 Une redirection (connexion unique), un envoi de formulaire, un rechargement ou un changement de route peuvent remplacer le document pendant que le crawler le lit : Playwright répond `page.evaluate: Execution context was destroyed, most likely because of a navigation`. Ce n'est pas une panne de l'application, c'est un changement d'état du navigateur ; le `NavigationGuard` le traite comme tel, à un seul endroit.

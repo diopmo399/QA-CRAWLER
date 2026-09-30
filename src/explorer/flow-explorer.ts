@@ -1740,7 +1740,9 @@ export class FlowExplorer {
         const url = new URL(startAt ?? this.config.target.startAt, this.config.target.baseUrl).toString();
         if (!/^https?:/.test(holder.page.url()) || holder.page.isClosed())
           holder.page = await this.recyclePage(browser, holder.page, observers.all);
-        if (!(await this.goto(holder.page, url))) return undefined;
+        // Déjà sur la page de départ (la mission vient de l'ouvrir) : ne pas la recharger.
+        const already = current === undefined && holder.page.url() === url;
+        if (!already && !(await this.goto(holder.page, url))) return undefined;
         const observed = await this.observeState(holder.page, 0).catch(() => undefined);
         return observed ? set(observed) : undefined;
       },
@@ -1926,7 +1928,10 @@ export class FlowExplorer {
         if (current && current.stateId === stateId) return stateOf(current);
         if (!/^https?:/.test(holder.page.url()) || holder.page.isClosed())
           holder.page = await this.recyclePage(browser, holder.page, observers.all);
-        const back: PageContext | undefined = await this.restore(holder.page, stateId).catch(() => undefined);
+        // L'historique du navigateur d'abord : dans une application monopage, il ne recharge pas la page.
+        const back: PageContext | undefined = await this.restore(holder.page, stateId, true).catch(
+          () => undefined,
+        );
         return back ? set(back) : undefined;
       },
       knownPaths: (target) => {
@@ -3520,13 +3525,17 @@ export class FlowExplorer {
         return matches('escape');
       },
       back: async () => {
-        const back = await page
+        const before = page.url();
+        // goBack renvoie null aussi pour un retour DANS la page (history.pushState d'une application
+        // monopage) : c'est l'adresse qui dit si le navigateur est revenu en arrière.
+        const moved = await page
           .goBack({
             waitUntil: this.config.exploration.waitUntil,
             timeout: this.config.exploration.navigationTimeoutMs,
           })
-          .catch(() => null);
-        if (back === null) return undefined;
+          .then(() => page.url() !== before)
+          .catch(() => false);
+        if (!moved) return undefined;
         await settle();
         return matches('history back');
       },
@@ -3560,6 +3569,8 @@ export class FlowExplorer {
       }
       const action = context.actions.find((candidate) => candidate.id === edge.actionId);
       if (!action || this.safety.evaluate(action).verdict === 'BLOCK') return undefined;
+      // Revenir à un écran ne doit jamais créer, modifier ni supprimer une seconde fois.
+      if (this.safety.changesData(action)) return undefined;
       const result = await this.execute(page, context, action);
       if (result.status === 'FAILED') return undefined;
       context = await this.observeState(page, this.graph.getNode(edge.to)?.depth ?? 0).catch(() => undefined);
