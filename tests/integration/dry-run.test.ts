@@ -91,6 +91,8 @@ describe('dry run, end to end', () => {
       scenarioFile: path.join(dir, 'create-user.flow.yaml'),
       missionFile: path.join(dir, 'mission-yaml.yaml'),
       outputFormat: 'both',
+      // Sa propre mémoire : le YAML ne profite pas de ce que le Gherkin a appris.
+      isolatedMemory: true,
       run: { env },
     });
     // Le même scénario une deuxième fois : la mémoire du premier propose le chemin, l'application le confirme.
@@ -159,6 +161,20 @@ describe('dry run, end to end', () => {
         step.fillFormBefore ?? false,
       ]);
     expect(shape(yaml)).toEqual(shape(gherkin));
+  });
+
+  it('the knowledge is shared with the runs of the mission (knowledge/ next to reports/), unless isolated', async () => {
+    const shared = JSON.parse(await readFile(path.join(dir, 'knowledge', 'knowledge-base.json'), 'utf8')) as {
+      applications: Record<string, { transitions: Record<string, unknown> }>;
+    };
+    const learned = Object.values(shared.applications).flatMap((data) => Object.keys(data.transitions));
+    expect(learned.length).toBeGreaterThan(0);
+    await expect(
+      readFile(
+        path.join(dir, 'reports-yaml', 'dry-run', 'create-user', 'knowledge', 'knowledge-base.json'),
+        'utf8',
+      ),
+    ).resolves.toContain('transitions');
   });
 
   it('memory proposes, the application confirms: the second run replays the known path', () => {

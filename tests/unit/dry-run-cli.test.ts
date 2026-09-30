@@ -42,6 +42,8 @@ describe('qa-crawler dry-run: arguments', () => {
       maxDurationMs: 90_000,
     });
     expect(parseDryRunArgs(['x.feature', '--max-duration', '120000']).maxDurationMs).toBe(120_000);
+    expect(parseDryRunArgs(['x.feature', '--isolated-memory']).isolatedMemory).toBe(true);
+    expect(parseDryRunArgs(['x.feature']).isolatedMemory).toBeUndefined();
   });
 
   it('refuses what makes no sense, with the reason', () => {

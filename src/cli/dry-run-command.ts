@@ -26,6 +26,8 @@ Options:
       --base-url <url>         Target (without --config, or to override it; also QA_BASE_URL)
       --use-history            Try known paths (memory, knowledge) before exploring
       --no-history             Current exploration only
+      --isolated-memory        Keep this dry run's knowledge apart (default: shared with the
+                               mission's runs, knowledge.file)
       --max-depth <n>          Actions at most between two found intents (dryRun.maxDepth)
       --max-actions <n>        Guided actions at most (dryRun.maxActions)
       --max-duration <time>    Time budget: ms, or 90s, 2m (dryRun.maxDurationMs)
@@ -48,6 +50,7 @@ export interface DryRunArgs {
   configPath?: string;
   baseUrl?: string;
   useHistory?: boolean;
+  isolatedMemory?: boolean;
   maxDepth?: number;
   maxActions?: number;
   maxDurationMs?: number;
@@ -72,6 +75,7 @@ export function parseDryRunArgs(argv: string[]): DryRunArgs {
         'base-url': { type: 'string' },
         'use-history': { type: 'boolean', default: false },
         'no-history': { type: 'boolean', default: false },
+        'isolated-memory': { type: 'boolean', default: false },
         'max-depth': { type: 'string' },
         'max-actions': { type: 'string' },
         'max-duration': { type: 'string' },
@@ -110,6 +114,7 @@ export function parseDryRunArgs(argv: string[]): DryRunArgs {
     ...(values.config !== undefined ? { configPath: values.config } : {}),
     ...(values['base-url'] !== undefined ? { baseUrl: values['base-url'] } : {}),
     ...(values['use-history'] ? { useHistory: true } : values['no-history'] ? { useHistory: false } : {}),
+    ...(values['isolated-memory'] ? { isolatedMemory: true } : {}),
     ...(maxDepth !== undefined ? { maxDepth } : {}),
     ...(maxActions !== undefined ? { maxActions } : {}),
     ...(maxDurationMs !== undefined ? { maxDurationMs } : {}),
@@ -195,6 +200,7 @@ export async function runDryRunCli(argv: string[]): Promise<number> {
         ...(args.memory !== undefined ? { memory: args.memory } : {}),
       },
       ...(args.useHistory !== undefined ? { useHistory: args.useHistory } : {}),
+      ...(args.isolatedMemory ? { isolatedMemory: true } : {}),
       ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
       ...(args.maxActions !== undefined ? { maxActions: args.maxActions } : {}),
       ...(args.maxDurationMs !== undefined ? { maxDurationMs: args.maxDurationMs } : {}),

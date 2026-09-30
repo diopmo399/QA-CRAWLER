@@ -75,6 +75,8 @@ export class DryRunEngine {
   private readonly searched = new Set<string>();
   private flow = '';
   private resolver: IntentPathResolver | undefined;
+  /** Intentions mises de côté trouvées mais non exécutables : plus revérifiées pendant les recherches. */
+  private readonly unwatched = new Set<string>();
 
   constructor(
     private readonly driver: DryRunDriver,
@@ -226,7 +228,33 @@ export class DryRunEngine {
       `looking for ${targets.map((t) => `"${t.label}"`).join(', ')}`,
       intent.id,
     );
-    const resolution = await resolver.resolvePath(targets);
+    // Les intentions mises de côté sont revérifiées sur chaque écran intermédiaire de la recherche.
+    const watched = pending.filter(
+      (candidate) =>
+        candidate.type !== 'ASSERT' &&
+        candidate.type !== 'CUSTOM' &&
+        !this.unwatched.has(candidate.id) &&
+        !targets.includes(candidate),
+    );
+    const resolution = await resolver.resolvePath(targets, watched);
+    const late = resolution.pendingFound;
+    if (resolution.status === 'FOUND' && late) {
+      for (const step of resolution.path) this.guided(step, undefined);
+      const done = await this.driver.perform(late);
+      if (done.status === 'PASSED') {
+        pending.splice(pending.indexOf(late), 1);
+        this.findings.delete(late.id);
+        this.matched(late, done.state, done.target, done.confidence, [
+          'found later in the flow than expected, while looking for another step',
+          ...resolution.reasons,
+        ]);
+        const finding = this.findings.get(late.id);
+        if (finding) finding.late = true;
+        this.emit('FLOW_STEP_REORDERED', `${describeFlowIntent(late)} found later than expected`, late.id);
+      } else this.unwatched.add(late.id);
+      // Puis reprendre la recherche de l'étape attendue, depuis là où on est.
+      return this.attempt(intent, following, resolver, pending);
+    }
     return this.afterSearch(intent, targets, resolution, pending, key, from);
   }
 
