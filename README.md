@@ -718,7 +718,7 @@ dryRun:
   suggestion: { generateGherkin: true, generateYaml: true } # --output-format gherkin | yaml | both
 ```
 
-La mission donne la cible, la connexion, la sécurité, `gherkin.steps` et les flows `reusable` ; ses autres flows sont ignorés. Sans mission : `--base-url` (ou `QA_BASE_URL`). Sans mémoire ni persistance, le Dry Run n'utilise que l'exploration courante : aucune base de données n'est nécessaire.
+La mission donne la cible, la connexion, la sécurité, `gherkin.steps` et les flows `reusable` ; ses autres flows sont ignorés. Sans mission : `--base-url` (ou `QA_BASE_URL`). En Dry Run, le **mode automatique** et la **résolution sémantique** sont actifs par défaut : une phrase métier inconnue n'arrête pas le chargement, elle devient une intention à vérifier sur l'écran (`gherkin.auto: false` dans la mission les coupe). Sans mémoire ni persistance, le Dry Run n'utilise que l'exploration courante : aucune base de données n'est nécessaire.
 
 **Codes de sortie :** `0` FULLY_MATCHED ou PARTIALLY_MATCHED, `1` DIVERGED, BLOCKED ou INCONCLUSIVE, `2` usage ou scénario invalide, `3` erreur d'exécution.
 

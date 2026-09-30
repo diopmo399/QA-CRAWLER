@@ -202,8 +202,8 @@ export async function runDryRunCli(argv: string[]): Promise<number> {
     });
   } catch (error) {
     if (error instanceof ConfigError) {
+      // Le message contient déjà le détail (une ligne par cause).
       logger.error(error.message);
-      for (const detail of error.details) logger.error(`  ${detail}`);
       return 2;
     }
     if (error instanceof AuthError) {

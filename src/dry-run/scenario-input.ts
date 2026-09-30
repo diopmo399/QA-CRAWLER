@@ -45,8 +45,16 @@ export function loadDryRunScenario(input: DryRunInput): LoadedDryRunScenario {
   );
   const scenarioFlows =
     type === 'GHERKIN' ? [{ gherkin: scenarioFile }] : yamlFlows(scenarioText, scenarioFile);
-  const raw = { ...mission, flows: [...reusable, ...scenarioFlows] };
+  const raw = { ...mission, gherkin: dryRunGherkin(mission.gherkin), flows: [...reusable, ...scenarioFlows] };
   const source = input.missionFile ? path.resolve(input.missionFile) : scenarioFile;
+  const hasTarget =
+    input.overrides?.baseUrl !== undefined ||
+    (input.env ?? process.env).QA_BASE_URL !== undefined ||
+    (isObject(mission.target) && mission.target.baseUrl !== undefined);
+  if (!hasTarget)
+    throw new ConfigError('No target application for the dry run', [
+      'give the mission with -c mission.yaml (target, sign-in, safety), or the address with --base-url https://…',
+    ]);
   const { config, warnings } = parseConfig(stringify(raw), input.overrides, input.env, source);
   if (config.flows.length === 0)
     throw new ConfigError(`No scenario to check in ${input.scenarioFile}`, [
@@ -67,6 +75,21 @@ export function loadDryRunScenario(input: DryRunInput): LoadedDryRunScenario {
     source: { type, file: input.scenarioFile },
     ...(language ? { language } : {}),
     warnings,
+  };
+}
+
+/**
+ * En Dry Run, une phrase inconnue n'arrête pas le chargement : le Dry Run est fait pour des
+ * scénarios incomplets ou imprécis. Mode automatique et résolution sémantique sont actifs,
+ * sauf si la mission dit explicitement le contraire.
+ */
+function dryRunGherkin(gherkin: unknown): Record<string, unknown> {
+  const given = isObject(gherkin) ? gherkin : {};
+  const semantic = isObject(given.semanticResolution) ? given.semanticResolution : {};
+  return {
+    ...given,
+    auto: given.auto ?? true,
+    semanticResolution: { ...semantic, enabled: semantic.enabled ?? true },
   };
 }
 

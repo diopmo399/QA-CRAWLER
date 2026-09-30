@@ -70,6 +70,7 @@ import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
 import { UIObserver } from '../observation/ui-observer.js';
 import {
+  classifyPlaywrightError,
   NavigationGuard,
   NavigationRecoveryError,
   type NavigationEvent,
@@ -3615,8 +3616,13 @@ export class FlowExplorer {
       await page.goto(url, { waitUntil: exploration.waitUntil, timeout: exploration.navigationTimeoutMs });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // Une redirection lancée par la page elle-même (garde d'authentification…) n'est pas un échec.
-      if (!/interrupted by another navigation to/i.test(message) || /chrome-error:/i.test(message)) {
+      // Une redirection lancée par la page elle-même (garde d'authentification, connexion unique…) n'est
+      // pas un échec : selon le moment, Chromium la signale « interrupted by another navigation » ou
+      // « net::ERR_ABORTED ». Le garde de navigation classe les deux de la même façon.
+      if (
+        classifyPlaywrightError(error).kind !== 'NAVIGATION_INTERRUPTED' ||
+        /chrome-error:/i.test(message)
+      ) {
         const kind = /timeout/i.test(message)
           ? 'timeout'
           : /TOO_MANY_REDIRECTS/i.test(message)
