@@ -23,6 +23,8 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 
 ## Sommaire
 
+> **Nouveau ?** Le [guide d'utilisation](docs/GUIDE.md) présente chaque fonctionnalité par besoin, avec les différentes manières de l'utiliser et des exemples prêts à copier.
+
 - [Démarrage rapide](#démarrage-rapide)
 - [Fonctionnement](#fonctionnement)
 - [Mission (YAML)](#mission-yaml)
