@@ -544,13 +544,15 @@ Pour les champs **muets** (sans libellé, sans `aria-label`, sans `placeholder`)
 
 **Manières de l'utiliser :**
 
-| Manière                                    | Réglage                                                                          |
-| ------------------------------------------ | -------------------------------------------------------------------------------- |
-| Avec le dépôt de l'application (conseillé) | `staticAnalysis: { enabled: true, source: { root: ../mon-application } }`        |
-| Sans le dépôt : les scripts du navigateur  | `staticAnalysis: { enabled: true, mode: bundle }` (source maps lues si publiées) |
-| À la demande (défaut)                      | analysé seulement quand un champ en a besoin                                     |
-| Dès le début                               | `strategy: eager`                                                                |
-| Avec le contrat d'API                      | `openapi: { enabled: true, source: openapi.yaml }` (format, bornes)              |
+| Manière                                    | Réglage                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------- |
+| Avec le dépôt de l'application (conseillé) | `staticAnalysis: { enabled: true, source: { root: ../mon-application } }` |
+| Sans le dépôt : l'URL déployée seule       | `staticAnalysis: { enabled: true }` (source maps publiées, sinon bundles) |
+| Dépôt + build déployé                      | `mode: hybrid` (le build déployé l'emporte s'ils divergent)               |
+| Bundles minifiés seulement                 | `mode: bundle` (couverture LIMITED)                                       |
+| À la demande (défaut)                      | analysé seulement quand un champ en a besoin                              |
+| Dès le début                               | `strategy: eager`                                                         |
+| Avec le contrat d'API                      | `openapi: { enabled: true, source: openapi.yaml }` (format, bornes)       |
 
 Avec, une phrase comme `Et je renseigne le courriel avec "test@example.com"` (ou `fill: { label: courriel, … }`) trouve le champ muet, et le rapport explique pourquoi. Les validateurs Angular enrichissent les contraintes et les tests négatifs ; en Dry Run, les routes du code suggèrent le chemin (Tableau de bord → Administration → Utilisateurs), toujours **cliqué pour de vrai** avant d'être retenu. Détails : README, « Analyse statique ».
 

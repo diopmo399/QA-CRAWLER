@@ -97,6 +97,7 @@ export function buildStaticGraph(
   const warnings: string[] = [];
   if (sources.budgetExhausted)
     warnings.push(`STATIC_ANALYSIS_BUDGET_EXHAUSTED: ${String(sources.skipped.length)} file(s) not read`);
+  warnings.push(...(sources.notes ?? []));
   if (!angular && !options.analyzers.genericJs)
     return emptyGraph(
       options,
@@ -301,6 +302,7 @@ export function buildStaticGraph(
     dataFlows,
     warnings: [...new Set(warnings)].slice(0, 50),
     stats: { files: sources.files.length, bytes: sources.bytes, durationMs: now() - started },
+    ...(sources.provenance ? { sources: sources.provenance } : {}),
     generatedAt: new Date().toISOString(),
   });
 }

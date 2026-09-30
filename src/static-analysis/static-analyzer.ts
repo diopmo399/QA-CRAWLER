@@ -7,6 +7,7 @@ import {
   type StaticFramework,
 } from './model.js';
 import { collectSources, type SourceBudget, type SourceSet } from './source-set.js';
+import type { SourceDiscoveryEvent } from './sources/model.js';
 import { loadTypeScript } from './typescript-loader.js';
 
 export type StaticAnalysisEvent =
@@ -25,7 +26,8 @@ export type StaticAnalysisEvent =
   | 'SEMANTIC_EVIDENCE_CONFLICT'
   | 'STATIC_PATH_SUGGESTED'
   | 'STATIC_PATH_CONFIRMED'
-  | 'STATIC_PATH_REJECTED';
+  | 'STATIC_PATH_REJECTED'
+  | SourceDiscoveryEvent;
 
 export type StaticEventSink = (event: StaticAnalysisEvent, message: string) => void;
 
@@ -94,16 +96,44 @@ export class StaticApplicationAnalyzer {
     return this.analyzeSet(sources, 'SOURCE');
   }
 
-  /** Un ensemble de sources déjà lu (bundle, source maps, tests). */
-  async analyzeSet(sources: SourceSet, mode: StaticAnalysisMode): Promise<StaticAnalysisOutcome> {
-    const emit = this.options.onEvent ?? (() => undefined);
-    const identity: StaticAnalysisIdentity = {
+  private baseIdentity(): Omit<StaticAnalysisIdentity, 'mode' | 'sourceHash'> {
+    return {
       application: this.options.applicationId,
-      mode,
-      sourceHash: sources.hash,
       ...(this.options.version ? { version: this.options.version } : {}),
       ...(this.options.commit ? { commit: this.options.commit } : {}),
       analyzerVersion: STATIC_ANALYZER_VERSION,
+    };
+  }
+
+  /**
+   * Le cache interrogé par une empreinte connue avant la lecture des sources (l'ensemble
+   * des bundles déployés) : un déploiement déjà analysé ne télécharge aucune source map.
+   */
+  async cachedByAlias(alias: string): Promise<StaticAnalysisOutcome | undefined> {
+    if (!this.cache) return undefined;
+    const graph = await this.cache.getByAlias(this.baseIdentity(), alias);
+    if (!graph) return undefined;
+    (this.options.onEvent ?? (() => undefined))(
+      'STATIC_ANALYSIS_CACHE_HIT',
+      `static knowledge reused for this deployment (${String(graph.fields.length)} field(s))`,
+    );
+    return { graph, cache: 'HIT' };
+  }
+
+  /**
+   * Un ensemble de sources déjà lu (workspace virtuel : source maps, bundles, dépôt).
+   * alias : l'empreinte du déploiement, enregistrée pour cachedByAlias().
+   */
+  async analyzeSet(
+    sources: SourceSet,
+    mode: StaticAnalysisMode,
+    options: { alias?: string } = {},
+  ): Promise<StaticAnalysisOutcome> {
+    const emit = this.options.onEvent ?? (() => undefined);
+    const identity: StaticAnalysisIdentity = { ...this.baseIdentity(), mode, sourceHash: sources.hash };
+    const remember = async (): Promise<void> => {
+      if (this.cache && options.alias)
+        await this.cache.putAlias(identity, options.alias).catch(() => undefined);
     };
     if (this.cache) {
       const cached = await this.cache.get(identity);
@@ -112,6 +142,7 @@ export class StaticApplicationAnalyzer {
           'STATIC_ANALYSIS_CACHE_HIT',
           `static knowledge reused (${String(cached.fields.length)} field(s))`,
         );
+        await remember();
         return { graph: cached, cache: 'HIT' };
       }
       emit('STATIC_ANALYSIS_CACHE_MISS', `no static knowledge for this source hash: analysing`);
@@ -158,8 +189,10 @@ export class StaticApplicationAnalyzer {
       'STATIC_ANALYSIS_COMPLETED',
       `${graph.framework} ${graph.coverage}: ${String(graph.routes.length)} route(s), ${String(graph.fields.length)} field(s), ${String(graph.apiCalls.length)} API call(s) in ${String(graph.stats.durationMs)} ms`,
     );
-    if (this.cache && graph.coverage !== 'UNAVAILABLE')
+    if (this.cache && graph.coverage !== 'UNAVAILABLE') {
       await this.cache.put(identity, graph).catch(() => undefined);
+      await remember();
+    }
     return { graph, cache: this.cache ? 'MISS' : 'DISABLED' };
   }
 

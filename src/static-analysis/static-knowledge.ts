@@ -12,6 +12,7 @@ import type {
   StaticRouteNode,
   StaticValidator,
 } from './model.js';
+import type { StaticSourceProvenance } from './sources/model.js';
 
 /**
  * Poids des preuves statiques : CENTRALISÉS ici (jamais en dur dans le résolveur).
@@ -76,12 +77,14 @@ export class StaticKnowledge {
   private readonly componentsByRoute = new Map<string, string>();
   private readonly routesByComponent = new Map<string, StaticRouteNode[]>();
   private readonly apiByComponent = new Map<string, StaticApiCallNode[]>();
+  private readonly sourcesByPath: Map<string, StaticSourceProvenance>;
 
   constructor(
     readonly graph: StaticApplicationGraph,
     private readonly conceptOf: ConceptOf,
     private readonly contract?: ApiContract,
   ) {
+    this.sourcesByPath = new Map((graph.sources ?? []).map((source) => [source.path, source]));
     for (const route of graph.routes) {
       if (route.component) {
         this.componentsByRoute.set(route.path, route.component);
@@ -352,6 +355,7 @@ export class StaticKnowledge {
     }
 
     const { concept, conflicts } = decideConcept(evidence);
+    const origin = this.originOf(field.location.file);
     return {
       control: field.control,
       component: field.component,
@@ -361,7 +365,16 @@ export class StaticKnowledge {
       ...(concept ? { concept } : {}),
       conflicts,
       truth: 'STATIC_DISCOVERED',
+      ...(origin ? { sourceOrigin: origin } : {}),
     };
+  }
+
+  /** « SOURCE_MAP https://…/main.js.map », « REPOSITORY », « BUNDLE https://…/main.js » : d'où vient le code cité. */
+  originOf(file: string): string | undefined {
+    const source = this.sourcesByPath.get(file);
+    if (!source) return undefined;
+    const where = source.origin === 'SOURCE_MAP' ? source.sourceMapUrl : source.bundleUrl;
+    return where ? `${source.origin} ${where}` : source.origin;
   }
 
   /** Le schéma OpenAPI de la propriété du corps envoyé par cet appel. */

@@ -7,7 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright';
 import { parseConfig } from '../../src/config/config-loader.js';
 import { runDryRun } from '../../src/dry-run/dry-run-orchestrator.js';
-import { collectBundle } from '../../src/static-analysis/bundle.js';
+import { playwrightFetcher, runtimeScriptUrls } from '../../src/static-analysis/bundle.js';
+import { RuntimeBundleSourceProvider } from '../../src/static-analysis/sources/source-providers.js';
+import { StaticSourceDiscovery } from '../../src/static-analysis/sources/source-discovery.js';
 import { StaticApplicationAnalyzer } from '../../src/static-analysis/static-analyzer.js';
 import { staticAnalyzerOptions } from '../helpers.js';
 import type { ExplorationResult } from '../../src/model/exploration-result.js';
@@ -215,18 +217,22 @@ output: { reportsDir: ${path.join(dir, 'reports')} }
   }, 120_000);
 });
 
-describe('bundle mode: the scripts the browser loaded, original sources from source maps', () => {
+describe('source maps: from a deployed URL only, the mute contact input is resolved as EMAIL', () => {
   let server: Server;
   let url: string;
+  let dir: string;
   let sources: Record<string, string>;
+  const MARKER = 'UNIQUE_SOURCE_BODY_MARKER_e2e';
+  const files = [
+    'src/app/users/create-user/create-user.component.ts',
+    'src/app/users/create-user/create-user.component.html',
+    'src/app/users/user.service.ts',
+    'src/app/users/user.models.ts',
+  ];
 
   beforeAll(async () => {
-    const files = [
-      'src/app/users/create-user/create-user.component.ts',
-      'src/app/users/create-user/create-user.component.html',
-      'src/app/users/user.service.ts',
-      'src/app/users/user.models.ts',
-    ];
+    dir = await mkdtemp(path.join(tmpdir(), 'qa-sourcemap-e2e-'));
+    await writeFile(path.join(dir, 'courriel.feature'), FEATURE);
     sources = Object.fromEntries(
       await Promise.all(
         files.map(async (file) => [file, await readFile(path.join(FIXTURE, file), 'utf8')] as const),
@@ -238,24 +244,49 @@ describe('bundle mode: the scripts the browser loaded, original sources from sou
         ...files.map((file) => `webpack:///./${file}`),
         'webpack:///./node_modules/@angular/core/fesm2022/core.mjs',
       ],
-      sourcesContent: [...files.map((file) => sources[file]), 'export const ignored = 1;'],
+      sourcesContent: [
+        ...files.map((file) => `${sources[file] ?? ''}\n// ${MARKER}`),
+        'export const ignored = 1;',
+      ],
       mappings: '',
     });
+    const lazyMap = JSON.stringify({
+      version: 3,
+      sources: ['webpack:///./src/app/reports/reports.component.ts'],
+      sourcesContent: ['export class ReportsComponent {}'],
+      mappings: '',
+    });
+    // Le déploiement : la page, son bundle (avec sourceMappingURL), la source map, et
+    // un chunk chargé plus tard (route à la demande). Aucun accès au dépôt.
+    const page = PAGE.replace(
+      '</body>',
+      '<script src="/main.js"></script><script>setTimeout(() => { const s = document.createElement("script"); s.src = "/chunk-reports.js"; document.body.appendChild(s); }, 50);</script></body>',
+    );
     server = createServer((request, response) => {
-      if (request.url === '/main.js') {
+      const route = request.url ?? '/';
+      if (route === '/main.js') {
         response.writeHead(200, { 'content-type': 'application/javascript' });
         response.end('console.log("app");\n//# sourceMappingURL=main.js.map\n');
-      } else if (request.url === '/main.js.map') {
+      } else if (route === '/main.js.map') {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(map);
-      } else if (request.url === '/plain.js') {
+      } else if (route === '/chunk-reports.js') {
+        response.writeHead(200, { 'content-type': 'application/javascript' });
+        response.end('console.log("reports");\n//# sourceMappingURL=chunk-reports.js.map\n');
+      } else if (route === '/chunk-reports.js.map') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(lazyMap);
+      } else if (route === '/plain.js') {
         response.writeHead(200, { 'content-type': 'application/javascript' });
         response.end('class a{constructor(t){this.http=t}create(e){return this.http.post("/api/users",e)}}');
-      } else {
+      } else if (route === '/plain') {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end(
-          `<!doctype html><html><body><h1>App</h1><script src="${request.url === '/plain' ? '/plain.js' : '/main.js'}"></script></body></html>`,
+          '<!doctype html><html><body><h1>App</h1><script src="/plain.js"></script></body></html>',
         );
+      } else {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end(page);
       }
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -266,41 +297,112 @@ describe('bundle mode: the scripts the browser loaded, original sources from sou
     await new Promise((resolve) => server.close(resolve));
   });
 
-  const collect = async (pagePath: string, sourceMaps: boolean) => {
+  it('runtime bundles → source map → sourcesContent → virtual workspace → existing analyzer → contact = EMAIL', async () => {
+    const reports = await mkdtemp(path.join(dir, 'run-'));
+    const { config } = parseConfig(
+      `
+mission: { name: sourcemap-e2e }
+target: { baseUrl: ${url}, startAt: /administration/users/new }
+exploration: { autonomous: false, actionTimeoutMs: 3000, settleTimeMs: 50 }
+gherkin: { semanticResolution: { enabled: true } }
+staticAnalysis:
+  enabled: true
+  mode: auto
+  cache: { enabled: false }
+flows:
+  - gherkin: ${path.join(dir, 'courriel.feature')}
+report: { failOnSeverity: NONE }
+output:
+  reportsDir: ${path.join(reports, 'reports')}
+  screenshotsDir: ${path.join(reports, 'screenshots')}
+`,
+      {},
+      {},
+    );
+    const { result } = await runMission(config);
+    const gherkin = result.flows.find((flow) => flow.name.includes('courriel'));
+    expect(gherkin?.status).toBe('PASSED');
+    const explanation =
+      gherkin?.steps.find((entry) => entry.kind === 'intent')?.resolution?.explanation?.join('\n') ?? '';
+    expect(explanation).toContain('static evidence means email');
+    expect(explanation).toContain('contact → request.email → CreateUserRequest.email → POST /api/users');
+    expect(explanation).toContain(`[code from SOURCE_MAP ${url}/main.js.map]`);
+
+    expect(result.staticAnalysis).toMatchObject({ status: 'USED', framework: 'ANGULAR', mode: 'SOURCE_MAP' });
+    expect(result.staticAnalysis?.confirmedFields).toContain('CreateUserComponent#contact');
+    const discovery = result.staticAnalysis?.discovery;
+    expect(discovery).toMatchObject({ strategy: 'auto', origins: ['SOURCE_MAP'] });
+    expect(discovery?.sourceMaps.loaded).toBeGreaterThanOrEqual(1);
+    expect(discovery?.extractedSources).toBeGreaterThanOrEqual(files.length);
+    expect(discovery?.entries.find((entry) => entry.url === `${url}/main.js`)).toMatchObject({
+      status: 'SOURCE_MAP',
+      sourceMap: `${url}/main.js.map`,
+      extracted: files.length,
+    });
+
+    // Le code source n'apparaît NULLE PART : rapport HTML, result.json, journal.
+    const html = await readFile(path.join(reports, 'reports', 'index.html'), 'utf8');
+    expect(html).toContain('Static source discovery');
+    const log = await findLog(reports);
+    expect(log).toContain('SOURCE_MAP_LOADED');
+    expect(log).toContain('VIRTUAL_WORKSPACE_CREATED');
+    const everything = [html, log, JSON.stringify(result)].join('\n');
+    expect(everything).not.toContain(MARKER);
+    expect(everything).not.toContain('fixture-constant-not-a-real-key');
+  }, 120_000);
+
+  const runtimeWorkspace = async (pagePath: string, lazyWait = 0) => {
     const browser = await chromium.launch();
     try {
       const page = await browser.newPage();
       await page.goto(`${url}${pagePath}`);
-      return await collectBundle(page, {
-        sourceMaps,
-        maxFiles: 50,
-        maxFileSizeBytes: 2_000_000,
+      if (lazyWait) await page.waitForTimeout(lazyWait);
+      const runtime = new RuntimeBundleSourceProvider({
+        fetch: playwrightFetcher(page),
         isAllowedUrl: (candidate) => new URL(candidate).hostname === '127.0.0.1',
+        sourceMaps: { enabled: true, inline: true, external: true },
+        bundleFallback: true,
+        budgets: {
+          maxBundles: 50,
+          maxSourceMaps: 50,
+          maxSourceMapBytes: 20_000_000,
+          maxFileSizeBytes: 2_000_000,
+        },
       });
+      for (const script of await runtimeScriptUrls(page)) runtime.observe(script);
+      const discovery = new StaticSourceDiscovery({
+        strategy: 'auto',
+        runtime,
+        workspace: { maxExtractedSources: 100, maxFileSizeBytes: 2_000_000 },
+        settingsKey: '',
+      });
+      await discovery.prepare();
+      await discovery.complete();
+      return discovery;
     } finally {
       await browser.close();
     }
   };
 
-  it('with a source map: the original TypeScript (never node_modules), analysed with LIMITED coverage', async () => {
-    const set = await collect('/', true);
-    expect(set.files.map((file) => file.path).sort()).toEqual(
-      Object.keys(sources)
-        .map((file) => `sourcemap/${file}`)
+  it('the scripts the browser loaded (lazy chunk included) are read through the browser session', async () => {
+    const discovery = await runtimeWorkspace('/administration/users/new', 300);
+    expect(
+      discovery.workspace
+        .toSourceSet()
+        .files.map((file) => file.path)
         .sort(),
-    );
-    const { graph } = await new StaticApplicationAnalyzer(staticAnalyzerOptions()).analyzeSet(set, 'BUNDLE');
-    expect(graph.mode).toBe('BUNDLE');
-    expect(graph.coverage).toBe('LIMITED');
-    expect(graph.dataFlows.find((flow) => flow.field?.endsWith('.contact'))?.requestProperty).toBe(
-      'request.email',
-    );
+    ).toEqual([...files, 'src/app/reports/reports.component.ts'].sort());
+    expect(discovery.analysisMode()).toBe('SOURCE_MAP');
   }, 60_000);
 
-  it('without a source map: the bundle itself (minified, no original names) — still no exception', async () => {
-    const set = await collect('/plain', true);
-    expect(set.files.map((file) => file.path)).toEqual(['bundle/plain.js']);
-    const { graph } = await new StaticApplicationAnalyzer(staticAnalyzerOptions()).analyzeSet(set, 'BUNDLE');
+  it('without a source map: the bundle itself (minified, no original names), LIMITED — still no exception', async () => {
+    const discovery = await runtimeWorkspace('/plain');
+    expect(discovery.workspace.toSourceSet().files.map((file) => file.path)).toEqual(['bundle/plain.js']);
+    expect(discovery.analysisMode()).toBe('BUNDLE');
+    const { graph } = await new StaticApplicationAnalyzer(staticAnalyzerOptions()).analyzeSet(
+      discovery.workspace.toSourceSet(),
+      discovery.analysisMode(),
+    );
     expect(graph.coverage).toBe('LIMITED');
     expect(graph.apiCalls.map((call) => `${call.method} ${call.route}`)).toContain('POST /api/users');
   }, 60_000);

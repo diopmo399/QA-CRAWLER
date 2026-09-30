@@ -261,13 +261,22 @@ export class EngineEventLog {
           event.event === 'SEMANTIC_EVIDENCE_CONFLICT' ||
           event.event === 'STATIC_ANALYSIS_BUDGET_EXHAUSTED' ||
           event.event === 'STATIC_ANALYSIS_UNAVAILABLE' ||
-          event.event === 'STATIC_PATH_REJECTED';
+          event.event === 'STATIC_PATH_REJECTED' ||
+          event.event === 'SOURCE_MAP_REJECTED' ||
+          event.event === 'SOURCE_MAP_PARTIAL' ||
+          event.event === 'SOURCE_CONTENT_CONFLICT' ||
+          event.event === 'SOURCE_BUILD_MISMATCH' ||
+          event.event === 'BUNDLE_FALLBACK_STARTED';
         const detail =
           event.event.startsWith('STATIC_ROUTE') ||
           event.event.startsWith('STATIC_FIELD') ||
           event.event.startsWith('STATIC_FORM') ||
           event.event.startsWith('STATIC_DATA') ||
-          event.event.startsWith('STATIC_HTTP');
+          event.event.startsWith('STATIC_HTTP') ||
+          event.event === 'SOURCE_EXTRACTED' ||
+          event.event === 'BUNDLE_DISCOVERED' ||
+          event.event === 'SOURCE_MAP_REFERENCE_DISCOVERED' ||
+          event.event === 'SOURCE_MAP_LOADING_STARTED';
         this.log(warn ? 'WARN' : detail ? 'DEBUG' : 'INFO', event.event, redactText(event.message));
       },
       onSemanticResolution: (event) => {

@@ -10,13 +10,19 @@
  * (AST du compilateur TypeScript), jamais évalué, importé ni requis.
  */
 
+import type { StaticSourceDiscoverySummary, StaticSourceProvenance } from './sources/model.js';
+
 /** Version de l'analyseur : un changement invalide le cache. */
 export const STATIC_ANALYZER_VERSION = '1.0.0';
 
 export type StaticFramework = 'ANGULAR' | 'REACT' | 'VUE' | 'GENERIC' | 'UNKNOWN';
 
-/** SOURCE : le dépôt de l'application ; BUNDLE : les scripts chargés par le navigateur. */
-export type StaticAnalysisMode = 'SOURCE' | 'BUNDLE';
+/**
+ * SOURCE : le dépôt de l'application ; SOURCE_MAP : les sources d'origine publiées par
+ * les source maps du déploiement ; HYBRID : le dépôt corrigé par le build déployé ;
+ * BUNDLE : les scripts minifiés chargés par le navigateur.
+ */
+export type StaticAnalysisMode = 'SOURCE' | 'SOURCE_MAP' | 'HYBRID' | 'BUNDLE';
 
 /** Ce que l'analyse a pu établir. */
 export type StaticCoverage = 'FULL' | 'PARTIAL' | 'LIMITED' | 'UNAVAILABLE';
@@ -154,6 +160,8 @@ export interface StaticApplicationGraph {
   /** Limites rencontrées (budget, fichiers ignorés, UNRESOLVED_DATA_FLOW…), sans secret. */
   warnings: string[];
   stats: { files: number; bytes: number; durationMs: number };
+  /** D'où vient chaque fichier lu (dépôt, source map, bundle) : chemins et empreintes, jamais le contenu. */
+  sources?: StaticSourceProvenance[];
   generatedAt: string;
 }
 
@@ -208,6 +216,8 @@ export interface FieldProvenance {
   concept?: string;
   conflicts: SemanticConflict[];
   truth: StaticTruth;
+  /** D'où vient le code qui le prouve : « SOURCE_MAP main.js.map », « REPOSITORY »… */
+  sourceOrigin?: string;
 }
 
 export interface SemanticConflict {
@@ -235,4 +245,6 @@ export interface StaticAnalysisSummary {
   confirmedFields: string[];
   confirmedRoutes: string[];
   warnings: string[];
+  /** D'où sont venues les sources : dépôt, source maps, bundles (jamais leur contenu). */
+  discovery?: StaticSourceDiscoverySummary;
 }

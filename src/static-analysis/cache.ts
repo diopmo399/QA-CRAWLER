@@ -63,4 +63,40 @@ export class StaticAnalysisCache {
     await mkdir(this.directory, { recursive: true });
     await writeFileAtomic(this.fileOf(identity), `${JSON.stringify(graph)}\n`);
   }
+
+  /**
+   * ALIAS : une empreinte connue AVANT de lire les sources (l'ensemble des bundles
+   * déployés, bundleSetHash) mène à l'identité déjà analysée — sans télécharger une
+   * seule source map. Le fichier ne contient que l'identité (empreintes, noms).
+   */
+  private aliasFileOf(base: Omit<StaticAnalysisIdentity, 'mode' | 'sourceHash'>, alias: string): string {
+    return path.join(
+      this.directory,
+      `alias-${cacheKeyOf({ ...base, mode: 'BUNDLE', sourceHash: `alias:${alias}` })}.json`,
+    );
+  }
+
+  async getByAlias(
+    base: Omit<StaticAnalysisIdentity, 'mode' | 'sourceHash'>,
+    alias: string,
+  ): Promise<StaticApplicationGraph | undefined> {
+    const text = await readFile(this.aliasFileOf(base, alias), 'utf8').catch(() => undefined);
+    if (text === undefined) return undefined;
+    try {
+      const identity = JSON.parse(text) as StaticAnalysisIdentity;
+      if (identity.application !== base.application) return undefined;
+      return await this.get({ ...base, mode: identity.mode, sourceHash: identity.sourceHash });
+    } catch {
+      return undefined;
+    }
+  }
+
+  async putAlias(identity: StaticAnalysisIdentity, alias: string): Promise<void> {
+    await mkdir(this.directory, { recursive: true });
+    const { mode, sourceHash, ...base } = identity;
+    await writeFileAtomic(
+      this.aliasFileOf(base, alias),
+      `${JSON.stringify({ application: identity.application, mode, sourceHash })}\n`,
+    );
+  }
 }
