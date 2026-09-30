@@ -10,6 +10,7 @@ import { BaselineMissingError, runMission } from '../orchestrator.js';
 import { buildFlowTree, renderTextTree } from '../reporting/flow-tree.js';
 import { storageLabel } from '../reporting/persistence-section.js';
 import { HELP_TEXT, parseCliArgs, UsageError } from './args.js';
+import { runDryRunCli } from './dry-run-command.js';
 import { color, logger } from './logger.js';
 
 export const EXIT = { OK: 0, ISSUES: 1, USAGE: 2, RUNTIME: 3 } as const;
@@ -22,6 +23,8 @@ const SEVERITY_COLOR: Record<Severity, (text: string) => string> = {
 };
 
 export async function runCli(argv: string[]): Promise<number> {
+  // DRY RUN : une commande à part, ses propres options ; les autres commandes ne changent pas.
+  if (argv[0] === 'dry-run') return runDryRunCli(argv.slice(1));
   let args;
   try {
     args = parseCliArgs(argv);

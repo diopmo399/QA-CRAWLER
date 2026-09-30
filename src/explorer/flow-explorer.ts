@@ -7,7 +7,9 @@ import { BrowserManager } from '../browser/browser-manager.js';
 import { ScreenshotService } from '../browser/screenshot-service.js';
 import type { ScenarioConfig } from '../config/config.js';
 import {
+  describeExpectation,
   describeStep,
+  describeTarget,
   type FlowConfig,
   type FlowExpectation,
   type FlowStep,
@@ -83,7 +85,11 @@ import { ContractOracle } from '../oracles/contract-oracle.js';
 import { TechnicalOracle } from '../oracles/technical-oracle.js';
 import { DEFAULT_ERROR_TEXTS, UIOracle } from '../oracles/ui-oracle.js';
 import { PageErrorObserver } from '../observers/page-error-observer.js';
-import { SafetyPolicy } from '../policies/safety-policy.js';
+import { SafetyPolicy, type SafetyVerdict } from '../policies/safety-policy.js';
+import type { DryRunDriver } from '../dry-run/dry-run-driver.js';
+import type { FlowIntent } from '../dry-run/flow-intent-graph.js';
+import { findKnownPaths, type KnownEdge } from '../dry-run/known-paths.js';
+import type { ObservedState } from '../dry-run/reconciliation-model.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import { CircuitBreaker } from '../recovery/circuit-breaker.js';
 import { RecoveryEngine, type RecoveryActions } from '../recovery/recovery-engine.js';
@@ -133,7 +139,7 @@ import {
 } from '../semantics/resolution/semantic-knowledge.js';
 import { DeterministicConfidenceEngine, type ConfidenceEngine } from '../intelligence/confidence-engine.js';
 import { ValidDataFillStrategy } from '../forms/form-fill-strategy.js';
-import { actionSignature, stateSignature } from '../knowledge/signatures.js';
+import { actionSignature, slug, stateSignature } from '../knowledge/signatures.js';
 import { HistoricalOracle, apiOperation } from '../oracles/historical-oracle.js';
 import { InvariantOracle, type InvariantEvaluation } from '../oracles/invariant-oracle.js';
 import { RuleBasedPatternDetector } from '../patterns/pattern-detector.js';
@@ -214,6 +220,11 @@ export interface FlowExplorerOptions {
   semantics?: Semantics;
   /** Ce que le crawler a appris des runs précédents (par défaut : en mémoire, vide). */
   knowledge?: KnowledgeBase;
+  /**
+   * DRY RUN : au lieu des flows et de l'exploration autonome, confier le navigateur (connecté,
+   * sur la page de départ) au Dry Run, à travers un DryRunDriver par flow.
+   */
+  dryRun?: (driverFor: (flow: FlowConfig) => DryRunDriver) => Promise<void>;
 }
 
 /** Ce que sait l'explorateur après un run ; les reporters en font des fichiers. */
@@ -383,11 +394,17 @@ export class FlowExplorer {
   /** Requêtes vues depuis le début du flow en cours (expect.response). */
   private flowNetwork: NetworkExchange[] = [];
 
+  /** DRY RUN (options.dryRun) et mémoire des runs précédents disponible. */
+  private readonly dryRunHook: FlowExplorerOptions['dryRun'];
+  private readonly historyAvailable: boolean;
+
   constructor(
     private readonly config: ScenarioConfig,
     options: FlowExplorerOptions,
   ) {
     const { exploration, goals } = config;
+    this.dryRunHook = options.dryRun;
+    this.historyAvailable = options.historyAvailable ?? false;
     this.safety = new SafetyPolicy(config.safety);
     this.stateDetector = new StateDetector(exploration.queryParams.mode, exploration.queryParams.ignored);
     this.discovery = new ActionDiscovery(this.safety, exploration.maxRecordedActions);
@@ -654,6 +671,15 @@ export class FlowExplorer {
       if (plan.goals.length > 0) {
         this.goals = new GoalTracker(plan, this.goalMatcher);
         this.observeGoals(current);
+      }
+
+      // DRY RUN : le scénario est confronté à l'application ; ni flows imposés ni exploration autonome.
+      const dryRun = this.dryRunHook;
+      if (dryRun) {
+        const holder = { page };
+        await dryRun((flow) => this.dryRunDriver(holder, browser, observers, flow));
+        await this.memory.save(this.graph);
+        return this.outcome('flows-only');
       }
 
       // 1. Flows imposés, dans l'ordre de la mission.
@@ -1635,6 +1661,331 @@ export class FlowExplorer {
         this.coverage.actionBlocked(stateId, action);
       }
     }
+  }
+
+  // ---------------------------------------------------------------- dry run
+
+  /**
+   * Le DryRunDriver d'un flow : le pipeline habituel, exposé au Dry Run sans rien dupliquer.
+   * - probe : SemanticResolver (étapes d'intention) ou localisateur (étapes YAML), sans exécuter ;
+   * - perform : runFlowStep (la SafetyPolicy des flows imposés, `allow` de l'étape compris) ;
+   * - actions / take : ActionDiscovery, score du moteur de décision, SafetyPolicy de la mission
+   *   ET permissions du scénario, puis executeAndObserve (oracles, recovery, garde d'écriture) ;
+   * - restore : retour à un état connu (URL, chemin rejoué) ;
+   * - knownPaths : graphe du run et mémorisé, KnowledgeBase — proposés, jamais crus sans confirmation.
+   */
+  private dryRunDriver(
+    holder: { page: Page },
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    flow: FlowConfig,
+  ): DryRunDriver {
+    const allow = [...new Set(flow.steps.flatMap((step) => step.allow))];
+    const seen = new Map<string, PageContext>();
+    let current: PageContext | undefined;
+    const probeTimeout = Math.min(1_000, this.config.exploration.actionTimeoutMs);
+    const stateOf = (context: PageContext): ObservedState => ({
+      id: context.stateId,
+      signature: stateSignature(context.stateLabel),
+      label: context.stateLabel,
+      url: context.url,
+    });
+    const set = (context: PageContext): ObservedState => {
+      current = context;
+      seen.set(context.stateId, context);
+      return stateOf(context);
+    };
+    const context = (): PageContext => {
+      if (!current) throw new Error('dry run: no current state (start() first)');
+      return current;
+    };
+    const done =
+      (step: FlowStep, index: number) =>
+      (status: FlowStatus, extra: Partial<FlowStepReport> = {}): FlowStepReport => ({
+        index,
+        kind: step.kind,
+        description: describeStep(step),
+        optional: step.optional,
+        status,
+        durationMs: 0,
+        ...extra,
+      });
+    const verdictOf = (action: DiscoveredAction): SafetyVerdict => {
+      // Une étape insérée n'est pas écrite par le développeur : la SafetyPolicy de la mission ET les permissions du scénario.
+      const mission = this.safety.evaluate(action);
+      if (mission.verdict === 'BLOCK') return mission;
+      return evaluateFlowAction(this.safety, action, { allow });
+    };
+    const formFieldsOf = (action: DiscoveredAction, of: PageContext): string[] | undefined => {
+      if (action.type !== 'click' || action.formIndex === undefined || !this.config.goals.discoverForms)
+        return undefined;
+      const fields = of.actions
+        .filter(
+          (candidate) =>
+            candidate.formIndex === action.formIndex &&
+            (candidate.type === 'fill' || candidate.type === 'select' || candidate.type === 'check') &&
+            this.safety.evaluate(candidate).verdict !== 'BLOCK',
+        )
+        .map((candidate) => actionLabel(candidate))
+        .filter(Boolean);
+      return fields.length > 0 ? fields : undefined;
+    };
+    const semanticOf = (text: string | undefined): string => slug(text ?? '');
+    const targetsIn = (of: PageContext, intent: FlowIntent): boolean =>
+      intent.type === 'NAVIGATE' || intent.type === 'ASSERT'
+        ? semanticOf(of.stateLabel).includes(intent.semanticTarget) ||
+          of.headings.some((heading) => semanticOf(heading) === intent.semanticTarget)
+        : of.actions.some((action) => semanticOf(actionLabel(action)) === intent.semanticTarget);
+
+    const driver: DryRunDriver = {
+      start: async (startAt) => {
+        this.flowNetwork = [];
+        this.scenario = { values: [] };
+        this.attribution = {};
+        const url = new URL(startAt ?? this.config.target.startAt, this.config.target.baseUrl).toString();
+        if (!/^https?:/.test(holder.page.url()) || holder.page.isClosed())
+          holder.page = await this.recyclePage(browser, holder.page, observers.all);
+        if (!(await this.goto(holder.page, url))) return undefined;
+        const observed = await this.observeState(holder.page, 0).catch(() => undefined);
+        return observed ? set(observed) : undefined;
+      },
+      current: () => stateOf(context()),
+      probe: async (intent) => {
+        const step = intent.step;
+        const where = context();
+        switch (step.kind) {
+          case 'goto': {
+            const url = new URL(step.url, this.config.target.baseUrl).toString();
+            const verdict = evaluateFlowUrl(this.safety, url);
+            return verdict.verdict === 'BLOCK'
+              ? { status: 'BLOCKED', target: step.url, reason: verdict.reason, confidence: 1 }
+              : { status: 'RESOLVED', target: step.url, reason: 'address', confidence: 1 };
+          }
+          case 'click':
+          case 'check':
+          case 'uncheck':
+          case 'fill':
+          case 'select': {
+            const located = await this.flowSteps.locate(holder.page, step.target, probeTimeout);
+            return typeof located === 'string'
+              ? { status: 'NOT_FOUND', reason: located, confidence: 0 }
+              : {
+                  status: 'RESOLVED',
+                  target: describeTarget(step.target),
+                  reason: 'element on the screen',
+                  confidence: 0.97,
+                };
+          }
+          case 'expect': {
+            const failure = await this.flowSteps.expect(
+              holder.page,
+              step.expect,
+              probeTimeout,
+              this.flowNetwork,
+            );
+            return failure
+              ? { status: 'NOT_FOUND', reason: failure, confidence: 0 }
+              : {
+                  status: 'RESOLVED',
+                  target: describeExpectation(step.expect),
+                  reason: 'expectation met',
+                  confidence: 1,
+                };
+          }
+          case 'intent': {
+            const resolver = this.semanticResolver;
+            if (!resolver)
+              return { status: 'NOT_FOUND', reason: 'gherkin.semanticResolution is disabled', confidence: 0 };
+            if (step.intent.kind === 'ASSERT') {
+              const checked = await this.runAssertion(
+                holder.page,
+                step.intent,
+                where,
+                probeTimeout,
+                done(step, intent.index),
+              );
+              return checked.report.status === 'PASSED'
+                ? {
+                    status: 'RESOLVED',
+                    target: intent.label,
+                    reason: checked.report.reason ?? 'verified',
+                    confidence: 0.95,
+                  }
+                : { status: 'NOT_FOUND', reason: checked.report.reason ?? 'not verified', confidence: 0 };
+            }
+            const resolution = resolver.resolve(step.intent, where, {
+              stateSignature: stateSignature(where.stateLabel),
+            });
+            const selected = this.resolutionReport(resolution).selected;
+            const status =
+              resolution.status === 'RESOLVED'
+                ? 'RESOLVED'
+                : resolution.status === 'AMBIGUOUS'
+                  ? 'AMBIGUOUS'
+                  : resolution.status === 'BLOCKED'
+                    ? 'BLOCKED'
+                    : 'NOT_FOUND';
+            return {
+              status,
+              ...(selected ? { target: selected } : {}),
+              reason: resolution.reasons[0] ?? resolution.status,
+              confidence: resolution.score,
+            };
+          }
+          case 'auto':
+          case 'manual':
+          case 'screenshot':
+            return { status: 'NOT_FOUND', reason: 'interpreted only when performed', confidence: 0 };
+        }
+      },
+      perform: async (intent) => {
+        const outcome = await this.runFlowStep(
+          holder.page,
+          browser,
+          observers,
+          flow,
+          intent.step,
+          intent.index,
+          context(),
+        );
+        holder.page = outcome.page;
+        const after = outcome.context ?? context();
+        const state = set(after);
+        const report = outcome.report;
+        const status =
+          report.status === 'PASSED'
+            ? 'PASSED'
+            : report.status === 'BLOCKED'
+              ? 'BLOCKED'
+              : report.status === 'MANUAL'
+                ? 'NOT_VERIFIED'
+                : 'FAILED';
+        return {
+          status,
+          state,
+          ...(report.resolution?.selected ? { target: report.resolution.selected } : {}),
+          ...(report.reason ? { reason: report.reason } : {}),
+          confidence: report.resolution ? report.resolution.score : status === 'PASSED' ? 0.97 : 0,
+        };
+      },
+      actions: () => {
+        const where = context();
+        const scores = new Map<string, number>();
+        if (this.decisionEngine instanceof RuleBasedDecisionEngine)
+          for (const ranked of this.decisionEngine.rank(where, this.graph))
+            scores.set(ranked.action.id, ranked.score);
+        return where.actions
+          .filter((action) => action.visible && !action.disabled)
+          .map((action) => {
+            const verdict = verdictOf(action);
+            const fields = formFieldsOf(action, where);
+            return {
+              id: action.id,
+              signature: actionSignature(action),
+              label: actionLabel(action),
+              type: action.type,
+              category: action.category,
+              classification: action.classification,
+              ...(action.locator.role ? { role: action.locator.role } : {}),
+              ...(action.href ? { href: redactUrl(action.href) } : {}),
+              verdict: verdict.verdict === 'BLOCK' ? 'BLOCK' : 'ALLOW',
+              reason: verdict.reason,
+              score: scores.get(action.id) ?? 0,
+              ...(fields ? { formFields: fields } : {}),
+            };
+          });
+      },
+      take: async (actionId) => {
+        const from = context();
+        const action = from.actions.find((candidate) => candidate.id === actionId);
+        if (!action) return { status: 'FAILED', state: stateOf(from), reason: 'action not on this screen' };
+        // « Ai-je le droit ? » — juste avant Playwright, comme dans l'exploration.
+        const verdict = verdictOf(action);
+        if (verdict.verdict === 'BLOCK') {
+          this.graph.recordBlocked(from.stateId, action, verdict.reason);
+          return { status: 'BLOCKED', state: stateOf(from), reason: verdict.reason };
+        }
+        const formFields = formFieldsOf(action, from);
+        try {
+          const step = await this.executeAndObserve(holder.page, browser, observers, from, action);
+          holder.page = step.page;
+          const edge = [...this.graph.allEdges()]
+            .reverse()
+            .find((candidate) => candidate.from === from.stateId && candidate.actionId === action.id);
+          const state = set(step.context);
+          if (edge?.result !== 'SUCCESS')
+            return {
+              status: edge?.result === 'BLOCKED' ? 'BLOCKED' : 'FAILED',
+              state,
+              reason: edge?.reason ?? 'failed',
+            };
+          return { status: 'SUCCESS', state, ...(formFields ? { formFields } : {}) };
+        } catch (error) {
+          if (!(error instanceof NavigationRecoveryError)) throw error;
+          this.currentAction = undefined;
+          this.graph.markTried(from.stateId, action.id);
+          return { status: 'FAILED', state: stateOf(from), reason: error.message };
+        }
+      },
+      restore: async (stateId) => {
+        if (current && current.stateId === stateId) return stateOf(current);
+        if (!/^https?:/.test(holder.page.url()) || holder.page.isClosed())
+          holder.page = await this.recyclePage(browser, holder.page, observers.all);
+        const back: PageContext | undefined = await this.restore(holder.page, stateId).catch(() => undefined);
+        return back ? set(back) : undefined;
+      },
+      knownPaths: (target) => {
+        const nodeOf = new Map(this.graph.allNodes().map((node) => [node.id, node]));
+        const edges: KnownEdge[] = [];
+        for (const edge of this.graph.allEdges()) {
+          if (edge.result !== 'SUCCESS' || edge.from === edge.to) continue;
+          const from = nodeOf.get(edge.from);
+          const to = nodeOf.get(edge.to);
+          if (!from || !to) continue;
+          edges.push({
+            from: stateSignature(from.label),
+            action: actionSignature({ ...edge.action, elementType: edge.action.type }),
+            to: stateSignature(to.label),
+            count: 1,
+            source: 'graph',
+          });
+        }
+        if (this.historyAvailable)
+          for (const transition of this.knowledge.transitions()) {
+            if (transition.actionSignature.startsWith('intent:')) continue;
+            for (const [to, count] of Object.entries(transition.targets))
+              edges.push({
+                from: transition.fromStateSignature,
+                action: transition.actionSignature,
+                to,
+                count,
+                source: 'historical',
+              });
+          }
+        const actionTargets = new Set(
+          edges
+            .filter((edge) => edge.action.split(':')[1] === target.semanticTarget)
+            .map((edge) => edge.from),
+        );
+        const isTarget = (state: string): boolean =>
+          target.type === 'NAVIGATE' || target.type === 'ASSERT'
+            ? state.includes(target.semanticTarget)
+            : actionTargets.has(state);
+        return findKnownPaths(edges, stateSignature(context().stateLabel), isTarget, {
+          maxDepth: this.config.dryRun.maxDepth,
+          maxPaths: this.config.dryRun.maxAlternativePaths,
+        });
+      },
+      seenDuringRun: (target) => [...seen.values()].some((of) => targetsIn(of, target)),
+      now: () => Date.now(),
+    };
+    if (this.historyAvailable)
+      driver.historicalObservations = (target) =>
+        this.knowledge
+          .transitions()
+          .filter((transition) => transition.actionSignature.split(':')[1] === target.semanticTarget)
+          .reduce((sum, transition) => sum + transition.successCount, 0);
+    return driver;
   }
 
   // ---------------------------------------------------------------- flows imposés

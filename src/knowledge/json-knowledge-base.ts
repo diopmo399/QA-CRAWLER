@@ -341,6 +341,10 @@ export class JsonKnowledgeBase implements KnowledgeBase {
     };
   }
 
+  transitions(): readonly TransitionKnowledge[] {
+    return Object.values(this.data.transitions);
+  }
+
   actionsLeadingTo(predicate: (stateSignature: string) => boolean): string[] {
     return (
       Object.values(this.data.transitions)

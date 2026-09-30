@@ -1119,6 +1119,34 @@ export const scenarioSchema = z
       })
       .strict()
       .default({}),
+    /**
+     * DRY RUN (`qa-crawler dry-run <scénario>`) : le scénario du développeur est confronté à
+     * l'application — exploration guidée quand une étape ne correspond pas, puis une seule
+     * réconciliation et un flow suggéré. Le fichier d'origine n'est jamais modifié.
+     */
+    dryRun: z
+      .object({
+        /** Explorer pour retrouver les intentions suivantes après un écart (sinon : arrêt au premier). */
+        continueAfterMismatch: z.boolean().default(true),
+        /** Chemins connus (graphe mémorisé, KnowledgeBase) essayés avant d'explorer ; jamais crus sans confirmation. */
+        useHistoricalKnowledge: z.boolean().default(true),
+        /** Actions au plus entre deux intentions retrouvées. */
+        maxDepth: z.number().int().min(1).max(50).default(15),
+        /** Actions de l'exploration guidée au plus, sur tout le Dry Run. */
+        maxActions: z.number().int().min(1).max(10_000).default(100),
+        maxDurationMs: z.number().int().min(1000).default(120_000),
+        /** Actions essayées au plus depuis un même écran (les mieux notées), et chemins connus rejoués. */
+        maxAlternativePaths: z.number().int().min(1).max(20).default(5),
+        suggestion: z
+          .object({
+            generateGherkin: z.boolean().default(true),
+            generateYaml: z.boolean().default(true),
+          })
+          .strict()
+          .default({}),
+      })
+      .strict()
+      .default({}),
     credentials: credentialsSchema,
     browserInteractions: browserInteractionsSchema.default({}),
     forms: formsSchema.default({}),

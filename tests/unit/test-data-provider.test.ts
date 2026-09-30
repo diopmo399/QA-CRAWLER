@@ -43,6 +43,18 @@ describe('DefaultTestDataProvider', () => {
     });
   });
 
+  it('a list never gets its placeholder option (-, –, —, …, « Choisir »)', () => {
+    for (const placeholder of ['—', '–', '-- Choisir --', '…', 'Sélectionner un rôle'])
+      expect(
+        provider.instructionFor(
+          fieldAction(
+            { inputType: 'select', required: true, options: [placeholder, 'Lecteur', 'Administrateur'] },
+            'select',
+          ),
+        ),
+      ).toEqual({ kind: 'select', label: 'Lecteur' });
+  });
+
   it('respects min/max/step and length constraints', () => {
     expect(
       provider.instructionFor(fieldAction({ inputType: 'number', required: true, min: '18', max: '99' })),

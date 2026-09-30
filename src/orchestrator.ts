@@ -73,6 +73,8 @@ export interface RunOptions {
   cleanup?: TestDataCleanup;
   /** Avertissements d'exécution (repli de la persistance…) ; par défaut : stderr. */
   onWarning?: (message: string) => void;
+  /** DRY RUN : le navigateur (connecté, sur la page de départ) est confié au Dry Run (dry-run-orchestrator). */
+  dryRun?: FlowExplorerOptions['dryRun'];
 }
 
 /** verify a besoin d'une baseline : `learn` d'abord. */
@@ -185,6 +187,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     ...(options.decisionEngine ? { decisionEngine: options.decisionEngine } : {}),
     ...(options.testData ? { testData: options.testData } : {}),
     ...(options.observer ? { observer: options.observer } : {}),
+    ...(options.dryRun ? { dryRun: options.dryRun } : {}),
     listener: combineListeners(
       options.listener,
       engineLog.listener(),
