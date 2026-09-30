@@ -31,7 +31,27 @@ export interface DryRunDriver {
   historicalObservations?(target: FlowIntent): number;
   /** La cible est-elle visible sur un écran déjà observé pendant ce run ? */
   seenDuringRun?(target: FlowIntent): boolean;
+  /**
+   * ANALYSE STATIQUE : les routes du code qui mènent de l'écran courant à la cible. Un
+   * INDICE pour l'exploration guidée (quels contrôles essayer d'abord), jamais une
+   * navigation directe vers une route cachée : le chemin n'est valide qu'une fois joué.
+   */
+  staticHints?(target: FlowIntent): StaticPathHint | undefined;
+  /** Le chemin suggéré par le code a été confirmé (ou non) par l'exécution. */
+  staticPathOutcome?(hint: StaticPathHint, confirmed: boolean, path: readonly string[]): void;
   now(): number;
+}
+
+/** Un chemin suggéré par le code : jamais une vérité avant d'avoir été joué (runtimeConfirmed). */
+export interface StaticPathHint {
+  /** Libellés attendus des étapes (segments de route : administration, users). */
+  segments: string[];
+  /** La route cible (/administration/users). */
+  route: string;
+  source: 'STATIC_CODE';
+  confidence: number;
+  runtimeConfirmed: boolean;
+  description: string;
 }
 
 export interface ProbeResult {

@@ -5,7 +5,7 @@ import type { PageContext } from '../../model/page-context.js';
 import type { SemanticDictionary } from '../semantic-dictionary.js';
 import { ActionResolver } from './action-resolver.js';
 import { fieldDescriptors, type FieldDescriptor } from './field-descriptor.js';
-import { FieldMatcher } from './field-matcher.js';
+import { FieldMatcher, type SemanticResolutionContext } from './field-matcher.js';
 import { FormIntentResolver, type FormIntentPlan } from './form-intent-resolver.js';
 import { describeIntent, type GherkinIntent } from './intent.js';
 import { NavigationResolver } from './navigation-resolver.js';
@@ -63,6 +63,8 @@ export interface ResolveOptions {
   sentence?: string;
   /** La valeur vient d'une variable d'environnement, ou le champ est sensible : jamais affichée. */
   sensitiveValue?: boolean;
+  /** Preuves de l'analyse statique (index en mémoire) ; absent : analyse statique coupée. */
+  staticEvidence?: SemanticResolutionContext['staticEvidence'];
 }
 
 const TITLES: Record<GherkinIntent['kind'], string> = {
@@ -136,6 +138,7 @@ export class SemanticResolver {
       ...(options.previousFormGroup ? { previousFormGroup: options.previousFormGroup } : {}),
       ...(options.history ? { history: options.history } : {}),
       ...(options.sensitiveValue ? { sensitiveValue: true } : {}),
+      ...(options.staticEvidence ? { staticEvidence: options.staticEvidence } : {}),
     };
     switch (intent.kind) {
       case 'FILL':

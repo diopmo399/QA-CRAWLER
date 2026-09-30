@@ -404,7 +404,9 @@ export class DefaultTestDataProvider implements TestDataProvider {
           ? 'phone'
           : field.type === 'url'
             ? 'url'
-            : SEMANTIC_RULES.find(([, pattern]) => pattern.test(text))?.[0];
+            : (SEMANTIC_RULES.find(([, pattern]) => pattern.test(text))?.[0] ??
+              // Un champ muet (ni libellé ni name) dont le code et l'API prouvent le sens.
+              staticKeyOf(field.staticConcept));
     if (!key) return undefined;
     const tag = runTag(runId);
     const person = this.persona(runId);
@@ -581,4 +583,23 @@ function fitted(value: string, field: FormField, source: TestValue['source']): T
   if (field.pattern && !matches(text, field.pattern))
     return { kind: 'skip', source, reason: 'no valid value satisfies the constraints' };
   return { kind: 'fill', value: text, source };
+}
+
+/** Le concept prouvé par l'analyse statique (vocabulaire) → la clé de données de test. */
+const STATIC_CONCEPT_KEYS: Readonly<Record<string, SemanticKey>> = {
+  email: 'email',
+  phone: 'phone',
+  firstName: 'firstName',
+  lastName: 'lastName',
+  fullName: 'name',
+  company: 'company',
+  address: 'address',
+  city: 'city',
+  postalCode: 'postalCode',
+  country: 'country',
+  website: 'url',
+};
+
+function staticKeyOf(concept: string | undefined): SemanticKey | undefined {
+  return concept ? STATIC_CONCEPT_KEYS[concept] : undefined;
 }

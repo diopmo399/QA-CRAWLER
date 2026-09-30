@@ -98,10 +98,8 @@ export function parseConfig(
   refuseInlineCredentials(raw as Record<string, unknown>);
   const migrationWarnings: string[] = [];
   const migrated = migrateLegacyKeys(raw as Record<string, unknown>, migrationWarnings);
-  const expanded = expandFlows(
-    migrated,
-    source === '<inline>' ? process.cwd() : path.dirname(path.resolve(source)),
-  );
+  const baseDir = source === '<inline>' ? process.cwd() : path.dirname(path.resolve(source));
+  const expanded = resolveStaticRoot(expandFlows(migrated, baseDir), baseDir);
   const withOverrides = applyOverrides(expanded, overrides, env);
 
   let config: ScenarioConfig;
@@ -116,6 +114,17 @@ export function parseConfig(
 
   const finalized = finalize(config);
   return { config: finalized.config, warnings: [...migrationWarnings, ...finalized.warnings] };
+}
+
+/** staticAnalysis.source.root, comme les .feature : relatif au fichier de mission. */
+function resolveStaticRoot(raw: Record<string, unknown>, baseDir: string): Record<string, unknown> {
+  const analysis = raw.staticAnalysis as { source?: { root?: unknown } } | undefined;
+  const root = analysis?.source?.root;
+  if (!analysis || typeof root !== 'string' || path.isAbsolute(root)) return raw;
+  return {
+    ...raw,
+    staticAnalysis: { ...analysis, source: { ...analysis.source, root: path.resolve(baseDir, root) } },
+  };
 }
 
 /**

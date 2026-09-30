@@ -1,3 +1,4 @@
+import type { StaticAnalysisSummary } from '../static-analysis/model.js';
 import type { RegressionReport } from '../regression/regression-store.js';
 import type { HistoricalKnowledgeSummary } from '../intelligence/knowledge-summary.js';
 import type { PersistenceReport } from './persistence-report.js';
@@ -130,6 +131,8 @@ export interface ExplorationResult {
   invariants?: InvariantEvaluation[];
   /** Requêtes d'écriture annulées par la garde d'écriture (effets de bord). */
   blockedWrites?: BlockedWrite[];
+  /** Analyse statique : ce que le code de l'application a apporté (preuves, jamais des vérités). */
+  staticAnalysis?: StaticAnalysisSummary;
   /** Résumé non secret de la configuration effective. */
   settings: Record<string, unknown>;
   artifacts: {

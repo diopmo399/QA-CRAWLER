@@ -1,6 +1,7 @@
 import type { ExplorationListener } from '../explorer/flow-explorer.js';
 import { actionLabel } from '../model/discovered-action.js';
 import { redactText, redactUrl } from '../security/redactor.js';
+import type { StaticAnalysisEvent } from '../static-analysis/static-analyzer.js';
 
 export const LOG_LEVELS = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -49,7 +50,8 @@ export type EngineEvent =
   | 'FLOW_STEP_AMBIGUOUS'
   | 'FLOW_RECONCILIATION_COMPLETED'
   | 'SUGGESTED_FLOW_GENERATED'
-  | 'DRY_RUN_COMPLETED';
+  | 'DRY_RUN_COMPLETED'
+  | StaticAnalysisEvent;
 
 /**
  * Une ligne du journal du moteur (engine-log.jsonl). Seulement des id, des libellés
@@ -253,6 +255,20 @@ export class EngineEventLog {
       },
       onInteraction: (result) => {
         this.log('INFO', 'BROWSER_INTERACTION', `${result.type} ${result.status}`);
+      },
+      onStaticAnalysis: (event) => {
+        const warn =
+          event.event === 'SEMANTIC_EVIDENCE_CONFLICT' ||
+          event.event === 'STATIC_ANALYSIS_BUDGET_EXHAUSTED' ||
+          event.event === 'STATIC_ANALYSIS_UNAVAILABLE' ||
+          event.event === 'STATIC_PATH_REJECTED';
+        const detail =
+          event.event.startsWith('STATIC_ROUTE') ||
+          event.event.startsWith('STATIC_FIELD') ||
+          event.event.startsWith('STATIC_FORM') ||
+          event.event.startsWith('STATIC_DATA') ||
+          event.event.startsWith('STATIC_HTTP');
+        this.log(warn ? 'WARN' : detail ? 'DEBUG' : 'INFO', event.event, redactText(event.message));
       },
       onSemanticResolution: (event) => {
         const kind =

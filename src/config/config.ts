@@ -829,6 +829,81 @@ const loggingSchema = z
   })
   .strict();
 
+/**
+ * ANALYSE STATIQUE : le code de l'application comme source de preuves supplémentaires
+ * (formControlName → propriété de requête → DTO → API → OpenAPI). Désactivée par
+ * défaut : sans elle, rien ne change. Le code est lu, jamais exécuté.
+ */
+const staticAnalysisSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    /** auto : SOURCE si source.root est donné, sinon BUNDLE ; source ; bundle. */
+    mode: z.enum(['auto', 'source', 'bundle']).default('auto'),
+    /** ON_DEMAND (défaut) : seulement quand la résolution en a besoin ; EAGER : au début du run. */
+    strategy: z.enum(['on-demand', 'eager']).default('on-demand'),
+    source: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Racine du dépôt de l'application (relative au fichier de mission). */
+        root: nonEmpty.optional(),
+      })
+      .strict()
+      .default({}),
+    bundle: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Lire les source maps (sourcesContent) quand le serveur les publie. */
+        sourceMaps: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+    cache: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Par défaut : knowledge/static/ à côté du dossier des rapports (hors du dépôt). */
+        directory: nonEmpty.optional(),
+      })
+      .strict()
+      .default({}),
+    budgets: z
+      .object({
+        maxFiles: z.number().int().positive().default(500),
+        maxDurationMs: z.number().int().positive().default(30_000),
+        maxFileSizeBytes: z.number().int().positive().default(2_000_000),
+        /** Nœuds d'AST visités au plus (tous fichiers confondus). */
+        maxAstNodes: z.number().int().positive().default(5_000_000),
+      })
+      .strict()
+      .default({}),
+    analyzers: z
+      .object({ angular: z.boolean().default(true), genericJs: z.boolean().default(true) })
+      .strict()
+      .default({}),
+    features: z
+      .object({
+        routes: z.boolean().default(true),
+        forms: z.boolean().default(true),
+        validators: z.boolean().default(true),
+        dtoMapping: z.boolean().default(true),
+        httpCalls: z.boolean().default(true),
+        dataFlow: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+    semanticResolution: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
+    dryRun: z
+      .object({ useStaticKnowledge: z.boolean().default(true) })
+      .strict()
+      .default({}),
+    /** Version et commit de l'application analysée (sinon QA_COMMIT / QA_VERSION, sinon rien). */
+    version: nonEmpty.optional(),
+    commit: nonEmpty.optional(),
+  })
+  .strict();
+
 const openApiSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -1165,6 +1240,7 @@ export const scenarioSchema = z
     actors: z.array(actorSchema).default([]),
     authorization: authorizationSchema.default({}),
     openapi: openApiSchema.default({}),
+    staticAnalysis: staticAnalysisSchema.default({}),
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),
     testData: testDataSchema.default({}),
@@ -1196,3 +1272,4 @@ export type QueryParamMode = ScenarioConfig['exploration']['queryParams']['mode'
 export type InvariantConfig = ScenarioConfig['invariants'][number];
 export type GoalTargetConfig = ScenarioConfig['goals']['targets'][number];
 export type KnowledgeConfig = ScenarioConfig['knowledge'];
+export type StaticAnalysisConfig = ScenarioConfig['staticAnalysis'];

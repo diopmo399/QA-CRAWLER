@@ -1,0 +1,30 @@
+openapi: 3.0.3
+info: { title: fixture, version: '1' }
+paths:
+  /api/users:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUserRequest' }
+      responses: { '201': { description: created } }
+  /api/users/{id}/contacts:
+    put:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                primaryEmail: { type: string, format: email }
+                secondaryEmail: { type: string, format: email }
+      responses: { '200': { description: ok } }
+components:
+  schemas:
+    CreateUserRequest:
+      type: object
+      required: [firstName, email]
+      properties:
+        firstName: { type: string, maxLength: 80 }
+        email: { type: string, format: email }
+        backupEmail: { type: string, format: email }

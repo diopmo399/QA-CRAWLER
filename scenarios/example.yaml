@@ -145,6 +145,23 @@ openapi:
   enabled: false
   # source: openapi.yaml # file, or a URL on an allowed host: statuses checked, form fields completed
 
+# Static analysis: the application's code (Angular / TypeScript / JavaScript) as extra evidence,
+# never a runtime truth. Read, never executed. Off by default: nothing changes when off.
+staticAnalysis:
+  enabled: false
+  mode: auto # auto: source if source.root is given, else the scripts the browser loaded (bundle)
+  strategy: on-demand # on-demand: only when a field cannot be resolved without it; eager: at start
+  source: { enabled: true } # root: ../my-app  (relative to this file)
+  bundle: { enabled: true, sourceMaps: true }
+  cache: { enabled: true } # directory: default knowledge/static next to the reports folder
+  budgets: { maxFiles: 500, maxDurationMs: 30000, maxFileSizeBytes: 2000000, maxAstNodes: 5000000 }
+  analyzers: { angular: true, genericJs: true }
+  features: { routes: true, forms: true, validators: true, dtoMapping: true, httpCalls: true, dataFlow: true }
+  semanticResolution: { enabled: true }
+  dryRun: { useStaticKnowledge: true }
+  # version: 1.4.0   # of the analysed application (else QA_VERSION)
+  # commit: 1a2b3c4  # (else QA_COMMIT) — part of the cache identity
+
 # After a failure: strategies tried in this order (one left out is never used).
 recovery:
   enabled: true

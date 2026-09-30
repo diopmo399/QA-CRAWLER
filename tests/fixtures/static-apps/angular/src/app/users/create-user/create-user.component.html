@@ -1,0 +1,9 @@
+<form [formGroup]="form" (ngSubmit)="save()">
+  <input type="text" formControlName="firstName" />
+  <input
+    type="text"
+    formControlName="contact"
+  />
+  <input type="tel" formControlName="phone" />
+  <button type="submit">Enregistrer</button>
+</form>

@@ -28,6 +28,7 @@ export interface ScoreComponent {
     | 'form'
     | 'context'
     | 'navigation'
+    | 'static'
     | 'history';
   points: number;
   detail: string;

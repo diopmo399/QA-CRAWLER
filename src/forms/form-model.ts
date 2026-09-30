@@ -51,6 +51,10 @@ export interface FormField {
   required: boolean;
   /** Qui déclare le champ obligatoire : attribut HTML required, aria-required. */
   requiredBy?: ('HTML' | 'ARIA')[];
+  /** ANALYSE STATIQUE (preuves, pas des vérités) : concept prouvé, propriété d'API alimentée, validateurs du framework. */
+  staticConcept?: string;
+  staticProperty?: string;
+  staticValidators?: { kind: string; value?: string | number }[];
   disabled: boolean;
   readonly: boolean;
   /** Attribut multiple (select, file, email). */

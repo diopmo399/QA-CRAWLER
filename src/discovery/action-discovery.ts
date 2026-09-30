@@ -342,6 +342,7 @@ function fieldConstraints(element: UiElement): FieldConstraints {
     choiceGroup: element.choiceGroup,
     elementId: element.elementId,
     accessibleName: element.name && element.name !== (element.label ?? '') ? element.name : undefined,
+    frameworkName: element.frameworkName,
   };
   for (const [key, value] of Object.entries(optional) as [keyof FieldConstraints, unknown][]) {
     if (value !== undefined && value !== '') (constraints as unknown as Record<string, unknown>)[key] = value;

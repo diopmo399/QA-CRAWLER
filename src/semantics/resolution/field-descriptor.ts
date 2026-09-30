@@ -34,6 +34,10 @@ export interface FieldDescriptor {
   options?: FieldOption[];
   sensitive: boolean;
   payment: boolean;
+  /** Nom du contrôle du framework (Angular formControlName). */
+  frameworkName?: string;
+  /** Concept prouvé par l'analyse statique (email…) : une preuve, jamais une vérité d'exécution. */
+  staticConcept?: string;
   /** Texte voisin : libellé du groupe, aide, fenêtre. */
   nearbyText: string[];
   groupLabel?: string;
@@ -68,6 +72,8 @@ export function describeField(action: DiscoveredAction): FieldDescriptor {
     ...(form.placeholder ? { placeholder: form.placeholder } : {}),
     ...(constraints?.accessibleName ? { ariaLabel: constraints.accessibleName } : {}),
     ...(constraints?.autocomplete ? { autocomplete: constraints.autocomplete } : {}),
+    ...(constraints?.frameworkName ? { frameworkName: constraints.frameworkName } : {}),
+    ...(constraints?.staticConcept ? { staticConcept: constraints.staticConcept } : {}),
     type: fieldTypeOf(action),
     ...(action.role ? { role: action.role } : {}),
     required: form.required,

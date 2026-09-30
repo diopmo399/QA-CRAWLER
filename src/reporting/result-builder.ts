@@ -96,6 +96,7 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     },
     ...(outcome.invariants.length > 0 ? { invariants: outcome.invariants } : {}),
     ...(outcome.blockedWrites.length > 0 ? { blockedWrites: outcome.blockedWrites } : {}),
+    ...(outcome.staticAnalysis ? { staticAnalysis: outcome.staticAnalysis } : {}),
     settings: {
       exploration,
       goals,

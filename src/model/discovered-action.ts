@@ -87,6 +87,16 @@ export interface FieldConstraints {
   elementId?: string;
   /** Nom accessible (aria-label, aria-labelledby…), quand il diffère du libellé. */
   accessibleName?: string;
+  /** Nom du contrôle de formulaire du framework (Angular formControlName). */
+  frameworkName?: string;
+  /**
+   * Ce que l'ANALYSE STATIQUE dit du champ (jamais une vérité d'exécution) : le concept
+   * prouvé par le code et le contrat (email…), la propriété d'API qu'il alimente et ses
+   * validateurs. Absent sans analyse statique.
+   */
+  staticConcept?: string;
+  staticProperty?: string;
+  staticValidators?: { kind: string; value?: string | number }[];
 }
 
 /** Une action utilisateur disponible sur un état donné. Données simples et sérialisables. */

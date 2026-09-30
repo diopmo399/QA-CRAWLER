@@ -5,6 +5,7 @@ import type { PageContext } from '../src/model/page-context.js';
 import type { PageStructure, UiElement, UiSnapshot } from '../src/model/ui-snapshot.js';
 import { StateDetector } from '../src/observation/state-detector.js';
 import { SafetyPolicy } from '../src/policies/safety-policy.js';
+import type { StaticAnalyzerOptions } from '../src/static-analysis/static-analyzer.js';
 
 /** Configuration complète, valeurs par défaut appliquées, pour http://localhost:4200, avec des ajouts YAML facultatifs. */
 export function testConfig(extraYaml = ''): ScenarioConfig {
@@ -98,6 +99,24 @@ export function structure(overrides: Partial<PageStructure> = {}): PageStructure
     wizardSteps: 0,
     fileInputs: 0,
     pagination: false,
+    ...overrides,
+  };
+}
+
+/** Options de l'analyseur statique pour les tests (toutes les analyses, budgets larges). */
+export function staticAnalyzerOptions(overrides: Partial<StaticAnalyzerOptions> = {}): StaticAnalyzerOptions {
+  return {
+    applicationId: 'fixture',
+    features: {
+      routes: true,
+      forms: true,
+      validators: true,
+      dtoMapping: true,
+      httpCalls: true,
+      dataFlow: true,
+    },
+    analyzers: { angular: true, genericJs: true },
+    budgets: { maxFiles: 500, maxDurationMs: 30_000, maxFileSizeBytes: 2_000_000, maxAstNodes: 5_000_000 },
     ...overrides,
   };
 }
