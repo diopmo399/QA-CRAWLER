@@ -178,7 +178,8 @@ export function gherkinFlows(
   }
   if (unknown.length > 0)
     throw new GherkinError(`Unrecognised Gherkin sentence(s) in ${display}`, [
-      ...unknown,
+      // Un Plan du scénario répète ses phrases pour chaque ligne d'exemples : chacune une seule fois.
+      ...new Set(unknown),
       'write it with one of the built-in sentences (see the README, "Scénarios Gherkin"), add it under gherkin.steps in the mission, or set gherkin.auto: true to interpret it on the screen',
     ]);
   if (wanted) {

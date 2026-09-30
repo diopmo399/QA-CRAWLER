@@ -21,7 +21,8 @@ Usage:
   npm run qa -- dry-run create-user.feature -c mission.yaml --output-format both
 
 Options:
-  -c, --config <file>          Mission (target, sign-in, safety, gherkin.steps, reusable flows)
+  -c, --config <file>          Mission (target, sign-in, safety, gherkin.steps, reusable flows).
+                               A mission given as the scenario (dry-run mission.yaml) checks its own flows.
       --base-url <url>         Target (without --config, or to override it; also QA_BASE_URL)
       --use-history            Try known paths (memory, knowledge) before exploring
       --no-history             Current exploration only
@@ -202,8 +203,8 @@ export async function runDryRunCli(argv: string[]): Promise<number> {
     });
   } catch (error) {
     if (error instanceof ConfigError) {
+      // Le message contient déjà le détail (une ligne par cause).
       logger.error(error.message);
-      for (const detail of error.details) logger.error(`  ${detail}`);
       return 2;
     }
     if (error instanceof AuthError) {

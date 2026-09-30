@@ -280,6 +280,18 @@ describe('Gherkin intents: what the scenario asks, never how', () => {
       { kind: 'NAVIGATE', target: 'Details' },
       { kind: 'NAVIGATE', target: 'Activity' },
     ]);
+    // Un lieu dans un tiroir (panneau latéral) : quatre lieux, dans l'ordre.
+    expect(
+      parser.parseAll(
+        'l\'utilisateur accède à l\'étape "Analyse", à l\'onglet "Détails" et à la section "Activité" du tiroir "Informations générales"',
+        'Action',
+      ),
+    ).toEqual([
+      { kind: 'NAVIGATE', target: 'Analyse' },
+      { kind: 'NAVIGATE', target: 'Détails' },
+      { kind: 'NAVIGATE', target: 'Activité' },
+      { kind: 'NAVIGATE', target: 'Informations générales' },
+    ]);
     // Un seul lieu : l'intention habituelle.
     expect(parser.parseAll('j\'accède à l\'onglet "Détails"', 'Action')).toEqual([
       { kind: 'NAVIGATE', target: 'Détails' },

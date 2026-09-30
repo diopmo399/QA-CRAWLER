@@ -179,3 +179,95 @@ describe('FlowIntentGraph: the expected flow, whatever its syntax', () => {
     );
   });
 });
+
+describe('dry run of a business scenario: unknown sentences never block the analysis', () => {
+  const BUSINESS = `Feature: Code de catégorie
+  Scenario Outline: Modifier le code de catégorie
+    Given un dossier est créé avec succès
+    When l'utilisateur accède à l'étape "Analyse", à l'onglet "Détails" et à la section "Activité"
+    And modifie le code de catégorie de 111 à <Nouveau code>
+    And quitte l'onglet afin d'enregistrer les modifications
+    Then le code <Nouveau code> est affiché dans le dossier
+
+    Examples:
+      | Nouveau code |
+      | 222          |
+      | 333          |
+      | 444          |
+`;
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'qa-dry-run-business-'));
+    await writeFile(path.join(dir, 'code.feature'), BUSINESS);
+    await writeFile(path.join(dir, 'mission.yaml'), 'target: { baseUrl: http://localhost:4200 }\n');
+    await writeFile(
+      path.join(dir, 'strict.yaml'),
+      'target: { baseUrl: http://localhost:4200 }\ngherkin: { auto: false }\n',
+    );
+  });
+
+  it('auto mode and semantic resolution are on by default: every example becomes a flow', () => {
+    const { graphs } = loadDryRunScenario({
+      scenarioFile: path.join(dir, 'code.feature'),
+      missionFile: path.join(dir, 'mission.yaml'),
+    });
+    expect(graphs).toHaveLength(3);
+    expect(graphs[0]?.intents.map((intent) => `${intent.type} ${intent.label}`)).toEqual([
+      'CUSTOM un dossier est créé avec succès',
+      'NAVIGATE Analyse',
+      'NAVIGATE Détails',
+      'NAVIGATE Activité',
+      'FILL code de catégorie',
+      "CUSTOM quitte l'onglet afin d'enregistrer les modifications",
+      'CUSTOM le code 222 est affiché dans le dossier',
+    ]);
+    expect(graphs[2]?.intents[4]?.value).toBe('444');
+  });
+
+  it('a mission that says gherkin.auto: false is respected; each unknown sentence is listed once', () => {
+    let message = '';
+    try {
+      loadDryRunScenario({
+        scenarioFile: path.join(dir, 'code.feature'),
+        missionFile: path.join(dir, 'strict.yaml'),
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('Unrecognised Gherkin sentence');
+    expect(message.match(/quitte l'onglet/g)).toHaveLength(1);
+  });
+
+  it('without a mission nor an address: a clear message, not a schema error', () => {
+    expect(() => loadDryRunScenario({ scenarioFile: path.join(dir, 'code.feature'), env: {} })).toThrow(
+      /No target application for the dry run/,
+    );
+  });
+});
+
+describe('dry run of a mission file: its own flows, target and sign-in', () => {
+  it('dry-run mission.yaml checks the flows of the mission with its target (reusable flows stay reusable)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'qa-dry-run-mission-'));
+    await writeFile(
+      path.join(dir, 'mission.yaml'),
+      `mission: { name: dossiers }
+target: { baseUrl: http://localhost:4200 }
+flows:
+  - name: ouvrir
+    reusable: true
+    steps: [{ goto: /liste }]
+  - name: traiter
+    steps:
+      - run: ouvrir
+      - click: { role: button, name: Traiter }
+`,
+    );
+    const loaded = loadDryRunScenario({ scenarioFile: path.join(dir, 'mission.yaml'), env: {} });
+    expect(loaded.config.target.baseUrl).toBe('http://localhost:4200');
+    expect(loaded.graphs.map((graph) => graph.name)).toEqual(['traiter']);
+    expect(loaded.graphs[0]?.intents.map((intent) => `${intent.type} ${intent.label}`)).toEqual([
+      'NAVIGATE /liste',
+      'CLICK Traiter',
+    ]);
+  });
+});
