@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ScenarioConfig } from '../config/config.js';
+import { knowledgeFileOf } from '../knowledge/json-knowledge-base.js';
 import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { runMission, type RunOptions } from '../orchestrator.js';
@@ -18,6 +19,8 @@ export type DryRunOutputFormat = 'gherkin' | 'yaml' | 'both';
 export interface DryRunRequest extends DryRunInput {
   /** true / false : forcer l'usage des chemins historiques (sinon dryRun.useHistoricalKnowledge). */
   useHistory?: boolean;
+  /** true : une mémoire propre à ce Dry Run (sinon : le fichier de connaissances commun aux runs de la mission). */
+  isolatedMemory?: boolean;
   maxDepth?: number;
   maxActions?: number;
   maxDurationMs?: number;
@@ -210,6 +213,14 @@ function dryRunConfig(config: ScenarioConfig, request: DryRunRequest, directory:
   return {
     ...config,
     mission: { ...config.mission, mode: 'explore' },
+    // La mémoire des runs de la mission (calculée avant de déplacer les rapports) : le Dry Run profite
+    // de ce qu'ils ont appris, et eux de ce qu'il découvre. --isolated-memory : le dossier du Dry Run.
+    knowledge: {
+      ...config.knowledge,
+      file: request.isolatedMemory
+        ? path.join(directory, 'knowledge', 'knowledge-base.json')
+        : knowledgeFileOf(config),
+    },
     output: {
       ...config.output,
       reportsDir: path.join(directory, 'exploration'),

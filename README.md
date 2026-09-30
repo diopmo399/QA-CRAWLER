@@ -632,6 +632,7 @@ Autres exemples : `tests/fixtures/features/semantic-users.feature` (création, t
 npm run qa -- dry-run features/create-user.feature -c mission.yaml
 npm run qa -- dry-run flows/create-user.flow.yaml -c mission.yaml --output-format both
 npm run qa -- dry-run create-user.feature --base-url https://qa.example.com --no-history --max-actions 60
+npm run qa -- dry-run features/create-user.feature -c mission.yaml --isolated-memory
 npm run qa -- dry-run --help
 ```
 
@@ -674,7 +675,7 @@ Le test de bout en bout `tests/integration/dry-run.test.ts` le vérifie dans Chr
 
 1. L'intention est-elle sur l'écran ? (SemanticResolver pour une phrase d'intention, localisateur pour une étape YAML, lecture seule pour une vérification.) Oui : elle est exécutée, avec la SafetyPolicy des flows imposés.
 2. Non : **exploration guidée** vers elle et vers les 3 suivantes. D'abord une étape suivante déjà à l'écran (l'attendue est dépassée). Ensuite les **chemins connus** (graphe du run, graphe mémorisé, KnowledgeBase) : la mémoire propose, l'application confirme, chaque pas est rejoué sur l'écran réel. Enfin une recherche best-first, les écrans les plus proches d'abord.
-3. Une intention dépassée est mise de côté, réessayée après chaque étape trouvée (**réordonnancement**), puis qualifiée à la fin.
+3. Une intention dépassée est mise de côté, réessayée après chaque étape trouvée (**réordonnancement**), puis qualifiée à la fin. Elle est aussi guettée sur **chaque écran intermédiaire** de l'exploration guidée : si elle y apparaît en cherchant une autre étape, elle est exécutée là, marquée `REORDERED` (trouvée plus tard que prévu), jamais `MISSING`.
 
 **Score de l'exploration guidée :** le score du moteur de décision existant (ActionScorer, AdaptiveScoring), plus la proximité avec l'intention cherchée (mots, concepts du dictionnaire, adresse du lien), le premier pas d'un chemin connu, la progression (un bouton de formulaire vers un résultat attendu) et la nouveauté ; moins la répétition, l'instabilité et le risque. Un couple (écran, intention) déjà cherché ne l'est jamais deux fois.
 
@@ -719,6 +720,8 @@ dryRun:
 ```
 
 La mission donne la cible, la connexion, la sécurité, `gherkin.steps` et les flows `reusable` ; ses autres flows sont ignorés. Une mission donnée comme scénario (`dry-run scenarios/ma-mission.yaml`) vérifie ses propres flows, avec sa cible et sa connexion. Sans mission : `--base-url` (ou `QA_BASE_URL`). En Dry Run, le **mode automatique** et la **résolution sémantique** sont actifs par défaut : une phrase métier inconnue n'arrête pas le chargement, elle devient une intention à vérifier sur l'écran (`gherkin.auto: false` dans la mission les coupe). Sans mémoire ni persistance, le Dry Run n'utilise que l'exploration courante : aucune base de données n'est nécessaire.
+
+**Connaissance partagée :** le Dry Run lit et enrichit le **même** fichier de connaissance que les runs de la mission (`knowledge.file`, par défaut `knowledge/knowledge-base.json` à côté du dossier des rapports) : ce qu'il découvre sert aux runs suivants, et inversement. `--isolated-memory` le garde à part, dans `<reportsDir>/dry-run/<scénario>/knowledge/` (pour essayer sans toucher la mémoire de la mission).
 
 **Codes de sortie :** `0` FULLY_MATCHED ou PARTIALLY_MATCHED, `1` DIVERGED, BLOCKED ou INCONCLUSIVE, `2` usage ou scénario invalide, `3` erreur d'exécution.
 

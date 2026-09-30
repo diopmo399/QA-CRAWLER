@@ -71,6 +71,11 @@ export interface PathResolution {
   blocked?: { action: string; reason: string; target: string };
   /** Tout l'espace accessible dans la profondeur permise a été parcouru. */
   searchExhausted: boolean;
+  /**
+   * Une intention mise de côté plus tôt, apparue sur un écran intermédiaire de la recherche :
+   * la page y est ; le moteur l'exécute (REORDERED) puis reprend la recherche.
+   */
+  pendingFound?: FlowIntent;
   reasons: string[];
 }
 
@@ -118,7 +123,11 @@ export class IntentPathResolver {
     return candidate.verdict === 'BLOCK' || this.forbidden.has(slug(candidate.label));
   }
 
-  async resolvePath(targets: readonly FlowIntent[]): Promise<PathResolution> {
+  async resolvePath(
+    targets: readonly FlowIntent[],
+    /** Intentions mises de côté : revérifiées sur chaque nouvel écran de la recherche. */
+    watched: readonly FlowIntent[] = [],
+  ): Promise<PathResolution> {
     const start = this.driver.current();
     const alternatives: string[][] = [];
     let blocked: PathResolution['blocked'];
@@ -272,6 +281,23 @@ export class IntentPathResolver {
                 action: probe.target ?? target.label,
                 reason: probe.reason,
                 target: target.label,
+              };
+          }
+          for (const intent of watched) {
+            const probe = await this.driver.probe(intent);
+            if (probe.status === 'RESOLVED')
+              return {
+                status: 'FOUND',
+                path,
+                confidence: Math.min(0.9, 0.6 + 0.3 * probe.confidence),
+                source: ['observed'],
+                alternatives,
+                searchExhausted: false,
+                pendingFound: intent,
+                reasons: [
+                  `guided exploration: ${path.map((pathStep) => pathStep.action.label).join(' → ')}`,
+                  `"${intent.label}", set aside earlier, appeared on this screen (${probe.reason})`,
+                ],
               };
           }
           if (!visited.has(result.state.id)) {

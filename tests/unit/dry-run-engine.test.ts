@@ -235,6 +235,41 @@ describe('DryRunEngine + reconciliation, on synthetic applications', () => {
     expect(reconciliation.status).toBe('PARTIALLY_MATCHED');
   });
 
+  it('a step set aside, seen on an intermediate screen while looking for another: REORDERED, not MISSING', async () => {
+    const app = new SyntheticApp(
+      {
+        s0: { label: 'Départ', actions: [{ label: 'A', to: 's1' }] },
+        s1: { label: 'Un', actions: [{ label: 'C', to: 's2' }] },
+        s2: { label: 'Deux', actions: [{ label: 'Y', to: 's3' }] },
+        s3: { label: 'Trois', actions: [{ label: 'B', to: 's4' }] },
+        s4: { label: 'Quatre', actions: [{ label: 'D', to: 's5' }] },
+        s5: { label: 'Fin' },
+      },
+      's0',
+    );
+    const { reconciliation, events } = await dryRun(
+      app,
+      expectedFlow('late', [
+        ['CLICK', 'A'],
+        ['CLICK', 'B'],
+        ['CLICK', 'C'],
+        ['CLICK', 'D'],
+      ]),
+    );
+    expect(rows(reconciliation)).toEqual([
+      'A MATCHED',
+      'C MATCHED',
+      'Y INSERTED',
+      'B REORDERED',
+      'D MATCHED',
+    ]);
+    expect(app.executed).toEqual(['A', 'C', 'Y', 'B', 'D']);
+    expect(events.some((event) => event.type === 'FLOW_STEP_REORDERED')).toBe(true);
+    expect(reconciliation.entries[3]?.reasons.join('\n')).toContain(
+      'found later in the flow than expected, while looking for another step',
+    );
+  });
+
   it('an alternative path: the historical one is replayed, confirmed, and the other is named', async () => {
     const app = new SyntheticApp(
       {
