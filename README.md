@@ -251,6 +251,17 @@ QA_USERNAME=admin@exemple.com QA_PASSWORD='mot-de-passe' npm run qa -- scenarios
 $env:QA_USERNAME="admin@exemple.com"; $env:QA_PASSWORD="mot-de-passe"; npm run qa -- scenarios/mon-flow.yaml
 ```
 
+**Ou dans un fichier `.env`**, à la racine du projet, lu automatiquement par toutes les commandes (`.env` est dans le `.gitignore` : il ne part jamais dans le dépôt) :
+
+```bash
+cp .env.example .env    # puis remplir les valeurs
+npm run qa -- scenarios/mon-flow.yaml
+npm run qa -- dry-run features/creation.feature -c scenarios/mon-flow.yaml
+npm run qa -- --dotenv .env.recette scenarios/mon-flow.yaml   # un autre fichier
+```
+
+Une ligne par variable (`NOM=valeur`, `# commentaire`, guillemets pour une valeur avec espaces ou `#`). Une variable déjà définie dans le terminal **reste prioritaire**. La console n'affiche que le nombre de variables chargées, jamais leurs valeurs ; une ligne invalide est signalée par son numéro, sans sa valeur.
+
 Pour regarder le navigateur travailler, ajoute `--headed` (et `browser.slowMoMs: 500` dans le YAML pour ralentir).
 
 ### 2. Les étapes
