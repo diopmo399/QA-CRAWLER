@@ -1,7 +1,7 @@
 import { slug } from '../knowledge/signatures.js';
 import { normalizeForMatch, tokenOverlap } from '../semantics/resolution/normalize.js';
 import type { SemanticDictionary } from '../semantics/semantic-dictionary.js';
-import type { DryRunCandidate, DryRunDriver, KnownPath } from './dry-run-driver.js';
+import type { DryRunCandidate, DryRunDriver, KnownPath, StaticPathHint } from './dry-run-driver.js';
 import type { FlowIntent } from './flow-intent-graph.js';
 import type { DryRunBudgetUsage, ObservedState } from './reconciliation-model.js';
 
@@ -107,6 +107,8 @@ export class IntentPathResolver {
    * jamais, même si les permissions d'une autre étape l'autoriseraient.
    */
   private readonly forbidden = new Set<string>();
+  /** Indices de l'analyse statique pour la recherche en cours (jamais une vérité avant d'être joués). */
+  private hints: StaticPathHint[] = [];
 
   constructor(
     private readonly driver: DryRunDriver,
@@ -197,7 +199,12 @@ export class IntentPathResolver {
       }
     }
 
-    // 2. Exploration best-first, écran par écran.
+    // 2. Exploration best-first, écran par écran. Le code de l'application peut suggérer
+    //    quelles actions essayer d'abord (routes) : un indice, confirmé ou non par l'exécution.
+    this.hints = targets.flatMap((target) => {
+      const hint = this.driver.staticHints?.(target);
+      return hint ? [hint] : [];
+    });
     const frontier: Frontier[] = [{ state: start, path: [] }];
     // Par identifiant d'état (empreinte) : deux écrans de même signature restent distincts pendant une recherche.
     const visited = new Set<string>([start.id]);
@@ -274,6 +281,7 @@ export class IntentPathResolver {
                 reasons: [
                   `guided exploration: ${path.map((pathStep) => pathStep.action.label).join(' → ')}`,
                   `then ${target.label} found (${probe.reason})`,
+                  ...this.confirmHints(path.map((pathStep) => pathStep.action)),
                 ],
               };
             if (probe.status === 'BLOCKED')
@@ -312,6 +320,7 @@ export class IntentPathResolver {
       }
     }
     await this.driver.restore(start.id);
+    for (const hint of this.hints) this.driver.staticPathOutcome?.(hint, false, []);
     if (blocked)
       return {
         status: 'BLOCKED',
@@ -367,6 +376,8 @@ export class IntentPathResolver {
       );
       if (onPath) add(0.6, 'first step of a known path');
     }
+    const hint = this.hintFor(candidate);
+    if (hint) add(0.35, `static code suggests ${hint.description} (hint, not yet confirmed at runtime)`);
     const outcome = targets.some((target) => target.type === 'ASSERT' || target.type === 'SUBMIT');
     if (outcome && (candidate.category === 'submit' || candidate.category === 'form-step'))
       add(0.25, 'goal progress: completes a form toward the expected outcome');
@@ -382,6 +393,30 @@ export class IntentPathResolver {
     if (this.failed.has(key)) add(-0.3, 'instability: failed before');
     if (candidate.classification === 'MUTATION' && !outcome) add(-0.15, 'risk: changes data');
     return { score, reasons };
+  }
+
+  /** L'indice statique dont une étape ressemble à ce contrôle (libellé ou adresse du lien). */
+  private hintFor(candidate: Pick<DryRunCandidate, 'label' | 'href'>): StaticPathHint | undefined {
+    return this.hints.find((hint) =>
+      hint.segments.some(
+        (segment) =>
+          similarityOf(candidate, { label: segment, semanticTarget: slug(segment) }, this.dictionary) >= 0.6,
+      ),
+    );
+  }
+
+  /** Le chemin joué passe-t-il par les étapes suggérées par le code ? Confirmé à l'exécution, ou pas. */
+  private confirmHints(actions: readonly Pick<DryRunCandidate, 'label' | 'href'>[]): string[] {
+    const reasons: string[] = [];
+    for (const hint of this.hints) {
+      const used = actions.filter((action) => this.hintFor(action) === hint).map((action) => action.label);
+      this.driver.staticPathOutcome?.(hint, used.length > 0, used);
+      if (used.length > 0)
+        reasons.push(
+          `path suggested by the application code (${hint.description}), confirmed at runtime: ${used.join(' → ')}`,
+        );
+    }
+    return reasons;
   }
 
   private bestSimilarity(

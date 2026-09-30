@@ -108,6 +108,9 @@ export function fieldOf(action: DiscoveredAction): FormField {
     requiredBy: field?.requiredBy,
     multiple: field?.multiple,
     ariaInvalid: field?.ariaInvalid,
+    staticConcept: field?.staticConcept,
+    staticProperty: field?.staticProperty,
+    staticValidators: field?.staticValidators,
   };
   const result: FormField = {
     id: action.id,

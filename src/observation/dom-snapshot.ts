@@ -625,6 +625,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
         attr('data-cy'),
       inputType,
       fieldName: attr('name'),
+      frameworkName: attr('formcontrolname'),
       elementId: attr('id'),
       href,
       target: attr('target'),

@@ -3,3 +3,5 @@ node_modules
 reports
 screenshots
 package-lock.json
+# applications analysées par les tests d'analyse statique (données, pas du code du projet)
+tests/fixtures/static-apps

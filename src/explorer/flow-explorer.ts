@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Page } from 'playwright';
 import { IssueCollector } from '../anomaly/issue-collector.js';
@@ -71,6 +72,13 @@ import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
 import { UIObserver } from '../observation/ui-observer.js';
 import { waitForScreenReady } from '../observation/screen-ready.js';
 import { fieldLabel, formFieldsFor } from '../forms/form-fields.js';
+import { StaticApplicationAnalyzer, type StaticAnalysisEvent } from '../static-analysis/static-analyzer.js';
+import { StaticKnowledge, annotateStaticFields } from '../static-analysis/static-knowledge.js';
+import { collectBundle } from '../static-analysis/bundle.js';
+import { StaticPathResolver } from '../static-analysis/static-path-resolver.js';
+import { SemanticVocabulary } from '../semantics/resolution/vocabulary.js';
+import type { FieldDescriptor } from '../semantics/resolution/field-descriptor.js';
+import type { FieldProvenance, StaticAnalysisSummary } from '../static-analysis/model.js';
 import {
   classifyPlaywrightError,
   NavigationGuard,
@@ -189,6 +197,8 @@ export interface ExplorationListener {
    * SEMANTIC_RESOLUTION_SUCCEEDED / FAILED / AMBIGUOUS. Jamais une valeur saisie.
    */
   onSemanticResolution?(event: SemanticResolutionEvent): void;
+  /** ANALYSE STATIQUE : cache, découvertes, preuves, chemins suggérés/confirmés. Jamais un secret. */
+  onStaticAnalysis?(event: { at: string; event: StaticAnalysisEvent; message: string }): void;
 }
 
 export interface FlowExplorerOptions {
@@ -251,6 +261,8 @@ export interface ExplorationOutcome {
   runId: string;
   /** Formulaires trouvés et remplis. */
   forms: FormReport[];
+  /** Analyse statique (seulement si activée). */
+  staticAnalysis?: StaticAnalysisSummary;
   /** Tentatives de récupération, branches abandonnées et circuits ouverts. */
   recovery: RecoverySummary;
   /** Actions qui modifient des données : exécutées, et le budget (safety.mutations). */
@@ -365,6 +377,11 @@ export class FlowExplorer {
   private readonly semantics: Semantics;
   /** Résolution sémantique des phrases d'intention (gherkin.semanticResolution.enabled). */
   private readonly semanticResolver: SemanticResolver | undefined;
+  /** Connaissance statique (code de l'application) : chargée une fois, à la demande ou au début. */
+  private staticKnowledge: StaticKnowledge | undefined;
+  private staticLoading: Promise<StaticKnowledge | undefined> | undefined;
+  private staticCache: 'HIT' | 'MISS' | 'DISABLED' | undefined;
+  private readonly staticWarnings: string[] = [];
   /** Le scénario en cours : le formulaire rempli, les valeurs saisies (non sensibles) pour les vérifications. */
   private scenario: { formGroup?: string; values: ScenarioValue[] } = { values: [] };
   private semanticEngine: ConfidenceEngine | undefined;
@@ -660,6 +677,13 @@ export class FlowExplorer {
           return this.outcome('unreachable-start');
         }
       }
+      // ANALYSE STATIQUE : au début (eager, ou Dry Run qui s'en sert pour ses indices), sinon à la demande.
+      if (
+        this.config.staticAnalysis.enabled &&
+        (this.config.staticAnalysis.strategy === 'eager' ||
+          (this.dryRunHook !== undefined && this.config.staticAnalysis.dryRun.useStaticKnowledge))
+      )
+        await this.ensureStaticKnowledge(page);
       // L'état de départ est la racine du graphe des flows, quel que soit ce que les flows visitent d'abord.
       let current = await this.observeState(page, 0);
       // GOAL PLANNER : des objectifs fonctionnels (jamais des clics), suivis pendant tout le run.
@@ -873,6 +897,7 @@ export class FlowExplorer {
     const state = this.stateDetector.detect(snapshot);
     this.frames.set(state.stateId, frameOf(state.signature));
     const actions = this.discovery.discover(snapshot, state.stateId);
+    this.annotateStatic(actions, snapshot.url);
     const isNew = this.graph.addNode({
       id: state.stateId,
       label: state.label,
@@ -1979,6 +2004,32 @@ export class FlowExplorer {
       seenDuringRun: (target) => [...seen.values()].some((of) => targetsIn(of, target)),
       now: () => Date.now(),
     };
+    // ANALYSE STATIQUE : les routes du code comme indices ; jamais un goto vers une route cachée.
+    const knowledge = this.staticKnowledge;
+    if (knowledge && this.config.staticAnalysis.dryRun.useStaticKnowledge) {
+      const paths = new StaticPathResolver(knowledge, this.semantics.dictionary);
+      const suggested = new Set<string>();
+      driver.staticHints = (target) => {
+        if (target.type !== 'NAVIGATE' && target.type !== 'CLICK') return undefined;
+        const hint = paths.suggest(pathnameOf(context().url), target.label);
+        if (hint && !suggested.has(`${target.id}|${hint.route}`)) {
+          suggested.add(`${target.id}|${hint.route}`);
+          this.emitStatic(
+            'STATIC_PATH_SUGGESTED',
+            `"${target.label}": ${hint.description} (confidence ${String(hint.confidence)}, not confirmed)`,
+          );
+        }
+        return hint;
+      };
+      driver.staticPathOutcome = (hint, confirmed, path) => {
+        if (confirmed) {
+          hint.runtimeConfirmed = true;
+          knowledge.confirmRoute(hint.route);
+          this.emitStatic('STATIC_PATH_CONFIRMED', `${hint.description}: ${path.join(' → ')}`);
+        } else
+          this.emitStatic('STATIC_PATH_REJECTED', `${hint.description}: not confirmed by the application`);
+      };
+    }
     if (this.historyAvailable)
       driver.historicalObservations = (target) =>
         this.knowledge
@@ -2257,13 +2308,187 @@ export class FlowExplorer {
           report: done('PASSED', { stateId: after.stateId, url: after.url, classification: 'SAFE' }),
         };
       }
+      case 'fill':
+      case 'select': {
+        // flow.yaml et Gherkin convergent : un champ que le libellé ne trouve pas (aucun
+        // <label>) est résolu comme l'intention équivalente, avec les preuves statiques.
+        const semantic = await this.semanticFallback(
+          page,
+          browser,
+          observers,
+          flow,
+          step,
+          context,
+          timeout,
+          done,
+        );
+        if (semantic) return semantic;
+        return this.runFlowElementStep(page, browser, observers, flow, step, context, timeout, done);
+      }
       case 'click':
       case 'check':
       case 'uncheck':
-      case 'fill':
-      case 'select':
         return this.runFlowElementStep(page, browser, observers, flow, step, context, timeout, done);
     }
+  }
+
+  private async semanticFallback(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    flow: FlowConfig,
+    step: Extract<FlowStep, { kind: 'fill' | 'select' }>,
+    context: PageContext,
+    timeout: number,
+    done: (status: FlowStatus, extra?: Partial<FlowStepReport>) => FlowStepReport,
+  ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport } | undefined> {
+    if (!this.config.staticAnalysis.enabled || !this.semanticResolver) return undefined;
+    const name =
+      step.target.strategy === 'label' || step.target.strategy === 'text'
+        ? step.target.value
+        : step.target.name;
+    if (!name) return undefined;
+    const located = await this.flowSteps.locate(page, step.target, Math.min(1_000, timeout));
+    if (typeof located !== 'string') return undefined;
+    const intentStep: Extract<FlowStep, { kind: 'intent' }> = {
+      kind: 'intent',
+      intent:
+        step.kind === 'fill'
+          ? { kind: 'FILL', field: name, value: step.value }
+          : { kind: 'SELECT', field: name, option: step.option },
+      allow: step.allow,
+      optional: step.optional,
+      ...(step.name ? { name: step.name } : {}),
+    };
+    const outcome = await this.runIntentStep(
+      page,
+      browser,
+      observers,
+      flow,
+      intentStep,
+      context,
+      timeout,
+      done,
+    );
+    return {
+      ...outcome,
+      report: {
+        ...outcome.report,
+        interpretation: `no element labelled "${name}": resolved as an intent${outcome.report.interpretation ? ` · ${outcome.report.interpretation}` : ''}`,
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------- analyse statique
+
+  /** Charge une fois la connaissance statique. Jamais une dépendance : un échec rend undefined, le run continue. */
+  private ensureStaticKnowledge(page?: Page): Promise<StaticKnowledge | undefined> {
+    if (!this.config.staticAnalysis.enabled) return Promise.resolve(undefined);
+    this.staticLoading ??= this.loadStaticKnowledge(page)
+      .catch((error: unknown) => {
+        this.emitStatic('STATIC_ANALYSIS_UNAVAILABLE', `static analysis failed: ${(error as Error).message}`);
+        this.staticWarnings.push(redactText(`static analysis failed: ${(error as Error).message}`));
+        return undefined;
+      })
+      .then((knowledge) => {
+        this.staticKnowledge = knowledge;
+        return knowledge;
+      });
+    return this.staticLoading;
+  }
+
+  private async loadStaticKnowledge(page?: Page): Promise<StaticKnowledge | undefined> {
+    const settings = this.config.staticAnalysis;
+    const analyzer = new StaticApplicationAnalyzer({
+      applicationId: this.config.mission.name,
+      ...((settings.version ?? this.env.QA_VERSION)
+        ? { version: settings.version ?? this.env.QA_VERSION }
+        : {}),
+      ...((settings.commit ?? this.env.QA_COMMIT) ? { commit: settings.commit ?? this.env.QA_COMMIT } : {}),
+      features: settings.features,
+      analyzers: settings.analyzers,
+      budgets: settings.budgets,
+      ...(settings.cache.enabled
+        ? {
+            cacheDirectory:
+              settings.cache.directory ??
+              path.join(path.dirname(path.resolve(this.config.output.reportsDir)), 'knowledge', 'static'),
+          }
+        : {}),
+      onEvent: (event, message) => {
+        this.emitStatic(event, message);
+      },
+    });
+    const mode =
+      settings.mode === 'auto'
+        ? settings.source.enabled && settings.source.root
+          ? 'source'
+          : 'bundle'
+        : settings.mode;
+    let outcome;
+    if (mode === 'source' && settings.source.enabled && settings.source.root)
+      outcome = await analyzer.analyzeSource(settings.source.root);
+    else if (mode === 'bundle' && settings.bundle.enabled && page)
+      outcome = await analyzer.analyzeSet(
+        await collectBundle(page, {
+          sourceMaps: settings.bundle.sourceMaps,
+          maxFiles: settings.budgets.maxFiles,
+          maxFileSizeBytes: settings.budgets.maxFileSizeBytes,
+          isAllowedUrl: (url) => this.safety.navigation.isAllowedHost(new URL(url).hostname),
+        }),
+        'BUNDLE',
+      );
+    else {
+      this.emitStatic(
+        'STATIC_ANALYSIS_UNAVAILABLE',
+        'no source (staticAnalysis.source.root) and no bundle to read',
+      );
+      this.staticWarnings.push('no source (staticAnalysis.source.root) and no bundle to read');
+      return undefined;
+    }
+    this.staticCache = outcome.cache;
+    if (outcome.graph.coverage === 'UNAVAILABLE') {
+      this.staticWarnings.push(...outcome.graph.warnings);
+      return undefined;
+    }
+    const vocabulary = this.semanticResolver?.vocabulary ?? new SemanticVocabulary(this.semantics.dictionary);
+    return new StaticKnowledge(outcome.graph, (text) => vocabulary.conceptOf(text)?.concept, this.contract);
+  }
+
+  /** Les preuves statiques d'un champ, pour le résolveur (index en mémoire, jamais l'AST). */
+  private staticEvidenceFor(
+    url: string,
+  ): ((field: FieldDescriptor) => readonly FieldProvenance[]) | undefined {
+    const knowledge = this.staticKnowledge;
+    if (!knowledge || !this.config.staticAnalysis.semanticResolution.enabled) return undefined;
+    const pathname = pathnameOf(url);
+    return (field) => knowledge.provenanceFor(field.frameworkName, pathname);
+  }
+
+  /**
+   * Chaque champ observé qui porte un formControlName reçoit ce que le code en dit :
+   * concept (données de test), propriété d'API et validateurs (contraintes). Des preuves,
+   * pas des vérités : l'exécution reste juge.
+   */
+  private annotateStatic(actions: readonly DiscoveredAction[], url: string): void {
+    if (this.staticKnowledge) annotateStaticFields(this.staticKnowledge, actions, pathnameOf(url));
+  }
+
+  /** Un champ prouvé par le code, rempli sans erreur : RUNTIME_CONFIRMED. */
+  private confirmStatic(action: DiscoveredAction, url: string, reasons: readonly string[]): void {
+    const knowledge = this.staticKnowledge;
+    const control = action.field?.frameworkName;
+    if (!knowledge || !control) return;
+    const usedStatic = reasons.some((reason) => reason.includes('static evidence means'));
+    knowledge.confirm(control, knowledge.componentAt(pathnameOf(url)));
+    if (usedStatic)
+      this.emitStatic('SEMANTIC_EVIDENCE_ADDED', `formControlName="${control}" confirmed at runtime`);
+    for (const conflict of reasons.filter((reason) => reason.includes('SEMANTIC_EVIDENCE_CONFLICT')))
+      this.emitStatic('SEMANTIC_EVIDENCE_CONFLICT', conflict);
+  }
+
+  private emitStatic(event: StaticAnalysisEvent, message: string): void {
+    this.listener.onStaticAnalysis?.({ at: new Date().toISOString(), event, message: redactText(message) });
   }
 
   /**
@@ -2450,7 +2675,24 @@ export class FlowExplorer {
     if (intent.kind === 'ASSERT') return this.runAssertion(page, intent, context, timeout, done);
     const signature = stateSignature(context.stateLabel);
     const history = this.semanticHistory(signature);
+    // ON_DEMAND : l'analyse statique n'est lancée que si la résolution en a besoin (un champ
+    // sans libellé porte un formControlName), puis la phrase est résolue à nouveau.
+    if (
+      this.config.staticAnalysis.enabled &&
+      !this.staticKnowledge &&
+      (intent.kind === 'FILL' || intent.kind === 'SELECT' || intent.kind === 'FILL_FORM') &&
+      context.actions.some((action) => action.field?.frameworkName !== undefined)
+    ) {
+      const probe = resolver.resolve(intent, context, {
+        stateSignature: signature,
+        ...(history ? { history } : {}),
+      });
+      if (probe.status !== 'RESOLVED' && (await this.ensureStaticKnowledge(page)))
+        this.annotateStatic(context.actions, context.url);
+    }
+    const staticEvidence = this.staticEvidenceFor(context.url);
     const resolution = resolver.resolve(intent, context, {
+      ...(staticEvidence ? { staticEvidence } : {}),
       stateSignature: signature,
       ...(history ? { history } : {}),
       ...(this.scenario.formGroup ? { previousFormGroup: this.scenario.formGroup } : {}),
@@ -2554,7 +2796,10 @@ export class FlowExplorer {
                   target: targetOf(field.action),
                 };
         const outcome = await run(concrete, context, page);
-        if (outcome.report.status === 'PASSED') this.remember(field, intent);
+        if (outcome.report.status === 'PASSED') {
+          this.remember(field, intent);
+          this.confirmStatic(field.action, context.url, resolution.reasons);
+        }
         return finish(outcome);
       }
       case 'form': {
@@ -3880,6 +4125,41 @@ export class FlowExplorer {
       blockedWrites: this.writeGuard.all(),
       invariants: this.invariantOracle?.evaluations() ?? [],
       budget: this.budget.usage(),
+      ...(this.config.staticAnalysis.enabled ? { staticAnalysis: this.staticSummary() } : {}),
+    };
+  }
+
+  private staticSummary(): StaticAnalysisSummary {
+    const knowledge = this.staticKnowledge;
+    if (!knowledge)
+      return {
+        status: this.staticLoading ? 'UNAVAILABLE' : 'NOT_NEEDED',
+        confirmedFields: [],
+        confirmedRoutes: [],
+        warnings: [...this.staticWarnings],
+      };
+    const { graph } = knowledge;
+    return {
+      status: 'USED',
+      mode: graph.mode,
+      framework: graph.framework,
+      coverage: graph.coverage,
+      ...(this.staticCache ? { cache: this.staticCache } : {}),
+      files: graph.stats.files,
+      durationMs: graph.stats.durationMs,
+      routes: graph.routes.length,
+      forms: graph.forms.length,
+      fields: graph.fields.length,
+      apiCalls: graph.apiCalls.length,
+      dataFlows: {
+        resolved: graph.dataFlows.filter((flow) => flow.status === 'RESOLVED').length,
+        unresolved: graph.dataFlows.filter((flow) => flow.status === 'UNRESOLVED_DATA_FLOW').length,
+      },
+      confirmedFields: knowledge.confirmedFields(),
+      confirmedRoutes: graph.routes
+        .filter((route) => route.truth === 'RUNTIME_CONFIRMED')
+        .map((route) => route.path),
+      warnings: [...graph.warnings, ...this.staticWarnings].slice(0, 20),
     };
   }
 
@@ -4179,3 +4459,11 @@ const MESSAGE_SELECTOR = [
   '.alert',
   '.notification',
 ].join(', ');
+
+function pathnameOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+}

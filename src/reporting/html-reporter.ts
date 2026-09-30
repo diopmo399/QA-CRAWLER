@@ -31,6 +31,7 @@ import {
 import { renderFlowMap, renderFlowSteps } from './flow-diagram.js';
 import { intelligenceSection } from './intelligence-section.js';
 import { persistenceSection } from './persistence-section.js';
+import { staticAnalysisSection } from './static-section.js';
 import { regressionSection } from './regression-section.js';
 
 export { esc } from './html-common.js';
@@ -215,6 +216,7 @@ export function renderHtml(
           intelligenceSection(result, nameOf, language),
           regressionSection(result, language),
           persistenceSection(result, language),
+          staticAnalysisSection(result, language),
           oraclesSection(result, nameOf, language),
           formsSection(result, nameOf, language),
           authorizationSection(result, language),

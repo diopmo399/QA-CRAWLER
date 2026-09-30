@@ -22,7 +22,8 @@ Ce guide présente **chaque fonctionnalité** et **les différentes manières de
 14. [Lire les résultats](#14-lire-les-résultats)
 15. [Lancer en CI, Docker, Kubernetes](#15-ci-docker-kubernetes)
 16. [Référence de la ligne de commande](#16-référence-de-la-ligne-de-commande)
-17. [Dépannage](#17-dépannage)
+17. [Utiliser le code de l'application (analyse statique)](#17-utiliser-le-code-de-lapplication-analyse-statique)
+18. [Dépannage](#18-dépannage)
 
 ---
 
@@ -537,7 +538,25 @@ Options propres au Dry Run : [section 6](#6-vérifier-un-scénario-contre-lappli
 
 ---
 
-## 17. Dépannage
+## 17. Utiliser le code de l'application (analyse statique)
+
+Pour les champs **muets** (sans libellé, sans `aria-label`, sans `placeholder`), QA-CRAWLER peut lire le code de l'application pour comprendre ce qu'ils attendent : `formControlName="contact"` → `request.email` → `CreateUserRequest.email` → `POST /api/users` → OpenAPI `format: email` ⇒ **e-mail**. Le code est lu, jamais exécuté ; ce qu'il dit reste une preuve, confirmée seulement par le navigateur.
+
+**Manières de l'utiliser :**
+
+| Manière                                    | Réglage                                                                          |
+| ------------------------------------------ | -------------------------------------------------------------------------------- |
+| Avec le dépôt de l'application (conseillé) | `staticAnalysis: { enabled: true, source: { root: ../mon-application } }`        |
+| Sans le dépôt : les scripts du navigateur  | `staticAnalysis: { enabled: true, mode: bundle }` (source maps lues si publiées) |
+| À la demande (défaut)                      | analysé seulement quand un champ en a besoin                                     |
+| Dès le début                               | `strategy: eager`                                                                |
+| Avec le contrat d'API                      | `openapi: { enabled: true, source: openapi.yaml }` (format, bornes)              |
+
+Avec, une phrase comme `Et je renseigne le courriel avec "test@example.com"` (ou `fill: { label: courriel, … }`) trouve le champ muet, et le rapport explique pourquoi. Les validateurs Angular enrichissent les contraintes et les tests négatifs ; en Dry Run, les routes du code suggèrent le chemin (Tableau de bord → Administration → Utilisateurs), toujours **cliqué pour de vrai** avant d'être retenu. Détails : README, « Analyse statique ».
+
+---
+
+## 18. Dépannage
 
 | Symptôme                                                    | Solution                                                                       |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------ |

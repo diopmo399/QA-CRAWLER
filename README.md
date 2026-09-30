@@ -31,6 +31,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Créer un flow de test imposé](#créer-un-flow-de-test-imposé)
 - [Scénarios Gherkin](#scénarios-gherkin)
 - [Dry Run : confronter un scénario à l'application](#dry-run--confronter-un-scénario-à-lapplication)
+- [Analyse statique : le code comme source de preuves](#analyse-statique--le-code-comme-source-de-preuves)
 - [Authentification](#authentification)
 - [Interactions navigateur](#interactions-navigateur)
 - [Sécurité](#sécurité)
@@ -740,6 +741,68 @@ La mission donne la cible, la connexion, la sécurité, `gherkin.steps` et les f
 **Codes de sortie :** `0` FULLY_MATCHED ou PARTIALLY_MATCHED, `1` DIVERGED, BLOCKED ou INCONCLUSIVE, `2` usage ou scénario invalide, `3` erreur d'exécution.
 
 **Limites.** Une exploration peut ne pas suffire : `POSSIBLY_OBSOLETE` n'est jamais une suppression. Une étape déjà sur l'écran courant peut dépasser une étape attendue plus loin (elle est alors réessayée après chaque étape trouvée). L'exploration guidée remplit un formulaire avant son bouton avec les données de test, mais ne remplit pas de champ isolé. Une action de modification exécutée pendant la recherche n'est pas annulée : elle n'est permise qu'avec `@mutation` (ou `allow: MUTATION`) ET une mission qui l'autorise, et compte dans le budget de modifications.
+
+## Analyse statique : le code comme source de preuves
+
+Un champ **pauvre** du DOM — `<input type="text" formControlName="contact">`, sans libellé, sans `aria-label`, sans `placeholder`, sans `name` utile — ne dit pas ce qu'il attend. Le code, lui, le dit :
+
+```
+input[type=text] → formControlName=contact → FormControl contact (Validators.required, Validators.email)
+  → contact → request.email → CreateUserRequest.email → POST /api/users → OpenAPI email format=email
+  ⇒ EMAIL
+```
+
+QA-CRAWLER lit le code de l'application (TypeScript, JavaScript, gabarits Angular) avec le **compilateur TypeScript comme parseur** : rien n'est jamais exécuté, évalué, importé ni requis. Ce qu'il en tire est une **preuve**, jamais une vérité d'exécution :
+
+```
+STATIC_DISCOVERED  ≠  RUNTIME_CONFIRMED
+```
+
+Seul le navigateur confirme qu'un champ est le bon (rempli sans erreur) ou qu'un chemin est utilisable (parcouru par l'interface).
+
+```yaml
+staticAnalysis:
+  enabled: true # désactivée par défaut : sans elle, rien ne change
+  source: { root: ../mon-application } # le dépôt (relatif au fichier de mission) ; sinon le bundle chargé par le navigateur
+openapi: { enabled: true, source: ../mon-application/openapi.yaml }
+gherkin: { semanticResolution: { enabled: true } }
+```
+
+**Ce qui est lu** (Angular, et JavaScript/TypeScript générique) :
+
+| Fait                                                 | Exemple                                                                                                            |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Routes (enfants, `loadChildren`, gardes, paramètres) | `/administration` → `/administration/users`, `/users/:id`                                                          |
+| Navigation programmatique et liens                   | `router.navigate(['/administration', 'users'])`, `routerLink`                                                      |
+| Formulaires et validateurs                           | `fb.group({ contact: ['', [Validators.required, Validators.email]] })`, `new FormGroup`, `new FormControl`         |
+| Gabarit ↔ contrôle                                   | `formControlName="contact"`, `[formControl]`, `templateUrl` ou `template`                                          |
+| DTO                                                  | `interface CreateUserRequest { email: string }`, types, classes simples                                            |
+| Appels HTTP et chaîne de services                    | composant → `userService.create(request)` → `http.post('/api/users', request)`                                     |
+| Flux de données                                      | `controls.contact.value`, `get('contact').value`, `value.email`, `getRawValue()`, déstructuration, `...form.value` |
+
+Un flux qui n'est pas une forme simple (clé calculée, valeur transformée, réflexion) devient `UNRESOLVED_DATA_FLOW` : jamais un lien inventé.
+
+**Ce que cela améliore :**
+
+- **Résolution des champs** (Gherkin et `flow.yaml`) : `Et je renseigne le courriel avec "test@example.com"` choisit le champ muet `contact`, avec l'explication complète (sources, chaîne, confiance). Une étape `fill: { label: courriel, … }` sans `<label>` correspondant est résolue de la même façon. Un libellé visible reste la preuve la plus forte ; deux champs prouvés « courriel » (`primaryEmail`, `secondaryEmail`) restent `AMBIGUOUS`. Une contradiction (`type=tel` dans le DOM, `request.email` dans le code) est toujours affichée : `SEMANTIC_EVIDENCE_CONFLICT`.
+- **Données de test** : un champ muet prouvé « e-mail » reçoit un e-mail.
+- **Contraintes et tests négatifs** : les validateurs Angular (`required`, `email`, `min`, `max`, `minLength`, `maxLength`, `pattern`) deviennent la source `FRAMEWORK` du modèle de contraintes ; HTML = 100, Angular = 100, OpenAPI = 80 donne `CONSTRAINT_MISMATCH`, jamais un choix silencieux. OpenAPI est retrouvé par la propriété d'API que le code relie au champ.
+- **Dry Run** : les routes suggèrent le chemin (`Dashboard → Administration → Users`, source `STATIC_CODE`, confiance, `runtimeConfirmed: false`) ; l'exploration guidée essaie ces contrôles en premier, **les clique réellement**, et seul un chemin parcouru est retenu (`STATIC_PATH_CONFIRMED`, sinon `STATIC_PATH_REJECTED`). Jamais de `page.goto` vers une route découverte dans le code : le but est le parcours réel de l'utilisateur.
+
+**Coût maîtrisé :**
+
+- `strategy: on-demand` (défaut) : l'analyse n'est lancée que lorsqu'un champ ne peut pas être résolu sans elle ; `eager` : au début du run (toujours pour le Dry Run avec `dryRun.useStaticKnowledge`).
+- **Cache** (`knowledge/static/`, hors du dépôt) : une analyse par identité — application, version, commit, empreinte des sources, version de l'analyseur ; un fichier modifié donne une nouvelle empreinte.
+- **Budgets** : fichiers, taille, durée, nœuds d'AST ; au-delà, `STATIC_ANALYSIS_BUDGET_EXHAUSTED` et le run continue. Un échec (parseur absent, sources illisibles) : un avertissement, puis le DOM, l'accessibilité, l'exécution et l'historique, comme avant.
+- Le résolveur interroge des **index en mémoire** (contrôle, concept, propriété de DTO, opération d'API, route ↔ composant) : jamais l'AST, jamais de SQL. Mesuré : 1 000 fichiers analysés en ≈ 0,15 s, une requête ≈ 0,15 µs (`tests/unit/static-analysis-bench.test.ts`).
+
+**Mode bundle** (sans le dépôt) : les scripts que le navigateur a chargés, sur les hôtes autorisés ; si le serveur publie les source maps, les sources d'origine qu'elles contiennent (jamais `node_modules`). Un bundle minifié n'a plus ses noms d'origine : couverture `LIMITED`.
+
+**Secrets :** seuls des noms (routes, contrôles, propriétés, types) et des contraintes sont gardés, jamais la valeur d'une constante ; la partie requête d'une adresse est retirée, les URL et chaînes qui ressemblent à une clé sont masquées.
+
+**Rapport :** section « Analyse statique » (mode, framework, couverture, cache, trouvailles, champs et routes confirmés à l'exécution, limites) ; chaque résolution cite ses preuves ; le journal du moteur reçoit `STATIC_ANALYSIS_*`, `SEMANTIC_EVIDENCE_ADDED`, `SEMANTIC_EVIDENCE_CONFLICT`, `STATIC_PATH_SUGGESTED` / `CONFIRMED` / `REJECTED`.
+
+**Limites :** Angular et JavaScript/TypeScript générique (React et Vue : interfaces prêtes, pas encore d'analyseur) ; un seul niveau composant → service ; `formGroupName` imbriqués non suivis ; un même `formControlName` dans deux composants de sens différents n'apporte aucune preuve.
 
 ## Authentification
 

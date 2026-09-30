@@ -59,6 +59,8 @@ export class SyntheticApp implements DryRunDriver {
   }
 
   historicalObservations?: (target: FlowIntent) => number;
+  staticHints?: DryRunDriver['staticHints'];
+  staticPathOutcome?: DryRunDriver['staticPathOutcome'];
 
   start(): Promise<ObservedState | undefined> {
     this.screen = this.startScreen;

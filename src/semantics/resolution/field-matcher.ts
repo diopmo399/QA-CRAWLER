@@ -23,6 +23,8 @@ import {
   type ValueClassification,
 } from './value-classifier.js';
 import type { SemanticVocabulary } from './vocabulary.js';
+import type { FieldProvenance } from '../../static-analysis/model.js';
+import { STATIC_EVIDENCE_WEIGHTS } from '../../static-analysis/static-knowledge.js';
 
 export type FieldIntent = FillIntent | SelectIntent | CheckIntent;
 
@@ -34,6 +36,12 @@ export interface SemanticResolutionContext {
   history?: SemanticHistory;
   /** La valeur est-elle sensible (mot de passe, OTP…) ? Son type n'est alors pas affiché. */
   sensitiveValue?: boolean;
+  /**
+   * Les preuves de l'ANALYSE STATIQUE d'un champ (formControlName → code → DTO → API →
+   * OpenAPI), lues dans un index en mémoire. Absent : l'analyse statique est coupée et
+   * rien ne change.
+   */
+  staticEvidence?: (field: FieldDescriptor) => readonly FieldProvenance[];
 }
 
 /** Une cible de champ : un champ, ou un groupe de radios (SELECT « Mensuel » comme fréquence). */
@@ -135,7 +143,8 @@ export class FieldMatcher {
         status: decision.status,
         score: decision.best?.score ?? 0,
         confidence: levelOf(decision.best?.score ?? 0),
-        reasons: [decision.reason],
+        // Une contradiction des preuves n'est jamais masquée, même sans résolution.
+        reasons: [decision.reason, ...conflictsOf(candidates.slice(0, 3))],
       };
     // Une option de liste (SELECT) doit elle aussi être résolue.
     if (best.option && best.option.status !== 'RESOLVED' && best.option.status !== 'UNVERIFIED')
@@ -280,6 +289,15 @@ export class FieldMatcher {
         detail: `autocomplete="${field.autocomplete ?? ''}" means ${autoConcept}`,
       });
 
+    // ---- analyse statique : ce que le code, le DTO, l'API et OpenAPI disent du champ
+    const provenances = context.staticEvidence && field.frameworkName ? context.staticEvidence(field) : [];
+    const staticConcepts = new Set(provenances.map((provenance) => provenance.concept));
+    const staticConcept = staticConcepts.size === 1 ? [...staticConcepts][0] : undefined;
+    if (provenances.length > 0)
+      components.push(
+        ...staticComponents(provenances, field, wantedConcept?.concept, wantedKey, this.vocabulary),
+      );
+
     // ---- type du champ attendu par le concept
     const expected = this.vocabulary.expectedTypes(wantedConcept?.concept);
     if (expected.includes(field.type))
@@ -323,7 +341,8 @@ export class FieldMatcher {
       [field.name, field.idAttribute, field.placeholder]
         .map((text) => this.vocabulary.conceptOf(text)?.concept)
         .find(Boolean) ??
-      autoConcept;
+      autoConcept ??
+      staticConcept;
     if (valueConcept && fieldConcept && intent.kind === 'FILL' && !context.sensitiveValue) {
       if (valueConcept.includes(fieldConcept))
         components.push({
@@ -463,4 +482,95 @@ function kindComponent(
         ? { factor: 'kind', points: 10, detail: 'checkbox' }
         : { factor: 'kind', points: -5, detail: 'radio button' };
   }
+}
+
+/** Ce que le type du DOM impose comme concept (un champ type=tel est un téléphone). */
+const DOM_TYPE_CONCEPTS: Readonly<Record<string, string>> = { email: 'email', tel: 'phone', url: 'website' };
+
+/**
+ * Les composantes « static » d'un champ : les preuves fortes (flux de données, DTO,
+ * OpenAPI) qui signifient le concept de l'intention, leur convergence, la simple
+ * similitude de formControlName, et les contradictions — jamais masquées
+ * (SEMANTIC_EVIDENCE_CONFLICT). Les poids viennent de STATIC_EVIDENCE_WEIGHTS.
+ */
+export function staticComponents(
+  provenances: readonly FieldProvenance[],
+  field: FieldDescriptor,
+  wantedConcept: string | undefined,
+  wantedKey: string,
+  vocabulary: SemanticVocabulary,
+): ScoreComponent[] {
+  const { points, strongSources } = STATIC_EVIDENCE_WEIGHTS;
+  const concepts = new Set(provenances.map((provenance) => provenance.concept ?? ''));
+  const [provenance] = provenances;
+  if (!provenance) return [];
+  // Le même formControlName dans deux composants qui divergent : pas de preuve utilisable.
+  if (concepts.size > 1)
+    return [
+      {
+        factor: 'static',
+        points: 0,
+        detail: `formControlName="${provenance.control}" is used by ${String(provenances.length)} components with different meanings: no static evidence used`,
+      },
+    ];
+  const components: ScoreComponent[] = [];
+  const chain = provenance.chain.join(' → ');
+  const strong = provenance.evidence.filter((entry) => entry.concept && strongSources.includes(entry.source));
+  const matching = wantedConcept ? strong.filter((entry) => entry.concept === wantedConcept) : [];
+  if (matching.length > 0 && provenance.concept === wantedConcept) {
+    const sources = new Set(matching.map((entry) => entry.source));
+    components.push({
+      factor: 'static',
+      points: points.strong,
+      detail: `static evidence means ${wantedConcept ?? ''}: ${chain}`,
+    });
+    if (sources.size > 1)
+      components.push({
+        factor: 'static',
+        points: Math.min(points.convergenceMax, points.convergence * (sources.size - 1)),
+        detail: `${String(sources.size)} independent sources agree (${[...sources].join(', ')})`,
+      });
+  } else if (wantedConcept && provenance.concept && provenance.concept !== wantedConcept) {
+    components.push({
+      factor: 'static',
+      points: points.contradiction,
+      detail: `static evidence means ${provenance.concept}, not ${wantedConcept}: ${chain}`,
+    });
+  } else {
+    const name = provenance.control;
+    if (
+      (wantedKey !== '' &&
+        vocabulary.conceptOf(name) === undefined &&
+        name.toLowerCase() === wantedKey.replace(/ /g, '')) ||
+      (wantedConcept !== undefined && vocabulary.conceptOf(name)?.concept === wantedConcept)
+    )
+      components.push({
+        factor: 'static',
+        points: points.medium,
+        detail: `formControlName="${name}" names the field`,
+      });
+  }
+  // Contradictions : le type du DOM, ou des preuves statiques qui divergent.
+  const domConcept = DOM_TYPE_CONCEPTS[field.type];
+  if (domConcept && provenance.concept && domConcept !== provenance.concept)
+    components.push({
+      factor: 'static',
+      points: -5,
+      detail: `SEMANTIC_EVIDENCE_CONFLICT: DOM type=${field.type} means ${domConcept}, code/API mean ${provenance.concept}`,
+    });
+  for (const conflict of provenance.conflicts)
+    components.push({
+      factor: 'static',
+      points: 0,
+      detail: `SEMANTIC_EVIDENCE_CONFLICT: ${conflict.detail}`,
+    });
+  return components;
+}
+
+function conflictsOf(candidates: readonly ResolutionCandidate[]): string[] {
+  return candidates.flatMap((candidate) =>
+    candidate.components
+      .filter((component) => component.detail.startsWith('SEMANTIC_EVIDENCE_CONFLICT'))
+      .map((component) => `"${candidate.label}": ${component.detail}`),
+  );
 }

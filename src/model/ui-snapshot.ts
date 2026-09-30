@@ -20,6 +20,8 @@ export interface UiElement {
   inputType?: string;
   /** Attribut name. */
   fieldName?: string;
+  /** Nom du contrôle de formulaire donné par le framework (Angular formControlName) : une preuve, pas un libellé. */
+  frameworkName?: string;
   elementId?: string;
   /** URL absolue des liens. */
   href?: string;

@@ -3,7 +3,14 @@ import type { ApiContract, ContractFieldSchema } from '../oracles/api-contract.j
 import { normalizeText } from '../policies/keywords.js';
 
 /** D'où vient une contrainte. APPLICATION et HISTORICAL sont réservés aux sources à venir (messages, historique). */
-export const CONSTRAINT_SOURCES = ['HTML', 'ARIA', 'OPENAPI', 'APPLICATION', 'HISTORICAL'] as const;
+export const CONSTRAINT_SOURCES = [
+  'HTML',
+  'ARIA',
+  'FRAMEWORK',
+  'OPENAPI',
+  'APPLICATION',
+  'HISTORICAL',
+] as const;
 export type ConstraintSource = (typeof CONSTRAINT_SOURCES)[number];
 
 /**
@@ -103,6 +110,8 @@ export interface ConstraintExtractor {
 const SOURCE_CONFIDENCE: Record<ConstraintSource, number> = {
   HTML: 0.8,
   ARIA: 0.75,
+  /** Validateurs du framework lus dans le code (Angular Validators) : l'application les applique. */
+  FRAMEWORK: 0.8,
   OPENAPI: 0.7,
   APPLICATION: 0.8,
   HISTORICAL: 0.6,
@@ -113,7 +122,7 @@ const MAX_CONFIDENCE = 0.95;
 /** Deux sources en désaccord : la contrainte retenue reste douteuse. */
 const CONFLICT_CONFIDENCE = 0.5;
 /** Ordre de préférence quand il faut une valeur pour tester par l'interface : ce que la page impose. */
-const UI_PRIORITY: ConstraintSource[] = ['HTML', 'ARIA', 'APPLICATION', 'OPENAPI', 'HISTORICAL'];
+const UI_PRIORITY: ConstraintSource[] = ['HTML', 'ARIA', 'FRAMEWORK', 'APPLICATION', 'OPENAPI', 'HISTORICAL'];
 
 interface Observation {
   key: ConstraintKey;
@@ -135,7 +144,11 @@ interface Observation {
  */
 export class DomOpenApiConstraintExtractor implements ConstraintExtractor {
   extract(field: FormField, contract?: ApiContract): FieldConstraints {
-    const observations = [...pageObservations(field), ...contractObservations(field, contract)];
+    const observations = [
+      ...pageObservations(field),
+      ...frameworkObservations(field),
+      ...contractObservations(field, contract),
+    ];
     const constraints: FieldConstraints = { sources: {}, confidence: {} };
     for (const key of CONSTRAINT_KEYS) {
       const seen = observations.filter((observation) => observation.key === key);
@@ -194,6 +207,45 @@ function pageObservations(field: FormField): Observation[] {
         ?.filter((option) => !option.placeholder && !option.disabled)
         .map((option) => option.label);
   if (options && options.length > 0) add('enum', options, 'HTML');
+  return observations;
+}
+
+/** Ce que les validateurs du framework (analyse statique) imposent : Validators.maxLength(100)… */
+function frameworkObservations(field: FormField): Observation[] {
+  const observations: Observation[] = [];
+  for (const validator of field.staticValidators ?? []) {
+    const add = (key: ConstraintKey, value: ConstraintValue | undefined): void => {
+      if (value !== undefined) observations.push({ key, value, source: 'FRAMEWORK' });
+    };
+    const number = typeof validator.value === 'number' ? validator.value : undefined;
+    switch (validator.kind) {
+      case 'required':
+      case 'requiredTrue':
+        add('required', true);
+        break;
+      case 'email':
+        add('format', 'email');
+        break;
+      case 'min':
+        add('min', number);
+        break;
+      case 'max':
+        add('max', number);
+        break;
+      case 'minLength':
+        add('minLength', number);
+        break;
+      case 'maxLength':
+        add('maxLength', number);
+        break;
+      case 'pattern':
+        add(
+          'pattern',
+          typeof validator.value === 'string' ? validator.value.replace(/^\/(.*)\/[a-z]*$/, '$1') : undefined,
+        );
+        break;
+    }
+  }
   return observations;
 }
 
@@ -331,12 +383,13 @@ function domFormat(field: FormField): string | undefined {
  * sans casse, accents ni séparateurs. Partagé avec enrichWithContract.
  */
 export function contractSchemaFor(
-  field: Pick<FormField, 'name' | 'label'>,
+  field: Pick<FormField, 'name' | 'label' | 'staticProperty'>,
   contract: ApiContract | undefined,
 ): ContractFieldSchema | undefined {
   if (!contract) return undefined;
   const properties = contractProperties(contract);
-  return [field.name, field.label]
+  // La propriété d'API que le code relie au champ (analyse statique), puis name et libellé.
+  return [field.staticProperty, field.name, field.label]
     .map((name) => (name ? properties.get(propertyKey(name)) : undefined))
     .find(Boolean);
 }
