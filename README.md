@@ -796,11 +796,33 @@ Un flux qui n'est pas une forme simple (clé calculée, valeur transformée, ré
 - **Budgets** : fichiers, taille, durée, nœuds d'AST ; au-delà, `STATIC_ANALYSIS_BUDGET_EXHAUSTED` et le run continue. Un échec (parseur absent, sources illisibles) : un avertissement, puis le DOM, l'accessibilité, l'exécution et l'historique, comme avant.
 - Le résolveur interroge des **index en mémoire** (contrôle, concept, propriété de DTO, opération d'API, route ↔ composant) : jamais l'AST, jamais de SQL. Mesuré : 1 000 fichiers analysés en ≈ 0,15 s, une requête ≈ 0,15 µs (`tests/unit/static-analysis-bench.test.ts`).
 
-**Mode bundle** (sans le dépôt) : les scripts que le navigateur a chargés, sur les hôtes autorisés ; si le serveur publie les source maps, les sources d'origine qu'elles contiennent (jamais `node_modules`). Un bundle minifié n'a plus ses noms d'origine : couverture `LIMITED`.
+**D'où viennent les sources** (`staticAnalysis.mode`) — l'analyseur est le même, seules ses entrées changent :
+
+| Mode            | Sources lues                                                                                                    | Couverture      |
+| --------------- | --------------------------------------------------------------------------------------------------------------- | --------------- |
+| `auto` (défaut) | le dépôt (`source.root`) s'il est lisible, sinon les **source maps** du déploiement, sinon les bundles minifiés | selon la source |
+| `source`        | le dépôt seulement                                                                                              | FULL / PARTIAL  |
+| `source-map`    | les sources d'origine publiées par les source maps (`sourcesContent`) des scripts chargés par le navigateur     | FULL / PARTIAL  |
+| `bundle`        | les bundles minifiés eux-mêmes (plus de noms d'origine)                                                         | LIMITED         |
+| `hybrid`        | le dépôt ET le déploiement ; là où ils divergent, le build déployé l'emporte (`SOURCE_BUILD_MISMATCH`)          | FULL / PARTIAL  |
+
+Sans aucun accès au dépôt, une URL déployée suffit : scripts réellement chargés → source map (commentaire `sourceMappingURL`, en-tête `SourceMap`, ou inline `data:`) → `sourcesContent` → **workspace virtuel en mémoire** → analyseur existant. Les chunks chargés plus tard (routes à la demande) enrichissent le workspace (`LAZY_BUNDLE_DISCOVERED`, `VIRTUAL_WORKSPACE_ENRICHED`) et l'analyse est refaite quand un champ en a besoin. Une source map absente, illisible ou refusée : `SOURCE_MAP_REJECTED`, puis le bundle lui-même (`bundleFallback`), jamais un échec du run. Chaque preuve dit d'où vient son code (`[code from SOURCE_MAP https://…/main.js.map]`).
+
+```yaml
+staticAnalysis:
+  enabled: true
+  mode: auto # auto | source | source-map | bundle | hybrid
+  sourceMaps:
+    { enabled: true, discoverFromRuntime: true, inline: true, external: true, incrementalChunks: true }
+  bundleFallback: { enabled: true }
+  budgets: { maxBundles: 50, maxSourceMaps: 50, maxSourceMapBytes: 20000000, maxExtractedSources: 2000 }
+```
+
+Une source map est une **donnée non fiable** : seuls les scripts et source maps des hôtes autorisés par la mission sont lus, sans suivre de redirection ; aucune adresse n'est devinée (pas de `.map` essayé au hasard) ; tailles bornées avant décodage ; chemins normalisés (`webpack:///`, `webpack://app/./`, `ng://`, `file://`, `C:\`) et bornés à la racine du workspace (`..` ne sort jamais) ; rien n'est écrit sur disque ni exécuté ; le code source n'apparaît **jamais** dans le rapport, `result.json`, le journal ou la console — seulement chemins, adresses sans paramètres et empreintes. Le cache reconnaît un déploiement déjà analysé à l'empreinte de ses bundles (`bundleSetHash`) **avant** de télécharger une seule source map. Détails : [docs/SOURCE_MAPS.md](docs/SOURCE_MAPS.md).
 
 **Secrets :** seuls des noms (routes, contrôles, propriétés, types) et des contraintes sont gardés, jamais la valeur d'une constante ; la partie requête d'une adresse est retirée, les URL et chaînes qui ressemblent à une clé sont masquées.
 
-**Rapport :** section « Analyse statique » (mode, framework, couverture, cache, trouvailles, champs et routes confirmés à l'exécution, limites) ; chaque résolution cite ses preuves ; le journal du moteur reçoit `STATIC_ANALYSIS_*`, `SEMANTIC_EVIDENCE_ADDED`, `SEMANTIC_EVIDENCE_CONFLICT`, `STATIC_PATH_SUGGESTED` / `CONFIRMED` / `REJECTED`.
+**Rapport :** section « Analyse statique » (mode, framework, couverture, cache, trouvailles, champs et routes confirmés à l'exécution, limites) ; chaque résolution cite ses preuves ; le rapport ajoute « Découverte des sources » (bundles, source maps, sources extraites, conflits, écarts dépôt ↔ build) ; le journal du moteur reçoit `STATIC_ANALYSIS_*`, `BUNDLE_DISCOVERED`, `SOURCE_MAP_*`, `SOURCE_EXTRACTED`, `SOURCE_CONTENT_CONFLICT`, `SOURCE_BUILD_MISMATCH`, `BUNDLE_FALLBACK_STARTED`, `LAZY_BUNDLE_DISCOVERED`, `VIRTUAL_WORKSPACE_*`, `SEMANTIC_EVIDENCE_ADDED`, `SEMANTIC_EVIDENCE_CONFLICT`, `STATIC_PATH_SUGGESTED` / `CONFIRMED` / `REJECTED`.
 
 **Limites :** Angular et JavaScript/TypeScript générique (React et Vue : interfaces prêtes, pas encore d'analyseur) ; un seul niveau composant → service ; `formGroupName` imbriqués non suivis ; un même `formControlName` dans deux composants de sens différents n'apporte aucune preuve.
 

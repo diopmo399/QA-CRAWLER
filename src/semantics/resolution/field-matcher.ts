@@ -514,7 +514,7 @@ export function staticComponents(
       },
     ];
   const components: ScoreComponent[] = [];
-  const chain = provenance.chain.join(' → ');
+  const chain = `${provenance.chain.join(' → ')}${provenance.sourceOrigin ? ` [code from ${provenance.sourceOrigin}]` : ''}`;
   const strong = provenance.evidence.filter((entry) => entry.concept && strongSources.includes(entry.source));
   const matching = wantedConcept ? strong.filter((entry) => entry.concept === wantedConcept) : [];
   if (matching.length > 0 && provenance.concept === wantedConcept) {

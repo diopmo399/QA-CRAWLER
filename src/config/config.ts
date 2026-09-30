@@ -837,8 +837,12 @@ const loggingSchema = z
 const staticAnalysisSchema = z
   .object({
     enabled: z.boolean().default(false),
-    /** auto : SOURCE si source.root est donné, sinon BUNDLE ; source ; bundle. */
-    mode: z.enum(['auto', 'source', 'bundle']).default('auto'),
+    /**
+     * D'où l'analyseur obtient ses sources. auto : le dépôt (source.root) s'il est lisible,
+     * sinon les source maps du déploiement, sinon les bundles ; source ; source-map ;
+     * bundle ; hybrid : le dépôt ET le déploiement (le build déployé l'emporte s'ils divergent).
+     */
+    mode: z.enum(['auto', 'source', 'source-map', 'bundle', 'hybrid']).default('auto'),
     /** ON_DEMAND (défaut) : seulement quand la résolution en a besoin ; EAGER : au début du run. */
     strategy: z.enum(['on-demand', 'eager']).default('on-demand'),
     source: z
@@ -857,6 +861,26 @@ const staticAnalysisSchema = z
       })
       .strict()
       .default({}),
+    /** Source maps publiées par le déploiement : une donnée non fiable, lue avec prudence. */
+    sourceMaps: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Suivre les scripts réellement chargés par le navigateur (réponses de type script). */
+        discoverFromRuntime: z.boolean().default(true),
+        /** Source maps inline (data:application/json;base64,…). */
+        inline: z.boolean().default(true),
+        /** Source maps externes (commentaire sourceMappingURL, en-tête SourceMap), hôtes autorisés seulement. */
+        external: z.boolean().default(true),
+        /** Chunks chargés plus tard (routes à la demande) : le workspace s'enrichit, l'analyse est refaite. */
+        incrementalChunks: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+    /** Sans source map utilisable : analyser le bundle minifié lui-même (couverture LIMITED/PARTIAL). */
+    bundleFallback: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
     cache: z
       .object({
         enabled: z.boolean().default(true),
@@ -872,6 +896,14 @@ const staticAnalysisSchema = z
         maxFileSizeBytes: z.number().int().positive().default(2_000_000),
         /** Nœuds d'AST visités au plus (tous fichiers confondus). */
         maxAstNodes: z.number().int().positive().default(5_000_000),
+        /** Scripts du déploiement lus au plus. */
+        maxBundles: z.number().int().positive().default(50),
+        /** Source maps lues au plus. */
+        maxSourceMaps: z.number().int().positive().default(50),
+        /** Taille maximale d'une source map (octets, avant décodage). */
+        maxSourceMapBytes: z.number().int().positive().default(20_000_000),
+        /** Fichiers au plus dans le workspace virtuel. */
+        maxExtractedSources: z.number().int().positive().default(2000),
       })
       .strict()
       .default({}),

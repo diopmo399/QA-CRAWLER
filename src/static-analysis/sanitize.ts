@@ -37,7 +37,7 @@ export function sanitizeGraph(graph: StaticApplicationGraph): StaticApplicationG
         Object.entries(value as Record<string, unknown>).map(([entryKey, entry]) => [
           entryKey,
           // Les empreintes sont des sha256 : pas des secrets, et elles doivent rester exactes.
-          entryKey === 'sourceHash' ? entry : visit(entry, entryKey),
+          entryKey.endsWith('Hash') ? entry : visit(entry, entryKey),
         ]),
       );
     return value;

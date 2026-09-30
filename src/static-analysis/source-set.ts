@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import type { StaticSourceProvenance } from './sources/model.js';
 
 /** Un fichier lu pour l'analyse (jamais exécuté). */
 export interface SourceFile {
@@ -20,6 +21,10 @@ export interface SourceSet {
   /** Fichiers laissés de côté (budget, taille) : l'analyse est alors PARTIAL. */
   skipped: string[];
   budgetExhausted: boolean;
+  /** Limites de la lecture (source map partielle ou rejetée, conflit…) : l'analyse est PARTIAL. */
+  notes?: string[];
+  /** D'où vient chaque fichier (dépôt, source map, bundle), sans contenu. */
+  provenance?: StaticSourceProvenance[];
 }
 
 export interface SourceBudget {

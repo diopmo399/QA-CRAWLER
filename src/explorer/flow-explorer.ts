@@ -74,7 +74,13 @@ import { waitForScreenReady } from '../observation/screen-ready.js';
 import { fieldLabel, formFieldsFor } from '../forms/form-fields.js';
 import { StaticApplicationAnalyzer, type StaticAnalysisEvent } from '../static-analysis/static-analyzer.js';
 import { StaticKnowledge, annotateStaticFields } from '../static-analysis/static-knowledge.js';
-import { collectBundle } from '../static-analysis/bundle.js';
+import { isScriptResponse, playwrightFetcher, runtimeScriptUrls } from '../static-analysis/bundle.js';
+import {
+  RepositorySourceProvider,
+  RuntimeBundleSourceProvider,
+} from '../static-analysis/sources/source-providers.js';
+import { StaticSourceDiscovery } from '../static-analysis/sources/source-discovery.js';
+import type { StaticAnalysisOutcome } from '../static-analysis/static-analyzer.js';
 import { StaticPathResolver } from '../static-analysis/static-path-resolver.js';
 import { SemanticVocabulary } from '../semantics/resolution/vocabulary.js';
 import type { FieldDescriptor } from '../semantics/resolution/field-descriptor.js';
@@ -382,6 +388,13 @@ export class FlowExplorer {
   private staticLoading: Promise<StaticKnowledge | undefined> | undefined;
   private staticCache: 'HIT' | 'MISS' | 'DISABLED' | undefined;
   private readonly staticWarnings: string[] = [];
+  /** Découverte des sources (dépôt, source maps, bundles) et l'analyseur qui les lit, gardés pour l'enrichissement. */
+  private staticDiscovery: StaticSourceDiscovery | undefined;
+  private staticAnalyzer: StaticApplicationAnalyzer | undefined;
+  private staticRuntime: RuntimeBundleSourceProvider | undefined;
+  /** Scripts vus par le navigateur avant que la découverte existe. */
+  private readonly observedScripts = new Set<string>();
+  private readonly watchedContexts = new WeakSet();
   /** Le scénario en cours : le formulaire rempli, les valeurs saisies (non sensibles) pour les vérifications. */
   private scenario: { formGroup?: string; values: ScenarioValue[] } = { values: [] };
   private semanticEngine: ConfidenceEngine | undefined;
@@ -678,6 +691,8 @@ export class FlowExplorer {
         }
       }
       // ANALYSE STATIQUE : au début (eager, ou Dry Run qui s'en sert pour ses indices), sinon à la demande.
+      // Les scripts reçus sont suivis dès maintenant, pour que les chunks à la demande soient connus.
+      if (this.config.staticAnalysis.enabled) this.watchScripts(page);
       if (
         this.config.staticAnalysis.enabled &&
         (this.config.staticAnalysis.strategy === 'eager' ||
@@ -2381,19 +2396,57 @@ export class FlowExplorer {
 
   // ---------------------------------------------------------------- analyse statique
 
-  /** Charge une fois la connaissance statique. Jamais une dépendance : un échec rend undefined, le run continue. */
+  /**
+   * Suit les scripts que le navigateur reçoit (chunks à la demande compris). Seules
+   * des adresses sont gardées ; les scripts sont relus plus tard, et seulement s'ils
+   * viennent d'un hôte autorisé.
+   */
+  private watchScripts(page: Page): void {
+    const settings = this.config.staticAnalysis;
+    if (!settings.enabled || !settings.sourceMaps.discoverFromRuntime || settings.mode === 'source') return;
+    const context = page.context();
+    if (this.watchedContexts.has(context)) return;
+    this.watchedContexts.add(context);
+    context.on('response', (response) => {
+      if (!isScriptResponse(response)) return;
+      const url = response.url();
+      if (this.staticRuntime) this.staticRuntime.observe(url);
+      else if (this.observedScripts.size < 1000) this.observedScripts.add(url);
+    });
+  }
+
+  /**
+   * Charge une fois la connaissance statique ; ensuite, si des chunks ont été chargés
+   * depuis (routes à la demande), le workspace s'enrichit et l'analyse est refaite.
+   * Jamais une dépendance : un échec rend undefined, le run continue.
+   */
   private ensureStaticKnowledge(page?: Page): Promise<StaticKnowledge | undefined> {
     if (!this.config.staticAnalysis.enabled) return Promise.resolve(undefined);
-    this.staticLoading ??= this.loadStaticKnowledge(page)
-      .catch((error: unknown) => {
-        this.emitStatic('STATIC_ANALYSIS_UNAVAILABLE', `static analysis failed: ${(error as Error).message}`);
-        this.staticWarnings.push(redactText(`static analysis failed: ${(error as Error).message}`));
-        return undefined;
-      })
-      .then((knowledge) => {
-        this.staticKnowledge = knowledge;
-        return knowledge;
-      });
+    if (page) this.watchScripts(page);
+    const remember = (knowledge: StaticKnowledge | undefined): StaticKnowledge | undefined => {
+      this.staticKnowledge = knowledge;
+      return knowledge;
+    };
+    if (!this.staticLoading)
+      this.staticLoading = this.loadStaticKnowledge(page)
+        .catch((error: unknown) => {
+          this.emitStatic(
+            'STATIC_ANALYSIS_UNAVAILABLE',
+            `static analysis failed: ${(error as Error).message}`,
+          );
+          this.staticWarnings.push(redactText(`static analysis failed: ${(error as Error).message}`));
+          return undefined;
+        })
+        .then(remember);
+    else if (this.config.staticAnalysis.sourceMaps.incrementalChunks && this.staticDiscovery?.hasPending())
+      this.staticLoading = this.staticLoading
+        .then((current) =>
+          this.enrichStaticKnowledge(current).catch((error: unknown) => {
+            this.staticWarnings.push(redactText(`static enrichment failed: ${(error as Error).message}`));
+            return current;
+          }),
+        )
+        .then(remember);
     return this.staticLoading;
   }
 
@@ -2419,33 +2472,109 @@ export class FlowExplorer {
         this.emitStatic(event, message);
       },
     });
-    const mode =
-      settings.mode === 'auto'
-        ? settings.source.enabled && settings.source.root
-          ? 'source'
-          : 'bundle'
-        : settings.mode;
-    let outcome;
-    if (mode === 'source' && settings.source.enabled && settings.source.root)
-      outcome = await analyzer.analyzeSource(settings.source.root);
-    else if (mode === 'bundle' && settings.bundle.enabled && page)
-      outcome = await analyzer.analyzeSet(
-        await collectBundle(page, {
-          sourceMaps: settings.bundle.sourceMaps,
-          maxFiles: settings.budgets.maxFiles,
-          maxFileSizeBytes: settings.budgets.maxFileSizeBytes,
-          isAllowedUrl: (url) => this.safety.navigation.isAllowedHost(new URL(url).hostname),
-        }),
-        'BUNDLE',
+    this.staticAnalyzer = analyzer;
+    const root = settings.source.enabled ? settings.source.root : undefined;
+    // SOURCE : le dépôt seul, lu exactement comme avant.
+    if (settings.mode === 'source') {
+      if (!root) {
+        this.staticUnavailable('no source (staticAnalysis.source.root)');
+        return undefined;
+      }
+      return this.knowledgeOf(await analyzer.analyzeSource(root));
+    }
+    const strategy = settings.mode;
+    const runtime =
+      page && settings.bundle.enabled
+        ? new RuntimeBundleSourceProvider({
+            fetch: playwrightFetcher(page),
+            isAllowedUrl: (url) => this.safety.navigation.isAllowedHost(new URL(url).hostname),
+            sourceMaps: {
+              enabled: strategy !== 'bundle' && settings.sourceMaps.enabled && settings.bundle.sourceMaps,
+              inline: settings.sourceMaps.inline,
+              external: settings.sourceMaps.external,
+            },
+            bundleFallback: strategy === 'bundle' || settings.bundleFallback.enabled,
+            budgets: {
+              maxBundles: settings.budgets.maxBundles,
+              maxSourceMaps: settings.budgets.maxSourceMaps,
+              maxSourceMapBytes: settings.budgets.maxSourceMapBytes,
+              maxFileSizeBytes: settings.budgets.maxFileSizeBytes,
+            },
+            onEvent: (event, message) => {
+              this.emitStatic(event, message);
+            },
+          })
+        : undefined;
+    if (runtime && page) {
+      for (const url of [...(await runtimeScriptUrls(page)), ...this.observedScripts]) runtime.observe(url);
+      this.observedScripts.clear();
+    }
+    const discovery = new StaticSourceDiscovery({
+      strategy,
+      ...(root ? { repository: new RepositorySourceProvider(root, settings.budgets) } : {}),
+      ...(runtime ? { runtime } : {}),
+      workspace: {
+        maxExtractedSources: settings.budgets.maxExtractedSources,
+        maxFileSizeBytes: settings.budgets.maxFileSizeBytes,
+      },
+      settingsKey: JSON.stringify([settings.sourceMaps, settings.bundleFallback, settings.bundle]),
+      onEvent: (event, message) => {
+        this.emitStatic(event, message);
+      },
+    });
+    this.staticDiscovery = discovery;
+    this.staticRuntime = runtime;
+    this.emitStatic('STATIC_ANALYSIS_STARTED', `source discovery (${strategy})`);
+    await discovery.prepare();
+    const alias = discovery.alias();
+    const cached = alias ? await analyzer.cachedByAlias(alias) : undefined;
+    if (cached) return this.knowledgeOf(cached);
+    await discovery.complete();
+    if (discovery.workspace.size === 0) {
+      this.staticUnavailable(
+        root || runtime
+          ? 'no readable source: repository empty, no source map and no bundle from an allowed host'
+          : 'no source (staticAnalysis.source.root) and no bundle to read',
       );
-    else {
-      this.emitStatic(
-        'STATIC_ANALYSIS_UNAVAILABLE',
-        'no source (staticAnalysis.source.root) and no bundle to read',
-      );
-      this.staticWarnings.push('no source (staticAnalysis.source.root) and no bundle to read');
       return undefined;
     }
+    return this.knowledgeOf(
+      await analyzer.analyzeSet(discovery.workspace.toSourceSet(), discovery.analysisMode(), {
+        ...(alias ? { alias } : {}),
+      }),
+    );
+  }
+
+  /** Chunks chargés depuis la dernière analyse : workspace enrichi, analyse refaite, confirmations gardées. */
+  private async enrichStaticKnowledge(
+    current: StaticKnowledge | undefined,
+  ): Promise<StaticKnowledge | undefined> {
+    const discovery = this.staticDiscovery;
+    const analyzer = this.staticAnalyzer;
+    if (!discovery || !analyzer || !(await discovery.enrich())) return current;
+    const alias = discovery.alias();
+    const next = this.knowledgeOf(
+      await analyzer.analyzeSet(discovery.workspace.toSourceSet(), discovery.analysisMode(), {
+        ...(alias ? { alias } : {}),
+      }),
+    );
+    if (!next) return current;
+    for (const field of current?.confirmedFields() ?? []) {
+      const [component, control] = field.split('#');
+      if (control) next.confirm(control, component);
+    }
+    for (const route of current?.graph.routes ?? [])
+      if (route.truth === 'RUNTIME_CONFIRMED') next.confirmRoute(route.path);
+    return next;
+  }
+
+  private staticUnavailable(reason: string): void {
+    this.emitStatic('STATIC_ANALYSIS_UNAVAILABLE', reason);
+    this.staticWarnings.push(reason);
+    return undefined;
+  }
+
+  private knowledgeOf(outcome: StaticAnalysisOutcome): StaticKnowledge | undefined {
     this.staticCache = outcome.cache;
     if (outcome.graph.coverage === 'UNAVAILABLE') {
       this.staticWarnings.push(...outcome.graph.warnings);
@@ -2679,7 +2808,7 @@ export class FlowExplorer {
     // sans libellé porte un formControlName), puis la phrase est résolue à nouveau.
     if (
       this.config.staticAnalysis.enabled &&
-      !this.staticKnowledge &&
+      (!this.staticKnowledge || this.staticDiscovery?.hasPending()) &&
       (intent.kind === 'FILL' || intent.kind === 'SELECT' || intent.kind === 'FILL_FORM') &&
       context.actions.some((action) => action.field?.frameworkName !== undefined)
     ) {
@@ -4137,6 +4266,7 @@ export class FlowExplorer {
         confirmedFields: [],
         confirmedRoutes: [],
         warnings: [...this.staticWarnings],
+        ...(this.staticDiscovery ? { discovery: this.staticDiscovery.summary() } : {}),
       };
     const { graph } = knowledge;
     return {
@@ -4160,6 +4290,7 @@ export class FlowExplorer {
         .filter((route) => route.truth === 'RUNTIME_CONFIRMED')
         .map((route) => route.path),
       warnings: [...graph.warnings, ...this.staticWarnings].slice(0, 20),
+      ...(this.staticDiscovery ? { discovery: this.staticDiscovery.summary() } : {}),
     };
   }
 
