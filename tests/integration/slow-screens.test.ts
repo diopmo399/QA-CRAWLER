@@ -29,8 +29,9 @@ const PAGE = `<!doctype html><html><body><div id="app"></div>
   };
   const screens = {
     '': () => later(() => {
-      app.innerHTML = '<h1>Demandes</h1><table><tr><td>Demande 7</td><td><a class="lien" style="cursor:pointer">Traiter la demande</a></td></tr></table>';
-      app.querySelector('a.lien').addEventListener('click', () => { location.hash = '#/traiter'; });
+      app.innerHTML = '<h1>Demandes</h1><table>' + [7, 8, 9].map((n) =>
+        '<tr><td>Demande ' + n + '</td><td><a class="lien" style="cursor:pointer">Traiter la demande</a></td></tr>').join('') + '</table>';
+      app.querySelectorAll('a.lien').forEach((a) => a.addEventListener('click', () => { location.hash = '#/traiter'; }));
     }),
     '#/traiter': () => later(() => {
       app.innerHTML = '<h1>Dossier à traiter</h1><div class="grid"><input id="a"><input id="b"></div>'
@@ -122,5 +123,37 @@ output: { reportsDir: ${path.join(dir, 'reports')} }
     expect(rows).toContain('Suivant INSERTED');
     const suivant = result.flows[0]?.suggested.steps.find((step) => step.label === 'Suivant');
     expect(suivant?.fillFormBefore).toBe(true);
+  }, 120_000);
+
+  it('Gherkin, semantic sentence: a link repeated on every row clicks the first row', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'qa-slow-screens-gherkin-'));
+    await writeFile(
+      path.join(dir, 'traiter.feature'),
+      `# language: fr
+Fonctionnalité: Demandes
+  Scénario: Traiter une demande
+    Étant donné que je suis sur "/"
+    Quand je clique sur traiter la demande
+    Alors je vois "Dossier à traiter"
+`,
+    );
+    await writeFile(
+      path.join(dir, 'mission.yaml'),
+      `mission: { name: slow-screens-gherkin }
+target: { baseUrl: ${url}, startAt: / }
+exploration: { actionTimeoutMs: 3000, settleTimeMs: 50 }
+report: { failOnSeverity: NONE }
+output: { reportsDir: ${path.join(dir, 'reports')} }
+`,
+    );
+    const result = await runDryRun({
+      scenarioFile: path.join(dir, 'traiter.feature'),
+      missionFile: path.join(dir, 'mission.yaml'),
+    });
+    const rows = (result.flows[0]?.reconciliation.entries ?? []).map(
+      (entry) => `${entry.expectedIntent?.label ?? entry.observedTarget?.label ?? '?'} ${entry.status}`,
+    );
+    expect(rows).toContain('traiter la demande MATCHED');
+    expect(result.flows[0]?.reconciliation.status).toBe('FULLY_MATCHED');
   }, 120_000);
 });

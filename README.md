@@ -939,6 +939,7 @@ Après un échec, si l'écran de départ ne peut pas être retrouvé (fenêtre f
 
 En exploration, un écran qui contient des champs est d'abord **rempli comme le ferait un utilisateur**, puis vérifié. Rien n'est envoyé par défaut.
 
+- **Le même lien sur chaque ligne.** Une phrase comme `je clique sur ouvrir le dossier`, quand « Ouvrir le dossier » est répété sur chaque ligne d'une liste, prend **la première ligne** (l'explication le dit : « repeated N times (a list): the first one »). Deux contrôles différents à égalité (un bouton et un lien, deux libellés) restent AMBIGUOUS.
 - **Un lien sans adresse.** Un `<a>` sans `href` (Angular `<a (click)>`) est une action quand il a l'air cliquable : curseur pointeur, ou classe de lien / bouton (`link`, `btn`…). Une ancre nue reste ignorée.
 - **Remplir avant d'avancer, même sans `<form>`.** Avant un clic sur le bouton d'un formulaire (« Suivant », « Continuer », un bouton qui valide), ses champs sont remplis avec les données de test, **y compris les champs sans libellé** : ceux du `<form>`, sinon ceux de la fenêtre, du calque ou de la page. C'est aussi ce que fait l'exploration guidée du Dry Run.
 - **Un formulaire, même sans `<form>`.** Les champs d'un `<form>`, ou ceux d'une fenêtre ou d'un calque (les fenêtres Angular Material n'ont souvent pas de `<form>`), forment un formulaire. Ce qui est devant l'écran est rempli en premier.
