@@ -507,12 +507,12 @@ export function firstPerson(sentence: string): string {
 
 const NAVIGATION_VERB = /^(?:j['’]accède|je vais|je navigue|j['’]ouvre|I go|I navigate|I access|I open)\s+/i;
 const NAMED_PLACE =
-  /(?:(?:étape|onglet|sous-onglet|section|rubrique|page|écran|menu|module|panneau|volet|step|tab|screen|panel)\s+)?(?:"([^"]+)"|«\s*([^»]+?)\s*»|“([^”]+)”)/gi;
+  /(?:(?:étape|onglet|sous-onglet|section|sous-section|rubrique|page|écran|menu|module|panneau|volet|tiroir|bloc|carte|encadré|accordéon|fenêtre|step|tab|screen|panel|drawer|card|dialog)\s+)?(?:"([^"]+)"|«\s*([^»]+?)\s*»|“([^”]+)”)/gi;
 /** Ce qui peut séparer les lieux nommés : prépositions, articles, « et », « puis », virgules. */
 const PLACE_GLUE = new Set(
   (
     'à au aux dans vers sur la le les l de du des d et puis ensuite ' +
-    'to the in on of and then step tab section page screen menu panel'
+    'to the in on of and then step tab section page screen menu panel drawer card dialog'
   ).split(' '),
 );
 const onlyGlue = (text: string): boolean =>
