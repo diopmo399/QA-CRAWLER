@@ -1,5 +1,6 @@
 import { navigationLogLines } from '../navigation/navigation-guard.js';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { AuthError } from '../auth/authenticator.js';
 import { ConfigError, loadConfigFile } from '../config/config-loader.js';
 import type { ExplorationListener } from '../explorer/flow-explorer.js';
@@ -11,6 +12,7 @@ import { buildFlowTree, renderTextTree } from '../reporting/flow-tree.js';
 import { storageLabel } from '../reporting/persistence-section.js';
 import { HELP_TEXT, parseCliArgs, UsageError } from './args.js';
 import { runDryRunCli } from './dry-run-command.js';
+import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
 
 export const EXIT = { OK: 0, ISSUES: 1, USAGE: 2, RUNTIME: 3 } as const;
@@ -22,7 +24,25 @@ const SEVERITY_COLOR: Record<Severity, (text: string) => string> = {
   CRITICAL: (text) => color.bold(color.red(text)),
 };
 
-export async function runCli(argv: string[]): Promise<number> {
+export async function runCli(input: string[]): Promise<number> {
+  // .env (ou --dotenv) : chargé avant tout, pour toutes les commandes ; le terminal reste prioritaire.
+  let argv: string[];
+  try {
+    const taken = takeEnvFileOption(input);
+    argv = taken.argv;
+    const loaded = loadEnvFile(taken.envFile);
+    if (loaded.file && loaded.loaded.length > 0) {
+      const relative = path.relative(process.cwd(), loaded.file);
+      const shown = relative && !relative.startsWith('..') ? relative : loaded.file;
+      logger.info(`Environment: ${String(loaded.loaded.length)} variable(s) from ${shown}`);
+    }
+  } catch (error) {
+    if (error instanceof EnvFileError) {
+      logger.error(`Error: ${error.message}`);
+      return EXIT.USAGE;
+    }
+    throw error;
+  }
   // DRY RUN : une commande à part, ses propres options ; les autres commandes ne changent pas.
   if (argv[0] === 'dry-run') return runDryRunCli(argv.slice(1));
   let args;

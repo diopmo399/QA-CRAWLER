@@ -35,6 +35,7 @@ Options:
       --reports-dir <dir>      Reports go to <dir>/dry-run/<scenario>/
       --headed                 Show the browser window
       --persistence <p> / --no-persistence / --memory / --no-memory   as for a run
+      --dotenv <file>          Environment variables to load (default: .env if present)
   -q, --quiet                  Only print the summary
   -h, --help                   Show this help
 

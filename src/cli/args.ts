@@ -59,6 +59,8 @@ Options:
                               sqlserver, sqlite (also: QA_PERSISTENCE_*, QA_DB_TYPE)
       --no-persistence        Store nothing (the default without a persistence block)
       --memory / --no-memory  Use / ignore the knowledge of previous runs (QA_MEMORY_ENABLED)
+      --dotenv <file>         Environment variables to load (default: .env if present;
+                              the terminal's variables win; never shown)
   -q, --quiet                 Only print the summary
   -h, --help                  Show this help
   -v, --version               Show the version
