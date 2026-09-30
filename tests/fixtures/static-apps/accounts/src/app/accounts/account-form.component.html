@@ -1,0 +1,33 @@
+<h1>Nouveau compte</h1>
+<form [formGroup]="form" (ngSubmit)="save()">
+  <input type="email" formControlName="email">
+  <select formControlName="accountType">
+    <option value="PERSONAL">Personnel</option>
+    <option value="BUSINESS">Entreprise</option>
+  </select>
+  @if (form.controls.accountType.value === 'BUSINESS') {
+    <input type="text" formControlName="companyName">
+    <input type="text" formControlName="companyNumber">
+  } @else {
+    <p>Compte personnel</p>
+  }
+  <select formControlName="country">
+    <option value="CA">Canada</option>
+    <option value="FR">France</option>
+  </select>
+  <div *ngIf="form.get('country')?.value === 'CA'">
+    <select formControlName="province">
+      <option *ngFor="let province of provinces" [value]="province">{{ province }}</option>
+    </select>
+  </div>
+  <input type="text" formControlName="customerId" [readonly]="mode === 'EDIT'">
+  <input type="number" formControlName="age">
+  <input type="text" formControlName="guardianName">
+  <input type="number" formControlName="quantity">
+  <input type="number" formControlName="price">
+  <input type="number" formControlName="total" [readonly]="true">
+  @if (isAdmin) {
+    <a routerLink="/administration">Administration</a>
+  }
+  <button type="submit" [disabled]="!form.valid || loading">Enregistrer</button>
+</form>

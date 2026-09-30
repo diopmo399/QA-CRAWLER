@@ -11,13 +11,26 @@ export type DomSnapshot = Omit<UiSnapshot, 'url' | 'title'>;
  * approximation de son nom accessible (les mêmes notions que getByRole de
  * Playwright). Les valeurs des champs ne sont jamais lues.
  */
-export function collectDomSnapshot(options: { maxElements: number }): DomSnapshot {
+export function collectDomSnapshot(options: { maxElements: number; valueSalt?: string }): DomSnapshot {
   // Un document sans <body> (en cours de chargement juste après une connexion, réponse XML,
   // page intermédiaire d'authentification) : son texte est lu sur la racine, jamais une erreur.
   const pageText = (): string => {
     // Les types du DOM disent <body> toujours présent ; ce n'est pas vrai pendant un chargement.
     const body = document.querySelector('body');
     return body ? body.innerText : (document.querySelector(':root')?.textContent ?? '');
+  };
+  // Empreinte salée d'une valeur (voir forms/state/value-digest.ts, même algorithme) : jamais la valeur elle-même.
+  const digestOf = (value: string): string | undefined => {
+    if (options.valueSalt === undefined || value.trim() === '') return undefined;
+    const text = `${options.valueSalt}\u0000${value.trim()}`;
+    let a = 0x811c9dc5;
+    let b = 0x01000193 ^ 0x5bd1e995;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      a = Math.imul(a ^ code, 0x01000193) >>> 0;
+      b = Math.imul(b ^ code, 0x01000193) >>> 0;
+    }
+    return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`;
   };
   // Posé par l'exécuteur de flows sur l'élément visé par une étape imposée (voir FlowStepExecutor).
   const FLOW_TARGET_ATTRIBUTE = 'data-qa-flow-target';
@@ -135,10 +148,13 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
   };
 
   /** Texte utilisé pour les noms accessibles : nœuds texte, en sautant les sous-arbres aria-hidden/cachés (sans text-transform CSS). */
-  const nameText = (node: Node): string => {
+  const nameText = (node: Node, skip?: Element): string => {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const el = node as Element;
+    // Le champ enveloppé par son <label> ne fait pas partie de son propre libellé (options d'une liste,
+    // valeur d'un <textarea>) : « Pays », jamais « Pays Canada France ».
+    if (skip !== undefined && el === skip) return '';
     if (el.getAttribute('aria-hidden') === 'true') return '';
     const tag = el.tagName.toLowerCase();
     if (tag === 'script' || tag === 'style' || tag === 'template') return '';
@@ -148,13 +164,13 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     // Un <slot> montre les nœuds que la page y a placés (ses propres enfants ne sont qu'un repli).
     if (tag === 'slot') {
       const assigned = (el as HTMLSlotElement).assignedNodes({ flatten: true });
-      if (assigned.length > 0) return assigned.map((child) => nameText(child)).join('');
+      if (assigned.length > 0) return assigned.map((child) => nameText(child, skip)).join('');
     }
     const block = style.display !== 'inline' && style.display !== 'inline-block' ? ' ' : '';
     return (
       block +
       Array.from(el.childNodes)
-        .map((child) => nameText(child))
+        .map((child) => nameText(child, skip))
         .join('') +
       block
     );
@@ -164,7 +180,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     const id = el.getAttribute('id');
     const byFor = id ? rootOf(el).querySelector(`label[for="${CSS.escape(id)}"]`) : null;
     const wrapping = closestDeep(el, 'label');
-    return clean(byFor ? nameText(byFor) : wrapping ? nameText(wrapping) : '') || hostLabel(el);
+    return clean(byFor ? nameText(byFor, el) : wrapping ? nameText(wrapping, el) : '') || hostLabel(el);
   };
   /**
    * Un champ dessiné dans un composant : le libellé que la page a donné au composant
@@ -435,9 +451,49 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     if (customSelect) {
       // Une liste personnalisée affiche son texte d'invite tant qu'aucune option n'est choisie.
       info.hasValue = el.querySelector('[class*="placeholder"]') === null && clean(nameText(el)) !== '';
+      if (info.hasValue) info.selectedOption = clean(nameText(el), 80);
     } else if (tag === 'input' || tag === 'textarea') {
-      if (inputType !== 'checkbox' && inputType !== 'radio') info.hasValue = input.value !== '';
+      if (inputType !== 'checkbox' && inputType !== 'radio') {
+        info.hasValue = input.value !== '';
+        // ÉTAT DU CHAMP : empreintes seulement (jamais pour un mot de passe ou un champ caché).
+        if (inputType !== 'password' && inputType !== 'hidden') {
+          const digest = digestOf(input.value);
+          if (digest) info.valueDigest = digest;
+          // L'attribut value du HTML reçu : une valeur posée par le serveur, pas par le script.
+          const initial = digestOf(input.defaultValue);
+          if (initial) info.defaultValueDigest = initial;
+        }
+      } else if (inputType === 'radio' && input.value && input.value !== 'on')
+        info.choiceValue = input.value.slice(0, 60);
+    } else if (tag === 'select') {
+      const select = el as HTMLSelectElement;
+      const chosen = select.selectedIndex >= 0 ? select.options[select.selectedIndex] : undefined;
+      info.hasValue = chosen !== undefined && chosen.value !== '';
+      if (chosen && chosen.value !== '') {
+        info.selectedValue = chosen.value.slice(0, 60);
+        info.selectedOption = clean(chosen.text, 80);
+      }
+      info.optionValues = Array.from(select.options)
+        .slice(0, 30)
+        .map((option) => option.value.slice(0, 60));
     }
+    try {
+      if (el.matches(':autofill')) info.autofilled = true;
+    } catch {
+      try {
+        if (el.matches(':-webkit-autofill')) info.autofilled = true;
+      } catch {
+        // pseudo-classe inconnue de ce navigateur
+      }
+    }
+    // État du formulaire du framework (Angular : ng-valid / ng-invalid, ng-dirty, ng-touched).
+    const classes = el.classList;
+    if (classes.contains('ng-invalid')) info.frameworkValid = false;
+    else if (classes.contains('ng-valid')) info.frameworkValid = true;
+    if (classes.contains('ng-dirty')) info.dirty = true;
+    else if (classes.contains('ng-pristine')) info.dirty = false;
+    if (classes.contains('ng-touched')) info.touched = true;
+    else if (classes.contains('ng-untouched')) info.touched = false;
     const container = closestDeep(el, FIELD_CONTAINER);
     const hint =
       textOfIds(el, el.getAttribute('aria-describedby')) ||

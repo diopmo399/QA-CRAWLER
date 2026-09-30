@@ -1,3 +1,4 @@
+import type { FormRulesSummary } from '../rules/form-rule-coordinator.js';
 import type { StaticAnalysisSummary } from '../static-analysis/model.js';
 import type { RegressionReport } from '../regression/regression-store.js';
 import type { HistoricalKnowledgeSummary } from '../intelligence/knowledge-summary.js';
@@ -133,6 +134,8 @@ export interface ExplorationResult {
   blockedWrites?: BlockedWrite[];
   /** Analyse statique : ce que le code de l'application a apporté (preuves, jamais des vérités). */
   staticAnalysis?: StaticAnalysisSummary;
+  /** État des formulaires (provenance, décisions), dépendances entre champs, règles et couverture — jamais une valeur saisie. */
+  formRules?: FormRulesSummary;
   /** Résumé non secret de la configuration effective. */
   settings: Record<string, unknown>;
   artifacts: {

@@ -84,6 +84,22 @@ export interface UiElement {
   labelGuessed?: boolean;
   /** Le champ contient déjà une valeur (la valeur elle-même n'est jamais lue). */
   hasValue?: boolean;
+  /** Empreinte salée (par run) de la valeur courante : comparer sans lire (forms/state/value-digest.ts). */
+  valueDigest?: string;
+  /** Empreinte de l'attribut value du HTML reçu (valeur posée par le serveur). */
+  defaultValueDigest?: string;
+  /** <select> : code (value) et libellé de l'option choisie, codes des options (30 premiers). */
+  selectedValue?: string;
+  selectedOption?: string;
+  optionValues?: string[];
+  /** Radio : son code (attribut value). */
+  choiceValue?: string;
+  /** Rempli par le navigateur (:autofill). */
+  autofilled?: boolean;
+  /** État du framework (Angular ng-valid / ng-invalid, ng-dirty, ng-touched). */
+  frameworkValid?: boolean;
+  dirty?: boolean;
+  touched?: boolean;
   /** Texte d'aide du champ (mat-hint, aria-describedby) : "99999", "HH:MM"… */
   hint?: string;
   /** Le champ ouvre un calendrier. */

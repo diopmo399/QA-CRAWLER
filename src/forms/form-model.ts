@@ -80,6 +80,14 @@ export interface FormField {
   hint?: string;
   /** Contient déjà une valeur (la valeur elle-même n'est jamais lue). */
   hasValue: boolean;
+  /** Empreinte salée de la valeur ; option choisie (code, libellé) ; état du framework (ng-valid). */
+  valueDigest?: string;
+  selectedValue?: string;
+  selectedOption?: string;
+  frameworkValid?: boolean;
+  autofilled?: boolean;
+  /** formControlName. */
+  control?: string;
   sensitive: boolean;
   /** Carte, IBAN, compte bancaire… : jamais rempli, quelle que soit la source. */
   payment: boolean;

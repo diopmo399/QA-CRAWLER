@@ -10,10 +10,11 @@
  * (AST du compilateur TypeScript), jamais évalué, importé ni requis.
  */
 
+import type { ApplicationRule } from './rules/rule-model.js';
 import type { StaticSourceDiscoverySummary, StaticSourceProvenance } from './sources/model.js';
 
 /** Version de l'analyseur : un changement invalide le cache. */
-export const STATIC_ANALYZER_VERSION = '1.0.0';
+export const STATIC_ANALYZER_VERSION = '1.1.0';
 
 export type StaticFramework = 'ANGULAR' | 'REACT' | 'VUE' | 'GENERIC' | 'UNKNOWN';
 
@@ -139,6 +140,31 @@ export interface StaticDataFlow {
   location: SourceLocation;
 }
 
+/**
+ * D'où vient la valeur initiale d'un contrôle, selon le code : un littéral du
+ * formulaire (country: ['Canada']), une réponse d'API (patchValue({ email: profile.email })
+ * dans le subscribe d'un GET), l'état du composant, un calcul. Jamais la valeur d'un
+ * secret (voir sanitize.ts).
+ */
+export interface StaticValueSource {
+  /** composant#formulaire.contrôle, quand le formulaire est connu. */
+  field?: string;
+  component: string;
+  control: string;
+  kind: 'INITIALIZER' | 'PATCH_VALUE' | 'SET_VALUE' | 'RESET';
+  origin: 'EMPTY' | 'FORM_DEFAULT' | 'STATIC_INITIALIZER' | 'API_RESPONSE' | 'COMPONENT_STATE' | 'DERIVED';
+  literal?: string | number | boolean;
+  /** profile.country (borné). */
+  expression?: string;
+  /** Service#méthode dont la réponse alimente la valeur, et son appel HTTP. */
+  apiCall?: string;
+  apiRoute?: string;
+  responseProperty?: string;
+  /** Champs d'où la valeur est calculée. */
+  inputs?: string[];
+  location: SourceLocation;
+}
+
 /** Le graphe statique de l'application. */
 export interface StaticApplicationGraph {
   applicationId: string;
@@ -157,6 +183,12 @@ export interface StaticApplicationGraph {
   dtos: StaticDtoNode[];
   navigation: StaticNavigationEdge[];
   dataFlows: StaticDataFlow[];
+  /** Valeurs initiales et affectations des contrôles (absent : analyse d'avant cette version). */
+  valueSources?: StaticValueSource[];
+  /** Règles candidates découvertes dans le code (STATIC_DISCOVERED jusqu'à preuve du runtime). */
+  rules?: ApplicationRule[];
+  /** Conditions lues mais écartées : aucun effet fonctionnel (NOT_CLASSIFIED_AS_BUSINESS_RULE). */
+  technicalConditions?: { component: string; text: string; location: SourceLocation }[];
   /** Limites rencontrées (budget, fichiers ignorés, UNRESOLVED_DATA_FLOW…), sans secret. */
   warnings: string[];
   stats: { files: number; bytes: number; durationMs: number };

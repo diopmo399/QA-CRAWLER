@@ -39,6 +39,23 @@ export interface ScoringSignals {
   loopPenaltyOf?(stateId: string, actionId: string): { points: number; detail: string } | undefined;
   /** Version de l'application (commit, appVersion) : une nouvelle version donne une nouvelle chance. */
   version?: string;
+  /**
+   * RULE COVERAGE : ce que cette action vérifierait de règles encore ouvertes (une valeur
+   * posée qui réalise leur condition), et l'influence du champ. Absent : rules désactivées.
+   */
+  ruleOpportunityOf?(
+    action: DiscoveredAction,
+    context: PageContext,
+  ):
+    | {
+        field: string;
+        value?: string;
+        expectations: string[];
+        influence?: { dependencies: number; unverifiedRules: number; level: string };
+      }
+    | undefined;
+  /** Poids de ce signal (rules.decisionWeight). */
+  rulesWeight?: number;
 }
 
 /** Le score d'une action, avec sa décomposition. */
@@ -181,6 +198,34 @@ export class AdvancedActionScorer implements ActionScorer {
           points: weights.coverageWeight * 40 * (1 - ratio),
           code: 'coverage-gain',
           params: { area, ratio: Math.round(ratio * 100) },
+        });
+    }
+
+    // ---- couverture de règles : minimum d'interactions, maximum de règles vérifiées (la SafetyPolicy reste hors du score)
+    const opportunity = this.signals.ruleOpportunityOf?.(action, context);
+    if (opportunity && opportunity.expectations.length > 0) {
+      const weight = this.signals.rulesWeight ?? 1;
+      add({
+        factor: 'rules',
+        points: weight * 30 * Math.min(4, opportunity.expectations.length),
+        code: 'rule-coverage',
+        params: {
+          field: opportunity.field,
+          value: opportunity.value ?? '…',
+          count: opportunity.expectations.length,
+          expectations: opportunity.expectations.slice(0, 3).join('; '),
+        },
+      });
+      if (opportunity.influence && opportunity.influence.level === 'HIGH')
+        add({
+          factor: 'rules',
+          points: weight * 15,
+          code: 'field-influence',
+          params: {
+            field: opportunity.field,
+            dependencies: opportunity.influence.dependencies,
+            unverified: opportunity.influence.unverifiedRules,
+          },
         });
     }
 

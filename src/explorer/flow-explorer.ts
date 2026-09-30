@@ -80,6 +80,15 @@ import {
   RuntimeBundleSourceProvider,
 } from '../static-analysis/sources/source-providers.js';
 import { StaticSourceDiscovery } from '../static-analysis/sources/source-discovery.js';
+import { newValueSalt, valueDigest } from '../forms/state/value-digest.js';
+import { decideFieldAction } from '../forms/state/field-state.js';
+import { fieldStateOfFormField } from '../forms/state/form-field-state.js';
+import { fieldOf } from '../forms/form-analyzer.js';
+import { CrawlerValueMemory, ResponseValueIndex } from '../forms/state/value-sources.js';
+import { FormKnowledgeObserver } from '../forms/state/form-knowledge-observer.js';
+import { FormRuleCoordinator, type FormRulesSummary } from '../rules/form-rule-coordinator.js';
+import type { RuleEvent } from '../rules/runtime-rule-verifier.js';
+import { RuleKnowledgeStore } from '../knowledge/rule-knowledge-store.js';
 import type { StaticAnalysisOutcome } from '../static-analysis/static-analyzer.js';
 import { StaticPathResolver } from '../static-analysis/static-path-resolver.js';
 import { SemanticVocabulary } from '../semantics/resolution/vocabulary.js';
@@ -205,6 +214,8 @@ export interface ExplorationListener {
   onSemanticResolution?(event: SemanticResolutionEvent): void;
   /** ANALYSE STATIQUE : cache, découvertes, preuves, chemins suggérés/confirmés. Jamais un secret. */
   onStaticAnalysis?(event: { at: string; event: StaticAnalysisEvent; message: string }): void;
+  /** Règles de l'application, état des formulaires, dépendances (sans valeur saisie). */
+  onRule?(event: { at: string; event: RuleEvent; message: string }): void;
 }
 
 export interface FlowExplorerOptions {
@@ -269,6 +280,8 @@ export interface ExplorationOutcome {
   forms: FormReport[];
   /** Analyse statique (seulement si activée). */
   staticAnalysis?: StaticAnalysisSummary;
+  /** État des formulaires, dépendances entre champs, règles de l'application et leur couverture. */
+  formRules?: FormRulesSummary;
   /** Tentatives de récupération, branches abandonnées et circuits ouverts. */
   recovery: RecoverySummary;
   /** Actions qui modifient des données : exécutées, et le budget (safety.mutations). */
@@ -395,6 +408,15 @@ export class FlowExplorer {
   /** Scripts vus par le navigateur avant que la découverte existe. */
   private readonly observedScripts = new Set<string>();
   private readonly watchedContexts = new WeakSet();
+  /** Sel des empreintes de valeurs de ce run (jamais écrit nulle part). */
+  private readonly valueSalt = newValueSalt();
+  /** État des formulaires, provenance des valeurs, règles de l'application et dépendances entre champs. */
+  private readonly crawlerValues = new CrawlerValueMemory(this.valueSalt);
+  private readonly responseValues = new ResponseValueIndex(this.valueSalt);
+  private readonly formNetwork: FormKnowledgeObserver;
+  private readonly coordinator: FormRuleCoordinator;
+  /** La valeur saisie par la dernière action exécutée (données de test du crawler). */
+  private lastExecutedValue: string | undefined;
   /** Le scénario en cours : le formulaire rempli, les valeurs saisies (non sensibles) pour les vérifications. */
   private scenario: { formGroup?: string; values: ScenarioValue[] } = { values: [] };
   private semanticEngine: ConfidenceEngine | undefined;
@@ -512,6 +534,13 @@ export class FlowExplorer {
             noveltyOf: (stateId) => this.noveltyByState.get(stateId),
             loopPenaltyOf: (stateId, actionId) => this.loopPenalties.get(`${stateId}::${actionId}`),
             version: this.knowledge.identity.commit ?? this.knowledge.identity.appVersion ?? 'unversioned',
+            ...(config.rules.enabled && config.rules.influenceDecisionEngine
+              ? {
+                  ruleOpportunityOf: (action: DiscoveredAction, context: PageContext) =>
+                    this.coordinator.opportunityOf(action, context),
+                  rulesWeight: config.rules.decisionWeight,
+                }
+              : {}),
           }),
           {
             knowledge: this.knowledge,
@@ -527,7 +556,8 @@ export class FlowExplorer {
         this.onNavigation(event);
       },
     });
-    this.observer = options.observer?.(this.navigation) ?? new UIObserver(400, this.navigation);
+    this.observer =
+      options.observer?.(this.navigation) ?? new UIObserver(400, this.navigation, this.valueSalt);
     this.executor = new PlaywrightActionExecutor(
       exploration.actionTimeoutMs,
       exploration.settleTimeMs,
@@ -579,6 +609,7 @@ export class FlowExplorer {
         fields: config.testData.fields,
         defaults: config.testData.defaults,
         language: config.report.language,
+        preserveExistingValues: config.forms.preserveExistingValues,
       });
     this.contract = options.contract;
     this.forms = new FormExerciser(
@@ -621,6 +652,48 @@ export class FlowExplorer {
         ])
       : undefined;
     this.networkTrace = new NetworkTraceRecorder(config.network);
+    this.formNetwork = new FormKnowledgeObserver(
+      (url) => this.safety.navigation.isAllowedHost(new URL(url).hostname),
+      this.responseValues,
+    );
+    this.coordinator = new FormRuleCoordinator({
+      config,
+      salt: this.valueSalt,
+      network: this.formNetwork,
+      responses: this.responseValues,
+      crawlerValues: this.crawlerValues,
+      observe: (page) => this.observer.observe(page),
+      settle: async (page) => {
+        await page.waitForTimeout(config.exploration.settleTimeMs).catch(() => undefined);
+        await waitForScreenReady(page, Math.min(config.exploration.readyTimeoutMs, 3000)).catch(
+          () => undefined,
+        );
+      },
+      allowed: (action) => this.safety.evaluate(action).verdict !== 'BLOCK',
+      submitAllowed: config.forms.submit === true || !config.safety.block.includes('form-submit'),
+      emit: (event, message) => {
+        this.listener.onRule?.({ at: new Date().toISOString(), event, message: redactText(message) });
+      },
+      ...(config.rules.enabled
+        ? {
+            store: new RuleKnowledgeStore(
+              path.join(path.dirname(path.resolve(config.output.reportsDir)), 'knowledge', 'rules'),
+              {
+                application: config.mission.name,
+                ...((config.staticAnalysis.version ?? this.env.QA_VERSION)
+                  ? { version: config.staticAnalysis.version ?? this.env.QA_VERSION }
+                  : {}),
+                ...((config.staticAnalysis.commit ?? this.env.QA_COMMIT)
+                  ? { commit: config.staticAnalysis.commit ?? this.env.QA_COMMIT }
+                  : {}),
+              },
+            ),
+          }
+        : {}),
+      ...((config.staticAnalysis.version ?? this.env.QA_VERSION)
+        ? { version: config.staticAnalysis.version ?? this.env.QA_VERSION }
+        : {}),
+    });
     const { recovery } = config;
     this.recovery = new RecoveryEngine(recovery);
     this.breaker = recovery.enabled ? new CircuitBreaker(recovery.circuitBreaker) : undefined;
@@ -696,6 +769,8 @@ export class FlowExplorer {
       if (
         this.config.staticAnalysis.enabled &&
         (this.config.staticAnalysis.strategy === 'eager' ||
+          // Les règles de l'application se lisent dans le code : dès le début.
+          (this.config.rules.enabled && this.config.rules.staticDiscovery) ||
           (this.dryRunHook !== undefined && this.config.staticAnalysis.dryRun.useStaticKnowledge))
       )
         await this.ensureStaticKnowledge(page);
@@ -768,6 +843,7 @@ export class FlowExplorer {
       await browser.close();
     }
     await this.memory.save(this.graph);
+    await this.coordinator.persist();
     return this.outcome(stopReason);
   }
 
@@ -800,6 +876,18 @@ export class FlowExplorer {
         if (!restored.context) return { page, stopReason: 'exhausted' };
         current = restored.context;
         continue;
+      }
+
+      // COMPRENDRE L'ÉCRAN (une fois par état) : état des champs, provenance des valeurs, règles du code
+      // confirmées ou contredites par le navigateur. Rien n'est envoyé ; une valeur posée est rétablie.
+      if (this.lastSnapshot) {
+        const understood = await this.coordinator
+          .understand(page, this.lastSnapshot, current)
+          .catch(() => ({ navigated: false }));
+        if (understood.navigated) {
+          current = await this.observeState(page, current.metadata.depth);
+          continue;
+        }
       }
 
       // Les formulaires d'abord : un écran avec des champs (une fenêtre « Nouveau dossier »…) est rempli, puis vérifié.
@@ -1053,6 +1141,9 @@ export class FlowExplorer {
   ): Promise<{ page: Page; context: PageContext }> {
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
     const urlBefore = page.url();
+    const snapshotBefore = this.lastSnapshot;
+    this.lastExecutedValue = undefined;
+    this.formNetwork.start(`action-${action.id}`);
     // Les anomalies levées à partir de maintenant sont causées par cette action ; leur état est connu après l'observation.
     this.attribution = { actionId: action.id };
     this.currentAction = { stateId: from.stateId, actionId: action.id };
@@ -1193,6 +1284,18 @@ export class FlowExplorer {
     // Les entrées du menu global sont atteignables depuis l'état de départ : un niveau de profondeur, où qu'on ait cliqué dessus.
     const depth = action.category === 'menu' ? 1 : from.metadata.depth + 1;
     const after = await this.observeState(page, depth);
+    // Une saisie : ce qui a changé ailleurs (dépendances entre champs), les règles de ce champ revues.
+    const formExchanges = this.formNetwork.stop(`action-${action.id}`);
+    if (action.field)
+      this.coordinator.afterAction({
+        action,
+        ...this.executedValue(),
+        before: snapshotBefore,
+        after: this.lastSnapshot,
+        stateId: after.stateId,
+        route: after.route,
+        network: formExchanges,
+      });
     const ids = newIssues();
     const edge = this.graph.addEdge({
       from: from.stateId,
@@ -1652,12 +1755,35 @@ export class FlowExplorer {
       await this.prepareForm(page, formFieldsFor(action, context.actions));
     const instruction =
       action.type === 'fill' || action.type === 'select' ? this.testData.instructionFor(action) : undefined;
+    // RULE COVERAGE : une liste dont une valeur vérifierait des règles non couvertes reçoit cette valeur (expliquée).
+    const ruleValue =
+      action.type === 'select' && this.config.rules.enabled
+        ? this.coordinator.ruleValueFor(action, context)
+        : undefined;
     const value =
-      instruction?.kind === 'fill'
+      ruleValue ??
+      (instruction?.kind === 'fill'
         ? instruction.value
         : instruction?.kind === 'select'
           ? instruction.label
-          : undefined;
+          : undefined);
+    this.lastExecutedValue = value;
+    // FIELD ACTION DECISION : une valeur existante et valide est GARDÉE (KEEP), un champ calculé OBSERVÉ —
+    // jamais écrasé par une option au hasard. Le champ est seulement marqué comme vu.
+    if (
+      (action.type === 'fill' || action.type === 'select') &&
+      instruction?.kind === 'skip' &&
+      ruleValue === undefined &&
+      /^(KEEP|OBSERVE_ONLY|SKIP_)/.test(instruction.reason)
+    )
+      return {
+        status: 'SUCCESS',
+        urlBefore: page.url(),
+        urlAfter: page.url(),
+        durationMs: 0,
+        usedFallback: false,
+        openedPopup: false,
+      };
     // Compté avant l'exécution : une action qui échoue à mi-chemin a peut-être déjà modifié des données.
     this.safety.recordExecuted(action);
     const run = (): Promise<ActionExecutionResult> =>
@@ -2581,7 +2707,13 @@ export class FlowExplorer {
       return undefined;
     }
     const vocabulary = this.semanticResolver?.vocabulary ?? new SemanticVocabulary(this.semantics.dictionary);
-    return new StaticKnowledge(outcome.graph, (text) => vocabulary.conceptOf(text)?.concept, this.contract);
+    const knowledge = new StaticKnowledge(
+      outcome.graph,
+      (text) => vocabulary.conceptOf(text)?.concept,
+      this.contract,
+    );
+    this.coordinator.useStaticKnowledge(knowledge);
+    return knowledge;
   }
 
   /** Les preuves statiques d'un champ, pour le résolveur (index en mémoire, jamais l'AST). */
@@ -2914,6 +3046,18 @@ export class FlowExplorer {
         );
       case 'field': {
         const field = target.field;
+        // FIELD ACTION DECISION d'une valeur imposée par le scénario : FILL, REPLACE (EXPLICIT_SCENARIO_VALUE)
+        // sur une valeur déjà présente — « je sélectionne France » sur « Canada » —, ou KEEP si elle y est déjà.
+        const decision = decideFieldAction(fieldStateOfFormField(fieldOf(field.action)), {
+          preserveExisting: this.config.forms.preserveExistingValues,
+          explicit:
+            target.operation === 'select'
+              ? { option: target.option ?? '' }
+              : intent.kind === 'FILL' && typeof intent.value === 'string'
+                ? { digest: valueDigest(intent.value, this.valueSalt) }
+                : 'any',
+        });
+        const decided = `${decision.decision} (${decision.reason})`;
         const concrete: Extract<FlowStep, { target: unknown }> =
           target.operation === 'fill' && intent.kind === 'FILL'
             ? { ...common, kind: 'fill', target: targetOf(field.action), value: intent.value }
@@ -2929,7 +3073,14 @@ export class FlowExplorer {
           this.remember(field, intent);
           this.confirmStatic(field.action, context.url, resolution.reasons);
         }
-        return finish(outcome);
+        const finished = finish(outcome);
+        return {
+          ...finished,
+          report: {
+            ...finished.report,
+            interpretation: `${finished.report.interpretation} · ${decided}`,
+          },
+        };
       }
       case 'form': {
         let current = context;
@@ -4068,7 +4219,7 @@ export class FlowExplorer {
       config: this.config,
     };
     const pageErrors = new PageErrorObserver(observation);
-    const tracing = this.config.network.trace ? [this.networkTrace] : [];
+    const tracing = [...(this.config.network.trace ? [this.networkTrace] : []), this.formNetwork];
     if (!this.config.goals.detectErrors) return { all: tracing, pageErrors };
     return {
       all: [new NetworkObserver(observation), new ConsoleObserver(observation), pageErrors, ...tracing],
@@ -4255,7 +4406,21 @@ export class FlowExplorer {
       invariants: this.invariantOracle?.evaluations() ?? [],
       budget: this.budget.usage(),
       ...(this.config.staticAnalysis.enabled ? { staticAnalysis: this.staticSummary() } : {}),
+      ...this.formRulesSummary(),
     };
+  }
+
+  /** La valeur saisie par la dernière action (posée par execute()). */
+  private executedValue(): { value?: string } {
+    return this.lastExecutedValue !== undefined ? { value: this.lastExecutedValue } : {};
+  }
+
+  /** Présent seulement quand il y a quelque chose à dire (règles activées, champs analysés, dépendances). */
+  private formRulesSummary(): { formRules?: FormRulesSummary } {
+    const summary = this.coordinator.summary();
+    const useful =
+      this.config.rules.enabled || summary.fieldStates.length > 0 || summary.dependencies.length > 0;
+    return useful ? { formRules: summary } : {};
   }
 
   private staticSummary(): StaticAnalysisSummary {

@@ -39,6 +39,9 @@ export type SemanticKey =
   | 'url'
   | 'text';
 
+import { decideFieldAction } from '../forms/state/field-state.js';
+import { fieldStateOfFormField } from '../forms/state/form-field-state.js';
+
 export interface TestDataOptions {
   /** Id court du run : les valeurs créées portent QA-CRAWLER-<runId>. */
   runId?: string;
@@ -49,6 +52,11 @@ export interface TestDataOptions {
   /** Langue des données générées (report.language) : une personne, une adresse et des textes cohérents dans cette langue. */
   language?: 'fr' | 'en';
   today?: () => Date;
+  /**
+   * forms.preserveExistingValues (défaut true) : une valeur déjà présente et valide
+   * est gardée (KEEP) ; false : remplacée par des données de test (REPLACE).
+   */
+  preserveExistingValues?: boolean;
 }
 
 /** Une personne fictive et son adresse : toutes les valeurs d'un run vont ensemble. */
@@ -246,8 +254,10 @@ export class DefaultTestDataProvider implements TestDataProvider {
   private readonly runId: string;
   private readonly today: () => Date;
   private readonly language: 'fr' | 'en';
+  private readonly preserveExisting: boolean;
 
   constructor(options: TestDataOptions = {}) {
+    this.preserveExisting = options.preserveExistingValues ?? true;
     this.fields = new Map(Object.entries(options.fields ?? {}).map(([key, value]) => [fieldKey(key), value]));
     this.defaults = options.defaults ?? {};
     this.runId = options.runId ?? 'run';
@@ -302,8 +312,15 @@ export class DefaultTestDataProvider implements TestDataProvider {
     if (field.sensitive || field.payment)
       return { kind: 'skip', source: 'fallback', reason: 'sensitive field: never filled automatically' };
     const configured = this.configured(field);
-    if (configured === undefined && field.hasValue)
-      return { kind: 'skip', source: 'fallback', reason: 'already filled' };
+    // FIELD ACTION DECISION : une valeur présente n'est plus simplement « ignorée » — gardée si elle
+    // est valide (KEEP), remplacée si elle est invalide (REPLACE) ; une valeur configurée reste prioritaire.
+    if (configured === undefined && field.hasValue) {
+      const decision = decideFieldAction(fieldStateOfFormField(field), {
+        preserveExisting: this.preserveExisting,
+      });
+      if (decision.decision !== 'REPLACE' && decision.decision !== 'FILL')
+        return { kind: 'skip', source: 'fallback', reason: `${decision.decision}: ${decision.explanation}` };
+    }
 
     switch (field.type) {
       case 'checkbox':

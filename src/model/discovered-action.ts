@@ -73,8 +73,19 @@ export interface FieldConstraints {
   placeholder?: string;
   /** Texte d'aide affiché avec le champ ("99999", "HH:MM"…). */
   hint?: string;
-  /** Le champ contient déjà une valeur : laissé tel quel. */
+  /** Le champ contient déjà une valeur (voir FormStateAnalyzer : garder, remplacer, observer). */
   hasValue?: boolean;
+  /** Empreinte salée de la valeur courante (jamais la valeur), et de la valeur posée par le serveur. */
+  valueDigest?: string;
+  defaultValueDigest?: string;
+  selectedValue?: string;
+  selectedOption?: string;
+  optionValues?: string[];
+  choiceValue?: string;
+  autofilled?: boolean;
+  frameworkValid?: boolean;
+  dirty?: boolean;
+  touched?: boolean;
   /** Champ texte qui ouvre un calendrier. */
   dateLike?: boolean;
   /** Une liste qui n'est pas un <select> natif (Angular Material…). */

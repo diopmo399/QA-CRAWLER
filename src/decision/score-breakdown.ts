@@ -11,6 +11,7 @@ export const SCORE_FACTORS = [
   'risk',
   'repetition',
   'adaptive',
+  'rules',
 ] as const;
 export type ScoreFactor = (typeof SCORE_FACTORS)[number];
 
@@ -38,6 +39,8 @@ export interface ScoreBreakdown {
   repetition: number;
   /** AdaptiveScoring (intelligence.adaptiveScoring) : 0 quand désactivé ou sans historique. */
   adaptive: number;
+  /** Couverture de règles (rules.influenceDecisionEngine) : 0 sans règle à vérifier. */
+  rules: number;
   total: number;
   /** Raisons lisibles (anglais), dans l'ordre des composantes. */
   reasons: string[];
@@ -78,6 +81,14 @@ const TEMPLATES = {
   'rarely-explored': {
     en: 'rarely explored before (novelty {novelty}: {detail})',
     fr: 'peu explorée auparavant (nouveauté {novelty} : {detail})',
+  },
+  'rule-coverage': {
+    en: 'RULE_COVERAGE: {field} = {value} would verify {count} expectation(s) ({expectations})',
+    fr: 'RULE_COVERAGE : {field} = {value} vérifierait {count} attente(s) ({expectations})',
+  },
+  'field-influence': {
+    en: 'influential field {field} ({dependencies} dependent(s), {unverified} unverified rule(s))',
+    fr: 'champ influent {field} ({dependencies} dépendance(s), {unverified} règle(s) non vérifiée(s))',
   },
   'unstable-history': {
     en: 'unstable history (stability {stability}, confidence {confidence}: {detail})',

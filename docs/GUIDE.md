@@ -558,6 +558,27 @@ Avec, une phrase comme `Et je renseigne le courriel avec "test@example.com"` (ou
 
 ---
 
+## 17 bis. Comprendre les règles de l'application
+
+Avec le code de l'application (dépôt ou source maps), QA-CRAWLER lit ses **règles** — « si le type de compte est Entreprise, le numéro d'entreprise apparaît et devient obligatoire » — puis les vérifie dans le navigateur :
+
+```yaml
+staticAnalysis: { enabled: true, source: { root: ../mon-application } }
+rules: { enabled: true }
+```
+
+| Résultat               | Signification                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| `RUNTIME_CONFIRMED`    | le navigateur montre ce que le code annonce                                       |
+| `RUNTIME_CONTRADICTED` | le navigateur montre autre chose (pas forcément un bug : lire le contexte)        |
+| `BLOCKED_BY_CONTEXT`   | dépend d'un rôle que l'utilisateur connecté n'a pas (jamais changé pour vérifier) |
+| `BLOCKED_BY_POLICY`    | demanderait un envoi de formulaire ou une action interdite                        |
+| `NOT_VERIFIED`         | pas de moyen sûr de la vérifier (état interne, données impossibles à produire)    |
+
+Un champ déjà rempli (profil, valeur par défaut) est **gardé** ; une règle se vérifie d'abord en observant l'écran. Si le crawler change une valeur pour vérifier une règle, il la **rétablit** ensuite, et ne touche jamais un champ prérempli par le serveur. Détails : [RULES.md](RULES.md).
+
+---
+
 ## 18. Dépannage
 
 | Symptôme                                                    | Solution                                                                       |

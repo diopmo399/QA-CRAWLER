@@ -13,9 +13,13 @@ import {
   type StaticFramework,
   type StaticNavigationEdge,
   type StaticRouteNode,
+  type StaticValueSource,
 } from './model.js';
 import { sanitizeGraph } from './sanitize.js';
 import type { SourceSet } from './source-set.js';
+import { buildRules, type RuleBuildComponent } from './rules/rule-builder.js';
+import type { ApplicationRule } from './rules/rule-model.js';
+import { scanTemplateRules, type TemplateRuleFacts } from './rules/template-rules.js';
 import { scanTemplate, type TemplateFacts } from './template-scanner.js';
 import {
   AstBudgetExceeded,
@@ -26,6 +30,7 @@ import {
   type RequestObjectFact,
   type RouteArrayFact,
   type RouteLiteral,
+  type ValueExpressionFact,
 } from './ts-facts.js';
 import type { TypeScriptModule } from './typescript-loader.js';
 
@@ -36,6 +41,8 @@ export interface StaticAnalysisFeatures {
   dtoMapping: boolean;
   httpCalls: boolean;
   dataFlow: boolean;
+  /** Règles candidates (gabarits et code) ; absent : true. */
+  rules?: boolean;
 }
 
 export interface GraphBuildOptions {
@@ -113,6 +120,7 @@ export function buildStaticGraph(
   const budget = { remaining: options.maxAstNodes };
   const facts: FileFacts[] = [];
   const templates = new Map<string, TemplateFacts>();
+  const templateRules = new Map<string, TemplateRuleFacts>();
   let exhausted = false;
   for (const file of sources.files) {
     if (now() - started > options.maxDurationMs) {
@@ -121,7 +129,10 @@ export function buildStaticGraph(
       break;
     }
     if (file.path.endsWith('.html')) {
-      if (angular) templates.set(file.path, scanTemplate(file.text));
+      if (angular) {
+        templates.set(file.path, scanTemplate(file.text));
+        if (options.features.rules !== false) templateRules.set(file.path, scanTemplateRules(file.text));
+      }
       continue;
     }
     if (!/\.(ts|tsx|js|jsx|mjs)$/.test(file.path)) continue;
@@ -148,6 +159,7 @@ export function buildStaticGraph(
   // ---- composants et gabarits
   const components: StaticComponentNode[] = [];
   const componentTemplates = new Map<string, { facts: TemplateFacts; name: string }>();
+  const ruleComponents: RuleBuildComponent[] = [];
   if (angular)
     for (const [name, { fact, file }] of classes) {
       if (fact.decorator !== 'Component') continue;
@@ -161,6 +173,28 @@ export function buildStaticGraph(
         componentTemplates.set(name, {
           facts: scanTemplate(fact.inlineTemplate.text),
           name: `${file} (inline)`,
+        });
+      }
+      if (options.features.rules !== false) {
+        const rulesOfTemplate = template
+          ? template === 'inline'
+            ? fact.inlineTemplate
+              ? scanTemplateRules(fact.inlineTemplate.text)
+              : undefined
+            : templateRules.get(template)
+          : undefined;
+        ruleComponents.push({
+          name,
+          file,
+          fact,
+          ...(rulesOfTemplate
+            ? {
+                template: {
+                  rules: rulesOfTemplate,
+                  name: template === 'inline' ? `${file} (inline)` : (template ?? ''),
+                },
+              }
+            : {}),
         });
       }
       components.push({
@@ -208,6 +242,15 @@ export function buildStaticGraph(
           });
         }
       }
+
+  // ---- valeurs initiales et affectations des contrôles (provenance des valeurs)
+  const valueSources: StaticValueSource[] =
+    angular && options.features.forms ? valueSourcesOf(classes, forms) : [];
+
+  // ---- règles candidates (gabarits + code), toujours STATIC_DISCOVERED
+  const ruleResult =
+    angular && options.features.rules !== false ? buildRules(ts, ruleComponents, classes, forms) : undefined;
+  const rules: ApplicationRule[] = ruleResult?.rules ?? [];
 
   // ---- DTO
   const dtos: StaticDtoNode[] = options.features.dtoMapping
@@ -300,6 +343,15 @@ export function buildStaticGraph(
     dtos,
     navigation,
     dataFlows,
+    ...(valueSources.length > 0 ? { valueSources } : {}),
+    ...(rules.length > 0 ? { rules } : {}),
+    ...(ruleResult && ruleResult.technical.length > 0
+      ? {
+          technicalConditions: ruleResult.technical
+            .slice(0, 20)
+            .map((entry) => ({ component: entry.component, text: entry.text, location: entry.location })),
+        }
+      : {}),
     warnings: [...new Set(warnings)].slice(0, 50),
     stats: { files: sources.files.length, bytes: sources.bytes, durationMs: now() - started },
     ...(sources.provenance ? { sources: sources.provenance } : {}),
@@ -407,6 +459,115 @@ function flattenRoutes(facts: readonly FileFacts[]): StaticRouteNode[] {
     if (!unique.has(`${node.path}|${node.component ?? ''}`))
       unique.set(`${node.path}|${node.component ?? ''}`, node);
   return [...unique.values()];
+}
+
+/** Service#méthode et « GET /api/profile » d'un appel dont la réponse est lue (un niveau de service). */
+export function apiOfSource(
+  fact: ClassFact,
+  owner: string,
+  source: NonNullable<ValueExpressionFact['source']>,
+  classes: Map<string, { fact: ClassFact; file: string }>,
+  method?: string,
+): { apiCall?: string; apiRoute?: string } {
+  if (source.httpMethod)
+    return {
+      apiCall: `${owner}#${method ?? source.method}`,
+      ...(source.route !== undefined ? { apiRoute: `${source.httpMethod} ${source.route}` } : {}),
+    };
+  const type = fact.injected[source.target];
+  const service = type ? classes.get(type) : undefined;
+  const serviceMethod = service?.fact.methods.find((entry) => entry.name === source.method);
+  const http = serviceMethod?.httpCalls[0];
+  if (!type || !serviceMethod) return {};
+  return {
+    apiCall: `${type}#${serviceMethod.name}`,
+    ...(http ? { apiRoute: `${http.method} ${http.route}` } : {}),
+  };
+}
+
+/**
+ * Les sources de valeur de chaque contrôle : son initialiseur (country: ['Canada'] →
+ * FORM_DEFAULT), et ses affectations — patchValue({ email: profile.email }) dans le
+ * subscribe d'un GET → API_RESPONSE, avec l'appel et la propriété de la réponse.
+ */
+function valueSourcesOf(
+  classes: Map<string, { fact: ClassFact; file: string }>,
+  forms: readonly StaticFormNode[],
+): StaticValueSource[] {
+  const sources: StaticValueSource[] = [];
+  for (const [name, { fact, file }] of classes) {
+    for (const form of fact.forms)
+      for (const control of form.controls) {
+        const initial = control.initial;
+        if (!initial) continue;
+        sources.push({
+          field: `${name}#${form.property}.${control.name}`,
+          component: name,
+          control: control.name,
+          kind: 'INITIALIZER',
+          origin:
+            initial.kind === 'EMPTY'
+              ? 'EMPTY'
+              : initial.kind === 'LITERAL'
+                ? 'FORM_DEFAULT'
+                : 'STATIC_INITIALIZER',
+          ...(initial.value !== undefined ? { literal: initial.value } : {}),
+          ...(initial.expression ? { expression: initial.expression } : {}),
+          location: { file, line: control.line },
+        });
+      }
+    const state = new Map<string, ValueExpressionFact>();
+    for (const method of fact.methods)
+      for (const assignment of method.stateAssignments) state.set(assignment.property, assignment.value);
+    const controlsOf = (form: string | undefined): string[] =>
+      forms.find((entry) => entry.component === name && entry.property === form)?.controls ?? [];
+    for (const method of fact.methods)
+      for (const assignment of method.valueAssignments) {
+        let value = assignment.value;
+        // this.profile.country, profile venant d'une réponse : la réponse, propriété country.
+        if (value.kind === 'STATE' && value.stateProperty && state.get(value.stateProperty)?.source) {
+          const origin = state.get(value.stateProperty);
+          value = {
+            kind: 'RESPONSE',
+            ...(origin?.source ? { source: origin.source } : {}),
+            ...(value.property ? { property: value.property } : {}),
+            expression: value.expression,
+          };
+        }
+        const targets = assignment.control === '*' ? controlsOf(assignment.form) : [assignment.control];
+        for (const control of targets) {
+          const api =
+            value.kind === 'RESPONSE' && value.source
+              ? apiOfSource(fact, name, value.source, classes, method.name)
+              : {};
+          const property =
+            assignment.control === '*' ? [value.property, control].filter(Boolean).join('.') : value.property;
+          sources.push({
+            ...(assignment.form ? { field: `${name}#${assignment.form}.${control}` } : {}),
+            component: name,
+            control,
+            kind: assignment.kind,
+            origin:
+              value.kind === 'LITERAL'
+                ? 'STATIC_INITIALIZER'
+                : value.kind === 'RESPONSE'
+                  ? 'API_RESPONSE'
+                  : value.kind === 'CALCULATION'
+                    ? 'DERIVED'
+                    : 'COMPONENT_STATE',
+            ...(value.literal !== undefined ? { literal: value.literal } : {}),
+            expression: value.expression,
+            ...api,
+            ...(value.kind === 'RESPONSE' && property
+              ? { responseProperty: property.split('.').pop() ?? property }
+              : {}),
+            ...(value.inputs ? { inputs: value.inputs } : {}),
+            location: { file, line: assignment.line },
+          });
+        }
+      }
+  }
+  return sources;
 }
 
 export function joinPath(parent: string, segment: string): string {
