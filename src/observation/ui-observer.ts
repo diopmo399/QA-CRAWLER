@@ -20,6 +20,11 @@ export class UIObserver {
   ) {}
 
   async observe(page: Page): Promise<UiSnapshot> {
+    // Juste après une navigation (connexion, redirection), le document peut ne pas avoir encore
+    // de <body> : il est attendu un court instant, puis lu quoi qu'il arrive (sans erreur).
+    await page
+      .waitForFunction(() => document.querySelector('body') !== null, undefined, { timeout: 3000 })
+      .catch(() => undefined);
     // Une LECTURE sans effet : le garde peut la refaire sur la nouvelle page si le document change pendant qu'elle court.
     const dom = await this.navigation.read(page, 'dom-snapshot', () =>
       page.evaluate(collectDomSnapshot, { maxElements: this.maxElements }),

@@ -28,6 +28,7 @@ function navigatingPage(failures: string[]): { page: Page; waits: number } {
       state.waits += 1;
       return Promise.resolve();
     },
+    waitForFunction: () => Promise.resolve(),
     title: () => Promise.resolve('Accueil'),
     isClosed: () => false,
     url: () => 'https://app.test/accueil',

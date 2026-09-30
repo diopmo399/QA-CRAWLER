@@ -108,7 +108,8 @@ function inspectScreen({ wanted, kind }: { wanted: string; kind: Kind }): {
   const modals = Array.from(document.querySelectorAll(MODAL)).filter(
     (el) => visible(el) && el.querySelector(selector) !== null,
   );
-  const root: Element = modals[modals.length - 1] ?? document.body;
+  const root: Element =
+    modals[modals.length - 1] ?? document.querySelector('body') ?? document.documentElement;
   const ownText = (el: Element): string =>
     Array.from(el.childNodes)
       .filter((node) => node.nodeType === Node.TEXT_NODE)

@@ -12,6 +12,13 @@ export type DomSnapshot = Omit<UiSnapshot, 'url' | 'title'>;
  * Playwright). Les valeurs des champs ne sont jamais lues.
  */
 export function collectDomSnapshot(options: { maxElements: number }): DomSnapshot {
+  // Un document sans <body> (en cours de chargement juste après une connexion, réponse XML,
+  // page intermédiaire d'authentification) : son texte est lu sur la racine, jamais une erreur.
+  const pageText = (): string => {
+    // Les types du DOM disent <body> toujours présent ; ce n'est pas vrai pendant un chargement.
+    const body = document.querySelector('body');
+    return body ? body.innerText : (document.querySelector(':root')?.textContent ?? '');
+  };
   // Posé par l'exécuteur de flows sur l'élément visé par une étape imposée (voir FlowStepExecutor).
   const FLOW_TARGET_ATTRIBUTE = 'data-qa-flow-target';
   const CANDIDATES = [
@@ -796,13 +803,13 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     const stepHeaders = shown(
       'mat-step-header, .mat-step-header, [class*="stepper"] [role="tab"], .step, .wizard-step',
     );
-    const stepText = /\b(etape|étape|step)\s*\d+\s*(sur|of|\/)\s*\d+/i.exec(document.body.innerText);
+    const stepText = /\b(etape|étape|step)\s*\d+\s*(sur|of|\/)\s*\d+/i.exec(pageText());
     const empty = shown(
       '.empty-state, .no-data, .no-results, [class*="empty-state"], [class*="no-data"], [class*="no-results"], mat-empty',
     )[0];
     const emptyText =
       /\b(aucun(e)? (resultat|résultat|donnee|donnée|element|élément|enregistrement)|no (results?|data|items?|records?)|nothing (here|found)|liste vide|empty)\b/i.exec(
-        clean(document.body.innerText, 2000),
+        clean(pageText(), 2000),
       );
     const structure: {
       tables: number;
@@ -850,7 +857,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     overlay: modal ? overlayName(modal) : undefined,
     selectedTabs: visibleTexts('[role="tab"][aria-selected="true"]', 10),
     currentItems: visibleTexts('[aria-current]:not([aria-current="false"])', 10),
-    textExcerpt: clean(document.body.innerText, 600),
+    textExcerpt: clean(pageText(), 600),
     structure: structureOf(),
     elements,
     forms: formResults,
@@ -868,7 +875,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
         '[aria-busy="true"], [role="progressbar"], mat-spinner, mat-progress-spinner, mat-progress-bar, ngx-spinner, .spinner, .loading, .loader, [class*="spinner"], [class*="skeleton"]',
       ).some((el) => isVisible(el)),
       // Rien à voir ni à faire.
-      empty: clean(document.body.innerText, 40).length < 3 && elements.length === 0,
+      empty: clean(pageText(), 40).length < 3 && elements.length === 0,
       invalidFields: deepAll('[aria-invalid="true"]').filter((el) => isVisible(el)).length,
     },
   };
