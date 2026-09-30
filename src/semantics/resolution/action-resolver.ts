@@ -176,7 +176,10 @@ export class ActionResolver {
     scored: { action: DiscoveredAction; candidate: ResolutionCandidate }[],
   ): ActionResolution {
     const candidates = rank(scored.map((entry) => entry.candidate));
-    const decision = decide(candidates, this.thresholds);
+    const repeated = repeatedInList(scored, candidates, this.thresholds.autoResolveThreshold);
+    const decision = repeated
+      ? { status: 'RESOLVED' as const, best: repeated.first.candidate, reason: repeated.reason }
+      : decide(candidates, this.thresholds);
     const best = decision.best ? scored.find((entry) => entry.candidate.id === decision.best?.id) : undefined;
     const common = {
       intent,
@@ -195,6 +198,31 @@ export class ActionResolver {
       targetSignature: actionTargetSignature(best.action),
     };
   }
+}
+
+/**
+ * Le même contrôle répété dans une liste (« Ouvrir » sur chaque ligne d'un tableau) :
+ * les meilleurs candidats ont le même libellé, le même type, le même rôle et le même
+ * score. Ce n'est pas une hésitation entre deux cibles : la première ligne est prise, et
+ * l'explication le dit. Deux contrôles différents à égalité restent AMBIGUOUS.
+ */
+function repeatedInList(
+  scored: readonly { action: DiscoveredAction; candidate: ResolutionCandidate }[],
+  ranked: readonly ResolutionCandidate[],
+  threshold: number,
+): { first: { action: DiscoveredAction; candidate: ResolutionCandidate }; reason: string } | undefined {
+  const [top] = ranked;
+  if (!top || top.score < threshold) return undefined;
+  const tied = scored.filter((entry) => entry.candidate.points === top.points);
+  if (tied.length < 2) return undefined;
+  const kind = (action: DiscoveredAction): string =>
+    [matchKey(actionLabel(action)), action.type, action.locator.role ?? '', action.category].join('|');
+  const [first] = tied;
+  if (!first || tied.some((entry) => kind(entry.action) !== kind(first.action))) return undefined;
+  return {
+    first,
+    reason: `"${first.candidate.label}" is repeated ${String(tied.length)} times (a list): the first one`,
+  };
 }
 
 /** Libellé identique, contenu, ou mots en commun : les mêmes règles que pour les champs. */

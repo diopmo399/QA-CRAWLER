@@ -123,6 +123,39 @@ describe('ActionResolver: the role of the button, not the word "valider"', () =>
     });
     expect(result.status).toBe('AMBIGUOUS');
   });
+  it('the same link on every row of a list: the first row, said so; two different controls stay AMBIGUOUS', () => {
+    const rows = screen(
+      {
+        url: 'http://localhost:4200/dossiers',
+        headings: ['Dossiers'],
+        elements: [1, 2, 3].map((row) =>
+          element({
+            tag: 'a',
+            role: '',
+            name: 'Ouvrir le dossier',
+            text: 'Ouvrir le dossier',
+            css: `tr:nth-child(${String(row)}) a`,
+          }),
+        ),
+      },
+      config,
+    );
+    const result = actions.resolveClick({ kind: 'CLICK', target: 'Ouvrir le dossier' }, rows.actions, {
+      stateSignature: 'x',
+    });
+    expect(result.status).toBe('RESOLVED');
+    expect(result.selected?.id).toBe(rows.actions[0]?.id);
+    expect(result.reasons[0]).toContain('repeated 3 times (a list): the first one');
+    const different = screen(
+      { elements: [button('Ouvrir le dossier'), link('Ouvrir le dossier', 'http://localhost:4200/d/1')] },
+      config,
+    );
+    expect(
+      actions.resolveClick({ kind: 'CLICK', target: 'Ouvrir le dossier' }, different.actions, {
+        stateSignature: 'x',
+      }).status,
+    ).toBe('AMBIGUOUS');
+  });
   it('a named click without quotes: « nouvel utilisateur », « le bouton créer »', () => {
     const list = screen(
       {

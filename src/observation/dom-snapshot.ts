@@ -35,6 +35,8 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
     '[routerlink]',
     '[ng-reflect-router-link]',
     '[onclick]',
+    // Un lien sans adresse (Angular « <a (click)> ») : gardé seulement s'il a l'air cliquable (curseur pointeur).
+    'a:not([href])',
     '[tabindex="0"]',
     // Texte riche et champs modifiables personnalisés.
     '[contenteditable]:not([contenteditable="false"])',
@@ -43,7 +45,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
   const TRANSIENT =
     '[aria-live]:not([aria-live="off"]), [role="status"], [role="alert"], [role="log"], [role="timer"], [role="marquee"], mat-snack-bar-container, .toast, .snackbar';
   /** Candidats qui sont des actions à eux seuls (tout sauf un simple tabindex="0"). */
-  const ACTIONABLE = CANDIDATES.replace(/,\s*\[tabindex="0"\]/, '');
+  const ACTIONABLE = CANDIDATES.replace(/,\s*\[tabindex="0"\]/, '').replace(/,\s*a:not\(\[href\]\)/, '');
   const STRUCTURE_ROLES = new Set([
     'heading',
     'dialog',
@@ -527,7 +529,10 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
       !el.matches(ACTIONABLE) &&
       (/^h[1-6]$/.test(tag) ||
         STRUCTURE_ROLES.has(clean(el.getAttribute('role'))) ||
-        (!clean(el.getAttribute('role')) && window.getComputedStyle(el).cursor !== 'pointer'))
+        (!clean(el.getAttribute('role')) &&
+          window.getComputedStyle(el).cursor !== 'pointer' &&
+          // Un lien sans adresse stylé comme un lien ou un bouton (class="link", "btn"…).
+          !(tag === 'a' && /link|btn|button|action/i.test(el.getAttribute('class') ?? ''))))
     )
       continue;
     const inputType =
@@ -859,7 +864,7 @@ export function collectDomSnapshot(options: { maxElements: number }): DomSnapsho
         .slice(0, 5),
       // Chargement en cours : aria-busy, barres de progression et roues de chargement.
       busy: deepAll(
-        '[aria-busy="true"], [role="progressbar"], mat-spinner, mat-progress-spinner, .spinner, .loading, .loader',
+        '[aria-busy="true"], [role="progressbar"], mat-spinner, mat-progress-spinner, mat-progress-bar, ngx-spinner, .spinner, .loading, .loader, [class*="spinner"], [class*="skeleton"]',
       ).some((el) => isVisible(el)),
       // Rien à voir ni à faire.
       empty: clean(document.body.innerText, 40).length < 3 && elements.length === 0,

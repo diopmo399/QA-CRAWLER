@@ -3,6 +3,7 @@ import { setCheckedRobust } from '../execution/checkable.js';
 import type { FlowExpectation, FlowTarget } from '../config/flow-schema.js';
 import { toLocator } from '../execution/locator-resolver.js';
 import type { NetworkExchange } from '../model/network.js';
+import { waitForScreenReady } from '../observation/screen-ready.js';
 import { pathPatternToRegex } from '../policies/navigation-policy.js';
 
 /**
@@ -37,7 +38,11 @@ export type FlowElementAction =
  * l'étape permise par la SafetyPolicy.
  */
 export class FlowStepExecutor {
-  constructor(private readonly settleTimeMs: number) {}
+  constructor(
+    private readonly settleTimeMs: number,
+    /** Attente au plus que l'écran soit affiché (plus de roue de chargement, DOM stable). */
+    private readonly readyTimeoutMs = 0,
+  ) {}
 
   /**
    * L'élément, une fois visible ; un message d'erreur sinon. Avec `nth`, cette
@@ -131,7 +136,8 @@ export class FlowStepExecutor {
           await this.select(page, locator, action.option, timeoutMs);
           break;
       }
-      await this.settle(page, timeoutMs);
+      // Un clic peut changer d'écran : attendre qu'il soit affiché. Une saisie, non.
+      await this.settle(page, timeoutMs, action.kind === 'click');
       return undefined;
     } catch (error) {
       await this.settle(page, timeoutMs).catch(() => undefined);
@@ -219,10 +225,11 @@ export class FlowStepExecutor {
     await page.getByRole('option', { name: option }).first().click({ timeout: timeoutMs });
   }
 
-  private async settle(page: Page, timeoutMs: number): Promise<void> {
+  private async settle(page: Page, timeoutMs: number, untilReady = false): Promise<void> {
     if (page.isClosed()) return;
     await page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => undefined);
     if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
+    if (untilReady) await waitForScreenReady(page, this.readyTimeoutMs);
   }
 }
 

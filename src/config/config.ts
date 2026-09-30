@@ -74,6 +74,11 @@ const explorationSchema = z
     waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle', 'commit']).default('load'),
     /** Attente supplémentaire après chaque action, pour que les SPA (Angular…) affichent l'écran et lancent leurs appels d'API. */
     settleTimeMs: z.number().int().min(0).default(400),
+    /**
+     * Puis, au plus ce délai, attendre que l'écran soit affiché : plus de roue de chargement
+     * ni de barre de progression visible, et une page qui ne bouge plus. 0 : ne pas attendre.
+     */
+    readyTimeoutMs: z.number().int().min(0).default(10_000),
     /** États distincts explorés par modèle de route (/users/:id → seulement N utilisateurs). */
     maxStatesPerRoute: z.number().int().positive().default(3),
     queryParams: queryParamsSchema.default({}),
