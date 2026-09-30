@@ -69,6 +69,8 @@ import type { PageContext } from '../model/page-context.js';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
 import { UIObserver } from '../observation/ui-observer.js';
+import { waitForScreenReady } from '../observation/screen-ready.js';
+import { fieldLabel, formFieldsFor } from '../forms/form-fields.js';
 import {
   classifyPlaywrightError,
   NavigationGuard,
@@ -500,8 +502,9 @@ export class FlowExplorer {
       exploration.actionTimeoutMs,
       exploration.settleTimeMs,
       this.navigation,
+      exploration.readyTimeoutMs,
     );
-    this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs);
+    this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs, exploration.readyTimeoutMs);
     this.env = options.env ?? process.env;
     const origins = new AllowedOriginPolicy(
       new URL(config.target.startAt, config.target.baseUrl).origin,
@@ -1605,9 +1608,8 @@ export class FlowExplorer {
     context: PageContext,
     action: DiscoveredAction,
   ): Promise<ActionExecutionResult> {
-    if (action.type === 'click' && action.formIndex !== undefined && this.config.goals.discoverForms) {
-      await this.prepareForm(page, context, action.formIndex);
-    }
+    if (action.type === 'click' && this.config.goals.discoverForms)
+      await this.prepareForm(page, formFieldsFor(action, context.actions));
     const instruction =
       action.type === 'fill' || action.type === 'select' ? this.testData.instructionFor(action) : undefined;
     const value =
@@ -1629,12 +1631,7 @@ export class FlowExplorer {
    * boutons (« Suivant » d'un assistant, recherche…). Chaque champ passe par la
    * SafetyPolicy : les champs sensibles (mots de passe, données de paiement, secrets) ne sont jamais remplis.
    */
-  private async prepareForm(page: Page, context: PageContext, formIndex: number): Promise<void> {
-    const fields = context.actions.filter(
-      (candidate) =>
-        candidate.formIndex === formIndex &&
-        (candidate.type === 'fill' || candidate.type === 'select' || candidate.type === 'check'),
-    );
+  private async prepareForm(page: Page, fields: readonly DiscoveredAction[]): Promise<void> {
     for (const field of fields) {
       if (this.safety.evaluate(field).verdict === 'BLOCK') continue;
       const instruction = this.testData.instructionFor(field);
@@ -1718,17 +1715,14 @@ export class FlowExplorer {
       return evaluateFlowAction(this.safety, action, { allow });
     };
     const formFieldsOf = (action: DiscoveredAction, of: PageContext): string[] | undefined => {
-      if (action.type !== 'click' || action.formIndex === undefined || !this.config.goals.discoverForms)
-        return undefined;
-      const fields = of.actions
+      if (!this.config.goals.discoverForms) return undefined;
+      const fields = formFieldsFor(action, of.actions)
         .filter(
           (candidate) =>
-            candidate.formIndex === action.formIndex &&
-            (candidate.type === 'fill' || candidate.type === 'select' || candidate.type === 'check') &&
-            this.safety.evaluate(candidate).verdict !== 'BLOCK',
+            this.safety.evaluate(candidate).verdict !== 'BLOCK' &&
+            this.testData.instructionFor(candidate).kind !== 'skip',
         )
-        .map((candidate) => actionLabel(candidate))
-        .filter(Boolean);
+        .map((candidate) => fieldLabel(candidate));
       return fields.length > 0 ? fields : undefined;
     };
     const semanticOf = (text: string | undefined): string => slug(text ?? '');
@@ -3511,8 +3505,10 @@ export class FlowExplorer {
       }
       return undefined;
     };
-    const settle = (): Promise<void> =>
-      page.waitForTimeout(this.config.exploration.settleTimeMs).catch(() => undefined);
+    const settle = async (): Promise<void> => {
+      await page.waitForTimeout(this.config.exploration.settleTimeMs).catch(() => undefined);
+      await waitForScreenReady(page, this.config.exploration.readyTimeoutMs);
+    };
 
     return {
       // Une fenêtre, un calendrier… : fermer d'abord le calque du dessus, l'écran dessous reste tel quel.
@@ -3641,6 +3637,7 @@ export class FlowExplorer {
     }
     if (exploration.settleTimeMs > 0)
       await page.waitForTimeout(exploration.settleTimeMs).catch(() => undefined);
+    await waitForScreenReady(page, exploration.readyTimeoutMs);
     if (!relogged && this.onLoginPage(page) && !this.isLoginUrl(url)) {
       // Renvoyé vers la page de connexion : la session a expiré. Se reconnecter (dans une limite), puis y retourner.
       const renewed = await this.reauthenticate(page);

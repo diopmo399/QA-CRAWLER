@@ -7,6 +7,7 @@ import type { LocatorDescriptor } from '../model/locator.js';
 import { toLocator } from './locator-resolver.js';
 import { normalizeText } from '../policies/keywords.js';
 import { classifyPlaywrightError, NavigationGuard } from '../navigation/navigation-guard.js';
+import { waitForScreenReady } from '../observation/screen-ready.js';
 
 /** Valeur à saisir/choisir pour les actions fill et select. */
 export interface ExecutionInput {
@@ -49,6 +50,8 @@ export class PlaywrightActionExecutor {
     private readonly settleTimeMs: number,
     /** Sait si une action a navigué ; partagé avec l'UIObserver. */
     private readonly navigation: NavigationGuard = new NavigationGuard(),
+    /** Attente au plus que l'écran soit affiché (plus de roue de chargement, DOM stable). */
+    private readonly readyTimeoutMs = 0,
   ) {}
 
   async execute(
@@ -99,7 +102,8 @@ export class PlaywrightActionExecutor {
           page.on('popup', onPopup);
           try {
             await this.click(target.locator, timeout);
-            await this.settle(page);
+            // Un clic peut changer d'écran : attendre qu'il soit affiché. Une saisie, non.
+            await this.settle(page, true);
           } finally {
             page.off('popup', onPopup);
           }
@@ -368,10 +372,11 @@ export class PlaywrightActionExecutor {
     return undefined;
   }
 
-  private async settle(page: Page): Promise<void> {
+  private async settle(page: Page, untilReady = false): Promise<void> {
     if (page.isClosed()) return;
     await page.waitForLoadState('domcontentloaded', { timeout: this.actionTimeoutMs }).catch(() => undefined);
     if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
+    if (untilReady) await waitForScreenReady(page, this.readyTimeoutMs);
   }
 }
 
