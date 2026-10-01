@@ -17,6 +17,8 @@ export class UIObserver {
     private readonly maxElements = 400,
     /** Une navigation pendant la lecture (redirection, route, envoi) : la page est relue, pas la mission arrêtée. */
     private readonly navigation: NavigationGuard = new NavigationGuard(),
+    /** Sel des empreintes de valeurs (un par run) ; absent : aucune empreinte n'est calculée. */
+    private readonly valueSalt?: string,
   ) {}
 
   async observe(page: Page): Promise<UiSnapshot> {
@@ -27,7 +29,10 @@ export class UIObserver {
       .catch(() => undefined);
     // Une LECTURE sans effet : le garde peut la refaire sur la nouvelle page si le document change pendant qu'elle court.
     const dom = await this.navigation.read(page, 'dom-snapshot', () =>
-      page.evaluate(collectDomSnapshot, { maxElements: this.maxElements }),
+      page.evaluate(collectDomSnapshot, {
+        maxElements: this.maxElements,
+        ...(this.valueSalt !== undefined ? { valueSalt: this.valueSalt } : {}),
+      }),
     );
     const title = await page.title().catch(() => '');
     return {

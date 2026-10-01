@@ -29,8 +29,12 @@ function sanitizePattern(pattern: string): string {
 /** Passe chaque chaîne du graphe au crible ; les motifs de validation gardent leur forme. */
 export function sanitizeGraph(graph: StaticApplicationGraph): StaticApplicationGraph {
   const visit = (value: unknown, key?: string): unknown => {
-    if (typeof value === 'string')
+    if (typeof value === 'string') {
+      // Nom de règle généré (ACCOUNT_TYPE_BUSINESS_REQUIRES_COMPANY_NUMBER) : des noms du code, jamais un secret
+      // (une condition sur un nom secret est écartée à la lecture, voir condition-parser.ts).
+      if (key === 'name' && /^[A-Z][A-Z0-9_]*$/.test(value)) return value;
       return key === 'value' || key === 'pattern' ? sanitizePattern(value) : sanitizeText(value);
+    }
     if (Array.isArray(value)) return value.map((item) => visit(item));
     if (value && typeof value === 'object')
       return Object.fromEntries(

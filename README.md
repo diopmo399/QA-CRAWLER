@@ -826,6 +826,22 @@ Une source map est une **donnée non fiable** : seuls les scripts et source maps
 
 **Limites :** Angular et JavaScript/TypeScript générique (React et Vue : interfaces prêtes, pas encore d'analyseur) ; un seul niveau composant → service ; `formGroupName` imbriqués non suivis ; un même `formControlName` dans deux composants de sens différents n'apporte aucune preuve.
 
+## État des formulaires et règles de l'application
+
+QA-CRAWLER comprend **pourquoi** une valeur est dans un champ et **ce que l'application fait** de ses champs :
+
+- **État d'un champ** : EMPTY, PREFILLED, DEFAULT_VALUE, AUTOFILLED, DERIVED_VALUE, PREVIOUS_STEP_VALUE, UNKNOWN_PREFILLED — et sa provenance (valeur par défaut du formulaire, réponse `GET /api/profile → email`, autocomplétion, étape précédente, calcul…). Décision : FILL, **KEEP** une valeur présente et valide, REPLACE une valeur invalide, OBSERVE_ONLY un champ calculé ; une valeur imposée par le scénario donne REPLACE (EXPLICIT_SCENARIO_VALUE). Les valeurs ne sont jamais lues en clair (empreintes salées par run).
+- **Dépendances** : pays → province (options, `GET /api/provinces`), type de compte → numéro d'entreprise (visible, obligatoire), quantité → total (calcul), observées avant/après chaque saisie.
+- **Règles** (`rules.enabled`, avec `staticAnalysis`) : lues dans les gabarits (`@if`, `*ngIf`, `[disabled]`, `[readonly]`…) et le code (`if` à effet fonctionnel, `valueChanges`, validateurs, calculs, navigation, rôles), puis **confirmées ou contredites par le navigateur** — passivement d'abord, en posant puis rétablissant une valeur ensuite, jamais en envoyant un formulaire ni en changeant un rôle. `if (!response) return;` n'est pas une règle.
+- **Couverture des règles** et signal `rules` dans le score des actions : un minimum d'interactions pour un maximum de règles vérifiées ; la SafetyPolicy reste hors du score.
+
+```yaml
+staticAnalysis: { enabled: true, source: { root: ../mon-application } }
+rules: { enabled: true }
+```
+
+Rapport : « Form state », « Application rules » (chaque règle : condition, effets ✓/✗, source fichier:ligne, runtime, effet réseau), « Rule graph », « Field dependencies ». Détails : [docs/RULES.md](docs/RULES.md).
+
 ## Authentification
 
 Les identifiants viennent toujours de variables d'environnement (`QA_USERNAME` / `QA_PASSWORD` par défaut, voir `usernameEnv` / `passwordEnv`), jamais du fichier de mission. Ils ne sont jamais écrits dans les logs ni dans les rapports.

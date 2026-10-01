@@ -2,6 +2,7 @@ import type { ExplorationListener } from '../explorer/flow-explorer.js';
 import { actionLabel } from '../model/discovered-action.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import type { StaticAnalysisEvent } from '../static-analysis/static-analyzer.js';
+import type { RuleEvent } from '../rules/runtime-rule-verifier.js';
 
 export const LOG_LEVELS = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -51,7 +52,8 @@ export type EngineEvent =
   | 'FLOW_RECONCILIATION_COMPLETED'
   | 'SUGGESTED_FLOW_GENERATED'
   | 'DRY_RUN_COMPLETED'
-  | StaticAnalysisEvent;
+  | StaticAnalysisEvent
+  | RuleEvent;
 
 /**
  * Une ligne du journal du moteur (engine-log.jsonl). Seulement des id, des libellés
@@ -277,6 +279,17 @@ export class EngineEventLog {
           event.event === 'BUNDLE_DISCOVERED' ||
           event.event === 'SOURCE_MAP_REFERENCE_DISCOVERED' ||
           event.event === 'SOURCE_MAP_LOADING_STARTED';
+        this.log(warn ? 'WARN' : detail ? 'DEBUG' : 'INFO', event.event, redactText(event.message));
+      },
+      onRule: (event) => {
+        const warn =
+          event.event === 'RULE_RUNTIME_CONTRADICTED' ||
+          event.event === 'RULE_VERIFICATION_INCONCLUSIVE' ||
+          event.event === 'RULE_BLOCKED_BY_POLICY';
+        const detail =
+          event.event === 'RULE_DISCOVERED' ||
+          event.event === 'RULE_CANDIDATE_DISCOVERED' ||
+          event.event === 'FIELD_DEPENDENCY_DISCOVERED';
         this.log(warn ? 'WARN' : detail ? 'DEBUG' : 'INFO', event.event, redactText(event.message));
       },
       onSemanticResolution: (event) => {

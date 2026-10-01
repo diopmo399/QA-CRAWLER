@@ -362,6 +362,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
             fields: config.testData.fields,
             defaults: config.testData.defaults,
             language: config.report.language,
+            preserveExistingValues: config.forms.preserveExistingValues,
           }),
       },
       { maxFlows: config.flowGeneration.maxFlows },

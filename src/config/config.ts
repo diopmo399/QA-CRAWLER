@@ -919,6 +919,8 @@ const staticAnalysisSchema = z
         dtoMapping: z.boolean().default(true),
         httpCalls: z.boolean().default(true),
         dataFlow: z.boolean().default(true),
+        /** Règles candidates (gabarits, code) : lues seulement si rules.enabled les utilise. */
+        rules: z.boolean().default(true),
       })
       .strict()
       .default({}),
@@ -1078,6 +1080,66 @@ const formsSchema = z
      * décide (form-submit, bloqué par défaut). Les étapes de flow avec `allow: MUTATION` le peuvent toujours.
      */
     submit: z.boolean().optional(),
+    /**
+     * Valeurs déjà présentes (préremplies, par défaut, autocomplétées) : gardées quand
+     * elles sont valides (KEEP), remplacées si elles sont invalides. false : toujours
+     * remplacées par des données de test. Une valeur imposée par un scénario l'emporte toujours.
+     */
+    preserveExistingValues: z.boolean().default(true),
+    /** Dépendances entre champs (avant/après chaque saisie) : pays → province, type → numéro d'entreprise. */
+    dependencyDiscovery: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Champs au plus dont la valeur est changée pour observer leurs effets (puis rétablie). */
+        maxFieldMutations: z.number().int().nonnegative().default(10),
+        /** Valeurs essayées au plus par champ. */
+        maxValuesPerField: z.number().int().positive().default(3),
+        maxDurationMs: z.number().int().positive().default(15_000),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
+const ruleCategoriesSchema = z
+  .object({
+    business: z.boolean().default(true),
+    visibility: z.boolean().default(true),
+    enablement: z.boolean().default(true),
+    readonly: z.boolean().default(true),
+    validation: z.boolean().default(true),
+    calculation: z.boolean().default(true),
+    navigation: z.boolean().default(true),
+    permission: z.boolean().default(true),
+    options: z.boolean().default(true),
+  })
+  .strict();
+
+/**
+ * RÈGLES DE L'APPLICATION : découvertes dans le code (staticAnalysis doit être activée
+ * pour la découverte), puis confirmées ou contredites par le navigateur. Une règle du
+ * code reste STATIC_DISCOVERED tant que l'exécution ne l'a pas prouvée.
+ */
+const rulesSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    staticDiscovery: z.boolean().default(true),
+    /** Vérifier les règles dans le navigateur (observation, et changements de valeur rétablis ensuite). */
+    runtimeVerification: z.boolean().default(true),
+    /** Le moteur de décision favorise les actions qui vérifient des règles non couvertes. */
+    influenceDecisionEngine: z.boolean().default(true),
+    categories: ruleCategoriesSchema.default({}),
+    budgets: z
+      .object({
+        maxRulesPerPage: z.number().int().positive().default(100),
+        /** Changements de valeur au plus pour vérifier des règles (tout le run). */
+        maxRuntimeVerifications: z.number().int().nonnegative().default(20),
+        maxDurationMs: z.number().int().positive().default(30_000),
+      })
+      .strict()
+      .default({}),
+    /** Poids du signal « couverture de règles » dans le score des actions. */
+    decisionWeight: z.number().nonnegative().default(1),
   })
   .strict();
 
@@ -1276,6 +1338,7 @@ export const scenarioSchema = z
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),
     testData: testDataSchema.default({}),
+    rules: rulesSchema.default({}),
     semantics: semanticsSchema.default({}),
     /** Packs de domaine (vocabulaire, synonymes, invariants, indices de score) : nom intégré (generic, ecommerce, administration) ou chemin d'un fichier YAML. */
     domainPacks: z.array(nonEmpty).default(['generic']),
@@ -1292,6 +1355,7 @@ export type ScenarioInput = z.input<typeof scenarioSchema>;
 /** Scénario complet, valeurs par défaut appliquées. */
 export type ScenarioConfig = z.output<typeof scenarioSchema>;
 export type PersistenceConfig = ScenarioConfig['persistence'];
+export type RulesConfig = ScenarioConfig['rules'];
 export type IntelligenceConfig = ScenarioConfig['intelligence'];
 export type MemoryConfig = ScenarioConfig['memory'];
 export type FormAuthConfig = z.output<typeof formAuthSchema>;

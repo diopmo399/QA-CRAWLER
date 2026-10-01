@@ -1,6 +1,7 @@
 import type * as TS from 'typescript';
 import type { HttpMethod, StaticValidator, StaticValidatorKind } from './model.js';
 import { SECRET_NAME } from './sanitize.js';
+import { extractCodeRules, type CodeRuleFacts } from './rules/code-rules.js';
 import type { TypeScriptModule } from './typescript-loader.js';
 
 /**
@@ -29,9 +30,42 @@ export interface RouteArrayFact {
   line: number;
 }
 
+/** La valeur initiale d'un contrôle telle qu'écrite : vide, un littéral, ou une expression (bornée). */
+export interface InitialValueFact {
+  kind: 'EMPTY' | 'LITERAL' | 'EXPRESSION';
+  value?: string | number | boolean;
+  expression?: string;
+}
+
 export interface FormControlFact {
   name: string;
   validators: StaticValidator[];
+  initial?: InitialValueFact;
+  line: number;
+}
+
+/** D'où vient une valeur : la réponse d'un appel (subscribe), l'état du composant, un calcul, un littéral. */
+export interface ValueExpressionFact {
+  kind: 'LITERAL' | 'RESPONSE' | 'STATE' | 'CALCULATION' | 'OTHER';
+  literal?: string | number | boolean;
+  /** RESPONSE : l'appel dont la réponse porte la valeur (this.profileService.getProfile()). */
+  source?: { target: string; method: string; route?: string; httpMethod?: HttpMethod };
+  /** RESPONSE / STATE : le chemin de la propriété (country, address.city). */
+  property?: string;
+  /** STATE : la propriété du composant (profile). */
+  stateProperty?: string;
+  /** CALCULATION : les noms d'où la valeur est calculée. */
+  inputs?: string[];
+  expression: string;
+}
+
+/** Une affectation de valeur à un contrôle : patchValue / setValue / reset. */
+export interface ValueAssignmentFact {
+  form?: string;
+  /** Le contrôle ; « * » : l'objet entier (patchValue(profile)). */
+  control: string;
+  kind: 'PATCH_VALUE' | 'SET_VALUE' | 'RESET';
+  value: ValueExpressionFact;
   line: number;
 }
 
@@ -86,6 +120,9 @@ export interface MethodFact {
   requests: RequestObjectFact[];
   serviceCalls: ServiceCallFact[];
   navigations: { target: string; line: number }[];
+  valueAssignments: ValueAssignmentFact[];
+  /** this.profile = p, dans le subscribe d'un appel : l'état du composant vient de cette réponse. */
+  stateAssignments: { property: string; value: ValueExpressionFact; line: number }[];
   line: number;
 }
 
@@ -98,6 +135,8 @@ export interface ClassFact {
   injected: Record<string, string>;
   forms: FormFact[];
   methods: MethodFact[];
+  /** Règles candidates du code (conditions à effet fonctionnel) et conditions techniques écartées. */
+  rules: CodeRuleFacts;
   line: number;
 }
 
@@ -171,6 +210,34 @@ export function extractFacts(
   const stringOf = (node: TS.Expression | undefined): string | undefined => {
     if (!node) return undefined;
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+    return undefined;
+  };
+  const ARITHMETIC = new Set<TS.SyntaxKind>([
+    ts.SyntaxKind.AsteriskToken,
+    ts.SyntaxKind.PlusToken,
+    ts.SyntaxKind.MinusToken,
+    ts.SyntaxKind.SlashToken,
+    ts.SyntaxKind.PercentToken,
+  ]);
+  /** Un littéral : chaîne, nombre (signé), booléen ; null / undefined → null ; sinon undefined. */
+  const literalOf = (node: TS.Expression | undefined): string | number | boolean | null | undefined => {
+    if (!node) return undefined;
+    let expression = node;
+    while (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression))
+      expression = expression.expression;
+    const text = stringOf(expression);
+    if (text !== undefined) return text;
+    if (ts.isNumericLiteral(expression)) return Number(expression.text);
+    if (
+      ts.isPrefixUnaryExpression(expression) &&
+      expression.operator === ts.SyntaxKind.MinusToken &&
+      ts.isNumericLiteral(expression.operand)
+    )
+      return -Number(expression.operand.text);
+    if (expression.kind === ts.SyntaxKind.TrueKeyword) return true;
+    if (expression.kind === ts.SyntaxKind.FalseKeyword) return false;
+    if (expression.kind === ts.SyntaxKind.NullKeyword) return null;
+    if (ts.isIdentifier(expression) && expression.text === 'undefined') return null;
     return undefined;
   };
   const typeName = (type: TS.TypeNode | undefined): string | undefined => {
@@ -255,25 +322,56 @@ export function extractFacts(
     }
     return validators;
   };
+  /** La valeur initiale d'un contrôle : '' / null → EMPTY ; 'Canada', 3, true → LITERAL ; sinon EXPRESSION (bornée). */
+  const initialOf = (node: TS.Expression | undefined, name: string): InitialValueFact | undefined => {
+    if (!node) return undefined;
+    let expression = node;
+    // { value: 'Canada', disabled: false }
+    if (ts.isObjectLiteralExpression(expression)) {
+      const value = expression.properties.find(
+        (property): property is TS.PropertyAssignment =>
+          ts.isPropertyAssignment(property) && nameOf(property.name) === 'value',
+      );
+      if (!value) return undefined;
+      expression = value.initializer;
+    }
+    const literal = literalOf(expression);
+    if (literal === null || (typeof literal === 'string' && literal.trim() === '')) return { kind: 'EMPTY' };
+    if (literal !== undefined)
+      // Jamais la valeur initiale d'un champ secret.
+      return SECRET_NAME.test(name)
+        ? { kind: 'EXPRESSION', expression: '…' }
+        : { kind: 'LITERAL', value: literal };
+    return { kind: 'EXPRESSION', expression: expression.getText(source).slice(0, 80) };
+  };
   /** Un contrôle : ['', [Validators…]], new FormControl('', …), fb.control('', …), { value, validators } */
   const controlOf = (name: string, initializer: TS.Expression, line: number): FormControlFact => {
+    const withInitial = (fact: FormControlFact, value: TS.Expression | undefined): FormControlFact => {
+      const initial = initialOf(value, name);
+      return initial ? { ...fact, initial } : fact;
+    };
     if (ts.isArrayLiteralExpression(initializer))
-      return { name, validators: validatorsOf(initializer.elements[1]), line };
+      return withInitial(
+        { name, validators: validatorsOf(initializer.elements[1]), line },
+        initializer.elements[0],
+      );
     if (
       (ts.isNewExpression(initializer) && /FormControl$/.test(initializer.expression.getText(source))) ||
       (ts.isCallExpression(initializer) && /\.control$/.test(initializer.expression.getText(source)))
     ) {
+      const first = initializer.arguments?.[0];
       const options = initializer.arguments?.[1];
       if (options && ts.isObjectLiteralExpression(options)) {
         const validators = options.properties.find(
           (property): property is TS.PropertyAssignment =>
             ts.isPropertyAssignment(property) && nameOf(property.name) === 'validators',
         );
-        return { name, validators: validatorsOf(validators?.initializer), line };
+        return withInitial({ name, validators: validatorsOf(validators?.initializer), line }, first);
       }
-      return { name, validators: validatorsOf(options), line };
+      return withInitial({ name, validators: validatorsOf(options), line }, first);
     }
-    return { name, validators: [], line };
+    // contact: '' (valeur seule)
+    return withInitial({ name, validators: [], line }, initializer);
   };
   /** fb.group({…}) / fb.nonNullable.group({…}) / new FormGroup({…}) → ses contrôles. */
   const formOf = (node: TS.Expression): FormControlFact[] | undefined => {
@@ -419,7 +517,14 @@ export function extractFacts(
   const classOf = (node: TS.ClassDeclaration): ClassFact | undefined => {
     const name = node.name?.text;
     if (!name) return undefined;
-    const fact: ClassFact = { name, injected: {}, forms: [], methods: [], line: lineOf(node) };
+    const fact: ClassFact = {
+      name,
+      injected: {},
+      forms: [],
+      methods: [],
+      rules: { rules: [], technical: [] },
+      line: lineOf(node),
+    };
     const decorators = ts.canHaveDecorators(node) ? (ts.getDecorators(node) ?? []) : [];
     for (const decorator of decorators) {
       if (!ts.isCallExpression(decorator.expression)) continue;
@@ -507,7 +612,198 @@ export function extractFacts(
         methodOf(methodName, parameters, body, lineOf(member), formNames, httpOwners, routerOwners),
       );
     }
+    // RÈGLES : le même AST, les mêmes lectures (contrôles, validateurs, navigation, appels).
+    const members: { name: string; body: TS.Node }[] = [];
+    const methodBodies = new Map<string, TS.Node>();
+    for (const member of node.members) {
+      if (ts.isConstructorDeclaration(member) && member.body)
+        members.push({ name: 'constructor', body: member.body });
+      if (ts.isMethodDeclaration(member) && member.body) {
+        const methodName = nameOf(member.name);
+        if (methodName) {
+          members.push({ name: methodName, body: member.body });
+          methodBodies.set(methodName, member.body);
+        }
+      }
+      if (ts.isPropertyDeclaration(member) && member.initializer) {
+        const propertyName = nameOf(member.name);
+        const initializer = member.initializer;
+        if (propertyName && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
+          members.push({ name: propertyName, body: initializer.body });
+          methodBodies.set(propertyName, initializer.body);
+        } else if (propertyName && /(computed|effect)\(/.test(initializer.getText(source).slice(0, 12)))
+          members.push({ name: propertyName, body: initializer });
+      }
+    }
+    const classScope: FlowScope = { forms: formNames, formValues: new Map(), controlValues: new Map() };
+    fact.rules = extractCodeRules(ts, members, {
+      lineOf,
+      controlRefOf: (expression) => controlRefOf(expression, classScope),
+      controlValueOf: (expression) => controlValueOf(expression, classScope),
+      formRefOf: (expression) => formRef(expression, classScope),
+      validatorsOf,
+      callOriginOf: (expression) => callOrigin(expression, httpOwners),
+      navigationTargetOf: navigationTarget,
+      routerOwners,
+      httpOwners,
+      methods: methodBodies,
+      controls: new Set(fact.forms.flatMap((form) => form.controls.map((control) => control.name))),
+    });
     return fact;
+  };
+
+  /** this.form.get('x') / this.form.controls.x / this.form.controls['x'] → le contrôle. */
+  const controlRefOf = (
+    node: TS.Expression,
+    scope: FlowScope,
+  ): { form: string; control: string } | undefined => {
+    let owner = node;
+    while (ts.isNonNullExpression(owner) || ts.isParenthesizedExpression(owner)) owner = owner.expression;
+    if (ts.isPropertyAccessExpression(owner) && ts.isPropertyAccessExpression(owner.expression)) {
+      if (owner.expression.name.text === 'controls') {
+        const form = formRef(owner.expression.expression, scope);
+        if (form) return { form, control: owner.name.text };
+      }
+    }
+    if (
+      ts.isElementAccessExpression(owner) &&
+      ts.isPropertyAccessExpression(owner.expression) &&
+      owner.expression.name.text === 'controls'
+    ) {
+      const form = formRef(owner.expression.expression, scope);
+      const control = stringOf(owner.argumentExpression);
+      if (form && control) return { form, control };
+    }
+    if (
+      ts.isCallExpression(owner) &&
+      ts.isPropertyAccessExpression(owner.expression) &&
+      owner.expression.name.text === 'get'
+    ) {
+      const form = formRef(owner.expression.expression, scope);
+      const control = stringOf(owner.arguments[0]);
+      if (form && control) return { form, control };
+    }
+    return undefined;
+  };
+  /** L'appel dont un Observable vient : this.svc.load(…).pipe(…) → svc.load ; this.http.get('/api/x') → la route. */
+  const callOrigin = (
+    node: TS.Expression,
+    httpOwners: Set<string>,
+  ): NonNullable<ValueExpressionFact['source']> | undefined => {
+    let expression = node;
+    while (
+      ts.isCallExpression(expression) &&
+      ts.isPropertyAccessExpression(expression.expression) &&
+      expression.expression.name.text === 'pipe'
+    )
+      expression = expression.expression.expression;
+    if (!ts.isCallExpression(expression) || !ts.isPropertyAccessExpression(expression.expression))
+      return undefined;
+    const owner = expression.expression.expression;
+    const ownerName =
+      ts.isPropertyAccessExpression(owner) && owner.expression.kind === ts.SyntaxKind.ThisKeyword
+        ? owner.name.text
+        : ts.isIdentifier(owner)
+          ? owner.text
+          : undefined;
+    if (!ownerName) return undefined;
+    const methodName = expression.expression.name.text;
+    const http = HTTP_METHODS[methodName];
+    if (http && (httpOwners.has(ownerName) || /^(http|httpClient)$/i.test(ownerName))) {
+      const route = routeTemplate(expression.arguments[0])?.replace(/\?.*$/, '');
+      return { target: ownerName, method: methodName, httpMethod: http, ...(route ? { route } : {}) };
+    }
+    return { target: ownerName, method: methodName };
+  };
+  /** (p) => …, function (p) {…}, { next: (p) => … } */
+  const callbackOf = (
+    node: TS.Expression | undefined,
+  ): TS.ArrowFunction | TS.FunctionExpression | undefined => {
+    if (!node) return undefined;
+    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return node;
+    if (ts.isObjectLiteralExpression(node)) {
+      const next = node.properties.find(
+        (property): property is TS.PropertyAssignment =>
+          ts.isPropertyAssignment(property) && nameOf(property.name) === 'next',
+      );
+      return next ? callbackOf(next.initializer) : undefined;
+    }
+    return undefined;
+  };
+  /** Ce qu'une expression affectée à un contrôle dit de sa source. */
+  const valueExpressionOf = (
+    node: TS.Expression,
+    callbacks: Map<string, NonNullable<ValueExpressionFact['source']>>,
+    scope: FlowScope,
+  ): ValueExpressionFact => {
+    let expression = node;
+    while (
+      ts.isParenthesizedExpression(expression) ||
+      ts.isNonNullExpression(expression) ||
+      ts.isAsExpression(expression)
+    )
+      expression = expression.expression;
+    const text = expression.getText(source).slice(0, 80);
+    const literal = literalOf(expression);
+    if (literal !== undefined && literal !== null) return { kind: 'LITERAL', literal, expression: text };
+    // profile.address.city / profile?.country / profile['country'] → racine + chemin
+    const path: string[] = [];
+    let root: TS.Expression = expression;
+    while (
+      ts.isPropertyAccessExpression(root) ||
+      ts.isElementAccessExpression(root) ||
+      ts.isNonNullExpression(root)
+    ) {
+      if (ts.isPropertyAccessExpression(root)) path.unshift(root.name.text);
+      else if (ts.isElementAccessExpression(root)) {
+        const key = stringOf(root.argumentExpression);
+        if (!key) break;
+        path.unshift(key);
+      }
+      root = root.expression;
+    }
+    if (ts.isIdentifier(root)) {
+      const origin = callbacks.get(root.text);
+      if (origin)
+        return {
+          kind: 'RESPONSE',
+          source: origin,
+          ...(path.length ? { property: path.join('.') } : {}),
+          expression: text,
+        };
+    }
+    if (root.kind === ts.SyntaxKind.ThisKeyword && path.length >= 1)
+      return {
+        kind: 'STATE',
+        stateProperty: path[0] ?? '',
+        ...(path.length > 1 ? { property: path.slice(1).join('.') } : {}),
+        expression: text,
+      };
+    // quantity * price * (1 - discount) : un calcul à partir d'autres valeurs.
+    if (ts.isBinaryExpression(expression) && ARITHMETIC.has(expression.operatorToken.kind)) {
+      const inputs = new Set<string>();
+      const collect = (child: TS.Node): void => {
+        if (ts.isExpression(child)) {
+          const control = controlValueOf(child, scope);
+          if (control) {
+            inputs.add(control.control);
+            return;
+          }
+        }
+        if (ts.isPropertyAccessExpression(child) && child.name.text !== 'value') {
+          inputs.add(child.name.text);
+          return;
+        }
+        if (ts.isIdentifier(child) && !ts.isPropertyAccessExpression(child.parent)) {
+          inputs.add(child.text);
+          return;
+        }
+        ts.forEachChild(child, collect);
+      };
+      collect(expression);
+      return { kind: 'CALCULATION', inputs: [...inputs].slice(0, 8), expression: text };
+    }
+    return { kind: 'OTHER', expression: text };
   };
 
   const methodOf = (
@@ -530,9 +826,15 @@ export function extractFacts(
       requests: [],
       serviceCalls: [],
       navigations: [],
+      valueAssignments: [],
+      stateAssignments: [],
       line,
     };
     const scope: FlowScope = { forms, formValues: new Map(), controlValues: new Map() };
+    /** Paramètre d'un callback de subscribe → l'appel dont il reçoit la réponse. */
+    const callbackSources = new Map<string, NonNullable<ValueExpressionFact['source']>>();
+    const valueOf = (node: TS.Expression): ValueExpressionFact =>
+      valueExpressionOf(node, callbackSources, scope);
     const argumentOf = (argument: TS.Expression): ArgumentFact => {
       if (ts.isIdentifier(argument)) return { kind: 'variable', name: argument.text };
       if (ts.isObjectLiteralExpression(argument)) {
@@ -550,6 +852,86 @@ export function extractFacts(
     };
     const visit = (node: TS.Node): void => {
       count();
+      // this.x.getProfile().pipe(…).subscribe((profile) => …) : profile porte la réponse de getProfile.
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === 'subscribe'
+      ) {
+        const origin = callOrigin(node.expression.expression, httpOwners);
+        const callback = callbackOf(node.arguments[0]);
+        const parameter = callback?.parameters[0];
+        const parameterName = parameter ? nameOf(parameter.name) : undefined;
+        if (origin && parameterName) callbackSources.set(parameterName, origin);
+      }
+      // this.form.patchValue({…}) / this.form.get('x').setValue(v) / this.form.reset({…})
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        /^(patchValue|setValue|reset)$/.test(node.expression.name.text)
+      ) {
+        const kind =
+          node.expression.name.text === 'patchValue'
+            ? 'PATCH_VALUE'
+            : node.expression.name.text === 'setValue'
+              ? 'SET_VALUE'
+              : 'RESET';
+        const owner = node.expression.expression;
+        const argument = node.arguments[0];
+        const control = controlRefOf(owner, scope);
+        const form = control ? undefined : formRef(owner, scope);
+        if (control && argument)
+          method.valueAssignments.push({
+            form: control.form,
+            control: control.control,
+            kind,
+            value: valueOf(argument),
+            line: lineOf(node),
+          });
+        else if (form && argument) {
+          if (ts.isObjectLiteralExpression(argument)) {
+            for (const property of argument.properties) {
+              if (ts.isPropertyAssignment(property)) {
+                const name = nameOf(property.name);
+                if (name && !SECRET_NAME.test(name))
+                  method.valueAssignments.push({
+                    form,
+                    control: name,
+                    kind,
+                    value: valueOf(property.initializer),
+                    line: lineOf(property),
+                  });
+              } else if (ts.isShorthandPropertyAssignment(property) && !SECRET_NAME.test(property.name.text))
+                method.valueAssignments.push({
+                  form,
+                  control: property.name.text,
+                  kind,
+                  value: valueOf(property.name),
+                  line: lineOf(property),
+                });
+            }
+          } else
+            method.valueAssignments.push({
+              form,
+              control: '*',
+              kind,
+              value: valueOf(argument),
+              line: lineOf(node),
+            });
+        }
+      }
+      // this.profile = profile (dans le subscribe) : l'état du composant vient de la réponse.
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isPropertyAccessExpression(node.left) &&
+        node.left.expression.kind === ts.SyntaxKind.ThisKeyword &&
+        !SECRET_NAME.test(node.left.name.text)
+      ) {
+        const value = valueOf(node.right);
+        if (value.kind === 'RESPONSE')
+          method.stateAssignments.push({ property: node.left.name.text, value, line: lineOf(node) });
+      }
       if (ts.isVariableDeclaration(node) && node.initializer) {
         // const request: CreateUserRequest = { email: this.form.controls.contact.value }
         if (ts.isIdentifier(node.name) && ts.isObjectLiteralExpression(node.initializer)) {

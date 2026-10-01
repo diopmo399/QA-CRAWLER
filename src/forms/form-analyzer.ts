@@ -111,6 +111,12 @@ export function fieldOf(action: DiscoveredAction): FormField {
     staticConcept: field?.staticConcept,
     staticProperty: field?.staticProperty,
     staticValidators: field?.staticValidators,
+    valueDigest: field?.valueDigest,
+    selectedValue: field?.selectedValue,
+    selectedOption: field?.selectedOption,
+    frameworkValid: field?.frameworkValid,
+    autofilled: field?.autofilled,
+    control: field?.frameworkName,
   };
   const result: FormField = {
     id: action.id,
