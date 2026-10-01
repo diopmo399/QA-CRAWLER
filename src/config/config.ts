@@ -1159,6 +1159,11 @@ const functionalIntelligenceSchema = z
     sideEffects: toggle.default({}),
     errorPaths: toggle.default({}),
     runtimeContracts: toggle.default({}),
+    /**
+     * Apprendre du réseau à chaque run : écritures acceptées → workflows, codes d'état →
+     * états et transitions, gardés comme historique pour les runs suivants (jamais une preuve).
+     */
+    runtimeLearning: toggle.default({}),
     testGoals: z
       .object({
         enabled: z.boolean().default(true),

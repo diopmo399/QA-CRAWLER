@@ -70,6 +70,7 @@ export class WorkflowIntentAnalyzer {
         expectedOutcomes: [],
         evidence: [],
         status: 'DISCOVERED' as const,
+        origin: 'STATIC' as const,
         api,
       };
       if (workflow.steps.length === 0) {
@@ -137,6 +138,13 @@ export class WorkflowIntentAnalyzer {
       }
     }
     return this.all();
+  }
+
+  /** Un workflow appris au runtime ou gardé d'un run précédent : ajouté s'il n'existe pas. */
+  learn(workflow: FunctionalWorkflow): boolean {
+    if (this.workflows.has(workflow.id)) return false;
+    this.workflows.set(workflow.id, workflow);
+    return true;
   }
 
   all(): FunctionalWorkflow[] {

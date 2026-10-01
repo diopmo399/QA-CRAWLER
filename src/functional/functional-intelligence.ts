@@ -2,7 +2,7 @@ import type { ScenarioConfig } from '../config/config.js';
 import type { FunctionalKnowledgeStore } from '../knowledge/functional-knowledge-store.js';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import type { ApiContract } from '../oracles/api-contract.js';
-import type { StaticApplicationGraph } from '../static-analysis/model.js';
+import type { SemanticEvidence, StaticApplicationGraph } from '../static-analysis/model.js';
 import type { ApplicationRule } from '../static-analysis/rules/rule-model.js';
 import { ErrorPathAnalyzer } from './error-paths.js';
 import { TestGoalPlanner, routeMatches, type GoalPlan, type PlanningContext } from './goal-planner.js';
@@ -10,6 +10,7 @@ import { goalSignal, type GoalSignal } from './goal-scoring.js';
 import { InvariantAnalyzer } from './invariants.js';
 import {
   apiMatches,
+  runtimeEvidence,
   sameLabel,
   type ActionSideEffect,
   type ApplicationInvariant,
@@ -25,6 +26,7 @@ import {
   type TestGoalCategory,
 } from './model.js';
 import { RuntimeContractCorrelator } from './runtime-contract.js';
+import { RuntimeLearner, describedBy, learnedWorkflow } from './runtime-learning.js';
 import { SideEffectAnalyzer } from './side-effects.js';
 import { BusinessStateMachineAnalyzer } from './state-machines.js';
 import { TestGoalGenerator, type GoalSafetyJudgement } from './test-goals.js';
@@ -109,6 +111,7 @@ export class FunctionalIntelligence {
   readonly errorPaths = new ErrorPathAnalyzer();
   readonly goals: TestGoalGenerator;
   private readonly planner = new TestGoalPlanner();
+  private readonly learner = new RuntimeLearner();
   private contract: RuntimeContractCorrelator;
   private contractSource: ApiContract | undefined;
   private readonly findings = new Map<string, FunctionalFinding[]>();
@@ -169,9 +172,10 @@ export class FunctionalIntelligence {
         );
       }
     }
-    const workflows = config.workflows.enabled
-      ? this.workflows.build(graph, this.machines.transitions(), declared)
-      : [];
+    if (config.workflows.enabled) this.workflows.build(graph, this.machines.transitions(), declared);
+    // Ce que les runs précédents ont appris du réseau : un point de départ (HISTORICAL), jamais une preuve.
+    if (config.runtimeLearning.enabled) this.recallLearned();
+    const workflows = config.workflows.enabled ? this.workflows.all() : [];
     for (const workflow of workflows.slice(0, 30))
       this.deps.emit('WORKFLOW_DISCOVERED', `${workflow.id}${workflow.api ? ` (${workflow.api})` : ''}`);
     const invariants = config.invariants.enabled
@@ -199,6 +203,93 @@ export class FunctionalIntelligence {
           `${path.operation} → ${String(path.httpStatus ?? '?')}${path.businessCode ? ` ${path.businessCode}` : ''}${path.uiTarget ? ` → field ${path.uiTarget}` : ''}${path.uiMessage ? ` → "${path.uiMessage}"` : ''}`,
         );
     this.generateGoals();
+  }
+
+  private recallLearned(): void {
+    const learned = this.deps.store?.learned();
+    if (!learned) return;
+    const evidence = (detail: string): SemanticEvidence => ({
+      source: 'HISTORICAL',
+      kind: 'learned',
+      value: detail,
+      confidence: 0.5,
+      provenance: { detail },
+    });
+    if (this.deps.config.stateMachines.enabled) {
+      for (const state of learned.states)
+        this.machines.learnState(
+          state.entityType,
+          state.stateField,
+          state.state,
+          evidence(`state ${state.state} seen in an earlier run`),
+        );
+      for (const transition of learned.transitions)
+        this.machines.learnTransition({
+          ...transition,
+          evidence: evidence(`${transition.from} → ${transition.to} seen in an earlier run`),
+          historical: true,
+        });
+    }
+    if (this.deps.config.workflows.enabled)
+      for (const workflow of learned.workflows)
+        this.workflows.learn(
+          learnedWorkflow(workflow, evidence(`${workflow.api} learned in an earlier run`), 'HISTORICAL'),
+        );
+  }
+
+  /**
+   * APPRENTISSAGE AU RUNTIME : les écritures acceptées que rien ne décrit, les codes
+   * d'état et leurs changements deviennent workflows, états et transitions — puis des
+   * objectifs de test. Avant l'analyse de l'action : ce qui vient d'être appris est jugé
+   * avec le reste.
+   */
+  private learnFrom(observation: FunctionalActionObservation): void {
+    const config = this.deps.config;
+    const learned = this.learner.learn(observation, (exchange) =>
+      describedBy(this.workflows.all(), exchange),
+    );
+    let changed = false;
+    if (config.stateMachines.enabled) {
+      for (const state of learned.states) {
+        this.machines.learnState(
+          state.entityType,
+          state.stateField,
+          state.state,
+          runtimeEvidence(`${state.stateField} = ${state.state} read in an API response`, 0.7),
+        );
+        this.deps.emit(
+          'BUSINESS_STATE_DISCOVERED',
+          `${state.entityType}: ${state.state} (learned from the network)`,
+        );
+        changed = true;
+      }
+      for (const transition of learned.transitions) {
+        this.machines.learnTransition({
+          ...transition,
+          evidence: runtimeEvidence(
+            `${transition.from} → ${transition.to} after "${transition.triggerLabel ?? transition.trigger}" (${transition.api ?? 'API'})`,
+            0.75,
+          ),
+          historical: false,
+        });
+        this.deps.emit(
+          'BUSINESS_TRANSITION_DISCOVERED',
+          `${transition.entityType}: ${transition.from} → ${transition.to} (${transition.trigger}, learned from the network)`,
+        );
+        changed = true;
+      }
+    }
+    if (config.workflows.enabled)
+      for (const workflow of learned.workflows) {
+        if (!this.workflows.learn(workflow)) continue;
+        if (config.sideEffects.enabled) this.sideEffects.build([workflow], this.machines.all());
+        this.deps.emit(
+          'WORKFLOW_DISCOVERED',
+          `${workflow.id} (${workflow.api ?? ''}, learned from the network)`,
+        );
+        changed = true;
+      }
+    if (changed) this.generateGoals();
   }
 
   private generateGoals(): void {
@@ -331,6 +422,8 @@ export class FunctionalIntelligence {
     const config = this.deps.config;
     const findings: FunctionalFinding[] = [];
     if (observation.after) this.screen = observation.after;
+    // 0. Ce que le réseau apprend (écritures, codes d'état) quand le code ne le dit pas.
+    if (config.runtimeLearning.enabled) this.learnFrom(observation);
     // 1. Transitions métier.
     const verdicts = config.stateMachines.enabled ? this.machines.observeAction(observation) : [];
     for (const verdict of verdicts) {
@@ -662,6 +755,7 @@ export class FunctionalIntelligence {
   async persist(): Promise<void> {
     const store = this.deps.store;
     if (!store || !this.enabled) return;
+    if (this.deps.config.runtimeLearning.enabled) store.rememberLearned(this.learner.knowledge());
     const entries = [
       ...this.machines.transitions().map((transition) => ({
         id: `TRANSITION:${transition.id}`,

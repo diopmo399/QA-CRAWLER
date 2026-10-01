@@ -77,6 +77,7 @@ functionalIntelligence:
   sideEffects: { enabled: true }
   errorPaths: { enabled: true }
   runtimeContracts: { enabled: true }
+  runtimeLearning: { enabled: true } # apprendre du réseau à chaque run (défaut : activé)
   testGoals:
     enabled: true # faux : aucun objectif, aucun signal pour le moteur de décision
     influenceDecisionEngine: true
@@ -136,6 +137,23 @@ Par workflow : API, STATE_CHANGE (nouvel état), UI (le déclencheur disparaît)
 
 Le contrat existant comparé aux corps réels (clés et types ; énumérations par empreinte) : FIELD_NOT_SENT (le champ est à l'écran mais pas dans la requête), UNEXPECTED_FIELD, TYPE_MISMATCH, REQUIRED_FIELD_MISSING, ENUM_MISMATCH, NULLABILITY_MISMATCH, UNEXPECTED_STATUS_CODE, RESPONSE_SCHEMA_MISMATCH. Toujours **CONTRACT_MISMATCH**, jamais un bug de l'application : le contrat peut être obsolète.
 
+### Apprentissage au runtime (`RuntimeLearner`)
+
+Quand le code ne dit pas comment l'application écrit — client OpenAPI généré, service générique, bundle illisible ou code non partageable — **le réseau le dit**, à chaque run :
+
+| Observé pendant une action                                                                    | Appris                                                                              |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| une écriture acceptée (2xx) que rien ne décrit : `PATCH /api/dossiers/42` après « Approuver » | le workflow `APPROVE:DOSSIER` (`PATCH /api/dossiers/{param}`, bouton « Approuver ») |
+| un code d'état dans une réponse : `{ "status": "PENDING" }`                                   | l'état `PENDING` de l'entité `DOSSIER`                                              |
+| l'état de la ressource avant (`PENDING`) et après (`APPROVED`) l'écriture                     | la transition `PENDING → APPROVED` (approve)                                        |
+
+- Verbe : libellé du bouton (« Approuver » → approve), sinon dernier segment d'action (`/approve`), sinon la méthode (POST → CREATE). Entité : dernier segment nommé de la route (`/api/v1/dossiers/{param}/documents` → DOCUMENT).
+- Même route, autre état écrit (`APPROVED` / `REJECTED`) : deux workflows distincts.
+- **La réponse fait foi** : une écriture acceptée dont la réponse garde l'ancien état n'apprend aucune transition (et la transition attendue, si elle est connue, est signalée manquante).
+- Ce qui est appris est `RUNTIME_OBSERVED` pendant le run (`RUNTIME_CONFIRMED` si l'écran montre aussi le nouvel état), et produit aussitôt des objectifs de test.
+- **Gardé d'un run à l'autre** dans `knowledge/functional/` (section `learned`) : au run suivant, workflows, états et transitions appris sont le **point de départ** — l'origine est « appris lors d'un run précédent », les transitions restent `STATIC_DISCOVERED` (historique, jamais une preuve) jusqu'à ce que ce run les revoie. Les objectifs qui en découlent orientent le moteur de décision dès la première page.
+- Jamais d'identifiant de ressource (`42`, UUID → `{param}`) ni de valeur saisie : seuls les **codes d'état** sont lus — une valeur en capitales (`PENDING`, `ECHEC_PARTIEL`) d'une clé `status` / `state` / `statut` / `…Status`, identifiant de l'application, jamais une saisie.
+
 ## 5. Objectifs de test
 
 `TestGoalGenerator` transforme la connaissance en objectifs : RULE, STATE_TRANSITION (« Verify PENDING registration can transition to APPROVED »), INVARIANT, WORKFLOW, SIDE_EFFECT (après un effet manquant), ERROR_PATH, CONTRACT, PERMISSION. Chacun dit **d'où il vient** (`generatedFrom`, `sourceId`, preuves) et **pourquoi** (`reason`), est dédupliqué par signature, et porte priorité, coût estimé, risque.
@@ -164,6 +182,7 @@ La **SafetyPolicy décide** : l'action déclencheuse est jugée par `classify()`
 
 - **Couverture fonctionnelle** : règles, états observés, transitions, invariants, workflows, effets, chemins d'erreur, écritures comparées au contrat — des **décomptes**, jamais une note.
 - **Historique** : `knowledge/functional/functional-<clé>.json` (par application et environnement), à côté de `knowledge/rules/`. Une transition confirmée par un run précédent reste STATIC_DISCOVERED (affichée « earlier run ») tant que ce run ne l'a pas observée ; elle sert à planifier. Aucune valeur saisie, aucun SQL dans les analyseurs, le moteur ou l'oracle ; la mémoire de travail reste en RAM.
+- **Rapport** : les workflows appris portent « appris du réseau » ou « appris lors d'un run précédent » ; une énumération « …Status » sans aucune transition (un code de résultat, pas un cycle de vie) est listée à part au lieu d'une machine vide ; les réponses d'erreur seulement déclarées par l'OpenAPI sont résumées par opération.
 - **Rapport** : section « Functional intelligence » (machines à états, transitions non offertes, workflows, invariants, effets, chemins d'erreur, observations de contrat, objectifs avec leur plan ou leur issue, couverture). `result.json` : `functional`.
 - **Journal du moteur** : `BUSINESS_STATE_DISCOVERED`, `BUSINESS_TRANSITION_DISCOVERED` / `CONFIRMED`, `INVARIANT_DISCOVERED` / `CONFIRMED` / `VIOLATED`, `WORKFLOW_DISCOVERED`, `SIDE_EFFECT_EXPECTED` / `CONFIRMED` / `MISSING`, `ERROR_PATH_DISCOVERED`, `CONTRACT_RUNTIME_MISMATCH`, `TEST_GOAL_GENERATED` / `SELECTED` / `STARTED` / `PROGRESS` / `VERIFIED` / `FAILED` / `BLOCKED` / `INCONCLUSIVE`.
 

@@ -115,6 +115,8 @@ export interface FunctionalWorkflow {
   api?: string;
   /** Libellé du bouton qui le déclenche, quand il est connu. */
   triggerLabel?: string;
+  /** D'où vient le workflow : le code, appris du réseau pendant ce run, ou d'un run précédent. */
+  origin?: 'STATIC' | 'RUNTIME_LEARNED' | 'HISTORICAL';
   /** Littéraux du corps écrits par le code ({ status: 'APPROVED' }) : distinguent les workflows d'une même API. */
   requestLiterals?: Record<string, string | number | boolean>;
   observations?: string[];
@@ -367,6 +369,27 @@ export interface FunctionalExchange {
   responseFields?: Record<string, FieldShape>;
   /** EMAIL_ALREADY_EXISTS : un identifiant en capitales lu dans la réponse d'erreur, jamais un message libre. */
   errorCode?: string;
+  /**
+   * Code d'état métier (PENDING, APPROVED) d'une propriété status / state du corps envoyé
+   * et de la réponse : un identifiant de l'application en capitales, jamais une valeur libre.
+   */
+  requestState?: StateCode;
+  responseState?: StateCode;
+}
+
+export interface StateCode {
+  field: string;
+  code: string;
+}
+
+/** Les propriétés qui portent un état métier : status, state, statut, etat, stage, lifecycle, …Status. */
+export function isStateKey(key: string): boolean {
+  return /^(status|state|statut|etat|stage|lifecycle)$/i.test(key) || /(Status|State|Statut)$/.test(key);
+}
+
+/** Un code d'état : un identifiant en capitales (PENDING, ECHEC_PARTIEL), jamais une saisie. */
+export function isStateCode(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(value);
 }
 
 /** Ce que l'écran montre, réduit à ce que l'intelligence fonctionnelle compare. */

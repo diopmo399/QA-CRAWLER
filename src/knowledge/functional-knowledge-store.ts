@@ -2,6 +2,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { writeFileAtomic } from '../memory/atomic-write.js';
 import { sha256 } from '../static-analysis/source-set.js';
+import type { LearnedKnowledge } from '../functional/runtime-learning.js';
 import type { RuleIdentity } from './rule-knowledge-store.js';
 
 /** Ce qu'un run précédent a appris d'une connaissance fonctionnelle (transition, workflow, objectif…). */
@@ -32,6 +33,8 @@ export interface RememberedFunctional {
  */
 export class FunctionalKnowledgeStore {
   private remembered = new Map<string, RememberedFunctional>();
+  /** Workflows, états et transitions appris du réseau lors des runs précédents (cumulés). */
+  private learnedKnowledge: LearnedKnowledge = { workflows: [], states: [], transitions: [] };
 
   constructor(
     private readonly directory: string,
@@ -47,11 +50,53 @@ export class FunctionalKnowledgeStore {
     const text = await readFile(this.file(), 'utf8').catch(() => undefined);
     if (!text) return;
     try {
-      const parsed = JSON.parse(text) as { entries?: RememberedFunctional[] };
+      const parsed = JSON.parse(text) as {
+        entries?: RememberedFunctional[];
+        learned?: Partial<LearnedKnowledge>;
+      };
       this.remembered = new Map((parsed.entries ?? []).map((entry) => [entry.id, entry]));
+      this.learnedKnowledge = {
+        workflows: parsed.learned?.workflows ?? [],
+        states: parsed.learned?.states ?? [],
+        transitions: parsed.learned?.transitions ?? [],
+      };
     } catch {
       this.remembered = new Map();
     }
+  }
+
+  /** Ce que les runs précédents ont appris du réseau : un point de départ, jamais une preuve. */
+  learned(): LearnedKnowledge {
+    return this.learnedKnowledge;
+  }
+
+  /** Ajoute ce que ce run a appris (dédupliqué, plafonné). */
+  rememberLearned(learned: LearnedKnowledge): void {
+    const merge = <T>(old: T[], add: T[], key: (entry: T) => string, limit: number): T[] => {
+      const map = new Map(old.map((entry) => [key(entry), entry]));
+      for (const entry of add) map.set(key(entry), entry);
+      return [...map.values()].slice(-limit);
+    };
+    this.learnedKnowledge = {
+      workflows: merge(
+        this.learnedKnowledge.workflows,
+        learned.workflows,
+        (entry) => `${entry.id}|${entry.api}`,
+        300,
+      ),
+      states: merge(
+        this.learnedKnowledge.states,
+        learned.states,
+        (entry) => `${entry.entityType}|${entry.state}`,
+        500,
+      ),
+      transitions: merge(
+        this.learnedKnowledge.transitions,
+        learned.transitions,
+        (entry) => `${entry.entityType}|${entry.from}|${entry.to}|${entry.trigger}`,
+        500,
+      ),
+    };
   }
 
   recall(id: string): (RememberedFunctional & { sameVersion: boolean }) | undefined {
@@ -103,7 +148,7 @@ export class FunctionalKnowledgeStore {
     await mkdir(this.directory, { recursive: true });
     await writeFileAtomic(
       this.file(),
-      `${JSON.stringify({ application: this.identity.application, entries: [...this.remembered.values()].slice(-3000) }, null, 2)}\n`,
+      `${JSON.stringify({ application: this.identity.application, entries: [...this.remembered.values()].slice(-3000), learned: this.learnedKnowledge }, null, 2)}\n`,
     );
   }
 }

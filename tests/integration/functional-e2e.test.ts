@@ -110,8 +110,13 @@ describe('functional intelligence end to end (Chromium): state machine, goals, s
     startAt: string;
     mutations?: boolean;
     flows?: string;
+    /** Sans code ni contrat : seulement ce que le réseau apprend. */
+    noSources?: boolean;
+    /** Dossier commun (knowledge/ partagé entre deux runs). */
+    base?: string;
   }): Promise<{ result: ExplorationResult; log: string; html: string }> => {
-    const reports = await mkdtemp(path.join(dir, 'run-'));
+    // knowledge/ se trouve à côté du dossier des rapports : un dossier commun le partage entre deux runs.
+    const reports = options.base ?? (await mkdtemp(path.join(dir, 'run-')));
     const { config } = parseConfig(
       `
 mission: { name: functional-e2e }
@@ -120,11 +125,15 @@ safety: { allowedActionClasses: [SAFE${options.mutations === false ? '' : ', MUT
 exploration: { maxStates: 6, maxActions: 6, actionTimeoutMs: 3000, settleTimeMs: 120 }
 forms: { exercise: false }
 ${options.flows ?? ''}
-openapi: { enabled: true, source: ${path.join(FIXTURE, 'openapi.yaml')} }
+${
+  options.noSources
+    ? ''
+    : `openapi: { enabled: true, source: ${path.join(FIXTURE, 'openapi.yaml')} }
 staticAnalysis:
   enabled: true
   source: { root: ${FIXTURE} }
-  cache: { enabled: false }
+  cache: { enabled: false }`
+}
 functionalIntelligence: { enabled: ${String(options.enabled)} }
 report: { failOnSeverity: NONE }
 output:
@@ -222,6 +231,36 @@ output:
     // Jamais une valeur saisie dans le résultat.
     expect(JSON.stringify(result.functional)).not.toMatch(/@example/);
   }, 120_000);
+
+  it('without code nor contract: learns the workflow and the transition from the network, then reuses them as history', async () => {
+    const base = await mkdtemp(path.join(dir, 'learning-'));
+    status = 'PENDING';
+    buggy = false;
+    const first = await run({ enabled: true, startAt: '/registrations/7', noSources: true, base });
+    const learned = first.result.functional;
+    const approve = learned?.workflows.find((workflow) => workflow.id === 'APPROVE:REGISTRATION');
+    expect(approve, JSON.stringify(learned?.workflows.map((entry) => entry.id))).toMatchObject({
+      origin: 'RUNTIME_LEARNED',
+      api: 'PATCH /api/registrations/{param}',
+      triggerLabel: 'Approve',
+    });
+    const machine = learned?.machines.find((entry) => entry.entityType === 'REGISTRATION');
+    expect(
+      machine?.transitions.find((entry) => entry.from === 'PENDING' && entry.to === 'APPROVED')?.status,
+    ).toBe('RUNTIME_CONFIRMED');
+    expect(first.html).toContain('learned from the network');
+
+    // Deuxième run, même knowledge/ : la connaissance apprise est le point de départ (historique, pas une preuve).
+    status = 'PENDING';
+    const second = await run({ enabled: true, startAt: '/registrations/7', noSources: true, base });
+    const goal = second.result.functional?.goals.find(
+      (entry) => entry.id === 'STATE_TRANSITION:REGISTRATION:PENDING>APPROVED:approve',
+    );
+    expect(goal?.generatedFrom).toContain('STATIC_DISCOVERED');
+    expect(goal?.history).toContain('VERIFIED');
+    expect(goal?.status).toBe('VERIFIED');
+    expect(second.log).toMatch(/TEST_GOAL_SELECTED[^\n]*Approve/);
+  }, 180_000);
 
   it('functionalIntelligence disabled (non-regression): no functional section, no functional issue', async () => {
     status = 'PENDING';
