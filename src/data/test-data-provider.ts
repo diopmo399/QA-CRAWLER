@@ -413,17 +413,10 @@ export class DefaultTestDataProvider implements TestDataProvider {
 
   /** testData.defaults, puis le sens intégré du champ (les noms portent le marqueur du run). */
   private semantic(field: FormField, runId: string): { key: SemanticKey; value: string } | undefined {
-    const text = normalizeText(`${field.name ?? ''} ${field.label ?? ''} ${field.placeholder ?? ''}`);
     const key =
-      field.type === 'email'
-        ? 'email'
-        : field.type === 'tel'
-          ? 'phone'
-          : field.type === 'url'
-            ? 'url'
-            : (SEMANTIC_RULES.find(([, pattern]) => pattern.test(text))?.[0] ??
-              // Un champ muet (ni libellé ni name) dont le code et l'API prouvent le sens.
-              staticKeyOf(field.staticConcept));
+      semanticKeyOf(field) ??
+      // Un champ muet (ni libellé ni name) dont le code et l'API prouvent le sens.
+      staticKeyOf(field.staticConcept);
     if (!key) return undefined;
     const tag = runTag(runId);
     const person = this.persona(runId);
@@ -512,6 +505,20 @@ export class DefaultTestDataProvider implements TestDataProvider {
       return field.maxText;
     return date;
   }
+}
+
+/** Le sens d'un champ (email, firstName, city…) d'après son type, son name, son libellé ou son placeholder. */
+export function semanticKeyOf(field: {
+  type?: string;
+  name?: string;
+  label?: string;
+  placeholder?: string;
+}): SemanticKey | undefined {
+  if (field.type === 'email') return 'email';
+  if (field.type === 'tel') return 'phone';
+  if (field.type === 'url') return 'url';
+  const text = normalizeText(`${field.name ?? ''} ${field.label ?? ''} ${field.placeholder ?? ''}`);
+  return SEMANTIC_RULES.find(([, pattern]) => pattern.test(text))?.[0];
 }
 
 /** Libellé tel qu'écrit dans le YAML ou à l'écran : majuscules, accents et marque d'obligation « * » ignorés. */

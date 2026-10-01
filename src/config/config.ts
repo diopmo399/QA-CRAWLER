@@ -1150,6 +1150,50 @@ const toggle = z.object({ enabled: z.boolean().default(true) }).strict();
  * chemins d'erreur, contrat au runtime, objectifs de test. Désactivée par défaut :
  * enabled=false garde exactement le comportement d'avant ; chaque partie se coupe seule.
  */
+/**
+ * HUMAN FLOW RECORDER (`qa-crawler record`) : un humain se sert de l'application, le
+ * crawler observe et en fait un flow imposé propre (flow.yaml + .feature). Sans effet sur
+ * `qa-crawler run` : seule la commande record lit cette section.
+ */
+const recordingSchema = z
+  .object({
+    /** false : la commande record refuse de démarrer. */
+    enabled: z.boolean().default(true),
+    /** Fichiers générés (les deux viennent de la même représentation). */
+    outputFormat: z.enum(['yaml', 'gherkin', 'both']).default('both'),
+    /** Langue du .feature (par défaut : report.language). */
+    language: z.enum(['fr', 'en']).optional(),
+    /** Le bandeau « ● RECORDING » (Stop, Checkpoint, Pause) dans la page. */
+    overlay: z.boolean().default(true),
+    /** Se connecter (auth de la mission) avant de commencer : la connexion n'est pas enregistrée. */
+    recordAfterAuthentication: z.boolean().default(true),
+    /** Événements bruts gardés au plus (les envois, navigations, changements et points de contrôle ne sont jamais perdus). */
+    maxRawEvents: z.number().int().min(100).max(100_000).default(5000),
+    maxDurationMinutes: z.number().min(1).max(480).default(60),
+    /** Pause (ms) après laquelle une saisie en cours est envoyée (jamais une touche à la fois). */
+    inputDebounceMs: z.number().int().min(100).max(5000).default(400),
+    /** Attente (ms) après une action avant d'observer l'écran. */
+    settleMs: z.number().int().min(100).max(10_000).default(600),
+    /** Réponse aux dialogues du navigateur pendant l'enregistrement (l'humain a voulu son clic). */
+    dialogs: z
+      .object({ confirm: z.enum(['accept', 'dismiss']).default('accept') })
+      .strict()
+      .default({}),
+    /** Variables d'environnement des identifiants tapés pendant l'enregistrement (jamais leurs valeurs). */
+    credentials: z
+      .object({
+        usernameEnv: nonEmpty.default('QA_USERNAME'),
+        passwordEnv: nonEmpty.default('QA_PASSWORD'),
+      })
+      .strict()
+      .default({}),
+    /** Ajouter ce qui a été appris (workflow, états) à la connaissance fonctionnelle, provenance HUMAN_RECORDED. */
+    knowledge: z.boolean().default(true),
+    /** Rejouer le flow généré (dry run) juste après : REPLAY_CONFIRMED / REPLAY_FAILED. */
+    validate: z.boolean().default(false),
+  })
+  .strict();
+
 const functionalIntelligenceSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -1364,6 +1408,7 @@ export const scenarioSchema = z
       })
       .strict()
       .default({}),
+    recording: recordingSchema.default({}),
     credentials: credentialsSchema,
     browserInteractions: browserInteractionsSchema.default({}),
     forms: formsSchema.default({}),
@@ -1400,6 +1445,7 @@ export type ScenarioInput = z.input<typeof scenarioSchema>;
 export type ScenarioConfig = z.output<typeof scenarioSchema>;
 export type PersistenceConfig = ScenarioConfig['persistence'];
 export type RulesConfig = ScenarioConfig['rules'];
+export type RecordingConfig = ScenarioConfig['recording'];
 export type IntelligenceConfig = ScenarioConfig['intelligence'];
 export type MemoryConfig = ScenarioConfig['memory'];
 export type FormAuthConfig = z.output<typeof formAuthSchema>;

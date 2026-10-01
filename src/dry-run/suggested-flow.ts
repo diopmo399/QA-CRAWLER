@@ -96,7 +96,9 @@ export function suggestedFlowYaml(suggested: SuggestedFlowGraph, header: string[
     'steps:',
   ];
   for (const item of suggested.steps) {
-    lines.push(`  # ${item.status} · ${item.provenance}${item.review ? ` · ${oneLine(item.review)}` : ''}`);
+    lines.push(
+      `  # ${item.comment !== undefined ? oneLine(item.comment) : `${item.status} · ${item.provenance}`}${item.review ? ` · ${oneLine(item.review)}` : ''}`,
+    );
     const raw: Record<string, unknown>[] = [];
     if (item.fillFormBefore) raw.push({ intent: { kind: 'FILL_FORM' } });
     if (item.step) raw.push(rawStepOf(item.step));
@@ -210,7 +212,7 @@ export function suggestedFeature(
   };
   let previousSentence: string | undefined;
   for (const item of suggested.steps) {
-    const note = `${item.status} · ${item.provenance}${item.review ? ` · ${oneLine(item.review)}` : ''}`;
+    const note = `${item.comment !== undefined ? oneLine(item.comment) : `${item.status} · ${item.provenance}`}${item.review ? ` · ${oneLine(item.review)}` : ''}`;
     // Une phrase de l'équipe qui donne plusieurs étapes (« je suis connecté ») : écrite une seule fois.
     const sentenceKey =
       suggested.source.type === 'GHERKIN' && item.provenance === 'ORIGINAL' && item.originalText
@@ -269,8 +271,9 @@ function stripKeyword(text: string): string {
   return text.replace(ORIGINAL_KEYWORD, '').trim();
 }
 
-function quote(value: string | { env: string }): string {
-  return typeof value === 'string' ? `"${value}"` : `"<env:${value.env}>"`;
+function quote(value: string | { env: string } | { testData: string }): string {
+  if (typeof value === 'string') return `"${value}"`;
+  return 'env' in value ? `"<env:${value.env}>"` : `"<testData:${value.testData}>"`;
 }
 
 const ROLE_WORDS: Record<Language, Record<string, string>> = {
@@ -323,8 +326,24 @@ export function sentenceOf(step: FlowStep, language: Language = 'fr'): string | 
     case 'uncheck': {
       const field = fieldName(step.target);
       if (!field) return undefined;
-      if (step.kind === 'check') return fr ? `je coche la case "${field}"` : `I check "${field}"`;
-      return fr ? `je décoche "${field}"` : `I uncheck "${field}"`;
+      // Les mots de l'élément redonnent la même cible à la relecture : un libellé seul, une case, une radio.
+      const role = step.target.strategy === 'role' ? step.target.role : undefined;
+      const element =
+        role === 'radio'
+          ? fr
+            ? 'le bouton radio '
+            : 'the radio button '
+          : role === 'checkbox'
+            ? fr
+              ? 'la case '
+              : 'the checkbox '
+            : step.target.strategy === 'label' || step.kind === 'uncheck'
+              ? ''
+              : fr
+                ? 'la case '
+                : '';
+      if (step.kind === 'check') return fr ? `je coche ${element}"${field}"` : `I check ${element}"${field}"`;
+      return fr ? `je décoche ${element}"${field}"` : `I uncheck ${element}"${field}"`;
     }
     case 'expect':
       return expectationSentence(step.expect, language);
@@ -355,6 +374,14 @@ function expectationSentence(expectation: FlowExpectation, language: Language): 
   }
   if (expectation.noError)
     return fr ? "aucun message d'erreur n'est affiché" : 'no error message is displayed';
+  if (expectation.response) {
+    const { method, url, status } = expectation.response;
+    const request = `${method ? `${method} ` : ''}"${url}"`;
+    if (status === '2xx') return fr ? `la requête ${request} réussit` : `the request ${request} succeeds`;
+    return fr
+      ? `la requête ${request} répond "${String(status)}"`
+      : `the request ${request} responds "${String(status)}"`;
+  }
   return undefined;
 }
 

@@ -7,7 +7,7 @@
  */
 
 /** Une valeur du scénario : littérale, ou lue dans une variable d'environnement (`<env:NOM>`). */
-export type IntentValue = string | { env: string };
+export type IntentValue = string | { env: string } | { testData: string };
 
 export interface NavigateIntent {
   kind: 'NAVIGATE';

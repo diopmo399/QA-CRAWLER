@@ -31,6 +31,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Créer un flow de test imposé](#créer-un-flow-de-test-imposé)
 - [Scénarios Gherkin](#scénarios-gherkin)
 - [Dry Run : confronter un scénario à l'application](#dry-run--confronter-un-scénario-à-lapplication)
+- [Enregistrer un flow montré par un humain (record)](#enregistrer-un-flow-montré-par-un-humain-record)
 - [Analyse statique : le code comme source de preuves](#analyse-statique--le-code-comme-source-de-preuves)
 - [Authentification](#authentification)
 - [Interactions navigateur](#interactions-navigateur)
@@ -741,6 +742,17 @@ La mission donne la cible, la connexion, la sécurité, `gherkin.steps` et les f
 **Codes de sortie :** `0` FULLY_MATCHED ou PARTIALLY_MATCHED, `1` DIVERGED, BLOCKED ou INCONCLUSIVE, `2` usage ou scénario invalide, `3` erreur d'exécution.
 
 **Limites.** Une exploration peut ne pas suffire : `POSSIBLY_OBSOLETE` n'est jamais une suppression. Une étape déjà sur l'écran courant peut dépasser une étape attendue plus loin (elle est alors réessayée après chaque étape trouvée). L'exploration guidée remplit un formulaire avant son bouton avec les données de test, mais ne remplit pas de champ isolé. Une action de modification exécutée pendant la recherche n'est pas annulée : elle n'est permise qu'avec `@mutation` (ou `allow: MUTATION`) ET une mission qui l'autorise, et compte dans le budget de modifications.
+
+## Enregistrer un flow montré par un humain (record)
+
+`qa-crawler record` ouvre Chromium sur l'application : vous vous en servez normalement, QA-CRAWLER observe, puis écrit **un** flow imposé propre, en `generated.flow.yaml` **et** `generated.feature` (la même représentation), utilisable tel quel par un run ou un Dry Run. Ce n'est pas un enregistreur de macros : des cibles stables (libellé, rôle + nom ; jamais `#mat-input-23` ni `nth-child`), une étape par intention (pas une par touche), des **données de test** à la place de ce que vous avez tapé (`value: { testData: email }`, choisie au rejeu), les secrets en `{ env: … }`, les choix métier gardés (« Business »), et les résultats observés (requête `POST /api/users` 2xx, page atteinte).
+
+```bash
+npm run qa -- record --url https://qa.example.com/users --name "Create business user"
+npm run qa -- record -c mission.yaml --name "Create user" --url /users --validate
+```
+
+Un bandeau **● RECORDING** (Checkpoint, Pause, Stop) s'affiche dans la page ; le terminal pilote aussi (Entrée pour arrêter, `c <libellé>` pour un point de contrôle, `p` pour la pause). La capture est passive (rien n'est empêché ni intercepté) et **aucune saisie en clair** ne quitte la page. Le nettoyage retire le bruit, fusionne les saisies, garde la valeur finale d'un champ corrigé, retire les détours ; un envoi refusé puis corrigé est un scénario de validation négatif s'il porte un point de contrôle. `--validate` rejoue le flow généré par le Dry Run (`REPLAY_CONFIRMED` / `REPLAY_FAILED`) sans jamais le modifier ; la SafetyPolicy reste absolue. Fichiers sous `<reportsDir>/recordings/<nom>/`, avec un rapport RAW → SEMANTIC → FINAL qui explique chaque étape. Détails : [docs/HUMAN_FLOW_RECORDER.md](docs/HUMAN_FLOW_RECORDER.md).
 
 ## Analyse statique : le code comme source de preuves
 
@@ -1904,6 +1916,7 @@ npm run qa -- verify scenarios/demo.yaml --baseline-dir baselines/qa
 npm run qa -- --config scenarios/smoke.yaml --base-url https://pr-42.example.com --max-states 30 --max-actions 100
 npm run qa -- scenarios/mon-flow.yaml --headed      # voir le navigateur (nécessite un écran)
 npm run qa -- dry-run features/create-user.feature -c scenarios/demo.yaml   # voir « Dry Run »
+npm run qa -- record --url https://qa.example.com/users --name "Create user"   # voir « record »
 npm run qa -- --help
 ```
 

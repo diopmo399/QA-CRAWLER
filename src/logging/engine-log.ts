@@ -4,6 +4,7 @@ import { redactText, redactUrl } from '../security/redactor.js';
 import type { StaticAnalysisEvent } from '../static-analysis/static-analyzer.js';
 import type { RuleEvent } from '../rules/runtime-rule-verifier.js';
 import type { FunctionalEvent } from '../functional/functional-intelligence.js';
+import type { RecordingEventType } from '../recording/model.js';
 
 export const LOG_LEVELS = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -53,6 +54,7 @@ export type EngineEvent =
   | 'FLOW_RECONCILIATION_COMPLETED'
   | 'SUGGESTED_FLOW_GENERATED'
   | 'DRY_RUN_COMPLETED'
+  | RecordingEventType
   | StaticAnalysisEvent
   | RuleEvent
   | FunctionalEvent;

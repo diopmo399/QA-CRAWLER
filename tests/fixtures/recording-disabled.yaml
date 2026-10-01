@@ -1,0 +1,3 @@
+mission: { name: recording-disabled }
+target: { baseUrl: 'http://127.0.0.1:9', startAt: / }
+recording: { enabled: false }

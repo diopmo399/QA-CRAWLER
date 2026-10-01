@@ -3054,7 +3054,9 @@ export class FlowExplorer {
                 : step.name,
           }
         : {}),
-      ...(intent.kind === 'FILL' && typeof intent.value !== 'string' ? { sensitiveValue: true } : {}),
+      ...(intent.kind === 'FILL' && typeof intent.value !== 'string' && 'env' in intent.value
+        ? { sensitiveValue: true }
+        : {}),
     });
     const report = this.resolutionReport(resolution);
     const common = { allow: step.allow, optional: false };
@@ -3531,7 +3533,7 @@ export class FlowExplorer {
     const value = step.kind === 'fill' ? step.value : undefined;
     const verdict = evaluateFlowAction(this.safety, action, {
       allow: step.allow,
-      valueFromEnv: value !== undefined && typeof value !== 'string',
+      valueFromEnv: value !== undefined && typeof value !== 'string' && 'env' in value,
     });
     if (verdict.verdict === 'BLOCK') {
       this.graph.addEdge({
@@ -3557,14 +3559,22 @@ export class FlowExplorer {
 
     let elementAction: FlowElementAction;
     if (step.kind === 'fill') {
-      const resolved = typeof step.value === 'string' ? step.value : this.env[step.value.env];
+      const resolved =
+        typeof step.value === 'string'
+          ? step.value
+          : 'env' in step.value
+            ? this.env[step.value.env]
+            : this.testDataValue(action, step.value.testData);
       if (resolved === undefined) {
-        const name = typeof step.value === 'string' ? '' : step.value.env;
+        const reason =
+          typeof step.value !== 'string' && 'env' in step.value
+            ? `environment variable ${step.value.env} is not set`
+            : `no test data for "${typeof step.value === 'string' ? '' : step.value.testData}"`;
         return {
           page,
           context: before,
           report: done('FAILED', {
-            reason: `environment variable ${name} is not set`,
+            reason,
             stateId: before.stateId,
             url: before.url,
             classification: action.classification,
@@ -3691,6 +3701,24 @@ export class FlowExplorer {
   }
 
   /** Classement d'un élément que l'observateur ne liste pas (texte simple, conteneur…). */
+  /**
+   * `{ testData: clé }` (un flow enregistré) : une valeur valide pour CE champ, choisie par le
+   * TestDataProvider à l'exécution ; testData.fields[clé] si la mission la donne. Jamais pour
+   * un champ sensible (le TestDataProvider ne les remplit pas).
+   */
+  private testDataValue(action: DiscoveredAction, key: string): string | undefined {
+    const configured = this.config.testData.fields[key];
+    if (configured !== undefined) return configured;
+    const field = { ...(action.field ?? { inputType: 'text', required: false, name: key }), hasValue: false };
+    const instruction = this.testData.instructionFor({
+      ...action,
+      type: 'fill',
+      ...(action.label ? {} : { label: key }),
+      field,
+    });
+    return instruction.kind === 'fill' ? instruction.value : undefined;
+  }
+
   private syntheticAction(
     stateId: string,
     step: Extract<FlowStep, { target: unknown }>,

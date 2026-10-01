@@ -34,7 +34,17 @@ export const DRY_RUN_STATUSES = [
 export type DryRunStatus = (typeof DRY_RUN_STATUSES)[number];
 
 /** D'où vient une étape du flow suggéré. */
-export type Provenance = 'ORIGINAL' | 'OBSERVED' | 'HISTORICAL_CONFIRMED';
+export type Provenance =
+  | 'ORIGINAL'
+  | 'OBSERVED'
+  | 'HISTORICAL_CONFIRMED'
+  // HUMAN FLOW RECORDER : une étape faite par l'humain, nettoyée, ou un résultat déduit / un point de contrôle.
+  | 'HUMAN_RECORDED'
+  | 'NORMALIZED_FROM_HUMAN'
+  | 'INFERRED_OUTCOME'
+  | 'MANUAL_CHECKPOINT'
+  | 'STATIC_ENRICHED'
+  | 'RUNTIME_OBSERVED';
 
 /** Pourquoi l'analyse s'est arrêtée. */
 export type DryRunStopReason = 'COMPLETED' | 'EXPLORATION_BUDGET_EXHAUSTED' | 'START_FAILED';
@@ -174,6 +184,8 @@ export interface SuggestedStep {
   review?: string;
   /** Champs à remplir avec des données de test avant cette étape. */
   fillFormBefore?: boolean;
+  /** Commentaire écrit au-dessus de l'étape à la place de « statut · provenance » (flow enregistré). */
+  comment?: string;
 }
 
 export interface SuggestedFlowGraph {
