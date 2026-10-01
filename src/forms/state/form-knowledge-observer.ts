@@ -120,7 +120,8 @@ export class FormKnowledgeObserver implements PageObserver {
       ]);
     const window = this.functional.get(id) ?? [];
     this.functional.delete(id);
-    if (this.functional.size === 0) this.pending.clear();
+    // Une réponse lente (après la fermeture de la fenêtre) complète encore l'échange déjà rapporté : seulement borner.
+    if (this.functional.size === 0 && this.pending.size > 200) this.pending.clear();
     return window;
   }
 

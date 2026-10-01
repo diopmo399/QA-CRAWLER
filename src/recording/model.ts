@@ -118,6 +118,8 @@ export interface RawRecordedEvent {
   control?: 'stop' | 'pause' | 'resume' | 'checkpoint';
   /** popup / download : URL de la nouvelle page, extension du fichier. */
   target?: string;
+  /** navigation : type de transition du navigateur (link, typed, reload, form_submit…, forward_back). */
+  transition?: string;
   /** Événement de bruit (clic de focus dans un champ…) : gardé dans la trace brute, ignoré ensuite. */
   noise?: string;
   /** L'observation de l'écran une fois l'action terminée (RecordedState.id), et les requêtes qu'elle a déclenchées. */
@@ -239,6 +241,20 @@ export interface SemanticRecordedAction {
   sideEffects?: string[];
   /** CONFIRM / CANCEL : le dialogue du navigateur (type, message court). */
   dialog?: { kind: string; message: string };
+  /**
+   * La navigation que l'action a causée (ACTION CORRELATION) : un EFFET, pas une étape. Routes
+   * dans l'ordre (redirections comprises), confiance et raisons de la corrélation.
+   */
+  navigation?: {
+    routes: string[];
+    navigationIds: string[];
+    confidence: string;
+    score: number;
+    reasons: string[];
+    provenance: 'RUNTIME_OBSERVED';
+  };
+  /** NAVIGATE gardé comme étape goto : pourquoi aucune action humaine ne l'explique. */
+  gotoReason?: string;
 }
 
 export type AssertionKind =
@@ -285,6 +301,9 @@ export type RecordingWarningCode =
   | 'NEGATIVE_VALIDATION_FLOW'
   | 'SENSITIVE_VALUE_REDACTED'
   | 'BUFFER_OVERFLOW'
+  | 'SUSPICIOUS_NAVIGATION_COLLAPSE'
+  | 'SEMANTIC_ACTION_LOST'
+  | 'CAUSALITY_AMBIGUOUS'
   | 'UNSUPPORTED_EVENT'
   | 'NO_OUTCOME_OBSERVED';
 
@@ -385,7 +404,15 @@ export type RecordingEventType =
   | 'REPLAY_CONFIRMED'
   | 'REPLAY_FAILED'
   | 'RECORDING_COMPLETED'
-  | 'RECORDING_FAILED';
+  | 'RECORDING_FAILED'
+  | 'ACTION_CORRELATION_STARTED'
+  | 'ACTION_EFFECT_CORRELATED'
+  | 'NAVIGATION_CORRELATED_TO_ACTION'
+  | 'NAVIGATION_UNCORRELATED'
+  | 'GOTO_FALLBACK_GENERATED'
+  | 'CAUSALITY_AMBIGUOUS'
+  | 'SUSPICIOUS_NAVIGATION_COLLAPSE'
+  | 'FLOW_SEMANTIC_PRESERVATION_CHECK';
 
 export interface RecordingEvent {
   type: RecordingEventType;

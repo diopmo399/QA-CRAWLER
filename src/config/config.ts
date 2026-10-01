@@ -1198,6 +1198,37 @@ const recordingSchema = z
     knowledge: z.boolean().default(true),
     /** Rejouer le flow généré (dry run) juste après : REPLAY_CONFIRMED / REPLAY_FAILED. */
     validate: z.boolean().default(false),
+    /**
+     * ACTION CORRELATION : une navigation qui suit une action humaine est d'abord son EFFET (le
+     * clic reste l'étape, la route devient un résultat) ; `goto` seulement sans cause fiable.
+     * false : l'ancien comportement (navigation rattachée au geste qui la précède de peu).
+     */
+    actionCorrelation: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Fenêtre (ms) dans laquelle une action peut avoir causé une navigation (handler, API, routeur). */
+        causalWindowMs: z.number().int().min(500).max(120_000).default(10_000),
+        /** Une navigation qui en suit une autre de moins de… (ms), sans geste entre les deux : une redirection. */
+        redirectWindowMs: z.number().int().min(50).max(10_000).default(1500),
+        /** Score minimal (0..1) pour rattacher une navigation à une action. */
+        minScore: z.number().min(0).max(1).default(0.5),
+        /** Un clic sur un élément sans rôle peut devenir le déclencheur de la navigation qui le suit. */
+        promoteNoiseClicks: z.boolean().default(true),
+        /** Une écriture acceptée par le serveur entre le geste et la navigation compte comme preuve. */
+        networkEvidence: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+    /** Contrôles avant la génération : aucune action métier perdue, pas un flow fait de goto. */
+    validation: z
+      .object({
+        detectSemanticActionLoss: z.boolean().default(true),
+        detectNavigationCollapse: z.boolean().default(true),
+        /** goto (hors départ) à partir desquels un flow plus fait de goto que de clics est suspect. */
+        collapseMinGotos: z.number().int().min(1).default(2),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 

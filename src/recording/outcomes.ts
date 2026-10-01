@@ -173,6 +173,26 @@ export function inferOutcomes(
           selected: wanted,
           reason: 'a control that only the new page shows',
         });
+      else if (!discriminating || action.checkpoint !== undefined) {
+        // Ni l'URL ni un bouton ne distinguent la nouvelle page : son titre, s'il n'apparaissait pas avant.
+        const known = new Set((origin?.headings ?? []).map((text) => text.toLowerCase()));
+        const heading = after.headings.find(
+          (text) => readable(text) && !/\d/.test(text) && !known.has(text.toLowerCase()),
+        );
+        if (heading)
+          add({
+            kind: 'ROUTE',
+            description: `the page "${heading}" (${route}) is displayed`,
+            expect: { text: heading },
+            stability: 'LIKELY_STABLE',
+            confidence: 0.7,
+            afterActionId: action.id,
+            provenance: 'INFERRED_OUTCOME',
+            evidence: [`heading of ${after.route}, not on ${beforeRoute}`],
+            selected: wanted,
+            reason: 'the title of the page the action leads to',
+          });
+      }
     }
     // Messages apparus.
     if (after) {
@@ -339,7 +359,8 @@ export function stableRoute(route: string): string {
   const hash = route.indexOf('#/');
   const path =
     hash >= 0 ? (route.slice(hash + 1).split('?')[0] ?? '/') : (route.split(/[?#]/)[0] ?? route) || '/';
-  const template = apiTemplate(path);
+  // Une route déjà normalisée par le StateDetector (/demandes/:id) a ses paramètres en « :nom ».
+  const template = apiTemplate(path).replace(/\/:[^/]+/g, '/{param}');
   const cut = template.indexOf('{param}');
   return cut >= 0 ? template.slice(0, cut) || '/' : template;
 }

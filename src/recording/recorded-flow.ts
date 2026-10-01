@@ -67,7 +67,7 @@ export function buildRecordedFlow(input: BuildRecordedFlowInput): {
         rawEventIds: raw,
         provenance: action.provenance,
         confidence: action.confidence,
-        explanation: 'the human typed an address or went back',
+        explanation: `goto generated: ${action.gotoReason ?? 'NO_CAUSAL_ACTION'} · ${action.evidence.slice(1).join('; ') || 'no human action caused this navigation'}`,
       });
       continue;
     }
@@ -247,6 +247,11 @@ function explanationOf(action: SemanticRecordedAction): string {
     ...(action.target ? [`target ${action.target.quality}: ${action.target.reasons[0] ?? ''}`] : []),
     ...(action.value ? [`value ${action.value.class}: ${action.value.reason}`] : []),
     ...(action.merged ? [`normalized: ${action.merged}`] : []),
+    ...(action.navigation
+      ? [
+          `navigation effect → ${action.navigation.routes.join(' → ')} (${action.navigation.confidence}: ${action.navigation.reasons.join(', ')})`,
+        ]
+      : []),
     ...(action.classification && action.classification !== 'SAFE'
       ? [`safety: ${action.classification}`]
       : []),

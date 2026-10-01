@@ -93,7 +93,8 @@ export function suggestedFlowYaml(suggested: SuggestedFlowGraph, header: string[
     )
       .trimEnd()
       .split('\n'),
-    'steps:',
+    // Un flow sans étape reste un flow valide (startAt seul).
+    suggested.steps.length === 0 ? 'steps: []' : 'steps:',
   ];
   for (const item of suggested.steps) {
     lines.push(

@@ -41,6 +41,8 @@ export function normalizeRecording(
   states: readonly RecordedState[],
   noise: number,
   options: ValueClassifierOptions,
+  /** Les navigations ont déjà été rattachées à leurs actions (ACTION CORRELATION) : les NAVIGATE restants sont des goto voulus. */
+  correlated = false,
 ): NormalizedRecording {
   const actions = input.map((action) => ({ ...action, evidence: [...action.evidence] }));
   const rawById = new Map(events.map((event) => [event.id, event]));
@@ -73,7 +75,7 @@ export function normalizeRecording(
       .slice(0, index)
       .reverse()
       .find((candidate) => candidate.type !== 'NAVIGATE');
-    if (before && action.at - before.at < CAUSED_NAVIGATION_MS && causesNavigation(before)) {
+    if (!correlated && before && action.at - before.at < CAUSED_NAVIGATION_MS && causesNavigation(before)) {
       // Un point de contrôle posé après la redirection appartient à l'action qui l'a causée.
       if (action.checkpoint !== undefined && before.checkpoint === undefined) {
         before.checkpoint = action.checkpoint;

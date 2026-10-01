@@ -1,4 +1,4 @@
-import type { BrowserContext, Dialog, Download, Page } from 'playwright';
+import type { BrowserContext, CDPSession, Dialog, Download, Page } from 'playwright';
 import type { ScenarioConfig } from '../config/config.js';
 import { FormKnowledgeObserver } from '../forms/state/form-knowledge-observer.js';
 import { newValueSalt } from '../forms/state/value-digest.js';
@@ -269,11 +269,20 @@ export class HumanFlowRecorder {
   // ------------------------------------------------------------------ page
 
   private watchPage(page: Page): void {
+    // La session CDP est ouverte d'emblée : la première navigation n'attend pas sa création.
+    this.cdp ??= this.openCdp(page);
     page.on('framenavigated', (frame) => {
       if (frame !== page.mainFrame()) return;
       const last = [...this.session.rawEvents].reverse().find((event) => event.type === 'navigation');
       if (last && last.url === redactUrl(frame.url())) return;
-      this.capture({ type: 'navigation', at: this.now(), url: frame.url() });
+      const event = this.capture({ type: 'navigation', at: this.now(), url: frame.url() });
+      // Le navigateur dit comment on est arrivé là : adresse tapée, retour arrière, lien, rechargement…
+      if (event) {
+        // Les requêtes d'historique sont faites dans l'ordre des navigations (index cohérent).
+        const url = frame.url();
+        this.history = this.history.then(() => this.transitionOf(page, event, url));
+        this.track(this.history);
+      }
     });
     page.on('dialog', (dialog: Dialog) => {
       void this.answer(dialog);
@@ -293,6 +302,67 @@ export class HumanFlowRecorder {
     page.on('close', () => {
       this.resolveStop('page-closed');
     });
+  }
+
+  private cdp: Promise<CDPSession | undefined> | undefined;
+  /** Adresses atteintes sans changer de document (pushState, ancre) : jamais une adresse tapée. */
+  private readonly withinDocument = new Set<string>();
+
+  /** Session CDP de la page : historique de navigation et navigations internes au document. */
+  private async openCdp(page: Page): Promise<CDPSession | undefined> {
+    try {
+      const cdp = await page.context().newCDPSession(page);
+      cdp.on('Page.navigatedWithinDocument', (event: { frameId: string; url: string }) => {
+        if (this.withinDocument.size > 500) this.withinDocument.clear();
+        this.withinDocument.add(event.url);
+      });
+      await cdp.send('Page.enable');
+      return cdp;
+    } catch {
+      return undefined;
+    }
+  }
+  private history: Promise<void> = Promise.resolve();
+  private historyIndex = -1;
+
+  /**
+   * Le type de transition de l'entrée d'historique de CETTE navigation (Chromium) : typed, link,
+   * reload, forward_back… L'historique peut ne pas être encore à jour quand la navigation est
+   * signalée (machine chargée) : relu jusqu'à ce que l'entrée courante soit la bonne adresse ;
+   * une session CDP perdue (changement de processus) est rouverte.
+   */
+  private async transitionOf(page: Page, event: RawRecordedEvent, url: string): Promise<void> {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const cdp = await this.cdp;
+        if (!cdp) return;
+        const history = (await cdp.send('Page.getNavigationHistory')) as {
+          currentIndex: number;
+          entries: { url?: string; transitionType?: string }[];
+        };
+        const entry = history.entries[history.currentIndex];
+        if (entry?.url !== undefined && entry.url !== url && attempt < 7) {
+          await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+          continue;
+        }
+        let type = entry?.transitionType ?? '';
+        // Une entrée créée par pushState hérite du type de la page d'origine (souvent « typed ») :
+        // une navigation interne au document est toujours le fait de l'application.
+        if (/typed|address_bar|keyword|auto_bookmark/.test(type)) {
+          if (!this.withinDocument.has(url)) await new Promise((resolve) => setTimeout(resolve, 100));
+          if (this.withinDocument.has(url)) type = 'same_document';
+        }
+        const back = this.historyIndex >= 0 && history.currentIndex < this.historyIndex;
+        this.historyIndex = history.currentIndex;
+        event.transition = back ? `${type}|forward_back` : type;
+        return;
+      } catch {
+        // La page a disparu (fin de l'enregistrement) : la corrélation s'en passe.
+        if (page.isClosed()) return;
+        this.cdp = this.openCdp(page);
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+      }
+    }
   }
 
   /** Un dialogue du navigateur pendant l'enregistrement : l'humain a voulu son clic (recording.dialogs). */
