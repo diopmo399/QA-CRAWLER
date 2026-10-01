@@ -1,5 +1,11 @@
 import type { Page, Request, Response } from 'playwright';
-import type { FieldShape, FunctionalExchange } from '../../functional/model.js';
+import {
+  isStateCode,
+  isStateKey,
+  type FieldShape,
+  type FunctionalExchange,
+  type StateCode,
+} from '../../functional/model.js';
 import type { NetworkExchange } from '../../model/network.js';
 import type { PageObserver } from '../../observers/observer.js';
 import { redactUrl } from '../../security/redactor.js';
@@ -43,8 +49,11 @@ export class FormKnowledgeObserver implements PageObserver {
     if (this.functional.size > 0 && this.salt !== undefined) {
       const entry: FunctionalExchange = { method: request.method(), path: pathOf(request.url()) };
       if (entry.method !== 'GET' && entry.method !== 'HEAD') {
-        const fields = shapeOf(parseJson(safePostData(request)), this.salt);
+        const body = parseJson(safePostData(request));
+        const fields = shapeOf(body, this.salt);
         if (fields) entry.requestFields = fields;
+        const state = stateCodeOf(body);
+        if (state) entry.requestState = state;
       }
       this.pending.set(request, entry);
       for (const window of this.functional.values()) if (window.length < 30) window.push(entry);
@@ -56,14 +65,17 @@ export class FormKnowledgeObserver implements PageObserver {
     if (!entry) return;
     this.pending.delete(response.request());
     entry.status = response.status();
-    // Le corps n'est lu que pour une écriture ou une erreur, et seulement sa forme (jamais gardé).
-    if (entry.method === 'GET' && entry.status < 400) return;
+    // Le corps n'est lu que pour sa forme (jamais gardé) ; d'une lecture (GET), seulement le code d'état.
     if (!/json/i.test(response.headers()['content-type'] ?? '')) return;
     const read = response
       .text()
       .then((text) => {
-        if (text.length > 200_000) return;
+        if (text.length > 1_000_000) return;
         const body = parseJson(text);
+        const state = stateCodeOf(body);
+        if (state) entry.responseState = state;
+        if (entry.method === 'GET' && (entry.status ?? 0) < 400) return;
+        if (text.length > 200_000) return;
         const fields = shapeOf(body);
         if (fields) entry.responseFields = fields;
         const code = errorCodeOf(body);
@@ -179,5 +191,16 @@ export function errorCodeOf(body: unknown): string | undefined {
     record.error && typeof record.error === 'object' ? (record.error as Record<string, unknown>) : {};
   for (const candidate of [record.code, record.errorCode, record.error, nested.code])
     if (typeof candidate === 'string' && /^[A-Z][A-Z0-9_]{2,63}$/.test(candidate)) return candidate;
+  return undefined;
+}
+
+/**
+ * Le code d'état métier d'un objet JSON (status: 'PENDING') : seulement une clé d'état et
+ * une valeur en capitales — un identifiant de l'application, jamais une saisie.
+ */
+export function stateCodeOf(body: unknown): StateCode | undefined {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  for (const [key, value] of Object.entries(body as Record<string, unknown>).slice(0, 80))
+    if (isStateKey(key) && isStateCode(value)) return { field: key, code: value };
   return undefined;
 }

@@ -43,6 +43,11 @@ const TEXTS = {
     goals: 'Test goals',
     goalColumns: ['Goal', 'Category', 'Priority', 'Cost', 'Risk', 'Status', 'Why', 'Plan / outcome'],
     deferred: 'goal(s) deferred by maxGoalsPerRun',
+    candidates:
+      'Status enumerations without any observed or written transition (not shown as state machines)',
+    contractErrors: 'Error responses declared by the contract only (no handling found in the code)',
+    learned: 'learned from the network',
+    historical: 'learned in an earlier run',
   },
   fr: {
     title: 'Intelligence fonctionnelle',
@@ -87,6 +92,12 @@ const TEXTS = {
       'Plan / issue',
     ],
     deferred: 'objectif(s) reporté(s) par maxGoalsPerRun',
+    candidates:
+      'Énumérations de statut sans transition écrite ni observée (non affichées comme machines à états)',
+    contractErrors:
+      'Réponses d’erreur déclarées par le contrat seulement (aucun traitement trouvé dans le code)',
+    learned: 'appris du réseau',
+    historical: 'appris lors d’un run précédent',
   },
 } as const;
 
@@ -144,7 +155,9 @@ export function functionalSection(result: ExplorationResult, language: ReportLan
       ],
     )}`,
   );
-  for (const machine of summary.machines) {
+  // Une énumération « …Status » sans aucune transition n'est pas (encore) un cycle de vie : listée à part.
+  const candidates = summary.machines.filter((machine) => machine.transitions.length === 0);
+  for (const machine of summary.machines.filter((entry) => entry.transitions.length > 0)) {
     parts.push(
       `<h3>${esc(t.machines)}: ${esc(machine.entityType)} (${esc(machine.stateField)})</h3><p>${machine.states
         .map((state) => `<code>${esc(state.state)}</code>${state.observed ? ' ✓' : ''}`)
@@ -183,7 +196,13 @@ export function functionalSection(result: ExplorationResult, language: ReportLan
       `<h3>${esc(t.workflows)}</h3>${table(
         t.workflowColumns,
         summary.workflows.map((workflow) => [
-          `<code>${esc(workflow.id)}</code>`,
+          `<code>${esc(workflow.id)}</code>${
+            workflow.origin === 'RUNTIME_LEARNED'
+              ? ` <span class="muted">(${esc(t.learned)})</span>`
+              : workflow.origin === 'HISTORICAL'
+                ? ` <span class="muted">(${esc(t.historical)})</span>`
+                : ''
+          }`,
           esc(workflow.steps.map((step) => step.description).join(' → ')),
           esc(workflow.expectedOutcomes.map((outcome) => outcome.description).join('; ')),
           badge(workflow.status),
@@ -215,22 +234,56 @@ export function functionalSection(result: ExplorationResult, language: ReportLan
         ]),
       )}`,
     );
-  if (summary.errorPaths.length > 0)
+  if (candidates.length > 0)
     parts.push(
-      `<h3>${esc(t.errors)}</h3>${table(
-        t.errorColumns,
-        summary.errorPaths.map((path) => [
-          esc(path.operation),
-          esc(path.httpStatus !== undefined ? String(path.httpStatus) : '—'),
-          esc(path.errorClass),
-          esc(path.businessCode ?? '—'),
-          esc(
-            `${path.uiResult}${path.uiTarget ? ` → ${path.uiTarget}` : ''}${path.uiMessage ? ` « ${path.uiMessage} »` : ''}`,
-          ),
-          badge(path.status),
-        ]),
-      )}`,
+      `<p class="muted">${esc(t.candidates)} : ${candidates
+        .map(
+          (machine) =>
+            `${esc(machine.entityType)} (${machine.states.map((state) => esc(state.state)).join(', ')})`,
+        )
+        .join(' · ')}</p>`,
     );
+  // Les erreurs déclarées par l'OpenAPI sans aucun traitement connu : un décompte par opération, pas une ligne chacune.
+  const declaredOnly = summary.errorPaths.filter(
+    (path) => path.status === 'STATIC_DISCOVERED' && path.uiResult === 'UNKNOWN' && !path.businessCode,
+  );
+  const detailed = summary.errorPaths.filter((path) => !declaredOnly.includes(path));
+  if (detailed.length > 0 || declaredOnly.length > 0) {
+    const byOperation = new Map<string, number[]>();
+    for (const path of declaredOnly)
+      byOperation.set(path.operation, [...(byOperation.get(path.operation) ?? []), path.httpStatus ?? 0]);
+    parts.push(
+      `<h3>${esc(t.errors)}</h3>${
+        detailed.length > 0
+          ? table(
+              t.errorColumns,
+              detailed.map((path) => [
+                esc(path.operation),
+                esc(path.httpStatus !== undefined ? String(path.httpStatus) : '—'),
+                esc(path.errorClass),
+                esc(path.businessCode ?? '—'),
+                esc(
+                  `${path.uiResult}${path.uiTarget ? ` → ${path.uiTarget}` : ''}${path.uiMessage ? ` « ${path.uiMessage} »` : ''}`,
+                ),
+                badge(path.status),
+              ]),
+            )
+          : ''
+      }${
+        byOperation.size > 0
+          ? `<details><summary class="muted">${esc(t.contractErrors)} (${String(declaredOnly.length)})</summary><ul>${[
+              ...byOperation.entries(),
+            ]
+              .slice(0, 100)
+              .map(
+                ([operation, statuses]) =>
+                  `<li>${esc(operation)} : ${esc([...new Set(statuses)].sort().join(', '))}</li>`,
+              )
+              .join('')}</ul></details>`
+          : ''
+      }`,
+    );
+  }
   if (summary.contract.length > 0)
     parts.push(
       `<h3>${esc(t.contract)}</h3>${table(

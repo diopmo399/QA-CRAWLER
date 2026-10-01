@@ -853,6 +853,8 @@ safety: { allowedActionClasses: [SAFE, MUTATION] }
 functionalIntelligence: { enabled: true }
 ```
 
+Sans code lisible (client généré, bundle, code non partageable), QA-CRAWLER **apprend du réseau à chaque run** : les écritures acceptées deviennent des workflows, les codes d'état (`status: "PENDING"`) des états et des transitions, gardés dans `knowledge/functional/` pour les runs suivants (`functionalIntelligence.runtimeLearning`, activé par défaut).
+
 Le code suggère, l'historique guide, l'exécution confirme, la sécurité décide : un objectif dont l'action est interdite (supprimer, payer) est BLOCKED, jamais exécuté. Rapport : « Functional intelligence » (sans note de qualité) ; anomalies `FUNCTIONAL` et `CONTRACT` en WARNING. Désactivée par défaut. Détails : [docs/FUNCTIONAL_INTELLIGENCE.md](docs/FUNCTIONAL_INTELLIGENCE.md).
 
 ## Authentification

@@ -365,6 +365,72 @@ export class BusinessStateMachineAnalyzer {
     }
   }
 
+  /**
+   * Un état appris au runtime (code lu dans une réponse) ou d'un run précédent : la
+   * machine de l'entité est créée au besoin.
+   */
+  learnState(
+    entityType: string,
+    stateField: string,
+    state: string,
+    evidence: BusinessState['evidence'][number],
+  ): void {
+    const machine = this.machines.get(entityType) ?? this.ensure(entityType, stateField);
+    this.addState(machine, state, evidence);
+  }
+
+  /** Une transition apprise : RUNTIME_OBSERVED pour ce run, historique (non prouvée) sinon. */
+  learnTransition(input: {
+    entityType: string;
+    stateField: string;
+    from: string;
+    to: string;
+    trigger: string;
+    triggerLabel?: string;
+    api?: string;
+    evidence: BusinessState['evidence'][number];
+    historical: boolean;
+  }): BusinessTransition | undefined {
+    const machine = this.machines.get(input.entityType) ?? this.ensure(input.entityType, input.stateField);
+    this.addState(machine, input.from, input.evidence);
+    this.addState(machine, input.to, input.evidence);
+    const id = `${input.entityType}:${input.from}>${input.to}:${input.trigger}`;
+    const known = machine.transitions.find((entry) => entry.id === id);
+    if (known) {
+      if (!input.historical && known.status === 'STATIC_DISCOVERED') known.status = 'RUNTIME_OBSERVED';
+      if (input.historical) known.historical = true;
+      return known;
+    }
+    const subject = { kind: 'STATE' as const, name: input.stateField };
+    const transition: BusinessTransition = {
+      id,
+      entityType: input.entityType,
+      from: input.from,
+      to: input.to,
+      trigger: input.trigger,
+      ...(input.triggerLabel ? { triggerLabel: input.triggerLabel } : {}),
+      ...(input.api ? { api: input.api } : {}),
+      preconditions: [{ kind: 'COMPARE', subject, operator: '==', value: input.from }],
+      postconditions: [
+        { kind: 'SET_VALUE', target: { kind: 'STATE', name: input.stateField }, value: input.to },
+        ...(input.api
+          ? [
+              {
+                kind: 'API_REQUEST_EXPECTED' as const,
+                target: { kind: 'API' as const, name: input.api },
+                api: input.api,
+              },
+            ]
+          : []),
+      ],
+      evidence: [input.evidence],
+      status: input.historical ? 'STATIC_DISCOVERED' : 'RUNTIME_OBSERVED',
+      ...(input.historical ? { historical: true } : {}),
+    };
+    machine.transitions.push(transition);
+    return transition;
+  }
+
   /** Ce qu'un run précédent avait vu (jamais une preuve : HISTORICAL seulement). */
   recallHistory(id: string, status: string): void {
     const transition = this.transitions().find((entry) => entry.id === id);
