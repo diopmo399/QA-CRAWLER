@@ -71,6 +71,8 @@ export interface RecordedElement {
   /** Liste déroulante personnalisée (role=combobox/listbox, mat-select). */
   customSelect?: boolean;
   required?: boolean;
+  /** Champ en lecture seule (calculé par l'application) : jamais une donnée d'entrée. */
+  readOnly?: boolean;
   /** Un <select>, une liste de suggestions (datalist) : une valeur choisie, pas tapée. */
   hasOptions?: boolean;
 }
@@ -304,6 +306,7 @@ export type RecordingWarningCode =
   | 'SUSPICIOUS_NAVIGATION_COLLAPSE'
   | 'SEMANTIC_ACTION_LOST'
   | 'CAUSALITY_AMBIGUOUS'
+  | 'TEST_DATA_COLLISION'
   | 'UNSUPPORTED_EVENT'
   | 'NO_OUTCOME_OBSERVED';
 
@@ -412,7 +415,17 @@ export type RecordingEventType =
   | 'GOTO_FALLBACK_GENERATED'
   | 'CAUSALITY_AMBIGUOUS'
   | 'SUSPICIOUS_NAVIGATION_COLLAPSE'
-  | 'FLOW_SEMANTIC_PRESERVATION_CHECK';
+  | 'FLOW_SEMANTIC_PRESERVATION_CHECK'
+  | 'RECORDED_TEST_DATA_DISCOVERED'
+  | 'TEST_DATA_KEY_RESOLVED'
+  | 'TEST_DATA_CLASSIFIED'
+  | 'TEST_DATA_GENERALIZED'
+  | 'TEST_DATA_LITERAL_PRESERVED'
+  | 'TEST_DATA_REFERENCE_CREATED'
+  | 'TEST_DATA_GENERATED_FOR_RUN'
+  | 'SENSITIVE_RECORDED_VALUE_REDACTED'
+  | 'TEST_DATA_COLLISION_DETECTED'
+  | 'TEST_DATA_STRATEGY_CANDIDATE';
 
 export interface RecordingEvent {
   type: RecordingEventType;

@@ -81,14 +81,23 @@ export function buildSuggestedFlow(
  * Chaque étape porte en commentaire son statut et sa provenance ; une étape à revoir
  * est entièrement en commentaire.
  */
-export function suggestedFlowYaml(suggested: SuggestedFlowGraph, header: string[] = []): string {
+export function suggestedFlowYaml(
+  suggested: SuggestedFlowGraph,
+  header: string[] = [],
+  /** Le jeu de données du flow (`testData: test-data.yaml`), relatif au fichier du flow. */
+  testDataFile?: string,
+): string {
   const lines: string[] = [
     ...header.map((line) => `# ${line}`),
     ...(needsSemantic(suggested)
       ? ['# Some steps are intents (FILL_FORM…): run with gherkin.semanticResolution.enabled: true']
       : []),
     ...stringify(
-      { name: suggested.name, ...(suggested.startAt ? { startAt: suggested.startAt } : {}) },
+      {
+        name: suggested.name,
+        ...(suggested.startAt ? { startAt: suggested.startAt } : {}),
+        ...(testDataFile ? { testData: testDataFile } : {}),
+      },
       { lineWidth: 0 },
     )
       .trimEnd()

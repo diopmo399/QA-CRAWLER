@@ -290,12 +290,14 @@ export interface GeneratedFiles {
 /** flow.yaml et .feature, depuis la même représentation. */
 export function generateFlowFiles(
   flow: RecordedFlow,
-  options: { language: 'fr' | 'en'; recordedAt: string },
+  options: { language: 'fr' | 'en'; recordedAt: string; testDataFile?: string },
 ): GeneratedFiles {
   const suggested = toSuggestedFlow(flow);
   const header = [
     `Recorded by QA-CRAWLER (human flow recorder), session ${flow.recordingSessionId}, ${options.recordedAt}`,
-    'Typed values are never recorded: { testData } is a valid value chosen at replay, secrets come from { env }.',
+    options.testDataFile
+      ? `Data in ${options.testDataFile} (recorded, generated at replay or business literals); secrets come from { env }, never from the file.`
+      : 'Typed values are never recorded: { testData } is a valid value chosen at replay, secrets come from { env }.',
     ...(flow.intent.workflow
       ? [`Intent: ${flow.intent.workflow}${flow.intent.api ? ` (${flow.intent.api})` : ''}`]
       : []),
@@ -303,7 +305,11 @@ export function generateFlowFiles(
     'Review before use. The safety policy still applies when it is replayed.',
   ];
   return {
-    yaml: suggestedFlowYaml(suggested, header),
-    feature: suggestedFeature(suggested, { language: options.language, header }),
+    yaml: suggestedFlowYaml(suggested, header, options.testDataFile),
+    // `# testData: …` en tête du .feature : le même jeu de données que le flow YAML.
+    feature: suggestedFeature(suggested, {
+      language: options.language,
+      header: options.testDataFile ? [`testData: ${options.testDataFile}`, ...header] : header,
+    }),
   };
 }

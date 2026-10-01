@@ -99,7 +99,7 @@ export function parseConfig(
   const migrationWarnings: string[] = [];
   const migrated = migrateLegacyKeys(raw as Record<string, unknown>, migrationWarnings);
   const baseDir = source === '<inline>' ? process.cwd() : path.dirname(path.resolve(source));
-  const expanded = resolveStaticRoot(expandFlows(migrated, baseDir), baseDir);
+  const expanded = resolveTestDataFiles(resolveStaticRoot(expandFlows(migrated, baseDir), baseDir), baseDir);
   const withOverrides = applyOverrides(expanded, overrides, env);
 
   let config: ScenarioConfig;
@@ -114,6 +114,27 @@ export function parseConfig(
 
   const finalized = finalize(config);
   return { config: finalized.config, warnings: [...migrationWarnings, ...finalized.warnings] };
+}
+
+/** Les fichiers de données (flow.testData, testData.include) : relatifs au fichier de mission. */
+function resolveTestDataFiles(raw: Record<string, unknown>, baseDir: string): Record<string, unknown> {
+  const absolute = (file: unknown): unknown =>
+    typeof file === 'string' && !path.isAbsolute(file) ? path.resolve(baseDir, file) : file;
+  const flows = Array.isArray(raw.flows)
+    ? (raw.flows as unknown[]).map((flow) =>
+        flow !== null && typeof flow === 'object' && 'testData' in flow
+          ? { ...flow, testData: absolute(flow.testData) }
+          : flow,
+      )
+    : raw.flows;
+  const testData = raw.testData as { include?: unknown } | undefined;
+  const include =
+    testData && Array.isArray(testData.include) ? (testData.include as unknown[]).map(absolute) : undefined;
+  return {
+    ...raw,
+    ...(flows !== undefined ? { flows } : {}),
+    ...(testData && include ? { testData: { ...testData, include } } : {}),
+  };
 }
 
 /** staticAnalysis.source.root, comme les .feature : relatif au fichier de mission. */

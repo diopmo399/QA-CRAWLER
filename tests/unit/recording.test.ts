@@ -456,7 +456,7 @@ describe('one model → flow.yaml and .feature', () => {
     ];
     for (const language of ['fr', 'en'] as const) {
       const result = processRecording(session(events, states), config, { language });
-      const yaml = flowSchema.parse(parseYaml(result.files.yaml));
+      const yaml = flowSchema.parse(withoutDataFile(result.files.yaml));
       const dictionary = new GherkinStepDictionary();
       const fromFeature = result.files.feature
         .split('\n')
@@ -606,3 +606,10 @@ describe('configuration, flow values and CLI', () => {
     expect(() => parseRecordArgs(['--output-format', 'pdf'])).toThrow(/yaml, gherkin or both/);
   });
 });
+
+/** Le flow généré, sans son fichier de données (test-data.yaml, écrit à côté par l'enregistreur). */
+function withoutDataFile(yaml: string): unknown {
+  const raw = parseYaml(yaml) as Record<string, unknown>;
+  delete raw.testData;
+  return raw;
+}

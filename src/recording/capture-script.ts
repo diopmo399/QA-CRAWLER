@@ -6,10 +6,11 @@
  * requête interceptée ; l'application ne voit aucune différence. Les mouvements de souris
  * et le défilement ne sont pas écoutés.
  *
- * AUCUNE SAISIE EN CLAIR ne quitte la page : d'une valeur tapée, seulement sa forme
- * (vide, longueur, email / nombre / date…) et une empreinte salée — jamais d'empreinte
- * pour un champ sensible (mot de passe, code à usage unique, carte). Une option choisie
- * (texte de l'interface) et l'extension d'un fichier choisi sont gardées.
+ * D'une valeur tapée : sa forme (vide, longueur, email / nombre / date…) et une empreinte
+ * salée ; avec recordValues (recording.testData), aussi le texte d'un champ NON sensible,
+ * pour en faire une donnée de test (jamais écrit dans la trace brute). Un champ sensible
+ * (mot de passe, code à usage unique, carte) n'envoie ni texte ni empreinte. Une option
+ * choisie (texte de l'interface) et l'extension d'un fichier choisi sont gardées.
  *
  * Le bandeau « ● RECORDING » vit dans un shadow root fermé sous un hôte marqué
  * data-qa-crawler-overlay : exclu de la capture, de l'observation de l'écran et des captures.
@@ -22,6 +23,10 @@ export interface CaptureOptions {
   overlay: boolean;
   /** Délai (ms) avant d'envoyer une saisie en cours (les touches ne sont jamais envoyées une à une). */
   inputDebounceMs: number;
+  /** Envoyer le texte saisi d'un champ non sensible (données de test) ; jamais pour un champ sensible. */
+  recordValues?: boolean;
+  /** Longueur maximale d'un texte envoyé (au-delà : seulement sa forme). */
+  maxValueLength?: number;
 }
 
 export const OVERLAY_ATTRIBUTE = 'data-qa-crawler-overlay';
@@ -314,6 +319,7 @@ export function installRecorder(options: CaptureOptions): void {
         ? { customSelect: true }
         : {}),
       ...(input.required || el.getAttribute('aria-required') === 'true' ? { required: true } : {}),
+      ...(input.readOnly || el.getAttribute('aria-readonly') === 'true' ? { readOnly: true } : {}),
       ...(tag === 'select' || el.hasAttribute('list') ? { hasOptions: true } : {}),
     };
   };
@@ -383,6 +389,12 @@ export function installRecorder(options: CaptureOptions): void {
       ...(digest ? { digest } : {}),
       ...(!sensitive && start ? { initialDigest: start } : {}),
       ...(sensitive ? { sensitive: true } : {}),
+      ...(!sensitive &&
+      options.recordValues === true &&
+      value.trim() !== '' &&
+      value.length <= (options.maxValueLength ?? 500)
+        ? { text: value }
+        : {}),
     };
   };
 

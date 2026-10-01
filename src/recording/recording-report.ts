@@ -121,6 +121,7 @@ export function recordingHtml(input: {
   </section>
   ${warnings ? `<section><h2>Warnings</h2><ul class="plain">${warnings}</ul></section>` : ''}
   ${causalitySection(result)}
+  ${testDataSection(result)}
   <section><h2>Final flow</h2><ol class="plain">${steps}</ol></section>
   <section><h2>Trace: RAW → SEMANTIC → FINAL</h2>
     <table class="rec"><thead><tr><th>Semantic action</th><th>Raw events</th><th>Kept</th><th>Final step(s)</th><th>Why</th></tr></thead>
@@ -194,6 +195,46 @@ const CSS = `
   ol.plain, ul.plain { margin:0; padding-left:22px; }
   ol.plain li, ul.plain li { margin:3px 0; }
 `;
+
+/**
+ * Recorded test data : chaque donnée, sa clé, sa stratégie et pourquoi. Le rapport ne montre
+ * AUCUNE valeur (elles ne sont que dans test-data.yaml, et jamais pour un secret).
+ */
+function testDataSection(result: RecordingResult): string {
+  const data = result.testData;
+  if (!data)
+    return `<section><h2>Recorded test data</h2><p class="muted">Off (recording.testData.enabled: false): typed values are { testData } chosen at replay.</p></section>`;
+  const count = (strategy: string): number => data.items.filter((item) => item.strategy === strategy).length;
+  const cards = [
+    card('Recorded', count('RECORDED_LITERAL')),
+    card('Generated at replay', count('GENERATE_AT_REPLAY') + count('TEMPLATE')),
+    card(
+      'Business literals',
+      count('BUSINESS_LITERAL') +
+        data.items.filter(
+          (item) => item.classification === 'BUSINESS_LITERAL' && item.strategy === 'FLOW_STEP',
+        ).length,
+    ),
+    card('References', count('REFERENCE')),
+    card('Preserved / derived', count('PRESERVE_EXISTING') + count('IGNORE_DERIVED')),
+    card('Sensitive recorded values', data.security.sensitiveRecorded),
+    card('Converted to credential references', data.security.credentialReferences, '#15803d'),
+    card(
+      'Clear-text sensitive values persisted',
+      data.security.clearTextPersisted,
+      data.security.clearTextPersisted > 0 ? '#dc2626' : '#15803d',
+    ),
+  ].join('');
+  const rows = data.items
+    .map(
+      (item) =>
+        `<tr><td>${esc(item.field)}</td><td>${item.key ? `<code>testData.${esc(item.key)}</code>` : '<span class="muted">—</span>'}</td><td>${esc(item.semanticType ?? '')}</td><td>${esc(item.classification)}</td><td>${esc(item.strategy)}${item.detail ? ` <span class="muted">(${esc(item.detail)})</span>` : ''}</td><td class="muted">${item.reasons.map(esc).join('<br>')}</td></tr>`,
+    )
+    .join('');
+  return `<section><h2>Recorded test data</h2><div class="cards">${cards}</div>
+    <table class="rec"><thead><tr><th>Field</th><th>Test data</th><th>Semantic type</th><th>Classification</th><th>Replay strategy</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">The flow says what to do, test-data.yaml says with which data (the .feature and the flow use the same file). Recorded values are examples of the test intent: business values keep the meaning of the scenario, generated values keep it replayable, secrets are never written. No value is shown here.</p></section>`;
+}
 
 /** Navigation causality : chaque navigation, l'action qui l'a causée, ou pourquoi elle reste un goto. */
 function causalitySection(result: RecordingResult): string {
