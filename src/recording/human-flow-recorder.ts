@@ -1,4 +1,4 @@
-import type { BrowserContext, Dialog, Download, Page } from 'playwright';
+import type { BrowserContext, CDPSession, Dialog, Download, Page } from 'playwright';
 import type { ScenarioConfig } from '../config/config.js';
 import { FormKnowledgeObserver } from '../forms/state/form-knowledge-observer.js';
 import { newValueSalt } from '../forms/state/value-digest.js';
@@ -269,11 +269,22 @@ export class HumanFlowRecorder {
   // ------------------------------------------------------------------ page
 
   private watchPage(page: Page): void {
+    // La session CDP est ouverte d'emblée : la première navigation n'attend pas sa création.
+    this.cdp ??= page
+      .context()
+      .newCDPSession(page)
+      .catch(() => undefined);
     page.on('framenavigated', (frame) => {
       if (frame !== page.mainFrame()) return;
       const last = [...this.session.rawEvents].reverse().find((event) => event.type === 'navigation');
       if (last && last.url === redactUrl(frame.url())) return;
-      this.capture({ type: 'navigation', at: this.now(), url: frame.url() });
+      const event = this.capture({ type: 'navigation', at: this.now(), url: frame.url() });
+      // Le navigateur dit comment on est arrivé là : adresse tapée, retour arrière, lien, rechargement…
+      if (event) {
+        // Les requêtes d'historique sont faites dans l'ordre des navigations (index cohérent).
+        this.history = this.history.then(() => this.transitionOf(event));
+        this.track(this.history);
+      }
     });
     page.on('dialog', (dialog: Dialog) => {
       void this.answer(dialog);
@@ -293,6 +304,28 @@ export class HumanFlowRecorder {
     page.on('close', () => {
       this.resolveStop('page-closed');
     });
+  }
+
+  private cdp: Promise<CDPSession | undefined> | undefined;
+  private history: Promise<void> = Promise.resolve();
+  private historyIndex = -1;
+
+  /** Le type de transition de l'entrée d'historique courante (Chromium) : typed, link, reload, forward_back… */
+  private async transitionOf(event: RawRecordedEvent): Promise<void> {
+    try {
+      const cdp = await this.cdp;
+      if (!cdp) return;
+      const history = (await cdp.send('Page.getNavigationHistory')) as {
+        currentIndex: number;
+        entries: { transitionType?: string }[];
+      };
+      const type = history.entries[history.currentIndex]?.transitionType ?? '';
+      const back = this.historyIndex >= 0 && history.currentIndex < this.historyIndex;
+      this.historyIndex = history.currentIndex;
+      event.transition = back ? `${type}|forward_back` : type;
+    } catch {
+      // Pas Chromium, ou la page a disparu : la corrélation s'en passe.
+    }
   }
 
   /** Un dialogue du navigateur pendant l'enregistrement : l'humain a voulu son clic (recording.dialogs). */

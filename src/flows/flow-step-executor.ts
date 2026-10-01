@@ -154,7 +154,18 @@ export class FlowStepExecutor {
   ): Promise<string | undefined> {
     const failures: string[] = [];
     if (expectation.response) {
-      const failure = responseFailure(expectation.response, network);
+      // Une réponse lente (l'envoi vient de partir) : l'attendre jusqu'au délai de l'étape.
+      const deadline = Date.now() + timeoutMs;
+      let failure = responseFailure(expectation.response, network);
+      while (
+        failure &&
+        isPending(expectation.response, network) &&
+        Date.now() < deadline &&
+        !page.isClosed()
+      ) {
+        await page.waitForTimeout(200).catch(() => undefined);
+        failure = responseFailure(expectation.response, network);
+      }
       if (failure) failures.push(failure);
     }
     if (expectation.noError) {
@@ -231,6 +242,26 @@ export class FlowStepExecutor {
     if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
     if (untilReady) await waitForScreenReady(page, this.readyTimeoutMs);
   }
+}
+
+/** La dernière requête qui correspond n'a pas encore de réponse (ni d'échec). */
+function isPending(
+  expected: NonNullable<FlowExpectation['response']>,
+  network: readonly NetworkExchange[],
+): boolean {
+  const pattern = expected.url.includes('*') ? pathPatternToRegex(expected.url) : undefined;
+  const last = network
+    .filter((exchange) => {
+      if (expected.method && exchange.method.toUpperCase() !== expected.method.toUpperCase()) return false;
+      if (!pattern) return exchange.url.includes(expected.url);
+      try {
+        return pattern.test(new URL(exchange.url).pathname);
+      } catch {
+        return false;
+      }
+    })
+    .at(-1);
+  return last !== undefined && last.status === undefined && last.failure === undefined;
 }
 
 /**

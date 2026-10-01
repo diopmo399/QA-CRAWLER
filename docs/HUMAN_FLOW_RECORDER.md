@@ -105,6 +105,53 @@ Une action écartée garde sa raison dans la trace : rien n'est supprimé.
 Un fichier choisi : son extension seulement (jamais le chemin) ; un téléchargement est un
 résultat, pas une étape.
 
+## Causalité des navigations (action → effet)
+
+**L'action humaine est la cause ; la navigation est d'abord un effet.** Un clic sur
+« Demandes » suivi d'un changement de route reste `click "Demandes"` ; la route `/demandes`
+devient le résultat de ce clic (preuve runtime, provenance `RUNTIME_OBSERVED`), pas une
+étape `goto`. Un envoi, une action qui modifie des données, n'est jamais remplacé par la page
+qu'il produit.
+
+L'ACTION CORRELATION ENGINE rattache chaque navigation observée (navigation complète, ou
+route d'une application monopage par `history.pushState` : Angular Router, React Router…)
+à l'action humaine récente qui l'a causée, dans une fenêtre bornée
+(`recording.actionCorrelation.causalWindowMs`, 10 s par défaut : un bouton qui charge des
+données puis appelle `router.navigate` 3 s plus tard reste ce bouton). Le temps n'est qu'un
+signal ; les autres :
+
+- la cible du clic pointe vers la destination (`href`, `routerLink`) ;
+- c'est la dernière action humaine avant la navigation (avec une liste puis « Continuer »,
+  c'est « Continuer ») ;
+- le clic envoie un formulaire, une écriture est acceptée par le serveur (POST 201) avant la
+  navigation ;
+- un lien, un onglet, un menu.
+
+Chaque rattachement a une confiance (`VERY_HIGH`, `HIGH`, `MEDIUM`) et ses raisons, dans le
+rapport. Un clic suivi d'une redirection (garde de route, 302) garde toute la chaîne
+(`/protected → /login`). Un élément sans rôle mais cliquable (une tuile `<div (click)>`, un
+`<span>` dans une carte) est un vrai clic : son ancêtre au curseur « main » est la cible ; à
+défaut, le clic est promu s'il a causé une navigation.
+
+`goto` n'est plus qu'un repli, toujours avec sa raison :
+
+| Raison                | Quand                                                   |
+| --------------------- | ------------------------------------------------------- |
+| `INITIAL_NAVIGATION`  | la première page : c'est `startAt`, jamais une étape    |
+| `DIRECT_URL_ENTRY`    | l'adresse a été tapée ou collée dans la barre d'adresse |
+| `BACK_FORWARD`        | bouton précédent / suivant du navigateur                |
+| `EXTERNAL_NAVIGATION` | un autre site, sans action corrélée                     |
+| `NO_CAUSAL_ACTION`    | aucune action humaine fiable dans la fenêtre            |
+
+Avant la génération, un contrôle de préservation vérifie qu'aucune action qui modifie des
+données n'a été perdue (`SEMANTIC_ACTION_LOST`) et signale un flow fait de goto alors que
+l'humain a cliqué (`SUSPICIOUS_NAVIGATION_COLLAPSE`). La section « Navigation causality » du
+rapport montre, pour chaque navigation, ce qui l'a causée ou pourquoi elle reste un goto.
+
+`recording.actionCorrelation.enabled: false` rétablit l'ancien comportement. Limite : la
+connaissance statique (le code qui appelle `router.navigate`) n'est pas encore utilisée
+comme preuve par l'enregistreur ; seule l'exécution observée l'est.
+
 ## Résultats et vérifications
 
 Chaque action est corrélée au réseau (fenêtre par action), à l'écran observé après elle
@@ -152,7 +199,7 @@ RAW → SEMANTIC → FINAL avec le pourquoi de chaque étape, vérifications can
 Événements : `RECORDING_STARTED`, `RAW_EVENT_CAPTURED`, `SEMANTIC_ACTION_RESOLVED`,
 `CHECKPOINT_ADDED`, `RECORDING_PAUSED`, `RECORDING_RESUMED`, `RECORDING_STOPPED`,
 `RECORDING_NORMALIZED`, `OUTCOME_INFERRED`, `FLOW_GENERATED`, `REPLAY_VALIDATION_STARTED`,
-`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`.
+`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`.
 
 ## Configuration
 
@@ -171,6 +218,17 @@ recording:
   credentials: { usernameEnv: QA_USERNAME, passwordEnv: QA_PASSWORD }
   knowledge: true
   validate: false
+  actionCorrelation:
+    enabled: true # false : l'ancien comportement
+    causalWindowMs: 10000 # une action peut avoir causé une navigation jusqu'à 10 s après
+    redirectWindowMs: 1500 # une navigation qui en suit une autre de si près : une redirection
+    minScore: 0.5 # confiance minimale pour rattacher une navigation à une action
+    promoteNoiseClicks: true # un clic « sans rôle » qui navigue est un vrai clic
+    networkEvidence: true # une écriture acceptée avant la navigation est une preuve
+  validation:
+    detectSemanticActionLoss: true
+    detectNavigationCollapse: true
+    collapseMinGotos: 2
 ```
 
 `qa-crawler run` ne lit pas cette section : désactiver l'enregistrement ne change rien aux runs.

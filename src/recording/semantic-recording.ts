@@ -6,6 +6,7 @@ import type {
   SemanticActionType,
   SemanticRecordedAction,
 } from './model.js';
+import type { CorrelationResult } from './action-correlation.js';
 import { resolveRecordedTarget } from './recorded-target.js';
 
 /** Un choix dans une liste personnalisée suit l'ouverture de la liste de près. */
@@ -31,7 +32,10 @@ export function resolveSemanticActions(
   events: readonly RawRecordedEvent[],
   safety: SafetyPolicy,
   initialStateId?: string,
+  /** ACTION CORRELATION : les navigations causées par une action deviennent ses effets, pas des goto. */
+  correlation?: CorrelationResult,
 ): SemanticResolution {
+  const decisions = new Map(correlation?.navigations.map((decision) => [decision.navigationId, decision]));
   const actions: SemanticRecordedAction[] = [];
   const warnings: RecordingWarning[] = [];
   let noise = 0;
@@ -93,8 +97,11 @@ export function resolveSemanticActions(
           : 0) || a.index - b.index,
     )
     .map((entry) => entry.event);
+  /** L'action sémantique qui contient un événement brut (le déclencheur d'une navigation). */
+  const actionOf = (rawId: string): SemanticRecordedAction | undefined =>
+    [...actions].reverse().find((action) => action.rawEventIds.includes(rawId));
   for (const event of ordered) {
-    if (event.noise) {
+    if (event.noise && !correlation?.promoted.has(event.id)) {
       noise += 1;
       if (event.stateAfter) stateBefore = event.stateAfter;
       continue;
@@ -236,12 +243,62 @@ export function resolveSemanticActions(
         }
         break;
       }
-      case 'navigation':
+      case 'navigation': {
+        const decision = decisions.get(event.id);
+        if (decision?.kind === 'RELOAD') {
+          if (event.stateAfter) stateBefore = event.stateAfter;
+          break;
+        }
+        // Une navigation causée par une action (ou la suite d'une telle navigation) : un EFFET de cette action.
+        const rootId =
+          decision?.kind === 'REDIRECT'
+            ? (decisions.get(decision.causedBy ?? '')?.causedBy ?? decision.causedBy)
+            : decision?.causedBy;
+        const owner =
+          decision?.kind === 'EFFECT' || decision?.kind === 'REDIRECT'
+            ? (actionOf(decision.kind === 'EFFECT' ? (decision.causedBy ?? '') : (rootId ?? '')) ??
+              actions.find((action) => action.navigation?.navigationIds.includes(decision.causedBy ?? '')))
+            : undefined;
+        if (owner && decision) {
+          const route = routeOf(event.url);
+          if (owner.navigation) {
+            owner.navigation.routes.push(route);
+            owner.navigation.navigationIds.push(event.id);
+            owner.navigation.reasons.push(...decision.reasons);
+          } else if (owner.type === 'NAVIGATE') {
+            // La redirection d'un goto (garde de route) : la chaîne reste sur le goto.
+            owner.evidence.push(`then redirected to ${route}`);
+          } else {
+            owner.navigation = {
+              routes: [route],
+              navigationIds: [event.id],
+              confidence: decision.confidence ?? 'MEDIUM',
+              score: decision.score,
+              reasons: decision.reasons,
+              provenance: 'RUNTIME_OBSERVED',
+            };
+            owner.evidence.push(`caused the navigation to ${route} (${decision.confidence ?? 'MEDIUM'})`);
+          }
+          owner.network = [...owner.network, ...(event.network ?? [])];
+          if (event.stateAfter) {
+            owner.stateAfter = event.stateAfter;
+            stateBefore = event.stateAfter;
+          }
+          if (decision.ambiguous)
+            warnings.push({
+              code: 'CAUSALITY_AMBIGUOUS',
+              message: `the navigation to ${route} could also come from another recent action: attributed to "${owner.target?.label ?? owner.type}"`,
+              actionId: owner.id,
+            });
+          break;
+        }
         push(event, 'NAVIGATE', {
           route: routeOf(event.url),
-          evidence: [`the page went to ${routeOf(event.url)}`],
+          evidence: [`the page went to ${routeOf(event.url)}`, ...(decision?.reasons ?? [])],
+          ...(decision?.gotoReason ? { gotoReason: decision.gotoReason } : {}),
         });
         break;
+      }
       case 'dialog': {
         const dialog = event.dialog;
         if (!dialog) break;

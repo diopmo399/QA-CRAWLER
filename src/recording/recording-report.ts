@@ -120,6 +120,7 @@ export function recordingHtml(input: {
     <p class="muted">Facts to judge, not a grade: a FRAGILE locator or an ambiguous target is worth a look before the flow goes into the suite.</p>
   </section>
   ${warnings ? `<section><h2>Warnings</h2><ul class="plain">${warnings}</ul></section>` : ''}
+  ${causalitySection(result)}
   <section><h2>Final flow</h2><ol class="plain">${steps}</ol></section>
   <section><h2>Trace: RAW → SEMANTIC → FINAL</h2>
     <table class="rec"><thead><tr><th>Semantic action</th><th>Raw events</th><th>Kept</th><th>Final step(s)</th><th>Why</th></tr></thead>
@@ -193,3 +194,44 @@ const CSS = `
   ol.plain, ul.plain { margin:0; padding-left:22px; }
   ol.plain li, ul.plain li { margin:3px 0; }
 `;
+
+/** Navigation causality : chaque navigation, l'action qui l'a causée, ou pourquoi elle reste un goto. */
+function causalitySection(result: RecordingResult): string {
+  const correlation = result.correlation;
+  const preservation = result.preservation;
+  if (!correlation)
+    return `<section><h2>Navigation causality</h2><p class="muted">Action correlation is off (recording.actionCorrelation.enabled: false).</p></section>`;
+  const raw = new Map(result.session.rawEvents.map((event) => [event.id, event]));
+  const reasons = new Map<string, number>();
+  for (const decision of correlation.navigations)
+    if (decision.kind === 'GOTO' && decision.gotoReason)
+      reasons.set(decision.gotoReason, (reasons.get(decision.gotoReason) ?? 0) + 1);
+  const cards = [
+    card('Navigations observed', correlation.stats.navigations),
+    card('Correlated to human actions', correlation.stats.correlated, '#15803d'),
+    card('Redirects', correlation.stats.redirects),
+    card('Goto (incl. start)', correlation.stats.gotos),
+    card('Human clicks', preservation.humanTriggers),
+    card('Click steps', preservation.generatedClicks),
+    card('Goto steps', preservation.generatedGotos, '#b45309'),
+    card('Data-changing actions lost', preservation.lostMutations.length, '#dc2626'),
+  ].join('');
+  const rows = correlation.navigations
+    .map((decision) => {
+      const cause = decision.causedBy ? raw.get(decision.causedBy) : undefined;
+      const by =
+        decision.kind === 'EFFECT'
+          ? `${cause?.type ?? ''} "${cause?.element?.name ?? cause?.key ?? ''}" (${decision.causedBy ?? ''})`
+          : decision.kind === 'REDIRECT'
+            ? `redirect after ${decision.causedBy ?? ''}`
+            : decision.kind === 'RELOAD'
+              ? 'same page'
+              : `goto: ${decision.gotoReason ?? ''}`;
+      return `<tr><td>${esc(decision.navigationId)}</td><td>${esc(decision.route)}</td><td>${esc(decision.kind)}</td><td>${esc(by)}</td><td>${esc(decision.confidence ?? '')}${decision.ambiguous ? ' (ambiguous)' : ''}</td><td class="muted">${decision.reasons.map(esc).join('<br>')}</td></tr>`;
+    })
+    .join('');
+  return `<section><h2>Navigation causality</h2><div class="cards">${cards}</div>
+    ${reasons.size > 0 ? `<p class="muted">Goto reasons: ${[...reasons].map(([reason, count]) => `${esc(reason)}: ${String(count)}`).join(' · ')}</p>` : ''}
+    <table class="rec"><thead><tr><th>Raw</th><th>Route</th><th>Kind</th><th>Caused by / why a goto</th><th>Confidence</th><th>Reasons</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">A navigation that follows a human action is first its effect: the action stays the step, the route becomes an outcome. A goto is generated only when no reliable human cause exists, always with its reason.</p></section>`;
+}

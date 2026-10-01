@@ -40,16 +40,28 @@ export class NetworkTraceRecorder implements PageObserver {
     window.pending.set(request, pending);
     window.order.push(pending);
   };
+  /**
+   * Requêtes encore sans réponse quand leur fenêtre s'est fermée (un envoi lent) : leur réponse
+   * complète l'échange déjà rapporté, pour qu'une attente `expect.response` la voie arriver.
+   */
+  private readonly late = new Map<Request, Pending>();
+
+  private pendingOf(request: Request): Pending | undefined {
+    return this.current?.pending.get(request) ?? this.late.get(request);
+  }
+
   private readonly onResponse = (response: Response): void => {
-    const pending = this.current?.pending.get(response.request());
+    const pending = this.pendingOf(response.request());
     if (pending) pending.exchange.status = response.status();
   };
   private readonly onFinished = (request: Request): void => {
-    const pending = this.current?.pending.get(request);
+    const pending = this.pendingOf(request);
     if (pending) pending.exchange.durationMs = Date.now() - pending.startedAt;
+    this.late.delete(request);
   };
   private readonly onFailed = (request: Request): void => {
-    const pending = this.current?.pending.get(request);
+    const pending = this.pendingOf(request);
+    this.late.delete(request);
     if (!pending) return;
     pending.exchange.durationMs = Date.now() - pending.startedAt;
     pending.exchange.failure = request.failure()?.errorText ?? 'failed';
@@ -81,11 +93,20 @@ export class NetworkTraceRecorder implements PageObserver {
     const window = this.current;
     if (!window || (actionId !== undefined && window.actionId !== actionId)) return undefined;
     this.current = undefined;
+    const requests = window.order.map((pending) => ({ ...pending.exchange }));
+    // Les requêtes encore en cours : leur réponse viendra compléter la copie rapportée.
+    for (const [request, pending] of window.pending) {
+      const index = window.order.indexOf(pending);
+      const copy = requests[index];
+      if (!copy || pending.exchange.status !== undefined || pending.exchange.failure !== undefined) continue;
+      if (this.late.size >= 200) this.late.clear();
+      this.late.set(request, { exchange: copy, startedAt: pending.startedAt });
+    }
     return {
       actionId: window.actionId,
       startedAt: window.startedAt.toISOString(),
       finishedAt: new Date().toISOString(),
-      requests: window.order.map((pending) => ({ ...pending.exchange })),
+      requests,
     };
   }
 }

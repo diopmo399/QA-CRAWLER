@@ -12,12 +12,17 @@ import type {
   RecordingWarning,
   SemanticRecordedAction,
 } from './model.js';
+import { correlateActions, type CorrelationResult } from './action-correlation.js';
 import { normalizeRecording, type NormalizedRecording } from './normalizer.js';
+import { checkSemanticPreservation, type PreservationReport } from './semantic-preservation.js';
 import { inferOutcomes } from './outcomes.js';
 import { buildRecordedFlow, generateFlowFiles, type GeneratedFiles } from './recorded-flow.js';
 import { resolveSemanticActions, routeOf } from './semantic-recording.js';
 
 export interface RecordingResult {
+  /** ACTION CORRELATION (absente si désactivée) et contrôle de préservation. */
+  correlation?: CorrelationResult;
+  preservation: PreservationReport;
   session: RecordingSession;
   normalized: NormalizedRecording;
   flow: RecordedFlow;
@@ -43,7 +48,33 @@ export function processRecording(
     options.onEvent?.({ type, at: new Date().toISOString(), message });
   };
   const safety = new SafetyPolicy(config.safety);
-  const semantic = resolveSemanticActions(session.rawEvents, safety, session.initialStateId);
+  // RAW → ACTION CORRELATION : chaque navigation rattachée à l'action humaine qui l'a causée (un effet, pas un goto).
+  const settings = config.recording.actionCorrelation;
+  let correlation: CorrelationResult | undefined;
+  if (settings.enabled) {
+    emit('ACTION_CORRELATION_STARTED', `${String(session.rawEvents.length)} raw event(s)`);
+    correlation = correlateActions(session.rawEvents, settings);
+    for (const decision of correlation.navigations) {
+      if (decision.kind === 'EFFECT') {
+        emit(
+          'NAVIGATION_CORRELATED_TO_ACTION',
+          `${decision.route} ← ${decision.causedBy ?? ''} (${decision.confidence ?? ''}: ${decision.reasons.join('; ')})`,
+        );
+        if (decision.ambiguous)
+          emit('CAUSALITY_AMBIGUOUS', `${decision.route}: another recent action was almost as likely`);
+      } else if (decision.kind === 'GOTO') {
+        emit('NAVIGATION_UNCORRELATED', `${decision.route}: ${decision.reasons.join('; ')}`);
+        if (decision.gotoReason !== 'INITIAL_NAVIGATION')
+          emit('GOTO_FALLBACK_GENERATED', `goto ${decision.route} (${decision.gotoReason ?? ''})`);
+      }
+    }
+    for (const group of correlation.groups)
+      emit(
+        'ACTION_EFFECT_CORRELATED',
+        `${group.triggerId} → ${(group.effects.navigation?.routes ?? []).join(' → ')}${group.effects.network.length > 0 ? ` (${group.effects.network.map((exchange) => `${exchange.method} ${exchange.path}`).join(', ')})` : ''}`,
+      );
+  }
+  const semantic = resolveSemanticActions(session.rawEvents, safety, session.initialStateId, correlation);
   session.semanticActions = semantic.actions;
   for (const action of semantic.actions)
     emit(
@@ -54,8 +85,9 @@ export function processRecording(
     semantic.actions,
     session.rawEvents,
     session.states,
-    semantic.noise,
+    semantic.noise - (correlation?.promoted.size ?? 0),
     config.recording.credentials,
+    correlation !== undefined,
   );
   session.semanticActions = normalized.actions;
   emit(
@@ -89,6 +121,14 @@ export function processRecording(
     negative: normalized.negative,
     stats: normalized.stats,
   });
+  const preservation = checkSemanticPreservation(normalized.actions, built.flow, config.recording.validation);
+  emit(
+    'FLOW_SEMANTIC_PRESERVATION_CHECK',
+    `${String(preservation.humanTriggers)} human click(s), ${String(preservation.generatedClicks)} click step(s), ${String(preservation.generatedGotos)} goto, ${String(preservation.lostMutations.length)} data-changing action(s) lost`,
+  );
+  for (const warning of preservation.warnings)
+    if (warning.code === 'SUSPICIOUS_NAVIGATION_COLLAPSE')
+      emit('SUSPICIOUS_NAVIGATION_COLLAPSE', warning.message);
   const files = generateFlowFiles(built.flow, { language: options.language, recordedAt: session.startedAt });
   emit('FLOW_GENERATED', `${String(built.flow.steps.length)} step(s)`);
   const warnings = [
@@ -97,12 +137,15 @@ export function processRecording(
     ...normalized.warnings,
     ...outcomes.warnings,
     ...built.warnings,
+    ...preservation.warnings,
   ];
   return {
     session,
     normalized,
     flow: built.flow,
     files,
+    ...(correlation ? { correlation } : {}),
+    preservation,
     graph: flowGraphOf(session, normalized.kept, safety, config, options.snapshot),
     warnings: dedupe(warnings),
   };

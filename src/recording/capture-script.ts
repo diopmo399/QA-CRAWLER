@@ -386,6 +386,22 @@ export function installRecorder(options: CaptureOptions): void {
     };
   };
 
+  const pointerAncestor = (el: Element): Element | null => {
+    let node: Element | null = el;
+    let found: Element | null = null;
+    for (let depth = 0; node && node !== document.body && depth < 6; depth += 1) {
+      if (
+        getComputedStyle(node).cursor === 'pointer' ||
+        node.hasAttribute('onclick') ||
+        node.hasAttribute('tabindex')
+      )
+        found = node;
+      else if (found) break;
+      node = node.parentElement;
+    }
+    return found;
+  };
+
   const interactive = (target: EventTarget | null): Element | null => {
     const el = target instanceof Element ? target : null;
     if (!el) return null;
@@ -426,8 +442,16 @@ export function installRecorder(options: CaptureOptions): void {
       else if (tag === 'label' && (el as HTMLLabelElement).control)
         noise = 'label of a control (recorded by change)';
       else if ((el as HTMLElement).isContentEditable) noise = 'focus click in an editable area';
-      else if (!el.matches(CANDIDATES)) noise = 'click on a non-interactive element';
-      send({ type: 'click', element: describe(el), ...(noise ? { noise } : {}) });
+      // Un élément sans rôle mais cliquable (une tuile <div (click)>, un <span> dans une carte) : le
+      // premier ancêtre au curseur « main » est la cible ; sans lui, un clic de bruit (que la
+      // corrélation peut encore promouvoir s'il précède une navigation).
+      let target = el;
+      if (!noise && !el.matches(CANDIDATES)) {
+        const clickable = pointerAncestor(el);
+        if (clickable) target = clickable;
+        else noise = 'click on a non-interactive element';
+      }
+      send({ type: 'click', element: describe(target), ...(noise ? { noise } : {}) });
     },
     { capture: true, passive: true },
   );
