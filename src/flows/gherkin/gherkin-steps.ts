@@ -122,10 +122,15 @@ function fieldTarget(values: Record<string, string>): RawStep {
   return role && role !== 'textbox' && role !== 'combobox' ? { role, name } : { label: name };
 }
 
-/** `<env:NOM>` → { env: NOM } : un secret n'est jamais écrit dans le fichier .feature. */
-export function valueOf(text: string): string | { env: string } {
+/**
+ * `<env:NOM>` → { env: NOM } : un secret n'est jamais écrit dans le fichier .feature.
+ * `<testData:email>` → { testData: email } : une donnée de test valide choisie à l'exécution.
+ */
+export function valueOf(text: string): string | { env: string } | { testData: string } {
   const env = /^<env:([A-Za-z_][A-Za-z0-9_]*)>$/.exec(text.trim());
-  return env?.[1] ? { env: env[1] } : text;
+  if (env?.[1]) return { env: env[1] };
+  const testData = /^<testData:([A-Za-z_][A-Za-z0-9_.-]*)>$/.exec(text.trim());
+  return testData?.[1] ? { testData: testData[1] } : text;
 }
 
 /** Un tableau champ | valeur → une saisie par ligne (l'en-tête « champ | valeur » est ignoré). */

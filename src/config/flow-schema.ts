@@ -49,8 +49,18 @@ function checkTarget(target: TargetInput, ctx: z.RefinementCtx): void {
 
 const targetSchema = z.object(targetShape).strict().superRefine(checkTarget);
 
-/** Valeur saisie dans un champ : littérale, ou lue dans une variable d'environnement (jamais journalisée). */
-const valueSchema = z.union([z.string(), z.number().transform(String), z.object({ env: nonEmpty }).strict()]);
+/**
+ * Valeur saisie dans un champ : littérale, lue dans une variable d'environnement (jamais
+ * journalisée), ou une donnée de test valide pour ce champ (`{ testData: email }` : le
+ * TestDataProvider la choisit à l'exécution ; un flow enregistré ne garde jamais la saisie).
+ */
+const testDataValueSchema = z.object({ testData: nonEmpty }).strict();
+const valueSchema = z.union([
+  z.string(),
+  z.number().transform(String),
+  z.object({ env: nonEmpty }).strict(),
+  testDataValueSchema,
+]);
 
 const fillSchema = z
   .object({ ...targetShape, value: valueSchema })
@@ -121,7 +131,7 @@ const STEP_KINDS = [
   'intent',
 ] as const;
 
-const intentValueSchema = z.union([z.string(), z.object({ env: nonEmpty }).strict()]);
+const intentValueSchema = z.union([z.string(), z.object({ env: nonEmpty }).strict(), testDataValueSchema]);
 
 /**
  * Une INTENTION Gherkin (gherkin.semanticResolution) : ce que la phrase demande, sans
@@ -301,7 +311,7 @@ export interface FlowTarget {
   nth?: number;
 }
 
-export type FlowValue = string | { env: string };
+export type FlowValue = string | { env: string } | { testData: string };
 
 export interface FlowExpectation {
   text?: string;
@@ -410,7 +420,8 @@ export function describeStep(step: FlowStep, maskValue = false): string {
 }
 
 export function describeValue(value: FlowValue): string {
-  return typeof value === 'string' ? `"${value}"` : `\${env:${value.env}}`;
+  if (typeof value === 'string') return `"${value}"`;
+  return 'env' in value ? `\${env:${value.env}}` : `\${testData:${value.testData}}`;
 }
 
 export function describeExpectation(expectation: FlowExpectation): string {

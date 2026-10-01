@@ -59,7 +59,9 @@ export function toYaml(step: ElementStep, target: Suggested): string {
   const parts = Object.entries(target).map(([key, value]) => `${key}: ${quote(value)}`);
   if ('role' in target) parts.push('exact: true');
   if (step.kind === 'fill') {
-    parts.push(`value: ${typeof step.value === 'string' ? quote(step.value) : `{ env: ${step.value.env} }`}`);
+    parts.push(
+      `value: ${typeof step.value === 'string' ? quote(step.value) : 'env' in step.value ? `{ env: ${step.value.env} }` : `{ testData: ${step.value.testData} }`}`,
+    );
   }
   if (step.kind === 'select') parts.push(`option: ${quote(step.option)}`);
   return `- ${step.kind}: { ${parts.join(', ')} }`;

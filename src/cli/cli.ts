@@ -12,6 +12,7 @@ import { buildFlowTree, renderTextTree } from '../reporting/flow-tree.js';
 import { storageLabel } from '../reporting/persistence-section.js';
 import { HELP_TEXT, parseCliArgs, UsageError } from './args.js';
 import { runDryRunCli } from './dry-run-command.js';
+import { runRecordCli } from './record-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
 
@@ -45,6 +46,8 @@ export async function runCli(input: string[]): Promise<number> {
   }
   // DRY RUN : une commande à part, ses propres options ; les autres commandes ne changent pas.
   if (argv[0] === 'dry-run') return runDryRunCli(argv.slice(1));
+  // RECORD : un humain montre le flow, le crawler en fait un flow imposé.
+  if (argv[0] === 'record') return runRecordCli(argv.slice(1));
   let args;
   try {
     args = parseCliArgs(argv);

@@ -434,6 +434,15 @@ flowGeneration: { enabled: true, maxFlows: 30 }
 
 Relis-les, puis copie ceux qui t'intéressent sous `flows:` de ta mission : ce sont des tests de non-régression écrits sans effort. Le Dry Run, lui, produit un `suggested.feature` / `suggested.flow.yaml` corrigé pour un scénario donné.
 
+**Montrer le parcours soi-même (`record`).** Tu fais le parcours dans Chromium, QA-CRAWLER en fait un flow propre (`generated.flow.yaml` + `generated.feature`) :
+
+```bash
+npm run qa -- record --url https://qa.example.com/users --name "Créer un utilisateur"
+npm run qa -- record -c scenarios/ma-mission.yaml --name "Créer un utilisateur" --validate
+```
+
+Arrête avec le bouton **Stop** du bandeau (ou Entrée dans le terminal) ; **Checkpoint** marque « vérifier ici ». Ce que tu as tapé n'est jamais enregistré : le flow utilise des données de test (`{ testData: email }`), les mots de passe viennent de l'environnement (`{ env: QA_PASSWORD }`). Détails : [HUMAN_FLOW_RECORDER.md](HUMAN_FLOW_RECORDER.md).
+
 ---
 
 ## 12. Comparer les droits de plusieurs utilisateurs
@@ -519,6 +528,7 @@ docker run --rm \
 ```bash
 npm run qa -- [learn|verify|explore] <mission.yaml> [options]
 npm run qa -- dry-run <scénario.feature|flow.yaml|mission.yaml> [-c <mission.yaml>] [options]
+npm run qa -- record --url <adresse> --name <nom du flow> [-c <mission.yaml>] [--validate]
 ```
 
 | Option                                                 | Effet                                              |
@@ -534,7 +544,7 @@ npm run qa -- dry-run <scénario.feature|flow.yaml|mission.yaml> [-c <mission.ya
 | `-q, --quiet`                                          | seulement le résumé                                |
 | `-h, --help`, `-v, --version`                          | aide, version                                      |
 
-Options propres au Dry Run : [section 6](#6-vérifier-un-scénario-contre-lapplication-dry-run), ou `npm run qa -- dry-run --help`.
+Options propres au Dry Run : [section 6](#6-vérifier-un-scénario-contre-lapplication-dry-run), ou `npm run qa -- dry-run --help`. Options de l'enregistrement : `npm run qa -- record --help`.
 
 ---
 

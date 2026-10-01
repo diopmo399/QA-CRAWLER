@@ -18,6 +18,9 @@ export interface LearnedKnowledge {
     entityType: string;
     triggerLabel?: string;
     requestLiterals?: Record<string, string>;
+    /** HUMAN_RECORDED : montré par un humain (qa-crawler record) ; sinon vu par un run. */
+    provenance?: 'RUNTIME_OBSERVED' | 'HUMAN_RECORDED';
+    recordingSessionId?: string;
   }[];
   states: { entityType: string; stateField: string; state: string }[];
   transitions: {
