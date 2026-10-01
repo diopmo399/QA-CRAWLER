@@ -546,6 +546,10 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ...optional('label', str('label') ? redactText(str('label') ?? '') : undefined),
     ...optional('guessedLabel', str('guessedLabel') ? redactText(str('guessedLabel') ?? '') : undefined),
     ...optional('testId', str('testId', 120)),
+    ...optional(
+      'testIdAttribute',
+      TEST_ID_ATTRIBUTES.includes(str('testIdAttribute', 40) ?? '') ? str('testIdAttribute', 40) : undefined,
+    ),
     ...optional('nameAttr', str('nameAttr', 120)),
     ...optional('formControlName', str('formControlName', 120)),
     ...optional('elementId', str('elementId', 120)),
@@ -571,6 +575,8 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ...(bool('hasOptions') ? { hasOptions: true } : {}),
   };
 }
+
+const TEST_ID_ATTRIBUTES = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy'];
 
 const SHAPES = new Set(['email', 'number', 'date', 'phone', 'url', 'code', 'text', 'empty']);
 

@@ -110,6 +110,19 @@ describe('recorded target (locator preference)', () => {
     expect(target.target).toEqual({ strategy: 'role', role: 'button', name: 'Edit', nth: 2 });
   });
 
+  it('a test id carried by another attribute than data-testid is targeted by that attribute', () => {
+    const qa = resolveRecordedTarget(
+      element({ label: undefined, name: '', testId: 'Reference_input', testIdAttribute: 'data-qa' }),
+      'field',
+    );
+    expect(qa.target).toEqual({ strategy: 'css', value: '[data-qa="Reference_input"]' });
+    const standard = resolveRecordedTarget(
+      element({ label: undefined, name: '', testId: 'Reference_input', testIdAttribute: 'data-testid' }),
+      'field',
+    );
+    expect(standard.target).toEqual({ strategy: 'testId', value: 'Reference_input' });
+  });
+
   it('formControlName is a framework binding, a position is FRAGILE', () => {
     const bound = resolveRecordedTarget(
       element({ label: undefined, name: '', formControlName: 'firstName' }),
@@ -167,10 +180,18 @@ describe('value classification (no typed value is ever kept)', () => {
     });
   });
 
-  it('test data keys follow the meaning of the field, then its shape, then its binding', () => {
+  it('test data keys follow the meaning of the field, then its name, then its shape', () => {
     expect(testDataKey(element({ label: 'First name', name: 'First name' }))).toBe('firstName');
     expect(testDataKey(element({ label: 'Amount', name: 'Amount' }), facts({ shape: 'number' }))).toBe(
-      'number',
+      'amount',
+    );
+    expect(testDataKey(element({ label: undefined, name: '' }), facts({ shape: 'number' }))).toBe('number');
+    // Un test id technique dit aussi le nom (et parfois le sens) du champ.
+    expect(testDataKey(element({ label: undefined, name: '', testId: 'BranchCode_input' }))).toBe(
+      'branchCode',
+    );
+    expect(testDataKey(element({ label: undefined, name: '', testId: 'PrenomContact_input' }))).toBe(
+      'firstName',
     );
     expect(testDataKey(element({ label: undefined, name: '', formControlName: 'legalEntityCode' }))).toBe(
       'legalEntityCode',

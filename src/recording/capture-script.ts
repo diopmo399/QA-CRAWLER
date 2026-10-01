@@ -268,9 +268,10 @@ export function installRecorder(options: CaptureOptions): void {
         form !== null &&
         (el.getAttribute('type') ?? 'submit').toLowerCase() === 'submit') ||
       (tag === 'input' && (type === 'submit' || type === 'image'));
-    const testId = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy']
-      .map((attribute) => el.getAttribute(attribute))
-      .find((value) => value);
+    const testIdEntry = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy']
+      .map((attribute) => [attribute, el.getAttribute(attribute)] as const)
+      .find(([, value]) => value);
+    const testId = testIdEntry?.[1];
     return {
       tag,
       role,
@@ -278,7 +279,7 @@ export function installRecorder(options: CaptureOptions): void {
       ...(textOf(el) && tag !== 'select' ? { text: textOf(el).slice(0, 80) } : {}),
       ...(label ? { label } : {}),
       ...(guessed ? { guessedLabel: guessed } : {}),
-      ...(testId ? { testId } : {}),
+      ...(testIdEntry ? { testId, testIdAttribute: testIdEntry[0] } : {}),
       ...(el.getAttribute('name') ? { nameAttr: el.getAttribute('name') } : {}),
       ...((el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name'))
         ? { formControlName: el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name') }

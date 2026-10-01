@@ -91,18 +91,27 @@ export function classifyRecordedValue(
 
 /** La clé d'une donnée de test : le sens du champ (email, firstName…), sinon sa forme, sinon son nom. */
 export function testDataKey(element: RecordedElement, facts?: RecordedValueFacts): string {
+  // Le nom technique d'un test id (PrenomContact_input) dit aussi le sens du champ.
+  const fromTestId = element.testId?.replace(/[-_]?(input|field|champ|select|txt)$/i, '');
+  const names = [
+    element.formControlName,
+    element.nameAttr,
+    element.label,
+    element.guessedLabel,
+    element.name,
+    fromTestId,
+  ].filter((text): text is string => text !== undefined && text.trim() !== '');
   const semantic = semanticKeyOf({
     ...(element.inputType ? { type: element.inputType } : {}),
-    ...((element.nameAttr ?? element.formControlName)
-      ? { name: element.nameAttr ?? element.formControlName ?? '' }
-      : {}),
-    ...(element.label ? { label: element.label } : {}),
+    name: names.join(' '),
     ...(element.placeholder ? { placeholder: element.placeholder } : {}),
   });
   if (semantic && semantic !== 'text') return semantic;
+  // Le nom du champ (pour testData.fields de la mission), sinon sa forme.
+  const named = names.map(camel).find((key) => key !== '');
+  if (named) return named;
   if (facts && ['email', 'phone', 'url', 'date', 'number'].includes(facts.shape)) return facts.shape;
-  const source = element.formControlName ?? element.nameAttr ?? element.label ?? element.name;
-  return camel(source) || 'text';
+  return 'text';
 }
 
 function camel(text: string | undefined): string {

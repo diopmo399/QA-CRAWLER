@@ -75,13 +75,19 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
         why: `visible text "${text}"`,
       });
   }
-  if (element.testId)
+  if (element.testId) {
+    // getByTestId ne lit que data-testid : un autre attribut (data-qa, data-cy…) se vise par sélecteur.
+    const attribute = element.testIdAttribute ?? 'data-testid';
     candidates.push({
-      target: { strategy: 'testId', value: element.testId },
+      target:
+        attribute === 'data-testid'
+          ? { strategy: 'testId', value: element.testId }
+          : { strategy: 'css', value: `[${attribute}="${element.testId}"]` },
       quality: 'STABLE_ATTRIBUTE',
       unique: true,
-      why: `test id "${element.testId}"`,
+      why: `${attribute} "${element.testId}"`,
     });
+  }
   if (element.nameAttr && !/\d{2,}/.test(element.nameAttr))
     candidates.push({
       target: { strategy: 'css', value: `${element.tag}[name="${element.nameAttr}"]` },

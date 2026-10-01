@@ -39,6 +39,8 @@ export interface RecordedElement {
   /** Champ sans libellé relié : le texte posé juste avant lui (deviné, inconnu de Playwright). */
   guessedLabel?: string;
   testId?: string;
+  /** L'attribut qui porte le testId (data-testid, data-qa, data-cy…) : seul data-testid est lu par getByTestId. */
+  testIdAttribute?: string;
   /** Attribut name. */
   nameAttr?: string;
   /** Angular formControlName (ou ng-reflect-name) : une preuve technique, pas un libellé. */
