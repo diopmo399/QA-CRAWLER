@@ -44,11 +44,25 @@ export interface ScriptResource {
   headers: Readonly<Record<string, string>>;
 }
 
+/** Pourquoi une adresse n'a pas été lue : statut HTTP, redirection, taille, délai (jamais un corps). */
+export interface ScriptFetchFailure {
+  failure: string;
+}
+
 /**
  * Lit une adresse déjà autorisée, sans suivre de redirection (une redirection pourrait
- * mener hors des hôtes autorisés), dans la limite de maxBytes. undefined : illisible.
+ * mener hors des hôtes autorisés), dans la limite de maxBytes. undefined ou failure : illisible.
  */
-export type ScriptFetcher = (url: string, maxBytes: number) => Promise<ScriptResource | undefined>;
+export type ScriptFetcher = (
+  url: string,
+  maxBytes: number,
+) => Promise<ScriptResource | ScriptFetchFailure | undefined>;
+
+/** La raison d'un échec de lecture, pour le rapport. */
+function failureOf(resource: ScriptResource | ScriptFetchFailure | undefined): string | undefined {
+  if (!resource) return 'not readable';
+  return 'failure' in resource ? resource.failure : undefined;
+}
 
 export interface RuntimeSourceBudgets {
   maxBundles: number;
@@ -198,8 +212,8 @@ export class RuntimeBundleSourceProvider implements StaticSourceProvider {
       return;
     }
     const resource = await this.options.fetch(url, budgets.maxFileSizeBytes);
-    if (!resource) {
-      this.inventory.record(this.descriptor(url, lazy, 'SKIPPED', 'not readable or too large'));
+    if (!resource || 'failure' in resource) {
+      this.inventory.record(this.descriptor(url, lazy, 'SKIPPED', failureOf(resource) ?? 'not readable'));
       return;
     }
     const display = displayUrl(url);
@@ -282,8 +296,8 @@ export class RuntimeBundleSourceProvider implements StaticSourceProvider {
         return;
       }
       const resource = await this.options.fetch(reference.url, budgets.maxSourceMapBytes);
-      if (!resource) {
-        this.reject(bundle, workspace, 'source map not readable or too large');
+      if (!resource || 'failure' in resource) {
+        this.reject(bundle, workspace, `source map ${failureOf(resource) ?? 'not readable'}`);
         return;
       }
       text = resource.text;

@@ -34,14 +34,24 @@ export function playwrightFetcher(page: Page): ScriptFetcher {
   return async (url, maxBytes) => {
     try {
       const response = await page.request.get(url, { timeout: 10_000, maxRedirects: 0 });
-      if (!response.ok()) return undefined;
+      const status = response.status();
+      if (status >= 300 && status < 400)
+        return { failure: `redirected (HTTP ${String(status)}): redirects are not followed` };
+      if (!response.ok()) return { failure: `HTTP ${String(status)}` };
       const declared = Number(response.headers()['content-length']);
-      if (Number.isFinite(declared) && declared > maxBytes) return undefined;
+      if (Number.isFinite(declared) && declared > maxBytes) return { failure: tooLarge(declared, maxBytes) };
       const body = await response.body();
-      if (body.byteLength > maxBytes) return undefined;
+      if (body.byteLength > maxBytes) return { failure: tooLarge(body.byteLength, maxBytes) };
       return { text: body.toString('utf8'), headers: response.headers() };
-    } catch {
-      return undefined;
+    } catch (error) {
+      const message = (error as Error).message;
+      return { failure: /timeout/i.test(message) ? 'timed out (10 s)' : 'network error' };
     }
   };
+}
+
+/** « too large (6.4 MB > limit 2.0 MB: staticAnalysis.budgets) » */
+function tooLarge(bytes: number, limit: number): string {
+  const mb = (value: number): string => `${(value / 1_000_000).toFixed(1)} MB`;
+  return `too large (${mb(bytes)} > limit ${mb(limit)}: raise staticAnalysis.budgets.maxFileSizeBytes or maxSourceMapBytes)`;
 }
