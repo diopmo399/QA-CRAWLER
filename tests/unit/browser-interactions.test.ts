@@ -7,6 +7,7 @@ import {
   formatLogLine,
 } from '../../src/interactions/browser-interaction-manager.js';
 import { Credentials, EnvironmentCredentialProvider } from '../../src/interactions/credential-provider.js';
+import { browserHttpCredentials } from '../../src/interactions/browser-credentials.js';
 import type { BrowserInteractionHandler } from '../../src/interactions/handler.js';
 import { HttpAuthHandler } from '../../src/interactions/handlers/http-auth-handler.js';
 import type { BrowserInteraction, BrowserInteractionType } from '../../src/interactions/types.js';
@@ -311,6 +312,7 @@ describe('configuration', () => {
     expect(http.browserInteractions.httpAuth).toEqual({
       credentialProfile: 'auth',
       origins: ['https://sso.example.com'],
+      answerByBrowser: false,
     });
   });
 
@@ -327,5 +329,43 @@ describe('configuration', () => {
     expect(() =>
       parseConfig(`${base}browserInteractions:\n  permissions:\n    grant: [everything]\n`, {}, {}),
     ).toThrowError(/grant/);
+  });
+});
+
+describe('browser HTTP credentials (sign-in popups)', () => {
+  const base = (yaml: string) =>
+    parseConfig(`mission: { name: x }\ntarget: { baseUrl: "https://app.example.test" }\n${yaml}`, {}, {})
+      .config;
+  const env = { SSO_USER: 'qa-user', SSO_PASS: 'qa-pass' };
+  const yaml = (origins: string) => `credentials:
+  sso: { usernameEnv: SSO_USER, passwordEnv: SSO_PASS }
+browserInteractions:
+  httpAuth: { credentialProfile: sso, origins: ${origins}, answerByBrowser: true }
+`;
+
+  it('one declared origin and a profile: the browser answers, only for that origin, only on challenge', () => {
+    const found = browserHttpCredentials(base(yaml('["https://sso.example.test"]')), env);
+    expect(found?.origin).toBe('https://sso.example.test');
+    expect(found?.options.httpCredentials).toMatchObject({
+      origin: 'https://sso.example.test',
+      send: 'unauthorized',
+    });
+  });
+
+  it('not asked, no origin, several origins, missing variables or interactions disabled: nothing given to the browser', () => {
+    expect(
+      browserHttpCredentials(
+        base(yaml('["https://sso.example.test"]').replace(', answerByBrowser: true', '')),
+        env,
+      ),
+    ).toBeUndefined();
+    expect(browserHttpCredentials(base(yaml('[]')), env)).toBeUndefined();
+    expect(
+      browserHttpCredentials(base(yaml('["https://a.example.test", "https://b.example.test"]')), env),
+    ).toBeUndefined();
+    expect(browserHttpCredentials(base(yaml('["https://sso.example.test"]')), {})).toBeUndefined();
+    expect(
+      browserHttpCredentials(base(`${yaml('["https://sso.example.test"]')}  enabled: false\n`), env),
+    ).toBeUndefined();
   });
 });

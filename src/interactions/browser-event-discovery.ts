@@ -64,6 +64,11 @@ export interface BrowserEventDiscoveryOptions {
   origins: AllowedOriginPolicy;
   /** Surveiller la fenêtre de connexion du navigateur (HTTP_AUTH) via le protocole du navigateur. */
   httpAuth: boolean;
+  /**
+   * false : le navigateur répond lui-même aux défis de connexion (identifiants donnés au contexte,
+   * voir browser-credentials.ts) ; la découverte ne les intercepte plus.
+   */
+  answerAuth?: boolean;
   /** Attente maximale du chargement d'une nouvelle page avant de la classer. */
   popupLoadTimeoutMs: number;
 }
@@ -242,7 +247,7 @@ export class BrowserEventDiscovery {
     try {
       session = await page.context().newCDPSession(page);
       await session.send('Fetch.enable', {
-        handleAuthRequests: true,
+        handleAuthRequests: this.options.answerAuth !== false,
         patterns: [
           { urlPattern: '*' },
           // Les documents sont aussi mis en pause à l'arrivée de leurs en-têtes : nom, type et taille d'un téléchargement.
@@ -326,7 +331,12 @@ export class BrowserEventDiscovery {
       .waitForLoadState('domcontentloaded', { timeout: this.options.popupLoadTimeoutMs })
       .catch(() => undefined);
     await this.attachPage(page).catch(() => undefined);
-    if (this.options.httpAuth && this.missedChallenge.has(page.url()) && !page.isClosed()) {
+    if (
+      this.options.httpAuth &&
+      this.options.answerAuth !== false &&
+      this.missedChallenge.has(page.url()) &&
+      !page.isClosed()
+    ) {
       // Le défi de connexion a eu lieu avant que la page soit surveillée : la recharger, le
       // défi est maintenant remonté au BrowserInteractionManager (HTTP_AUTH), puis traité.
       this.missedChallenge.delete(page.url());

@@ -917,6 +917,16 @@ browserInteractions:
 
 Exemple complet : [`scenarios/sso-popup.yaml`](scenarios/sso-popup.yaml). Pour NTLM, le nom d'utilisateur peut devoir être au format `DOMAINE\utilisateur`.
 
+**La fenêtre « Se connecter » reste parfois à l'écran ?** Une popup SSO qui se charge très vite peut présenter son défi avant que le crawler soit attaché : selon le moment, le run passe ou non. `answerByBrowser: true` confie alors la réponse au navigateur lui-même, dès son ouverture : Chromium remplit la fenêtre de connexion dans chaque page et chaque popup, sans course. Les identifiants viennent toujours de l'environnement et ne sont envoyés qu'à l'**unique** origine de `origins`, et seulement quand le serveur les demande. Les défis ne sont alors plus rapportés un par un (`HTTP_AUTH`), et un refus n'est pas réessayé. Vaut aussi pour `qa-crawler record` : le robot se connecte, l'humain n'a rien à taper.
+
+```yaml
+browserInteractions:
+  httpAuth:
+    credentialProfile: sso
+    origins: [https://sso.example.com] # une seule origine
+    answerByBrowser: true
+```
+
 `FORM_AUTH` (un formulaire de connexion dans la page) reste dans le monde du DOM : `auth.type: form`, ou un flow imposé. `HTTP_AUTH` (la fenêtre du navigateur) est une interaction navigateur. Les deux mécanismes ne sont jamais mélangés.
 
 ## Interactions navigateur

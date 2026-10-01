@@ -182,6 +182,7 @@ import { RuleBasedPatternDetector } from '../patterns/pattern-detector.js';
 import type { DetectedPattern } from '../patterns/ui-pattern.js';
 import { WriteGuard, writePattern, type BlockedWrite } from '../policies/write-guard.js';
 import { semanticsOf, type Semantics } from '../semantics/domain-packs.js';
+import { browserHttpCredentials, type BrowserHttpCredentials } from '../interactions/browser-credentials.js';
 
 /** Part des contrôles en commun à partir de laquelle un écran retrouvé est le jumeau de l'écran attendu. */
 const TWIN_SIMILARITY = 0.75;
@@ -361,6 +362,8 @@ export class FlowExplorer {
   private readonly interactions: BrowserInteractionManager;
   private readonly browserEvents: BrowserEventDiscovery;
   private readonly credentials: EnvironmentCredentialProvider;
+  /** Connexion HTTP confiée au navigateur (une origine, un profil) : aucune course avec les popups. */
+  private readonly browserCredentials: BrowserHttpCredentials | undefined;
   /** Action en cours d'exécution, pour rattacher les interactions et détecter les boucles. */
   private currentAction: InteractionContext | undefined;
   private readonly env: NodeJS.ProcessEnv;
@@ -626,9 +629,11 @@ export class FlowExplorer {
       .register(new FileChooserHandler())
       .register(new PermissionHandler())
       .register(new ExternalNavigationHandler());
+    this.browserCredentials = browserHttpCredentials(config, this.env);
     this.browserEvents = new BrowserEventDiscovery(this.interactions, {
       origins,
       httpAuth: config.browserInteractions.enabled,
+      answerAuth: this.browserCredentials === undefined,
       popupLoadTimeoutMs: Math.min(config.exploration.navigationTimeoutMs, 5_000),
     });
     this.runId = options.runId ?? config.testData.runId ?? newRunId();
@@ -795,7 +800,14 @@ export class FlowExplorer {
     const observers = this.createObservers();
     let stopReason: StopReason = 'exhausted';
     try {
-      const context = await browser.start(this.authenticator.contextOptions());
+      const context = await browser.start({
+        ...(this.browserCredentials?.options ?? {}),
+        ...this.authenticator.contextOptions(),
+      });
+      if (this.browserCredentials)
+        this.listener.onInteractionLog?.(
+          `HTTP sign-in for ${this.browserCredentials.origin}: answered by the browser with credential profile "${this.browserCredentials.profile}" (every page and popup)`,
+        );
       // Garde d'écriture : une requête POST/PUT/PATCH/DELETE que l'action en cours n'a pas le droit d'envoyer est annulée.
       await this.writeGuard.attach(context, (write) => {
         this.onBlockedWrite(write);
