@@ -421,6 +421,13 @@ const browserInteractionsSchema = z
         credentialProfile: nonEmpty.optional(),
         /** Origines qui peuvent recevoir les identifiants. Par défaut : la cible et les hôtes autorisés. */
         origins: z.array(httpOrigin).default([]),
+        /**
+         * true : les identifiants sont donnés au navigateur dès son ouverture, pour l'unique origine de
+         * `origins` ; Chromium répond lui-même à chaque fenêtre de connexion, dans toutes les popups
+         * (aucune course avec une popup SSO qui se charge vite). Les défis ne sont alors plus rapportés
+         * un par un (HTTP_AUTH), et un refus n'est pas réessayé.
+         */
+        answerByBrowser: z.boolean().default(false),
       })
       .strict()
       .default({}),

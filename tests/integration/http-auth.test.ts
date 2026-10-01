@@ -347,4 +347,62 @@ flows:
     });
     expect(authorizations).toContain(BASIC);
   });
+
+  it('sign-in origin declared: the browser answers the popup sign-in itself, every time (no race)', async () => {
+    const before = authorizations.length;
+    const { result } = await runMission(
+      mission(
+        'popup-sso-preauthorized',
+        `
+credentials:
+  qa-default: { usernameEnv: QA_USERNAME, passwordEnv: QA_PASSWORD }
+browserInteractions:
+  httpAuth:
+    credentialProfile: qa-default
+    origins: [${url}]
+    answerByBrowser: true
+  popups:
+    closeAfterMs: 5000
+flows:
+  - name: sso
+    steps:
+      - click: { role: button, name: Connexion SSO }
+      - expect: { text: connecté }
+      - goto: /
+      - click: { role: button, name: Connexion SSO }
+      - expect: { text: connecté }
+`,
+      ),
+      { env },
+    );
+    expect(result.flows[0]?.status).toBe('PASSED');
+    expect(authorizations.slice(before)).toContain(BASIC);
+    // Le navigateur a répondu : aucune fenêtre native laissée sans réponse.
+    expect(auths(result.browserInteractions).filter((auth) => auth.outcome !== 'AUTHENTICATED')).toEqual([]);
+  });
+
+  it('a credential origin that is not declared never receives the credentials from the browser', async () => {
+    const before = authorizations.length;
+    const { result } = await runMission(
+      mission(
+        'popup-sso-other-origin',
+        `
+credentials:
+  qa-default: { usernameEnv: QA_USERNAME, passwordEnv: QA_PASSWORD }
+browserInteractions:
+  httpAuth:
+    credentialProfile: qa-default
+    origins: [https://sso.example.test]
+    answerByBrowser: true
+flows:
+  - name: sso
+    steps:
+      - goto: /secure/
+`,
+      ),
+      { env },
+    );
+    expect(authorizations.slice(before)).not.toContain(BASIC);
+    expect(result.flows).toHaveLength(1);
+  });
 });

@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { Page } from 'playwright';
 import { createAuthenticator } from '../auth/authenticator.js';
 import { BrowserManager } from '../browser/browser-manager.js';
+import { browserHttpCredentials } from '../interactions/browser-credentials.js';
 import { ConfigError, loadConfigFile, parseConfig, type ConfigOverrides } from '../config/config-loader.js';
 import type { ScenarioConfig } from '../config/config.js';
 import { runDryRun } from '../dry-run/dry-run-orchestrator.js';
@@ -86,7 +87,12 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   let detach: (() => void) | undefined;
   try {
     const authenticator = createAuthenticator(config.auth, config.target.baseUrl, env, startUrl);
-    const context = await browser.start(authenticator.contextOptions());
+    // La fenêtre de connexion d'une popup SSO : remplie par le navigateur (httpAuth.origins + profil).
+    const preauthorized = browserHttpCredentials(config, env);
+    const context = await browser.start({
+      ...(preauthorized?.options ?? {}),
+      ...authenticator.contextOptions(),
+    });
     const page = await browser.newPage();
     page.setDefaultTimeout(config.exploration.actionTimeoutMs);
     // La connexion n'est pas enregistrée : le flow rejoué se connecte avec la mission (CredentialProvider).

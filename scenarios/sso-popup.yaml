@@ -23,6 +23,9 @@ browserInteractions:
     credentialProfile: sso
     # The only server that may receive the credentials: the one shown in the sign-in dialog.
     origins: [https://sso.example.com]
+    # true: Chromium itself answers the sign-in dialog in every page and popup, from the start
+    # (no race with a popup that loads fast). The credentials only go to the origin above.
+    answerByBrowser: true
   popups:
     # Let the popup sign in, then redirect or close itself, before the crawler closes it.
     closeAfterMs: 10000
