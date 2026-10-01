@@ -468,6 +468,18 @@ describe('one model → flow.yaml and .feature', () => {
     expect(result.files.feature).toContain('I click on "Dark mode"');
   });
 
+  it('a field without any name keeps its selector: never an intent on "input"', () => {
+    const events = [
+      raw('change', 1000, {
+        element: element({ label: undefined, name: '', css: '#search', cssStable: true }),
+        value: facts(),
+      }),
+    ];
+    const result = processRecording(session(events, [state('o1', '/users')]), config, { language: 'en' });
+    expect(result.files.yaml).not.toContain('field: input');
+    expect(result.files.yaml).toContain('css: "#search"');
+  });
+
   it('a large recording is processed quickly (no heavy analysis per event)', () => {
     const events: RawRecordedEvent[] = [];
     for (let index = 0; index < 3000; index += 1)

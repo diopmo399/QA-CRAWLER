@@ -163,6 +163,11 @@ export interface RecordedTarget {
   /** Les autres localisateurs possibles, du meilleur au moins bon. */
   alternatives: { target: FlowTarget; quality: LocatorQuality }[];
   ambiguous: boolean;
+  /**
+   * Le libellé vient d'un nom réel (libellé, nom accessible, texte, placeholder, attribut) et pas
+   * du type de l'élément : sans nom, aucune intention ne peut être dite (« input » ne désigne rien).
+   */
+  named: boolean;
   reasons: string[];
 }
 

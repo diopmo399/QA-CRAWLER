@@ -128,10 +128,19 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     reasons.push(`${first.why} is not unique: ${chosen.why} used instead`);
   }
   reasons.unshift(`chosen: ${chosen.why} (${chosen.quality})`);
+  const humanName = [
+    label,
+    name,
+    element.text,
+    element.placeholder,
+    element.formControlName,
+    element.nameAttr,
+  ].find((text): text is string => readable(text));
   return {
     target: chosen.target,
     quality: chosen.quality,
-    label: label ?? name ?? element.text ?? element.formControlName ?? element.nameAttr ?? element.tag,
+    label: humanName ?? element.tag,
+    named: humanName !== undefined,
     alternatives: candidates
       .filter((candidate) => candidate !== chosen && candidate.unique)
       .map((candidate) => ({ target: candidate.target, quality: candidate.quality })),
