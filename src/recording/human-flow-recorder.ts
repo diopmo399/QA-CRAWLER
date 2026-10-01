@@ -544,6 +544,7 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     name: redactText(str('name') ?? ''),
     ...optional('text', str('text', 80) ? redactText(str('text', 80) ?? '') : undefined),
     ...optional('label', str('label') ? redactText(str('label') ?? '') : undefined),
+    ...optional('guessedLabel', str('guessedLabel') ? redactText(str('guessedLabel') ?? '') : undefined),
     ...optional('testId', str('testId', 120)),
     ...optional('nameAttr', str('nameAttr', 120)),
     ...optional('formControlName', str('formControlName', 120)),

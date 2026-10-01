@@ -480,6 +480,18 @@ describe('one model → flow.yaml and .feature', () => {
     expect(result.files.yaml).toContain('css: "#search"');
   });
 
+  it('a field labelled only by the text just before it becomes an intent with that text', () => {
+    const events = [
+      raw('change', 1000, {
+        element: element({ label: undefined, name: '', guessedLabel: 'Branch code', css: 'div > input' }),
+        value: facts(),
+      }),
+    ];
+    const result = processRecording(session(events, [state('o1', '/users')]), config, { language: 'en' });
+    expect(result.files.yaml).toContain('field: Branch code');
+    expect(result.files.feature).toContain('Branch code');
+  });
+
   it('a large recording is processed quickly (no heavy analysis per event)', () => {
     const events: RawRecordedEvent[] = [];
     for (let index = 0; index < 3000; index += 1)

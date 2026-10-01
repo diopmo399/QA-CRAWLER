@@ -131,6 +131,7 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
   const humanName = [
     label,
     name,
+    element.guessedLabel,
     element.text,
     element.placeholder,
     element.formControlName,

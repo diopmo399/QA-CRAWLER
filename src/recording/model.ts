@@ -36,6 +36,8 @@ export interface RecordedElement {
   name: string;
   text?: string;
   label?: string;
+  /** Champ sans libellé relié : le texte posé juste avant lui (deviné, inconnu de Playwright). */
+  guessedLabel?: string;
   testId?: string;
   /** Attribut name. */
   nameAttr?: string;

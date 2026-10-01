@@ -359,3 +359,27 @@ describe('Human flow recorder: stopping', () => {
     }
   }, 60_000);
 });
+
+describe('Human flow recorder: unlabelled fields', () => {
+  it('a field labelled only by the text before it is recorded with that text, never as "input"', async () => {
+    const app = await startRecordingApp();
+    const dir = await mkdtemp(path.join(tmpdir(), 'qa-record-guess-'));
+    try {
+      const outcome = await runRecording({
+        name: 'Branch code',
+        url: `${app.url}/users/new`,
+        overrides: { headless: true, reportsDir: path.join(dir, 'reports') },
+        env: {},
+        drive: async ({ page }) => {
+          await page.locator('#mat-input-26').fill('12345');
+          await page.waitForTimeout(600);
+        },
+      });
+      const yaml = await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8');
+      expect(yaml).toContain('field: Branch code');
+      expect(yaml).not.toMatch(/field: input|mat-input/);
+    } finally {
+      await app.close();
+    }
+  }, 60_000);
+});

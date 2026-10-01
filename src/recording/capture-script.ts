@@ -131,6 +131,28 @@ export function installRecorder(options: CaptureOptions): void {
     return '';
   };
 
+  /**
+   * Un champ sans libellé relié (pas de <label>, ni aria-label) : le texte posé juste avant lui
+   * (« Code agence » au-dessus), comme l'UIObserver le devine — l'intention le retrouvera au rejeu.
+   */
+  const guessLabel = (el: Element): string => {
+    let node: Element = el;
+    for (let depth = 0; depth < 4; depth += 1) {
+      for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+        if (sibling.matches(FIELD) || sibling.querySelector(FIELD)) return '';
+        if (!isVisible(sibling)) continue;
+        const text = clean(textOf(sibling), 61)
+          .replace(/^\*\s*/, '')
+          .replace(/\s*\*$/, '');
+        if (text) return text.length <= 60 ? stripMark(text) : '';
+      }
+      const parent: Element | null = node.parentElement;
+      if (!parent || parent === document.body || parent.querySelectorAll(FIELD).length > 1) break;
+      node = parent;
+    }
+    return '';
+  };
+
   const nameOf = (el: Element): string => {
     const aria = el.getAttribute('aria-label');
     if (aria) return clean(aria);
@@ -208,6 +230,7 @@ export function installRecorder(options: CaptureOptions): void {
     const name = nameOf(el);
     const label = labelOf(el);
     const tag = el.tagName.toLowerCase();
+    const guessed = !label && !name && el.matches(FIELD) ? guessLabel(el) : '';
     const input = el as HTMLInputElement;
     const { css, stable } = cssOf(el);
     const id = el.getAttribute('id') ?? undefined;
@@ -254,6 +277,7 @@ export function installRecorder(options: CaptureOptions): void {
       name,
       ...(textOf(el) && tag !== 'select' ? { text: textOf(el).slice(0, 80) } : {}),
       ...(label ? { label } : {}),
+      ...(guessed ? { guessedLabel: guessed } : {}),
       ...(testId ? { testId } : {}),
       ...(el.getAttribute('name') ? { nameAttr: el.getAttribute('name') } : {}),
       ...((el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name'))
