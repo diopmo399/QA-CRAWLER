@@ -1,5 +1,6 @@
 import { StaticAnalysisCache, type StaticAnalysisIdentity } from './cache.js';
-import { buildStaticGraph, type GraphBuildOptions, type StaticAnalysisFeatures } from './graph-builder.js';
+import type { GraphBuildOptions, StaticAnalysisFeatures } from './graph-builder.js';
+import { buildGraphOffThread } from './graph-runner.js';
 import {
   STATIC_ANALYZER_VERSION,
   type StaticAnalysisMode,
@@ -8,7 +9,6 @@ import {
 } from './model.js';
 import { collectSources, type SourceBudget, type SourceSet } from './source-set.js';
 import type { SourceDiscoveryEvent } from './sources/model.js';
-import { loadTypeScript } from './typescript-loader.js';
 
 export type StaticAnalysisEvent =
   | 'STATIC_ANALYSIS_STARTED'
@@ -60,6 +60,8 @@ export interface StaticAnalyzerOptions {
   cacheDirectory?: string;
   onEvent?: StaticEventSink;
   now?: () => number;
+  /** Analyse dans un worker thread (défaut) ; false : sur le fil principal. */
+  worker?: boolean;
 }
 
 export interface StaticAnalysisOutcome {
@@ -147,14 +149,6 @@ export class StaticApplicationAnalyzer {
       }
       emit('STATIC_ANALYSIS_CACHE_MISS', `no static knowledge for this source hash: analysing`);
     }
-    const ts = await loadTypeScript();
-    if (!ts) {
-      emit('STATIC_ANALYSIS_UNAVAILABLE', 'the TypeScript parser is not installed');
-      return {
-        graph: this.unavailable(mode, 'the TypeScript parser is not installed', sources.hash),
-        cache: 'DISABLED',
-      };
-    }
     const buildOptions: GraphBuildOptions = {
       applicationId: this.options.applicationId,
       mode,
@@ -166,15 +160,20 @@ export class StaticApplicationAnalyzer {
       maxDurationMs: this.options.budgets.maxDurationMs,
       ...(this.options.now ? { now: this.options.now } : {}),
     };
-    let graph: StaticApplicationGraph;
-    try {
-      graph = buildStaticGraph(ts, sources, buildOptions);
-    } catch (error) {
+    // Hors du fil principal : le navigateur reste servi pendant l'analyse (connexion, popups).
+    const result = await buildGraphOffThread(sources, buildOptions, {
+      ...(this.options.worker !== undefined ? { worker: this.options.worker } : {}),
+    });
+    if ('unavailable' in result) {
+      emit('STATIC_ANALYSIS_UNAVAILABLE', result.unavailable);
+      return { graph: this.unavailable(mode, result.unavailable, sources.hash), cache: 'DISABLED' };
+    }
+    if ('error' in result)
       return {
-        graph: this.unavailable(mode, `analysis failed: ${(error as Error).message}`, sources.hash),
+        graph: this.unavailable(mode, `analysis failed: ${result.error}`, sources.hash),
         cache: 'DISABLED',
       };
-    }
+    const graph: StaticApplicationGraph = result.graph;
     if (graph.warnings.some((warning) => warning.startsWith('STATIC_ANALYSIS_BUDGET_EXHAUSTED')))
       emit('STATIC_ANALYSIS_BUDGET_EXHAUSTED', 'budget reached: partial static knowledge');
     for (const route of graph.routes.slice(0, 50)) emit('STATIC_ROUTE_DISCOVERED', route.path);
@@ -187,7 +186,7 @@ export class StaticApplicationAnalyzer {
       emit('STATIC_DATA_FLOW_DISCOVERED', `${flow.field ?? ''} → ${flow.requestProperty ?? ''}`);
     emit(
       'STATIC_ANALYSIS_COMPLETED',
-      `${graph.framework} ${graph.coverage}: ${String(graph.routes.length)} route(s), ${String(graph.fields.length)} field(s), ${String(graph.apiCalls.length)} API call(s) in ${String(graph.stats.durationMs)} ms`,
+      `${graph.framework} ${graph.coverage}: ${String(graph.routes.length)} route(s), ${String(graph.fields.length)} field(s), ${String(graph.apiCalls.length)} API call(s) in ${String(graph.stats.durationMs)} ms (${result.thread === 'worker' ? 'worker thread' : 'main thread'})`,
     );
     if (this.cache && graph.coverage !== 'UNAVAILABLE') {
       await this.cache.put(identity, graph).catch(() => undefined);

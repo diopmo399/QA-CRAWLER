@@ -92,10 +92,14 @@ staticAnalysis:
 
 La section « Analyse statique » gagne « Découverte des sources » : stratégie, origines, bundles lus (dont à la demande), source maps (référencées / chargées / partielles / rejetées), sources extraites, bundles sans source map, conflits, écarts dépôt ↔ build, empreinte des bundles, et un tableau bundle → source map → état → nombre de sources. Chaque résolution de champ cite l'origine de son code : `[code from SOURCE_MAP https://…/main.js.map]`.
 
+Un bundle non lu dit pourquoi, dans la colonne « État » : `too large (6.4 MB > limit 2.0 MB: raise staticAnalysis.budgets.maxFileSizeBytes or maxSourceMapBytes)`, `redirected (HTTP 302): redirects are not followed`, `HTTP 401`, `timed out (10 s)`, `network error`, `origin not allowed`.
+
 ## 6. Performance
 
 - L'inventaire (lecture des bundles, empreintes) précède toute source map : un déploiement déjà analysé est reconnu par `bundleSetHash` et **aucune source map n'est téléchargée**.
 - Extraction mesurée : 20 bundles × 100 sources (2 000 fichiers, ≈ 4 Mo de source maps) en ≈ 0,1 s ; l'analyse elle-même reste celle d'avant.
+- **L'analyse tourne dans un worker thread** : parser un gros bundle (un `main.js` de dev de plusieurs Mo) est un calcul synchrone ; hors du fil principal, le navigateur reste servi pendant ce temps (fenêtre de connexion HTTP, popup SSO, renouvellement de session). Mesuré sur un bundle de 7,5 Mo : la boucle d'événements restait bloquée ≈ 1,7 s sur le fil principal, moins de 60 ms avec le worker. Si un worker ne peut pas démarrer, l'analyse se fait sur le fil principal comme avant.
+- Un gros `main.js` demande des budgets plus larges : `staticAnalysis.budgets.maxFileSizeBytes` (2 Mo par défaut), `maxSourceMapBytes`, `maxAstNodes`.
 - Les chunks à la demande ne relancent l'analyse que lorsqu'un champ ne se résout pas sans elle, et seulement si le workspace a changé ; les confirmations d'exécution sont conservées.
 
 ## 7. Limites
