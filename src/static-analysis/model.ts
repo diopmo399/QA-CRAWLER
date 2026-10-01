@@ -14,7 +14,7 @@ import type { ApplicationRule } from './rules/rule-model.js';
 import type { StaticSourceDiscoverySummary, StaticSourceProvenance } from './sources/model.js';
 
 /** Version de l'analyseur : un changement invalide le cache. */
-export const STATIC_ANALYZER_VERSION = '1.1.0';
+export const STATIC_ANALYZER_VERSION = '1.2.0';
 
 export type StaticFramework = 'ANGULAR' | 'REACT' | 'VUE' | 'GENERIC' | 'UNKNOWN';
 
@@ -165,6 +165,54 @@ export interface StaticValueSource {
   location: SourceLocation;
 }
 
+/**
+ * Faits du code utiles à l'intelligence fonctionnelle (états métier, workflows,
+ * invariants, chemins d'erreur) — lus dans le même passage sur l'AST, jamais exécutés.
+ */
+export interface StaticFunctionalFacts {
+  /** enum / union de littéraux : les états possibles d'une entité, peut-être. */
+  enums: { name: string; members: string[]; location: SourceLocation }[];
+  /** Écritures HTTP (POST/PUT/PATCH/DELETE), leurs littéraux ({ status: 'APPROVED' }) et qui les appelle. */
+  writes: {
+    apiCall: string;
+    owner: string;
+    method: string;
+    httpMethod: HttpMethod;
+    route: string;
+    literals: Record<string, string | number | boolean>;
+    callers: { component: string; method: string }[];
+    location: SourceLocation;
+  }[];
+  /** Gardes : « if (paid > total) throw », « if (status !== 'PENDING') return ». */
+  guards: {
+    owner: string;
+    method: string;
+    text: string;
+    condition?: ApplicationRule['conditions'][number];
+    exit: 'THROW' | 'RETURN' | 'ERROR' | 'NONE';
+    location: SourceLocation;
+  }[];
+  /** Gestionnaires d'erreur d'API : statut / code attendu → champ en erreur, message. */
+  errorHandlers: {
+    owner: string;
+    method: string;
+    apiRoute?: string;
+    status?: number;
+    code?: string;
+    control?: string;
+    message?: string;
+    location: SourceLocation;
+  }[];
+  /** Boutons du gabarit → méthode du composant, et quand ils sont affichés. */
+  actions: {
+    component: string;
+    label: string;
+    handler: string;
+    conditions: ApplicationRule['conditions'];
+    location: SourceLocation;
+  }[];
+}
+
 /** Le graphe statique de l'application. */
 export interface StaticApplicationGraph {
   applicationId: string;
@@ -187,6 +235,8 @@ export interface StaticApplicationGraph {
   valueSources?: StaticValueSource[];
   /** Règles candidates découvertes dans le code (STATIC_DISCOVERED jusqu'à preuve du runtime). */
   rules?: ApplicationRule[];
+  /** Faits pour l'intelligence fonctionnelle (états, écritures, gardes, erreurs, boutons). */
+  functionalFacts?: StaticFunctionalFacts;
   /** Conditions lues mais écartées : aucun effet fonctionnel (NOT_CLASSIFIED_AS_BUSINESS_RULE). */
   technicalConditions?: { component: string; text: string; location: SourceLocation }[];
   /** Limites rencontrées (budget, fichiers ignorés, UNRESOLVED_DATA_FLOW…), sans secret. */

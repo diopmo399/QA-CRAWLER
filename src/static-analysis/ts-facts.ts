@@ -86,6 +86,8 @@ export interface RequestObjectFact {
   variable?: string;
   type?: string;
   mappings: RequestMapping[];
+  /** Propriétés littérales ({ status: 'APPROVED' }) : jamais celles d'un nom secret. */
+  literals?: Record<string, string | number | boolean>;
   /** ...this.form.value : chaque contrôle devient la propriété de même nom. */
   spreadForms: string[];
   unresolved: string[];
@@ -109,6 +111,8 @@ export interface HttpCallFact {
   /** Paramètre ou variable passé comme corps. */
   body?: string;
   bodyRequest?: RequestObjectFact;
+  /** Littéraux du corps envoyé ({ status: 'APPROVED' }) : une transition d'état métier probable. */
+  bodyLiterals?: Record<string, string | number | boolean>;
   responseType?: string;
   line: number;
 }
@@ -146,9 +150,17 @@ export interface DtoFact {
   line: number;
 }
 
+/** Un enum ou une union de littéraux (RegistrationStatus) : les états possibles d'une entité, peut-être. */
+export interface EnumFact {
+  name: string;
+  members: string[];
+  line: number;
+}
+
 export interface FileFacts {
   file: string;
   imports: string[];
+  enums?: EnumFact[];
   classes: ClassFact[];
   routeArrays: RouteArrayFact[];
   dtos: DtoFact[];
@@ -194,7 +206,7 @@ export function extractFacts(
       ? ts.ScriptKind.JS
       : ts.ScriptKind.TS;
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
-  const facts: FileFacts = { file, imports: [], classes: [], routeArrays: [], dtos: [], nodes: 0 };
+  const facts: FileFacts = { file, imports: [], enums: [], classes: [], routeArrays: [], dtos: [], nodes: 0 };
   const lineOf = (node: TS.Node): number =>
     source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
   const count = (): void => {
@@ -502,13 +514,19 @@ export function extractFacts(
       }
       const name = nameOf(property.name);
       if (!name) continue;
+      const literal = literalOf(property.initializer);
+      if (literal !== undefined && literal !== null && !SECRET_NAME.test(name))
+        request.literals = { ...request.literals, [name]: literal };
       const value = controlValueOf(property.initializer, scope);
       if (value) request.mappings.push({ property: name, ...value });
       else if (/form/i.test(property.initializer.getText(source)) && !SECRET_NAME.test(name))
         // Une valeur du formulaire passée par une transformation non suivie.
         request.unresolved.push(`${name}: transformed form value`);
     }
-    return request.mappings.length > 0 || request.spreadForms.length > 0 || request.unresolved.length > 0
+    return request.mappings.length > 0 ||
+      request.spreadForms.length > 0 ||
+      request.unresolved.length > 0 ||
+      request.literals !== undefined
       ? request
       : undefined;
   };
@@ -982,8 +1000,14 @@ export function extractFacts(
             const bodyArgument = BODY_METHODS.has(methodName) ? node.arguments[1] : undefined;
             if (bodyArgument) {
               const argument = argumentOf(bodyArgument);
-              if (argument.kind === 'variable') call.body = argument.name;
-              else if (argument.kind === 'object') call.bodyRequest = argument.request;
+              if (argument.kind === 'variable') {
+                call.body = argument.name;
+                const declared = method.requests.find((entry) => entry.variable === argument.name);
+                if (declared?.literals) call.bodyLiterals = declared.literals;
+              } else if (argument.kind === 'object') {
+                call.bodyRequest = argument.request;
+                if (argument.request.literals) call.bodyLiterals = argument.request.literals;
+              }
             }
             method.httpCalls.push(call);
           }
@@ -1077,6 +1101,23 @@ export function extractFacts(
       return;
     }
     if (ts.isInterfaceDeclaration(node)) facts.dtos.push(dtoOf(node.name.text, node.members, lineOf(node)));
+    // enum RegistrationStatus { DRAFT = 'DRAFT', … } : les états d'une entité, peut-être.
+    if (ts.isEnumDeclaration(node))
+      facts.enums?.push({
+        name: node.name.text,
+        members: node.members
+          .map((member) => stringOf(member.initializer) ?? nameOf(member.name) ?? '')
+          .filter(Boolean),
+        line: lineOf(node),
+      });
+    // type RegistrationStatus = 'DRAFT' | 'PENDING' | …
+    if (ts.isTypeAliasDeclaration(node) && ts.isUnionTypeNode(node.type)) {
+      const members = node.type.types.flatMap((type) =>
+        ts.isLiteralTypeNode(type) && ts.isStringLiteral(type.literal) ? [type.literal.text] : [],
+      );
+      if (members.length >= 2 && members.length === node.type.types.length)
+        facts.enums?.push({ name: node.name.text, members, line: lineOf(node) });
+    }
     if (ts.isTypeAliasDeclaration(node) && ts.isTypeLiteralNode(node.type))
       facts.dtos.push(dtoOf(node.name.text, node.type.members, lineOf(node)));
     if (isRouteArray(node)) {

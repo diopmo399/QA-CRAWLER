@@ -577,6 +577,26 @@ rules: { enabled: true }
 
 Un champ déjà rempli (profil, valeur par défaut) est **gardé** ; une règle se vérifie d'abord en observant l'écran. Si le crawler change une valeur pour vérifier une règle, il la **rétablit** ensuite, et ne touche jamais un champ prérempli par le serveur. Détails : [RULES.md](RULES.md).
 
+## 17 ter. Objectifs de test fonctionnels
+
+Avec le code et le contrat de l'application, QA-CRAWLER reconstruit ses **états métier** (une inscription passe de PENDING à APPROVED), ses **workflows**, ses **invariants**, les **effets** attendus d'une action et ses **chemins d'erreur**, puis se fixe des **objectifs de test** :
+
+```yaml
+staticAnalysis: { enabled: true, source: { root: ../mon-application } }
+openapi: { enabled: true, source: ./openapi.yaml }
+safety: { allowedActionClasses: [SAFE, MUTATION] } # pour vérifier une transition, il faut cliquer « Approve »
+functionalIntelligence: { enabled: true }
+```
+
+| Statut d'un objectif | Signification                                                               |
+| -------------------- | --------------------------------------------------------------------------- |
+| `VERIFIED`           | l'écran a montré ce que le code annonce (badge PENDING puis APPROVED)       |
+| `FAILED`             | l'API a accepté mais l'écran n'a pas changé, ou le contrat n'est pas suivi  |
+| `BLOCKED`            | la mission interdit l'action (supprimer, payer, modifier) : jamais exécutée |
+| `INCONCLUSIVE`       | l'écran ne permettait pas d'en juger, ou le budget est épuisé               |
+
+Un écart avec le contrat OpenAPI (un champ du formulaire absent de la requête) est un **CONTRACT_MISMATCH** : le contrat peut être en retard sur l'application. Détails : [FUNCTIONAL_INTELLIGENCE.md](FUNCTIONAL_INTELLIGENCE.md).
+
 ---
 
 ## 18. Dépannage

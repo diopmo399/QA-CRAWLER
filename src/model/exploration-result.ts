@@ -1,3 +1,4 @@
+import type { FunctionalSummary } from '../functional/functional-intelligence.js';
 import type { FormRulesSummary } from '../rules/form-rule-coordinator.js';
 import type { StaticAnalysisSummary } from '../static-analysis/model.js';
 import type { RegressionReport } from '../regression/regression-store.js';
@@ -136,6 +137,8 @@ export interface ExplorationResult {
   staticAnalysis?: StaticAnalysisSummary;
   /** État des formulaires (provenance, décisions), dépendances entre champs, règles et couverture — jamais une valeur saisie. */
   formRules?: FormRulesSummary;
+  /** Intelligence fonctionnelle : machines à états, workflows, invariants, effets, erreurs, contrat, objectifs — jamais une note. */
+  functional?: FunctionalSummary;
   /** Résumé non secret de la configuration effective. */
   settings: Record<string, unknown>;
   artifacts: {

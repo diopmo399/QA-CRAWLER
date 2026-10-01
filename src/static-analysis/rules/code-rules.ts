@@ -34,11 +34,30 @@ export interface TechnicalCondition {
   text: string;
   line: number;
   method: string;
+  /** La condition lue (une garde « if (x > y) throw » devient un invariant candidat). */
+  condition?: RuleCondition;
+  /** Ce que fait la branche : lever une erreur, sortir, poser une erreur de formulaire, rien. */
+  exit?: 'THROW' | 'RETURN' | 'ERROR' | 'NONE';
+}
+
+/**
+ * Un gestionnaire d'erreur d'un appel d'API (subscribe({ error }), catchError) :
+ * statut et code d'erreur attendus, champ marqué en erreur, message affiché.
+ */
+export interface ErrorHandlerFact {
+  origin: { target: string; method: string; route?: string; httpMethod?: string };
+  method: string;
+  status?: number;
+  code?: string;
+  control?: string;
+  message?: string;
+  line: number;
 }
 
 export interface CodeRuleFacts {
   rules: CodeRuleFact[];
   technical: TechnicalCondition[];
+  errorHandlers?: ErrorHandlerFact[];
 }
 
 /** Ce que ts-facts sait déjà lire, prêté à l'extracteur (un seul parseur, un seul moteur). */
@@ -77,7 +96,7 @@ interface WalkContext {
   visited: Set<string>;
 }
 
-const MAX_TECHNICAL = 30;
+const MAX_TECHNICAL = 60;
 
 export function extractCodeRules(
   ts: TypeScriptModule,
@@ -230,6 +249,100 @@ export function extractCodeRules(
     return undefined;
   };
 
+  /** subscribe(next, error) / subscribe({ error }) → le gestionnaire d'erreur. */
+  const errorCallbackOf = (
+    args: TS.NodeArray<TS.Expression>,
+  ): TS.ArrowFunction | TS.FunctionExpression | undefined => {
+    const second = args[1];
+    if (second && (ts.isArrowFunction(second) || ts.isFunctionExpression(second))) return second;
+    const first = args[0];
+    if (first && ts.isObjectLiteralExpression(first))
+      for (const property of first.properties)
+        if (
+          ts.isPropertyAssignment(property) &&
+          ts.isIdentifier(property.name) &&
+          property.name.text === 'error' &&
+          (ts.isArrowFunction(property.initializer) || ts.isFunctionExpression(property.initializer))
+        )
+          return property.initializer;
+    return undefined;
+  };
+
+  /**
+   * ERROR PATH (code) : dans le gestionnaire d'erreur, « if (e.status === 409) » ou
+   * « e.error.code === 'EMAIL_EXISTS' », puis le champ marqué (setErrors) ou le message posé.
+   */
+  const scanErrorHandler = (
+    callback: TS.ArrowFunction | TS.FunctionExpression,
+    origin: ErrorHandlerFact['origin'],
+    method: string,
+  ): void => {
+    const parameter = callback.parameters[0];
+    const name = parameter && ts.isIdentifier(parameter.name) ? parameter.name.text : undefined;
+    if (!name) return;
+    const handlers: ErrorHandlerFact[] = (facts.errorHandlers ??= []);
+    const statusPattern = new RegExp(`\\b${name}\\??\\.status\\s*===?\\s*(\\d{3})`);
+    const codePattern = new RegExp(
+      `\\b${name}\\??\\.error\\??\\.(?:code|errorCode|error|type)\\s*===?\\s*['"]([A-Za-z0-9_.-]{2,60})['"]`,
+    );
+    const visit = (node: TS.Node, scope: { status?: number; code?: string }): void => {
+      if (ts.isIfStatement(node)) {
+        const text = node.expression.getText();
+        const status = statusPattern.exec(text)?.[1];
+        const code = codePattern.exec(text)?.[1];
+        visit(node.thenStatement, {
+          ...scope,
+          ...(status ? { status: Number(status) } : {}),
+          ...(code ? { code } : {}),
+        });
+        if (node.elseStatement) visit(node.elseStatement, scope);
+        return;
+      }
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === 'setErrors'
+      ) {
+        const control =
+          helpers.controlRefOf(node.expression.expression)?.control ??
+          controlNamed(node.expression.expression);
+        if (handlers.length < 40)
+          handlers.push({
+            origin,
+            method,
+            ...scope,
+            ...(control ? { control } : {}),
+            line: helpers.lineOf(node),
+          });
+      }
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isPropertyAccessExpression(node.left) &&
+        node.left.expression.kind === ts.SyntaxKind.ThisKeyword &&
+        /(error|message|alert)/i.test(node.left.name.text)
+      ) {
+        const right = unwrap(ts, node.right);
+        const message =
+          ts.isStringLiteral(right) || ts.isNoSubstitutionTemplateLiteral(right)
+            ? right.text.slice(0, 120)
+            : undefined;
+        if (handlers.length < 40)
+          handlers.push({
+            origin,
+            method,
+            ...scope,
+            ...(message ? { message } : {}),
+            line: helpers.lineOf(node),
+          });
+      }
+      ts.forEachChild(node, (child) => {
+        visit(child, scope);
+      });
+    };
+    visit(callback.body, {});
+  };
+
   const walk = (node: TS.Node, context: WalkContext): number => {
     // ---- if (condition) { effets } else { effets }
     if (ts.isIfStatement(node)) {
@@ -241,12 +354,23 @@ export function extractCodeRules(
       const elseCount = node.elseStatement
         ? walk(node.elseStatement, { ...context, conditions: [...context.conditions, negate(condition)] })
         : 0;
-      if (thenCount + elseCount === 0 && facts.technical.length < MAX_TECHNICAL)
+      if (thenCount + elseCount === 0 && facts.technical.length < MAX_TECHNICAL) {
+        const branch = node.thenStatement.getText();
+        const exit = /\bthrow\b/.test(branch)
+          ? 'THROW'
+          : /\.setErrors\s*\(/.test(branch)
+            ? 'ERROR'
+            : /\breturn\b/.test(branch)
+              ? 'RETURN'
+              : 'NONE';
         facts.technical.push({
           text: node.expression.getText().replace(/\s+/g, ' ').slice(0, 80),
           line: helpers.lineOf(node),
           method: context.method,
+          condition,
+          exit,
         });
+      }
       return thenCount + elseCount;
     }
 
@@ -292,6 +416,8 @@ export function extractCodeRules(
             if (parameter && ts.isIdentifier(parameter.name)) responses.set(parameter.name.text, origin);
             count += walk(callback.body, { ...context, responses });
           }
+          const onError = errorCallbackOf(node.arguments);
+          if (onError) scanErrorHandler(onError, origin, context.method);
           return count;
         }
       }

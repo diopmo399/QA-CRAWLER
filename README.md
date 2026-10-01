@@ -842,6 +842,19 @@ rules: { enabled: true }
 
 Rapport : « Form state », « Application rules » (chaque règle : condition, effets ✓/✗, source fichier:ligne, runtime, effet réseau), « Rule graph », « Field dependencies ». Détails : [docs/RULES.md](docs/RULES.md).
 
+## Intelligence fonctionnelle et objectifs de test
+
+Au-delà des écrans et des règles, QA-CRAWLER comprend **ce que l'application fait** : cycles de vie des entités (DRAFT → PENDING → APPROVED), workflows (`CREATE:USER`, `APPROVE:REGISTRATION`), invariants (`paid + amount <= total`), effets attendus d'une action, chemins d'erreur (409 `EMAIL_ALREADY_EXISTS` → champ email), écarts entre le contrat OpenAPI et les requêtes réelles — puis en tire des **objectifs de test** (« Verify PENDING registration can transition to APPROVED ») planifiés, exécutés sous la SafetyPolicy et conclus VERIFIED, FAILED, BLOCKED ou INCONCLUSIVE, avec preuves.
+
+```yaml
+staticAnalysis: { enabled: true, source: { root: ../mon-application } }
+openapi: { enabled: true, source: ./openapi.yaml }
+safety: { allowedActionClasses: [SAFE, MUTATION] }
+functionalIntelligence: { enabled: true }
+```
+
+Le code suggère, l'historique guide, l'exécution confirme, la sécurité décide : un objectif dont l'action est interdite (supprimer, payer) est BLOCKED, jamais exécuté. Rapport : « Functional intelligence » (sans note de qualité) ; anomalies `FUNCTIONAL` et `CONTRACT` en WARNING. Désactivée par défaut. Détails : [docs/FUNCTIONAL_INTELLIGENCE.md](docs/FUNCTIONAL_INTELLIGENCE.md).
+
 ## Authentification
 
 Les identifiants viennent toujours de variables d'environnement (`QA_USERNAME` / `QA_PASSWORD` par défaut, voir `usernameEnv` / `passwordEnv`), jamais du fichier de mission. Ils ne sont jamais écrits dans les logs ni dans les rapports.

@@ -414,6 +414,11 @@ export class FormRuleCoordinator {
     return index >= 0 ? (labels[index] ?? opportunity.value) : opportunity.value;
   }
 
+  /** Les règles du RuleGraph, avec leur statut du run (objectifs de test RULE / PERMISSION). */
+  ruleList(): readonly ApplicationRule[] {
+    return this.rules?.all() ?? [];
+  }
+
   summary(): FormRulesSummary {
     const rules = this.rules;
     return {

@@ -1,0 +1,12 @@
+<h1>{{ registration.name }}</h1>
+<span class="badge">{{ registration.status }}</span>
+@if (registration.status === 'DRAFT') {
+  <button (click)="submit()">Submit</button>
+}
+@if (registration.status === 'PENDING') {
+  <button (click)="approve()">Approve</button>
+  <button (click)="reject()">Reject</button>
+}
+@if (registration.status === 'APPROVED') {
+  <button (click)="cancel()">Cancel registration</button>
+}

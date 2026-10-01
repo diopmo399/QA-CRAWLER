@@ -33,6 +33,7 @@ import { intelligenceSection } from './intelligence-section.js';
 import { persistenceSection } from './persistence-section.js';
 import { staticAnalysisSection } from './static-section.js';
 import { rulesSection } from './rules-section.js';
+import { functionalSection } from './functional-section.js';
 import { regressionSection } from './regression-section.js';
 
 export { esc } from './html-common.js';
@@ -219,6 +220,7 @@ export function renderHtml(
           persistenceSection(result, language),
           staticAnalysisSection(result, language),
           rulesSection(result, language),
+          functionalSection(result, language),
           oraclesSection(result, nameOf, language),
           formsSection(result, nameOf, language),
           authorizationSection(result, language),

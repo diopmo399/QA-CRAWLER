@@ -34,6 +34,8 @@ export const ISSUE_TYPES = [
   'UNEXPECTED_BEHAVIOR',
   /** Nettement plus lent que d'habitude (médiane / p95 historiques) ; jamais un échec à lui seul. */
   'PERFORMANCE',
+  /** SemanticFunctionalOracle : un effet, une transition ou une entité attendus n'ont pas été observés ; pas forcément un bug. */
+  'FUNCTIONAL',
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 
