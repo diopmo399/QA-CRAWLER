@@ -157,12 +157,14 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
   const target = action.target?.target;
   const common = { allow: allowOf(action), optional: false };
   const label = labelOf(action);
+  // Un élément sans nom (« input ») : son sélecteur, jamais une intention vide de sens.
+  const named = action.target?.named === true;
   switch (action.type) {
     case 'CLICK':
     case 'SUBMIT': {
       if (!target) return undefined;
       const step: FlowStep = { ...common, kind: 'click', target };
-      return gherkinTarget(step) || !readable(label)
+      return gherkinTarget(step) || !named || !readable(label)
         ? step
         : intentStep(common, { kind: 'CLICK', target: label });
     }
@@ -170,14 +172,14 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
       if (!target || !action.value) return undefined;
       const value = valueOf(action);
       const step: FlowStep = { ...common, allow: [], kind: 'fill', target, value };
-      return gherkinTarget(step) || !readable(label)
+      return gherkinTarget(step) || !named || !readable(label)
         ? step
         : intentStep({ ...common, allow: [] }, { kind: 'FILL', field: label, value });
     }
     case 'SELECT': {
       if (!target || action.option === undefined) return undefined;
       const step: FlowStep = { ...common, kind: 'select', target, option: action.option };
-      return gherkinTarget(step) || !readable(label)
+      return gherkinTarget(step) || !named || !readable(label)
         ? step
         : intentStep(common, { kind: 'SELECT', field: label, option: action.option });
     }
@@ -185,12 +187,14 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
     case 'UNCHECK': {
       if (!target) return undefined;
       const step: FlowStep = { ...common, kind: action.type === 'CHECK' ? 'check' : 'uncheck', target };
-      return gherkinTarget(step) || !readable(label)
+      return gherkinTarget(step) || !named || !readable(label)
         ? step
         : intentStep(common, { kind: 'CHECK', field: label, checked: action.type === 'CHECK' });
     }
     case 'UPLOAD':
-      return readable(label) ? intentStep(common, { kind: 'UPLOAD', field: label, file: '' }) : undefined;
+      return named && readable(label)
+        ? intentStep(common, { kind: 'UPLOAD', field: label, file: '' })
+        : undefined;
     default:
       return undefined;
   }
