@@ -56,6 +56,16 @@ export interface ScoringSignals {
     | undefined;
   /** Poids de ce signal (rules.decisionWeight). */
   rulesWeight?: number;
+  /**
+   * INTELLIGENCE FONCTIONNELLE : le meilleur objectif de test que cette action fait
+   * avancer, ses points calculés par functional/goal-scoring (un seul endroit). Absent :
+   * functionalIntelligence ou testGoals désactivés.
+   */
+  functionalSignalOf?(
+    action: DiscoveredAction,
+  ): { goalId: string; kind: 'progress' | 'coverage'; points: number; reason: string } | undefined;
+  /** Poids de ce signal (functionalIntelligence.testGoals.decisionWeight). */
+  functionalWeight?: number;
 }
 
 /** Le score d'une action, avec sa décomposition. */
@@ -228,6 +238,16 @@ export class AdvancedActionScorer implements ActionScorer {
           },
         });
     }
+
+    // ---- objectifs de test (la SafetyPolicy reste hors du score : un objectif bloqué ne donne rien)
+    const functional = this.signals.functionalSignalOf?.(action);
+    if (functional && functional.points > 0)
+      add({
+        factor: 'functional',
+        points: Math.round((this.signals.functionalWeight ?? 1) * functional.points),
+        code: functional.kind === 'progress' ? 'test-goal-progress' : 'functional-coverage',
+        params: { reason: functional.reason },
+      });
 
     // ---- risque
     if (action.classification === 'MUTATION') add({ factor: 'risk', points: -20, code: 'mutation-risk' });

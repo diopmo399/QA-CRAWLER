@@ -33,6 +33,8 @@ export interface TemplateRuleElement {
   hiddenWhen?: string;
   /** Liste : la collection itérée pour ses options (provinces). */
   optionsFrom?: string;
+  /** (click)="approve(registration)" : la méthode du composant que le bouton appelle. */
+  clickHandler?: string;
   line: number;
 }
 
@@ -240,6 +242,7 @@ export function scanTemplateRules(html: string): TemplateRuleFacts {
           return value !== undefined && value.trim() !== '' ? value.trim() : undefined;
         };
         const hidden = bound('[hidden]') ?? bound('[class.hidden]') ?? bound('[class.d-none]');
+        const handler = /^\s*([\w$]+)\s*\(/.exec(attributes.get('(click)') ?? '')?.[1];
         const common = {
           tag: name,
           visibleWhen: conditions,
@@ -265,6 +268,7 @@ export function scanTemplateRules(html: string): TemplateRuleFacts {
             kind: 'BUTTON',
             ...(label ? { label } : {}),
             ...(route ? { route } : {}),
+            ...(handler ? { clickHandler: handler } : {}),
             ...common,
           });
         } else if (route) {

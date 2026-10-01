@@ -1143,6 +1143,44 @@ const rulesSchema = z
   })
   .strict();
 
+const toggle = z.object({ enabled: z.boolean().default(true) }).strict();
+
+/**
+ * INTELLIGENCE FONCTIONNELLE : états métier, workflows, invariants, effets secondaires,
+ * chemins d'erreur, contrat au runtime, objectifs de test. Désactivée par défaut :
+ * enabled=false garde exactement le comportement d'avant ; chaque partie se coupe seule.
+ */
+const functionalIntelligenceSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    stateMachines: toggle.default({}),
+    invariants: toggle.default({}),
+    workflows: toggle.default({}),
+    sideEffects: toggle.default({}),
+    errorPaths: toggle.default({}),
+    runtimeContracts: toggle.default({}),
+    testGoals: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Le moteur de décision reçoit le signal `functional` (progression d'objectif, couverture). */
+        influenceDecisionEngine: z.boolean().default(true),
+        /** Poids de ce signal dans le score des actions. */
+        decisionWeight: z.number().nonnegative().default(1),
+        budgets: z
+          .object({
+            maxGoalsPerRun: z.number().int().positive().default(50),
+            /** Actions au plus pendant qu'un objectif est en cours, avant INCONCLUSIVE. */
+            maxGoalActions: z.number().int().positive().default(20),
+            maxGoalDurationMs: z.number().int().positive().default(60_000),
+          })
+          .strict()
+          .default({}),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
 const testDataSchema = z
   .object({
     /**
@@ -1339,6 +1377,7 @@ export const scenarioSchema = z
     verify: verifySchema.default({}),
     testData: testDataSchema.default({}),
     rules: rulesSchema.default({}),
+    functionalIntelligence: functionalIntelligenceSchema.default({}),
     semantics: semanticsSchema.default({}),
     /** Packs de domaine (vocabulaire, synonymes, invariants, indices de score) : nom intégré (generic, ecommerce, administration) ou chemin d'un fichier YAML. */
     domainPacks: z.array(nonEmpty).default(['generic']),

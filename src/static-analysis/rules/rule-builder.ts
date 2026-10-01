@@ -28,6 +28,17 @@ export interface RuleBuildResult {
   rules: ApplicationRule[];
   /** Conditions lues mais écartées : aucun effet fonctionnel (if (!response) return). */
   technical: { component: string; text: string; location: SourceLocation }[];
+  /** Boutons du gabarit qui appellent une méthode du composant, et quand ils sont affichés. */
+  actions: TemplateAction[];
+}
+
+export interface TemplateAction {
+  component: string;
+  label: string;
+  handler: string;
+  /** Conditions d'affichage (toutes vraies) : « registration.status == PENDING ». */
+  conditions: RuleCondition[];
+  location: SourceLocation;
 }
 
 interface Candidate {
@@ -53,6 +64,7 @@ export function buildRules(
 ): RuleBuildResult {
   const candidates: Candidate[] = [];
   const technical: RuleBuildResult['technical'] = [];
+  const actions: TemplateAction[] = [];
   for (const component of components) {
     const controls = new Set(
       forms.filter((form) => form.component === component.name).flatMap((form) => form.controls),
@@ -62,7 +74,7 @@ export function buildRules(
     for (const element of component.template?.rules.elements ?? [])
       if (element.control && element.optionsFrom)
         optionsOwner.set(element.optionsFrom.split('.').pop() ?? element.optionsFrom, element.control);
-    if (component.template) candidates.push(...templateCandidates(ts, component, controls));
+    if (component.template) candidates.push(...templateCandidates(ts, component, controls, actions));
     candidates.push(...codeCandidates(component, classes, optionsOwner));
     for (const entry of component.fact.rules.technical)
       technical.push({
@@ -71,7 +83,7 @@ export function buildRules(
         location: { file: component.file, line: entry.line },
       });
   }
-  return { rules: merge(candidates), technical };
+  return { rules: merge(candidates), technical, actions };
 }
 
 // ------------------------------------------------------------------ gabarit
@@ -80,6 +92,7 @@ function templateCandidates(
   ts: TypeScriptModule,
   component: RuleBuildComponent,
   controls: Set<string>,
+  actions: TemplateAction[],
 ): Candidate[] {
   const template = component.template;
   if (!template) return [];
@@ -99,6 +112,14 @@ function templateCandidates(
   for (const element of template.rules.elements) {
     const location = { file: template.name, line: element.line };
     const visible = element.visibleWhen.map(convert);
+    if (element.kind === 'BUTTON' && element.clickHandler && element.label)
+      actions.push({
+        component: component.name,
+        label: element.label,
+        handler: element.clickHandler,
+        conditions: visible,
+        location,
+      });
     const target: RuleEffect['target'] = element.control
       ? { kind: 'FIELD', name: element.control, control: element.control }
       : element.kind === 'BUTTON'

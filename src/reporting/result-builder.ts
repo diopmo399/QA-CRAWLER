@@ -98,6 +98,7 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     ...(outcome.blockedWrites.length > 0 ? { blockedWrites: outcome.blockedWrites } : {}),
     ...(outcome.staticAnalysis ? { staticAnalysis: outcome.staticAnalysis } : {}),
     ...(outcome.formRules ? { formRules: outcome.formRules } : {}),
+    ...(outcome.functional ? { functional: outcome.functional } : {}),
     settings: {
       exploration,
       goals,

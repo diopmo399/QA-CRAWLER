@@ -87,6 +87,16 @@ import { fieldOf } from '../forms/form-analyzer.js';
 import { CrawlerValueMemory, ResponseValueIndex } from '../forms/state/value-sources.js';
 import { FormKnowledgeObserver } from '../forms/state/form-knowledge-observer.js';
 import { FormRuleCoordinator, type FormRulesSummary } from '../rules/form-rule-coordinator.js';
+import {
+  FunctionalIntelligence,
+  screenFactsOf,
+  type FunctionalEvent,
+  type FunctionalSummary,
+} from '../functional/functional-intelligence.js';
+import type { FunctionalActionObservation } from '../functional/model.js';
+import { judgeGoalAction } from '../functional/goal-safety.js';
+import { FunctionalKnowledgeStore } from '../knowledge/functional-knowledge-store.js';
+import { SemanticFunctionalOracle } from '../oracles/semantic-functional-oracle.js';
 import type { RuleEvent } from '../rules/runtime-rule-verifier.js';
 import { RuleKnowledgeStore } from '../knowledge/rule-knowledge-store.js';
 import type { StaticAnalysisOutcome } from '../static-analysis/static-analyzer.js';
@@ -216,6 +226,8 @@ export interface ExplorationListener {
   onStaticAnalysis?(event: { at: string; event: StaticAnalysisEvent; message: string }): void;
   /** Règles de l'application, état des formulaires, dépendances (sans valeur saisie). */
   onRule?(event: { at: string; event: RuleEvent; message: string }): void;
+  /** Intelligence fonctionnelle : états métier, invariants, effets, objectifs de test (sans valeur saisie). */
+  onFunctional?(event: { at: string; event: FunctionalEvent; message: string }): void;
 }
 
 export interface FlowExplorerOptions {
@@ -282,6 +294,7 @@ export interface ExplorationOutcome {
   staticAnalysis?: StaticAnalysisSummary;
   /** État des formulaires, dépendances entre champs, règles de l'application et leur couverture. */
   formRules?: FormRulesSummary;
+  functional?: FunctionalSummary;
   /** Tentatives de récupération, branches abandonnées et circuits ouverts. */
   recovery: RecoverySummary;
   /** Actions qui modifient des données : exécutées, et le budget (safety.mutations). */
@@ -415,6 +428,8 @@ export class FlowExplorer {
   private readonly responseValues = new ResponseValueIndex(this.valueSalt);
   private readonly formNetwork: FormKnowledgeObserver;
   private readonly coordinator: FormRuleCoordinator;
+  /** Intelligence fonctionnelle (functionalIntelligence.enabled), sinon absente : rien ne change. */
+  private readonly functional: FunctionalIntelligence | undefined;
   /** La valeur saisie par la dernière action exécutée (données de test du crawler). */
   private lastExecutedValue: string | undefined;
   /** Le scénario en cours : le formulaire rempli, les valeurs saisies (non sensibles) pour les vérifications. */
@@ -541,6 +556,21 @@ export class FlowExplorer {
                   rulesWeight: config.rules.decisionWeight,
                 }
               : {}),
+            ...(config.functionalIntelligence.enabled &&
+            config.functionalIntelligence.testGoals.enabled &&
+            config.functionalIntelligence.testGoals.influenceDecisionEngine
+              ? {
+                  functionalSignalOf: (action: DiscoveredAction) => {
+                    const route = action.href ? pathnameOf(action.href) : undefined;
+                    return this.functional?.signalFor({
+                      label: actionLabel(action),
+                      type: action.type,
+                      ...(route ? { route } : {}),
+                    });
+                  },
+                  functionalWeight: config.functionalIntelligence.testGoals.decisionWeight,
+                }
+              : {}),
           }),
           {
             knowledge: this.knowledge,
@@ -635,6 +665,9 @@ export class FlowExplorer {
           ...(oracles.baseline.enabled ? [new BaselineOracle(options.baseline)] : []),
           new ContractOracle(options.contract),
           ...(this.invariantOracle ? [this.invariantOracle] : []),
+          ...(config.functionalIntelligence.enabled
+            ? [new SemanticFunctionalOracle((actionId) => this.functional?.findingsFor(actionId) ?? [])]
+            : []),
           ...(config.knowledge.enabled
             ? [
                 new HistoricalOracle(
@@ -655,6 +688,8 @@ export class FlowExplorer {
     this.formNetwork = new FormKnowledgeObserver(
       (url) => this.safety.navigation.isAllowedHost(new URL(url).hostname),
       this.responseValues,
+      // La forme des corps (clés, types) n'est lue que pour l'intelligence fonctionnelle.
+      config.functionalIntelligence.enabled ? this.valueSalt : undefined,
     );
     this.coordinator = new FormRuleCoordinator({
       config,
@@ -694,6 +729,34 @@ export class FlowExplorer {
         ? { version: config.staticAnalysis.version ?? this.env.QA_VERSION }
         : {}),
     });
+    this.functional = config.functionalIntelligence.enabled
+      ? new FunctionalIntelligence({
+          config: config.functionalIntelligence,
+          salt: this.valueSalt,
+          safety: (target) => judgeGoalAction(this.safety, target.actionLabel),
+          emit: (event, message) => {
+            this.listener.onFunctional?.({
+              at: new Date().toISOString(),
+              event,
+              message: redactText(message),
+            });
+          },
+          rules: () => this.coordinator.ruleList(),
+          knownPath: (route) => this.knownPathTo(route),
+          store: new FunctionalKnowledgeStore(
+            path.join(path.dirname(path.resolve(config.output.reportsDir)), 'knowledge', 'functional'),
+            {
+              application: config.mission.name,
+              ...((config.staticAnalysis.version ?? this.env.QA_VERSION)
+                ? { version: config.staticAnalysis.version ?? this.env.QA_VERSION }
+                : {}),
+              ...((config.staticAnalysis.commit ?? this.env.QA_COMMIT)
+                ? { commit: config.staticAnalysis.commit ?? this.env.QA_COMMIT }
+                : {}),
+            },
+          ),
+        })
+      : undefined;
     const { recovery } = config;
     this.recovery = new RecoveryEngine(recovery);
     this.breaker = recovery.enabled ? new CircuitBreaker(recovery.circuitBreaker) : undefined;
@@ -774,6 +837,16 @@ export class FlowExplorer {
           (this.dryRunHook !== undefined && this.config.staticAnalysis.dryRun.useStaticKnowledge))
       )
         await this.ensureStaticKnowledge(page);
+      // INTELLIGENCE FONCTIONNELLE : la connaissance du code (si l'analyse statique est là) et du contrat.
+      if (this.functional) {
+        await this.functional.loadHistory();
+        if (this.config.staticAnalysis.enabled) await this.ensureStaticKnowledge(page);
+        this.functional.useStaticKnowledge(
+          this.staticKnowledge?.graph,
+          this.contract,
+          this.declaredScenarios(),
+        );
+      }
       // L'état de départ est la racine du graphe des flows, quel que soit ce que les flows visitent d'abord.
       let current = await this.observeState(page, 0);
       // GOAL PLANNER : des objectifs fonctionnels (jamais des clics), suivis pendant tout le run.
@@ -844,6 +917,7 @@ export class FlowExplorer {
     }
     await this.memory.save(this.graph);
     await this.coordinator.persist();
+    await this.functional?.persist();
     return this.outcome(stopReason);
   }
 
@@ -1014,6 +1088,7 @@ export class FlowExplorer {
     });
     this.details.set(state.stateId, { actions, forms: snapshot.forms });
     this.currentUrl = snapshot.url;
+    this.functional?.observeScreen(screenFactsOf(snapshot, state.route));
 
     const flow = this.graph.flowTo(state.stateId);
     // Les anomalies levées en atteignant cet état lui appartiennent.
@@ -1144,6 +1219,10 @@ export class FlowExplorer {
     const snapshotBefore = this.lastSnapshot;
     this.lastExecutedValue = undefined;
     this.formNetwork.start(`action-${action.id}`);
+    if (this.functional) {
+      this.formNetwork.startFunctional(`action-${action.id}`);
+      this.functional.onActionSelected({ label: actionLabel(action), type: action.type });
+    }
     // Les anomalies levées à partir de maintenant sont causées par cette action ; leur état est connu après l'observation.
     this.attribution = { actionId: action.id };
     this.currentAction = { stateId: from.stateId, actionId: action.id };
@@ -1209,6 +1288,7 @@ export class FlowExplorer {
     const crashed = observers.pageErrors.consumeCrash();
     const beforeSignals = this.lastSnapshot?.signals;
     if (result.status === 'FAILED' || blocking.length > 0 || leftAllowedHosts || crashed) {
+      if (this.functional) await this.formNetwork.stopFunctional(`action-${action.id}`);
       const kind: FailureKind = expired
         ? 'session-expired'
         : crashed
@@ -1286,6 +1366,7 @@ export class FlowExplorer {
     const after = await this.observeState(page, depth);
     // Une saisie : ce qui a changé ailleurs (dépendances entre champs), les règles de ce champ revues.
     const formExchanges = this.formNetwork.stop(`action-${action.id}`);
+    await this.observeFunctional(action, snapshotBefore, this.lastSnapshot, from.route, after.route);
     if (action.field)
       this.coordinator.afterAction({
         action,
@@ -1557,6 +1638,13 @@ export class FlowExplorer {
           const severity = severities[reason.code];
           if (severity) add('INVARIANT', severity, reason.message);
         }
+        continue;
+      }
+      if (opinion.oracle === 'functional') {
+        // Une attente fonctionnelle non tenue : un avertissement, jamais un échec confirmé ; un écart de contrat reste CONTRACT.
+        if (opinion.status === 'WARNING')
+          for (const reason of opinion.reasons)
+            add(reason.code === 'contract-mismatch' ? 'CONTRACT' : 'FUNCTIONAL', 'WARNING', reason.message);
         continue;
       }
       const type = anomaly[opinion.oracle];
@@ -3496,6 +3584,11 @@ export class FlowExplorer {
     this.currentAction = { stateId: before.stateId, actionId: action.id, flow: flow.name };
     const interactionMark = this.interactions.mark();
     this.networkTrace.start(action.id);
+    const snapshotBefore = this.lastSnapshot;
+    if (this.functional) {
+      this.formNetwork.startFunctional(`action-${action.id}`);
+      this.functional.onActionSelected({ label: actionLabel(action), type: action.type });
+    }
     this.writeGuard.during(before.stateId, action.id, `flow "${flow.name}" step "${actionLabel(action)}"`);
     // Une étape qui a le droit de modifier des données (allow), ou l'écran de connexion d'un flow, peut écrire.
     const mayWrite =
@@ -3517,6 +3610,7 @@ export class FlowExplorer {
         .map((issue) => issue.id);
 
     if (error || blocking.length > 0 || !this.isExplorablePage(page) || observers.pageErrors.consumeCrash()) {
+      if (this.functional) await this.formNetwork.stopFunctional(`action-${action.id}`);
       const ids = newIssues();
       this.collector.assignState(ids, before.stateId, before.metadata.flow);
       const edge = this.graph.addEdge({
@@ -3552,6 +3646,19 @@ export class FlowExplorer {
 
     // « Que s'est-il passé ? »
     const after = await this.observeState(page, before.metadata.depth + 1);
+    if (this.functional) {
+      // Une étape de flow n'est pas jugée par les oracles : les constats fonctionnels deviennent des avertissements ici.
+      await this.observeFunctional(action, snapshotBefore, this.lastSnapshot, before.route, after.route);
+      for (const finding of this.functional.findingsFor(action.id))
+        if (finding.status === 'WARNING')
+          this.collector.add({
+            type: finding.code === 'CONTRACT_MISMATCH' ? 'CONTRACT' : 'FUNCTIONAL',
+            severity: 'WARNING',
+            message: `"${actionLabel(action)}": ${finding.message}`,
+            pageUrl: before.url,
+            actionId: action.id,
+          });
+    }
     const ids = newIssues();
     const edge = this.graph.addEdge({
       from: before.stateId,
@@ -4407,7 +4514,47 @@ export class FlowExplorer {
       budget: this.budget.usage(),
       ...(this.config.staticAnalysis.enabled ? { staticAnalysis: this.staticSummary() } : {}),
       ...this.formRulesSummary(),
+      ...(this.functional ? { functional: this.functional.summary() } : {}),
     };
+  }
+
+  /** Avant / après une action, sa fenêtre réseau : l'intelligence fonctionnelle en tire ses constats (avant les oracles). */
+  private async observeFunctional(
+    action: DiscoveredAction,
+    before: UiSnapshot | undefined,
+    after: UiSnapshot | undefined,
+    beforeRoute: string,
+    route: string,
+  ): Promise<void> {
+    const functional = this.functional;
+    if (!functional) return;
+    const exchanges = await this.formNetwork.stopFunctional(`action-${action.id}`);
+    const observation: FunctionalActionObservation = {
+      actionId: action.id,
+      label: actionLabel(action),
+      type: action.type,
+      ...(before ? { before: screenFactsOf(before, beforeRoute) } : {}),
+      ...(after ? { after: screenFactsOf(after, route) } : {}),
+      exchanges,
+    };
+    functional.afterAction(observation);
+  }
+
+  /** FlowGraph : étapes vers un état CONNU de cette route (le planificateur ne parcourt rien lui-même). */
+  private knownPathTo(route: string): number | undefined {
+    const template = route.replace(/^\//, '').split('/');
+    for (const node of this.graph.allNodes()) {
+      const actual = node.route.replace(/^\//, '').split('?')[0]?.split('/') ?? [];
+      if (actual.length !== template.length) continue;
+      if (!template.every((segment, index) => /^[:{]/.test(segment) || segment === actual[index])) continue;
+      return this.graph.pathTo(node.id).length;
+    }
+    return undefined;
+  }
+
+  /** Les scénarios déclarés (flows, Gherkin) : leur nom appuie un workflow. */
+  private declaredScenarios(): { name: string; source: 'GHERKIN' | 'FLOW_YAML' }[] {
+    return this.config.flows.map((flow) => ({ name: flow.name, source: 'FLOW_YAML' as const }));
   }
 
   /** La valeur saisie par la dernière action (posée par execute()). */

@@ -3,6 +3,7 @@ import { actionLabel } from '../model/discovered-action.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import type { StaticAnalysisEvent } from '../static-analysis/static-analyzer.js';
 import type { RuleEvent } from '../rules/runtime-rule-verifier.js';
+import type { FunctionalEvent } from '../functional/functional-intelligence.js';
 
 export const LOG_LEVELS = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -53,7 +54,8 @@ export type EngineEvent =
   | 'SUGGESTED_FLOW_GENERATED'
   | 'DRY_RUN_COMPLETED'
   | StaticAnalysisEvent
-  | RuleEvent;
+  | RuleEvent
+  | FunctionalEvent;
 
 /**
  * Une ligne du journal du moteur (engine-log.jsonl). Seulement des id, des libellés
@@ -290,6 +292,23 @@ export class EngineEventLog {
           event.event === 'RULE_DISCOVERED' ||
           event.event === 'RULE_CANDIDATE_DISCOVERED' ||
           event.event === 'FIELD_DEPENDENCY_DISCOVERED';
+        this.log(warn ? 'WARN' : detail ? 'DEBUG' : 'INFO', event.event, redactText(event.message));
+      },
+      onFunctional: (event) => {
+        const warn =
+          event.event === 'INVARIANT_VIOLATED' ||
+          event.event === 'SIDE_EFFECT_MISSING' ||
+          event.event === 'CONTRACT_RUNTIME_MISMATCH' ||
+          event.event === 'TEST_GOAL_FAILED' ||
+          event.event === 'TEST_GOAL_BLOCKED';
+        const detail =
+          event.event === 'BUSINESS_STATE_DISCOVERED' ||
+          event.event === 'BUSINESS_TRANSITION_DISCOVERED' ||
+          event.event === 'INVARIANT_DISCOVERED' ||
+          event.event === 'WORKFLOW_DISCOVERED' ||
+          event.event === 'SIDE_EFFECT_EXPECTED' ||
+          event.event === 'TEST_GOAL_GENERATED' ||
+          event.event === 'TEST_GOAL_PROGRESS';
         this.log(warn ? 'WARN' : detail ? 'DEBUG' : 'INFO', event.event, redactText(event.message));
       },
       onSemanticResolution: (event) => {

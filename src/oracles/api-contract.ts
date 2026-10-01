@@ -13,6 +13,8 @@ export interface ContractOperation {
   responses: string[];
   /** Propriétés du corps JSON de la requête, quand elles sont décrites. */
   requestFields: Record<string, ContractFieldSchema>;
+  /** Schéma JSON des réponses décrites, par statut ("200") : propriétés et obligatoires. */
+  responseSchemas?: Record<string, { fields: Record<string, ContractFieldSchema>; required: string[] }>;
 }
 
 export interface ContractFieldSchema {
@@ -75,7 +77,7 @@ interface OpenApiDocument {
   components?: { schemas?: Record<string, Schema | undefined> };
 }
 interface OpenApiOperation {
-  responses?: Record<string, unknown>;
+  responses?: Record<string, { content?: Record<string, { schema?: Schema } | undefined> } | undefined>;
   requestBody?: { content?: Record<string, { schema?: Schema } | undefined> };
 }
 interface Schema {
@@ -129,6 +131,24 @@ export function parseOpenApi(text: string, source = 'openapi'): ApiContract {
         .join('/');
       const bases = ['', ...prefixes.map((prefix) => prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))];
       const body = resolve(operation.requestBody?.content?.['application/json']?.schema);
+      const fieldsOf = (object: Schema | undefined): Record<string, ContractFieldSchema> => {
+        const fields: Record<string, ContractFieldSchema> = {};
+        for (const [name, raw] of Object.entries(object?.properties ?? {})) {
+          const schema = resolve(raw);
+          if (schema)
+            fields[name] = {
+              ...fieldType(schema),
+              ...(object?.required?.includes(name) ? { required: true } : {}),
+            };
+        }
+        return fields;
+      };
+      const responseSchemas: NonNullable<ContractOperation['responseSchemas']> = {};
+      for (const [status, response] of Object.entries(operation.responses ?? {})) {
+        const schema = resolve(response?.content?.['application/json']?.schema);
+        if (schema?.properties)
+          responseSchemas[status] = { fields: fieldsOf(schema), required: schema.required ?? [] };
+      }
       const requestFields: Record<string, ContractFieldSchema> = {};
       for (const [name, raw] of Object.entries(body?.properties ?? {})) {
         const schema = resolve(raw);
@@ -150,6 +170,7 @@ export function parseOpenApi(text: string, source = 'openapi'): ApiContract {
         matcher: new RegExp(`^(?:${bases.join('|')})${pattern}/?$`),
         responses: Object.keys(operation.responses ?? {}),
         requestFields,
+        ...(Object.keys(responseSchemas).length > 0 ? { responseSchemas } : {}),
       });
     }
   }

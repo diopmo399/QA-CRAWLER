@@ -12,6 +12,7 @@ export const SCORE_FACTORS = [
   'repetition',
   'adaptive',
   'rules',
+  'functional',
 ] as const;
 export type ScoreFactor = (typeof SCORE_FACTORS)[number];
 
@@ -41,6 +42,8 @@ export interface ScoreBreakdown {
   adaptive: number;
   /** Couverture de règles (rules.influenceDecisionEngine) : 0 sans règle à vérifier. */
   rules: number;
+  /** Objectifs de test (functionalIntelligence.testGoals.influenceDecisionEngine) : 0 sans objectif. */
+  functional: number;
   total: number;
   /** Raisons lisibles (anglais), dans l'ordre des composantes. */
   reasons: string[];
@@ -90,6 +93,8 @@ const TEMPLATES = {
     en: 'influential field {field} ({dependencies} dependent(s), {unverified} unverified rule(s))',
     fr: 'champ influent {field} ({dependencies} dépendance(s), {unverified} règle(s) non vérifiée(s))',
   },
+  'test-goal-progress': { en: '{reason}', fr: '{reason}' },
+  'functional-coverage': { en: '{reason}', fr: '{reason}' },
   'unstable-history': {
     en: 'unstable history (stability {stability}, confidence {confidence}: {detail})',
     fr: 'historique instable (stabilité {stability}, confiance {confidence} : {detail})',

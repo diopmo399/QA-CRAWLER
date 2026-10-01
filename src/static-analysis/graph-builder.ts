@@ -13,11 +13,13 @@ import {
   type StaticFramework,
   type StaticNavigationEdge,
   type StaticRouteNode,
+  type HttpMethod,
+  type StaticFunctionalFacts,
   type StaticValueSource,
 } from './model.js';
 import { sanitizeGraph } from './sanitize.js';
 import type { SourceSet } from './source-set.js';
-import { buildRules, type RuleBuildComponent } from './rules/rule-builder.js';
+import { buildRules, type RuleBuildComponent, type TemplateAction } from './rules/rule-builder.js';
 import type { ApplicationRule } from './rules/rule-model.js';
 import { scanTemplateRules, type TemplateRuleFacts } from './rules/template-rules.js';
 import { scanTemplate, type TemplateFacts } from './template-scanner.js';
@@ -252,6 +254,12 @@ export function buildStaticGraph(
     angular && options.features.rules !== false ? buildRules(ts, ruleComponents, classes, forms) : undefined;
   const rules: ApplicationRule[] = ruleResult?.rules ?? [];
 
+  // ---- faits pour l'intelligence fonctionnelle (même passage, mêmes faits)
+  const functionalFacts: StaticFunctionalFacts | undefined =
+    options.features.rules !== false
+      ? functionalFactsOf(facts, classes, ruleResult?.actions ?? [])
+      : undefined;
+
   // ---- DTO
   const dtos: StaticDtoNode[] = options.features.dtoMapping
     ? facts.flatMap((fileFacts) =>
@@ -345,6 +353,12 @@ export function buildStaticGraph(
     dataFlows,
     ...(valueSources.length > 0 ? { valueSources } : {}),
     ...(rules.length > 0 ? { rules } : {}),
+    ...(functionalFacts &&
+    (functionalFacts.enums.length > 0 ||
+      functionalFacts.writes.length > 0 ||
+      functionalFacts.guards.length > 0)
+      ? { functionalFacts }
+      : {}),
     ...(ruleResult && ruleResult.technical.length > 0
       ? {
           technicalConditions: ruleResult.technical
@@ -568,6 +582,86 @@ function valueSourcesOf(
       }
   }
   return sources;
+}
+
+/** Enums, écritures et leurs appelants, gardes, gestionnaires d'erreur, boutons → méthodes. */
+function functionalFactsOf(
+  facts: readonly FileFacts[],
+  classes: Map<string, { fact: ClassFact; file: string }>,
+  actions: TemplateAction[],
+): StaticFunctionalFacts {
+  const enums = facts.flatMap((fileFacts) =>
+    (fileFacts.enums ?? []).map((entry) => ({
+      name: entry.name,
+      members: entry.members,
+      location: { file: fileFacts.file, line: entry.line },
+    })),
+  );
+  const writes: StaticFunctionalFacts['writes'] = [];
+  for (const [name, { fact, file }] of classes)
+    for (const method of fact.methods)
+      for (const call of method.httpCalls) {
+        if (call.method === 'GET') continue;
+        const callers: { component: string; method: string }[] = [];
+        for (const [callerName, caller] of classes)
+          for (const callerMethod of caller.fact.methods)
+            if (
+              callerMethod.serviceCalls.some(
+                (serviceCall) =>
+                  caller.fact.injected[serviceCall.target] === name && serviceCall.method === method.name,
+              )
+            )
+              callers.push({ component: callerName, method: callerMethod.name });
+        if (fact.decorator === 'Component') callers.push({ component: name, method: method.name });
+        writes.push({
+          apiCall: `${name}#${method.name}`,
+          owner: name,
+          method: method.name,
+          httpMethod: call.method,
+          route: call.route,
+          literals: call.bodyLiterals ?? {},
+          callers,
+          location: { file, line: call.line },
+        });
+      }
+  const guards: StaticFunctionalFacts['guards'] = [];
+  const errorHandlers: StaticFunctionalFacts['errorHandlers'] = [];
+  for (const [name, { fact, file }] of classes) {
+    for (const entry of fact.rules.technical)
+      if (entry.exit && entry.exit !== 'NONE')
+        guards.push({
+          owner: name,
+          method: entry.method,
+          text: entry.text,
+          ...(entry.condition ? { condition: entry.condition } : {}),
+          exit: entry.exit,
+          location: { file, line: entry.line },
+        });
+    for (const handler of fact.rules.errorHandlers ?? []) {
+      const api = apiOfSource(
+        fact,
+        name,
+        {
+          target: handler.origin.target,
+          method: handler.origin.method,
+          ...(handler.origin.route !== undefined ? { route: handler.origin.route } : {}),
+          ...(handler.origin.httpMethod ? { httpMethod: handler.origin.httpMethod as HttpMethod } : {}),
+        },
+        classes,
+      );
+      errorHandlers.push({
+        owner: name,
+        method: handler.method,
+        ...(api.apiRoute ? { apiRoute: api.apiRoute } : {}),
+        ...(handler.status !== undefined ? { status: handler.status } : {}),
+        ...(handler.code ? { code: handler.code } : {}),
+        ...(handler.control ? { control: handler.control } : {}),
+        ...(handler.message ? { message: handler.message } : {}),
+        location: { file, line: handler.line },
+      });
+    }
+  }
+  return { enums, writes, guards, errorHandlers, actions };
 }
 
 export function joinPath(parent: string, segment: string): string {

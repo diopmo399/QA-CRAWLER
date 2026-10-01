@@ -1,0 +1,37 @@
+openapi: 3.0.3
+info: { title: fixture, version: 1.0.0 }
+paths:
+  /api/users:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, firstName]
+              properties:
+                email: { type: string, format: email }
+                firstName: { type: string }
+      responses:
+        '201': { description: created }
+        '409': { description: conflict }
+  /api/registrations/{id}:
+    patch:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [DRAFT, PENDING, APPROVED, REJECTED, CANCELLED] }
+      responses:
+        '200':
+          description: updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status]
+                properties:
+                  id: { type: string }
+                  status: { type: string }
