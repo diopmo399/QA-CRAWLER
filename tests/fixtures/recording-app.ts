@@ -54,6 +54,7 @@ export async function startRecordingApp(): Promise<RecordingApp> {
        <div><label for="mat-input-24">Last name</label><input id="mat-input-24" formcontrolname="lastName"></div>
        <div><label for="mat-input-25">Email</label><input id="mat-input-25" type="email" formcontrolname="email"></div>
        <div class="field"><span>Branch code</span><input id="mat-input-26"></div>
+       <div><input id="mat-input-27" data-qa="Reference_input" aria-describedby="nothing"></div>
        <div><label for="country">Country</label><input id="country" name="country" value="Canada"></div>
        <div><label for="type">Account type</label>
          <select id="type" name="accountType"><option value="PERSONAL">Personal</option><option value="BUSINESS">Business</option></select></div>

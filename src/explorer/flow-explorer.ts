@@ -3707,7 +3707,16 @@ export class FlowExplorer {
    * un champ sensible (le TestDataProvider ne les remplit pas).
    */
   private testDataValue(action: DiscoveredAction, key: string): string | undefined {
-    const configured = this.config.testData.fields[key];
+    // testData.fields de la mission : « Branch-Code » vaut pour la clé branchCode (casse et ponctuation ignorées).
+    const compact = (text: string): string =>
+      text
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^A-Za-z0-9]/g, '')
+        .toLowerCase();
+    const configured =
+      this.config.testData.fields[key] ??
+      Object.entries(this.config.testData.fields).find(([name]) => compact(name) === compact(key))?.[1];
     if (configured !== undefined) return configured;
     const field = { ...(action.field ?? { inputType: 'text', required: false, name: key }), hasValue: false };
     const instruction = this.testData.instructionFor({

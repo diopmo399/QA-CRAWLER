@@ -383,3 +383,42 @@ describe('Human flow recorder: unlabelled fields', () => {
     }
   }, 60_000);
 });
+
+describe('Human flow recorder: test ids', () => {
+  it('a field marked data-qa is replayed through that attribute (getByTestId only reads data-testid)', async () => {
+    const app = await startRecordingApp();
+    const dir = await mkdtemp(path.join(tmpdir(), 'qa-record-testid-'));
+    try {
+      const outcome = await runRecording({
+        name: 'Reference',
+        url: `${app.url}/users/new`,
+        overrides: { headless: true, reportsDir: path.join(dir, 'reports') },
+        env: {},
+        drive: async ({ page }) => {
+          await page.locator('[data-qa="Reference_input"]').fill('ABC-1');
+          await page.waitForTimeout(600);
+        },
+      });
+      const yaml = await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8');
+      expect(yaml).toContain(`css: '[data-qa="Reference_input"]'`);
+      const flow = flowSchema.parse(parseYaml(yaml));
+      const { config } = parseConfig(
+        `mission: { name: replay-testid }
+target: { baseUrl: ${app.url}, startAt: /users/new }
+exploration: { autonomous: false, actionTimeoutMs: 3000, settleTimeMs: 100 }
+report: { failOnSeverity: NONE }
+output: { reportsDir: ${path.join(dir, 'replay')}, screenshotsDir: ${path.join(dir, 'shots')} }
+flows:
+  - ${JSON.stringify(parseYaml(yaml))}
+`,
+        {},
+        {},
+      );
+      expect(flow.steps.length).toBeGreaterThan(0);
+      const { result } = await runMission(config, { env: {} });
+      expect(result.flows[0]?.status).toBe('PASSED');
+    } finally {
+      await app.close();
+    }
+  }, 120_000);
+});
