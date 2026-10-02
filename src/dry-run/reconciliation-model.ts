@@ -44,7 +44,9 @@ export type Provenance =
   | 'INFERRED_OUTCOME'
   | 'MANUAL_CHECKPOINT'
   | 'STATIC_ENRICHED'
-  | 'RUNTIME_OBSERVED';
+  | 'RUNTIME_OBSERVED'
+  // WORKFLOW SELF-HEALING : une action trouvée au rejeu pour atteindre le même objectif fonctionnel.
+  | 'RUNTIME_RECOVERED';
 
 /** Pourquoi l'analyse s'est arrêtée. */
 export type DryRunStopReason = 'COMPLETED' | 'EXPLORATION_BUDGET_EXHAUSTED' | 'START_FAILED';

@@ -1,3 +1,4 @@
+import type { FlowDriftReport, StepRecoveryReport } from '../workflow-healing/model.js';
 import type { ActionClassification } from './discovered-action.js';
 
 /**
@@ -38,6 +39,8 @@ export interface FlowStepReport {
   resolution?: SemanticResolutionReport;
   /** EXECUTED ≠ CONFIRMED : l'exécution Playwright et l'effet fonctionnel, séparés. */
   effect?: StepEffectReport;
+  /** WORKFLOW SELF-HEALING : divergence analysée, objectif, candidats, chemin retenu, vérification. */
+  recovery?: StepRecoveryReport;
 }
 
 export interface StepEffectReport {
@@ -61,6 +64,11 @@ export interface StepEffectReport {
   healed?: { from: string; to: string };
   /** Tentatives de récupération (RE_RESOLVE_TARGET, TRY_NEXT_LOCATOR…). */
   recovery: string[];
+  /**
+   * L'écran a changé, mais pas comme enregistré : accepté provisoirement, l'étape suivante
+   * (et son objectif) diront si c'était une divergence (EXPECTED_EFFECT_CHANGED).
+   */
+  deferred?: boolean;
 }
 
 /** La PREMIÈRE divergence entre le parcours enregistré et le parcours rejoué (la vraie cause). */
@@ -70,6 +78,10 @@ export interface FlowDivergence {
   reason: string;
   /** La dernière étape dont l'effet a été confirmé (point de reprise fiable). */
   lastConfirmedStep?: number;
+  /** Le symptôme rapporté (l'étape qui a échoué), quand la divergence d'origine est plus tôt. */
+  symptomStep?: number;
+  /** La cause probable (DivergenceAnalyzer) et sa confiance. */
+  probableCause?: { category: string; confidence: number };
 }
 
 /** Ce que le rapport garde d'une résolution sémantique. */
@@ -104,4 +116,6 @@ export interface FlowRunReport {
   testDataSuggestions?: string[];
   /** REPLAY DIVERGENCE : la première action dont l'effet manquait (à la place du symptôme plus loin). */
   divergence?: FlowDivergence;
+  /** FLOW DRIFT : le flow marche-t-il encore tel quel, ou seulement grâce aux récupérations ? */
+  drift?: FlowDriftReport;
 }

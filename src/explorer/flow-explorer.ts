@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Locator, Page } from 'playwright';
@@ -24,6 +25,7 @@ import { DefaultTestDataProvider, type TestDataProvider } from '../data/test-dat
 import { TestDataRunContext, type ResolvedTestData } from '../data/test-data-run-context.js';
 import {
   controlsOf,
+  normalize as normalizeControl,
   healingCandidates,
   isFragileTarget,
   matchFingerprint,
@@ -33,6 +35,23 @@ import {
   verifyEffects,
   type EffectVerification,
 } from '../flows/action-effect-verifier.js';
+import { suggestedFeature, suggestedFlowYaml } from '../dry-run/suggested-flow.js';
+import type { RecoveryInput } from '../knowledge/knowledge-model.js';
+import { buildRecoveredFlow, detectFlowDrift } from '../workflow-healing/flow-drift.js';
+import type { RecoveryDriver } from '../workflow-healing/goal-recovery-engine.js';
+import type {
+  DivergenceSymptom,
+  GoalPredicate,
+  HealingEvent,
+  HealingEventRecord,
+  ScreenControl,
+  StepRecoveryReport,
+} from '../workflow-healing/model.js';
+import type { SafetyJudgement } from '../workflow-healing/recovery-planner.js';
+import { screenControlsOf } from '../workflow-healing/screen.js';
+import { dependencyLinkEvidence, staticLinkEvidence } from '../workflow-healing/static-hints.js';
+import { goalProgressOf, predicateText } from '../workflow-healing/workflow-context.js';
+import { healWorkflow, type HealingPorts } from '../workflow-healing/workflow-healer.js';
 
 /** Le chemin d'une URL (route observée au rejeu). */
 function pathOf(url: string): string {
@@ -270,6 +289,8 @@ export interface ExplorationListener {
     event: 'TEST_DATA_GENERATED_FOR_RUN' | 'TEST_DATA_STRATEGY_CANDIDATE';
     message: string;
   }): void;
+  /** WORKFLOW SELF-HEALING : divergence analysée, objectif, plan, récupération, dérive. */
+  onHealing?(event: HealingEventRecord): void;
 }
 
 export interface FlowExplorerOptions {
@@ -399,6 +420,14 @@ export class FlowExplorer {
   private readonly flowRecordedKeys = new Set<string>();
   /** L'étape en cours d'un flow (pour la précondition de l'étape suivante). */
   private stepPosition: { flow: FlowConfig; index: number } | undefined;
+  /** Le rapport du flow en cours (l'étape précédente, pour le contexte de la divergence). */
+  private currentFlowReport: FlowRunReport | undefined;
+  /** Une récupération ne déclenche jamais une autre récupération (pas de boucle). */
+  private healingDepth = 0;
+  /** Récupération réussie, apprise quand l'étape suivante l'aura confirmée (ou infirmée). */
+  private pendingLearning: { index: number; input: RecoveryInput; report: StepRecoveryReport } | undefined;
+  /** Événements du self-healing, pour le journal du moteur et le rapport. */
+  readonly healingEvents: HealingEventRecord[] = [];
   private readonly screenshots: ScreenshotService;
   private readonly authenticator: Authenticator;
   private readonly listener: ExplorationListener;
@@ -2403,6 +2432,8 @@ export class FlowExplorer {
       explored: false,
     };
     this.flowReports.push(report);
+    this.currentFlowReport = report;
+    this.pendingLearning = undefined;
     this.flowNetwork = [];
     this.flowRecordedKeys.clear();
     this.scenario = { values: [] };
@@ -2452,6 +2483,14 @@ export class FlowExplorer {
       page = outcome.page;
       context = outcome.context ?? context;
       report.steps.push(outcome.report);
+      // RECOVERY LEARNING : une récupération n'est apprise que si le parcours CONTINUE ensuite.
+      const pending = this.pendingRecovery();
+      if (pending && pending.index < index && outcome.report.status !== 'MANUAL') {
+        this.pendingLearning = undefined;
+        const continued = outcome.report.status === 'PASSED';
+        pending.report.nextActionVerified = continued;
+        this.learnRecovery({ ...pending.input, result: continued ? 'SUCCESS' : 'FAILURE' });
+      }
       this.listener.onFlowStep?.(flow, outcome.report);
       if (outcome.report.stateId && report.states[report.states.length - 1] !== outcome.report.stateId) {
         report.states.push(outcome.report.stateId);
@@ -2466,11 +2505,29 @@ export class FlowExplorer {
             const confirmed = report.steps
               .filter((candidate) => candidate.effect?.status === 'CONFIRMED')
               .at(-1);
+            // SYMPTÔME ≠ CAUSE : une étape antérieure dont l'effet a changé est la vraie divergence.
+            const root = report.steps.find(
+              (candidate) =>
+                candidate.effect?.deferred === true &&
+                candidate.index > (confirmed?.index ?? 0) &&
+                candidate.index < index,
+            );
+            const cause = outcome.report.recovery?.divergence;
             report.divergence = {
-              stepIndex: index,
-              description: outcome.report.description,
-              reason: outcome.report.reason ?? outcome.report.status,
+              stepIndex: root?.index ?? index,
+              description: root?.description ?? outcome.report.description,
+              reason: root
+                ? `${root.reason ?? 'expected effect changed'} → reported at step ${String(index)}: ${outcome.report.reason ?? outcome.report.status}`
+                : (outcome.report.reason ?? outcome.report.status),
               ...(confirmed ? { lastConfirmedStep: confirmed.index } : {}),
+              ...(root ? { symptomStep: index } : {}),
+              ...(cause
+                ? {
+                    probableCause: root
+                      ? { category: 'WRONG_WORKFLOW_STATE', confidence: Math.max(0.6, cause.confidence) }
+                      : { category: cause.category, confidence: cause.confidence },
+                  }
+                : {}),
             };
           }
         }
@@ -2510,6 +2567,34 @@ export class FlowExplorer {
           message: suggestion,
         });
     }
+    // Fin du parcours sans étape suivante : l'objectif atteint suffit pour apprendre.
+    const unconfirmed = this.pendingRecovery();
+    if (unconfirmed) {
+      this.learnRecovery({ ...unconfirmed.input, result: 'SUCCESS' });
+      this.pendingLearning = undefined;
+    }
+    // FLOW DRIFT : le flow marche-t-il encore tel quel, ou seulement grâce au self-healing ?
+    const healing = this.config.replay.intelligentRecovery;
+    if (healing.enabled && healing.detectFlowDrift) {
+      const drift = detectFlowDrift(report.status, report.steps);
+      report.drift = drift;
+      if (drift.detected)
+        this.emitHealing(
+          'FLOW_DRIFT_DETECTED',
+          `flow "${flow.name}": ${drift.classification} (${drift.result}) — exact ${String(drift.facts.exactActions)}, healed ${String(drift.facts.locatorHealedActions)}, goal recovered ${String(drift.facts.goalRecoveredActions)}, inserted ${String(drift.facts.insertedRuntimeActions)}`,
+        );
+      if (healing.suggestFlowUpdates && drift.flowUpdateSuggested) {
+        const files = await this.writeSuggestedFlow(flow, report).catch(() => undefined);
+        if (files) {
+          drift.suggestedFiles = files;
+          this.emitHealing(
+            'SUGGESTED_FLOW_UPDATE_CREATED',
+            `flow "${flow.name}": ${files.map((file) => path.basename(file)).join(', ')} (original unchanged)`,
+          );
+        }
+      }
+    }
+    this.currentFlowReport = undefined;
     report.durationMs = Date.now() - started;
     report.issueIds = this.collector
       .all()
@@ -3576,6 +3661,21 @@ export class FlowExplorer {
       locator: describeTarget(step.target),
       recovery: [],
     };
+    // WORKFLOW SELF-HEALING : une étape qui diverge est analysée (cause, objectif, chemin sûr)
+    // avant d'être déclarée en échec. Rien de tout cela ne s'exécute quand l'étape réussit.
+    const diverged = (
+      symptom: DivergenceSymptom,
+      failure: { page: Page; context?: PageContext; report: FlowStepReport },
+    ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> =>
+      this.healDivergence(symptom, failure, {
+        browser,
+        observers,
+        flow,
+        step,
+        context,
+        timeout,
+        finish: (status, extra) => done(status, extra),
+      });
     // « Où est-il ? » — et est-ce bien LUI ? (un CSS structurel peut viser un autre élément)
     const fingerprint = step.fingerprint;
     let located: Locator | string | undefined;
@@ -3603,7 +3703,7 @@ export class FlowExplorer {
           : undefined;
         if (!healed) {
           // FOUND ELEMENT != CORRECT ELEMENT : ne jamais cliquer une cible qui n'est pas la bonne.
-          return {
+          return diverged('TARGET_MISMATCH', {
             page,
             report: done('FAILED', {
               reason: `TARGET_FINGERPRINT_MISMATCH: expected "${fingerprint.name ?? fingerprint.text ?? fingerprint.testId ?? ''}", found ${match.reasons.join('; ')} (not clicked)`,
@@ -3611,7 +3711,7 @@ export class FlowExplorer {
               url: context.url,
               effect: { ...effect, status: 'TARGET_MISMATCH', reasons: match.reasons },
             }),
-          };
+          });
         }
         located = healed.locator;
         effect.healed = { from: describeTarget(step.target), to: describeTarget(healed.target) };
@@ -3628,10 +3728,54 @@ export class FlowExplorer {
         effect.targetMatch = healed.match;
       }
     }
+    // Un nom accessible trouvé par correspondance PARTIELLE (« Company information » dans
+    // « Remove company information ») : la correspondance exacte d'abord ; sinon, si l'élément
+    // trouvé n'est pas le même genre d'action (SAFE ≠ DANGEROUS), ce n'est pas la bonne cible.
+    if (
+      typeof located !== 'string' &&
+      replay.intelligentRecovery.enabled &&
+      step.target.strategy === 'role' &&
+      step.target.name &&
+      step.target.exact !== true
+    ) {
+      const expectedName = step.target.name;
+      const found = await readTarget(located).catch(() => undefined);
+      if (found?.name && normalizeControl(found.name) !== normalizeControl(expectedName)) {
+        const exact = await this.flowSteps.locate(page, { ...step.target, exact: true }, 500);
+        if (typeof exact !== 'string') located = exact;
+        else {
+          const kind = step.kind === 'fill' || step.kind === 'select' ? step.kind : 'click';
+          const expectedClass = this.safety.classify({
+            type: kind,
+            category: 'other',
+            text: expectedName,
+          }).classification;
+          const foundClass = this.safety.classify({
+            type: kind,
+            category: 'other',
+            text: found.name,
+          }).classification;
+          if (expectedClass !== foundClass)
+            return diverged('TARGET_MISMATCH', {
+              page,
+              report: done('FAILED', {
+                reason: `TARGET_NAME_MISMATCH: "${expectedName}" only partially matches "${found.name}", a different kind of action (${expectedClass} → ${foundClass}) (not clicked)`,
+                stateId: context.stateId,
+                url: context.url,
+                effect: {
+                  ...effect,
+                  status: 'TARGET_MISMATCH',
+                  reasons: [`partial name match: "${found.name}"`],
+                },
+              }),
+            });
+        }
+      }
+    }
     if (typeof located === 'string') {
       // Chercher à l'écran ce que le YAML voulait probablement dire, et indiquer comment l'écrire.
       const found = await suggestTargets(page, step).catch(() => undefined);
-      return {
+      return diverged('TARGET_NOT_FOUND', {
         page,
         report: done('FAILED', {
           reason: located,
@@ -3640,7 +3784,7 @@ export class FlowExplorer {
           ...(found && found.suggestions.length > 0 ? { suggestions: found.suggestions } : {}),
           ...(found && found.onScreen.length > 0 ? { onScreen: found.onScreen } : {}),
         }),
-      };
+      });
     }
     const locator: Locator = located;
 
@@ -3682,7 +3826,7 @@ export class FlowExplorer {
       done = (status, extra = {}) => ({ ...finish(status, extra), description: masked });
     }
     if (action.disabled) {
-      return {
+      return diverged('TARGET_DISABLED', {
         page,
         report: done('FAILED', {
           reason: 'element is disabled',
@@ -3690,7 +3834,7 @@ export class FlowExplorer {
           url: before.url,
           classification: action.classification,
         }),
-      };
+      });
     }
 
     // « Ai-je le droit ? » — avant Playwright, quoi que dise le YAML.
@@ -3975,19 +4119,53 @@ export class FlowExplorer {
       effect.expected = verification.expected;
       effect.observed = verification.observed;
       effect.reasons = verification.reasons;
-      if (failed(verification) || verification.status === 'AMBIGUOUS') {
-        // FAIL AT ROOT CAUSE : le parcours diverge ICI, pas à l'étape suivante qui ne trouvera rien.
+      const intelligent = replay.intelligentRecovery;
+      if (
+        verification.status === 'WRONG_EFFECT' &&
+        intelligent.enabled &&
+        this.healingDepth === 0 &&
+        !mutation &&
+        this.nextStepTarget() !== undefined
+      ) {
+        // L'écran a changé, mais pas comme enregistré : la SUITE dira si c'est une divergence
+        // (son objectif sera vérifié) ; sinon la divergence d'origine sera ICI.
+        effect.deferred = true;
+        effect.reasons = [
+          ...verification.reasons,
+          'deferred: the next step and its goal will confirm or refute',
+        ];
         return {
           page,
           context: after,
-          report: done('FAILED', {
-            reason: `ACTION_NOT_CONFIRMED (${verification.status === 'AMBIGUOUS' ? 'MUTATION_EFFECT_AMBIGUOUS' : verification.status}): click executed, expected ${verification.expected.join(', ') || 'an effect'}; observed ${verification.observed.join(', ') || 'no relevant change'}`,
+          report: done('PASSED', {
+            reason: `EXPECTED_EFFECT_CHANGED (deferred): expected ${verification.expected.join(', ') || 'an effect'}; observed ${verification.observed.join(', ') || 'no relevant change'}`,
             stateId: after.stateId,
             url: after.url,
             classification: action.classification,
             effect,
           }),
         };
+      }
+      if (failed(verification) || verification.status === 'AMBIGUOUS') {
+        // FAIL AT ROOT CAUSE : le parcours diverge ICI, pas à l'étape suivante qui ne trouvera rien.
+        return diverged(
+          verification.status === 'AMBIGUOUS'
+            ? 'MUTATION_AMBIGUOUS'
+            : verification.status === 'WRONG_EFFECT'
+              ? 'WRONG_EFFECT'
+              : 'NO_EFFECT',
+          {
+            page,
+            context: after,
+            report: done('FAILED', {
+              reason: `ACTION_NOT_CONFIRMED (${verification.status === 'AMBIGUOUS' ? 'MUTATION_EFFECT_AMBIGUOUS' : verification.status}): click executed, expected ${verification.expected.join(', ') || 'an effect'}; observed ${verification.observed.join(', ') || 'no relevant change'}`,
+              stateId: after.stateId,
+              url: after.url,
+              classification: action.classification,
+              effect,
+            }),
+          },
+        );
       }
     }
     return {
@@ -4075,6 +4253,364 @@ export class FlowExplorer {
         return { locator: found, target: candidate, match: { verdict: match.verdict, score: match.score } };
     }
     return undefined;
+  }
+
+  /**
+   * WORKFLOW SELF-HEALING, côté explorateur : seulement les accès (écran, réseau, SafetyPolicy,
+   * connaissances) ; tout le raisonnement est dans healWorkflow. Une récupération ne déclenche
+   * jamais une autre récupération ; une récupération réussie est apprise quand l'étape suivante
+   * aura confirmé que le parcours continue.
+   */
+  private async healDivergence(
+    symptom: DivergenceSymptom,
+    failure: { page: Page; context?: PageContext; report: FlowStepReport },
+    at: {
+      browser: BrowserManager;
+      observers: { all: PageObserver[]; pageErrors: PageErrorObserver };
+      flow: FlowConfig;
+      step: Extract<FlowStep, { target: unknown }>;
+      context: PageContext;
+      timeout: number;
+      finish: (status: FlowStatus, extra?: Partial<FlowStepReport>) => FlowStepReport;
+    },
+  ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
+    const options = this.config.replay.intelligentRecovery;
+    const position = this.stepPosition;
+    const page = failure.page;
+    if (!options.enabled || this.healingDepth > 0 || position?.flow !== at.flow) return failure;
+    if (page.isClosed() || !this.isExplorablePage(page)) return failure;
+    const previous = this.currentFlowReport?.steps.at(-1);
+    this.healingDepth += 1;
+    let result: Awaited<ReturnType<typeof healWorkflow>>;
+    try {
+      result = await healWorkflow(
+        {
+          steps: at.flow.steps,
+          position: position.index - 1,
+          actionId: `${at.flow.name}#${String(position.index)}`,
+          symptom,
+          ...(previous
+            ? {
+                previous: {
+                  index: previous.index,
+                  deferredEffect: previous.effect?.deferred === true,
+                  description: previous.description,
+                  observed: previous.effect?.observed ?? [],
+                },
+              }
+            : {}),
+        },
+        this.healingPorts(page),
+        {
+          analyzeDivergence: options.analyzeDivergence,
+          useWorkflowContext: options.useWorkflowContext,
+          inferFunctionalGoals: options.inferFunctionalGoals,
+          goalBasedRecovery: options.goalBasedRecovery,
+          useStaticKnowledge: options.useStaticKnowledge,
+          useHistoricalRecovery: options.useHistoricalRecovery,
+          onAmbiguity: options.onAmbiguity,
+          budgets: options.budgets,
+        },
+      );
+    } catch (error) {
+      this.emitHealing(
+        'GOAL_RECOVERY_FAILED',
+        `recovery aborted: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return failure;
+    } finally {
+      this.healingDepth -= 1;
+    }
+    const recovery = result.report;
+    const outcome = recovery.outcome;
+    if (outcome.status !== 'GOAL_REACHED' && outcome.status !== 'GOAL_ALREADY_REACHED') {
+      return {
+        ...failure,
+        report: {
+          ...failure.report,
+          reason: `${failure.report.reason ?? 'step failed'} — ${outcome.status} (${recovery.divergence.category} ${String(recovery.divergence.confidence)})${outcome.reasons[0] ? `: ${outcome.reasons[0]}` : ''}`,
+          recovery,
+        },
+      };
+    }
+    if (result.learning)
+      this.pendingLearning = { index: position.index, input: result.learning, report: recovery };
+    if (at.step.kind === 'fill' || at.step.kind === 'select') {
+      // Le chemin a rendu le champ disponible : l'étape d'origine le remplit maintenant.
+      this.healingDepth += 1;
+      try {
+        const fresh = await this.observeState(page, at.context.metadata.depth).catch(() => at.context);
+        const again = await this.runFlowElementStep(
+          page,
+          at.browser,
+          at.observers,
+          at.flow,
+          at.step,
+          fresh,
+          at.timeout,
+          at.finish,
+        );
+        return { ...again, report: { ...again.report, recovery } };
+      } finally {
+        this.healingDepth -= 1;
+      }
+    }
+    const after = await this.observeState(page, at.context.metadata.depth + 1);
+    const pathText = outcome.path
+      .map((action) => `${action.kind} ${action.role} "${action.name}"`)
+      .join(' → ');
+    return {
+      page,
+      context: after,
+      report: at.finish('PASSED', {
+        reason:
+          outcome.status === 'GOAL_ALREADY_REACHED'
+            ? `GOAL_ALREADY_REACHED: ${recovery.goal.id} holds without "${recovery.originalTarget}" (possibly obsolete step)`
+            : `GOAL_RECOVERED (${recovery.divergence.category}): ${pathText} reached ${recovery.goal.id}`,
+        stateId: after.stateId,
+        url: after.url,
+        effect: {
+          execution: outcome.path.length > 0 ? 'EXECUTED' : 'NOT_EXECUTED',
+          status: 'CONFIRMED',
+          expected: recovery.goal.predicates.map(predicateText),
+          observed: outcome.progress?.satisfied ?? [],
+          reasons: outcome.reasons,
+          ...(pathText ? { locator: pathText } : {}),
+          recovery: failure.report.effect?.recovery ?? [],
+        },
+        recovery,
+      }),
+    };
+  }
+
+  /** (lu par une méthode : la valeur change pendant les étapes, pas seulement ici) */
+  private pendingRecovery(): typeof this.pendingLearning {
+    return this.pendingLearning;
+  }
+
+  private healingPorts(page: Page): HealingPorts {
+    const options = this.config.replay.intelligentRecovery;
+    const statics = options.useStaticKnowledge ? this.staticComponents() : [];
+    const edges = this.coordinator.dependencies.all();
+    const version = this.knowledge.identity.commit ?? this.knowledge.identity.appVersion;
+    return {
+      driver: this.recoveryDriver(page),
+      screen: async () => {
+        const snapshot = await this.observer.observe(page);
+        return {
+          controls: screenControlsOf(snapshot),
+          route: pathOf(snapshot.url),
+          text: snapshot.textExcerpt,
+          ...(snapshot.overlay ? { overlay: snapshot.overlay } : {}),
+          loginFormVisible: snapshot.elements.some(
+            (element) => element.visible && element.inputType === 'password',
+          ),
+        };
+      },
+      network: () =>
+        this.flowNetwork.slice(-20).map((exchange) => ({
+          request: `${exchange.method.toUpperCase()} ${pathOf(exchange.url)}`,
+          ...(exchange.status !== undefined ? { status: exchange.status } : {}),
+        })),
+      judge: (control, kind) => this.judgeRecovery(control, kind),
+      history: (key) => this.knowledge.recoveryKnowledge(key),
+      ...(statics.length > 0
+        ? { staticEvidence: (control: ScreenControl, goal) => staticLinkEvidence(statics, control, goal) }
+        : {}),
+      ...(edges.length > 0
+        ? {
+            dependencyEvidence: (control: ScreenControl, goal) =>
+              dependencyLinkEvidence(edges, control, goal),
+          }
+        : {}),
+      synonyms: (term) => this.semantics.dictionary.expand(term),
+      learn: (input) => {
+        this.learnRecovery(input);
+      },
+      emit: (event, message) => {
+        this.emitHealing(event, message);
+      },
+      now: () => new Date().toISOString(),
+      ...(version ? { version } : {}),
+    };
+  }
+
+  /** Les composants du code source et leurs contrôles (graphe statique déjà en cache). */
+  private staticComponents(): { component: string; controls: string[] }[] {
+    const byComponent = new Map<string, string[]>();
+    for (const field of this.staticKnowledge?.graph.fields ?? [])
+      byComponent.set(field.component, [...(byComponent.get(field.component) ?? []), field.control]);
+    return [...byComponent].map(([component, controls]) => ({ component, controls }));
+  }
+
+  /** La SafetyPolicy pour une action de récupération : seul SAFE passe, quel que soit le score. */
+  private judgeRecovery(control: ScreenControl, kind: 'click' | 'check'): SafetyJudgement {
+    const category =
+      control.role === 'tab'
+        ? 'tab'
+        : control.role === 'link'
+          ? 'navigation'
+          : control.role === 'menuitem'
+            ? 'menu'
+            : control.role === 'checkbox' || control.role === 'radio'
+              ? 'form-input'
+              : 'other';
+    const verdict = this.safety.classify({
+      type: kind,
+      category,
+      text: control.name,
+      name: control.name,
+      role: control.role,
+    });
+    return {
+      risk: verdict.classification,
+      allowed: verdict.classification === 'SAFE' && !verdict.risks.includes('sensitive-data'),
+      reason: verdict.reason,
+    };
+  }
+
+  /** Le navigateur vu par le GoalBasedRecoveryEngine : exécuter, observer, annuler. */
+  private recoveryDriver(page: Page): RecoveryDriver {
+    const keys = (snapshot: UiSnapshot): Set<string> =>
+      new Set(
+        snapshot.elements
+          .filter((element) => element.visible && !element.disabled && element.role && element.name)
+          .map((element) => `${element.role}:${normalizeControl(element.name)}`),
+      );
+    const targetOf = (action: { role: string; name: string }): FlowTarget => ({
+      strategy: 'role',
+      role: action.role,
+      name: action.name,
+      exact: true,
+    });
+    return {
+      screen: async () => screenControlsOf(await this.observer.observe(page)),
+      stateKey: async () => {
+        const snapshot = await this.observer.observe(page);
+        const checked = snapshot.elements
+          .filter(
+            (element) => element.checked === true || element.selected === true || element.expanded === true,
+          )
+          .map((element) => `${element.role}:${normalizeControl(element.name)}`);
+        return `${pathOf(snapshot.url)}|${[...keys(snapshot)].sort().join(',')}|${checked.sort().join(',')}`;
+      },
+      progress: async (goal) =>
+        goalProgressOf(
+          goal,
+          await Promise.all(goal.predicates.map((predicate) => this.predicateHolds(page, predicate))),
+        ),
+      execute: async (action) => {
+        // SAFETY ALWAYS WINS : rejugé au moment d'exécuter (historique compris).
+        const judged = this.judgeRecovery(
+          { role: action.role, name: action.name, visible: true, disabled: false },
+          action.kind,
+        );
+        if (!judged.allowed)
+          return { status: 'FAILED', detail: `blocked by the SafetyPolicy: ${judged.reason}`, appeared: [] };
+        const target = targetOf(action);
+        const located = await this.flowSteps.locate(page, target, 1500);
+        if (typeof located === 'string') return { status: 'NOT_FOUND', detail: located, appeared: [] };
+        const before = await this.observer.observe(page);
+        const keysBefore = keys(before);
+        const routeBefore = pathOf(before.url);
+        const expandedBefore = before.elements.find(
+          (element) =>
+            element.role === action.role && normalizeControl(element.name) === normalizeControl(action.name),
+        )?.expanded;
+        // Aucune écriture permise pendant une expérience (garde d'écriture active).
+        this.writeGuard.during(
+          undefined,
+          'workflow-recovery',
+          `workflow recovery: ${action.kind} ${action.role} "${action.name}"`,
+        );
+        const error = await this.flowSteps.perform(page, located, { kind: action.kind }, 3000);
+        this.actionsExecuted += 1;
+        if (error) return { status: 'FAILED', detail: error, appeared: [] };
+        await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => undefined);
+        const after = await this.observer.observe(page);
+        const appeared = [...keys(after)].filter((key) => !keysBefore.has(key));
+        const again = async (kind: 'click' | 'uncheck'): Promise<boolean> => {
+          const found = await this.flowSteps.locate(page, target, 1000);
+          return (
+            typeof found !== 'string' &&
+            (await this.flowSteps.perform(page, found, { kind }, 2000)) === undefined
+          );
+        };
+        const undo =
+          pathOf(after.url) !== routeBefore
+            ? async (): Promise<boolean> => {
+                await page.goBack({ timeout: 5000 }).catch(() => undefined);
+                return pathOf(page.url()) === routeBefore;
+              }
+            : action.kind === 'check'
+              ? (): Promise<boolean> => again('uncheck')
+              : expandedBefore === false
+                ? (): Promise<boolean> => again('click')
+                : undefined;
+        return { status: 'DONE', appeared, ...(undo ? { undo } : {}) };
+      },
+    };
+  }
+
+  private async predicateHolds(page: Page, predicate: GoalPredicate): Promise<boolean> {
+    if (predicate.kind === 'ROUTE') return routeMatches(predicate.value, pathOf(page.url()));
+    const target: FlowTarget =
+      predicate.kind === 'VISIBLE_FIELD'
+        ? { strategy: 'label', value: predicate.value }
+        : predicate.role
+          ? { strategy: 'role', role: predicate.role, name: predicate.value }
+          : { strategy: 'text', value: predicate.value };
+    const found = await this.flowSteps.locate(page, target, predicate.kind === 'ABSENT_CONTROL' ? 150 : 400);
+    if (predicate.kind === 'ABSENT_CONTROL') return typeof found === 'string';
+    if (typeof found === 'string') return false;
+    if (predicate.kind === 'CONTROL_AVAILABLE') return found.isEnabled().catch(() => false);
+    return true;
+  }
+
+  private learnRecovery(input: RecoveryInput): void {
+    const options = this.config.replay.intelligentRecovery;
+    if (input.result === 'SUCCESS' && !options.learnSuccessfulRecovery) return;
+    this.knowledge.recordRecovery(input);
+    this.emitHealing(
+      'RECOVERY_KNOWLEDGE_LEARNED',
+      `${input.result}: "${input.originalTarget}" → ${input.actions.map((action) => `${action.kind} ${action.role}:${action.name}`).join(' → ')} (${input.goal})`,
+    );
+  }
+
+  private emitHealing(event: HealingEvent, message: string): void {
+    const record: HealingEventRecord = { at: new Date().toISOString(), event, message: redactText(message) };
+    if (this.healingEvents.length < 1000) this.healingEvents.push(record);
+    this.listener.onHealing?.(record);
+  }
+
+  /**
+   * ORIGINAL → RECOVERED → SUGGESTED : suggested-flows/<flow>.flow.yaml et .feature.
+   * Le flow d'origine n'est jamais réécrit (replay.intelligentRecovery.autoUpdateFlow: false).
+   */
+  private async writeSuggestedFlow(flow: FlowConfig, report: FlowRunReport): Promise<string[]> {
+    const directory = path.join(this.config.output.reportsDir, 'suggested-flows');
+    await mkdir(directory, { recursive: true });
+    const slug =
+      flow.name
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^A-Za-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .toLowerCase() || 'flow';
+    const graph = buildRecoveredFlow(flow, report.steps);
+    const header = [
+      `Suggested update of flow "${flow.name}" (${report.drift?.classification ?? 'drift'}, ${report.drift?.result ?? ''})`,
+      'Built from a replay with workflow recovery: review before use. The original flow is unchanged.',
+    ];
+    const yamlFile = path.join(directory, `${slug}.flow.yaml`);
+    const featureFile = path.join(directory, `${slug}.feature`);
+    await writeFile(yamlFile, suggestedFlowYaml(graph, header), 'utf8');
+    await writeFile(
+      featureFile,
+      suggestedFeature(graph, { language: this.config.report.language, header }),
+      'utf8',
+    );
+    return [yamlFile, featureFile];
   }
 
   /** Classement d'un élément que l'observateur ne liste pas (texte simple, conteneur…). */
