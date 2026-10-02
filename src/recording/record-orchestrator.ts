@@ -157,7 +157,26 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   // Le jeu de données du flow (aucune valeur sensible : références à des variables d'environnement).
   if (result.testData && Object.keys(result.testData.set.values).length > 0)
     await write(TEST_DATA_FILE, stringifyYaml(result.testData.document, { lineWidth: 0 }));
+  // HUMAN JOURNEY : chaque interaction humaine, son statut et sa place dans le flow (jamais une valeur saisie).
+  await write(
+    'human-journey.json',
+    json({
+      recordingSessionId: result.session.id,
+      fidelity: result.fidelity,
+      startState: result.session.initialStateId,
+      finalState: result.session.states.at(-1)?.id,
+      summary: result.journey.summary,
+      ordered: result.journey.ordered,
+      interactions: result.journey.interactions,
+      dependencies: result.journey.dependencies,
+      phases: result.journey.phases,
+    }),
+  );
+  await write('action-preservation.json', json(result.journey.accounts));
   if (format !== 'gherkin') await write('generated.flow.yaml', result.files.yaml);
+  // Le flow raccourci est un AUTRE fichier : generated.flow.yaml reste le parcours enseigné.
+  if (result.optimized && format !== 'gherkin')
+    await write('optimized.flow.yaml', result.optimized.files.yaml);
   if (format !== 'yaml') await write('generated.feature', result.files.feature);
 
   if (config.recording.knowledge) await rememberRecording(config, result, env).catch(() => undefined);

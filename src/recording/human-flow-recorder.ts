@@ -11,6 +11,7 @@ import { SafetyPolicy } from '../policies/safety-policy.js';
 import { sensitivityOf } from '../policies/sensitive-fields.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import { captureScript } from './capture-script.js';
+import { NON_INTERACTIVE_NOISE } from './human-journey.js';
 import type {
   RawEventType,
   RawRecordedEvent,
@@ -448,7 +449,9 @@ export class HumanFlowRecorder {
       },
     );
     // Une action qui peut changer l'écran ou appeler le serveur : sa fenêtre réseau, puis l'écran observé.
-    if (event.type !== 'input' && event.type !== 'keydown' && event.type !== 'filechooser' && !event.noise) {
+    // Un clic sur un élément non reconnu est observé aussi : s'il change l'écran, c'est une action humaine.
+    const observed = !event.noise || event.noise === NON_INTERACTIVE_NOISE;
+    if (event.type !== 'input' && event.type !== 'keydown' && event.type !== 'filechooser' && observed) {
       this.openWindow(event);
       this.awaiting.push(event);
       this.schedule();
@@ -558,7 +561,10 @@ function sameObservation(a: RecordedState, b: RecordedState): boolean {
     a.tableRows === b.tableRows &&
     a.invalidFields === b.invalidFields &&
     a.alerts.join('\n') === b.alerts.join('\n') &&
-    a.dialogs.join('\n') === b.dialogs.join('\n')
+    a.dialogs.join('\n') === b.dialogs.join('\n') &&
+    // L'empreinte de l'écran ne voit pas une section ouverte, un onglet, des champs devenus
+    // visibles : les contrôles visibles, si (HUMAN JOURNEY : ce sont les effets d'un clic).
+    a.controls.join('\n') === b.controls.join('\n')
   );
 }
 

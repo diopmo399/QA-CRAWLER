@@ -19,6 +19,14 @@ import { extractRecordedTestData, type RecordedTestDataResult } from './recorded
 import { inferOutcomes } from './outcomes.js';
 import { buildRecordedFlow, generateFlowFiles, type GeneratedFiles } from './recorded-flow.js';
 import { resolveSemanticActions, routeOf } from './semantic-recording.js';
+import { optimizeRecordedActions } from './flow-optimizer.js';
+import {
+  accountHumanJourney,
+  clicksWithEffects,
+  attributeEffects,
+  dependencyGraph,
+  type HumanJourneyResult,
+} from './human-journey.js';
 
 /** Le jeu de données d'un enregistrement, à côté de generated.flow.yaml et generated.feature. */
 export const TEST_DATA_FILE = 'test-data.yaml';
@@ -27,6 +35,15 @@ export interface RecordingResult {
   /** ACTION CORRELATION (absente si désactivée) et contrôle de préservation. */
   correlation?: CorrelationResult;
   preservation: PreservationReport;
+  /** HUMAN JOURNEY : chaque interaction humaine, son statut, les dépendances, les phases. */
+  journey: HumanJourneyResult;
+  fidelity: 'EXACT' | 'SEMANTIC' | 'OPTIMIZED';
+  /** FLOW OPTIMIZER (facultatif) : un flow raccourci séparé (optimized.flow.yaml). */
+  optimized?: {
+    flow: RecordedFlow;
+    files: GeneratedFiles;
+    removed: { actionId: string; label: string; reason: string }[];
+  };
   /** RECORDED TEST DATA (absent si recording.testData.enabled vaut false) : le jeu de données du flow. */
   testData?: RecordedTestDataResult;
   session: RecordingSession;
@@ -82,8 +99,59 @@ export function processRecording(
         `${group.triggerId} → ${(group.effects.navigation?.routes ?? []).join(' → ')}${group.effects.network.length > 0 ? ` (${group.effects.network.map((exchange) => `${exchange.method} ${exchange.path}`).join(', ')})` : ''}`,
       );
   }
-  const semantic = resolveSemanticActions(session.rawEvents, safety, session.initialStateId, correlation);
+  // HUMAN JOURNEY : un clic que la capture n'a pas reconnu comme un contrôle, mais qui a changé l'écran
+  // ou dont l'action suivante dépend, est une action humaine (UNRESOLVED), jamais du bruit.
+  const recording = config.recording;
+  const fidelity = recording.fidelity;
+  const promoted =
+    recording.preserveUnknownInteractiveActions && !recording.normalization.removeUnresolvedClicks
+      ? clicksWithEffects(session.rawEvents, session.states)
+      : new Map<string, string>();
+  const semantic = resolveSemanticActions(
+    session.rawEvents,
+    safety,
+    session.initialStateId,
+    correlation,
+    promoted,
+  );
   session.semanticActions = semantic.actions;
+  // Effets sur l'écran et dépendances entre actions : ce qui ne doit jamais être fusionné ni retiré.
+  attributeEffects(semantic.actions, session.states);
+  const dependencies = dependencyGraph(semantic.actions, session.states);
+  const labelOfAction = new Map(
+    semantic.actions.map((action) => [action.id, action.target?.label ?? action.type]),
+  );
+  for (const dependency of dependencies)
+    emit(
+      'HUMAN_ACTION_DEPENDENCY_DISCOVERED',
+      `"${labelOfAction.get(dependency.from) ?? ''}" → "${labelOfAction.get(dependency.to) ?? ''}" (${dependency.evidence}: ${dependency.reason})`,
+    );
+  // Un vrai bouton cliqué sans effet observé (écran, navigation, requête, action suivante) : gardé,
+  // mais son rôle dans le parcours n'est pas compris (UNRESOLVED) — jamais une raison de le retirer.
+  const sources = new Set(dependencies.map((dependency) => dependency.from));
+  for (const action of semantic.actions)
+    if (
+      action.type === 'CLICK' &&
+      action.semanticStatus === undefined &&
+      action.stateAfter !== undefined &&
+      (action.domEffects ?? []).length === 0 &&
+      !action.navigation &&
+      action.network.length === 0 &&
+      !sources.has(action.id) &&
+      action.checkpoint === undefined
+    ) {
+      action.semanticStatus = 'UNRESOLVED';
+      action.evidence.push('no effect observed (screen, navigation, request, next action): kept as taught');
+    }
+  const preserve = new Set<string>();
+  if (recording.preserveHumanJourney) {
+    if (recording.preserveDependencyActions)
+      for (const dependency of dependencies) preserve.add(dependency.from);
+    if (recording.preserveDomChangingActions)
+      for (const action of semantic.actions)
+        if ((action.domEffects ?? []).some((effect) => effect !== 'VALIDATION_CHANGED'))
+          preserve.add(action.id);
+  }
   for (const action of semantic.actions)
     emit(
       'SEMANTIC_ACTION_RESOLVED',
@@ -93,9 +161,15 @@ export function processRecording(
     semantic.actions,
     session.rawEvents,
     session.states,
-    semantic.noise - (correlation?.promoted.size ?? 0),
+    semantic.noise - (correlation?.promoted.size ?? 0) - promoted.size,
     config.recording.credentials,
     correlation !== undefined,
+    {
+      mergeTyping: recording.normalization.mergeTyping,
+      // EXACT : chaque valeur saisie reste une étape.
+      collapseCorrections: fidelity !== 'EXACT' && recording.normalization.collapseCorrections,
+      preserve,
+    },
   );
   session.semanticActions = normalized.actions;
   emit(
@@ -154,12 +228,91 @@ export function processRecording(
   for (const warning of preservation.warnings)
     if (warning.code === 'SUSPICIOUS_NAVIGATION_COLLAPSE')
       emit('SUSPICIOUS_NAVIGATION_COLLAPSE', warning.message);
+  // HUMAN JOURNEY VALIDATOR : chaque interaction humaine a un statut ; aucune n'est perdue sans raison.
+  emit('HUMAN_JOURNEY_VALIDATION_STARTED', `${String(session.rawEvents.length)} raw event(s)`);
+  const journey = accountHumanJourney({
+    events: session.rawEvents,
+    actions: normalized.actions,
+    kept: normalized.kept,
+    flow: built.flow,
+    states: session.states,
+    dependencies,
+  });
+  annotateSteps(built.flow, journey, normalized.kept);
+  for (const interaction of journey.interactions)
+    emit('HUMAN_INTERACTION_CAPTURED', `${interaction.id} ${interaction.type} "${interaction.target ?? ''}"`);
+  for (const account of journey.accounts) {
+    const line = `${account.interactionId} ${account.type} "${account.target ?? ''}"`;
+    if (account.status === 'PRESERVED')
+      emit('HUMAN_INTERACTION_PRESERVED', `${line} → step ${String(account.flowStep ?? '')}`);
+    else if (account.status === 'UNRESOLVED_BUT_PRESERVED')
+      emit(
+        'HUMAN_INTERACTION_UNRESOLVED',
+        `${line} → step ${String(account.flowStep ?? '')} (${account.reason ?? ''})`,
+      );
+    else if (
+      account.status === 'MERGED' ||
+      account.status === 'COLLAPSED_CORRECTION' ||
+      account.status === 'DUPLICATE'
+    )
+      emit('HUMAN_INTERACTION_MERGED', `${line} → ${account.mergedInto ?? ''} (${account.rule ?? ''})`);
+    else if (account.status === 'UNACCOUNTED')
+      emit('HUMAN_ACTION_LOST', `${line}: ${account.reason ?? 'no reason'}`);
+    else
+      emit(
+        'HUMAN_INTERACTION_EXCLUDED',
+        `${line}: ${account.status} ${account.rule ?? ''} (${account.reason ?? ''})`,
+      );
+  }
+  const summary = journey.summary;
+  emit(
+    'HUMAN_JOURNEY_BUILT',
+    `${String(summary.meaningful)} interaction(s): ${String(summary.preserved)} preserved, ${String(summary.unresolvedPreserved)} unresolved but preserved, ${String(summary.merged)} merged, ${String(summary.excluded)} excluded, ${String(summary.noise)} noise, ${String(summary.unaccounted)} lost; ${String(journey.phases.length)} phase(s)`,
+  );
+  emit(
+    summary.unaccounted === 0 && journey.ordered
+      ? 'HUMAN_JOURNEY_VALIDATED'
+      : 'HUMAN_JOURNEY_VALIDATION_FAILED',
+    summary.unaccounted === 0 && journey.ordered
+      ? 'every human interaction is accounted for, in the human order'
+      : `${String(summary.unaccounted)} interaction(s) lost without a reason${journey.ordered ? '' : '; steps reordered'}`,
+  );
   const files = generateFlowFiles(built.flow, {
     language: options.language,
     recordedAt: session.startedAt,
     ...(testData && Object.keys(testData.set.values).length > 0 ? { testDataFile: TEST_DATA_FILE } : {}),
   });
   emit('FLOW_GENERATED', `${String(built.flow.steps.length)} step(s)`);
+  // FLOW OPTIMIZER (séparé, facultatif) : un AUTRE flow, jamais à la place du parcours humain.
+  let optimized: RecordingResult['optimized'];
+  if (recording.optimization.enabled || fidelity === 'OPTIMIZED') {
+    emit('FLOW_OPTIMIZATION_STARTED', `${String(normalized.kept.length)} action(s)`);
+    // Un détour change l'écran par nature : seule une action dont une suivante dépend est intouchable ici.
+    const shorter = optimizeRecordedActions(normalized.kept, session.states, sources);
+    const optimizedFlow = buildRecordedFlow({
+      name: `${session.name} (optimized)`,
+      recordingSessionId: session.id,
+      startRoute,
+      kept: shorter.kept,
+      assertions: outcomes.assertions,
+      intent: outcomes.intent,
+      negative: normalized.negative,
+      stats: normalized.stats,
+    }).flow;
+    optimized = {
+      flow: optimizedFlow,
+      removed: shorter.removed,
+      files: generateFlowFiles(optimizedFlow, {
+        language: options.language,
+        recordedAt: session.startedAt,
+        ...(testData && Object.keys(testData.set.values).length > 0 ? { testDataFile: TEST_DATA_FILE } : {}),
+      }),
+    };
+    emit(
+      'FLOW_OPTIMIZATION_COMPLETED',
+      `${String(optimizedFlow.steps.length)} step(s) instead of ${String(built.flow.steps.length)}: ${shorter.removed.map((item) => `${item.label} (${item.reason})`).join('; ') || 'nothing to remove'}`,
+    );
+  }
   const warnings = [
     ...session.warnings,
     ...semantic.warnings,
@@ -168,6 +321,7 @@ export function processRecording(
     ...built.warnings,
     ...preservation.warnings,
     ...(testData?.warnings ?? []),
+    ...journey.warnings,
   ];
   return {
     session,
@@ -176,10 +330,38 @@ export function processRecording(
     files,
     ...(correlation ? { correlation } : {}),
     ...(testData ? { testData } : {}),
+    journey,
+    fidelity,
+    ...(optimized ? { optimized } : {}),
     preservation,
     graph: flowGraphOf(session, normalized.kept, safety, config, options.snapshot),
     warnings: dedupe(warnings),
   };
+}
+
+/** Chaque étape porte les interactions humaines qu'elle représente (h001…) et son statut sémantique. */
+function annotateSteps(
+  flow: RecordedFlow,
+  journey: HumanJourneyResult,
+  kept: readonly SemanticRecordedAction[],
+): void {
+  const byId = new Map(kept.map((action) => [action.id, action]));
+  for (const [index, step] of flow.steps.entries()) {
+    const ids = journey.accounts
+      .filter(
+        (account) =>
+          account.flowStep === index + 1 ||
+          (account.mergedInto !== undefined &&
+            journey.accounts.some(
+              (owner) => owner.interactionId === account.mergedInto && owner.flowStep === index + 1,
+            )),
+      )
+      .map((account) => account.interactionId);
+    if (ids.length > 0) step.interactionIds = ids;
+    if (step.step.kind === 'expect') continue;
+    if (step.actionIds.some((id) => byId.get(id)?.semanticStatus === 'UNRESOLVED'))
+      step.semanticStatus = 'UNRESOLVED';
+  }
 }
 
 function checkpointAction(

@@ -1237,6 +1237,36 @@ const recordingSchema = z
       .strict()
       .default({}),
     /**
+     * FIDÉLITÉ du flow généré (PRESERVE FIRST, UNDERSTAND SECOND, OPTIMIZE LAST) :
+     *   EXACT     toutes les interactions fonctionnelles, corrections comprises (seul le bruit
+     *             évident du navigateur est fusionné) ;
+     *   SEMANTIC  (défaut) le parcours humain : frappe et corrections fusionnées, jamais un
+     *             bouton, un onglet, une section, un choix, un envoi ni un contrôle inconnu ;
+     *   OPTIMIZED SEMANTIC, plus un flow raccourci séparé (optimized.flow.yaml) : jamais à la place.
+     */
+    fidelity: z.enum(['EXACT', 'SEMANTIC', 'OPTIMIZED']).default('SEMANTIC'),
+    preserveHumanJourney: z.boolean().default(true),
+    /** Un clic sur un composant maison non reconnu, mais qui a un effet : une action UNRESOLVED gardée. */
+    preserveUnknownInteractiveActions: z.boolean().default(true),
+    /** Une action qui a changé l'écran (section, champ, fenêtre) n'est jamais fusionnée ni retirée. */
+    preserveDomChangingActions: z.boolean().default(true),
+    /** Une action dont une suivante dépend (elle a rendu un champ accessible) n'est jamais retirée. */
+    preserveDependencyActions: z.boolean().default(true),
+    normalization: z
+      .object({
+        mergeTyping: z.boolean().default(true),
+        collapseCorrections: z.boolean().default(true),
+        removeTechnicalNoise: z.boolean().default(true),
+        removeUnresolvedClicks: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
+    /** FlowOptimizer : un flow raccourci SÉPARÉ (optimized.flow.yaml) ; generated.flow.yaml reste le parcours humain. */
+    optimization: z
+      .object({ enabled: z.boolean().default(false) })
+      .strict()
+      .default({}),
+    /**
      * RECORDED TEST DATA : les valeurs saisies pendant l'enregistrement deviennent un jeu de
      * données (test-data.yaml) cité par le flow et le .feature : `{ testData: request.title }`.
      * Une valeur sensible n'est jamais lue ni écrite (référence à une variable d'environnement).

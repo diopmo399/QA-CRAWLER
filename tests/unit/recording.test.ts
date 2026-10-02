@@ -13,6 +13,7 @@ import type {
   RecordingSession,
 } from '../../src/recording/model.js';
 import { normalizeRecording } from '../../src/recording/normalizer.js';
+import { optimizeRecordedActions } from '../../src/recording/flow-optimizer.js';
 import { inferOutcomes, stableRoute } from '../../src/recording/outcomes.js';
 import { processRecording } from '../../src/recording/process-recording.js';
 import { resolveRecordedTarget } from '../../src/recording/recorded-target.js';
@@ -289,7 +290,7 @@ describe('recording normalizer', () => {
     expect(result.kept.map((action) => action.type)).toEqual(['NAVIGATE', 'CLICK']);
   });
 
-  it('removes a detour: a tab opened then left for a control already reachable before it', () => {
+  it('keeps a tab opened by the human (no shortest path); only the separate optimizer proposes to remove the detour', () => {
     const states = [
       state('o1', '/users', { controls: ['tab:Users', 'tab:Reports', 'button:Add user'] }),
       state('o2', '/reports', { controls: ['tab:Users', 'tab:Reports'] }),
@@ -305,8 +306,15 @@ describe('recording normalizer', () => {
       ],
       states,
     );
-    expect(result.kept.map((action) => action.target?.label)).toEqual(['Add user']);
-    expect(result.stats.removedDetours).toBe(1);
+    expect(result.kept.map((action) => action.target?.label)).toEqual(['Reports', 'Add user']);
+    expect(result.stats.removedDetours).toBe(0);
+    const optimized = optimizeRecordedActions(result.kept, states);
+    expect(optimized.kept.map((action) => action.target?.label)).toEqual(['Add user']);
+    expect(optimized.removed).toEqual([
+      expect.objectContaining({ label: 'Reports', reason: expect.stringMatching(/^detour/) as unknown }),
+    ]);
+    // Le parcours humain n'est jamais modifié par l'optimiseur.
+    expect(result.kept).toHaveLength(2);
   });
 
   it('never removes an action that wrote, even as a correction', () => {

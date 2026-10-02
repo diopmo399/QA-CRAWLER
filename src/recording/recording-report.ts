@@ -120,6 +120,7 @@ export function recordingHtml(input: {
     <p class="muted">Facts to judge, not a grade: a FRAGILE locator or an ambiguous target is worth a look before the flow goes into the suite.</p>
   </section>
   ${warnings ? `<section><h2>Warnings</h2><ul class="plain">${warnings}</ul></section>` : ''}
+  ${journeySection(result)}
   ${causalitySection(result)}
   ${testDataSection(result)}
   <section><h2>Final flow</h2><ol class="plain">${steps}</ol></section>
@@ -195,6 +196,68 @@ const CSS = `
   ol.plain, ul.plain { margin:0; padding-left:22px; }
   ol.plain li, ul.plain li { margin:3px 0; }
 `;
+
+/**
+ * Human journey : le parcours enseigné, interaction par interaction (statut, étape du flow,
+ * effets, donnée de test), les dépendances, les phases, et les interactions non représentées
+ * avec leur raison. « Lost without explanation » doit valoir 0.
+ */
+function journeySection(result: RecordingResult): string {
+  const { journey } = result;
+  const summary = journey.summary;
+  const cards = [
+    card('Recorded meaningful interactions', summary.meaningful),
+    card('Preserved as flow actions', summary.preserved, '#15803d'),
+    card('Unresolved but preserved', summary.unresolvedPreserved, '#b45309'),
+    card('Merged', summary.merged),
+    card('Excluded with a reason', summary.excluded),
+    card('Confirmed noise', summary.noise),
+    card('Lost without explanation', summary.unaccounted, summary.unaccounted > 0 ? '#dc2626' : '#15803d'),
+  ].join('');
+  const color = (status: string): string =>
+    status === 'PRESERVED'
+      ? '#15803d'
+      : status === 'UNRESOLVED_BUT_PRESERVED'
+        ? '#b45309'
+        : status === 'UNACCOUNTED'
+          ? '#dc2626'
+          : '#6b7280';
+  const timeline = journey.accounts
+    .map(
+      (account) =>
+        `<li><span class="muted">${String(account.sequence).padStart(2, '0')}</span> <b>${esc(account.type)}</b> ${esc(account.target ?? '')} <span style="color:${color(account.status)}">${esc(account.status)}</span>${account.flowStep !== undefined ? ` <span class="muted">→ step ${String(account.flowStep)}</span>` : ''}${account.mergedInto ? ` <span class="muted">→ ${esc(account.mergedInto)}</span>` : ''}${account.effects ? ` <span class="muted">(${account.effects.map(esc).join(', ')})</span>` : ''}${account.testData ? ` <code>testData.${esc(account.testData)}</code>` : ''}</li>`,
+    )
+    .join('');
+  const labelOf = new Map(
+    result.normalized.actions.map((action) => [action.id, action.target?.label ?? action.type]),
+  );
+  const dependencies = journey.dependencies
+    .map(
+      (dependency) =>
+        `<li>${esc(labelOf.get(dependency.from) ?? dependency.from)} → ${esc(labelOf.get(dependency.to) ?? dependency.to)} <span class="muted">(${esc(dependency.evidence)}: ${esc(dependency.reason)})</span></li>`,
+    )
+    .join('');
+  const phases = journey.phases
+    .map(
+      (phase) =>
+        `<li>Phase ${String(phase.index)} — ${esc(phase.label)} <span class="muted">(${phase.interactionIds.join(', ')})</span></li>`,
+    )
+    .join('');
+  const notInFlow = journey.accounts
+    .filter((account) => account.flowStep === undefined)
+    .map(
+      (account) =>
+        `<tr><td>${esc(account.interactionId)}</td><td>${esc(account.type)} ${esc(account.target ?? '')}</td><td>${esc(account.status)}</td><td>${esc(account.rule ?? '')}</td><td>${esc(account.mergedInto ?? '')}</td><td class="muted">${esc(account.reason ?? '')} <span class="muted">raw ${account.rawEventIds.join(',')}</span></td></tr>`,
+    )
+    .join('');
+  return `<section><h2>Human journey</h2><div class="cards">${cards}</div>
+    <p class="muted">Fidelity ${esc(result.fidelity)} · ${journey.ordered ? 'flow steps in the human order' : '<b>flow steps reordered</b>'} · preserve first, understand second, optimize last.</p>
+    <ol class="journey" style="list-style:none;padding-left:0">${timeline}</ol>
+    ${dependencies ? `<h3>Dependencies between actions</h3><ul>${dependencies}</ul>` : ''}
+    ${phases ? `<h3>Workflow phases</h3><ul>${phases}</ul>` : ''}
+    ${notInFlow ? `<h3>Dropped / merged human actions</h3><table class="rec"><thead><tr><th>Interaction</th><th>Action</th><th>Status</th><th>Rule</th><th>Merged into</th><th>Reason</th></tr></thead><tbody>${notInFlow}</tbody></table>` : ''}
+    ${result.optimized ? `<p class="muted">FlowOptimizer: optimized.flow.yaml has ${String(result.optimized.flow.steps.length)} step(s) (${result.optimized.removed.map((item) => `${esc(item.label)}: ${esc(item.reason)}`).join('; ') || 'nothing removed'}); generated.flow.yaml keeps the human journey.</p>` : ''}</section>`;
+}
 
 /**
  * Recorded test data : chaque donnée, sa clé, sa stratégie et pourquoi. Le rapport ne montre

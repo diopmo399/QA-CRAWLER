@@ -257,6 +257,10 @@ export interface SemanticRecordedAction {
   };
   /** NAVIGATE gardé comme étape goto : pourquoi aucune action humaine ne l'explique. */
   gotoReason?: string;
+  /** UNRESOLVED : un contrôle cliqué par l'humain dont l'intention n'est pas (encore) comprise — gardé. */
+  semanticStatus?: 'RESOLVED' | 'UNRESOLVED';
+  /** Ce que l'action a changé à l'écran (section révélée, champ ajouté, fenêtre ouverte…), même sans requête. */
+  domEffects?: string[];
 }
 
 export type AssertionKind =
@@ -307,6 +311,7 @@ export type RecordingWarningCode =
   | 'SEMANTIC_ACTION_LOST'
   | 'CAUSALITY_AMBIGUOUS'
   | 'TEST_DATA_COLLISION'
+  | 'FLOW_GENERATION_LOST_HUMAN_ACTIONS'
   | 'UNSUPPORTED_EVENT'
   | 'NO_OUTCOME_OBSERVED';
 
@@ -339,6 +344,10 @@ export interface RecordedFlowStep {
   confidence: number;
   quality?: LocatorQuality;
   valueClass?: ValueClass;
+  /** Les interactions humaines (h001…) que l'étape représente. */
+  interactionIds?: string[];
+  /** UNRESOLVED_HUMAN_ACTION : gardée bien que son intention ne soit pas comprise. */
+  semanticStatus?: 'RESOLVED' | 'UNRESOLVED';
   /** Pourquoi cette étape (explicabilité du rapport). */
   explanation: string;
 }
@@ -425,7 +434,20 @@ export type RecordingEventType =
   | 'TEST_DATA_GENERATED_FOR_RUN'
   | 'SENSITIVE_RECORDED_VALUE_REDACTED'
   | 'TEST_DATA_COLLISION_DETECTED'
-  | 'TEST_DATA_STRATEGY_CANDIDATE';
+  | 'TEST_DATA_STRATEGY_CANDIDATE'
+  | 'HUMAN_INTERACTION_CAPTURED'
+  | 'HUMAN_INTERACTION_PRESERVED'
+  | 'HUMAN_INTERACTION_MERGED'
+  | 'HUMAN_INTERACTION_EXCLUDED'
+  | 'HUMAN_INTERACTION_UNRESOLVED'
+  | 'HUMAN_ACTION_DEPENDENCY_DISCOVERED'
+  | 'HUMAN_JOURNEY_BUILT'
+  | 'HUMAN_JOURNEY_VALIDATION_STARTED'
+  | 'HUMAN_JOURNEY_VALIDATION_FAILED'
+  | 'HUMAN_JOURNEY_VALIDATED'
+  | 'HUMAN_ACTION_LOST'
+  | 'FLOW_OPTIMIZATION_STARTED'
+  | 'FLOW_OPTIMIZATION_COMPLETED';
 
 export interface RecordingEvent {
   type: RecordingEventType;
