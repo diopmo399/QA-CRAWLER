@@ -273,9 +273,15 @@ export function toSuggestedFlow(flow: RecordedFlow): SuggestedFlowGraph {
       step: item.step,
       label: item.label,
       comment: [
-        item.provenance,
+        item.semanticStatus === 'UNRESOLVED' ? 'UNRESOLVED_HUMAN_ACTION' : item.provenance,
         ...(item.quality ? [item.quality] : []),
         ...(item.valueClass ? [item.valueClass] : []),
+        // Les interactions humaines représentées (h005, ou h004+h005 quand l'étape en fusionne plusieurs).
+        ...(item.interactionIds && item.interactionIds.length > 0
+          ? [
+              `${item.interactionIds.length > 1 ? 'MERGED_HUMAN_ACTION ' : ''}${item.interactionIds.join('+')}`,
+            ]
+          : []),
         `raw ${item.rawEventIds.join(',')}`,
       ].join(' · '),
     })),

@@ -80,21 +80,25 @@ attribut `name`) › **FRAMEWORK_BINDING** (`formControlName`) › **CSS_STABLE*
 
 ### Normalisation
 
-- **Bruit** : clics de focus dans un champ, touches, clics sur un libellé : retirés.
+- **Bruit** : clics de focus dans un champ, touches, clics sur un libellé : fusionnés dans
+  la saisie ou le choix qu'ils précèdent (statut `MERGED` et sa règle dans le manifeste).
 - **Saisies** : plusieurs saisies d'un même champ → une étape, la valeur finale.
 - **Corrections** : un champ ressaisi, une case cochée puis décochée → la valeur finale (ou
-  rien). Jusqu'au prochain envoi seulement.
+  rien). Jusqu'au prochain envoi seulement, et jamais si une action a dépendu de la valeur
+  intermédiaire (une case qui a révélé des champs, utilisés ensuite). En `EXACT`, aucune.
 - **Navigations** : celles qu'une action a causées (redirection, route d'une SPA) ne sont pas
   des étapes. Un point de contrôle posé après une redirection appartient à l'action qui l'a
   causée.
-- **Détours** : un onglet / un lien ouvert puis quitté aussitôt pour un contrôle déjà
-  visible avant lui (ou un retour arrière) → retiré.
+- **Détours** : ne sont plus retirés. Un onglet ouvert par l'humain reste une étape ; seul
+  l'optimiseur séparé (`recording.optimization`, `optimized.flow.yaml`) propose de les retirer.
 - **Invalide puis valide** : un envoi refusé, corrigé, puis renvoyé. Avec un point de
   contrôle sur l'erreur, c'est voulu : le flow garde les deux envois et vérifie le refus
   (**NEGATIVE_VALIDATION_FLOW**). Sans point de contrôle, la tentative refusée est écartée
   et signalée (**AMBIGUOUS_RECORDING_INTENT**).
 - **Jamais retirée** : une action qui a écrit (requête acceptée), changé un état métier,
-  ou qui porte un point de contrôle.
+  porte un point de contrôle, a changé l'écran (section ouverte, champ révélé, fenêtre), ou
+  dont une action suivante dépend ; un bouton, un onglet, un menu, une case, un choix, un
+  envoi ; un contrôle dont l'intention n'est pas comprise (`UNRESOLVED_BUT_PRESERVED`).
 
 Une action écartée garde sa raison dans la trace : rien n'est supprimé.
 
@@ -109,6 +113,59 @@ Une action écartée garde sa raison dans la trace : rien n'est supprimé.
 
 Un fichier choisi : son extension seulement (jamais le chemin) ; un téléchargement est un
 résultat, pas une étape.
+
+## Parcours humain (Human journey)
+
+**PRESERVE FIRST, UNDERSTAND SECOND, OPTIMIZE LAST.** L'enregistreur ne cherche pas le chemin
+le plus court vers l'écran final : `generated.flow.yaml` est le parcours **enseigné** par
+l'humain. Ne pas comprendre une action n'est jamais une raison de la retirer.
+
+**Chronologie.** Chaque interaction humaine reçoit un id (`h001`, `h002`…) et un numéro
+d'ordre dès la trace brute (les frappes d'un même champ sont une interaction). Ces ids
+suivent l'action jusqu'à l'étape du flow (`# HUMAN_RECORDED · SEMANTIC · h005 · raw r20`).
+
+**Comptage.** Chaque interaction termine dans exactement un statut :
+
+| Statut                     | Sens                                                                     |
+| -------------------------- | ------------------------------------------------------------------------ |
+| `PRESERVED`                | une étape du flow                                                        |
+| `UNRESOLVED_BUT_PRESERVED` | une étape du flow, intention pas (encore) comprise                       |
+| `MERGED`                   | représentée par une autre (focus → saisie, frappes, clic + envoi)        |
+| `COLLAPSED_CORRECTION`     | une valeur corrigée ensuite (rien n'en dépendait)                        |
+| `SUPERSEDED`               | un envoi refusé, corrigé puis renvoyé                                    |
+| `EXCLUDED_WITH_REASON`     | valeur déjà là, valeur calculée, dialogue du navigateur…                 |
+| `HUMAN_NOISE`              | bruit confirmé (clic sur du texte sans effet, rien n'en dépend)          |
+| `UNACCOUNTED`              | **interdit** : perdue sans raison → `FLOW_GENERATION_LOST_HUMAN_ACTIONS` |
+
+`meaningful = preserved + merged + excluded + noise`, et « Lost without explanation » vaut 0.
+Le HumanJourneyValidator vérifie aussi que les étapes gardent l'ordre humain.
+
+**Effets et dépendances.** Un clic peut être fonctionnel sans changer d'adresse ni appeler le
+serveur : l'écran observé avant et après dit ce qu'il a changé (`FIELD_ADDED`,
+`HIDDEN_TO_VISIBLE`, `MODAL_OPENED`, `ROUTE_CHANGED`…), même quand l'empreinte de l'écran est
+la même (les contrôles visibles comptent). Une action dont la cible n'était pas accessible
+avant un clic dépend de ce clic (`FORWARD` : vue juste après ; `BACKWARD` : absente avant,
+utilisée ensuite) : ce clic ne peut pas être retiré.
+
+**Contrôles maison.** Un clic sur un élément que la capture ne reconnaît pas (une carte, un
+en-tête de composant) est observé : s'il change l'écran ou si l'action suivante en dépend,
+c'est une action `UNRESOLVED_BUT_PRESERVED`, avec un localisateur stable. Les attributs
+`aria-expanded`, `aria-controls`, `aria-pressed`, `aria-selected`, `aria-haspopup`,
+`data-toggle`, `jsaction`, et les classes `btn`, `button`, `accordion`, `panel-header`,
+`step-header`, `toggle` désignent un contrôle. Un vrai bouton cliqué sans aucun effet observé
+reste une étape, `UNRESOLVED`.
+
+**Phases.** Le parcours est lu par phases (une phase commence à une action qui ouvre quelque
+chose, ou après un envoi) : dans le rapport et `human-journey.json`, sans rien retirer.
+
+**Fidélité** (`recording.fidelity`) : `EXACT` (chaque valeur saisie reste une étape),
+`SEMANTIC` (défaut : frappe et corrections fusionnées, jamais un contrôle), `OPTIMIZED`
+(SEMANTIC, plus `optimized.flow.yaml` raccourci par le FlowOptimizer : jamais à la place).
+
+**Fichiers.** `human-journey.json` (interactions, dépendances, phases, résumé) et
+`action-preservation.json` (une ligne par interaction : statut, étape, règle, fusionnée dans,
+raison). Le rapport montre la chronologie, les dépendances, les phases et les actions
+fusionnées ou écartées avec leur règle.
 
 ## Données de test enregistrées
 
@@ -286,7 +343,8 @@ la session, la version et l'environnement. Les runs suivants la reprennent comme
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,
 `recorded-flow.json`, `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
-données du flow), `flow-graph.json` (la carte
+données du flow), `human-journey.json`, `action-preservation.json`, `optimized.flow.yaml`
+(seulement avec l'optimiseur), `flow-graph.json` (la carte
 des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en nombres — sans
 note globale —, intention comprise, qualité des cibles et des valeurs, trace
 RAW → SEMANTIC → FINAL avec le pourquoi de chaque étape, vérifications candidates).
@@ -294,7 +352,7 @@ RAW → SEMANTIC → FINAL avec le pourquoi de chaque étape, vérifications can
 Événements : `RECORDING_STARTED`, `RAW_EVENT_CAPTURED`, `SEMANTIC_ACTION_RESOLVED`,
 `CHECKPOINT_ADDED`, `RECORDING_PAUSED`, `RECORDING_RESUMED`, `RECORDING_STOPPED`,
 `RECORDING_NORMALIZED`, `OUTCOME_INFERRED`, `FLOW_GENERATED`, `REPLAY_VALIDATION_STARTED`,
-`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`, et pour les données : `RECORDED_TEST_DATA_DISCOVERED`, `TEST_DATA_KEY_RESOLVED`, `TEST_DATA_CLASSIFIED`, `TEST_DATA_GENERALIZED`, `TEST_DATA_LITERAL_PRESERVED`, `TEST_DATA_REFERENCE_CREATED`, `SENSITIVE_RECORDED_VALUE_REDACTED`, `TEST_DATA_COLLISION_DETECTED` (enregistrement), `TEST_DATA_GENERATED_FOR_RUN`, `TEST_DATA_STRATEGY_CANDIDATE` (rejeu). Jamais une valeur dans un événement.
+`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`, et pour les données : `RECORDED_TEST_DATA_DISCOVERED`, `TEST_DATA_KEY_RESOLVED`, `TEST_DATA_CLASSIFIED`, `TEST_DATA_GENERALIZED`, `TEST_DATA_LITERAL_PRESERVED`, `TEST_DATA_REFERENCE_CREATED`, `SENSITIVE_RECORDED_VALUE_REDACTED`, `TEST_DATA_COLLISION_DETECTED` (enregistrement), `TEST_DATA_GENERATED_FOR_RUN`, `TEST_DATA_STRATEGY_CANDIDATE` (rejeu), et pour le parcours humain : `HUMAN_INTERACTION_CAPTURED`, `HUMAN_INTERACTION_PRESERVED`, `HUMAN_INTERACTION_MERGED`, `HUMAN_INTERACTION_EXCLUDED`, `HUMAN_INTERACTION_UNRESOLVED`, `HUMAN_ACTION_DEPENDENCY_DISCOVERED`, `HUMAN_JOURNEY_BUILT`, `HUMAN_JOURNEY_VALIDATION_STARTED`, `HUMAN_JOURNEY_VALIDATED`, `HUMAN_JOURNEY_VALIDATION_FAILED`, `HUMAN_ACTION_LOST`, `FLOW_OPTIMIZATION_STARTED`, `FLOW_OPTIMIZATION_COMPLETED`. Jamais une valeur dans un événement.
 
 ## Configuration
 
@@ -324,6 +382,18 @@ recording:
     detectSemanticActionLoss: true
     detectNavigationCollapse: true
     collapseMinGotos: 2
+  fidelity: SEMANTIC # EXACT | SEMANTIC | OPTIMIZED
+  preserveHumanJourney: true
+  preserveUnknownInteractiveActions: true # un composant maison qui a un effet : gardé, UNRESOLVED
+  preserveDomChangingActions: true
+  preserveDependencyActions: true
+  normalization:
+    mergeTyping: true
+    collapseCorrections: true
+    removeTechnicalNoise: true
+    removeUnresolvedClicks: false
+  optimization:
+    enabled: false # true : optimized.flow.yaml en plus (generated.flow.yaml reste le parcours humain)
   testData:
     enabled: true # false : l'ancien comportement ({ testData: clé } choisi au rejeu, aucun fichier)
     extractRecordedValues: true # false : la saisie n'est jamais lue (seulement sa forme)

@@ -4,6 +4,19 @@ import { classifyRecordedValue, type ValueClassifierOptions } from './value-clas
 /** Une navigation qui suit une action de si près en est la conséquence (redirection, route d'une SPA). */
 const CAUSED_NAVIGATION_MS = 2500;
 
+/**
+ * SAFE NORMALIZATION : comment représenter proprement ce que l'humain a fait — pas comment le
+ * raccourcir. La frappe et les corrections se fusionnent ; un bouton, un onglet, une section,
+ * un choix, un envoi ou un contrôle inconnu ne disparaissent jamais.
+ */
+export interface SafeNormalizationOptions {
+  mergeTyping?: boolean;
+  /** EXACT : false (chaque valeur saisie reste une étape). */
+  collapseCorrections?: boolean;
+  /** Actions à ne jamais fusionner ni retirer (effet sur l'écran, dépendance d'une action suivante). */
+  preserve?: ReadonlySet<string>;
+}
+
 export interface NormalizationStats {
   removedNoise: number;
   mergedInputs: number;
@@ -30,8 +43,8 @@ export interface NormalizedRecording {
  *   3. cycle invalide → corrigé → renvoyé : voulu (point de contrôle) → NEGATIVE_VALIDATION_FLOW,
  *      gardé tel quel ; sinon la tentative ratée est écartée (AMBIGUOUS_RECORDING_INTENT) ;
  *   4. corrections (un champ ressaisi, une case cochée puis décochée) : la valeur finale ;
- *   5. valeurs : données de test, littéraux métier, secrets en { env }, valeur inchangée → rien ;
- *   6. détours (mauvais onglet, puis retour) : écartés.
+ *   5. valeurs : données de test, littéraux métier, secrets en { env }, valeur inchangée → rien.
+ * Les détours ne sont plus retirés ici (FlowOptimizer, séparé et facultatif).
  * Une action qui écrit (requête acceptée), change un état métier ou porte un point de
  * contrôle n'est jamais écartée. Rien n'est supprimé : une action écartée garde sa raison.
  */
@@ -43,7 +56,14 @@ export function normalizeRecording(
   options: ValueClassifierOptions,
   /** Les navigations ont déjà été rattachées à leurs actions (ACTION CORRELATION) : les NAVIGATE restants sont des goto voulus. */
   correlated = false,
+  safe: SafeNormalizationOptions = {},
 ): NormalizedRecording {
+  const mergeTyping = safe.mergeTyping ?? true;
+  const collapseCorrections = safe.collapseCorrections ?? true;
+  const preserve = safe.preserve ?? new Set<string>();
+  /** Jamais fusionnée ni retirée : elle écrit, porte un point de contrôle, change l'écran ou une action en dépend. */
+  const keep = (action: SemanticRecordedAction): boolean =>
+    protectedAction(action) || preserve.has(action.id);
   const actions = input.map((action) => ({ ...action, evidence: [...action.evidence] }));
   const rawById = new Map(events.map((event) => [event.id, event]));
   const stateById = new Map(states.map((state) => [state.id, state]));
@@ -57,7 +77,7 @@ export function normalizeRecording(
   const warnings: RecordingWarning[] = [];
   const live = (): SemanticRecordedAction[] => actions.filter((action) => !action.dropped);
   const drop = (action: SemanticRecordedAction, reason: string): void => {
-    if (protectedAction(action)) return;
+    if (keep(action)) return;
     action.dropped = reason;
   };
 
@@ -91,6 +111,7 @@ export function normalizeRecording(
   let previous: SemanticRecordedAction | undefined;
   for (const action of live()) {
     if (
+      mergeTyping &&
       action.type === 'FILL' &&
       previous?.type === 'FILL' &&
       fieldKey(previous) === fieldKey(action) &&
@@ -138,13 +159,14 @@ export function normalizeRecording(
       if (!['FILL', 'SELECT', 'CHECK', 'UNCHECK'].includes(action.type)) continue;
       const key = `${action.type === 'UNCHECK' ? 'CHECK' : action.type === 'CHECK' && action.option ? `RADIO:${action.option}` : action.type}|${fieldKey(action)}`;
       const earlier = lastOf.get(key);
-      if (earlier && !protectedAction(earlier)) {
+      // Une correction n'est fusionnée que si rien n'a dépendu de la valeur intermédiaire.
+      if (earlier && collapseCorrections && !keep(earlier)) {
         if (
           (earlier.type === 'CHECK' && action.type === 'UNCHECK') ||
           (earlier.type === 'UNCHECK' && action.type === 'CHECK')
         ) {
           earlier.dropped = 'toggled back: no change';
-          if (!protectedAction(action)) action.dropped = 'toggled back: no change';
+          if (!keep(action)) action.dropped = 'toggled back: no change';
           lastOf.delete(key);
           stats.collapsedCorrections += 1;
           continue;
@@ -187,26 +209,8 @@ export function normalizeRecording(
       });
   }
 
-  // 6. Détours : un onglet / lien ouvert puis quitté aussitôt pour un contrôle déjà visible avant lui.
-  const remaining = live();
-  for (const [index, action] of remaining.entries()) {
-    const next = remaining[index + 1];
-    if (!next || !isNavigationClick(action) || protectedAction(action)) continue;
-    const before = action.stateBefore ? stateById.get(action.stateBefore) : undefined;
-    if (!before) continue;
-    const backToStart = next.type === 'NAVIGATE' && next.route === before.route;
-    const reachableBefore =
-      next.type !== 'NAVIGATE' && next.target !== undefined && before.controls.includes(controlKey(next));
-    if (backToStart) {
-      action.dropped = 'detour: left immediately, back to the previous page';
-      next.dropped = 'detour: back to the previous page';
-      stats.removedDetours += 1;
-    } else if (reachableBefore) {
-      action.dropped = `detour: "${next.target?.label ?? ''}" was already reachable before`;
-      stats.removedDetours += 1;
-    }
-  }
-
+  // Les détours (un onglet ouvert puis quitté) ne sont PAS retirés ici : c'est de l'optimisation
+  // (FlowOptimizer, optimized.flow.yaml), jamais une normalisation du parcours humain.
   return { actions, kept: live(), stats, warnings, negative };
 }
 
@@ -247,14 +251,6 @@ function failedValidation(action: SemanticRecordedAction, states: Map<string, Re
 
 function causesNavigation(action: SemanticRecordedAction): boolean {
   return ['CLICK', 'SUBMIT', 'CONFIRM', 'SELECT', 'CHECK'].includes(action.type);
-}
-
-function isNavigationClick(action: SemanticRecordedAction): boolean {
-  if (action.type !== 'CLICK' || !action.target) return false;
-  const target = action.target.target;
-  const role = target.strategy === 'role' ? target.role : undefined;
-  const reads = action.network.every((exchange) => !isWrite(exchange.method));
-  return reads && (role === 'link' || role === 'tab' || role === 'menuitem');
 }
 
 function sameTarget(a: SemanticRecordedAction, b: SemanticRecordedAction): boolean {

@@ -34,6 +34,8 @@ export function resolveSemanticActions(
   initialStateId?: string,
   /** ACTION CORRELATION : les navigations causées par une action deviennent ses effets, pas des goto. */
   correlation?: CorrelationResult,
+  /** HUMAN JOURNEY : clics « non interactifs » qui ont pourtant un effet (raw id → pourquoi) : des actions UNRESOLVED. */
+  promoted?: ReadonlyMap<string, string>,
 ): SemanticResolution {
   const decisions = new Map(correlation?.navigations.map((decision) => [decision.navigationId, decision]));
   const actions: SemanticRecordedAction[] = [];
@@ -101,7 +103,7 @@ export function resolveSemanticActions(
   const actionOf = (rawId: string): SemanticRecordedAction | undefined =>
     [...actions].reverse().find((action) => action.rawEventIds.includes(rawId));
   for (const event of ordered) {
-    if (event.noise && !correlation?.promoted.has(event.id)) {
+    if (event.noise && !correlation?.promoted.has(event.id) && !promoted?.has(event.id)) {
       noise += 1;
       if (event.stateAfter) stateBefore = event.stateAfter;
       continue;
@@ -152,11 +154,20 @@ export function resolveSemanticActions(
           formHasAction: false,
           ...(element.dialogName ? { dialogName: element.dialogName } : {}),
         });
+        // Un contrôle cliqué par l'humain dont l'intention n'est pas comprise : gardé, UNRESOLVED.
+        const why = promoted?.get(event.id);
+        const unresolved = why !== undefined || !target.named;
         push(event, element.isSubmit ? 'SUBMIT' : 'CLICK', {
           target,
           classification: classification.classification,
-          evidence: [`raw click on ${element.role || element.tag} "${target.label}"`, ...target.reasons],
-          confidence: target.ambiguous ? 0.5 : target.quality === 'FRAGILE' ? 0.6 : 0.9,
+          evidence: [
+            `raw click on ${element.role || element.tag} "${target.label}"`,
+            ...target.reasons,
+            ...(why ? [`not recognised as a control, kept as a human action: ${why}`] : []),
+            ...(unresolved && !why ? ['a control without a name: kept, intention not understood yet'] : []),
+          ],
+          confidence: target.ambiguous ? 0.5 : target.quality === 'FRAGILE' || unresolved ? 0.6 : 0.9,
+          ...(unresolved ? { semanticStatus: 'UNRESOLVED' as const } : {}),
         });
         break;
       }

@@ -398,6 +398,18 @@ export function installRecorder(options: CaptureOptions): void {
     };
   };
 
+  const INTERACTIVE_HINT_ATTRIBUTES = [
+    'aria-expanded',
+    'aria-controls',
+    'aria-pressed',
+    'aria-selected',
+    'aria-haspopup',
+    'data-toggle',
+    'data-bs-toggle',
+    'jsaction',
+  ];
+  const INTERACTIVE_HINT_CLASS =
+    /(^|[\s_-])(btn|button|clickable|accordion|expansion-panel-header|panel-header|step-header|stepper-header|toggle)($|[\s_-])/i;
   const pointerAncestor = (el: Element): Element | null => {
     let node: Element | null = el;
     let found: Element | null = null;
@@ -405,7 +417,10 @@ export function installRecorder(options: CaptureOptions): void {
       if (
         getComputedStyle(node).cursor === 'pointer' ||
         node.hasAttribute('onclick') ||
-        node.hasAttribute('tabindex')
+        node.hasAttribute('tabindex') ||
+        // Composants maison : un en-tête d'accordéon, un onglet, une étape, un bouton bascule.
+        INTERACTIVE_HINT_ATTRIBUTES.some((name) => node?.hasAttribute(name) === true) ||
+        INTERACTIVE_HINT_CLASS.test(typeof node.className === 'string' ? node.className : '')
       )
         found = node;
       else if (found) break;

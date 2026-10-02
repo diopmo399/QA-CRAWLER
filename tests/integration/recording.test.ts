@@ -41,7 +41,7 @@ describe('Human flow recorder (E2E)', () => {
       validate: true,
       onEvent: (event) => events.push(event),
       drive: async ({ page, recorder }) => {
-        // Un détour : l'onglet Reports, puis retour à Users.
+        // Un détour : l'onglet Reports, puis retour à Users (gardé : c'est le parcours enseigné).
         await page.getByRole('tab', { name: 'Reports' }).click();
         await page.waitForURL('**/reports');
         await page.waitForTimeout(700);
@@ -120,7 +120,15 @@ describe('Human flow recorder (E2E)', () => {
     expect(flow.testData?.values['user.firstName']).toMatchObject({ strategy: 'GENERATE_AT_REPLAY' });
     // Le littéral métier reste ; la valeur pré-remplie (Country) et la case revenue en arrière : aucune étape.
     expect(flow.steps).toContainEqual(expect.objectContaining({ kind: 'select', option: 'Business' }));
-    expect(yaml).not.toMatch(/Country|Newsletter|Reports/);
+    expect(yaml).not.toMatch(/Country|Newsletter/);
+    // PRESERVE FIRST : les onglets cliqués par l'humain (Reports, puis Users) restent des étapes —
+    // le détour n'est retiré que par l'optimiseur séparé, jamais dans generated.flow.yaml.
+    expect(
+      flow.steps
+        .filter((step) => step.kind === 'click' && step.target.role === 'tab')
+        .map((step) => (step.kind === 'click' ? step.target.name : '')),
+    ).toEqual(['Reports', 'Users']);
+    expect(outcome.result.journey.summary.unaccounted).toBe(0);
     // Le clic d'envoi a le droit d'écrire ; les résultats observés sont vérifiés.
     const save = flow.steps.find(
       (step) => step.kind === 'click' && step.target.strategy === 'role' && step.target.name === 'Save',
@@ -137,7 +145,8 @@ describe('Human flow recorder (E2E)', () => {
     ).toBe(true);
     expect(outcome.result.flow.intent.workflow).toBe('CREATE:USER');
     const quality = outcome.result.flow.quality;
-    expect(quality.removedDetours).toBeGreaterThanOrEqual(1);
+    // Plus aucun détour retiré du parcours humain (seul l'optimiseur séparé en propose).
+    expect(quality.removedDetours).toBe(0);
     expect(quality.mergedInputs + quality.collapsedCorrections).toBeGreaterThanOrEqual(2);
     expect(quality.fragileLocators).toBe(0);
   });
