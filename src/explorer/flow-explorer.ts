@@ -2604,6 +2604,15 @@ export class FlowExplorer {
       this.learnRecovery({ ...unconfirmed.input, result: 'SUCCESS' });
       this.pendingLearning = undefined;
     }
+    // PLANS : enregistré (connu), courant (depuis l'état atteint), réparé (récupérations confirmées).
+    this.cognitive?.planFlow(flow, report.steps, (action) => {
+      if (action.kind !== 'click' && action.kind !== 'check') return { allowed: true, reason: 'field input' };
+      const verdict = this.judgeRecovery(
+        { role: action.role ?? 'button', name: action.label, visible: true, disabled: false },
+        action.kind,
+      );
+      return { allowed: verdict.allowed, reason: verdict.reason };
+    });
     // FLOW DRIFT : le flow marche-t-il encore tel quel, ou seulement grâce au self-healing ?
     const healing = this.config.replay.intelligentRecovery;
     if (healing.enabled && healing.detectFlowDrift) {

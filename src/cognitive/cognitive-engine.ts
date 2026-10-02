@@ -14,6 +14,27 @@ import { EvidenceStore, type Evidence } from './evidence.js';
 import { EvidenceGraph, importStaticGraph } from './evidence-graph.js';
 import { FunctionalModelBuilder, type FunctionalModel } from './functional-model.js';
 import { HypothesisEngine, describeProposition, type Hypothesis } from './hypothesis-engine.js';
+import {
+  buildGoalGraph,
+  describeChain,
+  resolvePreconditions,
+  type ConditionContext,
+  type GoalGraph,
+  type PreconditionResolution,
+} from './goal-graph.js';
+import {
+  checkpointsOf,
+  describePlan,
+  evaluateCheckpoint,
+  planGoal,
+  recordedPlan,
+  repairPlan,
+  type ExecutionPlan,
+  type PlannedAction,
+  type RepairResult,
+  type SemanticCheckpoint,
+} from './planning.js';
+import type { FlowStepReport } from '../model/flow-run.js';
 
 /** La clé causale d'une action : « check eur », « click company information ». */
 export function actionKey(kind: string, label: string): string {
@@ -27,6 +48,12 @@ export const COGNITIVE_EVENTS = [
   'HYPOTHESIS_CONTRADICTED',
   'CAUSAL_RELATION_CONFIRMED',
   'BUSINESS_STATE_UPDATED',
+  'GOAL_CREATED',
+  'GOAL_BLOCKED',
+  'PRECONDITION_DISCOVERED',
+  'PLAN_CREATED',
+  'PLAN_REPAIRED',
+  'SEMANTIC_CHECKPOINT_REACHED',
 ] as const;
 export type CognitiveEvent = (typeof COGNITIVE_EVENTS)[number];
 
@@ -70,6 +97,16 @@ export class CognitiveEngine {
   situation: BusinessSituation | undefined;
   functionalState: FunctionalState | undefined;
   readonly events: CognitiveEventRecord[] = [];
+  private goals: GoalGraph | undefined;
+  private checkpoints = new Map<string, SemanticCheckpoint>();
+  private lastBlocked: string | undefined;
+  private conditionContext: ConditionContext = {};
+  readonly plans: {
+    flow: string;
+    plans: ExecutionPlan[];
+    repair?: RepairResult;
+    preconditions?: PreconditionResolution;
+  }[] = [];
 
   constructor(private readonly options: CognitiveOptions) {
     const now = options.now ?? (() => new Date().toISOString());
@@ -159,6 +196,7 @@ export class CognitiveEngine {
       (input) => this.addEvidence(input),
       () => this.now(),
     );
+    this.goals = undefined;
   }
 
   /** Le code source (déjà analysé, en cache) : des preuves d'implémentation. */
@@ -176,6 +214,15 @@ export class CognitiveEngine {
       this.lastSituation = text;
       this.emit('BUSINESS_STATE_UPDATED', text);
     }
+    this.conditionContext = {
+      situation,
+      controls: new Set(
+        snapshot.elements
+          .filter((element) => element.visible && !element.disabled && element.role && element.name)
+          .map((element) => `${element.role}:${normalizeControl(element.name)}`),
+      ),
+    };
+    this.trackGoals();
     return situation;
   }
 
@@ -240,6 +287,106 @@ export class CognitiveEngine {
     );
   }
 
+  /** GOAL GRAPH du modèle courant (reconstruit quand le modèle change). */
+  goalGraph(): GoalGraph {
+    if (!this.goals) {
+      this.goals = buildGoalGraph(this.model, this.causal);
+      if (this.goals.nodes.length > 0) {
+        this.emit(
+          'GOAL_CREATED',
+          `${this.goals.root ?? ''}: ${String(this.goals.nodes.length)} goal(s) and precondition(s)`,
+        );
+        for (const checkpoint of checkpointsOf(this.goals))
+          if (!this.checkpoints.has(checkpoint.id)) this.checkpoints.set(checkpoint.id, checkpoint);
+      }
+    }
+    return this.goals;
+  }
+
+  /** WHAT PRECONDITIONS ARE MISSING? — pour un objectif, sur l'écran courant. */
+  preconditions(goalId?: string): PreconditionResolution | undefined {
+    const graph = this.goalGraph();
+    const goal = goalId ?? graph.root;
+    return goal ? resolvePreconditions(graph, goal, this.conditionContext) : undefined;
+  }
+
+  /** Les checkpoints sémantiques, réévalués sur l'écran (jamais l'URL seule). */
+  private trackGoals(): void {
+    const graph = this.goalGraph();
+    if (!graph.root) return;
+    for (const [id, checkpoint] of this.checkpoints) {
+      const next = evaluateCheckpoint(checkpoint, graph, this.conditionContext, this.now());
+      if (next.status === 'CONFIRMED' && checkpoint.status !== 'CONFIRMED')
+        this.emit('SEMANTIC_CHECKPOINT_REACHED', `${id} (${String(next.evidence.length)} signal(s))`);
+      this.checkpoints.set(id, next);
+    }
+    const resolution = resolvePreconditions(graph, graph.root, this.conditionContext);
+    const text = resolution.chains.map(describeChain).join(' | ');
+    if (resolution.status === 'BLOCKED' && text !== this.lastBlocked) {
+      this.lastBlocked = text;
+      this.emit('GOAL_BLOCKED', `${graph.root}: ${text}`);
+      for (const node of resolution.missingPreconditions)
+        this.emit(
+          'PRECONDITION_DISCOVERED',
+          `${node.id} — ${node.achievedBy.map((action) => `${action.kind} "${action.label}" (${action.source})`).join(', ') || 'no known action'}`,
+        );
+    }
+  }
+
+  /**
+   * Les plans d'un flow : RECORDED (le parcours démontré), CURRENT (depuis l'état atteint),
+   * RECOVERED / SUGGESTED (le plan réparé par les récupérations confirmées au runtime).
+   */
+  planFlow(
+    flow: Pick<FlowConfig, 'name' | 'steps'>,
+    steps: readonly FlowStepReport[],
+    judge: (action: PlannedAction) => { allowed: boolean; reason: string },
+  ): ExecutionPlan[] {
+    const graph = this.goalGraph();
+    const mission = graph.mission ?? flow.name;
+    const goal = graph.root ?? flow.name;
+    const recorded = recordedPlan(flow, mission, goal);
+    const plans: ExecutionPlan[] = [recorded];
+    this.emit('PLAN_CREATED', `RECORDED_PLAN ${flow.name}: ${describePlan(recorded)}`);
+    if (graph.root) {
+      const current = planGoal(graph, graph.root, this.conditionContext);
+      plans.push(current);
+      this.emit(
+        'PLAN_CREATED',
+        `CURRENT_PLAN ${graph.root}: ${describePlan(current) || 'nothing left to do'}${current.assumptions.length > 0 ? ` (assumes ${current.assumptions.map((assumption) => assumption.hypothesis).join(', ')})` : ''}`,
+      );
+    }
+    const repairs = steps
+      .filter((step) => step.recovery?.outcome.status === 'GOAL_REACHED')
+      .map((step) => ({
+        originalIndex: step.index - 1,
+        reason: `${step.recovery?.divergence.category ?? 'recovered'}: goal ${step.recovery?.goal.id ?? ''} confirmed at runtime`,
+        replacement: (step.recovery?.outcome.path ?? []).map((action): PlannedAction => ({
+          kind: action.kind,
+          label: action.name,
+          role: action.role,
+          intent: step.recovery?.goal.id ?? '',
+          source: 'RECOVERY',
+          expectedEffects: step.recovery?.goalVerification?.satisfied ?? [],
+        })),
+      }));
+    const repair = repairPlan(recorded, repairs, judge);
+    if (repair.status === 'REPAIRED' && repair.recovered && repair.suggested) {
+      plans.push(repair.recovered, repair.suggested);
+      this.emit('PLAN_REPAIRED', `${flow.name}: ${repair.explanation.join(' · ')}`);
+    }
+    const preconditions = graph.root
+      ? resolvePreconditions(graph, graph.root, this.conditionContext)
+      : undefined;
+    this.plans.push({
+      flow: flow.name,
+      plans,
+      ...(repair.status !== 'NO_REPAIR' ? { repair } : {}),
+      ...(preconditions ? { preconditions } : {}),
+    });
+    return plans;
+  }
+
   get functionalModel(): FunctionalModel {
     return this.model;
   }
@@ -293,6 +440,8 @@ export class CognitiveEngine {
         situation: this.situation ?? null,
         functionalState: this.functionalState ?? null,
       },
+      'goal-graph.json': this.goals ?? { nodes: [] },
+      'plan.json': { flows: this.plans, checkpoints: [...this.checkpoints.values()] },
     };
   }
 
