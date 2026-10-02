@@ -1,3 +1,4 @@
+import type { StepEffects } from '../config/flow-schema.js';
 import type {
   RawRecordedEvent,
   RecordedFlow,
@@ -293,8 +294,72 @@ export function attributeEffects(
       first.stateAfter ? stateById.get(first.stateAfter) : undefined,
     );
     if (owner && effects.length > 0) owner.domEffects = effects;
+    if (owner) {
+      const learned = learnExpectedEffects(
+        before ? stateById.get(before) : undefined,
+        first.stateAfter ? stateById.get(first.stateAfter) : undefined,
+        owner,
+      );
+      if (learned) owner.expectedEffects = learned;
+    }
     start = end + 1;
   }
+}
+
+/** Le gabarit complet d'une route (/requests/42, /requests/:id → /requests/{id}) : comparé au rejeu. */
+export function routeTemplate(route: string): string {
+  const hash = route.indexOf('#/');
+  const path =
+    hash >= 0 ? (route.slice(hash + 1).split('?')[0] ?? '/') : (route.split(/[?#]/)[0] ?? route) || '/';
+  return path
+    .split('/')
+    .map((segment) =>
+      /^:/.test(segment)
+        ? `{${segment.slice(1)}}`
+        : /^\d+$|^[0-9a-f]{8}-[0-9a-f-]{27,}$|^[0-9a-f]{24,}$/i.test(segment)
+          ? '{id}'
+          : segment,
+    )
+    .join('/');
+}
+
+/** Un contrôle dont le nom change d'un affichage à l'autre (heure, compteur, chargement) : jamais un effet exigé. */
+const UNSTABLE_NAME =
+  /\d{3,}|\d{1,2}:\d{2}|\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}|loading|chargement|spinner|please wait|patienter|^\s*$/i;
+const MAX_LEARNED = 3;
+
+/**
+ * EXPECTATION LEARNING : ce que l'action a produit pendant l'enregistrement, réduit à ce qui est
+ * fonctionnellement stable — des contrôles nommés apparus ou disparus (pas un horodatage, pas un
+ * compteur, pas un indicateur de chargement), la route atteinte, la requête envoyée.
+ */
+export function learnExpectedEffects(
+  before: RecordedState | undefined,
+  after: RecordedState | undefined,
+  action: SemanticRecordedAction,
+): StepEffects | undefined {
+  const effects: StepEffects = {};
+  if (before && after && before.id !== after.id) {
+    const was = new Set(before.controls);
+    const now = new Set(after.controls);
+    const stable = (control: string): boolean => {
+      const name = control.slice(control.indexOf(':') + 1);
+      return name.length > 1 && name.length <= 60 && !UNSTABLE_NAME.test(name);
+    };
+    const appears = [...now].filter((control) => !was.has(control) && stable(control)).slice(0, MAX_LEARNED);
+    const disappears = [...was].filter((control) => !now.has(control) && stable(control)).slice(0, 2);
+    if (appears.length > 0) effects.appears = appears;
+    if (disappears.length > 0 && appears.length === 0) effects.disappears = disappears;
+    if (before.route !== after.route) effects.route = routeTemplate(after.route);
+  }
+  const navigated = action.navigation?.routes.at(-1);
+  if (navigated && !effects.route) effects.route = routeTemplate(navigated);
+  const exchange =
+    action.network.find(
+      (candidate) => !['GET', 'HEAD', 'OPTIONS'].includes(candidate.method.toUpperCase()),
+    ) ?? action.network[0];
+  if (exchange) effects.request = `${exchange.method.toUpperCase()} ${routeTemplate(exchange.path)}`;
+  return Object.keys(effects).length > 0 ? effects : undefined;
 }
 const DEPENDENT = new Set(['FILL', 'CLICK', 'CHECK', 'UNCHECK', 'SELECT', 'SUBMIT', 'UPLOAD']);
 

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import { IssueCollector } from '../anomaly/issue-collector.js';
 import { SeverityRules } from '../anomaly/severity-rules.js';
 import { AuthError, createAuthenticator, type Authenticator } from '../auth/authenticator.js';
@@ -15,11 +15,33 @@ import {
   type FlowExpectation,
   type FlowStep,
   type FlowTarget,
+  type StepEffects,
+  type TargetFingerprint,
 } from '../config/flow-schema.js';
 import { findByName, planAutoStep } from '../flows/gherkin/auto-step.js';
 import { normalizeText } from '../policies/keywords.js';
 import { DefaultTestDataProvider, type TestDataProvider } from '../data/test-data-provider.js';
 import { TestDataRunContext, type ResolvedTestData } from '../data/test-data-run-context.js';
+import {
+  controlsOf,
+  healingCandidates,
+  isFragileTarget,
+  matchFingerprint,
+  observeEffects,
+  readTarget,
+  routeMatches,
+  verifyEffects,
+  type EffectVerification,
+} from '../flows/action-effect-verifier.js';
+
+/** Le chemin d'une URL (route observée au rejeu). */
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.split('?')[0] ?? url;
+  }
+}
 
 /** Le type HTML qui fait générer la bonne valeur à un générateur nommé (testData: { generator: email }). */
 const GENERATOR_TYPES: Readonly<Record<string, string>> = {
@@ -75,6 +97,7 @@ import type {
   FlowStatus,
   FlowStepReport,
   SemanticResolutionReport,
+  StepEffectReport,
 } from '../model/flow-run.js';
 import { isAtLeast, type Issue, type IssueType, type Severity } from '../model/issue.js';
 import type { NetworkExchange } from '../model/network.js';
@@ -374,6 +397,8 @@ export class FlowExplorer {
   private readonly testDataRun: TestDataRunContext;
   /** Les clés RECORDED_LITERAL utilisées par le flow en cours (pour l'apprentissage sur un 409). */
   private readonly flowRecordedKeys = new Set<string>();
+  /** L'étape en cours d'un flow (pour la précondition de l'étape suivante). */
+  private stepPosition: { flow: FlowConfig; index: number } | undefined;
   private readonly screenshots: ScreenshotService;
   private readonly authenticator: Authenticator;
   private readonly listener: ExplorationListener;
@@ -2436,6 +2461,18 @@ export class FlowExplorer {
         if (!step.optional) {
           report.status = outcome.report.status;
           stopped = `step ${index} ${outcome.report.status.toLowerCase()}`;
+          // REPLAY DIVERGENCE : la première étape qui diverge, et le dernier point de reprise fiable.
+          if (this.config.replay.detectFirstDivergence && !report.divergence) {
+            const confirmed = report.steps
+              .filter((candidate) => candidate.effect?.status === 'CONFIRMED')
+              .at(-1);
+            report.divergence = {
+              stepIndex: index,
+              description: outcome.report.description,
+              reason: outcome.report.reason ?? outcome.report.status,
+              ...(confirmed ? { lastConfirmedStep: confirmed.index } : {}),
+            };
+          }
         }
       }
       await this.memory.save(this.graph);
@@ -2493,6 +2530,8 @@ export class FlowExplorer {
     context: PageContext,
   ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
     const started = Date.now();
+    // La position de l'étape : l'étape suivante est la précondition à vérifier après celle-ci.
+    this.stepPosition = { flow, index };
     const timeout = step.timeoutMs ?? this.config.exploration.actionTimeoutMs;
     const base = { index, kind: step.kind, description: describeStep(step), optional: step.optional };
     const done = (status: FlowStatus, extra: Partial<FlowStepReport> = {}): FlowStepReport => ({
@@ -3525,8 +3564,70 @@ export class FlowExplorer {
     finish: (status: FlowStatus, extra?: Partial<FlowStepReport>) => FlowStepReport,
   ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
     let done = finish;
-    // « Où est-il ? »
-    const located = await this.flowSteps.locate(page, step.target, timeout);
+    const replay = this.config.replay;
+    const verifying =
+      replay.verifyActionEffects && ['click', 'check', 'uncheck', 'select'].includes(step.kind);
+    const effect: StepEffectReport = {
+      execution: 'NOT_EXECUTED',
+      status: 'NOT_VERIFIED',
+      expected: [],
+      observed: [],
+      reasons: [],
+      locator: describeTarget(step.target),
+      recovery: [],
+    };
+    // « Où est-il ? » — et est-ce bien LUI ? (un CSS structurel peut viser un autre élément)
+    const fingerprint = step.fingerprint;
+    let located: Locator | string | undefined;
+    if (
+      fingerprint &&
+      replay.locatorHealing &&
+      replay.locator.preferSemantic &&
+      isFragileTarget(step.target)
+    ) {
+      const healed = await this.healTarget(page, step.target, fingerprint, Math.min(timeout, 3000));
+      if (healed) {
+        located = healed.locator;
+        effect.healed = { from: describeTarget(step.target), to: describeTarget(healed.target) };
+        effect.locator = describeTarget(healed.target);
+        effect.targetMatch = healed.match;
+      }
+    }
+    located ??= await this.flowSteps.locate(page, step.target, timeout);
+    if (typeof located !== 'string' && fingerprint && replay.targetFingerprintMatching && !effect.healed) {
+      const match = matchFingerprint(fingerprint, await readTarget(located));
+      effect.targetMatch = { verdict: match.verdict, score: match.score };
+      if (match.verdict === 'MISMATCH' && replay.locator.rejectFingerprintMismatch) {
+        const healed = replay.locatorHealing
+          ? await this.healTarget(page, step.target, fingerprint, Math.min(timeout, 3000))
+          : undefined;
+        if (!healed) {
+          // FOUND ELEMENT != CORRECT ELEMENT : ne jamais cliquer une cible qui n'est pas la bonne.
+          return {
+            page,
+            report: done('FAILED', {
+              reason: `TARGET_FINGERPRINT_MISMATCH: expected "${fingerprint.name ?? fingerprint.text ?? fingerprint.testId ?? ''}", found ${match.reasons.join('; ')} (not clicked)`,
+              stateId: context.stateId,
+              url: context.url,
+              effect: { ...effect, status: 'TARGET_MISMATCH', reasons: match.reasons },
+            }),
+          };
+        }
+        located = healed.locator;
+        effect.healed = { from: describeTarget(step.target), to: describeTarget(healed.target) };
+        effect.locator = describeTarget(healed.target);
+        effect.targetMatch = healed.match;
+      }
+    }
+    if (typeof located === 'string' && fingerprint && replay.locatorHealing) {
+      const healed = await this.healTarget(page, step.target, fingerprint, Math.min(timeout, 3000));
+      if (healed) {
+        located = healed.locator;
+        effect.healed = { from: describeTarget(step.target), to: describeTarget(healed.target) };
+        effect.locator = describeTarget(healed.target);
+        effect.targetMatch = healed.match;
+      }
+    }
     if (typeof located === 'string') {
       // Chercher à l'écran ce que le YAML voulait probablement dire, et indiquer comment l'écrire.
       const found = await suggestTargets(page, step).catch(() => undefined);
@@ -3541,12 +3642,13 @@ export class FlowExplorer {
         }),
       };
     }
+    const locator: Locator = located;
 
     // « Qu'est-ce que c'est ? » — la même observation et le même classement que l'exploration autonome.
     let before: PageContext;
     let action: DiscoveredAction | undefined;
     try {
-      await this.flowSteps.mark(located);
+      await this.flowSteps.mark(locator);
       before = await this.observeState(page, context.metadata.depth);
       const element = this.lastSnapshot?.elements.find((candidate) => candidate.flowTarget === true);
       action =
@@ -3568,7 +3670,7 @@ export class FlowExplorer {
     }
     if (!action) {
       // Pas un élément interactif (texte simple, div…) : classé d'après son texte visible.
-      const text = ((await located.innerText({ timeout }).catch(() => '')) || '')
+      const text = ((await locator.innerText({ timeout }).catch(() => '')) || '')
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 120);
@@ -3676,6 +3778,11 @@ export class FlowExplorer {
     const interactionMark = this.interactions.mark();
     this.networkTrace.start(action.id);
     const snapshotBefore = this.lastSnapshot;
+    // BEFORE SNAPSHOT : les contrôles visibles, la route, et la cible de l'étape suivante (déjà là ?).
+    const controlsBefore = controlsOf(snapshotBefore);
+    const routeBefore = pathOf(before.url);
+    const next = verifying && replay.verifyNextActionPrecondition ? this.nextStepTarget() : undefined;
+    const nextBefore = next ? await this.targetAvailable(page, next, 150) : undefined;
     if (this.functional) {
       this.formNetwork.startFunctional(`action-${action.id}`);
       this.functional.onActionSelected({ label: actionLabel(action), type: action.type });
@@ -3686,7 +3793,7 @@ export class FlowExplorer {
       step.allow.some((allowed) => allowed === 'MUTATION' || allowed === 'DANGEROUS') ||
       (this.patternsByState.get(before.stateId) ?? []).some((pattern) => pattern.type === 'LOGIN');
     const perform = (): Promise<string | undefined> =>
-      this.flowSteps.perform(page, located, elementAction, timeout);
+      this.flowSteps.perform(page, locator, elementAction, timeout);
     const error = mayWrite ? await this.writeGuard.permit(`flow ${flow.name}`, perform) : await perform();
     this.actionsExecuted += 1;
     const raised = this.interactions.since(interactionMark);
@@ -3736,7 +3843,7 @@ export class FlowExplorer {
     }
 
     // « Que s'est-il passé ? »
-    const after = await this.observeState(page, before.metadata.depth + 1);
+    let after = await this.observeState(page, before.metadata.depth + 1);
     if (this.functional) {
       // Une étape de flow n'est pas jugée par les oracles : les constats fonctionnels deviennent des avertissements ici.
       await this.observeFunctional(action, snapshotBefore, this.lastSnapshot, before.route, after.route);
@@ -3751,12 +3858,13 @@ export class FlowExplorer {
           });
     }
     const ids = newIssues();
+    const traced = this.networkOf(action.id);
     const edge = this.graph.addEdge({
       from: before.stateId,
       to: after.stateId,
       actionId: action.id,
       action: summaryOf(action),
-      ...this.networkOf(action.id),
+      ...traced,
       result: 'SUCCESS',
       issueIds: ids,
       flow: flow.name,
@@ -3770,6 +3878,118 @@ export class FlowExplorer {
     }
     await this.captureErrorScreenshot(page, after, ids);
     this.listener.onTransition?.(edge, action);
+
+    // « A-t-il FONCTIONNÉ ? » — EXECUTED ≠ CONFIRMED.
+    if (verifying) {
+      effect.execution = 'EXECUTED';
+      const mutation =
+        action.classification !== 'SAFE' || step.allow.some((allowed) => allowed !== 'UNKNOWN');
+      const exchanges = traced.network ?? [];
+      const requests = exchanges.map(
+        (exchange) =>
+          `${exchange.method.toUpperCase()} ${pathOf(exchange.url)}${exchange.status ? ` ${String(exchange.status)}` : ''}`,
+      );
+      const writes = exchanges
+        .filter((exchange) => !['GET', 'HEAD', 'OPTIONS'].includes(exchange.method.toUpperCase()))
+        .map((exchange) => ({
+          request: `${exchange.method.toUpperCase()} ${pathOf(exchange.url)}`,
+          ...(exchange.status !== undefined ? { status: exchange.status } : {}),
+        }));
+      const awaitedNext = next && nextBefore === false ? next : undefined;
+      const check = async (): Promise<EffectVerification> => {
+        const controlsAfter = controlsOf(this.lastSnapshot);
+        const nextAfter = awaitedNext ? await this.targetAvailable(page, awaitedNext, 150) : true;
+        return verifyEffects({
+          ...(step.effects ? { effects: step.effects } : {}),
+          observed: observeEffects(controlsBefore, controlsAfter, routeBefore, pathOf(after.url), requests),
+          afterControls: controlsAfter,
+          afterRoute: pathOf(after.url),
+          ...(next && nextBefore !== undefined
+            ? { nextTarget: { label: describeTarget(next), before: nextBefore, after: nextAfter } }
+            : {}),
+          mutation,
+          writes,
+        });
+      };
+      const failed = (verification: EffectVerification): boolean =>
+        verification.status === 'NO_EFFECT' || verification.status === 'WRONG_EFFECT';
+      let verification = await check();
+      // UI STABILIZATION : attendre l'effet attendu (sur condition, borné), jamais un sommeil fixe.
+      if (
+        failed(verification) &&
+        (await this.waitForEffect(page, step.effects, awaitedNext, replay.effectTimeoutMs))
+      ) {
+        after = await this.observeState(page, before.metadata.depth + 1);
+        verification = await check();
+      }
+      // RECOVERY : une action sûre est retentée (même cible re-résolue, puis les autres localisateurs
+      // de son empreinte) ; une action qui écrit ne l'est JAMAIS automatiquement (pas de double envoi).
+      if (failed(verification) && replay.recovery.enabled) {
+        if (mutation && !replay.recovery.retryMutations)
+          effect.recovery.push('none: an action that writes is never retried automatically');
+        else if (replay.recovery.retrySafeActions) {
+          const attempts: { name: string; target: FlowTarget }[] = [
+            { name: 'RE_RESOLVE_TARGET', target: step.target },
+            ...(fingerprint && replay.locatorHealing
+              ? healingCandidates(fingerprint, step.target).map((target) => ({
+                  name: 'TRY_NEXT_LOCATOR',
+                  target,
+                }))
+              : []),
+          ].slice(0, 3);
+          for (const attempt of attempts) {
+            const again = await this.flowSteps.locate(page, attempt.target, Math.min(timeout, 3000));
+            if (typeof again === 'string') {
+              effect.recovery.push(`${attempt.name} ${describeTarget(attempt.target)}: not found`);
+              continue;
+            }
+            if (fingerprint) {
+              const match = matchFingerprint(fingerprint, await readTarget(again));
+              if (match.verdict === 'MISMATCH') {
+                effect.recovery.push(
+                  `${attempt.name} ${describeTarget(attempt.target)}: another element (${match.reasons.join('; ')})`,
+                );
+                continue;
+              }
+            }
+            const failure = await this.flowSteps.perform(page, again, elementAction, timeout);
+            if (failure) {
+              effect.recovery.push(`${attempt.name} ${describeTarget(attempt.target)}: ${failure}`);
+              continue;
+            }
+            await this.waitForEffect(page, step.effects, awaitedNext, replay.effectTimeoutMs);
+            after = await this.observeState(page, before.metadata.depth + 1);
+            verification = await check();
+            effect.recovery.push(`${attempt.name} ${describeTarget(attempt.target)}: ${verification.status}`);
+            if (verification.status === 'CONFIRMED') {
+              if (attempt.name === 'TRY_NEXT_LOCATOR') {
+                effect.healed = { from: describeTarget(step.target), to: describeTarget(attempt.target) };
+                effect.locator = describeTarget(attempt.target);
+              }
+              break;
+            }
+          }
+        }
+      }
+      effect.status = verification.status;
+      effect.expected = verification.expected;
+      effect.observed = verification.observed;
+      effect.reasons = verification.reasons;
+      if (failed(verification) || verification.status === 'AMBIGUOUS') {
+        // FAIL AT ROOT CAUSE : le parcours diverge ICI, pas à l'étape suivante qui ne trouvera rien.
+        return {
+          page,
+          context: after,
+          report: done('FAILED', {
+            reason: `ACTION_NOT_CONFIRMED (${verification.status === 'AMBIGUOUS' ? 'MUTATION_EFFECT_AMBIGUOUS' : verification.status}): click executed, expected ${verification.expected.join(', ') || 'an effect'}; observed ${verification.observed.join(', ') || 'no relevant change'}`,
+            stateId: after.stateId,
+            url: after.url,
+            classification: action.classification,
+            effect,
+          }),
+        };
+      }
+    }
     return {
       page,
       context: after,
@@ -3777,8 +3997,84 @@ export class FlowExplorer {
         stateId: after.stateId,
         url: after.url,
         classification: action.classification,
+        ...(verifying ? { effect } : {}),
       }),
     };
+  }
+
+  /** La cible de la prochaine étape d'action du flow (les vérifications expect sont sautées). */
+  private nextStepTarget(): FlowTarget | undefined {
+    const position = this.stepPosition;
+    if (!position) return undefined;
+    for (const step of position.flow.steps.slice(position.index)) {
+      if (step.kind === 'expect' || step.kind === 'screenshot' || step.kind === 'manual') continue;
+      if (step.optional) return undefined;
+      return 'target' in step ? step.target : undefined;
+    }
+    return undefined;
+  }
+
+  private async targetAvailable(page: Page, target: FlowTarget, timeoutMs: number): Promise<boolean> {
+    return typeof (await this.flowSteps.locate(page, target, timeoutMs)) !== 'string';
+  }
+
+  /**
+   * L'effet attendu, ATTENDU sur condition (borné) : un contrôle appris qui apparaît, la route
+   * attendue, la cible de l'étape suivante. Vrai dès que l'une arrive.
+   */
+  private async waitForEffect(
+    page: Page,
+    effects: StepEffects | undefined,
+    nextTarget: FlowTarget | undefined,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const waits: Promise<unknown>[] = [];
+    for (const control of (effects?.appears ?? []).slice(0, 3)) {
+      const colon = control.indexOf(':');
+      const role = colon > 0 && !control.slice(0, colon).includes(' ') ? control.slice(0, colon) : undefined;
+      const name = role ? control.slice(colon + 1) : control;
+      const target: FlowTarget = role ? { strategy: 'role', role, name } : { strategy: 'text', value: name };
+      waits.push(
+        this.flowSteps.locate(page, target, timeoutMs).then((found) => {
+          if (typeof found === 'string') throw new Error(found);
+        }),
+      );
+    }
+    if (effects?.route) {
+      const pattern = effects.route;
+      waits.push(page.waitForURL((url) => routeMatches(pattern, url.pathname), { timeout: timeoutMs }));
+    }
+    if (nextTarget)
+      waits.push(
+        this.flowSteps.locate(page, nextTarget, timeoutMs).then((found) => {
+          if (typeof found === 'string') throw new Error(found);
+        }),
+      );
+    if (waits.length === 0) return false;
+    for (const wait of waits) wait.catch(() => undefined);
+    return Promise.any(waits).then(
+      () => true,
+      () => false,
+    );
+  }
+
+  /** LOCATOR HEALING : le MÊME élément retrouvé par son empreinte (rôle + nom, test id, texte), vérifié. */
+  private async healTarget(
+    page: Page,
+    target: FlowTarget,
+    fingerprint: TargetFingerprint,
+    timeoutMs: number,
+  ): Promise<
+    { locator: Locator; target: FlowTarget; match: { verdict: string; score: number } } | undefined
+  > {
+    for (const candidate of healingCandidates(fingerprint, target)) {
+      const found = await this.flowSteps.locate(page, candidate, Math.min(timeoutMs, 1500));
+      if (typeof found === 'string') continue;
+      const match = matchFingerprint(fingerprint, await readTarget(found));
+      if (match.verdict !== 'MISMATCH')
+        return { locator: found, target: candidate, match: { verdict: match.verdict, score: match.score } };
+    }
+    return undefined;
   }
 
   /** Classement d'un élément que l'observateur ne liste pas (texte simple, conteneur…). */

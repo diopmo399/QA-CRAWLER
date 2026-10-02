@@ -341,6 +341,28 @@ function progressListener(quiet: boolean): ExplorationListener {
         `   ${mark} ${String(step.index).padStart(2, ' ')}. ${step.description}${step.status !== 'PASSED' ? ` ${step.status}` : ''}${reason}`,
       );
       if (step.interpretation) logger.info(color.dim(`       ↳ ${step.interpretation}`));
+      // EXECUTED ≠ CONFIRMED : l'effet de l'action, la cible vérifiée, la récupération.
+      const effect = step.effect;
+      if (effect && effect.status !== 'NOT_VERIFIED') {
+        const status =
+          effect.status === 'CONFIRMED'
+            ? color.green('✓ ACTION CONFIRMED')
+            : effect.status === 'NOT_REQUIRED'
+              ? color.dim('effect not required')
+              : color.yellow(`⚠ ACTION NOT FUNCTIONALLY CONFIRMED (${effect.status})`);
+        logger.info(
+          `       ${status}${effect.locator ? color.dim(` · ${effect.locator}`) : ''}${effect.targetMatch ? color.dim(` · target ${effect.targetMatch.verdict} ${String(effect.targetMatch.score)}`) : ''}`,
+        );
+        if (effect.healed)
+          logger.info(color.dim(`       healed: ${effect.healed.from} → ${effect.healed.to}`));
+        if (effect.status !== 'CONFIRMED' && effect.status !== 'NOT_REQUIRED') {
+          if (effect.expected.length > 0)
+            logger.info(color.dim(`       expected: ${effect.expected.join(', ')}`));
+          logger.info(color.dim(`       observed: ${effect.observed.join(', ') || 'no relevant change'}`));
+        }
+        if (effect.recovery.length > 0)
+          logger.info(color.dim(`       recovery: ${effect.recovery.join(' · ')}`));
+      }
       if (step.suggestions && step.suggestions.length > 0) {
         logger.info(color.yellow('       Suggested step (found on the screen):'));
         for (const line of step.suggestions) logger.info(`         ${line}`);
@@ -358,6 +380,12 @@ function progressListener(quiet: boolean): ExplorationListener {
       logger.info(
         `${color.bold(color.cyan('■ flow'))} ${report.name}: ${status} ${color.dim(`${(report.durationMs / 1000).toFixed(1)} s${report.explored ? ', last screen explored' : ''}`)}`,
       );
+      if (report.divergence)
+        logger.info(
+          color.yellow(
+            `   Root divergence: step ${String(report.divergence.stepIndex)} ${report.divergence.description}${report.divergence.lastConfirmedStep !== undefined ? ` (last confirmed checkpoint: step ${String(report.divergence.lastConfirmedStep)})` : ''}`,
+          ),
+        );
     },
     onNavigation(event) {
       // Événement technique, jamais une anomalie : [NAVIGATION] detected / recovering / recovered, [NAVIGATION_RECOVERY_FAILED].

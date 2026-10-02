@@ -478,7 +478,8 @@ describe('one model → flow.yaml and .feature', () => {
         );
       const parsed = flowSchema.parse({ name: 'x', steps: fromFeature });
       const shape = (steps: typeof yaml.steps): unknown[] =>
-        steps.map(({ allow: _a, optional: _o, name: _n, ...rest }) => rest);
+        // Les effets appris et l'empreinte de la cible sont dans le YAML seulement (le .feature se vérifie à l'exécution).
+        steps.map(({ allow: _a, optional: _o, name: _n, effects: _e, fingerprint: _f, ...rest }) => rest);
       expect(shape(parsed.steps), language).toEqual(shape(yaml.steps));
       expect(yaml.steps).toContainEqual(
         expect.objectContaining({ kind: 'check', target: { strategy: 'label', value: 'Monthly' } }),

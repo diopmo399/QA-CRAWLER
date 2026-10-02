@@ -36,6 +36,40 @@ export interface FlowStepReport {
   onScreen?: string[];
   /** Résolution sémantique d'une phrase d'intention : cible, confiance, raisons, candidats (jamais une valeur). */
   resolution?: SemanticResolutionReport;
+  /** EXECUTED ≠ CONFIRMED : l'exécution Playwright et l'effet fonctionnel, séparés. */
+  effect?: StepEffectReport;
+}
+
+export interface StepEffectReport {
+  execution: 'EXECUTED' | 'FAILED' | 'BLOCKED' | 'NOT_EXECUTED';
+  status:
+    | 'CONFIRMED'
+    | 'NO_EFFECT'
+    | 'WRONG_EFFECT'
+    | 'AMBIGUOUS'
+    | 'NOT_REQUIRED'
+    | 'NOT_VERIFIED'
+    | 'TARGET_MISMATCH';
+  expected: string[];
+  observed: string[];
+  reasons: string[];
+  /** Le localisateur réellement utilisé (après guérison éventuelle). */
+  locator?: string;
+  /** Correspondance de l'élément trouvé avec l'empreinte enregistrée. */
+  targetMatch?: { verdict: string; score: number };
+  /** Localisateur guéri (le fragile enregistré, et celui qui a marché) : une suggestion, jamais une réécriture. */
+  healed?: { from: string; to: string };
+  /** Tentatives de récupération (RE_RESOLVE_TARGET, TRY_NEXT_LOCATOR…). */
+  recovery: string[];
+}
+
+/** La PREMIÈRE divergence entre le parcours enregistré et le parcours rejoué (la vraie cause). */
+export interface FlowDivergence {
+  stepIndex: number;
+  description: string;
+  reason: string;
+  /** La dernière étape dont l'effet a été confirmé (point de reprise fiable). */
+  lastConfirmedStep?: number;
 }
 
 /** Ce que le rapport garde d'une résolution sémantique. */
@@ -68,4 +102,6 @@ export interface FlowRunReport {
   explored: boolean;
   /** TEST_DATA_STRATEGY_CANDIDATE : une donnée enregistrée à régénérer (409 au rejeu). Des clés, jamais des valeurs. */
   testDataSuggestions?: string[];
+  /** REPLAY DIVERGENCE : la première action dont l'effet manquait (à la place du symptôme plus loin). */
+  divergence?: FlowDivergence;
 }

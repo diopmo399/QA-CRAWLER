@@ -158,7 +158,15 @@ describe('Human flow recorder (E2E)', () => {
     expect(fromFeature).toBeDefined();
     const shape = (steps: typeof yaml.steps): unknown[] =>
       steps.map((step) => {
-        const { allow: _allow, optional: _optional, name: _name, ...rest } = step;
+        // Effets appris et empreinte : dans le YAML seulement (le .feature se vérifie à l'exécution).
+        const {
+          allow: _allow,
+          optional: _optional,
+          name: _name,
+          effects: _effects,
+          fingerprint: _fp,
+          ...rest
+        } = step;
         return rest;
       });
     expect(shape(fromFeature?.steps ?? [])).toEqual(shape(yaml.steps));

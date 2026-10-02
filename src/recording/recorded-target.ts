@@ -1,4 +1,4 @@
-import type { FlowTarget } from '../config/flow-schema.js';
+import type { FlowTarget, TargetFingerprint } from '../config/flow-schema.js';
 import type { LocatorQuality, RecordedElement, RecordedTarget } from './model.js';
 
 /** Rôles qu'une phrase Gherkin sait nommer (« le bouton », « le lien », « l'onglet », « le menu »). */
@@ -143,10 +143,20 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     element.formControlName,
     element.nameAttr,
   ].find((text): text is string => readable(text));
+  // L'empreinte : ce qui identifie le MÊME élément au rejeu, même si son localisateur change.
+  const fingerprint: TargetFingerprint = {
+    ...(role ? { role } : {}),
+    ...(name ? { name } : {}),
+    ...(readable(element.text) && element.text !== name ? { text: element.text } : {}),
+    ...(element.testId ? { testId: element.testId } : {}),
+    tag: element.tag,
+    ...(readable(element.context) ? { context: element.context } : {}),
+  };
   return {
     target: chosen.target,
     quality: chosen.quality,
-    label: humanName ?? element.tag,
+    fingerprint,
+    label: humanName ?? element.componentTag ?? element.tag,
     named: humanName !== undefined,
     alternatives: candidates
       .filter((candidate) => candidate !== chosen && candidate.unique)
