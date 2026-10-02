@@ -105,6 +105,58 @@ export interface KnowledgeData {
   api: Record<string, ApiKnowledge>;
   performance: Record<string, PerformanceKnowledge>;
   hints: Record<string, LearnedHint>;
+  /** WORKFLOW SELF-HEALING : les récupérations essayées (réussies ET échouées), par action enregistrée. */
+  recoveries?: Record<string, RecoveryKnowledge>;
+}
+
+/** Une action de récupération (jamais une saisie) : rôle + nom accessible. */
+export interface RecoveryActionKnowledge {
+  kind: 'click' | 'check';
+  role: string;
+  name: string;
+}
+
+/**
+ * Un chemin de récupération pour une action enregistrée. L'historique SUGGÈRE : chaque
+ * réutilisation est revérifiée au runtime ; un chemin ancien ou d'une autre version pèse moins,
+ * un chemin qui échoue est gardé (pour ne pas le réessayer sans cesse), jamais supprimé.
+ */
+export interface RecoveryPathKnowledge {
+  actions: RecoveryActionKnowledge[];
+  successes: number;
+  /** Exécuté sans atteindre l'objectif, ou introuvable. */
+  failures: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastSuccessAt?: string;
+  /** Version (commit, appVersion) de la dernière observation. */
+  version?: string;
+  context?: ObservedKnowledgeContext;
+}
+
+export interface RecoveryKnowledge {
+  /** Signature de l'action enregistrée + objectif fonctionnel. */
+  key: string;
+  actionSignature: string;
+  goal: string;
+  route?: string;
+  workflow?: string;
+  originalTarget: string;
+  paths: Record<string, RecoveryPathKnowledge>;
+}
+
+export interface RecoveryInput {
+  key: string;
+  actionSignature: string;
+  goal: string;
+  route?: string;
+  workflow?: string;
+  originalTarget: string;
+  actions: RecoveryActionKnowledge[];
+  result: 'SUCCESS' | 'FAILURE';
+  version?: string;
+  context?: ObservedKnowledgeContext;
+  at?: string;
 }
 
 export interface ActionResultInput {
@@ -142,6 +194,9 @@ export interface KnowledgeBase {
   expectationFor(fromStateSignature: string, actionSignature: string): HistoricalExpectation | undefined;
   /** Signatures d'actions qui ont mené à un écran dont la signature contient ce terme. */
   actionsLeadingTo(predicate: (stateSignature: string) => boolean): string[];
+  /** Une récupération essayée (réussie et confirmée par la suite du parcours, ou échouée). */
+  recordRecovery(input: RecoveryInput): void;
+  recoveryKnowledge(key: string): RecoveryKnowledge | undefined;
   /** Toutes les transitions connues (lecture seule) : chemins historiques du Dry Run. */
   transitions(): readonly TransitionKnowledge[];
   load(): Promise<void>;

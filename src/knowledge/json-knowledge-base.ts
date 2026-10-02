@@ -15,6 +15,8 @@ import {
   type LearnedHint,
   type ObservedKnowledgeContext,
   type PerformanceKnowledge,
+  type RecoveryInput,
+  type RecoveryKnowledge,
   type TransitionInput,
   type TransitionKnowledge,
 } from './knowledge-model.js';
@@ -282,6 +284,41 @@ export class JsonKnowledgeBase implements KnowledgeBase {
 
   getPerformance(kind: PerformanceKnowledge['kind'], key: string): PerformanceKnowledge | undefined {
     return this.data.performance[`${kind}:${key}`];
+  }
+
+  recordRecovery(input: RecoveryInput): void {
+    const at = input.at ?? this.stamp();
+    const recoveries = (this.data.recoveries ??= {});
+    const entry = (recoveries[input.key] ??= {
+      key: input.key,
+      actionSignature: input.actionSignature,
+      goal: input.goal,
+      ...(input.route ? { route: input.route } : {}),
+      ...(input.workflow ? { workflow: input.workflow } : {}),
+      originalTarget: input.originalTarget,
+      paths: {},
+    });
+    const signature = input.actions
+      .map((action) => `${action.kind} ${action.role}:${action.name}`)
+      .join(' → ');
+    const path = (entry.paths[signature] ??= {
+      actions: input.actions.map((action) => ({ kind: action.kind, role: action.role, name: action.name })),
+      successes: 0,
+      failures: 0,
+      firstSeenAt: at,
+      lastSeenAt: at,
+    });
+    if (input.result === 'SUCCESS') {
+      path.successes += 1;
+      path.lastSuccessAt = at;
+    } else path.failures += 1;
+    path.lastSeenAt = at;
+    if (input.version) path.version = input.version;
+    if (input.context) path.context = input.context;
+  }
+
+  recoveryKnowledge(key: string): RecoveryKnowledge | undefined {
+    return this.data.recoveries?.[key];
   }
 
   recordOutcomePatterns(label: string, patterns: readonly string[]): void {

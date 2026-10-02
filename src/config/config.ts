@@ -1351,6 +1351,41 @@ const replaySchema = z
       })
       .strict()
       .default({}),
+    /**
+     * WORKFLOW SELF-HEALING : quand une action n'est plus rejouable telle quelle, comprendre
+     * POURQUOI (DivergenceAnalyzer), ce qu'elle devait accomplir (objectif fonctionnel, déduit
+     * des effets appris et des étapes suivantes), et l'atteindre par un chemin SÛR, vérifié au
+     * runtime. Ne s'exécute qu'en cas de divergence : un rejeu sans écart n'en paie rien.
+     */
+    intelligentRecovery: z
+      .object({
+        enabled: z.boolean().default(true),
+        analyzeDivergence: z.boolean().default(true),
+        useWorkflowContext: z.boolean().default(true),
+        inferFunctionalGoals: z.boolean().default(true),
+        goalBasedRecovery: z.boolean().default(true),
+        useStaticKnowledge: z.boolean().default(true),
+        useHistoricalRecovery: z.boolean().default(true),
+        learnSuccessfulRecovery: z.boolean().default(true),
+        detectFlowDrift: z.boolean().default(true),
+        suggestFlowUpdates: z.boolean().default(true),
+        /** Jamais : le flow d'origine n'est jamais réécrit (seulement suggested.flow.yaml). */
+        autoUpdateFlow: z.literal(false).default(false),
+        /** Deux candidats aussi plausibles : s'arrêter (AMBIGUOUS_RECOVERY), ou essayer le moins coûteux (SAFE). */
+        onAmbiguity: z.enum(['stop', 'experiment']).default('stop'),
+        budgets: z
+          .object({
+            maxRecoveryActions: z.number().int().min(1).max(50).default(5),
+            maxRecoveryDepth: z.number().int().min(1).max(5).default(3),
+            maxCandidates: z.number().int().min(1).max(50).default(10),
+            maxRecoveryDurationMs: z.number().int().min(500).max(300_000).default(15_000),
+            maxSafeExperiments: z.number().int().min(1).max(50).default(8),
+          })
+          .strict()
+          .default({}),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 

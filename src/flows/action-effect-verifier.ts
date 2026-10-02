@@ -47,7 +47,7 @@ export interface EffectVerification {
   reasons: string[];
 }
 
-const normalize = (text: string | undefined): string =>
+export const normalize = (text: string | undefined): string =>
   (text ?? '')
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')

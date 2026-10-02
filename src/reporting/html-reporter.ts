@@ -36,6 +36,7 @@ import { staticAnalysisSection } from './static-section.js';
 import { rulesSection } from './rules-section.js';
 import { functionalSection } from './functional-section.js';
 import { regressionSection } from './regression-section.js';
+import { driftLines, healingMetrics, recoveryLines } from '../workflow-healing/explain.js';
 
 export { esc } from './html-common.js';
 
@@ -347,23 +348,34 @@ function flowsSection(
       const rows = flow.steps
         .map(
           (step) =>
-            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}${effectBlock(step)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
+            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}${effectBlock(step)}${recoveryBlock(step)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
         )
         .join('');
       return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status, t.lang)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ` · ${esc(t.lastScreenExplored)}` : ''}</span></h3>
       ${flow.description ? `<p class="muted">${esc(flow.description)}</p>` : ''}
       ${
         flow.divergence
-          ? `<p><b>Root divergence: step ${String(flow.divergence.stepIndex)}</b> — ${esc(flow.divergence.description)}<br><span class="muted">${esc(flow.divergence.reason)}${flow.divergence.lastConfirmedStep !== undefined ? ` · last confirmed checkpoint: step ${String(flow.divergence.lastConfirmedStep)}` : ''}</span></p>`
+          ? `<p><b>Root divergence: step ${String(flow.divergence.stepIndex)}</b> — ${esc(flow.divergence.description)}${flow.divergence.symptomStep !== undefined ? ` <span class="muted">(symptom at step ${String(flow.divergence.symptomStep)})</span>` : ''}${flow.divergence.probableCause ? ` · probable cause <b>${esc(flow.divergence.probableCause.category)}</b> (${String(flow.divergence.probableCause.confidence)})` : ''}<br><span class="muted">${esc(flow.divergence.reason)}${flow.divergence.lastConfirmedStep !== undefined ? ` · last confirmed checkpoint: step ${String(flow.divergence.lastConfirmedStep)}` : ''}</span></p>`
+          : ''
+      }
+      ${
+        flow.drift && (flow.drift.detected || flow.drift.result !== 'PASS_EXACT')
+          ? `<div class="suggest"><b>Flow drift</b><pre>${esc(driftLines(flow.drift).join('\n'))}</pre></div>`
           : ''
       }
       ${renderFlowSteps(flow)}
       <table><thead><tr><th>#</th><th>${c.step}</th><th>${c.class}</th><th>${c.result}</th><th>${c.reason}</th><th>${c.state}</th><th>${c.duration}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
     })
     .join('');
+  const metrics = healingMetrics(result.flows);
+  const healing =
+    metrics.recoveryAttempts > 0 || metrics.flowsWithDrift > 0
+      ? `<p class="muted">Workflow self-healing: ${String(metrics.recoveryAttempts)} recovery attempt(s), ${String(metrics.successfulRecoveries)} successful, ${String(metrics.failedRecoveries)} failed · average depth ${String(metrics.averageRecoveryDepth)} · static knowledge used ${String(metrics.staticKnowledgeUsed)} · history used ${String(metrics.historicalRecoveryUsed)} · flows with drift ${String(metrics.flowsWithDrift)}</p>`
+      : '';
   return `<section>
     <h2>${esc(t.flowsTitle)} (${result.flows.length})</h2>
     <p class="muted">${t.flowsHint}</p>
+    ${healing}
     ${runs}
   </section>`;
 }
@@ -384,6 +396,12 @@ function effectBlock(step: FlowStepReport): string {
     ...(effect.recovery.length > 0 ? [`recovery: ${effect.recovery.map(esc).join(' · ')}`] : []),
   ];
   return `<div class="muted">${lines.join('<br>')}</div>`;
+}
+
+/** WORKFLOW SELF-HEALING : divergence, objectif, candidats, choix, preuve (WHY DID YOU CHOOSE THIS?). */
+function recoveryBlock(step: FlowStepReport): string {
+  if (!step.recovery) return '';
+  return `<details class="suggest"><summary><b>Workflow recovery: ${esc(step.recovery.outcome.status)}</b> · ${esc(step.recovery.divergence.category)}</summary><pre>${esc(recoveryLines(step.recovery).join('\n'))}</pre></details>`;
 }
 
 /** Élément introuvable : les étapes trouvées à l'écran, prêtes à coller, et ce que montre l'écran. */

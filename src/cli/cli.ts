@@ -15,6 +15,7 @@ import { runDryRunCli } from './dry-run-command.js';
 import { runRecordCli } from './record-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
+import { driftLines, recoveryLines } from '../workflow-healing/explain.js';
 
 export const EXIT = { OK: 0, ISSUES: 1, USAGE: 2, RUNTIME: 3 } as const;
 
@@ -363,6 +364,18 @@ function progressListener(quiet: boolean): ExplorationListener {
         if (effect.recovery.length > 0)
           logger.info(color.dim(`       recovery: ${effect.recovery.join(' · ')}`));
       }
+      // WORKFLOW SELF-HEALING : pourquoi, quel objectif, quel chemin, quelle preuve.
+      if (step.recovery) {
+        const reached =
+          step.recovery.outcome.status === 'GOAL_REACHED' ||
+          step.recovery.outcome.status === 'GOAL_ALREADY_REACHED';
+        logger.info(
+          (reached ? color.green : color.yellow)(
+            `       ${reached ? '↻ WORKFLOW RECOVERED' : '⚠ WORKFLOW NOT RECOVERED'} (${step.recovery.outcome.status})`,
+          ),
+        );
+        for (const line of recoveryLines(step.recovery)) logger.info(color.dim(`         ${line}`));
+      }
       if (step.suggestions && step.suggestions.length > 0) {
         logger.info(color.yellow('       Suggested step (found on the screen):'));
         for (const line of step.suggestions) logger.info(`         ${line}`);
@@ -383,9 +396,14 @@ function progressListener(quiet: boolean): ExplorationListener {
       if (report.divergence)
         logger.info(
           color.yellow(
-            `   Root divergence: step ${String(report.divergence.stepIndex)} ${report.divergence.description}${report.divergence.lastConfirmedStep !== undefined ? ` (last confirmed checkpoint: step ${String(report.divergence.lastConfirmedStep)})` : ''}`,
+            `   Root divergence: step ${String(report.divergence.stepIndex)} ${report.divergence.description}${report.divergence.symptomStep !== undefined ? ` (symptom at step ${String(report.divergence.symptomStep)})` : ''}${report.divergence.probableCause ? ` — probable cause ${report.divergence.probableCause.category} (${String(report.divergence.probableCause.confidence)})` : ''}${report.divergence.lastConfirmedStep !== undefined ? ` (last confirmed checkpoint: step ${String(report.divergence.lastConfirmedStep)})` : ''}`,
           ),
         );
+      if (report.drift && (report.drift.detected || report.drift.result !== 'PASS_EXACT')) {
+        const [first, ...rest] = driftLines(report.drift);
+        logger.info((report.drift.detected ? color.yellow : color.dim)(`   ${first ?? ''}`));
+        for (const line of rest) logger.info(color.dim(`     ${line}`));
+      }
     },
     onNavigation(event) {
       // Événement technique, jamais une anomalie : [NAVIGATION] detected / recovering / recovered, [NAVIGATION_RECOVERY_FAILED].
