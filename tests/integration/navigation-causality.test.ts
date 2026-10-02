@@ -4,10 +4,11 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { parseConfig } from '../../src/config/config-loader.js';
-import { flowSchema, type FlowStep } from '../../src/config/flow-schema.js';
+import type { FlowStep } from '../../src/config/flow-schema.js';
 import { runMission } from '../../src/orchestrator.js';
 import type { RecordingEvent } from '../../src/recording/model.js';
 import { runRecording, type RecordOutcome } from '../../src/recording/record-orchestrator.js';
+import { generatedFlow, readGeneratedFlow } from '../helpers.js';
 import { startRequestsSpa, type RequestsSpa } from '../fixtures/requests-spa.js';
 
 const clickNames = (steps: FlowStep[]): string[] =>
@@ -59,7 +60,7 @@ describe('Navigation causality (E2E)', () => {
 
   it('keeps every human click; the routes are their effects, not goto steps (§54, §61)', async () => {
     const yaml = await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8');
-    const flow = flowSchema.parse(parseYaml(yaml));
+    const flow = generatedFlow(yaml, outcome.directory);
     expect(flow.startAt).toBe('/');
     expect(flow.steps.filter((step) => step.kind === 'goto')).toEqual([]);
     expect(clickNames(flow.steps)).toEqual(['Demandes', 'Créer nouvelle demande', 'Soumettre']);
@@ -93,7 +94,10 @@ describe('Navigation causality (E2E)', () => {
   it('the generated flow replays the human workflow through the UI (POST /api/demandes, Réclamation)', async () => {
     const generated = parseYaml(
       await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8'),
-    ) as unknown;
+    ) as Record<string, unknown>;
+    // Le jeu de données du flow est à côté de lui (test-data.yaml).
+    if (typeof generated.testData === 'string')
+      generated.testData = path.join(outcome.directory, generated.testData);
     const { config } = parseConfig(
       `mission: { name: replay-causality }
 target: { baseUrl: ${app.url}, startAt: / }
@@ -141,9 +145,7 @@ describe('Navigation causality: goto only with a reason', () => {
       expect(decisions.at(-1)).toMatchObject({ gotoReason: 'DIRECT_URL_ENTRY', route: '/aide' });
       const click = outcome.result.normalized.kept.find((action) => action.type === 'CLICK');
       expect(click?.navigation?.routes).toEqual(['/protected', '/login']);
-      const flow = flowSchema.parse(
-        parseYaml(await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8')),
-      );
+      const flow = await readGeneratedFlow(outcome.directory);
       expect(flow.steps.map((step) => step.kind)).toEqual(expect.arrayContaining(['click', 'goto']));
       expect(flow.steps.filter((step) => step.kind === 'goto')).toEqual([
         expect.objectContaining({ url: '/aide' }),

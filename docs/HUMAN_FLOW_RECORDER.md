@@ -41,11 +41,16 @@ Ni mouvements de souris, ni défilement. Un clic fait par un script (`isTrusted=
 pas un geste humain. Les saisies ne partent jamais touche par touche : la dernière valeur
 après une pause (`recording.inputDebounceMs`).
 
-**Aucune saisie en clair ne quitte la page.** D'une valeur tapée, le navigateur n'envoie que
-sa forme (vide, longueur, e-mail / nombre / date / téléphone…) et une empreinte salée (le sel
-de la session n'est jamais écrit) — et aucune empreinte pour un champ sensible. Mots de passe,
-jetons, codes à usage unique, PIN, CVV, clés d'API, cookies : jamais stockés. Un choix de
-l'interface (option d'une liste, radio) est gardé : c'est un texte de l'écran.
+**Aucun secret ne quitte la page.** D'une valeur tapée, le navigateur envoie sa forme (vide,
+longueur, e-mail / nombre / date / téléphone…) et une empreinte salée (le sel de la session
+n'est jamais écrit) ; pour un champ **non sensible**, aussi son texte, qui devient une donnée
+de test (voir [Données de test enregistrées](#données-de-test-enregistrées)) — gardé en
+mémoire, hors de la trace brute, et écrit seulement dans `test-data.yaml` quand la politique
+le garde (`recording.testData.extractRecordedValues: false` : seulement la forme, comme avant).
+Un champ sensible n'envoie ni texte ni empreinte. Mots de passe, jetons, codes à usage
+unique, PIN, CVV, clés d'API, cookies : jamais stockés ; une valeur qui ressemble à un jeton
+(JWT, clé, longue suite hexadécimale), même tapée dans un champ ordinaire, n'est jamais
+gardée. Un choix de l'interface (option d'une liste, radio) est gardé : c'est un texte de l'écran.
 
 Le tampon est borné (`recording.maxRawEvents`) : au-delà, des clics et des saisies sont
 écartés (signalé), jamais un envoi, une navigation, un changement ou un point de contrôle.
@@ -104,6 +109,95 @@ Une action écartée garde sa raison dans la trace : rien n'est supprimé.
 
 Un fichier choisi : son extension seulement (jamais le chemin) ; un téléchargement est un
 résultat, pas une étape.
+
+## Données de test enregistrées
+
+Le flow dit **quoi faire**, le jeu de données dit **avec quoi**. Les valeurs saisies pendant
+l'enregistrement ne sont ni perdues, ni codées en dur dans le flow, ni remplacées par un
+`testData: text` générique : elles deviennent un **TestDataSet** (`test-data.yaml`, à côté du
+flow), cité par le flow **et** par le `.feature` — un seul jeu de données.
+
+```yaml
+# generated.flow.yaml
+name: create request
+startAt: /requests/new
+testData: test-data.yaml
+steps:
+  - fill: { label: Title, value: { testData: request.title } }
+  - fill: { label: Description, value: { testData: request.description } }
+  - select: { label: Request type, option: Incident }
+  - fill: { label: Contact e-mail, value: { testData: request.contactEmail } }
+  - check: { label: Urgent }
+  - click: { role: button, name: Submit }
+    allow: MUTATION
+```
+
+```yaml
+# test-data.yaml
+name: create request-recorded-data
+source: HUMAN_RECORDING
+values:
+  request:
+    title: { strategy: recorded, value: Imprimante bureau }
+    description: { strategy: recorded, value: "Impossible d'imprimer" }
+    contactEmail: { strategy: generated, generator: email, semanticType: email }
+```
+
+Le `.feature` commence par `# testData: test-data.yaml` et dit
+`Quand je remplis "Title" avec "<testData:request.title>"`.
+
+**Le nom d'une donnée** (TestDataKeyResolver) est l'identité sémantique du champ, jamais son
+localisateur (`mat-input-17`, `input3`, CSS, XPath) : la propriété du corps envoyé qui porte
+exactement cette valeur (même empreinte : la propriété du DTO), puis le nom technique stable
+(`formControlName`, `name`, test id), puis le sens reconnu (`email`, `firstName`…), puis le
+libellé. **Espace de noms** : l'entité de l'écriture qui suit (`POST /api/requests` →
+`request.title`) ; deux entités créées → `customer1.name`, `customer2.name`.
+
+**La politique** (RecordedDataGeneralizationPolicy), dans cet ordre de priorité :
+configuration explicite → sécurité → sens métier → inférence → type sémantique → repli.
+
+| Donnée                                    | Classement            | Au rejeu                                     |
+| ----------------------------------------- | --------------------- | -------------------------------------------- |
+| texte libre, nombre, date (description…)  | `RECORDED_TEST_DATA`  | `recorded` : la valeur enregistrée           |
+| e-mail, identifiant, référence (unicité)  | `GENERATED_TEST_DATA` | `generated` : une nouvelle valeur par run    |
+| prénom, nom, téléphone, adresse, ville…   | `GENERATED_TEST_DATA` | `generated` (pas d'archive de données perso) |
+| code métier tapé (`BUSINESS`, `INCIDENT`) | `BUSINESS_LITERAL`    | `literal` : la valeur exacte                 |
+| option d'une liste, radio                 | `BUSINESS_LITERAL`    | gardée dans le flow (`select … option`)      |
+| case cochée                               | `FLOW_BEHAVIOR`       | une étape `check`, pas une donnée            |
+| mot de passe, PIN, jeton, identifiant     | `SENSITIVE_REFERENCE` | `{ env: QA_PASSWORD }`, jamais une valeur    |
+| valeur déjà là, inchangée                 | `PREFILLED_VALUE`     | aucune étape (`PRESERVE_EXISTING`)           |
+| champ calculé en lecture seule (total)    | `DERIVED_VALUE`       | jamais une entrée (`IGNORE_DERIVED`)         |
+
+**Occurrences.** La même valeur saisie deux fois (même empreinte) est **une** donnée. Une
+autre valeur pour le même champ n'écrase jamais la première : `request.description.initial`,
+`request.description.updated` (avertissement `TEST_DATA_COLLISION`). La même valeur sous un
+autre champ (recherche par l'e-mail créé, confirmation) devient une **référence** :
+`search: { strategy: reference, reference: user.email }`.
+
+**Au rejeu** (TestDataRunContext), chaque clé est résolue **une fois par run** : un e-mail
+généré cité trois fois (créer, chercher, vérifier) est le même pendant le run, et nouveau au
+run suivant ; deux clés générées ne reçoivent jamais la même valeur. `recorded` / `literal` :
+la valeur ; `generated` : le TestDataProvider (`email`, `firstName`, `phone`, `text`,
+`unique`…) ; `template` : `"QA ${runId}"` ; `reference` : la valeur de l'autre clé ;
+`credential` : la variable d'environnement ; `preserve` : rien n'est saisi. Une clé absente du
+jeu : la valeur du TestDataProvider, comme avant. `testData.fields` de la mission reste
+prioritaire sur tout. Le jeu d'un flow (`testData:` du flow ou `# testData:` du `.feature`)
+l'emporte sur celui de la mission (`testData.include: [chemin]`, `testData.values: {…}`).
+
+**Apprentissage.** Une donnée `recorded` réutilisée telle quelle et une réponse `409` pendant
+le flow : une suggestion `TEST_DATA_STRATEGY_CANDIDATE`
+(`request.contactEmail: RECORDED_LITERAL → GENERATE_AT_REPLAY`) dans le rapport du flow —
+jamais une modification silencieuse du flow ou du jeu.
+
+**Sécurité.** Une valeur sensible n'est jamais lue, ni écrite dans `test-data.yaml` : un jeu
+qui en contiendrait une en clair (`password: …`) est **refusé** au chargement. Le rapport
+« Recorded test data » ne montre aucune valeur : clés, stratégies, raisons, et les compteurs
+« Sensitive recorded values », « Converted to credential references »,
+« Clear-text sensitive values persisted » (toujours 0, vérifié). Les valeurs ne sont que dans
+`test-data.yaml` : ni dans `raw-recording.json`, ni dans le flow, ni dans le journal.
+
+Reprendre un flow enregistré dans une mission : copier `test-data.yaml` avec lui (le chemin
+`testData:` est relatif au fichier qui le cite), ou le citer par `testData.include`.
 
 ## Causalité des navigations (action → effet)
 
@@ -191,7 +285,8 @@ la session, la version et l'environnement. Les runs suivants la reprennent comme
 ## Fichiers
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,
-`recorded-flow.json`, `generated.flow.yaml`, `generated.feature`, `flow-graph.json` (la carte
+`recorded-flow.json`, `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
+données du flow), `flow-graph.json` (la carte
 des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en nombres — sans
 note globale —, intention comprise, qualité des cibles et des valeurs, trace
 RAW → SEMANTIC → FINAL avec le pourquoi de chaque étape, vérifications candidates).
@@ -199,7 +294,7 @@ RAW → SEMANTIC → FINAL avec le pourquoi de chaque étape, vérifications can
 Événements : `RECORDING_STARTED`, `RAW_EVENT_CAPTURED`, `SEMANTIC_ACTION_RESOLVED`,
 `CHECKPOINT_ADDED`, `RECORDING_PAUSED`, `RECORDING_RESUMED`, `RECORDING_STOPPED`,
 `RECORDING_NORMALIZED`, `OUTCOME_INFERRED`, `FLOW_GENERATED`, `REPLAY_VALIDATION_STARTED`,
-`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`.
+`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`, et pour les données : `RECORDED_TEST_DATA_DISCOVERED`, `TEST_DATA_KEY_RESOLVED`, `TEST_DATA_CLASSIFIED`, `TEST_DATA_GENERALIZED`, `TEST_DATA_LITERAL_PRESERVED`, `TEST_DATA_REFERENCE_CREATED`, `SENSITIVE_RECORDED_VALUE_REDACTED`, `TEST_DATA_COLLISION_DETECTED` (enregistrement), `TEST_DATA_GENERATED_FOR_RUN`, `TEST_DATA_STRATEGY_CANDIDATE` (rejeu). Jamais une valeur dans un événement.
 
 ## Configuration
 
@@ -229,6 +324,20 @@ recording:
     detectSemanticActionLoss: true
     detectNavigationCollapse: true
     collapseMinGotos: 2
+  testData:
+    enabled: true # false : l'ancien comportement ({ testData: clé } choisi au rejeu, aucun fichier)
+    extractRecordedValues: true # false : la saisie n'est jamais lue (seulement sa forme)
+    replaceFlowLiterals: true # le flow cite le jeu au lieu des valeurs
+    generalizeValues: true # noms, e-mails, téléphones, adresses : régénérés au rejeu
+    generatePerRun: true
+    preserveBusinessLiterals: true
+    preserveExistingValues: true
+    namespaceByEntity: true # POST /api/requests → request.title
+    maxValueLength: 500 # au-delà : régénérée au rejeu
+    sensitiveValues: { useCredentialReferences: true }
+    strategies: { email: generated, description: recorded } # par sens ou par nom de champ
+    overrides: # priorité absolue, sauf la sécurité
+      description: { strategy: template, template: 'QA ${runId}' }
 ```
 
 `qa-crawler run` ne lit pas cette section : désactiver l'enregistrement ne change rien aux runs.

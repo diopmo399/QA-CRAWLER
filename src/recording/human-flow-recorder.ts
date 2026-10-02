@@ -8,6 +8,7 @@ import { StateDetector } from '../observation/state-detector.js';
 import { UIObserver } from '../observation/ui-observer.js';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { SafetyPolicy } from '../policies/safety-policy.js';
+import { sensitivityOf } from '../policies/sensitive-fields.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import { captureScript } from './capture-script.js';
 import type {
@@ -142,6 +143,8 @@ export class HumanFlowRecorder {
       salt: this.salt,
       overlay: recording.overlay,
       inputDebounceMs: recording.inputDebounceMs,
+      recordValues: recording.testData.enabled && recording.testData.extractRecordedValues,
+      maxValueLength: recording.testData.maxValueLength,
     });
     await context.addInitScript({ content: script });
     // La page déjà chargée : le script est posé tout de suite (les suivantes l'ont par l'init script).
@@ -398,8 +401,17 @@ export class HumanFlowRecorder {
       return;
     }
     if (this.paused) return;
-    this.capture({ ...event, at: event.at ?? this.now() });
+    const captured = this.capture({ ...event, at: event.at ?? this.now() });
+    // Le texte saisi (données de test) : hors de la trace brute, dans un coffre en mémoire.
+    const typed = captured ? typedValueOf(payload, captured) : undefined;
+    if (captured && typed !== undefined) this.typedValues.set(captured.id, typed);
   }
+
+  /**
+   * Les textes saisis dans les champs non sensibles, par événement brut : la matière des
+   * données de test. Jamais écrits dans raw-recording.json, ni journalisés.
+   */
+  readonly typedValues = new Map<string, string>();
 
   // ------------------------------------------------------------------ capture
 
@@ -569,6 +581,40 @@ export function dedupeNetwork(events: RawRecordedEvent[]): void {
 // ------------------------------------------------------------------ données venues de la page
 
 /**
+ * Le texte saisi envoyé par la page, s'il peut devenir une donnée de test : champ NON sensible
+ * (pour la page ET pour le serveur), et pas une valeur qui ressemble à un secret (jeton, clé).
+ */
+export function typedValueOf(payload: unknown, event: RawRecordedEvent): string | undefined {
+  if (!isObject(payload) || !isObject(payload.value)) return undefined;
+  const raw = payload.value.text;
+  if (typeof raw !== 'string' || raw.trim() === '' || raw.length > 10_000) return undefined;
+  if (event.type !== 'input' && event.type !== 'change') return undefined;
+  if (event.value?.sensitive || event.value?.option || event.value?.checked !== undefined) return undefined;
+  const element = event.element;
+  if (!element) return undefined;
+  const label = element.label ?? element.name;
+  const verdict = sensitivityOf({
+    ...(element.inputType ? { inputType: element.inputType } : {}),
+    ...(element.autocomplete ? { autocomplete: element.autocomplete } : {}),
+    ...(label ? { label } : {}),
+    ...(element.nameAttr ? { name: element.nameAttr } : {}),
+    ...(element.placeholder ? { placeholder: element.placeholder } : {}),
+    ...(element.elementId ? { elementId: element.elementId } : {}),
+  });
+  if (verdict.sensitive || looksSecret(raw)) return undefined;
+  return raw;
+}
+
+/** Un jeton, une clé d'API, un JWT : jamais gardé, même tapé dans un champ ordinaire. */
+export function looksSecret(value: string): boolean {
+  const text = value.trim();
+  if (/^eyJ[\w-]+\.[\w-]+\.[\w-]*$/.test(text)) return true;
+  if (/^(sk|pk|ghp|gho|xox[abp]|AKIA)[-_A-Za-z0-9]{12,}$/.test(text)) return true;
+  // Une longue suite sans espace mêlant lettres et chiffres (hex, base64) : un secret probable.
+  return /^[A-Za-z0-9+/=_-]{32,}$/.test(text) && /\d/.test(text) && /[A-Za-z]/.test(text);
+}
+
+/**
  * Ce que la page envoie est une donnée NON FIABLE (la page peut appeler la fonction) :
  * types vérifiés, textes bornés, rien d'autre n'est gardé.
  */
@@ -642,6 +688,7 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ...(bool('contentEditable') ? { contentEditable: true } : {}),
     ...(bool('customSelect') ? { customSelect: true } : {}),
     ...(bool('required') ? { required: true } : {}),
+    ...(bool('readOnly') ? { readOnly: true } : {}),
     ...(bool('hasOptions') ? { hasOptions: true } : {}),
   };
 }

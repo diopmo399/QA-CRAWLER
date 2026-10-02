@@ -12,6 +12,7 @@ import { runMission } from '../../src/orchestrator.js';
 import { HumanFlowRecorder } from '../../src/recording/human-flow-recorder.js';
 import type { RecordingEvent } from '../../src/recording/model.js';
 import { runRecording, type RecordOutcome } from '../../src/recording/record-orchestrator.js';
+import { generatedFlow, readGeneratedFlow } from '../helpers.js';
 import { startRecordingApp, type RecordingApp } from '../fixtures/recording-app.js';
 
 const TYPED = { firstName: 'Julieta', email: 'julieta.qa@example.test', password: 'Pw-recorded-9z!' };
@@ -107,13 +108,16 @@ describe('Human flow recorder (E2E)', () => {
 
   it('generates a clean, semantic flow: no fragile selector, no keystroke, test data instead of typed values', async () => {
     const yaml = await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8');
-    const flow = flowSchema.parse(parseYaml(yaml));
+    const flow = generatedFlow(yaml, outcome.directory);
     expect(flow.startAt).toBe('/users');
     const steps = flow.steps.map((step) => JSON.stringify(step));
     expect(yaml).not.toMatch(/mat-input|nth-child|nth-of-type/);
     expect(flow.steps.filter((step) => step.kind === 'fill')).toHaveLength(2);
-    expect(steps.some((step) => step.includes('"testData":"firstName"'))).toBe(true);
-    expect(steps.some((step) => step.includes('"testData":"email"'))).toBe(true);
+    // Les données portent l'entité écrite (POST /api/users) ; prénom et e-mail sont régénérés au rejeu.
+    expect(steps.some((step) => step.includes('"testData":"user.firstName"'))).toBe(true);
+    expect(steps.some((step) => step.includes('"testData":"user.email"'))).toBe(true);
+    expect(flow.testData?.values['user.email']).toMatchObject({ strategy: 'GENERATE_AT_REPLAY' });
+    expect(flow.testData?.values['user.firstName']).toMatchObject({ strategy: 'GENERATE_AT_REPLAY' });
     // Le littéral métier reste ; la valeur pré-remplie (Country) et la case revenue en arrière : aucune étape.
     expect(flow.steps).toContainEqual(expect.objectContaining({ kind: 'select', option: 'Business' }));
     expect(yaml).not.toMatch(/Country|Newsletter|Reports/);
@@ -139,9 +143,7 @@ describe('Human flow recorder (E2E)', () => {
   });
 
   it('YAML and Gherkin say the same thing', async () => {
-    const yaml = flowSchema.parse(
-      parseYaml(await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8')),
-    );
+    const yaml = await readGeneratedFlow(outcome.directory);
     const featureFile = path.join(outcome.directory, 'generated.feature');
     const [fromFeature] = gherkinFlows({ gherkin: featureFile }, '/').map((raw) => flowSchema.parse(raw));
     expect(fromFeature).toBeDefined();
@@ -168,6 +170,9 @@ describe('Human flow recorder (E2E)', () => {
     const generated = parseYaml(
       await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8'),
     ) as Record<string, unknown>;
+    // Le jeu de données du flow est à côté de lui (test-data.yaml).
+    if (typeof generated.testData === 'string')
+      generated.testData = path.join(outcome.directory, generated.testData);
     const missionFile = path.join(dir, 'replay-mission.yaml');
     await writeFile(
       missionFile,
@@ -279,9 +284,7 @@ describe('Human flow recorder: secrets and negative validation', () => {
     });
     expect(outcome.result.flow.negative).toBe(true);
     expect(outcome.result.warnings.map((warning) => warning.code)).toContain('NEGATIVE_VALIDATION_FLOW');
-    const flow = flowSchema.parse(
-      parseYaml(await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8')),
-    );
+    const flow = await readGeneratedFlow(outcome.directory);
     expect(flow.steps.filter((step) => step.kind === 'click')).toHaveLength(2);
     expect(flow.steps).toContainEqual(
       expect.objectContaining({ kind: 'expect', expect: { text: 'Email is required' } }),
@@ -348,9 +351,7 @@ describe('Human flow recorder: stopping', () => {
           await page.getByLabel('Last name').pressSequentially('Tremblay', { delay: 5 });
         },
       });
-      const flow = flowSchema.parse(
-        parseYaml(await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8')),
-      );
+      const flow = await readGeneratedFlow(outcome.directory);
       expect(flow.steps).toContainEqual(
         expect.objectContaining({ kind: 'fill', value: { testData: 'lastName' } }),
       );
@@ -401,7 +402,7 @@ describe('Human flow recorder: test ids', () => {
       });
       const yaml = await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8');
       expect(yaml).toContain(`css: '[data-qa="Reference_input"]'`);
-      const flow = flowSchema.parse(parseYaml(yaml));
+      const flow = generatedFlow(yaml, outcome.directory);
       const { config } = parseConfig(
         `mission: { name: replay-testid }
 target: { baseUrl: ${app.url}, startAt: /users/new }
@@ -409,7 +410,7 @@ exploration: { autonomous: false, actionTimeoutMs: 3000, settleTimeMs: 100 }
 report: { failOnSeverity: NONE }
 output: { reportsDir: ${path.join(dir, 'replay')}, screenshotsDir: ${path.join(dir, 'shots')} }
 flows:
-  - ${JSON.stringify(parseYaml(yaml))}
+  - ${JSON.stringify({ ...(parseYaml(yaml) as object), testData: path.join(outcome.directory, 'test-data.yaml') })}
 `,
         {},
         {},

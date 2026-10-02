@@ -133,10 +133,18 @@ function yamlFlows(text: string, file: string): unknown[] {
     return (raw.flows as unknown[]).map((flow) =>
       isObject(flow) && typeof flow.gherkin === 'string'
         ? { ...flow, gherkin: path.resolve(path.dirname(file), flow.gherkin) }
-        : flow,
+        : isObject(flow) && typeof flow.testData === 'string'
+          ? { ...flow, testData: path.resolve(path.dirname(file), flow.testData) }
+          : flow,
     );
   }
-  if (isObject(raw) && Array.isArray(raw.steps)) return [raw];
+  // Le jeu de données d'un flow (`testData: test-data.yaml`) est relatif au fichier du flow.
+  if (isObject(raw) && Array.isArray(raw.steps))
+    return [
+      typeof raw.testData === 'string'
+        ? { ...raw, testData: path.resolve(path.dirname(file), raw.testData) }
+        : raw,
+    ];
   throw new ConfigError(`Not a flow file: ${file}`, [
     'a flow file has a "name" and "steps" (the schema of a flow under flows: in a mission), or a "flows:" list',
   ]);

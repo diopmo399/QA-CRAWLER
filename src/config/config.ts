@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  loadTestDataSetFile,
+  mergeTestDataSets,
+  parseTestDataSet,
+  TestDataSetError,
+  type TestDataSet,
+} from '../data/test-data-set.js';
 import { ACTION_CLASSIFICATIONS, RISK_KINDS } from '../model/discovered-action.js';
 import { SEVERITIES } from '../model/issue.js';
 import { REPORT_LANGUAGES } from '../reporting/i18n.js';
@@ -1229,6 +1236,50 @@ const recordingSchema = z
       })
       .strict()
       .default({}),
+    /**
+     * RECORDED TEST DATA : les valeurs saisies pendant l'enregistrement deviennent un jeu de
+     * données (test-data.yaml) cité par le flow et le .feature : `{ testData: request.title }`.
+     * Une valeur sensible n'est jamais lue ni écrite (référence à une variable d'environnement).
+     */
+    testData: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Lire la saisie (champs non sensibles seulement) ; false : seulement sa forme, comme avant. */
+        extractRecordedValues: z.boolean().default(true),
+        /** Le flow cite le jeu de données au lieu de valeurs. */
+        replaceFlowLiterals: z.boolean().default(true),
+        /** Noms, e-mails, téléphones, adresses : régénérés à chaque rejeu plutôt que gardés. */
+        generalizeValues: z.boolean().default(true),
+        /** Une valeur générée l'est une fois par run (la même clé citée trois fois = la même valeur). */
+        generatePerRun: z.boolean().default(true),
+        preserveBusinessLiterals: z.boolean().default(true),
+        preserveExistingValues: z.boolean().default(true),
+        /** Espace de noms d'après l'entité écrite (POST /api/requests → request.title). */
+        namespaceByEntity: z.boolean().default(true),
+        /** Longueur maximale d'une valeur gardée (au-delà : régénérée au rejeu). */
+        maxValueLength: z.number().int().min(1).max(10_000).default(500),
+        sensitiveValues: z
+          .object({ useCredentialReferences: z.boolean().default(true) })
+          .strict()
+          .default({}),
+        /** Stratégie par sens ou par nom de champ : email: generated, description: recorded… */
+        strategies: z.record(nonEmpty, z.enum(['recorded', 'generated', 'literal', 'template'])).default({}),
+        /** Priorité absolue (sauf sécurité) : par clé (request.title) ou nom de champ (title). */
+        overrides: z
+          .record(
+            nonEmpty,
+            z
+              .object({
+                strategy: z.enum(['recorded', 'generated', 'literal', 'template', 'preserve']),
+                generator: nonEmpty.optional(),
+                template: nonEmpty.optional(),
+              })
+              .strict(),
+          )
+          .default({}),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 
@@ -1313,8 +1364,35 @@ const testDataSchema = z
       .string()
       .regex(/^[A-Za-z0-9-]{1,24}$/, 'letters, digits and dashes (24 max)')
       .optional(),
+    /**
+     * Jeux de données (TestDataSet) pour `{ testData: clé }` : fichiers (test-data.yaml d'un
+     * enregistrement, relatifs à la mission), puis `values` (même forme que le `values:` d'un
+     * fichier). Le jeu propre à un flow (`testData:` du flow) l'emporte, puis celui-ci.
+     */
+    include: z.array(nonEmpty).default([]),
+    values: z.record(z.unknown()).optional(),
   })
-  .strict();
+  .strict()
+  .transform((data, ctx) => {
+    let set: TestDataSet | undefined;
+    try {
+      set = mergeTestDataSets(
+        [
+          ...data.include.map((file) => loadTestDataSetFile(file, process.cwd())),
+          ...(data.values ? [parseTestDataSet({ values: data.values }, 'testData.values')] : []),
+        ],
+        'testData',
+      );
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['include'],
+        message: error instanceof TestDataSetError ? error.message : String(error),
+      });
+      return z.NEVER;
+    }
+    return { ...data, ...(set ? { set } : {}) };
+  });
 
 export const scenarioSchema = z
   .object({

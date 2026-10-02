@@ -66,4 +66,6 @@ export interface FlowRunReport {
   issueIds: string[];
   /** L'explorateur a exploré en autonomie à partir du dernier écran (thenExplore). */
   explored: boolean;
+  /** TEST_DATA_STRATEGY_CANDIDATE : une donnée enregistrée à régénérer (409 au rejeu). Des clés, jamais des valeurs. */
+  testDataSuggestions?: string[];
 }

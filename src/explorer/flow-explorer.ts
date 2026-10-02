@@ -19,6 +19,18 @@ import {
 import { findByName, planAutoStep } from '../flows/gherkin/auto-step.js';
 import { normalizeText } from '../policies/keywords.js';
 import { DefaultTestDataProvider, type TestDataProvider } from '../data/test-data-provider.js';
+import { TestDataRunContext, type ResolvedTestData } from '../data/test-data-run-context.js';
+
+/** Le type HTML qui fait générer la bonne valeur à un générateur nommé (testData: { generator: email }). */
+const GENERATOR_TYPES: Readonly<Record<string, string>> = {
+  email: 'email',
+  phone: 'tel',
+  url: 'url',
+  number: 'number',
+  date: 'date',
+  text: 'text',
+  textarea: 'textarea',
+};
 import type { ActionDecision, DecisionEngine } from '../decision/decision-engine.js';
 import { RuleBasedDecisionEngine } from '../decision/rule-based-decision-engine.js';
 import { scoringWeights } from '../decision/scoring-weights.js';
@@ -229,6 +241,12 @@ export interface ExplorationListener {
   onRule?(event: { at: string; event: RuleEvent; message: string }): void;
   /** Intelligence fonctionnelle : états métier, invariants, effets, objectifs de test (sans valeur saisie). */
   onFunctional?(event: { at: string; event: FunctionalEvent; message: string }): void;
+  /** TEST_DATA_GENERATED_FOR_RUN, TEST_DATA_STRATEGY_CANDIDATE (des clés, jamais des valeurs). */
+  onTestData?(event: {
+    at: string;
+    event: 'TEST_DATA_GENERATED_FOR_RUN' | 'TEST_DATA_STRATEGY_CANDIDATE';
+    message: string;
+  }): void;
 }
 
 export interface FlowExplorerOptions {
@@ -352,6 +370,10 @@ export class FlowExplorer {
   private readonly decisionEngine: DecisionEngine;
   private readonly executor: PlaywrightActionExecutor;
   private readonly testData: TestDataProvider;
+  /** Les données de test d'un run : chaque clé résolue une seule fois (TEST DATA RUN CONTEXT). */
+  private readonly testDataRun: TestDataRunContext;
+  /** Les clés RECORDED_LITERAL utilisées par le flow en cours (pour l'apprentissage sur un 409). */
+  private readonly flowRecordedKeys = new Set<string>();
   private readonly screenshots: ScreenshotService;
   private readonly authenticator: Authenticator;
   private readonly listener: ExplorationListener;
@@ -646,6 +668,17 @@ export class FlowExplorer {
         language: config.report.language,
         preserveExistingValues: config.forms.preserveExistingValues,
       });
+    this.testDataRun = new TestDataRunContext({
+      runId: this.runId,
+      env: this.env,
+      onGenerated: (key) => {
+        this.listener.onTestData?.({
+          at: new Date().toISOString(),
+          event: 'TEST_DATA_GENERATED_FOR_RUN',
+          message: `testData.${key}: generated once for this run`,
+        });
+      },
+    });
     this.contract = options.contract;
     this.forms = new FormExerciser(
       this.executor,
@@ -2001,6 +2034,7 @@ export class FlowExplorer {
     const driver: DryRunDriver = {
       start: async (startAt) => {
         this.flowNetwork = [];
+        this.flowRecordedKeys.clear();
         this.scenario = { values: [] };
         this.attribution = {};
         const url = new URL(startAt ?? this.config.target.startAt, this.config.target.baseUrl).toString();
@@ -2345,6 +2379,7 @@ export class FlowExplorer {
     };
     this.flowReports.push(report);
     this.flowNetwork = [];
+    this.flowRecordedKeys.clear();
     this.scenario = { values: [] };
     this.listener.onFlowStart?.(flow);
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
@@ -2423,6 +2458,21 @@ export class FlowExplorer {
       for (const stateId of report.states) if (!knownStates.has(stateId)) this.exhausted.add(stateId);
     }
 
+    // RUNTIME LEARNING : une valeur enregistrée réutilisée telle quelle, puis un 409 (déjà existant) →
+    // une suggestion tracée (jamais une modification silencieuse du flow ou du jeu de données).
+    const conflict = this.flowNetwork.find((exchange) => exchange.status === 409);
+    if (conflict && this.flowRecordedKeys.size > 0) {
+      report.testDataSuggestions = [...this.flowRecordedKeys].map(
+        (key) =>
+          `testData.${key}: RECORDED_LITERAL → GENERATE_AT_REPLAY (${conflict.method} answered 409: the recorded value probably exists already)`,
+      );
+      for (const suggestion of report.testDataSuggestions)
+        this.listener.onTestData?.({
+          at: new Date().toISOString(),
+          event: 'TEST_DATA_STRATEGY_CANDIDATE',
+          message: suggestion,
+        });
+    }
     report.durationMs = Date.now() - started;
     report.issueIds = this.collector
       .all()
@@ -3571,17 +3621,36 @@ export class FlowExplorer {
 
     let elementAction: FlowElementAction;
     if (step.kind === 'fill') {
+      const data =
+        typeof step.value !== 'string' && 'testData' in step.value
+          ? this.testDataValue(action, step.value.testData, flow)
+          : undefined;
+      if (data?.kind === 'preserve')
+        return {
+          page,
+          context: before,
+          report: done('PASSED', {
+            reason: 'PRESERVE_EXISTING: the value already in the field is kept',
+            stateId: before.stateId,
+            url: before.url,
+            classification: action.classification,
+          }),
+        };
       const resolved =
         typeof step.value === 'string'
           ? step.value
           : 'env' in step.value
             ? this.env[step.value.env]
-            : this.testDataValue(action, step.value.testData);
+            : data?.kind === 'value'
+              ? data.value
+              : undefined;
       if (resolved === undefined) {
         const reason =
           typeof step.value !== 'string' && 'env' in step.value
             ? `environment variable ${step.value.env} is not set`
-            : `no test data for "${typeof step.value === 'string' ? '' : step.value.testData}"`;
+            : data?.kind === 'missing'
+              ? data.reason
+              : `no test data for "${typeof step.value === 'string' ? '' : step.value.testData}"`;
         return {
           page,
           context: before,
@@ -3718,26 +3787,49 @@ export class FlowExplorer {
    * TestDataProvider à l'exécution ; testData.fields[clé] si la mission la donne. Jamais pour
    * un champ sensible (le TestDataProvider ne les remplit pas).
    */
-  private testDataValue(action: DiscoveredAction, key: string): string | undefined {
+  private testDataValue(action: DiscoveredAction, key: string, flow: FlowConfig): ResolvedTestData {
     // testData.fields de la mission : « Branch-Code » vaut pour la clé branchCode (casse et ponctuation ignorées).
+    // Une configuration explicite l'emporte sur toute inférence (et sur le jeu enregistré).
     const compact = (text: string): string =>
       text
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .replace(/[^A-Za-z0-9]/g, '')
         .toLowerCase();
+    const leaf = key.split('.').at(-1) ?? key;
+    const fields = this.config.testData.fields;
     const configured =
-      this.config.testData.fields[key] ??
-      Object.entries(this.config.testData.fields).find(([name]) => compact(name) === compact(key))?.[1];
-    if (configured !== undefined) return configured;
-    const field = { ...(action.field ?? { inputType: 'text', required: false, name: key }), hasValue: false };
-    const instruction = this.testData.instructionFor({
-      ...action,
-      type: 'fill',
-      ...(action.label ? {} : { label: key }),
-      field,
+      fields[key] ??
+      Object.entries(fields).find(([name]) => compact(name) === compact(key))?.[1] ??
+      (leaf !== key
+        ? Object.entries(fields).find(([name]) => compact(name) === compact(leaf))?.[1]
+        : undefined);
+    if (configured !== undefined)
+      return { kind: 'value', value: configured, strategy: 'RECORDED_LITERAL', generated: false };
+    // Une valeur valide pour CE champ (ou pour un générateur nommé), choisie par le TestDataProvider du run.
+    const provide = (name: string, typed?: string): string | undefined => {
+      const field = {
+        ...(action.field ?? { inputType: 'text', required: false, name }),
+        ...(typed ? { inputType: typed, name, label: name } : {}),
+        hasValue: false,
+      };
+      const instruction = this.testData.instructionFor({
+        ...action,
+        type: 'fill',
+        ...(action.label && !typed ? {} : { label: name }),
+        field,
+      });
+      return instruction.kind === 'fill' ? instruction.value : undefined;
+    };
+    const resolved = this.testDataRun.resolve(key, [flow.testData, this.config.testData.set], {
+      fallback: () => provide(leaf),
+      generate: (generator) =>
+        generator === 'unique'
+          ? `QA-CRAWLER-${this.runId}`
+          : provide(generator, GENERATOR_TYPES[generator] ?? 'text'),
     });
-    return instruction.kind === 'fill' ? instruction.value : undefined;
+    if (resolved.kind === 'value' && resolved.strategy === 'RECORDED_LITERAL') this.flowRecordedKeys.add(key);
+    return resolved;
   }
 
   private syntheticAction(

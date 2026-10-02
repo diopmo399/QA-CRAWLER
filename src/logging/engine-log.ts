@@ -296,6 +296,13 @@ export class EngineEventLog {
           event.event === 'FIELD_DEPENDENCY_DISCOVERED';
         this.log(warn ? 'WARN' : detail ? 'DEBUG' : 'INFO', event.event, redactText(event.message));
       },
+      onTestData: (event) => {
+        this.log(
+          event.event === 'TEST_DATA_STRATEGY_CANDIDATE' ? 'WARN' : 'DEBUG',
+          event.event,
+          redactText(event.message),
+        );
+      },
       onFunctional: (event) => {
         const warn =
           event.event === 'INVARIANT_VIOLATED' ||

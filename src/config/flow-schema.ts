@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  loadTestDataSetFile,
+  parseTestDataSet,
+  TestDataSetError,
+  type TestDataSet,
+} from '../data/test-data-set.js';
 import { ASSERTION_KINDS, describeIntent, type GherkinIntent } from '../semantics/resolution/intent.js';
 
 /**
@@ -266,6 +272,20 @@ const stepSchema = z
     return { ...common, kind: 'screenshot', label: step.screenshot ?? 'screenshot' };
   });
 
+/** Un jeu de données : chemin d'un fichier (déjà absolu après chargement) ou le jeu lui-même. */
+export const testDataSetInput = z.unknown().transform((input, ctx): TestDataSet => {
+  try {
+    if (typeof input === 'string') return loadTestDataSetFile(input, process.cwd());
+    return parseTestDataSet(input, 'inline');
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof TestDataSetError ? error.message : String(error),
+    });
+    return z.NEVER;
+  }
+});
+
 export const flowSchema = z
   .object({
     name: nonEmpty,
@@ -273,6 +293,11 @@ export const flowSchema = z
     /** Page chargée avant la première étape (par défaut : target.startAt). */
     startAt: nonEmpty.optional(),
     steps: z.array(stepSchema).min(1),
+    /**
+     * Les données du flow (TestDataSet) : un fichier (`test-data.yaml`, relatif au fichier qui
+     * le cite) ou le jeu lui-même. `{ testData: request.title }` y est résolu au rejeu.
+     */
+    testData: testDataSetInput.optional(),
     /**
      * Une fois le flow réussi, explorer son dernier écran : seulement les contrôles
      * de la page et les pages sous son chemin (jamais le menu global). S'exécute

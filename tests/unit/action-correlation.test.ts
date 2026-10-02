@@ -80,7 +80,7 @@ function session(events: RawRecordedEvent[], states: RecordedState[] = [state('o
 }
 const flowOf = (events: RawRecordedEvent[], states?: RecordedState[], cfg = config) => {
   const result = processRecording(session(events, states), cfg, { language: 'en' });
-  return { result, flow: flowSchema.parse(parseYaml(result.files.yaml)) };
+  return { result, flow: flowSchema.parse(withoutDataFile(result.files.yaml)) };
 };
 const kinds = (steps: FlowStep[]): string[] => steps.map((step) => step.kind);
 const clickNames = (steps: FlowStep[]): string[] =>
@@ -298,3 +298,10 @@ describe('flow semantic preservation', () => {
     expect(result.normalized.stats.mergedInputs).toBe(1);
   });
 });
+
+/** Le flow généré, sans son fichier de données (test-data.yaml, écrit à côté par l'enregistreur). */
+function withoutDataFile(yaml: string): unknown {
+  const raw = parseYaml(yaml) as Record<string, unknown>;
+  delete raw.testData;
+  return raw;
+}

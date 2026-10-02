@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Page } from 'playwright';
+import { stringify as stringifyYaml } from 'yaml';
 import { createAuthenticator } from '../auth/authenticator.js';
 import { BrowserManager } from '../browser/browser-manager.js';
 import { browserHttpCredentials } from '../interactions/browser-credentials.js';
@@ -12,7 +13,7 @@ import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
 import type { RecordingEvent } from './model.js';
-import { processRecording, type RecordingResult } from './process-recording.js';
+import { processRecording, TEST_DATA_FILE, type RecordingResult } from './process-recording.js';
 import { recordingHtml, type ReplayOutcome } from './recording-report.js';
 
 export type RecordOutputFormat = 'yaml' | 'gherkin' | 'both';
@@ -129,7 +130,10 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     language,
     snapshot: (observationId) => recorder.snapshot(observationId),
     onEvent,
+    typedValues: recorder.typedValues,
   });
+  // Les textes saisis ne servent plus : effacés de la mémoire du recorder.
+  recorder.typedValues.clear();
   const format = request.outputFormat ?? config.recording.outputFormat;
   await mkdir(directory, { recursive: true });
   const files: Record<string, string> = {};
@@ -150,6 +154,9 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   );
   await write('recorded-flow.json', json(result.flow));
   await write('flow-graph.json', json(result.graph));
+  // Le jeu de données du flow (aucune valeur sensible : références à des variables d'environnement).
+  if (result.testData && Object.keys(result.testData.set.values).length > 0)
+    await write(TEST_DATA_FILE, stringifyYaml(result.testData.document, { lineWidth: 0 }));
   if (format !== 'gherkin') await write('generated.flow.yaml', result.files.yaml);
   if (format !== 'yaml') await write('generated.feature', result.files.feature);
 

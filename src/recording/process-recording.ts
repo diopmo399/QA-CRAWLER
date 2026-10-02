@@ -15,14 +15,20 @@ import type {
 import { correlateActions, type CorrelationResult } from './action-correlation.js';
 import { normalizeRecording, type NormalizedRecording } from './normalizer.js';
 import { checkSemanticPreservation, type PreservationReport } from './semantic-preservation.js';
+import { extractRecordedTestData, type RecordedTestDataResult } from './recorded-test-data.js';
 import { inferOutcomes } from './outcomes.js';
 import { buildRecordedFlow, generateFlowFiles, type GeneratedFiles } from './recorded-flow.js';
 import { resolveSemanticActions, routeOf } from './semantic-recording.js';
+
+/** Le jeu de données d'un enregistrement, à côté de generated.flow.yaml et generated.feature. */
+export const TEST_DATA_FILE = 'test-data.yaml';
 
 export interface RecordingResult {
   /** ACTION CORRELATION (absente si désactivée) et contrôle de préservation. */
   correlation?: CorrelationResult;
   preservation: PreservationReport;
+  /** RECORDED TEST DATA (absent si recording.testData.enabled vaut false) : le jeu de données du flow. */
+  testData?: RecordedTestDataResult;
   session: RecordingSession;
   normalized: NormalizedRecording;
   flow: RecordedFlow;
@@ -42,6 +48,8 @@ export function processRecording(
     language: 'fr' | 'en';
     snapshot?: (observationId: string) => UiSnapshot | undefined;
     onEvent?: (event: RecordingEvent) => void;
+    /** Les textes saisis (champs non sensibles), par événement brut : jamais dans la trace. */
+    typedValues?: ReadonlyMap<string, string>;
   },
 ): RecordingResult {
   const emit = (type: RecordingEventType, message: string): void => {
@@ -109,6 +117,23 @@ export function processRecording(
       )
       .map((candidate) => candidate.id);
   }
+  // RECORDED TEST DATA : les valeurs saisies deviennent un jeu de données ; le flow cite ses clés.
+  let testData: RecordedTestDataResult | undefined;
+  if (config.recording.testData.enabled) {
+    testData = extractRecordedTestData({
+      name: session.name,
+      recordingSessionId: session.id,
+      createdAt: session.startedAt,
+      actions: normalized.actions,
+      kept: normalized.kept,
+      rawEvents: session.rawEvents,
+      typedValues: options.typedValues ?? new Map(),
+      settings: config.recording.testData,
+    });
+    for (const event of testData.events) emit(event.type, event.message);
+    // Une valeur calculée (champ en lecture seule) n'est pas une saisie : écartée du flow.
+    normalized.kept = normalized.kept.filter((action) => !action.dropped);
+  }
   const startRoute =
     normalized.kept.find((action) => action.type === 'NAVIGATE')?.route ?? routeOf(session.startUrl);
   const built = buildRecordedFlow({
@@ -129,7 +154,11 @@ export function processRecording(
   for (const warning of preservation.warnings)
     if (warning.code === 'SUSPICIOUS_NAVIGATION_COLLAPSE')
       emit('SUSPICIOUS_NAVIGATION_COLLAPSE', warning.message);
-  const files = generateFlowFiles(built.flow, { language: options.language, recordedAt: session.startedAt });
+  const files = generateFlowFiles(built.flow, {
+    language: options.language,
+    recordedAt: session.startedAt,
+    ...(testData && Object.keys(testData.set.values).length > 0 ? { testDataFile: TEST_DATA_FILE } : {}),
+  });
   emit('FLOW_GENERATED', `${String(built.flow.steps.length)} step(s)`);
   const warnings = [
     ...session.warnings,
@@ -138,6 +167,7 @@ export function processRecording(
     ...outcomes.warnings,
     ...built.warnings,
     ...preservation.warnings,
+    ...(testData?.warnings ?? []),
   ];
   return {
     session,
@@ -145,6 +175,7 @@ export function processRecording(
     flow: built.flow,
     files,
     ...(correlation ? { correlation } : {}),
+    ...(testData ? { testData } : {}),
     preservation,
     graph: flowGraphOf(session, normalized.kept, safety, config, options.snapshot),
     warnings: dedupe(warnings),

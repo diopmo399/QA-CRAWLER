@@ -1,3 +1,7 @@
+import { readFile as readFileText } from 'node:fs/promises';
+import path from 'node:path';
+import { parse as parseYamlText } from 'yaml';
+import { flowSchema, type FlowConfig } from '../src/config/flow-schema.js';
 import { parseConfig } from '../src/config/config-loader.js';
 import type { ScenarioConfig } from '../src/config/config.js';
 import { ActionDiscovery } from '../src/discovery/action-discovery.js';
@@ -119,4 +123,18 @@ export function staticAnalyzerOptions(overrides: Partial<StaticAnalyzerOptions> 
     budgets: { maxFiles: 500, maxDurationMs: 30_000, maxFileSizeBytes: 2_000_000, maxAstNodes: 5_000_000 },
     ...overrides,
   };
+}
+
+/**
+ * Un flow généré par l'enregistreur, tel que le chargeur le lit : son jeu de données
+ * (`testData: test-data.yaml`) est relatif au dossier de l'enregistrement.
+ */
+export function generatedFlow(yaml: string, directory: string): FlowConfig {
+  const raw = parseYamlText(yaml) as Record<string, unknown>;
+  if (typeof raw.testData === 'string') raw.testData = path.resolve(directory, raw.testData);
+  return flowSchema.parse(raw);
+}
+
+export async function readGeneratedFlow(directory: string): Promise<FlowConfig> {
+  return generatedFlow(await readFileText(path.join(directory, 'generated.flow.yaml'), 'utf8'), directory);
 }

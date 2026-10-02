@@ -23,6 +23,8 @@ export interface GherkinFlowEntry {
   startAt?: string;
   /** Mode automatique pour ce fichier (par défaut : gherkin.auto de la mission). */
   auto?: boolean;
+  /** Le jeu de données des scénarios (relatif à la mission) ; sinon `# testData: …` en tête du .feature. */
+  testData?: string;
 }
 
 /** Tags reconnus sur un scénario (ou la fonctionnalité, ou une ligne d'exemples). */
@@ -96,6 +98,13 @@ export function gherkinFlows(
     ]);
   }
   const pickles = compile(document, display, IdGenerator.incrementing());
+  // `# testData: test-data.yaml` en tête du fichier (ou testData: dans l'entrée) : le jeu de données du .feature.
+  const header = /^\s*#\s*testData:\s*(\S+)\s*$/m.exec(text)?.[1];
+  const testData = entry.testData
+    ? path.resolve(baseDir, entry.testData)
+    : header
+      ? path.resolve(path.dirname(file), header)
+      : undefined;
   const steps = stepIndex(document);
   const dictionary = new GherkinStepDictionary(custom);
   const intents = semantic ? new GherkinIntentParser() : undefined;
@@ -170,6 +179,7 @@ export function gherkinFlows(
       name: uniqueName(names, pickle, document),
       description: `${display}:${pickle.location?.line ?? ''}`,
       ...(entry.startAt !== undefined ? { startAt: entry.startAt } : {}),
+      ...(testData ? { testData } : {}),
       steps: flowSteps,
       ...(entry.thenExplore === true || tags.some((tag) => TAG_EXPLORE.has(tag))
         ? { thenExplore: true }
