@@ -106,6 +106,50 @@ Les effets appris à l'enregistrement sont une preuve HUMAN_RECORDING de la mêm
 Les hypothèses (bornées) et leurs preuves sont gardées dans la KnowledgeBase et **réévaluées**
 au run suivant (âge, version) : l'historique est une expérience, pas une vérité.
 
+## Lot D — Objectifs et préconditions (`goal-graph.ts`)
+
+La mission devient un **graphe d'objectifs** (modèle fonctionnel + graphe causal) :
+
+```
+CREATE_REQUEST_DONE                       (envoi : action qui écrit)
+  ↑ CREATE_REQUEST_READY                  (envoi possible)
+      ↑ EUR_SELECTED                      (choix démontré)
+      ↑ COMPANY_INFORMATION_COMPLETE
+          ↑ COMPANY_INFORMATION_AVAILABLE ← COMPANY_INFORMATION_CONTROL_AVAILABLE ← EUR_SELECTED (appris : « check EUR révèle l'ouvreur »)
+          ↑ COMPANY_NAME_VALID · BUSINESS_NUMBER_VALID
+```
+
+Chaque nœud dit comment il peut être réalisé (`achievedBy` : plan démontré, modèle, ou
+relation causale avec le statut de son hypothèse). Le **PreconditionResolver** ne répond pas
+« BLOCKED » mais POURQUOI : les chaînes du but jusqu'à la condition manquante la plus profonde,
+les préconditions actionnables maintenant, leurs actions candidates et les preuves de l'écran.
+
+```
+CREATE_REQUEST_DONE ← CREATE_REQUEST_READY ← COMPANY_INFORMATION_COMPLETE ← BUSINESS_NUMBER_VALID
+→ fill "Business number"
+```
+
+## Lot E — Plans et checkpoints (`planning.ts`)
+
+- **SemanticCheckpoint** : un état métier (phase complète, prêt, terminé). Confirmé quand sa
+  condition est vraie, qu'au moins deux sous-conditions sont vérifiées à l'écran et qu'une
+  preuve observée existe — **jamais l'URL seule**. Une interface restructurée (bouton → onglet,
+  autre route) qui atteint le même état atteint le même checkpoint. Un checkpoint confirmé puis
+  démenti devient `CONTRADICTED`.
+- **PlanEngine** : état + objectif + préconditions → `ExecutionPlan` (étapes de la condition
+  la plus profonde jusqu'au but, checkpoints, confiance, `assumptions` : les hypothèses non
+  confirmées dont il dépend, `alternatives` : les autres candidats).
+- **Plan ≠ flow enregistré** : `RECORDED_PLAN` (le parcours démontré, connu), `CURRENT_PLAN`
+  (depuis l'état atteint), `RECOVERED_PLAN` et `SUGGESTED_PLAN` (réparés).
+- **PlanRepairEngine** : `A → B → C → D` devient `A → B → X → D` à partir d'une récupération
+  confirmée au runtime ; chaque action insérée repasse par la SafetyPolicy, et une action qui
+  écrirait là où l'étape d'origine ne le pouvait pas est refusée (`UNSAFE`, aucun plan). Le
+  plan enregistré n'est jamais modifié.
+
+Événements ajoutés : `GOAL_CREATED`, `GOAL_BLOCKED`, `PRECONDITION_DISCOVERED`,
+`PLAN_CREATED`, `PLAN_REPAIRED`, `SEMANTIC_CHECKPOINT_REACHED`. Vues : `goal-graph.json`,
+`plan.json` (plans par flow, réparation, préconditions, checkpoints).
+
 ## Observabilité
 
 Événements (`engine-log.jsonl`) : `EVIDENCE_ADDED`, `HYPOTHESIS_CREATED`,
