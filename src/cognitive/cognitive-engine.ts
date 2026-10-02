@@ -35,6 +35,30 @@ import {
   type SemanticCheckpoint,
 } from './planning.js';
 import type { FlowStepReport } from '../model/flow-run.js';
+import {
+  ActiveLearningEngine,
+  type ExperimentAction,
+  type ExperimentProposal,
+  type RejectedExperiment,
+  type SafetyClass,
+} from './active-learning.js';
+import {
+  ContradictionDetector,
+  TemporalDependencyGraph,
+  type KnowledgeClaim,
+  type KnowledgeContradiction,
+} from './contradictions.js';
+import { FunctionalCoverageGraph } from './functional-coverage.js';
+import {
+  FailureKnowledge,
+  InvariantDiscoveryEngine,
+  understandFailure,
+  type DiscoveredInvariant,
+  type FailureRecord,
+  type FailureSignal,
+  type FailureUnderstanding,
+  type InvariantThresholds,
+} from './invariants-failures.js';
 
 /** La clé causale d'une action : « check eur », « click company information ». */
 export function actionKey(kind: string, label: string): string {
@@ -54,6 +78,15 @@ export const COGNITIVE_EVENTS = [
   'PLAN_CREATED',
   'PLAN_REPAIRED',
   'SEMANTIC_CHECKPOINT_REACHED',
+  'CONTRADICTION_DETECTED',
+  'ACTIVE_LEARNING_STARTED',
+  'EXPERIMENT_PROPOSED',
+  'EXPERIMENT_COMPLETED',
+  'INVARIANT_CANDIDATE_CREATED',
+  'INVARIANT_CONFIRMED',
+  'INVARIANT_VIOLATED',
+  'FAILURE_CLASSIFIED',
+  'FUNCTIONAL_COVERAGE_UPDATED',
 ] as const;
 export type CognitiveEvent = (typeof COGNITIVE_EVENTS)[number];
 
@@ -67,6 +100,8 @@ export interface CognitiveEventRecord {
 export interface CognitiveKnowledge {
   hypotheses: Hypothesis[];
   evidence: Evidence[];
+  invariants?: DiscoveredInvariant[];
+  failures?: FailureRecord[];
 }
 
 export interface CognitiveOptions {
@@ -74,6 +109,8 @@ export interface CognitiveOptions {
   runTag: string;
   runtimeObservationsToConfirm: number;
   maxHypotheses: number;
+  /** Observations et runs exigés pour qu'une régularité devienne un invariant (pas d'un seul coup). */
+  invariantThresholds?: InvariantThresholds;
   emit?: (record: CognitiveEventRecord) => void;
   now?: () => string;
 }
@@ -97,6 +134,19 @@ export class CognitiveEngine {
   situation: BusinessSituation | undefined;
   functionalState: FunctionalState | undefined;
   readonly events: CognitiveEventRecord[] = [];
+  readonly contradictions: ContradictionDetector;
+  readonly temporal = new TemporalDependencyGraph();
+  readonly invariants: InvariantDiscoveryEngine;
+  failureKnowledge = new FailureKnowledge();
+  readonly failures: (FailureUnderstanding & { step: string })[] = [];
+  readonly activeLearning: ActiveLearningEngine;
+  readonly experiments: { proposed: ExperimentProposal[]; rejected: RejectedExperiment[] } = {
+    proposed: [],
+    rejected: [],
+  };
+  private coverage: FunctionalCoverageGraph | undefined;
+  /** Appelé quand un invariant soutenu est violé (l'oracle garde la provenance). */
+  onInvariantViolated?: (invariant: DiscoveredInvariant) => void;
   private goals: GoalGraph | undefined;
   private checkpoints = new Map<string, SemanticCheckpoint>();
   private lastBlocked: string | undefined;
@@ -138,6 +188,31 @@ export class CognitiveEngine {
       },
     );
     this.causal = new CausalKnowledgeGraph(this.hypotheses, this.graph);
+    this.contradictions = new ContradictionDetector((contradiction) => {
+      this.emit(
+        'CONTRADICTION_DETECTED',
+        `${contradiction.property}: ${contradiction.types.join(', ')} — ${contradiction.claims.map((claim) => `${claim.source}=${String(claim.value)}`).join(' · ')}`,
+      );
+    });
+    this.invariants = new InvariantDiscoveryEngine(
+      { run: options.runTag, ...(options.version ? { version: options.version } : {}), now },
+      options.invariantThresholds,
+      (invariant, previous) => {
+        if (invariant.status === 'VIOLATED') {
+          this.emit(
+            'INVARIANT_VIOLATED',
+            `${invariant.statement} — ${invariant.counterexamples.at(-1)?.detail ?? ''}`,
+          );
+          this.onInvariantViolated?.(invariant);
+        } else if (invariant.status === 'CONFIRMED') this.emit('INVARIANT_CONFIRMED', invariant.statement);
+        else if (!previous || previous === 'CANDIDATE')
+          this.emit('INVARIANT_CANDIDATE_CREATED', `${invariant.statement} (${invariant.status})`);
+      },
+    );
+    this.activeLearning = new ActiveLearningEngine(this.hypotheses, (input) => this.addEvidence(input), {
+      maxExperiments: 3,
+      now,
+    });
     this.stateEngine = new BusinessStateEngine(this.model, (input) => this.addEvidence(input), now);
   }
 
@@ -155,6 +230,8 @@ export class CognitiveEngine {
   restore(knowledge: CognitiveKnowledge | undefined): void {
     if (!knowledge) return;
     this.hypotheses.restore(knowledge.hypotheses, knowledge.evidence);
+    this.invariants.restore(knowledge.invariants ?? []);
+    this.failureKnowledge = new FailureKnowledge(knowledge.failures ?? []);
   }
 
   /** Un parcours démontré (flow, enregistrement) : une preuve d'INTENTION pour le modèle fonctionnel. */
@@ -167,6 +244,7 @@ export class CognitiveEngine {
       details: { steps: flow.steps.length },
     });
     this.modelBuilder.addFlow(flow, [{ id: proof.id, type: proof.type }]);
+    this.rebuildCoverage();
     // Les effets appris à l'enregistrement : l'humain a montré que l'action révèle ces contrôles.
     for (const step of flow.steps) {
       if (!('target' in step) || !('effects' in step) || !step.effects?.appears) continue;
@@ -213,6 +291,11 @@ export class CognitiveEngine {
     if (text !== this.lastSituation) {
       this.lastSituation = text;
       this.emit('BUSINESS_STATE_UPDATED', text);
+      // Un état métier NOUVEAU (pas le même écran revu) : une observation pour les invariants et la couverture.
+      this.invariants.observeSituation(situation);
+      const before = this.coverageSummary();
+      this.coverageGraph().observeSituation(situation, `screen ${route}`);
+      if (this.coverageSummary() !== before) this.emit('FUNCTIONAL_COVERAGE_UPDATED', this.coverageSummary());
     }
     this.conditionContext = {
       situation,
@@ -239,6 +322,8 @@ export class CognitiveEngine {
     afterRoute: string;
     requests: readonly string[];
     source: string;
+    /** Chronologie : durée de chaque requête et instant où l'état suivant a été observé (ms après l'action). */
+    timing?: { observedAfterMs: number; durations: (number | undefined)[]; busy?: boolean };
   }): Hypothesis[] {
     const keys = (snapshot: UiSnapshot | undefined, enabled: boolean): Set<string> =>
       new Set(
@@ -256,6 +341,47 @@ export class CognitiveEngine {
     const disabled = [...disabledAfter].filter((key) => before.has(key));
     const disappeared = [...before].filter((key) => !after.has(key) && !disabledAfter.has(key));
     const route = input.afterRoute !== input.beforeRoute ? input.afterRoute : undefined;
+    // INVARIANTS : un changement de choix ou de champ ne doit pas vider les autres champs remplis.
+    if (['fill', 'check', 'uncheck', 'select'].includes(input.kind) && input.before && input.after) {
+      const filled = (snapshot: UiSnapshot): Map<string, boolean> =>
+        new Map(
+          snapshot.elements
+            .filter(
+              (element) =>
+                element.visible && (element.label ?? element.name) && element.hasValue !== undefined,
+            )
+            .map((element) => [element.label ?? element.name, element.hasValue === true]),
+        );
+      const was = filled(input.before);
+      const now = filled(input.after);
+      for (const [field, had] of was)
+        if (had && field.toLowerCase() !== input.label.toLowerCase() && now.has(field))
+          this.invariants.observePreservation(
+            actionKey(input.kind, input.label),
+            field,
+            now.get(field) === true,
+          );
+    }
+    // TEMPORAL : un contrôle apparu après la fin d'une requête l'ATTEND (pas « immédiatement visible »).
+    if (input.timing && appeared.length > 0)
+      this.temporal.learn([
+        { at: 0, kind: 'ACTION', label: actionKey(input.kind, input.label) },
+        ...input.requests.map((request, index) => {
+          const duration = input.timing?.durations[index];
+          return {
+            at: 0,
+            kind: 'REQUEST_STARTED' as const,
+            label: request.replace(/ \d{3}$/, ''),
+            ...(duration !== undefined ? { end: duration } : {}),
+          };
+        }),
+        ...(input.timing.busy ? [{ at: 1, kind: 'LOADING_STARTED' as const, label: 'loading' }] : []),
+        ...appeared.map((control) => ({
+          at: input.timing?.observedAfterMs ?? 0,
+          kind: 'CONTROL_APPEARED' as const,
+          label: control,
+        })),
+      ]);
     if (
       appeared.length + disappeared.length + enabled.length + disabled.length + input.requests.length === 0 &&
       !route
@@ -285,6 +411,87 @@ export class CognitiveEngine {
       },
       proof,
     );
+  }
+
+  /** Une affirmation sur une propriété (DOM, code, contrat…) : les désaccords deviennent des contradictions visibles. */
+  claim(claim: KnowledgeClaim): KnowledgeContradiction | undefined {
+    return this.contradictions.claim(claim);
+  }
+
+  /** FAILURE UNDERSTANDING : classer un échec, le rapprocher des échecs déjà vus, l'apprendre. */
+  understand(signal: FailureSignal, step: string): FailureUnderstanding {
+    const understanding = understandFailure(signal, this.failureKnowledge);
+    this.failureKnowledge.record(understanding, this.now(), this.options.version);
+    this.failures.push({ ...understanding, step });
+    this.emit('FAILURE_CLASSIFIED', `${step}: ${understanding.class} — ${understanding.reasons.join('; ')}`);
+    if (signal.request && /^POST|^PUT|^PATCH/.test(signal.request))
+      this.coverageGraph().observeSubmission(understanding.class, step);
+    return understanding;
+  }
+
+  /** Un envoi réussi (effet confirmé au runtime). */
+  submissionSucceeded(source: string): void {
+    this.coverageGraph().observeSubmission('SUCCESS', source);
+    this.emit('FUNCTIONAL_COVERAGE_UPDATED', this.coverageSummary());
+  }
+
+  /**
+   * ACTIVE LEARNING : pour chaque effet expliqué par plusieurs causes plausibles, les expériences
+   * SÛRES qui les départageraient (les autres sont refusées par la SafetyPolicy, avec la raison).
+   */
+  proposeExperiments(
+    available: ReadonlySet<string>,
+    judge: (action: ExperimentAction) => SafetyClass,
+  ): ExperimentProposal[] {
+    const effects = new Set(
+      this.causal
+        .links()
+        .filter(
+          (link) =>
+            link.relation === 'REVEALS' &&
+            link.hypothesis.status !== 'RUNTIME_CONFIRMED' &&
+            link.hypothesis.status !== 'REJECTED',
+        )
+        .map((link) => link.effect),
+    );
+    const proposed: ExperimentProposal[] = [];
+    for (const effect of effects) {
+      const { proposals, rejected } = this.activeLearning.propose(effect, available, judge);
+      if (proposals.length === 0 && rejected.length === 0) continue;
+      this.emit(
+        'ACTIVE_LEARNING_STARTED',
+        `${effect}: ${String(this.hypotheses.competing('REVEALS', effect).length)} competing hypotheses`,
+      );
+      for (const proposal of proposals)
+        this.emit(
+          'EXPERIMENT_PROPOSED',
+          `${proposal.actions.map((action) => `${action.kind} "${action.label}"`).join(' → ')} tests ${proposal.tests} (gain ${String(proposal.informationGain)} bit, ${proposal.safetyClass}${proposal.reversible ? ', reversible' : ''})`,
+        );
+      proposed.push(...proposals);
+      this.experiments.rejected.push(...rejected);
+    }
+    this.experiments.proposed.push(...proposed);
+    return proposed;
+  }
+
+  /** La couverture fonctionnelle (créée avec le modèle, gardée quand le modèle grandit). */
+  coverageGraph(): FunctionalCoverageGraph {
+    this.coverage ??= new FunctionalCoverageGraph(this.model);
+    return this.coverage;
+  }
+
+  private rebuildCoverage(): void {
+    const previous = this.coverage;
+    this.coverage = new FunctionalCoverageGraph(this.modelBuilder.build());
+    for (const item of previous?.all() ?? [])
+      if (item.covered) for (const source of item.evidence) this.coverage.markCovered(item.id, source);
+  }
+
+  private coverageSummary(): string {
+    return this.coverageGraph()
+      .summary()
+      .map((row) => `${row.dimension} ${String(row.covered)}/${String(row.total)}`)
+      .join(', ');
   }
 
   /** GOAL GRAPH du modèle courant (reconstruit quand le modèle change). */
@@ -415,7 +622,12 @@ export class CognitiveEngine {
       .filter(
         (item, index, list) => ids.has(item.id) && list.findIndex((other) => other.id === item.id) === index,
       );
-    return { hypotheses, evidence };
+    return {
+      hypotheses,
+      evidence,
+      invariants: this.invariants.all(),
+      failures: this.failureKnowledge.all().slice(-200),
+    };
   }
 
   /** Les artefacts de débogage (§84) produits par cette couche. */
@@ -442,6 +654,15 @@ export class CognitiveEngine {
       },
       'goal-graph.json': this.goals ?? { nodes: [] },
       'plan.json': { flows: this.plans, checkpoints: [...this.checkpoints.values()] },
+      'contradictions.json': { contradictions: this.contradictions.all() },
+      'functional-coverage.json': {
+        ...this.coverageGraph().toJSON(),
+        lines: this.coverageGraph().describe(),
+      },
+      'invariants.json': { invariants: this.invariants.all() },
+      'failures.json': { failures: this.failures, knowledge: this.failureKnowledge.all() },
+      'temporal.json': { links: this.temporal.all() },
+      'experiments.json': this.experiments,
     };
   }
 

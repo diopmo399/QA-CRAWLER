@@ -433,6 +433,8 @@ export class FlowExplorer {
   readonly healingEvents: HealingEventRecord[] = [];
   /** QA COGNITIVE ENGINE : la couche de connaissance (observe et apprend ; n'exécute rien). */
   readonly cognitive: CognitiveEngine | undefined;
+  /** Début de l'action en cours (chronologie : requêtes, chargement, apparition des contrôles). */
+  private actionClock = 0;
   private readonly screenshots: ScreenshotService;
   private readonly authenticator: Authenticator;
   private readonly listener: ExplorationListener;
@@ -878,6 +880,7 @@ export class FlowExplorer {
           runTag: this.runId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'run',
           runtimeObservationsToConfirm: cognitive.runtimeObservationsToConfirm,
           maxHypotheses: cognitive.budgets.maxHypotheses,
+          invariantThresholds: cognitive.invariants,
           ...((this.knowledge.identity.commit ?? this.knowledge.identity.appVersion)
             ? { version: this.knowledge.identity.commit ?? this.knowledge.identity.appVersion }
             : {}),
@@ -885,6 +888,15 @@ export class FlowExplorer {
         })
       : undefined;
     this.cognitive?.restore(this.knowledge.cognitiveKnowledge());
+    if (this.cognitive)
+      // Un invariant découvert, soutenu puis violé : un avertissement, avec sa provenance.
+      this.cognitive.onInvariantViolated = (invariant) =>
+        this.collector.add({
+          type: 'FUNCTIONAL',
+          severity: 'WARNING',
+          message: `Invariant violated: ${invariant.statement} — ${invariant.counterexamples.at(-1)?.detail ?? ''} (observed ${String(invariant.observations)} time(s) over ${String(invariant.runs.length)} run(s) before)`,
+          pageUrl: this.currentUrl,
+        });
     this.memory = options.memory;
     this.startUrl = new URL(config.target.startAt, config.target.baseUrl).toString();
     this.currentUrl = this.startUrl;
@@ -1209,6 +1221,7 @@ export class FlowExplorer {
     this.functional?.observeScreen(screenFactsOf(snapshot, state.route));
     if (this.cognitive && this.config.cognitive.businessState)
       this.cognitive.observeScreen(snapshot, state.route);
+    if (this.cognitive && this.staticKnowledge) this.claimRequiredFields(snapshot, state.route);
 
     const flow = this.graph.flowTo(state.stateId);
     // Les anomalies levées en atteignant cet état lui appartiennent.
@@ -1351,6 +1364,7 @@ export class FlowExplorer {
     const interactionMark = this.interactions.mark();
 
     this.networkTrace.start(action.id);
+    this.actionClock = Date.now();
     let result = await this.execute(page, from, action);
     this.actionsExecuted += 1;
     // RETRY : une erreur Playwright passagère (élément réaffiché sous le clic), jamais une action qui envoie des données.
@@ -2510,7 +2524,9 @@ export class FlowExplorer {
         continue;
       }
 
+      const networkMark = this.flowNetwork.length;
       const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
+      this.understandStep(step, outcome.report, this.flowNetwork.slice(networkMark));
       page = outcome.page;
       context = outcome.context ?? context;
       report.steps.push(outcome.report);
@@ -3962,6 +3978,7 @@ export class FlowExplorer {
     this.currentAction = { stateId: before.stateId, actionId: action.id, flow: flow.name };
     const interactionMark = this.interactions.mark();
     this.networkTrace.start(action.id);
+    this.actionClock = Date.now();
     const snapshotBefore = this.lastSnapshot;
     // BEFORE SNAPSHOT : les contrôles visibles, la route, et la cible de l'étape suivante (déjà là ?).
     const controlsBefore = controlsOf(snapshotBefore);
@@ -4456,13 +4473,113 @@ export class FlowExplorer {
           `${exchange.method.toUpperCase()} ${pathOf(exchange.url)}${exchange.status !== undefined ? ` ${String(exchange.status)}` : ''}`,
       ),
       source,
+      ...(this.actionClock > 0
+        ? {
+            timing: {
+              observedAfterMs: Date.now() - this.actionClock,
+              durations: (network ?? []).map((exchange) => exchange.durationMs),
+              busy: before?.signals?.busy === true || this.lastSnapshot?.signals?.busy === true,
+            },
+          }
+        : {}),
     });
+  }
+
+  /**
+   * CONTRADICTIONS : ce que l'écran déclare (required) et ce que le code impose (Validators.required)
+   * pour un même contrôle. Un désaccord est enregistré et visible, jamais résolu en silence.
+   */
+  private claimRequiredFields(snapshot: UiSnapshot, route: string): void {
+    const knowledge = this.staticKnowledge;
+    if (!knowledge || !this.cognitive) return;
+    for (const element of snapshot.elements) {
+      if (!element.visible || !element.frameworkName) continue;
+      const validators = knowledge.validatorsFor(element.frameworkName, route);
+      if (validators.length === 0) continue;
+      const property = `${element.label ?? element.name}.required`;
+      this.cognitive.claim({
+        property,
+        source: 'RUNTIME',
+        value: element.required,
+        detail: `screen ${route}`,
+      });
+      this.cognitive.claim({
+        property,
+        source: 'STATIC_SOURCE',
+        value: validators.some(
+          (validator) => validator.kind === 'required' || validator.kind === 'requiredTrue',
+        ),
+        detail: element.frameworkName,
+      });
+    }
+  }
+
+  /** FAILURE UNDERSTANDING et couverture des envois, après chaque étape de flow. */
+  private understandStep(
+    step: FlowStep,
+    report: FlowStepReport,
+    exchanges: readonly NetworkExchange[],
+  ): void {
+    const cognitive = this.cognitive;
+    if (!cognitive) return;
+    const writes = exchanges.filter(
+      (exchange) => !['GET', 'HEAD', 'OPTIONS'].includes(exchange.method.toUpperCase()),
+    );
+    if (report.status === 'PASSED') {
+      const accepted = writes.some(
+        (exchange) => exchange.status !== undefined && exchange.status >= 200 && exchange.status < 300,
+      );
+      if (accepted && report.effect?.status === 'CONFIRMED')
+        cognitive.submissionSucceeded(`step ${String(report.index)}`);
+      return;
+    }
+    if (report.status !== 'FAILED' && report.status !== 'BLOCKED') return;
+    const failing = [...exchanges]
+      .reverse()
+      .find((exchange) => (exchange.status ?? 0) >= 400 || exchange.failure);
+    const reason = report.reason ?? '';
+    cognitive.understand(
+      {
+        ...(failing?.status !== undefined ? { status: failing.status } : {}),
+        ...(failing ? { request: `${failing.method.toUpperCase()} ${pathOf(failing.url)}` } : {}),
+        message: reason.slice(0, 160),
+        ...(!failing && /within \d+ ?ms|timeout/i.test(reason) && !/not found|not visible/i.test(reason)
+          ? { timedOut: true }
+          : {}),
+        ...(report.effect?.status === 'NO_EFFECT' || report.effect?.status === 'WRONG_EFFECT'
+          ? { effectMissing: true }
+          : {}),
+        ...(/not found|not visible|disabled|MISMATCH|not clicked/i.test(reason) ? { uiProblem: true } : {}),
+        ...(report.recovery
+          ? { workflowDivergence: true, divergence: report.recovery.divergence.category }
+          : {}),
+      },
+      `step ${String(report.index)} "${report.description}"`,
+    );
   }
 
   /** Les hypothèses vont dans la KnowledgeBase ; les vues de débogage dans reports/cognitive/. */
   private async persistCognitive(): Promise<void> {
     const cognitive = this.cognitive;
     if (!cognitive) return;
+    // ACTIVE LEARNING : les expériences SÛRES qui départageraient des hypothèses concurrentes.
+    cognitive.proposeExperiments(
+      new Set(
+        (this.lastSnapshot?.elements ?? [])
+          .filter((element) => element.visible && !element.disabled && element.role && element.name)
+          .map((element) => `${element.role}:${element.name.toLowerCase()}`),
+      ),
+      (action) =>
+        this.judgeRecovery(
+          {
+            role: action.role ?? (action.kind === 'check' ? 'checkbox' : 'button'),
+            name: action.label,
+            visible: true,
+            disabled: false,
+          },
+          action.kind === 'check' || action.kind === 'uncheck' ? 'check' : 'click',
+        ).risk,
+    );
     this.knowledge.saveCognitiveKnowledge(cognitive.export());
     if (!this.config.cognitive.writeArtifacts) return;
     const directory = path.join(this.config.output.reportsDir, 'cognitive');
@@ -5755,6 +5872,8 @@ export class FlowExplorer {
       this.attribution = { actionId: action.id };
       this.currentAction = { stateId: from.stateId, actionId: action.id };
       this.networkTrace.start(action.id);
+      this.actionClock = Date.now();
+      this.actionClock = Date.now();
       const result = await this.execute(page, from, action);
       this.actionsExecuted += 1;
       this.currentAction = undefined;

@@ -17,6 +17,7 @@ import type { AddressInfo } from 'node:net';
  *   inline  les champs sont déjà affichés (l'étape d'ouverture est devenue inutile)
  *   role=viewer  l'utilisateur n'a plus le droit de voir les informations de l'entreprise
  *   fail=1  le bouton existe, mais POST /api/company répond 500 (un vrai bogue)
+ *   strict=1  l'envoi reste désactivé tant que les champs ne sont pas remplis (strict=0 : toujours actif)
  */
 export interface WorkflowApp {
   url: string;
@@ -76,6 +77,14 @@ const PAGE = `<!doctype html>
     if (v === '4') show('question-box'); else show('opener');
   });
   $('registered').addEventListener('change', () => { if ($('registered').checked) show('opener'); else $('opener').classList.add('hidden'); });
+  // ?strict=1 : l'envoi reste désactivé tant que les deux champs ne sont pas remplis ; ?strict=0 : toujours actif.
+  if (params.has('strict')) {
+    const strict = params.get('strict') === '1';
+    const refresh = () => { $('submit').disabled = strict && !($('company-name').value && $('business-number').value); };
+    $('company-name').addEventListener('input', refresh);
+    $('business-number').addEventListener('input', refresh);
+    refresh();
+  }
   $('submit').addEventListener('click', async () => {
     const response = await fetch('/api/company' + (params.get('fail') === '1' ? '?fail=1' : ''), { method: 'POST', body: '{}' });
     $('status').textContent = response.ok ? 'Saved' : 'Error ' + response.status;

@@ -34,20 +34,20 @@ incertain, sûr par construction et vérifiable par le runtime.
 
 ## Lots
 
-| Lot | Contenu                                                                                    | État      |
-| --- | ------------------------------------------------------------------------------------------ | --------- |
-| A   | `Evidence`, `EvidenceStore`, `EvidenceGraph` (provenance, versions), import du code source | ✅ ce lot |
-| B   | `FunctionalModel`, `BusinessStateEngine`, `FunctionalState`                                | ✅ ce lot |
-| C   | `HypothesisEngine`, `CausalKnowledgeGraph` (corrélation ≠ causalité)                       | ✅ ce lot |
-| D   | `GoalGraph`, `PreconditionResolver`                                                        | suivant   |
-| E   | `PlanEngine`, `PlanRepairEngine`, `SemanticCheckpoint`                                     |           |
-| F   | `InformationGainEstimator`, `ActiveLearningEngine`, `ExperimentProposal` (SafetyPolicy)    |           |
-| G   | `ContradictionDetector`, `TemporalDependencyGraph`                                         |           |
-| H   | `InvariantDiscoveryEngine`, `FailureUnderstandingEngine`, `FailureKnowledge`               |           |
-| I   | `FunctionalCoverageGraph`, exploration guidée par la couverture                            |           |
-| J   | `QAReasoningEngine` (contexte, décision WHY / WHY NOT, chemin rapide / profond)            |           |
-| K   | `ReasoningAdvisor` (déterministe ; LLM optionnel, sans dépendance du cœur)                 |           |
-| L   | rapports, artefacts JSON, persistance, E2E (application V1 → V2)                           |           |
+| Lot | Contenu                                                                                    | État |
+| --- | ------------------------------------------------------------------------------------------ | ---- |
+| A   | `Evidence`, `EvidenceStore`, `EvidenceGraph` (provenance, versions), import du code source | ✅   |
+| B   | `FunctionalModel`, `BusinessStateEngine`, `FunctionalState`                                | ✅   |
+| C   | `HypothesisEngine`, `CausalKnowledgeGraph` (corrélation ≠ causalité)                       | ✅   |
+| D   | `GoalGraph`, `PreconditionResolver`                                                        | ✅   |
+| E   | `PlanEngine`, `PlanRepairEngine`, `SemanticCheckpoint`                                     | ✅   |
+| F   | `InformationGainEstimator`, `ActiveLearningEngine`, `ExperimentProposal` (SafetyPolicy)    | ✅   |
+| G   | `ContradictionDetector`, `TemporalDependencyGraph`                                         | ✅   |
+| H   | `InvariantDiscoveryEngine`, `FailureUnderstandingEngine`, `FailureKnowledge`               | ✅   |
+| I   | `FunctionalCoverageGraph`, exploration guidée par la couverture                            | ✅   |
+| J   | `QAReasoningEngine` (contexte, décision WHY / WHY NOT, chemin rapide / profond)            |      |
+| K   | `ReasoningAdvisor` (déterministe ; LLM optionnel, sans dépendance du cœur)                 |      |
+| L   | rapports, artefacts JSON, persistance, E2E (application V1 → V2)                           |      |
 
 ## Lot A — Preuves (`src/cognitive/evidence.ts`, `evidence-graph.ts`)
 
@@ -149,6 +149,63 @@ CREATE_REQUEST_DONE ← CREATE_REQUEST_READY ← COMPANY_INFORMATION_COMPLETE �
 Événements ajoutés : `GOAL_CREATED`, `GOAL_BLOCKED`, `PRECONDITION_DISCOVERED`,
 `PLAN_CREATED`, `PLAN_REPAIRED`, `SEMANTIC_CHECKPOINT_REACHED`. Vues : `goal-graph.json`,
 `plan.json` (plans par flow, réparation, préconditions, checkpoints).
+
+## Lot F — Apprentissage actif (`active-learning.ts`)
+
+Quand plusieurs causes expliquent un même effet (« EUR révèle le formulaire » / « l'entretien
+le révèle »), l'**InformationGainEstimator** mesure la baisse d'entropie attendue (bits) d'une
+expérience qui exécute une seule cause ; l'**ActiveLearningEngine** propose les expériences
+SÛRES (`ExperimentProposal` : hypothèses, actions, résultats attendus, gain, classe de sécurité,
+réversibilité, coût), les réversibles d'abord. Une expérience exécutée produit une preuve
+`TEST_RESULT` (`experiment: true`) : soutien si l'effet apparaît, contradiction sinon, puis
+l'expérience est annulée. **DELETE, PAY, APPROVE, SUBMIT, SEND, PUBLISH, droits… ne sont jamais
+expérimentés** : la SafetyPolicy refuse, la raison est gardée, rien n'est exécuté.
+
+## Lot G — Contradictions et temporalité (`contradictions.ts`)
+
+- **ContradictionDetector** : démonstration, runtime, code, OpenAPI, historique et règles sur
+  une même propriété. `SOURCE_RUNTIME_MISMATCH`, `OPENAPI_RUNTIME_MISMATCH`,
+  `HUMAN_RUNTIME_MISMATCH`, `HISTORY_RUNTIME_MISMATCH`, `BUSINESS_RULE_RUNTIME_MISMATCH`,
+  `CONTRACT_IMPLEMENTATION_MISMATCH`. Jamais résolue en silence : enregistrée, visible,
+  pénalité de confiance, investigation SAFE proposée. Branché : `required` déclaré par l'écran
+  vs `Validators.required` du code (graphe statique).
+- **TemporalDependencyGraph** : `BEFORE, AFTER, DURING, UNTIL, EVENTUALLY, TRIGGERS, WAITS_FOR,
+COMPLETES_BEFORE`. Un contrôle apparu après la fin d'une requête l'**attend** (latence
+  observée) : on n'apprend pas « visible immédiatement ».
+
+## Lot H — Invariants et échecs (`invariants-failures.ts`)
+
+- **InvariantDiscoveryEngine** : « l'envoi reste désactivé tant que les champs requis ne sont pas
+  valides », « choisir la devise ne vide pas le nom ». `CANDIDATE → OBSERVED_MULTIPLE_TIMES →
+SUPPORTED → CONFIRMED` (observations ET runs distincts, `cognitive.invariants.*`) ; un
+  contre-exemple sur un invariant soutenu → `VIOLATED` (avertissement avec sa provenance : runs,
+  observations, contre-exemple) ; autre version non revue → `STALE`. Une seule observation ne
+  fait jamais un invariant fort.
+- **FailureUnderstandingEngine** : `EXPECTED_VALIDATION, EXPECTED_BUSINESS_REJECTION, UI_FAILURE,
+FUNCTIONAL_FAILURE, API_FAILURE, TECHNICAL_FAILURE, CONTRACT_FAILURE, PERMISSION_FAILURE,
+DATA_FAILURE, TIMEOUT_FAILURE, WORKFLOW_FAILURE, UNKNOWN_FAILURE`, avec la chaîne
+  symptôme → divergence → cause probable → récupération connue → occurrences.
+- **FailureKnowledge** (KnowledgeBase) : « j'ai déjà vu cette classe de panne ici ».
+
+## Lot I — Couverture fonctionnelle (`functional-coverage.ts`)
+
+```
+Currency: ✓ EUR  ? CAD
+Company information: ✓ valid Business number  ? invalid Business number  ? missing Business number
+Submission: ✓ success  ? validation rejection  ? API unavailable
+```
+
+Dimensions : capacités, choix, champs (valide / invalide / manquant), envois, transitions,
+checkpoints, invariants, rôles, API. Beaucoup de pages visitées n'implique pas « numéro invalide
+testé » : les trous restent visibles, classés par importance métier, et `nextGoal()` donne la
+prochaine raison d'explorer (`COVERAGE`) — un chemin négatif important plutôt qu'un bouton
+jamais cliqué.
+
+Événements : `CONTRADICTION_DETECTED`, `ACTIVE_LEARNING_STARTED`, `EXPERIMENT_PROPOSED`,
+`EXPERIMENT_COMPLETED`, `INVARIANT_CANDIDATE_CREATED`, `INVARIANT_CONFIRMED`,
+`INVARIANT_VIOLATED`, `FAILURE_CLASSIFIED`, `FUNCTIONAL_COVERAGE_UPDATED`. Vues :
+`contradictions.json`, `functional-coverage.json`, `invariants.json`, `failures.json`,
+`temporal.json`, `experiments.json`.
 
 ## Observabilité
 
