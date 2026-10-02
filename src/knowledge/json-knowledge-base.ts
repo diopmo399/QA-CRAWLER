@@ -1,6 +1,7 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { KnowledgeConfig } from '../config/config.js';
+import type { CognitiveKnowledge } from '../cognitive/cognitive-engine.js';
 import { writeFileAtomic } from '../memory/atomic-write.js';
 import { normalizeText } from '../policies/keywords.js';
 import {
@@ -319,6 +320,14 @@ export class JsonKnowledgeBase implements KnowledgeBase {
 
   recoveryKnowledge(key: string): RecoveryKnowledge | undefined {
     return this.data.recoveries?.[key];
+  }
+
+  cognitiveKnowledge(): CognitiveKnowledge | undefined {
+    return this.data.cognitive;
+  }
+
+  saveCognitiveKnowledge(knowledge: CognitiveKnowledge): void {
+    this.data.cognitive = knowledge;
   }
 
   recordOutcomePatterns(label: string, patterns: readonly string[]): void {

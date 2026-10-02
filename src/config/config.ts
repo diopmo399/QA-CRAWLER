@@ -1389,6 +1389,31 @@ const replaySchema = z
   })
   .strict();
 
+/**
+ * QA COGNITIVE ENGINE : preuves, modèle fonctionnel, état métier, hypothèses et graphe
+ * causal. Observe et apprend à chaque action, sans rien exécuter lui-même ; une observation
+ * n'est jamais une vérité (HYPOTHESIS → SUPPORTED → RUNTIME_CONFIRMED).
+ */
+const cognitiveSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Les effets des actions deviennent des hypothèses causales (REVEALS, ENABLES, NAVIGATES_TO…). */
+    learnCausality: z.boolean().default(true),
+    /** L'état métier de chaque écran (phase, faits, champs manquants, envoi bloqué). */
+    businessState: z.boolean().default(true),
+    /** Observations runtime distinctes exigées (avec une source indépendante) pour RUNTIME_CONFIRMED. */
+    runtimeObservationsToConfirm: z.number().int().min(1).max(20).default(2),
+    /** reports/cognitive/*.json : knowledge-graph, causal-graph, hypotheses, functional-model, business-state. */
+    writeArtifacts: z.boolean().default(true),
+    budgets: z
+      .object({
+        maxHypotheses: z.number().int().min(10).max(10_000).default(500),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
 const functionalIntelligenceSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -1632,6 +1657,7 @@ export const scenarioSchema = z
       .default({}),
     recording: recordingSchema.default({}),
     replay: replaySchema.default({}),
+    cognitive: cognitiveSchema.default({}),
     credentials: credentialsSchema,
     browserInteractions: browserInteractionsSchema.default({}),
     forms: formsSchema.default({}),

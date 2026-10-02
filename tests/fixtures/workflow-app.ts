@@ -34,8 +34,8 @@ const PAGE = `<!doctype html>
 <section id="question-box" class="hidden"><label><input type="checkbox" id="registered"> The applicant is registered</label></section>
 <section id="opener" class="hidden"></section>
 <section id="company" class="hidden"><h2>Company</h2>
-  <label for="company-name">Company name</label><input id="company-name">
-  <label for="business-number">Business number</label><input id="business-number">
+  <label for="company-name">Company name</label><input id="company-name" required>
+  <label for="business-number">Business number</label><input id="business-number" required>
   <button type="button" id="submit">Submit</button><p id="status" role="status"></p>
 </section>
 <p id="notice"></p>

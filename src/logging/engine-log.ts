@@ -6,12 +6,14 @@ import type { RuleEvent } from '../rules/runtime-rule-verifier.js';
 import type { FunctionalEvent } from '../functional/functional-intelligence.js';
 import type { RecordingEventType } from '../recording/model.js';
 import type { HealingEvent } from '../workflow-healing/model.js';
+import type { CognitiveEvent } from '../cognitive/cognitive-engine.js';
 
 export const LOG_LEVELS = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 export type EngineEvent =
   | HealingEvent
+  | CognitiveEvent
   | 'AUTHENTICATED'
   | 'FLOW_STATE_DISCOVERED'
   | 'FLOW_STATE_REVISITED'
@@ -297,6 +299,14 @@ export class EngineEventLog {
           event.event === 'RULE_CANDIDATE_DISCOVERED' ||
           event.event === 'FIELD_DEPENDENCY_DISCOVERED';
         this.log(warn ? 'WARN' : detail ? 'DEBUG' : 'INFO', event.event, redactText(event.message));
+      },
+      onCognitive: (event) => {
+        const detail = event.event === 'EVIDENCE_ADDED' || event.event === 'HYPOTHESIS_SUPPORTED';
+        this.log(
+          event.event === 'HYPOTHESIS_CONTRADICTED' ? 'WARN' : detail ? 'DEBUG' : 'INFO',
+          event.event,
+          redactText(event.message),
+        );
       },
       onHealing: (event) => {
         const warn =

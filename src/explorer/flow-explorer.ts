@@ -52,6 +52,7 @@ import { screenControlsOf } from '../workflow-healing/screen.js';
 import { dependencyLinkEvidence, staticLinkEvidence } from '../workflow-healing/static-hints.js';
 import { goalProgressOf, predicateText } from '../workflow-healing/workflow-context.js';
 import { healWorkflow, type HealingPorts } from '../workflow-healing/workflow-healer.js';
+import { CognitiveEngine, type CognitiveEventRecord } from '../cognitive/cognitive-engine.js';
 
 /** Le chemin d'une URL (route observée au rejeu). */
 function pathOf(url: string): string {
@@ -291,6 +292,8 @@ export interface ExplorationListener {
   }): void;
   /** WORKFLOW SELF-HEALING : divergence analysée, objectif, plan, récupération, dérive. */
   onHealing?(event: HealingEventRecord): void;
+  /** QA COGNITIVE ENGINE : preuves, hypothèses, relations causales, état métier. */
+  onCognitive?(event: CognitiveEventRecord): void;
 }
 
 export interface FlowExplorerOptions {
@@ -428,6 +431,8 @@ export class FlowExplorer {
   private pendingLearning: { index: number; input: RecoveryInput; report: StepRecoveryReport } | undefined;
   /** Événements du self-healing, pour le journal du moteur et le rapport. */
   readonly healingEvents: HealingEventRecord[] = [];
+  /** QA COGNITIVE ENGINE : la couche de connaissance (observe et apprend ; n'exécute rien). */
+  readonly cognitive: CognitiveEngine | undefined;
   private readonly screenshots: ScreenshotService;
   private readonly authenticator: Authenticator;
   private readonly listener: ExplorationListener;
@@ -867,6 +872,19 @@ export class FlowExplorer {
       new URL(config.target.startAt, config.target.baseUrl).toString(),
     );
     this.listener = options.listener ?? {};
+    const cognitive = config.cognitive;
+    this.cognitive = cognitive.enabled
+      ? new CognitiveEngine({
+          runTag: this.runId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'run',
+          runtimeObservationsToConfirm: cognitive.runtimeObservationsToConfirm,
+          maxHypotheses: cognitive.budgets.maxHypotheses,
+          ...((this.knowledge.identity.commit ?? this.knowledge.identity.appVersion)
+            ? { version: this.knowledge.identity.commit ?? this.knowledge.identity.appVersion }
+            : {}),
+          emit: (record) => this.listener.onCognitive?.(record),
+        })
+      : undefined;
+    this.cognitive?.restore(this.knowledge.cognitiveKnowledge());
     this.memory = options.memory;
     this.startUrl = new URL(config.target.startAt, config.target.baseUrl).toString();
     this.currentUrl = this.startUrl;
@@ -1017,6 +1035,7 @@ export class FlowExplorer {
     await this.memory.save(this.graph);
     await this.coordinator.persist();
     await this.functional?.persist();
+    await this.persistCognitive();
     return this.outcome(stopReason);
   }
 
@@ -1188,6 +1207,8 @@ export class FlowExplorer {
     this.details.set(state.stateId, { actions, forms: snapshot.forms });
     this.currentUrl = snapshot.url;
     this.functional?.observeScreen(screenFactsOf(snapshot, state.route));
+    if (this.cognitive && this.config.cognitive.businessState)
+      this.cognitive.observeScreen(snapshot, state.route);
 
     const flow = this.graph.flowTo(state.stateId);
     // Les anomalies levées en atteignant cet état lui appartiennent.
@@ -1491,6 +1512,15 @@ export class FlowExplorer {
     await this.judge(edge, from, action, after, { crashed, beforeSignals });
     ids.push(...edge.issueIds.filter((id) => !ids.includes(id)));
     this.learn(edge, from, action, after);
+    this.observeCognitive(
+      action.type,
+      actionLabel(action),
+      snapshotBefore,
+      from.route,
+      after.route,
+      edge.network,
+      `exploration ${from.stateId}`,
+    );
     if (this.safety.changesData(action) && edge.network) {
       this.createdData.record({
         stateId: from.stateId,
@@ -2438,6 +2468,7 @@ export class FlowExplorer {
     this.flowRecordedKeys.clear();
     this.scenario = { values: [] };
     this.listener.onFlowStart?.(flow);
+    this.cognitive?.learnFlow(flow);
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
     const knownStates = new Set(this.graph.allNodes().map((node) => node.id));
     let stopReason: StopReason | undefined;
@@ -2825,6 +2856,7 @@ export class FlowExplorer {
     if (page) this.watchScripts(page);
     const remember = (knowledge: StaticKnowledge | undefined): StaticKnowledge | undefined => {
       this.staticKnowledge = knowledge;
+      if (knowledge) this.cognitive?.learnStatic(knowledge.graph);
       return knowledge;
     };
     if (!this.staticLoading)
@@ -4022,6 +4054,15 @@ export class FlowExplorer {
     }
     await this.captureErrorScreenshot(page, after, ids);
     this.listener.onTransition?.(edge, action);
+    this.observeCognitive(
+      step.kind,
+      step.target.name ?? step.target.value ?? actionLabel(action),
+      snapshotBefore,
+      before.route,
+      after.route,
+      traced.network,
+      `flow "${flow.name}"`,
+    );
 
     // « A-t-il FONCTIONNÉ ? » — EXECUTED ≠ CONFIRMED.
     if (verifying) {
@@ -4381,6 +4422,44 @@ export class FlowExplorer {
         recovery,
       }),
     };
+  }
+
+  /** Une action exécutée : ce qu'elle a changé devient des hypothèses causales (jamais des vérités). */
+  private observeCognitive(
+    kind: string,
+    label: string,
+    before: UiSnapshot | undefined,
+    beforeRoute: string,
+    afterRoute: string,
+    network: readonly NetworkExchange[] | undefined,
+    source: string,
+  ): void {
+    if (!this.cognitive || !this.config.cognitive.learnCausality) return;
+    this.cognitive.observeAction({
+      kind,
+      label,
+      ...(before ? { before } : {}),
+      ...(this.lastSnapshot ? { after: this.lastSnapshot } : {}),
+      beforeRoute,
+      afterRoute,
+      requests: (network ?? []).map(
+        (exchange) =>
+          `${exchange.method.toUpperCase()} ${pathOf(exchange.url)}${exchange.status !== undefined ? ` ${String(exchange.status)}` : ''}`,
+      ),
+      source,
+    });
+  }
+
+  /** Les hypothèses vont dans la KnowledgeBase ; les vues de débogage dans reports/cognitive/. */
+  private async persistCognitive(): Promise<void> {
+    const cognitive = this.cognitive;
+    if (!cognitive) return;
+    this.knowledge.saveCognitiveKnowledge(cognitive.export());
+    if (!this.config.cognitive.writeArtifacts) return;
+    const directory = path.join(this.config.output.reportsDir, 'cognitive');
+    await mkdir(directory, { recursive: true });
+    for (const [name, content] of Object.entries(cognitive.artifacts()))
+      await writeFile(path.join(directory, name), `${JSON.stringify(content, null, 2)}\n`, 'utf8');
   }
 
   /** (lu par une méthode : la valeur change pendant les étapes, pas seulement ici) */
