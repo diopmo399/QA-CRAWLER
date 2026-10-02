@@ -52,7 +52,13 @@ import { screenControlsOf } from '../workflow-healing/screen.js';
 import { dependencyLinkEvidence, staticLinkEvidence } from '../workflow-healing/static-hints.js';
 import { goalProgressOf, predicateText } from '../workflow-healing/workflow-context.js';
 import { healWorkflow, type HealingPorts } from '../workflow-healing/workflow-healer.js';
-import { CognitiveEngine, type CognitiveEventRecord } from '../cognitive/cognitive-engine.js';
+import {
+  CognitiveEngine,
+  type CognitiveEventRecord,
+  type CognitiveSummary,
+} from '../cognitive/cognitive-engine.js';
+import { DeterministicReasoningAdvisor, type ReasoningAdvisor } from '../cognitive/reasoning-advisor.js';
+import type { ScreenAction } from '../cognitive/reasoning-engine.js';
 
 /** Le chemin d'une URL (route observée au rejeu). */
 function pathOf(url: string): string {
@@ -310,6 +316,12 @@ export interface FlowExplorerOptions {
   /** `stateId::actionId` connus par la baseline (mode explore) : essayés après le nouveau terrain. */
   knownActions?: ReadonlySet<string>;
   /**
+   * Conseiller du raisonnement (QA Cognitive Engine). Par défaut : déterministe. Un conseiller LLM
+   * ne s'injecte QUE par programme (aucune dépendance de fournisseur dans le cœur) ; ses
+   * propositions sont validées, puis jugées par la SafetyPolicy, puis vérifiées au runtime.
+   */
+  reasoningAdvisor?: ReasoningAdvisor;
+  /**
    * La mémoire de travail contient-elle l'historique d'anciens runs ? (base de connaissances
    * fichier, ou préchargement de la persistance). false : l'AdaptiveScoring n'a aucun effet.
    */
@@ -361,6 +373,7 @@ export interface ExplorationOutcome {
   /** État des formulaires, dépendances entre champs, règles de l'application et leur couverture. */
   formRules?: FormRulesSummary;
   functional?: FunctionalSummary;
+  cognitive?: CognitiveSummary;
   /** Tentatives de récupération, branches abandonnées et circuits ouverts. */
   recovery: RecoverySummary;
   /** Actions qui modifient des données : exécutées, et le budget (safety.mutations). */
@@ -435,6 +448,10 @@ export class FlowExplorer {
   readonly cognitive: CognitiveEngine | undefined;
   /** Début de l'action en cours (chronologie : requêtes, chargement, apparition des contrôles). */
   private actionClock = 0;
+  /** QA REASONING : le signal de la décision raisonnée, par `stateId::actionId`. */
+  private readonly cognitiveSignals = new Map<string, { points: number; reason: string; decision: string }>();
+  private readonly reasonedStates = new Set<string>();
+  private advisor: ReasoningAdvisor | undefined;
   private readonly screenshots: ScreenshotService;
   private readonly authenticator: Authenticator;
   private readonly listener: ExplorationListener;
@@ -655,6 +672,15 @@ export class FlowExplorer {
                     });
                   },
                   functionalWeight: config.functionalIntelligence.testGoals.decisionWeight,
+                }
+              : {}),
+            ...(config.cognitive.enabled &&
+            config.cognitive.reasoning.enabled &&
+            config.cognitive.reasoning.influenceDecisionEngine
+              ? {
+                  cognitiveSignalOf: (action: DiscoveredAction, context: PageContext) =>
+                    this.cognitiveSignals.get(`${context.stateId}::${action.id}`),
+                  cognitiveWeight: config.cognitive.reasoning.decisionWeight,
                 }
               : {}),
           }),
@@ -881,6 +907,7 @@ export class FlowExplorer {
           runtimeObservationsToConfirm: cognitive.runtimeObservationsToConfirm,
           maxHypotheses: cognitive.budgets.maxHypotheses,
           invariantThresholds: cognitive.invariants,
+          budgets: cognitive.budgets,
           ...((this.knowledge.identity.commit ?? this.knowledge.identity.appVersion)
             ? { version: this.knowledge.identity.commit ?? this.knowledge.identity.appVersion }
             : {}),
@@ -888,6 +915,9 @@ export class FlowExplorer {
         })
       : undefined;
     this.cognitive?.restore(this.knowledge.cognitiveKnowledge());
+    this.advisor =
+      options.reasoningAdvisor ??
+      (cognitive.reasoning.advisor === 'deterministic' ? new DeterministicReasoningAdvisor() : undefined);
     if (this.cognitive)
       // Un invariant découvert, soutenu puis violé : un avertissement, avec sa provenance.
       this.cognitive.onInvariantViolated = (invariant) =>
@@ -1105,6 +1135,7 @@ export class FlowExplorer {
 
       // Le moteur ne voit que ce que le périmètre permet ; les autres actions restent inexplorées pour plus tard.
       const candidates = scope ? { ...current, actions: actionsInScope(scope, current.actions) } : current;
+      await this.reasonAboutState(candidates);
       const { decision, jumpTo } = await this.chooseNext(candidates, allowJump);
       this.listener.onDecision?.(current, decision);
 
@@ -4588,6 +4619,77 @@ export class FlowExplorer {
       await writeFile(path.join(directory, name), `${JSON.stringify(content, null, 2)}\n`, 'utf8');
   }
 
+  /**
+   * QA REASONING (une fois par écran) : la décision raisonnée devient un signal du moteur de
+   * décision existant. Le conseiller n'est consulté que si le raisonnement reste sans conclusion.
+   */
+  private async reasonAboutState(context: PageContext): Promise<void> {
+    const cognitive = this.cognitive;
+    const settings = this.config.cognitive.reasoning;
+    if (!cognitive || !settings.enabled || this.reasonedStates.has(context.stateId)) return;
+    this.reasonedStates.add(context.stateId);
+    const byKey = new Map<string, DiscoveredAction>();
+    const actions: ScreenAction[] = context.actions.map((action) => {
+      const knowledge = this.knowledge.getActionKnowledge(actionSignature(action));
+      byKey.set(action.id, action);
+      return {
+        key: action.id,
+        kind:
+          action.type === 'check' || action.type === 'uncheck'
+            ? 'check'
+            : action.type === 'fill'
+              ? 'fill'
+              : action.type === 'select'
+                ? 'select'
+                : 'click',
+        label: actionLabel(action),
+        ...(action.role ? { role: action.role } : {}),
+        safety: action.classification,
+        allowed: this.safety.evaluate(action).verdict !== 'BLOCK',
+        novel: knowledge === undefined,
+        ...(knowledge && knowledge.executionCount > 0
+          ? {
+              historicalSuccess: knowledge.successCount / knowledge.executionCount,
+              failures: knowledge.failureCount,
+            }
+          : {}),
+      };
+    });
+    const decision = cognitive.reason(actions);
+    if (decision.status === 'DECIDED' && decision.selectedAction)
+      this.cognitiveSignals.set(`${context.stateId}::${decision.selectedAction.key}`, {
+        points: Math.round(20 + 30 * Math.min(1, decision.utility?.total ?? decision.confidence)),
+        reason: `${decision.reason ?? 'GOAL'} — ${decision.why.join(', ')}`,
+        decision: decision.id,
+      });
+    else if (decision.status === 'INCONCLUSIVE') {
+      const verdict = await cognitive.consultAdvisor(
+        this.advisor,
+        cognitive.problemOf('INTENT_UNRESOLVED', actions),
+        {
+          exactLocatorFound: false,
+          planKnown: false,
+          confidence: decision.confidence,
+          maxCalls: settings.maxAdvisorCalls,
+        },
+      );
+      if (verdict?.status === 'ACCEPTED')
+        for (const proposed of verdict.actions) {
+          const match = actions.find(
+            (action) =>
+              action.label.toLowerCase() === proposed.label.toLowerCase() && action.kind === proposed.kind,
+          );
+          // Une proposition acceptée n'est qu'un signal : la SafetyPolicy jugera encore l'action.
+          if (match && byKey.has(match.key))
+            this.cognitiveSignals.set(`${context.stateId}::${match.key}`, {
+              points: 15,
+              reason: 'validated advisor proposal',
+              decision: decision.id,
+            });
+        }
+    }
+  }
+
   /** (lu par une méthode : la valeur change pendant les étapes, pas seulement ici) */
   private pendingRecovery(): typeof this.pendingLearning {
     return this.pendingLearning;
@@ -5693,6 +5795,7 @@ export class FlowExplorer {
       ...(this.config.staticAnalysis.enabled ? { staticAnalysis: this.staticSummary() } : {}),
       ...this.formRulesSummary(),
       ...(this.functional ? { functional: this.functional.summary() } : {}),
+      ...(this.cognitive ? { cognitive: this.cognitive.summary() } : {}),
     };
   }
 

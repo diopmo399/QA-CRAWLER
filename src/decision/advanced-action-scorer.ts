@@ -66,6 +66,15 @@ export interface ScoringSignals {
   ): { goalId: string; kind: 'progress' | 'coverage'; points: number; reason: string } | undefined;
   /** Poids de ce signal (functionalIntelligence.testGoals.decisionWeight). */
   functionalWeight?: number;
+  /**
+   * QA REASONING ENGINE : la décision raisonnée de cet écran (but, couverture, hypothèse…), en
+   * points d'utilité. Le moteur de décision reste unique ; la SafetyPolicy reste hors du score.
+   */
+  cognitiveSignalOf?(
+    action: DiscoveredAction,
+    context: PageContext,
+  ): { points: number; reason: string; decision: string } | undefined;
+  cognitiveWeight?: number;
 }
 
 /** Le score d'une action, avec sa décomposition. */
@@ -247,6 +256,16 @@ export class AdvancedActionScorer implements ActionScorer {
         points: Math.round((this.signals.functionalWeight ?? 1) * functional.points),
         code: functional.kind === 'progress' ? 'test-goal-progress' : 'functional-coverage',
         params: { reason: functional.reason },
+      });
+
+    // ---- raisonnement cognitif (une raison obligatoire : GOAL, COVERAGE, HYPOTHESIS…)
+    const cognitive = this.signals.cognitiveSignalOf?.(action, context);
+    if (cognitive && cognitive.points !== 0)
+      add({
+        factor: 'cognitive',
+        points: Math.round((this.signals.cognitiveWeight ?? 1) * cognitive.points),
+        code: 'cognitive-reasoning',
+        params: { reason: cognitive.reason, decision: cognitive.decision },
       });
 
     // ---- risque

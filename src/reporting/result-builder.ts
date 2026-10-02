@@ -99,6 +99,7 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     ...(outcome.staticAnalysis ? { staticAnalysis: outcome.staticAnalysis } : {}),
     ...(outcome.formRules ? { formRules: outcome.formRules } : {}),
     ...(outcome.functional ? { functional: outcome.functional } : {}),
+    ...(outcome.cognitive ? { cognitive: outcome.cognitive } : {}),
     settings: {
       exploration,
       goals,
