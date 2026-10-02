@@ -4,6 +4,8 @@
  * valeur saisie, ni en-tête ; seulement des signatures, des compteurs et des durées.
  */
 
+import type { CognitiveKnowledge } from '../cognitive/cognitive-engine.js';
+
 /** Version du format du fichier ; migrée au chargement quand elle change. */
 export const KNOWLEDGE_SCHEMA_VERSION = 1;
 
@@ -107,6 +109,8 @@ export interface KnowledgeData {
   hints: Record<string, LearnedHint>;
   /** WORKFLOW SELF-HEALING : les récupérations essayées (réussies ET échouées), par action enregistrée. */
   recoveries?: Record<string, RecoveryKnowledge>;
+  /** QA COGNITIVE ENGINE : hypothèses (causales, règles…) et les preuves qui les portent. */
+  cognitive?: CognitiveKnowledge;
 }
 
 /** Une action de récupération (jamais une saisie) : rôle + nom accessible. */
@@ -197,6 +201,9 @@ export interface KnowledgeBase {
   /** Une récupération essayée (réussie et confirmée par la suite du parcours, ou échouée). */
   recordRecovery(input: RecoveryInput): void;
   recoveryKnowledge(key: string): RecoveryKnowledge | undefined;
+  /** Les hypothèses d'un run précédent (jamais des vérités : elles sont réévaluées). */
+  cognitiveKnowledge(): CognitiveKnowledge | undefined;
+  saveCognitiveKnowledge(knowledge: CognitiveKnowledge): void;
   /** Toutes les transitions connues (lecture seule) : chemins historiques du Dry Run. */
   transitions(): readonly TransitionKnowledge[];
   load(): Promise<void>;
