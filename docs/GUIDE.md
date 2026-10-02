@@ -540,6 +540,8 @@ npm run qa -- record --url <adresse> --name <nom du flow> [-c <mission.yaml>] [-
 | `--reports-dir`, `--screenshots-dir`, `--baseline-dir` | dossiers de sortie                                 |
 | `--persistence <p>`, `--no-persistence`                | où enregistrer                                     |
 | `--memory`, `--no-memory`                              | utiliser ou ignorer la mémoire                     |
+| `--intelligence off\|assist\|hybrid`                   | conseiller IA optionnel (Copilot), défaut `off`    |
+| `--ai-provider <p>`, `--ai-model <m>`                  | fournisseur et modèle du conseiller IA             |
 | `--dotenv <fichier>`                                   | fichier de variables (défaut : `.env` s'il existe) |
 | `-q, --quiet`                                          | seulement le résumé                                |
 | `-h, --help`, `-v, --version`                          | aide, version                                      |

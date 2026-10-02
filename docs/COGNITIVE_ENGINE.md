@@ -246,6 +246,10 @@ n'existe que si l'intégrateur lui passe une fonction `complete(prompt)` (option
 `reasoningAdvisor`, jamais par la configuration). Consulté seulement si le déterministe ne
 suffit pas (ambiguïté, intention non résolue…), dans son budget (`maxAdvisorCalls`).
 
+Un **vrai** fournisseur (GitHub Copilot, par le SDK officiel) passe par l'`IntelligenceGateway`
+(`ai.*`, modes OFF / ASSIST / HYBRID, outils de lecture seule, audit, vérification au runtime) :
+voir [AI_INTELLIGENCE.md](AI_INTELLIGENCE.md).
+
 ```
 proposition → schéma (zod, strict) → preuves citées existantes → action existante à l'écran
 → SafetyPolicy → exécuteur déterministe → vérification de l'effet au runtime

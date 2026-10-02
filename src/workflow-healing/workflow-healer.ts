@@ -7,10 +7,13 @@ import type {
   Evidence,
   FunctionalGoal,
   HealingEvent,
+  RecoveryAction,
   RecoveryBudgets,
   RecoveryOutcome,
+  RecoveryPlan,
   ScreenControl,
   StepRecoveryReport,
+  WorkflowActionContext,
 } from './model.js';
 import { historicalRecoveries, recoveryKeyOf } from './recovery-memory.js';
 import { controlKey, planRecovery, reasonsOf, type SafetyJudgement } from './recovery-planner.js';
@@ -47,6 +50,30 @@ export interface HealingPorts {
   emit(event: HealingEvent, message: string): void;
   now(): string;
   version?: string;
+  /**
+   * Le CONSEILLER D'INTELLIGENCE (optionnel), consulté seulement quand la récupération
+   * déterministe a échoué. Il rend au plus UNE action déjà présente à l'écran, validée et
+   * autorisée par la SafetyPolicy ; elle est exécutée par le driver existant (qui la rejuge)
+   * et l'objectif est vérifié au runtime.
+   */
+  advise?(input: AdviceInput): Promise<AdvisedRecovery | undefined>;
+  /** Le runtime a confirmé (ou contredit) la proposition. */
+  adviceOutcome?(auditId: string, reached: boolean, detail: string): void;
+}
+
+export interface AdviceInput {
+  goal: FunctionalGoal;
+  original: { label: string; role?: string; kind: string };
+  context: WorkflowActionContext;
+  controls: ScreenControl[];
+  plan: RecoveryPlan;
+  outcome: RecoveryOutcome;
+  divergence: string;
+}
+
+export interface AdvisedRecovery {
+  action: RecoveryAction;
+  auditId: string;
 }
 
 export interface HealRequest {
@@ -246,6 +273,76 @@ export async function healWorkflow(
             at: ports.now(),
           });
       }
+  }
+  // CONSEILLER : seulement après un échec déterministe, une seule action, vérifiée au runtime.
+  if (
+    ports.advise &&
+    options.goalBasedRecovery &&
+    analysis.recoverable &&
+    goal.predicates.length > 0 &&
+    ['AMBIGUOUS_RECOVERY', 'NO_SAFE_RECOVERY', 'RECOVERY_BUDGET_EXHAUSTED'].includes(outcome.status)
+  ) {
+    const current = await ports.screen();
+    const advice = await ports.advise({
+      goal,
+      original,
+      context,
+      controls: current.controls,
+      plan,
+      outcome,
+      divergence: analysis.category,
+    });
+    if (advice) {
+      const signature = `${advice.action.kind} ${advice.action.role}:${advice.action.name.toLowerCase()}`;
+      const execution = await ports.driver.execute(advice.action);
+      const progress = execution.status === 'DONE' ? await ports.driver.progress(goal) : undefined;
+      const reached = progress?.status === 'REACHED';
+      const detail = reached
+        ? `goal ${goal.id} reached: ${progress.satisfied.join(', ')}`
+        : execution.status !== 'DONE'
+          ? `${execution.status}: ${execution.detail ?? ''}`
+          : `goal ${goal.id} not reached (missing: ${progress?.missing.join(', ') ?? '?'})`;
+      ports.adviceOutcome?.(advice.auditId, reached, detail);
+      const attempt = {
+        path: signature,
+        source: 'AI_PROPOSAL' as const,
+        result: reached
+          ? ('GOAL_REACHED' as const)
+          : execution.status === 'DONE'
+            ? ('NO_EFFECT' as const)
+            : ('FAILED' as const),
+        progress: progress?.progress ?? 0,
+        detail,
+      };
+      outcome = reached
+        ? {
+            ...outcome,
+            status: 'GOAL_REACHED',
+            path: [{ ...advice.action, part: 'REPLACEMENT' }],
+            pathSource: 'AI_PROPOSAL',
+            attempts: [...outcome.attempts, attempt],
+            progress,
+            actionsExecuted: outcome.actionsExecuted + 1,
+            confirmedCategory: 'TARGET_REPLACED',
+            reasons: [
+              ...outcome.reasons,
+              `AI proposal ${advice.auditId} (${signature}) reached ${goal.id} at runtime`,
+            ],
+          }
+        : {
+            ...outcome,
+            attempts: [...outcome.attempts, attempt],
+            actionsExecuted: outcome.actionsExecuted + (execution.status === 'DONE' ? 1 : 0),
+            reasons: [
+              ...outcome.reasons,
+              `AI proposal ${advice.auditId} (${signature}) contradicted at runtime: ${detail}`,
+            ],
+          };
+      ports.emit(
+        reached ? 'GOAL_REACHED' : 'GOAL_RECOVERY_FAILED',
+        `${goal.id}: AI proposal ${signature} — ${detail}`,
+      );
+    }
   }
   // Un champ : le chemin trouvé ne fait que le rendre disponible, l'étape d'origine le remplit ensuite.
   if (context.currentAction.field && context.currentAction.kind !== 'check')

@@ -2,6 +2,17 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Locator, Page } from 'playwright';
+import type { AiSummary } from '../ai/audit-trail.js';
+import {
+  IntelligenceContextBuilder,
+  toolContextOf,
+  type ContextSources,
+  type DiscoveredCandidate,
+} from '../ai/context-builder.js';
+import { createIntelligenceGateway } from '../ai/factory.js';
+import type { AiEventRecord, IntelligenceGateway } from '../ai/gateway.js';
+import type { IntelligenceProvider } from '../ai/provider.js';
+import type { AdviceInput, AdvisedRecovery } from '../workflow-healing/workflow-healer.js';
 import { IssueCollector } from '../anomaly/issue-collector.js';
 import { SeverityRules } from '../anomaly/severity-rules.js';
 import { AuthError, createAuthenticator, type Authenticator } from '../auth/authenticator.js';
@@ -58,7 +69,8 @@ import {
   type CognitiveSummary,
 } from '../cognitive/cognitive-engine.js';
 import { DeterministicReasoningAdvisor, type ReasoningAdvisor } from '../cognitive/reasoning-advisor.js';
-import type { ScreenAction } from '../cognitive/reasoning-engine.js';
+import type { QAReasoningDecision, ScreenAction } from '../cognitive/reasoning-engine.js';
+import type { FailureUnderstanding } from '../cognitive/invariants-failures.js';
 
 /** Le chemin d'une URL (route observée au rejeu). */
 function pathOf(url: string): string {
@@ -300,6 +312,8 @@ export interface ExplorationListener {
   onHealing?(event: HealingEventRecord): void;
   /** QA COGNITIVE ENGINE : preuves, hypothèses, relations causales, état métier. */
   onCognitive?(event: CognitiveEventRecord): void;
+  /** AI REASONING ADVISOR : déclencheurs, requêtes, propositions, validation, runtime. */
+  onIntelligence?(event: AiEventRecord): void;
 }
 
 export interface FlowExplorerOptions {
@@ -321,6 +335,11 @@ export interface FlowExplorerOptions {
    * propositions sont validées, puis jugées par la SafetyPolicy, puis vérifiées au runtime.
    */
   reasoningAdvisor?: ReasoningAdvisor;
+  /**
+   * Fournisseur d'intelligence injecté par programme (tests, intégrations) : remplace
+   * `ai.provider`. Sans effet en mode OFF (aucun fournisseur n'est alors créé).
+   */
+  intelligenceProvider?: IntelligenceProvider;
   /**
    * La mémoire de travail contient-elle l'historique d'anciens runs ? (base de connaissances
    * fichier, ou préchargement de la persistance). false : l'AdaptiveScoring n'a aucun effet.
@@ -374,6 +393,8 @@ export interface ExplorationOutcome {
   formRules?: FormRulesSummary;
   functional?: FunctionalSummary;
   cognitive?: CognitiveSummary;
+  /** AI REASONING ADVISOR : mode, fournisseur, appels, propositions, runtime (absent en OFF). */
+  ai?: AiSummary;
   /** Tentatives de récupération, branches abandonnées et circuits ouverts. */
   recovery: RecoverySummary;
   /** Actions qui modifient des données : exécutées, et le budget (safety.mutations). */
@@ -452,6 +473,11 @@ export class FlowExplorer {
   private readonly cognitiveSignals = new Map<string, { points: number; reason: string; decision: string }>();
   private readonly reasonedStates = new Set<string>();
   private advisor: ReasoningAdvisor | undefined;
+  /** AI REASONING ADVISOR (optionnel) : absent en mode OFF — aucun client, aucun appel. */
+  readonly ai: IntelligenceGateway | undefined;
+  private readonly aiContext: IntelligenceContextBuilder;
+  /** Propositions retenues en attente de vérification au runtime, par `stateId::actionId`. */
+  private readonly aiPending = new Map<string, { auditId: string; expected: string[] }>();
   private readonly screenshots: ScreenshotService;
   private readonly authenticator: Authenticator;
   private readonly listener: ExplorationListener;
@@ -918,6 +944,17 @@ export class FlowExplorer {
     this.advisor =
       options.reasoningAdvisor ??
       (cognitive.reasoning.advisor === 'deterministic' ? new DeterministicReasoningAdvisor() : undefined);
+    this.ai = createIntelligenceGateway(config.ai, {
+      env: options.env ?? process.env,
+      ...(options.intelligenceProvider ? { provider: options.intelligenceProvider } : {}),
+      emit: (record) => this.listener.onIntelligence?.(record),
+    });
+    this.aiContext = new IntelligenceContextBuilder({
+      maxActions: config.ai.context.maxActions,
+      maxEvidence: config.ai.context.maxEvidence,
+      maxHypotheses: config.ai.context.maxHypotheses,
+      maxPlanSteps: 10,
+    });
     if (this.cognitive)
       // Un invariant découvert, soutenu puis violé : un avertissement, avec sa provenance.
       this.cognitive.onInvariantViolated = (invariant) =>
@@ -1073,11 +1110,14 @@ export class FlowExplorer {
         )
         .catch(() => undefined);
       await browser.close();
+      // Le client d'intelligence (s'il a été créé) s'arrête avec le run, quoi qu'il arrive.
+      await this.ai?.close();
     }
     await this.memory.save(this.graph);
     await this.coordinator.persist();
     await this.functional?.persist();
     await this.persistCognitive();
+    await this.persistIntelligence();
     return this.outcome(stopReason);
   }
 
@@ -1565,6 +1605,13 @@ export class FlowExplorer {
       after.route,
       edge.network,
       `exploration ${from.stateId}`,
+    );
+    this.verifyAiProposal(
+      `${from.stateId}::${action.id}`,
+      snapshotBefore,
+      from.route,
+      after.route,
+      ids.length,
     );
     if (this.safety.changesData(action) && edge.network) {
       this.createdData.record({
@@ -2557,7 +2604,8 @@ export class FlowExplorer {
 
       const networkMark = this.flowNetwork.length;
       const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
-      this.understandStep(step, outcome.report, this.flowNetwork.slice(networkMark));
+      const understood = this.understandStep(step, outcome.report, this.flowNetwork.slice(networkMark));
+      if (understood?.class === 'UNKNOWN_FAILURE') await this.adviseFailure(page, outcome.report);
       page = outcome.page;
       context = outcome.context ?? context;
       report.steps.push(outcome.report);
@@ -4550,9 +4598,9 @@ export class FlowExplorer {
     step: FlowStep,
     report: FlowStepReport,
     exchanges: readonly NetworkExchange[],
-  ): void {
+  ): FailureUnderstanding | undefined {
     const cognitive = this.cognitive;
-    if (!cognitive) return;
+    if (!cognitive) return undefined;
     const writes = exchanges.filter(
       (exchange) => !['GET', 'HEAD', 'OPTIONS'].includes(exchange.method.toUpperCase()),
     );
@@ -4562,14 +4610,14 @@ export class FlowExplorer {
       );
       if (accepted && report.effect?.status === 'CONFIRMED')
         cognitive.submissionSucceeded(`step ${String(report.index)}`);
-      return;
+      return undefined;
     }
-    if (report.status !== 'FAILED' && report.status !== 'BLOCKED') return;
+    if (report.status !== 'FAILED' && report.status !== 'BLOCKED') return undefined;
     const failing = [...exchanges]
       .reverse()
       .find((exchange) => (exchange.status ?? 0) >= 400 || exchange.failure);
     const reason = report.reason ?? '';
-    cognitive.understand(
+    return cognitive.understand(
       {
         ...(failing?.status !== undefined ? { status: failing.status } : {}),
         ...(failing ? { request: `${failing.method.toUpperCase()} ${pathOf(failing.url)}` } : {}),
@@ -4688,6 +4736,299 @@ export class FlowExplorer {
             });
         }
     }
+    // AI REASONING ADVISOR : seulement si la situation l'exige (FAST PATH sinon).
+    if (this.ai) await this.adviseExploration(context, actions, byKey, decision);
+  }
+
+  /**
+   * AI REASONING ADVISOR, en exploration : appelé seulement quand le raisonnement déterministe
+   * est faible, ambigu ou sans conclusion. ASSIST mesure (shadow) ; HYBRID peut donner à une
+   * proposition VALIDÉE et SÛRE le signal du moteur de décision — qui reste celui qui choisit,
+   * après la SafetyPolicy. Le résultat est vérifié au runtime après l'exécution.
+   */
+  private async adviseExploration(
+    context: PageContext,
+    actions: ScreenAction[],
+    byKey: ReadonlyMap<string, DiscoveredAction>,
+    decision: QAReasoningDecision,
+  ): Promise<void> {
+    const ai = this.ai;
+    const cognitive = this.cognitive;
+    if (!ai || !cognitive) return;
+    const selected = decision.status === 'DECIDED' ? decision.selectedAction : undefined;
+    const confidence = selected ? decision.confidence : 0;
+    const sources = cognitive.intelligenceSources();
+    const trigger = ai.evaluate({
+      deterministicConfidence: confidence,
+      inconclusive: decision.status !== 'DECIDED',
+      ambiguousTarget: (decision.utility?.ambiguity ?? 0) > 0,
+      unresolvedHypothesis: decision.assumptions.length > 0,
+      contradiction: decision.status !== 'DECIDED' && sources.contradictions.length > 0,
+      evidence: decision.evidence,
+    });
+    if (!trigger.shouldInvoke || !trigger.reason) return;
+    const candidates: DiscoveredCandidate[] = actions.map((action) => ({
+      key: action.key,
+      kind: action.kind,
+      ...(action.role ? { role: action.role } : {}),
+      name: action.label,
+      safety: action.safety,
+      allowed: action.allowed,
+      ...(selected?.key === action.key ? { score: confidence } : {}),
+    }));
+    const full: ContextSources = {
+      ...sources,
+      candidates,
+      deterministic: { ...(selected ? { key: selected.key } : {}), confidence, status: decision.status },
+    };
+    const built = this.aiContext.build(trigger.reason, full);
+    const selectedId = selected ? built.idOf(selected.key) : undefined;
+    const result = await ai.consult({
+      context: 'EXPLORATION',
+      request: built.request,
+      scope: { action: context.stateId },
+      deterministic: { ...(selectedId ? { actionId: selectedId } : {}), confidence },
+      safety: (id) => {
+        const candidate = built.candidateOf(id);
+        const action = candidate ? byKey.get(candidate.key) : undefined;
+        if (!action) return { allowed: false, classification: 'UNKNOWN', reason: 'not a discovered action' };
+        const verdict = this.safety.evaluate(action);
+        return {
+          allowed: verdict.verdict !== 'BLOCK' && action.classification === 'SAFE',
+          classification: action.classification,
+          reason: verdict.reason,
+        };
+      },
+      knownEvidence: (id) => cognitive.evidence.get(id) !== undefined,
+      ...(this.config.ai.copilot.tools ? { tools: toolContextOf(built, full) } : {}),
+    });
+    const proposal = result.validation?.valid ? result.validation.proposal : undefined;
+    if (proposal?.hypothesis)
+      cognitive.recordAiHypothesis(
+        proposal.hypothesis.statement,
+        proposal.hypothesis.evidenceIds,
+        result.record.id,
+      );
+    if (!result.decision.accepted || !result.decision.actionId) return;
+    const key = built.keyOf(result.decision.actionId);
+    if (!key || !byKey.has(key)) return;
+    if (selected) this.cognitiveSignals.delete(`${context.stateId}::${selected.key}`);
+    this.cognitiveSignals.set(`${context.stateId}::${key}`, {
+      points: 60,
+      reason: `AI proposal ${result.record.id} (validated; SafetyPolicy ${result.decision.safety?.classification ?? 'SAFE'})`,
+      decision: result.record.id,
+    });
+    this.aiPending.set(`${context.stateId}::${key}`, {
+      auditId: result.record.id,
+      expected: (proposal?.expectedEffects ?? []).map((effect) => `${effect.kind}:${effect.value}`),
+    });
+  }
+
+  /**
+   * RUNTIME TRUTH : une proposition retenue et exécutée a-t-elle produit l'effet attendu ?
+   * (contrôles ou champs apparus, route) — sinon AI_RUNTIME_CONTRADICTED, et rien n'est appris.
+   */
+  private verifyAiProposal(
+    key: string,
+    before: UiSnapshot | undefined,
+    beforeRoute: string,
+    afterRoute: string,
+    newIssues: number,
+  ): void {
+    const pending = this.aiPending.get(key);
+    if (!pending || !this.ai) return;
+    this.aiPending.delete(key);
+    const visible = (snapshot: UiSnapshot | undefined): Set<string> =>
+      new Set(
+        (snapshot?.elements ?? [])
+          .filter((element) => element.visible && !element.disabled && element.role && element.name)
+          .map((element) => `${element.role}:${normalizeControl(element.name)}`),
+      );
+    const prior = visible(before);
+    const appeared = [...visible(this.lastSnapshot)].filter((entry) => !prior.has(entry));
+    const routeChanged = afterRoute !== beforeRoute;
+    const checkable = pending.expected.filter((effect) =>
+      /^(VISIBLE_CONTROL|VISIBLE_FIELD|ROUTE):/.test(effect),
+    );
+    const matched = checkable.filter((effect) => {
+      const [kind, ...rest] = effect.split(':');
+      const value = normalizeControl(rest.join(':'));
+      if (kind === 'ROUTE') return afterRoute.toLowerCase().includes(value);
+      return appeared.some(
+        (entry) => entry === value || entry.endsWith(`:${value}`) || entry.includes(value),
+      );
+    });
+    const confirmed =
+      newIssues === 0 && (checkable.length > 0 ? matched.length > 0 : appeared.length > 0 || routeChanged);
+    this.ai.recordRuntime(
+      pending.auditId,
+      confirmed,
+      confirmed
+        ? `observed: ${(matched.length > 0 ? matched : appeared.slice(0, 5)).join(', ') || afterRoute}`
+        : `expected ${checkable.join(', ') || 'a visible effect'}; observed ${appeared.slice(0, 5).join(', ') || 'no new control'}${newIssues > 0 ? `, ${String(newIssues)} new issue(s)` : ''}`,
+    );
+  }
+
+  /**
+   * AI REASONING ADVISOR, après une divergence que la récupération déterministe n'a pas su
+   * résoudre : au plus UNE action, prise parmi les contrôles présents, jugée par la SafetyPolicy
+   * (judgeRecovery : seul SAFE passe). Le healer l'exécute par le driver existant et vérifie
+   * l'objectif ; ASSIST ne rend jamais d'action (mesure seulement).
+   */
+  private async adviseRecovery(input: AdviceInput): Promise<AdvisedRecovery | undefined> {
+    const ai = this.ai;
+    if (!ai) return undefined;
+    const trigger = ai.evaluate({
+      deterministicConfidence: 0,
+      recoveryExhausted: true,
+      flowDivergence: true,
+      ambiguousTarget: input.outcome.status === 'AMBIGUOUS_RECOVERY',
+    });
+    if (!trigger.shouldInvoke || !trigger.reason) return undefined;
+    const candidates: DiscoveredCandidate[] = input.controls
+      .filter((control) => control.visible && !control.field && control.role && control.name)
+      .map((control) => {
+        const kind = control.role === 'checkbox' || control.role === 'radio' ? 'check' : 'click';
+        const judged = this.judgeRecovery(control, kind);
+        const planned = input.plan.candidates.find((candidate) =>
+          candidate.signature.endsWith(`${control.role}:${control.name.toLowerCase()}`),
+        );
+        return {
+          key: `${control.role}:${control.name}`,
+          kind,
+          role: control.role,
+          name: control.name,
+          safety: judged.risk,
+          allowed: judged.allowed,
+          ...(control.disabled ? { disabled: true } : {}),
+          ...(planned ? { score: planned.confidence } : {}),
+        };
+      });
+    const base = this.cognitive?.intelligenceSources();
+    const context = input.context;
+    const sources: ContextSources = {
+      ...(base ?? { evidence: [], hypotheses: [], contradictions: [], coverageGaps: [] }),
+      goal: { id: input.goal.id, conditions: input.goal.predicates.map(predicateText) },
+      workflow: {
+        previous: context.previousActions.map((action) => `${action.kind} ${action.label}`),
+        next: context.nextActions.map((action) => `${action.kind} ${action.label}`),
+        requiredFields: context.requiredFutureFields.map((action) => action.label),
+        ...(context.businessIntent ? { intent: context.businessIntent.name } : {}),
+      },
+      candidates,
+      deterministic: { confidence: 0, status: `${input.outcome.status} (${input.divergence})` },
+    };
+    const built = this.aiContext.build(trigger.reason, sources);
+    const result = await ai.consult({
+      context: 'RECOVERY',
+      request: built.request,
+      scope: { divergence: `${input.goal.id}|${input.original.label}` },
+      deterministic: { confidence: 0 },
+      safety: (id) => {
+        const candidate = built.candidateOf(id);
+        if (!candidate?.role)
+          return { allowed: false, classification: 'UNKNOWN', reason: 'not a control on screen' };
+        const judged = this.judgeRecovery(
+          {
+            role: candidate.role,
+            name: candidate.name,
+            visible: true,
+            disabled: candidate.disabled ?? false,
+          },
+          candidate.kind === 'check' ? 'check' : 'click',
+        );
+        return { allowed: judged.allowed, classification: judged.risk, reason: judged.reason };
+      },
+      knownEvidence: (id) => this.cognitive?.evidence.get(id) !== undefined,
+      ...(this.config.ai.copilot.tools ? { tools: toolContextOf(built, sources) } : {}),
+    });
+    const proposal = result.validation?.valid ? result.validation.proposal : undefined;
+    if (proposal?.hypothesis)
+      this.cognitive?.recordAiHypothesis(
+        proposal.hypothesis.statement,
+        proposal.hypothesis.evidenceIds,
+        result.record.id,
+      );
+    if (!result.decision.accepted || !result.decision.actionId) return undefined;
+    const chosen = built.candidateOf(result.decision.actionId);
+    if (!chosen?.role) return undefined;
+    return {
+      action: { kind: chosen.kind === 'check' ? 'check' : 'click', role: chosen.role, name: chosen.name },
+      auditId: result.record.id,
+    };
+  }
+
+  /**
+   * AI REASONING ADVISOR, pour une erreur métier que le FailureUnderstanding ne sait pas classer :
+   * une catégorie probable, un sens métier possible, une investigation SÛRE — consignés dans
+   * l'audit (et au plus une hypothèse). Le runtime et les oracles restent seuls juges.
+   */
+  private async adviseFailure(page: Page, report: FlowStepReport): Promise<void> {
+    const ai = this.ai;
+    const cognitive = this.cognitive;
+    if (!ai || !cognitive) return;
+    const trigger = ai.evaluate({ deterministicConfidence: 0, unknownBusinessError: true });
+    if (!trigger.shouldInvoke || !trigger.reason) return;
+    const snapshot = await this.observer.observe(page).catch(() => undefined);
+    const controls = snapshot ? screenControlsOf(snapshot) : [];
+    const sources: ContextSources = {
+      ...cognitive.intelligenceSources(),
+      candidates: controls
+        .filter((control) => control.visible && !control.field && control.role && control.name)
+        .map((control) => {
+          const kind = control.role === 'checkbox' || control.role === 'radio' ? 'check' : 'click';
+          const judged = this.judgeRecovery(control, kind);
+          return {
+            key: `${control.role}:${control.name}`,
+            kind,
+            role: control.role,
+            name: control.name,
+            safety: judged.risk,
+            allowed: judged.allowed,
+          };
+        }),
+      failure: {
+        step: `step ${String(report.index)} "${report.description}"`.slice(0, 160),
+        symptom: (report.reason ?? 'unknown').slice(0, 200),
+        observed: (report.effect?.observed ?? []).slice(0, 5),
+      },
+    };
+    const built = this.aiContext.build(trigger.reason, sources);
+    const result = await ai.consult({
+      context: 'FAILURE',
+      request: built.request,
+      scope: { divergence: `failure|${String(report.index)}` },
+      // Une analyse : aucune action n'est jamais exécutée sur sa foi.
+      deterministic: { confidence: 1 },
+      safety: () => ({
+        allowed: false,
+        classification: 'ADVISORY',
+        reason: 'failure analysis is advisory only',
+      }),
+      knownEvidence: (id) => cognitive.evidence.get(id) !== undefined,
+    });
+    const proposal = result.validation?.valid ? result.validation.proposal : undefined;
+    if (proposal?.hypothesis)
+      cognitive.recordAiHypothesis(
+        proposal.hypothesis.statement,
+        proposal.hypothesis.evidenceIds,
+        result.record.id,
+      );
+  }
+
+  /** L'audit de l'intelligence : reports/ai/intelligence.json (résumé, décisions, mesures). */
+  private async persistIntelligence(): Promise<void> {
+    if (!this.ai) return;
+    for (const pending of this.aiPending.values()) this.ai.markNotExecuted(pending.auditId);
+    this.aiPending.clear();
+    if (!this.config.ai.audit.enabled) return;
+    const directory = path.join(this.config.output.reportsDir, 'ai');
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      path.join(directory, 'intelligence.json'),
+      `${JSON.stringify(this.ai.summary(), null, 2)}\n`,
+      'utf8',
+    );
   }
 
   /** (lu par une méthode : la valeur change pendant les étapes, pas seulement ici) */
@@ -4739,6 +5080,14 @@ export class FlowExplorer {
       },
       now: () => new Date().toISOString(),
       ...(version ? { version } : {}),
+      ...(this.ai
+        ? {
+            advise: (input: AdviceInput) => this.adviseRecovery(input),
+            adviceOutcome: (auditId: string, reached: boolean, detail: string) => {
+              this.ai?.recordRuntime(auditId, reached, detail);
+            },
+          }
+        : {}),
     };
   }
 
@@ -5796,6 +6145,7 @@ export class FlowExplorer {
       ...this.formRulesSummary(),
       ...(this.functional ? { functional: this.functional.summary() } : {}),
       ...(this.cognitive ? { cognitive: this.cognitive.summary() } : {}),
+      ...(this.ai ? { ai: this.ai.summary() } : {}),
     };
   }
 

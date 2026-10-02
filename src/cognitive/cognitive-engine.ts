@@ -598,6 +598,72 @@ export class CognitiveEngine {
     };
   }
 
+  /**
+   * Ce que le conseiller d'intelligence peut recevoir (après sélection et nettoyage) : la
+   * mission, le but, l'état métier, les preuves, les hypothèses, les contradictions, les trous
+   * de couverture. Des lectures : rien n'est copié dans une deuxième représentation.
+   */
+  intelligenceSources(): {
+    mission?: string;
+    goal?: { id: string; conditions: string[] };
+    situation?: BusinessSituation;
+    functionalState?: string;
+    evidence: readonly Evidence[];
+    hypotheses: readonly Hypothesis[];
+    contradictions: readonly KnowledgeContradiction[];
+    coverageGaps: string[];
+  } {
+    const graph = this.goalGraph();
+    const preconditions = graph.root
+      ? resolvePreconditions(graph, graph.root, this.conditionContext, this.options.budgets?.maxPlanningDepth)
+      : undefined;
+    return {
+      ...(this.model.mission ? { mission: this.model.mission.id } : {}),
+      ...(graph.root
+        ? {
+            goal: {
+              id: graph.root,
+              conditions: preconditions?.missingPreconditions.map((node) => node.id) ?? [],
+            },
+          }
+        : {}),
+      ...(this.situation ? { situation: this.situation } : {}),
+      ...(this.lastSituation ? { functionalState: this.lastSituation } : {}),
+      evidence: this.evidence.all(),
+      hypotheses: this.hypotheses.all(),
+      contradictions: this.contradictions.all(),
+      coverageGaps: this.coverageGraph()
+        .gaps()
+        .slice(0, 10)
+        .map((gap) => gap.item.label),
+    };
+  }
+
+  /**
+   * Une hypothèse PROPOSÉE par le conseiller d'intelligence : au plus une hypothèse (preuve
+   * LLM_PROPOSAL, plafonnée), avec son origine — jamais une connaissance confirmée. Seules des
+   * observations runtime pourront la faire progresser, selon les règles habituelles.
+   */
+  recordAiHypothesis(statement: string, evidenceIds: readonly string[], auditId: string): Hypothesis {
+    const proof = this.addEvidence({
+      type: 'LLM_PROPOSAL',
+      source: `AI proposal ${auditId}`,
+      timestamp: this.now(),
+      confidence: 0.5,
+      details: { origin: 'AI_PROPOSAL', auditId, evidenceIds: [...evidenceIds] },
+    });
+    const hypothesis = this.hypotheses.propose(
+      { kind: 'BUSINESS_RULE', subject: 'ai-advisor', relation: 'CLAIMS', object: statement.slice(0, 300) },
+      proof,
+      { testable: false, reason: 'AI_PROPOSED_HYPOTHESIS: to be confirmed at runtime' },
+    );
+    this.emit(
+      'HYPOTHESIS_CREATED',
+      `${hypothesis.id} AI_PROPOSED_HYPOTHESIS (${auditId}): ${statement.slice(0, 120)}`,
+    );
+    return hypothesis;
+  }
+
   /** L'action décidée a été exécutée : son résultat confirme (ou non) la décision et, pour un test d'hypothèse, l'hypothèse. */
   private afterDecidedAction(label: string, appeared: readonly string[]): void {
     const decision = this.lastDecision;

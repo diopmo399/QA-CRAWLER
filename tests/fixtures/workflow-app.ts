@@ -14,6 +14,9 @@ import type { AddressInfo } from 'node:net';
  *   v4   v2 + v3 + une nouvelle question obligatoire (SAFE) avant l'onglet « Company »
  *   v5   la section entreprise n'existe plus (régression ou flow obsolète)
  *   amb  deux contrôles aussi plausibles : « Company profile » et « Company details »
+ *   ai   le bouton devient un onglet « Enterprise Details » ; un lien « Company Profile » (trompeur :
+ *        il n'ouvre qu'une fiche, sans les champs) et un bouton qui écrit (« Remove company information »)
+ *        sont aussi à l'écran
  *   inline  les champs sont déjà affichés (l'étape d'ouverture est devenue inutile)
  *   role=viewer  l'utilisateur n'a plus le droit de voir les informations de l'entreprise
  *   fail=1  le bouton existe, mais POST /api/company répond 500 (un vrai bogue)
@@ -65,6 +68,12 @@ const PAGE = `<!doctype html>
     opener.innerHTML = '<div role="tablist"><button role="tab" aria-selected="true" id="tab-a">Applicant</button>' +
       '<button role="tab" aria-selected="false" id="open">Company</button></div>' +
       (v === '3' ? '<button type="button" id="remove">Remove company information</button>' : '');
+  } else if (v === 'ai') {
+    opener.innerHTML = '<div role="tablist"><button role="tab" aria-selected="true" id="tab-a">Applicant</button>' +
+      '<button role="tab" aria-selected="false" id="open">Enterprise Details</button></div>' +
+      '<a href="#profile" id="profile">Company Profile</a><p id="profile-box" class="hidden">Profile: read-only summary</p>' +
+      '<button type="button" id="remove">Remove company information</button>';
+    $('profile').addEventListener('click', (event) => { event.preventDefault(); show('profile-box'); });
   } else if (v === 'amb') {
     opener.innerHTML = '<button type="button" id="open">Company profile</button><button type="button" id="open2">Company details</button>';
   }

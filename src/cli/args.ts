@@ -1,6 +1,11 @@
 import { parseArgs } from 'node:util';
 import { MISSION_MODES, type MissionMode } from '../config/config.js';
-import { PERSISTENCE_CHOICES, type PersistenceChoice } from '../config/config-loader.js';
+import {
+  INTELLIGENCE_CHOICES,
+  PERSISTENCE_CHOICES,
+  type IntelligenceChoice,
+  type PersistenceChoice,
+} from '../config/config-loader.js';
 
 export interface CliArgs {
   /** learn / verify / explore ; absent : mission.mode. */
@@ -17,6 +22,9 @@ export interface CliArgs {
   screenshotsDir?: string;
   persistence?: PersistenceChoice;
   memory?: boolean;
+  intelligence?: IntelligenceChoice;
+  aiProvider?: string;
+  aiModel?: string;
   quiet: boolean;
 }
 
@@ -62,6 +70,11 @@ Options:
                               sqlserver, sqlite (also: QA_PERSISTENCE_*, QA_DB_TYPE)
       --no-persistence        Store nothing (the default without a persistence block)
       --memory / --no-memory  Use / ignore the knowledge of previous runs (QA_MEMORY_ENABLED)
+      --intelligence <m>      Optional AI reasoning advisor: off (default), assist (shadow:
+                              analyze and measure, never changes a decision), hybrid
+                              (validated proposals may be used; SafetyPolicy still decides)
+      --ai-provider <p>       copilot (GitHub Copilot SDK) or deterministic (no network)
+      --ai-model <model>      Copilot model (default: auto; checked against the SDK list)
       --dotenv <file>         Environment variables to load (default: .env if present;
                               the terminal's variables win; never shown)
   -q, --quiet                 Only print the summary
@@ -83,6 +96,12 @@ Environment:
   QA_DB_HOST, QA_DB_PORT, QA_DB_NAME, QA_DB_USERNAME, QA_DB_PASSWORD
                              Database connection (credentials only ever from the environment)
   QA_MEMORY_ENABLED          true | false (overrides memory.enabled)
+  QA_INTELLIGENCE_ENABLED    true | false (overrides ai.enabled)
+  QA_INTELLIGENCE_MODE       off | assist | hybrid
+  QA_INTELLIGENCE_PROVIDER   copilot | deterministic
+  QA_COPILOT_MODEL, QA_COPILOT_REASONING_EFFORT
+                             Copilot model and reasoning effort (auth: the signed-in user,
+                             or the variable named by ai.copilot.tokenEnv; never logged)
   PLAYWRIGHT_BROWSERS_PATH   Where Playwright finds Chromium
 `;
 
@@ -113,6 +132,9 @@ export function parseCliArgs(argv: string[]): CliArgs {
         'no-persistence': { type: 'boolean', default: false },
         memory: { type: 'boolean' },
         'no-memory': { type: 'boolean', default: false },
+        intelligence: { type: 'string' },
+        'ai-provider': { type: 'string' },
+        'ai-model': { type: 'string' },
         quiet: { type: 'boolean', short: 'q', default: false },
         help: { type: 'boolean', short: 'h', default: false },
         version: { type: 'boolean', short: 'v', default: false },
@@ -144,6 +166,12 @@ export function parseCliArgs(argv: string[]): CliArgs {
     throw new UsageError(`--persistence must be one of ${PERSISTENCE_CHOICES.join(', ')}.`);
   if (values['no-memory'] && values.memory) throw new UsageError('Use either --memory or --no-memory.');
   const memory = values['no-memory'] ? false : values.memory;
+  const intelligence = values.intelligence?.toLowerCase();
+  if (intelligence !== undefined && !(INTELLIGENCE_CHOICES as readonly string[]).includes(intelligence))
+    throw new UsageError(`--intelligence must be one of ${INTELLIGENCE_CHOICES.join(', ')}.`);
+  const aiProvider = values['ai-provider']?.toLowerCase();
+  if (aiProvider !== undefined && !['copilot', 'deterministic'].includes(aiProvider))
+    throw new UsageError('--ai-provider must be copilot or deterministic.');
   return {
     ...(mode !== undefined ? { mode } : {}),
     ...(values['baseline-dir'] !== undefined ? { baselineDir: values['baseline-dir'] } : {}),
@@ -159,5 +187,8 @@ export function parseCliArgs(argv: string[]): CliArgs {
     ...(values['screenshots-dir'] !== undefined ? { screenshotsDir: values['screenshots-dir'] } : {}),
     ...(persistenceValue !== undefined ? { persistence: persistenceValue as PersistenceChoice } : {}),
     ...(memory !== undefined ? { memory } : {}),
+    ...(intelligence !== undefined ? { intelligence: intelligence as IntelligenceChoice } : {}),
+    ...(aiProvider !== undefined ? { aiProvider } : {}),
+    ...(values['ai-model'] !== undefined ? { aiModel: values['ai-model'] } : {}),
   };
 }

@@ -30,7 +30,25 @@ export interface ConfigOverrides {
   persistence?: PersistenceChoice;
   /** --memory / --no-memory. */
   memory?: boolean;
+  /** --intelligence <off|assist|hybrid> (QA_INTELLIGENCE_MODE). */
+  intelligence?: IntelligenceChoice;
+  /** --ai-provider <copilot|deterministic> (QA_INTELLIGENCE_PROVIDER). */
+  aiProvider?: string;
+  /** --ai-model <model> (QA_COPILOT_MODEL). */
+  aiModel?: string;
 }
+
+export const INTELLIGENCE_CHOICES = ['off', 'assist', 'hybrid'] as const;
+export type IntelligenceChoice = (typeof INTELLIGENCE_CHOICES)[number];
+
+/** L'intelligence optionnelle (ai.*) : seulement des réglages, jamais un jeton (ai.copilot.tokenEnv nomme la variable). */
+export const INTELLIGENCE_ENV = {
+  enabled: 'QA_INTELLIGENCE_ENABLED',
+  mode: 'QA_INTELLIGENCE_MODE',
+  provider: 'QA_INTELLIGENCE_PROVIDER',
+  model: 'QA_COPILOT_MODEL',
+  reasoningEffort: 'QA_COPILOT_REASONING_EFFORT',
+} as const;
 
 export const PERSISTENCE_CHOICES = [
   'off',
@@ -284,7 +302,48 @@ function applyOverrides(
   if (overrides.reportsDir !== undefined) section('output').reportsDir = overrides.reportsDir;
   if (overrides.screenshotsDir !== undefined) section('output').screenshotsDir = overrides.screenshotsDir;
   applyPersistenceOverrides(section, overrides, env);
+  applyIntelligenceOverrides(section, overrides, env);
   return result;
+}
+
+/**
+ * Intelligence optionnelle : CLI, puis environnement, puis YAML. Choisir ASSIST ou HYBRID
+ * l'active ; OFF la coupe entièrement (aucun client, aucun appel).
+ */
+function applyIntelligenceOverrides(
+  section: (key: string) => Record<string, unknown>,
+  overrides: ConfigOverrides,
+  env: NodeJS.ProcessEnv,
+): void {
+  const copilot = (ai: Record<string, unknown>): Record<string, unknown> => {
+    const current = ai.copilot;
+    const copy =
+      current !== null && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {};
+    ai.copilot = copy;
+    return copy;
+  };
+  const enabled = nonBlank(env[INTELLIGENCE_ENV.enabled])?.toLowerCase();
+  if (enabled !== undefined) {
+    if (!['true', '1', 'yes', 'on', 'false', '0', 'no', 'off'].includes(enabled))
+      throw new ConfigError(`${INTELLIGENCE_ENV.enabled} must be true or false (got "${enabled}")`);
+    section('ai').enabled = ['true', '1', 'yes', 'on'].includes(enabled);
+  }
+  const mode = overrides.intelligence ?? nonBlank(env[INTELLIGENCE_ENV.mode])?.toLowerCase();
+  if (mode !== undefined) {
+    if (!(INTELLIGENCE_CHOICES as readonly string[]).includes(mode))
+      throw new ConfigError(
+        `intelligence mode must be one of ${INTELLIGENCE_CHOICES.join(', ')} (got "${mode}")`,
+      );
+    const ai = section('ai');
+    ai.mode = mode.toUpperCase();
+    ai.enabled = mode !== 'off';
+  }
+  const provider = overrides.aiProvider ?? nonBlank(env[INTELLIGENCE_ENV.provider]);
+  if (provider !== undefined) section('ai').provider = provider.toLowerCase();
+  const model = overrides.aiModel ?? nonBlank(env[INTELLIGENCE_ENV.model]);
+  if (model !== undefined) copilot(section('ai')).model = model;
+  const effort = nonBlank(env[INTELLIGENCE_ENV.reasoningEffort]);
+  if (effort !== undefined) copilot(section('ai')).reasoningEffort = effort.toLowerCase();
 }
 
 /**
