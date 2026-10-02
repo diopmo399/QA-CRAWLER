@@ -256,6 +256,7 @@ export function domEffects(before: RecordedState | undefined, after: RecordedSta
   return effects;
 }
 
+const MAX_LOOK_BACK = 60;
 const ENABLING = new Set(['CLICK', 'CHECK', 'UNCHECK', 'SELECT', 'SUBMIT', 'CONFIRM']);
 
 /**
@@ -307,6 +308,12 @@ export function dependencyGraph(
   states: readonly RecordedState[],
 ): ActionDependency[] {
   const stateById = new Map(states.map((state) => [state.id, state]));
+  const cache = new Map<string, Set<string> | undefined>();
+  const namesOf = (id: string | undefined): Set<string> | undefined => {
+    if (!id) return undefined;
+    if (!cache.has(id)) cache.set(id, names(stateById.get(id)));
+    return cache.get(id);
+  };
   const dependencies: ActionDependency[] = [];
   for (const [j, later] of actions.entries()) {
     if (!DEPENDENT.has(later.type)) continue;
@@ -314,17 +321,18 @@ export function dependencyGraph(
     if (!name) continue;
     let found: ActionDependency | undefined;
     let backward: number | undefined;
-    for (let i = j - 1; i >= 0; i -= 1) {
+    // Une fenêtre bornée en arrière : la cause d'un champ révélé est proche de son usage.
+    for (let i = j - 1; i >= Math.max(0, j - MAX_LOOK_BACK); i -= 1) {
       const earlier = actions[i];
       if (!earlier || earlier.type === 'NAVIGATE') break;
       if (!ENABLING.has(earlier.type)) continue;
-      const before = names(earlier.stateBefore ? stateById.get(earlier.stateBefore) : undefined);
+      const before = namesOf(earlier.stateBefore);
       if (!before || before.size === 0 || before.has(name)) {
         // La cible était déjà là avant cette action : elle n'en dépend pas (ni des plus anciennes).
         if (before?.has(name)) break;
         continue;
       }
-      const after = names(earlier.stateAfter ? stateById.get(earlier.stateAfter) : undefined);
+      const after = namesOf(earlier.stateAfter);
       if (after?.has(name)) {
         found = {
           from: earlier.id,
@@ -416,6 +424,14 @@ export function accountHumanJourney(input: {
     if (owners.length === 0) return undefined;
     return ['FILL', 'SELECT', 'CHECK', 'UNCHECK'].includes(action.type) ? owners.at(-1) : owners[0];
   };
+  // Index brut → action (gardée d'abord, sinon écartée) : une recherche par interaction, pas un parcours.
+  const keptByRaw = new Map<string, SemanticRecordedAction>();
+  for (const action of input.kept)
+    for (const id of action.rawEventIds) if (!keptByRaw.has(id)) keptByRaw.set(id, action);
+  const droppedByRaw = new Map<string, SemanticRecordedAction>();
+  for (const action of input.actions)
+    if (!keptIds.has(action.id))
+      for (const id of action.rawEventIds) if (!droppedByRaw.has(id)) droppedByRaw.set(id, action);
   const accounts: InteractionAccount[] = [];
   for (const interaction of interactions) {
     const base = {
@@ -425,9 +441,16 @@ export function accountHumanJourney(input: {
       ...(interaction.target ? { target: interaction.target } : {}),
       rawEventIds: interaction.rawEventIds,
     };
-    const containing = (pool: readonly SemanticRecordedAction[]): SemanticRecordedAction | undefined =>
-      pool.find((action) => interaction.rawEventIds.some((id) => action.rawEventIds.includes(id)));
-    const keptAction = containing(input.kept);
+    const containing = (
+      index: ReadonlyMap<string, SemanticRecordedAction>,
+    ): SemanticRecordedAction | undefined => {
+      for (const id of interaction.rawEventIds) {
+        const action = index.get(id);
+        if (action) return action;
+      }
+      return undefined;
+    };
+    const keptAction = containing(keptByRaw);
     if (keptAction) {
       const owner = ownerOf(keptAction);
       const step = stepOfAction.get(keptAction.id);
@@ -485,13 +508,16 @@ export function accountHumanJourney(input: {
       });
       continue;
     }
-    const droppedAction = containing(input.actions.filter((action) => !keptIds.has(action.id)));
+    const droppedAction = containing(droppedByRaw);
     if (droppedAction) {
       accounts.push({ ...base, actionId: droppedAction.id, ...droppedStatus(droppedAction) });
       continue;
     }
     // Pas d'action : un geste que la capture a jugé sans intention propre.
-    accounts.push({ ...base, ...noiseStatus(interaction, interactions) });
+    accounts.push({
+      ...base,
+      ...noiseStatus(interaction, interactions.slice(interaction.sequence, interaction.sequence + 20)),
+    });
   }
   for (const account of accounts)
     if (account.status === 'MERGED' && account.mergedInto === undefined)

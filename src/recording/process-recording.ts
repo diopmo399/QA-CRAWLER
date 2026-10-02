@@ -346,18 +346,21 @@ function annotateSteps(
   kept: readonly SemanticRecordedAction[],
 ): void {
   const byId = new Map(kept.map((action) => [action.id, action]));
+  // L'étape de chaque interaction : la sienne, ou celle de l'interaction qui la représente.
+  const stepOf = new Map<string, number>();
+  for (const account of journey.accounts)
+    if (account.flowStep !== undefined) stepOf.set(account.interactionId, account.flowStep);
+  const idsByStep = new Map<number, string[]>();
+  for (const account of journey.accounts) {
+    const step = account.flowStep ?? (account.mergedInto ? stepOf.get(account.mergedInto) : undefined);
+    if (step === undefined) continue;
+    const ids = idsByStep.get(step) ?? [];
+    ids.push(account.interactionId);
+    idsByStep.set(step, ids);
+  }
   for (const [index, step] of flow.steps.entries()) {
-    const ids = journey.accounts
-      .filter(
-        (account) =>
-          account.flowStep === index + 1 ||
-          (account.mergedInto !== undefined &&
-            journey.accounts.some(
-              (owner) => owner.interactionId === account.mergedInto && owner.flowStep === index + 1,
-            )),
-      )
-      .map((account) => account.interactionId);
-    if (ids.length > 0) step.interactionIds = ids;
+    const ids = idsByStep.get(index + 1);
+    if (ids && ids.length > 0) step.interactionIds = ids;
     if (step.step.kind === 'expect') continue;
     if (step.actionIds.some((id) => byId.get(id)?.semanticStatus === 'UNRESOLVED'))
       step.semanticStatus = 'UNRESOLVED';
