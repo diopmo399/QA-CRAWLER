@@ -1405,6 +1405,17 @@ const cognitiveSchema = z
     runtimeObservationsToConfirm: z.number().int().min(1).max(20).default(2),
     /** reports/cognitive/*.json : knowledge-graph, causal-graph, hypotheses, functional-model, business-state. */
     writeArtifacts: z.boolean().default(true),
+    /** Une régularité devient un invariant progressivement : observations ET runs distincts. */
+    invariants: z
+      .object({
+        multiple: z.number().int().min(1).default(3),
+        supported: z.number().int().min(1).default(5),
+        confirmed: z.number().int().min(1).default(10),
+        runsForSupported: z.number().int().min(1).default(2),
+        runsForConfirmed: z.number().int().min(1).default(3),
+      })
+      .strict()
+      .default({}),
     budgets: z
       .object({
         maxHypotheses: z.number().int().min(10).max(10_000).default(500),

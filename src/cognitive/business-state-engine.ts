@@ -23,6 +23,9 @@ export interface ScreenObservation {
   busy: boolean;
 }
 
+/** Un bouton d'envoi reconnu à son libellé (type="button" dans beaucoup d'applications). */
+const SUBMIT_LABEL = /^\s*(submit|send|save|confirm|envoyer|soumettre|enregistrer|confirmer|valider)\b/i;
+
 const FIELD_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton', 'listbox']);
 
 /** Observation métier d'un instantané de l'UIObserver (aucune valeur lue). */
@@ -190,7 +193,8 @@ export class BusinessStateEngine {
     const submitLabel = this.model.submit?.label.toLowerCase();
     const submit =
       screen.buttons.find((button) => submitLabel && button.label.toLowerCase() === submitLabel) ??
-      screen.buttons.find((button) => button.submit);
+      screen.buttons.find((button) => button.submit) ??
+      screen.buttons.find((button) => SUBMIT_LABEL.test(button.label));
     const submission: SubmissionState = !submit
       ? 'NOT_VISIBLE'
       : !submit.enabled
