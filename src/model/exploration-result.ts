@@ -25,6 +25,7 @@ import type { KnowledgeIdentity } from '../knowledge/knowledge-model.js';
 import type { InvariantEvaluation } from '../oracles/invariant-oracle.js';
 import type { DetectedPattern } from '../patterns/ui-pattern.js';
 import type { BlockedWrite } from '../policies/write-guard.js';
+import type { CognitiveSummary } from '../cognitive/cognitive-engine.js';
 
 /** Pourquoi l'exploration s'est terminée. */
 export type StopReason =
@@ -139,6 +140,8 @@ export interface ExplorationResult {
   formRules?: FormRulesSummary;
   /** Intelligence fonctionnelle : machines à états, workflows, invariants, effets, erreurs, contrat, objectifs — jamais une note. */
   functional?: FunctionalSummary;
+  /** QA Cognitive Engine : état métier, but, plan, checkpoints, hypothèses, contradictions, couverture, décisions. */
+  cognitive?: CognitiveSummary;
   /** Résumé non secret de la configuration effective. */
   settings: Record<string, unknown>;
   artifacts: {

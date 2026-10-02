@@ -45,9 +45,9 @@ incertain, sûr par construction et vérifiable par le runtime.
 | G   | `ContradictionDetector`, `TemporalDependencyGraph`                                         | ✅   |
 | H   | `InvariantDiscoveryEngine`, `FailureUnderstandingEngine`, `FailureKnowledge`               | ✅   |
 | I   | `FunctionalCoverageGraph`, exploration guidée par la couverture                            | ✅   |
-| J   | `QAReasoningEngine` (contexte, décision WHY / WHY NOT, chemin rapide / profond)            |      |
-| K   | `ReasoningAdvisor` (déterministe ; LLM optionnel, sans dépendance du cœur)                 |      |
-| L   | rapports, artefacts JSON, persistance, E2E (application V1 → V2)                           |      |
+| J   | `QAReasoningEngine` (contexte, décision WHY / WHY NOT, chemin rapide / profond)            | ✅   |
+| K   | `ReasoningAdvisor` (déterministe ; LLM optionnel, sans dépendance du cœur)                 | ✅   |
+| L   | rapports, artefacts JSON, persistance, E2E (application V1 → V2)                           | ✅   |
 
 ## Lot A — Preuves (`src/cognitive/evidence.ts`, `evidence-graph.ts`)
 
@@ -207,6 +207,64 @@ jamais cliqué.
 `contradictions.json`, `functional-coverage.json`, `invariants.json`, `failures.json`,
 `temporal.json`, `experiments.json`.
 
+## Lot J — QA Reasoning Engine (`reasoning-engine.ts`)
+
+Il **ne clique pas**, n'appelle pas Playwright, ne contourne pas la SafetyPolicy et n'écrit pas
+dans la KnowledgeBase : il produit une `QAReasoningDecision` (but, raison, action, intention,
+effets attendus, preuves, confiance, hypothèses supposées, alternatives écartées, checkpoint visé).
+
+- **FAST PATH** : plan connu et confiant, prochaine étape à l'écran → décision déterministe.
+- **DEEP PATH** : utilité centralisée (§22)
+
+  ```
+  goalProgress + functionalCoverageGain + novelty + informationGain + businessImportance
+  + expectedKnowledgeGain + historicalSuccess + runtimeEvidence
+  − repetition − instability − ambiguity − actionCost − recoveryCost
+  ```
+
+  La sécurité n'est **pas** un poids : une action non SAFE (ou non permise) est écartée avec sa
+  raison. Toute décision a une raison (`GOAL`, `COVERAGE`, `HYPOTHESIS`, `RECOVERY`,
+  `CONTRADICTION`, `INVARIANT`) : pas d'exploration au hasard (`INCONCLUSIVE` sinon).
+
+- **WHY / WHY NOT** : `GOAL_PRECONDITION`, `NEXT_FIELDS_DEPEND_ON_TARGET`, `SEMANTIC_MATCH`,
+  `STATIC_COMPONENT_MATCH`, `RUNTIME_TARGET_EXISTS`, `HISTORICAL_SUCCESS`, `COVERAGE_GAP`,
+  `HYPOTHESIS_TEST`, `SAFE_ACTION` ; écartées : `UNSAFE`, `MUTATION_NOT_REQUIRED`,
+  `DIFFERENT_INTENT`, `WEAK_RELATIONSHIP`, `NO_EXPECTED_GOAL_EVIDENCE`, `REPETITION`, `LOWER_UTILITY`.
+- Un récit structuré (§125) accompagne chaque décision : phase, but, ce qui bloque, ce qui est
+  supposé, pourquoi cette action, ce qui sera vérifié. Pas de chaîne de pensée libre.
+- **Intégration sans second moteur de décision** : une décision par écran, donnée au moteur
+  existant comme un facteur du score (`cognitive`, `cognitive.reasoning.decisionWeight`). Le
+  résultat de l'action décidée est enregistré (confirmé ou non) ; une décision `HYPOTHESIS`
+  produit une preuve d'expérience (`TEST_RESULT`) et met à jour l'hypothèse.
+- Budget : `REASONING_BUDGET_EXHAUSTED` (jamais « inaccessible »).
+
+## Lot K — Conseiller (`reasoning-advisor.ts`)
+
+`ReasoningAdvisor` est une abstraction ; `DeterministicReasoningAdvisor` est le défaut (n'invente
+rien). `LLMReasoningAdvisor` est **optionnel** et le cœur ne dépend d'aucun fournisseur : il
+n'existe que si l'intégrateur lui passe une fonction `complete(prompt)` (option de programme
+`reasoningAdvisor`, jamais par la configuration). Consulté seulement si le déterministe ne
+suffit pas (ambiguïté, intention non résolue…), dans son budget (`maxAdvisorCalls`).
+
+```
+proposition → schéma (zod, strict) → preuves citées existantes → action existante à l'écran
+→ SafetyPolicy → exécuteur déterministe → vérification de l'effet au runtime
+```
+
+Une action inventée (« Magic Button ») est rejetée ; une affirmation (« EUR requires … ») devient
+au plus une **HYPOTHÈSE** (`LLM_PROPOSAL`, confiance ≤ 0,3), jamais une connaissance confirmée.
+
+## Lot L — Rapport, persistance
+
+- Rapport HTML « Cognitive engine » : mission, état fonctionnel, but, chaîne de préconditions
+  manquantes, plan courant, checkpoints, hypothèses (par statut), relations confirmées,
+  contradictions, plans réparés, échecs classés, couverture et ce qui reste non testé,
+  invariants, décisions (WHY / WHY NOT). La CLI en donne le résumé.
+- `reports/cognitive/reasoning.json` (décisions, récits, conseils), en plus des autres vues.
+- Persistance : la connaissance cognitive (hypothèses + preuves, invariants, échecs) vit dans la
+  KnowledgeBase existante (fichier JSON, mode historique) ; elle n'est couplée à aucune base de
+  données. En mémoire de travail (persistance DB), elle reste celle du run.
+
 ## Observabilité
 
 Événements (`engine-log.jsonl`) : `EVIDENCE_ADDED`, `HYPOTHESIS_CREATED`,
@@ -225,8 +283,19 @@ cognitive:
   businessState: true
   runtimeObservationsToConfirm: 2
   writeArtifacts: true
+  invariants: { multiple: 3, supported: 5, confirmed: 10, runsForSupported: 2, runsForConfirmed: 3 }
+  reasoning:
+    enabled: true
+    influenceDecisionEngine: true
+    decisionWeight: 1
+    advisor: deterministic # ou none ; un conseiller LLM ne s'injecte que par programme
+    maxAdvisorCalls: 5
   budgets:
     maxHypotheses: 500
+    maxPlanningDepth: 8
+    maxExperiments: 3
+    maxPlanCandidates: 30
+    maxReasoningDurationMs: 250
 ```
 
 Le moteur observe et apprend ; il ne clique jamais, n'appelle pas Playwright, ne contourne

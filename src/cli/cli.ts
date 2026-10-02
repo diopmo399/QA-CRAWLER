@@ -169,6 +169,15 @@ export async function runCli(input: string[]): Promise<number> {
         `  Coverage      : ${actions.EXECUTED}/${total} actions executed, ${actions.BLOCKED} blocked (${intelligence.strategy})`,
       );
     }
+    const cognitive = result.cognitive;
+    if (cognitive && (cognitive.functionalState || cognitive.knowledge.hypotheses > 0)) {
+      logger.info(
+        `  Cognitive     : ${String(cognitive.knowledge.hypotheses)} hypotheses (${String(cognitive.knowledge.confirmed)} runtime confirmed, ${String(cognitive.knowledge.contradicted)} contradicted) · ${String(cognitive.contradictions.length)} contradiction(s) · ${String(cognitive.failures.length)} classified failure(s)`,
+      );
+      if (cognitive.functionalState) logger.info(color.dim(`    state: ${cognitive.functionalState}`));
+      if (cognitive.missingChain) logger.info(color.dim(`    blocked: ${cognitive.missingChain}`));
+      for (const gap of cognitive.coverageGaps.slice(0, 3)) logger.info(color.dim(`    untested: ${gap}`));
+    }
     if (result.blockedWrites && result.blockedWrites.length > 0)
       logger.info(
         `  Writes blocked: ${color.yellow(String(result.blockedWrites.length))} (side effects, see the report)`,

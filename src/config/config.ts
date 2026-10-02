@@ -1416,9 +1416,28 @@ const cognitiveSchema = z
       })
       .strict()
       .default({}),
+    /**
+     * QA REASONING ENGINE : une décision raisonnée par écran (but, préconditions, couverture,
+     * hypothèses), donnée au moteur de décision existant comme un signal. Il ne clique jamais.
+     */
+    reasoning: z
+      .object({
+        enabled: z.boolean().default(true),
+        influenceDecisionEngine: z.boolean().default(true),
+        decisionWeight: z.number().min(0).max(5).default(1),
+        /** Conseiller : `deterministic` (défaut) ou `none`. Un conseiller LLM ne s'injecte que par programme. */
+        advisor: z.enum(['deterministic', 'none']).default('deterministic'),
+        maxAdvisorCalls: z.number().int().min(0).max(100).default(5),
+      })
+      .strict()
+      .default({}),
     budgets: z
       .object({
         maxHypotheses: z.number().int().min(10).max(10_000).default(500),
+        maxPlanningDepth: z.number().int().min(1).max(20).default(8),
+        maxExperiments: z.number().int().min(0).max(50).default(3),
+        maxPlanCandidates: z.number().int().min(1).max(200).default(30),
+        maxReasoningDurationMs: z.number().int().min(10).max(60_000).default(250),
       })
       .strict()
       .default({}),

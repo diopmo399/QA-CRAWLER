@@ -13,6 +13,7 @@ export const SCORE_FACTORS = [
   'adaptive',
   'rules',
   'functional',
+  'cognitive',
 ] as const;
 export type ScoreFactor = (typeof SCORE_FACTORS)[number];
 
@@ -44,6 +45,8 @@ export interface ScoreBreakdown {
   rules: number;
   /** Objectifs de test (functionalIntelligence.testGoals.influenceDecisionEngine) : 0 sans objectif. */
   functional: number;
+  /** QA Reasoning Engine (cognitive.reasoning.influenceDecisionEngine) : 0 sans décision raisonnée. */
+  cognitive: number;
   total: number;
   /** Raisons lisibles (anglais), dans l'ordre des composantes. */
   reasons: string[];
@@ -94,6 +97,7 @@ const TEMPLATES = {
     fr: 'champ influent {field} ({dependencies} dépendance(s), {unverified} règle(s) non vérifiée(s))',
   },
   'test-goal-progress': { en: '{reason}', fr: '{reason}' },
+  'cognitive-reasoning': { en: 'reasoning {decision}: {reason}', fr: 'raisonnement {decision} : {reason}' },
   'functional-coverage': { en: '{reason}', fr: '{reason}' },
   'unstable-history': {
     en: 'unstable history (stability {stability}, confidence {confidence}: {detail})',

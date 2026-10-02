@@ -36,6 +36,21 @@ import {
 } from './planning.js';
 import type { FlowStepReport } from '../model/flow-run.js';
 import {
+  QAReasoningEngine,
+  narrate,
+  type QAReasoningContext,
+  type QAReasoningDecision,
+  type ScreenAction,
+} from './reasoning-engine.js';
+import {
+  shouldConsultAdvisor,
+  validateProposal,
+  type AdvisorTrigger,
+  type ProposalVerdict,
+  type ReasoningAdvisor,
+  type ReasoningProblem,
+} from './reasoning-advisor.js';
+import {
   ActiveLearningEngine,
   type ExperimentAction,
   type ExperimentProposal,
@@ -87,6 +102,10 @@ export const COGNITIVE_EVENTS = [
   'INVARIANT_VIOLATED',
   'FAILURE_CLASSIFIED',
   'FUNCTIONAL_COVERAGE_UPDATED',
+  'REASONING_DECISION_CREATED',
+  'LLM_ADVISOR_REQUESTED',
+  'LLM_ADVISOR_PROPOSAL_REJECTED',
+  'LLM_ADVISOR_PROPOSAL_ACCEPTED',
 ] as const;
 export type CognitiveEvent = (typeof COGNITIVE_EVENTS)[number];
 
@@ -104,6 +123,37 @@ export interface CognitiveKnowledge {
   failures?: FailureRecord[];
 }
 
+/** Ce que le rapport montre de la couche cognitive (§83) : des faits, des statuts, des preuves. */
+export interface CognitiveSummary {
+  mission?: string;
+  functionalState?: string;
+  goal?: string;
+  missingChain?: string;
+  currentPlan?: string;
+  checkpoints: { id: string; status: string }[];
+  hypotheses: {
+    byStatus: Record<string, number>;
+    top: { id: string; proposition: string; status: string; confidence: number }[];
+  };
+  confirmedRelations: string[];
+  contradictions: string[];
+  recoveredPlans: string[];
+  failures: { step: string; class: string; reason: string }[];
+  coverage: string[];
+  coverageGaps: string[];
+  invariants: { statement: string; status: string }[];
+  decisions: {
+    id: string;
+    path: string;
+    status: string;
+    selected?: string;
+    reason?: string;
+    narration: string[];
+  }[];
+  experiments: { proposed: number; rejected: number };
+  knowledge: { evidence: number; hypotheses: number; confirmed: number; contradicted: number };
+}
+
 export interface CognitiveOptions {
   version?: string;
   runTag: string;
@@ -111,6 +161,13 @@ export interface CognitiveOptions {
   maxHypotheses: number;
   /** Observations et runs exigés pour qu'une régularité devienne un invariant (pas d'un seul coup). */
   invariantThresholds?: InvariantThresholds;
+  /** Budgets du raisonnement (§87) : un budget atteint n'est jamais « impossible ». */
+  budgets?: {
+    maxPlanningDepth: number;
+    maxExperiments: number;
+    maxPlanCandidates: number;
+    maxReasoningDurationMs: number;
+  };
   emit?: (record: CognitiveEventRecord) => void;
   now?: () => string;
 }
@@ -145,6 +202,16 @@ export class CognitiveEngine {
     rejected: [],
   };
   private coverage: FunctionalCoverageGraph | undefined;
+  readonly reasoning = new QAReasoningEngine();
+  private lastDecision: QAReasoningDecision | undefined;
+  private readonly narrations = new Map<string, string[]>();
+  private advisorCalls = 0;
+  readonly advice: {
+    trigger: AdvisorTrigger;
+    advisor: string;
+    verdict: ProposalVerdict['status'];
+    reasons: string[];
+  }[] = [];
   /** Appelé quand un invariant soutenu est violé (l'oracle garde la provenance). */
   onInvariantViolated?: (invariant: DiscoveredInvariant) => void;
   private goals: GoalGraph | undefined;
@@ -210,7 +277,7 @@ export class CognitiveEngine {
       },
     );
     this.activeLearning = new ActiveLearningEngine(this.hypotheses, (input) => this.addEvidence(input), {
-      maxExperiments: 3,
+      maxExperiments: options.budgets?.maxExperiments ?? 3,
       now,
     });
     this.stateEngine = new BusinessStateEngine(this.model, (input) => this.addEvidence(input), now);
@@ -341,6 +408,7 @@ export class CognitiveEngine {
     const disabled = [...disabledAfter].filter((key) => before.has(key));
     const disappeared = [...before].filter((key) => !after.has(key) && !disabledAfter.has(key));
     const route = input.afterRoute !== input.beforeRoute ? input.afterRoute : undefined;
+    this.afterDecidedAction(input.label, appeared);
     // INVARIANTS : un changement de choix ou de champ ne doit pas vider les autres champs remplis.
     if (['fill', 'check', 'uncheck', 'select'].includes(input.kind) && input.before && input.after) {
       const filled = (snapshot: UiSnapshot): Map<string, boolean> =>
@@ -410,6 +478,158 @@ export class CognitiveEngine {
         requests: [...input.requests],
       },
       proof,
+    );
+  }
+
+  /**
+   * QA REASONING : une décision pour l'écran courant (raison, preuves, alternatives écartées).
+   * Le moteur de décision existant reçoit l'utilité comme signal ; la SafetyPolicy a déjà jugé
+   * chaque action (`allowed`, `safety`), et le raisonnement ne la contourne jamais.
+   */
+  reason(
+    availableActions: ScreenAction[],
+    extra: { nextFields?: string[]; plan?: QAReasoningContext['currentPlan']; planPosition?: number } = {},
+  ): QAReasoningDecision {
+    const graph = this.goalGraph();
+    const preconditions = graph.root
+      ? resolvePreconditions(graph, graph.root, this.conditionContext, this.options.budgets?.maxPlanningDepth)
+      : undefined;
+    const context: QAReasoningContext = {
+      ...(this.model.mission ? { mission: this.model.mission.id } : {}),
+      ...(this.functionalState ? { currentState: this.functionalState } : {}),
+      ...(this.situation ? { businessState: this.situation } : {}),
+      ...(graph.root ? { goal: graph.root } : {}),
+      ...(preconditions ? { preconditions } : {}),
+      ...(extra.plan ? { currentPlan: extra.plan } : {}),
+      ...(extra.planPosition !== undefined ? { planPosition: extra.planPosition } : {}),
+      availableActions,
+      hypotheses: this.hypotheses.all(),
+      causal: this.causal.links(),
+      coverageGaps: this.coverageGraph().gaps(),
+      contradictions: this.contradictions.all(),
+      ...(extra.nextFields ? { nextFields: extra.nextFields } : {}),
+      budgets: {
+        maxCandidates: this.options.budgets?.maxPlanCandidates ?? 30,
+        maxReasoningDurationMs: this.options.budgets?.maxReasoningDurationMs ?? 250,
+      },
+    };
+    const decision = this.reasoning.decide(context);
+    this.lastDecision = decision;
+    const story = narrate(decision, context);
+    this.narrations.set(decision.id, story);
+    this.emit(
+      'REASONING_DECISION_CREATED',
+      `${decision.id} ${decision.path} ${decision.status}${decision.selectedAction ? ` → ${decision.selectedAction.kind} "${decision.selectedAction.label}" (${decision.reason ?? '-'}: ${decision.why.join(', ')})` : ''}${decision.alternatives.length > 0 ? `; rejected ${String(decision.alternatives.length)}` : ''}`,
+    );
+    return decision;
+  }
+
+  /**
+   * Un conseiller (déterministe, ou LLM injecté par programme) consulté seulement quand le
+   * déterministe ne suffit pas, dans son budget. Sa proposition est validée (schéma, preuves,
+   * existence de l'action) ; l'action acceptée repasse ensuite par la SafetyPolicy et l'exécuteur.
+   */
+  async consultAdvisor(
+    advisor: ReasoningAdvisor | undefined,
+    problem: ReasoningProblem,
+    input: { exactLocatorFound: boolean; planKnown: boolean; confidence: number; maxCalls: number },
+  ): Promise<ProposalVerdict | undefined> {
+    if (
+      !advisor ||
+      !shouldConsultAdvisor({ ...input, trigger: problem.trigger, callsUsed: this.advisorCalls })
+    )
+      return undefined;
+    this.advisorCalls += 1;
+    this.emit('LLM_ADVISOR_REQUESTED', `${advisor.name}: ${problem.trigger} for ${problem.goal}`);
+    const raw = await advisor
+      .advise(problem)
+      .catch((error: unknown) => ({ invalid: error instanceof Error ? error.message : String(error) }));
+    const verdict = validateProposal(raw, problem, (id) => this.evidence.get(id) !== undefined, {
+      engine: this.hypotheses,
+      addEvidence: (evidence) => this.addEvidence(evidence),
+    });
+    this.advice.push({
+      trigger: problem.trigger,
+      advisor: advisor.name,
+      verdict: verdict.status,
+      reasons: verdict.reasons,
+    });
+    this.emit(
+      verdict.status === 'ACCEPTED' ? 'LLM_ADVISOR_PROPOSAL_ACCEPTED' : 'LLM_ADVISOR_PROPOSAL_REJECTED',
+      `${advisor.name}: ${verdict.reasons.join('; ')}`,
+    );
+    return verdict;
+  }
+
+  /** Le problème soumis à un conseiller, borné (jamais tout le DOM ni tout le code). */
+  problemOf(trigger: AdvisorTrigger, availableActions: ScreenAction[]): ReasoningProblem {
+    const evidence = this.evidence.all();
+    const pick = (types: readonly string[]) =>
+      evidence
+        .filter((item) => types.includes(item.type))
+        .slice(-5)
+        .map((item) => ({ id: item.id, summary: `${item.type} ${item.source}` }));
+    const allowed = availableActions
+      .filter((action) => action.allowed && action.safety === 'SAFE')
+      .slice(0, 20)
+      .map((action) => ({
+        kind: action.kind,
+        label: action.label,
+        ...(action.role ? { role: action.role } : {}),
+      }));
+    return {
+      goal: this.goalGraph().root ?? this.model.mission?.id ?? 'EXPLORE',
+      functionalState: this.lastSituation ?? 'unknown',
+      visibleControls: allowed,
+      previousActions: [],
+      nextActions: [],
+      knownRules: this.causal
+        .confirmed()
+        .slice(0, 10)
+        .map((link) => `${link.cause} ${link.relation} ${link.effect}`),
+      staticEvidence: pick(['STATIC_SOURCE', 'OPENAPI']),
+      runtimeEvidence: pick(['RUNTIME', 'DOM', 'NETWORK']),
+      historicalEvidence: pick(['HISTORICAL']),
+      contradictions: this.contradictions
+        .all()
+        .map((contradiction) => `${contradiction.property}: ${contradiction.types.join(', ')}`),
+      allowedActions: allowed,
+      trigger,
+    };
+  }
+
+  /** L'action décidée a été exécutée : son résultat confirme (ou non) la décision et, pour un test d'hypothèse, l'hypothèse. */
+  private afterDecidedAction(label: string, appeared: readonly string[]): void {
+    const decision = this.lastDecision;
+    if (
+      !decision?.selectedAction ||
+      normalizeControl(decision.selectedAction.label) !== normalizeControl(label)
+    )
+      return;
+    this.lastDecision = undefined;
+    const expected = decision.expectedEffects.map((effect) => effect.replace(/ visible$/, ''));
+    const confirmed =
+      expected.length === 0 ? appeared.length > 0 : expected.some((effect) => appeared.includes(effect));
+    this.reasoning.recordOutcome(decision.id, confirmed, [...appeared]);
+    if (decision.reason !== 'HYPOTHESIS' || !decision.goal) return;
+    const hypothesis = this.hypotheses.byId(decision.goal);
+    if (!hypothesis) return;
+    const proof = this.addEvidence({
+      type: 'TEST_RESULT',
+      source: `experiment ${decision.id} ${decision.selectedAction.kind} "${decision.selectedAction.label}"`,
+      timestamp: this.now(),
+      confidence: 0.9,
+      details: {
+        experiment: true,
+        observable: hypothesis.proposition.object,
+        observed: appeared.includes(hypothesis.proposition.object),
+      },
+    });
+    if (appeared.includes(hypothesis.proposition.object)) this.hypotheses.support(hypothesis.id, proof);
+    else this.hypotheses.contradict(hypothesis.id, proof);
+    this.emit(
+      'EXPERIMENT_COMPLETED',
+      `${decision.id}: ${hypothesis.id} → ${this.hypotheses.byId(hypothesis.id)?.status ?? '?'}`,
     );
   }
 
@@ -630,6 +850,83 @@ export class CognitiveEngine {
     };
   }
 
+  /** WHERE AM I? WHAT IS THE BUSINESS STATE? … WHAT IS STILL UNTESTED? — en un résumé. */
+  summary(): CognitiveSummary {
+    const all = this.hypotheses.all();
+    const byStatus: Record<string, number> = {};
+    for (const hypothesis of all) byStatus[hypothesis.status] = (byStatus[hypothesis.status] ?? 0) + 1;
+    const graph = this.goals;
+    const resolution = graph?.root
+      ? resolvePreconditions(graph, graph.root, this.conditionContext)
+      : undefined;
+    const lastPlans = this.plans.at(-1);
+    const current = lastPlans?.plans.find((plan) => plan.kind === 'CURRENT_PLAN');
+    return {
+      ...(this.model.mission ? { mission: this.model.mission.id } : {}),
+      ...(this.lastSituation ? { functionalState: this.lastSituation } : {}),
+      ...(graph?.root ? { goal: graph.root } : {}),
+      ...(resolution?.chains[0] ? { missingChain: describeChain(resolution.chains[0]) } : {}),
+      ...(current ? { currentPlan: describePlan(current) || 'nothing left to do' } : {}),
+      checkpoints: [...this.checkpoints.values()].map((checkpoint) => ({
+        id: checkpoint.id,
+        status: checkpoint.status,
+      })),
+      hypotheses: {
+        byStatus,
+        top: all
+          .filter((hypothesis) => hypothesis.status !== 'REJECTED')
+          .sort((a, b) => b.confidence - a.confidence)
+          .slice(0, 10)
+          .map((hypothesis) => ({
+            id: hypothesis.id,
+            proposition: describeProposition(hypothesis.proposition),
+            status: hypothesis.status,
+            confidence: hypothesis.confidence,
+          })),
+      },
+      confirmedRelations: this.causal
+        .confirmed()
+        .slice(0, 15)
+        .map((link) => `${link.cause} ${link.relation} ${link.effect}`),
+      contradictions: this.contradictions
+        .all()
+        .map((contradiction) => `${contradiction.property}: ${contradiction.types.join(', ')}`),
+      recoveredPlans: this.plans.flatMap((entry) =>
+        entry.repair?.status === 'REPAIRED'
+          ? entry.repair.explanation.map((line) => `${entry.flow}: ${line}`)
+          : [],
+      ),
+      failures: this.failures
+        .slice(0, 20)
+        .map((failure) => ({ step: failure.step, class: failure.class, reason: failure.reasons[0] ?? '' })),
+      coverage: this.coverageGraph().describe(),
+      coverageGaps: this.coverageGraph()
+        .gaps()
+        .slice(0, 8)
+        .map((gap) => gap.suggestion),
+      invariants: this.invariants
+        .all()
+        .map((invariant) => ({ statement: invariant.statement, status: invariant.status })),
+      decisions: this.reasoning.trace.slice(-10).map((decision) => ({
+        id: decision.id,
+        path: decision.path,
+        status: decision.status,
+        ...(decision.selectedAction
+          ? { selected: `${decision.selectedAction.kind} "${decision.selectedAction.label}"` }
+          : {}),
+        ...(decision.reason ? { reason: decision.reason } : {}),
+        narration: this.narrations.get(decision.id) ?? [],
+      })),
+      experiments: { proposed: this.experiments.proposed.length, rejected: this.experiments.rejected.length },
+      knowledge: {
+        evidence: this.evidence.size,
+        hypotheses: all.length,
+        confirmed: byStatus.RUNTIME_CONFIRMED ?? 0,
+        contradicted: (byStatus.CONTRADICTED ?? 0) + (byStatus.REJECTED ?? 0),
+      },
+    };
+  }
+
   /** Les artefacts de débogage (§84) produits par cette couche. */
   artifacts(): Record<string, unknown> {
     return {
@@ -663,6 +960,13 @@ export class CognitiveEngine {
       'failures.json': { failures: this.failures, knowledge: this.failureKnowledge.all() },
       'temporal.json': { links: this.temporal.all() },
       'experiments.json': this.experiments,
+      'reasoning.json': {
+        decisions: this.reasoning.trace.map((decision) => ({
+          ...decision,
+          narration: this.narrations.get(decision.id) ?? [],
+        })),
+        advice: this.advice,
+      },
     };
   }
 
