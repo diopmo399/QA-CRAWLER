@@ -123,6 +123,8 @@ export function suggestedFlowYaml(
 export function rawStepOf(step: FlowStep): Record<string, unknown> {
   const common: Record<string, unknown> = {
     ...(step.name ? { name: step.name } : {}),
+    ...(step.effects ? { effects: step.effects } : {}),
+    ...(step.fingerprint ? { fingerprint: step.fingerprint } : {}),
     ...(step.allow.length === 1
       ? { allow: step.allow[0] }
       : step.allow.length > 1

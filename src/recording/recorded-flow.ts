@@ -155,7 +155,18 @@ function allowOf(action: SemanticRecordedAction): FlowAllowance[] {
 /** Une action → une étape de flow (undefined : rien à rejouer, comme un dialogue du navigateur). */
 function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
   const target = action.target?.target;
-  const common = { allow: allowOf(action), optional: false };
+  // L'effet appris à l'enregistrement : la preuve, au rejeu, que l'action a FONCTIONNÉ.
+  const effects =
+    action.expectedEffects && ['CLICK', 'SUBMIT', 'CHECK', 'UNCHECK', 'SELECT'].includes(action.type)
+      ? { effects: action.expectedEffects }
+      : {};
+  // L'empreinte, quand le localisateur seul ne garantit pas le bon élément (CSS, position).
+  const fingerprint =
+    action.target?.fingerprint &&
+    (target?.strategy === 'css' || action.target.quality === 'FRAGILE' || action.target.ambiguous)
+      ? { fingerprint: action.target.fingerprint }
+      : {};
+  const common = { allow: allowOf(action), optional: false, ...effects, ...fingerprint };
   const label = labelOf(action);
   // Un élément sans nom (« input ») : son sélecteur, jamais une intention vide de sens.
   const named = action.target?.named === true;

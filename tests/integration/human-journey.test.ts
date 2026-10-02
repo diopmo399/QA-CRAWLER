@@ -220,5 +220,13 @@ flows:
     ).toBe('PASSED');
     expect(app.created.length).toBe(before + 1);
     expect(app.created.at(-1)).toMatchObject({ requestType: 'INCIDENT', premium: true });
+    // §70 : chaque action EXÉCUTÉE est aussi CONFIRMÉE par son effet (ou n'exigeait rien, avec sa raison).
+    const verified = report?.steps.filter((step) => step.effect !== undefined) ?? [];
+    expect(verified.length).toBeGreaterThan(8);
+    for (const step of verified)
+      expect(['CONFIRMED', 'NOT_REQUIRED'], `${step.description}: ${JSON.stringify(step.effect)}`).toContain(
+        step.effect?.status,
+      );
+    expect(verified.filter((step) => step.effect?.status === 'CONFIRMED').length).toBeGreaterThan(6);
   }, 180_000);
 });

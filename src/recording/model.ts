@@ -1,4 +1,10 @@
-import type { FlowExpectation, FlowStep, FlowTarget } from '../config/flow-schema.js';
+import type {
+  FlowExpectation,
+  FlowStep,
+  FlowTarget,
+  StepEffects,
+  TargetFingerprint,
+} from '../config/flow-schema.js';
 import type { FunctionalExchange } from '../functional/model.js';
 
 /**
@@ -73,6 +79,12 @@ export interface RecordedElement {
   required?: boolean;
   /** Champ en lecture seule (calculé par l'application) : jamais une donnée d'entrée. */
   readOnly?: boolean;
+  /** Le titre de la section qui contient l'élément (contexte de l'empreinte). */
+  context?: string;
+  /** Le composant maison (balise à tiret) qui contient l'élément, à travers les shadow roots. */
+  componentTag?: string;
+  /** L'élément est dans un shadow DOM (son CSS est préfixé par l'hôte). */
+  inShadow?: boolean;
   /** Un <select>, une liste de suggestions (datalist) : une valeur choisie, pas tapée. */
   hasOptions?: boolean;
 }
@@ -166,6 +178,8 @@ export type RecordedProvenance =
 export interface RecordedTarget {
   target: FlowTarget;
   quality: LocatorQuality;
+  /** L'empreinte de l'élément (rôle, nom, texte, test id, balise, section) : vérifiée avant de cliquer au rejeu. */
+  fingerprint?: TargetFingerprint;
   /** Libellé lisible (« Email », « Enregistrer »). */
   label: string;
   /** Les autres localisateurs possibles, du meilleur au moins bon. */
@@ -261,6 +275,8 @@ export interface SemanticRecordedAction {
   semanticStatus?: 'RESOLVED' | 'UNRESOLVED';
   /** Ce que l'action a changé à l'écran (section révélée, champ ajouté, fenêtre ouverte…), même sans requête. */
   domEffects?: string[];
+  /** Les effets attendus au rejeu, appris de l'enregistrement (contrôles apparus, route, requête). */
+  expectedEffects?: StepEffects;
 }
 
 export type AssertionKind =

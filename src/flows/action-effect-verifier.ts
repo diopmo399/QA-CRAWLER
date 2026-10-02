@@ -1,0 +1,332 @@
+import type { FlowTarget, StepEffects, TargetFingerprint } from '../config/flow-schema.js';
+import type { Locator } from 'playwright';
+import type { UiSnapshot } from '../model/ui-snapshot.js';
+
+/**
+ * CLICKED != SUCCEEDED. Playwright qui clique sans erreur prouve seulement que le clic a eu
+ * lieu ; l'action n'est FONCTIONNELLEMENT réussie que si son effet attendu est observé.
+ *
+ *   CONFIRMED     un effet attendu est là (contrôle apparu, route, requête, cible suivante)
+ *   NO_EFFECT     rien d'attendu, rien de changé : le clic n'a rien produit
+ *   WRONG_EFFECT  l'écran a changé, mais pas comme pendant l'enregistrement (mauvaise cible ?)
+ *   AMBIGUOUS     une écriture partie sans réponse claire : jamais rejouée automatiquement
+ *   NOT_REQUIRED  aucun effet à exiger (rien appris, ou `effects.required: false`)
+ *   NOT_VERIFIED  vérification désactivée, ou seule la cible suivante était attendue et l'écran a changé
+ */
+export type EffectStatus =
+  'CONFIRMED' | 'NO_EFFECT' | 'WRONG_EFFECT' | 'AMBIGUOUS' | 'NOT_REQUIRED' | 'NOT_VERIFIED';
+
+export type FingerprintVerdict = 'EXACT_MATCH' | 'STRONG_MATCH' | 'WEAK_MATCH' | 'MISMATCH';
+
+/** Ce que l'élément trouvé au rejeu dit de lui-même (jamais une valeur saisie). */
+export interface ObservedTarget {
+  tag?: string;
+  role?: string;
+  name?: string;
+  text?: string;
+  testId?: string;
+}
+
+export interface FingerprintMatch {
+  verdict: FingerprintVerdict;
+  score: number;
+  reasons: string[];
+}
+
+export interface ObservedEffects {
+  appeared: string[];
+  disappeared: string[];
+  routeChanged?: string;
+  requests: string[];
+}
+
+export interface EffectVerification {
+  status: EffectStatus;
+  expected: string[];
+  observed: string[];
+  reasons: string[];
+}
+
+const normalize = (text: string | undefined): string =>
+  (text ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[*:]+\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+/**
+ * TARGET FINGERPRINT MATCHER : l'élément trouvé est-il celui que l'humain a cliqué ? Un CSS
+ * structurel (main > div:nth-of-type(3)) peut désigner un autre élément après un changement
+ * de l'écran : le nom, le texte, le test id et le rôle le disent avant de cliquer.
+ */
+export function matchFingerprint(expected: TargetFingerprint, observed: ObservedTarget): FingerprintMatch {
+  const reasons: string[] = [];
+  if (expected.testId && observed.testId) {
+    if (expected.testId === observed.testId)
+      return { verdict: 'EXACT_MATCH', score: 1, reasons: ['same test id'] };
+    return {
+      verdict: 'MISMATCH',
+      score: 0,
+      reasons: [`test id "${observed.testId}" instead of "${expected.testId}"`],
+    };
+  }
+  const wanted = normalize(expected.name ?? expected.text);
+  const found = [normalize(observed.name), normalize(observed.text)].filter(Boolean);
+  let score = 0;
+  if (wanted) {
+    if (found.some((text) => text === wanted)) {
+      score += 0.7;
+      reasons.push('same accessible name');
+    } else if (found.some((text) => text.includes(wanted) || (text.length >= 3 && wanted.includes(text)))) {
+      score += 0.45;
+      reasons.push('name contains the recorded one');
+    } else {
+      reasons.push(
+        `"${observed.name ?? observed.text ?? ''}" instead of "${expected.name ?? expected.text ?? ''}"`,
+      );
+    }
+  } else score += 0.4;
+  if (expected.role && observed.role) {
+    if (expected.role === observed.role) {
+      score += 0.2;
+      reasons.push('same role');
+    } else {
+      score -= 0.15;
+      reasons.push(`role ${observed.role} instead of ${expected.role}`);
+    }
+  }
+  if (expected.tag && observed.tag && expected.tag === observed.tag) score += 0.1;
+  score = Math.max(0, Math.min(1, score));
+  const verdict: FingerprintVerdict =
+    score >= 0.9 ? 'EXACT_MATCH' : score >= 0.7 ? 'STRONG_MATCH' : score >= 0.45 ? 'WEAK_MATCH' : 'MISMATCH';
+  return { verdict, score: Number(score.toFixed(2)), reasons };
+}
+
+/**
+ * LOCATOR CANDIDATES (healing) : les autres façons de trouver LE MÊME élément, à partir de son
+ * empreinte — rôle + nom, test id, texte. Jamais « n'importe quel élément cliquable ».
+ */
+export function healingCandidates(fingerprint: TargetFingerprint, current: FlowTarget): FlowTarget[] {
+  const candidates: FlowTarget[] = [];
+  if (fingerprint.role && fingerprint.name)
+    candidates.push({ strategy: 'role', role: fingerprint.role, name: fingerprint.name });
+  if (fingerprint.testId) candidates.push({ strategy: 'testId', value: fingerprint.testId });
+  if (fingerprint.name) candidates.push({ strategy: 'text', value: fingerprint.name });
+  if (fingerprint.text && fingerprint.text !== fingerprint.name)
+    candidates.push({ strategy: 'text', value: fingerprint.text });
+  const same = (a: FlowTarget, b: FlowTarget): boolean =>
+    a.strategy === b.strategy && a.value === b.value && a.role === b.role && a.name === b.name;
+  return candidates.filter((candidate) => !same(candidate, current));
+}
+
+/** Un locator CSS structurel (positions) : il peut viser un autre élément après un changement d'écran. */
+export function isFragileTarget(target: FlowTarget): boolean {
+  return target.strategy === 'css' && /:nth-(of-type|child)|>\s*div|^main\b|^body\b/.test(target.value ?? '');
+}
+
+/** Les contrôles visibles d'un écran : role:nom (et le nom seul, pour un rôle qui a changé). */
+export function controlsOf(snapshot: UiSnapshot | undefined): Set<string> {
+  const controls = new Set<string>();
+  for (const element of snapshot?.elements ?? []) {
+    if (!element.visible || !element.role) continue;
+    const name = normalize(element.name);
+    if (!name) continue;
+    controls.add(`${element.role}:${name}`);
+  }
+  return controls;
+}
+
+/** Ce que l'action a changé : contrôles apparus / disparus, route, requêtes. */
+export function observeEffects(
+  before: Set<string>,
+  after: Set<string>,
+  beforeRoute: string,
+  afterRoute: string,
+  requests: readonly string[],
+): ObservedEffects {
+  return {
+    appeared: [...after].filter((control) => !before.has(control)),
+    disappeared: [...before].filter((control) => !after.has(control)),
+    ...(beforeRoute !== afterRoute ? { routeChanged: afterRoute } : {}),
+    requests: [...requests],
+  };
+}
+
+/** « button:Suivant » ou « Suivant » présent à l'écran (le rôle peut avoir changé : le nom suffit). */
+export function present(controls: Set<string>, expected: string): boolean {
+  const colon = expected.indexOf(':');
+  const role = colon > 0 && !expected.slice(0, colon).includes(' ') ? expected.slice(0, colon) : undefined;
+  const name = normalize(role ? expected.slice(colon + 1) : expected);
+  if (role && controls.has(`${role}:${name}`)) return true;
+  for (const control of controls) if (control.slice(control.indexOf(':') + 1) === name) return true;
+  return false;
+}
+
+/** /demandes/{id} correspond à /demandes/42 ; un chemin sans paramètre se compare tel quel. */
+export function routeMatches(pattern: string, route: string): boolean {
+  const escaped = pattern
+    .split(/(\{[^}]+\}|:[A-Za-z]\w*)/)
+    .map((part) =>
+      /^(\{[^}]+\}|:[A-Za-z]\w*)$/.test(part) ? '[^/]+' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    )
+    .join('');
+  return new RegExp(`^${escaped}/?$`).test(route.split('?')[0] ?? route);
+}
+
+/** « POST /api/requests » contre les requêtes observées (« POST /api/requests 201 »). */
+export function requestMatches(expected: string, requests: readonly string[]): string | undefined {
+  const [method, path] = expected.split(' ');
+  if (!method || !path) return undefined;
+  const write = !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
+  return requests.find((request) => {
+    const [observedMethod, observedPath, status] = request.split(' ');
+    // Une écriture refusée (4xx, 5xx) n'est pas l'effet attendu : elle a été tentée, pas réussie.
+    if (write && status !== undefined && Number(status) >= 400) return false;
+    return (
+      observedMethod === method.toUpperCase() &&
+      observedPath !== undefined &&
+      routeMatches(path, observedPath)
+    );
+  });
+}
+
+/**
+ * ACTION EFFECT VERIFIER : les effets attendus (appris à l'enregistrement, et la cible de
+ * l'étape suivante si elle n'était pas là avant) comparés aux effets observés.
+ */
+export function verifyEffects(input: {
+  effects?: StepEffects;
+  observed: ObservedEffects;
+  afterControls: Set<string>;
+  afterRoute: string;
+  /** La cible de l'étape suivante : absente avant l'action ? présente après ? */
+  nextTarget?: { label: string; before: boolean; after: boolean };
+  /** L'action écrit (MUTATION) : une écriture sans réponse claire est AMBIGUOUS. */
+  mutation: boolean;
+  /** Statut des écritures observées (undefined : sans réponse). */
+  writes: { request: string; status?: number }[];
+}): EffectVerification {
+  const expected: string[] = [];
+  const met: string[] = [];
+  const effects = input.effects;
+  for (const control of effects?.appears ?? []) {
+    expected.push(`+ ${control}`);
+    if (present(input.afterControls, control)) met.push(`+ ${control}`);
+  }
+  for (const control of effects?.disappears ?? []) {
+    expected.push(`- ${control}`);
+    if (!present(input.afterControls, control)) met.push(`- ${control}`);
+  }
+  if (effects?.route) {
+    expected.push(`route ${effects.route}`);
+    if (routeMatches(effects.route, input.afterRoute)) met.push(`route ${input.afterRoute}`);
+  }
+  if (effects?.request) {
+    expected.push(`request ${effects.request}`);
+    const seen = requestMatches(effects.request, input.observed.requests);
+    if (seen) met.push(`request ${seen}`);
+  }
+  if (input.nextTarget && !input.nextTarget.before) {
+    expected.push(`next target "${input.nextTarget.label}" available`);
+    if (input.nextTarget.after) met.push(`next target "${input.nextTarget.label}" available`);
+  }
+  const observed = [
+    ...input.observed.appeared.slice(0, 5).map((control) => `+ ${control}`),
+    ...input.observed.disappeared.slice(0, 3).map((control) => `- ${control}`),
+    ...(input.observed.routeChanged ? [`route ${input.observed.routeChanged}`] : []),
+    ...input.observed.requests.slice(0, 3).map((request) => `request ${request}`),
+  ];
+  // Une écriture partie sans réponse claire : on ne sait pas si l'effet métier a eu lieu.
+  if (input.mutation) {
+    const accepted = input.writes.some(
+      (write) => write.status !== undefined && write.status >= 200 && write.status < 300,
+    );
+    const unclear = input.writes.some((write) => write.status === undefined || write.status >= 500);
+    if (!accepted && unclear && met.length === 0)
+      return {
+        status: 'AMBIGUOUS',
+        expected,
+        observed,
+        reasons: [
+          'a write was sent without a clear answer: it may have happened, it is never replayed automatically',
+        ],
+      };
+  }
+  if (effects?.required === false)
+    return { status: 'NOT_REQUIRED', expected, observed, reasons: ['effects.required: false'] };
+  if (expected.length === 0)
+    return { status: 'NOT_REQUIRED', expected, observed, reasons: ['no effect learned for this action'] };
+  if (met.length > 0)
+    return {
+      status: 'CONFIRMED',
+      expected,
+      observed,
+      reasons: [`observed: ${met.join(', ')}`],
+    };
+  const changed = observed.length > 0;
+  // Seule attente : la cible suivante. L'écran a changé : un écran intermédiaire (étape insérée,
+  // dry run) est possible, l'étape suivante dira si c'est une divergence. Rien n'a bougé : NO_EFFECT.
+  const learned = expected.length - (input.nextTarget && !input.nextTarget.before ? 1 : 0);
+  if (learned === 0 && changed)
+    return {
+      status: 'NOT_VERIFIED',
+      expected,
+      observed,
+      reasons: ['the screen changed, the next step target is not available yet (intermediate screen?)'],
+    };
+  return {
+    status: changed ? 'WRONG_EFFECT' : 'NO_EFFECT',
+    expected,
+    observed,
+    reasons: [
+      changed
+        ? 'the screen changed, but not as during the recording (wrong target, or the application changed)'
+        : 'click executed, no expected effect observed (nothing changed)',
+    ],
+  };
+}
+
+/** Ce que l'élément trouvé dit de lui (rôle, nom, texte, test id) — jamais la valeur d'un champ. */
+export async function readTarget(locator: Locator): Promise<ObservedTarget> {
+  return locator
+    .evaluate((el) => {
+      const clean = (text: string | null | undefined): string =>
+        (text ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      const tag = el.tagName.toLowerCase();
+      const implicit: Record<string, string> = {
+        button: 'button',
+        a: 'link',
+        select: 'combobox',
+        textarea: 'textbox',
+      };
+      const input = el as HTMLInputElement;
+      const role =
+        el.getAttribute('role') ??
+        (tag === 'input'
+          ? ['button', 'submit', 'reset'].includes(input.type)
+            ? 'button'
+            : input.type === 'checkbox'
+              ? 'checkbox'
+              : input.type === 'radio'
+                ? 'radio'
+                : 'textbox'
+          : implicit[tag]);
+      const field = ['input', 'select', 'textarea'].includes(tag);
+      const label = field && input.labels && input.labels.length > 0 ? clean(input.labels[0]?.innerText) : '';
+      const text = field ? '' : clean((el as HTMLElement).innerText || el.textContent);
+      const name = clean(el.getAttribute('aria-label')) || label || text || clean(el.getAttribute('title'));
+      const testId = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy']
+        .map((attribute) => el.getAttribute(attribute))
+        .find((value) => value);
+      return {
+        tag,
+        ...(role ? { role } : {}),
+        ...(name ? { name } : {}),
+        ...(text ? { text } : {}),
+        ...(testId ? { testId } : {}),
+      };
+    })
+    .catch(() => ({}));
+}

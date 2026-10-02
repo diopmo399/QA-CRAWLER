@@ -174,10 +174,43 @@ const intentSchema = z.discriminatedUnion('kind', [
     .strict(),
 ]);
 
+/**
+ * Ce que l'action doit produire (appris pendant l'enregistrement) : la preuve qu'elle a
+ * FONCTIONNÉ, pas seulement que Playwright a pu cliquer. `appears` / `disappears` : des
+ * contrôles (« button:Suivant » ou un nom) ; `route` : la route atteinte ; `request` : une
+ * requête (« GET /api/tasks ») ; `required: false` : un effet facultatif (rien n'est exigé).
+ */
+const effectsSchema = z
+  .object({
+    appears: z.array(nonEmpty).max(10).optional(),
+    disappears: z.array(nonEmpty).max(10).optional(),
+    route: nonEmpty.optional(),
+    request: nonEmpty.optional(),
+    required: z.boolean().optional(),
+  })
+  .strict();
+
+/** L'empreinte de la cible enregistrée : vérifiée avant de cliquer (un CSS structurel peut viser un autre élément). */
+const fingerprintSchema = z
+  .object({
+    role: nonEmpty.optional(),
+    name: nonEmpty.optional(),
+    text: nonEmpty.optional(),
+    testId: nonEmpty.optional(),
+    tag: nonEmpty.optional(),
+    /** La section / le titre le plus proche (contexte). */
+    context: nonEmpty.optional(),
+  })
+  .strict();
+
 const stepSchema = z
   .object({
     /** Courte description affichée dans les rapports (par défaut : générée à partir de l'étape). */
     name: nonEmpty.optional(),
+    /** Effets attendus de l'action (ACTION EFFECT VERIFIER). */
+    effects: effectsSchema.optional(),
+    /** Empreinte de la cible (TARGET FINGERPRINT MATCHER, LOCATOR HEALING). */
+    fingerprint: fingerprintSchema.optional(),
     goto: nonEmpty.optional(),
     click: targetSchema.optional(),
     fill: fillSchema.optional(),
@@ -226,6 +259,8 @@ const stepSchema = z
   .transform((step): FlowStep => {
     const common = {
       ...(step.name !== undefined ? { name: step.name } : {}),
+      ...(step.effects !== undefined ? { effects: step.effects } : {}),
+      ...(step.fingerprint !== undefined ? { fingerprint: step.fingerprint } : {}),
       allow: step.allow,
       optional: step.optional,
       ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
@@ -347,8 +382,27 @@ export interface FlowExpectation {
   response?: { method?: string; url: string; status: number | '2xx' | '3xx' | '4xx' | '5xx' };
 }
 
+export interface StepEffects {
+  appears?: string[];
+  disappears?: string[];
+  route?: string;
+  request?: string;
+  required?: boolean;
+}
+
+export interface TargetFingerprint {
+  role?: string;
+  name?: string;
+  text?: string;
+  testId?: string;
+  tag?: string;
+  context?: string;
+}
+
 interface StepCommon {
   name?: string;
+  effects?: StepEffects;
+  fingerprint?: TargetFingerprint;
   allow: FlowAllowance[];
   optional: boolean;
   timeoutMs?: number;

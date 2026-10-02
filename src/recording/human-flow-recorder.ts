@@ -695,6 +695,14 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ...(bool('customSelect') ? { customSelect: true } : {}),
     ...(bool('required') ? { required: true } : {}),
     ...(bool('readOnly') ? { readOnly: true } : {}),
+    ...optional('context', str('context', 60) ? redactText(str('context', 60) ?? '') : undefined),
+    ...optional(
+      'componentTag',
+      /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/.test(str('componentTag', 80) ?? '')
+        ? str('componentTag', 80)
+        : undefined,
+    ),
+    ...(bool('inShadow') ? { inShadow: true } : {}),
     ...(bool('hasOptions') ? { hasOptions: true } : {}),
   };
 }

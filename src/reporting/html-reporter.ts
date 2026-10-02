@@ -2,6 +2,7 @@ import { redactText } from '../security/redactor.js';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ExplorationResult, StateReport } from '../model/exploration-result.js';
+import type { FlowStepReport } from '../model/flow-run.js';
 import { SEVERITIES, type Issue, type Severity } from '../model/issue.js';
 import type { Reporter } from './reporter.js';
 import { buildFlowTree, displayName } from './flow-tree.js';
@@ -346,11 +347,16 @@ function flowsSection(
       const rows = flow.steps
         .map(
           (step) =>
-            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
+            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}${effectBlock(step)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
         )
         .join('');
       return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status, t.lang)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ` · ${esc(t.lastScreenExplored)}` : ''}</span></h3>
       ${flow.description ? `<p class="muted">${esc(flow.description)}</p>` : ''}
+      ${
+        flow.divergence
+          ? `<p><b>Root divergence: step ${String(flow.divergence.stepIndex)}</b> — ${esc(flow.divergence.description)}<br><span class="muted">${esc(flow.divergence.reason)}${flow.divergence.lastConfirmedStep !== undefined ? ` · last confirmed checkpoint: step ${String(flow.divergence.lastConfirmedStep)}` : ''}</span></p>`
+          : ''
+      }
       ${renderFlowSteps(flow)}
       <table><thead><tr><th>#</th><th>${c.step}</th><th>${c.class}</th><th>${c.result}</th><th>${c.reason}</th><th>${c.state}</th><th>${c.duration}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
     })
@@ -360,6 +366,24 @@ function flowsSection(
     <p class="muted">${t.flowsHint}</p>
     ${runs}
   </section>`;
+}
+
+/** EXECUTED ≠ CONFIRMED : l'effet de l'étape (attendu / observé), la cible vérifiée, la récupération. */
+function effectBlock(step: FlowStepReport): string {
+  const effect = step.effect;
+  if (!effect || effect.status === 'NOT_VERIFIED') return '';
+  const lines = [
+    `effect: <b>${esc(effect.status)}</b> (execution ${esc(effect.execution)})`,
+    ...(effect.locator ? [`locator: ${esc(effect.locator)}`] : []),
+    ...(effect.targetMatch
+      ? [`target match: ${esc(effect.targetMatch.verdict)} ${String(effect.targetMatch.score)}`]
+      : []),
+    ...(effect.healed ? [`healed: ${esc(effect.healed.from)} → ${esc(effect.healed.to)}`] : []),
+    ...(effect.expected.length > 0 ? [`expected: ${effect.expected.map(esc).join(', ')}`] : []),
+    ...(effect.observed.length > 0 ? [`observed: ${effect.observed.map(esc).join(', ')}`] : []),
+    ...(effect.recovery.length > 0 ? [`recovery: ${effect.recovery.map(esc).join(' · ')}`] : []),
+  ];
+  return `<div class="muted">${lines.join('<br>')}</div>`;
 }
 
 /** Élément introuvable : les étapes trouvées à l'écran, prêtes à coller, et ce que montre l'écran. */

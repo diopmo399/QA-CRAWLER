@@ -1313,6 +1313,47 @@ const recordingSchema = z
   })
   .strict();
 
+/**
+ * REPLAY d'un flow : RESOLVE → VERIFY TARGET → EXECUTE → OBSERVE → VERIFY EFFECT → CONFIRM.
+ * Un clic que Playwright réussit n'est une étape réussie que si son effet est observé (appris
+ * à l'enregistrement : contrôles apparus, route, requête ; et la cible de l'étape suivante).
+ * verifyActionEffects: false garde le comportement d'avant.
+ */
+const replaySchema = z
+  .object({
+    verifyActionEffects: z.boolean().default(true),
+    /** S'arrêter à la PREMIÈRE action dont l'effet manque (pas 10 étapes plus loin). */
+    detectFirstDivergence: z.boolean().default(true),
+    /** La cible de l'étape suivante, absente avant l'action, doit apparaître après. */
+    verifyNextActionPrecondition: z.boolean().default(true),
+    /** Vérifier, avant de cliquer, que l'élément trouvé est celui enregistré (empreinte). */
+    targetFingerprintMatching: z.boolean().default(true),
+    /** Retrouver le même élément par son empreinte (rôle + nom, test id, texte) si le localisateur échoue. */
+    locatorHealing: z.boolean().default(true),
+    uiStabilization: z.boolean().default(true),
+    /** Attente bornée d'un effet attendu (attente sur condition, jamais un sommeil fixe). */
+    effectTimeoutMs: z.number().int().min(100).max(60_000).default(8000),
+    recovery: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Un onglet, une section, un menu : peut être retenté (une fois). */
+        retrySafeActions: z.boolean().default(true),
+        /** Un envoi, une création : jamais retenté automatiquement (pas de double envoi). */
+        retryMutations: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
+    locator: z
+      .object({
+        preferSemantic: z.boolean().default(true),
+        structuralCssFallback: z.boolean().default(true),
+        rejectFingerprintMismatch: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
 const functionalIntelligenceSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -1555,6 +1596,7 @@ export const scenarioSchema = z
       .strict()
       .default({}),
     recording: recordingSchema.default({}),
+    replay: replaySchema.default({}),
     credentials: credentialsSchema,
     browserInteractions: browserInteractionsSchema.default({}),
     forms: formsSchema.default({}),

@@ -167,6 +167,68 @@ chose, ou après un envoi) : dans le rapport et `human-journey.json`, sans rien 
 raison). Le rapport montre la chronologie, les dépendances, les phases et les actions
 fusionnées ou écartées avec leur règle.
 
+## Rejeu vérifié : effet des actions
+
+**CLICKED ≠ SUCCEEDED.** Un clic que Playwright réussit prouve seulement que le clic a eu lieu.
+Au rejeu, chaque clic, case ou choix suit : RESOLVE → VERIFY TARGET → EXECUTE → OBSERVE →
+VERIFY EFFECT → CONFIRM. L'étape n'est réussie que si son effet est observé.
+
+**Effets appris à l'enregistrement** (`effects` dans `generated.flow.yaml`) : les contrôles
+nommés apparus ou disparus (jamais un horodatage, un compteur ou un indicateur de chargement),
+la route atteinte, la requête envoyée. Et, sans rien apprendre, la **cible de l'étape
+suivante** : absente avant l'action, elle doit être là après (NEXT_ACTION_TARGET_AVAILABLE).
+
+```yaml
+- click: { role: button, name: Tasks }
+  effects:
+    appears: ['button:Company interview']
+    request: GET /api/tasks
+```
+
+| Effet          | Sens                                                                              |
+| -------------- | --------------------------------------------------------------------------------- |
+| `CONFIRMED`    | un effet attendu est observé (même écran pour le StateDetector : onglet, section) |
+| `NO_EFFECT`    | clic exécuté, rien de changé → `ACTION_NOT_CONFIRMED`                             |
+| `WRONG_EFFECT` | l'écran a changé, mais pas comme à l'enregistrement (mauvaise cible ?)            |
+| `AMBIGUOUS`    | une écriture sans réponse claire : `MUTATION_EFFECT_AMBIGUOUS`, jamais renvoyée   |
+| `NOT_REQUIRED` | rien à exiger (rien appris, cible suivante déjà là, `effects.required: false`)    |
+
+L'attente d'un effet est **sur condition** et bornée (`replay.effectTimeoutMs`) : le contrôle
+attendu, la route, la cible suivante — jamais un sommeil fixe.
+
+**Première divergence.** Le rejeu s'arrête à l'action dont l'effet manque, pas dix étapes plus
+loin sur « element not found » : le rapport et le terminal donnent `Root divergence: step N`
+et le dernier point de reprise confirmé.
+
+**Empreinte de la cible** (`fingerprint`, pour un CSS de position ou une cible ambiguë) : rôle,
+nom, texte, test id, balise, section. Avant de cliquer, l'élément trouvé est comparé
+(EXACT / STRONG / WEAK / MISMATCH) : une cible qui n'est pas la bonne n'est **jamais cliquée**
+(`TARGET_FINGERPRINT_MISMATCH`). Le **même** élément est alors cherché par son empreinte
+(rôle + nom, test id, texte ; un CSS de position est essayé en dernier) : localisateur guéri,
+signalé dans le rapport, jamais réécrit dans le flow.
+
+**Récupération.** Une action sûre (onglet, section, menu) sans effet est retentée une fois
+(cible re-résolue, puis les autres localisateurs de son empreinte). Une action qui écrit
+(envoi, création) n'est **jamais** retentée automatiquement. Un voile qui couvre la cible est
+attendu par Playwright (jamais de `force: true`).
+
+**Web components.** Vu du document, un clic dans un shadow DOM est « retargeté » sur l'hôte
+(sans texte, souvent un conteneur : `click "element"`, `css=main > div:nth-of-type(…)`).
+L'enregistreur lit le chemin composé du clic : la cible est le vrai bouton interne (rôle +
+nom), le CSS traverse l'hôte, les saisies dans un shadow DOM sont enregistrées.
+
+```yaml
+replay:
+  verifyActionEffects: true # false : le comportement d'avant
+  detectFirstDivergence: true
+  verifyNextActionPrecondition: true
+  targetFingerprintMatching: true
+  locatorHealing: true
+  effectTimeoutMs: 8000
+  recovery: { enabled: true, retrySafeActions: true, retryMutations: false }
+  locator: { preferSemantic: true, structuralCssFallback: true, rejectFingerprintMismatch: true }
+```
+
 ## Données de test enregistrées
 
 Le flow dit **quoi faire**, le jeu de données dit **avec quoi**. Les valeurs saisies pendant

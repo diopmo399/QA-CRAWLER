@@ -82,6 +82,26 @@ export function installRecorder(options: CaptureOptions): void {
   };
   const isOverlay = (event: Event): boolean =>
     event.composedPath().some((node) => node instanceof Element && node.hasAttribute(OVERLAY));
+  /**
+   * L'élément d'origine de l'événement, MÊME dans un shadow DOM : vu du document, un clic dans un
+   * web component est « retargeté » sur l'hôte (sans texte, souvent un conteneur) ; le chemin
+   * composé garde le vrai bouton, le vrai champ.
+   */
+  const originOf = (event: Event): Element | null => {
+    const first = event.composedPath().find((node) => node instanceof Element);
+    return first instanceof Element ? first : event.target instanceof Element ? event.target : null;
+  };
+  /** Le premier élément du chemin composé (du plus interne au plus externe) qui correspond. */
+  const inPath = (event: Event, test: (el: Element) => boolean): Element | null => {
+    for (const node of event.composedPath()) {
+      if (!(node instanceof Element) || node === document.body || node === document.documentElement) break;
+      if (test(node)) return node;
+    }
+    return null;
+  };
+  /** Le composant maison (balise avec tiret) le plus proche, à travers les shadow roots. */
+  const componentOf = (event: Event): string | undefined =>
+    inPath(event, (el) => el.tagName.includes('-'))?.tagName.toLowerCase();
   const isVisible = (el: Element): boolean => {
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return false;
@@ -89,7 +109,20 @@ export function installRecorder(options: CaptureOptions): void {
     return style.visibility !== 'hidden' && style.display !== 'none';
   };
   const textOf = (el: Element | null | undefined): string =>
-    el ? clean((el as HTMLElement).innerText || el.textContent) : '';
+    el ? clean((el as HTMLElement).innerText || el.textContent || el.shadowRoot?.textContent) : '';
+  /** Le titre de la section qui contient l'élément (contexte de l'empreinte, jamais une valeur). */
+  const contextOf = (el: Element): string => {
+    const section = el.closest(
+      'section, fieldset, form, [role="region"], [role="tabpanel"], [role="dialog"], mat-expansion-panel, mat-card, article',
+    );
+    if (!section) return '';
+    const heading =
+      section.getAttribute('aria-label') ??
+      textOf(
+        section.querySelector('legend, h1, h2, h3, h4, [role="heading"], mat-panel-title, mat-card-title'),
+      );
+    return clean(heading, 60);
+  };
 
   const roleOf = (el: Element): string => {
     const explicit = el.getAttribute('role');
@@ -188,7 +221,17 @@ export function installRecorder(options: CaptureOptions): void {
       ? CSS.escape(value)
       : value.replace(/"/g, '\\"');
 
+  /** CSS d'un élément ; dans un shadow DOM, préfixé par l'hôte (Playwright traverse les shadow roots ouverts). */
   const cssOf = (el: Element): { css: string; stable: boolean } => {
+    const root = el.getRootNode();
+    const inner = localCss(el);
+    if (typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot) {
+      const host = cssOf(root.host);
+      return { css: `${host.css} ${inner.css}`, stable: host.stable && inner.stable };
+    }
+    return inner;
+  };
+  const localCss = (el: Element): { css: string; stable: boolean } => {
     const tag = el.tagName.toLowerCase();
     const testId = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy']
       .map((name) => [name, el.getAttribute(name)] as const)
@@ -205,6 +248,11 @@ export function installRecorder(options: CaptureOptions): void {
     let node: Element | null = el;
     for (let depth = 0; node && node !== document.body && depth < 5; depth += 1) {
       const parent: Element | null = node.parentElement;
+      // Un composant maison (balise à tiret) est une ancre plus stable qu'une position.
+      if (depth > 0 && node.tagName.includes('-') && !parts.some((part) => part.includes('-'))) {
+        parts.unshift(node.tagName.toLowerCase());
+        break;
+      }
       const nodeTag = node.tagName;
       const same = parent ? Array.from(parent.children).filter((child) => child.tagName === nodeTag) : [];
       const position = same.length > 1 ? `:nth-of-type(${String(same.indexOf(node) + 1)})` : '';
@@ -277,10 +325,15 @@ export function installRecorder(options: CaptureOptions): void {
       .map((attribute) => [attribute, el.getAttribute(attribute)] as const)
       .find(([, value]) => value);
     const testId = testIdEntry?.[1];
+    const context = contextOf(el);
     return {
       tag,
       role,
       name,
+      ...(context && context !== name ? { context } : {}),
+      ...(typeof ShadowRoot !== 'undefined' && el.getRootNode() instanceof ShadowRoot
+        ? { inShadow: true }
+        : {}),
       ...(textOf(el) && tag !== 'select' ? { text: textOf(el).slice(0, 80) } : {}),
       ...(label ? { label } : {}),
       ...(guessed ? { guessedLabel: guessed } : {}),
@@ -410,29 +463,45 @@ export function installRecorder(options: CaptureOptions): void {
   ];
   const INTERACTIVE_HINT_CLASS =
     /(^|[\s_-])(btn|button|clickable|accordion|expansion-panel-header|panel-header|step-header|stepper-header|toggle)($|[\s_-])/i;
-  const pointerAncestor = (el: Element): Element | null => {
-    let node: Element | null = el;
-    let found: Element | null = null;
-    for (let depth = 0; node && node !== document.body && depth < 6; depth += 1) {
+  /**
+   * La cible fonctionnelle d'un clic hors des contrôles reconnus : l'élément le plus INTERNE du
+   * chemin composé qui porte une preuve d'interactivité (onclick, tabindex, attributs et classes
+   * de composant) ; à défaut, celui qui DÉFINIT le curseur « main » (pas un grand conteneur qui en
+   * hérite). Jamais l'hôte d'un web component quand un élément interne convient.
+   */
+  const functionalTarget = (event: Event): Element | null => {
+    const path = event.composedPath().filter((node): node is Element => node instanceof Element);
+    const viewport = window.innerWidth * window.innerHeight;
+    const reasonable = (node: Element): boolean => {
+      const box = node.getBoundingClientRect();
+      return box.width * box.height <= viewport * 0.4 && clean(textOf(node), 400).length <= 160;
+    };
+    for (const node of path) {
+      if (node === document.body || node === document.documentElement) break;
+      const tabindex = node.getAttribute('tabindex');
       if (
-        getComputedStyle(node).cursor === 'pointer' ||
-        node.hasAttribute('onclick') ||
-        node.hasAttribute('tabindex') ||
-        // Composants maison : un en-tête d'accordéon, un onglet, une étape, un bouton bascule.
-        INTERACTIVE_HINT_ATTRIBUTES.some((name) => node?.hasAttribute(name) === true) ||
-        INTERACTIVE_HINT_CLASS.test(typeof node.className === 'string' ? node.className : '')
+        (node.hasAttribute('onclick') ||
+          (tabindex !== null && Number(tabindex) >= 0) ||
+          INTERACTIVE_HINT_ATTRIBUTES.some((name) => node.hasAttribute(name)) ||
+          INTERACTIVE_HINT_CLASS.test(typeof node.className === 'string' ? node.className : '')) &&
+        reasonable(node)
       )
-        found = node;
-      else if (found) break;
-      node = node.parentElement;
+        return node;
     }
-    return found;
-  };
-
-  const interactive = (target: EventTarget | null): Element | null => {
-    const el = target instanceof Element ? target : null;
-    if (!el) return null;
-    return el.closest(CANDIDATES) ?? el;
+    for (const node of path) {
+      if (node === document.body || node === document.documentElement) break;
+      const parent =
+        node.parentElement ??
+        (node.getRootNode() as ShadowRoot | (Document & { host?: Element })).host ??
+        null;
+      if (
+        getComputedStyle(node).cursor === 'pointer' &&
+        (!parent || getComputedStyle(parent).cursor !== 'pointer') &&
+        reasonable(node)
+      )
+        return node;
+    }
+    return null;
   };
 
   // ---- focus : la valeur trouvée en entrant dans le champ (empreinte), pour reconnaître une valeur inchangée.
@@ -440,7 +509,7 @@ export function installRecorder(options: CaptureOptions): void {
     'focusin',
     (event) => {
       if (isOverlay(event)) return;
-      const el = event.target instanceof Element ? event.target : null;
+      const el = originOf(event);
       if (!el || !el.matches(FIELD) || initial.has(el)) return;
       initial.set(el, sensitiveField(el) ? undefined : digestOf(currentValue(el)));
     },
@@ -452,8 +521,12 @@ export function installRecorder(options: CaptureOptions): void {
     'click',
     (event) => {
       if (isOverlay(event) || !event.isTrusted) return;
-      const el = interactive(event.target);
+      // Le contrôle réellement cliqué : le premier élément interactif du chemin composé (un <span>
+      // dans un bouton → le bouton ; un bouton dans un web component → ce bouton, pas l'hôte).
+      const origin = originOf(event);
+      const el = inPath(event, (node) => node.matches(CANDIDATES)) ?? origin;
       if (!el) return;
+      const component = componentOf(event);
       const tag = el.tagName.toLowerCase();
       const type = ((el as HTMLInputElement).type || '').toLowerCase();
       let noise: string | undefined;
@@ -474,11 +547,15 @@ export function installRecorder(options: CaptureOptions): void {
       // corrélation peut encore promouvoir s'il précède une navigation).
       let target = el;
       if (!noise && !el.matches(CANDIDATES)) {
-        const clickable = pointerAncestor(el);
+        const clickable = functionalTarget(event);
         if (clickable) target = clickable;
         else noise = 'click on a non-interactive element';
       }
-      send({ type: 'click', element: describe(target), ...(noise ? { noise } : {}) });
+      send({
+        type: 'click',
+        element: { ...describe(target), ...(component ? { componentTag: component } : {}) },
+        ...(noise ? { noise } : {}),
+      });
     },
     { capture: true, passive: true },
   );
@@ -489,7 +566,7 @@ export function installRecorder(options: CaptureOptions): void {
     'input',
     (event) => {
       if (isOverlay(event)) return;
-      const el = event.target instanceof Element ? event.target : null;
+      const el = originOf(event);
       if (!el || !el.matches(FIELD)) return;
       const tag = el.tagName.toLowerCase();
       const type = ((el as HTMLInputElement).type || '').toLowerCase();
@@ -521,7 +598,7 @@ export function installRecorder(options: CaptureOptions): void {
     'change',
     (event) => {
       if (isOverlay(event)) return;
-      const el = event.target instanceof Element ? event.target : null;
+      const el = originOf(event);
       if (el?.matches(FIELD)) commit(el);
     },
     { capture: true, passive: true },
@@ -531,8 +608,10 @@ export function installRecorder(options: CaptureOptions): void {
     'focusout',
     (event) => {
       if (isOverlay(event)) return;
-      const el = event.target instanceof Element ? event.target : null;
-      if (el && (el as HTMLElement).isContentEditable && pending.has(el)) commit(el);
+      const el = originOf(event);
+      // Un champ d'un shadow DOM (change n'en sort pas) : sa valeur est prise en le quittant.
+      if (el && pending.has(el) && ((el as HTMLElement).isContentEditable || el.getRootNode() !== document))
+        commit(el);
     },
     { capture: true, passive: true },
   );
@@ -558,7 +637,7 @@ export function installRecorder(options: CaptureOptions): void {
     (event) => {
       if (isOverlay(event) || !event.isTrusted) return;
       if (event.key !== 'Enter' && event.key !== 'Escape') return;
-      const el = event.target instanceof Element ? event.target : null;
+      const el = originOf(event);
       if (!el) return;
       if (event.key === 'Enter' && el.matches(FIELD)) {
         const timer = pending.get(el);
