@@ -422,6 +422,18 @@ export class UITransitionWaiter {
     let reported = 0;
     for (;;) {
       const elapsed = Date.now() - started;
+      // Les vérifications D'ABORD, la sonde ENSUITE : une cible apparue pendant la vérification a
+      // forcément produit une mutation que la lecture verra (jamais « prête » sur un écran jugé calme à tort).
+      const check = Date.now() - lastCheck >= this.checkEveryMs;
+      const effect =
+        check && context.effectObserved ? await context.effectObserved().catch(() => false) : undefined;
+      const next =
+        check && context.nextReady
+          ? await context
+              .nextReady()
+              .catch((): { ready: boolean; present?: boolean; reason?: string } => ({ ready: false }))
+          : undefined;
+      if (check) lastCheck = Date.now();
       let reading = await readTransitionProbe(page);
       if (!reading && !page.isClosed()) {
         // Nouveau document (navigation complète) : une transition ; la sonde est reposée.
@@ -437,16 +449,6 @@ export class UITransitionWaiter {
           lastMutationAt = Date.now() - reading.msSinceMutation;
         }
       }
-      const check = Date.now() - lastCheck >= this.checkEveryMs;
-      const effect =
-        check && context.effectObserved ? await context.effectObserved().catch(() => false) : undefined;
-      const next =
-        check && context.nextReady
-          ? await context
-              .nextReady()
-              .catch((): { ready: boolean; present?: boolean; reason?: string } => ({ ready: false }))
-          : undefined;
-      if (check) lastCheck = Date.now();
       const sample: TransitionSample = {
         elapsedMs: Date.now() - started,
         mutations: (reading?.mutations ?? 0) + (navigated ? 1 : 0),
