@@ -10,6 +10,7 @@ import type {
   ScreenControl,
   WorkflowPrerequisite,
 } from './model.js';
+import type { ExpectedTargetAnalysis } from './expected-target.js';
 import { labelSimilarity, round } from './similarity.js';
 
 /** Ce que l'analyse reçoit : le symptôme, l'écran, le réseau, et l'étape d'avant. */
@@ -36,6 +37,10 @@ export interface DivergenceInput {
   goal?: GoalProgress;
   /** La route enregistrée de l'étape (effects.route), si elle diffère de la route courante. */
   expectedRoute?: string;
+  /** Le symptôme technique tel que rapporté (« TARGET_FINGERPRINT_MISMATCH: … »). */
+  technicalSymptom?: string;
+  /** La cible attendue comprise : présente ? voisine ? absente — et pourquoi. */
+  expectedTarget?: ExpectedTargetAnalysis;
 }
 
 const PERMISSION_TEXT =
@@ -207,6 +212,23 @@ export function analyzeDivergence(input: DivergenceInput): DivergenceAnalysis {
         ? { source: 'NETWORK', detail: `${String(pending.length)} request(s) without an answer yet` }
         : { source: 'RUNTIME', detail: 'the screen says it is loading' },
     ]);
+  // HYPOTHESIS REBALANCING : un localisateur qui ne correspond plus n'est pas une cause.
+  // LOCATOR_STALE n'est fort que si le contrôle fonctionnel semble présent ; une cible absente
+  // est TARGET_NOT_RENDERED, et la question devient POURQUOI (section, précondition, état).
+  const target = input.expectedTarget;
+  if (target) {
+    for (const cause of target.rootCauses) {
+      const existing = causes.find((candidate) => candidate.category === cause.category);
+      if (existing) {
+        existing.confidence = cause.confidence;
+        existing.evidence = [...cause.evidence, ...existing.evidence].slice(0, 4);
+      } else causes.push({ ...cause, evidence: [...cause.evidence] });
+    }
+    if (target.functionalRecovery)
+      for (const cause of causes)
+        if (['LOCATOR_STALE', 'TARGET_RENAMED', 'TARGET_REPLACED', 'TARGET_MOVED'].includes(cause.category))
+          cause.confidence = Math.min(cause.confidence, 0.2);
+  }
   if (causes.length === 0)
     add('UNKNOWN_DIVERGENCE', 0.2, [{ source: 'RUNTIME', detail: 'no specific cause found' }]);
 
@@ -218,11 +240,25 @@ export function analyzeDivergence(input: DivergenceInput): DivergenceAnalysis {
     'APPLICATION_BEHAVIOR_CHANGED',
   ]);
   const recoverable = !causes.some((cause) => blocking.has(cause.category) && cause.confidence >= 0.7);
-  const missingPrerequisites: WorkflowPrerequisite[] = causes.some(
-    (cause) => cause.category === 'PREREQUISITE_MISSING',
-  )
-    ? [{ label: expected.label, kind: 'CONTROL', reason: 'disabled until an earlier choice is made' }]
-    : [];
+  const missingPrerequisites: WorkflowPrerequisite[] = target?.missingPreconditions.length
+    ? target.missingPreconditions.map((condition) => ({
+        label: condition,
+        kind: 'STEP' as const,
+        reason: `${target.target.label} is not rendered until ${condition}`,
+      }))
+    : causes.some((cause) => cause.category === 'PREREQUISITE_MISSING')
+      ? [{ label: expected.label, kind: 'CONTROL', reason: 'disabled until an earlier choice is made' }]
+      : [];
+  const FUNCTIONAL = new Set<DivergenceCategory>([
+    'PARENT_SECTION_CLOSED',
+    'PREREQUISITE_MISSING',
+    'WRONG_WORKFLOW_STATE',
+    'WRONG_TAB_SELECTED',
+    'BUSINESS_RULE_CHANGED',
+  ]);
+  const functionalRootCause = causes.find(
+    (cause) => FUNCTIONAL.has(cause.category) && cause.confidence >= 0.5,
+  );
   const observedState: FunctionalState = {
     route: screen.route,
     controls: visible.slice(0, 30).map((control) => `${control.role}:${control.name}`),
@@ -250,6 +286,9 @@ export function analyzeDivergence(input: DivergenceInput): DivergenceAnalysis {
     ...(missingPrerequisites.length > 0 ? { missingPrerequisites } : {}),
     possibleCauses: causes.slice(0, 5),
     rootStepIndex: deferred && input.previous ? input.previous.index : input.stepIndex,
+    ...(input.technicalSymptom ? { technicalSymptom: input.technicalSymptom } : {}),
+    ...(target ? { expectedTarget: target } : {}),
+    ...(functionalRootCause ? { functionalRootCause } : {}),
     recoverable,
   };
 }

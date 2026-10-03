@@ -226,6 +226,9 @@ import { missionOf, RuleBasedGoalPlanner } from '../goals/goal-planner.js';
 import { GoalTracker } from '../goals/goal-tracker.js';
 import { firstFunctionalDivergence } from '../cognitive/functional-reasoning.js';
 import { loadRecordingCandidates, recordingCandidatesFile } from '../recording/recording-intelligence.js';
+import type { KnownRevealer, TargetProbe } from '../workflow-healing/expected-target.js';
+import { isTechnicalTarget } from '../workflow-healing/workflow-context.js';
+import { toLocator } from '../execution/locator-resolver.js';
 import { JsonKnowledgeBase } from '../knowledge/json-knowledge-base.js';
 import type { KnowledgeBase, TransitionKnowledge } from '../knowledge/knowledge-model.js';
 import type { ConfidenceResult } from '../intelligence/confidence-engine.js';
@@ -3858,7 +3861,29 @@ export class FlowExplorer {
     }
     located ??= await this.flowSteps.locate(page, step.target, timeout);
     if (typeof located !== 'string' && fingerprint && replay.targetFingerprintMatching && !effect.healed) {
-      const match = matchFingerprint(fingerprint, await readTarget(located));
+      // Un élément re-rendu entre la localisation et la lecture se relit (au plus deux fois) :
+      // une lecture ratée n'est jamais la preuve qu'il s'agit d'un autre élément.
+      let observed = await readTarget(located);
+      for (let retry = 0; retry < 2 && observed.tag === undefined; retry++) {
+        await page.waitForTimeout(250);
+        const again = await this.flowSteps.locate(page, step.target, Math.min(timeout, 1500));
+        if (typeof again === 'string') break;
+        located = again;
+        observed = await readTarget(again);
+      }
+      const identifiable = Boolean(fingerprint.name ?? fingerprint.text ?? fingerprint.testId);
+      if (observed.tag === undefined && !identifiable) {
+        // Aucune identité enregistrée à comparer, élément illisible : rien ne prouve un mauvais élément.
+        effect.targetMatch = { verdict: 'WEAK_MATCH', score: 0.4 };
+        effect.reasons = [
+          ...effect.reasons,
+          'target identity not verifiable (no recorded name; element re-rendered)',
+        ];
+      }
+      const match =
+        observed.tag === undefined && !identifiable
+          ? { verdict: 'WEAK_MATCH' as const, score: 0.4, reasons: [] }
+          : matchFingerprint(fingerprint, observed);
       effect.targetMatch = { verdict: match.verdict, score: match.score };
       if (match.verdict === 'MISMATCH' && replay.locator.rejectFingerprintMismatch) {
         const healed = replay.locatorHealing
@@ -3866,7 +3891,8 @@ export class FlowExplorer {
           : undefined;
         if (!healed) {
           // FOUND ELEMENT != CORRECT ELEMENT : ne jamais cliquer une cible qui n'est pas la bonne.
-          return diverged('TARGET_MISMATCH', {
+          // Illisible après relecture : la cible n'est pas là de façon stable (pas un « autre élément »).
+          return diverged(observed.tag === undefined ? 'TARGET_NOT_FOUND' : 'TARGET_MISMATCH', {
             page,
             report: done('FAILED', {
               reason: `TARGET_FINGERPRINT_MISMATCH: expected "${fingerprint.name ?? fingerprint.text ?? fingerprint.testId ?? ''}", found ${match.reasons.join('; ')} (not clicked)`,
@@ -4462,6 +4488,12 @@ export class FlowExplorer {
           position: position.index - 1,
           actionId: `${at.flow.name}#${String(position.index)}`,
           symptom,
+          ...(failure.report.reason
+            ? { technicalSymptom: failure.report.reason.split(':')[0] ?? symptom }
+            : {}),
+          identifiable:
+            !isTechnicalTarget(at.step.target) ||
+            Boolean(at.step.fingerprint?.name ?? at.step.fingerprint?.text ?? at.step.fingerprint?.testId),
           ...(previous
             ? {
                 previous: {
@@ -5086,8 +5118,13 @@ export class FlowExplorer {
       ...context.nextActions.map((action) => action.label),
       ...context.requiredFutureFields.map((action) => action.label),
     ].filter((label, index, list) => label.length > 0 && list.indexOf(label) === index);
+    const target = input.expectedTarget;
+    // FUNCTIONAL GOAL RECOVERY : jamais « trouve un autre localisateur » ; quelle précondition manque ?
+    const question = target?.functionalRecovery
+      ? `The expected ${target.target.field ? 'field' : 'control'} "${target.target.label}" is ${target.presence === 'HIDDEN' ? 'not visible' : 'not rendered'}. Given the current functional state, the expected target, known dependencies (${target.revealers.map((revealer) => `${revealer.kind} "${revealer.label}"${revealer.hypothetical ? ' (hypothesis)' : ''}`).join(', ') || 'none'}), the recorded journey and the available SAFE actions, what missing precondition most plausibly prevents it from becoming available, and which SAFE action establishes it? Use only the provided evidence and action IDs.`
+      : `Which available action is most likely to restore goal ${input.goal.id} (so that the next recorded targets ${nextTargets.slice(0, 4).join(', ') || 'appear'}), using only the provided evidence and action IDs?`;
     const base = this.cognitive?.intelligenceSources({
-      question: `Which available action is most likely to restore goal ${input.goal.id} (so that the next recorded targets ${nextTargets.slice(0, 4).join(', ') || 'appear'}), using only the provided evidence and action IDs?`,
+      question,
       nextActions: context.nextActions.map((action) => `${action.kind} ${action.label}`),
       nextTargets,
       previousActions: context.previousActions.map((action) => `${action.kind} ${action.label}`),
@@ -5103,6 +5140,35 @@ export class FlowExplorer {
       },
       candidates,
       deterministic: { confidence: 0, status: `${input.outcome.status} (${input.divergence})` },
+      // L'état fonctionnel de la récupération : cible, chaîne de préconditions, hypothèses rééquilibrées.
+      ...(base?.functional
+        ? {
+            functional: {
+              ...base.functional,
+              ...(target
+                ? {
+                    missingPreconditions: [
+                      ...target.missingPreconditions,
+                      ...base.functional.missingPreconditions,
+                    ].slice(0, 8),
+                    blockingReasons: [
+                      ...target.rootCauses
+                        .slice(0, 3)
+                        .map(
+                          (cause) =>
+                            `${cause.category} ${String(cause.confidence)}: ${cause.evidence[0]?.detail ?? ''}`,
+                        ),
+                      ...base.functional.blockingReasons,
+                    ].slice(0, 6),
+                    nextActionTargets: [target.target.label, ...base.functional.nextActionTargets].slice(
+                      0,
+                      8,
+                    ),
+                  }
+                : {}),
+            },
+          }
+        : {}),
     };
     const built = this.aiContext.build(trigger.reason, sources);
     const result = await ai.consult({
@@ -5396,6 +5462,8 @@ export class FlowExplorer {
           }
         : {}),
       synonyms: (term) => this.semantics.dictionary.expand(term),
+      probeTarget: (target) => this.probeTarget(page, target),
+      revealersOf: (label, role) => this.revealersOf(label, role),
       learn: (input) => {
         this.learnRecovery(input);
       },
@@ -5534,8 +5602,11 @@ export class FlowExplorer {
 
   private async predicateHolds(page: Page, predicate: GoalPredicate): Promise<boolean> {
     if (predicate.kind === 'ROUTE') return routeMatches(predicate.value, pathOf(page.url()));
-    const target: FlowTarget =
-      predicate.kind === 'VISIBLE_FIELD'
+    // Un champ sans nom accessible (css, test id) se vérifie par son localisateur enregistré :
+    // existe, visible, utilisable — jamais par un « libellé » qui serait un sélecteur.
+    const target: FlowTarget = predicate.target
+      ? predicate.target
+      : predicate.kind === 'VISIBLE_FIELD'
         ? { strategy: 'label', value: predicate.value }
         : predicate.role
           ? { strategy: 'role', role: predicate.role, name: predicate.value }
@@ -5543,8 +5614,54 @@ export class FlowExplorer {
     const found = await this.flowSteps.locate(page, target, predicate.kind === 'ABSENT_CONTROL' ? 150 : 400);
     if (predicate.kind === 'ABSENT_CONTROL') return typeof found === 'string';
     if (typeof found === 'string') return false;
-    if (predicate.kind === 'CONTROL_AVAILABLE') return found.isEnabled().catch(() => false);
+    if (predicate.kind === 'CONTROL_AVAILABLE' || (predicate.kind === 'VISIBLE_FIELD' && predicate.target))
+      return found.isEnabled().catch(() => false);
     return true;
+  }
+
+  /** DIAGNOSE : le localisateur enregistré désigne-t-il un élément présent, visible, lisible ? (rien n'est cliqué) */
+  private async probeTarget(page: Page, target: FlowTarget): Promise<TargetProbe> {
+    try {
+      const locator = toLocator(page, {
+        strategy: target.strategy,
+        ...(target.role !== undefined ? { role: target.role } : {}),
+        ...(target.name !== undefined ? { name: target.name } : {}),
+        ...(target.value !== undefined ? { value: target.value } : {}),
+        ...(target.exact !== undefined ? { exact: target.exact } : {}),
+      }).first();
+      const attached = (await locator.count().catch(() => 0)) > 0;
+      if (!attached) return { attached: false, visible: false, readable: false };
+      const visible = await locator.isVisible().catch(() => false);
+      const observed = await readTarget(locator);
+      const enabled = visible ? await locator.isEnabled().catch(() => false) : false;
+      return { attached, visible, readable: observed.tag !== undefined, enabled };
+    } catch {
+      return { attached: false, visible: false, readable: false };
+    }
+  }
+
+  /** Ce que le graphe causal sait de ce qui révèle la cible (des hypothèses tant que le runtime ne confirme pas). */
+  private revealersOf(label: string, role?: string): KnownRevealer[] {
+    const causal = this.cognitive?.causal;
+    if (!causal || !label) return [];
+    const keys = [role ?? 'textbox', 'textbox', 'combobox', 'button']
+      .filter((candidate, index, list) => list.indexOf(candidate) === index)
+      .map((candidate) => `${candidate}:${normalizeControl(label)}`);
+    return keys.flatMap((key) =>
+      causal
+        .causesOf(key)
+        .filter((link) => link.hypothesis.status !== 'CONTRADICTED' && link.hypothesis.status !== 'REJECTED')
+        .map((link): KnownRevealer => {
+          const [kind = 'click', ...rest] = link.cause.split(' ');
+          return {
+            role: kind === 'check' ? 'checkbox' : 'button',
+            name: rest.join(' '),
+            source: 'CAUSAL',
+            status: link.hypothesis.status,
+            detail: `${link.cause} ${link.relation} ${link.effect} (${link.hypothesis.status})`,
+          };
+        }),
+    );
   }
 
   private learnRecovery(input: RecoveryInput): void {

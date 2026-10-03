@@ -1,4 +1,11 @@
-import type { FlowStep } from '../config/flow-schema.js';
+import type { FlowStep, FlowTarget } from '../config/flow-schema.js';
+import {
+  analyzeExpectedTarget,
+  type ExpectedTargetAnalysis,
+  type KnownRevealer,
+  type RecordedStepView,
+  type TargetProbe,
+} from './expected-target.js';
 import type { RecoveryInput, RecoveryKnowledge } from '../knowledge/knowledge-model.js';
 import { analyzeDivergence, confirmCause, type DivergenceInput } from './divergence-analyzer.js';
 import { recoverGoal, type RecoveryDriver } from './goal-recovery-engine.js';
@@ -17,7 +24,13 @@ import type {
 } from './model.js';
 import { historicalRecoveries, recoveryKeyOf } from './recovery-memory.js';
 import { controlKey, planRecovery, reasonsOf, type SafetyJudgement } from './recovery-planner.js';
-import { inferFunctionalGoal, predicateText, resolveWorkflowContext } from './workflow-context.js';
+import {
+  inferFunctionalGoal,
+  isTechnicalTarget,
+  predicateText,
+  resolveWorkflowContext,
+  semanticActionOf,
+} from './workflow-context.js';
 
 export interface HealingOptions {
   analyzeDivergence: boolean;
@@ -59,6 +72,10 @@ export interface HealingPorts {
   advise?(input: AdviceInput): Promise<AdvisedRecovery | undefined>;
   /** Le runtime a confirmé (ou contredit) la proposition. */
   adviceOutcome?(auditId: string, reached: boolean, detail: string): void;
+  /** DIAGNOSE : le localisateur enregistré désigne-t-il un élément présent, visible, lisible ? */
+  probeTarget?(target: FlowTarget): Promise<TargetProbe>;
+  /** Ce qui rend la cible disponible d'après les connaissances (dépendances de champs, graphe causal). */
+  revealersOf?(label: string, role?: string): KnownRevealer[];
 }
 
 export interface AdviceInput {
@@ -69,6 +86,10 @@ export interface AdviceInput {
   plan: RecoveryPlan;
   outcome: RecoveryOutcome;
   divergence: string;
+  /** La cible attendue comprise (présence, section parente, préconditions manquantes). */
+  expectedTarget?: ExpectedTargetAnalysis;
+  /** Les hypothèses fonctionnelles (catégorie et confiance), les plus probables d'abord. */
+  hypotheses: { category: string; confidence: number }[];
 }
 
 export interface AdvisedRecovery {
@@ -84,6 +105,10 @@ export interface HealRequest {
   symptom: DivergenceSymptom;
   /** L'étape précédente : son effet a-t-il été seulement accepté provisoirement ? */
   previous?: { index: number; deferredEffect: boolean; description: string; observed: readonly string[] };
+  /** Le symptôme technique rapporté (« TARGET_FINGERPRINT_MISMATCH: … »). */
+  technicalSymptom?: string;
+  /** Une identité vérifiable a été enregistrée pour la cible (nom, texte, test id). */
+  identifiable?: boolean;
 }
 
 export interface HealResult {
@@ -147,7 +172,41 @@ export async function healWorkflow(
     ...(initial ? { goal: initial } : {}),
     ...(effects?.route ? { expectedRoute: effects.route } : {}),
   };
-  let analysis = analyzeDivergence(divergenceInput);
+  // PHASE 1 — DIAGNOSE : la cible existe-t-elle FONCTIONNELLEMENT ? sinon, qu'est-ce qui la révèle ?
+  const expectedTarget =
+    // Un CHAMP absent : la question est fonctionnelle (qu'est-ce qui le rend disponible ?). Un contrôle
+    // cliquable renommé sans ressemblance de nom reste l'affaire de la récupération existante.
+    (request.symptom === 'TARGET_NOT_FOUND' || request.symptom === 'TARGET_MISMATCH') &&
+    'target' in step &&
+    context.currentAction.field === true &&
+    context.currentAction.kind !== 'check'
+      ? analyzeExpectedTarget({
+          current: context.currentAction,
+          identifiable: request.identifiable ?? !isTechnicalTarget(step.target),
+          probe: ports.probeTarget
+            ? await ports.probeTarget(step.target)
+            : { attached: false, visible: false, readable: false },
+          controls: screen.controls,
+          previous: request.steps.slice(0, request.position).map((previous, at): RecordedStepView => ({
+            index: at + 1,
+            action: semanticActionOf(previous, at + 1),
+            appears: 'effects' in previous ? (previous.effects?.appears ?? []) : [],
+          })),
+          previousDeferred: request.previous?.deferredEffect === true,
+          revealers: ports.revealersOf?.(context.currentAction.label, context.currentAction.role) ?? [],
+          ...(ports.synonyms ? { synonyms: (term: string) => ports.synonyms?.(term) ?? [] } : {}),
+        })
+      : undefined;
+  if (expectedTarget)
+    ports.emit(
+      'EXPECTED_TARGET_ANALYZED',
+      `"${expectedTarget.target.label}" ${expectedTarget.presence}${expectedTarget.parentSection ? `, parent ${expectedTarget.parentSection.label} ${expectedTarget.parentSection.state}` : ''}; chain ${expectedTarget.preconditionChain.join(' ← ')}${expectedTarget.functionalRecovery ? ' → FUNCTIONAL_RECOVERY (no locator healing)' : ''}`,
+    );
+  let analysis = analyzeDivergence({
+    ...divergenceInput,
+    ...(request.technicalSymptom ? { technicalSymptom: request.technicalSymptom } : {}),
+    ...(expectedTarget ? { expectedTarget } : {}),
+  });
   if (!options.analyzeDivergence)
     analysis = {
       ...analysis,
@@ -177,6 +236,10 @@ export async function healWorkflow(
     const name = previous.target.name ?? previous.target.value;
     if (previous.target.role && name) exclude.add(controlKey({ role: previous.target.role, name }));
   }
+  // Une action du parcours qui RÉVÉLAIT la cible peut être rétablie (précondition), pas les autres.
+  if (expectedTarget?.functionalRecovery)
+    for (const revealer of expectedTarget.revealers)
+      if (revealer.role) exclude.delete(controlKey({ role: revealer.role, name: revealer.label }));
   const recentlyAppeared = new Set(
     (request.previous?.observed ?? [])
       .filter((entry) => entry.startsWith('+ '))
@@ -202,6 +265,7 @@ export async function healWorkflow(
       onAmbiguity: options.onAmbiguity,
       exclude: new Set([...exclude, ...extra]),
       synonyms: (term: string) => ports.synonyms?.(term) ?? [],
+      ...(expectedTarget ? { expectedTarget } : {}),
     });
   const plan = planFor(screen.controls);
   ports.emit(
@@ -291,6 +355,11 @@ export async function healWorkflow(
       plan,
       outcome,
       divergence: analysis.category,
+      ...(expectedTarget ? { expectedTarget } : {}),
+      hypotheses: analysis.possibleCauses.map((cause) => ({
+        category: cause.category,
+        confidence: cause.confidence,
+      })),
     });
     if (advice) {
       const signature = `${advice.action.kind} ${advice.action.role}:${advice.action.name.toLowerCase()}`;
@@ -349,6 +418,10 @@ export async function healWorkflow(
     outcome = {
       ...outcome,
       path: outcome.path.map((action) => ({ ...action, part: 'INSERTED_PREREQUISITE' as const })),
+      // Le champ est revenu par une précondition rétablie : la cause confirmée est FONCTIONNELLE.
+      ...(outcome.status === 'GOAL_REACHED' && outcome.path.length > 0
+        ? { confirmedCategory: analysis.functionalRootCause?.category ?? ('PREREQUISITE_MISSING' as const) }
+        : {}),
     };
   if (outcome.status === 'GOAL_REACHED' && outcome.confirmedCategory) {
     analysis = confirmCause(analysis, outcome.confirmedCategory, [

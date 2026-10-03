@@ -63,6 +63,13 @@ export const normalize = (text: string | undefined): string =>
  */
 export function matchFingerprint(expected: TargetFingerprint, observed: ObservedTarget): FingerprintMatch {
   const reasons: string[] = [];
+  // Rien n'a pu être lu (élément détaché, re-rendu) : ce n'est PAS la preuve d'un autre élément.
+  if (observed.tag === undefined && !observed.role && !observed.name && !observed.text && !observed.testId)
+    return {
+      verdict: 'MISMATCH',
+      score: 0,
+      reasons: ['the located element could not be read (detached or re-rendered)'],
+    };
   if (expected.testId && observed.testId) {
     if (expected.testId === observed.testId)
       return { verdict: 'EXACT_MATCH', score: 1, reasons: ['same test id'] };

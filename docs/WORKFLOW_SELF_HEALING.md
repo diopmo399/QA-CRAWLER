@@ -203,3 +203,91 @@ replay:
 10. Les étapes suivantes sont des preuves.
 11. L'intention métier est plus stable qu'un sélecteur CSS.
 12. L'objectif fonctionnel est plus stable que l'implémentation d'un bouton.
+
+## Récupération par objectif fonctionnel : récupérer l'état, pas le sélecteur
+
+Un localisateur n'est que la représentation technique d'une cible. Quand la cible elle-même
+n'est pas disponible, QA-Crawler raisonne sur les objectifs, les préconditions, les
+dépendances et le parcours humain avant de toucher au sélecteur.
+
+### Ce qu'un vrai run a montré
+
+Une étape `fill css=#valueInput` (un champ valeur sans nom accessible, après deux choix de
+filtre) a échoué avec `TARGET_FINGERPRINT_MISMATCH: expected "", found (not clicked)`, puis
+`LOCATOR_STALE 0.8`, des candidats sans rapport et `RECOVERY_BUDGET_EXHAUSTED`. Trois causes :
+
+| Cause                                                                                                                                                                                                                      | Correction                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L'élément trouvé a été re-rendu avant d'être lu : une **observation vide** donnait 0.4 → `MISMATCH` sans raison → `LOCATOR_STALE 0.8`                                                                                      | L'élément est relocalisé et relu (deux fois). Sans identité enregistrée (ni nom, ni texte, ni test id), un élément illisible ne prouve pas un mauvais élément ; avec une identité, il est rapporté `TARGET_NOT_FOUND`, jamais « un autre élément ». `matchFingerprint` donne toujours une raison. |
+| L'objectif de récupération prenait le **sélecteur pour un libellé** : `field "#valueInput" visible` était vérifié par nom accessible — insatisfiable, donc toute récupération (et la proposition IA) était perdue d'avance | Un prédicat d'objectif garde le localisateur enregistré (`GoalPredicate.target`) pour une cible css / test id, et se vérifie par lui (existe, visible, utilisable).                                                                                                                               |
+| `TARGET_MISMATCH` valait toujours `LOCATOR_STALE 0.8`, et des contrôles SÛRS sans lien avec la cible (score 0.05) consommaient le budget                                                                                   | `ExpectedTargetAnalysis` rééquilibre les hypothèses ; les candidats sans lien ne sont pas essayés quand la cible est absente fonctionnellement.                                                                                                                                                   |
+
+### Deux phases
+
+**PHASE 1 — DIAGNOSTIC** (`src/workflow-healing/expected-target.ts`), pour une action sur un
+**champ** (`fill`, `select`) introuvable ou non conforme ; un bouton renommé reste traité par la
+récupération existante (renommé, remplacé, déplacé) :
+
+- le localisateur enregistré est sondé (attaché, visible, lisible — rien n'est cliqué) ;
+- `presence` : `PRESENT`, `PRESENT_SIMILAR` (même rôle, nom voisin), `HIDDEN`, `UNSTABLE` (re-rendu), `ABSENT` ;
+- ce qui révèle la cible : les effets appris des étapes précédentes (`effects.appears`), le choix juste avant un champ (une _hypothèse_), le graphe causal (une hypothèse tant que le runtime ne l'a pas confirmée) ;
+- la section parente : un contrôle replié (`aria-expanded=false`), un onglet non sélectionné ;
+- la chaîne de préconditions, du but vers la cause la plus profonde : `FILL X ← X_AVAILABLE ← SECTION_OPEN ← CHOICE_DONE` ;
+- les causes rééquilibrées :
+  - `LOCATOR_STALE` n'est fort (0.85) que si le contrôle fonctionnel **semble présent** (même rôle, nom voisin) ;
+  - une cible absente est `TARGET_NOT_RENDERED`, et la question devient **pourquoi** : `PARENT_SECTION_CLOSED`, `PREREQUISITE_MISSING`, `WRONG_WORKFLOW_STATE` ; `LOCATOR_STALE` est plafonné à 0.2.
+
+L'analyse sépare le symptôme technique (`TARGET_FINGERPRINT_MISMATCH`) de la cause fonctionnelle.
+
+**PHASE 2 — ACTION** (seulement ensuite) : l'objectif devient _atteindre `X_AVAILABLE`_, pas
+_réparer le sélecteur_. Le planificateur :
+
+- classe d'abord les contrôles qui établissent une précondition manquante : la section parente, l'action enregistrée qui révélait la cible (source `HUMAN_JOURNEY` ; c'est la seule étape précédente qui peut être rétablie) ;
+- n'essaie pas les candidats sans lien avec la cible (`budgets.minCandidateRelevance`, 0.15 par défaut) : les variantes de localisateur ne consomment jamais le budget de la récupération fonctionnelle ;
+- garde chaque candidat derrière la SafetyPolicy : un contrôle MUTATION ou UNKNOWN n'est jamais exécuté (`NO_SAFE_RECOVERY`) ;
+- vérifie chaque action insérée par son effet et la progression de l'objectif ; pour un champ, l'action trouvée est un prérequis inséré et la cause confirmée est la cause fonctionnelle.
+
+### Copilot
+
+Quand la récupération déterministe échoue, on ne demande plus au conseiller « un autre
+localisateur », mais : _étant donné l'état fonctionnel, la cible attendue, les dépendances
+connues, le parcours enregistré et les actions SÛRES disponibles, quelle précondition
+manquante empêche le plus probablement la cible d'apparaître ?_ Il reçoit la chaîne de
+préconditions et les hypothèses rééquilibrées. Sa proposition passe toujours par le
+ProposalValidator, l'EvidenceValidator, la SafetyPolicy et la vérification au runtime.
+
+### Rapport
+
+Chaque récupération montre :
+
+- le symptôme technique ;
+- la cible attendue : présence, contrôles voisins, section parente ;
+- la chaîne de préconditions et les préconditions manquantes ;
+- les révélateurs, avec leur statut d'hypothèse et leur présence à l'écran ;
+- le mode : `FUNCTIONAL_RECOVERY` ou `LOCATOR_HEALING` ;
+- la cause fonctionnelle ;
+- les candidats et leur sûreté ;
+- la récupération retenue et la progression de l'objectif ;
+- `Result: RECOVERED / NOT_RECOVERED / INCONCLUSIVE`.
+
+Événement : `EXPECTED_TARGET_ANALYZED`.
+
+### Classification de sûreté
+
+La classification reste sémantique : un contrôle est MUTATION par son intention (texte,
+formulaire, effet réseau, effet appris), jamais parce que c'est un bouton. Un comportement
+inconnu (une icône sans libellé) est `UNKNOWN` et n'est jamais exécuté automatiquement ;
+QA-Crawler n'invente jamais SAFE.
+
+### Tests
+
+- `tests/unit/functional-goal-recovery.test.ts` couvre :
+  - la section parente fermée ;
+  - le vrai localisateur périmé ;
+  - la cible non rendue derrière un choix précédent ;
+  - le chemin uniquement MUTATION ;
+  - l'entrée du conseiller ;
+  - le budget ;
+  - le prédicat de champ par localisateur ;
+  - l'élément illisible.
+- `tests/integration/functional-goal-recovery.test.ts` (navigateur réel) reproduit un panneau de filtre dont le champ valeur (`#valueInput`, sans nom) est passé dans une section repliée. Il est récupéré en l'ouvrant, vérifié par son localisateur, sans essayer de bouton sans rapport.
