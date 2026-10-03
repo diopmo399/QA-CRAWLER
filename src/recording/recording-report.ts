@@ -2,6 +2,7 @@ import { BASE_CSS, card, esc } from '../reporting/html-common.js';
 import { describeStep } from '../config/flow-schema.js';
 import type { RawRecordedEvent, SemanticRecordedAction } from './model.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
+import type { SemanticAuditReport, SemanticInterpretation } from './semantic-audit.js';
 import type { RecordingResult } from './process-recording.js';
 
 export type ReplayStatus = 'REPLAY_CONFIRMED' | 'REPLAY_FAILED' | 'NOT_VALIDATED';
@@ -32,6 +33,7 @@ export function recordingHtml(input: {
   files: Record<string, string>;
   generatedAt: string;
   intelligence?: RecordingIntelligence;
+  audit?: SemanticAuditReport;
 }): string {
   const { result, replay } = input;
   const { session, normalized, flow } = result;
@@ -137,6 +139,7 @@ export function recordingHtml(input: {
   </section>
   ${checkpoints ? `<section><h2>Checkpoints</h2><ul class="plain">${checkpoints}</ul></section>` : ''}
   ${input.intelligence ? recordingIntelligenceHtml(input.intelligence) : ''}
+  ${input.audit ? recordingAuditHtml(input.audit) : ''}
   <section><h2>Files</h2><ul class="plain">${files}</ul></section>
   <p class="muted">Generated ${esc(input.generatedAt)}</p>
 </main></body></html>
@@ -376,5 +379,61 @@ function recordingIntelligenceHtml(intelligence: RecordingIntelligence): string 
     <p class="muted">PRESERVE FIRST, UNDERSTAND SECOND, OPTIMIZE LAST. The advisor never removes, reorders, invents or changes a human action; what it proposes stays a candidate until the replay confirms it. The generated flow is unchanged.</p>
     <table><tbody>${rows.map(([label, value]) => `<tr><th>${esc(label)}</th><td>${esc(value)}</td></tr>`).join('')}</tbody></table>
     ${candidates ? `<ul class="plain">${candidates}</ul>` : ''}
+  </section>`;
+}
+
+const ASSESSMENT_COLORS: Record<string, string> = {
+  CONFIRMED: '#15803d',
+  SUSPICIOUS: '#b45309',
+  DISAGREEMENT: '#dc2626',
+  INCONCLUSIVE: '#64748b',
+  NOT_AUDITED: '#94a3b8',
+};
+
+function interpretationText(interpretation: SemanticInterpretation): string {
+  const drag = interpretation.drag
+    ? ` → "${interpretation.drag.to ?? '?'}"${interpretation.drag.moved ? ' (moved)' : ' (no move observed)'}`
+    : '';
+  return `${interpretation.interaction} "${interpretation.target}"${interpretation.section ? ` in "${interpretation.section}"` : ''}${drag}`;
+}
+
+/**
+ * RECORDING AI AUDIT : pour chaque action humaine, le parcours de sa compréhension —
+ * action humaine → interprétation déterministe → audit de l'IA → interprétation finale → rejeu.
+ */
+function recordingAuditHtml(audit: SemanticAuditReport): string {
+  const s = audit.summary;
+  const rows: [string, string][] = [
+    [
+      'Audit mode',
+      `${audit.mode}${audit.enabled ? '' : ' (disabled)'} · intelligence ${audit.intelligenceMode}`,
+    ],
+    ['AI calls', String(audit.aiCalls)],
+    ['Audited / not audited', `${String(s.audited)} / ${String(s.notAudited)}`],
+    ['Confirmed', String(s.confirmed)],
+    ['Suspicious', String(s.suspicious)],
+    ['Disagreements', String(s.disagreements)],
+    ['Inconclusive', String(s.inconclusive)],
+    ['To review', String(s.reviewRequired)],
+  ];
+  const journey = audit.entries
+    .map((entry) => {
+      const color = ASSESSMENT_COLORS[entry.aiAssessment] ?? '#64748b';
+      const ai = entry.aiProposal
+        ? `${entry.aiProposal.target ? `"${entry.aiProposal.target}"` : 'no target'}${entry.aiProposal.intent ? ` · ${entry.aiProposal.intent}` : ''} (hypothesis, ${entry.aiProposal.origin}, runtime confirmed: no)`
+        : '—';
+      return `<tr>
+        <td><b>${esc(entry.humanActionId)}</b>${entry.flowStep !== undefined ? ` <span class="muted">step ${String(entry.flowStep)}</span>` : ''}</td>
+        <td>${esc(interpretationText(entry.deterministicInterpretation))}<br><span class="muted">confidence ${String(entry.deterministicConfidence)}${entry.auditTrigger.length > 0 ? ` · ${esc(entry.auditTrigger.join(', '))}` : ''}</span></td>
+        <td><span style="color:${color};font-weight:600">${esc(entry.aiAssessment)}</span>${entry.aiDecisionId ? ` <span class="muted">${esc(entry.aiDecisionId)}</span>` : ''}<br>${esc(ai)}${entry.citedEvidence.length > 0 ? `<br><span class="muted">evidence ${esc(entry.citedEvidence.join(', '))}</span>` : ''}</td>
+        <td>${esc(interpretationText(entry.finalInterpretation))}${entry.reviewRequired ? ' <b style="color:#b45309">review</b>' : ''}<br><span class="muted">${esc(entry.decisionReason)}</span></td>
+        <td>${esc(entry.runtimeConfirmation)}</td>
+      </tr>`;
+    })
+    .join('');
+  return `<section><h2>Recording AI Audit</h2>
+    <p class="muted">The advisor re-reads the deterministic interpretation of each human action; it never captures, removes or rewrites one. A different reading stays a hypothesis (AI_PROPOSAL, runtime confirmed: no) flagged for review; the final interpretation is the deterministic one. Details: semantic-audit.json.</p>
+    <table><tbody>${rows.map(([label, value]) => `<tr><th>${esc(label)}</th><td>${esc(value)}</td></tr>`).join('')}</tbody></table>
+    ${journey ? `<table><thead><tr><th>Human action</th><th>Deterministic</th><th>AI audit</th><th>Final</th><th>Runtime</th></tr></thead><tbody>${journey}</tbody></table>` : ''}
   </section>`;
 }

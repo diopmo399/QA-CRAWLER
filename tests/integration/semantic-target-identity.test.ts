@@ -76,6 +76,22 @@ ${steps}
     expect(yaml).not.toMatch(/css:|nth-of-type/);
     const feature = await readFile(path.join(outcome.directory, 'generated.feature'), 'utf8');
     expect(feature).toMatch(/"Search" (in the|dans la) section "(Report settings > )?Columns"/);
+    // RECORDING SEMANTIC AUDIT : écrit à chaque enregistrement ; intelligence OFF → aucun appel.
+    const audit = JSON.parse(await readFile(path.join(outcome.directory, 'semantic-audit.json'), 'utf8')) as {
+      mode: string;
+      aiCalls: number;
+      entries: {
+        humanActionId: string;
+        deterministicInterpretation: { section?: string };
+        finalInterpretation: unknown;
+      }[];
+    };
+    expect(audit.mode).toBe('SUSPICIOUS_ONLY');
+    expect(audit.aiCalls).toBe(0);
+    expect(audit.entries.map((entry) => entry.humanActionId)).toEqual(['h001', 'h002', 'h003']);
+    expect(audit.entries[1]?.deterministicInterpretation.section).toMatch(/Columns$/);
+    const html = await readFile(path.join(outcome.directory, 'index.html'), 'utf8');
+    expect(html).toContain('Recording AI Audit');
   }, 120_000);
 
   it('the section-scoped flow replays on the recorded layout and on a reordered one (identity, not position)', async () => {

@@ -1246,6 +1246,35 @@ const recordingSchema = z
      */
     fidelity: z.enum(['EXACT', 'SEMANTIC', 'OPTIMIZED']).default('SEMANTIC'),
     preserveHumanJourney: z.boolean().default(true),
+    /**
+     * RECORDING SEMANTIC AUDIT : le conseiller d'intelligence (ai.*) RELIT l'interprétation
+     * déterministe de chaque action humaine — jamais la capture, jamais une réécriture. Il confirme,
+     * signale ou propose une autre lecture (hypothèse AI_PROPOSAL, runtimeConfirmed=false) ; le
+     * déterministe reste l'interprétation finale. ai.mode OFF : zéro appel, quoi qu'il soit écrit ici.
+     *   SUSPICIOUS_ONLY  seulement les actions qui déclenchent un des `triggers` ;
+     *   FULL             toutes les actions (bornées par maxCalls) ; OFF : aucune.
+     */
+    intelligenceAudit: z
+      .object({
+        enabled: z.boolean().default(true),
+        mode: z.enum(['OFF', 'SUSPICIOUS_ONLY', 'FULL']).default('SUSPICIOUS_ONLY'),
+        maxCalls: z.number().int().min(0).max(200).default(10),
+        triggers: z
+          .object({
+            ambiguousTarget: z.boolean().default(true),
+            fragileLocator: z.boolean().default(true),
+            lowSemanticConfidence: z.boolean().default(true),
+            unknownInteraction: z.boolean().default(true),
+            possibleDragAndDrop: z.boolean().default(true),
+            normalizationLoss: z.boolean().default(true),
+            contextMismatch: z.boolean().default(true),
+            suspiciousMerge: z.boolean().default(true),
+          })
+          .strict()
+          .default({}),
+      })
+      .strict()
+      .default({}),
     /** Un clic sur un composant maison non reconnu, mais qui a un effet : une action UNRESOLVED gardée. */
     preserveUnknownInteractiveActions: z.boolean().default(true),
     /** Une action qui a changé l'écran (section, champ, fenêtre) n'est jamais fusionnée ni retirée. */
