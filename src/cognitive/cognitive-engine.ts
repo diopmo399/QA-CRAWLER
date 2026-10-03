@@ -13,7 +13,12 @@ import { CausalKnowledgeGraph } from './causal-graph.js';
 import { EvidenceStore, type Evidence } from './evidence.js';
 import { EvidenceGraph, importStaticGraph } from './evidence-graph.js';
 import { FunctionalModelBuilder, type FunctionalModel } from './functional-model.js';
-import { HypothesisEngine, describeProposition, type Hypothesis } from './hypothesis-engine.js';
+import {
+  HypothesisEngine,
+  describeProposition,
+  type Hypothesis,
+  type Proposition,
+} from './hypothesis-engine.js';
 import {
   buildGoalGraph,
   describeChain,
@@ -65,6 +70,18 @@ import {
 } from './contradictions.js';
 import { FunctionalCoverageGraph } from './functional-coverage.js';
 import {
+  analyzeBlockedGoal,
+  checkpointPosition,
+  evaluateGoalProgress,
+  firstFunctionalDivergence,
+  type BlockedGoalAnalysis,
+  type FailureContext,
+  type FunctionalDivergence,
+  type GoalProgress,
+  type SubmitAttempt,
+} from './functional-reasoning.js';
+import type { FunctionalContext } from '../ai/model.js';
+import {
   FailureKnowledge,
   InvariantDiscoveryEngine,
   understandFailure,
@@ -106,6 +123,9 @@ export const COGNITIVE_EVENTS = [
   'LLM_ADVISOR_REQUESTED',
   'LLM_ADVISOR_PROPOSAL_REJECTED',
   'LLM_ADVISOR_PROPOSAL_ACCEPTED',
+  'GOAL_PROGRESS_UPDATED',
+  'BLOCKED_GOAL_ANALYZED',
+  'FIRST_FUNCTIONAL_DIVERGENCE',
 ] as const;
 export type CognitiveEvent = (typeof COGNITIVE_EVENTS)[number];
 
@@ -138,7 +158,7 @@ export interface CognitiveSummary {
   confirmedRelations: string[];
   contradictions: string[];
   recoveredPlans: string[];
-  failures: { step: string; class: string; reason: string }[];
+  failures: { step: string; class: string; reason: string; context?: FailureContext }[];
   coverage: string[];
   coverageGaps: string[];
   invariants: { statement: string; status: string }[];
@@ -152,6 +172,45 @@ export interface CognitiveSummary {
   }[];
   experiments: { proposed: number; rejected: number };
   knowledge: { evidence: number; hypotheses: number; confirmed: number; contradicted: number };
+  /** Pourquoi l'objectif reste bloqué (ou que la cause est inconnue). */
+  blockedGoal?: BlockedGoalAnalysis;
+  goalProgress?: GoalProgress;
+  /** L'avancement de l'objectif au fil des actions (avant → après). */
+  progressTimeline: { source: string; before: number; after: number }[];
+  /** La première divergence fonctionnelle de chaque flow (la vraie cause, pas le symptôme). */
+  divergences: { flow: string; divergence: FunctionalDivergence }[];
+  /** Chaque hypothèse, avec son origine, ses preuves pour et contre, et ses dates. */
+  hypothesisDetails: HypothesisDetail[];
+  /** Une hypothèse contredite ne disparaît pas : pourquoi, quelles alternatives, quelle investigation. */
+  contradictedAnalysis: ContradictedHypothesisAnalysis[];
+}
+
+export interface HypothesisDetail {
+  id: string;
+  type: string;
+  origin: 'AI_PROPOSAL' | 'HUMAN_RECORDING' | 'RUNTIME' | 'STATIC' | 'HISTORICAL' | 'OTHER';
+  description: string;
+  supportingEvidence: string[];
+  contradictingEvidence: string[];
+  confidence: number;
+  status: string;
+  createdAt: string;
+  lastEvaluatedAt: string;
+  /** Origine IA : la décision qui l'a proposée, et l'enregistrement source éventuel. */
+  aiDecisionId?: string;
+  sourceRecording?: string;
+  runtimeConfirmed: boolean;
+}
+
+export interface ContradictedHypothesisAnalysis {
+  id: string;
+  description: string;
+  why: string;
+  alternatives: string[];
+  /** Une investigation SÛRE proposée par l'apprentissage actif, ou « none ». */
+  investigation: string;
+  /** Aucune alternative ni investigation : un vrai besoin d'aide (HYPOTHESIS_ANALYSIS). */
+  needsAnalysis: boolean;
 }
 
 export interface CognitiveOptions {
@@ -195,7 +254,24 @@ export class CognitiveEngine {
   readonly temporal = new TemporalDependencyGraph();
   readonly invariants: InvariantDiscoveryEngine;
   failureKnowledge = new FailureKnowledge();
-  readonly failures: (FailureUnderstanding & { step: string })[] = [];
+  readonly failures: (FailureUnderstanding & { step: string; context?: FailureContext })[] = [];
+  /** Objectifs confirmés par leur effet (envoi accepté) : la mission elle-même est alors atteinte. */
+  private readonly achieved = new Set<string>();
+  private readonly submits: SubmitAttempt[] = [];
+  private readonly divergences: { flow: string; divergence: FunctionalDivergence }[] = [];
+  private readonly progressTimeline: { source: string; before: number; after: number }[] = [];
+  private lastProgress: number | undefined;
+  private lastBlockedAnalysis: string | undefined;
+  /** Candidats d'un enregistrement (HYBRID) : une relation observable, à confirmer ou contredire au rejeu. */
+  private readonly recordingObservables: {
+    hypothesisId: string;
+    candidate: string;
+    action: string;
+    effect: string;
+    result: 'PENDING' | 'RUNTIME_CONFIRMED' | 'CONTRADICTED';
+  }[] = [];
+  /** Hypothèse proposée par l'IA → la décision d'origine (et l'enregistrement source). */
+  private readonly aiHypotheses = new Map<string, { auditId: string; sourceRecording?: string }>();
   readonly activeLearning: ActiveLearningEngine;
   readonly experiments: { proposed: ExperimentProposal[]; rejected: RejectedExperiment[] } = {
     proposed: [],
@@ -366,6 +442,7 @@ export class CognitiveEngine {
     }
     this.conditionContext = {
       situation,
+      achieved: this.achieved,
       controls: new Set(
         snapshot.elements
           .filter((element) => element.visible && !element.disabled && element.role && element.name)
@@ -409,6 +486,7 @@ export class CognitiveEngine {
     const disappeared = [...before].filter((key) => !after.has(key) && !disabledAfter.has(key));
     const route = input.afterRoute !== input.beforeRoute ? input.afterRoute : undefined;
     this.afterDecidedAction(input.label, appeared);
+    this.checkRecordingObservables(actionKey(input.kind, input.label), appeared);
     // INVARIANTS : un changement de choix ou de champ ne doit pas vider les autres champs remplis.
     if (['fill', 'check', 'uncheck', 'select'].includes(input.kind) && input.before && input.after) {
       const filled = (snapshot: UiSnapshot): Map<string, boolean> =>
@@ -603,7 +681,14 @@ export class CognitiveEngine {
    * mission, le but, l'état métier, les preuves, les hypothèses, les contradictions, les trous
    * de couverture. Des lectures : rien n'est copié dans une deuxième représentation.
    */
-  intelligenceSources(): {
+  intelligenceSources(
+    extra: {
+      question?: string;
+      nextActions?: string[];
+      nextTargets?: string[];
+      previousActions?: string[];
+    } = {},
+  ): {
     mission?: string;
     goal?: { id: string; conditions: string[] };
     situation?: BusinessSituation;
@@ -612,6 +697,7 @@ export class CognitiveEngine {
     hypotheses: readonly Hypothesis[];
     contradictions: readonly KnowledgeContradiction[];
     coverageGaps: string[];
+    functional?: FunctionalContext;
   } {
     const graph = this.goalGraph();
     const preconditions = graph.root
@@ -636,6 +722,71 @@ export class CognitiveEngine {
         .gaps()
         .slice(0, 10)
         .map((gap) => gap.item.label),
+      ...(graph.root ? { functional: this.functionalContext(extra) } : {}),
+    };
+  }
+
+  /**
+   * L'ÉTAT FONCTIONNEL pour le conseiller : objectif, préconditions satisfaites / manquantes,
+   * raisons du blocage, checkpoints, relations causales, actions confirmées et attendues,
+   * première divergence. De quoi juger « cette action satisfera X et fera avancer Y ».
+   */
+  functionalContext(
+    extra: {
+      question?: string;
+      nextActions?: string[];
+      nextTargets?: string[];
+      previousActions?: string[];
+    } = {},
+  ): FunctionalContext {
+    const graph = this.goalGraph();
+    const analysis = this.blockedGoal();
+    const progress = this.goalProgress();
+    const position = checkpointPosition(graph, this.checkpoints);
+    const root = graph.nodes.find((node) => node.id === graph.root);
+    const divergence = this.latestDivergence()?.divergence;
+    const confirmedActions = this.reasoning.trace
+      .filter((decision) => decision.outcome?.confirmed === true && decision.selectedAction)
+      .slice(-5)
+      .map((decision) => `${decision.selectedAction?.kind ?? ''} "${decision.selectedAction?.label ?? ''}"`);
+    return {
+      ...(graph.root ? { currentGoal: graph.root } : {}),
+      ...(root?.requires[0] ? { parentGoal: graph.mission ?? graph.root } : {}),
+      ...(progress ? { goalProgress: progress.progress } : {}),
+      satisfiedPreconditions: (analysis?.satisfiedPreconditions ?? []).slice(0, 12),
+      missingPreconditions: (analysis?.missingPreconditions ?? []).slice(0, 8),
+      ...(analysis?.unknownPrecondition ? { unknownPrecondition: true } : {}),
+      blockingReasons: (analysis?.blockingReasons ?? []).slice(0, 5).map((reason) => reason.slice(0, 200)),
+      ...(position.lastConfirmed ? { lastConfirmedCheckpoint: position.lastConfirmed } : {}),
+      ...(position.nextExpected ? { nextExpectedCheckpoint: position.nextExpected } : {}),
+      causalRelations: this.causal
+        .links()
+        .filter((link) => link.hypothesis.status !== 'REJECTED')
+        .sort((a, b) => b.hypothesis.confidence - a.hypothesis.confidence)
+        .slice(0, 10)
+        .map((link) =>
+          `${link.cause} ${link.relation} ${link.effect} — ${link.hypothesis.status}`.slice(0, 160),
+        ),
+      previousConfirmedActions: [...(extra.previousActions ?? []), ...confirmedActions].slice(-5),
+      nextExpectedActions: (extra.nextActions ?? []).slice(0, 5),
+      nextActionTargets: (extra.nextTargets ?? []).slice(0, 8),
+      functionalCoverage: this.coverageGraph()
+        .summary()
+        .map((row) => `${row.dimension} ${String(row.covered)}/${String(row.total)}`),
+      ...(divergence
+        ? {
+            firstDivergence: {
+              step: divergence.step,
+              description: divergence.description.slice(0, 160),
+              expected: divergence.expected,
+              observed: divergence.observed,
+              ...(divergence.lastFailedStep !== undefined
+                ? { lastFailedStep: divergence.lastFailedStep }
+                : {}),
+            },
+          }
+        : {}),
+      ...(extra.question ? { question: extra.question } : {}),
     };
   }
 
@@ -644,24 +795,222 @@ export class CognitiveEngine {
    * LLM_PROPOSAL, plafonnée), avec son origine — jamais une connaissance confirmée. Seules des
    * observations runtime pourront la faire progresser, selon les règles habituelles.
    */
-  recordAiHypothesis(statement: string, evidenceIds: readonly string[], auditId: string): Hypothesis {
+  recordAiHypothesis(
+    statement: string,
+    evidenceIds: readonly string[],
+    auditId: string,
+    options: { type?: string; sourceRecording?: string; proposition?: Proposition } = {},
+  ): Hypothesis {
     const proof = this.addEvidence({
       type: 'LLM_PROPOSAL',
       source: `AI proposal ${auditId}`,
       timestamp: this.now(),
       confidence: 0.5,
-      details: { origin: 'AI_PROPOSAL', auditId, evidenceIds: [...evidenceIds] },
+      details: {
+        origin: 'AI_PROPOSAL',
+        auditId,
+        evidenceIds: [...evidenceIds],
+        runtimeConfirmed: false,
+        ...(options.type ? { hypothesisType: options.type } : {}),
+        ...(options.sourceRecording ? { sourceRecording: options.sourceRecording } : {}),
+      },
     });
+    const kind: Proposition['kind'] =
+      options.type === 'WORKFLOW_PRECONDITION'
+        ? 'PRECONDITION'
+        : options.type === 'INVARIANT'
+          ? 'INVARIANT'
+          : options.type === 'FAILURE_CAUSE'
+            ? 'FAILURE_CAUSE'
+            : 'BUSINESS_RULE';
+    // Une proposition causale TESTABLE (« click X REVEALS textbox:y ») peut être confirmée par les
+    // observations habituelles ; les autres restent des affirmations à vérifier.
     const hypothesis = this.hypotheses.propose(
-      { kind: 'BUSINESS_RULE', subject: 'ai-advisor', relation: 'CLAIMS', object: statement.slice(0, 300) },
+      options.proposition ?? {
+        kind,
+        subject: 'ai-advisor',
+        relation: 'CLAIMS',
+        object: statement.slice(0, 300),
+      },
       proof,
-      { testable: false, reason: 'AI_PROPOSED_HYPOTHESIS: to be confirmed at runtime' },
+      options.proposition
+        ? { testable: true, reason: 'AI_PROPOSED_HYPOTHESIS: observable at runtime' }
+        : { testable: false, reason: 'AI_PROPOSED_HYPOTHESIS: to be confirmed at runtime' },
     );
+    this.aiHypotheses.set(hypothesis.id, {
+      auditId,
+      ...(options.sourceRecording ? { sourceRecording: options.sourceRecording } : {}),
+    });
     this.emit(
       'HYPOTHESIS_CREATED',
-      `${hypothesis.id} AI_PROPOSED_HYPOTHESIS (${auditId}): ${statement.slice(0, 120)}`,
+      `${hypothesis.id} AI_PROPOSED_HYPOTHESIS (${auditId}${options.type ? `, ${options.type}` : ''}): ${statement.slice(0, 120)}`,
     );
     return hypothesis;
+  }
+
+  /**
+   * Le RUNTIME juge une hypothèse proposée par l'IA : la proposition exécutée a-t-elle produit
+   * l'effet attendu ? Une preuve runtime pour ou contre (jamais une confirmation d'office : une
+   * affirmation d'IA ne devient connaissance confirmée qu'avec une source indépendante).
+   */
+  aiHypothesisRuntime(hypothesisId: string, confirmed: boolean, detail: string): Hypothesis | undefined {
+    const proof = this.addEvidence({
+      type: 'RUNTIME',
+      source: `runtime verification of ${hypothesisId}`,
+      timestamp: this.now(),
+      confidence: 0.8,
+      details: { observed: detail.slice(0, 200), confirmed },
+    });
+    return confirmed
+      ? this.hypotheses.support(hypothesisId, proof)
+      : this.hypotheses.contradict(hypothesisId, proof);
+  }
+
+  /**
+   * Un candidat d'enregistrement proposé par l'IA (HYBRID) : une HYPOTHÈSE causale observable
+   * (« click X REVEALS textbox:y »), jamais une vérité. Le rejeu la soutiendra ou la contredira.
+   */
+  registerRecordingCandidate(candidate: {
+    id: string;
+    statement: string;
+    sourceRecording: string;
+    aiDecisionId?: string;
+    observable: { action: string; effect: string };
+  }): Hypothesis {
+    const hypothesis = this.recordAiHypothesis(
+      candidate.statement,
+      [],
+      candidate.aiDecisionId ?? `recording ${candidate.sourceRecording}`,
+      {
+        type: 'CAUSAL',
+        sourceRecording: candidate.sourceRecording,
+        proposition: {
+          kind: 'CAUSAL',
+          subject: candidate.observable.action,
+          relation: 'REVEALS',
+          object: candidate.observable.effect,
+        },
+      },
+    );
+    if (!this.recordingObservables.some((entry) => entry.hypothesisId === hypothesis.id))
+      this.recordingObservables.push({
+        hypothesisId: hypothesis.id,
+        candidate: candidate.id,
+        action: candidate.observable.action,
+        effect: candidate.observable.effect,
+        result: 'PENDING',
+      });
+    return hypothesis;
+  }
+
+  /** Les candidats d'enregistrement et ce que le rejeu en a dit. */
+  recordingConfirmations(): {
+    hypothesisId: string;
+    candidate: string;
+    action: string;
+    effect: string;
+    result: string;
+  }[] {
+    return this.recordingObservables.map((entry) => ({ ...entry }));
+  }
+
+  /** L'action du candidat a été rejouée : l'effet proposé est-il venu ? (le nom suffit, le rôle peut varier) */
+  private checkRecordingObservables(action: string, appeared: readonly string[]): void {
+    for (const entry of this.recordingObservables) {
+      if (entry.action !== action || entry.result !== 'PENDING') continue;
+      const name = entry.effect.slice(entry.effect.indexOf(':') + 1);
+      const observed = appeared.some((key) => key === entry.effect || key.endsWith(`:${name}`));
+      entry.result = observed ? 'RUNTIME_CONFIRMED' : 'CONTRADICTED';
+      this.aiHypothesisRuntime(
+        entry.hypothesisId,
+        observed,
+        observed
+          ? `replay: ${entry.effect} appeared after ${action}`
+          : `replay: ${entry.effect} did not appear after ${action}`,
+      );
+    }
+  }
+
+  /** Le détail de chaque hypothèse (§27) : type, origine, preuves pour / contre, statut, dates. */
+  hypothesisDetails(): HypothesisDetail[] {
+    return this.hypotheses.all().map((hypothesis) => {
+      const resolved = this.hypotheses.evidenceOf(hypothesis);
+      const first = resolved.for[0];
+      const ai = this.aiHypotheses.get(hypothesis.id);
+      const origin: HypothesisDetail['origin'] =
+        ai || first?.type === 'LLM_PROPOSAL'
+          ? 'AI_PROPOSAL'
+          : first?.type === 'HUMAN_RECORDING'
+            ? 'HUMAN_RECORDING'
+            : first?.type === 'RUNTIME' || first?.type === 'DOM' || first?.type === 'NETWORK'
+              ? 'RUNTIME'
+              : first?.type === 'STATIC_SOURCE' || first?.type === 'OPENAPI'
+                ? 'STATIC'
+                : first?.type === 'HISTORICAL'
+                  ? 'HISTORICAL'
+                  : 'OTHER';
+      const recording =
+        ai?.sourceRecording ??
+        (typeof first?.details.sourceRecording === 'string' ? first.details.sourceRecording : undefined);
+      return {
+        id: hypothesis.id,
+        type:
+          typeof first?.details.hypothesisType === 'string'
+            ? first.details.hypothesisType
+            : hypothesis.proposition.kind,
+        origin,
+        description: describeProposition(hypothesis.proposition).slice(0, 300),
+        supportingEvidence: hypothesis.evidenceFor.map((reference) => reference.id).slice(-10),
+        contradictingEvidence: hypothesis.evidenceAgainst.map((reference) => reference.id).slice(-10),
+        confidence: hypothesis.confidence,
+        status: hypothesis.status,
+        createdAt: hypothesis.createdAt,
+        lastEvaluatedAt: hypothesis.updatedAt,
+        ...(ai ? { aiDecisionId: ai.auditId } : {}),
+        ...(recording ? { sourceRecording: recording } : {}),
+        runtimeConfirmed: resolved.for.some(
+          (item) => item.type === 'RUNTIME' || item.type === 'DOM' || item.type === 'NETWORK',
+        ),
+      };
+    });
+  }
+
+  /**
+   * Une hypothèse CONTREDITE aide encore : pourquoi (la preuve contre), quelles alternatives
+   * (hypothèses concurrentes sur le même effet), quelle investigation SÛRE — ou le besoin d'aide.
+   */
+  contradictedAnalysis(): ContradictedHypothesisAnalysis[] {
+    return this.hypotheses
+      .all()
+      .filter((hypothesis) => hypothesis.status === 'CONTRADICTED' || hypothesis.status === 'REJECTED')
+      .slice(0, 20)
+      .map((hypothesis) => {
+        const against = this.hypotheses.evidenceOf(hypothesis).against.at(-1);
+        const alternatives = this.hypotheses
+          .competing(hypothesis.proposition.relation, hypothesis.proposition.object)
+          .filter((other) => other.id !== hypothesis.id && other.status !== 'CONTRADICTED')
+          .slice(0, 5)
+          .map((other) => `${other.id} ${describeProposition(other.proposition)} — ${other.status}`);
+        const experiment = this.experiments.proposed.find(
+          (proposal) => proposal.tests.toLowerCase() === hypothesis.proposition.object.toLowerCase(),
+        );
+        const investigation = experiment
+          ? `${experiment.actions.map((action) => `${action.kind} "${action.label}"`).join(' → ')} (${experiment.safetyClass})`
+          : 'none';
+        return {
+          id: hypothesis.id,
+          description: describeProposition(hypothesis.proposition).slice(0, 300),
+          why: against
+            ? `${against.type} ${against.source}${typeof against.details.observed === 'string' ? `: ${against.details.observed}` : ''}`.slice(
+                0,
+                200,
+              )
+            : 'contradicted by runtime evidence',
+          alternatives,
+          investigation,
+          needsAnalysis: alternatives.length === 0 && !experiment,
+        };
+      });
   }
 
   /** L'action décidée a été exécutée : son résultat confirme (ou non) la décision et, pour un test d'hypothèse, l'hypothèse. */
@@ -708,7 +1057,19 @@ export class CognitiveEngine {
   understand(signal: FailureSignal, step: string): FailureUnderstanding {
     const understanding = understandFailure(signal, this.failureKnowledge);
     this.failureKnowledge.record(understanding, this.now(), this.options.version);
-    this.failures.push({ ...understanding, step });
+    // FAILURE CONTEXT : l'échec relié à l'objectif qu'il empêche (checkpoint atteint, attendu, observé).
+    const graph = this.goalGraph();
+    const position = checkpointPosition(graph, this.checkpoints);
+    const context: FailureContext = {
+      ...(graph.mission ? { affectedGoal: graph.mission } : {}),
+      ...(position.lastConfirmed ? { checkpoint: position.lastConfirmed } : {}),
+      ...(position.nextExpected ? { expected: position.nextExpected } : {}),
+      observed: this.lastSituation ?? 'unknown functional state',
+      ...(understanding.chain.firstDivergence
+        ? { firstDivergence: understanding.chain.firstDivergence }
+        : {}),
+    };
+    this.failures.push({ ...understanding, step, context });
     this.emit('FAILURE_CLASSIFIED', `${step}: ${understanding.class} — ${understanding.reasons.join('; ')}`);
     if (signal.request && /^POST|^PUT|^PATCH/.test(signal.request))
       this.coverageGraph().observeSubmission(understanding.class, step);
@@ -716,9 +1077,101 @@ export class CognitiveEngine {
   }
 
   /** Un envoi réussi (effet confirmé au runtime). */
-  submissionSucceeded(source: string): void {
+  submissionSucceeded(source: string, label = 'submit'): void {
     this.coverageGraph().observeSubmission('SUCCESS', source);
     this.emit('FUNCTIONAL_COVERAGE_UPDATED', this.coverageSummary());
+    // La mission est ATTEINTE par son effet confirmé (sans cela, son objectif restait bloqué à jamais).
+    const root = this.goalGraph().root;
+    if (root) this.achieved.add(root);
+    this.submits.push({
+      step: source,
+      label,
+      outcome: 'CONFIRMED',
+      detail: 'accepted write and confirmed effect',
+    });
+    this.trackGoals();
+  }
+
+  /** Une tentative d'envoi sans effet confirmé (ou en échec) : la preuve qui explique un objectif bloqué. */
+  submissionAttempted(attempt: SubmitAttempt): void {
+    this.submits.push({ ...attempt, detail: attempt.detail.slice(0, 200) });
+  }
+
+  /** Un envoi a-t-il été tenté (confirmé ou non) pendant ce run ? */
+  submissionWasAttempted(): boolean {
+    return this.submits.length > 0;
+  }
+
+  /** L'action finale du parcours démontré (le bouton d'envoi), si le modèle la connaît. */
+  isSubmitAction(label: string): boolean {
+    const submit = this.model.submit?.label;
+    return submit !== undefined && normalizeControl(submit) === normalizeControl(label);
+  }
+
+  /** GOAL PROGRESS : l'avancement de l'objectif courant (préconditions, checkpoints, état métier). */
+  goalProgress(): GoalProgress | undefined {
+    const graph = this.goalGraph();
+    return graph.root
+      ? evaluateGoalProgress(graph, graph.root, this.conditionContext, this.checkpoints)
+      : undefined;
+  }
+
+  /** L'avancement a-t-il changé ? (avant → après, avec la source : une action, un écran). */
+  updateProgress(source: string): GoalProgress | undefined {
+    const progress = this.goalProgress();
+    if (!progress) return undefined;
+    const before = this.lastProgress ?? 0;
+    if (progress.progress !== this.lastProgress) {
+      this.lastProgress = progress.progress;
+      if (this.progressTimeline.length < 200)
+        this.progressTimeline.push({ source: source.slice(0, 120), before, after: progress.progress });
+      this.emit(
+        'GOAL_PROGRESS_UPDATED',
+        `${progress.goal}: ${before.toFixed(2)} → ${progress.progress.toFixed(2)} (${source.slice(0, 80)})`,
+      );
+    }
+    return progress;
+  }
+
+  /**
+   * BLOCKED GOAL ANALYSIS : pourquoi l'objectif reste bloqué — ou l'aveu que la cause est
+   * inconnue (UNKNOWN_BLOCKING_PRECONDITION), ce qui justifie de demander de l'aide.
+   */
+  blockedGoal(): BlockedGoalAnalysis | undefined {
+    const analysis = analyzeBlockedGoal({
+      graph: this.goalGraph(),
+      context: this.conditionContext,
+      checkpoints: this.checkpoints,
+      hypotheses: this.hypotheses.all(),
+      submits: this.submits,
+      failures: this.failures,
+      ...(this.options.budgets ? { maxDepth: this.options.budgets.maxPlanningDepth } : {}),
+    });
+    if (analysis && analysis.state !== 'SATISFIED') {
+      const text = `${analysis.goal} ${analysis.state}: missing ${analysis.missingPreconditions.join(', ') || 'nothing'} — ${analysis.blockingReasons[0] ?? 'no reason found'}`;
+      if (text !== this.lastBlockedAnalysis) {
+        this.lastBlockedAnalysis = text;
+        this.emit('BLOCKED_GOAL_ANALYZED', `${text} (confidence ${String(analysis.confidence)})`);
+      }
+    }
+    return analysis;
+  }
+
+  /** FIRST FUNCTIONAL DIVERGENCE d'un flow terminé (gardée pour le rapport, l'IA et la couverture). */
+  recordFlow(flow: string, steps: readonly FlowStepReport[]): FunctionalDivergence | undefined {
+    const divergence = firstFunctionalDivergence(steps);
+    if (!divergence) return undefined;
+    this.divergences.push({ flow, divergence });
+    this.emit(
+      'FIRST_FUNCTIONAL_DIVERGENCE',
+      `${flow}: step ${String(divergence.step)} ${divergence.kind} "${divergence.description}"${divergence.rootBeforeSymptom ? ` (failure reported at step ${String(divergence.lastFailedStep ?? '?')})` : ''}`,
+    );
+    return divergence;
+  }
+
+  /** La dernière divergence fonctionnelle connue (pour l'explication d'un échec ou d'un trou de couverture). */
+  latestDivergence(): { flow: string; divergence: FunctionalDivergence } | undefined {
+    return this.divergences.at(-1);
   }
 
   /**
@@ -813,6 +1266,7 @@ export class CognitiveEngine {
         this.emit('SEMANTIC_CHECKPOINT_REACHED', `${id} (${String(next.evidence.length)} signal(s))`);
       this.checkpoints.set(id, next);
     }
+    this.updateProgress('screen');
     const resolution = resolvePreconditions(graph, graph.root, this.conditionContext);
     const text = resolution.chains.map(describeChain).join(' | ');
     if (resolution.status === 'BLOCKED' && text !== this.lastBlocked) {
@@ -927,6 +1381,8 @@ export class CognitiveEngine {
       : undefined;
     const lastPlans = this.plans.at(-1);
     const current = lastPlans?.plans.find((plan) => plan.kind === 'CURRENT_PLAN');
+    const blocked = graph?.root ? this.blockedGoal() : undefined;
+    const progress = graph?.root ? this.goalProgress() : undefined;
     return {
       ...(this.model.mission ? { mission: this.model.mission.id } : {}),
       ...(this.lastSituation ? { functionalState: this.lastSituation } : {}),
@@ -962,9 +1418,12 @@ export class CognitiveEngine {
           ? entry.repair.explanation.map((line) => `${entry.flow}: ${line}`)
           : [],
       ),
-      failures: this.failures
-        .slice(0, 20)
-        .map((failure) => ({ step: failure.step, class: failure.class, reason: failure.reasons[0] ?? '' })),
+      failures: this.failures.slice(0, 20).map((failure) => ({
+        step: failure.step,
+        class: failure.class,
+        reason: failure.reasons[0] ?? '',
+        ...(failure.context ? { context: failure.context } : {}),
+      })),
       coverage: this.coverageGraph().describe(),
       coverageGaps: this.coverageGraph()
         .gaps()
@@ -990,6 +1449,12 @@ export class CognitiveEngine {
         confirmed: byStatus.RUNTIME_CONFIRMED ?? 0,
         contradicted: (byStatus.CONTRADICTED ?? 0) + (byStatus.REJECTED ?? 0),
       },
+      ...(blocked ? { blockedGoal: blocked } : {}),
+      ...(progress ? { goalProgress: progress } : {}),
+      progressTimeline: this.progressTimeline.slice(-30),
+      divergences: [...this.divergences],
+      hypothesisDetails: this.hypothesisDetails().slice(0, 50),
+      contradictedAnalysis: this.contradictedAnalysis(),
     };
   }
 
@@ -1009,6 +1474,16 @@ export class CognitiveEngine {
           evidenceAgainst: hypothesis.evidenceAgainst,
           testability: hypothesis.testability,
         })),
+        details: this.hypothesisDetails(),
+        contradicted: this.contradictedAnalysis(),
+      },
+      'functional-reasoning.json': {
+        blockedGoal: this.goals?.root ? (this.blockedGoal() ?? null) : null,
+        goalProgress: this.goals?.root ? (this.goalProgress() ?? null) : null,
+        progressTimeline: this.progressTimeline,
+        divergences: this.divergences,
+        submits: this.submits,
+        recordingCandidates: this.recordingObservables,
       },
       'functional-model.json': this.model,
       'business-state.json': {

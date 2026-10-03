@@ -24,6 +24,9 @@ const ALL_TRIGGERS: TriggerSettings = {
   unknownBusinessError: true,
   lowConfidence: true,
   knowledgeContradiction: true,
+  unknownBlockingPrecondition: true,
+  hypothesisAnalysis: true,
+  recordingEnrichment: true,
 };
 
 const evidence = (id: string, source: string, details: Evidence['details'] = {}): Evidence => ({

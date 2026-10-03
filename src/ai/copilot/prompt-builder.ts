@@ -15,6 +15,8 @@ Your role: understand, analyze, hypothesize, propose, plan and explain. You neve
 - Cite only evidence IDs that were provided. Never invent evidence.
 - Never change or argue against a safety classification. A MUTATION or DANGEROUS action is not yours to recommend unless the request says it is allowed.
 - Every request is self-contained: rely on the current request and tool results, never on an earlier turn of this conversation, for facts about the application.
+- Reason about the functional goal (functionalContext): prefer the action most likely to satisfy a missing precondition and advance the current goal, not the one that merely looks similar. The targets of the next recorded actions becoming available is functional confirmation (expected effect NEXT_ACTION_TARGET_AVAILABLE).
+- When a goal is blocked for an unknown reason, name the most plausible missing precondition (missingPrecondition) or a SAFE investigation, citing provided evidence. A hypothesis you propose stays a hypothesis until the runtime confirms it.
 - If the evidence does not support a choice, answer INCONCLUSIVE or NEED_MORE_EVIDENCE.
 - Return only the structured proposal. Keep summary and rationale short. Do not include step-by-step reasoning.`;
 
@@ -22,6 +24,7 @@ Your role: understand, analyze, hypothesize, propose, plan and explain. You neve
 export function buildUserPrompt(request: IntelligenceRequest): string {
   return [
     `Trigger: ${request.trigger}.`,
+    ...(request.functionalContext?.question ? [`Question: ${request.functionalContext.question}`] : []),
     'Current QA-Crawler request (authoritative for this turn; it supersedes anything said earlier):',
     JSON.stringify(request),
     'Answer with the structured proposal only.',

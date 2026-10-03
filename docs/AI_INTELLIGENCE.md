@@ -697,3 +697,234 @@ aucune session, aucune activité réseau. C'est vérifié par les tests.
 - `tests/integration/ai-model-selection.test.ts` (navigateur réel, SDK simulé à la forme réelle) :
   - une divergence profonde choisit le modèle du profil INTELLIGENCE avec l'effort HIGH ; le runtime confirme, et l'audit est tenu par modèle ;
   - un modèle EXPLICIT inexistant se replie sur `auto`, de façon visible, et le parcours se termine.
+
+## 18. Cycle de vie d'une décision IA
+
+Chaque appel au conseiller a un cycle de vie entièrement traçable :
+
+```
+TRIGGER → CONTEXT → CALL → RAW RESULT → PARSED PROPOSAL → VALIDATION → ARBITRATION
+→ DECISION → (EXECUTION) → RUNTIME VERIFICATION → KNOWLEDGE UPDATE
+```
+
+Le cycle permet de répondre, pour chaque décision `AI-00017` :
+
+- pourquoi Copilot a été appelé ;
+- ce qu'il a proposé ;
+- si la proposition était valide ;
+- pourquoi elle a été retenue ou non ;
+- pourquoi il y a eu un repli ;
+- si elle a aidé l'objectif fonctionnel ;
+- ce que QA-Crawler en a appris.
+
+### Audit : « 10 calls, 0 accepted, 0 rejected, 11 fallbacks »
+
+Le chemin réel d'un appel :
+
+```
+IntelligenceTriggerPolicy → IntelligenceGateway → CopilotIntelligenceProvider → SDK
+→ réponse → validateIntelligenceProposal → arbitrate → IntelligenceAuditTrail → rapport
+```
+
+L'information était perdue à la fin de ce chemin, dans les compteurs de l'audit :
+
+- **Les replis étaient mal comptés.** Un repli était défini comme `!accepted && outcome !== NO_LLM_REQUIRED`.
+  - En ASSIST, `accepted` vaut toujours `false`. Chaque proposition shadow, même valide, comptait donc comme un « repli ».
+  - Chaque décision émettait aussi `AI_FALLBACK_ACTIVATED`.
+- **Une décision sans appel s'ajoutait.** `calls` exclut les décisions sans appel : budget épuisé, fournisseur ou modèle indisponible. `fallbacks` les comptait.
+  - Le budget `ai.budgets.maxCallsPerRun` vaut 10 par défaut. Le 11ᵉ besoin d'aide devient une décision `AI_BUDGET_EXHAUSTED` : un repli sans appel.
+  - D'où 10 appels et 11 « replis ».
+- **Aucun appel n'était compté deux fois.** Les compteurs mesuraient donc autre chose que ce qu'ils affichaient.
+- **`0 rejected` voulait dire seulement « aucune réponse invalide ».** Les 10 réponses étaient des propositions shadow, des réponses sans conclusion, des délais dépassés ou des erreurs. Le rapport ne les détaillait pas.
+
+### Un appel, une issue
+
+Chaque décision porte un `lifecycle` (voir `src/ai/decision-lifecycle.ts`). Ses dimensions sont séparées :
+
+| Dimension | Valeurs |
+|---|---|
+| `response` | `PROPOSAL`, `INCONCLUSIVE`, `NEED_MORE_EVIDENCE`, `INVALID_RESPONSE`, `TIMEOUT`, `ERROR`, et sans appel : `UNAVAILABLE`, `BUDGET_EXHAUSTED`, `NO_LLM_REQUIRED` |
+| `terminal` | exactement une issue : `ACCEPTED`, `SHADOW_ONLY`, `SAFETY_REJECTED`, `VALIDATION_REJECTED`, `PROPOSAL`, `INCONCLUSIVE`… |
+| `proposalValid` / `acceptedForExecution` | jamais confondus (en ASSIST : valide, mais jamais retenue pour exécution) |
+| `shadowResult` (ASSIST) | `AGREEMENT`, `DISAGREEMENT`, `AI_INCONCLUSIVE`, `DETERMINISTIC_ONLY`, `AI_ONLY_CANDIDATE` |
+| `fallbackReason` | `AI_INCONCLUSIVE`, `AI_NEED_MORE_EVIDENCE`, `AI_TIMEOUT`, `AI_UNAVAILABLE`, `AI_ERROR`, `INVALID_PROPOSAL`, `UNKNOWN_ACTION`, `INVALID_EVIDENCE`, `SAFETY_BLOCKED`, `BUDGET_EXHAUSTED`, `MODEL_UNAVAILABLE`, `LOW_AI_CONFIDENCE`, `DETERMINISTIC_PRIORITY`, `NO_USEFUL_PROPOSAL` |
+| `notExecutedReason` | `ASSIST_MODE`, `ADVISORY_ONLY`, `SAFETY_BLOCKED`, `DETERMINISTIC_PRIORITY`… |
+| `runtime` | `CONFIRMED`, `CONTRADICTED`, `NOT_APPLICABLE`, `PENDING` |
+| `knowledge` | `AI_PROPOSED_HYPOTHESIS`, `RUNTIME_SUPPORTED`, `RUNTIME_CONTRADICTED` |
+| `goalProgress` | avancement de l'objectif avant → après l'action proposée |
+
+**ASSIST n'est pas un repli.** Un repli signifie qu'un chemin IA attendu n'a pas pu servir. Une proposition valide en ASSIST est `SHADOW_ONLY`, avec `notExecutedReason=ASSIST_MODE`.
+
+**Contrôle des compteurs.** Sur les appels réels, la somme des `response` vaut `calls`. Chaque repli cite les décisions qui l'ont produit (`fallbacks.decisionIds`). Un écart est signalé `INCONSISTENT` dans le rapport.
+
+Une trace par décision (`AI_DECISION_CLASSIFIED`) :
+
+```
+[AI AI-00017] trigger=UNKNOWN_BLOCKING_PRECONDITION context=BLOCKED_GOAL mission=CREATE_REQUEST
+goal=CREATE_REQUEST_DONE checkpoint=CREATE_REQUEST_READY missing=UNKNOWN deterministicConfidence=0.41
+model=… mode=ASSIST response=PROPOSAL proposal.action=A31 proposal.hypothesis=WORKFLOW_PRECONDITION
+proposal.precondition=FINAL_APPLY_REQUIRED proposal.confidence=0.74 validation=VALID
+shadow=AI_ONLY_CANDIDATE terminal=SHADOW_ONLY execution=NOT_EXECUTED_ASSIST_MODE
+```
+
+### Le contexte fonctionnel envoyé à Copilot
+
+`IntelligenceContextBuilder` ajoute `functionalContext` à chaque requête. Ce contexte vient du moteur cognitif ; il est nettoyé comme le reste et ne contient aucune valeur saisie. Il comprend :
+
+- l'objectif courant et l'objectif parent ;
+- l'avancement de l'objectif ;
+- les préconditions satisfaites et manquantes ;
+- les raisons du blocage ;
+- le dernier checkpoint confirmé et le suivant attendu ;
+- les relations causales ;
+- les actions confirmées et attendues ;
+- les cibles des actions suivantes du parcours humain (`NEXT_ACTION_TARGET_AVAILABLE` est un effet attendu vérifiable) ;
+- la couverture fonctionnelle ;
+- la première divergence fonctionnelle ;
+- une question cognitive.
+
+Le conseiller peut ainsi répondre « cette action satisfera la précondition X et fera avancer l'objectif Y », et pas seulement « cette action ressemble à… ». Le schéma de proposition accepte :
+
+- `hypothesis.type` (`WORKFLOW_PRECONDITION`, `CAUSAL`, `SEMANTIC_CHECKPOINT`…) ;
+- `missingPrecondition` ;
+- `workflowPhase` ;
+- les effets attendus `CHECKPOINT` et `NEXT_ACTION_TARGET_AVAILABLE`.
+
+### Objectif bloqué : « submission READY, blocked »
+
+- **Ce qui manquait.** La mission n'était jamais atteinte, même après un envoi réussi : la condition `MISSION_DONE` ne recevait jamais l'effet confirmé. C'est corrigé.
+- **`BlockedGoalAnalysis`.** Elle s'appuie sur le PreconditionResolver et dit pourquoi l'objectif est bloqué :
+  - les préconditions satisfaites (par exemple `CREATE_REQUEST_READY`) ;
+  - les préconditions manquantes ;
+  - les raisons, par exemple « l'action d'envoi n'a pas été exécutée et confirmée », ou « l'envoi a échoué (classe d'échec) » ;
+  - les actions et hypothèses candidates ;
+  - les checkpoints ;
+  - une confiance.
+- **Cause inconnue.** Si le moteur ne sait pas pourquoi l'objectif reste bloqué, la précondition manquante vaut `UNKNOWN`. Exemples : l'envoi a été fait sans écriture acceptée, ou aucun envoi n'a été démontré.
+- **Déclencheur `UNKNOWN_BLOCKING_PRECONDITION`.** En fin de flow, il appelle le conseiller dans un contexte d'analyse `BLOCKED_GOAL`. Rien n'y est exécuté. La proposition devient une `AI_PROPOSED_HYPOTHESIS`, que le HypothesisEngine juge ensuite.
+
+### Avancement, première divergence, couverture expliquée
+
+- **GoalProgressEvaluator.** Il mesure l'avancement à partir des préconditions satisfaites, des checkpoints confirmés et de l'état métier, jamais de l'URL seule. Le rapport montre `before → after` à chaque changement, et pour chaque action proposée par l'IA exécutée.
+- **FIRST FUNCTIONAL DIVERGENCE.** C'est la première étape dont l'effet attendu manque, est faux, a demandé une récupération, ou a échoué. Ce n'est pas forcément la dernière erreur Playwright.
+  - L'analyse d'un échec envoie cette divergence au conseiller.
+  - Chaque échec classé porte un `FailureContext` : objectif touché, checkpoint atteint, attendu, observé.
+- **Couverture `UNREACHABLE` / `BLOCKED`.** Elle est expliquée par :
+  - la raison ;
+  - le dernier checkpoint ;
+  - l'objectif bloquant ;
+  - les préconditions manquantes ou inconnues ;
+  - la première divergence ;
+  - les preuves ;
+  - l'hypothèse IA éventuelle.
+
+  L'IA ne transforme jamais `UNREACHABLE` en `REACHED` : seul le runtime le peut.
+
+### Connaissance
+
+- **Le détail de chaque hypothèse.** Le rapport et `cognitive/hypotheses.json` montrent :
+  - le type et l'origine (`AI_PROPOSAL`, `HUMAN_RECORDING`, `RUNTIME`…) ;
+  - la description ;
+  - les preuves pour et contre ;
+  - la confiance et le statut ;
+  - les dates de création et de dernière évaluation ;
+  - la décision IA d'origine.
+- **Une hypothèse contredite ne disparaît pas.** Le rapport dit pourquoi elle l'a été, quelles alternatives existent, et quelle investigation SÛRE l'apprentissage actif propose. Sans alternative ni investigation, le déclencheur `HYPOTHESIS_ANALYSIS` peut demander une autre explication au conseiller.
+- **Une affirmation de LLM n'est jamais confirmée seule.** En revanche, le runtime peut maintenant la contredire (`CONTRADICTED`, puis `REJECTED`). Avant, elle restait `HYPOTHESIS` quoi qu'il arrive.
+
+### Recording Intelligence (PRESERVE FIRST, UNDERSTAND SECOND, OPTIMIZE LAST)
+
+Après `qa-crawler record`, avec `ai.mode` ASSIST ou HYBRID, `RecordingIntelligenceEnricher` :
+
+1. fait l'enrichissement déterministe (phases, dépendances, intention, checkpoints) ;
+2. si le sens reste ambigu (action non comprise, aucune intention métier, aucune dépendance), appelle le conseiller (`RECORDING_ENRICHMENT`, contexte `RECORDING`).
+
+Le conseiller peut proposer :
+
+- un objectif fonctionnel ;
+- une phase ;
+- une intention ;
+- un checkpoint ;
+- une précondition ;
+- une relation causale ;
+- un invariant.
+
+Le conseiller ne peut jamais :
+
+- supprimer, réordonner ou inventer une action humaine ;
+- modifier une valeur ou une classification ;
+- modifier le flow ;
+- déclarer une causalité CONFIRMED.
+
+L'empreinte des actions humaines est vérifiée avant et après l'enrichissement. Tout candidat porte `origin=AI_PROPOSAL`, `sourceRecording`, `runtimeConfirmed=false` et `status=PROPOSED`. Le résultat est écrit dans `recording-intelligence.json` et dans la section « Recording intelligence » du rapport d'enregistrement.
+
+Selon le mode :
+
+- **ASSIST** : des candidats shadow seulement.
+- **HYBRID** : les relations observables (« click X révèle le champ Y ») sont gardées hors du dépôt, dans `knowledge/ai-recording-candidates.json`. Au rejeu, elles deviennent des hypothèses que le runtime soutient (effet observé) ou contredit (effet absent), jamais des vérités.
+
+### Artefacts et rapport
+
+- **`reports/intelligence-decisions.json`.** Chaque décision y figure avec :
+  - `decisionId`, `timestamp`, `trigger`, `mode` et `model` ;
+  - `functionalContextSummary`, `goal` et `blockingReason` ;
+  - `requestSummary` et `proposal` ;
+  - `validation` et `shadowResult` ;
+  - `fallbackReason` et `executionResult` ;
+  - `runtimeVerification` et `knowledgeImpact`.
+
+  Le fichier est nettoyé : aucun secret, jeton, mot de passe, en-tête `Authorization` ni cookie.
+- **La section « AI decisions — lifecycle » du rapport.** Elle détaille :
+  - les appels par déclencheur ;
+  - les réponses ;
+  - les décisions sans appel ;
+  - la validation et le shadow ;
+  - les exécutions et leurs raisons ;
+  - le runtime (« sans objet en ASSIST ») ;
+  - les replis par raison, avec leurs décisions ;
+  - l'apport à la connaissance ;
+  - le contrôle des compteurs.
+- **`cognitive/functional-reasoning.json`.** Il contient l'objectif bloqué, l'avancement, les divergences, les envois tentés et les candidats d'enregistrement.
+- **Déclencheurs configurables :**
+
+```yaml
+ai:
+  triggers:
+    unknownBlockingPrecondition: true   # objectif bloqué, cause inconnue
+    hypothesisAnalysis: true            # hypothèse contredite sans alternative
+    recordingEnrichment: true           # enrichissement après un enregistrement
+```
+
+### Tests
+
+- `tests/unit/ai-decision-lifecycle.test.ts` couvre :
+  - la reproduction de l'audit (10 appels ASSIST, puis budget épuisé : 10 `SHADOW_ONLY` et 1 repli `BUDGET_EXHAUSTED`) ;
+  - la cohérence des compteurs sur des réponses mélangées ;
+  - ASSIST en désaccord (valide, `DISAGREEMENT`, non retenue, `ASSIST_MODE`, aucun repli) ;
+  - INCONCLUSIVE (un seul repli) ;
+  - HYBRID retenue puis confirmée avec avancement ;
+  - une proposition fausse, contredite ;
+  - SafetyPolicy et priorité déterministe ;
+  - l'analyse d'objectif bloqué et le contexte fonctionnel ;
+  - un délai dépassé ;
+  - l'artefact nettoyé.
+- `tests/unit/functional-reasoning.test.ts` couvre :
+  - le cas réel (READY mais bloqué, puis cause inconnue) ;
+  - la mission atteinte après un envoi accepté ;
+  - l'avancement ;
+  - la première divergence ;
+  - le `FailureContext` ;
+  - une hypothèse IA contredite au runtime, puis analysée ;
+  - la confirmation ou la contradiction au rejeu des candidats d'enregistrement.
+- `tests/unit/recording-intelligence.test.ts` couvre :
+  - toutes les actions humaines gardées, à l'identique ;
+  - aucune valeur saisie envoyée ;
+  - des candidats `PROPOSED` ;
+  - le mode HYBRID ;
+  - le mode OFF.
+- `tests/integration/ai-blocked-goal.test.ts` (navigateur réel, Copilot simulé) : formulaire prêt, envoi sans effet. Le test vérifie :
+  - `UNKNOWN_BLOCKING_PRECONDITION` avec le contexte fonctionnel ;
+  - une décision `SHADOW_ONLY` sans repli ;
+  - une hypothèse IA ;
+  - des compteurs cohérents ;
+  - la trace et le rapport.

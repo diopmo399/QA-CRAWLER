@@ -117,7 +117,9 @@ export function validateIntelligenceProposal(
     !proposal.plan &&
     !proposal.hypothesis &&
     !proposal.proposedGoal &&
-    !proposal.failureCategory
+    !proposal.failureCategory &&
+    !proposal.missingPrecondition &&
+    !proposal.workflowPhase
   )
     return {
       valid: false,

@@ -5,6 +5,7 @@ import type { Hypothesis } from '../cognitive/hypothesis-engine.js';
 import { normalize } from '../flows/action-effect-verifier.js';
 import type {
   ActionSafety,
+  FunctionalContext,
   IntelligenceAction,
   IntelligenceEvidence,
   IntelligenceRequest,
@@ -39,6 +40,8 @@ export interface ContextSources {
   coverageGaps?: string[];
   failure?: IntelligenceRequest['failure'];
   deterministic?: { key?: string; confidence: number; status: string };
+  /** L'état fonctionnel (objectif, préconditions, checkpoints, divergence…) du moteur cognitif. */
+  functional?: FunctionalContext;
 }
 
 export interface ContextLimits {
@@ -111,6 +114,9 @@ export class IntelligenceContextBuilder {
 
     const focus = new Set([
       ...terms(sources.goal?.id ?? ''),
+      ...(sources.functional?.missingPreconditions ?? []).flatMap(terms),
+      ...(sources.functional?.nextActionTargets ?? []).flatMap(terms),
+      ...terms(sources.functional?.nextExpectedCheckpoint ?? ''),
       ...(sources.goal?.conditions ?? []).flatMap(terms),
       ...(sources.workflow?.next ?? []).flatMap(terms),
       ...(sources.workflow?.requiredFields ?? []).flatMap(terms),
@@ -217,6 +223,7 @@ export class IntelligenceContextBuilder {
         ? { coverageContext: { gaps: sources.coverageGaps.slice(0, 10) } }
         : {}),
       ...(sources.failure ? { failure: sources.failure } : {}),
+      ...(sources.functional ? { functionalContext: sources.functional } : {}),
       constraints: {
         allowedActionIds: actions.filter((action) => !action.disabled).map((action) => action.id),
         forbidden: FORBIDDEN,

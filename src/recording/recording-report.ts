@@ -1,6 +1,7 @@
 import { BASE_CSS, card, esc } from '../reporting/html-common.js';
 import { describeStep } from '../config/flow-schema.js';
 import type { RawRecordedEvent, SemanticRecordedAction } from './model.js';
+import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { RecordingResult } from './process-recording.js';
 
 export type ReplayStatus = 'REPLAY_CONFIRMED' | 'REPLAY_FAILED' | 'NOT_VALIDATED';
@@ -30,6 +31,7 @@ export function recordingHtml(input: {
   replay: ReplayOutcome;
   files: Record<string, string>;
   generatedAt: string;
+  intelligence?: RecordingIntelligence;
 }): string {
   const { result, replay } = input;
   const { session, normalized, flow } = result;
@@ -134,6 +136,7 @@ export function recordingHtml(input: {
     <tbody>${assertions || '<tr><td colspan="6" class="muted">none</td></tr>'}</tbody></table>
   </section>
   ${checkpoints ? `<section><h2>Checkpoints</h2><ul class="plain">${checkpoints}</ul></section>` : ''}
+  ${input.intelligence ? recordingIntelligenceHtml(input.intelligence) : ''}
   <section><h2>Files</h2><ul class="plain">${files}</ul></section>
   <p class="muted">Generated ${esc(input.generatedAt)}</p>
 </main></body></html>
@@ -338,4 +341,40 @@ function causalitySection(result: RecordingResult): string {
     ${reasons.size > 0 ? `<p class="muted">Goto reasons: ${[...reasons].map(([reason, count]) => `${esc(reason)}: ${String(count)}`).join(' · ')}</p>` : ''}
     <table class="rec"><thead><tr><th>Raw</th><th>Route</th><th>Kind</th><th>Caused by / why a goto</th><th>Confidence</th><th>Reasons</th></tr></thead><tbody>${rows}</tbody></table>
     <p class="muted">A navigation that follows a human action is first its effect: the action stays the step, the route becomes an outcome. A goto is generated only when no reliable human cause exists, always with its reason.</p></section>`;
+}
+
+/**
+ * RECORDING INTELLIGENCE (§42) : les actions humaines (toutes préservées), les appels au
+ * conseiller, et ce qu'il propose — des CANDIDATS, en attente de confirmation au rejeu.
+ */
+function recordingIntelligenceHtml(intelligence: RecordingIntelligence): string {
+  const s = intelligence.summary;
+  const rows: [string, string][] = [
+    ['Mode', intelligence.mode],
+    ['Human actions', String(intelligence.humanActions)],
+    [
+      'Preserved',
+      `${String(intelligence.preserved)}${intelligence.preservationVerified ? ' (fingerprint unchanged by the enrichment)' : ' — PRESERVATION CHECK FAILED'}`,
+    ],
+    ['Ambiguities', intelligence.ambiguities.join(' · ') || 'none (deterministic enrichment only)'],
+    ['AI enrichment calls', String(intelligence.aiCalls)],
+    ['Functional goals proposed', String(s.functionalGoals)],
+    ['Workflow phases', String(s.phases)],
+    ['Preconditions proposed', String(s.preconditions)],
+    ['Causal hypotheses proposed', String(s.causalHypotheses)],
+    ['Semantic checkpoints', String(s.checkpoints)],
+    ['Runtime confirmed', String(s.runtimeConfirmed)],
+    ['Pending confirmation (AI proposals)', String(s.pendingConfirmation)],
+  ];
+  const candidates = intelligence.candidates
+    .map(
+      (candidate) =>
+        `<li><b>${esc(candidate.kind)}</b> ${esc(candidate.statement)} <span class="muted">— ${esc(candidate.origin)}${candidate.aiDecisionId ? ` ${esc(candidate.aiDecisionId)}` : ''} · ${esc(candidate.status)} · ${esc(candidate.usage)} · runtime confirmed: no</span></li>`,
+    )
+    .join('');
+  return `<section><h2>Recording intelligence</h2>
+    <p class="muted">PRESERVE FIRST, UNDERSTAND SECOND, OPTIMIZE LAST. The advisor never removes, reorders, invents or changes a human action; what it proposes stays a candidate until the replay confirms it. The generated flow is unchanged.</p>
+    <table><tbody>${rows.map(([label, value]) => `<tr><th>${esc(label)}</th><td>${esc(value)}</td></tr>`).join('')}</tbody></table>
+    ${candidates ? `<ul class="plain">${candidates}</ul>` : ''}
+  </section>`;
 }

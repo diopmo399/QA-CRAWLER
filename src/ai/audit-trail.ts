@@ -1,3 +1,13 @@
+import {
+  AI_FALLBACK_REASONS,
+  CALL_RESPONSES,
+  type AiDecisionLifecycle,
+  type AiFallbackReason,
+  type AiResponseStatus,
+  type AiTerminalResult,
+  type NotExecutedReason,
+  type ShadowDecisionResult,
+} from './decision-lifecycle.js';
 import type { ArbiterSource } from './hybrid-arbiter.js';
 import type { IntelligenceMode, IntelligenceTriggerReason } from './model.js';
 import type { ComplexityLevel, ModelExecutionContext } from './models/model-types.js';
@@ -17,7 +27,28 @@ export type AiOutcome =
   | 'NO_LLM_REQUIRED'
   | 'AI_ERROR';
 
-export type AiContext = 'EXPLORATION' | 'RECOVERY' | 'FAILURE';
+/**
+ * Où l'intelligence intervient. EXPLORATION et RECOVERY attendent une ACTION ; les autres sont
+ * des analyses (échec, objectif bloqué, hypothèse contredite, enregistrement) : rien n'y est exécuté.
+ */
+export type AiContext = 'EXPLORATION' | 'RECOVERY' | 'FAILURE' | 'BLOCKED_GOAL' | 'HYPOTHESIS' | 'RECORDING';
+
+export const ADVISORY_CONTEXTS: readonly AiContext[] = ['FAILURE', 'BLOCKED_GOAL', 'HYPOTHESIS', 'RECORDING'];
+
+/** Le contexte fonctionnel d'une décision, résumé pour l'audit (jamais une valeur saisie). */
+export interface AiFunctionalContextSummary {
+  mission?: string;
+  goal?: string;
+  parentGoal?: string;
+  goalProgress?: number;
+  lastConfirmedCheckpoint?: string;
+  nextExpectedCheckpoint?: string;
+  missingPreconditions: string[];
+  unknownPrecondition?: boolean;
+  blockingReason?: string;
+  firstDivergence?: string;
+  question?: string;
+}
 
 /**
  * Une intervention de l'intelligence, telle qu'elle reste dans l'audit (§62) : le résumé de
@@ -50,7 +81,11 @@ export interface AiDecisionRecord {
     evidenceIds: string[];
     uncertainties: string[];
     hypothesis?: string;
+    hypothesisType?: string;
+    missingPrecondition?: string;
+    expectedEffects?: string[];
     failureCategory?: string;
+    nextInvestigation?: string;
     summary?: string;
   };
   validation: { status: 'VALID' | 'REJECTED' | 'NOT_RECEIVED'; rejection?: string; reasons: string[] };
@@ -71,6 +106,39 @@ export interface AiDecisionRecord {
   complexity?: { level: ComplexityLevel; score: number; reasons: string[] };
   /** Modèle demandé / choisi / réellement utilisé, effort, repli. */
   modelContext?: ModelExecutionContext;
+  /** Le cycle de vie : une réponse, une issue, et les dimensions séparées (shadow, repli, runtime). */
+  lifecycle: AiDecisionLifecycle;
+  /** Ce que la décision savait du parcours fonctionnel (objectif, checkpoint, préconditions). */
+  functionalContext?: AiFunctionalContextSummary;
+}
+
+/**
+ * Les compteurs du cycle de vie, en dimensions SÉPARÉES. Sur les appels réels, la somme de
+ * `byResponse` vaut `calls` ; chaque repli cite les décisions qui l'ont produit.
+ */
+export interface AiLifecycleSummary {
+  records: number;
+  calls: number;
+  notCalled: number;
+  byResponse: Partial<Record<AiResponseStatus, number>>;
+  byTerminal: Partial<Record<AiTerminalResult, number>>;
+  validation: { valid: number; invalid: number; notReceived: number };
+  shadow: Partial<Record<ShadowDecisionResult, number>>;
+  execution: {
+    executedFromAi: number;
+    pending: number;
+    notExecuted: Partial<Record<NotExecutedReason, number>>;
+  };
+  runtime: { confirmed: number; contradicted: number; notApplicable: number; pending: number };
+  fallbacks: {
+    total: number;
+    byReason: Partial<Record<AiFallbackReason, number>>;
+    decisionIds: Partial<Record<AiFallbackReason, string[]>>;
+  };
+  knowledge: { hypothesesProposed: number; runtimeSupported: number; runtimeContradicted: number };
+  /** Contrôle : chaque appel a exactement une réponse classée. */
+  consistent: boolean;
+  consistency: string;
 }
 
 /** Des mesures OBSERVÉES par modèle (aucun classement : seulement ce qui s'est passé). */
@@ -136,6 +204,7 @@ export interface AiSummary {
   reasoning: Partial<Record<'LOW' | 'MEDIUM' | 'HIGH' | 'NOT_SENT', number>>;
   complexity: Partial<Record<ComplexityLevel, number>>;
   modelFallbacks: number;
+  lifecycle: AiLifecycleSummary;
   decisions: AiDecisionRecord[];
 }
 
@@ -149,7 +218,7 @@ export class IntelligenceAuditTrail {
   constructor(private readonly limit = 500) {}
 
   create(record: Omit<AiDecisionRecord, 'id'>): AiDecisionRecord {
-    const entry: AiDecisionRecord = { id: `AI-${String(this.next)}`, ...record };
+    const entry: AiDecisionRecord = { id: `AI-${String(this.next).padStart(5, '0')}`, ...record };
     this.next += 1;
     this.records.push(entry);
     if (this.records.length > this.limit) this.records.shift();
@@ -174,15 +243,17 @@ export class IntelligenceAuditTrail {
     const count = (predicate: (record: AiDecisionRecord) => boolean) => this.records.filter(predicate).length;
     const byTrigger: Partial<Record<IntelligenceTriggerReason, number>> = {};
     for (const record of this.records) byTrigger[record.trigger] = (byTrigger[record.trigger] ?? 0) + 1;
-    const compared = this.records.filter((record) => record.shadowAgreement !== undefined);
+    const compared = this.records.filter((record) => record.lifecycle.shadowResult !== undefined);
     return {
       ...base,
       triggersEvaluated: this.triggersEvaluated,
       fastPath: this.fastPath,
       calls: count((record) => isCall(record)),
-      proposals: count((record) => record.proposal?.status === 'PROPOSAL'),
-      accepted: count((record) => record.accepted),
-      rejected: count((record) => record.outcome === 'PROPOSAL_REJECTED'),
+      proposals: count(
+        (record) => record.lifecycle.response === 'PROPOSAL' && record.lifecycle.proposalValid === true,
+      ),
+      accepted: count((record) => record.lifecycle.acceptedForExecution),
+      rejected: count((record) => record.lifecycle.proposalValid === false),
       inconclusive: count(
         (record) => record.outcome === 'INCONCLUSIVE' || record.outcome === 'NEED_MORE_EVIDENCE',
       ),
@@ -194,13 +265,14 @@ export class IntelligenceAuditTrail {
       ),
       shadow: {
         compared: compared.length,
-        agreements: compared.filter((record) => record.shadowAgreement).length,
-        disagreements: compared.filter((record) => !record.shadowAgreement).length,
+        agreements: count((record) => record.lifecycle.shadowResult === 'AGREEMENT'),
+        disagreements: count((record) => record.lifecycle.shadowResult === 'DISAGREEMENT'),
       },
       timeouts: count((record) => record.outcome === 'AI_TIMEOUT'),
       unavailable: count((record) => record.outcome === 'AI_UNAVAILABLE'),
       budgetExhausted: count((record) => record.outcome === 'AI_BUDGET_EXHAUSTED'),
-      fallbacks: count((record) => !record.accepted && record.outcome !== 'NO_LLM_REQUIRED'),
+      // Un repli : un chemin IA attendu n'a pas servi (raison classée). ASSIST n'en est jamais un.
+      fallbacks: count((record) => record.lifecycle.fallbackReason !== undefined),
       byTrigger,
       noLlmRequired: count((record) => record.outcome === 'NO_LLM_REQUIRED'),
       models: this.modelStats(),
@@ -214,7 +286,74 @@ export class IntelligenceAuditTrail {
         (record) => record.complexity?.level ?? 'MEDIUM',
       ),
       modelFallbacks: count((record) => record.modelContext?.fallbackApplied === true),
+      lifecycle: this.lifecycleSummary(),
       decisions: this.records.slice(-100),
+    };
+  }
+
+  /** Les compteurs du cycle de vie (dimensions séparées, sommes contrôlées). */
+  private lifecycleSummary(): AiLifecycleSummary {
+    const records = this.records;
+    const calls = records.filter((record) => record.lifecycle.call);
+    const byResponse = tally(records, (record) => record.lifecycle.response);
+    const fallbacks = records.filter((record) => record.lifecycle.fallbackReason !== undefined);
+    const decisionIds: Partial<Record<AiFallbackReason, string[]>> = {};
+    for (const record of fallbacks) {
+      const reason = record.lifecycle.fallbackReason;
+      if (reason) decisionIds[reason] = [...(decisionIds[reason] ?? []), record.id];
+    }
+    const callResponses = calls.filter((record) => CALL_RESPONSES.includes(record.lifecycle.response)).length;
+    const unknownReasons = fallbacks.filter(
+      (record) => !AI_FALLBACK_REASONS.includes(record.lifecycle.fallbackReason as AiFallbackReason),
+    ).length;
+    const consistent = callResponses === calls.length && unknownReasons === 0;
+    return {
+      records: records.length,
+      calls: calls.length,
+      notCalled: records.length - calls.length,
+      byResponse,
+      byTerminal: tally(records, (record) => record.lifecycle.terminal),
+      validation: {
+        valid: records.filter((record) => record.lifecycle.proposalValid === true).length,
+        invalid: records.filter((record) => record.lifecycle.proposalValid === false).length,
+        notReceived: records.filter((record) => record.lifecycle.proposalValid === undefined).length,
+      },
+      shadow: tally(
+        records.filter((record) => record.lifecycle.shadowResult !== undefined),
+        (record) => record.lifecycle.shadowResult ?? 'AI_INCONCLUSIVE',
+      ),
+      execution: {
+        executedFromAi: records.filter((record) => record.lifecycle.execution === 'EXECUTED').length,
+        pending: records.filter((record) => record.lifecycle.execution === 'PENDING').length,
+        notExecuted: tally(
+          records.filter((record) => record.lifecycle.notExecutedReason !== undefined),
+          (record) => record.lifecycle.notExecutedReason ?? 'NO_RESPONSE',
+        ),
+      },
+      runtime: {
+        confirmed: records.filter((record) => record.lifecycle.runtime === 'CONFIRMED').length,
+        contradicted: records.filter((record) => record.lifecycle.runtime === 'CONTRADICTED').length,
+        notApplicable: records.filter((record) => record.lifecycle.runtime === 'NOT_APPLICABLE').length,
+        pending: records.filter((record) => record.lifecycle.runtime === 'PENDING').length,
+      },
+      fallbacks: {
+        total: fallbacks.length,
+        byReason: tally(fallbacks, (record) => record.lifecycle.fallbackReason ?? 'AI_ERROR'),
+        decisionIds,
+      },
+      knowledge: {
+        hypothesesProposed: records.filter((record) => record.lifecycle.knowledge.impact !== 'NONE').length,
+        runtimeSupported: records.filter(
+          (record) => record.lifecycle.knowledge.impact === 'RUNTIME_SUPPORTED',
+        ).length,
+        runtimeContradicted: records.filter(
+          (record) => record.lifecycle.knowledge.impact === 'RUNTIME_CONTRADICTED',
+        ).length,
+      },
+      consistent,
+      consistency: consistent
+        ? `${String(calls.length)} call(s) = ${String(callResponses)} classified response(s); ${String(records.length - calls.length)} decision(s) without a call`
+        : `${String(calls.length)} call(s) but ${String(callResponses)} classified response(s)${unknownReasons > 0 ? `, ${String(unknownReasons)} unclassified fallback(s)` : ''}`,
     };
   }
 
@@ -231,8 +370,8 @@ export class IntelligenceAuditTrail {
       return {
         model,
         calls: calls.length,
-        accepted: records.filter((record) => record.accepted).length,
-        rejected: records.filter((record) => record.outcome === 'PROPOSAL_REJECTED').length,
+        accepted: records.filter((record) => record.lifecycle.acceptedForExecution).length,
+        rejected: records.filter((record) => record.lifecycle.proposalValid === false).length,
         inconclusive: records.filter(
           (record) => record.outcome === 'INCONCLUSIVE' || record.outcome === 'NEED_MORE_EVIDENCE',
         ).length,
@@ -282,9 +421,7 @@ export class IntelligenceAuditTrail {
 
 /** Un vrai appel au fournisseur (ni budget épuisé, ni indisponible, ni raisonnement trivial). */
 function isCall(record: AiDecisionRecord): boolean {
-  return !['AI_BUDGET_EXHAUSTED', 'AI_UNAVAILABLE', 'AI_MODEL_UNAVAILABLE', 'NO_LLM_REQUIRED'].includes(
-    record.outcome,
-  );
+  return record.lifecycle.call;
 }
 
 function modelKey(record: AiDecisionRecord): string {

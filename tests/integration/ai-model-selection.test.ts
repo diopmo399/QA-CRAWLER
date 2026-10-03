@@ -181,7 +181,7 @@ ${FLOW}
     const html = await readFile(path.join(reportsDir, 'index.html'), 'utf8');
     expect(html).toContain('Models used (observed, not ranked)');
     expect(html).toContain('model-deep');
-    // L'hypothèse de Copilot reste une hypothèse (preuve LLM, plafonnée), avec son origine.
+    // L'hypothèse de Copilot reste une hypothèse (preuve LLM), avec son origine.
     const hypotheses = JSON.parse(
       await readFile(path.join(reportsDir, 'cognitive', 'hypotheses.json'), 'utf8'),
     ) as {
@@ -190,8 +190,9 @@ ${FLOW}
     const claimed = hypotheses.hypotheses.find((entry) =>
       entry.proposition.includes('Enterprise Details tab'),
     );
-    expect(claimed?.status).toBe('HYPOTHESIS');
-    expect(claimed?.confidence).toBeLessThanOrEqual(0.3);
+    // Confirmée au runtime : soutenue par une preuve runtime, jamais une connaissance confirmée sur la foi de l'IA.
+    expect(claimed?.status).toBe('SUPPORTED');
+    expect(claimed?.status).not.toBe('RUNTIME_CONFIRMED');
   }, 180_000);
 
   it('§65 / §71 EXPLICIT unavailable model: visible fallback, requested ≠ selected, the workflow still completes', async () => {

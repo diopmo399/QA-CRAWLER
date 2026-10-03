@@ -1492,6 +1492,12 @@ const aiSchema = z
         unknownBusinessError: z.boolean().default(true),
         lowConfidence: z.boolean().default(true),
         knowledgeContradiction: z.boolean().default(true),
+        /** Objectif bloqué sans précondition connue (submission READY, objectif toujours bloqué…). */
+        unknownBlockingPrecondition: z.boolean().default(true),
+        /** Hypothèse contredite sans alternative : demander une explication ou une investigation SÛRE. */
+        hypothesisAnalysis: z.boolean().default(true),
+        /** Après un enregistrement : objectifs, phases, préconditions proposés (jamais le flow modifié). */
+        recordingEnrichment: z.boolean().default(true),
       })
       .strict()
       .default({}),

@@ -46,6 +46,24 @@ export interface GoalState {
   /** Pourquoi il est BLOCKED / UNREACHABLE. */
   reason?: string;
   reachedAt?: string;
+  /** UNREACHABLE / BLOCKED expliqué par le raisonnement fonctionnel (jamais seulement « non atteint »). */
+  explanation?: GoalExplanation;
+}
+
+/**
+ * L'explication d'un objectif non atteint : le dernier checkpoint atteint, l'objectif qui bloque,
+ * les préconditions manquantes (ou inconnues), la première divergence, les preuves, l'hypothèse
+ * de l'IA éventuelle. Seul le runtime peut faire passer un objectif à REACHED.
+ */
+export interface GoalExplanation {
+  reason: string;
+  lastReachedCheckpoint?: string;
+  blockingGoal?: string;
+  missingPreconditions: string[];
+  firstDivergence?: string;
+  supportingEvidence: string[];
+  aiHypotheses: string[];
+  confidence: number;
 }
 
 /** Le plan : des objectifs fonctionnels, jamais une liste de clics. */

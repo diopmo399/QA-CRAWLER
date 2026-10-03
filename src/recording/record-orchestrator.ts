@@ -13,8 +13,16 @@ import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
 import type { RecordingEvent } from './model.js';
+import type { IntelligenceProvider } from '../ai/provider.js';
 import { processRecording, TEST_DATA_FILE, type RecordingResult } from './process-recording.js';
 import { recordingHtml, type ReplayOutcome } from './recording-report.js';
+import { createIntelligenceGateway, effectiveMode } from '../ai/factory.js';
+import {
+  enrichRecording,
+  recordingCandidatesFile,
+  rememberRecordingCandidates,
+  type RecordingIntelligence,
+} from './recording-intelligence.js';
 
 export type RecordOutputFormat = 'yaml' | 'gherkin' | 'both';
 
@@ -38,6 +46,8 @@ export interface RecordRequest {
    * fermeture). Les tests y jouent la démonstration avec Playwright.
    */
   drive?: (session: { page: Page; recorder: HumanFlowRecorder }) => Promise<void>;
+  /** Un fournisseur d'intelligence injecté (tests, intégrations) : remplace ai.provider. */
+  intelligenceProvider?: IntelligenceProvider;
   /** Le terminal : Entrée pour arrêter, « c » pour un point de contrôle… ; renvoie de quoi se détacher. */
   control?: (recorder: HumanFlowRecorder) => () => void;
 }
@@ -181,6 +191,46 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
 
   if (config.recording.knowledge) await rememberRecording(config, result, env).catch(() => undefined);
 
+  // RECORDING INTELLIGENCE : comprendre (jamais modifier) le parcours humain, après la capture.
+  let intelligence: RecordingIntelligence | undefined;
+  const mode = effectiveMode(config.ai);
+  if (mode !== 'OFF') {
+    const gateway = createIntelligenceGateway(config.ai, {
+      env,
+      ...(request.intelligenceProvider ? { provider: request.intelligenceProvider } : {}),
+      emit: (record) => {
+        log.log('INFO', record.event, record.message);
+      },
+    });
+    try {
+      intelligence = await enrichRecording({
+        result,
+        mode,
+        ...(gateway && config.ai.triggers.recordingEnrichment ? { gateway } : {}),
+        context: config.ai.context,
+      });
+      onEvent({
+        type: 'RECORDING_ENRICHED',
+        at: new Date().toISOString(),
+        message: `${String(intelligence.candidates.length)} knowledge candidate(s) (${String(intelligence.aiCalls)} AI call(s)); ${String(intelligence.preserved)}/${String(intelligence.humanActions)} human action(s) preserved${intelligence.preservationVerified ? '' : ' — PRESERVATION CHECK FAILED'}`,
+      });
+      await write('recording-intelligence.json', json(intelligence));
+      if (mode === 'HYBRID')
+        await rememberRecordingCandidates(
+          recordingCandidatesFile(config.output.reportsDir),
+          intelligence.candidates,
+        ).catch(() => undefined);
+    } catch (error) {
+      onEvent({
+        type: 'RECORDING_ENRICHED',
+        at: new Date().toISOString(),
+        message: `recording enrichment skipped: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    } finally {
+      await gateway?.close();
+    }
+  }
+
   let replay: ReplayOutcome = { status: 'NOT_VALIDATED' };
   if (request.validate ?? config.recording.validate) {
     onEvent({
@@ -204,7 +254,13 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   await write('recording-events.jsonl', log.toJsonLines());
   await write(
     'index.html',
-    recordingHtml({ result, replay, files: { ...files }, generatedAt: new Date().toISOString() }),
+    recordingHtml({
+      result,
+      replay,
+      files: { ...files },
+      generatedAt: new Date().toISOString(),
+      ...(intelligence ? { intelligence } : {}),
+    }),
   );
   return { result, directory, files, replay, stopReason, warnings };
 }

@@ -186,7 +186,7 @@ export async function runCli(input: string[]): Promise<number> {
     const ai = result.ai;
     if (ai) {
       logger.info(
-        `  AI advisor    : ${ai.mode} · ${ai.provider}${ai.model ? ` (${ai.model})` : ''} · ${String(ai.calls)} call(s), ${String(ai.accepted)} accepted, ${String(ai.rejected)} rejected, ${String(ai.runtimeConfirmed)} runtime confirmed, ${String(ai.runtimeContradicted)} contradicted · ${String(ai.fallbacks)} fallback(s)`,
+        `  AI advisor    : ${ai.mode} · ${ai.provider}${ai.model ? ` (${ai.model})` : ''} · ${String(ai.calls)} call(s) [${entriesOf(ai.lifecycle.byResponse)}] · shadow [${entriesOf(ai.lifecycle.shadow)}] · executed from AI ${String(ai.lifecycle.execution.executedFromAi)}, ${String(ai.runtimeConfirmed)} runtime confirmed, ${String(ai.runtimeContradicted)} contradicted · ${String(ai.fallbacks)} fallback(s) [${entriesOf(ai.lifecycle.fallbacks.byReason)}]`,
       );
       if (ai.available === false)
         logger.info(
@@ -474,4 +474,14 @@ async function readVersion(): Promise<string> {
   } catch {
     return 'unknown';
   }
+}
+
+/** « PROPOSAL 6, INCONCLUSIVE 2 » (les compteurs nuls sont omis). */
+function entriesOf(values: Partial<Record<string, number>>): string {
+  return (
+    Object.entries(values)
+      .filter(([, count]) => (count ?? 0) > 0)
+      .map(([key, count]) => `${key} ${String(count)}`)
+      .join(', ') || 'none'
+  );
 }
