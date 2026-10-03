@@ -392,6 +392,56 @@ AUTRE section connue est exclu ; deux candidats aussi plausibles donnent `AMBIGU
 Un localisateur structurel qui atteint un élément d'une autre section est rejeté par l'empreinte
 (`TARGET_FINGERPRINT_MISMATCH … section "Filters" instead of "Columns"`), avant toute action.
 
+## Auto-validation de la cible pendant l'enregistrement
+
+RECORD → RESOLVE → VALIDATE → ENRICH → REVALIDATE → PERSIST. Un sélecteur généré ne suffit plus :
+juste après chaque action humaine, QA-CRAWLER se demande « si je n'avais plus que la
+représentation que je viens de construire, retrouverais-je EXACTEMENT l'élément utilisé ? ».
+
+- **Élément original** : le script de capture garde une référence en mémoire à l'élément de
+  chaque action (bornée, jamais sérialisée, jamais écrite dans le DOM).
+- **Recherche à sec** (`RecordingTargetValidator`) : la cible est résolue comme au rejeu
+  (`toLocator`, ou le ContextualTargetResolver pour une cible avec section) et comparée à
+  l'élément original — même nœud, puis l'empreinte face à ce que le rejeu en lira (`readTarget` :
+  rôle, balise, nom, test id, section). **Jamais** `click`, `fill`, `press`, `selectOption`, glisser,
+  `submit` ni `dispatchEvent` : on valide l'identité de la cible, pas l'action.
+- **Statuts** : `VALIDATED`, `VALIDATED_FRAGILE` (retrouvée seulement par position),
+  `VALIDATED_AFTER_RERENDER` (nœud remplacé : comparaison par instantané sémantique),
+  `VALIDATED_AFTER_AI_AUDIT`, `AMBIGUOUS` (plusieurs candidats : jamais le premier),
+  `MISMATCH` (ex. `RECORDED_ROLE_INCORRECT`), `CONTEXT_MISMATCH` (autre section),
+  `SEMANTIC_MISMATCH`, `NOT_FOUND`, `STALE_BEFORE_VALIDATION`, `NOT_VALIDATABLE` (l'écran a changé
+  avant la validation, ou l'action elle-même a masqué ou renommé l'élément —
+  `TARGET_HIDDEN_BY_ACTION`, `TARGET_CHANGED_BY_ACTION` : jamais une erreur de la cible, qui est
+  gardée telle quelle et jamais « réparée » en sélecteur).
+- **Réparation déterministe** (au plus `maxDeterministicRepairAttempts`), toujours **revalidée** :
+  l'empreinte prend ce que le runtime montre de l'élément original (`role: combobox → textbox`),
+  ou la cible est remplacée par une alternative sémantique (section de l'élément original d'abord ;
+  jamais une position). Tracée : avant, réparation, après, preuve `runtime-original-target`.
+- **Audit par le conseiller** (même `IntelligenceGateway`, déclencheurs de
+  `recording.intelligenceAudit`) seulement si le déterministe ne suffit pas : il choisit une
+  candidate fournie (T…), QA-CRAWLER la **résout** et la compare à l'original. Une proposition qui ne
+  retrouve pas la cible est `AI_PROPOSAL_RUNTIME_REJECTED` : l'action humaine reste telle quelle.
+  `ai.mode: OFF` → zéro appel ; fournisseur indisponible → le résultat déterministe est gardé.
+- **Glisser-déposer** : jamais un second glisser ; l'élément (dans sa zone d'arrivée) et la zone
+  de dépôt sont retrouvés par leur identité, le déplacement observé sert de preuve.
+- **Groupe sémantique** : « champ », « opérateur » puis « valeur » dans la même section forment une
+  `FILTER_CONFIGURATION` ; les actions restent séparées, la valeur reçoit `semanticId: filter.value`.
+- **Génération** : la représentation réparée va dans le flow (avec son empreinte) ; une cible non
+  prouvée est **gardée**, commentée `REQUIRES_REPLAY_VALIDATION`. Le commentaire de chaque étape
+  dit `target VALIDATED (repaired)`, `target AMBIGUOUS`…
+- **Audit final** : « le parcours est-il cohérent et rejouable ? », à partir des validations
+  immédiates (un écran passé n'est jamais « NOT_FOUND ») ; confiance de rejeu HIGH / MEDIUM / LOW,
+  jamais à la place du détail.
+- **Connaissance** : une réparation prouve « cette représentation retrouvait la cible dans CE
+  runtime » (`recordingValidated: true`) ; `replayValidated` attend un rejeu réussi. Rien n'est
+  promu automatiquement.
+
+Fichiers : `target-validation.json` (par action : original, empreinte et validation avant,
+réparation, empreinte et validation après, audit, cible finale) ; section **Target validation** du
+rapport (badges VALIDATED, REPAIRED, FRAGILE, AMBIGUOUS, UNRESOLVED, AI_AUDITED) ; dans le
+terminal, une ligne par étape (`[TARGET_MISMATCH] … role recorded=combobox runtime=textbox`,
+`[TARGET_REPAIRED]`, `[TARGET_REVALIDATED]`) et le bilan **RECORDING VALIDATION**.
+
 ## Glisser-déposer (DRAG_AND_DROP)
 
 Un glisser-déposer est **une** action humaine de premier ordre, jamais un clic ni une perte.
@@ -486,7 +536,7 @@ la session, la version et l'environnement. Les runs suivants la reprennent comme
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,
 `recorded-flow.json`, `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
-données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `optimized.flow.yaml`
+données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `target-validation.json`, `optimized.flow.yaml`
 (seulement avec l'optimiseur), `flow-graph.json` (la carte
 des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en nombres — sans
 note globale —, intention comprise, qualité des cibles et des valeurs, trace
@@ -495,7 +545,7 @@ RAW → SEMANTIC → FINAL avec le pourquoi de chaque étape, vérifications can
 Événements : `RECORDING_STARTED`, `RAW_EVENT_CAPTURED`, `SEMANTIC_ACTION_RESOLVED`,
 `CHECKPOINT_ADDED`, `RECORDING_PAUSED`, `RECORDING_RESUMED`, `RECORDING_STOPPED`,
 `RECORDING_NORMALIZED`, `OUTCOME_INFERRED`, `FLOW_GENERATED`, `REPLAY_VALIDATION_STARTED`,
-`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`, et pour les données : `RECORDED_TEST_DATA_DISCOVERED`, `TEST_DATA_KEY_RESOLVED`, `TEST_DATA_CLASSIFIED`, `TEST_DATA_GENERALIZED`, `TEST_DATA_LITERAL_PRESERVED`, `TEST_DATA_REFERENCE_CREATED`, `SENSITIVE_RECORDED_VALUE_REDACTED`, `TEST_DATA_COLLISION_DETECTED` (enregistrement), `TEST_DATA_GENERATED_FOR_RUN`, `TEST_DATA_STRATEGY_CANDIDATE` (rejeu), et pour le parcours humain : `HUMAN_INTERACTION_CAPTURED`, `HUMAN_INTERACTION_PRESERVED`, `HUMAN_INTERACTION_MERGED`, `HUMAN_INTERACTION_EXCLUDED`, `HUMAN_INTERACTION_UNRESOLVED`, `HUMAN_ACTION_DEPENDENCY_DISCOVERED`, `HUMAN_JOURNEY_BUILT`, `HUMAN_JOURNEY_VALIDATION_STARTED`, `HUMAN_JOURNEY_VALIDATED`, `HUMAN_JOURNEY_VALIDATION_FAILED`, `HUMAN_ACTION_LOST`, `FLOW_OPTIMIZATION_STARTED`, `FLOW_OPTIMIZATION_COMPLETED`, et pour l'audit : `RECORDING_SEMANTIC_AUDITED`. Jamais une valeur dans un événement.
+`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`, et pour les données : `RECORDED_TEST_DATA_DISCOVERED`, `TEST_DATA_KEY_RESOLVED`, `TEST_DATA_CLASSIFIED`, `TEST_DATA_GENERALIZED`, `TEST_DATA_LITERAL_PRESERVED`, `TEST_DATA_REFERENCE_CREATED`, `SENSITIVE_RECORDED_VALUE_REDACTED`, `TEST_DATA_COLLISION_DETECTED` (enregistrement), `TEST_DATA_GENERATED_FOR_RUN`, `TEST_DATA_STRATEGY_CANDIDATE` (rejeu), et pour le parcours humain : `HUMAN_INTERACTION_CAPTURED`, `HUMAN_INTERACTION_PRESERVED`, `HUMAN_INTERACTION_MERGED`, `HUMAN_INTERACTION_EXCLUDED`, `HUMAN_INTERACTION_UNRESOLVED`, `HUMAN_ACTION_DEPENDENCY_DISCOVERED`, `HUMAN_JOURNEY_BUILT`, `HUMAN_JOURNEY_VALIDATION_STARTED`, `HUMAN_JOURNEY_VALIDATED`, `HUMAN_JOURNEY_VALIDATION_FAILED`, `HUMAN_ACTION_LOST`, `FLOW_OPTIMIZATION_STARTED`, `FLOW_OPTIMIZATION_COMPLETED`, et pour l'audit : `RECORDING_SEMANTIC_AUDITED`, `TARGET_VALIDATION`. Jamais une valeur dans un événement.
 
 ## Configuration
 
@@ -527,6 +577,10 @@ recording:
     collapseMinGotos: 2
   fidelity: SEMANTIC # EXACT | SEMANTIC | OPTIMIZED
   preserveHumanJourney: true
+  targetValidation: # auto-validation de la cible juste après chaque action (recherche à sec)
+    enabled: true
+    maxDeterministicRepairAttempts: 2
+    aiAudit: true # le conseiller audite ce que le déterministe ne règle pas (ai.mode OFF → aucun appel)
   intelligenceAudit: # relecture par l'intelligence (ai.*) ; ai.mode OFF → aucun appel
     enabled: true
     mode: SUSPICIOUS_ONLY # OFF | SUSPICIOUS_ONLY | FULL

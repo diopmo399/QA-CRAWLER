@@ -218,6 +218,13 @@ function printEvent(event: RecordingEvent): void {
     REPLAY_CONFIRMED: color.green,
     REPLAY_FAILED: color.red,
   };
+  // Le journal de validation des cibles : une ligne concise par étape ([TARGET_MISMATCH] …).
+  if (event.type === 'TARGET_VALIDATION' && event.message.startsWith('[')) {
+    const ok = /^\[TARGET_(VALIDATED|REVALIDATED|CAPTURED|VALIDATING)\]/.test(event.message);
+    const repaired = event.message.startsWith('[TARGET_REPAIRED]');
+    logger.info(`  ${(ok ? color.dim : repaired ? color.cyan : color.yellow)(event.message)}`);
+    return;
+  }
   const paint = shown[event.type];
   if (paint) logger.info(`  ${paint(`[${event.type}]`)} ${event.message}`);
 }
@@ -238,6 +245,22 @@ function printSummary(outcome: RecordOutcome): void {
   line('Ambiguous targets', q.ambiguousTargets);
   line('Fragile locators', q.fragileLocators);
   line('Replay', outcome.replay.status);
+  // RECORDING VALIDATION : le détail, jamais caché derrière une note.
+  const v = outcome.result.targetValidation.summary;
+  logger.info('');
+  logger.info(color.bold('RECORDING VALIDATION'));
+  line('Human actions', v.humanActions);
+  line('Targets validated', v.validated);
+  line('Validated after repair', v.validatedAfterRepair);
+  line('Fragile', v.fragile);
+  line('Ambiguous', v.ambiguous);
+  line('Unresolved', v.unresolved);
+  line('AI audits', v.aiAudits);
+  line('AI confirmed', v.aiConfirmed);
+  line('AI rejected', v.aiRejected);
+  line('AI inconclusive', v.aiInconclusive);
+  line('Flow generated', flow.steps.length > 0 ? 'YES' : 'NO');
+  line('Replay confidence', outcome.result.targetValidation.replayConfidence);
   for (const warning of outcome.result.warnings) logger.warn(`  ! ${warning.code}: ${warning.message}`);
   logger.info('');
   logger.info(`  Report : ${path.join(outcome.directory, 'index.html')}`);

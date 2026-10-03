@@ -14,6 +14,12 @@ import type {
 } from './model.js';
 import { correlateActions, type CorrelationResult } from './action-correlation.js';
 import { normalizeRecording, type NormalizedRecording } from './normalizer.js';
+import {
+  applyTargetValidations,
+  groupSemanticActions,
+  targetValidationReport,
+  type TargetValidationReport,
+} from './target-validation-state.js';
 import { checkSemanticPreservation, type PreservationReport } from './semantic-preservation.js';
 import { extractRecordedTestData, type RecordedTestDataResult } from './recorded-test-data.js';
 import { inferOutcomes } from './outcomes.js';
@@ -37,6 +43,8 @@ export interface RecordingResult {
   preservation: PreservationReport;
   /** HUMAN JOURNEY : chaque interaction humaine, son statut, les dépendances, les phases. */
   journey: HumanJourneyResult;
+  /** AUTO-VALIDATION DES CIBLES : chaque action, sa validation immédiate, la confiance de rejeu. */
+  targetValidation: TargetValidationReport;
   fidelity: 'EXACT' | 'SEMANTIC' | 'OPTIMIZED';
   /** FLOW OPTIMIZER (facultatif) : un flow raccourci séparé (optimized.flow.yaml). */
   optimized?: {
@@ -176,6 +184,10 @@ export function processRecording(
     'RECORDING_NORMALIZED',
     `${String(normalized.kept.length)} action(s) kept of ${String(normalized.actions.length)}: ${String(normalized.stats.mergedInputs)} input(s) merged, ${String(normalized.stats.collapsedCorrections)} correction(s), ${String(normalized.stats.removedDetours)} detour(s), ${String(normalized.stats.removedNoise)} noise event(s)`,
   );
+  // TARGET SELF-VALIDATION : la représentation validée (ou réparée puis revalidée) pendant
+  // l'enregistrement remplace la représentation brute ; le groupe sémantique donne le contexte.
+  applyTargetValidations(normalized.kept, session.rawEvents);
+  groupSemanticActions(normalized.kept);
   const outcomes = inferOutcomes(normalized.kept, session.states, normalized.negative);
   emit(
     'OUTCOME_INFERRED',
@@ -239,6 +251,14 @@ export function processRecording(
     dependencies,
   });
   annotateSteps(built.flow, journey, normalized.kept);
+  // FINAL RECORDING AUDIT : à partir des validations immédiates (un écran passé n'est jamais « NOT_FOUND »).
+  const targetValidation = targetValidationReport(normalized.kept, journey, {
+    enabled: config.recording.targetValidation.enabled,
+  });
+  emit(
+    'TARGET_VALIDATION',
+    `${String(targetValidation.summary.validated)}/${String(targetValidation.summary.humanActions)} target(s) validated (${String(targetValidation.summary.validatedAfterRepair)} after repair), ${String(targetValidation.summary.fragile)} fragile, ${String(targetValidation.summary.unresolved)} unresolved; replay confidence ${targetValidation.replayConfidence}`,
+  );
   for (const interaction of journey.interactions)
     emit('HUMAN_INTERACTION_CAPTURED', `${interaction.id} ${interaction.type} "${interaction.target ?? ''}"`);
   for (const account of journey.accounts) {
@@ -331,6 +351,7 @@ export function processRecording(
     ...(correlation ? { correlation } : {}),
     ...(testData ? { testData } : {}),
     journey,
+    targetValidation,
     fidelity,
     ...(optimized ? { optimized } : {}),
     preservation,

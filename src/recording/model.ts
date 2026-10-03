@@ -6,6 +6,7 @@ import type {
   TargetFingerprint,
 } from '../config/flow-schema.js';
 import type { FunctionalExchange } from '../functional/model.js';
+import type { RecordingTargetValidation } from './target-validator.js';
 
 /**
  * HUMAN FLOW RECORDER — le modèle. Trois représentations séparées, jamais écrasées :
@@ -152,6 +153,8 @@ export interface RawRecordedEvent {
   key?: string;
   /** drag : le glisser-déposer corrélé (élément, zones, déplacement observé). */
   drag?: RecordedDrag;
+  /** AUTO-VALIDATION immédiate de la cible (recherche à sec, jamais rejouée). */
+  targetValidation?: RecordingTargetValidation;
   /** dialog : alert / confirm / prompt, et ce que l'humain (ou la règle d'enregistrement) a répondu. */
   dialog?: { kind: string; accepted: boolean; message: string };
   /** checkpoint : libellé donné par l'humain. */
@@ -308,6 +311,10 @@ export interface SemanticRecordedAction {
   expectedEffects?: StepEffects;
   /** DRAG_AND_DROP : l'élément, ses zones, et l'effet ITEM_MOVED observé à l'enregistrement. */
   drag?: RecordedDrag;
+  /** La validation immédiate de sa cible (statut, tentatives, réparation, audit). */
+  targetValidation?: RecordingTargetValidation;
+  /** Un groupe sémantique (FILTER_CONFIGURATION : champ, opérateur, valeur) : le contexte de la cible. */
+  semanticGroup?: { kind: string; id: string; context: Record<string, string> };
 }
 
 export type AssertionKind =
@@ -395,6 +402,8 @@ export interface RecordedFlowStep {
   interactionIds?: string[];
   /** UNRESOLVED_HUMAN_ACTION : gardée bien que son intention ne soit pas comprise. */
   semanticStatus?: 'RESOLVED' | 'UNRESOLVED';
+  /** La validation immédiate de sa cible ; une cible non prouvée reste, à confirmer au rejeu. */
+  targetValidation?: { status: string; repaired: boolean; requiresReplayValidation: boolean };
   /** Pourquoi cette étape (explicabilité du rapport). */
   explanation: string;
 }
@@ -465,6 +474,7 @@ export type RecordingEventType =
   | 'RECORDING_COMPLETED'
   | 'RECORDING_ENRICHED'
   | 'RECORDING_SEMANTIC_AUDITED'
+  | 'TARGET_VALIDATION'
   | 'RECORDING_FAILED'
   | 'ACTION_CORRELATION_STARTED'
   | 'ACTION_EFFECT_CORRELATED'

@@ -1,5 +1,5 @@
 import type { FlowTarget, StepEffects, TargetFingerprint } from '../config/flow-schema.js';
-import type { Locator } from 'playwright';
+import type { ElementHandle, Locator, Page } from 'playwright';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { sectionPathExpression } from '../recording/semantic-dom.js';
 
@@ -333,7 +333,9 @@ export function verifyEffects(input: {
 }
 
 /** Ce que l'élément trouvé dit de lui (rôle, nom, texte, test id) — jamais la valeur d'un champ. */
-export async function readTarget(locator: Locator): Promise<ObservedTarget> {
+export async function readTarget(target: Locator | ElementHandle, page?: Page): Promise<ObservedTarget> {
+  // Un localisateur ou un élément déjà tenu (validation pendant l'enregistrement) : la même lecture.
+  const locator = target as Locator;
   const observed = await locator
     .evaluate((el) => {
       const clean = (text: string | null | undefined): string =>
@@ -374,12 +376,13 @@ export async function readTarget(locator: Locator): Promise<ObservedTarget> {
     })
     .catch((): ObservedTarget => ({}));
   if (observed.tag === undefined) return observed;
-  const section = await readSection(locator);
+  const section = await readSection(locator, page);
   return section ? { ...observed, section } : observed;
 }
 
 /** Le chemin de sections de l'élément (même calcul qu'à l'enregistrement) ; undefined s'il est illisible. */
-export async function readSection(locator: Locator): Promise<string | undefined> {
+export async function readSection(target: Locator | ElementHandle, page?: Page): Promise<string | undefined> {
+  const locator = target as Locator;
   probes += 1;
   const token = `probe-${String(probes)}`;
   const marked = await locator
@@ -389,9 +392,8 @@ export async function readSection(locator: Locator): Promise<string | undefined>
     }, token)
     .catch(() => false);
   if (!marked) return undefined;
-  const path = (await locator
-    .page()
-    .evaluate(sectionPathExpression(token))
-    .catch(() => null)) as string[] | null;
+  const owner = page ?? (typeof locator.page === 'function' ? locator.page() : undefined);
+  if (!owner) return undefined;
+  const path = (await owner.evaluate(sectionPathExpression(token)).catch(() => null)) as string[] | null;
   return path && path.length > 0 ? path.join(' > ') : undefined;
 }
