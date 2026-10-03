@@ -333,8 +333,13 @@ export class EngineEventLog {
         const warn =
           event.event === 'GOAL_RECOVERY_FAILED' ||
           event.event === 'FLOW_DRIFT_DETECTED' ||
-          event.event === 'RECOVERY_CANDIDATE_REJECTED';
+          event.event === 'RECOVERY_CANDIDATE_REJECTED' ||
+          event.event === 'TARGET_CONTRADICTION' ||
+          event.event === 'AI_TARGET_PROPOSAL_REJECTED' ||
+          event.event === 'AI_TARGET_RUNTIME_CONTRADICTED';
         const detail =
+          event.event === 'TARGET_EVIDENCE' ||
+          event.event === 'TARGET_CANDIDATE_DISCOVERED' ||
           event.event === 'RECOVERY_CANDIDATE_EVALUATED' ||
           event.event === 'GOAL_PROGRESS_UPDATED' ||
           event.event === 'ROOT_CAUSE_CANDIDATE_IDENTIFIED';

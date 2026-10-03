@@ -1,9 +1,15 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { chromium } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { IntelligenceRequest } from '../../src/ai/model.js';
 import { parseConfig } from '../../src/config/config-loader.js';
+import {
+  candidateSelector,
+  discoverCandidates,
+  recordedLocatorCandidate,
+} from '../../src/flows/functional-target.js';
 import type { FlowRunReport } from '../../src/model/flow-run.js';
 import { runMission } from '../../src/orchestrator.js';
 import { FakeIntelligenceProvider } from '../fixtures/fake-intelligence-provider.js';
@@ -34,6 +40,7 @@ const RECORDED =
 describe('Functional target resolution on replay (real browser)', () => {
   let app: FilterApp;
   let dir: string;
+  let lastReportsDir = '';
   beforeAll(async () => {
     app = await startFilterApp();
     dir = await mkdtemp(path.join(tmpdir(), 'qa-functional-target-'));
@@ -44,9 +51,10 @@ describe('Functional target resolution on replay (real browser)', () => {
 
   const replay = async (
     variant: string,
-    options: { fingerprint?: string; ai?: string; provider?: FakeIntelligenceProvider } = {},
+    options: { fingerprint?: string; ai?: string; provider?: FakeIntelligenceProvider; extra?: string } = {},
   ): Promise<FlowRunReport> => {
     const reportsDir = await mkdtemp(path.join(dir, `${variant}-`));
+    lastReportsDir = reportsDir;
     const { config } = parseConfig(
       `mission: { name: functional-${variant} }
 target: { baseUrl: ${app.url}, startAt: "/?variant=${variant}" }
@@ -54,6 +62,7 @@ exploration: { autonomous: false, actionTimeoutMs: 3000, settleTimeMs: 100 }
 report: { failOnSeverity: NONE }
 replay: { effectTimeoutMs: 800, intelligentRecovery: { enabled: false } }
 ${options.ai ?? ''}
+${options.extra ?? ''}
 output: { reportsDir: ${reportsDir} }
 ${FLOW(options.fingerprint ?? RECORDED)}`,
       {},
@@ -248,4 +257,159 @@ ${FLOW(RECORDED)}`,
     expect(html).toContain('Target resolution: TARGET_RERENDERED');
     expect(html).toContain('RUNTIME_CONFIRMED');
   }, 90_000);
+
+  /** Le candidat que désigne encore le localisateur enregistré (identifiant public). */
+  const recordedCandidate = (request: IntelligenceRequest): string | undefined =>
+    (
+      (request.targetResolution?.runtimeCandidates as
+        { id: string; designatedByRecordedLocator: boolean }[] | undefined) ?? []
+    ).find((entry) => entry.designatedByRecordedLocator)?.id;
+
+  it('shadow DOM: the value field recreated in an open shadow root is found by the deep scan — contradictory evidence shown, resolved deterministically (fast path, no AI), VALUE_CHANGED confirmed', async () => {
+    const report = await replay('shadow');
+    expect(report.status, describeFlow(report)).toBe('PASSED');
+    const trace = fillOf(report)?.targetResolution;
+    const kept = trace?.candidates.find((candidate) => candidate.id === trace.resolution);
+    expect(kept?.source).toBe('PAGE_SCAN');
+    expect(kept?.positive).toContain('RECORDED_LOCATOR_MATCH');
+    expect(kept?.negative?.join(' ')).toMatch(/FINGERPRINT_MISMATCH/);
+    expect(trace?.evidenceStatus).toBe('CONTRADICTORY_EVIDENCE');
+    expect(trace?.decision).toBe('RESOLVED');
+    expect(trace?.ai.requested).toBe(false);
+    expect(trace?.runtimeVerification?.status).toBe('CONFIRMED');
+  }, 90_000);
+
+  it('REAL BUG, intelligence OFF: fingerprint MISMATCH, contradictory evidence — the recorded-locator target stays a candidate (CandidateSet >= 1), an honest failure (TARGET_CONTRADICTORY_EVIDENCE, never TARGET_NOT_FOUND), never filled by chance', async () => {
+    const report = await replay('shadowLoose');
+    const fill = fillOf(report);
+    const trace = fill?.targetResolution;
+    expect(fill?.status).toBe('FAILED');
+    expect(trace?.candidates.length).toBeGreaterThanOrEqual(1);
+    expect(
+      trace?.candidates.some((candidate) => candidate.positive?.includes('RECORDED_LOCATOR_MATCH')),
+    ).toBe(true);
+    expect(trace?.evidenceStatus).toBe('CONTRADICTORY_EVIDENCE');
+    expect(trace?.status).toBe('TARGET_CONTRADICTORY_EVIDENCE');
+    expect(trace?.ai).toMatchObject({ requested: false, trigger: 'CONTRADICTORY_TARGET_EVIDENCE' });
+    expect(fill?.reason).not.toMatch(/TARGET_NOT_FOUND/);
+    expect(fill?.effect?.execution).not.toBe('EXECUTED');
+  }, 90_000);
+
+  it('REAL BUG, HYBRID: the advisor is triggered by the contradictory evidence (not only by an ambiguity), receives evidence ids, contradictions, known facts and constraints, picks the recorded-locator candidate — validated, re-resolved at runtime, VALUE_CHANGED confirmed, the flow passes; DEBUG writes the sanitized resolution artifact', async () => {
+    const provider = advisor(recordedCandidate);
+    const report = await replay('shadowLoose', {
+      ai: HYBRID,
+      provider,
+      extra: 'logging: { level: DEBUG }',
+    });
+    expect(report.status, describeFlow(report)).toBe('PASSED');
+    const trace = fillOf(report)?.targetResolution;
+    expect(trace?.ai).toMatchObject({
+      requested: true,
+      trigger: 'CONTRADICTORY_TARGET_EVIDENCE',
+      outcome: 'VALIDATED',
+    });
+    expect(trace?.status).toBe('TARGET_AI_ASSISTED');
+    expect(trace?.runtimeVerification?.status).toBe('CONFIRMED');
+    expect(trace?.final).toBe('TARGET_RECOVERED_AND_CONFIRMED');
+    const request = resolutionRequest(provider);
+    expect(request).toMatchObject({
+      mission: { type: 'TARGET_RESOLUTION', context: 'REPLAY_RECORDED_HUMAN_JOURNEY' },
+      resolutionFailure: { trigger: 'CONTRADICTORY_TARGET_EVIDENCE' },
+      constraints: { mustChooseExistingCandidate: true, mustNotExecuteAction: true },
+    });
+    expect(request?.knownFacts).toContain('The recorded locator resolves to a runtime element');
+    const sent = (request?.runtimeCandidates as { evidence: string[]; contradictions: string[] }[])[0];
+    expect(sent?.evidence.some((id) => id.endsWith('_RECORDED_LOCATOR_MATCH'))).toBe(true);
+    expect(sent?.contradictions.join(' ')).toMatch(/FINGERPRINT_MISMATCH/);
+    expect(JSON.stringify(provider.requests)).not.toContain('alpha');
+    expect(JSON.stringify(provider.requests)).not.toContain('<value-field');
+    // Les journaux et l'artefact de débogage.
+    const reportsDir = lastReportsDir;
+    const log = await readFile(path.join(reportsDir, 'engine-log.jsonl'), 'utf8');
+    for (const event of [
+      'TARGET_CONTEXT',
+      'TARGET_CANDIDATE_DISCOVERED',
+      'TARGET_EVIDENCE',
+      'TARGET_CONTRADICTION',
+      'AI_TARGET_TRIGGER',
+      'AI_TARGET_CONTEXT_BUILT',
+      'AI_TARGET_PROPOSAL',
+      'AI_TARGET_RUNTIME_CONFIRMED',
+    ])
+      expect(log, event).toContain(`"${event}"`);
+    const folder = path.join(reportsDir, 'intelligence', 'target-resolution');
+    const [file] = await readdir(folder);
+    if (!file) throw new Error('no target-resolution artifact');
+    const artifact = await readFile(path.join(folder, file), 'utf8');
+    expect(JSON.parse(artifact)).toMatchObject({
+      status: 'TARGET_AI_ASSISTED',
+      evidenceStatus: 'CONTRADICTORY_EVIDENCE',
+    });
+    expect(artifact).not.toContain('alpha');
+  }, 90_000);
+
+  it('REAL BUG, HYBRID: an invented candidate (T99) — AI_PROPOSAL_INVALID_CANDIDATE, nothing is executed', async () => {
+    const provider = advisor(() => 'T99');
+    const report = await replay('shadowLoose', { ai: HYBRID, provider });
+    const fill = fillOf(report);
+    expect(fill?.status).toBe('FAILED');
+    expect(fill?.targetResolution?.ai).toMatchObject({
+      outcome: 'REJECTED',
+      rejection: 'AI_PROPOSAL_INVALID_CANDIDATE',
+    });
+    expect(fill?.effect?.execution).not.toBe('EXECUTED');
+  }, 90_000);
+
+  it('REAL BUG, HYBRID: an invented evidence id — the proposal is rejected (AI_PROPOSAL_INVALID_EVIDENCE), nothing is executed', async () => {
+    const provider = new FakeIntelligenceProvider((request) => ({
+      status: 'PROPOSAL',
+      selectedActionId: recordedCandidate(request),
+      supportingEvidenceIds: ['E_T7_INVENTED'],
+      uncertainties: [],
+      confidence: 0.95,
+    }));
+    const report = await replay('shadowLoose', { ai: HYBRID, provider });
+    const fill = fillOf(report);
+    expect(fill?.status).toBe('FAILED');
+    expect(fill?.targetResolution?.ai.rejection).toBe('AI_PROPOSAL_INVALID_EVIDENCE');
+    expect(fill?.effect?.execution).not.toBe('EXECUTED');
+  }, 90_000);
+
+  it('TEST 18 (critical, real browser) the page scan fails (returns 0), the recorded locator still finds the element: it becomes a candidate (CandidateSet >= 1), marked and usable', async () => {
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.setContent(
+        `<div role="dialog" aria-label="Filter"><label>Criteria <input id="valueInput"></label><button>Apply</button></div>
+<script>Object.defineProperty(globalThis, '__name', { get() { throw new Error('page globals broke the scan'); } });</script>`,
+      );
+      const step = parseConfig(
+        `mission: { name: scan }
+target: { baseUrl: "http://app.test" }
+flows:
+  - name: Scan
+    steps:
+      - fill: { css: "#valueInput", value: x }
+`,
+        {},
+        {},
+      ).config.flows[0]?.steps[0];
+      if (!step || !('target' in step)) throw new Error('no fill step');
+      const found = await discoverCandidates(page, step, 12);
+      expect(found.candidates).toHaveLength(0);
+      expect(found.scanError).toMatch(/page globals broke the scan/);
+      const kept = await recordedLocatorCandidate(page.locator('#valueInput'), found.token, 'T1');
+      expect(kept).toMatchObject({
+        id: 'T1',
+        matchesRecordedLocator: true,
+        source: 'RECORDED_LOCATOR',
+        visible: true,
+        editable: true,
+      });
+      expect(await page.locator(candidateSelector(found.token, 'T1')).count()).toBe(1);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
 });

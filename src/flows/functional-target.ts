@@ -1,10 +1,11 @@
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import type { FlowStep, FlowTarget, TargetFingerprint } from '../config/flow-schema.js';
 import { describeTarget } from '../config/flow-schema.js';
 import { toLocator } from '../execution/locator-resolver.js';
 import { sectionPathOf } from '../recording/semantic-dom.js';
 import { resolveWorkflowContext } from '../workflow-healing/workflow-context.js';
-import { normalize, sectionMatch } from './action-effect-verifier.js';
+import { normalize, readTarget, sectionMatch, type ObservedTarget } from './action-effect-verifier.js';
+import { redactText } from '../security/redactor.js';
 
 /**
  * RÉSOLUTION FONCTIONNELLE DE CIBLE (rejeu).
@@ -28,6 +29,8 @@ export type TargetResolutionStatus =
   | 'TARGET_AMBIGUOUS'
   | 'TARGET_CONTEXT_MISMATCH'
   | 'TARGET_FUNCTIONAL_MISMATCH'
+  | 'TARGET_CONTRADICTORY_EVIDENCE'
+  | 'TARGET_NO_CANDIDATE'
   | 'TARGET_RUNTIME_CONFIRMED'
   | 'TARGET_RUNTIME_REJECTED'
   | 'TARGET_REQUIRES_REPLAY_VALIDATION';
@@ -104,8 +107,20 @@ export interface ScoredCandidate extends FunctionalCandidate {
   score: number;
   /** Chaque preuve, ce qu'elle a apporté (ou retiré). */
   components: Record<string, number>;
-  /** Écarté avant tout score : invisible, non éditable, autre section… */
+  /** Les preuves POSITIVES et NÉGATIVES, identifiées (E_T1_RECORDED_LOCATOR_MATCH…) : citables par le conseiller. */
+  evidence?: TargetEvidence[];
+  /** Les preuves négatives (identifiants) : une cible peut être retenue AVEC des contradictions, jamais en les cachant. */
+  contradictions?: string[];
+  /** Écarté avant tout score : invisible, désactivé, non éditable, autre contexte (section ET fenêtre). */
   rejected?: string;
+}
+
+/** Une preuve de résolution : d'où elle vient, dans quel sens elle pèse. */
+export interface TargetEvidence {
+  id: string;
+  kind: string;
+  polarity: 'POSITIVE' | 'NEGATIVE';
+  detail: string;
 }
 
 export interface FunctionalDecision {
@@ -129,17 +144,35 @@ export interface TargetResolutionTrace {
   identity: FunctionalTargetIdentity;
   temporal: TemporalActionContext;
   screen?: ScreenSemanticContext;
-  candidates: { id: string; score: number; summary: string; rejected?: string }[];
+  candidates: {
+    id: string;
+    score: number;
+    summary: string;
+    rejected?: string;
+    /** PAGE_SCAN, ou RECORDED_LOCATOR (le localisateur enregistré, gardé même si le scan l'ignore). */
+    source?: string;
+    positive?: string[];
+    negative?: string[];
+  }[];
+  /** Le scan de la page a échoué : la raison (jamais avalée en silence). */
+  scanError?: string;
+  /** CONTRADICTORY_EVIDENCE : la cible retenue (ou la meilleure) a des preuves positives ET négatives. */
+  evidenceStatus?: 'CONSISTENT' | 'CONTRADICTORY_EVIDENCE';
   decision: FunctionalDecision['status'];
   resolution?: string;
   reason: string;
   ai: {
     requested: boolean;
+    /** Pourquoi le conseiller est consulté (TARGET_AMBIGUOUS, TARGET_FUNCTIONAL_MISMATCH, CONTRADICTORY_TARGET_EVIDENCE…). */
+    trigger?: string;
     mode?: string;
     proposal?: string;
     confidence?: number;
-    outcome?: 'VALIDATED' | 'REJECTED' | 'RECORDED_ONLY' | 'NOT_REQUIRED' | 'UNAVAILABLE';
+    outcome?: 'VALIDATED' | 'REJECTED' | 'RECORDED_ONLY' | 'NOT_REQUIRED' | 'UNAVAILABLE' | 'INCONCLUSIVE';
+    /** AI_PROPOSAL_INVALID_CANDIDATE, AI_PROPOSAL_RUNTIME_REJECTED… */
+    rejection?: string;
     auditId?: string;
+    citedEvidence?: string[];
   };
   status: TargetResolutionStatus;
   runtimeVerification?: { status: 'CONFIRMED' | 'REJECTED' | 'NOT_VERIFIED'; detail: string };
@@ -281,7 +314,15 @@ export function functionalIdentityOf(
  * utilisé ensuite ; le localisateur enregistré marque ses propres éléments (une preuve de plus).
  */
 function scanCandidates(
-  spec: { kind: TargetInteraction; token: string; recorded: string; max: number },
+  spec: {
+    kind: TargetInteraction;
+    token: string;
+    recorded: string;
+    max: number;
+    /** Seulement les éléments du localisateur enregistré (seconde passe), numérotés à partir d'offset. */
+    onlyRecorded?: boolean;
+    offset?: number;
+  },
   sectionPath: (el: Element) => string[],
 ): { screen: ScreenSemanticContext; candidates: FunctionalCandidate[] } {
   const clean = (text: string | null | undefined, max = 60): string =>
@@ -304,6 +345,32 @@ function scanCandidates(
     spec.kind === 'FILL' ? FIELD : spec.kind === 'SELECT' ? SELECT : spec.kind === 'CHECK' ? CHECK : CLICK;
   const DIALOG =
     '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], .cdk-overlay-pane';
+  // Le DOM entier, y compris les shadow roots OUVERTS (web components, design systems) : dans l'ordre.
+  const deepAll = (selector: string): Element[] => {
+    const out: Element[] = [];
+    const visit = (parent: ParentNode): void => {
+      for (const child of Array.from(parent.children)) {
+        if (child.matches(selector)) out.push(child);
+        if (child.shadowRoot) visit(child.shadowRoot);
+        visit(child);
+      }
+    };
+    visit(document);
+    return out;
+  };
+  // closest() à travers les frontières de shadow root.
+  const composedClosest = (el: Element, selector: string): Element | null => {
+    for (let node: Element | null = el; node;) {
+      if (node.matches(selector)) return node;
+      const parent: Element | null = node.parentElement;
+      if (parent) node = parent;
+      else {
+        const root = node.getRootNode();
+        node = root instanceof ShadowRoot ? root.host : null;
+      }
+    }
+    return null;
+  };
   const roleOf = (el: Element): string => {
     const explicit = el.getAttribute('role');
     if (explicit) return explicit.split(' ')[0] ?? '';
@@ -363,10 +430,8 @@ function scanCandidates(
     );
   };
   // Le localisateur enregistré a marqué ses éléments (data-qa-crawler-recorded) avant ce scan.
-  const controls = Array.from(document.querySelectorAll(CONTROL)).filter(
-    (el) => !el.closest('[data-qa-crawler-overlay]'),
-  );
-  const openDialog = Array.from(document.querySelectorAll(DIALOG)).find(visible);
+  const controls = deepAll(CONTROL).filter((el) => !composedClosest(el, '[data-qa-crawler-overlay]'));
+  const openDialog = deepAll(DIALOG).find(visible);
   const dialogName = (node: Element | null | undefined): string =>
     node
       ? clean(
@@ -375,14 +440,19 @@ function scanCandidates(
         )
       : '';
   const candidates: FunctionalCandidate[] = [];
-  for (const el of Array.from(document.querySelectorAll(selector))) {
+  const pool = spec.onlyRecorded
+    ? deepAll(`[data-qa-crawler-recorded="${spec.recorded}"]`).filter(
+        (el) => !el.hasAttribute('data-qa-crawler-candidate'),
+      )
+    : deepAll(selector);
+  for (const el of pool) {
     if (candidates.length >= spec.max) break;
-    if (el.closest('[data-qa-crawler-overlay]')) continue;
+    if (composedClosest(el, '[data-qa-crawler-overlay]')) continue;
     const isVisible = visible(el);
     // Un élément invisible n'est candidat que si le localisateur enregistré le désigne (preuve à montrer).
     const recorded = el.getAttribute('data-qa-crawler-recorded') === spec.recorded;
     if (!isVisible && !recorded) continue;
-    const id = `T${String(candidates.length + 1)}`;
+    const id = `T${String((spec.offset ?? 0) + candidates.length + 1)}`;
     el.setAttribute('data-qa-crawler-candidate', `${spec.token}-${id}`);
     const at = controls.indexOf(el);
     const before =
@@ -397,9 +467,9 @@ function scanCandidates(
         ? controls.slice(at + 1).find((other) => visible(other) && roleOf(other) === 'button')
         : undefined;
     const input = el as HTMLInputElement;
-    const container = el.closest('mat-form-field, .mat-mdc-form-field, fieldset, [role="group"]');
+    const container = composedClosest(el, 'mat-form-field, .mat-mdc-form-field, fieldset, [role="group"]');
     const path = sectionPath(el);
-    const dialog = el.closest(DIALOG);
+    const dialog = composedClosest(el, DIALOG);
     const stable: Record<string, string> = {};
     for (const name of ['id', 'name', 'formcontrolname', 'placeholder', 'data-testid'])
       if (el.getAttribute(name)) stable[name] = clean(el.getAttribute(name));
@@ -479,7 +549,12 @@ export async function discoverCandidates(
   page: Page,
   step: Extract<FlowStep, { target: unknown }>,
   max = 12,
-): Promise<{ token: string; screen: ScreenSemanticContext; candidates: FunctionalCandidate[] }> {
+): Promise<{
+  token: string;
+  screen: ScreenSemanticContext;
+  candidates: (FunctionalCandidate & { source?: CandidateSource })[];
+  scanError?: string;
+}> {
   scans += 1;
   const token = `fr${String(scans)}`;
   const recorded = `${token}-recorded`;
@@ -493,12 +568,37 @@ export async function discoverCandidates(
     '(() => { if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
     `return (${scanCandidates.toString()})(${JSON.stringify({ kind: INTERACTION[step.kind] ?? 'CLICK', token, recorded, max })}, ${sectionPathOf.toString()}); })()`,
   ].join('\n');
-  const result = (await page.evaluate(expression).catch(() => undefined)) as
-    { screen: ScreenSemanticContext; candidates: FunctionalCandidate[] } | undefined;
+  let scanError: string | undefined;
+  const result = (await page.evaluate(expression).catch((error: unknown) => {
+    scanError = error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
+    return undefined;
+  })) as { screen: ScreenSemanticContext; candidates: FunctionalCandidate[] } | undefined;
+  const candidates: (FunctionalCandidate & { source?: CandidateSource })[] = (result?.candidates ?? []).map(
+    (candidate) => ({ ...candidate, source: 'PAGE_SCAN' }),
+  );
+  // LE LOCALISATEUR ENREGISTRÉ trouve un élément que le scan n'a pas retenu (autre genre de contrôle,
+  // scan en échec) : il devient candidat quand même, avec ses preuves contradictoires — jamais perdu.
+  if (!candidates.some((candidate) => candidate.matchesRecordedLocator)) {
+    const second = [
+      '(() => { if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
+      `return (${scanCandidates.toString()})(${JSON.stringify({ kind: INTERACTION[step.kind] ?? 'CLICK', token, recorded, max: 3, onlyRecorded: true, offset: candidates.length })}, ${sectionPathOf.toString()}); })()`,
+    ].join('\n');
+    const extra = (await page.evaluate(second).catch(() => undefined)) as
+      { candidates: FunctionalCandidate[] } | undefined;
+    for (const candidate of extra?.candidates ?? [])
+      candidates.push({ ...candidate, source: 'RECORDED_LOCATOR' });
+  }
   await page
     .evaluate((mark) => {
-      for (const el of Array.from(document.querySelectorAll(`[data-qa-crawler-recorded="${mark}"]`)))
-        el.removeAttribute('data-qa-crawler-recorded');
+      const visit = (parent: ParentNode): void => {
+        for (const child of Array.from(parent.children)) {
+          if (child.getAttribute('data-qa-crawler-recorded') === mark)
+            child.removeAttribute('data-qa-crawler-recorded');
+          if (child.shadowRoot) visit(child.shadowRoot);
+          visit(child);
+        }
+      };
+      visit(document);
     }, recorded)
     .catch(() => undefined);
   return {
@@ -510,9 +610,52 @@ export async function discoverCandidates(
       selectedValues: {},
       availableActions: [],
     },
-    candidates: result?.candidates ?? [],
+    candidates,
+    ...(scanError ? { scanError } : {}),
   };
 }
+
+/**
+ * DERNIER RECOURS : le scan de la page a échoué ou n'a rien rendu, mais le localisateur enregistré
+ * tient encore un élément. Il est décrit par l'API Playwright (rôle, nom, visibilité, éditabilité) et
+ * marqué pour pouvoir être utilisé : CandidateSet ≥ 1 dès qu'un élément runtime est retrouvé.
+ */
+export async function recordedLocatorCandidate(
+  located: Locator,
+  token: string,
+  id: string,
+): Promise<(FunctionalCandidate & { source: CandidateSource }) | undefined> {
+  const marked = await located
+    .evaluate((el, mark) => {
+      el.setAttribute('data-qa-crawler-candidate', mark);
+      return { tag: el.tagName.toLowerCase(), id: el.getAttribute('id') ?? '' };
+    }, `${token}-${id}`)
+    .catch(() => undefined);
+  if (!marked) return undefined;
+  const observed = await readTarget(located).catch((): ObservedTarget => ({}));
+  const visible = await located.isVisible().catch(() => false);
+  const enabled = await located.isEnabled().catch(() => false);
+  const editable = await located.isEditable().catch(() => false);
+  return {
+    id,
+    tag: marked.tag,
+    role: observed.role ?? '',
+    name: observed.name ?? observed.text ?? '',
+    ...(observed.name ? { label: observed.name } : {}),
+    ...(observed.section ? { section: observed.section } : {}),
+    visible,
+    enabled,
+    editable,
+    matchesRecordedLocator: true,
+    nearText: [],
+    stableAttributes: marked.id ? { id: marked.id } : {},
+    ...(marked.id ? { cssHint: `#${marked.id}` } : {}),
+    source: 'RECORDED_LOCATOR',
+  };
+}
+
+/** D'où vient un candidat : le scan de la page, ou le localisateur enregistré (seconde passe / API). */
+export type CandidateSource = 'PAGE_SCAN' | 'RECORDED_LOCATOR';
 
 /** Le sélecteur d'un candidat marqué par la découverte. */
 export function candidateSelector(token: string, id: string): string {
@@ -524,11 +667,16 @@ export async function clearCandidateMarks(page: Page, token: string, keep?: stri
   await page
     .evaluate(
       ({ prefix, kept }) => {
-        for (const el of Array.from(document.querySelectorAll('[data-qa-crawler-candidate]'))) {
-          const mark = el.getAttribute('data-qa-crawler-candidate') ?? '';
-          if (mark.startsWith(`${prefix}-`) && mark !== `${prefix}-${kept}`)
-            el.removeAttribute('data-qa-crawler-candidate');
-        }
+        const visit = (parent: ParentNode): void => {
+          for (const child of Array.from(parent.children)) {
+            const mark = child.getAttribute('data-qa-crawler-candidate') ?? '';
+            if (mark.startsWith(`${prefix}-`) && mark !== `${prefix}-${kept}`)
+              child.removeAttribute('data-qa-crawler-candidate');
+            if (child.shadowRoot) visit(child.shadowRoot);
+            visit(child);
+          }
+        };
+        visit(document);
       },
       { prefix: token, kept: keep ?? '' },
     )
@@ -549,40 +697,84 @@ export function scoreCandidates(
   identity: FunctionalTargetIdentity,
   temporal: TemporalActionContext,
   candidates: readonly FunctionalCandidate[],
+  /** Le localisateur enregistré a été lu au runtime et son empreinte ne correspond plus. */
+  fingerprintMismatch?: { score?: number; reasons: readonly string[] },
 ): ScoredCandidate[] {
   const lastChoice = Object.values(identity.configuration).at(-1);
   const nextTarget = temporal.nextActions.find((action) => action.type === 'CLICK')?.target;
   return candidates
     .map((candidate): ScoredCandidate => {
       const components: Record<string, number> = {};
-      const reject = (reason: string): ScoredCandidate => ({
-        ...candidate,
-        score: 0,
-        components,
-        rejected: reason,
-      });
+      const evidence: TargetEvidence[] = [];
+      const prove = (kind: string, polarity: TargetEvidence['polarity'], detail: string): void => {
+        evidence.push({ id: `E_${candidate.id}_${kind}`, kind, polarity, detail });
+      };
+      // Le localisateur enregistré et l'empreinte : une preuve positive ET une preuve négative.
+      if (candidate.matchesRecordedLocator) {
+        prove('RECORDED_LOCATOR_MATCH', 'POSITIVE', 'the recorded locator resolves to this element');
+        if (fingerprintMismatch)
+          prove(
+            'FINGERPRINT_MISMATCH',
+            'NEGATIVE',
+            `recorded fingerprint differs${fingerprintMismatch.score !== undefined ? ` (score ${String(fingerprintMismatch.score)})` : ''}: ${fingerprintMismatch.reasons.slice(0, 2).join('; ')}`,
+          );
+      }
+      if (candidate.visible) prove('VISIBLE', 'POSITIVE', 'visible');
+      if (candidate.enabled) prove('ENABLED', 'POSITIVE', 'enabled');
+      if (identity.interaction === 'FILL' && candidate.editable) prove('EDITABLE', 'POSITIVE', 'editable');
+      const reject = (reason: string): ScoredCandidate => {
+        prove('HARD_CONTRADICTION', 'NEGATIVE', reason);
+        return { ...candidate, score: 0, components, evidence, contradictions: [reason], rejected: reason };
+      };
+      // DURS : jamais actionnable (invisible, désactivé, non éditable pour une saisie).
       if (!candidate.visible) return reject('hidden');
       if (!candidate.enabled) return reject('disabled');
       if (identity.interaction === 'FILL' && !candidate.editable) return reject('not editable');
-      if (sectionMatch(identity.section, candidate.section) === 'OTHER')
+      const sameDialog =
+        identity.dialog !== undefined &&
+        candidate.dialog !== undefined &&
+        normalize(candidate.dialog) === normalize(identity.dialog);
+      const section = sectionMatch(identity.section, candidate.section);
+      // Une AUTRE section ET une autre fenêtre : un autre contexte (jamais « récupéré »). Une autre
+      // section DANS la même fenêtre : un chemin de sections qui a changé — une preuve négative, pas une exclusion.
+      if (section === 'OTHER' && !sameDialog)
         return reject(
           `section "${candidate.section ?? ''}" instead of "${identity.section ?? ''}" (context mismatch)`,
         );
+      if (section === 'OTHER') {
+        components.contextMismatchPenalty = -0.2;
+        prove(
+          'SECTION_PATH_CHANGED',
+          'NEGATIVE',
+          `section "${candidate.section ?? ''}" instead of "${identity.section ?? ''}" (same dialog)`,
+        );
+      }
       const wanted = normalize(identity.label);
       const found = normalize(candidate.label ?? candidate.name);
-      if (wanted)
+      if (wanted) {
         components.label =
           found === wanted ? 0.25 : found && (found.includes(wanted) || wanted.includes(found)) ? 0.15 : -0.1;
-      if (sectionMatch(identity.section, candidate.section) === 'SAME') components.section = 0.2;
+        prove(
+          components.label > 0 ? 'LABEL_MATCH' : 'LABEL_CHANGED',
+          components.label > 0 ? 'POSITIVE' : 'NEGATIVE',
+          `label "${candidate.label ?? candidate.name}" (recorded "${identity.label ?? ''}")`,
+        );
+      }
+      if (section === 'SAME') {
+        components.section = 0.2;
+        prove('SECTION_MATCH', 'POSITIVE', `section "${candidate.section ?? ''}"`);
+      }
       // Le contrôle précédent porte le dernier choix fait (« operator: Like ») : la cible est la suite.
       if (
         lastChoice &&
         candidate.previousControl &&
         normalize(candidate.previousControl).includes(normalize(lastChoice))
-      )
+      ) {
         components.previousActionCompatibility = 0.15;
-      if (candidate.matchesRecordedLocator) components.recordedLocator = 0.15;
-      if (identity.role && candidate.role)
+        prove('PREVIOUS_ACTION', 'POSITIVE', `right after ${candidate.previousControl}`);
+      }
+      if (candidate.matchesRecordedLocator) components.locatorIdentity = 0.15;
+      if (identity.role && candidate.role) {
         components.role =
           identity.role === candidate.role
             ? 0.1
@@ -590,20 +782,36 @@ export function scoreCandidates(
                 ['textbox', 'combobox', 'searchbox'].includes(candidate.role)
               ? 0.05
               : -0.1;
+        if (identity.role !== candidate.role)
+          prove('ROLE_CHANGED', 'NEGATIVE', `role ${candidate.role} instead of ${identity.role}`);
+      }
       // La fenêtre : la cible était dans « Filter » ; un champ hors de toute fenêtre n'est pas du contexte.
-      if (identity.dialog)
-        components.dialog =
-          candidate.dialog && normalize(candidate.dialog) === normalize(identity.dialog) ? 0.05 : -0.15;
+      if (identity.dialog) {
+        components.dialog = sameDialog ? 0.05 : -0.15;
+        prove(
+          sameDialog ? 'DIALOG_MATCH' : 'DIALOG_MISMATCH',
+          sameDialog ? 'POSITIVE' : 'NEGATIVE',
+          `dialog "${candidate.dialog ?? 'none'}" (recorded "${identity.dialog}")`,
+        );
+      }
       // Le concept métier (filter.value) nommé par le libellé actuel (« Value ») : une preuve sémantique.
       const concept = normalize(identity.businessConcept?.split('.').at(-1)?.replace(/[_-]+/g, ' '));
-      if (concept && found && (found === concept || found.split(' ').includes(concept)))
+      if (concept && found && (found === concept || found.split(' ').includes(concept))) {
         components.businessConceptMatch = 0.1;
+        prove('BUSINESS_CONCEPT', 'POSITIVE', `"${found}" names ${identity.businessConcept ?? ''}`);
+      }
       if (
         nextTarget &&
         candidate.nextControl &&
         normalize(candidate.nextControl).includes(normalize(nextTarget))
-      )
-        components.futureWorkflowCompatibility = 0.1;
+      ) {
+        components.nextActionCompatibility = 0.1;
+        prove(
+          'NEXT_ACTION',
+          'POSITIVE',
+          `the next action "${nextTarget}" follows it (${candidate.nextControl})`,
+        );
+      }
       // Un champ sans libellé enregistré : son identité tient au contexte (section, parcours, structure).
       const base = wanted ? 0 : 0.15;
       if (base) components.unlabelledTarget = base;
@@ -614,7 +822,10 @@ export function scoreCandidates(
           Object.values(components).reduce((sum, value) => sum + value, 0),
         ),
       );
-      return { ...candidate, score: Number(score.toFixed(2)), components };
+      const contradictions = evidence
+        .filter((entry) => entry.polarity === 'NEGATIVE')
+        .map((entry) => entry.id);
+      return { ...candidate, score: Number(score.toFixed(2)), components, evidence, contradictions };
     })
     .sort((a, b) => b.score - a.score);
 }
@@ -653,6 +864,25 @@ export function decide(
       ? `${best.id} ${String(best.score)} and ${second.id} ${String(second.score)} are too close: never the first one by chance`
       : `${best.id} ${String(best.score)} is not strong enough on its own`,
   };
+}
+
+/**
+ * QUAND CONSULTER LE CONSEILLER (lent, seulement si le déterministe ne prouve rien) : une ambiguïté,
+ * un candidat retrouvé mais aux preuves contradictoires, ou aucun candidat assez fort alors qu'au
+ * moins un élément actionnable existe. Jamais quand la cible est résolue ; jamais sans candidat
+ * actionnable (le conseiller ne peut pas inventer un élément).
+ */
+export function aiTriggerOf(decision: FunctionalDecision): string | undefined {
+  if (decision.status === 'RESOLVED') return undefined;
+  const viable = decision.ranked.filter((candidate) => !candidate.rejected);
+  if (viable.length === 0) return undefined;
+  // Deux candidats proches : une ambiguïté. Un seul, trop faible : une confiance basse, dont la cause
+  // est dite (preuves contradictoires sur la cible enregistrée, ou aucune fonction équivalente).
+  if (decision.status === 'AMBIGUOUS' && viable.length >= 2) return 'TARGET_AMBIGUOUS';
+  const best = viable[0];
+  if (best?.matchesRecordedLocator && (best.contradictions?.length ?? 0) > 0)
+    return 'CONTRADICTORY_TARGET_EVIDENCE';
+  return decision.status === 'AMBIGUOUS' ? 'TARGET_LOW_CONFIDENCE' : 'TARGET_FUNCTIONAL_MISMATCH';
 }
 
 /**
@@ -706,6 +936,32 @@ export function candidateSummary(candidate: FunctionalCandidate): string {
     .slice(0, 200);
 }
 
+/** [TARGET_CONTEXT] : previous ✓ (confirmé) / ✗, current ?, next →. */
+export function temporalLine(temporal: TemporalActionContext): string {
+  return [
+    ...temporal.previousActions.map(
+      (action) =>
+        `previous ${action.result === 'CONFIRMED' ? '✓' : action.result ? '✗' : '·'} ${action.type} ${action.target}${action.value ? ` = ${action.value}` : ''}`,
+    ),
+    `current ? ${temporal.currentAction.type} ${temporal.currentAction.recordedTarget}`,
+    ...temporal.nextActions.map((action) => `next → ${action.type} ${action.target}`),
+  ].join(' | ');
+}
+
+/** Une structure assainie en profondeur (chaque chaîne passe par le redactor) : pour les artefacts. */
+export function redactDeep<T>(value: T): T {
+  const walk = (entry: unknown): unknown => {
+    if (typeof entry === 'string') return redactText(entry);
+    if (Array.isArray(entry)) return entry.map(walk);
+    if (entry !== null && typeof entry === 'object')
+      return Object.fromEntries(
+        Object.entries(entry as Record<string, unknown>).map(([key, item]) => [key, walk(item)]),
+      );
+    return entry;
+  };
+  return walk(value) as T;
+}
+
 /** La trace en texte (journal) : TARGET_RESOLUTION, lisible d'un coup d'œil. */
 export function traceText(trace: TargetResolutionTrace): string[] {
   return [
@@ -737,7 +993,12 @@ export function targetResolutionRequest(
 ): Record<string, unknown> {
   return {
     trigger: 'TARGET_FINGERPRINT_MISMATCH',
-    mission: { type: 'TARGET_RESOLUTION', flow: flowName },
+    mission: {
+      type: 'TARGET_RESOLUTION',
+      context: 'REPLAY_RECORDED_HUMAN_JOURNEY',
+      goal: 'Replay faithfully the recorded human workflow',
+      flow: flowName,
+    },
     workflow: {
       phase: trace.temporal.workflowPhase,
       ...(trace.temporal.activeSection ? { activeSection: trace.temporal.activeSection } : {}),
@@ -761,6 +1022,32 @@ export function targetResolutionRequest(
     },
     fingerprintMismatch: trace.runtime.reasons.slice(0, 4),
     ...(trace.screen ? { screen: trace.screen } : {}),
+    resolutionFailure: {
+      type: trace.status,
+      reason: trace.reason,
+      ...(trace.ai.trigger ? { trigger: trace.ai.trigger } : {}),
+    },
+    knownFacts: [
+      ...(candidates.some((candidate) => candidate.matchesRecordedLocator)
+        ? ['The recorded locator resolves to a runtime element']
+        : ['The recorded locator does not resolve to an actionable runtime element']),
+      ...(trace.temporal.previousActions.every((action) => action.result === 'CONFIRMED') &&
+      trace.temporal.previousActions.length > 0
+        ? ['The previous actions were confirmed at runtime']
+        : []),
+      `The current expected action is a ${trace.identity.interaction}`,
+      ...(trace.temporal.nextActions[0]
+        ? [
+            `The next recorded action is ${trace.temporal.nextActions[0].type} "${trace.temporal.nextActions[0].target}"`,
+          ]
+        : []),
+    ],
+    constraints: {
+      mustChooseExistingCandidate: true,
+      mustNotInventElement: true,
+      mustNotExecuteAction: true,
+      runtimeMustValidateProposal: true,
+    },
     runtimeCandidates: candidates.map((candidate) => ({
       id: publicId(candidate.id),
       tag: candidate.tag,
@@ -778,6 +1065,13 @@ export function targetResolutionRequest(
       ...(candidate.nearText.length > 0 ? { nearText: candidate.nearText } : {}),
       designatedByRecordedLocator: candidate.matchesRecordedLocator,
       deterministicScore: candidate.score,
+      // Les preuves citables (identifiants) : positives, et les contradictions — jamais cachées.
+      evidence: (candidate.evidence ?? [])
+        .filter((entry) => entry.polarity === 'POSITIVE')
+        .map((entry) => entry.id),
+      contradictions: (candidate.evidence ?? [])
+        .filter((entry) => entry.polarity === 'NEGATIVE')
+        .map((entry) => `${entry.id}: ${entry.detail}`),
     })),
     authority: 'RUNTIME_EFFECT_IS_THE_FINAL_PROOF',
   };
