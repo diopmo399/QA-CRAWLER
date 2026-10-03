@@ -61,8 +61,20 @@ export function installRecorder(
   const originals = new Map<string, Element>();
   global.__qaCrawlerOriginal = (ref: unknown): Element | null =>
     typeof ref === 'string' ? (originals.get(ref) ?? null) : null;
+  // Le contexte AVANT l'effet (défini plus bas, une fois les lecteurs disponibles).
+  const preContext: { of?: (el: Element, css: string) => Record<string, unknown> } = {};
   const send = (payload: Record<string, unknown>, original?: Element | null, zone?: Element | null): void => {
     if (paused && payload.type !== 'control') return;
+    // PRE-ACTION : la capture est en phase de capture, AVANT les gestionnaires de l'application.
+    const preContextOf = preContext.of;
+    if (original && payload.pre === undefined && preContextOf) {
+      const css = (payload.element as { css?: unknown } | undefined)?.css;
+      try {
+        payload = { ...payload, pre: preContextOf(original, typeof css === 'string' ? css : '') };
+      } catch {
+        // un contexte illisible n'empêche jamais l'enregistrement
+      }
+    }
     sequence += 1;
     let ref: string | undefined;
     if (original) {
@@ -565,6 +577,93 @@ export function installRecorder(
     { capture: true, passive: true },
   );
 
+  // ---- CONTEXTE PRÉ-ACTION : l'écran tel que l'humain le voyait juste avant son geste. Jamais une
+  // valeur saisie : les champs texte ne donnent que leur libellé ; une liste, son choix affiché.
+  preContext.of = (el: Element, css: string): Record<string, unknown> => {
+    const visible = (node: Element): boolean => {
+      const rect = node.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return false;
+      const style = getComputedStyle(node);
+      return style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const DIALOG =
+      '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], .cdk-overlay-pane';
+    const ownDialog = el.closest(DIALOG);
+    const openDialog = Array.from(document.querySelectorAll(DIALOG)).find(visible);
+    const dialogName = (node: Element | null | undefined): string =>
+      node
+        ? clean(
+            node.getAttribute('aria-label') ??
+              textOf(node.querySelector('h1, h2, h3, [role="heading"], mat-dialog-title, legend')),
+            60,
+          )
+        : '';
+    const headings = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"]'))
+      .filter(visible)
+      .map((node) => clean(textOf(node), 60))
+      .filter(Boolean)
+      .slice(0, 5);
+    let cssCount = 0;
+    try {
+      cssCount = css ? document.querySelectorAll(css).length : 0;
+    } catch {
+      cssCount = 0;
+    }
+    const ownText = clean(textOf(el), 80).toLowerCase();
+    const sameText = ownText
+      ? Array.from(document.querySelectorAll(CANDIDATES)).filter(
+          (node) => visible(node) && clean(textOf(node), 80).toLowerCase() === ownText,
+        ).length
+      : 0;
+    // Les choix déjà faits (listes, cases) : l'état du formulaire, sans aucune saisie libre.
+    const selected = Array.from(
+      document.querySelectorAll(
+        'select, [role="combobox"], mat-select, input[type="checkbox"], input[type="radio"]',
+      ),
+    )
+      .filter((node) => visible(node) && node !== el)
+      .map((node) => {
+        const label = labelOf(node) || nameOf(node);
+        let value = '';
+        if (node.tagName.toLowerCase() === 'select')
+          value = (node as HTMLSelectElement).selectedOptions[0]?.textContent ?? '';
+        else if (node instanceof HTMLInputElement) value = node.checked ? 'checked' : 'unchecked';
+        else if (!(node instanceof HTMLInputElement)) value = textOf(node);
+        return { label: clean(label, 60), value: clean(value, 60) };
+      })
+      .filter((entry) => entry.label && entry.value && entry.value !== '--')
+      .slice(0, 6);
+    const tab = Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"]')).find(visible);
+    const role = roleOf(el);
+    // Les éléments du même genre visibles à ce moment (la base des candidats pré-action).
+    const peers = Array.from(document.querySelectorAll(CANDIDATES))
+      .filter((node) => node !== el && visible(node) && roleOf(node) === role)
+      .slice(0, 6)
+      .map((node) => {
+        const path = sectionOf(node);
+        return {
+          role,
+          name: clean(nameOf(node), 60),
+          ...(path.length > 0 ? { section: path.join(' > ') } : {}),
+        };
+      });
+    const busy = Array.from(
+      document.querySelectorAll('[aria-busy="true"], mat-progress-spinner, mat-spinner, .spinner, .loading'),
+    ).some(visible);
+    return {
+      route: location.pathname,
+      title: clean(document.title, 80),
+      ...(dialogName(ownDialog ?? openDialog) ? { dialog: dialogName(ownDialog ?? openDialog) } : {}),
+      headings,
+      cssCount,
+      sameText,
+      selected,
+      ...(tab ? { activeTab: clean(textOf(tab), 60) } : {}),
+      peers,
+      loading: busy,
+    };
+  };
+
   // ---- glisser-déposer : pointeur (CDK, implémentations maison) ou HTML5 (draggable), corrélés en
   // UNE action humaine. L'élément est décrit au départ (avant que l'application ne le déplace) ;
   // les éléments des deux zones sont relus après le dépôt : déplacé ou non (ITEM_MOVED).
@@ -598,6 +697,8 @@ export function installRecorder(
         y: number;
         kind: 'HTML5' | 'POINTER';
         drop?: Element | null;
+        pre?: Record<string, unknown>;
+        sourceBefore: string[];
       }
     | undefined;
   let lastDragAt = 0;
@@ -616,6 +717,9 @@ export function installRecorder(
       x,
       y,
       kind,
+      // AVANT le déplacement : l'écran et la liste d'origine.
+      ...(preContext.of ? { pre: preContext.of(item, '') } : {}),
+      sourceBefore: itemTexts(item.parentElement?.closest(DROP_ZONE) ?? null),
     };
   };
   const finishDrag = (x: number, y: number, zone: Element | null): void => {
@@ -644,7 +748,13 @@ export function installRecorder(
             ...(to ? { destination: to } : {}),
             sameZone: destination !== null && destination === current.source,
             moved: destination !== null && destination !== current.source && inDestination && !inSource,
+            lists: {
+              sourceBefore: current.sourceBefore.slice(0, 10),
+              sourceAfter: itemTexts(current.source).slice(0, 10),
+              destinationAfter: itemTexts(destination).slice(0, 10),
+            },
           },
+          ...(current.pre ? { pre: current.pre } : {}),
         },
         current.item,
         destination,

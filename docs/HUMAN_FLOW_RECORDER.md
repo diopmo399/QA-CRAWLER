@@ -422,6 +422,29 @@ représentation que je viens de construire, retrouverais-je EXACTEMENT l'éléme
   composant, fenêtre, visible, **focus**). Un attribut stable propre à l'original suffit à réparer
   sans conseiller (`input[formcontrolname="zip"]`) ; sinon le conseiller reçoit ces traits pour
   chaque candidate — jamais une valeur saisie ni le texte d'une ligne de tableau.
+- **Contexte pré-action** : la capture (phase de capture, avant les gestionnaires de
+  l'application) relève l'écran tel que l'humain le voyait : route, titre, fenêtre ouverte, titres,
+  unicité de la cible (CSS, texte, rôle + nom, libellé), choix déjà faits (listes, cases — jamais
+  une saisie libre), onglet actif, éléments du même genre, chargement en cours. Quand l'action fait
+  disparaître sa cible (un bouton « Filtre » qui ouvre une fenêtre et se masque), l'ordre est :
+  résolution live → élément original → contexte pré-action. Une cible unique avant l'action est
+  `VALIDATED_PRE_ACTION` ; avec un effet observé après (fenêtre apparue, route, titre),
+  `VALIDATED_WITH_EFFECT` (`semanticallyConfirmed`). L'effet ne remplace jamais l'identité : il
+  s'y ajoute. Une cible disparue et ambiguë avant l'action reste ambiguë (jamais « prouvée »).
+- **Contexte du conseiller (CONTEXT BEFORE DECISION)** : `RecordingIntelligenceContextBuilder`
+  joint à la requête un `recordingContext` structuré — mission `RECORDING_TARGET_AUDIT`, parcours,
+  écran (fenêtre, section, composant, onglet, titres), action (type, intention en hypothèse, type de
+  valeur — jamais la valeur), cible réelle et ses attributs stables, 3 à 5 actions précédentes de la
+  même zone, actions SUIVANTES déjà reçues (une preuve, pas une vérité), configuration en cours
+  (« Field = …, Operator = … »), état du formulaire, dépendances observées, effets, preuves runtime,
+  candidats décrits par leur identité fonctionnelle et leur similarité avec l'original,
+  contradictions (C1…), scores (des indices), indices statiques (`SUPPORTING_EVIDENCE`) et
+  historiques (`EXPERIENCE`). Le `ContextRelevanceSelector` borne la fenêtre ; tout passe par
+  l'`IntelligenceContextSanitizer`. Le prompt système précise l'autorité des preuves (runtime d'abord).
+  La proposition peut ajouter `semanticTarget` et `contradictionsResolved` : un `semanticId` n'est
+  repris qu'après confirmation runtime, un rôle qui contredit le runtime est ignoré. Résumé assaini
+  de chaque contexte envoyé : `ai-context-summary.json` ; journal `[AI_CONTEXT_BUILT]`,
+  `[AI_CONTEXT_SANITIZED]`, `[AI_TARGET_AUDIT_REQUESTED]`, `[AI_TARGET_PROPOSAL]`.
 - **Audit par le conseiller** (même `IntelligenceGateway`, déclencheurs de
   `recording.intelligenceAudit`) seulement si le déterministe ne suffit pas : il choisit une
   candidate fournie (T…), QA-CRAWLER la **résout** et la compare à l'original. Une proposition qui ne
@@ -446,6 +469,60 @@ réparation, empreinte et validation après, audit, cible finale) ; section **Ta
 rapport (badges VALIDATED, REPAIRED, FRAGILE, AMBIGUOUS, UNRESOLVED, AI_AUDITED) ; dans le
 terminal, une ligne par étape (`[TARGET_MISMATCH] … role recorded=combobox runtime=textbox`,
 `[TARGET_REPAIRED]`, `[TARGET_REVALIDATED]`) et le bilan **RECORDING VALIDATION**.
+
+### Validation d'enregistrement ≠ récupération de rejeu (`ValidationMode.RECORDING`)
+
+Pendant l'enregistrement, l'action humaine est **déjà exécutée** : la valider, c'est prouver
+qu'elle a été bien comprise, jamais la refaire ni la « réparer » comme un rejeu en échec. Le
+validateur travaille en `ValidationMode.RECORDING` (`src/recording/validation-mode.ts`) : jamais
+de clic, de saisie, de sélection ni de glisser, jamais le `RecoveryEngine`, jamais
+`GOAL_ALREADY_REACHED` comme preuve d'identité.
+
+Trois verdicts **séparés** par action (`target-validation.json` : `mode`, `target`, `effect`,
+`goal` ; journal `[RECORDING_VERDICT] … target=… effect=… goal=…`) :
+
+| Verdict  | Question                               | Preuves                                                                           |
+| -------- | -------------------------------------- | --------------------------------------------------------------------------------- |
+| `target` | quel élément l'humain a-t-il utilisé ? | identité seulement, par priorité (ci-dessous) ; `source` dit laquelle a décidé    |
+| `effect` | qu'a produit l'action ?                | l'écran d'après : `CONFIRMED` / `NOT_OBSERVED` / `NOT_VERIFIABLE`                 |
+| `goal`   | le but fonctionnel est-il atteint ?    | suit l'effet (`REACHED`), nommé par le groupe sémantique (`filter.value applied`) |
+
+Un effet confirmé ou un objectif atteint ne valide **jamais** une cible.
+
+Priorité des preuves d'identité : 1. la cible originale au moment exact de l'action
+(`ORIGINAL_HUMAN_TARGET`) ; 2. son instantané pré-action (`PRE_ACTION_TARGET_SNAPSHOT`) ; 3. le
+contexte pré-action (`PRE_ACTION_CONTEXT`) ; 4. l'empreinte capturée avant toute mutation
+(`TARGET_FINGERPRINT`) ; 5. l'effet observé (complément seulement) ; 6. la reconstruction
+déterministe (`DETERMINISTIC_RECONSTRUCTION`) ; 7. le conseiller, revalidé
+(`ADVISOR_REVALIDATED`).
+
+**Le nœud original a disparu** (re-rendu après la saisie, le sélecteur désigne maintenant un
+nœud B) : ce que le localisateur trouve **après** n'est qu'une preuve complémentaire
+(`validationBefore.postState`), jamais un écart d'identité. Si la cible était unique juste avant
+l'action, elle est `VALIDATED_PRE_ACTION` ; si le nœud B (même identité) serait lu autrement au
+rejeu, seule la **représentation** est alignée (`REPRESENTATION_ALIGNED_POST_STATE`) et
+revalidée — l'identité reste pré-action. Exemple (saisie dans le champ valeur d'un filtre) :
+
+```yaml
+target: { status: VALIDATED_PRE_ACTION, source: PRE_ACTION_CONTEXT }
+effect: { status: CONFIRMED, evidence: ['"…" holds the typed value (post-state: the re-rendered field)'] }
+goal: { status: REACHED, evidence: ['filter.value applied', …] }
+```
+
+L'effet d'une saisie se compare par **empreinte salée** (le sel de la session) : la valeur n'est
+jamais relue en clair ni écrite, et un champ sensible reste `NOT_VERIFIABLE`.
+
+Si l'identité pré-action reste **ambiguë** (`PRE_ACTION_AMBIGUOUS`), même quand le localisateur
+trouve un seul élément après l'action, le conseiller est consulté avec le contexte d'enregistrement
+(mode `RECORDING` dans sa mission) ; ses candidates sont les éléments visibles **avant** l'action.
+Sa proposition est **revalidée contre les preuves pré-action** : même rôle, même libellé, même
+section que l'instantané, et seule ainsi avant l'action → `VALIDATED_AFTER_AI_AUDIT`
+(`ADVISOR_REVALIDATED`) ; identité contredite → `AI_PROPOSAL_RUNTIME_REJECTED` (l'action humaine
+est gardée) ; plusieurs éléments identiques → `INCONCLUSIVE`.
+
+Au **rejeu**, la récupération par objectif garde sa place, mais pour une saisie ou une sélection
+`GOAL_ALREADY_REACHED` n'est que la **précondition** de l'étape : si le champ reste introuvable,
+l'étape est en échec et la récupération est `NO_SAFE_RECOVERY` (jamais `RECOVERED`).
 
 ## Glisser-déposer (DRAG_AND_DROP)
 
@@ -541,7 +618,7 @@ la session, la version et l'environnement. Les runs suivants la reprennent comme
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,
 `recorded-flow.json`, `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
-données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `target-validation.json`, `optimized.flow.yaml`
+données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `target-validation.json`, `ai-context-summary.json`, `optimized.flow.yaml`
 (seulement avec l'optimiseur), `flow-graph.json` (la carte
 des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en nombres — sans
 note globale —, intention comprise, qualité des cibles et des valeurs, trace

@@ -21,12 +21,17 @@ interface ValidationEntry {
   validationBefore?: {
     status: string;
     reason: string;
+    postState?: { status: string; reason: string };
     differences: { property: string; expected?: string; actual?: string }[];
   };
   validationAfter?: { status: string } | null;
   fingerprintAfter?: { role?: string; semanticId?: string };
   finalFingerprint?: { role?: string; semanticId?: string };
   knowledge?: { recordingValidated: boolean; replayValidated: boolean };
+  mode?: string;
+  target?: { status: string; source: string };
+  effect?: { status: string; evidence: string[] };
+  goal?: { status: string; evidence: string[] };
 }
 
 /**
@@ -145,11 +150,44 @@ steps:
     expect(describeFlow(before)).toMatch(/TARGET_FINGERPRINT_MISMATCH/);
   }, 180_000);
 
-  it('§57 a framework that replaces the node after the change: snapshot-based comparison, VALIDATED_AFTER_RERENDER (then repaired)', async () => {
+  it('RECORDING ≠ RECOVERY: the value field is re-rendered after the fill — target VALIDATED_PRE_ACTION (post-state kept as evidence only), effect CONFIRMED, goal REACHED; the replay passes without any recovery', async () => {
     const outcome = await record('Filter rerender', 'rerender');
     const report = await validationOf(outcome);
     const value = report.actions.find((entry) => entry.action === 'FILL');
-    expect(['VALIDATED_AFTER_RERENDER', 'VALIDATED']).toContain(value?.status);
+    // Le nœud original a disparu : l'identité vient d'AVANT l'action, jamais de ce que #valueInput désigne après.
+    expect(value?.status).toBe('VALIDATED_PRE_ACTION');
     expect(value?.classification).toBe('VALIDATED');
+    expect(value?.mode).toBe('RECORDING');
+    expect(value?.target).toMatchObject({ status: 'VALIDATED_PRE_ACTION', source: 'PRE_ACTION_CONTEXT' });
+    // L'après est une preuve complémentaire : jamais un MISMATCH d'identité, jamais une récupération.
+    expect(value?.validationBefore?.differences).toEqual([]);
+    expect(value?.validationBefore?.postState?.status).toBeDefined();
+    expect(JSON.stringify(value)).not.toMatch(/GOAL_ALREADY_REACHED|RECOVERED/);
+    // TROIS verdicts séparés : l'effet (la valeur saisie, par empreinte) et l'objectif.
+    expect(value?.effect?.status).toBe('CONFIRMED');
+    expect(value?.effect?.evidence.join(' ')).toContain('holds the typed value');
+    expect(value?.goal?.status).toBe('REACHED');
+    expect(value?.goal?.evidence[0]).toBe('filter.value applied');
+    // La valeur saisie n'apparaît jamais dans la preuve (empreinte salée seulement).
+    expect(JSON.stringify(value)).not.toContain('alpha');
+    // La représentation alignée sur ce que le rejeu lira : le flow se rejoue, récupération désactivée.
+    const yaml = await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8');
+    const after = await replay(yaml, path.join(outcome.directory, 'test-data.yaml'));
+    expect(after.status, describeFlow(after)).toBe('PASSED');
+  }, 180_000);
+
+  it('§48.1 end to end: the "Filter" button disappears with its click — validated from the pre-action context captured by the recorder, with its effect', async () => {
+    const outcome = await record('Filter hidden opener', 'hideOpener');
+    const report = await validationOf(outcome);
+    const opener = report.actions.find((entry) => entry.action === 'CLICK' && entry.label === 'Filter');
+    expect(opener?.status).toBe('VALIDATED_WITH_EFFECT');
+    expect(opener?.classification).toBe('VALIDATED');
+    const raw = JSON.parse(await readFile(path.join(outcome.directory, 'raw-recording.json'), 'utf8')) as {
+      rawEvents?: { type: string; pre?: { title: string; cssCount: number } }[];
+      events?: { type: string; pre?: { title: string; cssCount: number } }[];
+    };
+    const events = raw.rawEvents ?? raw.events ?? [];
+    const click = events.find((entry) => entry.type === 'click' && entry.pre);
+    expect(click?.pre?.title).toBe('Requests');
   }, 120_000);
 });

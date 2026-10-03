@@ -26,6 +26,7 @@ import {
 } from './recording-intelligence.js';
 import { auditRecordingSemantics, targetAuditAdvisor, type SemanticAuditReport } from './semantic-audit.js';
 import { RecordingTargetValidator, type TargetValidationStatus } from './target-validator.js';
+import { withSemanticGoal } from './validation-mode.js';
 
 export type RecordOutputFormat = 'yaml' | 'gherkin' | 'both';
 
@@ -127,6 +128,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   const targetValidator = validation.enabled
     ? new RecordingTargetValidator({
         maxDeterministicRepairAttempts: validation.maxDeterministicRepairAttempts,
+        flowName: request.name,
         auditOn,
         ...(gateway && validation.aiAudit
           ? { advisor: targetAuditAdvisor(gateway, { maxCalls: audit.maxCalls }) }
@@ -234,6 +236,17 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }),
   );
   await write('action-preservation.json', json(result.journey.accounts));
+  // AI CONTEXT AUDIT : ce qui a été envoyé au conseiller, assaini (jamais un secret ni une saisie).
+  const aiContexts = recorder.session.rawEvents
+    .filter((event) => event.targetValidation?.aiAudit?.context)
+    .map((event) => ({
+      rawEventId: event.id,
+      humanActionId: event.targetValidation?.humanActionId,
+      outcome: event.targetValidation?.aiAudit?.outcome,
+      decisionId: event.targetValidation?.aiAudit?.decisionId,
+      context: event.targetValidation?.aiAudit?.context,
+    }));
+  if (aiContexts.length > 0) await write('ai-context-summary.json', json({ audits: aiContexts }));
   // AUTO-VALIDATION DES CIBLES : avant, réparation, après, audit — et la confiance de rejeu.
   await write(
     'target-validation.json',
@@ -246,6 +259,11 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         ...entry,
         ...(validation
           ? {
+              // CIBLE / EFFET / OBJECTIF : trois verdicts séparés (ValidationMode.RECORDING).
+              mode: validation.mode,
+              target: validation.verdict.target,
+              effect: validation.verdict.effect,
+              goal: withSemanticGoal(validation.verdict.goal, entry.finalFingerprint?.semanticId),
               original: validation.original,
               fingerprintBefore: validation.fingerprintBefore,
               targetBefore: validation.targetBefore,
@@ -259,6 +277,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
               confidence: validation.confidence,
               originalTargetMatch: validation.originalTargetMatch,
               knowledge: validation.knowledge,
+              ...(validation.effects ? { effects: validation.effects } : {}),
+              ...(validation.semanticallyConfirmed ? { semanticallyConfirmed: true } : {}),
               ...(validation.drag ? { drag: validation.drag } : {}),
             }
           : {}),

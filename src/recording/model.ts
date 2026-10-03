@@ -55,6 +55,31 @@ export interface RecordedDrag {
   sameZone: boolean;
   /** ITEM_MOVED observé : l'élément est dans la destination et plus dans la source. */
   moved: boolean;
+  /** Les listes avant / après (textes d'interface, bornés) : la preuve du déplacement. */
+  lists?: { sourceBefore: string[]; sourceAfter: string[]; destinationAfter: string[] };
+}
+
+/**
+ * PRE-ACTION CONTEXT : l'écran tel que l'humain le voyait JUSTE AVANT son geste (capturé en phase
+ * de capture, avant les gestionnaires de l'application). Jamais une valeur saisie : les listes
+ * donnent leur choix affiché, les cases leur état, un champ texte rien.
+ */
+export interface PreActionContext {
+  route: string;
+  title: string;
+  dialog?: string;
+  headings: string[];
+  /** Combien d'éléments le CSS enregistré trouvait avant l'action. */
+  cssCount: number;
+  /** Combien de contrôles visibles portaient le même texte. */
+  sameText: number;
+  /** Les choix déjà faits à l'écran (libellé → choix affiché). */
+  selected: { label: string; value: string }[];
+  activeTab?: string;
+  /** Les éléments du même genre visibles à ce moment (candidats pré-action). */
+  peers: { role: string; name: string; section?: string }[];
+  /** Un indicateur de chargement était visible. */
+  loading: boolean;
 }
 
 /** Un élément tel que le navigateur le décrit au moment de l'événement (jamais sa valeur). */
@@ -153,6 +178,8 @@ export interface RawRecordedEvent {
   key?: string;
   /** drag : le glisser-déposer corrélé (élément, zones, déplacement observé). */
   drag?: RecordedDrag;
+  /** L'écran juste AVANT l'action (pour valider une cible que l'action fait disparaître). */
+  pre?: PreActionContext;
   /** AUTO-VALIDATION immédiate de la cible (recherche à sec, jamais rejouée). */
   targetValidation?: RecordingTargetValidation;
   /** dialog : alert / confirm / prompt, et ce que l'humain (ou la règle d'enregistrement) a répondu. */

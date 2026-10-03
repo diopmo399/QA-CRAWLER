@@ -7,7 +7,11 @@ import type { ScenarioConfig } from '../config/config.js';
 import { describeTarget } from '../config/flow-schema.js';
 import { normalize } from '../flows/action-effect-verifier.js';
 import type { RecordedElement, SemanticRecordedAction } from './model.js';
+import { IntelligenceContextSanitizer } from '../ai/sanitizer.js';
+import { RecordingIntelligenceContextBuilder } from './recording-intelligence-context.js';
 import { describeTraits, type TargetAuditAdvisor } from './target-validator.js';
+
+const summarySanitizer = new IntelligenceContextSanitizer();
 import type { RecordingResult } from './process-recording.js';
 
 /**
@@ -517,7 +521,8 @@ export function targetAuditAdvisor(
     maxHypotheses: 0,
     maxPlanSteps: 3,
   });
-  return async ({ event, original, check, candidates, previousActions }) => {
+  return async (input) => {
+    const { event, original, check, candidates, previousActions } = input;
     if (calls >= options.maxCalls) return { outcome: 'INCONCLUSIVE', citedEvidence: [] };
     const trigger = gateway.evaluate({ deterministicConfidence: 0, recordingAmbiguity: true });
     if (!trigger.shouldInvoke || !trigger.reason) return { outcome: 'UNAVAILABLE', citedEvidence: [] };
@@ -549,6 +554,24 @@ export function targetAuditAdvisor(
       });
     if (previousActions.length > 0)
       prove('previous human actions', { actions: previousActions.join(' ; ').slice(0, 200) });
+    const next = input.context?.next ?? [];
+    if (next.length > 0)
+      prove('next human actions (evidence, not truth)', {
+        actions: next
+          .slice(0, 2)
+          .map((action) => `${action.type} ${action.target}`)
+          .join(' ; ')
+          .slice(0, 200),
+      });
+    for (const effect of (input.context?.effects ?? []).slice(0, 3)) prove('observed effect', { effect });
+    for (const hint of input.context?.sources?.staticEvidence?.({
+      ...(original.label ? { label: original.label } : {}),
+    }) ?? [])
+      prove(`static evidence ${hint.id} (SUPPORTING_EVIDENCE, not runtime truth)`, {
+        type: hint.type,
+        ...(hint.possibleConcept ? { concept: hint.possibleConcept } : {}),
+        ...(hint.formControl ? { formControl: hint.formControl } : {}),
+      });
     const known = new Set(evidence.map((entry) => entry.id));
     const keys = new Set(candidates.map((candidate) => candidate.key));
     const built = builder.build(trigger.reason, {
@@ -580,6 +603,32 @@ export function targetAuditAdvisor(
         question: `RECORDING TARGET VALIDATION (never execute anything). The human just used: ${describeOriginal(original)}${describeTraits(original.traits) ? ` [${describeTraits(original.traits)}]` : ''}. Compare the traits of each candidate (formControl, name, id, placeholder, text before, dialog, visible, FOCUSED) with the traits of the human target. Validation: ${check.status} (${check.reason}). Does the proposed representation correctly represent the target actually manipulated by the human? Which provided candidate (action ID) best represents the human target? Use only the given action IDs and evidence IDs.`,
       },
     });
+    // CONTEXT BEFORE DECISION : le contexte fonctionnel, avec les identifiants publics des candidates.
+    const ids = new Map<string, string>();
+    for (const action of built.request.availableActions) {
+      const key = built.keyOf(action.id);
+      if (key) ids.set(key, action.id);
+    }
+    let contextSummary: Record<string, unknown> | undefined;
+    let redactions = 0;
+    if (input.context) {
+      const recordingContext = new RecordingIntelligenceContextBuilder().build(
+        { ...input.context, candidates },
+        ids,
+      ) as unknown as Record<string, unknown>;
+      built.request.recordingContext = recordingContext;
+      // Le même filtre que la passerelle : ce résumé (ai-context-summary.json) n'a ni secret ni saisie.
+      const sanitized = summarySanitizer.sanitize({ ...built.request, recordingContext });
+      contextSummary = sanitized.request.recordingContext;
+      redactions = sanitized.redactions;
+    }
+    const contextStats = {
+      candidates: built.request.availableActions.length,
+      evidence: built.request.relevantEvidence.length,
+      previousActions: input.context?.history.length ?? previousActions.length,
+      futureActions: input.context?.next.length ?? 0,
+      redactions,
+    };
     const consulted = await gateway.consult({
       context: 'RECORDING',
       request: built.request,
@@ -596,11 +645,16 @@ export function targetAuditAdvisor(
     if (consulted.record.lifecycle.call) calls += 1;
     const decisionId = consulted.record.id;
     const proposal = consulted.validation?.valid ? consulted.validation.proposal : undefined;
+    const shared = {
+      ...(contextSummary ? { contextSummary } : {}),
+      contextStats,
+    };
     if (!proposal)
       return {
         decisionId,
         outcome: consulted.record.lifecycle.call ? 'INCONCLUSIVE' : 'UNAVAILABLE',
         citedEvidence: [],
+        ...shared,
       };
     const selectedKey = proposal.selectedActionId ? built.keyOf(proposal.selectedActionId) : undefined;
     return {
@@ -608,6 +662,9 @@ export function targetAuditAdvisor(
       ...(selectedKey && keys.has(selectedKey) ? { selectedKey } : {}),
       outcome: proposal.status === 'PROPOSAL' && selectedKey ? 'PROPOSAL' : 'INCONCLUSIVE',
       citedEvidence: proposal.supportingEvidenceIds.filter((id) => known.has(id)),
+      confidence: proposal.confidence,
+      ...(proposal.semanticTarget ? { semanticTarget: proposal.semanticTarget } : {}),
+      ...shared,
     };
   };
 }

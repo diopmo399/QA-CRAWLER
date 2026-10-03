@@ -503,7 +503,11 @@ function targetValidationHtml(result: RecordingResult): string {
       const final = entry.finalTarget ? esc(describeTargetText(entry.finalTarget)) : esc(entry.label);
       return `<tr><td><b>${esc(entry.humanActionId)}</b> ${esc(entry.action)} ${esc(entry.label)}${entry.semanticGroup ? `<br><span class="muted">${esc(entry.semanticGroup)}</span>` : ''}</td>
         <td>${validation?.targetBefore ? esc(describeTargetText(validation.targetBefore)) : '—'}</td>
-        <td>${badges.map(badge).join('')}<br>${before}</td><td>${repair}</td><td>${ai}</td>
+        <td>${badges.map(badge).join('')}<br>${before}${
+          validation?.verdict
+            ? `<br><span class="muted">target ${esc(validation.verdict.target.status)} (${esc(validation.verdict.target.source)}) · effect ${esc(validation.verdict.effect.status)} · goal ${esc(validation.verdict.goal.status)}</span>`
+            : ''
+        }</td><td>${repair}</td><td>${ai}</td>
         <td>${final}${entry.requiresReplayValidation ? '<br><b style="color:#b45309">requires replay validation</b>' : ''}</td></tr>`;
     })
     .join('');

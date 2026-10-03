@@ -65,7 +65,7 @@ export interface EquivalencePartition {
 
 /**
  * Partitions d'équivalence : age 18..65 → <18, 18..65, >65, une valeur par partition
- * (inutile de tester 100 valeurs pareils).
+ * (inutile de tester 100 valeurs pareilles).
  */
 export function equivalencePartitions(constraints: FieldConstraints): EquivalencePartition[] {
   const partitions: EquivalencePartition[] = [];

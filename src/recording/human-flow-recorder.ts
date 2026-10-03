@@ -16,6 +16,7 @@ import type { RecordingTargetValidator } from './target-validator.js';
 import type {
   RawEventType,
   RawRecordedEvent,
+  PreActionContext,
   RecordedDrag,
   RecordedDropZone,
   RecordedElement,
@@ -129,6 +130,8 @@ export class HumanFlowRecorder {
     this.stopped = new Promise((resolve) => {
       this.resolveStop = resolve;
     });
+    // L'effet d'une saisie se compare par empreinte salée (le même sel que la capture).
+    options.targetValidator?.useValueSalt(this.salt);
   }
 
   /** Sel des empreintes de la session (jamais écrit : il ne sert qu'à comparer pendant le traitement). */
@@ -411,6 +414,8 @@ export class HumanFlowRecorder {
     // VALIDATION IMMÉDIATE : tant que l'élément original existe encore (jamais l'action rejouée).
     const ref = isObject(payload) && typeof payload.ref === 'string' ? payload.ref.slice(0, 40) : undefined;
     const validator = this.options.targetValidator;
+    // Toute action reçue est connue du validateur : celle qui SUIT une action incertaine en est une preuve.
+    if (captured && validator) validator.observe(captured);
     if (captured && validator && page && !captured.noise && (captured.element || captured.drag))
       this.track(
         validator.validate(page, captured, ref).then((result) => {
@@ -664,10 +669,55 @@ export function sanitize(
       : {}),
     ...(typeof payload.noise === 'string' ? { noise: text(payload.noise, 80) } : {}),
     ...(type === 'drag' && isObject(payload.drag) ? dragOf(payload.drag) : {}),
+    ...(isObject(payload.pre) ? { pre: preOf(payload.pre) } : {}),
+  };
+}
+
+/** Le contexte pré-action envoyé par la page : textes d'interface bornés et expurgés, nombres stricts. */
+function preOf(raw: Record<string, unknown>): PreActionContext {
+  const str = (value: unknown, max: number): string =>
+    typeof value === 'string' ? redactText(text(value, max)) : '';
+  const num = (value: unknown): number =>
+    typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.min(10_000, Math.round(value)))
+      : 0;
+  const list = (value: unknown, max: number): unknown[] => (Array.isArray(value) ? value.slice(0, max) : []);
+  const dialog = str(raw.dialog, 60);
+  const activeTab = str(raw.activeTab, 60);
+  return {
+    route: str(raw.route, 200),
+    title: str(raw.title, 80),
+    ...(dialog ? { dialog } : {}),
+    headings: list(raw.headings, 5)
+      .map((entry) => str(entry, 60))
+      .filter(Boolean),
+    cssCount: num(raw.cssCount),
+    sameText: num(raw.sameText),
+    selected: list(raw.selected, 6)
+      .filter(isObject)
+      .map((entry) => ({ label: str(entry.label, 60), value: str(entry.value, 60) }))
+      .filter((entry) => entry.label && entry.value),
+    ...(activeTab ? { activeTab } : {}),
+    peers: list(raw.peers, 6)
+      .filter(isObject)
+      .map((entry) => {
+        const section = str(entry.section, 180);
+        return { role: str(entry.role, 30), name: str(entry.name, 60), ...(section ? { section } : {}) };
+      }),
+    loading: raw.loading === true,
   };
 }
 
 /** Le glisser-déposer envoyé par la page : textes d'interface bornés et expurgés, booléens stricts. */
+function texts(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .slice(0, 10)
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => redactText(text(entry, 60)))
+    : [];
+}
+
 function dragOf(raw: Record<string, unknown>): { drag: RecordedDrag } | Record<string, never> {
   const item = typeof raw.item === 'string' ? redactText(text(raw.item, 60)) : '';
   if (!item) return {};
@@ -689,6 +739,15 @@ function dragOf(raw: Record<string, unknown>): { drag: RecordedDrag } | Record<s
       ...(destination ? { destination } : {}),
       sameZone: raw.sameZone === true,
       moved: raw.moved === true,
+      ...(isObject(raw.lists)
+        ? {
+            lists: {
+              sourceBefore: texts(raw.lists.sourceBefore),
+              sourceAfter: texts(raw.lists.sourceAfter),
+              destinationAfter: texts(raw.lists.destinationAfter),
+            },
+          }
+        : {}),
     },
   };
 }
