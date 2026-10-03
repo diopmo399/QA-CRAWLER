@@ -229,6 +229,32 @@ describe('Recording semantic audit (RecordingSemanticAuditor)', () => {
     expect(JSON.stringify(provider.requests)).not.toContain('secret-looking-text');
   });
 
+  it('a target already validated during the recording: its target-identity doubts (fragile, ambiguous, context) are settled — no AI call for them, only the other doubts are sent', async () => {
+    const result = recording();
+    const click = result.session.rawEvents.find((event) => event.type === 'click');
+    if (!click) throw new Error('no click');
+    click.targetValidation = {
+      knowledge: { recordingValidated: true, replayValidated: false },
+      aiAudited: false,
+    } as unknown as NonNullable<typeof click.targetValidation>;
+    const provider = new FakeIntelligenceProvider(agree);
+    const audit = await auditRecordingSemantics({
+      result,
+      settings: settings('SUSPICIOUS_ONLY'),
+      intelligenceMode: 'ASSIST',
+      gateway: gateway('ASSIST', provider),
+    });
+    const entry = audit.entries.find((candidate) =>
+      result.normalized.kept.some(
+        (action) => action.id === candidate.actionId && action.rawEventIds.includes(click.id),
+      ),
+    );
+    expect(entry?.auditTrigger).not.toContain('FRAGILE_LOCATOR');
+    expect(entry?.auditTrigger).not.toContain('AMBIGUOUS_TARGET');
+    // Moins d'appels qu'avant : la cible prouvée n'est pas ré-auditée pour son identité.
+    expect(audit.aiCalls).toBeLessThanOrEqual(2);
+  });
+
   it('§74 FULL: every human action is audited (bounded by maxCalls)', async () => {
     const result = recording();
     const provider = new FakeIntelligenceProvider(agree);
