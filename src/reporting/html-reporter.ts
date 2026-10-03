@@ -352,7 +352,7 @@ function flowsSection(
       const rows = flow.steps
         .map(
           (step) =>
-            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}${effectBlock(step)}${recoveryBlock(step)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
+            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}${effectBlock(step)}${recoveryBlock(step)}${targetResolutionBlock(step)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
         )
         .join('');
       return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status, t.lang)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ` · ${esc(t.lastScreenExplored)}` : ''}</span></h3>
@@ -406,6 +406,79 @@ function effectBlock(step: FlowStepReport): string {
 function recoveryBlock(step: FlowStepReport): string {
   if (!step.recovery) return '';
   return `<details class="suggest"><summary><b>Workflow recovery: ${esc(step.recovery.outcome.status)}</b> · ${esc(step.recovery.divergence.category)}</summary><pre>${esc(recoveryLines(step.recovery).join('\n'))}</pre></details>`;
+}
+
+/**
+ * TARGET RESOLUTION : cible enregistrée / runtime, empreinte, identité fonctionnelle, re-rendu,
+ * avant / courante / après, préconditions, candidats et scores, conseiller, décision, effet, statut.
+ */
+function targetResolutionBlock(step: FlowStepReport): string {
+  const trace = step.targetResolution;
+  if (!trace) return '';
+  const badges = [
+    trace.rerender.detected ? 'RERENDERED' : undefined,
+    trace.status === 'TARGET_FUNCTIONALLY_EQUIVALENT' || trace.status === 'TARGET_RERENDERED'
+      ? 'FUNCTIONALLY_EQUIVALENT'
+      : undefined,
+    trace.status === 'TARGET_HEALED' ? 'HEALED' : undefined,
+    trace.ai.outcome === 'VALIDATED' ? 'AI_ASSISTED' : undefined,
+    trace.decision === 'AMBIGUOUS' && !trace.resolution ? 'AMBIGUOUS' : undefined,
+    trace.runtimeVerification?.status === 'CONFIRMED' ? 'RUNTIME_CONFIRMED' : undefined,
+    trace.runtimeVerification?.status === 'REJECTED' ? 'RUNTIME_REJECTED' : undefined,
+  ].filter((badge): badge is string => badge !== undefined);
+  const rows: [string, string][] = [
+    ['Recorded target', trace.recorded.locator],
+    [
+      'Runtime target',
+      `${trace.runtime.locator} (fingerprint ${trace.runtime.fingerprintVerdict}: ${trace.runtime.reasons.join('; ')})`,
+    ],
+    [
+      'Functional identity',
+      `${trace.identity.businessConcept ?? trace.identity.semanticRole}${trace.identity.section ? ` · section ${trace.identity.section}` : ''}`,
+    ],
+    ['Rerender detected', trace.rerender.detected ? `yes — ${trace.rerender.evidence.join('; ')}` : 'no'],
+    [
+      'Previous actions',
+      trace.temporal.previousActions
+        .map((action) => `${action.type} ${action.target}${action.value ? ` = ${action.value}` : ''}`)
+        .join(' → ') || '—',
+    ],
+    [
+      'Current action',
+      `${trace.temporal.currentAction.type} (${trace.temporal.currentAction.semanticIntent})`,
+    ],
+    [
+      'Next actions',
+      trace.temporal.nextActions.map((action) => `${action.type} ${action.target}`).join(' → ') || '—',
+    ],
+    ['Preconditions', trace.temporal.preconditions.join(', ')],
+    [
+      'Candidates',
+      trace.candidates
+        .map(
+          (candidate) =>
+            `${candidate.id} ${String(candidate.score)}${candidate.rejected ? ` (rejected: ${candidate.rejected})` : ''} — ${candidate.summary}`,
+        )
+        .join('\n') || 'none',
+    ],
+    [
+      'AI',
+      trace.ai.requested
+        ? `${trace.ai.outcome ?? 'requested'}${trace.ai.proposal ? ` · proposal ${trace.ai.proposal}` : ''}${trace.ai.confidence !== undefined ? ` · confidence ${String(trace.ai.confidence)}` : ''}`
+        : 'not required',
+    ],
+    ['Decision', `${trace.resolution ?? trace.decision} — ${trace.reason}`],
+    [
+      'Runtime effect',
+      trace.runtimeVerification
+        ? `${trace.runtimeVerification.status} — ${trace.runtimeVerification.detail}`
+        : 'not executed',
+    ],
+    ['Final status', `${trace.status}${trace.final ? ` → ${trace.final}` : ''}`],
+  ];
+  return `<details class="suggest"><summary><b>Target resolution: ${esc(trace.status)}</b>${badges.map((badge) => ` <code>${esc(badge)}</code>`).join('')}</summary><table>${rows
+    .map(([label, value]) => `<tr><th>${esc(label)}</th><td><pre>${esc(value)}</pre></td></tr>`)
+    .join('')}</table></details>`;
 }
 
 /** Élément introuvable : les étapes trouvées à l'écran, prêtes à coller, et ce que montre l'écran. */

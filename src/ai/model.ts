@@ -163,6 +163,11 @@ export interface IntelligenceRequest {
    * et d'après, cible réelle, candidats, contradictions, indices statiques / historiques marqués).
    */
   recordingContext?: Record<string, unknown>;
+  /**
+   * TARGET RESOLUTION (rejeu) : l'action, son contexte temporel (avant / après, préconditions),
+   * l'identité fonctionnelle attendue, l'écran (compact) et les candidats réellement présents.
+   */
+  targetResolution?: Record<string, unknown>;
   constraints: IntelligenceConstraints;
 }
 

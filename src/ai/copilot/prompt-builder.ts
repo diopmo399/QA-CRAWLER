@@ -29,7 +29,12 @@ When the request contains recordingContext (mission RECORDING_TARGET_AUDIT), you
 - Do not invent UI elements, labels or workflow steps. If the evidence is insufficient or candidates remain ambiguous, return INCONCLUSIVE.
 - Candidates marked capturedBeforeAction describe the screen BEFORE the human action (historical evidence, not stale); the one with origin ORIGINAL_HUMAN_TARGET is the element the human actually used. A CSS locator is only a hint. Choose only by candidate ID; with no candidate, return INCONCLUSIVE — never describe or invent a target.
 - You may add semanticTarget (semanticId, role), context and contradictionsResolved (C1…) to the proposal. Cite evidence IDs, not hidden reasoning.
-- Your proposal will be independently validated against the runtime (or, when the original element is gone, against the pre-action evidence) before it can be accepted.`;
+- Your proposal will be independently validated against the runtime (or, when the original element is gone, against the pre-action evidence) before it can be accepted.
+
+When the request contains targetResolution (mission TARGET_RESOLUTION, during a replay), a recorded target no longer matches its structural fingerprint (often a framework re-render: a new DOM node for the same field):
+- Find the runtime candidate that fills the SAME FUNCTION in the SAME CONTEXT of the workflow (functional identity, section, dialog, previous choices, next action), not the same DOM node. A same locator is not a same function; a different node is not a different function.
+- Previous and next actions, preconditions, static and historical hints are evidence, not truth. The runtime effect after execution is the final proof.
+- Choose only an existing candidate ID (selectedActionId); never invent an element or a locator. If the evidence does not single one out, return INCONCLUSIVE.`;
 
 /** Le message d'une requête : le contexte structuré, rien d'autre. */
 export function buildUserPrompt(request: IntelligenceRequest): string {
@@ -37,6 +42,11 @@ export function buildUserPrompt(request: IntelligenceRequest): string {
     `Trigger: ${request.trigger}.`,
     ...(request.recordingContext
       ? ['Mission: RECORDING_TARGET_AUDIT — which provided candidate is the element the human actually used?']
+      : []),
+    ...(request.targetResolution
+      ? [
+          'Mission: TARGET_RESOLUTION — which provided runtime candidate fills the same function in this workflow context?',
+        ]
       : []),
     ...(request.functionalContext?.question ? [`Question: ${request.functionalContext.question}`] : []),
     'Current QA-Crawler request (authoritative for this turn; it supersedes anything said earlier):',
