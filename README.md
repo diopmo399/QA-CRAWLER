@@ -1681,12 +1681,12 @@ Exemples complets : `scenarios/persistence-file.yaml`, `scenarios/persistence-po
 
 **Priorité** : ligne de commande → variables d'environnement → YAML → valeurs par défaut (comme `--base-url` / `QA_BASE_URL`).
 
-| Ligne de commande                                                                     | Variable d'environnement                                                                                                         |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `--persistence memory \| file \| postgres \| sqlserver \| sqlite`, `--no-persistence` | `QA_PERSISTENCE_ENABLED`, `QA_PERSISTENCE_PROVIDER`, `QA_DB_TYPE`                                                                |
-| `--memory`, `--no-memory`                                                             | `QA_MEMORY_ENABLED`                                                                                                              |
-| `--intelligence off \| assist \| hybrid`, `--ai-provider`, `--ai-model`               | `QA_INTELLIGENCE_ENABLED`, `QA_INTELLIGENCE_MODE`, `QA_INTELLIGENCE_PROVIDER`, `QA_COPILOT_MODEL`, `QA_COPILOT_REASONING_EFFORT` |
-| —                                                                                     | `QA_DB_HOST`, `QA_DB_PORT`, `QA_DB_NAME`, `QA_DB_USERNAME`, `QA_DB_PASSWORD`                                                     |
+| Ligne de commande                                                                                                 | Variable d'environnement                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--persistence memory \| file \| postgres \| sqlserver \| sqlite`, `--no-persistence`                             | `QA_PERSISTENCE_ENABLED`, `QA_PERSISTENCE_PROVIDER`, `QA_DB_TYPE`                                                                                              |
+| `--memory`, `--no-memory`                                                                                         | `QA_MEMORY_ENABLED`                                                                                                                                            |
+| `--intelligence off \| assist \| hybrid`, `--ai-provider`, `--ai-model`, `--ai-model-selection`, `--ai-reasoning` | `QA_INTELLIGENCE_ENABLED`, `QA_INTELLIGENCE_MODE`, `QA_INTELLIGENCE_PROVIDER`, `QA_COPILOT_MODEL`, `QA_COPILOT_MODEL_SELECTION`, `QA_COPILOT_REASONING_EFFORT` |
+| —                                                                                                                 | `QA_DB_HOST`, `QA_DB_PORT`, `QA_DB_NAME`, `QA_DB_USERNAME`, `QA_DB_PASSWORD`                                                                                   |
 
 ```bash
 npm run qa -- mission.yaml --persistence postgres

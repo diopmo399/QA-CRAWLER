@@ -316,8 +316,14 @@ export class EngineEventLog {
           event.event === 'AI_UNAVAILABLE' ||
           event.event === 'AI_TIMEOUT' ||
           event.event === 'AI_BUDGET_EXHAUSTED' ||
-          event.event === 'AI_RUNTIME_CONTRADICTED';
+          event.event === 'AI_RUNTIME_CONTRADICTED' ||
+          event.event === 'AI_MODEL_UNAVAILABLE' ||
+          event.event === 'AI_MODEL_FALLBACK' ||
+          event.event === 'AI_MODEL_CAPABILITY_MISMATCH' ||
+          event.event === 'AI_MODEL_DISCOVERY_FAILED';
         const detail =
+          event.event === 'AI_MODEL_DISCOVERY_STARTED' ||
+          event.event === 'AI_REASONING_EFFORT_SELECTED' ||
           event.event === 'AI_REQUEST_CREATED' ||
           event.event === 'AI_REQUEST_SANITIZED' ||
           event.event === 'AI_FALLBACK_ACTIVATED';

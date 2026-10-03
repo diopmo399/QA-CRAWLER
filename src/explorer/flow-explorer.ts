@@ -4924,6 +4924,12 @@ export class FlowExplorer {
       request: built.request,
       scope: { divergence: `${input.goal.id}|${input.original.label}` },
       deterministic: { confidence: 0 },
+      // Ce que la récupération a déjà essayé : la difficulté guide le choix du modèle et de l'effort.
+      signals: {
+        recoveryAttempts: input.outcome.attempts.length,
+        plausiblePlans: input.plan.candidates.length,
+        divergence: input.divergence,
+      },
       safety: (id) => {
         const candidate = built.candidateOf(id);
         if (!candidate?.role)

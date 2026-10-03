@@ -114,8 +114,6 @@ function gateway(
       timeoutMs: 5_000,
       maxRetries: 0,
       failOnUnavailable: false,
-      reasoningEffort: 'auto',
-      adaptiveReasoning: true,
       sanitizer: new IntelligenceContextSanitizer(),
       emit: (record) => events.push(record),
       ...overrides,
@@ -595,7 +593,10 @@ describe('AI reasoning advisor: modes, gateway, validation, arbitration', () => 
     expect(fromEnv).toMatchObject({
       enabled: true,
       mode: 'ASSIST',
-      copilot: { model: 'some-model', reasoningEffort: 'high' },
+      copilot: {
+        modelSelection: { mode: 'EXPLICIT', model: 'some-model' },
+        reasoning: { mode: 'FIXED', default: 'HIGH' },
+      },
     });
     const cliWins = parseConfig(
       'target: { baseUrl: "http://localhost" }\nai: { enabled: true, mode: HYBRID }',

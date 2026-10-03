@@ -34,8 +34,12 @@ export interface ConfigOverrides {
   intelligence?: IntelligenceChoice;
   /** --ai-provider <copilot|deterministic> (QA_INTELLIGENCE_PROVIDER). */
   aiProvider?: string;
-  /** --ai-model <model> (QA_COPILOT_MODEL). */
+  /** --ai-model <model> (QA_COPILOT_MODEL) : implique EXPLICIT, sauf choix contraire. */
   aiModel?: string;
+  /** --ai-model-selection auto|explicit|adaptive (QA_COPILOT_MODEL_SELECTION). */
+  aiModelSelection?: string;
+  /** --ai-reasoning auto|adaptive|low|medium|high (QA_COPILOT_REASONING_EFFORT). */
+  aiReasoning?: string;
 }
 
 export const INTELLIGENCE_CHOICES = ['off', 'assist', 'hybrid'] as const;
@@ -47,6 +51,7 @@ export const INTELLIGENCE_ENV = {
   mode: 'QA_INTELLIGENCE_MODE',
   provider: 'QA_INTELLIGENCE_PROVIDER',
   model: 'QA_COPILOT_MODEL',
+  modelSelection: 'QA_COPILOT_MODEL_SELECTION',
   reasoningEffort: 'QA_COPILOT_REASONING_EFFORT',
 } as const;
 
@@ -254,6 +259,43 @@ function migrateLegacyKeys(raw: Record<string, unknown>, warnings: string[]): Re
     warnings.push('"name"/"description" are deprecated: use mission.name / mission.description.');
   }
 
+  // ai.copilot.model / reasoningEffort / adaptiveReasoning → modelSelection / reasoning.
+  const ai = asObject(result.ai);
+  const copilot = asObject(ai?.copilot);
+  if (
+    ai &&
+    copilot &&
+    ('model' in copilot || 'reasoningEffort' in copilot || 'adaptiveReasoning' in copilot)
+  ) {
+    const modelSelection = asObject(copilot.modelSelection) ?? {};
+    const reasoning = asObject(copilot.reasoning) ?? {};
+    if (typeof copilot.model === 'string') {
+      if (copilot.model === 'auto') modelSelection.mode ??= 'AUTO';
+      else {
+        modelSelection.mode ??= 'EXPLICIT';
+        modelSelection.model ??= copilot.model;
+      }
+      warnings.push('ai.copilot.model is deprecated: use ai.copilot.modelSelection.{mode, model}.');
+    }
+    if (typeof copilot.reasoningEffort === 'string') {
+      const level = copilot.reasoningEffort.toUpperCase();
+      if (level !== 'AUTO') {
+        reasoning.mode ??= 'FIXED';
+        reasoning.default ??= level === 'XHIGH' ? 'HIGH' : level;
+      } else if (copilot.adaptiveReasoning === false) reasoning.mode ??= 'AUTO';
+      warnings.push('ai.copilot.reasoningEffort is deprecated: use ai.copilot.reasoning.{mode, default}.');
+    } else if (copilot.adaptiveReasoning === false) reasoning.mode ??= 'AUTO';
+    if ('adaptiveReasoning' in copilot)
+      warnings.push('ai.copilot.adaptiveReasoning is deprecated: use ai.copilot.reasoning.mode.');
+    delete copilot.model;
+    delete copilot.reasoningEffort;
+    delete copilot.adaptiveReasoning;
+    if (Object.keys(modelSelection).length > 0) copilot.modelSelection = modelSelection;
+    if (Object.keys(reasoning).length > 0) copilot.reasoning = reasoning;
+    ai.copilot = copilot;
+    result.ai = ai;
+  }
+
   const exploration = asObject(result.exploration);
   if (exploration) {
     const renamed = new Map([
@@ -340,11 +382,44 @@ function applyIntelligenceOverrides(
   }
   const provider = overrides.aiProvider ?? nonBlank(env[INTELLIGENCE_ENV.provider]);
   if (provider !== undefined) section('ai').provider = provider.toLowerCase();
+  const nested = (parent: Record<string, unknown>, key: string): Record<string, unknown> => {
+    const current = parent[key];
+    const copy =
+      current !== null && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {};
+    parent[key] = copy;
+    return copy;
+  };
   const model = overrides.aiModel ?? nonBlank(env[INTELLIGENCE_ENV.model]);
-  if (model !== undefined) copilot(section('ai')).model = model;
-  const effort = nonBlank(env[INTELLIGENCE_ENV.reasoningEffort]);
-  if (effort !== undefined) copilot(section('ai')).reasoningEffort = effort.toLowerCase();
+  const selection = (
+    overrides.aiModelSelection ?? nonBlank(env[INTELLIGENCE_ENV.modelSelection])
+  )?.toUpperCase();
+  if (selection !== undefined && !MODEL_SELECTION_CHOICES.includes(selection))
+    throw new ConfigError(
+      `model selection must be one of ${MODEL_SELECTION_CHOICES.join(', ').toLowerCase()} (got "${selection.toLowerCase()}")`,
+    );
+  if (model !== undefined || selection !== undefined) {
+    const modelSelection = nested(copilot(section('ai')), 'modelSelection');
+    if (model !== undefined) modelSelection.model = model;
+    // Un modèle nommé sur la ligne de commande ou dans l'environnement : EXPLICIT, sauf choix contraire.
+    modelSelection.mode = selection ?? 'EXPLICIT';
+  }
+  const effort = (overrides.aiReasoning ?? nonBlank(env[INTELLIGENCE_ENV.reasoningEffort]))?.toUpperCase();
+  if (effort !== undefined) {
+    if (!REASONING_CHOICES.includes(effort))
+      throw new ConfigError(
+        `reasoning effort must be one of ${REASONING_CHOICES.join(', ').toLowerCase()} (got "${effort.toLowerCase()}")`,
+      );
+    const reasoning = nested(copilot(section('ai')), 'reasoning');
+    if (effort === 'AUTO' || effort === 'ADAPTIVE') reasoning.mode = effort;
+    else {
+      reasoning.mode = 'FIXED';
+      reasoning.default = effort;
+    }
+  }
 }
+
+const MODEL_SELECTION_CHOICES: readonly string[] = ['AUTO', 'EXPLICIT', 'ADAPTIVE'];
+const REASONING_CHOICES: readonly string[] = ['AUTO', 'ADAPTIVE', 'LOW', 'MEDIUM', 'HIGH'];
 
 /**
  * Persistance et mémoire : CLI, puis environnement, puis YAML, puis valeurs par défaut —

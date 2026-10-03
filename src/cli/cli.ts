@@ -89,6 +89,8 @@ export async function runCli(input: string[]): Promise<number> {
       ...(args.intelligence !== undefined ? { intelligence: args.intelligence } : {}),
       ...(args.aiProvider !== undefined ? { aiProvider: args.aiProvider } : {}),
       ...(args.aiModel !== undefined ? { aiModel: args.aiModel } : {}),
+      ...(args.aiModelSelection !== undefined ? { aiModelSelection: args.aiModelSelection } : {}),
+      ...(args.aiReasoning !== undefined ? { aiReasoning: args.aiReasoning } : {}),
     });
   } catch (error) {
     if (error instanceof ConfigError) {
@@ -190,6 +192,12 @@ export async function runCli(input: string[]): Promise<number> {
         logger.info(
           color.yellow(
             `    unavailable: ${ai.unavailableReason ?? 'provider unavailable'} (deterministic fallback)`,
+          ),
+        );
+      if (ai.modelSelection)
+        logger.info(
+          color.dim(
+            `    models: ${ai.modelSelection.selectionMode}${ai.models.length > 0 ? ` · ${ai.models.map((model) => `${model.model} (${String(model.calls)})`).join(', ')}` : ''}${ai.modelFallbacks > 0 ? ` · ${String(ai.modelFallbacks)} model fallback(s)` : ''}${ai.noLlmRequired > 0 ? ` · ${String(ai.noLlmRequired)} without LLM` : ''}`,
           ),
         );
       if (ai.shadow.compared > 0)

@@ -25,6 +25,8 @@ export interface CliArgs {
   intelligence?: IntelligenceChoice;
   aiProvider?: string;
   aiModel?: string;
+  aiModelSelection?: string;
+  aiReasoning?: string;
   quiet: boolean;
 }
 
@@ -74,7 +76,12 @@ Options:
                               analyze and measure, never changes a decision), hybrid
                               (validated proposals may be used; SafetyPolicy still decides)
       --ai-provider <p>       copilot (GitHub Copilot SDK) or deterministic (no network)
-      --ai-model <model>      Copilot model (default: auto; checked against the SDK list)
+      --ai-model <model>      Copilot model (implies --ai-model-selection explicit; checked
+                              against the models the SDK lists for this account)
+      --ai-model-selection <m>  auto (official routing), explicit, adaptive (default: by
+                              reasoning complexity → FAST / BALANCED / INTELLIGENCE profile)
+      --ai-reasoning <r>      auto, adaptive (default), low, medium, high (sent only if the
+                              selected model declares it)
       --dotenv <file>         Environment variables to load (default: .env if present;
                               the terminal's variables win; never shown)
   -q, --quiet                 Only print the summary
@@ -99,8 +106,8 @@ Environment:
   QA_INTELLIGENCE_ENABLED    true | false (overrides ai.enabled)
   QA_INTELLIGENCE_MODE       off | assist | hybrid
   QA_INTELLIGENCE_PROVIDER   copilot | deterministic
-  QA_COPILOT_MODEL, QA_COPILOT_REASONING_EFFORT
-                             Copilot model and reasoning effort (auth: the signed-in user,
+  QA_COPILOT_MODEL, QA_COPILOT_MODEL_SELECTION, QA_COPILOT_REASONING_EFFORT
+                             Copilot model, selection mode and reasoning effort (auth: the signed-in user,
                              or the variable named by ai.copilot.tokenEnv; never logged)
   PLAYWRIGHT_BROWSERS_PATH   Where Playwright finds Chromium
 `;
@@ -135,6 +142,8 @@ export function parseCliArgs(argv: string[]): CliArgs {
         intelligence: { type: 'string' },
         'ai-provider': { type: 'string' },
         'ai-model': { type: 'string' },
+        'ai-model-selection': { type: 'string' },
+        'ai-reasoning': { type: 'string' },
         quiet: { type: 'boolean', short: 'q', default: false },
         help: { type: 'boolean', short: 'h', default: false },
         version: { type: 'boolean', short: 'v', default: false },
@@ -172,6 +181,12 @@ export function parseCliArgs(argv: string[]): CliArgs {
   const aiProvider = values['ai-provider']?.toLowerCase();
   if (aiProvider !== undefined && !['copilot', 'deterministic'].includes(aiProvider))
     throw new UsageError('--ai-provider must be copilot or deterministic.');
+  const aiModelSelection = values['ai-model-selection']?.toLowerCase();
+  if (aiModelSelection !== undefined && !['auto', 'explicit', 'adaptive'].includes(aiModelSelection))
+    throw new UsageError('--ai-model-selection must be auto, explicit or adaptive.');
+  const aiReasoning = values['ai-reasoning']?.toLowerCase();
+  if (aiReasoning !== undefined && !['auto', 'adaptive', 'low', 'medium', 'high'].includes(aiReasoning))
+    throw new UsageError('--ai-reasoning must be auto, adaptive, low, medium or high.');
   return {
     ...(mode !== undefined ? { mode } : {}),
     ...(values['baseline-dir'] !== undefined ? { baselineDir: values['baseline-dir'] } : {}),
@@ -190,5 +205,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     ...(intelligence !== undefined ? { intelligence: intelligence as IntelligenceChoice } : {}),
     ...(aiProvider !== undefined ? { aiProvider } : {}),
     ...(values['ai-model'] !== undefined ? { aiModel: values['ai-model'] } : {}),
+    ...(aiModelSelection !== undefined ? { aiModelSelection } : {}),
+    ...(aiReasoning !== undefined ? { aiReasoning } : {}),
   };
 }

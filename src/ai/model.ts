@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { ComplexityAssessment } from './models/complexity-analyzer.js';
+import type { ModelExecutionContext } from './models/model-types.js';
 
 /**
  * AI REASONING ADVISOR — le modèle.
@@ -233,12 +235,17 @@ export interface ProviderResult {
   model?: string;
   toolCalls?: number;
   usage?: { inputTokens?: number; outputTokens?: number };
+  /** Modèle demandé, choisi, réellement utilisé ; effort ; repli (si le fournisseur gère des modèles). */
+  modelContext?: ModelExecutionContext;
 }
 
-/** Ce qu'un fournisseur reçoit en plus de la requête : budget d'outils, effort, annulation. */
+/** Ce qu'un fournisseur reçoit en plus de la requête : complexité, budget d'outils, annulation. */
 export interface ProviderCallOptions {
   signal: AbortSignal;
-  reasoningEffort?: string;
+  /** La difficulté du raisonnement (ReasoningComplexityAnalyzer) : guide le choix du modèle et de l'effort. */
+  complexity?: ComplexityAssessment;
+  /** Les événements du fournisseur (découverte, choix de modèle, repli…), relayés par la passerelle. */
+  emit?: (event: string, message: string) => void;
   /** Les outils LECTURE SEULE pour cette requête (le fournisseur peut les ignorer). */
   tools?: IntelligenceToolContext;
   maxToolCalls: number;
