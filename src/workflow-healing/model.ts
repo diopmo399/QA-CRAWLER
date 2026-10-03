@@ -9,6 +9,9 @@
  * le code source suggèrent seulement ; la SafetyPolicy a toujours le dernier mot.
  */
 
+import type { FlowTarget } from '../config/flow-schema.js';
+import type { ExpectedTargetAnalysis } from './expected-target.js';
+
 export const DIVERGENCE_CATEGORIES = [
   'TARGET_MOVED',
   'TARGET_RENAMED',
@@ -109,6 +112,12 @@ export interface DivergenceAnalysis {
   possibleCauses: RootCauseCandidate[];
   /** La PREMIÈRE divergence fonctionnelle (peut précéder l'étape qui a échoué). */
   rootStepIndex: number;
+  /** Le symptôme TECHNIQUE tel que rapporté (TARGET_FINGERPRINT_MISMATCH…) : jamais la cause. */
+  technicalSymptom?: string;
+  /** La cible attendue comprise (présence, section parente, préconditions). */
+  expectedTarget?: ExpectedTargetAnalysis;
+  /** La cause FONCTIONNELLE la plus probable (précondition, section, état du parcours). */
+  functionalRootCause?: RootCauseCandidate;
   /**
    * Faux : la cause interdit toute récupération (droits, session, comportement de l'application) :
    * on ne contourne ni une autorisation, ni une régression.
@@ -124,6 +133,8 @@ export interface SemanticAction {
   role?: string;
   /** Le libellé est celui d'un champ (fill/select/check) : une exigence pour la suite. */
   field?: boolean;
+  /** La cible enregistrée (pour vérifier un champ sans nom accessible : css, test id). */
+  target?: FlowTarget;
 }
 
 export interface BusinessIntent {
@@ -157,6 +168,11 @@ export interface GoalPredicate {
   role?: string;
   /** Vient d'où : effet appris, étape suivante, effet de route… */
   source: string;
+  /**
+   * Le localisateur enregistré de la cible : un champ sans nom accessible (css #valueInput) se
+   * vérifie par lui, jamais par un « libellé » qui serait un sélecteur.
+   */
+  target?: FlowTarget;
 }
 
 export type GoalSource = 'EXPECTED_EFFECTS' | 'NEXT_ACTIONS' | 'ACTION_LABEL' | 'STATIC' | 'HISTORY';
@@ -194,7 +210,9 @@ export type RecoveryCandidateSource =
   | 'FLOW_GRAPH'
   | 'BUSINESS_RULE'
   /** Une proposition du conseiller d'intelligence, validée, autorisée et confirmée au runtime. */
-  | 'AI_PROPOSAL';
+  | 'AI_PROPOSAL'
+  /** Une action du parcours humain qui révélait la cible (précondition à rétablir). */
+  | 'HUMAN_JOURNEY';
 
 export type SafetyClass = 'SAFE' | 'MUTATION' | 'DANGEROUS' | 'UNKNOWN';
 
@@ -252,6 +270,11 @@ export interface RecoveryBudgets {
   maxCandidates: number;
   maxRecoveryDurationMs: number;
   maxSafeExperiments: number;
+  /**
+   * Pertinence minimale d'un candidat quand la cible est absente fonctionnellement : un contrôle
+   * sans lien avec l'objectif ne consomme pas le budget (défaut 0.15).
+   */
+  minCandidateRelevance?: number;
 }
 
 export type AttemptResult =
@@ -389,6 +412,7 @@ export const HEALING_EVENTS = [
   'FLOW_DRIFT_DETECTED',
   'PREREQUISITE_DISCOVERED',
   'SUGGESTED_FLOW_UPDATE_CREATED',
+  'EXPECTED_TARGET_ANALYZED',
 ] as const;
 export type HealingEvent = (typeof HEALING_EVENTS)[number];
 

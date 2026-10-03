@@ -16,6 +16,11 @@ export function targetLabel(target: FlowTarget): string {
   return target.name ?? target.value ?? '';
 }
 
+/** Une cible désignée par un sélecteur technique (css, xpath, test id) : son « libellé » n'est pas un nom. */
+export function isTechnicalTarget(target: FlowTarget | undefined): boolean {
+  return target !== undefined && (target.strategy === 'css' || target.strategy === 'testId');
+}
+
 /** Une étape de flow vue par son sens. Les valeurs saisies ne sont jamais lues. */
 export function semanticActionOf(step: FlowStep, index: number): SemanticAction {
   switch (step.kind) {
@@ -25,6 +30,7 @@ export function semanticActionOf(step: FlowStep, index: number): SemanticAction 
         kind: 'click',
         label: targetLabel(step.target),
         ...(step.target.role ? { role: step.target.role } : {}),
+        target: step.target,
       };
     case 'check':
     case 'uncheck':
@@ -43,6 +49,7 @@ export function semanticActionOf(step: FlowStep, index: number): SemanticAction 
         label: targetLabel(step.target),
         ...(step.target.role ? { role: step.target.role } : {}),
         field: true,
+        target: step.target,
       };
     case 'goto':
       return { index, kind: 'goto', label: step.url };
@@ -169,6 +176,10 @@ export function inferFunctionalGoal(
       value: context.currentAction.label,
       ...(context.currentAction.role ? { role: context.currentAction.role } : {}),
       source: 'current step',
+      // Le champ se vérifie par son localisateur enregistré quand il n'a pas de nom (css, test id).
+      ...(isTechnicalTarget(context.currentAction.target) && context.currentAction.target
+        ? { target: context.currentAction.target }
+        : {}),
     });
     sources.add('ACTION_LABEL');
   }
@@ -196,6 +207,7 @@ export function inferFunctionalGoal(
       value: field.label,
       ...(field.role ? { role: field.role } : {}),
       source: `next step ${String(field.index)}`,
+      ...(isTechnicalTarget(field.target) && field.target ? { target: field.target } : {}),
     });
     sources.add('NEXT_ACTIONS');
   }
@@ -207,6 +219,7 @@ export function inferFunctionalGoal(
         value: next.label,
         ...(next.role ? { role: next.role } : {}),
         source: `next step ${String(next.index)}`,
+        ...(isTechnicalTarget(next.target) && next.target ? { target: next.target } : {}),
       });
       sources.add('NEXT_ACTIONS');
     }

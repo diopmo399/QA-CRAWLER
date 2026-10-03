@@ -14,6 +14,7 @@ import type {
   ScreenControl,
   WorkflowActionContext,
 } from './model.js';
+import type { ExpectedTargetAnalysis } from './expected-target.js';
 import { labelSimilarity, RECOVERY_ROLES, REVEALING_ROLES, round } from './similarity.js';
 
 /** Une récupération apprise, pondérée (âge, version, échecs) : un CANDIDAT, jamais une vérité. */
@@ -47,12 +48,14 @@ export interface PlannerInput {
   dependencyEvidence?: (control: ScreenControl) => Evidence | undefined;
   /** La SafetyPolicy : passage obligé, jamais contourné par un score. */
   judge: (control: ScreenControl, kind: RecoveryAction['kind']) => SafetyJudgement;
-  budgets: Pick<RecoveryBudgets, 'maxCandidates'>;
+  budgets: Pick<RecoveryBudgets, 'maxCandidates' | 'minCandidateRelevance'>;
   /** stop : deux candidats trop proches → AMBIGUOUS ; experiment : essayer le moins coûteux (SAFE). */
   onAmbiguity: 'stop' | 'experiment';
   /** Signatures à ne jamais proposer (cibles des étapes précédentes, déjà essayées). */
   exclude?: ReadonlySet<string>;
   synonyms?: (term: string) => readonly string[];
+  /** La cible attendue comprise : section parente, actions qui la révèlent, absence fonctionnelle. */
+  expectedTarget?: ExpectedTargetAnalysis;
 }
 
 export function actionSignature(action: RecoveryAction): string {
@@ -226,11 +229,37 @@ export function planRecovery(input: PlannerInput): RecoveryPlan {
     const dependency = input.dependencyEvidence?.(control);
     if (dependency) evidence.push(dependency);
     const appeared = input.recentlyAppeared?.has(controlKey(control)) ?? false;
+    // PRECONDITION BACKTRACKING : la section parente fermée, l'action qui révélait la cible.
+    const target = input.expectedTarget;
+    const section =
+      target?.parentSection?.label.toLowerCase() === controlKey(control) ? target.parentSection : undefined;
+    const parent = section !== undefined;
+    const revealer = target?.revealers.find(
+      (candidate) =>
+        (!candidate.role || candidate.role === control.role) &&
+        normalize(candidate.label) === normalize(control.name),
+    );
+    if (section)
+      evidence.push({
+        source: 'RUNTIME',
+        detail: `opens the parent section (${section.evidence})`,
+        weight: 0.3,
+      });
+    if (revealer)
+      evidence.push({
+        source:
+          revealer.source === 'RECORDED_EFFECT' || revealer.source === 'PREVIOUS_CHOICE'
+            ? 'RECORDING'
+            : 'DEPENDENCY',
+        detail: `${revealer.hypothetical ? 'may reveal' : 'revealed'} "${target?.target.label ?? ''}" (${revealer.source})`,
+        weight: revealer.hypothetical ? 0.2 : 0.4,
+      });
+    const preconditionFit = revealer ? (revealer.hypothetical ? 0.6 : 0.9) : parent ? 0.8 : 0;
     const factors: RecoveryScoreFactors = {
       semanticSimilarity,
-      goalProgress: semanticSimilarity >= 0.5 ? 0.6 : 0.3,
+      goalProgress: preconditionFit > 0 ? 0.7 : semanticSimilarity >= 0.5 ? 0.6 : 0.3,
       expectedEffectMatch: appeared ? 0.5 : 0,
-      workflowContextMatch: round(Math.min(1, futureMatch * 0.8 + roleFit)),
+      workflowContextMatch: round(Math.min(1, Math.max(futureMatch * 0.8 + roleFit, preconditionFit))),
       staticEvidence: round(Math.min(1, (statics?.weight ?? 0) + (dependency?.weight ?? 0))),
       historicalSuccess: 0,
       runtimeEvidence: 0,
@@ -242,7 +271,13 @@ export function planRecovery(input: PlannerInput): RecoveryPlan {
     candidates.push(
       candidate(
         [action],
-        statics ? 'STATIC_ANALYSIS' : dependency ? 'DEPENDENCY_GRAPH' : 'CURRENT_UI',
+        revealer
+          ? 'HUMAN_JOURNEY'
+          : statics
+            ? 'STATIC_ANALYSIS'
+            : dependency
+              ? 'DEPENDENCY_GRAPH'
+              : 'CURRENT_UI',
         factors,
         verdict.risk,
         [{ source: 'RUNTIME', detail: `"${control.role}:${control.name}" on screen` }, ...evidence],
@@ -254,6 +289,28 @@ export function planRecovery(input: PlannerInput): RecoveryPlan {
     (a, b) =>
       b.score - a.score || a.estimatedCost - b.estimatedCost || a.signature.localeCompare(b.signature),
   );
+  // La cible n'existe pas fonctionnellement : un contrôle SANS lien avec elle (ni section, ni
+  // révélateur, ni contexte, ni preuve) ne consomme pas le budget de récupération.
+  if (input.expectedTarget?.functionalRecovery) {
+    const floor = input.budgets.minCandidateRelevance ?? 0.15;
+    const unrelated = candidates.filter(
+      (entry) =>
+        entry.source !== 'HISTORY' &&
+        entry.factors.workflowContextMatch < 0.3 &&
+        entry.factors.staticEvidence === 0 &&
+        entry.factors.semanticSimilarity < 0.3 &&
+        entry.score < floor + 0.15,
+    );
+    if (unrelated.length > 0) {
+      for (const entry of unrelated) candidates.splice(candidates.indexOf(entry), 1);
+      reasons.push(
+        `${String(unrelated.length)} candidate(s) unrelated to the missing target were not tried (${unrelated
+          .slice(0, 3)
+          .map((entry) => entry.signature)
+          .join(', ')})`,
+      );
+    }
+  }
 
   // AMBIGUITY : deux candidats proches, sans preuve qui les départage → ne pas choisir au hasard.
   let ambiguous = false;

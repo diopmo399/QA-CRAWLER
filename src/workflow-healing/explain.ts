@@ -9,9 +9,38 @@ import { predicateText } from './workflow-context.js';
 export function recoveryLines(recovery: StepRecoveryReport): string[] {
   const outcome = recovery.outcome;
   const divergence = recovery.divergence;
+  const target = divergence.expectedTarget;
   const lines = [
     `Original action: ${recovery.originalRole ? `${recovery.originalRole} ` : ''}"${recovery.originalTarget}"`,
     `Symptom: ${divergence.symptom}${divergence.rootStepIndex !== divergence.stepIndex ? ` (first divergence: step ${String(divergence.rootStepIndex)})` : ''}`,
+    ...(divergence.technicalSymptom ? [`Technical symptom: ${divergence.technicalSymptom}`] : []),
+    // RECOVERY ANALYSIS : la cible comprise avant le sélecteur.
+    ...(target
+      ? [
+          `Expected target: ${target.target.field ? 'field' : 'control'} "${target.target.label}" — ${target.presence}${target.semanticMatches.length > 0 ? ` (similar: ${target.semanticMatches.join(', ')})` : ''}${target.parentSection ? ` · parent ${target.parentSection.label} ${target.parentSection.state}` : ''}`,
+          `Precondition chain: ${target.preconditionChain.join(' ← ')}`,
+          ...(target.missingPreconditions.length > 0
+            ? [`Missing preconditions: ${target.missingPreconditions.join(', ')}`]
+            : []),
+          ...(target.revealers.length > 0
+            ? [
+                `Revealed by: ${target.revealers
+                  .slice(0, 3)
+                  .map(
+                    (revealer) =>
+                      `${revealer.kind} "${revealer.label}" (${revealer.source}${revealer.hypothetical ? ', hypothesis' : ''}${revealer.onScreen ? ', on screen' : ''})`,
+                  )
+                  .join(' · ')}`,
+              ]
+            : []),
+          `Recovery mode: ${target.functionalRecovery ? 'FUNCTIONAL_RECOVERY (the target is absent: no locator retries)' : 'LOCATOR_HEALING (the functional target looks present)'}`,
+        ]
+      : []),
+    ...(divergence.functionalRootCause
+      ? [
+          `Functional root cause: ${divergence.functionalRootCause.category} (${String(divergence.functionalRootCause.confidence)})`,
+        ]
+      : []),
     `Probable cause: ${divergence.category} (${String(divergence.confidence)})${
       divergence.possibleCauses.length > 1
         ? ` — other hypotheses: ${divergence.possibleCauses
@@ -54,6 +83,13 @@ export function recoveryLines(recovery: StepRecoveryReport): string[] {
           `Goal: ${recovery.goalVerification.status} (${String(recovery.goalVerification.progress)})${recovery.goalVerification.satisfied.length > 0 ? ` — ${recovery.goalVerification.satisfied.join(', ')}` : ''}`,
         ]
       : []),
+    `Result: ${
+      outcome.status === 'GOAL_REACHED' || outcome.status === 'GOAL_ALREADY_REACHED'
+        ? 'RECOVERED'
+        : outcome.status === 'RECOVERY_BUDGET_EXHAUSTED' || outcome.status === 'AMBIGUOUS_RECOVERY'
+          ? 'INCONCLUSIVE'
+          : 'NOT_RECOVERED'
+    }`,
     ...(recovery.nextActionVerified !== undefined
       ? [
           `Next action: ${recovery.nextActionVerified ? 'SUCCESS (recovery confirmed)' : 'FAILED (recovery not confirmed)'}`,
