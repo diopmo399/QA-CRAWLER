@@ -365,6 +365,87 @@ rapport montre, pour chaque navigation, ce qui l'a causée ou pourquoi elle rest
 connaissance statique (le code qui appelle `router.navigate`) n'est pas encore utilisée
 comme preuve par l'enregistreur ; seule l'exécution observée l'est.
 
+## Identité sémantique des cibles (section, contexte)
+
+Un champ n'est pas « un input » : c'est **Priorité dans Général**, **Rechercher dans Colonnes**.
+À l'enregistrement, chaque élément reçoit son **chemin de sections** (du plus large au plus
+proche, 3 au plus) : `aria-labelledby`, `aria-label` d'un conteneur, l'en-tête qui contrôle un
+accordéon (`aria-controls`), ou le titre (`legend`, `h1`–`h6`, `mat-panel-title`…) posé avant
+l'élément dans son conteneur. Le titre d'une section SŒUR ne nomme jamais l'élément qui la suit.
+La même fonction (`src/recording/semantic-dom.ts`) calcule ce chemin à l'enregistrement et au
+rejeu : une seule définition de l'identité.
+
+- Deux champs de même libellé dans deux sections : la cible garde sa section
+  (`fill: { label: Search, section: "Report settings > Columns", value: … }`).
+- Un champ sans libellé relié, avec une section connue : le texte posé devant lui devient sa
+  cible (`label` + `section`), plus jamais un CSS structurel (`main > div:nth-of-type(3)`).
+- L'empreinte (`fingerprint`) s'enrichit : `label`, `section`, `component`, `formControl`,
+  `placeholder`, `semanticId` (`general.priorite` : un nom stable, pas un localisateur).
+- Gherkin : `Quand je saisis "x" dans "Search" dans la section "Columns"` (la section se dit en
+  fin de phrase, pour toute phrase de clic, saisie, choix ou case).
+
+**Au rejeu (ContextualTargetResolver)**, une cible qui a une section est cherchée par son
+identité : libellé (associé, aria, placeholder, ou deviné), rôle, et section. Un candidat d'une
+AUTRE section connue est exclu ; deux candidats aussi plausibles donnent `AMBIGUOUS_TARGET`
+(jamais le premier du DOM au hasard) ; la cible absente de sa section donne
+`element "…" not found in section "…"` — jamais le champ de même libellé d'une autre section.
+Un localisateur structurel qui atteint un élément d'une autre section est rejeté par l'empreinte
+(`TARGET_FINGERPRINT_MISMATCH … section "Filters" instead of "Columns"`), avant toute action.
+
+## Glisser-déposer (DRAG_AND_DROP)
+
+Un glisser-déposer est **une** action humaine de premier ordre, jamais un clic ni une perte.
+La capture corrèle l'appui et le relâchement (pointeur : CDK, implémentations maison) ou
+`dragstart` → `drop` (HTML5) : l'élément est décrit **au départ** (avant que l'application ne le
+déplace), puis les éléments des deux zones sont relus après le dépôt — l'élément est-il dans la
+destination et plus dans la source (`ITEM_MOVED`) ? Le clic qui suit un glisser est du bruit.
+
+```yaml
+- dragAndDrop:
+    item: Status
+    from: { section: Report settings > Columns > Available columns }
+    to: { section: Report settings > Columns > Selected columns }
+```
+
+```gherkin
+Quand je glisse "Status" de la section "Columns > Available columns" vers la section "Columns > Selected columns"
+```
+
+Au rejeu : la SafetyPolicy décide d'abord (le texte de l'élément est classé comme un clic ; une
+écriture causée par le dépôt reste soumise au garde des écritures et à `allow`), l'élément et la
+zone sont trouvés par leur identité (texte + section), puis le glisser est joué (`dragTo` pour un
+élément `draggable`, une suite pointeur sinon). L'étape n'est réussie que si `ITEM_MOVED` est
+observé ; un glisser exécuté sans déplacement est `ACTION_EFFECT_MISMATCH` (effet `NO_EFFECT`),
+jamais un succès technique pris pour un succès fonctionnel. Une zone de dépôt non comprise à
+l'enregistrement : l'action est gardée (UNRESOLVED, étape `manual`), jamais perdue.
+
+## Audit sémantique par l'intelligence (Recording AI Audit)
+
+PRESERVE FIRST, UNDERSTAND SECOND, OPTIMIZE LAST. La capture est **toujours** déterministe :
+l'intelligence n'y participe jamais. Après la capture, le `RecordingSemanticAuditor` relit
+l'interprétation déterministe de chaque action humaine, en passant par l'`IntelligenceGateway`
+existant (contexte `RECORDING`, avis seulement : aucune exécution, aucun second client).
+
+- **Déclencheurs** (déterministes) : cible ambiguë, localisateur fragile, confiance faible,
+  interaction inconnue (UNRESOLVED), glisser sans déplacement observé, interaction humaine sans
+  compte (perte de normalisation), même libellé ailleurs sans section, fusion d'éléments différents.
+- **Modes** : `OFF`, `SUSPICIOUS_ONLY` (défaut : seules les actions qui déclenchent),
+  `FULL` (toutes, bornées par `maxCalls`). `ai.mode: OFF` → zéro appel, quoi qu'il soit écrit.
+- **Preuves** : des faits d'interface numérotés `E1`, `E2`… (libellé, section, liaison de
+  formulaire, zones d'un glisser) ; jamais une valeur saisie, un mot de passe, un jeton, un cookie.
+- **Arbitre** (`RecordingAuditArbiter`) : même cible → `CONFIRMED` ; une autre cible →
+  `DISAGREEMENT` ; doutes exprimés → `SUSPICIOUS` ; rien de clair, réponse invalide ou fournisseur
+  indisponible → `INCONCLUSIVE`. L'**interprétation finale reste la déterministe** : une autre
+  lecture est une hypothèse (`origin: AI_PROPOSAL`, `runtimeConfirmed: false`), signalée pour
+  revue, que seul le rejeu pourra confirmer. Rien n'est appris avant cette confirmation.
+
+`semantic-audit.json` : pour chaque action, `humanActionId` (h001… : le même identifiant de la
+trace brute au flow généré), `deterministicInterpretation`, `deterministicConfidence`,
+`auditTrigger`, `aiDecisionId`, `aiAssessment`, `aiProposal`, `evidence`, `citedEvidence`,
+`disagreement`, `finalInterpretation`, `decisionReason`, `runtimeConfirmation`. Le rapport
+`index.html` montre la section **Recording AI Audit** : action humaine → déterministe → audit →
+final → rejeu.
+
 ## Résultats et vérifications
 
 Chaque action est corrélée au réseau (fenêtre par action), à l'écran observé après elle
@@ -405,7 +486,7 @@ la session, la version et l'environnement. Les runs suivants la reprennent comme
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,
 `recorded-flow.json`, `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
-données du flow), `human-journey.json`, `action-preservation.json`, `optimized.flow.yaml`
+données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `optimized.flow.yaml`
 (seulement avec l'optimiseur), `flow-graph.json` (la carte
 des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en nombres — sans
 note globale —, intention comprise, qualité des cibles et des valeurs, trace
@@ -414,7 +495,7 @@ RAW → SEMANTIC → FINAL avec le pourquoi de chaque étape, vérifications can
 Événements : `RECORDING_STARTED`, `RAW_EVENT_CAPTURED`, `SEMANTIC_ACTION_RESOLVED`,
 `CHECKPOINT_ADDED`, `RECORDING_PAUSED`, `RECORDING_RESUMED`, `RECORDING_STOPPED`,
 `RECORDING_NORMALIZED`, `OUTCOME_INFERRED`, `FLOW_GENERATED`, `REPLAY_VALIDATION_STARTED`,
-`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`, et pour les données : `RECORDED_TEST_DATA_DISCOVERED`, `TEST_DATA_KEY_RESOLVED`, `TEST_DATA_CLASSIFIED`, `TEST_DATA_GENERALIZED`, `TEST_DATA_LITERAL_PRESERVED`, `TEST_DATA_REFERENCE_CREATED`, `SENSITIVE_RECORDED_VALUE_REDACTED`, `TEST_DATA_COLLISION_DETECTED` (enregistrement), `TEST_DATA_GENERATED_FOR_RUN`, `TEST_DATA_STRATEGY_CANDIDATE` (rejeu), et pour le parcours humain : `HUMAN_INTERACTION_CAPTURED`, `HUMAN_INTERACTION_PRESERVED`, `HUMAN_INTERACTION_MERGED`, `HUMAN_INTERACTION_EXCLUDED`, `HUMAN_INTERACTION_UNRESOLVED`, `HUMAN_ACTION_DEPENDENCY_DISCOVERED`, `HUMAN_JOURNEY_BUILT`, `HUMAN_JOURNEY_VALIDATION_STARTED`, `HUMAN_JOURNEY_VALIDATED`, `HUMAN_JOURNEY_VALIDATION_FAILED`, `HUMAN_ACTION_LOST`, `FLOW_OPTIMIZATION_STARTED`, `FLOW_OPTIMIZATION_COMPLETED`. Jamais une valeur dans un événement.
+`REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`, et pour les données : `RECORDED_TEST_DATA_DISCOVERED`, `TEST_DATA_KEY_RESOLVED`, `TEST_DATA_CLASSIFIED`, `TEST_DATA_GENERALIZED`, `TEST_DATA_LITERAL_PRESERVED`, `TEST_DATA_REFERENCE_CREATED`, `SENSITIVE_RECORDED_VALUE_REDACTED`, `TEST_DATA_COLLISION_DETECTED` (enregistrement), `TEST_DATA_GENERATED_FOR_RUN`, `TEST_DATA_STRATEGY_CANDIDATE` (rejeu), et pour le parcours humain : `HUMAN_INTERACTION_CAPTURED`, `HUMAN_INTERACTION_PRESERVED`, `HUMAN_INTERACTION_MERGED`, `HUMAN_INTERACTION_EXCLUDED`, `HUMAN_INTERACTION_UNRESOLVED`, `HUMAN_ACTION_DEPENDENCY_DISCOVERED`, `HUMAN_JOURNEY_BUILT`, `HUMAN_JOURNEY_VALIDATION_STARTED`, `HUMAN_JOURNEY_VALIDATED`, `HUMAN_JOURNEY_VALIDATION_FAILED`, `HUMAN_ACTION_LOST`, `FLOW_OPTIMIZATION_STARTED`, `FLOW_OPTIMIZATION_COMPLETED`, et pour l'audit : `RECORDING_SEMANTIC_AUDITED`. Jamais une valeur dans un événement.
 
 ## Configuration
 
@@ -446,6 +527,19 @@ recording:
     collapseMinGotos: 2
   fidelity: SEMANTIC # EXACT | SEMANTIC | OPTIMIZED
   preserveHumanJourney: true
+  intelligenceAudit: # relecture par l'intelligence (ai.*) ; ai.mode OFF → aucun appel
+    enabled: true
+    mode: SUSPICIOUS_ONLY # OFF | SUSPICIOUS_ONLY | FULL
+    maxCalls: 10
+    triggers:
+      ambiguousTarget: true
+      fragileLocator: true
+      lowSemanticConfidence: true
+      unknownInteraction: true
+      possibleDragAndDrop: true
+      normalizationLoss: true
+      contextMismatch: true
+      suspiciousMerge: true
   preserveUnknownInteractiveActions: true # un composant maison qui a un effet : gardé, UNRESOLVED
   preserveDomChangingActions: true
   preserveDependencyActions: true
@@ -482,5 +576,9 @@ recording:
   Un `prompt()` est refusé (sa réponse serait une saisie).
 - Un envoi de fichier devient une intention `UPLOAD` sans fichier : à compléter.
 - Un message affiché brièvement (toast) n'est proposé qu'en revue.
+- Glisser-déposer : l'élément est identifié par son texte visible ; une requête envoyée au
+  dépôt peut être rattachée à l'action précédente (le glisser est envoyé 300 ms après le dépôt,
+  le temps de relire les zones). Un réordonnancement dans la même zone est gardé sans phrase
+  dédiée de vérification de position.
 - L'humain qui va très vite peut regrouper plusieurs actions dans une même observation de
   l'écran : l'ordre et les requêtes restent justes, l'écran intermédiaire peut manquer.

@@ -23,6 +23,7 @@ import { BrowserManager } from '../browser/browser-manager.js';
 import { ScreenshotService } from '../browser/screenshot-service.js';
 import type { ScenarioConfig } from '../config/config.js';
 import {
+  describeDropZone,
   describeExpectation,
   describeStep,
   describeTarget,
@@ -104,7 +105,7 @@ import {
 } from '../execution/playwright-action-executor.js';
 import { evaluateFlowAction, evaluateFlowUrl } from '../flows/flow-safety.js';
 import { actionsInScope, isInScope, scopeOf, type ExplorationScope } from '../flows/flow-scope.js';
-import { FlowStepExecutor, type FlowElementAction } from '../flows/flow-step-executor.js';
+import { FlowStepExecutor, type DragOutcome, type FlowElementAction } from '../flows/flow-step-executor.js';
 import { suggestTargets } from '../flows/target-suggester.js';
 import { FormExerciser, formName, type FormRun } from '../forms/form-exerciser.js';
 import { formReportOf, type FormReport } from '../forms/form-report.js';
@@ -2328,6 +2329,7 @@ export class FlowExplorer {
           case 'auto':
           case 'manual':
           case 'screenshot':
+          case 'dragAndDrop':
             return { status: 'NOT_FOUND', reason: 'interpreted only when performed', confidence: 0 };
         }
       },
@@ -2909,7 +2911,113 @@ export class FlowExplorer {
       case 'check':
       case 'uncheck':
         return this.runFlowElementStep(page, browser, observers, flow, step, context, timeout, done);
+      case 'dragAndDrop':
+        return this.runDragStep(page, flow, step, context, timeout, done);
     }
+  }
+
+  /**
+   * DRAG_AND_DROP, action de premier ordre : la SafetyPolicy décide d'abord (le texte de l'élément
+   * déplacé est classé comme un clic) ; une écriture déclenchée par le dépôt reste soumise au
+   * garde des écritures. Réussi seulement si ITEM_MOVED est observé ; un glisser exécuté sans
+   * déplacement est ACTION_EFFECT_MISMATCH (jamais un succès technique pris pour un succès).
+   */
+  private async runDragStep(
+    page: Page,
+    flow: FlowConfig,
+    step: Extract<FlowStep, { kind: 'dragAndDrop' }>,
+    context: PageContext,
+    timeout: number,
+    done: (status: FlowStatus, extra?: Partial<FlowStepReport>) => FlowStepReport,
+  ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
+    const label = `drag ${step.item}`;
+    const classification = this.safety.classify({ type: 'click', category: 'other', text: step.item });
+    const action: DiscoveredAction = {
+      id: `flow-drag:${context.stateId}:${step.item}`,
+      stateId: context.stateId,
+      type: 'click',
+      category: 'other',
+      elementType: 'element',
+      text: label,
+      disabled: false,
+      visible: true,
+      ...classification,
+      locator: { strategy: 'text', value: step.item },
+    };
+    const verdict = evaluateFlowAction(this.safety, action, { allow: step.allow, valueFromEnv: false });
+    if (verdict.verdict === 'BLOCK')
+      return {
+        page,
+        context,
+        report: done('BLOCKED', {
+          reason: verdict.reason,
+          stateId: context.stateId,
+          url: context.url,
+          classification: action.classification,
+        }),
+      };
+    this.attribution = { actionId: action.id };
+    this.currentAction = { stateId: context.stateId, actionId: action.id, flow: flow.name };
+    const interactionMark = this.interactions.mark();
+    this.networkTrace.start(action.id);
+    this.writeGuard.during(context.stateId, action.id, `flow "${flow.name}" step "${label}"`);
+    const mayWrite = step.allow.some((allowed) => allowed === 'MUTATION' || allowed === 'DANGEROUS');
+    const effectTimeout = Math.max(this.config.replay.effectTimeoutMs, 500);
+    const perform = (): Promise<DragOutcome> =>
+      this.flowSteps.dragAndDrop(page, step, timeout, effectTimeout);
+    const outcome = mayWrite ? await this.writeGuard.permit(`flow ${flow.name}`, perform) : await perform();
+    this.actionsExecuted += 1;
+    this.currentAction = undefined;
+    const blocking = this.interactions.since(interactionMark).filter((interaction) => interaction.blocking);
+    const after = await this.observeState(page, context.metadata.depth + 1).catch(() => context);
+    const moved = outcome.status === 'MOVED';
+    const executed = moved || outcome.status === 'NOT_MOVED';
+    this.graph.addEdge({
+      from: context.stateId,
+      to: after.stateId,
+      actionId: action.id,
+      action: summaryOf(action),
+      ...this.networkOf(action.id),
+      result: blocking.length > 0 ? 'BLOCKED' : moved ? 'SUCCESS' : 'FAILED',
+      ...(moved ? {} : { reason: outcome.reason }),
+      flow: flow.name,
+    });
+    const effect = {
+      execution: executed ? ('EXECUTED' as const) : ('FAILED' as const),
+      status: moved
+        ? ('CONFIRMED' as const)
+        : executed
+          ? ('NO_EFFECT' as const)
+          : ('TARGET_MISMATCH' as const),
+      expected: [`ITEM_MOVED "${step.item}" → ${describeDropZone(step.to)}`],
+      observed: outcome.membership
+        ? [
+            `destination: ${outcome.membership.destinationItems.join(', ') || '(empty)'}`,
+            ...(outcome.membership.sourceItems.length > 0
+              ? [`source: ${outcome.membership.sourceItems.join(', ')}`]
+              : []),
+          ]
+        : [],
+      reasons: [outcome.reason, ...outcome.evidence, ...(outcome.mode ? [`drag mode ${outcome.mode}`] : [])],
+      recovery: [],
+    };
+    if (blocking.length > 0)
+      return {
+        page,
+        context: after,
+        report: done('BLOCKED', { reason: blockingReason(blocking), stateId: after.stateId, effect }),
+      };
+    return {
+      page,
+      context: after,
+      report: done(moved ? 'PASSED' : 'FAILED', {
+        ...(moved ? {} : { reason: outcome.reason }),
+        stateId: after.stateId,
+        url: after.url,
+        classification: action.classification,
+        effect,
+      }),
+    };
   }
 
   private async semanticFallback(
@@ -3895,7 +4003,7 @@ export class FlowExplorer {
           return diverged(observed.tag === undefined ? 'TARGET_NOT_FOUND' : 'TARGET_MISMATCH', {
             page,
             report: done('FAILED', {
-              reason: `TARGET_FINGERPRINT_MISMATCH: expected "${fingerprint.name ?? fingerprint.text ?? fingerprint.testId ?? ''}", found ${match.reasons.join('; ')} (not clicked)`,
+              reason: `TARGET_FINGERPRINT_MISMATCH: expected "${fingerprint.name ?? fingerprint.text ?? fingerprint.testId ?? fingerprint.label ?? ''}", found ${match.reasons.join('; ')} (not clicked)`,
               stateId: context.stateId,
               url: context.url,
               effect: { ...effect, status: 'TARGET_MISMATCH', reasons: match.reasons },

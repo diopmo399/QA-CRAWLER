@@ -17,12 +17,14 @@ import type { IntelligenceProvider } from '../ai/provider.js';
 import { processRecording, TEST_DATA_FILE, type RecordingResult } from './process-recording.js';
 import { recordingHtml, type ReplayOutcome } from './recording-report.js';
 import { createIntelligenceGateway, effectiveMode } from '../ai/factory.js';
+import type { IntelligenceGateway } from '../ai/gateway.js';
 import {
   enrichRecording,
   recordingCandidatesFile,
   rememberRecordingCandidates,
   type RecordingIntelligence,
 } from './recording-intelligence.js';
+import { auditRecordingSemantics, type SemanticAuditReport } from './semantic-audit.js';
 
 export type RecordOutputFormat = 'yaml' | 'gherkin' | 'both';
 
@@ -59,6 +61,8 @@ export interface RecordOutcome {
   replay: ReplayOutcome;
   stopReason: StopReason;
   warnings: string[];
+  /** RECORDING SEMANTIC AUDIT (semantic-audit.json). */
+  audit?: SemanticAuditReport;
 }
 
 /**
@@ -194,6 +198,34 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   // RECORDING INTELLIGENCE : comprendre (jamais modifier) le parcours humain, après la capture.
   let intelligence: RecordingIntelligence | undefined;
   const mode = effectiveMode(config.ai);
+  // RECORDING SEMANTIC AUDIT : le déterministe toujours ; le conseiller seulement si ai.mode ≠ OFF.
+  let audit: SemanticAuditReport | undefined;
+  const runSemanticAudit = async (
+    gateway: IntelligenceGateway | undefined,
+  ): Promise<SemanticAuditReport | undefined> => {
+    try {
+      const report = await auditRecordingSemantics({
+        result,
+        settings: config.recording.intelligenceAudit,
+        intelligenceMode: mode,
+        ...(gateway ? { gateway } : {}),
+        minProposalConfidence: config.ai.thresholds.minProposalConfidence,
+      });
+      onEvent({
+        type: 'RECORDING_SEMANTIC_AUDITED',
+        at: new Date().toISOString(),
+        message: `${String(report.summary.audited)} action(s) audited (${String(report.aiCalls)} AI call(s)): ${String(report.summary.confirmed)} confirmed, ${String(report.summary.disagreements)} disagreement(s), ${String(report.summary.suspicious)} suspicious, ${String(report.summary.reviewRequired)} to review`,
+      });
+      return report;
+    } catch (error) {
+      onEvent({
+        type: 'RECORDING_SEMANTIC_AUDITED',
+        at: new Date().toISOString(),
+        message: `semantic audit skipped: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return undefined;
+    }
+  };
   if (mode !== 'OFF') {
     const gateway = createIntelligenceGateway(config.ai, {
       env,
@@ -226,10 +258,11 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         at: new Date().toISOString(),
         message: `recording enrichment skipped: ${error instanceof Error ? error.message : String(error)}`,
       });
-    } finally {
-      await gateway?.close();
     }
-  }
+    audit = await runSemanticAudit(gateway);
+    await gateway?.close();
+  } else audit = await runSemanticAudit(undefined);
+  if (audit) await write('semantic-audit.json', json(audit));
 
   let replay: ReplayOutcome = { status: 'NOT_VALIDATED' };
   if (request.validate ?? config.recording.validate) {
@@ -260,9 +293,10 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       files: { ...files },
       generatedAt: new Date().toISOString(),
       ...(intelligence ? { intelligence } : {}),
+      ...(audit ? { audit } : {}),
     }),
   );
-  return { result, directory, files, replay, stopReason, warnings };
+  return { result, directory, files, replay, stopReason, warnings, ...(audit ? { audit } : {}) };
 }
 
 /** La mission (ou une cible donnée par --url seule). */

@@ -35,6 +35,13 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
   const label = readable(element.label) ? element.label : undefined;
   const name = readable(element.name) ? element.name : undefined;
   const role = element.role;
+  // L'IDENTITÉ CONTEXTUELLE : la section (« Colonnes > Colonnes disponibles ») distingue deux champs
+  // identiques ; le libellé deviné (texte posé avant un champ non relié) est un nom humain, pas un CSS.
+  const section =
+    element.sectionPath && element.sectionPath.length > 0 ? element.sectionPath.join(' > ') : undefined;
+  const guessed = !label && readable(element.guessedLabel) ? element.guessedLabel : undefined;
+  const uniqueInSection = (element.sameLabelInSection ?? 0) <= 1;
+  const semanticId = semanticIdOf(section, label ?? guessed ?? name);
 
   if (use === 'field' || use === 'check') {
     if (label)
@@ -43,6 +50,23 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
         quality: 'SEMANTIC',
         unique: element.sameLabel <= 1,
         why: `field label "${label}"`,
+      });
+    // Le même libellé ailleurs (« Rechercher » dans Colonnes et dans Filtres) : la section le rend unique.
+    if (label && element.sameLabel > 1 && section && uniqueInSection)
+      candidates.push({
+        target: { strategy: 'label', value: label, section },
+        quality: 'SEMANTIC',
+        unique: true,
+        why: `field label "${label}" in section "${section}"`,
+      });
+    // Sans section, le libellé deviné reste une intention (comportement historique) ; avec une
+    // section connue, il devient une cible sémantique résolue dans son contexte.
+    if (guessed && section && uniqueInSection)
+      candidates.push({
+        target: { strategy: 'label', value: guessed, section },
+        quality: 'SEMANTIC',
+        unique: true,
+        why: `text before the field "${guessed}" in section "${section}"`,
       });
     if (use === 'check' && name && (role === 'checkbox' || role === 'radio' || role === 'switch'))
       candidates.push({
@@ -65,6 +89,13 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
         quality: 'SEMANTIC',
         unique: element.sameRoleName <= 1,
         why: `${role} "${name}"`,
+      });
+    if (name && CLICK_ROLES.has(role) && element.sameRoleName > 1 && section)
+      candidates.push({
+        target: { strategy: 'role', role, name, section },
+        quality: 'SEMANTIC',
+        unique: true,
+        why: `${role} "${name}" in section "${section}"`,
       });
     const text = element.text;
     if (readable(text) && text.length <= 60 && !CLICK_ROLES.has(role))
@@ -151,6 +182,12 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     ...(element.testId ? { testId: element.testId } : {}),
     tag: element.tag,
     ...(readable(element.context) ? { context: element.context } : {}),
+    ...((label ?? guessed) ? { label: label ?? guessed } : {}),
+    ...(section ? { section } : {}),
+    ...(element.componentTag ? { component: element.componentTag } : {}),
+    ...(element.formControlName ? { formControl: element.formControlName } : {}),
+    ...(readable(element.placeholder) ? { placeholder: element.placeholder } : {}),
+    ...(semanticId ? { semanticId } : {}),
   };
   return {
     target: chosen.target,
@@ -164,4 +201,20 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     ambiguous,
     reasons,
   };
+}
+
+/** « general.priorite » : la section la plus proche et le nom humain, en identifiant stable. */
+export function semanticIdOf(section: string | undefined, name: string | undefined): string | undefined {
+  const slug = (text: string): string =>
+    text
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40);
+  if (!name || !readable(name)) return undefined;
+  const scope = section?.split('>').at(-1)?.trim();
+  const id = [scope ? slug(scope) : '', slug(name)].filter(Boolean).join('.');
+  return id || undefined;
 }

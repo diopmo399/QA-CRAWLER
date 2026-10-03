@@ -171,6 +171,31 @@ export function resolveSemanticActions(
         });
         break;
       }
+      case 'drag': {
+        // DRAG_AND_DROP : une action humaine de premier ordre (jamais réduite à un clic ni perdue).
+        const drag = event.drag;
+        if (!drag) break;
+        const zone = (facts: typeof drag.destination): string =>
+          facts ? `"${facts.label ?? facts.section ?? ''}"` : 'an unknown zone';
+        const classification = safety.classify({ type: 'click', category: 'other', text: drag.item });
+        const resolved = drag.destination !== undefined && (drag.moved || drag.sameZone);
+        push(event, 'DRAG_AND_DROP', {
+          ...(event.element ? { target: resolveRecordedTarget(event.element, 'click') } : {}),
+          drag,
+          classification: classification.classification,
+          evidence: [
+            `${drag.kind === 'HTML5' ? 'HTML5' : 'pointer'} drag of "${drag.item}" from ${zone(drag.source)} to ${zone(drag.destination)}`,
+            drag.moved
+              ? `ITEM_MOVED observed: "${drag.item}" is in ${zone(drag.destination)}`
+              : drag.sameZone
+                ? 'dropped in its own zone (reorder)'
+                : 'no move observed after the drop',
+          ],
+          confidence: drag.moved ? 0.9 : drag.sameZone ? 0.7 : 0.5,
+          ...(resolved ? {} : { semanticStatus: 'UNRESOLVED' as const }),
+        });
+        break;
+      }
       case 'submit': {
         const previous = last();
         if (

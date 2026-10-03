@@ -18,7 +18,7 @@ import type {
  */
 
 export type HumanInteractionType =
-  'CLICK' | 'FILL' | 'CHECK' | 'SELECT' | 'SUBMIT' | 'KEY' | 'DIALOG' | 'UPLOAD';
+  'CLICK' | 'FILL' | 'CHECK' | 'SELECT' | 'SUBMIT' | 'KEY' | 'DIALOG' | 'UPLOAD' | 'DRAG_AND_DROP';
 
 export interface HumanInteraction {
   id: string;
@@ -178,6 +178,11 @@ export function buildInteractionTimeline(events: readonly RawRecordedEvent[]): {
       case 'filechooser':
         lastField = undefined;
         add(event, 'UPLOAD', label);
+        break;
+      case 'drag':
+        // Un glisser-déposer est UNE interaction humaine (appui, déplacement, dépôt corrélés).
+        lastField = undefined;
+        add(event, 'DRAG_AND_DROP', event.drag?.item ?? label);
         break;
       case 'input':
       case 'change': {
@@ -361,7 +366,16 @@ export function learnExpectedEffects(
   if (exchange) effects.request = `${exchange.method.toUpperCase()} ${routeTemplate(exchange.path)}`;
   return Object.keys(effects).length > 0 ? effects : undefined;
 }
-const DEPENDENT = new Set(['FILL', 'CLICK', 'CHECK', 'UNCHECK', 'SELECT', 'SUBMIT', 'UPLOAD']);
+const DEPENDENT = new Set([
+  'FILL',
+  'CLICK',
+  'CHECK',
+  'UNCHECK',
+  'SELECT',
+  'SUBMIT',
+  'UPLOAD',
+  'DRAG_AND_DROP',
+]);
 
 /**
  * HUMAN ACTION DEPENDENCY GRAPH : A → B quand la cible de B n'était pas accessible avant A.

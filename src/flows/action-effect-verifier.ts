@@ -1,6 +1,7 @@
 import type { FlowTarget, StepEffects, TargetFingerprint } from '../config/flow-schema.js';
 import type { Locator } from 'playwright';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
+import { sectionPathExpression } from '../recording/semantic-dom.js';
 
 /**
  * CLICKED != SUCCEEDED. Playwright qui clique sans erreur prouve seulement que le clic a eu
@@ -25,6 +26,8 @@ export interface ObservedTarget {
   name?: string;
   text?: string;
   testId?: string;
+  /** Le chemin de sections de l'élément trouvé (« Général », « Colonnes > Disponibles »). */
+  section?: string;
 }
 
 export interface FingerprintMatch {
@@ -105,11 +108,45 @@ export function matchFingerprint(expected: TargetFingerprint, observed: Observed
     }
   }
   if (expected.tag && observed.tag && expected.tag === observed.tag) score += 0.1;
+  // LE CONTEXTE : un élément identique d'une AUTRE section n'est pas la cible (Filtres ≠ Général).
+  const context = sectionMatch(expected.section, observed.section);
+  if (context === 'OTHER')
+    return {
+      verdict: 'MISMATCH',
+      score: 0,
+      reasons: [...reasons, `section "${observed.section ?? ''}" instead of "${expected.section ?? ''}"`],
+    };
+  if (context === 'SAME') {
+    score += 0.1;
+    reasons.push('same section');
+  }
   score = Math.max(0, Math.min(1, score));
   const verdict: FingerprintVerdict =
     score >= 0.9 ? 'EXACT_MATCH' : score >= 0.7 ? 'STRONG_MATCH' : score >= 0.45 ? 'WEAK_MATCH' : 'MISMATCH';
   return { verdict, score: Number(score.toFixed(2)), reasons };
 }
+
+/**
+ * La section trouvée est-elle celle attendue ? SAME (même chemin, ou la section attendue la plus
+ * précise s'y retrouve), OTHER (une autre section connue), UNKNOWN (rien à comparer).
+ */
+export function sectionMatch(
+  expected: string | undefined,
+  observed: string | undefined,
+): 'SAME' | 'OTHER' | 'UNKNOWN' {
+  const parts = (text: string | undefined): string[] =>
+    (text ?? '')
+      .split('>')
+      .map((part) => normalize(part))
+      .filter(Boolean);
+  const wanted = parts(expected);
+  const found = parts(observed);
+  if (wanted.length === 0 || found.length === 0) return 'UNKNOWN';
+  if (wanted.join('>') === found.join('>')) return 'SAME';
+  return found.includes(wanted[wanted.length - 1] ?? '') ? 'SAME' : 'OTHER';
+}
+
+let probes = 0;
 
 /**
  * LOCATOR CANDIDATES (healing) : les autres façons de trouver LE MÊME élément, à partir de son
@@ -297,7 +334,7 @@ export function verifyEffects(input: {
 
 /** Ce que l'élément trouvé dit de lui (rôle, nom, texte, test id) — jamais la valeur d'un champ. */
 export async function readTarget(locator: Locator): Promise<ObservedTarget> {
-  return locator
+  const observed = await locator
     .evaluate((el) => {
       const clean = (text: string | null | undefined): string =>
         (text ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -335,5 +372,26 @@ export async function readTarget(locator: Locator): Promise<ObservedTarget> {
         ...(testId ? { testId } : {}),
       };
     })
-    .catch(() => ({}));
+    .catch((): ObservedTarget => ({}));
+  if (observed.tag === undefined) return observed;
+  const section = await readSection(locator);
+  return section ? { ...observed, section } : observed;
+}
+
+/** Le chemin de sections de l'élément (même calcul qu'à l'enregistrement) ; undefined s'il est illisible. */
+export async function readSection(locator: Locator): Promise<string | undefined> {
+  probes += 1;
+  const token = `probe-${String(probes)}`;
+  const marked = await locator
+    .evaluate((el, value) => {
+      el.setAttribute('data-qa-crawler-probe', value);
+      return true;
+    }, token)
+    .catch(() => false);
+  if (!marked) return undefined;
+  const path = (await locator
+    .page()
+    .evaluate(sectionPathExpression(token))
+    .catch(() => null)) as string[] | null;
+  return path && path.length > 0 ? path.join(' > ') : undefined;
 }

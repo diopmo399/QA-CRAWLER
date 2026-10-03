@@ -1,10 +1,12 @@
+import { sectionPathOf } from './semantic-dom.js';
+
 /**
  * Le script injecté dans chaque page pendant un enregistrement. Il s'exécute dans le
  * navigateur (sérialisé) : autonome, aucun import.
  *
  * PASSIF : des écouteurs en phase de capture, passive, jamais de preventDefault, aucune
  * requête interceptée ; l'application ne voit aucune différence. Les mouvements de souris
- * et le défilement ne sont pas écoutés.
+ * et le défilement ne sont pas écoutés (un glisser-déposer : l'appui et le relâchement seulement).
  *
  * D'une valeur tapée : sa forme (vide, longueur, email / nombre / date…) et une empreinte
  * salée ; avec recordValues (recording.testData), aussi le texte d'un champ NON sensible,
@@ -31,7 +33,11 @@ export interface CaptureOptions {
 
 export const OVERLAY_ATTRIBUTE = 'data-qa-crawler-overlay';
 
-export function installRecorder(options: CaptureOptions): void {
+export function installRecorder(
+  options: CaptureOptions,
+  /** sectionPathOf (semantic-dom) : le même chemin de sections qu'au rejeu. */
+  sectionOf: (el: Element) => string[] = () => [],
+): void {
   const global = window as unknown as Record<string, unknown>;
   if (global.__qaCrawlerRecorderInstalled === true) return;
   global.__qaCrawlerRecorderInstalled = true;
@@ -325,12 +331,29 @@ export function installRecorder(options: CaptureOptions): void {
       .map((attribute) => [attribute, el.getAttribute(attribute)] as const)
       .find(([, value]) => value);
     const testId = testIdEntry?.[1];
-    const context = contextOf(el);
+    // L'IDENTITÉ CONTEXTUELLE : le chemin de sections (« Colonnes > Colonnes disponibles »), le même
+    // qu'au rejeu ; deux champs identiques de sections différentes ne se confondent pas.
+    const sectionPath = sectionOf(el);
+    const context = sectionPath.at(-1) ?? contextOf(el);
+    const humanLabel = label || guessed || clean(el.getAttribute('placeholder'));
+    let sameLabelInSection = 0;
+    if (humanLabel && el.matches(FIELD)) {
+      const section = sectionPath.join(' > ');
+      for (const candidate of Array.from(document.querySelectorAll(FIELD))) {
+        if (candidate.closest(`[${OVERLAY}]`) || (!isVisible(candidate) && candidate !== el)) continue;
+        const other =
+          labelOf(candidate) || guessLabel(candidate) || clean(candidate.getAttribute('placeholder'));
+        if (other.toLowerCase() === humanLabel.toLowerCase() && sectionOf(candidate).join(' > ') === section)
+          sameLabelInSection += 1;
+      }
+    }
     return {
       tag,
       role,
       name,
       ...(context && context !== name ? { context } : {}),
+      ...(sectionPath.length > 0 ? { sectionPath } : {}),
+      ...(sameLabelInSection > 0 ? { sameLabelInSection } : {}),
       ...(typeof ShadowRoot !== 'undefined' && el.getRootNode() instanceof ShadowRoot
         ? { inShadow: true }
         : {}),
@@ -516,6 +539,135 @@ export function installRecorder(options: CaptureOptions): void {
     { capture: true, passive: true },
   );
 
+  // ---- glisser-déposer : pointeur (CDK, implémentations maison) ou HTML5 (draggable), corrélés en
+  // UNE action humaine. L'élément est décrit au départ (avant que l'application ne le déplace) ;
+  // les éléments des deux zones sont relus après le dépôt : déplacé ou non (ITEM_MOVED).
+  const DRAG_ITEM =
+    '[draggable="true"], [cdkdrag], .cdk-drag, [role="option"], [role="listitem"], [role="row"], li, [role="treeitem"]';
+  const DROP_ZONE =
+    '[cdkdroplist], .cdk-drop-list, [role="list"], [role="listbox"], [role="tree"], ul, ol, [aria-dropeffect], [data-drop-zone], tbody';
+  const itemTexts = (zone: Element | null): string[] => {
+    if (!zone) return [];
+    const found = Array.from(zone.querySelectorAll(DRAG_ITEM)).filter(
+      (el) => !el.classList.contains('cdk-drag-placeholder') && !el.classList.contains('cdk-drag-preview'),
+    );
+    return found
+      .filter((el) => !found.some((other) => other !== el && el.contains(other)))
+      .map((el) => clean((el as HTMLElement).innerText || el.textContent, 60))
+      .slice(0, 30);
+  };
+  const zoneFacts = (zone: Element | null): Record<string, unknown> | undefined => {
+    if (!zone) return undefined;
+    const path = sectionOf(zone);
+    const label = clean(zone.getAttribute('aria-label'), 60);
+    return { ...(path.length > 0 ? { section: path.join(' > ') } : {}), ...(label ? { label } : {}) };
+  };
+  let dragging:
+    | {
+        item: Element;
+        text: string;
+        element: Record<string, unknown>;
+        source: Element | null;
+        x: number;
+        y: number;
+        kind: 'HTML5' | 'POINTER';
+        drop?: Element | null;
+      }
+    | undefined;
+  let lastDragAt = 0;
+  const startDrag = (event: Event, kind: 'HTML5' | 'POINTER', x: number, y: number): void => {
+    if (isOverlay(event) || !event.isTrusted) return;
+    const item = inPath(event, (node) => node.matches(DRAG_ITEM));
+    if (!item) {
+      dragging = undefined;
+      return;
+    }
+    dragging = {
+      item,
+      text: clean((item as HTMLElement).innerText || item.textContent, 60),
+      element: describe(item),
+      source: item.parentElement?.closest(DROP_ZONE) ?? null,
+      x,
+      y,
+      kind,
+    };
+  };
+  const finishDrag = (x: number, y: number, zone: Element | null): void => {
+    const current = dragging;
+    dragging = undefined;
+    if (!current) return;
+    // Un appui sans déplacement est un clic, pas un glisser.
+    if (current.kind === 'POINTER' && Math.hypot(x - current.x, y - current.y) < 10) return;
+    lastDragAt = Date.now();
+    const destination = zone ?? current.drop ?? null;
+    window.setTimeout(() => {
+      const norm = (text: string): string => text.toLowerCase();
+      const inDestination = itemTexts(destination).map(norm).includes(norm(current.text));
+      const inSource =
+        current.source !== destination && itemTexts(current.source).map(norm).includes(norm(current.text));
+      const from = zoneFacts(current.source);
+      const to = zoneFacts(destination);
+      send({
+        type: 'drag',
+        element: current.element,
+        drag: {
+          kind: current.kind,
+          item: current.text,
+          ...(from ? { source: from } : {}),
+          ...(to ? { destination: to } : {}),
+          sameZone: destination !== null && destination === current.source,
+          moved: destination !== null && destination !== current.source && inDestination && !inSource,
+        },
+      });
+    }, 300);
+  };
+  document.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (event.button !== 0 || dragging?.kind === 'HTML5') return;
+      startDrag(event, 'POINTER', event.clientX, event.clientY);
+    },
+    { capture: true, passive: true },
+  );
+  document.addEventListener(
+    'dragstart',
+    (event) => {
+      startDrag(event, 'HTML5', event.clientX, event.clientY);
+    },
+    { capture: true, passive: true },
+  );
+  document.addEventListener(
+    'drop',
+    (event) => {
+      if (dragging) dragging.drop = originOf(event)?.closest(DROP_ZONE) ?? null;
+    },
+    { capture: true, passive: true },
+  );
+  document.addEventListener(
+    'dragend',
+    (event) => {
+      if (dragging?.kind === 'HTML5') finishDrag(event.clientX, event.clientY, dragging.drop ?? null);
+    },
+    { capture: true, passive: true },
+  );
+  document.addEventListener(
+    'pointerup',
+    (event) => {
+      if (dragging?.kind !== 'POINTER') return;
+      // Phase de capture : lu AVANT que l'application ne déplace l'élément.
+      const under = document.elementFromPoint(event.clientX, event.clientY);
+      finishDrag(event.clientX, event.clientY, under?.closest(DROP_ZONE) ?? null);
+    },
+    { capture: true, passive: true },
+  );
+  document.addEventListener(
+    'pointercancel',
+    () => {
+      if (dragging?.kind === 'POINTER') dragging = undefined;
+    },
+    { capture: true, passive: true },
+  );
+
   // ---- clics
   document.addEventListener(
     'click',
@@ -530,7 +682,8 @@ export function installRecorder(options: CaptureOptions): void {
       const tag = el.tagName.toLowerCase();
       const type = ((el as HTMLInputElement).type || '').toLowerCase();
       let noise: string | undefined;
-      if (
+      if (Date.now() - lastDragAt < 500) noise = 'end of a drag (recorded as a drag and drop)';
+      else if (
         tag === 'textarea' ||
         (tag === 'input' &&
           !['button', 'submit', 'reset', 'image', 'checkbox', 'radio', 'file'].includes(type))
@@ -718,6 +871,6 @@ export function installRecorder(options: CaptureOptions): void {
 export function captureScript(options: CaptureOptions): string {
   return [
     'if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
-    `(${installRecorder.toString()})(${JSON.stringify(options)});`,
+    `(${installRecorder.toString()})(${JSON.stringify(options)}, ${sectionPathOf.toString()});`,
   ].join('\n');
 }

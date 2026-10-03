@@ -15,6 +15,8 @@ import { NON_INTERACTIVE_NOISE } from './human-journey.js';
 import type {
   RawEventType,
   RawRecordedEvent,
+  RecordedDrag,
+  RecordedDropZone,
   RecordedElement,
   RecordedState,
   RecordedValueFacts,
@@ -35,7 +37,7 @@ const ESSENTIAL = new Set<RawEventType>([
   'download',
   'popup',
 ]);
-const RAW_TYPES = new Set<RawEventType>(['click', 'input', 'change', 'submit', 'keydown', 'control']);
+const RAW_TYPES = new Set<RawEventType>(['click', 'input', 'change', 'submit', 'keydown', 'control', 'drag']);
 
 export type StopReason = 'overlay' | 'terminal' | 'page-closed' | 'browser-closed' | 'max-duration' | 'api';
 
@@ -649,6 +651,33 @@ export function sanitize(
       ? { control }
       : {}),
     ...(typeof payload.noise === 'string' ? { noise: text(payload.noise, 80) } : {}),
+    ...(type === 'drag' && isObject(payload.drag) ? dragOf(payload.drag) : {}),
+  };
+}
+
+/** Le glisser-déposer envoyé par la page : textes d'interface bornés et expurgés, booléens stricts. */
+function dragOf(raw: Record<string, unknown>): { drag: RecordedDrag } | Record<string, never> {
+  const item = typeof raw.item === 'string' ? redactText(text(raw.item, 60)) : '';
+  if (!item) return {};
+  const zone = (value: unknown): RecordedDropZone | undefined => {
+    if (!isObject(value)) return undefined;
+    const section =
+      typeof value.section === 'string' && value.section ? redactText(text(value.section, 180)) : undefined;
+    const label =
+      typeof value.label === 'string' && value.label ? redactText(text(value.label, 60)) : undefined;
+    return section || label ? { ...(section ? { section } : {}), ...(label ? { label } : {}) } : undefined;
+  };
+  const source = zone(raw.source);
+  const destination = zone(raw.destination);
+  return {
+    drag: {
+      kind: raw.kind === 'HTML5' ? 'HTML5' : 'POINTER',
+      item,
+      ...(source ? { source } : {}),
+      ...(destination ? { destination } : {}),
+      sameZone: raw.sameZone === true,
+      moved: raw.moved === true,
+    },
   };
 }
 
@@ -696,6 +725,15 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ...(bool('required') ? { required: true } : {}),
     ...(bool('readOnly') ? { readOnly: true } : {}),
     ...optional('context', str('context', 60) ? redactText(str('context', 60) ?? '') : undefined),
+    ...(Array.isArray(raw.sectionPath)
+      ? {
+          sectionPath: raw.sectionPath
+            .filter((entry): entry is string => typeof entry === 'string' && entry !== '')
+            .slice(0, 3)
+            .map((entry) => redactText(text(entry, 60))),
+        }
+      : {}),
+    ...(num('sameLabelInSection') > 0 ? { sameLabelInSection: num('sameLabelInSection') } : {}),
     ...optional(
       'componentTag',
       /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/.test(str('componentTag', 80) ?? '')

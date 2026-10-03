@@ -188,6 +188,8 @@ function describeIntentOf(step: FlowStep): Described | undefined {
     case 'screenshot':
       // Une capture n'est pas une intention de l'application.
       return undefined;
+    case 'dragAndDrop':
+      return { type: 'CUSTOM', label: `drag ${step.item}` };
   }
   return undefined;
 }

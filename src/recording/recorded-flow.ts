@@ -206,6 +206,25 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
       return named && readable(label)
         ? intentStep(common, { kind: 'UPLOAD', field: label, file: '' })
         : undefined;
+    case 'DRAG_AND_DROP': {
+      const drag = action.drag;
+      if (!drag) return undefined;
+      const { fingerprint: _fingerprint, ...rest } = common;
+      // Une zone de dépôt non comprise : l'action est GARDÉE (à rejouer à la main), jamais perdue.
+      if (!drag.destination)
+        return { ...rest, kind: 'manual', text: `drag "${drag.item}" (drop zone not understood)` };
+      // La section d'abord (elle se dit en Gherkin) ; le libellé seulement sans section.
+      const zone = (facts: { section?: string; label?: string }): { section?: string; label?: string } =>
+        facts.section ? { section: facts.section } : facts.label ? { label: facts.label } : {};
+      const from = drag.source ? zone(drag.source) : undefined;
+      return {
+        ...rest,
+        kind: 'dragAndDrop',
+        item: drag.item,
+        ...(from && (from.section || from.label) ? { from } : {}),
+        to: zone(drag.destination),
+      };
+    }
     default:
       return undefined;
   }
