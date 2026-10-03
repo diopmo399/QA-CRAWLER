@@ -90,7 +90,7 @@ const explorationSchema = z
     maxStatesPerRoute: z.number().int().positive().default(3),
     queryParams: queryParamsSchema.default({}),
     /**
-     * Les contrôles semblables d'un écran (jours d'un calendrier, numéros de page,
+     * Les contrôles pareils d'un écran (jours d'un calendrier, numéros de page,
      * « Voir » sur chaque ligne…) sont essayés au plus ce nombre de fois, pas un par un.
      */
     maxSimilarActions: z.number().int().positive().default(2),

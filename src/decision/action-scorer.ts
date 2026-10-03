@@ -26,7 +26,7 @@ export interface ScoringMission {
   weights: ScoringWeights;
   maxStatesPerRoute: number;
   queryParamMode: QueryParamMode;
-  /** Contrôles semblables (même genre, même libellé une fois les nombres masqués) essayés au plus ce nombre de fois par état. */
+  /** Contrôles pareils (même genre, même libellé une fois les nombres masqués) essayés au plus ce nombre de fois par état. */
   maxSimilarActions?: number;
   /** `stateId::actionId` déjà connus par la baseline (mode explore). */
   knownActions?: ReadonlySet<string>;

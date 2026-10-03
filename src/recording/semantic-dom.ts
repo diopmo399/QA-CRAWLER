@@ -341,7 +341,7 @@ export function dropMembershipExpression(spec: {
   ].join('\n');
 }
 
-/** Ce qui DISTINGUE un élément de ses semblables (jamais une valeur saisie, jamais le texte d'une ligne). */
+/** Ce qui DISTINGUE un élément de ses pareils (jamais une valeur saisie, jamais le texte d'une ligne). */
 export interface ElementTraits {
   id?: string;
   name?: string;

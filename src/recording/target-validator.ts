@@ -56,7 +56,7 @@ export interface TargetIdentity {
   name?: string;
   testId?: string;
   section?: string;
-  /** Ce qui le distingue de ses semblables (attributs stables, texte voisin, focus, fenêtre). */
+  /** Ce qui le distingue de ses pareils (attributs stables, texte voisin, focus, fenêtre). */
   traits?: ElementTraits;
 }
 
@@ -873,7 +873,7 @@ export class RecordingTargetValidator {
       target.section !== section
     )
       options.push({ ...target, section });
-    // L'ATTRIBUT STABLE qui distingue l'original de ses semblables (formControlName, name, id,
+    // L'ATTRIBUT STABLE qui distingue l'original de ses pareils (formControlName, name, id,
     // placeholder) : une représentation précise, jamais une position.
     const own = originalIdentity?.traits;
     const others = (check.candidates ?? []).filter((entry) => !entry.original).map((entry) => entry.traits);
