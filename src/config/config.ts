@@ -1411,6 +1411,25 @@ const replaySchema = z
       .strict()
       .default({}),
     /**
+     * RÉSOLUTION FONCTIONNELLE DE CIBLE : un TARGET_FINGERPRINT_MISMATCH n'est plus terminal. Les
+     * candidats de l'écran sont comparés par leur FONCTION dans le contexte du parcours (section,
+     * fenêtre, choix précédents, action suivante, localisateur enregistré comme simple preuve) ;
+     * ambigu → le conseiller (ai.*) si actif ; l'effet observé au runtime tranche toujours.
+     */
+    functionalTargetResolution: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Score minimal du meilleur candidat (0..1). */
+        minScore: z.number().min(0).max(1).default(0.6),
+        /** Écart minimal avec le deuxième : sinon AMBIGUOUS (jamais le premier par hasard). */
+        ambiguityMargin: z.number().min(0).max(1).default(0.15),
+        maxCandidates: z.number().int().min(2).max(40).default(12),
+        /** Une saisie résolue fonctionnellement doit être PROUVÉE par la valeur lue ensuite. */
+        verifyFillValue: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+    /**
      * WORKFLOW SELF-HEALING : quand une action n'est plus rejouable telle quelle, comprendre
      * POURQUOI (DivergenceAnalyzer), ce qu'elle devait accomplir (objectif fonctionnel, déduit
      * des effets appris et des étapes suivantes), et l'atteindre par un chemin SÛR, vérifié au

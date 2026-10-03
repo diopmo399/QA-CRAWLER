@@ -79,13 +79,17 @@ describe('Recording target self-validation (real browser)', () => {
       actions: ValidationEntry[];
       replayConfidence: string;
     };
-  const replay = async (yaml: string, testData: string | undefined): Promise<FlowRunReport> => {
+  const replay = async (
+    yaml: string,
+    testData: string | undefined,
+    functional = true,
+  ): Promise<FlowRunReport> => {
     const { config } = parseConfig(
       `mission: { name: replay-filter }
 target: { baseUrl: ${app.url}, startAt: "/" }
 exploration: { autonomous: false, actionTimeoutMs: 2000, settleTimeMs: 100 }
 report: { failOnSeverity: NONE }
-replay: { intelligentRecovery: { enabled: false } }
+replay: { intelligentRecovery: { enabled: false }, functionalTargetResolution: { enabled: ${String(functional)} } }
 output: { reportsDir: ${await mkdtemp(path.join(dir, 'replay-'))} }
 flows:
   - ${JSON.stringify({ ...(parseYaml(yaml) as object), startAt: '/', ...(testData ? { testData } : {}) })}
@@ -135,8 +139,7 @@ flows:
     const after = await replay(yaml, path.join(outcome.directory, 'test-data.yaml'));
     expect(after.status, describeFlow(after)).toBe('PASSED');
     // BEFORE : la représentation d'origine (rôle faux) échouait au rejeu.
-    const before = await replay(
-      `name: Filter requests (before)
+    const BEFORE = `name: Filter requests (before)
 steps:
   - click: { role: button, name: Filter }
   - select: { label: Field, option: Company name }
@@ -144,10 +147,16 @@ steps:
   - fill: { css: "#valueInput", value: alpha }
     fingerprint: { role: combobox, tag: input }
   - click: { role: button, name: Apply }
-`,
-      undefined,
-    );
+`;
+    // Sans résolution fonctionnelle, la représentation d'origine (rôle faux) échouait au rejeu.
+    const before = await replay(BEFORE, undefined, false);
     expect(describeFlow(before)).toMatch(/TARGET_FINGERPRINT_MISMATCH/);
+    // Avec elle : le même champ, dans le même contexte, retrouvé puis PROUVÉ par la valeur tenue.
+    const recovered = await replay(BEFORE, undefined);
+    const fill = recovered.steps.find((step) => step.description.includes('#valueInput'));
+    expect(fill?.status, describeFlow(recovered)).toBe('PASSED');
+    expect(fill?.targetResolution?.runtime.fingerprintVerdict).toBe('MISMATCH');
+    expect(fill?.targetResolution?.runtimeVerification?.status).toBe('CONFIRMED');
   }, 180_000);
 
   it('RECORDING ≠ RECOVERY: the value field is re-rendered after the fill — target VALIDATED_PRE_ACTION (post-state kept as evidence only), effect CONFIRMED, goal REACHED; the replay passes without any recovery', async () => {

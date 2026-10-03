@@ -291,3 +291,112 @@ QA-Crawler n'invente jamais SAFE.
   - le prédicat de champ par localisateur ;
   - l'élément illisible.
 - `tests/integration/functional-goal-recovery.test.ts` (navigateur réel) reproduit un panneau de filtre dont le champ valeur (`#valueInput`, sans nom) est passé dans une section repliée. Il est récupéré en l'ouvrant, vérifié par son localisateur, sans essayer de bouton sans rapport.
+
+## Résolution fonctionnelle de cible : la même fonction, pas le même nœud
+
+**Le problème.** Un composant dynamique (Angular, Material) peut RECRÉER un champ après un choix :
+le localisateur `#valueInput` trouve toujours un élément, mais c'est un nouveau nœud DOM, avec un
+autre `mat-label`, un autre parent ou un autre rôle lu. Avant, l'empreinte ne correspondait plus →
+`TARGET_FINGERPRINT_MISMATCH` → l'étape échouait et la suite était ignorée.
+
+**Désormais** (`replay.functionalTargetResolution`), un mismatch n'est plus terminal. La chaîne est
+la suivante (`src/flows/functional-target.ts`, branchée dans `runFlowElementStep` avant la
+divergence) :
+
+1. **Identité fonctionnelle**. Elle est déduite de la cible enregistrée :
+   - rôle sémantique (`FILTER_VALUE`) et concept métier (`filter.value`) ;
+   - section, fenêtre ;
+   - choix faits juste avant dans la même section (`Field = Company name`, `Operator = Like`).
+2. **Contexte temporel** :
+   - actions précédentes, avec option et résultat ;
+   - action courante et actions suivantes (le texte d'un `expect` n'est jamais repris) ;
+   - phase (`FILTER_CONFIGURATION`) ;
+   - préconditions (`FIELD_SELECTED`, `OPERATOR_SELECTED`, `VALUE_INPUT_AVAILABLE`) ;
+   - effets observés.
+3. **Découverte des candidats**. Ce sont les éléments compatibles avec l'action, décrits par leur
+   voisinage :
+   - libellé, section, fenêtre ;
+   - parent (`mat-form-field`), contrôle précédent (« operator: Like »), contrôle suivant
+     (« button: Apply ») ;
+   - attributs stables, et si le localisateur enregistré les désigne.
+
+   Jamais le DOM complet. L'écran est résumé à part (`ScreenSemanticContext` : fenêtre, choix
+   affichés, contrôles et actions visibles).
+
+4. **Score expliqué**. Chaque preuve dit ce qu'elle apporte :
+
+   | Preuve                                      | Poids                     |
+   | ------------------------------------------- | ------------------------- |
+   | libellé                                     | 0,25                      |
+   | section                                     | 0,20                      |
+   | contrôle précédent portant le dernier choix | 0,15                      |
+   | localisateur enregistré                     | 0,15                      |
+   | rôle                                        | 0,10                      |
+   | concept métier nommé par le libellé         | 0,10                      |
+   | action suivante juste après                 | 0,10                      |
+   | fenêtre                                     | 0,05 (−0,15 hors fenêtre) |
+
+   Écartés avant tout score : un élément invisible, désactivé, non éditable pour une saisie, ou
+   d'une **autre section**. Ce n'est jamais une « récupération » : ce serait masquer une régression.
+
+5. **Décision**. Un candidat ≥ `minScore` (0,6), nettement devant le deuxième (`ambiguityMargin`
+   0,15). Deux candidats proches → `TARGET_AMBIGUOUS`, jamais le premier par hasard.
+6. **Re-rendu**. Si le localisateur enregistré désigne l'élément équivalent, que l'empreinte a changé
+   juste après une action causale (un choix dans la même section), le statut est
+   `TARGET_RERENDERED`.
+7. **Conseiller**, seulement si l'ambiguïté persiste. Il suit le mode de `ai.mode` :
+
+   | Mode     | Comportement                                                                                          |
+   | -------- | ----------------------------------------------------------------------------------------------------- |
+   | `OFF`    | aucun appel                                                                                           |
+   | `ASSIST` | proposition consignée (`RECORDED_ONLY`), décision inchangée                                           |
+   | `HYBRID` | proposition validée (identifiant fourni, visible, actionnable, contexte, SafetyPolicy), puis exécutée |
+
+   La requête est la `TargetResolutionIntelligenceRequest`. Il ne répond qu'avec un identifiant
+   fourni : un candidat inventé est rejeté, rien n'est exécuté.
+
+8. **Preuve runtime**. Une saisie est relue : la valeur doit être tenue par le champ (casse, espaces
+   et masques tolérés). Sinon `ACTION_EFFECT_NOT_CONFIRMED` **sur cette étape** : on échoue à la
+   première divergence fonctionnelle, pas à « Apply ». Une proposition du conseiller est alors
+   contredite (`AI_RUNTIME_CONTRADICTED`). L'action suivante encore disponible renforce la preuve.
+9. **Connaissance**. Une résolution confirmée devient une connaissance _candidate_
+   (représentations connues, sensible au re-rendu), jamais `globallyTrusted`.
+
+Statuts :
+
+- `TARGET_EXACT`, `TARGET_STRONG_MATCH` ;
+- `TARGET_RERENDERED`, `TARGET_FUNCTIONALLY_EQUIVALENT`, `TARGET_HEALED`, `TARGET_AI_ASSISTED` ;
+- `TARGET_AMBIGUOUS`, `TARGET_CONTEXT_MISMATCH`, `TARGET_FUNCTIONAL_MISMATCH` ;
+- `TARGET_REQUIRES_REPLAY_VALIDATION`.
+
+Le résultat runtime est dans `runtimeVerification` (`CONFIRMED` / `REJECTED`) et `final`
+(`TARGET_RECOVERED_AND_CONFIRMED`, `TARGET_RECOVERY_REJECTED`, `TARGET_UNRESOLVED`).
+
+Événements :
+
+- `TARGET_RESOLUTION` (la trace complète), `TARGET_RERENDERED` ;
+- `AI_TARGET_RESOLUTION_REQUEST`, `AI_TARGET_RESOLUTION_PROPOSAL` ;
+- `AI_PROPOSAL_RUNTIME_VALIDATED`, `AI_PROPOSAL_RUNTIME_REJECTED`.
+
+Rapport HTML : un bloc **Target resolution** par étape concernée, avec :
+
+- cible enregistrée / runtime, empreinte ;
+- identité fonctionnelle, re-rendu ;
+- actions précédente, courante et suivante, préconditions ;
+- candidats et scores, conseiller, décision, effet runtime, statut final ;
+- badges `RERENDERED`, `FUNCTIONALLY_EQUIVALENT`, `HEALED`, `AI_ASSISTED`, `AMBIGUOUS`,
+  `RUNTIME_CONFIRMED`, `RUNTIME_REJECTED`.
+
+```yaml
+replay:
+  functionalTargetResolution:
+    enabled: true
+    minScore: 0.6 # score minimal du meilleur candidat
+    ambiguityMargin: 0.15 # écart minimal avec le deuxième (sinon AMBIGUOUS)
+    maxCandidates: 12
+    verifyFillValue: true # une saisie est prouvée par la valeur relue
+```
+
+Ce que la validation pendant l'enregistrement fait déjà, sans ce module : l'élément humain original
+reste la vérité. Elle s'appuie sur le nœud original, l'instantané et les candidats pré-action (voir
+HUMAN_FLOW_RECORDER.md), et ne rejoue jamais rien.
