@@ -27,6 +27,11 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
   <ul id="selected" aria-label="Selected columns"><li id="col-name">Name</li></ul></section>
 <button type="button" id="apply">Apply</button>
 <button type="button" id="gone" hidden>Continue</button>
+<div class="mat-mdc-form-field"><label id="tasks-label">My tasks</label><input id="tasksSearch" aria-labelledby="tasks-label"></div>
+<div role="combobox" id="attribute" tabindex="0"><span class="placeholder">Select an attribute</span></div>
+<div hidden><input class="dup"></div><div role="dialog" aria-label="Filter"><input class="dup"></div>
+<div hidden><input class="dup2"></div><div><input class="dup2"></div>
+<span hidden>Process request</span><span hidden>Process request</span><div class="tile" onclick="void 0">Process request</div>
 <p>Applied <span id="count">0</span></p>
 </main><script>
   let count = 0;
@@ -315,5 +320,99 @@ describe('RecordingTargetValidator (real browser, dry lookup)', () => {
     expect(result?.status).toBe('NOT_VALIDATABLE');
     expect(result?.validationBefore.reason).toMatch(/TARGET_HIDDEN_BY_ACTION/);
     expect(result?.targetAfter).toBeUndefined();
+  });
+
+  it('a Material field labelled through aria-labelledby: the replay reader reads the same label — VALIDATED, no false REPLAY_FINGERPRINT_CHECK_WOULD_FAIL', async () => {
+    const result = await validator().validate(
+      page,
+      change(element({ label: 'My tasks', name: 'My tasks', css: '#tasksSearch', cssStable: true })),
+      '#tasksSearch',
+    );
+    expect(result?.validationBefore.reason).not.toMatch(/REPLAY_FINGERPRINT_CHECK_WOULD_FAIL/);
+    expect(result?.status).toBe('VALIDATED');
+  });
+
+  it('a custom list (mat-select) clicked by its placeholder text: the text inside the control is the same control — VALIDATED', async () => {
+    const result = await validator().validate(
+      page,
+      {
+        id: 'r4',
+        sequence: 4,
+        type: 'click',
+        at: 0,
+        url: 'http://app.test/',
+        element: element({
+          tag: 'div',
+          role: 'combobox',
+          name: 'Select an attribute',
+          text: 'Select an attribute',
+          css: '#attribute',
+          cssStable: true,
+        }),
+      },
+      '#attribute',
+    );
+    expect(result?.validationBefore.reason).not.toMatch(/RESOLVED_OTHER_ELEMENT/);
+    expect(result?.status).toBe('VALIDATED');
+  });
+
+  it('a field typed in several input events is validated once (same result reused)', async () => {
+    const v = validator();
+    const event = change(
+      element({ label: 'My tasks', name: 'My tasks', css: '#tasksSearch', cssStable: true }),
+    );
+    const [first, second] = await Promise.all([
+      v.validate(page, { ...event, id: 'r10', type: 'input' }, '#tasksSearch'),
+      v.validate(page, { ...event, id: 'r11', type: 'input' }, '#tasksSearch'),
+    ]);
+    expect(first?.status).toBe('VALIDATED');
+    expect(second?.rawEventId).toBe('r11');
+    expect(second?.log).toEqual([]);
+  });
+
+  it('the same id twice (a hidden template + the open panel): the replay picks the visible one in the dialog — VALIDATED, not AMBIGUOUS', async () => {
+    const result = await validator().validate(
+      page,
+      change(element({ css: '.dup', cssStable: true })),
+      '[role="dialog"] .dup',
+    );
+    expect(result?.validationBefore.status).not.toBe('AMBIGUOUS');
+    expect(result?.status).toBe('VALIDATED');
+  });
+
+  it('a hidden copy first: the replay would pick it — repaired to the visible element (never a position), then revalidated', async () => {
+    const result = await validator().validate(
+      page,
+      change(element({ css: '.dup2', cssStable: true })),
+      'div:not([hidden]) > .dup2',
+    );
+    expect(result?.validationBefore.status).toBe('AMBIGUOUS');
+    expect(result?.status).toBe('VALIDATED');
+    expect(result?.targetAfter).toEqual({ strategy: 'css', value: '.dup2 >> visible=true' });
+  });
+
+  it('a text also present in hidden copies: repaired to the visible text, revalidated', async () => {
+    const result = await validator().validate(
+      page,
+      {
+        id: 'r5',
+        sequence: 5,
+        type: 'click',
+        at: 0,
+        url: 'http://app.test/',
+        element: element({
+          tag: 'div',
+          role: '',
+          name: 'Process request',
+          text: 'Process request',
+          css: '.tile',
+          cssStable: true,
+        }),
+      },
+      '.tile',
+    );
+    expect(result?.validationBefore.status).toBe('AMBIGUOUS');
+    expect(result?.status).toBe('VALIDATED');
+    expect(result?.targetAfter).toEqual({ strategy: 'css', value: 'text="Process request" >> visible=true' });
   });
 });

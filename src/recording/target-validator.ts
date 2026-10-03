@@ -71,7 +71,7 @@ export interface TargetCheck {
   resolved?: TargetIdentity;
   differences: TargetDifference[];
   /** AMBIGUOUS : les candidats (identité, et lequel est l'original). */
-  candidates?: (TargetIdentity & { index: number; original: boolean })[];
+  candidates?: (TargetIdentity & { index: number; original: boolean; visible?: boolean })[];
 }
 
 export interface TargetRepair {
@@ -167,13 +167,27 @@ export interface TargetValidatorOptions {
 
 export class RecordingTargetValidator {
   private tokens = 0;
+  private lastField: { key: string; result: RecordingTargetValidation } | undefined;
   /** Les dernières actions comprises (contexte : un champ « valeur » après « champ » et « opérateur »). */
   private readonly previous: string[] = [];
 
   constructor(private readonly options: TargetValidatorOptions) {}
 
   /** Valide la cible d'un événement humain. Ne lève jamais : une validation impossible n'arrête pas l'enregistrement. */
-  async validate(
+  /** Une validation à la fois, dans l'ordre des actions humaines (le contexte précédent compte). */
+  validate(
+    page: Page,
+    event: RawRecordedEvent,
+    ref: string | undefined,
+  ): Promise<RecordingTargetValidation | undefined> {
+    const next = this.queue.then(() => this.validateNow(page, event, ref));
+    this.queue = next.catch(() => undefined);
+    return next;
+  }
+
+  private queue: Promise<unknown> = Promise.resolve();
+
+  private async validateNow(
     page: Page,
     event: RawRecordedEvent,
     ref: string | undefined,
@@ -183,7 +197,13 @@ export class RecordingTargetValidator {
       const candidate = candidateTargetOf(event);
       const element = event.element;
       if (!candidate || !element) return undefined;
+      // Une saisie arrive en plusieurs événements (frappe, pause) : la même cible n'est validée qu'une fois.
+      const key = `${element.css}|${JSON.stringify(candidate.target)}`;
+      if ((event.type === 'input' || event.type === 'change') && this.lastField?.key === key)
+        return { ...this.lastField.result, rawEventId: event.id, log: [] };
       const result = await this.validateTarget(page, event, element, candidate, ref);
+      if (event.type === 'input' || event.type === 'change') this.lastField = { key, result };
+      else this.lastField = undefined;
       this.remember(event, element);
       return result;
     } catch (error) {
@@ -622,7 +642,15 @@ export class RecordingTargetValidator {
         };
       const locator = page.locator(`[data-qa-crawler-target="${token}"]`).first();
       const sameElement = original
-        ? await locator.evaluate((el, orig) => el === orig, original).catch(() => false)
+        ? await locator
+            .evaluate((el, orig) => {
+              if (el === orig) return true;
+              const INTERACTIVE =
+                'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="combobox"], [role="checkbox"], [role="radio"], [role="switch"], [contenteditable]:not([contenteditable="false"])';
+              // Le texte d'un contrôle (le libellé dans un mat-select) : le rejeu agit sur le contrôle englobant.
+              return orig.contains(el) && el.closest(INTERACTIVE) === orig;
+            }, original)
+            .catch(() => false)
         : undefined;
       const observed = await readTarget(locator);
       await locator
@@ -643,16 +671,52 @@ export class RecordingTargetValidator {
     if (count === 0) return { count };
     const matches = original
       ? await base
-          .evaluateAll((els, orig) => els.slice(0, 20).map((el) => el === orig), original)
+          .evaluateAll((els, orig) => {
+            const INTERACTIVE =
+              'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="combobox"], [role="checkbox"], [role="radio"], [role="switch"], [contenteditable]:not([contenteditable="false"])';
+            return els
+              .slice(0, 20)
+              .map((el) => el === orig || (orig.contains(el) && el.closest(INTERACTIVE) === orig));
+          }, original)
           .catch(() => [] as boolean[])
       : [];
     if (target.nth === undefined && count > 1) {
-      const candidates: (TargetIdentity & { index: number; original: boolean })[] = [];
+      // LE CHOIX DU REJEU, simulé : l'élément visible de la fenêtre ouverte d'abord, sinon le premier.
+      // Sans équivoque (un seul candidat visible, un seul dans la fenêtre) : ce n'est pas une ambiguïté.
+      const info = await base
+        .evaluateAll((els) => {
+          const MODAL =
+            '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], .cdk-overlay-pane';
+          return els.slice(0, 20).map((el) => {
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            const boxed = rect.width > 0 || rect.height > 0;
+            return {
+              visible: boxed && style.visibility !== 'hidden' && style.display !== 'none',
+              modal: boxed && el.closest(MODAL) !== null,
+            };
+          });
+        })
+        .catch(() => [] as { visible: boolean; modal: boolean }[]);
+      const modals = info.filter((entry) => entry.modal).length;
+      const visibles = info.filter((entry) => entry.visible).length;
+      const pick = modals > 0 ? info.findIndex((entry) => entry.modal) : 0;
+      if (info[pick]?.visible && (modals > 0 ? modals === 1 : visibles === 1)) {
+        const chosen = base.nth(pick);
+        return {
+          count,
+          chosen: pick,
+          ...(original ? { sameElement: matches[pick] === true } : {}),
+          observed: await readTarget(chosen),
+        };
+      }
+      const candidates: (TargetIdentity & { index: number; original: boolean; visible?: boolean })[] = [];
       for (let index = 0; index < Math.min(count, 6); index += 1)
         candidates.push({
           index,
           ...identityOf(await readTarget(base.nth(index))),
           original: matches[index] === true,
+          visible: info[index]?.visible === true,
         });
       return { count, candidates };
     }
@@ -721,12 +785,63 @@ export class RecordingTargetValidator {
         repair: { type: 'DETERMINISTIC', reason: reasonOf, changes, evidence: ['runtime-original-target'] },
       };
     }
+    // 1 bis. Le bon élément, mais le contrôle d'empreinte du rejeu échouerait (un nom que le rejeu
+    // ne lit pas) : l'empreinte dit ce que le rejeu lira — jamais une autre cible.
+    if (
+      (check.sameElement || check.sameIdentity) &&
+      check.reason.startsWith('REPLAY_FINGERPRINT_CHECK_WOULD_FAIL') &&
+      fingerprint &&
+      truth
+    ) {
+      const next: TargetFingerprint = { ...fingerprint, ...identityPatch(truth) };
+      const changes: TargetRepair['changes'] = [];
+      const name = truth.name ?? truth.text;
+      if (name && name !== fingerprint.name) {
+        next.name = name;
+        changes.push({
+          property: 'name',
+          ...(fingerprint.name ? { before: fingerprint.name } : {}),
+          after: name,
+        });
+      } else if (!name && fingerprint.name) {
+        delete next.name;
+        delete next.text;
+        changes.push({
+          property: 'name',
+          before: fingerprint.name,
+          after: '(not readable at replay: label, section and role identify it)',
+        });
+      }
+      if (changes.length === 0) return undefined;
+      return {
+        target,
+        fingerprint: next,
+        repair: {
+          type: 'DETERMINISTIC',
+          reason: 'RECORDED_NAME_NOT_READABLE_AT_REPLAY',
+          changes,
+          evidence: ['runtime-original-target'],
+        },
+      };
+    }
+    // Le bon élément : seule l'empreinte pouvait être corrigée ; jamais une autre cible à sa place.
+    if (check.sameElement || check.sameIdentity) return undefined;
     // 2. Un autre élément, aucun, ou plusieurs : une représentation SÉMANTIQUE plus précise.
     // La section VRAIE est celle de l'élément original (lue comme au rejeu), pas celle de l'instantané.
     const section =
       truth?.section ??
       (element.sectionPath && element.sectionPath.length > 0 ? element.sectionPath.join(' > ') : undefined);
     const options: FlowTarget[] = [];
+    // Des copies cachées (gabarit, panneau fermé) : la cible restreinte aux éléments VISIBLES,
+    // quand l'original est le seul visible — jamais une position.
+    const onlyVisibleIsOriginal =
+      check.candidates !== undefined &&
+      check.candidates.filter((candidate) => candidate.visible).length === 1 &&
+      check.candidates.some((candidate) => candidate.visible && candidate.original);
+    if (onlyVisibleIsOriginal && target.strategy === 'css' && !target.value?.includes('visible=true'))
+      options.push({ ...target, value: `${target.value ?? ''} >> visible=true` });
+    if (onlyVisibleIsOriginal && target.strategy === 'text')
+      options.push({ strategy: 'css', value: `text=${JSON.stringify(target.value ?? '')} >> visible=true` });
     if (
       section &&
       (target.strategy === 'label' || target.strategy === 'role' || target.strategy === 'text') &&
@@ -890,7 +1005,15 @@ export class RecordingTargetValidator {
       if (result.status === 'AMBIGUOUS') return 'AMBIGUOUS';
       const locator = page.locator(`[data-qa-crawler-target="${spec.token}"]`).first();
       const same = original
-        ? await locator.evaluate((el, orig) => el === orig, original).catch(() => false)
+        ? await locator
+            .evaluate((el, orig) => {
+              if (el === orig) return true;
+              const INTERACTIVE =
+                'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="combobox"], [role="checkbox"], [role="radio"], [role="switch"], [contenteditable]:not([contenteditable="false"])';
+              // Le texte d'un contrôle (le libellé dans un mat-select) : le rejeu agit sur le contrôle englobant.
+              return orig.contains(el) && el.closest(INTERACTIVE) === orig;
+            }, original)
+            .catch(() => false)
         : undefined;
       await locator
         .evaluate((el) => {

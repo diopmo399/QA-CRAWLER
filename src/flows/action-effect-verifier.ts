@@ -359,10 +359,38 @@ export async function readTarget(target: Locator | ElementHandle, page?: Page): 
                 ? 'radio'
                 : 'textbox'
           : implicit[tag]);
-      const field = ['input', 'select', 'textarea'].includes(tag);
-      const label = field && input.labels && input.labels.length > 0 ? clean(input.labels[0]?.innerText) : '';
-      const text = field ? '' : clean((el as HTMLElement).innerText || el.textContent);
-      const name = clean(el.getAttribute('aria-label')) || label || text || clean(el.getAttribute('title'));
+      const field =
+        ['input', 'select', 'textarea'].includes(tag) || ['textbox', 'combobox'].includes(role ?? '');
+      // Le libellé d'un champ comme la capture le lit : aria-labelledby, <label> (sans les contrôles
+      // qu'il contient), le libellé d'un mat-form-field — sinon le rejeu croirait le nom « vide ».
+      const labelText = (node: Element | null | undefined): string => {
+        if (!node) return '';
+        const copy = node.cloneNode(true) as Element;
+        for (const control of Array.from(copy.querySelectorAll('select, textarea, input, option')))
+          control.remove();
+        return clean(copy.textContent).replace(/[*:\s]+$/, '');
+      };
+      const labelledBy = (el.getAttribute('aria-labelledby') ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => labelText(document.getElementById(id)))
+        .join(' ')
+        .trim();
+      const label = field
+        ? labelledBy ||
+          labelText(input.labels?.[0]) ||
+          labelText(el.closest('label')) ||
+          labelText(el.closest('mat-form-field, .mat-mdc-form-field')?.querySelector('mat-label, label'))
+        : '';
+      // Un champ natif n'a pas de texte (jamais sa valeur) ; une liste maison (mat-select) garde le sien.
+      const native = ['input', 'select', 'textarea'].includes(tag);
+      const text = native ? '' : clean((el as HTMLElement).innerText || el.textContent);
+      const name =
+        clean(el.getAttribute('aria-label')) ||
+        label ||
+        text ||
+        clean(el.getAttribute('title')) ||
+        (field ? clean(el.getAttribute('placeholder')) : '');
       const testId = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy']
         .map((attribute) => el.getAttribute(attribute))
         .find((value) => value);

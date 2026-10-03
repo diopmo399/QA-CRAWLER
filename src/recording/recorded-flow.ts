@@ -180,8 +180,11 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
       : {};
   const common = { allow: allowOf(action), optional: false, ...effects, ...fingerprint };
   const label = labelOf(action);
-  // Un élément sans nom (« input ») : son sélecteur, jamais une intention vide de sens.
-  const named = action.target?.named === true;
+  // Un élément sans nom (« input ») : son sélecteur, jamais une intention vide de sens. Une cible
+  // RÉPARÉE et revalidée pendant l'enregistrement reste une étape exécutable (prouvée sur l'élément).
+  const proven =
+    action.targetValidation?.repairApplied === true && !action.targetValidation.requiresReplayValidation;
+  const named = action.target?.named === true && !proven;
   switch (action.type) {
     case 'CLICK':
     case 'SUBMIT': {
