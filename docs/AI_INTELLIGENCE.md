@@ -741,17 +741,17 @@ L'information était perdue à la fin de ce chemin, dans les compteurs de l'audi
 
 Chaque décision porte un `lifecycle` (voir `src/ai/decision-lifecycle.ts`). Ses dimensions sont séparées :
 
-| Dimension | Valeurs |
-|---|---|
-| `response` | `PROPOSAL`, `INCONCLUSIVE`, `NEED_MORE_EVIDENCE`, `INVALID_RESPONSE`, `TIMEOUT`, `ERROR`, et sans appel : `UNAVAILABLE`, `BUDGET_EXHAUSTED`, `NO_LLM_REQUIRED` |
-| `terminal` | exactement une issue : `ACCEPTED`, `SHADOW_ONLY`, `SAFETY_REJECTED`, `VALIDATION_REJECTED`, `PROPOSAL`, `INCONCLUSIVE`… |
-| `proposalValid` / `acceptedForExecution` | jamais confondus (en ASSIST : valide, mais jamais retenue pour exécution) |
-| `shadowResult` (ASSIST) | `AGREEMENT`, `DISAGREEMENT`, `AI_INCONCLUSIVE`, `DETERMINISTIC_ONLY`, `AI_ONLY_CANDIDATE` |
-| `fallbackReason` | `AI_INCONCLUSIVE`, `AI_NEED_MORE_EVIDENCE`, `AI_TIMEOUT`, `AI_UNAVAILABLE`, `AI_ERROR`, `INVALID_PROPOSAL`, `UNKNOWN_ACTION`, `INVALID_EVIDENCE`, `SAFETY_BLOCKED`, `BUDGET_EXHAUSTED`, `MODEL_UNAVAILABLE`, `LOW_AI_CONFIDENCE`, `DETERMINISTIC_PRIORITY`, `NO_USEFUL_PROPOSAL` |
-| `notExecutedReason` | `ASSIST_MODE`, `ADVISORY_ONLY`, `SAFETY_BLOCKED`, `DETERMINISTIC_PRIORITY`… |
-| `runtime` | `CONFIRMED`, `CONTRADICTED`, `NOT_APPLICABLE`, `PENDING` |
-| `knowledge` | `AI_PROPOSED_HYPOTHESIS`, `RUNTIME_SUPPORTED`, `RUNTIME_CONTRADICTED` |
-| `goalProgress` | avancement de l'objectif avant → après l'action proposée |
+| Dimension                                | Valeurs                                                                                                                                                                                                                                                                          |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `response`                               | `PROPOSAL`, `INCONCLUSIVE`, `NEED_MORE_EVIDENCE`, `INVALID_RESPONSE`, `TIMEOUT`, `ERROR`, et sans appel : `UNAVAILABLE`, `BUDGET_EXHAUSTED`, `NO_LLM_REQUIRED`                                                                                                                   |
+| `terminal`                               | exactement une issue : `ACCEPTED`, `SHADOW_ONLY`, `SAFETY_REJECTED`, `VALIDATION_REJECTED`, `PROPOSAL`, `INCONCLUSIVE`…                                                                                                                                                          |
+| `proposalValid` / `acceptedForExecution` | jamais confondus (en ASSIST : valide, mais jamais retenue pour exécution)                                                                                                                                                                                                        |
+| `shadowResult` (ASSIST)                  | `AGREEMENT`, `DISAGREEMENT`, `AI_INCONCLUSIVE`, `DETERMINISTIC_ONLY`, `AI_ONLY_CANDIDATE`                                                                                                                                                                                        |
+| `fallbackReason`                         | `AI_INCONCLUSIVE`, `AI_NEED_MORE_EVIDENCE`, `AI_TIMEOUT`, `AI_UNAVAILABLE`, `AI_ERROR`, `INVALID_PROPOSAL`, `UNKNOWN_ACTION`, `INVALID_EVIDENCE`, `SAFETY_BLOCKED`, `BUDGET_EXHAUSTED`, `MODEL_UNAVAILABLE`, `LOW_AI_CONFIDENCE`, `DETERMINISTIC_PRIORITY`, `NO_USEFUL_PROPOSAL` |
+| `notExecutedReason`                      | `ASSIST_MODE`, `ADVISORY_ONLY`, `SAFETY_BLOCKED`, `DETERMINISTIC_PRIORITY`…                                                                                                                                                                                                      |
+| `runtime`                                | `CONFIRMED`, `CONTRADICTED`, `NOT_APPLICABLE`, `PENDING`                                                                                                                                                                                                                         |
+| `knowledge`                              | `AI_PROPOSED_HYPOTHESIS`, `RUNTIME_SUPPORTED`, `RUNTIME_CONTRADICTED`                                                                                                                                                                                                            |
+| `goalProgress`                           | avancement de l'objectif avant → après l'action proposée                                                                                                                                                                                                                         |
 
 **ASSIST n'est pas un repli.** Un repli signifie qu'un chemin IA attendu n'a pas pu servir. Une proposition valide en ASSIST est `SHADOW_ONLY`, avec `notExecutedReason=ASSIST_MODE`.
 
@@ -874,6 +874,7 @@ Selon le mode :
   - `runtimeVerification` et `knowledgeImpact`.
 
   Le fichier est nettoyé : aucun secret, jeton, mot de passe, en-tête `Authorization` ni cookie.
+
 - **La section « AI decisions — lifecycle » du rapport.** Elle détaille :
   - les appels par déclencheur ;
   - les réponses ;
@@ -890,9 +891,9 @@ Selon le mode :
 ```yaml
 ai:
   triggers:
-    unknownBlockingPrecondition: true   # objectif bloqué, cause inconnue
-    hypothesisAnalysis: true            # hypothèse contredite sans alternative
-    recordingEnrichment: true           # enrichissement après un enregistrement
+    unknownBlockingPrecondition: true # objectif bloqué, cause inconnue
+    hypothesisAnalysis: true # hypothèse contredite sans alternative
+    recordingEnrichment: true # enrichissement après un enregistrement
 ```
 
 ### Tests
