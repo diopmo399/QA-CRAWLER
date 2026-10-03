@@ -90,7 +90,7 @@ const explorationSchema = z
     maxStatesPerRoute: z.number().int().positive().default(3),
     queryParams: queryParamsSchema.default({}),
     /**
-     * Les contrôles semblables d'un écran (jours d'un calendrier, numéros de page,
+     * Les contrôles pareils d'un écran (jours d'un calendrier, numéros de page,
      * « Voir » sur chaque ligne…) sont essayés au plus ce nombre de fois, pas un par un.
      */
     maxSimilarActions: z.number().int().positive().default(2),
@@ -1254,6 +1254,20 @@ const recordingSchema = z
      *   SUSPICIOUS_ONLY  seulement les actions qui déclenchent un des `triggers` ;
      *   FULL             toutes les actions (bornées par maxCalls) ; OFF : aucune.
      */
+    /**
+     * AUTO-VALIDATION DE LA CIBLE pendant l'enregistrement : juste après chaque action, la
+     * représentation construite (localisateur + empreinte) est résolue À SEC et comparée à
+     * l'élément réellement utilisé — jamais rejouée. Réparée si besoin (bornée), puis revalidée.
+     */
+    targetValidation: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxDeterministicRepairAttempts: z.number().int().min(0).max(5).default(2),
+        /** Le conseiller (ai.*, recording.intelligenceAudit) audite ce que le déterministe ne règle pas. */
+        aiAudit: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
     intelligenceAudit: z
       .object({
         enabled: z.boolean().default(true),

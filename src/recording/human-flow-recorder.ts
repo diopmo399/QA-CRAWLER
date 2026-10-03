@@ -12,6 +12,7 @@ import { sensitivityOf } from '../policies/sensitive-fields.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import { captureScript } from './capture-script.js';
 import { NON_INTERACTIVE_NOISE } from './human-journey.js';
+import type { RecordingTargetValidator } from './target-validator.js';
 import type {
   RawEventType,
   RawRecordedEvent,
@@ -51,6 +52,8 @@ export interface HumanFlowRecorderOptions {
   role?: string;
   /** Pour les tests : l'horloge. */
   now?: () => number;
+  /** AUTO-VALIDATION de la cible juste après chaque action (absente : désactivée). */
+  targetValidator?: RecordingTargetValidator;
 }
 
 /**
@@ -405,6 +408,15 @@ export class HumanFlowRecorder {
     }
     if (this.paused) return;
     const captured = this.capture({ ...event, at: event.at ?? this.now() });
+    // VALIDATION IMMÉDIATE : tant que l'élément original existe encore (jamais l'action rejouée).
+    const ref = isObject(payload) && typeof payload.ref === 'string' ? payload.ref.slice(0, 40) : undefined;
+    const validator = this.options.targetValidator;
+    if (captured && validator && page && !captured.noise && (captured.element || captured.drag))
+      this.track(
+        validator.validate(page, captured, ref).then((result) => {
+          if (result) captured.targetValidation = result;
+        }),
+      );
     // Le texte saisi (données de test) : hors de la trace brute, dans un coffre en mémoire.
     const typed = captured ? typedValueOf(payload, captured) : undefined;
     if (captured && typed !== undefined) this.typedValues.set(captured.id, typed);

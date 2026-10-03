@@ -24,7 +24,8 @@ import {
   rememberRecordingCandidates,
   type RecordingIntelligence,
 } from './recording-intelligence.js';
-import { auditRecordingSemantics, type SemanticAuditReport } from './semantic-audit.js';
+import { auditRecordingSemantics, targetAuditAdvisor, type SemanticAuditReport } from './semantic-audit.js';
+import { RecordingTargetValidator, type TargetValidationStatus } from './target-validator.js';
 
 export type RecordOutputFormat = 'yaml' | 'gherkin' | 'both';
 
@@ -96,7 +97,52 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       : {}),
     ...(env.QA_ROLE ? { role: env.QA_ROLE } : {}),
   };
-  const recorder = new HumanFlowRecorder({ name: request.name, config, onEvent, ...identity });
+  // UN SEUL gateway pour la session : validation des cibles, enrichissement, audit (jamais en OFF).
+  const mode = effectiveMode(config.ai);
+  const gateway =
+    mode !== 'OFF'
+      ? createIntelligenceGateway(config.ai, {
+          env,
+          ...(request.intelligenceProvider ? { provider: request.intelligenceProvider } : {}),
+          emit: (record) => {
+            log.log('INFO', record.event, record.message);
+          },
+        })
+      : undefined;
+  const validation = config.recording.targetValidation;
+  const audit = config.recording.intelligenceAudit;
+  // Les statuts qui méritent un audit (selon les déclencheurs de recording.intelligenceAudit).
+  const auditOn = new Set<TargetValidationStatus>(
+    !audit.enabled || audit.mode === 'OFF'
+      ? []
+      : [
+          ...(audit.triggers.ambiguousTarget ? (['AMBIGUOUS'] as const) : []),
+          ...(audit.triggers.contextMismatch ? (['CONTEXT_MISMATCH'] as const) : []),
+          ...(audit.triggers.lowSemanticConfidence
+            ? (['MISMATCH', 'SEMANTIC_MISMATCH', 'NOT_FOUND', 'STALE_BEFORE_VALIDATION'] as const)
+            : []),
+          ...(audit.triggers.fragileLocator ? (['VALIDATED_FRAGILE'] as const) : []),
+        ],
+  );
+  const targetValidator = validation.enabled
+    ? new RecordingTargetValidator({
+        maxDeterministicRepairAttempts: validation.maxDeterministicRepairAttempts,
+        auditOn,
+        ...(gateway && validation.aiAudit
+          ? { advisor: targetAuditAdvisor(gateway, { maxCalls: audit.maxCalls }) }
+          : {}),
+        log: (line) => {
+          onEvent({ type: 'TARGET_VALIDATION', at: new Date().toISOString(), message: line });
+        },
+      })
+    : undefined;
+  const recorder = new HumanFlowRecorder({
+    name: request.name,
+    config,
+    onEvent,
+    ...identity,
+    ...(targetValidator ? { targetValidator } : {}),
+  });
   const browser = new BrowserManager(config.browser);
   let stopReason: StopReason = 'api';
   let detach: (() => void) | undefined;
@@ -132,6 +178,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       at: new Date().toISOString(),
       message: error instanceof Error ? error.message : String(error),
     });
+    await gateway?.close();
     throw error;
   } finally {
     detach?.();
@@ -187,6 +234,37 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }),
   );
   await write('action-preservation.json', json(result.journey.accounts));
+  // AUTO-VALIDATION DES CIBLES : avant, réparation, après, audit — et la confiance de rejeu.
+  await write(
+    'target-validation.json',
+    json({
+      enabled: config.recording.targetValidation.enabled,
+      summary: result.targetValidation.summary,
+      replayConfidence: result.targetValidation.replayConfidence,
+      coherence: result.targetValidation.coherence,
+      actions: result.targetValidation.entries.map(({ validation, ...entry }) => ({
+        ...entry,
+        ...(validation
+          ? {
+              original: validation.original,
+              fingerprintBefore: validation.fingerprintBefore,
+              targetBefore: validation.targetBefore,
+              validationBefore: validation.validationBefore,
+              repair: validation.repair ?? null,
+              targetAfter: validation.targetAfter,
+              fingerprintAfter: validation.fingerprintAfter,
+              validationAfter: validation.validationAfter ?? null,
+              aiAudit: validation.aiAudit ?? null,
+              attempts: validation.attempts,
+              confidence: validation.confidence,
+              originalTargetMatch: validation.originalTargetMatch,
+              knowledge: validation.knowledge,
+              ...(validation.drag ? { drag: validation.drag } : {}),
+            }
+          : {}),
+      })),
+    }),
+  );
   if (format !== 'gherkin') await write('generated.flow.yaml', result.files.yaml);
   // Le flow raccourci est un AUTRE fichier : generated.flow.yaml reste le parcours enseigné.
   if (result.optimized && format !== 'gherkin')
@@ -197,9 +275,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
 
   // RECORDING INTELLIGENCE : comprendre (jamais modifier) le parcours humain, après la capture.
   let intelligence: RecordingIntelligence | undefined;
-  const mode = effectiveMode(config.ai);
   // RECORDING SEMANTIC AUDIT : le déterministe toujours ; le conseiller seulement si ai.mode ≠ OFF.
-  let audit: SemanticAuditReport | undefined;
+  let semanticAudit: SemanticAuditReport | undefined;
   const runSemanticAudit = async (
     gateway: IntelligenceGateway | undefined,
   ): Promise<SemanticAuditReport | undefined> => {
@@ -227,13 +304,6 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }
   };
   if (mode !== 'OFF') {
-    const gateway = createIntelligenceGateway(config.ai, {
-      env,
-      ...(request.intelligenceProvider ? { provider: request.intelligenceProvider } : {}),
-      emit: (record) => {
-        log.log('INFO', record.event, record.message);
-      },
-    });
     try {
       intelligence = await enrichRecording({
         result,
@@ -259,10 +329,10 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         message: `recording enrichment skipped: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
-    audit = await runSemanticAudit(gateway);
+    semanticAudit = await runSemanticAudit(gateway);
     await gateway?.close();
-  } else audit = await runSemanticAudit(undefined);
-  if (audit) await write('semantic-audit.json', json(audit));
+  } else semanticAudit = await runSemanticAudit(undefined);
+  if (semanticAudit) await write('semantic-audit.json', json(semanticAudit));
 
   let replay: ReplayOutcome = { status: 'NOT_VALIDATED' };
   if (request.validate ?? config.recording.validate) {
@@ -293,10 +363,18 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       files: { ...files },
       generatedAt: new Date().toISOString(),
       ...(intelligence ? { intelligence } : {}),
-      ...(audit ? { audit } : {}),
+      ...(semanticAudit ? { audit: semanticAudit } : {}),
     }),
   );
-  return { result, directory, files, replay, stopReason, warnings, ...(audit ? { audit } : {}) };
+  return {
+    result,
+    directory,
+    files,
+    replay,
+    stopReason,
+    warnings,
+    ...(semanticAudit ? { audit: semanticAudit } : {}),
+  };
 }
 
 /** La mission (ou une cible donnée par --url seule). */

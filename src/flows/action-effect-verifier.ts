@@ -1,5 +1,5 @@
 import type { FlowTarget, StepEffects, TargetFingerprint } from '../config/flow-schema.js';
-import type { Locator } from 'playwright';
+import type { ElementHandle, Locator, Page } from 'playwright';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { sectionPathExpression } from '../recording/semantic-dom.js';
 
@@ -333,7 +333,9 @@ export function verifyEffects(input: {
 }
 
 /** Ce que l'élément trouvé dit de lui (rôle, nom, texte, test id) — jamais la valeur d'un champ. */
-export async function readTarget(locator: Locator): Promise<ObservedTarget> {
+export async function readTarget(target: Locator | ElementHandle, page?: Page): Promise<ObservedTarget> {
+  // Un localisateur ou un élément déjà tenu (validation pendant l'enregistrement) : la même lecture.
+  const locator = target as Locator;
   const observed = await locator
     .evaluate((el) => {
       const clean = (text: string | null | undefined): string =>
@@ -357,10 +359,38 @@ export async function readTarget(locator: Locator): Promise<ObservedTarget> {
                 ? 'radio'
                 : 'textbox'
           : implicit[tag]);
-      const field = ['input', 'select', 'textarea'].includes(tag);
-      const label = field && input.labels && input.labels.length > 0 ? clean(input.labels[0]?.innerText) : '';
-      const text = field ? '' : clean((el as HTMLElement).innerText || el.textContent);
-      const name = clean(el.getAttribute('aria-label')) || label || text || clean(el.getAttribute('title'));
+      const field =
+        ['input', 'select', 'textarea'].includes(tag) || ['textbox', 'combobox'].includes(role ?? '');
+      // Le libellé d'un champ comme la capture le lit : aria-labelledby, <label> (sans les contrôles
+      // qu'il contient), le libellé d'un mat-form-field — sinon le rejeu croirait le nom « vide ».
+      const labelText = (node: Element | null | undefined): string => {
+        if (!node) return '';
+        const copy = node.cloneNode(true) as Element;
+        for (const control of Array.from(copy.querySelectorAll('select, textarea, input, option')))
+          control.remove();
+        return clean(copy.textContent).replace(/[*:\s]+$/, '');
+      };
+      const labelledBy = (el.getAttribute('aria-labelledby') ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => labelText(document.getElementById(id)))
+        .join(' ')
+        .trim();
+      const label = field
+        ? labelledBy ||
+          labelText(input.labels?.[0]) ||
+          labelText(el.closest('label')) ||
+          labelText(el.closest('mat-form-field, .mat-mdc-form-field')?.querySelector('mat-label, label'))
+        : '';
+      // Un champ natif n'a pas de texte (jamais sa valeur) ; une liste maison (mat-select) garde le sien.
+      const native = ['input', 'select', 'textarea'].includes(tag);
+      const text = native ? '' : clean((el as HTMLElement).innerText || el.textContent);
+      const name =
+        clean(el.getAttribute('aria-label')) ||
+        label ||
+        text ||
+        clean(el.getAttribute('title')) ||
+        (field ? clean(el.getAttribute('placeholder')) : '');
       const testId = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy']
         .map((attribute) => el.getAttribute(attribute))
         .find((value) => value);
@@ -374,12 +404,13 @@ export async function readTarget(locator: Locator): Promise<ObservedTarget> {
     })
     .catch((): ObservedTarget => ({}));
   if (observed.tag === undefined) return observed;
-  const section = await readSection(locator);
+  const section = await readSection(locator, page);
   return section ? { ...observed, section } : observed;
 }
 
 /** Le chemin de sections de l'élément (même calcul qu'à l'enregistrement) ; undefined s'il est illisible. */
-export async function readSection(locator: Locator): Promise<string | undefined> {
+export async function readSection(target: Locator | ElementHandle, page?: Page): Promise<string | undefined> {
+  const locator = target as Locator;
   probes += 1;
   const token = `probe-${String(probes)}`;
   const marked = await locator
@@ -389,9 +420,8 @@ export async function readSection(locator: Locator): Promise<string | undefined>
     }, token)
     .catch(() => false);
   if (!marked) return undefined;
-  const path = (await locator
-    .page()
-    .evaluate(sectionPathExpression(token))
-    .catch(() => null)) as string[] | null;
+  const owner = page ?? (typeof locator.page === 'function' ? locator.page() : undefined);
+  if (!owner) return undefined;
+  const path = (await owner.evaluate(sectionPathExpression(token)).catch(() => null)) as string[] | null;
   return path && path.length > 0 ? path.join(' > ') : undefined;
 }

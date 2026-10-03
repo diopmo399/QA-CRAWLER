@@ -139,6 +139,7 @@ export function recordingHtml(input: {
   </section>
   ${checkpoints ? `<section><h2>Checkpoints</h2><ul class="plain">${checkpoints}</ul></section>` : ''}
   ${input.intelligence ? recordingIntelligenceHtml(input.intelligence) : ''}
+  ${targetValidationHtml(result)}
   ${input.audit ? recordingAuditHtml(input.audit) : ''}
   <section><h2>Files</h2><ul class="plain">${files}</ul></section>
   <p class="muted">Generated ${esc(input.generatedAt)}</p>
@@ -436,4 +437,94 @@ function recordingAuditHtml(audit: SemanticAuditReport): string {
     <table><tbody>${rows.map(([label, value]) => `<tr><th>${esc(label)}</th><td>${esc(value)}</td></tr>`).join('')}</tbody></table>
     ${journey ? `<table><thead><tr><th>Human action</th><th>Deterministic</th><th>AI audit</th><th>Final</th><th>Runtime</th></tr></thead><tbody>${journey}</tbody></table>` : ''}
   </section>`;
+}
+
+const VALIDATION_BADGES: Record<string, string> = {
+  VALIDATED: '#15803d',
+  REPAIRED: '#0369a1',
+  FRAGILE: '#b45309',
+  AMBIGUOUS: '#b45309',
+  UNRESOLVED: '#dc2626',
+  NOT_VALIDATED: '#64748b',
+  AI_AUDITED: '#7c3aed',
+};
+
+const badge = (label: string): string =>
+  `<span style="display:inline-block;padding:1px 6px;border-radius:4px;background:${VALIDATION_BADGES[label] ?? '#64748b'};color:#fff;font-size:11px;font-weight:600;margin-right:4px">${esc(label)}</span>`;
+
+/**
+ * TARGET VALIDATION : pour chaque action, la cible enregistrée, sa validation immédiate (recherche à
+ * sec, jamais rejouée), la réparation, l'audit du conseiller et la cible finale.
+ */
+function targetValidationHtml(result: RecordingResult): string {
+  const report = result.targetValidation;
+  const s = report.summary;
+  const cards = [
+    card('Human actions', String(s.humanActions)),
+    card('Validated', String(s.validated)),
+    card('After repair', String(s.validatedAfterRepair)),
+    card('Fragile', String(s.fragile)),
+    card('Ambiguous', String(s.ambiguous)),
+    card('Unresolved', String(s.unresolved)),
+    card('AI audits', String(s.aiAudits)),
+    card('Replay confidence', report.replayConfidence),
+  ].join('');
+  const rows = report.entries
+    .map((entry) => {
+      const validation = entry.validation;
+      const badges = [
+        entry.classification === 'VALIDATED'
+          ? 'VALIDATED'
+          : entry.classification === 'VALIDATED_FRAGILE'
+            ? 'FRAGILE'
+            : entry.classification,
+        ...(entry.status === 'AMBIGUOUS' ? ['AMBIGUOUS'] : []),
+        ...(entry.repairApplied ? ['REPAIRED'] : []),
+        ...(entry.aiAudited ? ['AI_AUDITED'] : []),
+      ];
+      const before = validation
+        ? `${esc(validation.validationBefore.status)} <span class="muted">${esc(validation.validationBefore.reason)}</span>${validation.validationBefore.differences
+            .map(
+              (d) =>
+                `<br><span class="muted">${esc(d.property)}: recorded ${esc(d.expected ?? '-')} · runtime ${esc(d.actual ?? '-')}</span>`,
+            )
+            .join('')}`
+        : '<span class="muted">not validated during the recording</span>';
+      const repair = validation?.repair
+        ? `${esc(validation.repair.type)} ${esc(validation.repair.reason)}<br><span class="muted">${esc(
+            validation.repair.changes
+              .map((change) => `${change.property}: ${change.before ?? '-'} → ${change.after ?? '-'}`)
+              .join(', '),
+          )}</span>`
+        : '—';
+      const ai = validation?.aiAudit
+        ? `${esc(validation.aiAudit.outcome)}<br><span class="muted">${esc(validation.aiAudit.reason)}</span>`
+        : '—';
+      const final = entry.finalTarget ? esc(describeTargetText(entry.finalTarget)) : esc(entry.label);
+      return `<tr><td><b>${esc(entry.humanActionId)}</b> ${esc(entry.action)} ${esc(entry.label)}${entry.semanticGroup ? `<br><span class="muted">${esc(entry.semanticGroup)}</span>` : ''}</td>
+        <td>${validation?.targetBefore ? esc(describeTargetText(validation.targetBefore)) : '—'}</td>
+        <td>${badges.map(badge).join('')}<br>${before}</td><td>${repair}</td><td>${ai}</td>
+        <td>${final}${entry.requiresReplayValidation ? '<br><b style="color:#b45309">requires replay validation</b>' : ''}</td></tr>`;
+    })
+    .join('');
+  return `<section><h2>Target validation</h2>
+    <p class="muted">RECORD → RESOLVE → VALIDATE → ENRICH → REVALIDATE → PERSIST. Right after each human action, the recorded representation is resolved (dry lookup, never replayed) and compared with the element the human actually used. ${report.coherence.length > 0 ? `Coherence: ${esc(report.coherence.join(' · '))}` : 'The generated journey is coherent.'}</p>
+    <div class="cards">${cards}</div>
+    ${rows ? `<table><thead><tr><th>Human action</th><th>Recorded target</th><th>Validation</th><th>Repair</th><th>AI audit</th><th>Final target</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+  </section>`;
+}
+
+function describeTargetText(target: {
+  strategy: string;
+  role?: string;
+  name?: string;
+  value?: string;
+  section?: string;
+  nth?: number;
+}): string {
+  const base =
+    target.strategy === 'role'
+      ? `${target.role ?? ''} "${target.name ?? ''}"`
+      : `${target.strategy} "${target.value ?? ''}"`;
+  return `${base}${target.section ? ` in "${target.section}"` : ''}${target.nth !== undefined ? ` [${String(target.nth)}]` : ''}`;
 }

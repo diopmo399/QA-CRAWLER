@@ -107,6 +107,15 @@ export function buildRecordedFlow(input: BuildRecordedFlowInput): {
         confidence: action.confidence,
         ...(action.target ? { quality: action.target.quality } : {}),
         ...(action.value ? { valueClass: action.value.class } : {}),
+        ...(action.targetValidation
+          ? {
+              targetValidation: {
+                status: action.targetValidation.status,
+                repaired: action.targetValidation.repairApplied,
+                requiresReplayValidation: action.targetValidation.requiresReplayValidation,
+              },
+            }
+          : {}),
         explanation: explanationOf(action),
       });
     }
@@ -163,13 +172,19 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
   // L'empreinte, quand le localisateur seul ne garantit pas le bon élément (CSS, position).
   const fingerprint =
     action.target?.fingerprint &&
-    (target?.strategy === 'css' || action.target.quality === 'FRAGILE' || action.target.ambiguous)
+    (target?.strategy === 'css' ||
+      action.target.quality === 'FRAGILE' ||
+      action.target.ambiguous ||
+      action.targetValidation?.repairApplied === true)
       ? { fingerprint: action.target.fingerprint }
       : {};
   const common = { allow: allowOf(action), optional: false, ...effects, ...fingerprint };
   const label = labelOf(action);
-  // Un élément sans nom (« input ») : son sélecteur, jamais une intention vide de sens.
-  const named = action.target?.named === true;
+  // Un élément sans nom (« input ») : son sélecteur, jamais une intention vide de sens. Une cible
+  // RÉPARÉE et revalidée pendant l'enregistrement reste une étape exécutable (prouvée sur l'élément).
+  const proven =
+    action.targetValidation?.repairApplied === true && !action.targetValidation.requiresReplayValidation;
+  const named = action.target?.named === true && !proven;
   switch (action.type) {
     case 'CLICK':
     case 'SUBMIT': {
@@ -310,6 +325,11 @@ export function toSuggestedFlow(flow: RecordedFlow): SuggestedFlowGraph {
         ...(item.interactionIds && item.interactionIds.length > 0
           ? [
               `${item.interactionIds.length > 1 ? 'MERGED_HUMAN_ACTION ' : ''}${item.interactionIds.join('+')}`,
+            ]
+          : []),
+        ...(item.targetValidation
+          ? [
+              `target ${item.targetValidation.status}${item.targetValidation.repaired ? ' (repaired)' : ''}${item.targetValidation.requiresReplayValidation ? ' · REQUIRES_REPLAY_VALIDATION' : ''}`,
             ]
           : []),
         `raw ${item.rawEventIds.join(',')}`,

@@ -55,10 +55,27 @@ export function installRecorder(
   let sequence = 0;
   const queue: unknown[] = [];
 
-  const send = (payload: Record<string, unknown>): void => {
+  // L'ÉLÉMENT ORIGINAL de chaque action (validation immédiate de la cible) : une référence en
+  // mémoire, bornée, jamais envoyée ni écrite dans le DOM. Le validateur la LIT seulement.
+  const documentId = Math.random().toString(36).slice(2, 10);
+  const originals = new Map<string, Element>();
+  global.__qaCrawlerOriginal = (ref: unknown): Element | null =>
+    typeof ref === 'string' ? (originals.get(ref) ?? null) : null;
+  const send = (payload: Record<string, unknown>, original?: Element | null, zone?: Element | null): void => {
     if (paused && payload.type !== 'control') return;
     sequence += 1;
-    const message = { ...payload, sequence, at: Date.now(), url: location.href };
+    let ref: string | undefined;
+    if (original) {
+      ref = `${documentId}:${String(sequence)}`;
+      originals.set(ref, original);
+      if (zone) originals.set(`${ref}:zone`, zone);
+      while (originals.size > 120) {
+        const oldest = originals.keys().next().value;
+        if (oldest === undefined) break;
+        originals.delete(oldest);
+      }
+    }
+    const message = { ...payload, sequence, at: Date.now(), url: location.href, ...(ref ? { ref } : {}) };
     const fn = global[options.binding];
     if (typeof fn !== 'function') {
       if (queue.length < 200) queue.push(message);
@@ -163,10 +180,19 @@ export function installRecorder(
         .join(' ');
       if (clean(text)) return stripMark(clean(text));
     }
+    // Le texte d'un <label> SANS les contrôles qu'il contient (les options d'un <select> enveloppé
+    // ne font pas partie du libellé : « Field », pas « Field -- Company name City »).
+    const labelText = (label: Element): string => {
+      if (!label.querySelector('select, textarea, input, option')) return textOf(label);
+      const copy = label.cloneNode(true) as Element;
+      for (const control of Array.from(copy.querySelectorAll('select, textarea, input, option')))
+        control.remove();
+      return clean(copy.textContent);
+    };
     const labels = (el as HTMLInputElement).labels;
-    if (labels && labels.length > 0) return stripMark(textOf(labels[0]));
+    if (labels?.[0]) return stripMark(labelText(labels[0]));
     const wrapping = el.closest('label');
-    if (wrapping) return stripMark(textOf(wrapping));
+    if (wrapping) return stripMark(labelText(wrapping));
     const field = el.closest('mat-form-field, .mat-mdc-form-field');
     const matLabel = field?.querySelector('mat-label, label');
     if (matLabel) return stripMark(textOf(matLabel));
@@ -607,18 +633,22 @@ export function installRecorder(
         current.source !== destination && itemTexts(current.source).map(norm).includes(norm(current.text));
       const from = zoneFacts(current.source);
       const to = zoneFacts(destination);
-      send({
-        type: 'drag',
-        element: current.element,
-        drag: {
-          kind: current.kind,
-          item: current.text,
-          ...(from ? { source: from } : {}),
-          ...(to ? { destination: to } : {}),
-          sameZone: destination !== null && destination === current.source,
-          moved: destination !== null && destination !== current.source && inDestination && !inSource,
+      send(
+        {
+          type: 'drag',
+          element: current.element,
+          drag: {
+            kind: current.kind,
+            item: current.text,
+            ...(from ? { source: from } : {}),
+            ...(to ? { destination: to } : {}),
+            sameZone: destination !== null && destination === current.source,
+            moved: destination !== null && destination !== current.source && inDestination && !inSource,
+          },
         },
-      });
+        current.item,
+        destination,
+      );
     }, 300);
   };
   document.addEventListener(
@@ -704,11 +734,14 @@ export function installRecorder(
         if (clickable) target = clickable;
         else noise = 'click on a non-interactive element';
       }
-      send({
-        type: 'click',
-        element: { ...describe(target), ...(component ? { componentTag: component } : {}) },
-        ...(noise ? { noise } : {}),
-      });
+      send(
+        {
+          type: 'click',
+          element: { ...describe(target), ...(component ? { componentTag: component } : {}) },
+          ...(noise ? { noise } : {}),
+        },
+        noise ? null : target,
+      );
     },
     { capture: true, passive: true },
   );
@@ -731,7 +764,7 @@ export function installRecorder(
         el,
         window.setTimeout(() => {
           pending.delete(el);
-          send({ type: 'input', element: describe(el), value: valueFacts(el) });
+          send({ type: 'input', element: describe(el), value: valueFacts(el) }, el);
         }, options.inputDebounceMs),
       );
     },
@@ -744,7 +777,7 @@ export function installRecorder(
       window.clearTimeout(timer);
       pending.delete(el);
     }
-    send({ type: 'change', element: describe(el), value: valueFacts(el) });
+    send({ type: 'change', element: describe(el), value: valueFacts(el) }, el);
     started.delete(el);
   };
   document.addEventListener(
@@ -781,7 +814,7 @@ export function installRecorder(
       const submitter =
         event.submitter ??
         form.querySelector('button:not([type]), button[type="submit"], input[type="submit"]');
-      send({ type: 'submit', element: describe(submitter ?? form) });
+      send({ type: 'submit', element: describe(submitter ?? form) }, submitter ?? form);
     },
     { capture: true, passive: true },
   );

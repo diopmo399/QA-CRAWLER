@@ -7,6 +7,7 @@ import type { ScenarioConfig } from '../config/config.js';
 import { describeTarget } from '../config/flow-schema.js';
 import { normalize } from '../flows/action-effect-verifier.js';
 import type { RecordedElement, SemanticRecordedAction } from './model.js';
+import { describeTraits, type TargetAuditAdvisor } from './target-validator.js';
 import type { RecordingResult } from './process-recording.js';
 
 /**
@@ -496,4 +497,145 @@ function summaryOf(evidence: Evidence): string {
   return `${evidence.source}: ${Object.entries(evidence.details)
     .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join('|') : String(value)}`)
     .join(', ')}`.slice(0, 200);
+}
+
+/**
+ * Le conseiller de la VALIDATION IMMÉDIATE (même gateway, même builder, contexte RECORDING) :
+ * « la représentation proposée désigne-t-elle bien la cible de l'humain ? quelle candidate T…
+ * la représente le mieux ? ». Il choisit une candidate fournie ; QA-CRAWLER la résout ensuite et
+ * la compare à l'original — une proposition qui ne retrouve pas la cible est rejetée.
+ */
+export function targetAuditAdvisor(
+  gateway: IntelligenceGateway,
+  options: { maxCalls: number },
+): TargetAuditAdvisor {
+  let calls = 0;
+  let counter = 0;
+  const builder = new IntelligenceContextBuilder({
+    maxActions: 10,
+    maxEvidence: 12,
+    maxHypotheses: 0,
+    maxPlanSteps: 3,
+  });
+  return async ({ event, original, check, candidates, previousActions }) => {
+    if (calls >= options.maxCalls) return { outcome: 'INCONCLUSIVE', citedEvidence: [] };
+    const trigger = gateway.evaluate({ deterministicConfidence: 0, recordingAmbiguity: true });
+    if (!trigger.shouldInvoke || !trigger.reason) return { outcome: 'UNAVAILABLE', citedEvidence: [] };
+    const evidence: Evidence[] = [];
+    const prove = (source: string, details: Record<string, string>): void => {
+      counter += 1;
+      evidence.push({ id: `E${String(counter)}`, type: 'HUMAN_RECORDING', source, confidence: 0.9, details });
+    };
+    prove('original human target', {
+      action: event.type,
+      ...(original.role ? { role: original.role } : {}),
+      ...(original.tag ? { tag: original.tag } : {}),
+      ...(original.label ? { label: original.label } : {}),
+      ...(original.name ? { name: original.name } : {}),
+      ...(original.section ? { section: original.section } : {}),
+      ...(describeTraits(original.traits) ? { traits: describeTraits(original.traits) } : {}),
+    });
+    prove('validation result', {
+      status: check.status,
+      reason: check.reason.slice(0, 160),
+      candidates: String(check.candidateCount),
+    });
+    for (const entry of check.candidates ?? [])
+      prove(`runtime candidate ${String(entry.index + 1)}`, {
+        ...(entry.role ? { role: entry.role } : {}),
+        ...(entry.name ? { name: entry.name } : {}),
+        ...(entry.section ? { section: entry.section } : {}),
+        ...(describeTraits(entry.traits) ? { traits: describeTraits(entry.traits) } : {}),
+      });
+    if (previousActions.length > 0)
+      prove('previous human actions', { actions: previousActions.join(' ; ').slice(0, 200) });
+    const known = new Set(evidence.map((entry) => entry.id));
+    const keys = new Set(candidates.map((candidate) => candidate.key));
+    const built = builder.build(trigger.reason, {
+      mission: 'recording target validation',
+      workflow: {
+        previous: previousActions,
+        next: [`${event.type} ${humanName(original)}`],
+        requiredFields: [],
+      },
+      candidates: candidates.map((candidate) => ({
+        key: candidate.key,
+        kind: event.type === 'click' || event.type === 'submit' ? 'click' : 'fill',
+        name: candidate.description,
+        safety: 'SAFE' as const,
+        allowed: true,
+      })),
+      evidence,
+      hypotheses: [],
+      contradictions: [],
+      functional: {
+        satisfiedPreconditions: [],
+        missingPreconditions: [],
+        blockingReasons: [],
+        causalRelations: [],
+        previousConfirmedActions: previousActions,
+        nextExpectedActions: [],
+        nextActionTargets: [],
+        functionalCoverage: [],
+        question: `RECORDING TARGET VALIDATION (never execute anything). The human just used: ${describeOriginal(original)}${describeTraits(original.traits) ? ` [${describeTraits(original.traits)}]` : ''}. Compare the traits of each candidate (formControl, name, id, placeholder, text before, dialog, visible, FOCUSED) with the traits of the human target. Validation: ${check.status} (${check.reason}). Does the proposed representation correctly represent the target actually manipulated by the human? Which provided candidate (action ID) best represents the human target? Use only the given action IDs and evidence IDs.`,
+      },
+    });
+    const consulted = await gateway.consult({
+      context: 'RECORDING',
+      request: built.request,
+      scope: { action: `target-validation|${event.id}` },
+      deterministic: { confidence: check.confidence },
+      safety: () => ({
+        allowed: false,
+        classification: 'ADVISORY',
+        reason: 'a target validation never executes',
+      }),
+      knownEvidence: (id) => known.has(id),
+      advisory: true,
+    });
+    if (consulted.record.lifecycle.call) calls += 1;
+    const decisionId = consulted.record.id;
+    const proposal = consulted.validation?.valid ? consulted.validation.proposal : undefined;
+    if (!proposal)
+      return {
+        decisionId,
+        outcome: consulted.record.lifecycle.call ? 'INCONCLUSIVE' : 'UNAVAILABLE',
+        citedEvidence: [],
+      };
+    const selectedKey = proposal.selectedActionId ? built.keyOf(proposal.selectedActionId) : undefined;
+    return {
+      decisionId,
+      ...(selectedKey && keys.has(selectedKey) ? { selectedKey } : {}),
+      outcome: proposal.status === 'PROPOSAL' && selectedKey ? 'PROPOSAL' : 'INCONCLUSIVE',
+      citedEvidence: proposal.supportingEvidenceIds.filter((id) => known.has(id)),
+    };
+  };
+}
+
+function describeOriginal(original: {
+  role?: string;
+  tag?: string;
+  label?: string;
+  name?: string;
+  section?: string;
+  traits?: { nearText?: string; placeholder?: string };
+}): string {
+  return `${original.role ?? original.tag ?? 'element'} "${humanName(original)}"${original.section ? ` in section "${original.section}"` : ''}`;
+}
+
+/** Le nom humain d'une cible : libellé, nom, texte posé avant le champ, sinon sa balise. */
+function humanName(original: {
+  label?: string;
+  name?: string;
+  tag?: string;
+  traits?: { nearText?: string; placeholder?: string };
+}): string {
+  return (
+    original.label ||
+    original.name ||
+    original.traits?.nearText ||
+    original.traits?.placeholder ||
+    original.tag ||
+    'element'
+  );
 }

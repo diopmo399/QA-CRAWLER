@@ -18,7 +18,7 @@ export interface RuleBasedOptions {
   maxDepth: number;
   maxStatesPerRoute: number;
   queryParamMode: QueryParamMode;
-  /** Contrôles semblables (même genre, même libellé une fois les nombres masqués) essayés au plus ce nombre de fois par état. */
+  /** Contrôles pareils (même genre, même libellé une fois les nombres masqués) essayés au plus ce nombre de fois par état. */
   maxSimilarActions?: number;
   /** Nom de la mission (rapports). */
   missionName?: string;
