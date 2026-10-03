@@ -56,7 +56,15 @@ export interface RecordedDrag {
   /** ITEM_MOVED observé : l'élément est dans la destination et plus dans la source. */
   moved: boolean;
   /** Les listes avant / après (textes d'interface, bornés) : la preuve du déplacement. */
-  lists?: { sourceBefore: string[]; sourceAfter: string[]; destinationAfter: string[] };
+  lists?: {
+    sourceBefore: string[];
+    sourceAfter: string[];
+    destinationAfter: string[];
+    /** La zone d'arrivée telle qu'elle était au départ du glisser. */
+    destinationBefore?: string[];
+  };
+  /** La zone d'arrivée parmi les zones candidates figées au départ (D1 = zone d'origine). */
+  destinationCandidateId?: string;
 }
 
 /**
@@ -93,6 +101,16 @@ export interface PreActionContext {
   /** Les candidats figés AVANT l'action ; la cible originale y est toujours (T1). */
   candidates?: PreActionCandidate[];
   originalCandidateId?: string;
+  /** Glisser-déposer : les zones de dépôt visibles au départ (D1 = la zone d'origine). */
+  dropZones?: PreActionDropZone[];
+}
+
+export interface PreActionDropZone {
+  id: string;
+  origin: 'SOURCE' | 'CONTEXT';
+  section?: string;
+  label?: string;
+  itemCount: number;
 }
 
 /** Un candidat pré-action : une description, jamais un localisateur (le CSS n'est qu'un indice). */

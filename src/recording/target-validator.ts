@@ -184,7 +184,14 @@ export interface RecordingTargetValidation {
     item: TargetValidationStatus;
     destination: TargetValidationStatus;
     movedObserved: boolean;
-    lists?: { sourceBefore: string[]; sourceAfter: string[]; destinationAfter: string[] };
+    lists?: {
+      sourceBefore: string[];
+      sourceAfter: string[];
+      destinationAfter: string[];
+      destinationBefore?: string[];
+    };
+    destinationCandidate?: string;
+    dropZoneCandidates?: number;
   };
   log: string[];
 }
@@ -1829,6 +1836,22 @@ export class RecordingTargetValidator {
       this.options.log?.(line);
     };
     say(`[TARGET_CAPTURED] ${event.id} DRAG "${drag.item}"`);
+    // LA PREUVE DU DÉPART : l'élément (T1), les zones candidates (D…) et leurs listes d'AVANT.
+    const capture = preActionCaptureOf(event);
+    const zones = event.pre?.dropZones ?? [];
+    if (capture.complete)
+      say(
+        `[PRE_ACTION_CAPTURE] action=${event.id} type=DRAG target="${drag.item}" phase=${capture.phase ?? '-'} candidates=${String(capture.candidateCount)} originalCandidate=${capture.originalCandidateId ?? '-'} dropZones=${String(zones.length)}${drag.destinationCandidateId ? ` destination=${drag.destinationCandidateId}` : ''}`,
+      );
+    else if (capture.captured)
+      say(`[PRE_ACTION_CAPTURE_INCOMPLETE] action=${event.id} ${capture.diagnostic ?? ''}`);
+    // Le déplacement PROUVÉ par les listes : absent de la zone d'arrivée avant, présent après.
+    const norm = (text: string): string => normalize(text);
+    const lists = drag.lists;
+    const movedProven =
+      lists?.destinationBefore !== undefined &&
+      !lists.destinationBefore.map(norm).includes(norm(drag.item)) &&
+      lists.destinationAfter.map(norm).includes(norm(drag.item));
     const item = await this.original(page, ref);
     const zone = await this.original(page, ref, ':zone');
     const itemSection = (drag.moved ? drag.destination : drag.source)?.section;
@@ -1880,24 +1903,40 @@ export class RecordingTargetValidator {
           zone,
         )
       : 'NOT_FOUND';
-    const ok = VALIDATED_STATUSES.has(itemStatus) && VALIDATED_STATUSES.has(destinationStatus);
+    // Les nœuds recréés après le dépôt : l'élément et la zone figés au départ, avec le déplacement
+    // prouvé par les listes d'avant / après, valident l'action (jamais un second glisser).
+    const preActionProof =
+      capture.complete &&
+      movedProven &&
+      drag.destinationCandidateId !== undefined &&
+      (!VALIDATED_STATUSES.has(itemStatus) || !VALIDATED_STATUSES.has(destinationStatus));
+    const ok =
+      preActionProof || (VALIDATED_STATUSES.has(itemStatus) && VALIDATED_STATUSES.has(destinationStatus));
     const status: TargetValidationStatus = ok
-      ? itemStatus === 'VALIDATED' && destinationStatus === 'VALIDATED'
-        ? 'VALIDATED'
-        : 'VALIDATED_AFTER_RERENDER'
+      ? preActionProof
+        ? 'VALIDATED_PRE_ACTION'
+        : itemStatus === 'VALIDATED' && destinationStatus === 'VALIDATED'
+          ? 'VALIDATED'
+          : 'VALIDATED_AFTER_RERENDER'
       : ([itemStatus, destinationStatus].find((value) => !VALIDATED_STATUSES.has(value)) ??
         'NOT_VALIDATABLE');
     const check: TargetCheck = {
       status,
       confidence: ok ? (drag.moved ? 0.95 : 0.8) : 0.6,
-      reason: `item ${itemStatus}, drop zone ${destinationStatus}${drag.moved ? ', ITEM_MOVED observed' : ''}`,
-      candidateCount: 1,
+      reason: `item ${itemStatus}, drop zone ${destinationStatus}${drag.moved ? ', ITEM_MOVED observed' : ''}${movedProven ? `, moved into ${drag.destinationCandidateId ?? 'the drop zone'} (absent before, present after)` : ''}${preActionProof ? ' — validated from the pre-action capture' : ''}`,
+      candidateCount: Math.max(1, zones.length),
+      ...(preActionProof ? { preAction: true } : {}),
       differences: [],
     };
     say(`[TARGET_${ok ? 'VALIDATED' : status}] ${event.id} ${check.reason}`);
     this.previous.push(`drag "${drag.item}"`);
     const result: Omit<RecordingTargetValidation, 'verdict'> = {
       mode: ValidationMode.RECORDING,
+      preActionCapture: capture,
+      currentRuntime: { originalStillPresent: item !== undefined },
+      ...(preActionProof && capture.originalCandidateId
+        ? { validatedCandidate: capture.originalCandidateId }
+        : {}),
       rawEventId: event.id,
       action: 'drag',
       timestamp: Date.now(),
@@ -1918,26 +1957,32 @@ export class RecordingTargetValidator {
       drag: {
         item: itemStatus,
         destination: destinationStatus,
-        movedObserved: drag.moved,
+        movedObserved: drag.moved || movedProven,
+        ...(drag.destinationCandidateId ? { destinationCandidate: drag.destinationCandidateId } : {}),
+        ...(zones.length > 0 ? { dropZoneCandidates: zones.length } : {}),
         // AVANT / APRÈS : la preuve du déplacement (listes d'interface, jamais un second glisser).
         ...(drag.lists ? { lists: drag.lists } : {}),
       },
       log,
     };
-    return {
-      ...result,
-      verdict: verdictOf(
-        result,
-        drag.moved
-          ? {
-              status: 'CONFIRMED',
-              evidence: [
-                `"${drag.item}" moved${drag.destination?.label ? ` to "${drag.destination.label}"` : ''}`,
-              ],
-            }
-          : { status: 'NOT_OBSERVED', evidence: [] },
-      ),
-    };
+    const effect: RecordingVerdict['effect'] =
+      drag.moved || movedProven
+        ? {
+            status: 'CONFIRMED',
+            evidence: [
+              `"${drag.item}" moved${drag.destination?.label ? ` to "${drag.destination.label}"` : ''}`,
+              ...(movedProven
+                ? [`absent from ${drag.destinationCandidateId ?? 'the drop zone'} before, present after`]
+                : []),
+            ],
+          }
+        : { status: 'NOT_OBSERVED', evidence: [] };
+    const published = publishedStatus(result, effect);
+    if (published.startsWith('VALIDATED_'))
+      say(
+        `[TARGET_${published}] action=${event.id}${result.validatedCandidate ? ` candidate=${result.validatedCandidate}` : ''}`,
+      );
+    return { ...result, validationStatus: published, verdict: verdictOf(result, effect) };
   }
 }
 

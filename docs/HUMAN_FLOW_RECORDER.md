@@ -529,6 +529,17 @@ Ordre de décision :
 
 Un `#valueInput` qui désigne maintenant un autre nœud ne crée plus de faux `MISMATCH`.
 
+**Glisser-déposer.** Au départ du glisser (`pointerdown` / `dragstart`), la page fige :
+
+- l'élément (T1) et ses candidats ;
+- les **zones de dépôt candidates** (D1 = la zone d'origine, puis les autres zones visibles, bornées) ;
+- la liste de chaque zone **avant** le dépôt.
+
+Après le dépôt, la zone d'arrivée est reliée à sa candidate (`destinationCandidateId`) et à sa liste
+d'avant (`lists.destinationBefore`). L'élément absent de cette zone avant, présent après, prouve le
+déplacement, même si l'application recrée les nœuds. Les nœuds recréés introuvables sont
+alors validés par la capture pré-action (`VALIDATED_PRE_ACTION`), jamais par un second glisser.
+
 **Invariant.** Une action sur un élément capturée a au moins un candidat, et T1 en fait partie.
 Sinon `PRE_ACTION_CAPTURE_INCOMPLETE`, diagnostiqué. Sans candidat, le conseiller n'est **jamais**
 consulté : il ne peut pas inventer la cible.

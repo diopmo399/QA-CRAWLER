@@ -936,6 +936,8 @@ export function installRecorder(
         drop?: Element | null;
         pre?: Record<string, unknown>;
         sourceBefore: string[];
+        /** Les zones de dépôt visibles AU DÉPART (candidates D1…), et leurs listes d'avant. */
+        zones: { zone: Element; id: string; before: string[] }[];
       }
     | undefined;
   let lastDragAt = 0;
@@ -946,8 +948,20 @@ export function installRecorder(
       dragging = undefined;
       return;
     }
+    // LES ZONES DE DÉPÔT CANDIDATES, figées au départ (avant que l'application ne recrée les nœuds) :
+    // la zone d'origine d'abord (D1), puis les autres zones visibles, bornées.
+    const source = item.parentElement?.closest(DROP_ZONE) ?? null;
+    const zones = [
+      ...(source ? [source] : []),
+      ...Array.from(document.querySelectorAll(DROP_ZONE)).filter(
+        (zone) => zone !== source && !item.contains(zone) && !zone.contains(source) && isVisible(zone),
+      ),
+    ]
+      .slice(0, 6)
+      .map((zone, index) => ({ zone, id: `D${String(index + 1)}`, before: itemTexts(zone) }));
     dragging = {
       item,
+      zones,
       text: clean((item as HTMLElement).innerText || item.textContent, 60),
       element: describe(item),
       source: item.parentElement?.closest(DROP_ZONE) ?? null,
@@ -956,7 +970,17 @@ export function installRecorder(
       kind,
       // AVANT le déplacement : l'écran et la liste d'origine.
       ...(preContext.of
-        ? { pre: preContext.of(item, '', kind === 'HTML5' ? 'DRAGSTART' : 'POINTERDOWN') }
+        ? {
+            pre: {
+              ...preContext.of(item, '', kind === 'HTML5' ? 'DRAGSTART' : 'POINTERDOWN'),
+              dropZones: zones.map((entry) => ({
+                id: entry.id,
+                origin: entry.zone === source ? 'SOURCE' : 'CONTEXT',
+                ...zoneFacts(entry.zone),
+                itemCount: entry.before.length,
+              })),
+            },
+          }
         : {}),
       sourceBefore: itemTexts(item.parentElement?.closest(DROP_ZONE) ?? null),
     };
@@ -976,6 +1000,10 @@ export function installRecorder(
         current.source !== destination && itemTexts(current.source).map(norm).includes(norm(current.text));
       const from = zoneFacts(current.source);
       const to = zoneFacts(destination);
+      // La zone d'arrivée parmi les candidates d'avant : sa liste AVANT le dépôt (preuve historique).
+      const landed = current.zones.find(
+        (entry) => destination !== null && (entry.zone === destination || entry.zone.contains(destination)),
+      );
       send(
         {
           type: 'drag',
@@ -987,8 +1015,10 @@ export function installRecorder(
             ...(to ? { destination: to } : {}),
             sameZone: destination !== null && destination === current.source,
             moved: destination !== null && destination !== current.source && inDestination && !inSource,
+            ...(landed ? { destinationCandidateId: landed.id } : {}),
             lists: {
               sourceBefore: current.sourceBefore.slice(0, 10),
+              ...(landed ? { destinationBefore: landed.before.slice(0, 10) } : {}),
               sourceAfter: itemTexts(current.source).slice(0, 10),
               destinationAfter: itemTexts(destination).slice(0, 10),
             },

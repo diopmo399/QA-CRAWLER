@@ -14,7 +14,8 @@ export interface SettingsApp {
 
 /**
  * Les listes de colonnes (disponibles → sélectionnées) : `dnd=pointer` (glisser maison par
- * événements pointeur), `dnd=html5` (draggable natif), `dnd=broken` (le glisser ne déplace rien).
+ * événements pointeur), `dnd=html5` (draggable natif), `dnd=broken` (le glisser ne déplace rien),
+ * `dnd=recreate` (glisser pointeur, puis l'application recrée tous les éléments des listes).
  */
 const lists = (dnd: string): string => `
   <div aria-labelledby="av"><h3 id="av">Available columns</h3>
@@ -35,6 +36,7 @@ const dragScript = (dnd: string): string =>
     if (!dragged) return;
     const ul = document.elementFromPoint(e.clientX, e.clientY)?.closest('ul');
     ${dnd === 'broken' ? '' : 'if (ul && ul !== dragged.parentElement) ul.appendChild(dragged);'}
+    ${dnd === 'recreate' ? "for (const list of document.querySelectorAll('ul')) list.innerHTML = list.innerHTML;" : ''}
     dragged = null;
   });`;
 

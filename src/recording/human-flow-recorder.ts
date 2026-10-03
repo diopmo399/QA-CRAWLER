@@ -732,6 +732,23 @@ function preOf(raw: Record<string, unknown>): PreActionContext {
             .map((entry) => candidateOf(entry, str)),
         }
       : {}),
+    ...(Array.isArray(raw.dropZones)
+      ? {
+          dropZones: list(raw.dropZones, 6)
+            .filter(isObject)
+            .map((zone) => {
+              const section = str(zone.section, 180);
+              const label = str(zone.label, 60);
+              return {
+                id: typeof zone.id === 'string' && /^D\d$/.test(zone.id) ? zone.id : 'D?',
+                origin: zone.origin === 'SOURCE' ? ('SOURCE' as const) : ('CONTEXT' as const),
+                ...(section ? { section } : {}),
+                ...(label ? { label } : {}),
+                itemCount: num(zone.itemCount),
+              };
+            }),
+        }
+      : {}),
     ...(typeof raw.originalCandidateId === 'string' && /^T\d{1,2}$/.test(raw.originalCandidateId)
       ? { originalCandidateId: raw.originalCandidateId }
       : {}),
@@ -836,8 +853,14 @@ function dragOf(raw: Record<string, unknown>): { drag: RecordedDrag } | Record<s
               sourceBefore: texts(raw.lists.sourceBefore),
               sourceAfter: texts(raw.lists.sourceAfter),
               destinationAfter: texts(raw.lists.destinationAfter),
+              ...(Array.isArray(raw.lists.destinationBefore)
+                ? { destinationBefore: texts(raw.lists.destinationBefore) }
+                : {}),
             },
           }
+        : {}),
+      ...(typeof raw.destinationCandidateId === 'string' && /^D\d$/.test(raw.destinationCandidateId)
+        ? { destinationCandidateId: raw.destinationCandidateId }
         : {}),
     },
   };
