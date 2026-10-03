@@ -348,6 +348,22 @@ export class RecordingTargetValidator {
 
   constructor(private readonly options: TargetValidatorOptions) {}
 
+  /**
+   * ARRÊT DEMANDÉ : les validations encore en file restent faites (déterministes, lecture seule),
+   * mais le conseiller n'est plus consulté — un « Stop » n'attend jamais une file d'appels IA.
+   */
+  private draining = false;
+  /** Les audits IA non faits à cause de l'arrêt (affichés dans le bilan). */
+  deferredAudits = 0;
+  /** Validations reçues et pas encore terminées. */
+  private inFlight = 0;
+  get pending(): number {
+    return this.inFlight;
+  }
+  drain(): void {
+    this.draining = true;
+  }
+
   /** Le sel des empreintes de la session : l'effet d'une saisie se compare sans jamais lire la valeur en clair. */
   private salt: string | undefined;
   useValueSalt(salt: string): void {
@@ -361,7 +377,12 @@ export class RecordingTargetValidator {
     event: RawRecordedEvent,
     ref: string | undefined,
   ): Promise<RecordingTargetValidation | undefined> {
-    const next = this.queue.then(() => this.validateNow(page, event, ref));
+    this.inFlight += 1;
+    const next = this.queue
+      .then(() => this.validateNow(page, event, ref))
+      .finally(() => {
+        this.inFlight -= 1;
+      });
     this.queue = next.catch(() => undefined);
     return next;
   }
@@ -771,11 +792,20 @@ export class RecordingTargetValidator {
     // Une cible disparue ne peut pas être RE-PROUVÉE au runtime : un résultat pré-action validé n'est
     // jamais audité ; une ambiguïté PRÉ-ACTION, si : la proposition est revalidée contre les preuves
     // d'avant l'action (jamais contre l'effet ou un objectif atteint).
-    if (
-      this.options.advisor &&
+    const auditable =
+      this.options.advisor !== undefined &&
       this.options.auditOn.has(current.status) &&
-      (current.preAction !== true || current.status === 'AMBIGUOUS')
-    ) {
+      (current.preAction !== true || current.status === 'AMBIGUOUS');
+    if (auditable && this.draining) {
+      // Arrêt demandé : la validation déterministe reste ; l'audit IA est noté comme non fait.
+      this.deferredAudits += 1;
+      aiAudit = {
+        outcome: 'NOT_CALLED',
+        citedEvidence: [],
+        reason: 'recording stopped: the AI audit was skipped (the deterministic validation is kept)',
+      };
+      say(`[TARGET_AI_AUDIT] ${event.id} NOT_CALLED: recording stopped`);
+    } else if (auditable) {
       const outcome = await this.audit(
         page,
         event,

@@ -246,6 +246,8 @@ describe('Pre-action candidate capture, end to end (recording + validation)', ()
       expect(fill?.status).not.toBe('MISMATCH');
       const text = logs.join('\n');
       expect(text).not.toMatch(/candidates=0/);
+      // Le temps après « Stop », phase par phase (jamais deviné).
+      expect(text).toMatch(/after Stop: \d+\.\d s — /);
       expect(text).toMatch(/\[DOM_GENERATION_CHANGED\]/);
       expect(text).not.toMatch(/matched 0 elements before the action/);
       for (const entry of actions)

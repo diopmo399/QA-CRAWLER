@@ -642,6 +642,31 @@ Au **rejeu**, la récupération par objectif garde sa place, mais pour une saisi
 `GOAL_ALREADY_REACHED` n'est que la **précondition** de l'étape : si le champ reste introuvable,
 l'étape est en échec et la récupération est `NO_SAFE_RECOVERY` (jamais `RECOVERED`).
 
+### Arrêt (« Stop ») : ce qui reste à faire, et combien de temps
+
+**Avant.** Au « Stop », le recorder attendait toutes les validations de cible encore en file : elles
+sont sérialisées, et chacune pouvait consulter le conseiller (plusieurs secondes par appel). Venaient
+ensuite l'enrichissement et l'audit sémantique, avec leurs propres appels IA, faits les uns après les
+autres. Un audit sémantique pouvait aussi redemander à l'IA l'identité d'une cible déjà prouvée
+pendant l'enregistrement.
+
+**Désormais :**
+
+- **Validations en file** : dès le Stop, elles restent faites (déterministes, en lecture seule), mais
+  le conseiller n'est plus consulté. L'audit non fait est noté `NOT_CALLED: recording stopped`.
+- **Progression** : `RECORDING_STOPPING` dit ce qu'il reste à finir.
+- **Audit sémantique** : pour une cible déjà validée ou auditée pendant l'enregistrement, les doutes
+  d'identité (`AMBIGUOUS_TARGET`, `FRAGILE_LOCATOR`, `CONTEXT_MISMATCH`) sont réglés. Il n'y a plus
+  d'appel IA pour eux ; les autres doutes restent audités. Le mode `FULL` audite toujours tout.
+- **Bilan du temps** : `RECORDING_STOP_TIMING` donne le temps total après Stop et chaque phase, les
+  plus longues d'abord :
+  - saisie en attente, dernière observation, validations en file ;
+  - fermeture du navigateur, traitement, écriture, connaissance ;
+  - enrichissement IA, audit sémantique, rejeu `--validate`.
+
+  Les audits IA sautés à cause de l'arrêt sont comptés. Exemple :
+  `after Stop: 3.4 s — semantic audit 1.9 s · stop: pending validations and observations 0.8 s · …`.
+
 ## Glisser-déposer (DRAG_AND_DROP)
 
 Un glisser-déposer est **une** action humaine de premier ordre, jamais un clic ni une perte.
