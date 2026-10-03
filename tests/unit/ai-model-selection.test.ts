@@ -720,6 +720,9 @@ function gatewayFor(
       unknownBusinessError: true,
       lowConfidence: true,
       knowledgeContradiction: true,
+      unknownBlockingPrecondition: true,
+      hypothesisAnalysis: true,
+      recordingEnrichment: true,
     },
     thresholds: { deterministicConfidence: 0.85, minProposalConfidence: 0.6, overrideMargin: 0.15 },
     budgets: {

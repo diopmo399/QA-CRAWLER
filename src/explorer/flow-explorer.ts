@@ -11,6 +11,9 @@ import {
 } from '../ai/context-builder.js';
 import { createIntelligenceGateway } from '../ai/factory.js';
 import type { AiEventRecord, IntelligenceGateway } from '../ai/gateway.js';
+import type { ProposalValidation } from '../ai/proposal-validator.js';
+import { intelligenceDecisionsArtifact } from '../ai/decision-report.js';
+import type { IntelligenceProposal } from '../ai/model.js';
 import type { IntelligenceProvider } from '../ai/provider.js';
 import type { AdviceInput, AdvisedRecovery } from '../workflow-healing/workflow-healer.js';
 import { IssueCollector } from '../anomaly/issue-collector.js';
@@ -221,6 +224,8 @@ import { RuleBasedGoalMatcher } from '../goals/goal-matcher.js';
 import type { GoalState } from '../goals/goal-model.js';
 import { missionOf, RuleBasedGoalPlanner } from '../goals/goal-planner.js';
 import { GoalTracker } from '../goals/goal-tracker.js';
+import { firstFunctionalDivergence } from '../cognitive/functional-reasoning.js';
+import { loadRecordingCandidates, recordingCandidatesFile } from '../recording/recording-intelligence.js';
 import { JsonKnowledgeBase } from '../knowledge/json-knowledge-base.js';
 import type { KnowledgeBase, TransitionKnowledge } from '../knowledge/knowledge-model.js';
 import type { ConfidenceResult } from '../intelligence/confidence-engine.js';
@@ -477,7 +482,16 @@ export class FlowExplorer {
   readonly ai: IntelligenceGateway | undefined;
   private readonly aiContext: IntelligenceContextBuilder;
   /** Propositions retenues en attente de vérification au runtime, par `stateId::actionId`. */
-  private readonly aiPending = new Map<string, { auditId: string; expected: string[] }>();
+  private readonly aiPending = new Map<
+    string,
+    { auditId: string; expected: string[]; progressBefore?: number }
+  >();
+  /** Hypothèses contredites déjà soumises à l'analyse (une fois chacune). */
+  private readonly aiAnalyzedHypotheses = new Set<string>();
+  /** Avancement de l'objectif au moment d'une récupération proposée par l'IA. */
+  private readonly aiRecoveryProgress = new Map<string, number>();
+  /** Décision IA → l'hypothèse qu'elle a proposée (jugée ensuite par le runtime). */
+  private readonly aiHypothesisOf = new Map<string, string>();
   private readonly screenshots: ScreenshotService;
   private readonly authenticator: Authenticator;
   private readonly listener: ExplorationListener;
@@ -1043,6 +1057,9 @@ export class FlowExplorer {
           this.declaredScenarios(),
         );
       }
+      // RECORDING INTELLIGENCE (HYBRID) : les candidats proposés à l'enregistrement deviennent des hypothèses
+      // observables — le rejeu les soutiendra ou les contredira (jamais une vérité d'emblée).
+      if (this.cognitive && this.ai?.mode === 'HYBRID') await this.loadRecordingCandidates();
       // L'état de départ est la racine du graphe des flows, quel que soit ce que les flows visitent d'abord.
       let current = await this.observeState(page, 0);
       // GOAL PLANNER : des objectifs fonctionnels (jamais des clics), suivis pendant tout le run.
@@ -2605,7 +2622,8 @@ export class FlowExplorer {
       const networkMark = this.flowNetwork.length;
       const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
       const understood = this.understandStep(step, outcome.report, this.flowNetwork.slice(networkMark));
-      if (understood?.class === 'UNKNOWN_FAILURE') await this.adviseFailure(page, outcome.report);
+      if (understood?.class === 'UNKNOWN_FAILURE')
+        await this.adviseFailure(page, outcome.report, [...report.steps, outcome.report]);
       page = outcome.page;
       context = outcome.context ?? context;
       report.steps.push(outcome.report);
@@ -2708,6 +2726,15 @@ export class FlowExplorer {
       );
       return { allowed: verdict.allowed, reason: verdict.reason };
     });
+    // FIRST FUNCTIONAL DIVERGENCE, puis : l'objectif est-il bloqué pour une raison inconnue ?
+    if (this.cognitive) {
+      this.cognitive.recordFlow(flow.name, report.steps);
+      this.cognitive.blockedGoal();
+      if (this.ai && !page.isClosed()) {
+        await this.adviseBlockedGoal(page, flow.name);
+        await this.adviseContradictedHypotheses();
+      }
+    }
     // FLOW DRIFT : le flow marche-t-il encore tel quel, ou seulement grâce au self-healing ?
     const healing = this.config.replay.intelligentRecovery;
     if (healing.enabled && healing.detectFlowDrift) {
@@ -4604,14 +4631,31 @@ export class FlowExplorer {
     const writes = exchanges.filter(
       (exchange) => !['GET', 'HEAD', 'OPTIONS'].includes(exchange.method.toUpperCase()),
     );
+    const label = 'target' in step ? (step.target.name ?? step.target.value ?? '') : '';
+    const submitStep = writes.length > 0 || (label !== '' && cognitive.isSubmitAction(label));
     if (report.status === 'PASSED') {
       const accepted = writes.some(
         (exchange) => exchange.status !== undefined && exchange.status >= 200 && exchange.status < 300,
       );
       if (accepted && report.effect?.status === 'CONFIRMED')
-        cognitive.submissionSucceeded(`step ${String(report.index)}`);
+        cognitive.submissionSucceeded(`step ${String(report.index)}`, label || report.description);
+      else if (submitStep)
+        // L'envoi a été fait sans effet confirmé : la preuve d'un objectif bloqué « sans raison connue ».
+        cognitive.submissionAttempted({
+          step: `step ${String(report.index)}`,
+          label: label || report.description,
+          outcome: 'UNCONFIRMED',
+          detail: `${writes.length > 0 ? `${String(writes.length)} write(s), none accepted with a confirmed effect` : 'no write observed'}; effect ${report.effect?.status ?? 'not verified'}`,
+        });
       return undefined;
     }
+    if (submitStep && (report.status === 'FAILED' || report.status === 'BLOCKED'))
+      cognitive.submissionAttempted({
+        step: `step ${String(report.index)} "${report.description}"`,
+        label: label || report.description,
+        outcome: 'FAILED',
+        detail: (report.reason ?? report.status).slice(0, 160),
+      });
     if (report.status !== 'FAILED' && report.status !== 'BLOCKED') return undefined;
     const failing = [...exchanges]
       .reverse()
@@ -4635,6 +4679,70 @@ export class FlowExplorer {
       },
       `step ${String(report.index)} "${report.description}"`,
     );
+  }
+
+  private async loadRecordingCandidates(): Promise<void> {
+    const cognitive = this.cognitive;
+    if (!cognitive) return;
+    const candidates = await loadRecordingCandidates(recordingCandidatesFile(this.config.output.reportsDir));
+    for (const candidate of candidates.slice(-50))
+      if (candidate.kind === 'CAUSAL' && candidate.observable && candidate.usage === 'HYPOTHESIS')
+        cognitive.registerRecordingCandidate({
+          id: candidate.id,
+          statement: candidate.statement,
+          sourceRecording: candidate.sourceRecording,
+          ...(candidate.aiDecisionId ? { aiDecisionId: candidate.aiDecisionId } : {}),
+          observable: candidate.observable,
+        });
+  }
+
+  /**
+   * COVERAGE GAP EXPLAINED : un objectif UNREACHABLE / BLOCKED dit pourquoi — dernier checkpoint,
+   * objectif bloquant, préconditions manquantes, première divergence, preuves, hypothèse de l'IA.
+   * L'IA peut avoir proposé une explication ; elle ne change jamais le statut (le runtime seul le peut).
+   */
+  private explainUnreachedGoals(stopReason: StopReason): void {
+    const cognitive = this.cognitive;
+    if (!this.goals || !cognitive) return;
+    const analysis = cognitive.blockedGoal();
+    const divergence = cognitive.latestDivergence();
+    const aiHypotheses = cognitive
+      .hypothesisDetails()
+      .filter((detail) => detail.origin === 'AI_PROPOSAL' && detail.status !== 'REJECTED')
+      .slice(-3)
+      .map((detail) => `${detail.id} ${detail.description} — ${detail.status}`);
+    for (const goal of this.goals.goals) {
+      if (goal.status !== 'UNREACHABLE' && goal.status !== 'BLOCKED') continue;
+      const missing = analysis?.missingPreconditions ?? [];
+      const reason = analysis?.blockingReasons[0]
+        ? analysis.blockingReasons[0]
+        : divergence
+          ? `the journey diverged at step ${String(divergence.divergence.step)} (${divergence.divergence.kind})`
+          : (goal.reason ?? `not observed before the end of the exploration (${stopReason})`);
+      goal.explanation = {
+        reason: reason.slice(0, 300),
+        ...(analysis?.lastConfirmedCheckpoint
+          ? { lastReachedCheckpoint: analysis.lastConfirmedCheckpoint }
+          : {}),
+        ...(analysis && analysis.state !== 'SATISFIED' ? { blockingGoal: analysis.node } : {}),
+        missingPreconditions: missing,
+        ...(divergence
+          ? {
+              firstDivergence:
+                `${divergence.flow}: step ${String(divergence.divergence.step)} "${divergence.divergence.description}" (${divergence.divergence.kind})`.slice(
+                  0,
+                  200,
+                ),
+            }
+          : {}),
+        supportingEvidence: [
+          ...goal.evidence.map((evidence) => `${evidence.kind}: ${evidence.value}`),
+          ...(analysis?.candidateHypotheses ?? []),
+        ].slice(0, 8),
+        aiHypotheses,
+        confidence: analysis?.confidence ?? 0.3,
+      };
+    }
   }
 
   /** Les hypothèses vont dans la KnowledgeBase ; les vues de débogage dans reports/cognitive/. */
@@ -4802,13 +4910,7 @@ export class FlowExplorer {
       knownEvidence: (id) => cognitive.evidence.get(id) !== undefined,
       ...(this.config.ai.copilot.tools ? { tools: toolContextOf(built, full) } : {}),
     });
-    const proposal = result.validation?.valid ? result.validation.proposal : undefined;
-    if (proposal?.hypothesis)
-      cognitive.recordAiHypothesis(
-        proposal.hypothesis.statement,
-        proposal.hypothesis.evidenceIds,
-        result.record.id,
-      );
+    const proposal = this.learnAiProposal(result);
     if (!result.decision.accepted || !result.decision.actionId) return;
     const key = built.keyOf(result.decision.actionId);
     if (!key || !byKey.has(key)) return;
@@ -4818,9 +4920,11 @@ export class FlowExplorer {
       reason: `AI proposal ${result.record.id} (validated; SafetyPolicy ${result.decision.safety?.classification ?? 'SAFE'})`,
       decision: result.record.id,
     });
+    const progressBefore = cognitive.goalProgress()?.progress;
     this.aiPending.set(`${context.stateId}::${key}`, {
       auditId: result.record.id,
       expected: (proposal?.expectedEffects ?? []).map((effect) => `${effect.kind}:${effect.value}`),
+      ...(progressBefore !== undefined ? { progressBefore } : {}),
     });
   }
 
@@ -4848,7 +4952,7 @@ export class FlowExplorer {
     const appeared = [...visible(this.lastSnapshot)].filter((entry) => !prior.has(entry));
     const routeChanged = afterRoute !== beforeRoute;
     const checkable = pending.expected.filter((effect) =>
-      /^(VISIBLE_CONTROL|VISIBLE_FIELD|ROUTE):/.test(effect),
+      /^(VISIBLE_CONTROL|VISIBLE_FIELD|ROUTE|NEXT_ACTION_TARGET_AVAILABLE):/.test(effect),
     );
     const matched = checkable.filter((effect) => {
       const [kind, ...rest] = effect.split(':');
@@ -4860,13 +4964,85 @@ export class FlowExplorer {
     });
     const confirmed =
       newIssues === 0 && (checkable.length > 0 ? matched.length > 0 : appeared.length > 0 || routeChanged);
-    this.ai.recordRuntime(
+    this.aiRuntime(
       pending.auditId,
       confirmed,
       confirmed
         ? `observed: ${(matched.length > 0 ? matched : appeared.slice(0, 5)).join(', ') || afterRoute}`
         : `expected ${checkable.join(', ') || 'a visible effect'}; observed ${appeared.slice(0, 5).join(', ') || 'no new control'}${newIssues > 0 ? `, ${String(newIssues)} new issue(s)` : ''}`,
+      pending.progressBefore,
     );
+  }
+
+  /**
+   * Une proposition VALIDE apporte au plus une hypothèse (AI_PROPOSED_HYPOTHESIS, preuve LLM
+   * plafonnée, origine gardée) : l'hypothèse elle-même, ou la précondition manquante proposée.
+   * Jamais une vérité ; le runtime la jugera.
+   */
+  private learnAiProposal(result: {
+    record: { id: string };
+    validation?: ProposalValidation;
+  }): IntelligenceProposal | undefined {
+    const proposal = result.validation?.valid ? result.validation.proposal : undefined;
+    const cognitive = this.cognitive;
+    if (!proposal || !cognitive || !this.ai) return proposal;
+    const statement =
+      proposal.hypothesis?.statement ??
+      (proposal.missingPrecondition ? `missing precondition: ${proposal.missingPrecondition}` : undefined);
+    if (!statement) return proposal;
+    const type =
+      proposal.hypothesis?.type ?? (proposal.missingPrecondition ? 'WORKFLOW_PRECONDITION' : undefined);
+    const hypothesis = cognitive.recordAiHypothesis(
+      statement,
+      [...(proposal.hypothesis?.evidenceIds ?? []), ...proposal.supportingEvidenceIds],
+      result.record.id,
+      type ? { type } : {},
+    );
+    this.aiHypothesisOf.set(result.record.id, hypothesis.id);
+    this.ai.recordKnowledge(result.record.id, {
+      impact: 'AI_PROPOSED_HYPOTHESIS',
+      hypothesisId: hypothesis.id,
+      hypothesisStatus: hypothesis.status,
+    });
+    return proposal;
+  }
+
+  /**
+   * RUNTIME TRUTH d'une proposition exécutée : l'audit (confirmée / contredite, avancement de
+   * l'objectif avant → après) et l'hypothèse qu'elle portait (preuve runtime pour ou contre).
+   */
+  private aiRuntime(auditId: string, confirmed: boolean, detail: string, progressBefore?: number): void {
+    const ai = this.ai;
+    if (!ai) return;
+    const progress = this.cognitive?.updateProgress(`AI ${auditId}`);
+    ai.recordRuntime(
+      auditId,
+      confirmed,
+      detail,
+      progress && progressBefore !== undefined
+        ? {
+            goal: progress.goal,
+            before: progressBefore,
+            after: progress.progress,
+            impact:
+              progress.progress > progressBefore
+                ? 'ADVANCED'
+                : progress.progress < progressBefore
+                  ? 'REGRESSED'
+                  : 'NO_CHANGE',
+          }
+        : undefined,
+    );
+    const hypothesisId = this.aiHypothesisOf.get(auditId);
+    const hypothesis = hypothesisId
+      ? this.cognitive?.aiHypothesisRuntime(hypothesisId, confirmed, detail)
+      : undefined;
+    if (hypothesis)
+      ai.recordKnowledge(auditId, {
+        impact: confirmed ? 'RUNTIME_SUPPORTED' : 'RUNTIME_CONTRADICTED',
+        hypothesisId: hypothesis.id,
+        hypothesisStatus: hypothesis.status,
+      });
   }
 
   /**
@@ -4904,8 +5080,18 @@ export class FlowExplorer {
           ...(planned ? { score: planned.confidence } : {}),
         };
       });
-    const base = this.cognitive?.intelligenceSources();
     const context = input.context;
+    // NEXT ACTION AS EVIDENCE : les cibles des actions suivantes du parcours humain doivent devenir disponibles.
+    const nextTargets = [
+      ...context.nextActions.map((action) => action.label),
+      ...context.requiredFutureFields.map((action) => action.label),
+    ].filter((label, index, list) => label.length > 0 && list.indexOf(label) === index);
+    const base = this.cognitive?.intelligenceSources({
+      question: `Which available action is most likely to restore goal ${input.goal.id} (so that the next recorded targets ${nextTargets.slice(0, 4).join(', ') || 'appear'}), using only the provided evidence and action IDs?`,
+      nextActions: context.nextActions.map((action) => `${action.kind} ${action.label}`),
+      nextTargets,
+      previousActions: context.previousActions.map((action) => `${action.kind} ${action.label}`),
+    });
     const sources: ContextSources = {
       ...(base ?? { evidence: [], hypotheses: [], contradictions: [], coverageGaps: [] }),
       goal: { id: input.goal.id, conditions: input.goal.predicates.map(predicateText) },
@@ -4948,14 +5134,10 @@ export class FlowExplorer {
       knownEvidence: (id) => this.cognitive?.evidence.get(id) !== undefined,
       ...(this.config.ai.copilot.tools ? { tools: toolContextOf(built, sources) } : {}),
     });
-    const proposal = result.validation?.valid ? result.validation.proposal : undefined;
-    if (proposal?.hypothesis)
-      this.cognitive?.recordAiHypothesis(
-        proposal.hypothesis.statement,
-        proposal.hypothesis.evidenceIds,
-        result.record.id,
-      );
+    this.learnAiProposal(result);
     if (!result.decision.accepted || !result.decision.actionId) return undefined;
+    const progressBefore = this.cognitive?.goalProgress()?.progress;
+    if (progressBefore !== undefined) this.aiRecoveryProgress.set(result.record.id, progressBefore);
     const chosen = built.candidateOf(result.decision.actionId);
     if (!chosen?.role) return undefined;
     return {
@@ -4969,7 +5151,11 @@ export class FlowExplorer {
    * une catégorie probable, un sens métier possible, une investigation SÛRE — consignés dans
    * l'audit (et au plus une hypothèse). Le runtime et les oracles restent seuls juges.
    */
-  private async adviseFailure(page: Page, report: FlowStepReport): Promise<void> {
+  private async adviseFailure(
+    page: Page,
+    report: FlowStepReport,
+    steps: readonly FlowStepReport[] = [report],
+  ): Promise<void> {
     const ai = this.ai;
     const cognitive = this.cognitive;
     if (!ai || !cognitive) return;
@@ -4977,8 +5163,34 @@ export class FlowExplorer {
     if (!trigger.shouldInvoke || !trigger.reason) return;
     const snapshot = await this.observer.observe(page).catch(() => undefined);
     const controls = snapshot ? screenControlsOf(snapshot) : [];
+    // La PREMIÈRE divergence fonctionnelle, pas seulement la dernière erreur Playwright.
+    const divergence = firstFunctionalDivergence(steps);
+    const sources0 = cognitive.intelligenceSources({
+      question: divergence?.rootBeforeSymptom
+        ? `The failure was reported at step ${String(report.index)}, but the journey first diverged at step ${String(divergence.step)}. Which cause and which SAFE investigation best explain it, using only provided evidence?`
+        : 'Classify this unknown business failure and propose a SAFE investigation, using only provided evidence.',
+    });
+    const functional = sources0.functional
+      ? {
+          ...sources0.functional,
+          ...(divergence
+            ? {
+                firstDivergence: {
+                  step: divergence.step,
+                  description: divergence.description.slice(0, 160),
+                  expected: divergence.expected,
+                  observed: divergence.observed,
+                  ...(divergence.lastFailedStep !== undefined
+                    ? { lastFailedStep: divergence.lastFailedStep }
+                    : {}),
+                },
+              }
+            : {}),
+        }
+      : undefined;
     const sources: ContextSources = {
-      ...cognitive.intelligenceSources(),
+      ...sources0,
+      ...(functional ? { functional } : {}),
       candidates: controls
         .filter((control) => control.visible && !control.field && control.role && control.name)
         .map((control) => {
@@ -5013,13 +5225,111 @@ export class FlowExplorer {
       }),
       knownEvidence: (id) => cognitive.evidence.get(id) !== undefined,
     });
-    const proposal = result.validation?.valid ? result.validation.proposal : undefined;
-    if (proposal?.hypothesis)
-      cognitive.recordAiHypothesis(
-        proposal.hypothesis.statement,
-        proposal.hypothesis.evidenceIds,
-        result.record.id,
-      );
+    this.learnAiProposal(result);
+  }
+
+  /**
+   * OBJECTIF BLOQUÉ, CAUSE INCONNUE (fin de flow) : le PreconditionResolver a dit ce qu'il savait ;
+   * s'il ne sait pas pourquoi l'objectif reste bloqué (submission READY, mission toujours bloquée…),
+   * le conseiller reçoit le contexte fonctionnel et propose une précondition manquante ou une
+   * investigation SÛRE. Une analyse : rien n'est exécuté, la proposition devient une hypothèse.
+   */
+  private async adviseBlockedGoal(page: Page, flow: string): Promise<void> {
+    const ai = this.ai;
+    const cognitive = this.cognitive;
+    if (!ai || !cognitive) return;
+    const analysis = cognitive.blockedGoal();
+    if (!analysis || analysis.state === 'SATISFIED' || !analysis.unknownPrecondition) return;
+    // Un parcours qui a divergé AVANT d'être prêt est expliqué par sa divergence : la cause n'est pas
+    // inconnue. Seul un objectif prêt (ou dont l'envoi a été tenté) et encore bloqué justifie l'appel.
+    const established =
+      analysis.satisfiedPreconditions.some((id) => id.endsWith('_READY')) ||
+      cognitive.submissionWasAttempted();
+    if (!established && cognitive.latestDivergence()?.flow === flow) return;
+    const trigger = ai.evaluate({
+      deterministicConfidence: analysis.confidence,
+      unknownBlockingPrecondition: true,
+    });
+    if (!trigger.shouldInvoke || !trigger.reason) return;
+    const snapshot = await this.observer.observe(page).catch(() => undefined);
+    const controls = snapshot ? screenControlsOf(snapshot) : [];
+    const sources: ContextSources = {
+      ...cognitive.intelligenceSources({
+        question: `Goal ${analysis.goal} remains blocked${analysis.lastConfirmedCheckpoint ? ` although ${analysis.lastConfirmedCheckpoint} is confirmed` : ''}. Identify the most plausible missing precondition or a SAFE investigation, using only provided evidence and action IDs.`,
+      }),
+      candidates: controls
+        .filter((control) => control.visible && !control.field && control.role && control.name)
+        .map((control) => {
+          const kind = control.role === 'checkbox' || control.role === 'radio' ? 'check' : 'click';
+          const judged = this.judgeRecovery(control, kind);
+          return {
+            key: `${control.role}:${control.name}`,
+            kind,
+            role: control.role,
+            name: control.name,
+            safety: judged.risk,
+            allowed: judged.allowed,
+          };
+        }),
+    };
+    const built = this.aiContext.build(trigger.reason, sources);
+    const result = await ai.consult({
+      context: 'BLOCKED_GOAL',
+      request: built.request,
+      scope: { divergence: `blocked|${flow}|${analysis.goal}` },
+      deterministic: { confidence: analysis.confidence },
+      safety: (id) => {
+        const candidate = built.candidateOf(id);
+        if (!candidate?.role)
+          return { allowed: false, classification: 'UNKNOWN', reason: 'not a control on screen' };
+        const judged = this.judgeRecovery(
+          { role: candidate.role, name: candidate.name, visible: true, disabled: false },
+          candidate.kind === 'check' ? 'check' : 'click',
+        );
+        return { allowed: judged.allowed, classification: judged.risk, reason: judged.reason };
+      },
+      knownEvidence: (id) => cognitive.evidence.get(id) !== undefined,
+      signals: { plausiblePlans: analysis.candidateActions.length },
+    });
+    this.learnAiProposal(result);
+  }
+
+  /**
+   * HYPOTHÈSE CONTREDITE sans alternative ni investigation (l'apprentissage actif n'a rien
+   * proposé) : le conseiller peut proposer une autre explication ou une investigation SÛRE.
+   */
+  private async adviseContradictedHypotheses(): Promise<void> {
+    const ai = this.ai;
+    const cognitive = this.cognitive;
+    if (!ai || !cognitive) return;
+    for (const contradicted of cognitive
+      .contradictedAnalysis()
+      .filter((entry) => entry.needsAnalysis)
+      .slice(0, 1)) {
+      if (this.aiAnalyzedHypotheses.has(contradicted.id)) continue;
+      this.aiAnalyzedHypotheses.add(contradicted.id);
+      const trigger = ai.evaluate({ deterministicConfidence: 0, contradictedHypothesis: true });
+      if (!trigger.shouldInvoke || !trigger.reason) return;
+      const built = this.aiContext.build(trigger.reason, {
+        ...cognitive.intelligenceSources({
+          question: `Hypothesis ${contradicted.id} "${contradicted.description}" was contradicted (${contradicted.why}) and no alternative is known. Propose an alternative hypothesis or a SAFE investigation, using only provided evidence.`,
+        }),
+        candidates: [],
+      });
+      const result = await ai.consult({
+        context: 'HYPOTHESIS',
+        request: built.request,
+        scope: { divergence: `hypothesis|${contradicted.id}` },
+        deterministic: { confidence: 0 },
+        safety: () => ({
+          allowed: false,
+          classification: 'ADVISORY',
+          reason: 'hypothesis analysis is advisory only',
+        }),
+        knownEvidence: (id) => cognitive.evidence.get(id) !== undefined,
+      });
+      this.learnAiProposal(result);
+    }
   }
 
   /** L'audit de l'intelligence : reports/ai/intelligence.json (résumé, décisions, mesures). */
@@ -5030,9 +5340,17 @@ export class FlowExplorer {
     if (!this.config.ai.audit.enabled) return;
     const directory = path.join(this.config.output.reportsDir, 'ai');
     await mkdir(directory, { recursive: true });
+    const summary = this.ai.summary();
     await writeFile(
       path.join(directory, 'intelligence.json'),
-      `${JSON.stringify(this.ai.summary(), null, 2)}\n`,
+      `${JSON.stringify(summary, null, 2)}\n`,
+      'utf8',
+    );
+    // Le cycle de vie de chaque décision (déclencheur → contexte → proposition → validation → shadow
+    // → repli → exécution → runtime → connaissance), nettoyé.
+    await writeFile(
+      path.join(this.config.output.reportsDir, 'intelligence-decisions.json'),
+      `${JSON.stringify(intelligenceDecisionsArtifact(summary), null, 2)}\n`,
       'utf8',
     );
   }
@@ -5090,7 +5408,7 @@ export class FlowExplorer {
         ? {
             advise: (input: AdviceInput) => this.adviseRecovery(input),
             adviceOutcome: (auditId: string, reached: boolean, detail: string) => {
-              this.ai?.recordRuntime(auditId, reached, detail);
+              this.aiRuntime(auditId, reached, detail, this.aiRecoveryProgress.get(auditId));
             },
           }
         : {}),
@@ -6107,6 +6425,7 @@ export class FlowExplorer {
 
   private outcome(stopReason: StopReason): ExplorationOutcome {
     this.goals?.finalize(stopReason);
+    this.explainUnreachedGoals(stopReason);
     return {
       graph: this.graph,
       issues: this.collector.all(),

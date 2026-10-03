@@ -36,6 +36,21 @@ const TEXTS = {
     reasoning: 'Reasoning effort sent',
     complexity: 'Reasoning complexity',
     effectiveness: 'Effectiveness by trigger and complexity',
+    lifecycle: 'AI decisions — lifecycle',
+    lifecycleHint:
+      'Every call ends in exactly one response. Validation, shadow comparison, execution, runtime and fallbacks are separate dimensions. In ASSIST a valid proposal is SHADOW_ONLY, never a fallback.',
+    byTrigger: 'Calls by trigger',
+    responses: 'Responses',
+    validation: 'Proposal validation',
+    shadowResults: 'Shadow (deterministic vs AI)',
+    executed: 'Executed from AI',
+    notExecuted: 'Not executed because',
+    runtime: 'Runtime confirmation',
+    runtimeNa: 'N/A because current mode=ASSIST (shadow only)',
+    fallbackReasons: 'Fallbacks (an expected AI path could not be used)',
+    knowledge: 'Knowledge impact',
+    consistency: 'Counter check',
+    withoutCall: 'Decisions without a call',
   },
   fr: {
     title: 'Intelligence IA',
@@ -70,6 +85,21 @@ const TEXTS = {
     reasoning: 'Effort envoyé',
     complexity: 'Complexité du raisonnement',
     effectiveness: 'Efficacité par déclencheur et complexité',
+    lifecycle: 'Décisions IA — cycle de vie',
+    lifecycleHint:
+      'Chaque appel a exactement une réponse. Validation, comparaison shadow, exécution, runtime et replis sont des dimensions séparées. En ASSIST, une proposition valide est SHADOW_ONLY, jamais un repli.',
+    byTrigger: 'Appels par déclencheur',
+    responses: 'Réponses',
+    validation: 'Validation des propositions',
+    shadowResults: 'Shadow (déterministe vs IA)',
+    executed: 'Exécutées depuis l’IA',
+    notExecuted: 'Non exécutées parce que',
+    runtime: 'Confirmation au runtime',
+    runtimeNa: 'sans objet : mode ASSIST (shadow seulement)',
+    fallbackReasons: 'Replis (un chemin IA attendu n’a pas servi)',
+    knowledge: 'Apport à la connaissance',
+    consistency: 'Contrôle des compteurs',
+    withoutCall: 'Décisions sans appel',
   },
 } as const;
 
@@ -91,7 +121,7 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
           decision.proposal?.action
             ? `${decision.proposal.selectedActionId ?? ''} ${decision.proposal.action}`
             : (decision.proposal?.status ?? '—'),
-        )}</td><td>${esc(decision.validation.rejection ?? decision.validation.status)}</td><td>${esc(decision.safety ?? '—')}</td><td>${esc(decision.outcome)}</td><td>${esc(decision.runtimeResult ?? '—')}</td></tr>`,
+        )}${decision.proposal?.hypothesis ? `<br><span class="muted">${esc(`${decision.proposal.hypothesisType ?? 'hypothesis'}: ${decision.proposal.hypothesis}`)}</span>` : ''}${decision.proposal?.missingPrecondition ? `<br><span class="muted">${esc(`missing precondition: ${decision.proposal.missingPrecondition}`)}</span>` : ''}</td><td>${esc(decision.lifecycle.response)}</td><td>${esc(decision.validation.rejection ?? decision.validation.status)}</td><td>${esc(decision.safety ?? '—')}</td><td>${esc(decision.lifecycle.shadowResult ?? '—')}</td><td><b>${esc(decision.lifecycle.terminal)}</b>${decision.lifecycle.notExecutedReason ? `<br><span class="muted">${esc(decision.lifecycle.notExecutedReason)}</span>` : ''}</td><td>${esc(decision.lifecycle.fallbackReason ?? '—')}</td><td>${esc(decision.runtimeResult ?? (decision.lifecycle.runtime === 'NOT_APPLICABLE' ? '—' : decision.lifecycle.runtime))}${decision.lifecycle.goalProgress?.after !== undefined ? `<br><span class="muted">${esc(`${decision.lifecycle.goalProgress.goal} ${String(decision.lifecycle.goalProgress.before)} → ${String(decision.lifecycle.goalProgress.after)} (${decision.lifecycle.goalProgress.impact ?? ''})`)}</span>` : ''}</td><td class="wrap">${esc(functionalCell(decision))}</td></tr>`,
     )
     .join('');
   return `<section>
@@ -161,12 +191,87 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
             .join('')}</tbody></table>`
         : ''
     }
+    ${lifecycleHtml(ai, t)}
     <h3>${esc(t.decisions)}</h3>${
       ai.decisions.length > 0
-        ? `<table><thead><tr><th>id</th><th>context</th><th>trigger</th><th>complexity / model / effort</th><th>proposal</th><th>validation</th><th>safety</th><th>outcome</th><th>runtime</th></tr></thead><tbody>${decisions}</tbody></table>`
+        ? `<table><thead><tr><th>id</th><th>context</th><th>trigger</th><th>complexity / model / effort</th><th>proposal</th><th>response</th><th>validation</th><th>safety</th><th>shadow</th><th>result</th><th>fallback</th><th>runtime</th><th>functional context</th></tr></thead><tbody>${decisions}</tbody></table>`
         : `<p class="muted">${t.none}</p>`
     }
   </section>`;
+}
+
+type AiSummaryView = NonNullable<ExplorationResult['ai']>;
+
+/**
+ * AI DECISIONS (§43-44) : les appels par déclencheur, puis chaque dimension SÉPARÉE — réponses,
+ * validation, shadow, exécution, runtime, replis (avec les décisions qui les ont produits).
+ */
+function lifecycleHtml(ai: AiSummaryView, t: (typeof TEXTS)[ReportLanguage]): string {
+  const lifecycle = ai.lifecycle;
+  const tally = (values: Partial<Record<string, number>>): string =>
+    Object.entries(values)
+      .filter(([, count]) => (count ?? 0) > 0)
+      .map(([key, count]) => `${key}: ${String(count)}`)
+      .join(' · ') || '—';
+  const callTriggers: Partial<Record<string, number>> = {};
+  for (const decision of ai.decisions)
+    if (decision.lifecycle.call) callTriggers[decision.trigger] = (callTriggers[decision.trigger] ?? 0) + 1;
+  const responses: Partial<Record<string, number>> = {};
+  const without: Partial<Record<string, number>> = {};
+  for (const [response, count] of Object.entries(lifecycle.byResponse))
+    if (['UNAVAILABLE', 'BUDGET_EXHAUSTED', 'NO_LLM_REQUIRED'].includes(response)) without[response] = count;
+    else responses[response] = count;
+  const runtime =
+    ai.mode === 'ASSIST' && lifecycle.execution.executedFromAi === 0
+      ? t.runtimeNa
+      : `confirmed ${String(lifecycle.runtime.confirmed)} · contradicted ${String(lifecycle.runtime.contradicted)}${lifecycle.runtime.pending > 0 ? ` · pending ${String(lifecycle.runtime.pending)}` : ''}`;
+  const fallbacks = Object.entries(lifecycle.fallbacks.byReason)
+    .map(
+      ([reason, count]) =>
+        `${reason}: ${String(count)} (${(lifecycle.fallbacks.decisionIds[reason as keyof typeof lifecycle.fallbacks.decisionIds] ?? []).join(', ')})`,
+    )
+    .join(' · ');
+  const rows: [string, string][] = [
+    [t.calls, String(lifecycle.calls)],
+    [t.byTrigger, tally(callTriggers)],
+    [t.responses, tally(responses)],
+    [t.withoutCall, `${String(lifecycle.notCalled)}${lifecycle.notCalled > 0 ? ` — ${tally(without)}` : ''}`],
+    [
+      t.validation,
+      `valid ${String(lifecycle.validation.valid)} · invalid ${String(lifecycle.validation.invalid)}`,
+    ],
+    [t.shadowResults, tally(lifecycle.shadow)],
+    [t.executed, String(lifecycle.execution.executedFromAi)],
+    [t.notExecuted, tally(lifecycle.execution.notExecuted)],
+    [t.runtime, runtime],
+    [t.fallbackReasons, `${String(lifecycle.fallbacks.total)}${fallbacks ? ` — ${fallbacks}` : ''}`],
+    [
+      t.knowledge,
+      `${String(lifecycle.knowledge.hypothesesProposed)} hypothesis(es) proposed · ${String(lifecycle.knowledge.runtimeSupported)} runtime supported · ${String(lifecycle.knowledge.runtimeContradicted)} runtime contradicted`,
+    ],
+    [t.consistency, `${lifecycle.consistent ? 'OK' : 'INCONSISTENT'} — ${lifecycle.consistency}`],
+  ];
+  return `<h3>${esc(t.lifecycle)}</h3><p class="muted">${esc(t.lifecycleHint)}</p><table><tbody>${rows
+    .map(([label, value]) => `<tr><th>${esc(label)}</th><td class="wrap">${esc(value)}</td></tr>`)
+    .join('')}</tbody></table>`;
+}
+
+/** Ce que la décision savait du parcours : objectif, checkpoint, précondition manquante, divergence. */
+function functionalCell(decision: AiSummaryView['decisions'][number]): string {
+  const functional = decision.functionalContext;
+  if (!functional) return '—';
+  return [
+    functional.goal ? `goal ${functional.goal}` : '',
+    functional.goalProgress !== undefined ? `progress ${String(functional.goalProgress)}` : '',
+    functional.lastConfirmedCheckpoint ? `checkpoint ${functional.lastConfirmedCheckpoint}` : '',
+    functional.missingPreconditions.length > 0
+      ? `missing ${functional.missingPreconditions.join(', ')}${functional.unknownPrecondition ? ' (unknown)' : ''}`
+      : '',
+    functional.blockingReason ? `blocked: ${functional.blockingReason}` : '',
+    functional.firstDivergence ? `first divergence: ${functional.firstDivergence}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 /** Complexité, modèle demandé → choisi (→ réellement utilisé), effort, repli : jamais masqué. */

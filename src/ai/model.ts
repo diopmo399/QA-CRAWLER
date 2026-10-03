@@ -27,6 +27,12 @@ export const INTELLIGENCE_TRIGGERS = [
   'KNOWLEDGE_CONTRADICTION',
   'UNKNOWN_BUSINESS_ERROR',
   'LOW_DECISION_CONFIDENCE',
+  /** L'objectif reste bloqué et le PreconditionResolver ne sait pas pourquoi. */
+  'UNKNOWN_BLOCKING_PRECONDITION',
+  /** Une hypothèse contredite sans alternative claire : quelle autre explication, quelle investigation ? */
+  'HYPOTHESIS_ANALYSIS',
+  /** Après un enregistrement : comprendre le parcours humain (jamais le modifier). */
+  'RECORDING_ENRICHMENT',
 ] as const;
 export type IntelligenceTriggerReason = (typeof INTELLIGENCE_TRIGGERS)[number];
 
@@ -37,6 +43,8 @@ export const COMPLEX_TRIGGERS: readonly IntelligenceTriggerReason[] = [
   'KNOWLEDGE_CONTRADICTION',
   'UNKNOWN_BUSINESS_ERROR',
   'MULTIPLE_PLAUSIBLE_PLANS',
+  'UNKNOWN_BLOCKING_PRECONDITION',
+  'HYPOTHESIS_ANALYSIS',
 ];
 
 export type ActionSafety = 'SAFE' | 'MUTATION' | 'DANGEROUS' | 'UNKNOWN';
@@ -84,6 +92,40 @@ export interface IntelligenceContradiction {
   summary: string;
 }
 
+/** La première divergence FONCTIONNELLE d'un parcours (pas la dernière erreur Playwright). */
+export interface FunctionalDivergenceSummary {
+  step: number;
+  description: string;
+  expected: string[];
+  observed: string[];
+  /** L'étape où le parcours a fini par échouer (souvent plus loin que la divergence). */
+  lastFailedStep?: number;
+}
+
+export interface FunctionalContext {
+  currentGoal?: string;
+  parentGoal?: string;
+  /** Avancement de l'objectif (0..1), selon les préconditions et checkpoints confirmés. */
+  goalProgress?: number;
+  satisfiedPreconditions: string[];
+  missingPreconditions: string[];
+  /** La précondition qui bloque est inconnue du moteur déterministe. */
+  unknownPrecondition?: boolean;
+  blockingReasons: string[];
+  lastConfirmedCheckpoint?: string;
+  nextExpectedCheckpoint?: string;
+  /** Relations causales connues (« click X REVEALS textbox:Y — SUPPORTED »). */
+  causalRelations: string[];
+  previousConfirmedActions: string[];
+  nextExpectedActions: string[];
+  /** Les cibles des actions suivantes du parcours humain : leur apparition confirme l'action courante. */
+  nextActionTargets: string[];
+  functionalCoverage: string[];
+  firstDivergence?: FunctionalDivergenceSummary;
+  /** La question cognitive posée (identifier une précondition, expliquer un échec…). */
+  question?: string;
+}
+
 export interface IntelligenceConstraints {
   /** Seuls ces identifiants d'action peuvent être proposés. */
   allowedActionIds: string[];
@@ -110,6 +152,12 @@ export interface IntelligenceRequest {
   coverageContext?: { gaps: string[] };
   /** Pour une erreur métier inconnue : le symptôme observé (texte court, nettoyé). */
   failure?: { step: string; symptom: string; observed: string[] };
+  /**
+   * L'ÉTAT FONCTIONNEL du raisonnement : objectif, préconditions satisfaites et manquantes,
+   * checkpoints, relations causales, première divergence, question cognitive. Ce qui permet de
+   * répondre « cette action satisfera la précondition X et fera avancer l'objectif Y ».
+   */
+  functionalContext?: FunctionalContext;
   constraints: IntelligenceConstraints;
 }
 
@@ -120,6 +168,21 @@ export const EXPECTED_EFFECT_KINDS = [
   'ROUTE',
   'GOAL_REACHED',
   'TEXT',
+  /** Un checkpoint sémantique (DEMANDE_CREATED, COMPANY_INFORMATION_AVAILABLE…). */
+  'CHECKPOINT',
+  /** La cible de l'action suivante du parcours devient disponible (confirmation fonctionnelle). */
+  'NEXT_ACTION_TARGET_AVAILABLE',
+] as const;
+
+/** Ce qu'une hypothèse proposée affirme (elle reste AI_PROPOSED_HYPOTHESIS jusqu'au runtime). */
+export const PROPOSED_HYPOTHESIS_TYPES = [
+  'WORKFLOW_PRECONDITION',
+  'CAUSAL',
+  'BUSINESS_RULE',
+  'FUNCTIONAL_GOAL',
+  'SEMANTIC_CHECKPOINT',
+  'INVARIANT',
+  'FAILURE_CAUSE',
 ] as const;
 
 const shortText = (max: number) => z.string().min(1).max(max);
@@ -141,9 +204,17 @@ export const intelligenceProposalSchema = z
       .strict()
       .optional(),
     hypothesis: z
-      .object({ statement: shortText(300), evidenceIds: z.array(shortText(80)).max(20) })
+      .object({
+        type: z.enum(PROPOSED_HYPOTHESIS_TYPES).optional(),
+        statement: shortText(300),
+        evidenceIds: z.array(shortText(80)).max(20),
+      })
       .strict()
       .optional(),
+    /** La précondition manquante la plus plausible (un identifiant court, jamais une action). */
+    missingPrecondition: shortText(120).optional(),
+    /** La phase du parcours (enrichissement d'un enregistrement). */
+    workflowPhase: shortText(120).optional(),
     plan: z
       .object({
         steps: z
@@ -188,10 +259,13 @@ export const INTELLIGENCE_PROPOSAL_JSON_SCHEMA: Record<string, unknown> = {
       additionalProperties: false,
       required: ['statement', 'evidenceIds'],
       properties: {
+        type: { type: 'string', enum: [...PROPOSED_HYPOTHESIS_TYPES] },
         statement: { type: 'string', maxLength: 300 },
         evidenceIds: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 80 } },
       },
     },
+    missingPrecondition: { type: 'string', maxLength: 120 },
+    workflowPhase: { type: 'string', maxLength: 120 },
     plan: {
       type: 'object',
       additionalProperties: false,

@@ -1,11 +1,19 @@
 import { sanitizeText } from '../persistence/sanitize.js';
 import {
+  ADVISORY_CONTEXTS,
   IntelligenceAuditTrail,
   type AiContext,
   type AiDecisionRecord,
+  type AiFunctionalContextSummary,
   type AiOutcome,
   type AiSummary,
 } from './audit-trail.js';
+import {
+  classifyDecision,
+  type AiCallFailure,
+  type AiGoalProgress,
+  type AiKnowledgeImpact,
+} from './decision-lifecycle.js';
 import { IntelligenceBudgetManager, type CallScope, type IntelligenceBudgets } from './budget-manager.js';
 import {
   arbitrate,
@@ -60,6 +68,8 @@ export const AI_EVENTS = [
   'AI_REASONING_EFFORT_SELECTED',
   'AI_REASONING_EFFORT_ADJUSTED',
   'AI_EFFECTIVE_MODEL_OBSERVED',
+  'AI_SHADOW_RECORDED',
+  'AI_DECISION_CLASSIFIED',
 ] as const;
 export type AiEvent = (typeof AI_EVENTS)[number];
 export interface AiEventRecord {
@@ -98,6 +108,8 @@ export interface ConsultInput {
   tools?: IntelligenceToolContext;
   /** Signaux du moteur cognitif pour mesurer la difficulté (tentatives, plans, divergence). */
   signals?: ComplexitySignals;
+  /** Une analyse (aucune exécution attendue) ; par défaut selon le contexte (FAILURE, BLOCKED_GOAL…). */
+  advisory?: boolean;
 }
 
 export interface ConsultResult {
@@ -155,6 +167,7 @@ export class IntelligenceGateway {
   async consult(input: ConsultInput): Promise<ConsultResult> {
     const started = this.now();
     const { request } = input;
+    const functional = functionalSummaryOf(request);
     const base = {
       at: this.clock(),
       context: input.context,
@@ -172,7 +185,9 @@ export class IntelligenceGateway {
         confidence: round(input.deterministic.confidence),
       },
       toolCalls: 0,
+      ...(functional ? { functionalContext: functional } : {}),
     };
+    const advisory = input.advisory ?? ADVISORY_CONTEXTS.includes(input.context);
     const fallback = (
       outcome: AiOutcome,
       reasons: string[],
@@ -195,9 +210,15 @@ export class IntelligenceGateway {
         outcome,
         latencyMs: this.now() - started,
         reasons,
+        lifecycle: classifyDecision({
+          mode: this.options.mode,
+          advisory,
+          ...(input.deterministic.actionId ? { deterministicActionId: input.deterministic.actionId } : {}),
+          failure: FAILURE_OF[outcome] ?? 'ERROR',
+        }),
         ...extra,
       });
-      this.emit('AI_FALLBACK_ACTIVATED', `${record.id} ${outcome}: deterministic decision kept`);
+      this.classified(record);
       return { record, decision };
     };
     if (this.options.mode === 'OFF') return fallback('AI_UNAVAILABLE', ['intelligence OFF']);
@@ -303,10 +324,20 @@ export class IntelligenceGateway {
             : this.options.mode === 'ASSIST'
               ? 'SHADOW'
               : 'PROPOSAL_NOT_SELECTED';
+    const lifecycle = classifyDecision({
+      mode: this.options.mode,
+      advisory,
+      ...(input.deterministic.actionId ? { deterministicActionId: input.deterministic.actionId } : {}),
+      validation,
+      decision,
+    });
+    // Compatibilité : vrai / faux seulement quand les deux côtés ont choisi une action.
     const shadow =
-      this.options.mode === 'ASSIST' && validation.valid && validation.proposal.selectedActionId
-        ? validation.proposal.selectedActionId === input.deterministic.actionId
-        : undefined;
+      lifecycle.shadowResult === 'AGREEMENT'
+        ? true
+        : lifecycle.shadowResult === 'DISAGREEMENT'
+          ? false
+          : undefined;
     const record = this.audit.create({
       ...base,
       ...((result.modelContext?.effectiveModel ?? result.model ?? result.modelContext?.selectedModel)
@@ -330,7 +361,17 @@ export class IntelligenceGateway {
               evidenceIds: proposal.supportingEvidenceIds,
               uncertainties: proposal.uncertainties,
               ...(proposal.hypothesis ? { hypothesis: proposal.hypothesis.statement } : {}),
+              ...(proposal.hypothesis?.type ? { hypothesisType: proposal.hypothesis.type } : {}),
+              ...(proposal.missingPrecondition ? { missingPrecondition: proposal.missingPrecondition } : {}),
+              ...(proposal.expectedEffects && proposal.expectedEffects.length > 0
+                ? {
+                    expectedEffects: proposal.expectedEffects.map(
+                      (effect) => `${effect.kind}:${effect.value}`,
+                    ),
+                  }
+                : {}),
               ...(proposal.failureCategory ? { failureCategory: proposal.failureCategory } : {}),
+              ...(proposal.nextInvestigation ? { nextInvestigation: proposal.nextInvestigation } : {}),
               ...(proposal.summary ? { summary: proposal.summary } : {}),
             },
           }
@@ -347,6 +388,7 @@ export class IntelligenceGateway {
       latencyMs: this.now() - started,
       toolCalls: result.toolCalls ?? 0,
       reasons: decision.reasons,
+      lifecycle,
     });
     if (validation.valid) this.emit('AI_PROPOSAL_VALIDATED', `${record.id}: ${validation.checks.join(', ')}`);
     else
@@ -366,8 +408,70 @@ export class IntelligenceGateway {
         'AI_SHADOW_DISAGREEMENT',
         `${record.id}: deterministic ${input.deterministic.actionId ?? 'none'} vs proposed ${record.proposal?.selectedActionId ?? ''}`,
       );
-    if (!decision.accepted) this.emit('AI_FALLBACK_ACTIVATED', `${record.id}: deterministic decision kept`);
+    this.classified(record);
     return { record, decision, validation };
+  }
+
+  /**
+   * L'issue d'une décision, en une trace lisible (§45) : déclencheur, contexte fonctionnel,
+   * modèle, proposition, validation, shadow, exécution. Un repli n'est annoncé QUE s'il en est un.
+   */
+  private classified(record: AiDecisionRecord): void {
+    const { lifecycle } = record;
+    const functional = record.functionalContext;
+    if (lifecycle.shadowResult)
+      this.emit(
+        'AI_SHADOW_RECORDED',
+        `${record.id} ${lifecycle.shadowResult}: deterministic ${record.deterministic.actionId ?? 'none'} vs proposed ${record.proposal?.selectedActionId ?? 'none'}`,
+      );
+    if (lifecycle.fallbackReason)
+      this.emit(
+        'AI_FALLBACK_ACTIVATED',
+        `${record.id} ${lifecycle.fallbackReason}: deterministic decision kept (${record.reasons[0] ?? record.outcome})`,
+      );
+    const fields: [string, string | number | undefined][] = [
+      ['trigger', record.trigger],
+      ['context', record.context],
+      ['mission', functional?.mission],
+      ['goal', functional?.goal ?? record.goal],
+      ['checkpoint', functional?.lastConfirmedCheckpoint],
+      ['missing', functional?.missingPreconditions.join('|') || undefined],
+      ['deterministicConfidence', record.deterministic.confidence],
+      ['model', record.modelContext?.effectiveModel ?? record.modelContext?.selectedModel ?? record.model],
+      ['mode', record.mode],
+      ['response', lifecycle.response],
+      ['proposal.action', record.proposal?.selectedActionId],
+      [
+        'proposal.hypothesis',
+        record.proposal?.hypothesisType ?? (record.proposal?.hypothesis ? 'PROPOSED' : undefined),
+      ],
+      ['proposal.precondition', record.proposal?.missingPrecondition],
+      ['proposal.confidence', record.proposal?.confidence],
+      [
+        'validation',
+        lifecycle.proposalValid === undefined
+          ? 'NOT_RECEIVED'
+          : lifecycle.proposalValid
+            ? 'VALID'
+            : 'INVALID',
+      ],
+      ['shadow', lifecycle.shadowResult],
+      ['terminal', lifecycle.terminal],
+      [
+        'execution',
+        lifecycle.acceptedForExecution
+          ? 'ACCEPTED_FOR_EXECUTION'
+          : `NOT_EXECUTED_${lifecycle.notExecutedReason ?? 'NO_RESPONSE'}`,
+      ],
+      ['fallback', lifecycle.fallbackReason],
+    ];
+    this.emit(
+      'AI_DECISION_CLASSIFIED',
+      `[AI ${record.id}] ${fields
+        .filter(([, value]) => value !== undefined && value !== '')
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .join(' ')}`,
+    );
   }
 
   /**
@@ -375,19 +479,34 @@ export class IntelligenceGateway {
    * Confirmée, elle peut devenir un candidat de connaissance (origine AI_PROPOSAL gardée) ;
    * contredite, elle n'est jamais apprise.
    */
-  recordRuntime(id: string, confirmed: boolean, detail: string): void {
+  recordRuntime(id: string, confirmed: boolean, detail: string, progress?: AiGoalProgress): void {
     const record = this.audit.byId(id);
     if (!record) return;
     record.runtimeResult = confirmed ? 'GOAL_CONFIRMED' : 'RUNTIME_CONTRADICTED';
     record.runtimeDetail = detail.slice(0, 200);
     record.knowledgeCandidate = { origin: 'AI_PROPOSAL', runtimeConfirmed: confirmed };
+    record.lifecycle.execution = 'EXECUTED';
+    record.lifecycle.runtime = confirmed ? 'CONFIRMED' : 'CONTRADICTED';
+    if (progress) record.lifecycle.goalProgress = progress;
     this.emit(confirmed ? 'AI_RUNTIME_CONFIRMED' : 'AI_RUNTIME_CONTRADICTED', `${id}: ${detail}`);
   }
 
   /** Retenue, mais le moteur de décision a finalement exécuté autre chose (ou le run s'est arrêté). */
   markNotExecuted(id: string): void {
     const record = this.audit.byId(id);
-    if (record && record.runtimeResult === undefined) record.runtimeResult = 'NOT_EXECUTED';
+    if (!record || record.runtimeResult !== undefined) return;
+    record.runtimeResult = 'NOT_EXECUTED';
+    if (record.lifecycle.execution === 'PENDING') {
+      record.lifecycle.execution = 'NOT_EXECUTED';
+      record.lifecycle.runtime = 'NOT_APPLICABLE';
+      record.lifecycle.notExecutedReason = 'EXECUTOR_CHOSE_OTHER';
+    }
+  }
+
+  /** Ce que la décision a apporté à la connaissance (une hypothèse proposée, soutenue ou contredite). */
+  recordKnowledge(id: string, impact: AiKnowledgeImpact): void {
+    const record = this.audit.byId(id);
+    if (record) record.lifecycle.knowledge = impact;
   }
 
   summary(): AiSummary {
@@ -458,6 +577,46 @@ export class IntelligenceGateway {
   private clock(): string {
     return this.options.clock?.() ?? new Date().toISOString();
   }
+}
+
+/** Une issue « sans réponse » de la passerelle → la cause du cycle de vie. */
+const FAILURE_OF: Partial<Record<AiOutcome, AiCallFailure>> = {
+  AI_UNAVAILABLE: 'UNAVAILABLE',
+  AI_TIMEOUT: 'TIMEOUT',
+  AI_BUDGET_EXHAUSTED: 'BUDGET_EXHAUSTED',
+  AI_MODEL_UNAVAILABLE: 'MODEL_UNAVAILABLE',
+  NO_LLM_REQUIRED: 'NO_LLM_REQUIRED',
+  AI_ERROR: 'ERROR',
+};
+
+/** Le contexte fonctionnel d'une requête, résumé pour l'audit et la trace. */
+function functionalSummaryOf(request: IntelligenceRequest): AiFunctionalContextSummary | undefined {
+  const functional = request.functionalContext;
+  if (!functional && !request.mission && !request.goal) return undefined;
+  const divergence = functional?.firstDivergence;
+  return {
+    ...(request.mission ? { mission: request.mission } : {}),
+    ...((functional?.currentGoal ?? request.goal?.id)
+      ? { goal: functional?.currentGoal ?? request.goal?.id }
+      : {}),
+    ...(functional?.parentGoal ? { parentGoal: functional.parentGoal } : {}),
+    ...(functional?.goalProgress !== undefined ? { goalProgress: functional.goalProgress } : {}),
+    ...(functional?.lastConfirmedCheckpoint
+      ? { lastConfirmedCheckpoint: functional.lastConfirmedCheckpoint }
+      : {}),
+    ...(functional?.nextExpectedCheckpoint
+      ? { nextExpectedCheckpoint: functional.nextExpectedCheckpoint }
+      : {}),
+    missingPreconditions: (functional?.missingPreconditions ?? request.goal?.conditions ?? []).slice(0, 8),
+    ...(functional?.unknownPrecondition ? { unknownPrecondition: true } : {}),
+    ...(functional?.blockingReasons[0]
+      ? { blockingReason: functional.blockingReasons[0].slice(0, 200) }
+      : {}),
+    ...(divergence
+      ? { firstDivergence: `step ${String(divergence.step)} ${divergence.description}`.slice(0, 200) }
+      : {}),
+    ...(functional?.question ? { question: functional.question.slice(0, 200) } : {}),
+  };
 }
 
 function labelOf(request: IntelligenceRequest, id: string): string | undefined {

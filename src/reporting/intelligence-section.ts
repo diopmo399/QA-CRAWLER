@@ -5,7 +5,7 @@ import { VERDICT_CATEGORIES } from '../oracles/confidence.js';
 import { classPill, esc } from './html-common.js';
 import { valueLabel, type ReportLanguage } from './i18n.js';
 import { engineLabel, translateEngineText } from './engine-text.js';
-import { describeGoal } from '../goals/goal-model.js';
+import { describeGoal, type GoalExplanation } from '../goals/goal-model.js';
 import { writePattern } from '../policies/write-guard.js';
 
 /** Textes de la section « Moteur de décision », en anglais et en français. */
@@ -178,7 +178,7 @@ export function intelligenceSection(
                     .map((entry) => `${esc(engineLabel(entry.kind, language))} : ${esc(tr(entry.value))}`)
                     .join('<br>')
                 : esc(tr(goal.reason ?? ''))
-            }</td></tr>`,
+            }${goal.explanation ? goalExplanationHtml(goal.explanation) : ''}</td></tr>`,
         )
         .join('')}</table>`,
     );
@@ -372,4 +372,23 @@ export function intelligenceSection(
   }
 
   return `<section><h2>${esc(t.title)}</h2>${parts.join('\n')}</section>`;
+}
+
+/** UNREACHABLE expliqué : dernier checkpoint, objectif bloquant, préconditions, divergence, preuves, hypothèse IA. */
+function goalExplanationHtml(explanation: GoalExplanation): string {
+  const lines = [
+    `Reason: ${explanation.reason}`,
+    explanation.lastReachedCheckpoint ? `Last checkpoint: ${explanation.lastReachedCheckpoint}` : '',
+    explanation.blockingGoal ? `Blocked goal: ${explanation.blockingGoal}` : '',
+    explanation.missingPreconditions.length > 0
+      ? `Missing/unknown precondition: ${explanation.missingPreconditions.join(', ')}`
+      : '',
+    explanation.firstDivergence ? `First divergence: ${explanation.firstDivergence}` : '',
+    explanation.supportingEvidence.length > 0 ? `Evidence: ${explanation.supportingEvidence.join(', ')}` : '',
+    explanation.aiHypotheses.length > 0
+      ? `AI hypothesis (not runtime truth): ${explanation.aiHypotheses.join(' · ')}`
+      : '',
+    `Confidence: ${String(explanation.confidence)}`,
+  ].filter(Boolean);
+  return `<details class="suggest"><summary>why</summary><ul>${lines.map((line) => `<li>${esc(line)}</li>`).join('')}</ul></details>`;
 }

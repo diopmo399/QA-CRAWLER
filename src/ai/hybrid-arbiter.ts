@@ -24,6 +24,19 @@ export interface SafetyVerdict {
 
 export type ArbiterSource = 'DETERMINISTIC' | 'AI_PROPOSAL' | 'NONE';
 
+/** La règle de l'arbitre qui a tranché (pour classer l'issue sans relire les phrases). */
+export type ArbiterCode =
+  | 'OFF'
+  | 'NO_PROPOSAL'
+  | 'INVALID'
+  | 'NOT_ACTIONABLE'
+  | 'ASSIST'
+  | 'SAFETY'
+  | 'DETERMINISTIC_CONFIDENT'
+  | 'LOW_CONFIDENCE'
+  | 'MARGIN'
+  | 'ACCEPTED';
+
 export interface ArbiterDecision {
   /** L'action retenue (à exécuter par l'exécuteur existant, après la SafetyPolicy). */
   actionId?: string;
@@ -34,6 +47,7 @@ export interface ArbiterDecision {
   disagreement: boolean;
   safety?: SafetyVerdict;
   reasons: string[];
+  code: ArbiterCode;
 }
 
 /**
@@ -53,34 +67,42 @@ export function arbitrate(input: {
   thresholds: ArbiterThresholds;
 }): ArbiterDecision {
   const { deterministic, validation, thresholds } = input;
-  const keep = (reasons: string[], extra: Partial<ArbiterDecision> = {}): ArbiterDecision => ({
+  const keep = (
+    code: ArbiterCode,
+    reasons: string[],
+    extra: Partial<ArbiterDecision> = {},
+  ): ArbiterDecision => ({
     ...(deterministic.actionId ? { actionId: deterministic.actionId } : {}),
     source: deterministic.actionId ? 'DETERMINISTIC' : 'NONE',
     accepted: false,
     disagreement: false,
     reasons,
+    code,
     ...extra,
   });
   const proposed = validation?.valid ? validation.proposal.selectedActionId : undefined;
   const disagreement = proposed !== undefined && proposed !== deterministic.actionId;
-  if (input.mode === 'OFF') return keep(['intelligence OFF']);
-  if (!validation) return keep(['no proposal']);
-  if (!validation.valid) return keep([`proposal rejected: ${validation.rejection}`]);
+  if (input.mode === 'OFF') return keep('OFF', ['intelligence OFF']);
+  if (!validation) return keep('NO_PROPOSAL', ['no proposal']);
+  if (!validation.valid) return keep('INVALID', [`proposal rejected: ${validation.rejection}`]);
   if (validation.proposal.status !== 'PROPOSAL' || !proposed)
-    return keep([`proposal ${validation.proposal.status}${proposed ? '' : ' without action'}`]);
+    return keep('NOT_ACTIONABLE', [
+      `proposal ${validation.proposal.status}${proposed ? '' : ' without action'}`,
+    ]);
   const safety = input.safety(proposed);
   if (input.mode === 'ASSIST')
-    return keep(['ASSIST: the deterministic decision is executed; the proposal is recorded only'], {
+    return keep('ASSIST', ['ASSIST: the deterministic decision is executed; the proposal is recorded only'], {
       disagreement,
       safety,
     });
   if (!safety.allowed)
-    return keep([`SafetyPolicy refuses ${proposed}: ${safety.classification} — ${safety.reason}`], {
+    return keep('SAFETY', [`SafetyPolicy refuses ${proposed}: ${safety.classification} — ${safety.reason}`], {
       disagreement,
       safety,
     });
   if (deterministic.actionId && deterministic.confidence >= thresholds.deterministicConfidence)
     return keep(
+      'DETERMINISTIC_CONFIDENT',
       [
         `deterministic confidence ${deterministic.confidence.toFixed(2)} ≥ ${thresholds.deterministicConfidence.toFixed(2)}`,
       ],
@@ -89,6 +111,7 @@ export function arbitrate(input: {
   const confidence = validation.proposal.confidence;
   if (confidence < thresholds.minProposalConfidence)
     return keep(
+      'LOW_CONFIDENCE',
       [`proposal confidence ${confidence.toFixed(2)} < ${thresholds.minProposalConfidence.toFixed(2)}`],
       {
         disagreement,
@@ -101,6 +124,7 @@ export function arbitrate(input: {
     confidence < deterministic.confidence + thresholds.overrideMargin
   )
     return keep(
+      'MARGIN',
       [
         `proposal confidence ${confidence.toFixed(2)} does not exceed deterministic ${deterministic.confidence.toFixed(2)} by ${thresholds.overrideMargin.toFixed(2)}`,
       ],
@@ -110,6 +134,7 @@ export function arbitrate(input: {
     actionId: proposed,
     source: 'AI_PROPOSAL',
     accepted: true,
+    code: 'ACCEPTED',
     disagreement,
     safety,
     reasons: [

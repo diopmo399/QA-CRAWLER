@@ -11,6 +11,9 @@ export interface TriggerSettings {
   unknownBusinessError: boolean;
   lowConfidence: boolean;
   knowledgeContradiction: boolean;
+  unknownBlockingPrecondition: boolean;
+  hypothesisAnalysis: boolean;
+  recordingEnrichment: boolean;
 }
 
 /** Ce que QA-Crawler sait de la situation, au moment de décider s'il faut demander de l'aide. */
@@ -35,6 +38,12 @@ export interface TriggerSituation {
   unresolvedHypothesis?: boolean;
   contradiction?: boolean;
   unknownBusinessError?: boolean;
+  /** L'objectif reste bloqué et aucune précondition connue ne l'explique. */
+  unknownBlockingPrecondition?: boolean;
+  /** Une hypothèse contredite, sans alternative claire. */
+  contradictedHypothesis?: boolean;
+  /** Un enregistrement dont le sens fonctionnel reste ambigu. */
+  recordingAmbiguity?: boolean;
   evidence?: EvidenceReference[];
 }
 
@@ -64,6 +73,9 @@ export class IntelligenceTriggerPolicy {
       [situation.unknownBusinessError, 'unknownBusinessError', 'UNKNOWN_BUSINESS_ERROR'],
       [situation.flowDivergence, 'flowDivergence', 'FLOW_DIVERGENCE'],
       [situation.contradiction, 'knowledgeContradiction', 'KNOWLEDGE_CONTRADICTION'],
+      [situation.unknownBlockingPrecondition, 'unknownBlockingPrecondition', 'UNKNOWN_BLOCKING_PRECONDITION'],
+      [situation.contradictedHypothesis, 'hypothesisAnalysis', 'HYPOTHESIS_ANALYSIS'],
+      [situation.recordingAmbiguity, 'recordingEnrichment', 'RECORDING_ENRICHMENT'],
     ];
     for (const [active, setting, reason] of hard)
       if (active) {

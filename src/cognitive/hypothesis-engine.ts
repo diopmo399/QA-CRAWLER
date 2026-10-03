@@ -218,8 +218,9 @@ export class HypothesisEngine {
     let confidence = Math.max(0, forWeight - againstWeight * 0.8);
     let status: HypothesisStatus;
     if (llmOnly) {
-      // Une affirmation de LLM ne devient jamais une connaissance confirmée.
-      status = 'HYPOTHESIS';
+      // Une affirmation de LLM ne devient jamais une connaissance confirmée — mais le runtime peut la démentir.
+      status =
+        runtimeAgainst.length >= 2 ? 'REJECTED' : runtimeAgainst.length > 0 ? 'CONTRADICTED' : 'HYPOTHESIS';
       confidence = Math.min(confidence, 0.3);
     } else if (runtimeAgainst.length >= 2 && runtimeFor.length === 0) status = 'REJECTED';
     else if (runtimeAgainst.length > 0 && againstWeight >= forWeight * 0.8) status = 'CONTRADICTED';
