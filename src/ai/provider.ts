@@ -1,4 +1,13 @@
 import type { IntelligenceRequest, ProviderCallOptions, ProviderResult } from './model.js';
+import type { ModelProfile, ModelSelectionMode } from './models/model-types.js';
+
+export interface ProviderModelSummary {
+  selectionMode: ModelSelectionMode;
+  requestedModel?: string;
+  defaultProfile: ModelProfile;
+  reasoningMode: string;
+  discovery?: { status: string; available: number; listed: number; at?: string; error?: string };
+}
 
 /**
  * Un FOURNISSEUR D'INTELLIGENCE : il analyse une requête structurée et rend une proposition
@@ -17,5 +26,7 @@ export interface IntelligenceProvider {
   /** La raison de l'indisponibilité (jamais un secret). */
   unavailableReason?(): string | undefined;
   analyze(request: IntelligenceRequest, options: ProviderCallOptions): Promise<ProviderResult>;
+  /** La gestion des modèles du fournisseur, pour le rapport (mode de sélection, découverte). */
+  modelSummary?(): ProviderModelSummary | undefined;
   close?(): Promise<void>;
 }

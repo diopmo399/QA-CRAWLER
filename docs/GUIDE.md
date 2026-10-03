@@ -531,20 +531,21 @@ npm run qa -- dry-run <scénario.feature|flow.yaml|mission.yaml> [-c <mission.ya
 npm run qa -- record --url <adresse> --name <nom du flow> [-c <mission.yaml>] [--validate]
 ```
 
-| Option                                                 | Effet                                              |
-| ------------------------------------------------------ | -------------------------------------------------- |
-| `-c, --config <fichier>`                               | la mission                                         |
-| `--base-url <url>`                                     | autre cible (aussi `QA_BASE_URL`)                  |
-| `--max-states <n>`, `--max-actions <n>`                | limites                                            |
-| `--headed`                                             | voir le navigateur                                 |
-| `--reports-dir`, `--screenshots-dir`, `--baseline-dir` | dossiers de sortie                                 |
-| `--persistence <p>`, `--no-persistence`                | où enregistrer                                     |
-| `--memory`, `--no-memory`                              | utiliser ou ignorer la mémoire                     |
-| `--intelligence off\|assist\|hybrid`                   | conseiller IA optionnel (Copilot), défaut `off`    |
-| `--ai-provider <p>`, `--ai-model <m>`                  | fournisseur et modèle du conseiller IA             |
-| `--dotenv <fichier>`                                   | fichier de variables (défaut : `.env` s'il existe) |
-| `-q, --quiet`                                          | seulement le résumé                                |
-| `-h, --help`, `-v, --version`                          | aide, version                                      |
+| Option                                                 | Effet                                                    |
+| ------------------------------------------------------ | -------------------------------------------------------- |
+| `-c, --config <fichier>`                               | la mission                                               |
+| `--base-url <url>`                                     | autre cible (aussi `QA_BASE_URL`)                        |
+| `--max-states <n>`, `--max-actions <n>`                | limites                                                  |
+| `--headed`                                             | voir le navigateur                                       |
+| `--reports-dir`, `--screenshots-dir`, `--baseline-dir` | dossiers de sortie                                       |
+| `--persistence <p>`, `--no-persistence`                | où enregistrer                                           |
+| `--memory`, `--no-memory`                              | utiliser ou ignorer la mémoire                           |
+| `--intelligence off\|assist\|hybrid`                   | conseiller IA optionnel (Copilot), défaut `off`          |
+| `--ai-provider <p>`, `--ai-model <m>`                  | fournisseur et modèle du conseiller IA                   |
+| `--ai-model-selection <m>`, `--ai-reasoning <r>`       | sélection du modèle (auto, explicit, adaptive) et effort |
+| `--dotenv <fichier>`                                   | fichier de variables (défaut : `.env` s'il existe)       |
+| `-q, --quiet`                                          | seulement le résumé                                      |
+| `-h, --help`, `-v, --version`                          | aide, version                                            |
 
 Options propres au Dry Run : [section 6](#6-vérifier-un-scénario-contre-lapplication-dry-run), ou `npm run qa -- dry-run --help`. Options de l'enregistrement : `npm run qa -- record --help`.
 

@@ -3,6 +3,7 @@ import type { AiConfig } from '../config/config.js';
 import { IntelligenceGateway, type AiEventRecord } from './gateway.js';
 import type { IntelligenceMode } from './model.js';
 import type { IntelligenceProvider } from './provider.js';
+import type { CopilotSdkModule } from './copilot/sdk.js';
 import { CopilotIntelligenceProvider } from './providers/copilot-provider.js';
 import { DeterministicIntelligenceProvider } from './providers/deterministic-provider.js';
 import { IntelligenceContextSanitizer } from './sanitizer.js';
@@ -54,16 +55,10 @@ export function createIntelligenceGateway(
       options.provider ??
       (config.provider === 'deterministic'
         ? new DeterministicIntelligenceProvider()
-        : new CopilotIntelligenceProvider({
-            model: config.copilot.model,
-            sessionReuse: config.copilot.sessionReuse,
-            tools: config.copilot.tools,
-            timeoutMs: config.copilot.timeoutMs,
-            startTimeoutMs: config.copilot.timeoutMs,
-            baseDirectory: path.resolve(options.cwd ?? process.cwd(), config.copilot.baseDirectory),
-            ...(config.copilot.tokenEnv ? { tokenEnv: config.copilot.tokenEnv } : {}),
+        : createCopilotProvider(config, {
             env: options.env,
             sanitize: (value) => sanitizer.sanitizeValue(value),
+            ...(options.cwd ? { cwd: options.cwd } : {}),
           })),
     triggers: config.triggers,
     thresholds: config.thresholds,
@@ -71,9 +66,46 @@ export function createIntelligenceGateway(
     timeoutMs: config.copilot.timeoutMs,
     maxRetries: config.copilot.maxRetries,
     failOnUnavailable: config.failOnUnavailable,
-    reasoningEffort: config.copilot.reasoningEffort,
-    adaptiveReasoning: config.copilot.adaptiveReasoning,
     sanitizer,
     ...(options.emit ? { emit: options.emit } : {}),
+  });
+}
+
+/**
+ * Le fournisseur Copilot depuis la configuration : sélection du modèle, effort, repli,
+ * découverte. `loadSdk` remplace le chargement du SDK (tests, intégrations) — le reste est le
+ * chemin de production.
+ */
+export function createCopilotProvider(
+  config: AiConfig,
+  options: {
+    env: NodeJS.ProcessEnv;
+    sanitize: (value: unknown) => unknown;
+    cwd?: string;
+    loadSdk?: () => Promise<CopilotSdkModule>;
+  },
+): CopilotIntelligenceProvider {
+  const { copilot } = config;
+  return new CopilotIntelligenceProvider({
+    models: {
+      selection: {
+        mode: copilot.modelSelection.mode,
+        ...(copilot.modelSelection.model ? { model: copilot.modelSelection.model } : {}),
+        defaultProfile: copilot.modelSelection.defaultProfile,
+        profiles: copilot.modelSelection.profiles,
+      },
+      reasoning: copilot.reasoning,
+      fallback: copilot.fallback,
+      discovery: copilot.discovery,
+    },
+    sessionReuse: copilot.sessionReuse,
+    tools: copilot.tools,
+    timeoutMs: copilot.timeoutMs,
+    startTimeoutMs: copilot.timeoutMs,
+    baseDirectory: path.resolve(options.cwd ?? process.cwd(), copilot.baseDirectory),
+    ...(copilot.tokenEnv ? { tokenEnv: copilot.tokenEnv } : {}),
+    env: options.env,
+    sanitize: options.sanitize,
+    ...(options.loadSdk ? { loadSdk: options.loadSdk } : {}),
   });
 }

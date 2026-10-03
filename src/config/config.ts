@@ -1397,6 +1397,17 @@ const replaySchema = z
  * exécutée par l'exécuteur existant et vérifiée au runtime. Le fournisseur ne clique jamais.
  * (`intelligence:` reste l'intelligence historique déterministe.)
  */
+const reasoningLevel = z.enum(['LOW', 'MEDIUM', 'HIGH']);
+const modelProfileSchema = (autoTier: 'efficiency' | 'balance' | 'intelligence') =>
+  z
+    .object({
+      /** Modèles candidats (identifiants découverts), essayés dans l'ordre ; vide : routage officiel. */
+      models: z.array(nonEmpty).default([]),
+      autoTier: z.enum(['efficiency', 'balance', 'intelligence', 'fast']).default(autoTier),
+    })
+    .strict()
+    .default({});
+
 const aiSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -1407,11 +1418,57 @@ const aiSchema = z
     failOnUnavailable: z.boolean().default(false),
     copilot: z
       .object({
-        /** `auto` ou un identifiant validé avec la liste des modèles du SDK. */
-        model: nonEmpty.default('auto'),
-        reasoningEffort: z.enum(['auto', 'low', 'medium', 'high', 'xhigh']).default('auto'),
-        /** auto : effort plus élevé pour une divergence, une récupération épuisée, une contradiction (si le modèle le déclare). */
-        adaptiveReasoning: z.boolean().default(true),
+        /**
+         * MODEL SELECTION : AUTO (routage officiel de Copilot), EXPLICIT (ce modèle, vérifié avant la
+         * session), ADAPTIVE (complexité → profil FAST / BALANCED / INTELLIGENCE → un modèle
+         * candidat découvert, sinon le routage officiel avec la préférence du profil).
+         */
+        modelSelection: z
+          .object({
+            mode: z.enum(['AUTO', 'EXPLICIT', 'ADAPTIVE']).default('ADAPTIVE'),
+            model: nonEmpty.optional(),
+            /** Le profil de la complexité MEDIUM (le cas ordinaire). */
+            defaultProfile: z.enum(['FAST', 'BALANCED', 'INTELLIGENCE']).default('BALANCED'),
+            profiles: z
+              .object({
+                FAST: modelProfileSchema('efficiency'),
+                BALANCED: modelProfileSchema('balance'),
+                INTELLIGENCE: modelProfileSchema('intelligence'),
+              })
+              .strict()
+              .default({}),
+          })
+          .strict()
+          .default({}),
+        /** REASONING EFFORT : envoyé seulement si le modèle choisi le déclare (sinon ajusté ou omis). */
+        reasoning: z
+          .object({
+            mode: z.enum(['AUTO', 'FIXED', 'ADAPTIVE']).default('ADAPTIVE'),
+            default: reasoningLevel.default('MEDIUM'),
+            lowComplexity: reasoningLevel.default('LOW'),
+            mediumComplexity: reasoningLevel.default('MEDIUM'),
+            highComplexity: reasoningLevel.default('HIGH'),
+            veryHighComplexity: reasoningLevel.default('HIGH'),
+          })
+          .strict()
+          .default({}),
+        /** Modèle demandé inutilisable : AUTO (routage officiel), ALTERNATIVE (autre modèle découvert, sinon AUTO), DETERMINISTIC (pas d'IA). */
+        fallback: z
+          .object({
+            enabled: z.boolean().default(true),
+            strategy: z.enum(['AUTO', 'ALTERNATIVE', 'DETERMINISTIC']).default('AUTO'),
+          })
+          .strict()
+          .default({}),
+        /** Découverte des modèles (client.listModels()) : en cache, rafraîchie si un modèle est refusé. */
+        discovery: z
+          .object({
+            cache: z.boolean().default(true),
+            ttlMs: z.number().int().min(1000).max(86_400_000).default(600_000),
+            refreshOnUnavailableModel: z.boolean().default(true),
+          })
+          .strict()
+          .default({}),
         timeoutMs: z.number().int().min(1000).max(600_000).default(30_000),
         maxRetries: z.number().int().min(0).max(3).default(1),
         sessionReuse: z.boolean().default(true),
@@ -1475,7 +1532,17 @@ const aiSchema = z
       .strict()
       .default({}),
   })
-  .strict();
+  .strict()
+  .superRefine((ai, context) => {
+    const selection = ai.copilot.modelSelection;
+    if (selection.mode === 'EXPLICIT' && !selection.model)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['copilot', 'modelSelection', 'model'],
+        message:
+          'modelSelection.mode EXPLICIT needs modelSelection.model (an id discovered for this account)',
+      });
+  });
 
 /**
  * QA COGNITIVE ENGINE : preuves, modèle fonctionnel, état métier, hypothèses et graphe

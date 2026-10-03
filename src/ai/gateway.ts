@@ -14,8 +14,9 @@ import {
   type DeterministicChoice,
   type SafetyVerdict,
 } from './hybrid-arbiter.js';
+import { ReasoningComplexityAnalyzer, type ComplexitySignals } from './models/complexity-analyzer.js';
+import { ModelUnavailableError, type ModelExecutionContext } from './models/model-types.js';
 import {
-  COMPLEX_TRIGGERS,
   IntelligenceUnavailableError,
   type IntelligenceMode,
   type IntelligenceRequest,
@@ -48,6 +49,17 @@ export const AI_EVENTS = [
   'AI_BUDGET_EXHAUSTED',
   'AI_RUNTIME_CONFIRMED',
   'AI_RUNTIME_CONTRADICTED',
+  'AI_NO_LLM_REQUIRED',
+  'AI_MODEL_DISCOVERY_STARTED',
+  'AI_MODEL_DISCOVERY_COMPLETED',
+  'AI_MODEL_DISCOVERY_FAILED',
+  'AI_MODEL_SELECTED',
+  'AI_MODEL_UNAVAILABLE',
+  'AI_MODEL_FALLBACK',
+  'AI_MODEL_CAPABILITY_MISMATCH',
+  'AI_REASONING_EFFORT_SELECTED',
+  'AI_REASONING_EFFORT_ADJUSTED',
+  'AI_EFFECTIVE_MODEL_OBSERVED',
 ] as const;
 export type AiEvent = (typeof AI_EVENTS)[number];
 export interface AiEventRecord {
@@ -67,8 +79,6 @@ export interface GatewayOptions {
   maxRetries: number;
   /** Un fournisseur indisponible arrête le run (par défaut : repli déterministe). */
   failOnUnavailable: boolean;
-  reasoningEffort: string;
-  adaptiveReasoning: boolean;
   sanitizer: IntelligenceContextSanitizer;
   emit?: (record: AiEventRecord) => void;
   now?: () => number;
@@ -86,6 +96,8 @@ export interface ConsultInput {
   /** L'EvidenceStore de QA-Crawler : une preuve citée doit y exister. */
   knownEvidence: (id: string) => boolean;
   tools?: IntelligenceToolContext;
+  /** Signaux du moteur cognitif pour mesurer la difficulté (tentatives, plans, divergence). */
+  signals?: ComplexitySignals;
 }
 
 export interface ConsultResult {
@@ -109,6 +121,7 @@ class TimeoutError extends Error {}
 export class IntelligenceGateway {
   readonly audit = new IntelligenceAuditTrail();
   readonly budget: IntelligenceBudgetManager;
+  private readonly complexity = new ReasoningComplexityAnalyzer();
   private readonly policy: IntelligenceTriggerPolicy;
   private provider: IntelligenceProvider | undefined;
   private availability: Promise<boolean> | undefined;
@@ -189,6 +202,15 @@ export class IntelligenceGateway {
     };
     if (this.options.mode === 'OFF') return fallback('AI_UNAVAILABLE', ['intelligence OFF']);
 
+    // La difficulté du raisonnement (sans LLM) : TRIVIAL → aucun appel, aucun choix de modèle.
+    const complexity = this.complexity.analyze(request, input.signals);
+    if (complexity.level === 'TRIVIAL') {
+      this.emit('AI_NO_LLM_REQUIRED', `${request.trigger}: ${complexity.reasons.join('; ')}`);
+      return fallback('NO_LLM_REQUIRED', complexity.reasons, 0, {
+        complexity: { level: complexity.level, score: complexity.score, reasons: complexity.reasons },
+      });
+    }
+
     const exhausted = this.budget.check(input.scope);
     if (exhausted) {
       this.emit('AI_BUDGET_EXHAUSTED', `${request.trigger}: ${exhausted}`);
@@ -212,15 +234,17 @@ export class IntelligenceGateway {
 
     this.budget.begin(input.scope);
     const timeoutMs = Math.min(this.options.timeoutMs, this.options.budgets.maxReasoningDurationMs);
-    const effort = this.effortFor(request.trigger);
     let result: ProviderResult | undefined;
-    let failure: { outcome: AiOutcome; reason: string } | undefined;
+    let failure: { outcome: AiOutcome; reason: string; modelContext?: ModelExecutionContext } | undefined;
     for (let attempt = 0; attempt <= this.options.maxRetries; attempt++) {
       try {
         result = await this.withTimeout(timeoutMs, (signal) =>
           provider.analyze(sanitized, {
             signal,
-            ...(effort ? { reasoningEffort: effort } : {}),
+            complexity,
+            emit: (event, message) => {
+              if ((AI_EVENTS as readonly string[]).includes(event)) this.emit(event as AiEvent, message);
+            },
             ...(input.tools ? { tools: input.tools } : {}),
             maxToolCalls: this.options.budgets.maxToolCallsPerRequest,
           }),
@@ -228,6 +252,11 @@ export class IntelligenceGateway {
         failure = undefined;
         break;
       } catch (error) {
+        if (error instanceof ModelUnavailableError) {
+          // Aucun modèle utilisable et aucun repli permis : pas d'appel, décision déterministe.
+          failure = { outcome: 'AI_MODEL_UNAVAILABLE', reason: error.message, modelContext: error.context };
+          break;
+        }
         if (error instanceof TimeoutError) {
           failure = { outcome: 'AI_TIMEOUT', reason: `no answer within ${String(timeoutMs)} ms` };
           break;
@@ -247,7 +276,10 @@ export class IntelligenceGateway {
     if (failure || !result) {
       const reason = failure?.reason ?? 'no answer';
       if (failure?.outcome === 'AI_TIMEOUT') this.emit('AI_TIMEOUT', `${request.requestId}: ${reason}`);
-      return fallback(failure?.outcome ?? 'AI_ERROR', [reason], redactions);
+      return fallback(failure?.outcome ?? 'AI_ERROR', [reason], redactions, {
+        complexity: { level: complexity.level, score: complexity.score, reasons: complexity.reasons },
+        ...(failure?.modelContext ? { modelContext: failure.modelContext } : {}),
+      });
     }
 
     this.emit('AI_PROPOSAL_RECEIVED', `${request.requestId} from ${result.model ?? this.options.providerId}`);
@@ -277,8 +309,12 @@ export class IntelligenceGateway {
         : undefined;
     const record = this.audit.create({
       ...base,
-      ...((result.model ?? provider.model) ? { model: result.model ?? provider.model } : {}),
+      ...((result.modelContext?.effectiveModel ?? result.model ?? result.modelContext?.selectedModel)
+        ? { model: result.modelContext?.effectiveModel ?? result.model ?? result.modelContext?.selectedModel }
+        : {}),
       input: inputSummary(request, redactions),
+      complexity: { level: complexity.level, score: complexity.score, reasons: complexity.reasons },
+      ...(result.modelContext ? { modelContext: result.modelContext } : {}),
       ...(proposal
         ? {
             proposal: {
@@ -356,7 +392,9 @@ export class IntelligenceGateway {
 
   summary(): AiSummary {
     const reason = this.provider?.unavailableReason?.();
+    const models = this.provider?.modelSummary?.();
     return this.audit.summarize({
+      ...(models ? { modelSelection: models } : {}),
       mode: this.options.mode,
       provider: this.options.providerId,
       ...(this.provider?.model ? { model: this.provider.model } : {}),
@@ -391,13 +429,6 @@ export class IntelligenceGateway {
         return available;
       });
     return this.availability;
-  }
-
-  private effortFor(trigger: IntelligenceRequest['trigger']): string | undefined {
-    const configured = this.options.reasoningEffort;
-    if (configured !== 'auto') return configured;
-    if (!this.options.adaptiveReasoning) return undefined;
-    return COMPLEX_TRIGGERS.includes(trigger) ? 'high' : 'medium';
   }
 
   private async withTimeout<T>(ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {

@@ -1,3 +1,5 @@
+import type { SdkModelInfo } from '../models/capability-resolver.js';
+
 /**
  * Ce que QA-Crawler utilise de `@github/copilot-sdk`, décrit STRUCTURELLEMENT : le cœur ne
  * dépend jamais des types du SDK (dépendance optionnelle, chargée dynamiquement dans ce seul
@@ -28,6 +30,8 @@ export interface CopilotPreToolUseInput {
 export interface CopilotSessionConfig {
   model?: string;
   reasoningEffort?: string;
+  /** Préférence du routage AUTO officiel (model: "auto"). */
+  capi?: { autoTier?: string };
   tools?: CopilotToolDefinition[];
   availableTools?: string[];
   excludedTools?: string[];
@@ -56,15 +60,13 @@ export interface CopilotSessionLike {
     timeout?: number,
   ): Promise<CopilotAssistantMessage | undefined>;
   abort?(): Promise<void>;
-  setModel?(model: string, options?: { reasoningEffort?: string }): Promise<void>;
+  setModel?(model: string, options?: { reasoningEffort?: string; autoTier?: string | null }): Promise<void>;
   on?(eventType: string, handler: (event: { data?: Record<string, unknown> }) => void): () => void;
   disconnect(): Promise<void>;
 }
 
-export interface CopilotModelInfo {
-  id: string;
-  supportedReasoningEfforts?: string[];
-}
+/** `ModelInfo` du SDK (id, nom, capacités, politique, facturation, efforts déclarés). */
+export type CopilotModelInfo = SdkModelInfo;
 
 export interface CopilotClientLike {
   start(): Promise<void>;

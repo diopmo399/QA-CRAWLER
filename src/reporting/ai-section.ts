@@ -26,6 +26,16 @@ const TEXTS = {
     latency: 'Average latency',
     decisions: 'Interventions',
     none: 'none',
+    selection: 'Model selection',
+    defaultProfile: 'Default profile',
+    reasoningMode: 'Reasoning effort',
+    discovery: 'Model discovery',
+    noLlm: 'No LLM required (trivial)',
+    modelFallbacks: 'Model fallbacks',
+    models: 'Models used (observed, not ranked)',
+    reasoning: 'Reasoning effort sent',
+    complexity: 'Reasoning complexity',
+    effectiveness: 'Effectiveness by trigger and complexity',
   },
   fr: {
     title: 'Intelligence IA',
@@ -50,6 +60,16 @@ const TEXTS = {
     latency: 'Latence moyenne',
     decisions: 'Interventions',
     none: 'aucune',
+    selection: 'Sélection du modèle',
+    defaultProfile: 'Profil par défaut',
+    reasoningMode: 'Effort de raisonnement',
+    discovery: 'Découverte des modèles',
+    noLlm: 'Sans LLM (trivial)',
+    modelFallbacks: 'Replis de modèle',
+    models: 'Modèles utilisés (observés, sans classement)',
+    reasoning: 'Effort envoyé',
+    complexity: 'Complexité du raisonnement',
+    effectiveness: 'Efficacité par déclencheur et complexité',
   },
 } as const;
 
@@ -67,7 +87,7 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
   const decisions = ai.decisions
     .map(
       (decision) =>
-        `<tr><td>${esc(decision.id)}</td><td>${esc(decision.context)}</td><td>${esc(decision.trigger)}</td><td class="wrap">${esc(
+        `<tr><td>${esc(decision.id)}</td><td>${esc(decision.context)}</td><td>${esc(decision.trigger)}</td><td>${esc(modelCell(decision))}</td><td class="wrap">${esc(
           decision.proposal?.action
             ? `${decision.proposal.selectedActionId ?? ''} ${decision.proposal.action}`
             : (decision.proposal?.status ?? '—'),
@@ -96,11 +116,80 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
       ${row(t.budget, ai.budgetExhausted)}
       ${row(t.fallbacks, ai.fallbacks)}
       ${row(t.latency, `${String(ai.averageLatencyMs)} ms`)}
-    </tbody></table>
+      ${ai.modelSelection ? row(t.selection, `${ai.modelSelection.selectionMode}${ai.modelSelection.requestedModel ? ` (requested ${ai.modelSelection.requestedModel})` : ''}`) : ''}
+      ${ai.modelSelection ? row(t.defaultProfile, ai.modelSelection.defaultProfile) : ''}
+      ${ai.modelSelection ? row(t.reasoningMode, ai.modelSelection.reasoningMode) : ''}
+      ${ai.modelSelection?.discovery ? row(t.discovery, `${ai.modelSelection.discovery.status}: ${String(ai.modelSelection.discovery.available)} available / ${String(ai.modelSelection.discovery.listed)} listed${ai.modelSelection.discovery.error ? ` — ${ai.modelSelection.discovery.error}` : ''}`) : ''}
+      ${row(t.noLlm, ai.noLlmRequired)}
+      ${row(t.modelFallbacks, ai.modelFallbacks)}
+      ${
+        Object.keys(ai.reasoning).length > 0
+          ? row(
+              t.reasoning,
+              Object.entries(ai.reasoning)
+                .map(([level, count]) => `${level}: ${String(count)}`)
+                .join(' · '),
+            )
+          : ''
+      }
+      ${
+        Object.keys(ai.complexity).length > 0
+          ? row(
+              t.complexity,
+              Object.entries(ai.complexity)
+                .map(([level, count]) => `${level}: ${String(count)}`)
+                .join(' · '),
+            )
+          : ''
+      }
+    </tbody></table>${
+      ai.models.length > 0
+        ? `<h3>${esc(t.models)}</h3><table><thead><tr><th>model</th><th>calls</th><th>accepted</th><th>rejected</th><th>inconclusive</th><th>runtime confirmed</th><th>runtime contradicted</th><th>timeouts</th><th>fallbacks</th><th>avg latency</th><th>recoveries solved</th></tr></thead><tbody>${ai.models
+            .map(
+              (model) =>
+                `<tr><td>${esc(model.model)}</td><td>${String(model.calls)}</td><td>${String(model.accepted)}</td><td>${String(model.rejected)}</td><td>${String(model.inconclusive)}</td><td>${String(model.runtimeConfirmed)}</td><td>${String(model.runtimeContradicted)}</td><td>${String(model.timeouts)}</td><td>${String(model.fallbacks)}</td><td>${String(model.averageLatencyMs)} ms</td><td>${String(model.recoverySolved)}</td></tr>`,
+            )
+            .join('')}</tbody></table>`
+        : ''
+    }${
+      ai.effectiveness.length > 0
+        ? `<h3>${esc(t.effectiveness)}</h3><table><thead><tr><th>model</th><th>trigger</th><th>complexity</th><th>samples</th><th>confirmed</th><th>contradicted</th><th>rate</th></tr></thead><tbody>${ai.effectiveness
+            .map(
+              (entry) =>
+                `<tr><td>${esc(entry.model)}</td><td>${esc(entry.trigger)}</td><td>${esc(entry.complexity)}</td><td>${String(entry.samples)}</td><td>${String(entry.runtimeConfirmed)}</td><td>${String(entry.runtimeContradicted)}</td><td>${entry.confirmationRate === null ? 'too few samples' : `${String(Math.round(entry.confirmationRate * 100))}%`}</td></tr>`,
+            )
+            .join('')}</tbody></table>`
+        : ''
+    }
     <h3>${esc(t.decisions)}</h3>${
       ai.decisions.length > 0
-        ? `<table><thead><tr><th>id</th><th>context</th><th>trigger</th><th>proposal</th><th>validation</th><th>safety</th><th>outcome</th><th>runtime</th></tr></thead><tbody>${decisions}</tbody></table>`
+        ? `<table><thead><tr><th>id</th><th>context</th><th>trigger</th><th>complexity / model / effort</th><th>proposal</th><th>validation</th><th>safety</th><th>outcome</th><th>runtime</th></tr></thead><tbody>${decisions}</tbody></table>`
         : `<p class="muted">${t.none}</p>`
     }
   </section>`;
+}
+
+/** Complexité, modèle demandé → choisi (→ réellement utilisé), effort, repli : jamais masqué. */
+function modelCell(decision: NonNullable<ExplorationResult['ai']>['decisions'][number]): string {
+  const context = decision.modelContext;
+  const complexity = decision.complexity?.level ?? context?.complexity;
+  if (!context) return complexity ?? '—';
+  const selected = context.selectedModel ?? '—';
+  const route = [
+    context.requestedModel && context.requestedModel !== selected ? `${context.requestedModel} →` : '',
+    selected,
+    context.autoTier ? `(${context.autoTier})` : '',
+    context.effectiveModel && context.effectiveModel !== selected ? `→ ${context.effectiveModel}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return [
+    complexity,
+    context.profile,
+    route,
+    context.sentReasoningEffort ?? 'effort not sent',
+    context.fallbackApplied ? `fallback ${context.fallbackReason ?? ''}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }

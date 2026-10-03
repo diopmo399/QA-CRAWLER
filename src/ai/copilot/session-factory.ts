@@ -4,7 +4,10 @@ import type { CopilotToolRegistry } from './tool-registry.js';
 
 export interface SessionFactoryOptions {
   model: string;
+  /** Niveau du SDK (low, medium, high) — seulement si le modèle choisi le déclare. */
   reasoningEffort?: string;
+  /** Préférence du routage AUTO officiel (seulement avec model: "auto"). */
+  autoTier?: string;
   registry?: CopilotToolRegistry;
   /** Compte un appel d'outil (audit, budget). */
   onToolUse?: (name: string, allowed: boolean) => void;
@@ -31,6 +34,7 @@ export function createAdvisorSessionConfig(options: SessionFactoryOptions): Copi
   return {
     model: options.model,
     ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+    ...(options.autoTier && options.model === 'auto' ? { capi: { autoTier: options.autoTier } } : {}),
     systemMessage: { mode: 'replace', content: QA_ADVISOR_SYSTEM_PROMPT },
     tools: registry?.definitions() ?? [],
     availableTools: names.map((name) => `custom:${name}`),

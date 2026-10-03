@@ -67,7 +67,28 @@ describe.skipIf(!live)('GitHub Copilot SDK — live contract (opt-in)', () => {
     const sanitizer = new IntelligenceContextSanitizer();
     const tokenEnv = process.env.QA_COPILOT_TOKEN_ENV;
     const provider = new CopilotIntelligenceProvider({
-      model: process.env.QA_COPILOT_MODEL ?? 'auto',
+      models: {
+        selection: {
+          mode: process.env.QA_COPILOT_MODEL ? 'EXPLICIT' : 'ADAPTIVE',
+          ...(process.env.QA_COPILOT_MODEL ? { model: process.env.QA_COPILOT_MODEL } : {}),
+          defaultProfile: 'BALANCED',
+          profiles: {
+            FAST: { models: [], autoTier: 'efficiency' },
+            BALANCED: { models: [], autoTier: 'balance' },
+            INTELLIGENCE: { models: [], autoTier: 'intelligence' },
+          },
+        },
+        reasoning: {
+          mode: 'ADAPTIVE',
+          default: 'MEDIUM',
+          lowComplexity: 'LOW',
+          mediumComplexity: 'MEDIUM',
+          highComplexity: 'HIGH',
+          veryHighComplexity: 'HIGH',
+        },
+        fallback: { enabled: true, strategy: 'AUTO' },
+        discovery: { cache: true, ttlMs: 600_000, refreshOnUnavailableModel: true },
+      },
       sessionReuse: true,
       tools: true,
       timeoutMs: 90_000,

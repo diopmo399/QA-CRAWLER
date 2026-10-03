@@ -6,13 +6,8 @@ import {
 } from '../../src/ai/context-builder.js';
 import { createIntelligenceGateway } from '../../src/ai/factory.js';
 import { QA_ADVISOR_SYSTEM_PROMPT, buildUserPrompt } from '../../src/ai/copilot/prompt-builder.js';
-import type {
-  CopilotClientLike,
-  CopilotClientOptionsLike,
-  CopilotSdkModule,
-  CopilotSessionConfig,
-  CopilotSessionLike,
-} from '../../src/ai/copilot/sdk.js';
+import type { CopilotSdkModule } from '../../src/ai/copilot/sdk.js';
+import { fakeSdk } from '../fixtures/fake-copilot-sdk.js';
 import { CopilotToolRegistry, READ_ONLY_TOOLS } from '../../src/ai/copilot/tool-registry.js';
 import type { ProviderCallOptions } from '../../src/ai/model.js';
 import {
@@ -21,90 +16,6 @@ import {
 } from '../../src/ai/providers/copilot-provider.js';
 import { validateIntelligenceProposal } from '../../src/ai/proposal-validator.js';
 import { parseConfig } from '../../src/config/config-loader.js';
-
-type Responder = (prompt: string, session: FakeSession) => Promise<string> | string;
-
-class FakeSession implements CopilotSessionLike {
-  readonly sessionId = `s-${String(Math.random()).slice(2, 8)}`;
-  readonly prompts: string[] = [];
-  readonly schemas: (Record<string, unknown> | undefined)[] = [];
-  private usage: ((event: { data?: Record<string, unknown> }) => void) | undefined;
-  disconnected = false;
-
-  constructor(
-    readonly config: CopilotSessionConfig,
-    private readonly respond: Responder,
-  ) {}
-
-  async sendAndWait(options: { prompt: string; responseSchema?: Record<string, unknown> }) {
-    this.prompts.push(options.prompt);
-    this.schemas.push(options.responseSchema);
-    const content = await this.respond(options.prompt, this);
-    this.usage?.({ data: { inputTokens: 120, outputTokens: 30, model: 'fake-model-1' } });
-    return { data: { content } };
-  }
-
-  on(eventType: string, handler: (event: { data?: Record<string, unknown> }) => void) {
-    if (eventType === 'assistant.usage') this.usage = handler;
-    return () => {
-      this.usage = undefined;
-    };
-  }
-
-  /** Ce que ferait le runtime : appeler un outil enregistré (après permission et hook). */
-  async callTool(name: string, args: unknown = {}): Promise<unknown> {
-    const permission = this.config.onPermissionRequest?.({ kind: 'custom-tool', toolName: name }, {});
-    const hook = await this.config.hooks?.onPreToolUse?.({ toolName: name, toolArgs: args }, {});
-    if (permission?.kind !== 'approve-once' || hook?.permissionDecision !== 'allow') return 'denied';
-    const tool = this.config.tools?.find((candidate) => candidate.name === name);
-    return tool?.handler?.(args, {});
-  }
-
-  disconnect(): Promise<void> {
-    this.disconnected = true;
-    return Promise.resolve();
-  }
-}
-
-function fakeSdk(
-  respond: Responder,
-  options: { authenticated?: boolean; models?: { id: string; supportedReasoningEfforts?: string[] }[] } = {},
-) {
-  const state = { clients: [] as FakeClient[], sessions: [] as FakeSession[], loads: 0 };
-  class FakeClient implements CopilotClientLike {
-    started = false;
-    stopped = false;
-    constructor(readonly options?: CopilotClientOptionsLike) {
-      state.clients.push(this);
-    }
-    start() {
-      this.started = true;
-      return Promise.resolve();
-    }
-    stop() {
-      this.stopped = true;
-      return Promise.resolve([]);
-    }
-    getAuthStatus() {
-      return Promise.resolve({ isAuthenticated: options.authenticated ?? true });
-    }
-    listModels() {
-      return Promise.resolve(
-        options.models ?? [{ id: 'model-a', supportedReasoningEfforts: ['low', 'medium', 'high'] }],
-      );
-    }
-    createSession(config: CopilotSessionConfig) {
-      const session = new FakeSession(config, respond);
-      state.sessions.push(session);
-      return Promise.resolve(session);
-    }
-  }
-  const load = (): Promise<CopilotSdkModule> => {
-    state.loads += 1;
-    return Promise.resolve({ CopilotClient: FakeClient });
-  };
-  return { state, load };
-}
 
 const SOURCES: ContextSources = {
   goal: { id: 'COMPANY_INFORMATION_AVAILABLE', conditions: ['field Company name'] },
@@ -153,9 +64,29 @@ const PROPOSAL = JSON.stringify({
   confidence: 0.91,
 });
 
+const PROFILES = {
+  FAST: { models: [], autoTier: 'efficiency' as const },
+  BALANCED: { models: [], autoTier: 'balance' as const },
+  INTELLIGENCE: { models: [], autoTier: 'intelligence' as const },
+};
+const MODEL_SETTINGS: CopilotProviderOptions['models'] = {
+  selection: { mode: 'EXPLICIT', model: 'model-a', defaultProfile: 'BALANCED', profiles: PROFILES },
+  reasoning: {
+    mode: 'ADAPTIVE',
+    default: 'MEDIUM',
+    lowComplexity: 'LOW',
+    mediumComplexity: 'MEDIUM',
+    highComplexity: 'HIGH',
+    veryHighComplexity: 'HIGH',
+  },
+  fallback: { enabled: true, strategy: 'AUTO' },
+  discovery: { cache: true, ttlMs: 600_000, refreshOnUnavailableModel: true },
+};
+const HIGH = { level: 'HIGH' as const, score: 4, reasons: ['workflow divergence'] };
+
 function provider(load: () => Promise<CopilotSdkModule>, extra: Partial<CopilotProviderOptions> = {}) {
   return new CopilotIntelligenceProvider({
-    model: 'model-a',
+    models: MODEL_SETTINGS,
     sessionReuse: true,
     tools: true,
     timeoutMs: 5_000,
@@ -206,7 +137,7 @@ describe('GitHub Copilot provider (official SDK, faked): isolation, safety in de
     const { state, load } = fakeSdk(() => PROPOSAL);
     const copilot = provider(load);
     expect(await copilot.isAvailable()).toBe(true);
-    const result = await copilot.analyze(built.request, call({ reasoningEffort: 'high' }));
+    const result = await copilot.analyze(built.request, call({ complexity: HIGH }));
     const session = state.sessions[0];
     expect(session?.config.systemMessage).toEqual({ mode: 'replace', content: QA_ADVISOR_SYSTEM_PROMPT });
     expect(session?.config.reasoningEffort).toBe('high');
@@ -220,7 +151,7 @@ describe('GitHub Copilot provider (official SDK, faked): isolation, safety in de
     const { state: other, load: otherLoad } = fakeSdk(() => PROPOSAL, { models: [{ id: 'model-a' }] });
     const plain = provider(otherLoad);
     await plain.isAvailable();
-    await plain.analyze(built.request, call({ reasoningEffort: 'high' }));
+    await plain.analyze(built.request, call({ complexity: HIGH }));
     expect(other.sessions[0]?.config.reasoningEffort).toBeUndefined();
   });
 
@@ -312,8 +243,15 @@ describe('GitHub Copilot provider (official SDK, faked): isolation, safety in de
 
     const { load: limited } = fakeSdk(() => PROPOSAL, { models: [{ id: 'model-b' }] });
     const wrongModel = provider(limited);
-    expect(await wrongModel.isAvailable()).toBe(false);
-    expect(wrongModel.unavailableReason()).toMatch(/model "model-a" is not available.*model-b/);
+    // Le compte reste disponible : le modèle se choisit à chaque requête (repli visible, voir ai-model-selection).
+    expect(await wrongModel.isAvailable()).toBe(true);
+    const fallback = await wrongModel.analyze(built.request, call());
+    expect(fallback.modelContext).toMatchObject({
+      requestedModel: 'model-a',
+      selectedModel: 'auto',
+      fallbackApplied: true,
+      fallbackReason: 'MODEL_NOT_AVAILABLE',
+    });
 
     // Un jeton passe par la variable NOMMÉE dans la configuration, jusqu'au SDK — nulle part ailleurs.
     const token = 'ghp_SECRETSECRETSECRETSECRETSECRET1234';

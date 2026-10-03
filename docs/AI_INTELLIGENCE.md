@@ -33,6 +33,7 @@ session, aucun appel réseau, aucun changement de décision.
 14. [Tests](#14-tests)
 15. [Docker et dépendance optionnelle](#15-docker-et-dépendance-optionnelle)
 16. [Limites et évolutions](#16-limites-et-évolutions)
+17. [Gestion des modèles Copilot](#17-gestion-des-modèles-copilot)
 
 ## 1. Audit de l'existant et points d'insertion
 
@@ -142,9 +143,28 @@ ai:
   provider: copilot # copilot | deterministic (même chaîne, sans réseau)
   failOnUnavailable: false # true : un fournisseur indisponible arrête le run
   copilot:
-    model: auto # ou un identifiant, validé avec listModels() du SDK
-    reasoningEffort: auto # auto | low | medium | high | xhigh (si le modèle le déclare)
-    adaptiveReasoning: true # auto : plus d'effort pour une divergence, une récupération épuisée…
+    modelSelection: # voir « Gestion des modèles » (§17)
+      mode: ADAPTIVE # AUTO | EXPLICIT | ADAPTIVE
+      # model: <id>              # EXPLICIT : un identifiant découvert pour ce compte
+      defaultProfile: BALANCED # profil de la complexité MEDIUM
+      profiles: # candidats facultatifs ; sans candidat : routage officiel (autoTier)
+        FAST: { models: [], autoTier: efficiency }
+        BALANCED: { models: [], autoTier: balance }
+        INTELLIGENCE: { models: [], autoTier: intelligence }
+    reasoning:
+      mode: ADAPTIVE # AUTO (rien d'envoyé) | FIXED (default) | ADAPTIVE (selon la complexité)
+      default: MEDIUM
+      lowComplexity: LOW
+      mediumComplexity: MEDIUM
+      highComplexity: HIGH
+      veryHighComplexity: HIGH
+    fallback:
+      enabled: true
+      strategy: AUTO # AUTO | ALTERNATIVE | DETERMINISTIC
+    discovery:
+      cache: true
+      ttlMs: 600000
+      refreshOnUnavailableModel: true
     timeoutMs: 30000
     maxRetries: 1
     sessionReuse: true
@@ -182,13 +202,14 @@ ai:
 
 Priorité : CLI, puis environnement, puis YAML.
 
-| CLI                                    | Environnement                 | Effet                                    |
-| -------------------------------------- | ----------------------------- | ---------------------------------------- |
-| `--intelligence off\|assist\|hybrid`   | `QA_INTELLIGENCE_MODE`        | Mode (assist / hybrid active, off coupe) |
-| —                                      | `QA_INTELLIGENCE_ENABLED`     | `ai.enabled`                             |
-| `--ai-provider copilot\|deterministic` | `QA_INTELLIGENCE_PROVIDER`    | Fournisseur                              |
-| `--ai-model <id>`                      | `QA_COPILOT_MODEL`            | Modèle Copilot                           |
-| —                                      | `QA_COPILOT_REASONING_EFFORT` | Effort de raisonnement                   |
+| CLI                                                | Environnement                 | Effet                                            |
+| -------------------------------------------------- | ----------------------------- | ------------------------------------------------ |
+| `--intelligence off\|assist\|hybrid`               | `QA_INTELLIGENCE_MODE`        | Mode (assist / hybrid active, off coupe)         |
+| —                                                  | `QA_INTELLIGENCE_ENABLED`     | `ai.enabled`                                     |
+| `--ai-provider copilot\|deterministic`             | `QA_INTELLIGENCE_PROVIDER`    | Fournisseur                                      |
+| `--ai-model <id>`                                  | `QA_COPILOT_MODEL`            | Modèle Copilot (implique EXPLICIT)               |
+| `--ai-model-selection auto\|explicit\|adaptive`    | `QA_COPILOT_MODEL_SELECTION`  | Mode de sélection du modèle                      |
+| `--ai-reasoning auto\|adaptive\|low\|medium\|high` | `QA_COPILOT_REASONING_EFFORT` | Effort de raisonnement (low/medium/high : FIXED) |
 
 ```bash
 npm run qa -- scenarios/mission.yaml --intelligence assist        # mesurer, sans influencer
@@ -467,3 +488,212 @@ docker build --build-arg WITH_COPILOT_SDK=false -t qa-crawler .
   pas encore exécuté pas à pas (il est validé et audité).
 - L'analyse d'une erreur inconnue est consignée (catégorie probable, investigation SÛRE) ; le
   runtime et les oracles restent seuls juges.
+
+## 17. Gestion des modèles Copilot
+
+> Ne jamais utiliser le modèle le plus puissant pour tout ; ne jamais utiliser un LLM quand il
+> n'est pas nécessaire ; ne jamais supposer qu'un modèle est disponible, ni ses capacités, ni
+> qu'un effort de raisonnement est supporté. **Découvrir ce que Copilot rend réellement
+> disponible**, puis adapter.
+
+### Ce que le SDK installé expose réellement (`@github/copilot-sdk` 1.0.16)
+
+| Besoin                    | API réelle utilisée                                                                                                                                                                               |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Découverte                | `client.listModels()` → `ModelInfo[]` (mis en cache par le SDK jusqu'à la déconnexion)                                                                                                            |
+| Capacités                 | `capabilities.supports.{vision, reasoningEffort}`, `capabilities.limits.{max_context_window_tokens, max_prompt_tokens, max_output_tokens}`, `supportedReasoningEfforts`, `defaultReasoningEffort` |
+| Autorisation              | `policy.state` : `enabled` (utilisable), `disabled` (MODEL_NOT_AUTHORIZED), `unconfigured`                                                                                                        |
+| AUTO officiel             | `createSession({ model: "auto", capi: { autoTier } })` avec `efficiency`, `balance`, `intelligence` (`fast` est réservé aux intégrateurs)                                                         |
+| Changement de modèle      | `session.setModel(model, { reasoningEffort, autoTier })`                                                                                                                                          |
+| Modèle réellement utilisé | l'événement `assistant.usage` (`data.model`, `data.reasoningEffort`)                                                                                                                              |
+
+Le SDK ne dit **pas** si un modèle supporte les outils ou la sortie structurée : ces capacités
+restent **inconnues** (jamais supposées vraies ou fausses) et n'excluent pas un modèle.
+
+### Architecture
+
+```
+IntelligenceTriggerPolicy (faut-il un LLM ?)
+        ▼
+ReasoningComplexityAnalyzer (sans LLM) ── TRIVIAL → aucun appel, aucun choix de modèle
+        ▼
+ModelSelectionPolicy ── AUTO | EXPLICIT | ADAPTIVE (profil FAST / BALANCED / INTELLIGENCE)
+   ├── AvailableModelRegistry (listModels, cache TTL, refreshModels)
+   └── ModelCapabilityResolver (capacités déclarées, contexte nécessaire)
+        ▼
+ReasoningEffortPolicy (niveau voulu → niveau DÉCLARÉ par le modèle, sinon ajusté ou omis)
+        ▼
+ModelFallbackPolicy (AUTO | ALTERNATIVE | DETERMINISTIC — jamais masqué)
+        ▼
+ModelSelectionDecision → CopilotSessionFactory → Copilot Provider EXISTANT → SDK
+        ▼
+validation, SafetyPolicy, exécution, vérification au runtime (INCHANGÉES)
+```
+
+Code : `src/ai/models/` (types, registre, capacités, complexité, sélection, effort, repli). Le
+fournisseur Copilot existant applique la décision ; la session factory reçoit le modèle, l'effort
+et la préférence AUTO sans rien choisir elle-même.
+
+### Complexité du raisonnement (sans LLM)
+
+Le `ReasoningComplexityAnalyzer` lit ce que le moteur cognitif sait déjà :
+
+- la confiance déterministe ;
+- les actions plausibles ;
+- les hypothèses ouvertes et concurrentes ;
+- les contradictions ;
+- la divergence du parcours ;
+- les plans ou candidats de récupération ;
+- les tentatives de récupération ;
+- l'état métier inconnu ;
+- le but ambigu et les préconditions manquantes ;
+- l'échec non classé ;
+- l'absence de preuves.
+
+Chaque point de difficulté devient une **raison** lisible.
+
+| Niveau    | Exemple                                                   | Profil (ADAPTIVE)           | Effort voulu |
+| --------- | --------------------------------------------------------- | --------------------------- | ------------ |
+| TRIVIAL   | but connu, une action, confiance 0,96                     | — (aucun LLM)               | —            |
+| LOW       | petite ambiguïté entre deux libellés                      | FAST                        | LOW          |
+| MEDIUM    | deux actions plausibles, hypothèses 0,58 / 0,55           | `defaultProfile` (BALANCED) | MEDIUM       |
+| HIGH      | divergence + hypothèses + précondition inconnue           | INTELLIGENCE                | HIGH         |
+| VERY_HIGH | divergence + contradictions + plans + état métier inconnu | INTELLIGENCE                | HIGH         |
+
+### Modes de sélection
+
+| Mode       | Comportement                                                                                                                                                                                                |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTO`     | le routage officiel de Copilot (`model: auto`) ; QA-Crawler enregistre le mode, et le modèle effectif s'il est observé                                                                                      |
+| `EXPLICIT` | le modèle demandé, **vérifié avant la session** (découvert ? autorisé ? contexte suffisant ?) ; sinon repli visible                                                                                         |
+| `ADAPTIVE` | complexité → profil → premier candidat configuré, découvert, utilisable et compatible (de préférence un qui déclare l'effort voulu) ; sans candidat : `auto` avec la préférence du profil (`capi.autoTier`) |
+
+Aucun modèle n'est écrit en dur, aucun classement n'est codé : seulement la configuration, les
+capacités découvertes et la difficulté.
+
+### Effort de raisonnement
+
+`reasoning.mode` :
+
+- `AUTO` : rien n'est envoyé ;
+- `FIXED` : `default` ;
+- `ADAPTIVE` : selon la complexité.
+
+Le niveau n'est **envoyé** que si le modèle choisi le **déclare** :
+
+| Cas                                      | Ce qui est envoyé                       |
+| ---------------------------------------- | --------------------------------------- |
+| HIGH demandé, `[low, medium]` déclarés   | MEDIUM — `AI_REASONING_EFFORT_ADJUSTED` |
+| Le modèle ne déclare aucun effort        | rien n'est envoyé                       |
+| Routage `auto` (modèle inconnu d'avance) | rien n'est envoyé (invérifiable)        |
+
+### Replis (jamais masqués)
+
+Les raisons de repli possibles :
+
+- `MODEL_NOT_AVAILABLE`, `MODEL_NOT_AUTHORIZED`, `MODEL_CAPABILITY_MISMATCH` ;
+- `MODEL_SESSION_CREATION_FAILED`, `MODEL_DISCOVERY_FAILED` ;
+- `REASONING_EFFORT_UNSUPPORTED`, `MODEL_TEMPORARILY_UNAVAILABLE`.
+
+La stratégie (`fallback.strategy`) décide de la suite :
+
+| Stratégie       | Repli                                                                    |
+| --------------- | ------------------------------------------------------------------------ |
+| `AUTO`          | routage officiel                                                         |
+| `ALTERNATIVE`   | un autre modèle découvert et compatible, dans l'ordre du SDK, sinon AUTO |
+| `DETERMINISTIC` | aucune IA pour cet appel (`AI_MODEL_UNAVAILABLE`, décision déterministe) |
+
+Un modèle introuvable dans un cache ancien déclenche **une** redécouverte avant le repli
+(`refreshOnUnavailableModel`).
+
+Le rapport distingue toujours trois modèles :
+
+- `requestedModel` : demandé par la configuration, la CLI ou la politique ;
+- `selectedModel` : choisi par la politique ;
+- `effectiveModel` : réellement utilisé, **seulement s'il est observé** (`assistant.usage`), jamais déduit.
+
+### Observabilité
+
+**Événements :**
+
+- `AI_NO_LLM_REQUIRED` ;
+- `AI_MODEL_DISCOVERY_STARTED`, `AI_MODEL_DISCOVERY_COMPLETED`, `AI_MODEL_DISCOVERY_FAILED` ;
+- `AI_MODEL_SELECTED`, au format `[AI] trigger=… complexity=… mode=… profile=… model=… reasoning=…` ;
+- `AI_MODEL_UNAVAILABLE`, `AI_MODEL_FALLBACK`, `AI_MODEL_CAPABILITY_MISMATCH` ;
+- `AI_REASONING_EFFORT_SELECTED`, `AI_REASONING_EFFORT_ADJUSTED` ;
+- `AI_EFFECTIVE_MODEL_OBSERVED`.
+
+**Audit, par intervention** (`modelContext`) :
+
+- mode de sélection ;
+- complexité et ses raisons ;
+- profil ;
+- modèles demandé, choisi et effectif ;
+- préférence AUTO ;
+- efforts demandé, envoyé et rapporté ;
+- repli et sa raison.
+
+**Rapport** (section « AI Intelligence ») :
+
+- mode de sélection, profil par défaut, état de la découverte ;
+- interventions sans LLM ;
+- replis de modèle ;
+- répartition de l'effort envoyé et de la complexité ;
+- tableau « Models used (observed, not ranked) » ;
+- tableau « Effectiveness by trigger and complexity » (efficacité par modèle, déclencheur et complexité).
+
+Le tableau « Models used » donne, par modèle :
+
+- appels ;
+- propositions acceptées, rejetées, sans conclusion ;
+- confirmations et contradictions au runtime ;
+- délais dépassés, replis ;
+- latence moyenne ;
+- récupérations résolues.
+
+Une proposition acceptée puis **contredite** au runtime n'est jamais comptée comme un succès. Le
+taux de confirmation n'est calculé qu'à partir de **5** vérifications : en dessous, « too few
+samples ». Ces statistiques sont observationnelles et par run ; elles ne pilotent jamais la
+sélection.
+
+### Configuration
+
+```yaml
+ai:
+  enabled: true
+  mode: HYBRID
+  copilot:
+    modelSelection: { mode: EXPLICIT, model: '<available-model-id>' } # ou mode: AUTO / ADAPTIVE
+    reasoning: { mode: ADAPTIVE }
+```
+
+```bash
+npm run qa -- mission.yaml --intelligence hybrid --ai-model <model-id>                 # EXPLICIT
+npm run qa -- mission.yaml --intelligence hybrid --ai-model-selection auto
+npm run qa -- mission.yaml --intelligence assist --ai-model-selection adaptive --ai-reasoning high
+```
+
+Les anciennes clés `ai.copilot.model`, `reasoningEffort` et `adaptiveReasoning` sont migrées
+automatiquement, avec un avertissement.
+
+**Mode OFF** : aucun client, aucune découverte, aucune sélection, aucune résolution d'effort,
+aucune session, aucune activité réseau. C'est vérifié par les tests.
+
+### Tests
+
+- `tests/unit/ai-model-selection.test.ts` (21 tests) couvre :
+  - le registre : découverte, cache TTL, rafraîchissement, échec de découverte, capacités jamais inventées ;
+  - la complexité : TRIVIAL, MEDIUM, VERY_HIGH ;
+  - la sélection : EXPLICIT vérifié, EXPLICIT indisponible (repli visible, désactivé, alternative), contexte insuffisant, ADAPTIVE (profils, candidats), AUTO ;
+  - l'effort : ajusté ou omis ;
+  - la session : ouverte avec la décision ; aucune session au modèle inexistant ; session refusée ;
+  - la découverte en échec (AUTO ou déterministe) ;
+  - le modèle effectif observé ou laissé indéfini ;
+  - `setModel` sur une session réutilisée ;
+  - le mode OFF ;
+  - le cas TRIVIAL sans appel ;
+  - les mesures par modèle (une contradiction n'est pas un succès) ;
+  - la configuration, la CLI, l'environnement et la migration.
+- `tests/integration/ai-model-selection.test.ts` (navigateur réel, SDK simulé à la forme réelle) :
+  - une divergence profonde choisit le modèle du profil INTELLIGENCE avec l'effort HIGH ; le runtime confirme, et l'audit est tenu par modèle ;
+  - un modèle EXPLICIT inexistant se replie sur `auto`, de façon visible, et le parcours se termine.

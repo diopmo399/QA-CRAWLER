@@ -35,7 +35,6 @@ export class CopilotClientManager {
   private client: CopilotClientLike | undefined;
   private starting: Promise<CopilotClientLike> | undefined;
   private session: CopilotSessionLike | undefined;
-  private models: CopilotModelInfo[] | undefined;
   private reason: string | undefined;
   /** Combien de clients ont été créés (0 en mode OFF : vérifié par les tests). */
   clientsCreated = 0;
@@ -66,12 +65,21 @@ export class CopilotClientManager {
     }
   }
 
-  /** Les modèles disponibles (mécanisme officiel du SDK), mis en cache pour le run. */
+  /**
+   * Les modèles du compte (mécanisme officiel : client.listModels(), que le SDK met en cache
+   * jusqu'à la déconnexion). Une erreur est PROPAGÉE : l'AvailableModelRegistry la rapporte
+   * (AI_MODEL_DISCOVERY_FAILED) au lieu de la confondre avec « aucun modèle ».
+   */
   async listModels(): Promise<CopilotModelInfo[]> {
-    if (this.models) return this.models;
     const client = await this.ensureStarted();
-    this.models = await client.listModels().catch(() => []);
-    return this.models;
+    return client.listModels();
+  }
+
+  /** La session réutilisée est abandonnée (changement de modèle refusé) : la suivante sera neuve. */
+  async resetSession(): Promise<void> {
+    const session = this.session;
+    this.session = undefined;
+    await session?.disconnect().catch(() => undefined);
   }
 
   /** Une session : réutilisée si demandé, sinon une nouvelle à chaque fois. */
