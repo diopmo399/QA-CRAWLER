@@ -100,6 +100,7 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     ...(outcome.formRules ? { formRules: outcome.formRules } : {}),
     ...(outcome.functional ? { functional: outcome.functional } : {}),
     ...(outcome.cognitive ? { cognitive: outcome.cognitive } : {}),
+    ...(outcome.ai ? { ai: outcome.ai } : {}),
     settings: {
       exploration,
       goals,

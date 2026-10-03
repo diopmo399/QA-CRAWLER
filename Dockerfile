@@ -11,6 +11,11 @@ RUN npm ci --no-audit --no-fund
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
+# Optional AI reasoning advisor (ai.provider: copilot). Off by default at runtime; this only
+# controls whether the GitHub Copilot SDK (~150 MB with its runtime) is shipped in the image.
+# Without it, ai.mode ASSIST/HYBRID reports AI_UNAVAILABLE and falls back to deterministic.
+ARG WITH_COPILOT_SDK=true
+RUN if [ "$WITH_COPILOT_SDK" != "true" ]; then rm -rf node_modules/@github/copilot-sdk*; fi
 
 FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble
 LABEL org.opencontainers.image.title="qa-crawler" \

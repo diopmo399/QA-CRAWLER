@@ -1,3 +1,4 @@
+import type { AiEvent } from '../ai/gateway.js';
 import type { ExplorationListener } from '../explorer/flow-explorer.js';
 import { actionLabel } from '../model/discovered-action.js';
 import { redactText, redactUrl } from '../security/redactor.js';
@@ -14,6 +15,7 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 export type EngineEvent =
   | HealingEvent
   | CognitiveEvent
+  | AiEvent
   | 'AUTHENTICATED'
   | 'FLOW_STATE_DISCOVERED'
   | 'FLOW_STATE_REVISITED'
@@ -307,6 +309,19 @@ export class EngineEventLog {
           event.event,
           redactText(event.message),
         );
+      },
+      onIntelligence: (event) => {
+        const warn =
+          event.event === 'AI_PROPOSAL_REJECTED' ||
+          event.event === 'AI_UNAVAILABLE' ||
+          event.event === 'AI_TIMEOUT' ||
+          event.event === 'AI_BUDGET_EXHAUSTED' ||
+          event.event === 'AI_RUNTIME_CONTRADICTED';
+        const detail =
+          event.event === 'AI_REQUEST_CREATED' ||
+          event.event === 'AI_REQUEST_SANITIZED' ||
+          event.event === 'AI_FALLBACK_ACTIVATED';
+        this.log(warn ? 'WARN' : detail ? 'DEBUG' : 'INFO', event.event, redactText(event.message));
       },
       onHealing: (event) => {
         const warn =

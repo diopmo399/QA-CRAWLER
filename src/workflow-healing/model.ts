@@ -187,7 +187,14 @@ export interface RecoveryAction {
 }
 
 export type RecoveryCandidateSource =
-  'CURRENT_UI' | 'STATIC_ANALYSIS' | 'HISTORY' | 'DEPENDENCY_GRAPH' | 'FLOW_GRAPH' | 'BUSINESS_RULE';
+  | 'CURRENT_UI'
+  | 'STATIC_ANALYSIS'
+  | 'HISTORY'
+  | 'DEPENDENCY_GRAPH'
+  | 'FLOW_GRAPH'
+  | 'BUSINESS_RULE'
+  /** Une proposition du conseiller d'intelligence, validée, autorisée et confirmée au runtime. */
+  | 'AI_PROPOSAL';
 
 export type SafetyClass = 'SAFE' | 'MUTATION' | 'DANGEROUS' | 'UNKNOWN';
 

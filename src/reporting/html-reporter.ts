@@ -35,6 +35,7 @@ import { persistenceSection } from './persistence-section.js';
 import { staticAnalysisSection } from './static-section.js';
 import { rulesSection } from './rules-section.js';
 import { functionalSection } from './functional-section.js';
+import { aiSection } from './ai-section.js';
 import { cognitiveSection } from './cognitive-section.js';
 import { regressionSection } from './regression-section.js';
 import { driftLines, healingMetrics, recoveryLines } from '../workflow-healing/explain.js';
@@ -225,6 +226,7 @@ export function renderHtml(
           rulesSection(result, language),
           functionalSection(result, language),
           cognitiveSection(result, language),
+          aiSection(result, language),
           oraclesSection(result, nameOf, language),
           formsSection(result, nameOf, language),
           authorizationSection(result, language),

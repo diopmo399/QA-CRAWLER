@@ -86,6 +86,9 @@ export async function runCli(input: string[]): Promise<number> {
       ...(args.screenshotsDir !== undefined ? { screenshotsDir: args.screenshotsDir } : {}),
       ...(args.persistence !== undefined ? { persistence: args.persistence } : {}),
       ...(args.memory !== undefined ? { memory: args.memory } : {}),
+      ...(args.intelligence !== undefined ? { intelligence: args.intelligence } : {}),
+      ...(args.aiProvider !== undefined ? { aiProvider: args.aiProvider } : {}),
+      ...(args.aiModel !== undefined ? { aiModel: args.aiModel } : {}),
     });
   } catch (error) {
     if (error instanceof ConfigError) {
@@ -177,6 +180,24 @@ export async function runCli(input: string[]): Promise<number> {
       if (cognitive.functionalState) logger.info(color.dim(`    state: ${cognitive.functionalState}`));
       if (cognitive.missingChain) logger.info(color.dim(`    blocked: ${cognitive.missingChain}`));
       for (const gap of cognitive.coverageGaps.slice(0, 3)) logger.info(color.dim(`    untested: ${gap}`));
+    }
+    const ai = result.ai;
+    if (ai) {
+      logger.info(
+        `  AI advisor    : ${ai.mode} · ${ai.provider}${ai.model ? ` (${ai.model})` : ''} · ${String(ai.calls)} call(s), ${String(ai.accepted)} accepted, ${String(ai.rejected)} rejected, ${String(ai.runtimeConfirmed)} runtime confirmed, ${String(ai.runtimeContradicted)} contradicted · ${String(ai.fallbacks)} fallback(s)`,
+      );
+      if (ai.available === false)
+        logger.info(
+          color.yellow(
+            `    unavailable: ${ai.unavailableReason ?? 'provider unavailable'} (deterministic fallback)`,
+          ),
+        );
+      if (ai.shadow.compared > 0)
+        logger.info(
+          color.dim(
+            `    shadow: ${String(ai.shadow.agreements)} agreement(s), ${String(ai.shadow.disagreements)} disagreement(s)`,
+          ),
+        );
     }
     if (result.blockedWrites && result.blockedWrites.length > 0)
       logger.info(

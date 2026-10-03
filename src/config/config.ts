@@ -1390,6 +1390,94 @@ const replaySchema = z
   .strict();
 
 /**
+ * AI REASONING ADVISOR (GitHub Copilot SDK) : une intelligence OPTIONNELLE. OFF par défaut :
+ * aucun client créé, aucun appel, aucun changement de décision. ASSIST : analyse et mesure sans
+ * influencer l'exécution (shadow). HYBRID : une proposition validée (schéma, actions, preuves),
+ * autorisée par la SafetyPolicy et plus sûre que le déterministe peut être retenue — puis
+ * exécutée par l'exécuteur existant et vérifiée au runtime. Le fournisseur ne clique jamais.
+ * (`intelligence:` reste l'intelligence historique déterministe.)
+ */
+const aiSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    mode: z.enum(['OFF', 'ASSIST', 'HYBRID']).default('OFF'),
+    /** `copilot` : GitHub Copilot SDK ; `deterministic` : la même chaîne, sans réseau. */
+    provider: z.enum(['copilot', 'deterministic']).default('copilot'),
+    /** Un fournisseur indisponible arrête le run (par défaut : repli déterministe et AI_UNAVAILABLE). */
+    failOnUnavailable: z.boolean().default(false),
+    copilot: z
+      .object({
+        /** `auto` ou un identifiant validé avec la liste des modèles du SDK. */
+        model: nonEmpty.default('auto'),
+        reasoningEffort: z.enum(['auto', 'low', 'medium', 'high', 'xhigh']).default('auto'),
+        /** auto : effort plus élevé pour une divergence, une récupération épuisée, une contradiction (si le modèle le déclare). */
+        adaptiveReasoning: z.boolean().default(true),
+        timeoutMs: z.number().int().min(1000).max(600_000).default(30_000),
+        maxRetries: z.number().int().min(0).max(3).default(1),
+        sessionReuse: z.boolean().default(true),
+        /** Outils de LECTURE exposés au modèle (aucun outil d'exécution n'existe). */
+        tools: z.boolean().default(true),
+        /** Données du runtime Copilot (sessions) : hors du dépôt. */
+        baseDirectory: nonEmpty.default('.qa-crawler/copilot'),
+        /** Nom de la variable d'environnement d'un jeton ; absent : l'utilisateur connecté (mécanisme officiel du SDK). */
+        tokenEnv: nonEmpty.optional(),
+      })
+      .strict()
+      .default({}),
+    triggers: z
+      .object({
+        ambiguousTarget: z.boolean().default(true),
+        unknownScreen: z.boolean().default(true),
+        flowDivergence: z.boolean().default(true),
+        recoveryFailed: z.boolean().default(true),
+        multiplePlans: z.boolean().default(true),
+        unresolvedHypothesis: z.boolean().default(true),
+        unknownBusinessError: z.boolean().default(true),
+        lowConfidence: z.boolean().default(true),
+        knowledgeContradiction: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+    thresholds: z
+      .object({
+        /** Au-dessus : FAST PATH déterministe, aucun appel. */
+        deterministicConfidence: z.number().min(0).max(1).default(0.85),
+        minProposalConfidence: z.number().min(0).max(1).default(0.6),
+        /** Écart de confiance exigé pour préférer une proposition à une décision déterministe. */
+        overrideMargin: z.number().min(0).max(1).default(0.15),
+      })
+      .strict()
+      .default({}),
+    budgets: z
+      .object({
+        maxCallsPerRun: z.number().int().min(0).max(1000).default(10),
+        maxCallsPerAction: z.number().int().min(0).max(10).default(1),
+        maxCallsPerDivergence: z.number().int().min(0).max(10).default(1),
+        maxToolCallsPerRequest: z.number().int().min(0).max(50).default(6),
+        maxReasoningDurationMs: z.number().int().min(1000).max(600_000).default(60_000),
+      })
+      .strict()
+      .default({}),
+    context: z
+      .object({
+        maxActions: z.number().int().min(1).max(100).default(25),
+        maxEvidence: z.number().int().min(0).max(100).default(15),
+        maxHypotheses: z.number().int().min(0).max(50).default(8),
+        /** Libellés de champs dont aucune valeur ne doit partir (en plus des règles intégrées). */
+        sensitiveFields: z.array(nonEmpty).default([]),
+      })
+      .strict()
+      .default({}),
+    audit: z
+      .object({
+        enabled: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
+/**
  * QA COGNITIVE ENGINE : preuves, modèle fonctionnel, état métier, hypothèses et graphe
  * causal. Observe et apprend à chaque action, sans rien exécuter lui-même ; une observation
  * n'est jamais une vérité (HYPOTHESIS → SUPPORTED → RUNTIME_CONFIRMED).
@@ -1688,6 +1776,7 @@ export const scenarioSchema = z
     recording: recordingSchema.default({}),
     replay: replaySchema.default({}),
     cognitive: cognitiveSchema.default({}),
+    ai: aiSchema.default({}),
     credentials: credentialsSchema,
     browserInteractions: browserInteractionsSchema.default({}),
     forms: formsSchema.default({}),
@@ -1726,6 +1815,7 @@ export type PersistenceConfig = ScenarioConfig['persistence'];
 export type RulesConfig = ScenarioConfig['rules'];
 export type RecordingConfig = ScenarioConfig['recording'];
 export type IntelligenceConfig = ScenarioConfig['intelligence'];
+export type AiConfig = ScenarioConfig['ai'];
 export type MemoryConfig = ScenarioConfig['memory'];
 export type FormAuthConfig = z.output<typeof formAuthSchema>;
 export type HttpAuthConfig = z.output<typeof httpAuthSchema>;

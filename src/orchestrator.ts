@@ -75,6 +75,8 @@ export interface RunOptions {
   onWarning?: (message: string) => void;
   /** DRY RUN : le navigateur (connecté, sur la page de départ) est confié au Dry Run (dry-run-orchestrator). */
   dryRun?: FlowExplorerOptions['dryRun'];
+  /** Fournisseur d'intelligence injecté par programme (remplace ai.provider ; sans effet en OFF). */
+  intelligenceProvider?: FlowExplorerOptions['intelligenceProvider'];
 }
 
 /** verify a besoin d'une baseline : `learn` d'abord. */
@@ -188,6 +190,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     ...(options.testData ? { testData: options.testData } : {}),
     ...(options.observer ? { observer: options.observer } : {}),
     ...(options.dryRun ? { dryRun: options.dryRun } : {}),
+    ...(options.intelligenceProvider ? { intelligenceProvider: options.intelligenceProvider } : {}),
     listener: combineListeners(
       options.listener,
       engineLog.listener(),
