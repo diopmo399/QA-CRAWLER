@@ -343,6 +343,20 @@ const BUILTIN: [string[], Builder][] = [
   ],
 ];
 
+const SECTION_SUFFIX = new RegExp(
+  String.raw`^(.+?)\s+(?:dans la section|de la section|in the section|in section)\s+${QUOTED}$`,
+  'i',
+);
+const TARGETED = ['click', 'fill', 'select', 'check', 'uncheck'];
+
+/** Ajoute la section à la cible d'une étape (clic, saisie, choix, case). */
+function withSection(step: RawStep, section: string): RawStep {
+  const kind = TARGETED.find((key) => key in step);
+  const target = kind ? step[kind] : undefined;
+  if (!kind || target === null || typeof target !== 'object') return step;
+  return { ...step, [kind]: { ...(target as Record<string, unknown>), section } };
+}
+
 /** Remplace `{emplacement}` par sa valeur dans toutes les chaînes d'une étape personnalisée. */
 function substitute(template: unknown, values: Record<string, string>): unknown {
   if (typeof template === 'string') {
@@ -404,6 +418,18 @@ export class GherkinStepDictionary {
 
   translate(text: string, table?: string[][]): RawStep[] | undefined {
     const sentence = text.trim().replace(/\s+/g, ' ');
+    const whole = this.match(sentence, table);
+    if (whole) return whole;
+    // « … dans la section "Général" » : la même phrase, avec la section de sa cible.
+    const scoped = SECTION_SUFFIX.exec(sentence);
+    const section = scoped
+      ? [2, 3, 4, 5].map((index) => scoped[index]).find((v) => v !== undefined)
+      : undefined;
+    if (!scoped?.[1] || !section) return undefined;
+    return this.match(scoped[1], table)?.map((step) => withSection(step, section));
+  }
+
+  private match(sentence: string, table: string[][] | undefined): RawStep[] | undefined {
     for (const definition of this.definitions) {
       const match = definition.regex.exec(sentence);
       if (match) return definition.build(valuesOf(match, definition.names), table, sentence);

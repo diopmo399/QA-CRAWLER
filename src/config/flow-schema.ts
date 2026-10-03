@@ -36,6 +36,13 @@ const targetShape = {
   exact: z.boolean().optional(),
   /** Index à partir de 0 quand plusieurs éléments correspondent. */
   nth: z.number().int().min(0).optional(),
+  /**
+   * La SECTION de la cible (« Général », « Colonnes > Colonnes disponibles ») : deux champs
+   * identiques de sections différentes ne se confondent jamais (ContextualTargetResolver).
+   */
+  section: nonEmpty.optional(),
+  /** L'identité sémantique de la cible (general.priority) : un nom stable, pas un localisateur. */
+  semanticId: nonEmpty.optional(),
 };
 
 type TargetInput = { [K in keyof typeof targetShape]?: unknown };
@@ -200,6 +207,16 @@ const fingerprintSchema = z
     tag: nonEmpty.optional(),
     /** La section / le titre le plus proche (contexte). */
     context: nonEmpty.optional(),
+    /** Le libellé lu par l'humain (associé, ou le texte posé avant le champ). */
+    label: nonEmpty.optional(),
+    /** Le chemin de sections (« Colonnes > Colonnes disponibles »). */
+    section: nonEmpty.optional(),
+    /** Le composant maison qui contient la cible. */
+    component: nonEmpty.optional(),
+    /** formControlName : une preuve technique du concept, pas un libellé. */
+    formControl: nonEmpty.optional(),
+    placeholder: nonEmpty.optional(),
+    semanticId: nonEmpty.optional(),
   })
   .strict();
 
@@ -369,6 +386,9 @@ export interface FlowTarget {
   value?: string;
   exact?: boolean;
   nth?: number;
+  /** La section de la cible : le résolveur contextuel ne prend jamais un élément d'une autre section. */
+  section?: string;
+  semanticId?: string;
 }
 
 export type FlowValue = string | { env: string } | { testData: string };
@@ -397,6 +417,12 @@ export interface TargetFingerprint {
   testId?: string;
   tag?: string;
   context?: string;
+  label?: string;
+  section?: string;
+  component?: string;
+  formControl?: string;
+  placeholder?: string;
+  semanticId?: string;
 }
 
 interface StepCommon {
@@ -432,10 +458,14 @@ function toTarget(input: {
   css?: string | undefined;
   exact?: boolean | undefined;
   nth?: number | undefined;
+  section?: string | undefined;
+  semanticId?: string | undefined;
 }): FlowTarget {
   const options = {
     ...(input.exact !== undefined ? { exact: input.exact } : {}),
     ...(input.nth !== undefined ? { nth: input.nth } : {}),
+    ...(input.section !== undefined ? { section: input.section } : {}),
+    ...(input.semanticId !== undefined ? { semanticId: input.semanticId } : {}),
   };
   if (input.role !== undefined) {
     return {

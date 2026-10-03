@@ -3895,7 +3895,7 @@ export class FlowExplorer {
           return diverged(observed.tag === undefined ? 'TARGET_NOT_FOUND' : 'TARGET_MISMATCH', {
             page,
             report: done('FAILED', {
-              reason: `TARGET_FINGERPRINT_MISMATCH: expected "${fingerprint.name ?? fingerprint.text ?? fingerprint.testId ?? ''}", found ${match.reasons.join('; ')} (not clicked)`,
+              reason: `TARGET_FINGERPRINT_MISMATCH: expected "${fingerprint.name ?? fingerprint.text ?? fingerprint.testId ?? fingerprint.label ?? ''}", found ${match.reasons.join('; ')} (not clicked)`,
               stateId: context.stateId,
               url: context.url,
               effect: { ...effect, status: 'TARGET_MISMATCH', reasons: match.reasons },

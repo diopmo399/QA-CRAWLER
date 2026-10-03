@@ -81,6 +81,10 @@ export interface RecordedElement {
   readOnly?: boolean;
   /** Le titre de la section qui contient l'élément (contexte de l'empreinte). */
   context?: string;
+  /** Le chemin de sections, de la plus large à la plus proche (« Colonnes > Colonnes disponibles »). */
+  sectionPath?: string[];
+  /** Champs de MÊME libellé dans la MÊME section (1 : unique dans sa section). */
+  sameLabelInSection?: number;
   /** Le composant maison (balise à tiret) qui contient l'élément, à travers les shadow roots. */
   componentTag?: string;
   /** L'élément est dans un shadow DOM (son CSS est préfixé par l'hôte). */

@@ -394,12 +394,29 @@ describe('Human flow recorder: unlabelled fields', () => {
         },
       });
       const yaml = await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8');
-      expect(yaml).toContain('field: Branch code');
+      // Le texte devant le champ + sa section : une cible sémantique, jamais « input » ni un CSS.
+      expect(yaml).toContain('label: Branch code');
+      expect(yaml).toContain('section: New user');
       expect(yaml).not.toMatch(/field: input|mat-input/);
+      // Rejoué par le résolveur contextuel (libellé deviné + section), sans localisateur structurel.
+      const { config } = parseConfig(
+        `mission: { name: replay-guessed }
+target: { baseUrl: ${app.url}, startAt: /users/new }
+exploration: { autonomous: false, actionTimeoutMs: 3000, settleTimeMs: 100 }
+report: { failOnSeverity: NONE }
+output: { reportsDir: ${path.join(dir, 'replay')}, screenshotsDir: ${path.join(dir, 'shots')} }
+flows:
+  - ${JSON.stringify({ ...(parseYaml(yaml) as object), testData: path.join(outcome.directory, 'test-data.yaml') })}
+`,
+        {},
+        {},
+      );
+      const { result } = await runMission(config, { env: {} });
+      expect(result.flows[0]?.status).toBe('PASSED');
     } finally {
       await app.close();
     }
-  }, 60_000);
+  }, 120_000);
 });
 
 describe('Human flow recorder: test ids', () => {

@@ -5,6 +5,10 @@ import { toLocator } from '../execution/locator-resolver.js';
 import type { NetworkExchange } from '../model/network.js';
 import { waitForScreenReady } from '../observation/screen-ready.js';
 import { pathPatternToRegex } from '../policies/navigation-policy.js';
+import { semanticScanExpression, type SemanticScanResult } from '../recording/semantic-dom.js';
+
+const FIELD_ROLES = new Set(['textbox', 'combobox', 'searchbox', 'spinbutton']);
+let contextualTokens = 0;
 
 /**
  * Messages d'erreur visibles : les mêmes que ceux que l'UIObserver associe aux champs
@@ -51,6 +55,13 @@ export class FlowStepExecutor {
    * une fenêtre modale ne peut pas être cliquée), sinon la première correspondance.
    */
   async locate(page: Page, target: FlowTarget, timeoutMs: number): Promise<Locator | string> {
+    if (
+      target.section !== undefined &&
+      target.nth === undefined &&
+      target.strategy !== 'css' &&
+      target.strategy !== 'testId'
+    )
+      return this.locateInSection(page, target, timeoutMs);
     const base = toLocator(page, {
       strategy: target.strategy,
       ...(target.role !== undefined ? { role: target.role } : {}),
@@ -81,6 +92,55 @@ export class FlowStepExecutor {
         ? `element not found within ${timeoutMs} ms`
         : `element not visible within ${timeoutMs} ms (${count} match(es)): ${firstLine(error)}`;
     }
+  }
+
+  /** La dernière résolution contextuelle (candidats, scores, raisons) : pour le rapport. */
+  lastContextualResolution: (SemanticScanResult & { section: string; label: string }) | undefined;
+
+  /**
+   * CONTEXTUAL TARGET RESOLVER : une cible avec une section est cherchée PAR SON IDENTITÉ
+   * (libellé, rôle, section), jamais par position. Un candidat d'une autre section est exclu ;
+   * deux candidats aussi proches → AMBIGUOUS_TARGET (jamais le premier du DOM au hasard).
+   */
+  private async locateInSection(
+    page: Page,
+    target: FlowTarget,
+    timeoutMs: number,
+  ): Promise<Locator | string> {
+    const label = target.strategy === 'role' ? (target.name ?? '') : (target.value ?? '');
+    const section = target.section ?? '';
+    const kind =
+      target.strategy === 'label' || (target.strategy === 'role' && FIELD_ROLES.has(target.role ?? ''))
+        ? 'field'
+        : 'control';
+    contextualTokens += 1;
+    const token = `ctx-${String(contextualTokens)}`;
+    const deadline = Date.now() + timeoutMs;
+    let result: SemanticScanResult | undefined;
+    for (;;) {
+      result = (await page
+        .evaluate(
+          semanticScanExpression({
+            kind,
+            label,
+            ...(target.strategy === 'role' && target.role ? { role: target.role } : {}),
+            section,
+            token,
+          }),
+        )
+        .catch(() => undefined)) as SemanticScanResult | undefined;
+      if (result?.status === 'RESOLVED' || result?.status === 'AMBIGUOUS' || Date.now() >= deadline) break;
+      await page.waitForTimeout(Math.min(150, Math.max(0, deadline - Date.now())));
+    }
+    this.lastContextualResolution = result ? { ...result, section, label } : undefined;
+    if (result?.status === 'AMBIGUOUS')
+      return `AMBIGUOUS_TARGET: ${String(result.candidates.length)} candidates for "${label}" in section "${section}" (${result.candidates
+        .slice(0, 3)
+        .map((candidate) => `${candidate.label} @ ${candidate.section || '?'} = ${String(candidate.score)}`)
+        .join('; ')})`;
+    if (result?.status !== 'RESOLVED')
+      return `element "${label}" not found in section "${section}" within ${timeoutMs} ms`;
+    return page.locator(`[data-qa-crawler-target="${token}"]`).first();
   }
 
   /**

@@ -161,6 +161,8 @@ function rawTarget(target: FlowTarget): Record<string, unknown> {
   const options = {
     ...(target.exact !== undefined ? { exact: target.exact } : {}),
     ...(target.nth !== undefined ? { nth: target.nth } : {}),
+    ...(target.section !== undefined ? { section: target.section } : {}),
+    ...(target.semanticId !== undefined ? { semanticId: target.semanticId } : {}),
   };
   if (target.strategy === 'role')
     return { role: target.role, ...(target.name !== undefined ? { name: target.name } : {}), ...options };
@@ -310,6 +312,17 @@ function fieldName(target: FlowTarget): string | undefined {
 
 /** Une étape → une phrase intégrée (ou d'intention) ; undefined si elle ne se dit pas sans sélecteur. */
 export function sentenceOf(step: FlowStep, language: Language = 'fr'): string | undefined {
+  const sentence = plainSentenceOf(step, language);
+  // La section se dit en fin de phrase : « … dans la section "Général" » (relue par le dictionnaire).
+  const section = 'target' in step ? step.target.section : undefined;
+  if (!sentence || !section || !['click', 'fill', 'select', 'check', 'uncheck'].includes(step.kind))
+    return sentence;
+  return language === 'fr'
+    ? `${sentence} dans la section "${section}"`
+    : `${sentence} in the section "${section}"`;
+}
+
+function plainSentenceOf(step: FlowStep, language: Language): string | undefined {
   const fr = language === 'fr';
   switch (step.kind) {
     case 'goto':

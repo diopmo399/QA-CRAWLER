@@ -1,3 +1,5 @@
+import { sectionPathOf } from './semantic-dom.js';
+
 /**
  * Le script injecté dans chaque page pendant un enregistrement. Il s'exécute dans le
  * navigateur (sérialisé) : autonome, aucun import.
@@ -31,7 +33,11 @@ export interface CaptureOptions {
 
 export const OVERLAY_ATTRIBUTE = 'data-qa-crawler-overlay';
 
-export function installRecorder(options: CaptureOptions): void {
+export function installRecorder(
+  options: CaptureOptions,
+  /** sectionPathOf (semantic-dom) : le même chemin de sections qu'au rejeu. */
+  sectionOf: (el: Element) => string[] = () => [],
+): void {
   const global = window as unknown as Record<string, unknown>;
   if (global.__qaCrawlerRecorderInstalled === true) return;
   global.__qaCrawlerRecorderInstalled = true;
@@ -325,12 +331,29 @@ export function installRecorder(options: CaptureOptions): void {
       .map((attribute) => [attribute, el.getAttribute(attribute)] as const)
       .find(([, value]) => value);
     const testId = testIdEntry?.[1];
-    const context = contextOf(el);
+    // L'IDENTITÉ CONTEXTUELLE : le chemin de sections (« Colonnes > Colonnes disponibles »), le même
+    // qu'au rejeu ; deux champs identiques de sections différentes ne se confondent pas.
+    const sectionPath = sectionOf(el);
+    const context = sectionPath.at(-1) ?? contextOf(el);
+    const humanLabel = label || guessed || clean(el.getAttribute('placeholder'));
+    let sameLabelInSection = 0;
+    if (humanLabel && el.matches(FIELD)) {
+      const section = sectionPath.join(' > ');
+      for (const candidate of Array.from(document.querySelectorAll(FIELD))) {
+        if (candidate.closest(`[${OVERLAY}]`) || (!isVisible(candidate) && candidate !== el)) continue;
+        const other =
+          labelOf(candidate) || guessLabel(candidate) || clean(candidate.getAttribute('placeholder'));
+        if (other.toLowerCase() === humanLabel.toLowerCase() && sectionOf(candidate).join(' > ') === section)
+          sameLabelInSection += 1;
+      }
+    }
     return {
       tag,
       role,
       name,
       ...(context && context !== name ? { context } : {}),
+      ...(sectionPath.length > 0 ? { sectionPath } : {}),
+      ...(sameLabelInSection > 0 ? { sameLabelInSection } : {}),
       ...(typeof ShadowRoot !== 'undefined' && el.getRootNode() instanceof ShadowRoot
         ? { inShadow: true }
         : {}),
@@ -718,6 +741,6 @@ export function installRecorder(options: CaptureOptions): void {
 export function captureScript(options: CaptureOptions): string {
   return [
     'if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
-    `(${installRecorder.toString()})(${JSON.stringify(options)});`,
+    `(${installRecorder.toString()})(${JSON.stringify(options)}, ${sectionPathOf.toString()});`,
   ].join('\n');
 }
