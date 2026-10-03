@@ -152,4 +152,19 @@ steps:
     expect(['VALIDATED_AFTER_RERENDER', 'VALIDATED']).toContain(value?.status);
     expect(value?.classification).toBe('VALIDATED');
   }, 120_000);
+
+  it('§48.1 end to end: the "Filter" button disappears with its click — validated from the pre-action context captured by the recorder, with its effect', async () => {
+    const outcome = await record('Filter hidden opener', 'hideOpener');
+    const report = await validationOf(outcome);
+    const opener = report.actions.find((entry) => entry.action === 'CLICK' && entry.label === 'Filter');
+    expect(opener?.status).toBe('VALIDATED_WITH_EFFECT');
+    expect(opener?.classification).toBe('VALIDATED');
+    const raw = JSON.parse(await readFile(path.join(outcome.directory, 'raw-recording.json'), 'utf8')) as {
+      rawEvents?: { type: string; pre?: { title: string; cssCount: number } }[];
+      events?: { type: string; pre?: { title: string; cssCount: number } }[];
+    };
+    const events = raw.rawEvents ?? raw.events ?? [];
+    const click = events.find((entry) => entry.type === 'click' && entry.pre);
+    expect(click?.pre?.title).toBe('Requests');
+  }, 120_000);
 });

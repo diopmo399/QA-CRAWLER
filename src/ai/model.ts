@@ -158,6 +158,11 @@ export interface IntelligenceRequest {
    * répondre « cette action satisfera la précondition X et fera avancer l'objectif Y ».
    */
   functionalContext?: FunctionalContext;
+  /**
+   * RECORDING TARGET AUDIT : le contexte fonctionnel d'une action humaine (écran, actions d'avant
+   * et d'après, cible réelle, candidats, contradictions, indices statiques / historiques marqués).
+   */
+  recordingContext?: Record<string, unknown>;
   constraints: IntelligenceConstraints;
 }
 
@@ -235,6 +240,15 @@ export const intelligenceProposalSchema = z
     uncertainties: z.array(shortText(200)).max(10),
     confidence: z.number().min(0).max(1),
     summary: shortText(300).optional(),
+    /** Audit d'enregistrement : l'identité sémantique proposée (appliquée seulement si le runtime confirme). */
+    semanticTarget: z
+      .object({ semanticId: shortText(80).optional(), role: shortText(40).optional() })
+      .strict()
+      .optional(),
+    /** Les contradictions (C1…) que la proposition explique. */
+    contradictionsResolved: z.array(shortText(20)).max(10).optional(),
+    /** Le contexte fonctionnel retenu (dialog, field, operator…), court. */
+    context: z.record(shortText(40), shortText(80)).optional(),
   })
   .strict();
 export type IntelligenceProposal = z.infer<typeof intelligenceProposalSchema>;

@@ -422,6 +422,29 @@ représentation que je viens de construire, retrouverais-je EXACTEMENT l'éléme
   composant, fenêtre, visible, **focus**). Un attribut stable propre à l'original suffit à réparer
   sans conseiller (`input[formcontrolname="zip"]`) ; sinon le conseiller reçoit ces traits pour
   chaque candidate — jamais une valeur saisie ni le texte d'une ligne de tableau.
+- **Contexte pré-action** : la capture (phase de capture, avant les gestionnaires de
+  l'application) relève l'écran tel que l'humain le voyait : route, titre, fenêtre ouverte, titres,
+  unicité de la cible (CSS, texte, rôle + nom, libellé), choix déjà faits (listes, cases — jamais
+  une saisie libre), onglet actif, éléments du même genre, chargement en cours. Quand l'action fait
+  disparaître sa cible (un bouton « Filtre » qui ouvre une fenêtre et se masque), l'ordre est :
+  résolution live → élément original → contexte pré-action. Une cible unique avant l'action est
+  `VALIDATED_PRE_ACTION` ; avec un effet observé après (fenêtre apparue, route, titre),
+  `VALIDATED_WITH_EFFECT` (`semanticallyConfirmed`). L'effet ne remplace jamais l'identité : il
+  s'y ajoute. Une cible disparue et ambiguë avant l'action reste ambiguë (jamais « prouvée »).
+- **Contexte du conseiller (CONTEXT BEFORE DECISION)** : `RecordingIntelligenceContextBuilder`
+  joint à la requête un `recordingContext` structuré — mission `RECORDING_TARGET_AUDIT`, parcours,
+  écran (fenêtre, section, composant, onglet, titres), action (type, intention en hypothèse, type de
+  valeur — jamais la valeur), cible réelle et ses attributs stables, 3 à 5 actions précédentes de la
+  même zone, actions SUIVANTES déjà reçues (une preuve, pas une vérité), configuration en cours
+  (« Field = …, Operator = … »), état du formulaire, dépendances observées, effets, preuves runtime,
+  candidats décrits par leur identité fonctionnelle et leur similarité avec l'original,
+  contradictions (C1…), scores (des indices), indices statiques (`SUPPORTING_EVIDENCE`) et
+  historiques (`EXPERIENCE`). Le `ContextRelevanceSelector` borne la fenêtre ; tout passe par
+  l'`IntelligenceContextSanitizer`. Le prompt système précise l'autorité des preuves (runtime d'abord).
+  La proposition peut ajouter `semanticTarget` et `contradictionsResolved` : un `semanticId` n'est
+  repris qu'après confirmation runtime, un rôle qui contredit le runtime est ignoré. Résumé assaini
+  de chaque contexte envoyé : `ai-context-summary.json` ; journal `[AI_CONTEXT_BUILT]`,
+  `[AI_CONTEXT_SANITIZED]`, `[AI_TARGET_AUDIT_REQUESTED]`, `[AI_TARGET_PROPOSAL]`.
 - **Audit par le conseiller** (même `IntelligenceGateway`, déclencheurs de
   `recording.intelligenceAudit`) seulement si le déterministe ne suffit pas : il choisit une
   candidate fournie (T…), QA-CRAWLER la **résout** et la compare à l'original. Une proposition qui ne
@@ -541,7 +564,7 @@ la session, la version et l'environnement. Les runs suivants la reprennent comme
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,
 `recorded-flow.json`, `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
-données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `target-validation.json`, `optimized.flow.yaml`
+données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `target-validation.json`, `ai-context-summary.json`, `optimized.flow.yaml`
 (seulement avec l'optimiseur), `flow-graph.json` (la carte
 des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en nombres — sans
 note globale —, intention comprise, qualité des cibles et des valeurs, trace

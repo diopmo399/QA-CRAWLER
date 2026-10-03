@@ -30,7 +30,10 @@ const page = (
 <p id="result"></p>
 <p>Applied <span id="count">0</span> time(s)</p>
 </main><script>
-  document.getElementById('open').addEventListener('click', () => document.getElementById('panel').classList.remove('hidden'));
+  document.getElementById('open').addEventListener('click', (event) => {
+    document.getElementById('panel').classList.remove('hidden');
+    ${variant === 'hideOpener' ? "event.currentTarget.classList.add('hidden');" : ''}
+  });
   let count = 0;
   document.getElementById('apply').addEventListener('click', () => {
     count += 1;

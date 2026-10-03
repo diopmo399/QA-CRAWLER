@@ -10,8 +10,14 @@ import {
   sectionMatch,
   type ObservedTarget,
 } from '../flows/action-effect-verifier.js';
-import type { RawRecordedEvent, RecordedElement, RecordedTarget } from './model.js';
+import type { PreActionContext, RawRecordedEvent, RecordedElement, RecordedTarget } from './model.js';
 import { resolveRecordedTarget } from './recorded-target.js';
+import type {
+  ContextAction,
+  ContextCandidate,
+  EvidenceSources,
+  RecordingContextInput,
+} from './recording-intelligence-context.js';
 import {
   elementTraits,
   semanticScanExpression,
@@ -34,6 +40,10 @@ export type TargetValidationStatus =
   | 'VALIDATED_FRAGILE'
   | 'VALIDATED_AFTER_RERENDER'
   | 'VALIDATED_AFTER_AI_AUDIT'
+  /** L'élément a disparu avec l'action, mais il était UNIQUE juste avant (contexte pré-action). */
+  | 'VALIDATED_PRE_ACTION'
+  /** Identité prouvée avant l'action ET effet fonctionnel observé après (fenêtre ouverte, route…). */
+  | 'VALIDATED_WITH_EFFECT'
   | 'AMBIGUOUS'
   | 'MISMATCH'
   | 'NOT_FOUND'
@@ -47,6 +57,8 @@ export const VALIDATED_STATUSES: ReadonlySet<TargetValidationStatus> = new Set([
   'VALIDATED_FRAGILE',
   'VALIDATED_AFTER_RERENDER',
   'VALIDATED_AFTER_AI_AUDIT',
+  'VALIDATED_PRE_ACTION',
+  'VALIDATED_WITH_EFFECT',
 ]);
 
 /** Ce que le rejeu lira de l'élément (rôle, nom, balise, test id, section) : jamais une valeur. */
@@ -75,6 +87,8 @@ export interface TargetCheck {
   sameElement?: boolean;
   /** Le nœud original a été remplacé, mais l'élément résolu a la même identité (instantané). */
   sameIdentity?: boolean;
+  /** Le résultat vient du contexte PRÉ-ACTION (la cible n'existe plus au runtime). */
+  preAction?: boolean;
   resolved?: TargetIdentity;
   differences: TargetDifference[];
   /** AMBIGUOUS : les candidats (identité, et lequel est l'original). */
@@ -99,6 +113,10 @@ export interface TargetAiAudit {
   proposedTarget?: string;
   citedEvidence: string[];
   reason: string;
+  /** Ce qui a été envoyé au conseiller (assaini) : ai-context-summary.json. */
+  context?: Record<string, unknown>;
+  /** Ce que la proposition affirmait mais que le runtime contredit (ignoré). */
+  ignored?: string[];
 }
 
 /**
@@ -129,8 +147,17 @@ export interface RecordingTargetValidation {
   requiresReplayValidation: boolean;
   /** Prouvée dans CE runtime ; la connaissance universelle attend le rejeu. */
   knowledge: { recordingValidated: boolean; replayValidated: false };
+  /** Les effets observés entre l'écran d'avant et celui d'après (fenêtre, route, titre, cible disparue). */
+  effects?: string[];
+  /** ACTION_SEMANTICALLY_CONFIRMED : cible validée ET effet observé. */
+  semanticallyConfirmed?: boolean;
   /** Glisser-déposer : l'élément et la zone retrouvés, et le déplacement observé (preuve). */
-  drag?: { item: TargetValidationStatus; destination: TargetValidationStatus; movedObserved: boolean };
+  drag?: {
+    item: TargetValidationStatus;
+    destination: TargetValidationStatus;
+    movedObserved: boolean;
+    lists?: { sourceBefore: string[]; sourceAfter: string[]; destinationAfter: string[] };
+  };
   log: string[];
 }
 
@@ -155,13 +182,26 @@ export type TargetAuditAdvisor = (input: {
   event: RawRecordedEvent;
   original: TargetIdentity & { label?: string };
   check: TargetCheck;
-  candidates: { key: string; target: FlowTarget; description: string }[];
+  candidates: (ContextCandidate & { description: string })[];
   previousActions: string[];
+  /** CONTEXT BEFORE DECISION : écran, actions d'avant et d'après, effets, indices (voir RecordingIntelligenceContextBuilder). */
+  context?: Omit<RecordingContextInput, 'candidates'>;
 }) => Promise<{
   decisionId?: string;
   selectedKey?: string;
   outcome: 'PROPOSAL' | 'INCONCLUSIVE' | 'UNAVAILABLE';
   citedEvidence: string[];
+  confidence?: number;
+  semanticTarget?: { semanticId?: string; role?: string };
+  /** Ce qui a été envoyé (assaini) : pour ai-context-summary.json. */
+  contextSummary?: Record<string, unknown>;
+  contextStats?: {
+    candidates: number;
+    evidence: number;
+    previousActions: number;
+    futureActions: number;
+    redactions: number;
+  };
 }>;
 
 export interface TargetValidatorOptions {
@@ -170,6 +210,10 @@ export interface TargetValidatorOptions {
   auditOn: ReadonlySet<TargetValidationStatus>;
   advisor?: TargetAuditAdvisor;
   log?: (line: string) => void;
+  /** Le nom du parcours (contexte du conseiller). */
+  flowName?: string;
+  /** Indices statiques / historiques (jamais une vérité runtime) ; aucun par défaut. */
+  sources?: EvidenceSources;
 }
 
 export class RecordingTargetValidator {
@@ -226,6 +270,47 @@ export class RecordingTargetValidator {
     const option = event.value?.option?.label;
     this.previous.push(`${event.type} "${label}"${option ? ` = "${option}"` : ''}`);
     if (this.previous.length > 6) this.previous.shift();
+  }
+
+  /** Toutes les actions humaines reçues (dans l'ordre) : l'historique et les actions SUIVANTES. */
+  private readonly observed: RawRecordedEvent[] = [];
+  private lastEffects: string[] = [];
+
+  /** Appelé dès la réception d'un événement (avant sa validation) : une action suivante devient une preuve. */
+  observe(event: RawRecordedEvent): void {
+    if (event.type === 'navigation' || event.type === 'control' || event.noise) return;
+    this.observed.push(event);
+    if (this.observed.length > 60) this.observed.shift();
+  }
+
+  private contextAction(event: RawRecordedEvent): ContextAction {
+    const element = event.element;
+    const option =
+      event.value?.option?.label ??
+      (event.value?.checked !== undefined ? (event.value.checked ? 'checked' : 'unchecked') : undefined);
+    const section =
+      element?.sectionPath && element.sectionPath.length > 0 ? element.sectionPath.join(' > ') : undefined;
+    return {
+      id: event.id,
+      type:
+        event.type === 'change' && option !== undefined && !event.value?.checked
+          ? 'SELECT'
+          : event.type.toUpperCase(),
+      target:
+        event.drag?.item ?? element?.label ?? element?.guessedLabel ?? element?.name ?? element?.tag ?? '',
+      ...(option !== undefined ? { value: option } : {}),
+      // Une saisie libre : son TYPE seulement, jamais sa valeur.
+      ...(option === undefined && event.value
+        ? { valueType: event.value.sensitive ? 'SENSITIVE' : event.value.shape }
+        : {}),
+      ...(section ? { section } : {}),
+      ...(event.pre?.dialog
+        ? { dialog: event.pre.dialog }
+        : element?.dialogName
+          ? { dialog: element.dialogName }
+          : {}),
+      at: event.at,
+    };
   }
 
   private async original(
@@ -309,6 +394,42 @@ export class RecordingTargetValidator {
         confidence: 0.5,
         reason: `TARGET_CHANGED_BY_ACTION: "${element.label ?? element.name}" became "${observed?.name ?? observed?.text ?? ''}" after the action (kept as recorded)`,
       };
+    // L'ÉCRAN APRÈS l'action, comparé à celui d'avant : les effets observés (une preuve, jamais
+    // à la place de l'identité de la cible).
+    const post = await postActionSummary(page);
+    const effects = event.pre ? observedEffects(event.pre, post, original === undefined) : [];
+    this.lastEffects = effects;
+    // NOT_VALIDATABLE EN DERNIER RECOURS : la cible a disparu avec l'action → le contexte PRÉ-ACTION.
+    if (
+      !VALIDATED_STATUSES.has(before.status) &&
+      event.pre &&
+      (before.status === 'NOT_VALIDATABLE' ||
+        (!original && (before.status === 'NOT_FOUND' || before.status === 'STALE_BEFORE_VALIDATION')))
+    ) {
+      const pre = preActionCheck(target, element, event.pre);
+      before = pre.unique
+        ? {
+            ...before,
+            status: effects.length > 0 ? 'VALIDATED_WITH_EFFECT' : 'VALIDATED_PRE_ACTION',
+            confidence: effects.length > 0 ? 0.92 : 0.8,
+            reason: `TARGET_VALIDATED_PRE_ACTION: ${pre.reason}${effects.length > 0 ? `; effect observed: ${effects.join(', ')}` : ''}`,
+            preAction: true,
+          }
+        : {
+            ...before,
+            status: 'AMBIGUOUS',
+            confidence: 0.6,
+            reason: `PRE_ACTION_AMBIGUOUS: ${pre.reason} (the original element is gone: no exact match can be proven)`,
+            preAction: true,
+            candidates: event.pre.peers.slice(0, 6).map((peer, index) => ({
+              index,
+              role: peer.role,
+              name: peer.name,
+              ...(peer.section ? { section: peer.section } : {}),
+              original: false,
+            })),
+          };
+    }
     let after: TargetCheck | undefined;
     let repair: TargetRepair | undefined;
     let attempts = 1;
@@ -331,6 +452,7 @@ export class RecordingTargetValidator {
     const tried = new Set([JSON.stringify(target)]);
     while (
       !VALIDATED_STATUSES.has(current.status) &&
+      current.preAction !== true &&
       attempts <= this.options.maxDeterministicRepairAttempts &&
       current.status !== 'NOT_VALIDATABLE'
     ) {
@@ -374,7 +496,9 @@ export class RecordingTargetValidator {
 
     // ---- AUDIT par le conseiller (seulement si le déterministe ne suffit pas), puis REVALIDATION.
     let aiAudit: TargetAiAudit | undefined;
-    if (this.options.advisor && this.options.auditOn.has(current.status)) {
+    // Une cible disparue ne peut pas être RE-PROUVÉE au runtime : le conseiller ne peut pas valider
+    // une correspondance exacte impossible à démontrer (jamais d'audit sur un résultat pré-action).
+    if (this.options.advisor && this.options.auditOn.has(current.status) && current.preAction !== true) {
       const outcome = await this.audit(
         page,
         event,
@@ -419,10 +543,15 @@ export class RecordingTargetValidator {
       ...(changed ? { targetAfter: target, ...(fingerprint ? { fingerprintAfter: fingerprint } : {}) } : {}),
       ...(after ? { validationAfter: after } : {}),
       ...(aiAudit ? { aiAudit } : {}),
+      ...(effects.length > 0 ? { effects } : {}),
+      ...(validated && effects.length > 0 ? { semanticallyConfirmed: true } : {}),
       repairApplied: changed,
       aiAudited: aiAudit !== undefined && aiAudit.outcome !== 'NOT_CALLED',
+      // Prouvé sur le nœud original au runtime (pas un re-rendu, pas le seul contexte pré-action).
       originalTargetMatch:
-        validated && current.status !== 'VALIDATED_AFTER_RERENDER' ? true : current.sameElement === true,
+        validated && current.status !== 'VALIDATED_AFTER_RERENDER' && current.preAction !== true
+          ? true
+          : current.sameElement === true,
       requiresReplayValidation: !validated,
       knowledge: { recordingValidated: validated, replayValidated: false },
       log,
@@ -957,35 +1086,90 @@ export class RecordingTargetValidator {
     if (check.candidates) for (const entry of check.candidates) add({ ...target, nth: entry.index });
     // Chaque candidate est décrite par ce qu'elle trouve VRAIMENT (combien, et ses traits) : sans cela
     // le conseiller ne peut que parier entre des « textbox » identiques.
-    const candidates: { key: string; target: FlowTarget; description: string }[] = [];
+    const candidates: (ContextCandidate & { description: string })[] = [];
     for (const [index, option] of options.slice(0, 8).entries()) {
       const identity = check.candidates?.find(
         (entry) => option.nth === entry.index && option.strategy === target.strategy,
       );
       let found = identity ? describeIdentity(identity) : '';
+      let resolvedIdentity: ContextCandidate['identity'] = identity;
       if (!identity) {
-        const resolution = await this.resolve(page, option, undefined).catch(() => ({ count: 0 }));
+        const resolution: { count: number; chosen?: number; observed?: ObservedTarget } = await this.resolve(
+          page,
+          option,
+          undefined,
+        ).catch(() => ({ count: 0 }));
         found =
           resolution.count === 0
             ? 'finds nothing'
-            : resolution.count > 1 && !('chosen' in resolution && resolution.chosen !== undefined)
+            : resolution.count > 1 && resolution.chosen === undefined
               ? `finds ${String(resolution.count)} elements`
               : 'finds 1 element';
+        if (resolution.observed) resolvedIdentity = identityOf(resolution.observed);
       }
       candidates.push({
         key: `T${String(index + 1)}`,
         target: option,
+        found,
+        ...(resolvedIdentity ? { identity: resolvedIdentity } : {}),
         // Ce qui départage d'abord (identité, traits), le localisateur ensuite, raccourci.
         description: `${found} ← ${shorten(describeTarget({ ...option, nth: undefined }), 48)}${option.nth ? ` [${String(option.nth)}]` : ''}`,
       });
     }
+    // CONTEXT BEFORE DECISION : l'historique et les actions SUIVANTES déjà reçues (des preuves).
+    const position = this.observed.findIndex((entry) => entry.id === event.id);
+    const history = (
+      position >= 0 ? this.observed.slice(0, position) : this.observed.filter((entry) => entry.at < event.at)
+    ).map((entry) => this.contextAction(entry));
+    const next = (position >= 0 ? this.observed.slice(position + 1) : []).map((entry) =>
+      this.contextAction(entry),
+    );
     const answer = await advisor({
       event,
       original: originalIdentity,
       check,
       candidates,
       previousActions: [...this.previous],
+      context: {
+        flowName: this.options.flowName ?? 'recording',
+        event: {
+          id: event.id,
+          type: event.type,
+          at: event.at,
+          ...(event.value && !event.value.option
+            ? { valueType: event.value.sensitive ? 'SENSITIVE' : event.value.shape }
+            : {}),
+        },
+        original: originalIdentity,
+        ...(fingerprint ? { fingerprint } : {}),
+        recordedTarget: target,
+        validation: {
+          status: check.status,
+          reason: check.reason,
+          confidence: check.confidence,
+          candidateCount: check.candidateCount,
+          differences: check.differences,
+        },
+        ...(event.pre ? { pre: event.pre } : {}),
+        effects: this.lastEffects,
+        history,
+        next,
+        ...(this.options.sources ? { sources: this.options.sources } : {}),
+      },
     });
+    if (answer.contextStats)
+      this.options.log?.(
+        `[AI_CONTEXT_BUILT] trigger=TARGET_${check.status} action=${event.id} candidates=${String(answer.contextStats.candidates)} evidence=${String(answer.contextStats.evidence)} previousActions=${String(answer.contextStats.previousActions)} futureActions=${String(answer.contextStats.futureActions)}`,
+      );
+    if (answer.contextStats)
+      this.options.log?.(
+        `[AI_CONTEXT_SANITIZED] action=${event.id} redactions=${String(answer.contextStats.redactions)}`,
+      );
+    this.options.log?.(`[AI_TARGET_AUDIT_REQUESTED] action=${event.id}`);
+    if (answer.selectedKey)
+      this.options.log?.(
+        `[AI_TARGET_PROPOSAL] action=${event.id} candidate=${answer.selectedKey}${answer.confidence !== undefined ? ` confidence=${String(answer.confidence)}` : ''}`,
+      );
     const base = {
       ...(answer.decisionId ? { decisionId: answer.decisionId } : {}),
       citedEvidence: answer.citedEvidence,
@@ -994,6 +1178,7 @@ export class RecordingTargetValidator {
       return {
         audit: { ...base, outcome: 'UNAVAILABLE', reason: 'advisor unavailable: deterministic result kept' },
       };
+    if (answer.contextSummary) Object.assign(base, { context: answer.contextSummary });
     const chosen = candidates.find((entry) => entry.key === answer.selectedKey);
     if (!chosen)
       return {
@@ -1003,15 +1188,20 @@ export class RecordingTargetValidator {
           reason: 'no candidate selected: deterministic result kept',
         },
       };
-    // LE CONSEILLER PROPOSE, QA-CRAWLER RÉSOUT, LE RUNTIME CONFIRME.
-    const proposedFingerprint =
+    // LE CONSEILLER PROPOSE, QA-CRAWLER RÉSOUT, LE RUNTIME CONFIRME. Son identité sémantique n'est
+    // reprise qu'après confirmation ; un rôle qui contredit le runtime est ignoré (le runtime gagne).
+    const runtimeFingerprint =
       observed && fingerprint ? { ...fingerprint, ...identityPatch(observed) } : fingerprint;
+    const semanticId = answer.semanticTarget?.semanticId;
+    const proposedFingerprint =
+      runtimeFingerprint && semanticId ? { ...runtimeFingerprint, semanticId } : runtimeFingerprint;
     const recheck = await this.check(page, chosen.target, proposedFingerprint, original, observed, element);
     if (!VALIDATED_STATUSES.has(recheck.status))
       return {
         audit: {
           ...base,
           outcome: 'AI_PROPOSAL_RUNTIME_REJECTED',
+          ...(answer.contextSummary ? { context: answer.contextSummary } : {}),
           proposedTarget: chosen.description,
           reason: `the proposed candidate does not find the human target (${recheck.status}): human action preserved, no silent correction`,
         },
@@ -1021,6 +1211,14 @@ export class RecordingTargetValidator {
         ...base,
         outcome: 'AI_PROPOSAL_RUNTIME_CONFIRMED',
         proposedTarget: chosen.description,
+        ...(answer.contextSummary ? { context: answer.contextSummary } : {}),
+        ...(answer.semanticTarget?.role && observed?.role && answer.semanticTarget.role !== observed.role
+          ? {
+              ignored: [
+                `role "${answer.semanticTarget.role}" contradicts the runtime role "${observed.role}"`,
+              ],
+            }
+          : {}),
         reason: 'the proposed candidate resolves to the original human target',
       },
       validated: {
@@ -1141,7 +1339,13 @@ export class RecordingTargetValidator {
       originalTargetMatch: ok,
       requiresReplayValidation: !ok,
       knowledge: { recordingValidated: ok, replayValidated: false },
-      drag: { item: itemStatus, destination: destinationStatus, movedObserved: drag.moved },
+      drag: {
+        item: itemStatus,
+        destination: destinationStatus,
+        movedObserved: drag.moved,
+        // AVANT / APRÈS : la preuve du déplacement (listes d'interface, jamais un second glisser).
+        ...(drag.lists ? { lists: drag.lists } : {}),
+      },
       log,
     };
   }
@@ -1232,4 +1436,112 @@ export function describeTraits(traits: ElementTraits | undefined): string {
 
 function shorten(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/** L'écran maintenant (route, titre, fenêtre ouverte, titres) : lecture seule. */
+async function postActionSummary(
+  page: Page,
+): Promise<{ route: string; title: string; dialog?: string; headings: string[] }> {
+  return page
+    .evaluate(() => {
+      const visible = (node: Element): boolean => {
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return false;
+        const style = getComputedStyle(node);
+        return style.visibility !== 'hidden' && style.display !== 'none';
+      };
+      const clean = (text: string | null | undefined): string =>
+        (text ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+      const dialog = Array.from(
+        document.querySelectorAll(
+          '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], .cdk-overlay-pane',
+        ),
+      ).find(visible);
+      const name = dialog
+        ? clean(
+            dialog.getAttribute('aria-label') ??
+              dialog.querySelector('h1, h2, h3, [role="heading"], legend')?.textContent,
+          )
+        : '';
+      return {
+        route: location.pathname,
+        title: clean(document.title),
+        ...(name ? { dialog: name } : {}),
+        headings: Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"]'))
+          .filter(visible)
+          .map((node) => clean(node.textContent))
+          .filter(Boolean)
+          .slice(0, 5),
+      };
+    })
+    .catch(() => ({ route: '', title: '', headings: [] }));
+}
+
+/** Ce que l'action a changé à l'écran (fenêtre, route, titre, titres, cible disparue). */
+export function observedEffects(
+  pre: PreActionContext,
+  post: { route: string; title: string; dialog?: string; headings: string[] },
+  targetGone: boolean,
+): string[] {
+  const effects: string[] = [];
+  if (post.route && post.route !== pre.route) effects.push(`route ${pre.route} → ${post.route}`);
+  if (post.dialog && post.dialog !== pre.dialog) effects.push(`dialog "${post.dialog}" appeared`);
+  if (pre.dialog && !post.dialog) effects.push(`dialog "${pre.dialog}" closed`);
+  if (post.title && post.title !== pre.title) effects.push(`title "${post.title}"`);
+  const appeared = post.headings.filter((heading) => !pre.headings.includes(heading));
+  if (appeared.length > 0) effects.push(`heading "${appeared.slice(0, 2).join('", "')}" appeared`);
+  if (targetGone && effects.length > 0) effects.push('the target itself left the screen');
+  return effects;
+}
+
+/**
+ * La cible était-elle UNIQUE juste avant l'action ? Les comptes sont faits par la capture,
+ * avant l'effet : rôle + nom, libellé (dans sa section), texte, CSS. Une position n'en est pas une.
+ */
+export function preActionCheck(
+  target: FlowTarget,
+  element: RecordedElement,
+  pre: PreActionContext,
+): { unique: boolean; reason: string } {
+  if (target.nth !== undefined) return { unique: false, reason: 'a position is not an identity' };
+  switch (target.strategy) {
+    case 'role':
+      return element.sameRoleName <= 1
+        ? {
+            unique: true,
+            reason: `${target.role ?? ''} "${target.name ?? ''}" was the only one before the action`,
+          }
+        : {
+            unique: false,
+            reason: `${String(element.sameRoleName)} "${target.name ?? ''}" before the action`,
+          };
+    case 'label': {
+      const count = target.section ? (element.sameLabelInSection ?? 1) : element.sameLabel;
+      return count <= 1
+        ? {
+            unique: true,
+            reason: `label "${target.value ?? ''}"${target.section ? ` in "${target.section}"` : ''} was unique before the action`,
+          }
+        : {
+            unique: false,
+            reason: `${String(count)} fields labelled "${target.value ?? ''}" before the action`,
+          };
+    }
+    case 'text':
+      return pre.sameText <= 1
+        ? { unique: true, reason: `text "${target.value ?? ''}" was unique before the action` }
+        : {
+            unique: false,
+            reason: `${String(pre.sameText)} controls showed "${target.value ?? ''}" before the action`,
+          };
+    case 'css':
+      return pre.cssCount === 1
+        ? { unique: true, reason: `${target.value ?? ''} matched exactly one element before the action` }
+        : {
+            unique: false,
+            reason: `${target.value ?? ''} matched ${String(pre.cssCount)} elements before the action`,
+          };
+    case 'testId':
+      return { unique: true, reason: `test id "${target.value ?? ''}"` };
+  }
 }
