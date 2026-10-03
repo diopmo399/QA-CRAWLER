@@ -1,3 +1,4 @@
+import type { TargetResolutionTrace } from '../flows/functional-target.js';
 import type { FlowDriftReport, StepRecoveryReport } from '../workflow-healing/model.js';
 import type { ActionClassification } from './discovered-action.js';
 
@@ -41,6 +42,8 @@ export interface FlowStepReport {
   effect?: StepEffectReport;
   /** WORKFLOW SELF-HEALING : divergence analysée, objectif, candidats, chemin retenu, vérification. */
   recovery?: StepRecoveryReport;
+  /** La résolution FONCTIONNELLE d'une cible dont l'empreinte ne correspondait plus (trace complète). */
+  targetResolution?: TargetResolutionTrace;
 }
 
 export interface StepEffectReport {

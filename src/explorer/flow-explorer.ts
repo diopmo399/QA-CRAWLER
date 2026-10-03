@@ -206,6 +206,22 @@ import type { ObservedState } from '../dry-run/reconciliation-model.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import { CircuitBreaker } from '../recovery/circuit-breaker.js';
 import { RecoveryEngine, type RecoveryActions } from '../recovery/recovery-engine.js';
+import {
+  analyzeRerender,
+  buildTemporalContext,
+  candidateSelector,
+  candidateSummary,
+  clearCandidateMarks,
+  decide,
+  discoverCandidates,
+  functionalIdentityOf,
+  sameFilledValue,
+  scoreCandidates,
+  targetResolutionRequest,
+  traceText,
+  type ScoredCandidate,
+  type TargetResolutionTrace,
+} from '../flows/functional-target.js';
 import type { FailureKind, RecoveryEvent, RecoverySummary, StuckEvent } from '../recovery/recovery-model.js';
 import { StuckDetector } from '../recovery/stuck-detector.js';
 import { AccessibilityChecker } from '../accessibility/accessibility-checker.js';
@@ -3953,6 +3969,7 @@ export class FlowExplorer {
     // « Où est-il ? » — et est-ce bien LUI ? (un CSS structurel peut viser un autre élément)
     const fingerprint = step.fingerprint;
     let located: Locator | string | undefined;
+    let resolution: TargetResolutionTrace | undefined;
     if (
       fingerprint &&
       replay.locatorHealing &&
@@ -3997,23 +4014,44 @@ export class FlowExplorer {
         const healed = replay.locatorHealing
           ? await this.healTarget(page, step.target, fingerprint, Math.min(timeout, 3000))
           : undefined;
-        if (!healed) {
+        // FINGERPRINT MISMATCH != AUTOMATIC FAILURE : l'élément qui remplit la MÊME FONCTION dans le
+        // même contexte du parcours (re-rendu Angular, nouveau nœud) — prouvé ensuite par l'effet.
+        const functional =
+          !healed && replay.functionalTargetResolution.enabled
+            ? await this.resolveFunctionalTarget(page, flow, step, fingerprint, match.reasons)
+            : undefined;
+        if (functional) {
+          resolution = functional.trace;
+          const base = done;
+          done = (status, extra) => base(status, { ...extra, targetResolution: functional.trace });
+        }
+        if (!healed && !functional?.locator) {
           // FOUND ELEMENT != CORRECT ELEMENT : ne jamais cliquer une cible qui n'est pas la bonne.
           // Illisible après relecture : la cible n'est pas là de façon stable (pas un « autre élément »).
           return diverged(observed.tag === undefined ? 'TARGET_NOT_FOUND' : 'TARGET_MISMATCH', {
             page,
             report: done('FAILED', {
-              reason: `TARGET_FINGERPRINT_MISMATCH: expected "${fingerprint.name ?? fingerprint.text ?? fingerprint.testId ?? fingerprint.label ?? ''}", found ${match.reasons.join('; ')} (not clicked)`,
+              reason: `TARGET_FINGERPRINT_MISMATCH: expected "${fingerprint.name ?? fingerprint.text ?? fingerprint.testId ?? fingerprint.label ?? ''}", found ${match.reasons.join('; ')} (not clicked)${functional ? ` — ${functional.trace.status}: ${functional.trace.reason}` : ''}`,
               stateId: context.stateId,
               url: context.url,
               effect: { ...effect, status: 'TARGET_MISMATCH', reasons: match.reasons },
             }),
           });
         }
-        located = healed.locator;
-        effect.healed = { from: describeTarget(step.target), to: describeTarget(healed.target) };
-        effect.locator = describeTarget(healed.target);
-        effect.targetMatch = healed.match;
+        if (healed) {
+          located = healed.locator;
+          effect.healed = { from: describeTarget(step.target), to: describeTarget(healed.target) };
+          effect.locator = describeTarget(healed.target);
+          effect.targetMatch = healed.match;
+        } else if (functional?.locator && functional.chosen) {
+          located = functional.locator;
+          effect.healed = {
+            from: describeTarget(step.target),
+            to: `${functional.trace.status} ${functional.chosen.id}: ${candidateSummary(functional.chosen)}`,
+          };
+          effect.locator = functional.chosen.cssHint ?? describeTarget(step.target);
+          effect.targetMatch = { verdict: functional.trace.status, score: functional.chosen.score };
+        }
       }
     }
     if (typeof located === 'string' && fingerprint && replay.locatorHealing) {
@@ -4284,6 +4322,35 @@ export class FlowExplorer {
       };
     }
 
+    // FAIL AT FIRST FUNCTIONAL DIVERGENCE : une saisie est PROUVÉE par la valeur lue ensuite. Une
+    // cible résolue fonctionnellement n'est confirmée que par cet effet (jamais par son score).
+    if (elementAction.kind === 'fill' && replay.functionalTargetResolution.verifyFillValue) {
+      const held = await this.filledValue(page, locator, step.target);
+      const confirmed = held === undefined ? undefined : sameFilledValue(held, elementAction.value);
+      if (resolution) await this.confirmTargetResolution(page, resolution, confirmed);
+      if (confirmed === false) {
+        if (this.functional) await this.formNetwork.stopFunctional(`action-${action.id}`);
+        return {
+          page,
+          context: before,
+          report: done('FAILED', {
+            reason: `ACTION_EFFECT_NOT_CONFIRMED: the field does not hold the filled value${resolution ? ` (${resolution.status} ${resolution.resolution ?? ''}: the resolution is rejected)` : ''}`,
+            stateId: before.stateId,
+            url: before.url,
+            classification: action.classification,
+            effect: {
+              ...effect,
+              execution: 'EXECUTED',
+              status: 'WRONG_EFFECT',
+              expected: ['VALUE_CHANGED'],
+              observed: ['value not held by the field'],
+              reasons: [...effect.reasons, 'ACTION_EFFECT_NOT_CONFIRMED'],
+            },
+          }),
+        };
+      }
+    } else if (resolution) await this.confirmTargetResolution(page, resolution, undefined);
+
     // « Que s'est-il passé ? »
     let after = await this.observeState(page, before.metadata.depth + 1);
     if (this.functional) {
@@ -4544,6 +4611,271 @@ export class FlowExplorer {
   }
 
   /** LOCATOR HEALING : le MÊME élément retrouvé par son empreinte (rôle + nom, test id, texte), vérifié. */
+  /**
+   * RÉSOLUTION FONCTIONNELLE : identité fonctionnelle + contexte temporel → candidats de l'écran →
+   * score expliqué → décision (jamais le premier par hasard) → conseiller si l'ambiguïté persiste
+   * (HYBRID : proposition validée ; ASSIST : consignée seulement ; OFF : aucun appel).
+   */
+  private async resolveFunctionalTarget(
+    page: Page,
+    flow: FlowConfig,
+    step: Extract<FlowStep, { target: unknown }>,
+    fingerprint: TargetFingerprint,
+    reasons: readonly string[],
+  ): Promise<{ locator?: Locator; chosen?: ScoredCandidate; trace: TargetResolutionTrace }> {
+    const settings = this.config.replay.functionalTargetResolution;
+    const index = this.stepPosition?.flow === flow ? this.stepPosition.index - 1 : flow.steps.indexOf(step);
+    const reports = this.currentFlowReport?.steps ?? [];
+    const temporal = buildTemporalContext(
+      flow.steps,
+      index,
+      reports.map((report) => ({ status: report.status, observed: report.effect?.observed ?? [] })),
+    );
+    const identity = functionalIdentityOf(step, flow.steps, index);
+    const found = await discoverCandidates(page, step, settings.maxCandidates);
+    const ranked = scoreCandidates(identity, temporal, found.candidates);
+    const decision = decide(ranked, settings.minScore, settings.ambiguityMargin);
+    let chosen = decision.chosen;
+    const trace: TargetResolutionTrace = {
+      action: `${flow.name}#${String(index + 1)} ${identity.interaction} ${identity.businessConcept ?? identity.label ?? describeTarget(step.target)}`,
+      recorded: { locator: describeTarget(step.target), fingerprint },
+      runtime: {
+        locator: describeTarget(step.target),
+        fingerprintVerdict: 'MISMATCH',
+        reasons: [...reasons],
+      },
+      rerender: { detected: false, evidence: [] },
+      identity,
+      temporal,
+      screen: found.screen,
+      candidates: ranked.map((candidate) => ({
+        id: candidate.id,
+        score: candidate.score,
+        summary: candidateSummary(candidate),
+        ...(candidate.rejected ? { rejected: candidate.rejected } : {}),
+      })),
+      decision: decision.status,
+      reason: decision.reason,
+      ai: { requested: false, outcome: 'NOT_REQUIRED' },
+      status: 'TARGET_REQUIRES_REPLAY_VALIDATION',
+    };
+    if (decision.status === 'AMBIGUOUS') {
+      const advice = await this.adviseTargetResolution(flow, step, trace, ranked);
+      if (advice?.chosen) chosen = advice.chosen;
+    }
+    if (chosen) {
+      trace.rerender = analyzeRerender(chosen, temporal, reasons);
+      trace.resolution = chosen.id;
+      if (trace.ai.outcome === 'VALIDATED') trace.status = 'TARGET_AI_ASSISTED';
+      else
+        trace.status = trace.rerender.detected
+          ? 'TARGET_RERENDERED'
+          : chosen.matchesRecordedLocator
+            ? 'TARGET_FUNCTIONALLY_EQUIVALENT'
+            : 'TARGET_HEALED';
+      if (trace.rerender.detected)
+        this.emitHealing('TARGET_RERENDERED', `${trace.action}: ${trace.rerender.evidence.join('; ')}`);
+      await clearCandidateMarks(page, found.token, chosen.id);
+    } else {
+      trace.status =
+        decision.status === 'AMBIGUOUS'
+          ? 'TARGET_AMBIGUOUS'
+          : decision.reason.includes('context mismatch')
+            ? 'TARGET_CONTEXT_MISMATCH'
+            : 'TARGET_FUNCTIONAL_MISMATCH';
+      trace.final = 'TARGET_UNRESOLVED';
+      await clearCandidateMarks(page, found.token);
+    }
+    this.emitHealing('TARGET_RESOLUTION', traceText(trace).join(' | '));
+    return {
+      ...(chosen ? { locator: page.locator(candidateSelector(found.token, chosen.id)), chosen } : {}),
+      trace,
+    };
+  }
+
+  /**
+   * TARGET RESOLUTION, conseiller : le contexte STRUCTURÉ (action, avant / après, préconditions,
+   * identité fonctionnelle, écran compact, candidats décrits par leur voisinage) ; il ne choisit
+   * qu'un identifiant fourni, et QA-CRAWLER revalide (visible, actionnable, compatible, SafetyPolicy).
+   */
+  private async adviseTargetResolution(
+    flow: FlowConfig,
+    step: Extract<FlowStep, { target: unknown }>,
+    trace: TargetResolutionTrace,
+    ranked: readonly ScoredCandidate[],
+  ): Promise<{ chosen?: ScoredCandidate } | undefined> {
+    const ai = this.ai;
+    if (!ai) return undefined;
+    const viable = ranked.filter((candidate) => !candidate.rejected).slice(0, 8);
+    const best = viable[0];
+    const trigger = ai.evaluate({
+      deterministicConfidence: best?.score ?? 0,
+      ambiguousTarget: true,
+      inconclusive: true,
+    });
+    if (!trigger.shouldInvoke || !trigger.reason || viable.length === 0) return undefined;
+    const kind =
+      step.kind === 'fill'
+        ? 'fill'
+        : step.kind === 'select'
+          ? 'select'
+          : step.kind === 'check' || step.kind === 'uncheck'
+            ? 'check'
+            : 'click';
+    const candidates: DiscoveredCandidate[] = viable.map((candidate) => ({
+      key: candidate.id,
+      kind,
+      ...(candidate.role ? { role: candidate.role } : {}),
+      name: candidateSummary(candidate),
+      safety: 'SAFE',
+      allowed: true,
+      score: candidate.score,
+    }));
+    const sources: ContextSources = {
+      evidence: [],
+      hypotheses: [],
+      contradictions: [],
+      coverageGaps: [],
+      candidates,
+      workflow: {
+        previous: trace.temporal.previousActions.map(
+          (action) => `${action.type} ${action.target}${action.value ? ` = ${action.value}` : ''}`,
+        ),
+        next: trace.temporal.nextActions.map((action) => `${action.type} ${action.target}`),
+        requiredFields: [],
+      },
+      deterministic: { confidence: best?.score ?? 0, status: 'TARGET_AMBIGUOUS' },
+    };
+    const built = this.aiContext.build(trigger.reason, sources);
+    built.request.targetResolution = targetResolutionRequest(
+      trace,
+      viable,
+      (id) => built.idOf(id) ?? id,
+      flow.name,
+    );
+    trace.ai = { requested: true, mode: this.config.ai.mode };
+    this.emitHealing(
+      'AI_TARGET_RESOLUTION_REQUEST',
+      `${trace.action}: trigger TARGET_FINGERPRINT_MISMATCH · context ${Object.values(trace.identity.configuration).join(' / ') || trace.identity.section || '—'} · candidates ${viable.map((candidate) => candidate.id).join(' ')}`,
+    );
+    const result = await ai.consult({
+      context: 'RECOVERY',
+      request: built.request,
+      scope: { action: `target-resolution|${flow.name}|${trace.action}` },
+      deterministic: { confidence: best?.score ?? 0 },
+      safety: (id) => {
+        const key = built.keyOf(id);
+        const candidate = viable.find((entry) => entry.id === key);
+        if (!candidate)
+          return { allowed: false, classification: 'UNKNOWN', reason: 'not a provided candidate' };
+        const classification = this.safety.classify({
+          type: kind,
+          category: 'other',
+          text: candidate.name,
+        }).classification;
+        const allowed =
+          candidate.visible &&
+          candidate.enabled &&
+          (kind !== 'fill' || candidate.editable) &&
+          (classification === 'SAFE' || step.allow.some((allowedClass) => allowedClass === classification));
+        return {
+          allowed,
+          classification,
+          reason: allowed ? 'visible, actionable, context-compatible' : 'not actionable or not allowed',
+        };
+      },
+      knownEvidence: () => false,
+    });
+    this.learnAiProposal(result);
+    const proposal = result.validation?.valid ? result.validation.proposal : undefined;
+    const proposedKey = proposal?.selectedActionId ? built.keyOf(proposal.selectedActionId) : undefined;
+    trace.ai.auditId = result.record.id;
+    if (proposal?.confidence !== undefined) trace.ai.confidence = proposal.confidence;
+    if (proposedKey) trace.ai.proposal = proposedKey;
+    this.emitHealing(
+      'AI_TARGET_RESOLUTION_PROPOSAL',
+      `${trace.action}: ${proposedKey ? `selected ${proposedKey}` : 'no valid proposal'}${proposal?.confidence !== undefined ? ` confidence ${String(proposal.confidence)}` : ''}`,
+    );
+    const chosen = proposedKey ? viable.find((candidate) => candidate.id === proposedKey) : undefined;
+    if (!result.decision.accepted || !chosen) {
+      // ASSIST : consignée, jamais appliquée ; proposition invalide (identifiant inventé) : rejetée.
+      trace.ai.outcome =
+        this.config.ai.mode === 'ASSIST' && chosen ? 'RECORDED_ONLY' : proposal ? 'REJECTED' : 'UNAVAILABLE';
+      if (!chosen && proposal)
+        this.emitHealing('AI_PROPOSAL_RUNTIME_REJECTED', `${trace.action}: not a provided candidate`);
+      return undefined;
+    }
+    trace.ai.outcome = 'VALIDATED';
+    return { chosen };
+  }
+
+  /** La valeur que tient le champ (relu ; s'il a été re-rendu, retrouvé par son localisateur). */
+  private async filledValue(page: Page, locator: Locator, target: FlowTarget): Promise<string | undefined> {
+    const held = await locator.inputValue({ timeout: 1000 }).catch(() => undefined);
+    if (held !== undefined) return held;
+    const again = await this.flowSteps.locate(page, target, 1000);
+    return typeof again === 'string' ? undefined : again.inputValue({ timeout: 1000 }).catch(() => undefined);
+  }
+
+  /**
+   * RUNTIME PROVES : l'effet confirme (ou rejette) la résolution ; l'action suivante disponible la
+   * renforce ; une proposition du conseiller est confirmée ou contredite ; une connaissance
+   * CANDIDATE (jamais une vérité globale) est notée quand l'effet est confirmé.
+   */
+  private async confirmTargetResolution(
+    page: Page,
+    trace: TargetResolutionTrace,
+    confirmed: boolean | undefined,
+  ): Promise<void> {
+    const next = this.nextStepTarget();
+    trace.nextAction = next
+      ? (await this.targetAvailable(page, next, 300))
+        ? 'AVAILABLE'
+        : 'NOT_AVAILABLE'
+      : 'NOT_CHECKED';
+    trace.runtimeVerification =
+      confirmed === undefined
+        ? { status: 'NOT_VERIFIED', detail: 'the effect could not be read' }
+        : confirmed
+          ? {
+              status: 'CONFIRMED',
+              detail: `VALUE_CHANGED confirmed${trace.nextAction === 'AVAILABLE' ? '; the next action remains available' : ''}`,
+            }
+          : { status: 'REJECTED', detail: 'the field does not hold the filled value' };
+    trace.final = confirmed === false ? 'TARGET_RECOVERY_REJECTED' : 'TARGET_RECOVERED_AND_CONFIRMED';
+    if (confirmed !== false)
+      trace.knowledge = {
+        functionalTarget: trace.identity.businessConcept ?? trace.identity.semanticRole,
+        context: {
+          ...(trace.identity.dialog ? { dialog: trace.identity.dialog } : {}),
+          ...(trace.identity.section ? { section: trace.identity.section } : {}),
+          ...trace.identity.configuration,
+        },
+        knownRepresentations: [
+          ...new Set([
+            trace.recorded.locator,
+            ...(trace.resolution
+              ? [trace.candidates.find((candidate) => candidate.id === trace.resolution)?.summary ?? '']
+              : []),
+          ]),
+        ].filter(Boolean),
+        rerenderSensitive: trace.rerender.detected,
+        status: 'CANDIDATE',
+        globallyTrusted: false,
+      };
+    if (trace.ai.outcome === 'VALIDATED' && trace.ai.auditId) {
+      this.aiRuntime(trace.ai.auditId, confirmed !== false, trace.runtimeVerification.detail);
+      this.emitHealing(
+        confirmed === false ? 'AI_PROPOSAL_RUNTIME_REJECTED' : 'AI_PROPOSAL_RUNTIME_VALIDATED',
+        `${trace.action}: ${trace.runtimeVerification.detail}`,
+      );
+    }
+    this.emitHealing(
+      'TARGET_RESOLUTION',
+      `${trace.action}: ${trace.final} (${trace.runtimeVerification.detail})`,
+    );
+  }
+
   private async healTarget(
     page: Page,
     target: FlowTarget,
