@@ -40,6 +40,13 @@ export type RecordingAuditTrigger =
   | 'SUSPICIOUS_MERGE'
   | 'FULL_AUDIT';
 
+/** Les doutes sur l'IDENTITÉ de la cible, que la validation pendant l'enregistrement règle déjà. */
+const TARGET_IDENTITY_TRIGGERS: ReadonlySet<RecordingAuditTrigger> = new Set([
+  'AMBIGUOUS_TARGET',
+  'FRAGILE_LOCATOR',
+  'CONTEXT_MISMATCH',
+]);
+
 export type AiAssessment = 'CONFIRMED' | 'SUSPICIOUS' | 'DISAGREEMENT' | 'INCONCLUSIVE' | 'NOT_AUDITED';
 
 /** Ce que le déterministe a compris d'une action humaine. */
@@ -263,13 +270,20 @@ export async function auditRecordingSemantics(input: {
     const triggers = auditTriggersOf(action, elements).filter(
       (trigger) => settings.triggers[TRIGGER_SETTING[trigger]],
     );
+    // La cible déjà PROUVÉE (ou déjà auditée) pendant l'enregistrement : les doutes d'identité de cible
+    // (ambiguë, fragile, autre section) sont réglés ; le conseiller n'est pas re-consulté pour eux.
+    const settled = action.rawEventIds.some((id) => {
+      const validation = rawById.get(id)?.targetValidation;
+      return validation !== undefined && (validation.knowledge.recordingValidated || validation.aiAudited);
+    });
+    const open = settled ? triggers.filter((trigger) => !TARGET_IDENTITY_TRIGGERS.has(trigger)) : triggers;
     const audited: RecordingAuditTrigger[] =
       mode === 'FULL'
         ? triggers.length > 0
           ? triggers
           : ['FULL_AUDIT']
         : mode === 'SUSPICIOUS_ONLY'
-          ? triggers
+          ? open
           : [];
     const base = {
       humanActionId: account?.interactionId ?? action.id,
@@ -290,9 +304,11 @@ export async function auditRecordingSemantics(input: {
         reviewRequired: triggers.length > 0,
         decisionReason:
           audited.length === 0
-            ? triggers.length > 0
-              ? `deterministic triggers (${triggers.join(', ')}), audit mode ${mode}: not sent`
-              : 'deterministic interpretation, no audit trigger'
+            ? settled && triggers.length > 0 && open.length === 0 && mode === 'SUSPICIOUS_ONLY'
+              ? `target already validated during the recording (${triggers.join(', ')} settled): no AI call`
+              : triggers.length > 0
+                ? `deterministic triggers (${triggers.join(', ')}), audit mode ${mode}: not sent`
+                : 'deterministic interpretation, no audit trigger'
             : !gateway
               ? 'intelligence OFF or unavailable: deterministic interpretation kept (no call)'
               : `audit budget reached (${String(settings.maxCalls)} call(s)): deterministic interpretation kept`,

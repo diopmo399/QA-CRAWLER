@@ -243,6 +243,9 @@ export class HumanFlowRecorder {
     this.resolveStop(reason);
   }
 
+  /** Le temps de chaque phase de l'arrêt (ms) : le bilan dit où passe le temps. */
+  readonly stopTimings: { phase: string; ms: number }[] = [];
+
   /** Arrête : dernière observation, réseau fermé, puis la session (statut PROCESSING). */
   async stop(): Promise<RecordingSession> {
     if (this.stopping) return this.session;
@@ -251,18 +254,37 @@ export class HumanFlowRecorder {
     const reason = await this.stopped;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    // Plus aucun appel IA pour les validations encore en file : un Stop ne les attend pas.
+    const validator = this.options.targetValidator;
+    validator?.drain();
+    const timed = async (phase: string, run: () => Promise<unknown>): Promise<void> => {
+      const started = Date.now();
+      await run();
+      this.stopTimings.push({ phase, ms: Date.now() - started });
+    };
     if (this.page && !this.page.isClosed()) {
+      const page = this.page;
       // Les saisies en attente dans la page partent maintenant.
-      await this.page
-        .evaluate(() => {
-          (document.activeElement as HTMLElement | null)?.blur();
-        })
-        .catch(() => undefined);
-      await new Promise((resolve) => setTimeout(resolve, this.options.config.recording.inputDebounceMs + 50));
-      await this.observeNow();
+      await timed('flush pending input', async () => {
+        await page
+          .evaluate(() => {
+            (document.activeElement as HTMLElement | null)?.blur();
+          })
+          .catch(() => undefined);
+        await new Promise((resolve) =>
+          setTimeout(resolve, this.options.config.recording.inputDebounceMs + 50),
+        );
+      });
+      await timed('final screen observation', () => this.observeNow());
     }
     this.closed = true;
-    await Promise.allSettled([...this.pending]);
+    const queued = validator?.pending ?? 0;
+    if (queued > 0 || this.pending.size > 0)
+      this.emit(
+        'RECORDING_STOPPING',
+        `finishing ${String(queued)} target validation(s) and ${String(Math.max(0, this.pending.size - queued))} other pending task(s) — no AI call any more`,
+      );
+    await timed('pending validations and observations', () => Promise.allSettled([...this.pending]));
     if (this.window) await this.closeWindow();
     if (this.page) this.network.detach(this.page);
     dedupeNetwork(this.session.rawEvents);

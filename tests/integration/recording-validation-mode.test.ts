@@ -488,6 +488,22 @@ describe('Pre-action candidate set in the validator (real browser)', () => {
     expect(provider.requests).toHaveLength(0);
   });
 
+  it('STOP: the validations still queued stay deterministic — the advisor is never called after the stop (the deferred audit is counted)', async () => {
+    const provider = new FakeIntelligenceProvider(pick('near "Company name'));
+    const log: string[] = [];
+    const v = validator(provider, log);
+    v.drain();
+    const value = valueEvent([FILTER_VALUE, GLOBAL_SEARCH], 'T1');
+    observeJourney(v, value);
+    const result = await v.validate(page, value, undefined);
+    expect(provider.requests).toHaveLength(0);
+    expect(result?.aiAudit?.outcome).toBe('NOT_CALLED');
+    expect(result?.aiAudit?.reason).toMatch(/recording stopped/);
+    expect(v.deferredAudits).toBe(1);
+    expect(v.pending).toBe(0);
+    expect(result?.status).toBe('AMBIGUOUS');
+  });
+
   it('the relevance selector never drops the original human target, whatever its similarity', () => {
     const selector = new ContextRelevanceSelector({ previous: 5, next: 2, candidates: 2 });
     const kept = selector.candidates([
