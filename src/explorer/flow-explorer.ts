@@ -4663,6 +4663,26 @@ export class FlowExplorer {
           at.timeout,
           at.finish,
         );
+        // L'objectif atteint n'était que la PRÉCONDITION de la saisie : si le champ reste introuvable,
+        // l'étape n'est pas récupérée (jamais RECOVERED sur une étape en échec, jamais une cible validée).
+        if (again.report.status !== 'PASSED')
+          return {
+            ...again,
+            report: {
+              ...again.report,
+              recovery: {
+                ...recovery,
+                outcome: {
+                  ...outcome,
+                  status: 'NO_SAFE_RECOVERY',
+                  reasons: [
+                    `${outcome.status} only reached the precondition of this ${at.step.kind}: the step itself still fails`,
+                    ...outcome.reasons,
+                  ],
+                },
+              },
+            },
+          };
         return { ...again, report: { ...again.report, recovery } };
       } finally {
         this.healingDepth -= 1;

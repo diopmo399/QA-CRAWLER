@@ -130,6 +130,8 @@ export class HumanFlowRecorder {
     this.stopped = new Promise((resolve) => {
       this.resolveStop = resolve;
     });
+    // L'effet d'une saisie se compare par empreinte salée (le même sel que la capture).
+    options.targetValidator?.useValueSalt(this.salt);
   }
 
   /** Sel des empreintes de la session (jamais écrit : il ne sert qu'à comparer pendant le traitement). */

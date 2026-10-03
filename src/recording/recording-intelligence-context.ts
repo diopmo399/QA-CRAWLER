@@ -90,7 +90,12 @@ export interface RecordingContextInput {
 
 /** Le contexte envoyé au conseiller (dans `recordingContext`, assaini par le même sanitizer). */
 export interface RecordingAuditContext {
-  mission: { type: 'RECORDING_TARGET_AUDIT'; objective: string; constraints: string[] };
+  mission: {
+    type: 'RECORDING_TARGET_AUDIT';
+    validationMode: 'RECORDING';
+    objective: string;
+    constraints: string[];
+  };
   workflow: {
     flowName: string;
     currentPhase?: string;
@@ -280,13 +285,16 @@ export class RecordingIntelligenceContextBuilder {
     return {
       mission: {
         type: 'RECORDING_TARGET_AUDIT',
+        validationMode: 'RECORDING',
         objective:
           'Determine which provided runtime candidate corresponds to the element actually manipulated by the human, and whether the recorded representation correctly represents it.',
         constraints: [
           'do not invent targets, labels or workflow steps',
           'only reference provided candidate IDs and evidence IDs',
           'runtime evidence has priority over static and historical evidence',
-          'do not execute actions',
+          'do not execute actions: the human action is already done (never replayed, never recovered)',
+          'target identity, action effect and functional goal are separate: an effect or a reached goal never validates a target',
+          'when the original element is gone, the pre-action evidence decides the identity, not what the locator finds after the action',
           'do not bypass the SafetyPolicy',
           'return INCONCLUSIVE when the evidence does not decide',
         ],

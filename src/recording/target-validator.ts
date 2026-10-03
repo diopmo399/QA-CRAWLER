@@ -1,4 +1,4 @@
-import type { ElementHandle, JSHandle, Page } from 'playwright';
+import type { ElementHandle, JSHandle, Locator, Page } from 'playwright';
 import type { FlowTarget, TargetFingerprint } from '../config/flow-schema.js';
 import { describeTarget } from '../config/flow-schema.js';
 import { toLocator } from '../execution/locator-resolver.js';
@@ -12,6 +12,12 @@ import {
 } from '../flows/action-effect-verifier.js';
 import type { PreActionContext, RawRecordedEvent, RecordedElement, RecordedTarget } from './model.js';
 import { resolveRecordedTarget } from './recorded-target.js';
+import {
+  goalOf,
+  ValidationMode,
+  type RecordingVerdict,
+  type TargetIdentitySource,
+} from './validation-mode.js';
 import type {
   ContextAction,
   ContextCandidate,
@@ -89,6 +95,8 @@ export interface TargetCheck {
   sameIdentity?: boolean;
   /** Le résultat vient du contexte PRÉ-ACTION (la cible n'existe plus au runtime). */
   preAction?: boolean;
+  /** Ce que le localisateur trouvait APRÈS l'action : une preuve complémentaire, jamais un verdict d'identité. */
+  postState?: { status: TargetValidationStatus; reason: string };
   resolved?: TargetIdentity;
   differences: TargetDifference[];
   /** AMBIGUOUS : les candidats (identité, et lequel est l'original). */
@@ -124,6 +132,10 @@ export interface TargetAiAudit {
  * audit, et la représentation FINALE (celle qui ira dans le flow).
  */
 export interface RecordingTargetValidation {
+  /** Toujours RECORDING : l'action humaine est déjà faite (jamais rejouée, jamais « récupérée »). */
+  mode: typeof ValidationMode.RECORDING;
+  /** CIBLE, EFFET, OBJECTIF : trois verdicts séparés (un effet ou un objectif ne valide jamais une cible). */
+  verdict: RecordingVerdict;
   rawEventId: string;
   humanActionId?: string;
   action: string;
@@ -224,6 +236,12 @@ export class RecordingTargetValidator {
 
   constructor(private readonly options: TargetValidatorOptions) {}
 
+  /** Le sel des empreintes de la session : l'effet d'une saisie se compare sans jamais lire la valeur en clair. */
+  private salt: string | undefined;
+  useValueSalt(salt: string): void {
+    this.salt = salt;
+  }
+
   /** Valide la cible d'un événement humain. Ne lève jamais : une validation impossible n'arrête pas l'enregistrement. */
   /** Une validation à la fois, dans l'ordre des actions humaines (le contexte précédent compte). */
   validate(
@@ -250,8 +268,20 @@ export class RecordingTargetValidator {
       if (!candidate || !element) return undefined;
       // Une saisie arrive en plusieurs événements (frappe, pause) : la même cible n'est validée qu'une fois.
       const key = `${element.css}|${JSON.stringify(candidate.target)}`;
-      if ((event.type === 'input' || event.type === 'change') && this.lastField?.key === key)
-        return { ...this.lastField.result, rawEventId: event.id, log: [] };
+      if ((event.type === 'input' || event.type === 'change') && this.lastField?.key === key) {
+        // La cible est déjà validée ; l'EFFET, lui, se relit à chaque saisie (la valeur finale compte).
+        const known = this.lastField.result;
+        const effect = await this.effectOf(
+          page,
+          event,
+          await this.original(page, ref),
+          known.targetAfter ?? known.targetBefore,
+          known.effects ?? [],
+        );
+        const result = { ...known, rawEventId: event.id, verdict: verdictOf(known, effect), log: [] };
+        this.lastField = { key, result };
+        return result;
+      }
       const result = await this.validateTarget(page, event, element, candidate, ref);
       if (event.type === 'input' || event.type === 'change') this.lastField = { key, result };
       else this.lastField = undefined;
@@ -399,36 +429,47 @@ export class RecordingTargetValidator {
     const post = await postActionSummary(page);
     const effects = event.pre ? observedEffects(event.pre, post, original === undefined) : [];
     this.lastEffects = effects;
-    // NOT_VALIDATABLE EN DERNIER RECOURS : la cible a disparu avec l'action → le contexte PRÉ-ACTION.
-    if (
-      !VALIDATED_STATUSES.has(before.status) &&
-      event.pre &&
-      (before.status === 'NOT_VALIDATABLE' ||
-        (!original && (before.status === 'NOT_FOUND' || before.status === 'STALE_BEFORE_VALIDATION')))
-    ) {
+    // PRIORITÉ DES PREUVES D'IDENTITÉ (ValidationMode.RECORDING) : le nœud original au moment exact
+    // de l'action d'abord ; s'il n'existe plus (re-rendu, disparu), son instantané et le contexte
+    // PRÉ-ACTION font foi. Ce que le localisateur trouve APRÈS l'action n'est qu'une preuve
+    // complémentaire : un nœud B qui porte maintenant le même sélecteur ne prouve pas que
+    // l'humain visait le mauvais élément (jamais MISMATCH → réparation sur la seule foi de l'après).
+    let liveCheck: TargetCheck | undefined;
+    if (event.pre && (!original || before.status === 'NOT_VALIDATABLE')) {
       const pre = preActionCheck(target, element, event.pre);
-      before = pre.unique
-        ? {
-            ...before,
-            status: effects.length > 0 ? 'VALIDATED_WITH_EFFECT' : 'VALIDATED_PRE_ACTION',
-            confidence: effects.length > 0 ? 0.92 : 0.8,
-            reason: `TARGET_VALIDATED_PRE_ACTION: ${pre.reason}${effects.length > 0 ? `; effect observed: ${effects.join(', ')}` : ''}`,
-            preAction: true,
-          }
-        : {
-            ...before,
-            status: 'AMBIGUOUS',
-            confidence: 0.6,
-            reason: `PRE_ACTION_AMBIGUOUS: ${pre.reason} (the original element is gone: no exact match can be proven)`,
-            preAction: true,
-            candidates: event.pre.peers.slice(0, 6).map((peer, index) => ({
-              index,
-              role: peer.role,
-              name: peer.name,
-              ...(peer.section ? { section: peer.section } : {}),
-              original: false,
-            })),
-          };
+      const live = before;
+      liveCheck = live;
+      const postState = { status: live.status, reason: live.reason };
+      if (pre.unique && VALIDATED_STATUSES.has(live.status))
+        before = { ...live, reason: `${live.reason}; pre-action: ${pre.reason}`, postState };
+      else if (pre.unique)
+        before = {
+          ...live,
+          status: effects.length > 0 ? 'VALIDATED_WITH_EFFECT' : 'VALIDATED_PRE_ACTION',
+          confidence: effects.length > 0 ? 0.92 : 0.8,
+          reason: `TARGET_VALIDATED_PRE_ACTION: ${pre.reason}${effects.length > 0 ? `; effect observed: ${effects.join(', ')}` : ''}`,
+          preAction: true,
+          // L'après ne contredit pas l'identité prouvée avant : il est gardé comme preuve, sans écart.
+          differences: [],
+          postState,
+        };
+      else
+        before = {
+          ...live,
+          status: 'AMBIGUOUS',
+          confidence: 0.6,
+          reason: `PRE_ACTION_AMBIGUOUS: ${pre.reason} (the original element is gone: no exact match can be proven${VALIDATED_STATUSES.has(live.status) ? '; the post-action match is not an identity proof' : ''})`,
+          preAction: true,
+          differences: [],
+          postState,
+          candidates: event.pre.peers.slice(0, 6).map((peer, index) => ({
+            index,
+            role: peer.role,
+            name: peer.name,
+            ...(peer.section ? { section: peer.section } : {}),
+            original: false,
+          })),
+        };
     }
     let after: TargetCheck | undefined;
     let repair: TargetRepair | undefined;
@@ -448,8 +489,56 @@ export class RecordingTargetValidator {
     report(before, 'TARGET_VALIDATED');
     let current = before;
 
-    // ---- RÉPARATION DÉTERMINISTE (bornée), puis REVALIDATION obligatoire.
     const tried = new Set([JSON.stringify(target)]);
+    // ---- ALIGNEMENT DE LA REPRÉSENTATION (identité prouvée AVANT l'action) : le nœud re-rendu a
+    // l'identité de l'instantané mais le rejeu en lirait une autre empreinte (rôle, nom). L'identité
+    // reste pré-action ; seule la représentation est alignée sur ce que le rejeu lira, puis revalidée.
+    if (
+      current.preAction === true &&
+      VALIDATED_STATUSES.has(current.status) &&
+      liveCheck &&
+      (liveCheck.status === 'MISMATCH' || liveCheck.status === 'SEMANTIC_MISMATCH')
+    ) {
+      const proposal = this.repairOf(
+        liveCheck,
+        target,
+        fingerprint,
+        candidate,
+        element,
+        observed,
+        tried,
+        originalIdentity,
+      );
+      if (proposal) {
+        attempts += 1;
+        tried.add(JSON.stringify(proposal.target));
+        const check = await this.check(
+          page,
+          proposal.target,
+          proposal.fingerprint,
+          original,
+          observed,
+          element,
+        );
+        if (VALIDATED_STATUSES.has(check.status)) {
+          target = proposal.target;
+          fingerprint = proposal.fingerprint;
+          repair = {
+            ...proposal.repair,
+            reason: `REPRESENTATION_ALIGNED_POST_STATE: ${proposal.repair.reason}`,
+            // L'identité vient d'AVANT l'action ; l'après ne fournit que ce que le rejeu lira.
+            evidence: ['pre-action-identity', 'post-state-rerendered-node'],
+          };
+          say(
+            `[TARGET_REPRESENTATION_ALIGNED] ${event.id} ${proposal.repair.reason} (identity proven before the action)`,
+          );
+          after = { ...current, reason: `${current.reason}; representation aligned: ${check.status}` };
+          current = after;
+        } else say(`[TARGET_REPAIR_REJECTED] ${event.id} ${proposal.repair.reason}: still ${check.status}`);
+      }
+    }
+
+    // ---- RÉPARATION DÉTERMINISTE (bornée), puis REVALIDATION obligatoire.
     while (
       !VALIDATED_STATUSES.has(current.status) &&
       current.preAction !== true &&
@@ -496,9 +585,14 @@ export class RecordingTargetValidator {
 
     // ---- AUDIT par le conseiller (seulement si le déterministe ne suffit pas), puis REVALIDATION.
     let aiAudit: TargetAiAudit | undefined;
-    // Une cible disparue ne peut pas être RE-PROUVÉE au runtime : le conseiller ne peut pas valider
-    // une correspondance exacte impossible à démontrer (jamais d'audit sur un résultat pré-action).
-    if (this.options.advisor && this.options.auditOn.has(current.status) && current.preAction !== true) {
+    // Une cible disparue ne peut pas être RE-PROUVÉE au runtime : un résultat pré-action validé n'est
+    // jamais audité ; une ambiguïté PRÉ-ACTION, si : la proposition est revalidée contre les preuves
+    // d'avant l'action (jamais contre l'effet ou un objectif atteint).
+    if (
+      this.options.advisor &&
+      this.options.auditOn.has(current.status) &&
+      (current.preAction !== true || current.status === 'AMBIGUOUS')
+    ) {
       const outcome = await this.audit(
         page,
         event,
@@ -528,7 +622,9 @@ export class RecordingTargetValidator {
     const changed =
       JSON.stringify(target) !== JSON.stringify(candidate.target) ||
       JSON.stringify(fingerprint) !== JSON.stringify(fingerprintBefore);
-    return {
+    const effect = await this.effectOf(page, event, original, target, effects);
+    const result: Omit<RecordingTargetValidation, 'verdict'> = {
+      mode: ValidationMode.RECORDING,
       rawEventId: event.id,
       action: event.type,
       timestamp: Date.now(),
@@ -556,6 +652,77 @@ export class RecordingTargetValidator {
       knowledge: { recordingValidated: validated, replayValidated: false },
       log,
     };
+    const verdict = verdictOf(result, effect);
+    say(
+      `[RECORDING_VERDICT] ${event.id} target=${verdict.target.status} (${verdict.target.source}) effect=${verdict.effect.status} goal=${verdict.goal.status}`,
+    );
+    return { ...result, verdict };
+  }
+
+  /**
+   * L'EFFET de l'action, lu sur l'écran d'APRÈS (lecture seule) : une preuve complémentaire, jamais
+   * l'identité de la cible. Une saisie se compare par empreinte salée (jamais la valeur en clair,
+   * jamais pour un champ sensible) ; le champ re-rendu est relu par son localisateur.
+   */
+  private async effectOf(
+    page: Page,
+    event: RawRecordedEvent,
+    original: ElementHandle | undefined,
+    target: FlowTarget | undefined,
+    screen: readonly string[],
+  ): Promise<RecordingVerdict['effect']> {
+    const value = event.value;
+    const field = event.type === 'input' || event.type === 'change';
+    if (!field || !value)
+      return screen.length > 0
+        ? { status: 'CONFIRMED', evidence: [...screen] }
+        : { status: 'NOT_OBSERVED', evidence: [] };
+    if (value.sensitive)
+      return { status: 'NOT_VERIFIABLE', evidence: ['sensitive field: its value is never read'] };
+    const label =
+      event.element?.label ||
+      event.element?.guessedLabel ||
+      event.element?.name ||
+      (target ? describeTarget(target) : 'field');
+    let handle: ElementHandle | Locator | undefined = original;
+    let cleanup: (() => Promise<void>) | undefined;
+    if (!handle && target) {
+      const live = await postStateLocator(page, target, () => {
+        this.tokens += 1;
+        return `effect-${String(this.tokens)}`;
+      });
+      handle = live?.locator;
+      cleanup = live?.cleanup;
+    }
+    if (!handle) return { status: 'NOT_VERIFIABLE', evidence: ['the field is no longer on the screen'] };
+    const where = original ? '' : ' (post-state: the re-rendered field)';
+    try {
+      const salt = this.salt ?? '';
+      const state = await (
+        'asElement' in handle ? handle.evaluate(readFieldState, salt) : handle.evaluate(readFieldState, salt)
+      ).catch(() => undefined);
+      if (!state) return { status: 'NOT_VERIFIABLE', evidence: [] };
+      if (value.checked !== undefined)
+        return state.checked === value.checked
+          ? {
+              status: 'CONFIRMED',
+              evidence: [`"${label}" is ${value.checked ? 'checked' : 'unchecked'}${where}`],
+            }
+          : { status: 'NOT_OBSERVED', evidence: [] };
+      if (value.option) {
+        const wanted = normalize(value.option.label);
+        const shown = normalize(state.selected);
+        return wanted && shown && (shown === wanted || shown.includes(wanted))
+          ? { status: 'CONFIRMED', evidence: [`"${label}" = "${value.option.label}"${where}`] }
+          : { status: 'NOT_OBSERVED', evidence: [] };
+      }
+      if (!value.digest || !this.salt) return { status: 'NOT_VERIFIABLE', evidence: [] };
+      return state.digest === value.digest
+        ? { status: 'CONFIRMED', evidence: [`"${label}" holds the typed value${where}`] }
+        : { status: 'NOT_OBSERVED', evidence: [`"${label}" does not hold the typed value yet`] };
+    } finally {
+      await cleanup?.();
+    }
   }
 
   /**
@@ -1076,17 +1243,35 @@ export class RecordingTargetValidator {
   }> {
     const advisor = this.options.advisor;
     if (!advisor) return { audit: { outcome: 'NOT_CALLED', citedEvidence: [], reason: 'no advisor' } };
+    const candidates: (ContextCandidate & { description: string })[] = [];
+    // AMBIGUÏTÉ PRÉ-ACTION : l'élément original n'existe plus ; les candidates sont les éléments du
+    // même genre visibles JUSTE AVANT l'action (jamais ce que le localisateur trouve après).
+    const preAction = check.preAction === true && event.pre !== undefined;
+    if (preAction)
+      for (const [index, peer] of (event.pre?.peers ?? []).slice(0, 8).entries())
+        candidates.push({
+          key: `T${String(index + 1)}`,
+          target: {
+            strategy: 'role',
+            role: peer.role,
+            name: peer.name,
+            ...(peer.section ? { section: peer.section } : {}),
+          },
+          found: 'visible before the action',
+          identity: { role: peer.role, name: peer.name, ...(peer.section ? { section: peer.section } : {}) },
+          description: `before the action: ${peer.role} "${shorten(peer.name, 40)}"${peer.section ? ` in "${shorten(peer.section, 40)}"` : ''}`,
+        });
     const options: FlowTarget[] = [];
     const add = (option: FlowTarget): void => {
       if (!options.some((known) => JSON.stringify(known) === JSON.stringify(option))) options.push(option);
     };
-    add(target);
-    for (const alternative of candidate.alternatives) add(alternative.target);
+    if (!preAction) add(target);
+    if (!preAction) for (const alternative of candidate.alternatives) add(alternative.target);
     // Plusieurs éléments correspondent : chacun devient une candidate (par sa position), décrite par son identité.
-    if (check.candidates) for (const entry of check.candidates) add({ ...target, nth: entry.index });
+    if (check.candidates && !preAction)
+      for (const entry of check.candidates) add({ ...target, nth: entry.index });
     // Chaque candidate est décrite par ce qu'elle trouve VRAIMENT (combien, et ses traits) : sans cela
     // le conseiller ne peut que parier entre des « textbox » identiques.
-    const candidates: (ContextCandidate & { description: string })[] = [];
     for (const [index, option] of options.slice(0, 8).entries()) {
       const identity = check.candidates?.find(
         (entry) => option.nth === entry.index && option.strategy === target.strategy,
@@ -1188,6 +1373,7 @@ export class RecordingTargetValidator {
           reason: 'no candidate selected: deterministic result kept',
         },
       };
+    if (preAction) return this.revalidatePreAction(event, element, target, fingerprint, chosen, answer, base);
     // LE CONSEILLER PROPOSE, QA-CRAWLER RÉSOUT, LE RUNTIME CONFIRME. Son identité sémantique n'est
     // reprise qu'après confirmation ; un rôle qui contredit le runtime est ignoré (le runtime gagne).
     const runtimeFingerprint =
@@ -1232,6 +1418,98 @@ export class RecordingTargetValidator {
             { property: 'target', before: describeTarget(target), after: describeTarget(chosen.target) },
           ],
           evidence: ['ai-proposal', 'runtime-original-target', ...answer.citedEvidence],
+        },
+      },
+    };
+  }
+
+  /**
+   * Une proposition sur une ambiguïté PRÉ-ACTION ne peut pas être confirmée par le runtime (l'élément
+   * original n'existe plus) : elle est REVALIDÉE contre les preuves d'avant l'action. La candidate doit
+   * avoir l'identité de l'instantané (rôle, libellé, section) et être la SEULE ainsi avant l'action.
+   * Un effet ou un objectif atteint ne compte jamais : seule l'identité pré-action valide une cible.
+   */
+  private revalidatePreAction(
+    event: RawRecordedEvent,
+    element: RecordedElement,
+    target: FlowTarget,
+    fingerprint: TargetFingerprint | undefined,
+    chosen: ContextCandidate & { description: string },
+    answer: Awaited<ReturnType<TargetAuditAdvisor>>,
+    base: { decisionId?: string; citedEvidence: string[]; context?: Record<string, unknown> },
+  ): {
+    audit: TargetAiAudit;
+    validated?: {
+      target: FlowTarget;
+      fingerprint: TargetFingerprint | undefined;
+      check: TargetCheck;
+      repair: TargetRepair;
+    };
+  } {
+    const peers = event.pre?.peers ?? [];
+    const proposed = chosen.identity ?? {};
+    const wantedName = normalize(element.label ?? element.guessedLabel ?? element.name);
+    const name = normalize(proposed.name);
+    const sameName =
+      !!wantedName &&
+      !!name &&
+      (name === wantedName || name.includes(wantedName) || wantedName.includes(name));
+    const snapshotSection =
+      element.sectionPath && element.sectionPath.length > 0 ? element.sectionPath.join(' > ') : undefined;
+    const sameSection = sectionMatch(snapshotSection, proposed.section) !== 'OTHER';
+    const sameRole = !element.role || !proposed.role || element.role === proposed.role;
+    const twins = peers.filter(
+      (peer) =>
+        peer.role === proposed.role && peer.name === proposed.name && peer.section === proposed.section,
+    ).length;
+    const reject = (reason: string): { audit: TargetAiAudit } => ({
+      audit: {
+        ...base,
+        outcome: 'AI_PROPOSAL_RUNTIME_REJECTED',
+        proposedTarget: chosen.description,
+        reason: `${reason}: human action preserved, no silent correction`,
+      },
+    });
+    if (!sameRole || !sameName || !sameSection)
+      return reject('the proposed candidate does not have the pre-action identity of the human target');
+    if (twins !== 1)
+      return {
+        audit: {
+          ...base,
+          outcome: 'INCONCLUSIVE',
+          proposedTarget: chosen.description,
+          reason: `${String(twins)} elements had this identity before the action: the pre-action evidence cannot single one out`,
+        },
+      };
+    const semanticId = answer.semanticTarget?.semanticId;
+    const proposedFingerprint = fingerprint && semanticId ? { ...fingerprint, semanticId } : fingerprint;
+    return {
+      audit: {
+        ...base,
+        outcome: 'AI_PROPOSAL_RUNTIME_CONFIRMED',
+        proposedTarget: chosen.description,
+        reason:
+          'the proposed candidate was the only element with the human target identity before the action',
+      },
+      validated: {
+        target: chosen.target,
+        fingerprint: proposedFingerprint,
+        check: {
+          status: 'VALIDATED_AFTER_AI_AUDIT',
+          confidence: 0.75,
+          reason: `pre-action identity: ${chosen.description} was unique before the action`,
+          candidateCount: 1,
+          preAction: true,
+          resolved: proposed,
+          differences: [],
+        },
+        repair: {
+          type: 'AI',
+          reason: 'AI_PROPOSAL_PRE_ACTION_REVALIDATED',
+          changes: [
+            { property: 'target', before: describeTarget(target), after: describeTarget(chosen.target) },
+          ],
+          evidence: ['ai-proposal', 'pre-action-peers', ...answer.citedEvidence],
         },
       },
     };
@@ -1321,7 +1599,8 @@ export class RecordingTargetValidator {
     };
     say(`[TARGET_${ok ? 'VALIDATED' : status}] ${event.id} ${check.reason}`);
     this.previous.push(`drag "${drag.item}"`);
-    return {
+    const result: Omit<RecordingTargetValidation, 'verdict'> = {
+      mode: ValidationMode.RECORDING,
       rawEventId: event.id,
       action: 'drag',
       timestamp: Date.now(),
@@ -1348,7 +1627,154 @@ export class RecordingTargetValidator {
       },
       log,
     };
+    return {
+      ...result,
+      verdict: verdictOf(
+        result,
+        drag.moved
+          ? {
+              status: 'CONFIRMED',
+              evidence: [
+                `"${drag.item}" moved${drag.destination?.label ? ` to "${drag.destination.label}"` : ''}`,
+              ],
+            }
+          : { status: 'NOT_OBSERVED', evidence: [] },
+      ),
+    };
   }
+}
+
+/**
+ * Les trois verdicts : l'IDENTITÉ vient des seules preuves de cible (par priorité), l'EFFET de
+ * l'écran d'après, l'OBJECTIF de l'effet. VALIDATED_WITH_EFFECT réunit les deux : la cible, elle,
+ * est VALIDATED_PRE_ACTION.
+ */
+export function verdictOf(
+  result: Omit<RecordingTargetValidation, 'verdict'>,
+  effect: RecordingVerdict['effect'],
+): RecordingVerdict {
+  const check = result.validationAfter ?? result.validationBefore;
+  const validated = VALIDATED_STATUSES.has(result.status);
+  const source: TargetIdentitySource = !validated
+    ? 'NONE'
+    : result.repair?.type === 'AI'
+      ? 'ADVISOR_REVALIDATED'
+      : check.preAction
+        ? 'PRE_ACTION_CONTEXT'
+        : result.repair?.type === 'DETERMINISTIC'
+          ? 'DETERMINISTIC_RECONSTRUCTION'
+          : result.status === 'VALIDATED_AFTER_RERENDER'
+            ? 'PRE_ACTION_TARGET_SNAPSHOT'
+            : result.original.stale
+              ? 'TARGET_FINGERPRINT'
+              : 'ORIGINAL_HUMAN_TARGET';
+  return {
+    mode: ValidationMode.RECORDING,
+    target: {
+      status: result.status === 'VALIDATED_WITH_EFFECT' ? 'VALIDATED_PRE_ACTION' : result.status,
+      source,
+      confidence: result.confidence,
+      reason: check.reason,
+    },
+    effect,
+    goal: goalOf(effect, result.fingerprintAfter?.semanticId ?? result.fingerprintBefore?.semanticId),
+  };
+}
+
+/** L'état d'un champ, lu dans la page (autonome) : empreinte salée de sa valeur, coché, choix affiché. */
+function readFieldState(
+  el: Element,
+  salt: string,
+): { digest?: string; checked?: boolean; selected?: string } {
+  const digestOf = (value: string): string | undefined => {
+    if (value.trim() === '' || salt === '') return undefined;
+    const text = `${salt}\u0000${value.trim()}`;
+    let a = 0x811c9dc5;
+    let b = 0x01000193 ^ 0x5bd1e995;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      a = Math.imul(a ^ code, 0x01000193) >>> 0;
+      b = Math.imul(b ^ code, 0x01000193) >>> 0;
+    }
+    return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`;
+  };
+  const field =
+    el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement
+      ? el
+      : el.querySelector('input, textarea, select');
+  if (field instanceof HTMLInputElement && (field.type === 'checkbox' || field.type === 'radio'))
+    return { checked: field.checked };
+  const ariaChecked = el.getAttribute('aria-checked');
+  if (ariaChecked === 'true' || ariaChecked === 'false') return { checked: ariaChecked === 'true' };
+  if (field instanceof HTMLSelectElement)
+    return { selected: (field.selectedOptions[0]?.textContent ?? '').replace(/\s+/g, ' ').trim() };
+  if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
+    const digest = digestOf(field.value);
+    return digest ? { digest } : {};
+  }
+  if (el instanceof HTMLElement && el.isContentEditable) {
+    const digest = digestOf(el.innerText);
+    return digest ? { digest } : {};
+  }
+  // Une liste déroulante composée (combobox) : le choix affiché.
+  return { selected: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 120) };
+}
+
+/**
+ * L'élément que le localisateur désigne APRÈS l'action (une preuve d'effet, jamais d'identité) :
+ * unique ou rien. Le marqueur temporaire est retiré après lecture.
+ */
+async function postStateLocator(
+  page: Page,
+  target: FlowTarget,
+  token: () => string,
+): Promise<{ locator: Locator; cleanup?: () => Promise<void> } | undefined> {
+  if (
+    target.section !== undefined &&
+    target.nth === undefined &&
+    target.strategy !== 'css' &&
+    target.strategy !== 'testId'
+  ) {
+    const mark = token();
+    const label = target.strategy === 'role' ? (target.name ?? '') : (target.value ?? '');
+    const kind =
+      target.strategy === 'label' || (target.strategy === 'role' && FIELD_ROLES.has(target.role ?? ''))
+        ? 'field'
+        : 'control';
+    const scan = (await page
+      .evaluate(
+        semanticScanExpression({
+          kind,
+          label,
+          ...(target.strategy === 'role' && target.role ? { role: target.role } : {}),
+          section: target.section,
+          token: mark,
+        }),
+      )
+      .catch(() => undefined)) as SemanticScanResult | undefined;
+    if (scan?.status !== 'RESOLVED') return undefined;
+    const locator = page.locator(`[data-qa-crawler-target="${mark}"]`).first();
+    return {
+      locator,
+      cleanup: async () => {
+        await locator
+          .evaluate((el) => {
+            el.removeAttribute('data-qa-crawler-target');
+          })
+          .catch(() => undefined);
+      },
+    };
+  }
+  const base = toLocator(page, {
+    strategy: target.strategy,
+    ...(target.role !== undefined ? { role: target.role } : {}),
+    ...(target.name !== undefined ? { name: target.name } : {}),
+    ...(target.value !== undefined ? { value: target.value } : {}),
+    ...(target.exact !== undefined ? { exact: target.exact } : {}),
+  });
+  if (target.nth !== undefined) return { locator: base.nth(target.nth) };
+  const count = await base.count().catch(() => 0);
+  return count === 1 ? { locator: base.first() } : undefined;
 }
 
 function identityOf(observed: ObservedTarget): TargetIdentity {

@@ -470,6 +470,60 @@ rapport (badges VALIDATED, REPAIRED, FRAGILE, AMBIGUOUS, UNRESOLVED, AI_AUDITED)
 terminal, une ligne par étape (`[TARGET_MISMATCH] … role recorded=combobox runtime=textbox`,
 `[TARGET_REPAIRED]`, `[TARGET_REVALIDATED]`) et le bilan **RECORDING VALIDATION**.
 
+### Validation d'enregistrement ≠ récupération de rejeu (`ValidationMode.RECORDING`)
+
+Pendant l'enregistrement, l'action humaine est **déjà exécutée** : la valider, c'est prouver
+qu'elle a été bien comprise, jamais la refaire ni la « réparer » comme un rejeu en échec. Le
+validateur travaille en `ValidationMode.RECORDING` (`src/recording/validation-mode.ts`) : jamais
+de clic, de saisie, de sélection ni de glisser, jamais le `RecoveryEngine`, jamais
+`GOAL_ALREADY_REACHED` comme preuve d'identité.
+
+Trois verdicts **séparés** par action (`target-validation.json` : `mode`, `target`, `effect`,
+`goal` ; journal `[RECORDING_VERDICT] … target=… effect=… goal=…`) :
+
+| Verdict  | Question                               | Preuves                                                                           |
+| -------- | -------------------------------------- | --------------------------------------------------------------------------------- |
+| `target` | quel élément l'humain a-t-il utilisé ? | identité seulement, par priorité (ci-dessous) ; `source` dit laquelle a décidé    |
+| `effect` | qu'a produit l'action ?                | l'écran d'après : `CONFIRMED` / `NOT_OBSERVED` / `NOT_VERIFIABLE`                 |
+| `goal`   | le but fonctionnel est-il atteint ?    | suit l'effet (`REACHED`), nommé par le groupe sémantique (`filter.value applied`) |
+
+Un effet confirmé ou un objectif atteint ne valide **jamais** une cible.
+
+Priorité des preuves d'identité : 1. la cible originale au moment exact de l'action
+(`ORIGINAL_HUMAN_TARGET`) ; 2. son instantané pré-action (`PRE_ACTION_TARGET_SNAPSHOT`) ; 3. le
+contexte pré-action (`PRE_ACTION_CONTEXT`) ; 4. l'empreinte capturée avant toute mutation
+(`TARGET_FINGERPRINT`) ; 5. l'effet observé (complément seulement) ; 6. la reconstruction
+déterministe (`DETERMINISTIC_RECONSTRUCTION`) ; 7. le conseiller, revalidé
+(`ADVISOR_REVALIDATED`).
+
+**Le nœud original a disparu** (re-rendu après la saisie, le sélecteur désigne maintenant un
+nœud B) : ce que le localisateur trouve **après** n'est qu'une preuve complémentaire
+(`validationBefore.postState`), jamais un écart d'identité. Si la cible était unique juste avant
+l'action, elle est `VALIDATED_PRE_ACTION` ; si le nœud B (même identité) serait lu autrement au
+rejeu, seule la **représentation** est alignée (`REPRESENTATION_ALIGNED_POST_STATE`) et
+revalidée — l'identité reste pré-action. Exemple (saisie dans le champ valeur d'un filtre) :
+
+```yaml
+target: { status: VALIDATED_PRE_ACTION, source: PRE_ACTION_CONTEXT }
+effect: { status: CONFIRMED, evidence: ['"…" holds the typed value (post-state: the re-rendered field)'] }
+goal: { status: REACHED, evidence: ['filter.value applied', …] }
+```
+
+L'effet d'une saisie se compare par **empreinte salée** (le sel de la session) : la valeur n'est
+jamais relue en clair ni écrite, et un champ sensible reste `NOT_VERIFIABLE`.
+
+Si l'identité pré-action reste **ambiguë** (`PRE_ACTION_AMBIGUOUS`), même quand le localisateur
+trouve un seul élément après l'action, le conseiller est consulté avec le contexte d'enregistrement
+(mode `RECORDING` dans sa mission) ; ses candidates sont les éléments visibles **avant** l'action.
+Sa proposition est **revalidée contre les preuves pré-action** : même rôle, même libellé, même
+section que l'instantané, et seule ainsi avant l'action → `VALIDATED_AFTER_AI_AUDIT`
+(`ADVISOR_REVALIDATED`) ; identité contredite → `AI_PROPOSAL_RUNTIME_REJECTED` (l'action humaine
+est gardée) ; plusieurs éléments identiques → `INCONCLUSIVE`.
+
+Au **rejeu**, la récupération par objectif garde sa place, mais pour une saisie ou une sélection
+`GOAL_ALREADY_REACHED` n'est que la **précondition** de l'étape : si le champ reste introuvable,
+l'étape est en échec et la récupération est `NO_SAFE_RECOVERY` (jamais `RECOVERED`).
+
 ## Glisser-déposer (DRAG_AND_DROP)
 
 Un glisser-déposer est **une** action humaine de premier ordre, jamais un clic ni une perte.

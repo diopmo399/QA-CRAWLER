@@ -26,6 +26,7 @@ import {
 } from './recording-intelligence.js';
 import { auditRecordingSemantics, targetAuditAdvisor, type SemanticAuditReport } from './semantic-audit.js';
 import { RecordingTargetValidator, type TargetValidationStatus } from './target-validator.js';
+import { withSemanticGoal } from './validation-mode.js';
 
 export type RecordOutputFormat = 'yaml' | 'gherkin' | 'both';
 
@@ -258,6 +259,11 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         ...entry,
         ...(validation
           ? {
+              // CIBLE / EFFET / OBJECTIF : trois verdicts séparés (ValidationMode.RECORDING).
+              mode: validation.mode,
+              target: validation.verdict.target,
+              effect: validation.verdict.effect,
+              goal: withSemanticGoal(validation.verdict.goal, entry.finalFingerprint?.semanticId),
               original: validation.original,
               fingerprintBefore: validation.fingerprintBefore,
               targetBefore: validation.targetBefore,
