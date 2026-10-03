@@ -555,6 +555,10 @@ export type RecordingEventType =
   | 'RECORDING_PAUSED'
   | 'RECORDING_RESUMED'
   | 'RECORDING_STOPPED'
+  /** L'arrêt en cours : ce qui reste à finir (validations en file, dernière observation…). */
+  | 'RECORDING_STOPPING'
+  /** Le temps de chaque phase après « Stop » (validations, traitement, IA, rejeu, écriture). */
+  | 'RECORDING_STOP_TIMING'
   | 'RECORDING_NORMALIZED'
   | 'OUTCOME_INFERRED'
   | 'FLOW_GENERATED'

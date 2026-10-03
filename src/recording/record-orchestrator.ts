@@ -88,6 +88,19 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     if (event.type !== 'RAW_EVENT_CAPTURED') log.log('INFO', event.type, event.message);
     request.onEvent?.(event);
   };
+  // LE TEMPS APRÈS « STOP », phase par phase : le bilan dit où il passe (jamais deviné).
+  const stopClock = {
+    start: 0,
+    last: 0,
+    phases: [] as { phase: string; ms: number }[],
+    mark(phase: string): void {
+      if (this.start === 0) return;
+      const now = Date.now();
+      const from = this.last || this.start;
+      this.phases.push({ phase, ms: now - from });
+      this.last = now;
+    },
+  };
   const startUrl = new URL(config.target.startAt, config.target.baseUrl).toString();
   const identity = {
     ...((config.staticAnalysis.version ?? env.QA_VERSION)
@@ -172,7 +185,9 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       recorder.requestStop('api');
     }
     stopReason = await recorder.stopped;
+    stopClock.start = Date.now();
     await recorder.stop();
+    stopClock.mark('recorder stop (total)');
   } catch (error) {
     recorder.session.status = 'FAILED';
     onEvent({
@@ -185,10 +200,12 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   } finally {
     detach?.();
     await browser.close();
+    stopClock.mark('browser close');
   }
 
   const language =
     request.language ?? config.recording.language ?? (config.report.language === 'fr' ? 'fr' : 'en');
+  stopClock.mark('(pre-processing)');
   const result = processRecording(recorder.session, config, {
     language,
     snapshot: (observationId) => recorder.snapshot(observationId),
@@ -197,6 +214,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   });
   // Les textes saisis ne servent plus : effacés de la mémoire du recorder.
   recorder.typedValues.clear();
+  stopClock.mark('processing (journey, flow, test data)');
   const format = request.outputFormat ?? config.recording.outputFormat;
   await mkdir(directory, { recursive: true });
   const files: Record<string, string> = {};
@@ -299,7 +317,9 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     await write('optimized.flow.yaml', result.optimized.files.yaml);
   if (format !== 'yaml') await write('generated.feature', result.files.feature);
 
+  stopClock.mark('writing artifacts');
   if (config.recording.knowledge) await rememberRecording(config, result, env).catch(() => undefined);
+  stopClock.mark('knowledge');
 
   // RECORDING INTELLIGENCE : comprendre (jamais modifier) le parcours humain, après la capture.
   let intelligence: RecordingIntelligence | undefined;
@@ -357,9 +377,14 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         message: `recording enrichment skipped: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
+    stopClock.mark('AI enrichment');
     semanticAudit = await runSemanticAudit(gateway);
+    stopClock.mark('semantic audit');
     await gateway?.close();
-  } else semanticAudit = await runSemanticAudit(undefined);
+  } else {
+    semanticAudit = await runSemanticAudit(undefined);
+    stopClock.mark('semantic audit');
+  }
   if (semanticAudit) await write('semantic-audit.json', json(semanticAudit));
 
   let replay: ReplayOutcome = { status: 'NOT_VALIDATED' };
@@ -375,8 +400,11 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       at: new Date().toISOString(),
       message: replay.reason ?? replay.status,
     });
+    stopClock.mark('replay validation (--validate)');
   }
   result.session.status = 'COMPLETED';
+  const stopTiming = stopTimingOf(stopClock, recorder.stopTimings, targetValidator?.deferredAudits ?? 0);
+  onEvent({ type: 'RECORDING_STOP_TIMING', at: new Date().toISOString(), message: stopTiming.message });
   onEvent({
     type: 'RECORDING_COMPLETED',
     at: new Date().toISOString(),
@@ -534,6 +562,29 @@ async function validateReplay(
       reason: `the replay could not run: ${error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error)}`,
     };
   }
+}
+
+/**
+ * Le bilan du temps après « Stop » : le total, puis chaque phase (les phases de l'arrêt du recorder
+ * en détail), les plus longues d'abord ; les audits IA non faits à cause de l'arrêt.
+ */
+export function stopTimingOf(
+  clock: { start: number; phases: readonly { phase: string; ms: number }[] },
+  recorderPhases: readonly { phase: string; ms: number }[],
+  deferredAudits: number,
+): { totalMs: number; phases: { phase: string; ms: number }[]; message: string } {
+  const phases = [
+    ...recorderPhases.map((entry) => ({ phase: `stop: ${entry.phase}`, ms: entry.ms })),
+    ...clock.phases.filter((entry) => entry.phase !== 'recorder stop (total)' || recorderPhases.length === 0),
+  ].filter((entry) => entry.ms >= 0);
+  const totalMs = clock.start === 0 ? 0 : Date.now() - clock.start;
+  const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)} s`;
+  const top = [...phases].sort((a, b) => b.ms - a.ms).filter((entry) => entry.ms >= 50);
+  return {
+    totalMs,
+    phases,
+    message: `after Stop: ${seconds(totalMs)} — ${top.map((entry) => `${entry.phase} ${seconds(entry.ms)}`).join(' · ') || 'nothing slow'}${deferredAudits > 0 ? ` · ${String(deferredAudits)} AI audit(s) skipped because of the stop` : ''}`,
+  };
 }
 
 function sessionMeta(result: RecordingResult): Record<string, unknown> {
