@@ -417,6 +417,11 @@ représentation que je viens de construire, retrouverais-je EXACTEMENT l'éléme
   l'empreinte prend ce que le runtime montre de l'élément original (`role: combobox → textbox`),
   ou la cible est remplacée par une alternative sémantique (section de l'élément original d'abord ;
   jamais une position). Tracée : avant, réparation, après, preuve `runtime-original-target`.
+- **Traits distinctifs** : l'élément original et chaque candidate sont décrits par ce qui les
+  distingue (`formControlName`, `name`, `id` stable, `placeholder`, texte posé avant le champ,
+  composant, fenêtre, visible, **focus**). Un attribut stable propre à l'original suffit à réparer
+  sans conseiller (`input[formcontrolname="zip"]`) ; sinon le conseiller reçoit ces traits pour
+  chaque candidate — jamais une valeur saisie ni le texte d'une ligne de tableau.
 - **Audit par le conseiller** (même `IntelligenceGateway`, déclencheurs de
   `recording.intelligenceAudit`) seulement si le déterministe ne suffit pas : il choisit une
   candidate fournie (T…), QA-CRAWLER la **résout** et la compare à l'original. Une proposition qui ne

@@ -29,6 +29,7 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
 <button type="button" id="gone" hidden>Continue</button>
 <div class="mat-mdc-form-field"><label id="tasks-label">My tasks</label><input id="tasksSearch" aria-labelledby="tasks-label"></div>
 <div role="combobox" id="attribute" tabindex="0"><span class="placeholder">Select an attribute</span></div>
+<form id="bound"><div><input class="ctl" formcontrolname="city"></div><div><input class="ctl" formcontrolname="zip"></div><div><input class="ctl" formcontrolname="street"></div></form>
 <div hidden><input class="dup"></div><div role="dialog" aria-label="Filter"><input class="dup"></div>
 <div hidden><input class="dup2"></div><div><input class="dup2"></div>
 <span hidden>Process request</span><span hidden>Process request</span><div class="tile" onclick="void 0">Process request</div>
@@ -201,6 +202,13 @@ describe('RecordingTargetValidator (real browser, dry lookup)', () => {
     );
     expect(provider.requests).toHaveLength(1);
     expect(result?.status).toBe('VALIDATED_AFTER_AI_AUDIT');
+    // Le conseiller reçoit de quoi DÉPARTAGER : chaque candidate dit ce qu'elle trouve et ses traits.
+    const request = provider.requests[0];
+    const names = request?.availableActions.map((action) => action.name) ?? [];
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.every((name) => name.includes('←'))).toBe(true);
+    expect(JSON.stringify(request)).toMatch(/visible/);
+    expect(request?.workflowContext?.next[0]).not.toMatch(/^change\s*$/);
     expect(result?.aiAudit?.outcome).toBe('AI_PROPOSAL_RUNTIME_CONFIRMED');
     expect(result?.repair?.type).toBe('AI');
     expect(result?.targetAfter?.nth).toBe(1);
@@ -414,5 +422,34 @@ describe('RecordingTargetValidator (real browser, dry lookup)', () => {
     expect(result?.validationBefore.status).toBe('AMBIGUOUS');
     expect(result?.status).toBe('VALIDATED');
     expect(result?.targetAfter).toEqual({ strategy: 'css', value: 'text="Process request" >> visible=true' });
+  });
+
+  it('identical inputs told apart by a stable attribute (formControlName): repaired deterministically, no advisor call', async () => {
+    const provider = new FakeIntelligenceProvider(pick('[1]'));
+    const result = await validator(targetAuditAdvisor(gateway('ASSIST', provider), { maxCalls: 5 })).validate(
+      page,
+      change(element({ css: '#bound .ctl' })),
+      '[formcontrolname="zip"]',
+    );
+    expect(result?.validationBefore.status).toBe('AMBIGUOUS');
+    expect(result?.status).toBe('VALIDATED');
+    expect(result?.targetAfter).toEqual({ strategy: 'css', value: 'input[formcontrolname="zip"]' });
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it('the advisor sees which candidate the human was just using (FOCUSED), never the typed value', async () => {
+    await page.locator('#v3').fill('typed-by-the-human');
+    await page.locator('#v3').focus();
+    const provider = new FakeIntelligenceProvider(pick('[2]'));
+    const result = await validator(targetAuditAdvisor(gateway('ASSIST', provider), { maxCalls: 5 })).validate(
+      page,
+      change(unnamedValue),
+      '#v3',
+    );
+    const sent = JSON.stringify(provider.requests);
+    expect(sent).toContain('FOCUSED');
+    expect(sent).not.toContain('typed-by-the-human');
+    expect(result?.status).toBe('VALIDATED_AFTER_AI_AUDIT');
+    await page.locator('#v3').fill('');
   });
 });

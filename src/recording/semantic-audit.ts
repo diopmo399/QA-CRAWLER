@@ -7,7 +7,7 @@ import type { ScenarioConfig } from '../config/config.js';
 import { describeTarget } from '../config/flow-schema.js';
 import { normalize } from '../flows/action-effect-verifier.js';
 import type { RecordedElement, SemanticRecordedAction } from './model.js';
-import type { TargetAuditAdvisor } from './target-validator.js';
+import { describeTraits, type TargetAuditAdvisor } from './target-validator.js';
 import type { RecordingResult } from './process-recording.js';
 
 /**
@@ -533,6 +533,7 @@ export function targetAuditAdvisor(
       ...(original.label ? { label: original.label } : {}),
       ...(original.name ? { name: original.name } : {}),
       ...(original.section ? { section: original.section } : {}),
+      ...(describeTraits(original.traits) ? { traits: describeTraits(original.traits) } : {}),
     });
     prove('validation result', {
       status: check.status,
@@ -544,6 +545,7 @@ export function targetAuditAdvisor(
         ...(entry.role ? { role: entry.role } : {}),
         ...(entry.name ? { name: entry.name } : {}),
         ...(entry.section ? { section: entry.section } : {}),
+        ...(describeTraits(entry.traits) ? { traits: describeTraits(entry.traits) } : {}),
       });
     if (previousActions.length > 0)
       prove('previous human actions', { actions: previousActions.join(' ; ').slice(0, 200) });
@@ -553,7 +555,7 @@ export function targetAuditAdvisor(
       mission: 'recording target validation',
       workflow: {
         previous: previousActions,
-        next: [`${event.type} ${original.label ?? original.name ?? ''}`],
+        next: [`${event.type} ${humanName(original)}`],
         requiredFields: [],
       },
       candidates: candidates.map((candidate) => ({
@@ -575,7 +577,7 @@ export function targetAuditAdvisor(
         nextExpectedActions: [],
         nextActionTargets: [],
         functionalCoverage: [],
-        question: `RECORDING TARGET VALIDATION (never execute anything). The human just used: ${describeOriginal(original)}. Validation: ${check.status} (${check.reason}). Does the proposed representation correctly represent the target actually manipulated by the human? Which provided candidate (action ID) best represents the human target? Use only the given action IDs and evidence IDs.`,
+        question: `RECORDING TARGET VALIDATION (never execute anything). The human just used: ${describeOriginal(original)}${describeTraits(original.traits) ? ` [${describeTraits(original.traits)}]` : ''}. Compare the traits of each candidate (formControl, name, id, placeholder, text before, dialog, visible, FOCUSED) with the traits of the human target. Validation: ${check.status} (${check.reason}). Does the proposed representation correctly represent the target actually manipulated by the human? Which provided candidate (action ID) best represents the human target? Use only the given action IDs and evidence IDs.`,
       },
     });
     const consulted = await gateway.consult({
@@ -616,6 +618,24 @@ function describeOriginal(original: {
   label?: string;
   name?: string;
   section?: string;
+  traits?: { nearText?: string; placeholder?: string };
 }): string {
-  return `${original.role ?? original.tag ?? 'element'} "${original.label ?? original.name ?? ''}"${original.section ? ` in section "${original.section}"` : ''}`;
+  return `${original.role ?? original.tag ?? 'element'} "${humanName(original)}"${original.section ? ` in section "${original.section}"` : ''}`;
+}
+
+/** Le nom humain d'une cible : libellé, nom, texte posé avant le champ, sinon sa balise. */
+function humanName(original: {
+  label?: string;
+  name?: string;
+  tag?: string;
+  traits?: { nearText?: string; placeholder?: string };
+}): string {
+  return (
+    original.label ||
+    original.name ||
+    original.traits?.nearText ||
+    original.traits?.placeholder ||
+    original.tag ||
+    'element'
+  );
 }

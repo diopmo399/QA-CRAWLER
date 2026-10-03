@@ -12,7 +12,12 @@ import {
 } from '../flows/action-effect-verifier.js';
 import type { RawRecordedEvent, RecordedElement, RecordedTarget } from './model.js';
 import { resolveRecordedTarget } from './recorded-target.js';
-import { semanticScanExpression, type SemanticScanResult } from './semantic-dom.js';
+import {
+  elementTraits,
+  semanticScanExpression,
+  type ElementTraits,
+  type SemanticScanResult,
+} from './semantic-dom.js';
 
 /**
  * RECORDING TARGET VALIDATOR — RECORD → RESOLVE → VALIDATE → ENRICH → REVALIDATE → PERSIST.
@@ -51,6 +56,8 @@ export interface TargetIdentity {
   name?: string;
   testId?: string;
   section?: string;
+  /** Ce qui le distingue de ses semblables (attributs stables, texte voisin, focus, fenêtre). */
+  traits?: ElementTraits;
 }
 
 export interface TargetDifference {
@@ -257,8 +264,12 @@ export class RecordingTargetValidator {
     say(`[TARGET_VALIDATING] ${event.id} ${describeTarget(candidate.target)}`);
     const original = await this.original(page, ref);
     const observed = original ? await readTarget(original, page) : undefined;
+    const traits = original
+      ? await original.evaluate(elementTraits).catch(() => snapshotTraits(element))
+      : snapshotTraits(element);
     const originalIdentity: RecordingTargetValidation['original'] = {
       ...identityOf(observed ?? fromSnapshot(element)),
+      traits,
       ...(label ? { label } : {}),
       stale: !original,
     };
@@ -323,7 +334,16 @@ export class RecordingTargetValidator {
       attempts <= this.options.maxDeterministicRepairAttempts &&
       current.status !== 'NOT_VALIDATABLE'
     ) {
-      const proposal = this.repairOf(current, target, fingerprint, candidate, element, observed, tried);
+      const proposal = this.repairOf(
+        current,
+        target,
+        fingerprint,
+        candidate,
+        element,
+        observed,
+        tried,
+        originalIdentity,
+      );
       if (!proposal) break;
       attempts += 1;
       tried.add(JSON.stringify(proposal.target));
@@ -715,6 +735,10 @@ export class RecordingTargetValidator {
         candidates.push({
           index,
           ...identityOf(await readTarget(base.nth(index))),
+          traits: await base
+            .nth(index)
+            .evaluate(elementTraits)
+            .catch(() => ({ visible: false, inDialog: false, focused: false })),
           original: matches[index] === true,
           visible: info[index]?.visible === true,
         });
@@ -744,6 +768,7 @@ export class RecordingTargetValidator {
     element: RecordedElement,
     observed: ObservedTarget | undefined,
     tried: ReadonlySet<string>,
+    originalIdentity?: TargetIdentity,
   ): { target: FlowTarget; fingerprint: TargetFingerprint | undefined; repair: TargetRepair } | undefined {
     // La vérité runtime : l'élément original lu comme au rejeu ; après un re-rendu, l'élément de même identité.
     const truth: ObservedTarget | undefined = observed ?? (check.sameIdentity ? check.resolved : undefined);
@@ -848,6 +873,31 @@ export class RecordingTargetValidator {
       target.section !== section
     )
       options.push({ ...target, section });
+    // L'ATTRIBUT STABLE qui distingue l'original de ses semblables (formControlName, name, id,
+    // placeholder) : une représentation précise, jamais une position.
+    const own = originalIdentity?.traits;
+    const others = (check.candidates ?? []).filter((entry) => !entry.original).map((entry) => entry.traits);
+    const tag = originalIdentity?.tag ?? element.tag;
+    const quote = (value: string): string => JSON.stringify(value);
+    const distinguishing: [
+      string | undefined,
+      (value: string) => string,
+      (traits: ElementTraits | undefined) => string | undefined,
+    ][] = [
+      [
+        own?.formControl,
+        (value) => `${tag}[formcontrolname=${quote(value)}]`,
+        (traits) => traits?.formControl,
+      ],
+      [own?.name, (value) => `${tag}[name=${quote(value)}]`, (traits) => traits?.name],
+      [own?.id, (value) => `${tag}[id=${quote(value)}]`, (traits) => traits?.id],
+      [own?.placeholder, (value) => `${tag}[placeholder=${quote(value)}]`, (traits) => traits?.placeholder],
+    ];
+    for (const [value, selector, of] of distinguishing)
+      if (value && !others.some((traits) => of(traits) === value)) {
+        const css = selector(value);
+        if (target.strategy !== 'css' || target.value !== css) options.push({ strategy: 'css', value: css });
+      }
     for (const alternative of candidate.alternatives) {
       if (alternative.target.nth !== undefined || isFragileTarget(alternative.target)) continue;
       options.push(alternative.target);
@@ -905,16 +955,30 @@ export class RecordingTargetValidator {
     for (const alternative of candidate.alternatives) add(alternative.target);
     // Plusieurs éléments correspondent : chacun devient une candidate (par sa position), décrite par son identité.
     if (check.candidates) for (const entry of check.candidates) add({ ...target, nth: entry.index });
-    const candidates = options.slice(0, 8).map((option, index) => {
+    // Chaque candidate est décrite par ce qu'elle trouve VRAIMENT (combien, et ses traits) : sans cela
+    // le conseiller ne peut que parier entre des « textbox » identiques.
+    const candidates: { key: string; target: FlowTarget; description: string }[] = [];
+    for (const [index, option] of options.slice(0, 8).entries()) {
       const identity = check.candidates?.find(
         (entry) => option.nth === entry.index && option.strategy === target.strategy,
       );
-      return {
+      let found = identity ? describeIdentity(identity) : '';
+      if (!identity) {
+        const resolution = await this.resolve(page, option, undefined).catch(() => ({ count: 0 }));
+        found =
+          resolution.count === 0
+            ? 'finds nothing'
+            : resolution.count > 1 && !('chosen' in resolution && resolution.chosen !== undefined)
+              ? `finds ${String(resolution.count)} elements`
+              : 'finds 1 element';
+      }
+      candidates.push({
         key: `T${String(index + 1)}`,
         target: option,
-        description: `${describeTarget(option)}${identity ? ` → ${describeIdentity(identity)}` : ''}`,
-      };
-    });
+        // Ce qui départage d'abord (identité, traits), le localisateur ensuite, raccourci.
+        description: `${found} ← ${shorten(describeTarget({ ...option, nth: undefined }), 48)}${option.nth ? ` [${String(option.nth)}]` : ''}`,
+      });
+    }
     const answer = await advisor({
       event,
       original: originalIdentity,
@@ -1117,6 +1181,11 @@ function fromSnapshot(element: RecordedElement): ObservedTarget {
 }
 
 export function describeIdentity(identity: TargetIdentity): string {
+  const traits = describeTraits(identity.traits);
+  return `${baseIdentity(identity)}${traits ? ` [${traits}]` : ''}`;
+}
+
+function baseIdentity(identity: TargetIdentity): string {
   return [
     identity.role ?? identity.tag ?? '?',
     identity.name ? `"${identity.name}"` : '',
@@ -1124,4 +1193,43 @@ export function describeIdentity(identity: TargetIdentity): string {
   ]
     .filter(Boolean)
     .join(' ');
+}
+
+/** Les traits de l'élément d'après l'instantané (quand le nœud original n'existe plus). */
+function snapshotTraits(element: RecordedElement): ElementTraits {
+  return {
+    ...(element.elementId && !element.generatedId ? { id: element.elementId } : {}),
+    ...(element.nameAttr ? { name: element.nameAttr } : {}),
+    ...(element.formControlName ? { formControl: element.formControlName } : {}),
+    ...(element.placeholder ? { placeholder: element.placeholder } : {}),
+    ...(element.testId ? { testId: element.testId } : {}),
+    ...(element.guessedLabel ? { nearText: element.guessedLabel } : {}),
+    ...(element.componentTag ? { component: element.componentTag } : {}),
+    visible: true,
+    inDialog: element.inDialog,
+    ...(element.dialogName ? { dialog: element.dialogName } : {}),
+    focused: false,
+  };
+}
+
+/** Les traits lisibles (pour le conseiller et le rapport) : seulement ce qui existe. */
+export function describeTraits(traits: ElementTraits | undefined): string {
+  if (!traits) return '';
+  return [
+    traits.formControl ? `formControl=${traits.formControl}` : '',
+    traits.name ? `name=${traits.name}` : '',
+    traits.id ? `id=${traits.id}` : '',
+    traits.placeholder ? `placeholder="${traits.placeholder}"` : '',
+    traits.nearText ? `text before="${traits.nearText}"` : '',
+    traits.component ? `component=${traits.component}` : '',
+    traits.inDialog ? `in dialog${traits.dialog ? ` "${traits.dialog}"` : ''}` : '',
+    traits.visible ? 'visible' : 'hidden',
+    traits.focused ? 'FOCUSED' : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
+function shorten(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }

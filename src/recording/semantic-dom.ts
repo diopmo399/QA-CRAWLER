@@ -340,3 +340,80 @@ export function dropMembershipExpression(spec: {
     `return (${dropMembership.toString()})(${JSON.stringify(spec)}); })()`,
   ].join('\n');
 }
+
+/** Ce qui DISTINGUE un élément de ses semblables (jamais une valeur saisie, jamais le texte d'une ligne). */
+export interface ElementTraits {
+  id?: string;
+  name?: string;
+  formControl?: string;
+  placeholder?: string;
+  testId?: string;
+  /** Le texte posé juste avant le champ (un libellé non relié), court. */
+  nearText?: string;
+  /** Le composant maison qui le contient (balise à tiret). */
+  component?: string;
+  visible: boolean;
+  inDialog: boolean;
+  dialog?: string;
+  /** L'élément (ou un de ses descendants) a le focus : l'humain vient de s'en servir. */
+  focused: boolean;
+}
+
+/** Lecture seule, dans la page : autonome (sérialisée par Playwright). */
+export function elementTraits(el: Element): ElementTraits {
+  const clean = (text: string | null | undefined, max: number): string =>
+    (text ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+  const attr = (name: string): string => clean(el.getAttribute(name), 80);
+  const id = attr('id');
+  // Un id généré (mat-input-23, :r1:, cdk-…) ne distingue rien de stable.
+  const stableId =
+    id && !/\d/.test(id) && !/^(mat|cdk|ng|ion|mui|react)[-_:]/i.test(id) && !id.startsWith(':') ? id : '';
+  const rect = el.getBoundingClientRect();
+  const style = getComputedStyle(el);
+  const visible =
+    (rect.width > 0 || rect.height > 0) && style.visibility !== 'hidden' && style.display !== 'none';
+  const dialogEl = el.closest(
+    '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], .cdk-overlay-pane',
+  );
+  const dialog = dialogEl ? clean(dialogEl.getAttribute('aria-label'), 60) : '';
+  let nearText = '';
+  if (el.matches('input, select, textarea, [role="textbox"], [role="combobox"]')) {
+    let node: Element = el;
+    for (let depth = 0; depth < 3 && !nearText; depth += 1) {
+      for (
+        let sibling = node.previousElementSibling;
+        sibling && !nearText;
+        sibling = sibling.previousElementSibling
+      ) {
+        if (sibling.matches('input, select, textarea') || sibling.querySelector('input, select, textarea'))
+          break;
+        const text = clean((sibling as HTMLElement).innerText || sibling.textContent, 61);
+        if (text && text.length <= 40) nearText = text;
+      }
+      const parent: Element | null = node.parentElement;
+      if (!parent || parent === document.body) break;
+      node = parent;
+    }
+  }
+  let component = '';
+  for (let node: Element | null = el.parentElement; node && !component; node = node.parentElement)
+    if (node.tagName.includes('-')) component = node.tagName.toLowerCase();
+  const active = document.activeElement;
+  const testId =
+    ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy'].map(attr).find(Boolean) ?? '';
+  return {
+    ...(stableId ? { id: stableId } : {}),
+    ...(attr('name') ? { name: attr('name') } : {}),
+    ...(attr('formcontrolname') || attr('ng-reflect-name')
+      ? { formControl: attr('formcontrolname') || attr('ng-reflect-name') }
+      : {}),
+    ...(attr('placeholder') ? { placeholder: attr('placeholder') } : {}),
+    ...(testId ? { testId } : {}),
+    ...(nearText ? { nearText } : {}),
+    ...(component ? { component } : {}),
+    visible,
+    inDialog: dialogEl !== null,
+    ...(dialog ? { dialog } : {}),
+    focused: active !== null && (active === el || el.contains(active)),
+  };
+}
