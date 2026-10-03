@@ -1,4 +1,5 @@
 import type { TargetResolutionTrace } from '../flows/functional-target.js';
+import type { TransitionWaitStatus } from '../observation/transition-waiter.js';
 import type { FlowDriftReport, StepRecoveryReport } from '../workflow-healing/model.js';
 import type { ActionClassification } from './discovered-action.js';
 
@@ -44,6 +45,25 @@ export interface FlowStepReport {
   recovery?: StepRecoveryReport;
   /** La résolution FONCTIONNELLE d'une cible dont l'empreinte ne correspondait plus (trace complète). */
   targetResolution?: TargetResolutionTrace;
+  /**
+   * REPLAY TRANSITION SYNCHRONIZATION : exécution → transition → stabilité → préparation de
+   * l'action suivante. Distingue un problème de localisateur, de transition, d'effet ou une régression.
+   */
+  synchronization?: StepSynchronizationReport;
+}
+
+export interface StepSynchronizationReport {
+  execution: 'EXECUTED';
+  /** CONFIRMED / LOCAL_EFFECT / NEXT_ACTION_READY / NOT_EXPECTED / TIMEOUT / AMBIGUOUS. */
+  transition: TransitionWaitStatus;
+  signals: string[];
+  /** Ce qui était attendu et n'est jamais venu (TIMEOUT). */
+  missing: string[];
+  stability: { stable: boolean; durationMs: number };
+  durationMs: number;
+  nextAction: 'READY' | 'NOT_READY' | 'UNKNOWN';
+  /** La cible de CETTE étape relue après un re-rendu (TARGET_REACQUIRED_AFTER_RERENDER). */
+  reacquired?: string;
 }
 
 export interface StepEffectReport {

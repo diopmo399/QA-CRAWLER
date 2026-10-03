@@ -88,6 +88,50 @@ export class NetworkTraceRecorder implements PageObserver {
     this.current = { actionId, startedAt: new Date(), pending: new Map(), order: [] };
   }
 
+  /**
+   * L'activité réseau CORRÉLÉE à l'action en cours, sans fermer la fenêtre : les requêtes parties
+   * dans les `correlationMs` après l'action (une interrogation périodique plus tardive n'en est pas),
+   * et, parmi elles, celles encore en attente depuis moins de `pendingCapMs` (une connexion
+   * persistante ne bloque jamais la stabilité). Jamais « networkidle ».
+   */
+  activity(
+    actionId: string,
+    options: { correlationMs: number; pendingCapMs: number },
+  ): { started: number; pending: number; completed: number; lastStarted?: string; lastCompleted?: string } {
+    const window = this.current;
+    if (window?.actionId !== actionId) return { started: 0, pending: 0, completed: 0 };
+    const origin = window.startedAt.getTime();
+    const now = Date.now();
+    const related = window.order.filter((pending) => pending.startedAt - origin <= options.correlationMs);
+    const label = (pending: Pending): string => {
+      let path = pending.exchange.url;
+      try {
+        path = new URL(pending.exchange.url).pathname;
+      } catch {
+        // URL relative ou masquée : telle quelle.
+      }
+      return `${pending.exchange.method.toUpperCase()} ${path}${pending.exchange.status !== undefined ? ` ${String(pending.exchange.status)}` : ''}`;
+    };
+    const done = related.filter(
+      (pending) => pending.exchange.status !== undefined || pending.exchange.failure !== undefined,
+    );
+    const waiting = related.filter(
+      (pending) =>
+        pending.exchange.status === undefined &&
+        pending.exchange.failure === undefined &&
+        now - pending.startedAt < options.pendingCapMs,
+    );
+    const lastStarted = related.at(-1);
+    const lastCompleted = done.at(-1);
+    return {
+      started: related.length,
+      pending: waiting.length,
+      completed: done.length,
+      ...(lastStarted ? { lastStarted: label(lastStarted) } : {}),
+      ...(lastCompleted ? { lastCompleted: label(lastCompleted) } : {}),
+    };
+  }
+
   /** Ferme la fenêtre ; la trace, si elle appartient à `actionId` (ou à n'importe quelle action quand il est omis). */
   stop(actionId?: string): ActionNetworkTrace | undefined {
     const window = this.current;

@@ -1389,7 +1389,43 @@ const replaySchema = z
     targetFingerprintMatching: z.boolean().default(true),
     /** Retrouver le même élément par son empreinte (rôle + nom, test id, texte) si le localisateur échoue. */
     locatorHealing: z.boolean().default(true),
+    /** Interrupteur de la synchronisation des transitions (réglages : `synchronization`). */
     uiStabilization: z.boolean().default(true),
+    /**
+     * REPLAY TRANSITION SYNCHRONIZATION : ACTION_EXECUTED ≠ TRANSITION_COMPLETED ≠ UI_STABLE ≠
+     * EFFECT_CONFIRMED. Après l'exécution technique, attendre des CONDITIONS observables (mutations,
+     * route, dialogues, chargements, réseau corrélé, effets enregistrés, cible de l'action suivante
+     * résolue sur le DOM frais), puis une courte fenêtre de stabilité. Les délais sont des bornes.
+     */
+    synchronization: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Borne maximale de l'attente d'une transition (jamais la condition de succès). */
+        transitionTimeoutMs: z.number().int().min(200).max(120_000).default(10_000),
+        /** Aucune mutation pertinente pendant ce temps (et ni chargement ni requête corrélée) : stable. */
+        stabilityWindowMs: z.number().int().min(50).max(5000).default(400),
+        /** Une action dont aucune transition n'est attendue (saisie) : borne de l'attente de stabilité. */
+        noTransitionCapMs: z.number().int().min(100).max(30_000).default(1500),
+        /** Rien observé, rien de précis attendu : au-delà, l'attente conclut (sans attendre la borne). */
+        graceMs: z.number().int().min(100).max(30_000).default(1000),
+        /** Une requête partie dans ce délai après l'action lui est corrélée (une interrogation plus tardive, non). */
+        networkCorrelationMs: z.number().int().min(0).max(30_000).default(1500),
+        /** Une requête corrélée encore en attente au-delà ne bloque plus la stabilité (connexion persistante). */
+        networkPendingCapMs: z.number().int().min(100).max(60_000).default(5000),
+        observeDomChanges: z.boolean().default(true),
+        observeRouteChanges: z.boolean().default(true),
+        observeNetwork: z.boolean().default(true),
+        observeDialogs: z.boolean().default(true),
+        observeLoaders: z.boolean().default(true),
+        /** Les effets enregistrés de l'action (ActionExpectedEffects) servent de point de contrôle. */
+        useExpectedEffects: z.boolean().default(true),
+        /** La cible de l'action suivante (résolue sur le DOM frais, empreinte vérifiée) sert de point de contrôle. */
+        useNextActionAsCheckpoint: z.boolean().default(true),
+        /** Une cible dont l'empreinte ne correspond pas est relue après stabilisation (re-rendu) avant tout mismatch. */
+        reacquireAfterRerender: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
     /** Attente bornée d'un effet attendu (attente sur condition, jamais un sommeil fixe). */
     effectTimeoutMs: z.number().int().min(100).max(60_000).default(8000),
     recovery: z

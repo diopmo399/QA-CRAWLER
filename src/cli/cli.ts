@@ -5,6 +5,7 @@ import { AuthError } from '../auth/authenticator.js';
 import { ConfigError, loadConfigFile } from '../config/config-loader.js';
 import type { ExplorationListener } from '../explorer/flow-explorer.js';
 import { actionLabel } from '../model/discovered-action.js';
+import type { FlowStepReport } from '../model/flow-run.js';
 import type { Severity } from '../model/issue.js';
 import { renderFlowDiffText } from '../diff/flow-diff.js';
 import { BaselineMissingError, runMission } from '../orchestrator.js';
@@ -312,6 +313,21 @@ export async function runCli(input: string[]): Promise<number> {
   }
 }
 
+/** Les lignes [TRANSITION_WAIT] d'une étape : signaux, stabilité, préparation de la suite, ou la borne atteinte. */
+export function synchronizationLines(sync: FlowStepReport['synchronization']): string[] {
+  if (!sync) return [];
+  if (sync.transition === 'TIMEOUT')
+    return [
+      `[TRANSITION_WAIT] result=TRANSITION_TIMEOUT after ${String(sync.durationMs)} ms`,
+      `  signals=${sync.signals.join(', ') || 'none'}`,
+      `  expected=${sync.missing.join(', ') || '—'}`,
+    ];
+  return [
+    `[TRANSITION_WAIT] ${sync.transition} in ${String(sync.durationMs)} ms · ${sync.stability.stable ? `UI_STABLE ${String(sync.stability.durationMs)} ms` : 'not stable'} · next ${sync.nextAction}${sync.signals.length > 0 ? ` · ${sync.signals.join(' · ')}` : ''}`,
+    ...(sync.reacquired ? [`[TARGET_REACQUIRED_AFTER_RERENDER] ${sync.reacquired}`] : []),
+  ];
+}
+
 function progressListener(quiet: boolean): ExplorationListener {
   let step = 0;
   return {
@@ -380,6 +396,13 @@ function progressListener(quiet: boolean): ExplorationListener {
         `   ${mark} ${String(step.index).padStart(2, ' ')}. ${step.description}${step.status !== 'PASSED' ? ` ${step.status}` : ''}${reason}`,
       );
       if (step.interpretation) logger.info(color.dim(`       ↳ ${step.interpretation}`));
+      // ACTION_EXECUTED ≠ TRANSITION_COMPLETED ≠ UI_STABLE ≠ EFFECT_CONFIRMED.
+      for (const line of synchronizationLines(step.synchronization))
+        logger.info(
+          line.startsWith('[TRANSITION_WAIT] result=TRANSITION_TIMEOUT')
+            ? color.yellow(`       ${line}`)
+            : color.dim(`       ${line}`),
+        );
       // EXECUTED ≠ CONFIRMED : l'effet de l'action, la cible vérifiée, la récupération.
       const effect = step.effect;
       if (effect && effect.status !== 'NOT_VERIFIED') {

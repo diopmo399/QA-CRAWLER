@@ -352,7 +352,7 @@ function flowsSection(
       const rows = flow.steps
         .map(
           (step) =>
-            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}${effectBlock(step)}${recoveryBlock(step)}${targetResolutionBlock(step)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
+            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}${synchronizationBlock(step)}${effectBlock(step)}${recoveryBlock(step)}${targetResolutionBlock(step)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
         )
         .join('');
       return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status, t.lang)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ` · ${esc(t.lastScreenExplored)}` : ''}</span></h3>
@@ -382,6 +382,23 @@ function flowsSection(
     ${healing}
     ${runs}
   </section>`;
+}
+
+/**
+ * SYNCHRONIZATION : exécution → transition → stabilité → préparation de la suite. Distingue d'un
+ * coup d'œil un problème de localisateur, de transition, d'effet fonctionnel ou une régression.
+ */
+function synchronizationBlock(step: FlowStepReport): string {
+  const sync = step.synchronization;
+  if (!sync) return '';
+  const lines = [
+    `execution: ${esc(sync.execution)} · transition: <b>${esc(sync.transition)}</b> (${String(sync.durationMs)} ms)`,
+    `stability: ${sync.stability.stable ? `STABLE ${String(sync.stability.durationMs)} ms` : 'NOT STABLE'} · next action: ${esc(sync.nextAction)}`,
+    ...(sync.signals.length > 0 ? [`signals: ${sync.signals.map(esc).join(' · ')}`] : []),
+    ...(sync.missing.length > 0 ? [`missing: ${sync.missing.map(esc).join(' · ')}`] : []),
+    ...(sync.reacquired ? [`reacquired after rerender: ${esc(sync.reacquired)}`] : []),
+  ];
+  return `<div class="muted">${lines.join('<br>')}</div>`;
 }
 
 /** EXECUTED ≠ CONFIRMED : l'effet de l'étape (attendu / observé), la cible vérifiée, la récupération. */
