@@ -1259,6 +1259,22 @@ const recordingSchema = z
      * représentation construite (localisateur + empreinte) est résolue À SEC et comparée à
      * l'élément réellement utilisé — jamais rejouée. Réparée si besoin (bornée), puis revalidée.
      */
+    /**
+     * CAPTURE AVANT MUTATION : au premier événement d'un geste (appui, entrée dans un champ,
+     * première frappe), la cible réellement utilisée, son contexte et un ensemble borné de
+     * candidats sont figés dans la page. La cible originale est TOUJOURS candidate (T1), jamais
+     * retirée par le budget. Les preuves restent celles de l'enregistrement en cours.
+     */
+    preActionCapture: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxCandidates: z.number().int().min(1).max(40).default(12),
+        includeSameForm: z.boolean().default(true),
+        includeSameDialog: z.boolean().default(true),
+        includeSameSection: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
     targetValidation: z
       .object({
         enabled: z.boolean().default(true),

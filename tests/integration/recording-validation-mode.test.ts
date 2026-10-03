@@ -3,7 +3,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { IntelligenceGateway } from '../../src/ai/gateway.js';
 import type { IntelligenceMode, IntelligenceRequest } from '../../src/ai/model.js';
 import { IntelligenceContextSanitizer } from '../../src/ai/sanitizer.js';
-import type { PreActionContext, RawRecordedEvent, RecordedElement } from '../../src/recording/model.js';
+import type {
+  PreActionCandidate,
+  PreActionContext,
+  RawRecordedEvent,
+  RecordedElement,
+} from '../../src/recording/model.js';
+import { ContextRelevanceSelector } from '../../src/recording/recording-intelligence-context.js';
 import { targetAuditAdvisor } from '../../src/recording/semantic-audit.js';
 import {
   RecordingTargetValidator,
@@ -306,5 +312,189 @@ describe('ValidationMode.RECORDING: target, effect and goal are separate (real b
     };
     expect(context.mission?.validationMode).toBe('RECORDING');
     expect(context.mission?.constraints?.join(' ')).toMatch(/never validates a target/);
+  });
+});
+
+/** Les candidats figés AVANT l'action : T1 le champ valeur du panneau Filter (original), T2 la recherche globale. */
+const candidate = (overrides: Partial<PreActionCandidate> & { id: string }): PreActionCandidate => ({
+  origin: 'CONTEXT',
+  relationship: 'SAME_ROLE',
+  tag: 'input',
+  role: 'textbox',
+  name: '',
+  stableAttributes: {},
+  visible: true,
+  enabled: true,
+  editable: true,
+  ...overrides,
+});
+const FILTER_VALUE = candidate({
+  id: 'T1',
+  origin: 'ORIGINAL_HUMAN_TARGET',
+  relationship: 'SELF',
+  stableAttributes: { id: 'valueInput' },
+  section: 'Filter',
+  dialog: 'Filter',
+  nearby: ['Company name', 'Like'],
+  cssHint: '#valueInput',
+});
+const GLOBAL_SEARCH = candidate({
+  id: 'T2',
+  name: 'Search',
+  label: 'Search',
+  section: 'Requests',
+  cssHint: '#search',
+});
+
+describe('Pre-action candidate set in the validator (real browser)', () => {
+  let browser: Browser;
+  let page: Page;
+  beforeAll(async () => {
+    browser = await chromium.launch();
+    page = await browser.newPage();
+  });
+  beforeEach(async () => {
+    await page.setContent(PAGE);
+  });
+  afterAll(async () => {
+    await browser.close();
+  });
+  const validator = (provider?: FakeIntelligenceProvider, log?: string[]): RecordingTargetValidator =>
+    new RecordingTargetValidator({
+      maxDeterministicRepairAttempts: 2,
+      auditOn: AUDIT,
+      flowName: 'filter-requests',
+      ...(provider ? { advisor: targetAuditAdvisor(gateway('ASSIST', provider), { maxCalls: 5 }) } : {}),
+      ...(log ? { log: (line: string) => log.push(line) } : {}),
+    });
+  /** Le champ valeur, disparu après l'action ; la représentation (#valueInput) trouvait 2 éléments avant. */
+  const valueEvent = (candidates: PreActionCandidate[], originalCandidateId?: string): RawRecordedEvent =>
+    event(
+      'input',
+      element({
+        role: 'textbox',
+        css: '#valueInput',
+        cssStable: true,
+        elementId: 'valueInput',
+        sectionPath: ['Filter'],
+      }),
+      {
+        value: { empty: false, length: 5, shape: 'text' },
+        pre: pre({
+          phase: 'FOCUSIN',
+          generation: 3,
+          cssCount: 2,
+          candidates,
+          ...(originalCandidateId ? { originalCandidateId } : {}),
+        }),
+      },
+    );
+  /** Le parcours : champ et opérateur choisis avant, « Apply » après (des preuves, pas une vérité). */
+  const observeJourney = (v: RecordingTargetValidator, value: RawRecordedEvent): void => {
+    const select = (name: string, option: string): RawRecordedEvent =>
+      event('change', element({ tag: 'select', role: 'combobox', name, label: name, css: `#${name}` }), {
+        value: { empty: false, length: option.length, shape: 'text', option: { label: option } },
+      });
+    const apply = event('click', element({ tag: 'button', role: 'button', name: 'Apply', css: '#apply' }));
+    for (const entry of [select('Field', 'Company name'), select('Operator', 'Like'), value, apply])
+      v.observe(entry);
+  };
+
+  it('candidates=0 despite a successful capture: PRE_ACTION_CAPTURE_INCOMPLETE, diagnosed — and the advisor is never asked to invent a target', async () => {
+    const provider = new FakeIntelligenceProvider(pick('Search'));
+    const log: string[] = [];
+    const result = await validator(provider, log).validate(page, valueEvent([]), undefined);
+    expect(result?.preActionCapture).toMatchObject({ captured: true, complete: false, candidateCount: 0 });
+    expect(result?.preActionCapture?.diagnostic).toMatch(/PRE_ACTION_CAPTURE_INCOMPLETE: candidates=0/);
+    expect(log.join('\n')).toMatch(/\[PRE_ACTION_CAPTURE_INCOMPLETE\]/);
+    expect(provider.requests).toHaveLength(0);
+    expect(result?.aiAudit?.outcome).toBe('NOT_CALLED');
+    expect(result?.status).toBe('AMBIGUOUS');
+  });
+
+  it('the advisor receives the PRE-ACTION candidates (T1 = original, with its nearby context) and the future actions; choosing T1 is confirmed against the pre-action evidence', async () => {
+    const provider = new FakeIntelligenceProvider(pick('near "Company name'));
+    const log: string[] = [];
+    const v = validator(provider, log);
+    const value = valueEvent([FILTER_VALUE, GLOBAL_SEARCH], 'T1');
+    observeJourney(v, value);
+    const result = await v.validate(page, value, undefined);
+    expect(log.join('\n')).toMatch(
+      /\[PRE_ACTION_CAPTURE\] action=\S+ type=INPUT target=input#valueInput phase=FOCUSIN generation=3 candidates=2 originalCandidate=T1/,
+    );
+    expect(log.join('\n')).toMatch(/\[AI_PRE_ACTION_AUDIT_REQUESTED\]/);
+    expect(log.join('\n')).toMatch(/\[AI_PRE_ACTION_PROPOSAL_CONFIRMED\] action=\S+ candidate=T1/);
+    expect(result?.aiAudit).toMatchObject({ outcome: 'AI_PROPOSAL_RUNTIME_CONFIRMED', candidate: 'T1' });
+    expect(result?.status).toBe('VALIDATED_AFTER_AI_AUDIT');
+    expect(result?.validatedCandidate).toBe('T1');
+    // La représentation enregistrée est gardée : l'identité est prouvée, rien n'est « corrigé ».
+    expect(result?.targetAfter).toBeUndefined();
+    const context = provider.requests[0]?.recordingContext as {
+      candidates: {
+        origin?: string;
+        nearby?: string[];
+        capturedBeforeAction?: boolean;
+        locatorEvidence: { locator: string };
+      }[];
+      nextActions: { actions: { type: string; target: string }[] };
+    };
+    const original = context.candidates.find((entry) => entry.origin === 'ORIGINAL_HUMAN_TARGET');
+    expect(original).toMatchObject({ capturedBeforeAction: true, nearby: ['Company name', 'Like'] });
+    expect(original?.locatorEvidence.locator).toBe('#valueInput');
+    expect(context.nextActions.actions.map((entry) => entry.target)).toContain('Apply');
+  });
+
+  it('choosing T2 (the global search box) is rejected: it is not the original human target captured before the action — the human action is preserved', async () => {
+    const provider = new FakeIntelligenceProvider(pick('Search'));
+    const log: string[] = [];
+    const v = validator(provider, log);
+    const value = valueEvent([FILTER_VALUE, GLOBAL_SEARCH], 'T1');
+    observeJourney(v, value);
+    const result = await v.validate(page, value, undefined);
+    expect(log.join('\n')).toMatch(/\[AI_PRE_ACTION_PROPOSAL_REJECTED\] action=\S+ candidate=T2/);
+    expect(result?.aiAudit).toMatchObject({ outcome: 'AI_PROPOSAL_RUNTIME_REJECTED', candidate: 'T2' });
+    expect(result?.status).toBe('AMBIGUOUS');
+    expect(result?.repairApplied).toBe(false);
+  });
+
+  it('the representation matched 2 elements before the action, but the original candidate was the only "Priority" in its section: deterministic reconstruction, VALIDATED_PRE_ACTION — no advisor', async () => {
+    const provider = new FakeIntelligenceProvider(pick('Priority'));
+    const result = await validator(provider).validate(
+      page,
+      valueEvent(
+        [
+          candidate({
+            id: 'T1',
+            origin: 'ORIGINAL_HUMAN_TARGET',
+            relationship: 'SELF',
+            name: 'Priority',
+            label: 'Priority',
+            section: 'Filters',
+          }),
+          candidate({ id: 'T2', name: 'Priority', label: 'Priority', section: 'General' }),
+        ],
+        'T1',
+      ),
+      undefined,
+    );
+    // (L'écran de test change aussi de route : l'effet est un verdict à part, l'identité est pré-action.)
+    expect(result?.status).toMatch(/^VALIDATED_(PRE_ACTION|WITH_EFFECT)$/);
+    expect(result?.verdict.target).toMatchObject({
+      status: 'VALIDATED_PRE_ACTION',
+      source: 'PRE_ACTION_CONTEXT',
+    });
+    expect(result?.repair?.reason).toBe('PRE_ACTION_CANDIDATE_RECONSTRUCTION');
+    expect(result?.targetAfter).toEqual({ strategy: 'label', value: 'Priority', section: 'Filters' });
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it('the relevance selector never drops the original human target, whatever its similarity', () => {
+    const selector = new ContextRelevanceSelector({ previous: 5, next: 2, candidates: 2 });
+    const kept = selector.candidates([
+      { id: 'a', similarity: 0.9 },
+      { id: 'b', similarity: 0.8 },
+      { id: 'original', similarity: 0.1, pinned: true },
+    ]);
+    expect(kept.map((entry) => entry.id)).toEqual(['a', 'original']);
   });
 });

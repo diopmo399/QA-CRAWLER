@@ -193,4 +193,70 @@ ${steps}
       expect(flow.status, describeFlow(flow)).toBe('PASSED');
     }
   }, 180_000);
+
+  it('§25 drag and drop, the application recreates the list items after the drop: the item, the drop-zone candidates and the lists BEFORE the drag are kept — the move is proven, nothing replayed', async () => {
+    const logs: string[] = [];
+    const outcome = await runRecording({
+      name: 'Columns recreate',
+      url: `${app.url}/?dnd=recreate`,
+      overrides: { headless: true, reportsDir: path.join(dir, 'reports-recreate') },
+      env: {},
+      onEvent: (event) => {
+        logs.push(event.message);
+      },
+      drive: async ({ page }) => {
+        const from = await page.locator('#col-status').boundingBox();
+        const to = await page.locator('#selected').boundingBox();
+        if (!from || !to) throw new Error('no box');
+        await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(from.x + 20, from.y + 20, { steps: 4 });
+        await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 10 });
+        await page.mouse.up();
+        await page.waitForTimeout(900);
+      },
+    });
+    const raw = JSON.parse(await readFile(path.join(outcome.directory, 'raw-recording.json'), 'utf8')) as {
+      rawEvents?: {
+        type: string;
+        drag?: {
+          destinationCandidateId?: string;
+          lists?: { destinationBefore?: string[]; destinationAfter: string[] };
+        };
+        pre?: {
+          phase?: string;
+          originalCandidateId?: string;
+          dropZones?: { id: string; origin: string; section?: string }[];
+        };
+      }[];
+    };
+    const drag = raw.rawEvents?.find((event) => event.type === 'drag');
+    // Au départ : l'élément (T1) et les zones candidates (D1 = la zone d'origine).
+    expect(drag?.pre?.phase).toBe('POINTERDOWN');
+    expect(drag?.pre?.originalCandidateId).toBe('T1');
+    expect(drag?.pre?.dropZones?.[0]).toMatchObject({ id: 'D1', origin: 'SOURCE' });
+    expect(drag?.pre?.dropZones?.find((zone) => zone.section?.includes('Selected columns'))?.id).toBe('D2');
+    // La zone d'arrivée telle qu'elle était AVANT le dépôt, puis après : la preuve du déplacement.
+    expect(drag?.drag?.destinationCandidateId).toBe('D2');
+    expect(drag?.drag?.lists?.destinationBefore).toEqual(['Name']);
+    expect(drag?.drag?.lists?.destinationAfter).toContain('Status');
+    const validation = JSON.parse(
+      await readFile(path.join(outcome.directory, 'target-validation.json'), 'utf8'),
+    ) as {
+      actions: {
+        action: string;
+        preActionCapture?: { complete: boolean };
+        validation?: { status: string };
+        drag?: { movedObserved: boolean; destinationCandidate?: string; dropZoneCandidates?: number };
+      }[];
+    };
+    const entry = validation.actions.find((action) => action.action === 'DRAG_AND_DROP');
+    expect(entry?.preActionCapture?.complete).toBe(true);
+    expect(entry?.validation?.status).toMatch(/^VALIDATED_/);
+    expect(entry?.drag).toMatchObject({ movedObserved: true, destinationCandidate: 'D2' });
+    expect(entry?.drag?.dropZoneCandidates).toBeGreaterThanOrEqual(2);
+    expect(logs.join('\n')).toMatch(
+      /\[PRE_ACTION_CAPTURE\] action=\S+ type=DRAG target="Status".* dropZones=\d+ destination=D2/,
+    );
+  }, 120_000);
 });

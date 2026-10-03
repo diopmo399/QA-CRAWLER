@@ -27,6 +27,7 @@ When the request contains recordingContext (mission RECORDING_TARGET_AUDIT), you
 - Evidence authority for the target identity: 1. the original human target at the exact time of the action, 2. its pre-action snapshot, 3. the pre-action context, 4. the target fingerprint captured before any mutation, 5. observed action effects (complementary only), 6. deterministic semantic/context reconstruction, 7. static application evidence (SUPPORTING_EVIDENCE), 8. historical evidence (EXPERIENCE). Static and historical evidence may support a hypothesis but are never current runtime truth.
 - Confidence scores given by QA-Crawler are evidence, not truth. A candidate's locator is only a technical property: decide from its functional identity.
 - Do not invent UI elements, labels or workflow steps. If the evidence is insufficient or candidates remain ambiguous, return INCONCLUSIVE.
+- Candidates marked capturedBeforeAction describe the screen BEFORE the human action (historical evidence, not stale); the one with origin ORIGINAL_HUMAN_TARGET is the element the human actually used. A CSS locator is only a hint. Choose only by candidate ID; with no candidate, return INCONCLUSIVE — never describe or invent a target.
 - You may add semanticTarget (semanticId, role), context and contradictionsResolved (C1…) to the proposal. Cite evidence IDs, not hidden reasoning.
 - Your proposal will be independently validated against the runtime (or, when the original element is gone, against the pre-action evidence) before it can be accepted.`;
 

@@ -58,6 +58,14 @@ export interface ContextCandidate {
   identity?: { role?: string; tag?: string; name?: string; section?: string; traits?: ElementTraits };
   /** Ce que la représentation trouve à l'écran (1 élément, 3 éléments, rien). */
   found: string;
+  /** Figé AVANT l'action (capture pré-action) : sa provenance, son voisinage, un indice CSS. */
+  preAction?: {
+    origin: 'ORIGINAL_HUMAN_TARGET' | 'CONTEXT';
+    relationship: string;
+    nearby?: string[];
+    container?: string;
+    cssHint?: string;
+  };
 }
 
 export interface RecordingContextInput {
@@ -155,6 +163,11 @@ export interface RecordingAuditContext {
     nearbyText?: string;
     visible?: boolean;
     focused?: boolean;
+    capturedBeforeAction?: boolean;
+    origin?: 'ORIGINAL_HUMAN_TARGET' | 'CONTEXT';
+    relationshipToOriginalTarget?: string;
+    nearby?: string[];
+    semanticContainer?: string;
     locatorEvidence: { locator: string; found: string; stableAttributes: Record<string, string> };
     runtimeMatch: { originalTargetSimilarity: number };
   }[];
@@ -198,8 +211,16 @@ export class ContextRelevanceSelector {
     return next.slice(0, this.limits.next);
   }
 
-  candidates<T extends { similarity: number }>(candidates: readonly T[]): T[] {
-    return [...candidates].sort((a, b) => b.similarity - a.similarity).slice(0, this.limits.candidates);
+  /** Les plus proches d'abord, bornés ; la cible humaine originale n'est JAMAIS retirée. */
+  candidates<T extends { similarity: number; pinned?: boolean }>(candidates: readonly T[]): T[] {
+    const sorted = [...candidates].sort((a, b) => b.similarity - a.similarity);
+    const pinned = sorted.filter((entry) => entry.pinned === true);
+    const others = sorted.filter((entry) => entry.pinned !== true);
+    const kept = new Set([
+      ...pinned,
+      ...others.slice(0, Math.max(0, this.limits.candidates - pinned.length)),
+    ]);
+    return sorted.filter((entry) => kept.has(entry));
   }
 }
 
@@ -262,6 +283,7 @@ export class RecordingIntelligenceContextBuilder {
     const scored = input.candidates.map((candidate) => ({
       candidate,
       similarity: targetSimilarity(original, candidate.identity),
+      pinned: candidate.preAction?.origin === 'ORIGINAL_HUMAN_TARGET',
     }));
     const candidates = this.selector.candidates(scored);
     const contradictions = input.validation.differences
@@ -395,8 +417,18 @@ export class RecordingIntelligenceContextBuilder {
         ...(candidate.identity?.traits
           ? { visible: candidate.identity.traits.visible, focused: candidate.identity.traits.focused }
           : {}),
+        ...(candidate.preAction
+          ? {
+              capturedBeforeAction: true,
+              origin: candidate.preAction.origin,
+              relationshipToOriginalTarget: candidate.preAction.relationship,
+              ...(candidate.preAction.nearby ? { nearby: candidate.preAction.nearby } : {}),
+              ...(candidate.preAction.container ? { semanticContainer: candidate.preAction.container } : {}),
+            }
+          : {}),
         locatorEvidence: {
-          locator: describeTarget(candidate.target).slice(0, 80),
+          // Un candidat n'est pas un localisateur : le CSS n'est qu'un indice.
+          locator: (candidate.preAction?.cssHint ?? describeTarget(candidate.target)).slice(0, 80),
           found: candidate.found,
           stableAttributes: stableAttributes(candidate.identity?.traits),
         },

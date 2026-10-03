@@ -16,6 +16,7 @@ import type { RecordingTargetValidator } from './target-validator.js';
 import type {
   RawEventType,
   RawRecordedEvent,
+  PreActionCandidate,
   PreActionContext,
   RecordedDrag,
   RecordedDropZone,
@@ -154,6 +155,7 @@ export class HumanFlowRecorder {
       inputDebounceMs: recording.inputDebounceMs,
       recordValues: recording.testData.enabled && recording.testData.extractRecordedValues,
       maxValueLength: recording.testData.maxValueLength,
+      preActionCapture: recording.preActionCapture,
     });
     await context.addInitScript({ content: script });
     // La page déjà chargée : le script est posé tout de suite (les suivantes l'ont par l'init script).
@@ -705,6 +707,112 @@ function preOf(raw: Record<string, unknown>): PreActionContext {
         return { role: str(entry.role, 30), name: str(entry.name, 60), ...(section ? { section } : {}) };
       }),
     loading: raw.loading === true,
+    ...(typeof raw.phase === 'string' && /^[A-Z_]{3,20}$/.test(raw.phase) ? { phase: raw.phase } : {}),
+    ...(typeof raw.generation === 'number' ? { generation: num(raw.generation) } : {}),
+    ...(typeof raw.sentGeneration === 'number' ? { sentGeneration: num(raw.sentGeneration) } : {}),
+    ...(typeof raw.capturedAt === 'number' && Number.isFinite(raw.capturedAt)
+      ? { capturedAt: raw.capturedAt }
+      : {}),
+    ...(typeof raw.captureId === 'string' ? { captureId: text(raw.captureId, 40) } : {}),
+    ...(isObject(raw.target)
+      ? {
+          target: {
+            ...candidateOf(raw.target, str),
+            captureId: typeof raw.target.captureId === 'string' ? text(raw.target.captureId, 40) : '',
+            ...optionalText('ariaLabel', raw.target.ariaLabel, str),
+            ...optionalText('ariaLabelledBy', raw.target.ariaLabelledBy, str),
+            ...optionalText('ariaDescription', raw.target.ariaDescription, str),
+          },
+        }
+      : {}),
+    ...(Array.isArray(raw.candidates)
+      ? {
+          candidates: list(raw.candidates, 40)
+            .filter(isObject)
+            .map((entry) => candidateOf(entry, str)),
+        }
+      : {}),
+    ...(Array.isArray(raw.dropZones)
+      ? {
+          dropZones: list(raw.dropZones, 6)
+            .filter(isObject)
+            .map((zone) => {
+              const section = str(zone.section, 180);
+              const label = str(zone.label, 60);
+              return {
+                id: typeof zone.id === 'string' && /^D\d$/.test(zone.id) ? zone.id : 'D?',
+                origin: zone.origin === 'SOURCE' ? ('SOURCE' as const) : ('CONTEXT' as const),
+                ...(section ? { section } : {}),
+                ...(label ? { label } : {}),
+                itemCount: num(zone.itemCount),
+              };
+            }),
+        }
+      : {}),
+    ...(typeof raw.originalCandidateId === 'string' && /^T\d{1,2}$/.test(raw.originalCandidateId)
+      ? { originalCandidateId: raw.originalCandidateId }
+      : {}),
+  };
+}
+
+function optionalText(
+  key: string,
+  value: unknown,
+  str: (value: unknown, max: number) => string,
+): Record<string, string> {
+  const cleaned = str(value, 80);
+  return cleaned ? { [key]: cleaned } : {};
+}
+
+const RELATIONSHIPS = new Set(['SELF', 'SAME_FORM', 'SAME_DIALOG', 'SAME_SECTION', 'SAME_ROLE']);
+
+/** Un candidat pré-action : textes d'interface bornés et expurgés ; jamais une valeur saisie. */
+function candidateOf(
+  raw: Record<string, unknown>,
+  str: (value: unknown, max: number) => string,
+): PreActionCandidate {
+  const attributes: Record<string, string> = {};
+  if (isObject(raw.stableAttributes))
+    for (const [key, value] of Object.entries(raw.stableAttributes).slice(0, 8))
+      if (/^[a-z-]{1,20}$/.test(key) && str(value, 60)) attributes[key] = str(value, 60);
+  const relationship =
+    typeof raw.relationship === 'string' && RELATIONSHIPS.has(raw.relationship)
+      ? (raw.relationship as PreActionCandidate['relationship'])
+      : 'SAME_ROLE';
+  const container = isObject(raw.container) ? raw.container : undefined;
+  const containerLabel = container ? str(container.label, 60) : '';
+  const nearby = Array.isArray(raw.nearby)
+    ? raw.nearby
+        .slice(0, 4)
+        .map((entry) => str(entry, 60))
+        .filter(Boolean)
+    : [];
+  const optional = (key: string, value: unknown, max: number): Record<string, string> => {
+    const cleaned = str(value, max);
+    return cleaned ? { [key]: cleaned } : {};
+  };
+  return {
+    id: typeof raw.id === 'string' && /^T\d{1,2}$/.test(raw.id) ? raw.id : 'T?',
+    origin: relationship === 'SELF' ? 'ORIGINAL_HUMAN_TARGET' : 'CONTEXT',
+    relationship,
+    tag: str(raw.tag, 30),
+    role: str(raw.role, 30),
+    name: str(raw.name, 60),
+    ...optional('label', raw.label, 60),
+    ...optional('text', raw.text, 60),
+    stableAttributes: attributes,
+    visible: raw.visible === true,
+    enabled: raw.enabled !== false,
+    editable: raw.editable === true,
+    ...optional('component', raw.component, 40),
+    ...optional('form', raw.form, 60),
+    ...optional('section', raw.section, 180),
+    ...optional('dialog', raw.dialog, 60),
+    ...(container && typeof container.tag === 'string'
+      ? { container: { tag: str(container.tag, 30), ...(containerLabel ? { label: containerLabel } : {}) } }
+      : {}),
+    ...(nearby.length > 0 ? { nearby } : {}),
+    ...optional('cssHint', raw.cssHint, 200),
   };
 }
 
@@ -745,8 +853,14 @@ function dragOf(raw: Record<string, unknown>): { drag: RecordedDrag } | Record<s
               sourceBefore: texts(raw.lists.sourceBefore),
               sourceAfter: texts(raw.lists.sourceAfter),
               destinationAfter: texts(raw.lists.destinationAfter),
+              ...(Array.isArray(raw.lists.destinationBefore)
+                ? { destinationBefore: texts(raw.lists.destinationBefore) }
+                : {}),
             },
           }
+        : {}),
+      ...(typeof raw.destinationCandidateId === 'string' && /^D\d$/.test(raw.destinationCandidateId)
+        ? { destinationCandidateId: raw.destinationCandidateId }
         : {}),
     },
   };
