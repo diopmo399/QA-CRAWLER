@@ -53,7 +53,14 @@ describe('toLocator (descriptor → Playwright)', () => {
         (_target, method: string) =>
         (...args: unknown[]) => {
           calls.push(`${method}(${JSON.stringify(args)})`);
-          return {};
+          // Un Locator imité : `or` enregistre la combinaison.
+          const locator = {
+            or: () => {
+              calls.push('or');
+              return locator;
+            },
+          };
+          return locator;
         },
     },
   ) as unknown as LocatorFactory;
@@ -65,7 +72,6 @@ describe('toLocator (descriptor → Playwright)', () => {
         'getByRole(["button",{"name":"Nouvel utilisateur","exact":true}])',
       ],
       [{ strategy: 'testId', value: 'save' }, 'getByTestId(["save"])'],
-      [{ strategy: 'label', value: 'Email', exact: true }, 'getByLabel(["Email",{"exact":true}])'],
       [{ strategy: 'text', value: 'Open' }, 'getByText(["Open",{"exact":false}])'],
       [{ strategy: 'css', value: '#id' }, 'locator(["#id"])'],
     ];
@@ -74,5 +80,19 @@ describe('toLocator (descriptor → Playwright)', () => {
       toLocator(fake, descriptor);
       expect(calls).toEqual([expected]);
     }
+  });
+
+  it('label: the accessible name of a field — <label>, placeholder, or a combobox / textbox named so', () => {
+    calls.length = 0;
+    toLocator(fake, { strategy: 'label', value: 'My tasks', exact: true });
+    expect(calls).toEqual([
+      'getByLabel(["My tasks",{"exact":true}])',
+      'getByPlaceholder(["My tasks",{"exact":true}])',
+      'or',
+      'getByRole(["combobox",{"name":"My tasks","exact":true}])',
+      'or',
+      'getByRole(["textbox",{"name":"My tasks","exact":true}])',
+      'or',
+    ]);
   });
 });
