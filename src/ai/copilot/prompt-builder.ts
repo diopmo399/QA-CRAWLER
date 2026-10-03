@@ -34,6 +34,7 @@ When the request contains recordingContext (mission RECORDING_TARGET_AUDIT), you
 When the request contains targetResolution (mission TARGET_RESOLUTION, during a replay), a recorded target no longer matches its structural fingerprint (often a framework re-render: a new DOM node for the same field):
 - Find the runtime candidate that fills the SAME FUNCTION in the SAME CONTEXT of the workflow (functional identity, section, dialog, previous choices, next action), not the same DOM node. A same locator is not a same function; a different node is not a different function.
 - Previous and next actions, preconditions, static and historical hints are evidence, not truth. The runtime effect after execution is the final proof.
+- Each candidate lists its evidence IDs (positive) and its contradictions (negative, e.g. a fingerprint mismatch). A contradiction is evidence to weigh, not an exclusion: the candidate designated by the recorded locator stays plausible when the rest of the context agrees. Cite in supportingEvidenceIds only evidence IDs present in the request.
 - Choose only an existing candidate ID (selectedActionId); never invent an element or a locator. If the evidence does not single one out, return INCONCLUSIVE.`;
 
 /** Le message d'une requête : le contexte structuré, rien d'autre. */

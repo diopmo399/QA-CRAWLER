@@ -367,6 +367,7 @@ Statuts :
 - `TARGET_EXACT`, `TARGET_STRONG_MATCH` ;
 - `TARGET_RERENDERED`, `TARGET_FUNCTIONALLY_EQUIVALENT`, `TARGET_HEALED`, `TARGET_AI_ASSISTED` ;
 - `TARGET_AMBIGUOUS`, `TARGET_CONTEXT_MISMATCH`, `TARGET_FUNCTIONAL_MISMATCH` ;
+- `TARGET_CONTRADICTORY_EVIDENCE`, `TARGET_NO_CANDIDATE`, `TARGET_RUNTIME_REJECTED` ;
 - `TARGET_REQUIRES_REPLAY_VALIDATION`.
 
 Le résultat runtime est dans `runtimeVerification` (`CONFIRMED` / `REJECTED`) et `final`
@@ -375,8 +376,11 @@ Le résultat runtime est dans `runtimeVerification` (`CONFIRMED` / `REJECTED`) e
 Événements :
 
 - `TARGET_RESOLUTION` (la trace complète), `TARGET_RERENDERED` ;
-- `AI_TARGET_RESOLUTION_REQUEST`, `AI_TARGET_RESOLUTION_PROPOSAL` ;
-- `AI_PROPOSAL_RUNTIME_VALIDATED`, `AI_PROPOSAL_RUNTIME_REJECTED`.
+- `TARGET_CONTEXT` (previous ✓ / current ? / next →), `TARGET_CANDIDATE_DISCOVERED`,
+  `TARGET_EVIDENCE`, `TARGET_CONTRADICTION` ;
+- `AI_TARGET_TRIGGER`, `AI_TARGET_CONTEXT_BUILT`, `AI_TARGET_PROPOSAL`,
+  `AI_TARGET_PROPOSAL_REJECTED` ;
+- `AI_TARGET_RUNTIME_CONFIRMED`, `AI_TARGET_RUNTIME_CONTRADICTED`.
 
 Rapport HTML : un bloc **Target resolution** par étape concernée, avec :
 
@@ -396,6 +400,68 @@ replay:
     maxCandidates: 12
     verifyFillValue: true # une saisie est prouvée par la valeur relue
 ```
+
+### Modèle de preuves : la cible du localisateur enregistré n'est jamais perdue
+
+Le bug d'origine : le localisateur trouvait encore l'élément, l'empreinte ne correspondait plus, et
+le scan de l'écran (un `querySelectorAll` indépendant, aveugle au shadow DOM, aux erreurs avalées)
+rendait **0 candidat**. Résultat : `TARGET_FUNCTIONAL_MISMATCH`, conseiller jamais appelé, saisie en
+échec, « Apply » ignoré. La correction est générique, sans rien de propre à un framework ou à un id :
+
+1. **Ensemble de candidats multi-sources**, chacun avec sa source :
+   - `PAGE_SCAN` : le scan parcourt aussi les shadow roots ouverts (dans l'ordre du document),
+     et `closest()` traverse leurs frontières ;
+   - `RECORDED_LOCATOR` : si aucun candidat scanné n'est l'élément du localisateur enregistré, une
+     seconde passe le décrit ; si le scan échoue, l'élément est décrit par l'API Playwright
+     (rôle, nom, visible, éditable). L'erreur du scan est gardée (`scanError`), jamais avalée.
+
+   Invariant (TEST 18) : si le localisateur enregistré trouve un élément, `CandidateSet ≥ 1`.
+
+2. **Preuves positives et négatives**, chacune avec un identifiant citable `E_<candidat>_<KIND>` :
+   - positives : `RECORDED_LOCATOR_MATCH`, `VISIBLE`, `ENABLED`, `EDITABLE`, `LABEL_MATCH`,
+     `SECTION_MATCH`, `PREVIOUS_ACTION`, `DIALOG_MATCH`, `BUSINESS_CONCEPT`, `NEXT_ACTION` ;
+   - négatives : `FINGERPRINT_MISMATCH`, `LABEL_CHANGED`, `ROLE_CHANGED`, `SECTION_PATH_CHANGED`,
+     `DIALOG_MISMATCH`, `HARD_CONTRADICTION`.
+
+   Un mismatch d'empreinte est une preuve **négative**, pas une exclusion. Seules les contradictions
+   **dures** excluent (invisible, désactivé, non éditable pour une saisie, autre section hors de la
+   fenêtre). Une autre section **dans la même fenêtre** est une pénalité (−0,2).
+   La trace dit `evidenceStatus: CONTRADICTORY_EVIDENCE` quand le meilleur candidat a les deux.
+
+3. **Déclencheur du conseiller** (`aiTriggerOf`). Il n'est jamais appelé quand la décision est
+   résolue (le chemin rapide reste déterministe), ni sans candidat actionnable :
+   - `TARGET_AMBIGUOUS` : deux candidats proches ;
+   - `CONTRADICTORY_TARGET_EVIDENCE` : la cible du localisateur enregistré, aux preuves contradictoires ;
+   - `TARGET_LOW_CONFIDENCE` : un seul candidat, trop faible ;
+   - `TARGET_FUNCTIONAL_MISMATCH` : aucune fonction équivalente assez forte.
+4. **Contexte du conseiller**. Il reçoit, assaini et sans DOM :
+   - la mission, l'échec (type, raison, déclencheur), les faits connus et les contraintes
+     (`mustChooseExistingCandidate`, `mustNotInventElement`, `mustNotExecuteAction`,
+     `runtimeMustValidateProposal`) ;
+   - par candidat : ses preuves et ses contradictions.
+
+   Il ne répond qu'avec `selectedActionId` et des preuves citées existantes.
+
+5. **Chaîne de validation** : schéma et candidat fourni → preuves citées existantes → compatibilité,
+   SafetyPolicy (passerelle) → **re-résolution runtime** (le candidat marqué est encore là, unique,
+   visible, éditable pour une saisie) → exécution → `ActionEffectVerifier`.
+   Rejets :
+   - `AI_PROPOSAL_INVALID_CANDIDATE` : un identifiant inventé (T99) ;
+   - `AI_PROPOSAL_INVALID_EVIDENCE` : une preuve inventée ;
+   - `AI_PROPOSAL_RUNTIME_REJECTED` : le candidat a disparu ou n'est plus actionnable.
+
+   Sans proposition : `INCONCLUSIVE`.
+
+6. **Preuve runtime**. Valeur tenue, pas de navigation inattendue après une saisie, action suivante
+   disponible → `AI_TARGET_RUNTIME_CONFIRMED`. Sinon `AI_TARGET_RUNTIME_CONTRADICTED`,
+   `TARGET_RUNTIME_REJECTED` et l'étape échoue.
+7. **Jamais masquer une régression**. Sans conseiller (`OFF`), une cible aux preuves
+   contradictoires reste un échec honnête (`TARGET_CONTRADICTORY_EVIDENCE`), jamais une saisie au
+   hasard, jamais `TARGET_NOT_FOUND`.
+
+**Artefact de débogage**. En `logging.level: DEBUG` ou `TRACE`, chaque résolution écrit
+`reports/intelligence/target-resolution/<n>-<action>.json`. Il contient la trace complète (candidats,
+preuves, contradictions, décision, conseiller, vérification runtime), assainie.
 
 Ce que la validation pendant l'enregistrement fait déjà, sans ce module : l'élément humain original
 reste la vérité. Elle s'appuie sur le nœud original, l'instantané et les candidats pré-action (voir

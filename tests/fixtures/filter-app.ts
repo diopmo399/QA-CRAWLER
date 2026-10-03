@@ -16,7 +16,11 @@ import type { AddressInfo } from 'node:net';
  * au choix de l'opérateur avec un autre mat-label — même id, nouveau nœud), `wrongSection` (au choix
  * de l'opérateur, le champ disparaît et `#valueInput` désigne un champ d'une AUTRE section),
  * `ambiguous` (deux champs pareils recréés, le second refuse toute saisie), `swallow` (le champ valeur
- * refuse toute saisie : la valeur n'est jamais tenue).
+ * refuse toute saisie : la valeur n'est jamais tenue), `shadow` (au choix de l'opérateur, le champ
+ * est RECRÉÉ dans le shadow root OUVERT d'un composant `value-field`, libellé « Criteria » : même
+ * #valueInput pour Playwright, invisible pour un querySelectorAll, empreinte différente), `shadowLoose`
+ * (idem, précédé d'un bouton « Reset » et lu « combobox » : les preuves se contredisent, aucune
+ * décision déterministe).
  */
 export interface FilterApp {
   url: string;
@@ -34,7 +38,7 @@ const page = (
   <label>Field <select id="field"><option value="">--</option><option>Company name</option><option>City</option></select></label>
   <label>Operator <select id="operator"><option value="">--</option><option>Like</option><option>Equals</option></select></label>
   <div id="valueBox">${
-    ['relabel', 'wrongSection', 'ambiguous'].includes(variant)
+    ['relabel', 'wrongSection', 'ambiguous', 'shadow', 'shadowLoose'].includes(variant)
       ? '<mat-form-field><mat-label>Search term</mat-label><input id="valueInput"></mat-form-field>'
       : variant === 'material'
         ? '<mat-form-field><mat-label>Value</mat-label><input id="valueInput" list="hints"></mat-form-field>'
@@ -56,7 +60,7 @@ ${variant === 'wrongSection' ? '<section aria-label="Archive"><h2>Archive</h2><l
   document.getElementById('apply').addEventListener('click', () => {
     count += 1;
     document.getElementById('count').textContent = String(count);
-    const value = document.querySelector('#valueBox input')?.value ?? '';
+    const value = (document.querySelector('#valueBox input') ?? document.querySelector('#valueBox value-field')?.shadowRoot?.querySelector('input'))?.value ?? '';
     ${variant === 'closeOnApply' ? "document.getElementById('panel').classList.add('hidden');" : ''}
     document.getElementById('result').textContent = value
       ? 'Filtered: ' + document.getElementById('field').value + ' ' + document.getElementById('operator').value + ' ' + value
@@ -78,7 +82,10 @@ ${variant === 'wrongSection' ? '<section aria-label="Archive"><h2>Archive</h2><l
       : ''
   }
   ${
-    variant === 'relabel' || variant === 'wrongSection' || variant === 'ambiguous'
+    variant === 'relabel' ||
+    variant === 'wrongSection' ||
+    variant === 'ambiguous' ||
+    variant.startsWith('shadow')
       ? `document.getElementById('operator').addEventListener('change', () => {
     // Le framework RECRÉE le champ valeur après le choix de l'opérateur (nouveau nœud, même id).
     const box = document.getElementById('valueBox');
@@ -87,7 +94,9 @@ ${variant === 'wrongSection' ? '<section aria-label="Archive"><h2>Archive</h2><l
         ? `box.innerHTML = '<mat-form-field><mat-label>Value</mat-label><input id="valueInput"></mat-form-field>';`
         : variant === 'wrongSection'
           ? `box.innerHTML = ''; document.getElementById('archiveSearch').id = 'valueInput';`
-          : `box.innerHTML = '<mat-form-field><mat-label>Like value</mat-label><input id="valueInput"></mat-form-field><mat-form-field><mat-label>Like value</mat-label><input id="valueInput" oninput="this.value = \\'\\'"></mat-form-field>';`
+          : variant.startsWith('shadow')
+            ? `box.innerHTML = '<value-field></value-field>'; box.firstElementChild.attachShadow({ mode: 'open' }).innerHTML = '${variant === 'shadowLoose' ? '<button type="button">Reset</button><label>Criteria <input id="valueInput" list="hints"></label>' : '<label>Criteria <input id="valueInput"></label>'}';`
+            : `box.innerHTML = '<mat-form-field><mat-label>Like value</mat-label><input id="valueInput"></mat-form-field><mat-form-field><mat-label>Like value</mat-label><input id="valueInput" oninput="this.value = \\'\\'"></mat-form-field>';`
     }
   });`
       : ''

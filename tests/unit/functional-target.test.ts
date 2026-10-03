@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/config/config-loader.js';
 import type { FlowStep } from '../../src/config/flow-schema.js';
 import {
+  aiTriggerOf,
   analyzeRerender,
   buildTemporalContext,
   decide,
   functionalIdentityOf,
+  redactDeep,
   sameFilledValue,
   scoreCandidates,
   targetResolutionRequest,
+  temporalLine,
   type FunctionalCandidate,
   type TargetResolutionTrace,
 } from '../../src/flows/functional-target.js';
@@ -94,7 +97,7 @@ describe('Functional target resolution (pure)', () => {
     expect(decision.chosen?.id).toBe('T1');
     expect(decision.chosen?.components).toMatchObject({
       previousActionCompatibility: 0.15,
-      futureWorkflowCompatibility: 0.1,
+      nextActionCompatibility: 0.1,
       businessConceptMatch: 0.1,
       section: 0.2,
     });
@@ -173,5 +176,122 @@ describe('Functional target resolution (pure)', () => {
       ],
     });
     expect(JSON.stringify(request)).not.toContain('alpha');
+  });
+
+  describe('Evidence model', () => {
+    const mismatch = { score: 0.3, reasons: ['"Value" instead of "Search term"'] };
+
+    it('a fingerprint mismatch is NEGATIVE evidence, never an exclusion: the recorded-locator target stays a candidate with contradictory evidence', () => {
+      const [kept] = scoreCandidates(identity, temporal, [FILTER_VALUE], mismatch);
+      expect(kept?.rejected).toBeUndefined();
+      const kinds = (polarity: string): string[] =>
+        (kept?.evidence ?? []).filter((entry) => entry.polarity === polarity).map((entry) => entry.kind);
+      expect(kinds('POSITIVE')).toEqual(
+        expect.arrayContaining([
+          'RECORDED_LOCATOR_MATCH',
+          'VISIBLE',
+          'ENABLED',
+          'EDITABLE',
+          'SECTION_MATCH',
+          'PREVIOUS_ACTION',
+          'NEXT_ACTION',
+        ]),
+      );
+      expect(kinds('NEGATIVE')).toEqual(expect.arrayContaining(['FINGERPRINT_MISMATCH']));
+      expect(kept?.contradictions).toContain('E_T1_FINGERPRINT_MISMATCH');
+      expect(kept?.components.locatorIdentity).toBe(0.15);
+    });
+
+    it('soft vs hard context: another section of the SAME dialog is a penalty (SECTION_PATH_CHANGED), another section outside the dialog is rejected', () => {
+      const ranked = scoreCandidates(identity, temporal, [
+        { ...FILTER_VALUE, id: 'T1', section: 'Requests > Advanced' },
+        { ...FILTER_VALUE, id: 'T2', section: 'Archive', dialog: undefined, matchesRecordedLocator: false },
+      ]);
+      const soft = ranked.find((entry) => entry.id === 'T1');
+      expect(soft?.rejected).toBeUndefined();
+      expect(soft?.components.contextMismatchPenalty).toBe(-0.2);
+      expect(soft?.evidence?.map((entry) => entry.kind)).toContain('SECTION_PATH_CHANGED');
+      expect(ranked.find((entry) => entry.id === 'T2')?.rejected).toMatch(/context mismatch/);
+    });
+
+    it('TEST 18 (critical) deterministic discovery returns 0, the recorded locator still finds an element: CandidateSet >= 1, the advisor is triggered (never TARGET_NOT_FOUND)', () => {
+      // Ce que recordedLocatorCandidate décrit par l'API Playwright : ni section ni fenêtre lues.
+      const fromLocator = candidate({
+        id: 'T1',
+        name: 'Value',
+        label: 'Value',
+        matchesRecordedLocator: true,
+        cssHint: '#valueInput',
+      });
+      const ranked = scoreCandidates(identity, temporal, [fromLocator], mismatch);
+      expect(ranked.length).toBeGreaterThanOrEqual(1);
+      expect(ranked[0]?.rejected).toBeUndefined();
+      const decision = decide(ranked);
+      expect(decision.status).not.toBe('RESOLVED');
+      expect(aiTriggerOf(decision)).toBe('CONTRADICTORY_TARGET_EVIDENCE');
+    });
+
+    it('aiTriggerOf: never when resolved, never without a viable candidate; ambiguity, contradiction, functional mismatch otherwise', () => {
+      expect(aiTriggerOf(decide(scoreCandidates(identity, temporal, [FILTER_VALUE])))).toBeUndefined();
+      expect(
+        aiTriggerOf(
+          decide(scoreCandidates(identity, temporal, [FILTER_VALUE, { ...FILTER_VALUE, id: 'T2' }])),
+        ),
+      ).toBe('TARGET_AMBIGUOUS');
+      expect(
+        aiTriggerOf(decide(scoreCandidates(identity, temporal, [{ ...FILTER_VALUE, visible: false }]))),
+      ).toBeUndefined();
+      const weak = candidate({ id: 'T3', name: 'Notes', label: 'Notes' });
+      expect(aiTriggerOf(decide(scoreCandidates(identity, temporal, [weak])))).toBe(
+        'TARGET_FUNCTIONAL_MISMATCH',
+      );
+    });
+
+    it('the advisor request: mission, failure, known facts, constraints, citable evidence ids and contradictions per candidate', () => {
+      const ranked = scoreCandidates(identity, temporal, [FILTER_VALUE], mismatch);
+      const trace: TargetResolutionTrace = {
+        action: 'Filter#4 FILL filter.value',
+        recorded: { locator: 'css=#valueInput' },
+        runtime: { locator: 'css=#valueInput', fingerprintVerdict: 'MISMATCH', reasons: mismatch.reasons },
+        rerender: { detected: false, evidence: [] },
+        identity,
+        temporal,
+        candidates: [],
+        decision: 'NONE',
+        reason: 'no candidate fills the same function in this context',
+        ai: { requested: true, trigger: 'CONTRADICTORY_TARGET_EVIDENCE' },
+        status: 'TARGET_REQUIRES_REPLAY_VALIDATION',
+      };
+      const request = targetResolutionRequest(trace, ranked, (id) => `A${id.slice(1)}`, 'Filter');
+      expect(request).toMatchObject({
+        mission: { type: 'TARGET_RESOLUTION', context: 'REPLAY_RECORDED_HUMAN_JOURNEY' },
+        resolutionFailure: { trigger: 'CONTRADICTORY_TARGET_EVIDENCE' },
+        constraints: {
+          mustChooseExistingCandidate: true,
+          mustNotInventElement: true,
+          mustNotExecuteAction: true,
+        },
+      });
+      expect(request.knownFacts).toContain('The recorded locator resolves to a runtime element');
+      const [sent] = request.runtimeCandidates as { evidence: string[]; contradictions: string[] }[];
+      expect(sent?.evidence).toContain('E_T1_RECORDED_LOCATOR_MATCH');
+      expect(sent?.contradictions.join(' ')).toMatch(/E_T1_FINGERPRINT_MISMATCH/);
+      expect(JSON.stringify(request)).not.toContain('alpha');
+    });
+
+    it('[TARGET_CONTEXT]: previous ✓, current ?, next →', () => {
+      const line = temporalLine(temporal);
+      expect(line).toMatch(/previous ✓ SELECT Operator = Like/);
+      expect(line).toMatch(/current \? FILL/);
+      expect(line).toMatch(/next → CLICK Apply/);
+    });
+
+    it('the debug artifact is redacted in depth (no token, no Authorization header)', () => {
+      const redacted = redactDeep({
+        a: ['Authorization: Bearer abc.def.ghi'],
+        b: { c: 'password=hunter22' },
+      });
+      expect(JSON.stringify(redacted)).not.toMatch(/abc\.def\.ghi|hunter22/);
+    });
   });
 });

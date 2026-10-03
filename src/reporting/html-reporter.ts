@@ -423,6 +423,8 @@ function targetResolutionBlock(step: FlowStepReport): string {
     trace.status === 'TARGET_HEALED' ? 'HEALED' : undefined,
     trace.ai.outcome === 'VALIDATED' ? 'AI_ASSISTED' : undefined,
     trace.decision === 'AMBIGUOUS' && !trace.resolution ? 'AMBIGUOUS' : undefined,
+    trace.evidenceStatus === 'CONTRADICTORY_EVIDENCE' ? 'CONTRADICTORY_EVIDENCE' : undefined,
+    trace.ai.rejection ? trace.ai.rejection : undefined,
     trace.runtimeVerification?.status === 'CONFIRMED' ? 'RUNTIME_CONFIRMED' : undefined,
     trace.runtimeVerification?.status === 'REJECTED' ? 'RUNTIME_REJECTED' : undefined,
   ].filter((badge): badge is string => badge !== undefined);
@@ -457,15 +459,19 @@ function targetResolutionBlock(step: FlowStepReport): string {
       trace.candidates
         .map(
           (candidate) =>
-            `${candidate.id} ${String(candidate.score)}${candidate.rejected ? ` (rejected: ${candidate.rejected})` : ''} — ${candidate.summary}`,
+            `${candidate.id} ${String(candidate.score)}${candidate.source ? ` [${candidate.source}]` : ''}${candidate.rejected ? ` (rejected: ${candidate.rejected})` : ''} — ${candidate.summary}${candidate.positive && candidate.positive.length > 0 ? `\n   + ${candidate.positive.join(', ')}` : ''}${candidate.negative && candidate.negative.length > 0 ? `\n   − ${candidate.negative.join('\n   − ')}` : ''}`,
         )
         .join('\n') || 'none',
     ],
+    ...(trace.evidenceStatus ? [['Evidence', trace.evidenceStatus] as [string, string]] : []),
+    ...(trace.scanError ? [['Scan error', trace.scanError] as [string, string]] : []),
     [
       'AI',
       trace.ai.requested
-        ? `${trace.ai.outcome ?? 'requested'}${trace.ai.proposal ? ` · proposal ${trace.ai.proposal}` : ''}${trace.ai.confidence !== undefined ? ` · confidence ${String(trace.ai.confidence)}` : ''}`
-        : 'not required',
+        ? `${trace.ai.trigger ? `trigger ${trace.ai.trigger} · ` : ''}${trace.ai.outcome ?? 'requested'}${trace.ai.proposal ? ` · proposal ${trace.ai.proposal}` : ''}${trace.ai.confidence !== undefined ? ` · confidence ${String(trace.ai.confidence)}` : ''}${trace.ai.rejection ? ` · ${trace.ai.rejection}` : ''}${trace.ai.citedEvidence ? ` · evidence ${trace.ai.citedEvidence.join(' ')}` : ''}`
+        : trace.ai.trigger
+          ? `not called (${trace.ai.trigger}; intelligence off or not triggered)`
+          : 'not required',
     ],
     ['Decision', `${trace.resolution ?? trace.decision} — ${trace.reason}`],
     [
