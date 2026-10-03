@@ -154,6 +154,11 @@ export function rawStepOf(step: FlowStep): Record<string, unknown> {
       return { auto: { sentence: step.sentence, type: step.type }, ...common };
     case 'intent':
       return { intent: step.intent, ...common };
+    case 'dragAndDrop':
+      return {
+        dragAndDrop: { item: step.item, ...(step.from ? { from: step.from } : {}), to: step.to },
+        ...common,
+      };
   }
 }
 
@@ -380,6 +385,14 @@ function plainSentenceOf(step: FlowStep, language: Language): string | undefined
       return step.sentence;
     case 'intent':
       return intentSentence(step.intent, language);
+    case 'dragAndDrop': {
+      // Une zone avec un libellé n'a pas de phrase (le dictionnaire dit une section) : YAML seulement.
+      if (step.to.label || !step.to.section || step.from?.label) return undefined;
+      const from = step.from?.section;
+      if (fr)
+        return `je glisse "${step.item}"${from ? ` de la section "${from}"` : ''} vers la section "${step.to.section}"`;
+      return `I drag "${step.item}"${from ? ` from the section "${from}"` : ''} to the section "${step.to.section}"`;
+    }
   }
 }
 

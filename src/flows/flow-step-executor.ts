@@ -5,7 +5,27 @@ import { toLocator } from '../execution/locator-resolver.js';
 import type { NetworkExchange } from '../model/network.js';
 import { waitForScreenReady } from '../observation/screen-ready.js';
 import { pathPatternToRegex } from '../policies/navigation-policy.js';
-import { semanticScanExpression, type SemanticScanResult } from '../recording/semantic-dom.js';
+import {
+  dropMembershipExpression,
+  semanticScanExpression,
+  type DropMembership,
+  type SemanticScanResult,
+  type SemanticTargetSpec,
+} from '../recording/semantic-dom.js';
+import type { DropZone } from '../config/flow-schema.js';
+
+/**
+ * Le résultat d'un glisser-déposer : MOVED (ITEM_MOVED observé), NOT_MOVED (Playwright a glissé,
+ * l'élément n'a pas changé de zone : ACTION_EFFECT_MISMATCH), ou la cible introuvable / ambiguë.
+ */
+export interface DragOutcome {
+  status: 'MOVED' | 'NOT_MOVED' | 'ITEM_NOT_FOUND' | 'DESTINATION_NOT_FOUND' | 'AMBIGUOUS_TARGET' | 'FAILED';
+  reason: string;
+  /** Comment le glisser a été joué : HTML5 (draggable) ou une suite d'événements pointeur. */
+  mode?: 'HTML5' | 'POINTER';
+  membership?: DropMembership;
+  evidence: string[];
+}
 
 const FIELD_ROLES = new Set(['textbox', 'combobox', 'searchbox', 'spinbutton']);
 let contextualTokens = 0;
@@ -141,6 +161,158 @@ export class FlowStepExecutor {
     if (result?.status !== 'RESOLVED')
       return `element "${label}" not found in section "${section}" within ${timeoutMs} ms`;
     return page.locator(`[data-qa-crawler-target="${token}"]`).first();
+  }
+
+  /** Une résolution contextuelle (libellé + section), attendue au plus `timeoutMs`. */
+  private async scan(
+    page: Page,
+    spec: SemanticTargetSpec,
+    timeoutMs: number,
+  ): Promise<SemanticScanResult | undefined> {
+    const deadline = Date.now() + timeoutMs;
+    let result: SemanticScanResult | undefined;
+    for (;;) {
+      result = (await page.evaluate(semanticScanExpression(spec)).catch(() => undefined)) as
+        SemanticScanResult | undefined;
+      if (result?.status === 'RESOLVED' || result?.status === 'AMBIGUOUS' || Date.now() >= deadline)
+        return result;
+      await page.waitForTimeout(Math.min(150, Math.max(0, deadline - Date.now())));
+    }
+  }
+
+  /**
+   * DRAG_AND_DROP : l'élément (par son texte, dans sa zone d'origine) glissé vers la zone de
+   * destination (par sa section / son libellé). L'action n'est réussie que si l'élément est
+   * ENSUITE dans la destination et plus dans la source (ITEM_MOVED) — sinon NOT_MOVED.
+   */
+  async dragAndDrop(
+    page: Page,
+    step: { item: string; from?: DropZone; to: DropZone },
+    timeoutMs: number,
+    effectTimeoutMs: number,
+  ): Promise<DragOutcome> {
+    contextualTokens += 1;
+    const token = `drag-${String(contextualTokens)}`;
+    const evidence: string[] = [];
+    const item = await this.scan(
+      page,
+      {
+        kind: 'item',
+        label: step.item,
+        ...(step.from?.section ? { section: step.from.section } : {}),
+        token: `${token}-item`,
+      },
+      timeoutMs,
+    );
+    if (item?.status === 'AMBIGUOUS')
+      return {
+        status: 'AMBIGUOUS_TARGET',
+        reason: `AMBIGUOUS_TARGET: ${String(item.candidates.length)} items "${step.item}"${step.from?.section ? ` in "${step.from.section}"` : ''}`,
+        evidence,
+      };
+    if (item?.status !== 'RESOLVED')
+      return {
+        status: 'ITEM_NOT_FOUND',
+        reason: `item "${step.item}" not found${step.from?.section ? ` in section "${step.from.section}"` : ''}`,
+        evidence,
+      };
+    evidence.push(`item "${step.item}" found in "${item.chosen?.section ?? '?'}"`);
+    const source = page.locator(`[data-qa-crawler-target="${token}-item"]`).first();
+    // La zone d'origine est marquée AVANT de chercher la destination (le marquage de la destination remplace celui de l'élément).
+    await source
+      .evaluate((el, value) => {
+        const CONTAINER =
+          '[cdkdroplist], .cdk-drop-list, [role="list"], [role="listbox"], [role="tree"], ul, ol, [aria-dropeffect], [data-drop-zone], tbody';
+        const zone = el.parentElement?.closest(CONTAINER);
+        if (zone) zone.setAttribute('data-qa-crawler-source', value);
+        el.setAttribute('data-qa-crawler-dragged', value);
+      }, token)
+      .catch(() => undefined);
+    const draggable = await source.getAttribute('draggable').catch(() => null);
+    const destination = await this.scan(
+      page,
+      {
+        kind: 'container',
+        ...(step.to.label ? { label: step.to.label } : {}),
+        ...(step.to.section ? { section: step.to.section } : {}),
+        token: `${token}-to`,
+      },
+      timeoutMs,
+    );
+    const zone = describeZone(step.to);
+    if (destination?.status === 'AMBIGUOUS')
+      return {
+        status: 'AMBIGUOUS_TARGET',
+        reason: `AMBIGUOUS_TARGET: ${String(destination.candidates.length)} drop zones ${zone}`,
+        evidence,
+      };
+    if (destination?.status !== 'RESOLVED')
+      return { status: 'DESTINATION_NOT_FOUND', reason: `drop zone ${zone} not found`, evidence };
+    evidence.push(`drop zone ${zone} found (${destination.chosen?.reasons.join(', ') ?? ''})`);
+    const item2 = page.locator(`[data-qa-crawler-dragged="${token}"]`).first();
+    const target = page.locator(`[data-qa-crawler-target="${token}-to"]`).first();
+    const mode = draggable === 'true' ? 'HTML5' : 'POINTER';
+    try {
+      if (mode === 'HTML5') await item2.dragTo(target, { timeout: timeoutMs });
+      else {
+        // Pointeur (CDK, implémentations maison) : appuyer, dépasser le seuil, glisser par étapes, relâcher.
+        await item2.scrollIntoViewIfNeeded({ timeout: timeoutMs });
+        const from = await item2.boundingBox({ timeout: timeoutMs });
+        const to = await target.boundingBox({ timeout: timeoutMs });
+        if (!from || !to)
+          return { status: 'FAILED', reason: 'drag source or drop zone has no box', mode, evidence };
+        const startX = from.x + from.width / 2;
+        const startY = from.y + from.height / 2;
+        await page.mouse.move(startX, startY);
+        await page.mouse.down();
+        await page.mouse.move(startX + 8, startY + 8, { steps: 4 });
+        await page.mouse.move(
+          to.x + to.width / 2,
+          to.y + Math.min(to.height - 4, Math.max(4, to.height / 2)),
+          { steps: 12 },
+        );
+        await page.mouse.up();
+      }
+    } catch (error) {
+      return { status: 'FAILED', reason: `drag failed: ${firstLine(error)}`, mode, evidence };
+    }
+    // L'EFFET : l'élément a-t-il changé de zone ? (une application peut déplacer après un délai)
+    const deadline = Date.now() + effectTimeoutMs;
+    let membership: DropMembership | undefined;
+    for (;;) {
+      membership = (await page
+        .evaluate(dropMembershipExpression({ item: step.item, destination: `${token}-to`, source: token }))
+        .catch(() => undefined)) as DropMembership | undefined;
+      if ((membership?.inDestination && !membership.inSource) || Date.now() >= deadline) break;
+      await page.waitForTimeout(100);
+    }
+    await page
+      .evaluate((value) => {
+        for (const el of Array.from(
+          document.querySelectorAll(
+            `[data-qa-crawler-source="${value}"], [data-qa-crawler-dragged="${value}"]`,
+          ),
+        )) {
+          el.removeAttribute('data-qa-crawler-source');
+          el.removeAttribute('data-qa-crawler-dragged');
+        }
+      }, token)
+      .catch(() => undefined);
+    if (membership?.inDestination && !membership.inSource)
+      return {
+        status: 'MOVED',
+        reason: `ITEM_MOVED: "${step.item}" is now in ${zone}`,
+        mode,
+        membership,
+        evidence: [...evidence, `"${step.item}" in ${zone}`],
+      };
+    return {
+      status: 'NOT_MOVED',
+      reason: `ACTION_EFFECT_MISMATCH: the drag was executed but "${step.item}" ${membership?.inDestination ? 'is still in its source zone' : `is not in ${zone}`}`,
+      mode,
+      ...(membership ? { membership } : {}),
+      evidence,
+    };
   }
 
   /**
@@ -372,4 +544,9 @@ function pathOf(url: string): string {
 function firstLine(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return (message.split('\n')[0] ?? message).trim();
+}
+
+function describeZone(zone: DropZone): string {
+  if (zone.label && zone.section) return `"${zone.label}" (${zone.section})`;
+  return `"${zone.label ?? zone.section ?? ''}"`;
 }

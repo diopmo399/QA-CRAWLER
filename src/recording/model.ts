@@ -32,7 +32,29 @@ export type RawEventType =
   | 'download'
   | 'filechooser'
   | 'checkpoint'
-  | 'control';
+  | 'control'
+  | 'drag';
+
+/** Une zone de glisser-déposer telle qu'enregistrée : sa section et son libellé (jamais une position). */
+export interface RecordedDropZone {
+  section?: string;
+  label?: string;
+}
+
+/**
+ * Un GLISSER-DÉPOSER corrélé dans la page (appui → relâchement, ou dragstart → drop) : l'élément
+ * (son texte), les zones d'origine et de destination, et ce qui a été observé après le dépôt.
+ */
+export interface RecordedDrag {
+  kind: 'HTML5' | 'POINTER';
+  item: string;
+  source?: RecordedDropZone;
+  destination?: RecordedDropZone;
+  /** Déposé dans sa propre zone (un réordonnancement). */
+  sameZone: boolean;
+  /** ITEM_MOVED observé : l'élément est dans la destination et plus dans la source. */
+  moved: boolean;
+}
 
 /** Un élément tel que le navigateur le décrit au moment de l'événement (jamais sa valeur). */
 export interface RecordedElement {
@@ -128,6 +150,8 @@ export interface RawRecordedEvent {
   value?: RecordedValueFacts;
   /** keydown : la touche (Enter, Escape, Tab seulement). */
   key?: string;
+  /** drag : le glisser-déposer corrélé (élément, zones, déplacement observé). */
+  drag?: RecordedDrag;
   /** dialog : alert / confirm / prompt, et ce que l'humain (ou la règle d'enregistrement) a répondu. */
   dialog?: { kind: string; accepted: boolean; message: string };
   /** checkpoint : libellé donné par l'humain. */
@@ -157,7 +181,8 @@ export type SemanticActionType =
   | 'CANCEL'
   | 'UPLOAD'
   | 'WAIT_FOR'
-  | 'ASSERT';
+  | 'ASSERT'
+  | 'DRAG_AND_DROP';
 
 export type LocatorQuality =
   'SEMANTIC' | 'ACCESSIBLE' | 'STABLE_ATTRIBUTE' | 'FRAMEWORK_BINDING' | 'CSS_STABLE' | 'FRAGILE';
@@ -281,6 +306,8 @@ export interface SemanticRecordedAction {
   domEffects?: string[];
   /** Les effets attendus au rejeu, appris de l'enregistrement (contrôles apparus, route, requête). */
   expectedEffects?: StepEffects;
+  /** DRAG_AND_DROP : l'élément, ses zones, et l'effet ITEM_MOVED observé à l'enregistrement. */
+  drag?: RecordedDrag;
 }
 
 export type AssertionKind =

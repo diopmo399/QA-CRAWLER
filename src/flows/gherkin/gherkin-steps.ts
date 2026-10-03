@@ -333,6 +333,32 @@ const BUILTIN: [string[], Builder][] = [
   ],
   [
     [
+      'je glisse {élément_glissé} de la section {source} vers la section {destination}',
+      'je déplace {élément_glissé} de la section {source} vers la section {destination}',
+      'I drag {élément_glissé} from the section {source} to the section {destination}',
+      'I move {élément_glissé} from the section {source} to the section {destination}',
+    ],
+    (values) => ({
+      dragAndDrop: {
+        item: values.élément_glissé ?? '',
+        from: { section: values.source ?? '' },
+        to: { section: values.destination ?? '' },
+      },
+    }),
+  ],
+  [
+    [
+      'je glisse {élément_glissé} vers la section {destination}',
+      'je déplace {élément_glissé} vers la section {destination}',
+      'I drag {élément_glissé} to the section {destination}',
+      'I move {élément_glissé} to the section {destination}',
+    ],
+    (values) => ({
+      dragAndDrop: { item: values.élément_glissé ?? '', to: { section: values.destination ?? '' } },
+    }),
+  ],
+  [
+    [
       'je prends une capture {nom}',
       "je prends une capture d'écran {nom}",
       "je fais une capture d'écran {nom}",

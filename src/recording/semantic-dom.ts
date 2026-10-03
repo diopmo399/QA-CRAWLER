@@ -287,3 +287,56 @@ export function sectionPathExpression(token: string): string {
     `return (${sectionPathOf.toString()})(el); })()`,
   ].join('\n');
 }
+
+/** Où est l'élément glissé ? Les éléments des deux zones marquées (destination, source). */
+export interface DropMembership {
+  inDestination: boolean;
+  inSource: boolean;
+  destinationItems: string[];
+  sourceItems: string[];
+}
+
+/**
+ * ITEM_MOVED : l'élément (son texte) est-il dans la zone marquée data-qa-crawler-target=<destination>,
+ * et plus dans celle marquée data-qa-crawler-source=<source> ? Lu dans la page, sans rien modifier.
+ */
+export function dropMembership(spec: { item: string; destination: string; source?: string }): DropMembership {
+  const norm = (text: string | null | undefined): string =>
+    (text ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const ITEM =
+    '[draggable="true"], [cdkdrag], .cdk-drag, [role="option"], [role="listitem"], [role="row"], li, [role="treeitem"]';
+  const itemsOf = (zone: Element | null): string[] => {
+    if (!zone) return [];
+    const found = Array.from(zone.querySelectorAll(ITEM)).filter(
+      (el) => !el.classList.contains('cdk-drag-placeholder') && !el.classList.contains('cdk-drag-preview'),
+    );
+    const leaves = found.filter((el) => !found.some((other) => other !== el && el.contains(other)));
+    return leaves
+      .map((el) =>
+        ((el as HTMLElement).innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60),
+      )
+      .slice(0, 30);
+  };
+  const destination = document.querySelector(`[data-qa-crawler-target="${spec.destination}"]`);
+  const source = spec.source ? document.querySelector(`[data-qa-crawler-source="${spec.source}"]`) : null;
+  const wanted = norm(spec.item);
+  const destinationItems = itemsOf(destination);
+  const sourceItems = source && source !== destination ? itemsOf(source) : [];
+  return {
+    inDestination: destinationItems.some((text) => norm(text) === wanted),
+    inSource: sourceItems.some((text) => norm(text) === wanted),
+    destinationItems,
+    sourceItems,
+  };
+}
+
+export function dropMembershipExpression(spec: {
+  item: string;
+  destination: string;
+  source?: string;
+}): string {
+  return [
+    '(() => { if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
+    `return (${dropMembership.toString()})(${JSON.stringify(spec)}); })()`,
+  ].join('\n');
+}

@@ -24,11 +24,11 @@ describe('Semantic target identity (real browser)', () => {
     await app.close();
   });
 
-  const replay = async (layout: string, steps: string): Promise<FlowRunReport> => {
+  const replay = async (layout: string, steps: string, dnd = 'pointer'): Promise<FlowRunReport> => {
     const reportsDir = await mkdtemp(path.join(dir, 'replay-'));
     const { config } = parseConfig(
       `mission: { name: semantic-identity }
-target: { baseUrl: ${app.url}, startAt: "/?layout=${layout}" }
+target: { baseUrl: ${app.url}, startAt: "/?layout=${layout}&dnd=${dnd}" }
 exploration: { autonomous: false, actionTimeoutMs: 1500, settleTimeMs: 100 }
 report: { failOnSeverity: NONE }
 replay: { intelligentRecovery: { enabled: false } }
@@ -54,7 +54,7 @@ ${steps}
       - fill: { label: Search, section: Filters, value: beta }
       - click: { role: button, name: Save }
         allow: [MUTATION]
-      - expect: { text: "priority=high columns=alpha filters=beta" }`;
+      - expect: { text: "priority=high columns=alpha filters=beta selected=Name" }`;
 
   it('§66 / §67 the recording keeps the section of each field: same label and same input type are told apart, the unlabelled field keeps its human text', async () => {
     const outcome = await runRecording({
@@ -107,4 +107,74 @@ ${steps}
     expect(flow.status).not.toBe('PASSED');
     expect(describeFlow(flow)).toMatch(/section "Report settings > Filters" instead of "Columns"/);
   }, 120_000);
+
+  const DRAG = `      - dragAndDrop: { item: Status, from: { section: "Columns > Available columns" }, to: { section: "Columns > Selected columns" } }
+      - click: { role: button, name: Save }
+        allow: [MUTATION]
+      - expect: { text: "selected=Name,Status" }`;
+
+  it('§68 / §69 a drag and drop replays as a first-class action, pointer-based and HTML5, and its ITEM_MOVED effect is verified', async () => {
+    for (const dnd of ['pointer', 'html5']) {
+      const flow = await replay('default', DRAG, dnd);
+      expect(flow.status, `${dnd}\n${describeFlow(flow)}`).toBe('PASSED');
+      expect(flow.steps[0]?.effect?.status).toBe('CONFIRMED');
+      expect(flow.steps[0]?.effect?.reasons.join(' ')).toContain(
+        `drag mode ${dnd === 'html5' ? 'HTML5' : 'POINTER'}`,
+      );
+    }
+  }, 120_000);
+
+  it('§69 the drag is executed but nothing moves: ACTION_EFFECT_MISMATCH, never a technical success', async () => {
+    const flow = await replay('default', DRAG, 'broken');
+    expect(flow.status).not.toBe('PASSED');
+    expect(flow.steps[0]?.status).toBe('FAILED');
+    expect(flow.steps[0]?.reason).toMatch(/ACTION_EFFECT_MISMATCH/);
+    expect(flow.steps[0]?.effect?.status).toBe('NO_EFFECT');
+  }, 120_000);
+
+  it('§68 a human drag and drop is recorded as ONE first-class action (pointer and HTML5), preserved in the journey, and the generated flow replays it', async () => {
+    for (const dnd of ['pointer', 'html5']) {
+      const outcome = await runRecording({
+        name: `Columns ${dnd}`,
+        url: `${app.url}/?dnd=${dnd}`,
+        overrides: { headless: true, reportsDir: path.join(dir, `reports-${dnd}`) },
+        env: {},
+        drive: async ({ page }) => {
+          if (dnd === 'html5') await page.locator('#col-status').dragTo(page.locator('#selected'));
+          else {
+            const from = await page.locator('#col-status').boundingBox();
+            const to = await page.locator('#selected').boundingBox();
+            if (!from || !to) throw new Error('no box');
+            await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+            await page.mouse.down();
+            await page.mouse.move(from.x + 20, from.y + 20, { steps: 4 });
+            await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 10 });
+            await page.mouse.up();
+          }
+          await page.waitForTimeout(900);
+        },
+      });
+      const yaml = await readFile(path.join(outcome.directory, 'generated.flow.yaml'), 'utf8');
+      expect(yaml, dnd).toMatch(
+        /dragAndDrop:\s+item: Status\s+from:\s+section: (Report settings > )?Columns > Available columns\s+to:\s+section: (Report settings > )?Columns > Selected columns/,
+      );
+      // Une seule action humaine, préservée (jamais un clic ni une perte).
+      const accounts = JSON.parse(
+        await readFile(path.join(outcome.directory, 'action-preservation.json'), 'utf8'),
+      ) as { type: string; status: string }[];
+      const drags = accounts.filter((account) => account.type === 'DRAG_AND_DROP');
+      expect(drags, dnd).toHaveLength(1);
+      expect(drags[0]?.status).toBe('PRESERVED');
+      expect(accounts.filter((account) => account.status === 'UNACCOUNTED')).toHaveLength(0);
+      const feature = await readFile(path.join(outcome.directory, 'generated.feature'), 'utf8');
+      expect(feature).toMatch(/(je glisse|I drag) "Status"/);
+      // Le flow généré se rejoue : ITEM_MOVED vérifié.
+      const flow = await replay(
+        'default',
+        `      - dragAndDrop: { item: Status, from: { section: "Columns > Available columns" }, to: { section: "Columns > Selected columns" } }`,
+        dnd,
+      );
+      expect(flow.status, describeFlow(flow)).toBe('PASSED');
+    }
+  }, 180_000);
 });

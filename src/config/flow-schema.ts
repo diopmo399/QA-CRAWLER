@@ -142,7 +142,27 @@ const STEP_KINDS = [
   'manual',
   'auto',
   'intent',
+  'dragAndDrop',
 ] as const;
+
+/**
+ * Une ZONE de glisser-déposer : identifiée par sa section (« Columns > Selected columns ») et,
+ * si elle en a un, son libellé — jamais par une position.
+ */
+const dropZoneSchema = z.object({ section: nonEmpty.optional(), label: nonEmpty.optional() }).strict();
+
+/**
+ * DRAG_AND_DROP : un élément (son texte visible) glissé d'une zone vers une autre. L'effet
+ * attendu (ITEM_MOVED : l'élément est dans la destination, plus dans la source) est vérifié au
+ * rejeu ; un glisser exécuté sans déplacement est ACTION_EFFECT_MISMATCH.
+ */
+const dragAndDropSchema = z
+  .object({ item: nonEmpty, from: dropZoneSchema.optional(), to: dropZoneSchema })
+  .strict()
+  .refine(
+    (step) => step.to.section !== undefined || step.to.label !== undefined,
+    'dragAndDrop.to needs a section or a label',
+  );
 
 const intentValueSchema = z.union([z.string(), z.object({ env: nonEmpty }).strict(), testDataValueSchema]);
 
@@ -249,6 +269,8 @@ const stepSchema = z
       .optional(),
     /** Intention Gherkin résolue sur l'écran à l'exécution (gherkin.semanticResolution). */
     intent: intentSchema.optional(),
+    /** Glisser-déposer : un élément vers une zone (effet ITEM_MOVED vérifié au rejeu). */
+    dragAndDrop: dragAndDropSchema.optional(),
     /**
      * Permission explicite pour cette étape seulement : MUTATION (créer, enregistrer,
      * envoyer…) et/ou UNKNOWN (contrôle réduit à une icône). DANGEROUS (supprimer,
@@ -321,6 +343,16 @@ const stepSchema = z
     if (step.auto !== undefined)
       return { ...common, kind: 'auto', sentence: step.auto.sentence, type: step.auto.type };
     if (step.intent !== undefined) return { ...common, kind: 'intent', intent: step.intent };
+    if (step.dragAndDrop !== undefined) {
+      const { item, from, to } = step.dragAndDrop;
+      return {
+        ...common,
+        kind: 'dragAndDrop',
+        item,
+        ...(from ? { from: dropZone(from) } : {}),
+        to: dropZone(to),
+      };
+    }
     return { ...common, kind: 'screenshot', label: step.screenshot ?? 'screenshot' };
   });
 
@@ -445,7 +477,27 @@ export type FlowStep = StepCommon &
     | { kind: 'manual'; text: string }
     | { kind: 'auto'; sentence: string; type: 'Context' | 'Action' | 'Outcome' | 'Unknown' }
     | { kind: 'intent'; intent: GherkinIntent }
+    | { kind: 'dragAndDrop'; item: string; from?: DropZone; to: DropZone }
   );
+
+/** Une zone de dépôt : sa section et/ou son libellé. */
+export interface DropZone {
+  section?: string;
+  label?: string;
+}
+
+function dropZone(input: { section?: string | undefined; label?: string | undefined }): DropZone {
+  return {
+    ...(input.section !== undefined ? { section: input.section } : {}),
+    ...(input.label !== undefined ? { label: input.label } : {}),
+  };
+}
+
+/** « Columns > Selected columns » ou « "Selected" (Columns) » : une zone lisible. */
+export function describeDropZone(zone: DropZone): string {
+  if (zone.label && zone.section) return `"${zone.label}" (${zone.section})`;
+  return zone.label ? `"${zone.label}"` : `"${zone.section ?? ''}"`;
+}
 
 export type FlowConfig = z.output<typeof flowSchema>;
 
@@ -525,6 +577,8 @@ export function describeStep(step: FlowStep, maskValue = false): string {
       return `auto: ${step.sentence}`;
     case 'intent':
       return `intent: ${describeIntent(step.intent)}`;
+    case 'dragAndDrop':
+      return `drag "${step.item}"${step.from ? ` from ${describeDropZone(step.from)}` : ''} to ${describeDropZone(step.to)}`;
   }
 }
 
