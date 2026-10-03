@@ -4,6 +4,7 @@ import type { RawRecordedEvent, SemanticRecordedAction } from './model.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { SemanticAuditReport, SemanticInterpretation } from './semantic-audit.js';
 import type { RecordingResult } from './process-recording.js';
+import type { RecordingTargetValidation } from './target-validator.js';
 
 export type ReplayStatus = 'REPLAY_CONFIRMED' | 'REPLAY_FAILED' | 'NOT_VALIDATED';
 
@@ -507,7 +508,7 @@ function targetValidationHtml(result: RecordingResult): string {
           validation?.verdict
             ? `<br><span class="muted">target ${esc(validation.verdict.target.status)} (${esc(validation.verdict.target.source)}) · effect ${esc(validation.verdict.effect.status)} · goal ${esc(validation.verdict.goal.status)}</span>`
             : ''
-        }</td><td>${repair}</td><td>${ai}</td>
+        }${validation?.preActionCapture ? `<br>${preActionLine(validation)}` : ''}</td><td>${repair}</td><td>${ai}</td>
         <td>${final}${entry.requiresReplayValidation ? '<br><b style="color:#b45309">requires replay validation</b>' : ''}</td></tr>`;
     })
     .join('');
@@ -516,6 +517,23 @@ function targetValidationHtml(result: RecordingResult): string {
     <div class="cards">${cards}</div>
     ${rows ? `<table><thead><tr><th>Human action</th><th>Recorded target</th><th>Validation</th><th>Repair</th><th>AI audit</th><th>Final target</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
   </section>`;
+}
+
+/** La capture pré-action d'une action : capturée ✓, cible originale, candidats, DOM avant → après, statut, IA. */
+function preActionLine(validation: RecordingTargetValidation): string {
+  const capture = validation.preActionCapture;
+  if (!capture) return '';
+  const original = validation.verdict.target;
+  const dom =
+    capture.domGeneration !== undefined
+      ? ` · DOM ${String(capture.domGeneration)} → ${String(capture.postGeneration ?? capture.domGeneration)}`
+      : '';
+  const ai = validation.aiAudit
+    ? `AI ${esc(validation.aiAudit.outcome)}${validation.aiAudit.candidate ? ` candidate=${esc(validation.aiAudit.candidate)}` : ''}`
+    : 'AI NOT_REQUIRED';
+  return capture.complete
+    ? `<span class="muted">Pre-action captured ✓ (${esc(capture.phase ?? '-')}) · original ${esc(validation.original.tag ?? '')} / ${esc(validation.original.role ?? '')} · candidates ${String(capture.candidateCount)} · original candidate ${esc(capture.originalCandidateId ?? '-')}${dom} · ${esc(validation.validationStatus ?? original.status)} · ${ai}</span>`
+    : `<b style="color:#b45309">${esc(capture.diagnostic ?? 'PRE_ACTION_CAPTURE_INCOMPLETE')}</b>`;
 }
 
 function describeTargetText(target: {

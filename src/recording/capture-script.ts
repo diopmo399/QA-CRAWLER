@@ -29,6 +29,14 @@ export interface CaptureOptions {
   recordValues?: boolean;
   /** Longueur maximale d'un texte envoyé (au-delà : seulement sa forme). */
   maxValueLength?: number;
+  /** CAPTURE AVANT MUTATION : la cible, son contexte et ses candidats, au premier événement du geste. */
+  preActionCapture?: {
+    enabled: boolean;
+    maxCandidates: number;
+    includeSameForm: boolean;
+    includeSameDialog: boolean;
+    includeSameSection: boolean;
+  };
 }
 
 export const OVERLAY_ATTRIBUTE = 'data-qa-crawler-overlay';
@@ -59,18 +67,63 @@ export function installRecorder(
   // mémoire, bornée, jamais envoyée ni écrite dans le DOM. Le validateur la LIT seulement.
   const documentId = Math.random().toString(36).slice(2, 10);
   const originals = new Map<string, Element>();
+  let captures = 0;
   global.__qaCrawlerOriginal = (ref: unknown): Element | null =>
     typeof ref === 'string' ? (originals.get(ref) ?? null) : null;
+  // GÉNÉRATION DU DOM : un compteur léger des lots de mutations de structure (re-rendus). Les
+  // preuves pré-action portent la génération de leur capture : « l'état AVANT l'action ».
+  let domGeneration = 0;
+  let generationObserver: MutationObserver | undefined;
+  try {
+    generationObserver = new MutationObserver(() => {
+      domGeneration += 1;
+    });
+    generationObserver.observe(document, { childList: true, subtree: true });
+  } catch {
+    // sans observateur, la génération reste 0 (jamais bloquant)
+  }
+  // Lue de façon SYNCHRONE : un re-rendu fait dans la même tâche que l'envoi compte déjà.
+  const generationNow = (): number => {
+    if (generationObserver && generationObserver.takeRecords().length > 0) domGeneration += 1;
+    return domGeneration;
+  };
+  global.__qaCrawlerDomGeneration = generationNow;
   // Le contexte AVANT l'effet (défini plus bas, une fois les lecteurs disponibles).
-  const preContext: { of?: (el: Element, css: string) => Record<string, unknown> } = {};
+  const preContext: {
+    of?: (el: Element, css: string, phase?: string) => Record<string, unknown>;
+    /** La preuve capturée au PREMIER événement du geste (pointerdown, focusin, beforeinput…). */
+    take?: (el: Element) => { pre: Record<string, unknown>; element: Record<string, unknown> } | undefined;
+  } = {};
+  /** Ce que la description de l'événement ajoute (le composant du chemin) : gardé sur la description d'avant. */
+  const keepOf = (element: unknown): Record<string, unknown> => {
+    const component = (element as { componentTag?: unknown } | null)?.componentTag;
+    return typeof component === 'string' ? { componentTag: component } : {};
+  };
   const send = (payload: Record<string, unknown>, original?: Element | null, zone?: Element | null): void => {
     if (paused && payload.type !== 'control') return;
-    // PRE-ACTION : la capture est en phase de capture, AVANT les gestionnaires de l'application.
+    // CAPTURE FIRST, VALIDATE LATER : la preuve prise AVANT la mutation (au premier événement du
+    // geste) fait foi ; à défaut seulement, le contexte est lu maintenant (phase AT_EVENT).
+    const stored = original && payload.pre === undefined ? preContext.take?.(original) : undefined;
+    if (stored)
+      payload = {
+        ...payload,
+        // La description d'AVANT l'action (un nœud re-rendu ou détaché ne se décrit plus).
+        ...(payload.element !== undefined
+          ? { element: { ...stored.element, ...keepOf(payload.element) } }
+          : {}),
+        pre: { ...stored.pre, sentGeneration: generationNow() },
+      };
     const preContextOf = preContext.of;
     if (original && payload.pre === undefined && preContextOf) {
       const css = (payload.element as { css?: unknown } | undefined)?.css;
       try {
-        payload = { ...payload, pre: preContextOf(original, typeof css === 'string' ? css : '') };
+        payload = {
+          ...payload,
+          pre: {
+            ...preContextOf(original, typeof css === 'string' ? css : '', 'AT_EVENT'),
+            sentGeneration: generationNow(),
+          },
+        };
       } catch {
         // un contexte illisible n'empêche jamais l'enregistrement
       }
@@ -579,7 +632,7 @@ export function installRecorder(
 
   // ---- CONTEXTE PRÉ-ACTION : l'écran tel que l'humain le voyait juste avant son geste. Jamais une
   // valeur saisie : les champs texte ne donnent que leur libellé ; une liste, son choix affiché.
-  preContext.of = (el: Element, css: string): Record<string, unknown> => {
+  preContext.of = (el: Element, css: string, phase = 'AT_EVENT'): Record<string, unknown> => {
     const visible = (node: Element): boolean => {
       const rect = node.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) return false;
@@ -635,18 +688,127 @@ export function installRecorder(
       .slice(0, 6);
     const tab = Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"]')).find(visible);
     const role = roleOf(el);
-    // Les éléments du même genre visibles à ce moment (la base des candidats pré-action).
-    const peers = Array.from(document.querySelectorAll(CANDIDATES))
-      .filter((node) => node !== el && visible(node) && roleOf(node) === role)
+    // L'ENSEMBLE DES CANDIDATS, pris MAINTENANT (avant la mutation) : la cible originale d'abord
+    // (T1, jamais retirée par le budget), puis le voisinage pertinent — même formulaire, même
+    // fenêtre, même section, rôle compatible. Jamais tous les champs de la page.
+    const settings = options.preActionCapture;
+    const max = Math.max(1, settings?.maxCandidates ?? 12);
+    const SECTION =
+      'section, fieldset, [role="region"], [role="tabpanel"], [role="group"], mat-expansion-panel, mat-card, article';
+    const pool: { node: Element; relationship: string }[] = [{ node: el, relationship: 'SELF' }];
+    const seen = new Set<Element>([el]);
+    const add = (scope: Element | null | undefined, relationship: string): void => {
+      if (!scope) return;
+      for (const node of Array.from(scope.querySelectorAll(CANDIDATES))) {
+        if (pool.length >= max) return;
+        if (seen.has(node) || node.closest(`[${OVERLAY}]`) || !visible(node)) continue;
+        seen.add(node);
+        pool.push({ node, relationship });
+      }
+    };
+    if (settings?.includeSameForm !== false) add(el.closest('form'), 'SAME_FORM');
+    if (settings?.includeSameDialog !== false) add(ownDialog, 'SAME_DIALOG');
+    if (settings?.includeSameSection !== false) add(el.closest(SECTION), 'SAME_SECTION');
+    // Un rôle compatible ailleurs à l'écran (un champ global de recherche face au champ du panneau Filter).
+    if (pool.length < max)
+      for (const node of Array.from(document.querySelectorAll(CANDIDATES))) {
+        if (pool.length >= max) break;
+        if (seen.has(node) || node.closest(`[${OVERLAY}]`) || !visible(node) || roleOf(node) !== role)
+          continue;
+        seen.add(node);
+        pool.push({ node, relationship: 'SAME_ROLE' });
+      }
+    const containerOf = (node: Element): { tag: string; label?: string } | undefined => {
+      const container = node.closest('mat-form-field, .mat-mdc-form-field, [role="group"], fieldset');
+      if (!container || container === node) return undefined;
+      const label = clean(
+        textOf(container.querySelector('mat-label, label, legend')) || container.getAttribute('aria-label'),
+        60,
+      );
+      return { tag: container.tagName.toLowerCase(), ...(label ? { label } : {}) };
+    };
+    const hostOf = (node: Element): string | undefined => {
+      for (let cursor: Element | null = node; cursor; cursor = cursor.parentElement)
+        if (cursor.tagName.includes('-')) return cursor.tagName.toLowerCase();
+      const root = node.getRootNode();
+      return typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot
+        ? root.host.tagName.toLowerCase()
+        : undefined;
+    };
+    // Une description sérialisable (jamais une valeur saisie, jamais une référence au nœud).
+    const snapshotOf = (node: Element, id: string, relationship: string): Record<string, unknown> => {
+      const tag = node.tagName.toLowerCase();
+      const label = labelOf(node) || (node.matches(FIELD) ? guessLabel(node) : '');
+      const text = node.matches(FIELD) ? '' : clean(textOf(node), 60);
+      const path = sectionOf(node);
+      const elementId = node.getAttribute('id');
+      const testIdAttr = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy'].find((name) =>
+        node.hasAttribute(name),
+      );
+      const stableAttributes: Record<string, string> = {};
+      if (elementId && !generatedId(elementId)) stableAttributes.id = elementId;
+      if (testIdAttr) stableAttributes[testIdAttr] = node.getAttribute(testIdAttr) ?? '';
+      for (const name of ['name', 'formcontrolname', 'type', 'placeholder'])
+        if (node.getAttribute(name)) stableAttributes[name] = clean(node.getAttribute(name), 60);
+      const nearby = [guessLabel(node), contextOf(node)]
+        .map((entry) => clean(entry, 60))
+        .filter((entry, index, all) => entry && entry !== label && all.indexOf(entry) === index);
+      const form = node.closest('form');
+      const formName = form
+        ? clean(form.getAttribute('aria-label') ?? form.getAttribute('name') ?? form.id, 60)
+        : '';
+      const dialog = node.closest(DIALOG);
+      const container = containerOf(node);
+      const host = hostOf(node);
+      const field = node as HTMLInputElement;
+      return {
+        id,
+        origin: relationship === 'SELF' ? 'ORIGINAL_HUMAN_TARGET' : 'CONTEXT',
+        relationship,
+        tag,
+        role: roleOf(node),
+        name: clean(nameOf(node), 60),
+        ...(label ? { label: clean(label, 60) } : {}),
+        ...(text ? { text } : {}),
+        stableAttributes,
+        visible: visible(node),
+        enabled: !(field.disabled || node.getAttribute('aria-disabled') === 'true'),
+        editable: node.matches(FIELD) && !field.readOnly && !field.disabled,
+        ...(host ? { component: host } : {}),
+        ...(formName ? { form: formName } : {}),
+        ...(path.length > 0 ? { section: path.join(' > ') } : {}),
+        ...(dialog && dialogName(dialog) ? { dialog: dialogName(dialog) } : {}),
+        ...(container ? { container } : {}),
+        ...(nearby.length > 0 ? { nearby } : {}),
+        cssHint: cssOf(node).css,
+      };
+    };
+    const candidates = pool.map((entry, index) =>
+      snapshotOf(entry.node, `T${String(index + 1)}`, entry.relationship),
+    );
+    // La cible elle-même, avec ses preuves d'accessibilité (avant tout re-rendu).
+    const describedBy = (el.getAttribute('aria-describedby') ?? '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((key) => textOf(document.getElementById(key)))
+      .join(' ');
+    captures += 1;
+    const target = {
+      ...(candidates[0] ?? {}),
+      captureId: `${documentId}:c${String(captures)}`,
+      ...(el.getAttribute('aria-label') ? { ariaLabel: clean(el.getAttribute('aria-label'), 60) } : {}),
+      ...(el.getAttribute('aria-labelledby') ? { ariaLabelledBy: labelOf(el) } : {}),
+      ...(describedBy ? { ariaDescription: clean(describedBy, 80) } : {}),
+    };
+    // Compatibilité : les pairs du même rôle (les candidats hors cible originale).
+    const peers = candidates
+      .filter((entry) => entry.origin !== 'ORIGINAL_HUMAN_TARGET' && entry.role === role)
       .slice(0, 6)
-      .map((node) => {
-        const path = sectionOf(node);
-        return {
-          role,
-          name: clean(nameOf(node), 60),
-          ...(path.length > 0 ? { section: path.join(' > ') } : {}),
-        };
-      });
+      .map((entry) => ({
+        role,
+        name: String(entry.name),
+        ...(typeof entry.section === 'string' ? { section: entry.section } : {}),
+      }));
     const busy = Array.from(
       document.querySelectorAll('[aria-busy="true"], mat-progress-spinner, mat-spinner, .spinner, .loading'),
     ).some(visible);
@@ -661,8 +823,83 @@ export function installRecorder(
       ...(tab ? { activeTab: clean(textOf(tab), 60) } : {}),
       peers,
       loading: busy,
+      phase,
+      generation: generationNow(),
+      capturedAt: Date.now(),
+      captureId: target.captureId,
+      target,
+      candidates,
+      originalCandidateId: 'T1',
     };
   };
+
+  // ---- CAPTURE PRÉ-ACTION ATOMIQUE : au PREMIER événement d'un geste (avant que l'application ne
+  // réagisse), la cible, son contexte et ses candidats sont figés ; l'envoi (après la saisie, le
+  // clic, la pause) les reprend. Une référence au nœud ne quitte jamais la page.
+  const evidence = new WeakMap<
+    Element,
+    { at: number; pre: Record<string, unknown>; element: Record<string, unknown> }
+  >();
+  const capturePreActionEvidence = (el: Element, phase: string): void => {
+    if (paused || options.preActionCapture?.enabled === false || !preContext.of) return;
+    try {
+      evidence.set(el, {
+        at: Date.now(),
+        pre: preContext.of(el, cssOf(el).css, phase),
+        element: describe(el),
+      });
+    } catch {
+      // une capture illisible n'empêche jamais l'enregistrement (repli : AT_EVENT)
+    }
+  };
+  // Une preuve est celle de CE geste : récente (un clic suit son appui), ou la session de saisie en cours.
+  preContext.take = (el: Element) => {
+    const found = evidence.get(el);
+    if (!found) return undefined;
+    const field = el.matches(FIELD);
+    if (Date.now() - found.at > (field ? 10 * 60_000 : 5_000)) return undefined;
+    if (!field) evidence.delete(el);
+    return { pre: found.pre, element: found.element };
+  };
+  // CLIC / LISTE / CASE / GLISSER : l'appui précède tout gestionnaire de clic de l'application.
+  document.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (isOverlay(event) || !event.isTrusted || event.button !== 0) return;
+      const el = inPath(event, (node) => node.matches(CANDIDATES)) ?? functionalTarget(event);
+      if (el) capturePreActionEvidence(el, 'POINTERDOWN');
+    },
+    { capture: true, passive: true },
+  );
+  // SAISIE : l'entrée dans le champ, puis la première frappe si la preuve manque.
+  document.addEventListener(
+    'focusin',
+    (event) => {
+      if (isOverlay(event)) return;
+      const el = originOf(event);
+      if (el?.matches(FIELD)) capturePreActionEvidence(el, 'FOCUSIN');
+    },
+    { capture: true, passive: true },
+  );
+  document.addEventListener(
+    'beforeinput',
+    (event) => {
+      if (isOverlay(event)) return;
+      const el = originOf(event);
+      if (el?.matches(FIELD) && !evidence.has(el)) capturePreActionEvidence(el, 'BEFOREINPUT');
+    },
+    { capture: true, passive: true },
+  );
+  document.addEventListener(
+    'keydown',
+    (event) => {
+      if (isOverlay(event) || !event.isTrusted) return;
+      const el = originOf(event);
+      if (el && !evidence.has(el) && (el.matches(FIELD) || el.matches(CANDIDATES)))
+        capturePreActionEvidence(el, 'KEYDOWN');
+    },
+    { capture: true, passive: true },
+  );
 
   // ---- glisser-déposer : pointeur (CDK, implémentations maison) ou HTML5 (draggable), corrélés en
   // UNE action humaine. L'élément est décrit au départ (avant que l'application ne le déplace) ;
@@ -718,7 +955,9 @@ export function installRecorder(
       y,
       kind,
       // AVANT le déplacement : l'écran et la liste d'origine.
-      ...(preContext.of ? { pre: preContext.of(item, '') } : {}),
+      ...(preContext.of
+        ? { pre: preContext.of(item, '', kind === 'HTML5' ? 'DRAGSTART' : 'POINTERDOWN') }
+        : {}),
       sourceBefore: itemTexts(item.parentElement?.closest(DROP_ZONE) ?? null),
     };
   };

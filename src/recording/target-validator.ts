@@ -10,7 +10,13 @@ import {
   sectionMatch,
   type ObservedTarget,
 } from '../flows/action-effect-verifier.js';
-import type { PreActionContext, RawRecordedEvent, RecordedElement, RecordedTarget } from './model.js';
+import type {
+  PreActionCandidate,
+  PreActionContext,
+  RawRecordedEvent,
+  RecordedElement,
+  RecordedTarget,
+} from './model.js';
 import { resolveRecordedTarget } from './recorded-target.js';
 import {
   goalOf,
@@ -125,6 +131,8 @@ export interface TargetAiAudit {
   context?: Record<string, unknown>;
   /** Ce que la proposition affirmait mais que le runtime contredit (ignoré). */
   ignored?: string[];
+  /** Le candidat proposé (T…), quand il en a choisi un. */
+  candidate?: string;
 }
 
 /**
@@ -157,6 +165,14 @@ export interface RecordingTargetValidation {
   originalTargetMatch: boolean;
   /** UNRESOLVED : gardée, à confirmer au rejeu (jamais supprimée). */
   requiresReplayValidation: boolean;
+  /** La capture AVANT mutation : complète (la cible originale est un candidat) ou diagnostiquée. */
+  preActionCapture?: PreActionCaptureSummary;
+  /** Ce qui existe MAINTENANT (une autre preuve que ce qui existait quand l'humain a agi). */
+  currentRuntime?: { originalStillPresent: boolean };
+  /** Le statut publié : VALIDATED_LIVE, VALIDATED_PRE_ACTION(_WITH_EFFECT), AMBIGUOUS_PRE_ACTION, NOT_CAPTURED… */
+  validationStatus?: string;
+  /** Le candidat pré-action retenu (T1 : la cible originale). */
+  validatedCandidate?: string;
   /** Prouvée dans CE runtime ; la connaissance universelle attend le rejeu. */
   knowledge: { recordingValidated: boolean; replayValidated: false };
   /** Les effets observés entre l'écran d'avant et celui d'après (fenêtre, route, titre, cible disparue). */
@@ -171,6 +187,95 @@ export interface RecordingTargetValidation {
     lists?: { sourceBefore: string[]; sourceAfter: string[]; destinationAfter: string[] };
   };
   log: string[];
+}
+
+export interface PreActionCaptureSummary {
+  captured: boolean;
+  complete: boolean;
+  phase?: string;
+  captureId?: string;
+  domGeneration?: number;
+  sentGeneration?: number;
+  postGeneration?: number;
+  candidateCount: number;
+  originalCandidateId?: string;
+  /** PRE_ACTION_CAPTURE_INCOMPLETE / NOT_CAPTURED : pourquoi. */
+  diagnostic?: string;
+}
+
+/**
+ * L'INVARIANT de la capture : une action humaine sur un élément, capturée, a au moins un candidat
+ * et la cible originale en fait partie. Sinon : PRE_ACTION_CAPTURE_INCOMPLETE, diagnostiqué.
+ */
+export function preActionCaptureOf(event: RawRecordedEvent): PreActionCaptureSummary {
+  const pre = event.pre;
+  if (!pre)
+    return {
+      captured: false,
+      complete: false,
+      candidateCount: 0,
+      diagnostic: 'NOT_CAPTURED: no pre-action context was received for this action',
+    };
+  const candidates = pre.candidates ?? [];
+  const original = candidates.find(
+    (candidate) => candidate.id === pre.originalCandidateId && candidate.origin === 'ORIGINAL_HUMAN_TARGET',
+  );
+  const diagnostic = !pre.candidates
+    ? 'PRE_ACTION_CAPTURE_INCOMPLETE: no candidate set was captured (capture disabled or an older page script)'
+    : candidates.length === 0
+      ? 'PRE_ACTION_CAPTURE_INCOMPLETE: candidates=0 although the human target was an element'
+      : !original
+        ? 'PRE_ACTION_CAPTURE_INCOMPLETE: the original human target is missing from the candidate set'
+        : undefined;
+  return {
+    captured: true,
+    complete: diagnostic === undefined,
+    ...(pre.phase ? { phase: pre.phase } : {}),
+    ...(pre.captureId ? { captureId: pre.captureId } : {}),
+    ...(pre.generation !== undefined ? { domGeneration: pre.generation } : {}),
+    ...(pre.sentGeneration !== undefined ? { sentGeneration: pre.sentGeneration } : {}),
+    candidateCount: candidates.length,
+    ...(original ? { originalCandidateId: original.id } : {}),
+    ...(diagnostic ? { diagnostic } : {}),
+  };
+}
+
+/** Un candidat pré-action devenu représentation : test id, libellé ou rôle + nom dans sa section ; l'id stable sinon. */
+export function targetOfCandidate(candidate: PreActionCandidate): FlowTarget {
+  const section = candidate.section ? { section: candidate.section } : {};
+  const testId = candidate.stableAttributes['data-testid'];
+  if (testId) return { strategy: 'testId', value: testId };
+  if (candidate.label && candidate.editable) return { strategy: 'label', value: candidate.label, ...section };
+  if (candidate.name && candidate.role)
+    return { strategy: 'role', role: candidate.role, name: candidate.name, ...section };
+  const id = candidate.stableAttributes.id;
+  if (id) return { strategy: 'css', value: `#${id}` };
+  return { strategy: 'css', value: candidate.cssHint ?? candidate.tag };
+}
+
+/** L'identité fonctionnelle d'un candidat (rôle, libellé ou nom, section) : ce qui le distingue. */
+function candidateKey(candidate: PreActionCandidate): string {
+  return `${candidate.role}|${normalize(candidate.label ?? candidate.name)}|${candidate.section ?? ''}`;
+}
+
+/** Le statut publié (sans toucher aux statuts internes) : LIVE, PRE_ACTION, AVEC EFFET, AMBIGU PRÉ-ACTION, NON CAPTURÉ. */
+export function publishedStatus(
+  result: Omit<RecordingTargetValidation, 'verdict'>,
+  effect: RecordingVerdict['effect'],
+): string {
+  const check = result.validationAfter ?? result.validationBefore;
+  if (result.status === 'VALIDATED' && !check.preAction) return 'VALIDATED_LIVE';
+  if (result.status === 'VALIDATED_WITH_EFFECT') return 'VALIDATED_PRE_ACTION_WITH_EFFECT';
+  if (result.status === 'VALIDATED_PRE_ACTION')
+    return effect.status === 'CONFIRMED' ? 'VALIDATED_PRE_ACTION_WITH_EFFECT' : 'VALIDATED_PRE_ACTION';
+  if (result.status === 'AMBIGUOUS' && check.preAction) return 'AMBIGUOUS_PRE_ACTION';
+  if (
+    result.status === 'NOT_VALIDATABLE' &&
+    result.original.stale &&
+    result.preActionCapture?.captured === false
+  )
+    return 'NOT_CAPTURED';
+  return result.status;
 }
 
 /** La cible que l'étape sémantique produira pour cet événement (même règle que semantic-recording). */
@@ -377,6 +482,29 @@ export class RecordingTargetValidator {
     const label = element.label ?? element.guessedLabel ?? element.name;
     say(`[TARGET_CAPTURED] ${event.id} ${event.type.toUpperCase()} "${label || element.tag}"`);
     say(`[TARGET_VALIDATING] ${event.id} ${describeTarget(candidate.target)}`);
+    // LA CAPTURE PRÉ-ACTION (faite par la page au premier événement du geste) : son bilan d'abord.
+    const capture = preActionCaptureOf(event);
+    const postGeneration = await page
+      .evaluate(() => {
+        const read = (window as unknown as Record<string, unknown>).__qaCrawlerDomGeneration;
+        return typeof read === 'function' ? (read as () => number)() : undefined;
+      })
+      .catch(() => undefined);
+    if (postGeneration !== undefined) capture.postGeneration = postGeneration;
+    if (capture.complete)
+      say(
+        `[PRE_ACTION_CAPTURE] action=${event.id} type=${event.type.toUpperCase()} target=${element.tag}${element.elementId && !element.generatedId ? `#${element.elementId}` : ''} phase=${capture.phase ?? '-'} generation=${String(capture.domGeneration ?? '-')} candidates=${String(capture.candidateCount)} originalCandidate=${capture.originalCandidateId ?? '-'}`,
+      );
+    else if (capture.captured)
+      say(`[PRE_ACTION_CAPTURE_INCOMPLETE] action=${event.id} ${capture.diagnostic ?? ''}`);
+    if (
+      capture.domGeneration !== undefined &&
+      postGeneration !== undefined &&
+      postGeneration !== capture.domGeneration
+    )
+      say(
+        `[DOM_GENERATION_CHANGED] action=${event.id} ${String(capture.domGeneration)} → ${String(postGeneration)} (the pre-action candidates describe the screen BEFORE the action: historical evidence, not stale)`,
+      );
     const original = await this.original(page, ref);
     const observed = original ? await readTarget(original, page) : undefined;
     const traits = original
@@ -435,6 +563,7 @@ export class RecordingTargetValidator {
     // complémentaire : un nœud B qui porte maintenant le même sélecteur ne prouve pas que
     // l'humain visait le mauvais élément (jamais MISMATCH → réparation sur la seule foi de l'après).
     let liveCheck: TargetCheck | undefined;
+    let reconstruction: { target: FlowTarget; repair: TargetRepair } | undefined;
     if (event.pre && (!original || before.status === 'NOT_VALIDATABLE')) {
       const pre = preActionCheck(target, element, event.pre);
       const live = before;
@@ -453,27 +582,74 @@ export class RecordingTargetValidator {
           differences: [],
           postState,
         };
-      else
-        before = {
-          ...live,
-          status: 'AMBIGUOUS',
-          confidence: 0.6,
-          reason: `PRE_ACTION_AMBIGUOUS: ${pre.reason} (the original element is gone: no exact match can be proven${VALIDATED_STATUSES.has(live.status) ? '; the post-action match is not an identity proof' : ''})`,
-          preAction: true,
-          differences: [],
-          postState,
-          candidates: event.pre.peers.slice(0, 6).map((peer, index) => ({
-            index,
-            role: peer.role,
-            name: peer.name,
-            ...(peer.section ? { section: peer.section } : {}),
-            original: false,
-          })),
-        };
+      else {
+        // RECONSTRUCTION depuis le candidat original : son identité (rôle, libellé, section) était-elle
+        // la seule parmi les candidats figés avant l'action ? Alors elle devient la représentation.
+        const candidates = event.pre.candidates ?? [];
+        const originalCandidate = candidates.find((entry) => entry.id === capture.originalCandidateId);
+        const twins = originalCandidate
+          ? candidates.filter((entry) => candidateKey(entry) === candidateKey(originalCandidate)).length
+          : 0;
+        const rebuilt =
+          originalCandidate && twins === 1 && normalize(originalCandidate.label ?? originalCandidate.name)
+            ? targetOfCandidate(originalCandidate)
+            : undefined;
+        if (originalCandidate && rebuilt && JSON.stringify(rebuilt) !== JSON.stringify(target)) {
+          reconstruction = {
+            target: rebuilt,
+            repair: {
+              type: 'DETERMINISTIC',
+              reason: 'PRE_ACTION_CANDIDATE_RECONSTRUCTION',
+              changes: [
+                { property: 'target', before: describeTarget(target), after: describeTarget(rebuilt) },
+              ],
+              evidence: ['pre-action-original-candidate', 'pre-action-candidates'],
+            },
+          };
+          before = {
+            ...live,
+            status: effects.length > 0 ? 'VALIDATED_WITH_EFFECT' : 'VALIDATED_PRE_ACTION',
+            confidence: 0.75,
+            reason: `TARGET_VALIDATED_PRE_ACTION: ${pre.reason}; the original candidate ${originalCandidate.id} was the only "${originalCandidate.label ?? originalCandidate.name}"${originalCandidate.section ? ` in "${originalCandidate.section}"` : ''} before the action`,
+            preAction: true,
+            differences: [],
+            postState,
+          };
+        } else
+          before = {
+            ...live,
+            status: 'AMBIGUOUS',
+            confidence: 0.6,
+            reason: `PRE_ACTION_AMBIGUOUS: ${pre.reason} (the original element is gone: no exact match can be proven${VALIDATED_STATUSES.has(live.status) ? '; the post-action match is not an identity proof' : ''})`,
+            preAction: true,
+            differences: [],
+            postState,
+            candidates:
+              candidates.length > 0
+                ? candidates.slice(0, 8).map((entry, index) => ({
+                    index,
+                    role: entry.role,
+                    name: entry.label ?? entry.name,
+                    ...(entry.section ? { section: entry.section } : {}),
+                    original: entry.origin === 'ORIGINAL_HUMAN_TARGET',
+                  }))
+                : event.pre.peers.slice(0, 6).map((peer, index) => ({
+                    index,
+                    role: peer.role,
+                    name: peer.name,
+                    ...(peer.section ? { section: peer.section } : {}),
+                    original: false,
+                  })),
+          };
+      }
     }
     let after: TargetCheck | undefined;
-    let repair: TargetRepair | undefined;
-    let attempts = 1;
+    let repair: TargetRepair | undefined = reconstruction?.repair;
+    let attempts = reconstruction ? 2 : 1;
+    if (reconstruction) {
+      target = reconstruction.target;
+      say(`[TARGET_REPAIRED] ${event.id} PRE_ACTION_CANDIDATE_RECONSTRUCTION: ${describeTarget(target)}`);
+    }
     const report = (check: TargetCheck, prefix: string): void => {
       if (VALIDATED_STATUSES.has(check.status))
         say(
@@ -625,6 +801,8 @@ export class RecordingTargetValidator {
     const effect = await this.effectOf(page, event, original, target, effects);
     const result: Omit<RecordingTargetValidation, 'verdict'> = {
       mode: ValidationMode.RECORDING,
+      preActionCapture: capture,
+      currentRuntime: { originalStillPresent: original !== undefined },
       rawEventId: event.id,
       action: event.type,
       timestamp: Date.now(),
@@ -653,10 +831,26 @@ export class RecordingTargetValidator {
       log,
     };
     const verdict = verdictOf(result, effect);
+    const published = publishedStatus(result, effect);
+    const validatedCandidate =
+      VALIDATED_STATUSES.has(current.status) && current.preAction === true
+        ? aiAudit?.outcome === 'AI_PROPOSAL_RUNTIME_CONFIRMED'
+          ? aiAudit.candidate
+          : capture.originalCandidateId
+        : undefined;
+    if (published.startsWith('VALIDATED_LIVE') || published.startsWith('VALIDATED_PRE_ACTION'))
+      say(
+        `[TARGET_${published}] action=${event.id}${validatedCandidate ? ` candidate=${validatedCandidate}` : ''} confidence=${String(current.confidence)}`,
+      );
     say(
       `[RECORDING_VERDICT] ${event.id} target=${verdict.target.status} (${verdict.target.source}) effect=${verdict.effect.status} goal=${verdict.goal.status}`,
     );
-    return { ...result, verdict };
+    return {
+      ...result,
+      validationStatus: published,
+      ...(validatedCandidate ? { validatedCandidate } : {}),
+      verdict,
+    };
   }
 
   /**
@@ -1247,7 +1441,39 @@ export class RecordingTargetValidator {
     // AMBIGUÏTÉ PRÉ-ACTION : l'élément original n'existe plus ; les candidates sont les éléments du
     // même genre visibles JUSTE AVANT l'action (jamais ce que le localisateur trouve après).
     const preAction = check.preAction === true && event.pre !== undefined;
-    if (preAction)
+    const captured = event.pre?.candidates ?? [];
+    if (preAction && captured.length > 0)
+      // Les candidats FIGÉS AVANT l'action, avec leur identifiant de capture (T1 = la cible originale).
+      for (const entry of captured.slice(0, 12)) {
+        const name = entry.label ?? entry.name;
+        candidates.push({
+          key: entry.id,
+          target: targetOfCandidate(entry),
+          found:
+            entry.origin === 'ORIGINAL_HUMAN_TARGET'
+              ? 'the element the human used (captured before the action)'
+              : 'visible before the action',
+          identity: {
+            role: entry.role,
+            tag: entry.tag,
+            name,
+            ...(entry.section ? { section: entry.section } : {}),
+          },
+          preAction: {
+            origin: entry.origin,
+            relationship: entry.relationship,
+            ...(entry.nearby ? { nearby: entry.nearby } : {}),
+            ...(entry.container
+              ? {
+                  container: `${entry.container.tag}${entry.container.label ? ` "${entry.container.label}"` : ''}`,
+                }
+              : {}),
+            ...(entry.cssHint ? { cssHint: entry.cssHint } : {}),
+          },
+          description: `before the action: ${entry.role || entry.tag} "${shorten(name, 40)}"${entry.section ? ` in "${shorten(entry.section, 40)}"` : ''}${entry.nearby?.length ? ` near "${shorten(entry.nearby.join(', '), 40)}"` : ''}`,
+        });
+      }
+    else if (preAction)
       for (const [index, peer] of (event.pre?.peers ?? []).slice(0, 8).entries())
         candidates.push({
           key: `T${String(index + 1)}`,
@@ -1309,6 +1535,19 @@ export class RecordingTargetValidator {
     const next = (position >= 0 ? this.observed.slice(position + 1) : []).map((entry) =>
       this.contextAction(entry),
     );
+    // AUCUN CANDIDAT : le conseiller ne peut pas inventer la cible (il n'est jamais consulté).
+    if (candidates.length === 0)
+      return {
+        audit: {
+          outcome: 'NOT_CALLED',
+          citedEvidence: [],
+          reason: 'PRE_ACTION_CAPTURE_INCOMPLETE: no captured candidate — the advisor never invents a target',
+        },
+      };
+    if (preAction)
+      this.options.log?.(
+        `[AI_PRE_ACTION_AUDIT_REQUESTED] action=${event.id} candidates=${String(candidates.length)}${event.pre?.originalCandidateId ? ` originalCandidate=${event.pre.originalCandidateId}` : ''}`,
+      );
     const answer = await advisor({
       event,
       original: originalIdentity,
@@ -1353,7 +1592,7 @@ export class RecordingTargetValidator {
     this.options.log?.(`[AI_TARGET_AUDIT_REQUESTED] action=${event.id}`);
     if (answer.selectedKey)
       this.options.log?.(
-        `[AI_TARGET_PROPOSAL] action=${event.id} candidate=${answer.selectedKey}${answer.confidence !== undefined ? ` confidence=${String(answer.confidence)}` : ''}`,
+        `[${preAction ? 'AI_PRE_ACTION_PROPOSAL' : 'AI_TARGET_PROPOSAL'}] action=${event.id} candidate=${answer.selectedKey}${answer.confidence !== undefined ? ` confidence=${String(answer.confidence)}` : ''}`,
       );
     const base = {
       ...(answer.decisionId ? { decisionId: answer.decisionId } : {}),
@@ -1446,6 +1685,60 @@ export class RecordingTargetValidator {
       repair: TargetRepair;
     };
   } {
+    const log = (outcome: 'CONFIRMED' | 'REJECTED', reason: string): void => {
+      this.options.log?.(
+        `[AI_PRE_ACTION_PROPOSAL_${outcome}] action=${event.id} candidate=${chosen.key} ${reason}`,
+      );
+    };
+    // LA CIBLE ORIGINALE A ÉTÉ CAPTURÉE (T1) : la proposition est jugée contre elle, rien d'autre.
+    const originalId = event.pre?.originalCandidateId;
+    const captured = event.pre?.candidates ?? [];
+    if (originalId && captured.some((entry) => entry.id === chosen.key)) {
+      if (chosen.key !== originalId) {
+        const reason = `${chosen.key} is not the original human target ${originalId} captured before the action`;
+        log('REJECTED', reason);
+        return {
+          audit: {
+            ...base,
+            outcome: 'AI_PROPOSAL_RUNTIME_REJECTED',
+            candidate: chosen.key,
+            proposedTarget: chosen.description,
+            reason: `${reason}: human action preserved, no silent correction`,
+          },
+        };
+      }
+      const semanticId = answer.semanticTarget?.semanticId;
+      log('CONFIRMED', 'the original human target captured before the action');
+      return {
+        audit: {
+          ...base,
+          outcome: 'AI_PROPOSAL_RUNTIME_CONFIRMED',
+          candidate: chosen.key,
+          proposedTarget: chosen.description,
+          reason: `the proposed candidate is the original human target ${originalId} captured before the action`,
+        },
+        validated: {
+          // La représentation enregistrée reste (l'identité est prouvée) ; seul le sens est ajouté.
+          target,
+          fingerprint: fingerprint && semanticId ? { ...fingerprint, semanticId } : fingerprint,
+          check: {
+            status: 'VALIDATED_AFTER_AI_AUDIT',
+            confidence: 0.85,
+            reason: `pre-action identity: ${chosen.key} is the original human target captured before the action`,
+            candidateCount: captured.length,
+            preAction: true,
+            resolved: chosen.identity ?? {},
+            differences: [],
+          },
+          repair: {
+            type: 'AI',
+            reason: 'AI_PRE_ACTION_PROPOSAL_CONFIRMED',
+            changes: semanticId ? [{ property: 'semanticId', after: semanticId }] : [],
+            evidence: ['ai-proposal', 'pre-action-original-candidate', ...answer.citedEvidence],
+          },
+        },
+      };
+    }
     const peers = event.pre?.peers ?? [];
     const proposed = chosen.identity ?? {};
     const wantedName = normalize(element.label ?? element.guessedLabel ?? element.name);
@@ -1470,8 +1763,10 @@ export class RecordingTargetValidator {
         reason: `${reason}: human action preserved, no silent correction`,
       },
     });
-    if (!sameRole || !sameName || !sameSection)
+    if (!sameRole || !sameName || !sameSection) {
+      log('REJECTED', 'identity differs from the pre-action snapshot');
       return reject('the proposed candidate does not have the pre-action identity of the human target');
+    }
     if (twins !== 1)
       return {
         audit: {
@@ -1483,10 +1778,12 @@ export class RecordingTargetValidator {
       };
     const semanticId = answer.semanticTarget?.semanticId;
     const proposedFingerprint = fingerprint && semanticId ? { ...fingerprint, semanticId } : fingerprint;
+    log('CONFIRMED', 'unique pre-action identity');
     return {
       audit: {
         ...base,
         outcome: 'AI_PROPOSAL_RUNTIME_CONFIRMED',
+        candidate: chosen.key,
         proposedTarget: chosen.description,
         reason:
           'the proposed candidate was the only element with the human target identity before the action',

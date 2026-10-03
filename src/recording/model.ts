@@ -80,6 +80,51 @@ export interface PreActionContext {
   peers: { role: string; name: string; section?: string }[];
   /** Un indicateur de chargement était visible. */
   loading: boolean;
+  /** L'événement qui a figé la preuve : POINTERDOWN, FOCUSIN, BEFOREINPUT, KEYDOWN, DRAGSTART ; AT_EVENT = repli tardif. */
+  phase?: string;
+  /** Génération du DOM à la capture, puis à l'envoi (l'état AVANT l'action, voulu historique). */
+  generation?: number;
+  sentGeneration?: number;
+  capturedAt?: number;
+  /** originalTargetRuntimeId : relie événement brut → preuve pré-action → action → validation. */
+  captureId?: string;
+  /** La cible originale telle qu'elle était (sérialisable : jamais une référence au nœud). */
+  target?: PreActionTargetSnapshot;
+  /** Les candidats figés AVANT l'action ; la cible originale y est toujours (T1). */
+  candidates?: PreActionCandidate[];
+  originalCandidateId?: string;
+}
+
+/** Un candidat pré-action : une description, jamais un localisateur (le CSS n'est qu'un indice). */
+export interface PreActionCandidate {
+  id: string;
+  origin: 'ORIGINAL_HUMAN_TARGET' | 'CONTEXT';
+  relationship: 'SELF' | 'SAME_FORM' | 'SAME_DIALOG' | 'SAME_SECTION' | 'SAME_ROLE';
+  tag: string;
+  role: string;
+  name: string;
+  label?: string;
+  text?: string;
+  stableAttributes: Record<string, string>;
+  visible: boolean;
+  enabled: boolean;
+  editable: boolean;
+  /** L'hôte du composant (balise à tiret) qui porte la cible physique. */
+  component?: string;
+  form?: string;
+  section?: string;
+  dialog?: string;
+  /** Le conteneur sémantique (mat-form-field, fieldset) de la cible physique. */
+  container?: { tag: string; label?: string };
+  nearby?: string[];
+  cssHint?: string;
+}
+
+export interface PreActionTargetSnapshot extends PreActionCandidate {
+  captureId: string;
+  ariaLabel?: string;
+  ariaLabelledBy?: string;
+  ariaDescription?: string;
 }
 
 /** Un élément tel que le navigateur le décrit au moment de l'événement (jamais sa valeur). */

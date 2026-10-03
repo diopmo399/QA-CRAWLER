@@ -261,6 +261,14 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           ? {
               // CIBLE / EFFET / OBJECTIF : trois verdicts séparés (ValidationMode.RECORDING).
               mode: validation.mode,
+              // CAPTURE AVANT MUTATION : ce qui existait quand l'humain a agi, puis ce qui existe maintenant.
+              ...(validation.preActionCapture ? { preActionCapture: validation.preActionCapture } : {}),
+              ...(validation.currentRuntime ? { currentRuntime: validation.currentRuntime } : {}),
+              validation: {
+                status: validation.validationStatus ?? validation.status,
+                ...(validation.validatedCandidate ? { candidate: validation.validatedCandidate } : {}),
+                confidence: validation.confidence,
+              },
               target: validation.verdict.target,
               effect: validation.verdict.effect,
               goal: withSemanticGoal(validation.verdict.goal, entry.finalFingerprint?.semanticId),

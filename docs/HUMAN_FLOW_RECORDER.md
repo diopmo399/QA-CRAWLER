@@ -470,6 +470,113 @@ rapport (badges VALIDATED, REPAIRED, FRAGILE, AMBIGUOUS, UNRESOLVED, AI_AUDITED)
 terminal, une ligne par étape (`[TARGET_MISMATCH] … role recorded=combobox runtime=textbox`,
 `[TARGET_REPAIRED]`, `[TARGET_REVALIDATED]`) et le bilan **RECORDING VALIDATION**.
 
+### Capture pré-action des candidats (CAPTURE FIRST, VALIDATE LATER)
+
+**Le défaut corrigé.** Une saisie n'était envoyée par la page qu'après la pause de frappe (ou au
+`change`). Le contexte « pré-action » (combien d'éléments le CSS trouvait, les pairs) et la
+description de la cible étaient donc lus **après** le re-rendu de l'application. Un champ remplacé
+dès la première frappe donnait `#valueInput matched 0 elements before the action`. Les pairs
+excluaient en plus la cible elle-même : `candidates=0`, et le conseiller ne pouvait rien choisir.
+
+**Désormais, la page fige la preuve au PREMIER événement du geste**, en phase de capture, avant
+tout gestionnaire de l'application :
+
+| Geste                      | Événement de capture                                   |
+| -------------------------- | ------------------------------------------------------ |
+| clic, liste, case, glisser | `pointerdown` (sinon `dragstart`)                      |
+| saisie                     | `focusin`, puis `beforeinput` si la preuve manque      |
+| clavier                    | `keydown`                                              |
+| repli                      | l'événement lui-même (`AT_EVENT`, en phase de capture) |
+
+**Ce qui est figé ensemble** :
+
+- la description de la cible ;
+- le contexte d'écran ;
+- la **génération du DOM**, un compteur léger des re-rendus ;
+- un **ensemble borné de candidats** (`recording.preActionCapture.maxCandidates`, 12 par défaut).
+
+Les candidats sont pris dans cet ordre :
+
+1. la cible originale **T1** (`ORIGINAL_HUMAN_TARGET`), jamais retirée par le budget ;
+2. les éléments du même formulaire, de la même fenêtre, de la même section ;
+3. un rôle compatible ailleurs à l'écran.
+
+Un candidat est une **description**, pas un localisateur. Il porte :
+
+- son rôle, son nom et son libellé ;
+- ses attributs stables ;
+- sa section et sa fenêtre ;
+- son voisinage ;
+- l'hôte du composant et le conteneur sémantique (`mat-form-field` + `mat-label`) ;
+- `cssHint`, qui n'est qu'un indice.
+
+Jamais une valeur saisie. La référence au nœud reste dans la page. `captureId`
+(originalTargetRuntimeId) relie l'événement brut, la preuve et la validation.
+
+**Validation.** Deux univers distincts :
+
+- le runtime **actuel** (ce qui existe maintenant) ;
+- l'instantané **pré-action** (ce qui existait quand l'humain a agi).
+
+Ordre de décision :
+
+1. le nœud original encore présent ;
+2. le runtime actuel ;
+3. le candidat original pré-action ;
+4. la reconstruction depuis les candidats (`PRE_ACTION_CANDIDATE_RECONSTRUCTION` : l'identité de
+   T1 était la seule parmi eux) ;
+5. le conseiller.
+
+Un `#valueInput` qui désigne maintenant un autre nœud ne crée plus de faux `MISMATCH`.
+
+**Invariant.** Une action sur un élément capturée a au moins un candidat, et T1 en fait partie.
+Sinon `PRE_ACTION_CAPTURE_INCOMPLETE`, diagnostiqué. Sans candidat, le conseiller n'est **jamais**
+consulté : il ne peut pas inventer la cible.
+
+**Conseiller.** Il reçoit les candidats pré-action (provenance, voisinage, conteneur) et les actions
+précédentes et suivantes. Il choisit un identifiant. Choisir T1 → `AI_PRE_ACTION_PROPOSAL_CONFIRMED` ;
+un autre → `AI_PRE_ACTION_PROPOSAL_REJECTED`, l'action humaine est gardée.
+
+Statuts publiés (`validation.status` dans `target-validation.json`) :
+
+- `VALIDATED_LIVE` ;
+- `VALIDATED_PRE_ACTION` ;
+- `VALIDATED_PRE_ACTION_WITH_EFFECT` ;
+- `VALIDATED_AFTER_RERENDER` ;
+- `AMBIGUOUS_PRE_ACTION` ;
+- `MISMATCH`, `CONTEXT_MISMATCH` ;
+- `NOT_CAPTURED`, `NOT_VALIDATABLE`.
+
+Le fichier contient aussi `preActionCapture` (`phase`, `domGeneration`, `postGeneration`,
+`candidateCount`, `originalCandidateId`, `diagnostic`) et `currentRuntime.originalStillPresent`.
+
+Journal :
+
+- `[PRE_ACTION_CAPTURE] action=… type=… target=input#valueInput phase=FOCUSIN generation=… candidates=… originalCandidate=T1` ;
+- `[PRE_ACTION_CAPTURE_INCOMPLETE]`, `[DOM_GENERATION_CHANGED] a → b` ;
+- `[TARGET_VALIDATED_LIVE]`, `[TARGET_VALIDATED_PRE_ACTION(_WITH_EFFECT)] … candidate=T1` ;
+- `[AI_PRE_ACTION_AUDIT_REQUESTED]`, `[AI_PRE_ACTION_PROPOSAL(_CONFIRMED|_REJECTED)]`.
+
+Le rapport HTML affiche :
+
+```text
+Pre-action captured ✓ · candidates · original candidate · DOM a → b · statut · IA
+```
+
+La capture est locale, synchrone et bornée : elle ne sérialise jamais tout le DOM, n'attend pas le
+réseau et n'appelle jamais le conseiller. Les preuves restent celles de l'enregistrement en cours ;
+la connaissance générale attend le rejeu réussi.
+
+```yaml
+recording:
+  preActionCapture:
+    enabled: true
+    maxCandidates: 12 # la cible originale n'est jamais retirée
+    includeSameForm: true
+    includeSameDialog: true
+    includeSameSection: true
+```
+
 ### Validation d'enregistrement ≠ récupération de rejeu (`ValidationMode.RECORDING`)
 
 Pendant l'enregistrement, l'action humaine est **déjà exécutée** : la valider, c'est prouver
