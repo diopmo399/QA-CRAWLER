@@ -48,6 +48,7 @@ import {
   verifyFieldFill,
   observeEffects,
   readTarget,
+  requestCompleted,
   routeMatches,
   verifyEffects,
   type EffectVerification,
@@ -320,6 +321,12 @@ import { InvariantOracle, type InvariantEvaluation } from '../oracles/invariant-
 import { RuleBasedPatternDetector } from '../patterns/pattern-detector.js';
 import type { DetectedPattern } from '../patterns/ui-pattern.js';
 import { WriteGuard, writePattern, type BlockedWrite } from '../policies/write-guard.js';
+import { evaluateFastPath } from '../performance/fast-path.js';
+import {
+  instrumentMethods,
+  PerformanceTracer,
+  type ActionPerformanceTrace,
+} from '../performance/performance-tracer.js';
 import { semanticsOf, type Semantics } from '../semantics/domain-packs.js';
 import { browserHttpCredentials, type BrowserHttpCredentials } from '../interactions/browser-credentials.js';
 
@@ -680,6 +687,11 @@ export class FlowExplorer {
   /** DRY RUN (options.dryRun) et mémoire des runs précédents disponible. */
   private readonly dryRunHook: FlowExplorerOptions['dryRun'];
   private readonly historyAvailable: boolean;
+  private readonly perf: PerformanceTracer;
+  /** Profondeur d'exécution d'étapes (> 1 : une étape rejouée à l'intérieur d'une récupération). */
+  private stepDepth = 0;
+  /** Statut de la dernière étape terminée (le chemin rapide suppose que tout allait bien avant). */
+  private previousStepStatus: string | undefined;
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -1065,6 +1077,84 @@ export class FlowExplorer {
     this.startUrl = new URL(config.target.startAt, config.target.baseUrl).toString();
     this.currentUrl = this.startUrl;
     this.collector.onIssue((issue, isNew) => this.listener.onIssue?.(issue, isNew));
+    // Le traceur est toujours là (il porte aussi la profondeur d'étape) ; ses rapports seulement si tracing.
+    this.perf = new PerformanceTracer(this.runId);
+    this.instrumentPerformance(this.perf);
+  }
+
+  /**
+   * PERFORMANCE TRACING : chaque étape de flow devient une action tracée, et les méthodes EXISTANTES du
+   * pipeline des phases mesurées — sans changer leur code, leur ordre ni leurs attentes.
+   */
+  private instrumentPerformance(perf: PerformanceTracer): void {
+    instrumentMethods(this, perf, {
+      observeState: { phase: 'state-observation' },
+      resolveFunctionalTarget: { phase: 'candidate-discovery', deep: 'FUNCTIONAL_RESOLUTION' },
+      healTarget: { phase: 'locator-healing', deep: 'LOCATOR_HEALING' },
+      reacquireAfterRerender: { phase: 'reacquire', deep: 'REACQUIRE' },
+      healDivergence: { phase: 'recovery', deep: 'RECOVERY' },
+      nextReadiness: { phase: 'next-target-probe' },
+      targetAvailable: { phase: 'next-target-probe' },
+      waitForEffect: { phase: 'effect-verification' },
+      filledValue: { phase: 'fill-verification' },
+      observeFunctional: { phase: 'functional-observation' },
+      observeCognitive: { phase: 'cognitive-observation' },
+      captureErrorScreenshot: { phase: 'screenshot' },
+      adviseRecovery: { phase: 'ai', deep: 'AI' },
+      adviseFailure: { phase: 'ai', deep: 'AI' },
+    });
+    instrumentMethods(this.flowSteps, perf, {
+      locate: { phase: 'locate' },
+      perform: { phase: 'execute' },
+      expect: { phase: 'assertion' },
+    });
+    const host = this as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const wait = host['waitTransition'];
+    if (wait)
+      host['waitTransition'] = async (...args: unknown[]) => {
+        const result = (await perf.track('transition-wait', () =>
+          wait.apply(this, args),
+        )) as TransitionWaitResult;
+        perf.wait({
+          type: 'transition',
+          durationMs: result.durationMs,
+          terminationReason:
+            result.status === 'TIMEOUT'
+              ? 'MAX_TIMEOUT'
+              : result.signals.some((signal) => signal.kind === 'NO_PROGRESS')
+                ? 'NO_PROGRESS'
+                : 'CONDITION_MET',
+          signals: result.signals,
+        });
+        return result;
+      };
+    // Une étape = une action (les étapes rejouées à l'intérieur d'une récupération restent dans celle-ci).
+    const step = host['runFlowStep'];
+    if (step)
+      host['runFlowStep'] = async (...args: unknown[]) => {
+        const flowStep = args[4] as FlowStep;
+        const index = args[5] as number;
+        if (this.stepDepth === 0)
+          perf.beginAction(`step-${String(index)}`, index, describeStep(flowStep), flowStep.kind);
+        this.stepDepth += 1;
+        let status = 'ERROR';
+        try {
+          const outcome = (await step.apply(this, args)) as { report: FlowStepReport };
+          status = outcome.report.status;
+          return outcome;
+        } finally {
+          this.stepDepth -= 1;
+          if (this.stepDepth === 0) {
+            perf.endAction(status);
+            this.previousStepStatus = status;
+          }
+        }
+      };
+  }
+
+  /** Les traces de performance du run (vide si le tracing est désactivé). */
+  performanceTraces(): readonly ActionPerformanceTrace[] {
+    return this.perf.traces();
   }
 
   async explore(): Promise<ExplorationOutcome> {
@@ -2659,6 +2749,7 @@ export class FlowExplorer {
     this.pendingLearning = undefined;
     this.flowNetwork = [];
     this.stepContexts = [];
+    this.previousStepStatus = undefined;
     this.flowRecordedKeys.clear();
     this.scenario = { values: [] };
     this.listener.onFlowStart?.(flow);
@@ -4532,6 +4623,24 @@ export class FlowExplorer {
     // ACTION_EXECUTED ≠ TRANSITION_COMPLETED : la transition fait partie de l'action — elle est attendue
     // dans la même fenêtre (une écriture permise par l'étape part souvent APRÈS le retour du clic).
     let transition: TransitionWaitResult | undefined;
+    // FAST PATH / DEEP PATH : une situation connue, résolue directement, attend une preuve positive puis
+    // un calme COURT ; tout le reste garde l'attente complète. Les vérifications restent les mêmes.
+    const fastPath = evaluateFastPath({
+      enabled: this.config.performance.fastPath.enabled,
+      recorded: fingerprint !== undefined || step.effects !== undefined,
+      healed: effect.healed !== undefined,
+      functionalResolution: resolution !== undefined,
+      contextualResolution: contextual,
+      reacquired: reacquiredTarget !== undefined,
+      inRecovery: this.stepDepth > 1,
+      previousStatus: this.previousStepStatus,
+      dangerous: action.classification === 'DANGEROUS' || step.allow.includes('DANGEROUS'),
+    });
+    for (const reason of fastPath.reasons) this.perf.deep(reason);
+    this.emitHealing(
+      fastPath.path === 'FAST_PATH' ? 'FAST_PATH_SELECTED' : 'DEEP_PATH_SELECTED',
+      `${step.kind} ${describeTarget(step.target)}${fastPath.reasons.length > 0 ? `: ${fastPath.reasons.join(', ')}` : ''}`,
+    );
     const perform = async (): Promise<string | undefined> => {
       const failure = await this.flowSteps.perform(
         page,
@@ -4551,6 +4660,9 @@ export class FlowExplorer {
         nextStep,
         nextReadyBefore,
         before: probeBefore,
+        ...(fastPath.path === 'FAST_PATH'
+          ? { confirmationQuietMs: this.config.performance.fastPath.confirmationQuietMs }
+          : {}),
       });
       return undefined;
     };
@@ -5116,6 +5228,7 @@ export class FlowExplorer {
       nextStep: Extract<FlowStep, { target: unknown }> | undefined;
       nextReadyBefore: boolean | undefined;
       before: { href: string; route: string; dialogs: number };
+      confirmationQuietMs?: number;
     },
   ): Promise<TransitionWaitResult> {
     const sync = this.config.replay.synchronization;
@@ -5148,8 +5261,22 @@ export class FlowExplorer {
               }),
           }
         : {}),
-      ...(effects && effectsDeclared ? { effectObserved: () => this.effectVisible(page, effects) } : {}),
+      ...(effects && (effectsDeclared || effects.request)
+        ? {
+            effectObserved: async () =>
+              (effectsDeclared && (await this.effectVisible(page, effects))) ||
+              (effects.request !== undefined &&
+                requestCompleted(
+                  effects.request,
+                  this.networkTrace.activity(input.actionId, {
+                    correlationMs: sync.networkCorrelationMs,
+                    pendingCapMs: sync.networkPendingCapMs,
+                  }).completedRequests,
+                )),
+          }
+        : {}),
       ...(nextStep ? { nextReady: () => this.nextReadiness(page, nextStep) } : {}),
+      ...(input.confirmationQuietMs !== undefined ? { confirmationQuietMs: input.confirmationQuietMs } : {}),
       onSignal: (signal) => {
         this.emitHealing(
           signal.kind === 'UI_STABLE' ? 'UI_STABLE' : 'TRANSITION_SIGNAL',

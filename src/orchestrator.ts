@@ -24,6 +24,13 @@ import { writeReports } from './reporting/reporter.js';
 import { redactText, redactUrl } from './security/redactor.js';
 import { ManualCleanup, type TestDataCleanup } from './data/created-data.js';
 import { combineListeners, EngineEventLog } from './logging/engine-log.js';
+import {
+  baselineOf,
+  compareToBaseline,
+  performanceReportOf,
+  summaryText,
+  type PerformanceBaseline,
+} from './performance/performance-tracer.js';
 import { flowsYaml, generateFlows } from './flows/flow-generator.js';
 import { DefaultTestDataProvider } from './data/test-data-provider.js';
 import { AuthorizationObserver, type AuthorizationReport } from './actors/authorization-observer.js';
@@ -217,6 +224,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       : {}),
   });
   let outcome: Awaited<ReturnType<FlowExplorer['explore']>>;
+  const exploreStartedAt = performance.now();
   try {
     outcome = await explorer.explore();
   } catch (error) {
@@ -379,6 +387,63 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
         'utf8',
       );
       result.artifacts.generatedFlows = file;
+    }
+  }
+  if (config.performance.tracing.enabled) {
+    const report = performanceReportOf(
+      explorer.performanceTraces(),
+      Math.round(performance.now() - exploreStartedAt),
+      config.performance.tracing.slowActionThresholdMs,
+    );
+    for (const slow of report.slowActions)
+      engineLog.log(
+        'WARN',
+        'SLOW_ACTION_DETECTED',
+        `step ${String(slow.step)} ${slow.description}: ${String(slow.durationMs)} ms, ${slow.reason} — ${slow.evidence.join('; ')}`,
+        {
+          actionId: slow.actionId,
+          data: { durationMs: slow.durationMs, phase: slow.phase, reason: slow.reason },
+        },
+      );
+    if (report.summary.actions > 0) {
+      engineLog.log('INFO', 'PERFORMANCE_SUMMARY', summaryText(report.summary).join(' | '));
+      await mkdir(config.output.reportsDir, { recursive: true });
+      const file = path.join(config.output.reportsDir, 'performance.json');
+      await writeFile(file, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+      await writeFile(
+        path.join(config.output.reportsDir, 'performance-summary.txt'),
+        [...summaryText(report.summary), '', ...report.waterfalls.flatMap((lines) => [...lines, ''])].join(
+          '\n',
+        ),
+        'utf8',
+      );
+      result.artifacts.performance = file;
+      const baselineFile = config.performance.baseline.file;
+      if (baselineFile) {
+        const current = baselineOf(report.summary);
+        const previous = await readFile(baselineFile, 'utf8')
+          .then((text) => JSON.parse(text) as PerformanceBaseline)
+          .catch(() => undefined);
+        if (!previous) await writeFile(baselineFile, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
+        else
+          for (const regression of compareToBaseline(
+            current,
+            previous,
+            config.performance.baseline.tolerance,
+          ))
+            engineLog.log(
+              'WARN',
+              'PERFORMANCE_REGRESSION',
+              `${regression.metric}: ${String(regression.current)} ms vs baseline ${String(regression.baseline)} ms (×${regression.ratio.toFixed(2)})`,
+              {
+                data: {
+                  metric: regression.metric,
+                  current: regression.current,
+                  baseline: regression.baseline,
+                },
+              },
+            );
+      }
     }
   }
   if (config.logging.file) {
