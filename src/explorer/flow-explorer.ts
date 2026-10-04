@@ -171,6 +171,11 @@ import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
 import { UIObserver } from '../observation/ui-observer.js';
 import { waitForScreenReady } from '../observation/screen-ready.js';
+import type { FunctionalStepContext, ReplayedStepView } from '../workflow-healing/first-divergence.js';
+import {
+  actionContextFingerprintOf,
+  interactionTargetIdentityOf,
+} from '../flows/interaction-target-identity.js';
 import { analyzeWrongEffect, type WrongEffectAnalysis } from '../flows/wrong-effect-analyzer.js';
 import {
   expectationOf,
@@ -588,6 +593,8 @@ export class FlowExplorer {
   private readonly flowReports: FlowRunReport[] = [];
   /** Dernière observation brute (permet aux étapes de flow de trouver l'élément qu'elles visent). */
   private lastSnapshot: UiSnapshot | undefined;
+  /** Le contexte fonctionnel avant / après chaque étape du flow en cours (FIRST FUNCTIONAL DIVERGENCE). */
+  private stepContexts: ReplayedStepView[] = [];
   private readonly forms: FormExerciser;
   /** Fenêtre réseau de chaque action (FlowEdge.network). */
   private readonly networkTrace: NetworkTraceRecorder;
@@ -816,6 +823,7 @@ export class FlowExplorer {
       stabilityWindowMs: sync.stabilityWindowMs,
       noTransitionCapMs: sync.noTransitionCapMs,
       graceMs: sync.graceMs,
+      ...(sync.noProgressTimeoutMs !== undefined ? { noProgressTimeoutMs: sync.noProgressTimeoutMs } : {}),
       observeDomChanges: sync.observeDomChanges,
       observeRouteChanges: sync.observeRouteChanges,
       observeNetwork: sync.observeNetwork,
@@ -2650,6 +2658,7 @@ export class FlowExplorer {
     this.currentFlowReport = report;
     this.pendingLearning = undefined;
     this.flowNetwork = [];
+    this.stepContexts = [];
     this.flowRecordedKeys.clear();
     this.scenario = { values: [] };
     this.listener.onFlowStart?.(flow);
@@ -2696,7 +2705,26 @@ export class FlowExplorer {
       }
 
       const networkMark = this.flowNetwork.length;
+      const contextBefore = functionalContextOf(this.lastSnapshot);
       const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
+      this.stepContexts.push({
+        index,
+        description: outcome.report.description,
+        ...('target' in step
+          ? {
+              target: {
+                ...((step.fingerprint?.role ?? step.target.role)
+                  ? { role: step.fingerprint?.role ?? step.target.role }
+                  : {}),
+                ...((step.fingerprint?.name ?? step.target.name ?? step.target.value)
+                  ? { name: step.fingerprint?.name ?? step.target.name ?? step.target.value }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(contextBefore ? { before: contextBefore } : {}),
+        ...(functionalContextOf(this.lastSnapshot) ? { after: functionalContextOf(this.lastSnapshot) } : {}),
+      });
       const understood = this.understandStep(step, outcome.report, this.flowNetwork.slice(networkMark));
       if (understood?.class === 'UNKNOWN_FAILURE')
         await this.adviseFailure(page, outcome.report, [...report.steps, outcome.report]);
@@ -4660,6 +4688,37 @@ export class FlowExplorer {
       }
     } else if (resolution && (elementAction.kind === 'fill' || !verifying))
       await this.confirmTargetResolution(page, resolution, undefined);
+    // CHECKED_STATE_CHANGED : une case est prouvée par son état relu, pas par un clic réussi.
+    if (elementAction.kind === 'check' || elementAction.kind === 'uncheck') {
+      const wanted = elementAction.kind === 'check';
+      const state = await locator.isChecked({ timeout: 1000 }).catch(() => undefined);
+      if (state !== undefined)
+        this.emitHealing(
+          state === wanted ? 'CHECKED_STATE_CHANGED' : 'CHECKED_STATE_NOT_CHANGED',
+          `${actionLabel(action)}: ${state ? 'checked' : 'unchecked'} (expected ${wanted ? 'checked' : 'unchecked'})`,
+        );
+      if (state === !wanted) {
+        if (this.functional) await this.formNetwork.stopFunctional(`action-${action.id}`);
+        return {
+          page,
+          context: before,
+          report: done('FAILED', {
+            reason: `ACTION_EFFECT_NOT_CONFIRMED: CHECKED_STATE_NOT_CHANGED — the control is ${state ? 'checked' : 'unchecked'}, expected ${wanted ? 'checked' : 'unchecked'}`,
+            stateId: before.stateId,
+            url: before.url,
+            classification: action.classification,
+            effect: {
+              ...effect,
+              execution: 'EXECUTED',
+              status: 'WRONG_EFFECT',
+              expected: ['CHECKED_STATE_CHANGED'],
+              observed: [state ? 'checked' : 'unchecked'],
+              reasons: [...effect.reasons, 'CHECKED_STATE_NOT_CHANGED'],
+            },
+          }),
+        };
+      }
+    }
 
     // « Que s'est-il passé ? »
     let after = await this.observeState(page, before.metadata.depth + 1);
@@ -5280,6 +5339,19 @@ export class FlowExplorer {
       ...(rawMatches !== undefined ? { rawMatches } : {}),
       rerender: { detected: false, evidence: [] },
       identity,
+      ...((): Pick<TargetResolutionTrace, 'interaction' | 'actionContext'> => {
+        const interaction = interactionTargetIdentityOf(step, identity, temporal);
+        return {
+          interaction: {
+            type: interaction.type,
+            semanticIntent: interaction.semanticIntent,
+            adapter: interaction.adapter,
+            ...(interaction.owner ? { owner: `${interaction.owner.kind}:${interaction.owner.name}` } : {}),
+            confidence: interaction.confidence,
+          },
+          actionContext: actionContextFingerprintOf(interaction, found.screen.route),
+        };
+      })(),
       temporal,
       screen: found.screen,
       candidates: ranked.map((candidate) => ({
@@ -5741,6 +5813,10 @@ export class FlowExplorer {
           ...(failure.report.reason
             ? { technicalSymptom: failure.report.reason.split(':')[0] ?? symptom }
             : {}),
+          ...(this.config.authorization.primaryActor
+            ? { expectedRole: this.config.authorization.primaryActor }
+            : {}),
+          history: [...this.stepContexts],
           identifiable:
             !isTechnicalTarget(at.step.target) ||
             Boolean(at.step.fingerprint?.name ?? at.step.fingerprint?.text ?? at.step.fingerprint?.testId),
@@ -5790,8 +5866,18 @@ export class FlowExplorer {
     }
     if (result.learning)
       this.pendingLearning = { index: position.index, input: result.learning, report: recovery };
-    if (at.step.kind === 'fill' || at.step.kind === 'select') {
-      // Le chemin a rendu le champ disponible : l'étape d'origine le remplit maintenant.
+    // L'objectif atteint n'est que la PRÉCONDITION de l'action d'origine (le champ, la case, la cible
+    // d'un contexte rétabli — onglet sélectionné, section ouverte) : l'action elle-même doit encore
+    // être exécutée. Jamais « réussie » sans avoir coché la case ni cliqué la cible.
+    const contextRestored = recovery.divergence.expectedTarget?.contextMismatch !== undefined;
+    if (
+      at.step.kind === 'fill' ||
+      at.step.kind === 'select' ||
+      at.step.kind === 'check' ||
+      at.step.kind === 'uncheck' ||
+      contextRestored
+    ) {
+      // Le chemin a rendu la cible disponible : l'étape d'origine agit maintenant.
       this.healingDepth += 1;
       try {
         const fresh = await this.observeState(page, at.context.metadata.depth).catch(() => at.context);
@@ -8254,4 +8340,19 @@ function pathnameOf(url: string): string {
   } catch {
     return url;
   }
+}
+
+/** Le contexte fonctionnel d'un écran observé : route, onglets sélectionnés, sections ouvertes, dialogue. */
+function functionalContextOf(snapshot: UiSnapshot | undefined): FunctionalStepContext | undefined {
+  if (!snapshot) return undefined;
+  const visible = snapshot.elements.filter((element) => element.visible);
+  const dialog = visible.find((element) => element.dialogName)?.dialogName;
+  return {
+    route: pathOf(snapshot.url),
+    selectedTabs: visible
+      .filter((element) => element.role === 'tab' && element.selected === true)
+      .map((element) => element.name),
+    expandedSections: visible.filter((element) => element.expanded === true).map((element) => element.name),
+    ...(dialog ? { dialog } : {}),
+  };
 }

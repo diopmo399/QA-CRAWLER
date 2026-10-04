@@ -212,6 +212,169 @@ export function installRecorder(
     return clean(heading, 60);
   };
 
+  /**
+   * INTERACTION OWNER : le conteneur sémantique qui POSSÈDE l'interaction (le bouton du dialogue
+   * « Filter », l'option de la liste « Operator », la case de la section « Interview »…), et l'état
+   * de ce conteneur (onglet sélectionné ? panneau ouvert ?). Découvert génériquement : un composant
+   * maison inconnu est au moins identifié par sa balise.
+   */
+  const ownerOf = (el: Element): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    const nameOfContainer = (node: Element): string =>
+      clean(
+        node.getAttribute('aria-label') ??
+          (node.getAttribute('aria-labelledby') ?? '')
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((id) => textOf(document.getElementById(id)))
+            .join(' '),
+        60,
+      ) ||
+      clean(
+        textOf(
+          node.querySelector(
+            ':scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > h4, mat-card-title, mat-panel-title, [role="heading"]',
+          ),
+        ),
+        60,
+      );
+    // L'onglet : le panneau d'onglet qui contient la cible, et l'onglet qui le commande.
+    const panel = el.closest('[role="tabpanel"], mat-tab-body');
+    if (panel) {
+      const id = panel.getAttribute('id');
+      const labelledBy = panel.getAttribute('aria-labelledby');
+      const tab =
+        (id ? document.querySelector(`[role="tab"][aria-controls="${CSS.escape(id)}"]`) : null) ??
+        (labelledBy ? document.getElementById(labelledBy.split(/\s+/)[0] ?? '') : null);
+      if (tab) {
+        out.tab = clean(textOf(tab), 60);
+        out.tabSelected = tab.getAttribute('aria-selected') === 'true';
+      }
+    }
+    // L'accordéon : un panneau repliable (mat-expansion-panel, details, région commandée par un aria-expanded).
+    const expansion = el.closest('mat-expansion-panel, details');
+    if (expansion) {
+      const header = expansion.querySelector(':scope > mat-expansion-panel-header, :scope > summary');
+      out.accordion = clean(textOf(header ?? expansion.querySelector('mat-panel-title')), 60);
+      out.accordionExpanded =
+        expansion.tagName.toLowerCase() === 'details'
+          ? (expansion as HTMLDetailsElement).open
+          : expansion.classList.contains('mat-expanded') || header?.getAttribute('aria-expanded') === 'true';
+    } else {
+      // Le motif ARIA : un ancêtre commandé par un bouton aria-expanded (aria-controls).
+      let node: Element | null = el.parentElement;
+      for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+        if (!node.id) continue;
+        const controller = document.querySelector(`[aria-controls="${CSS.escape(node.id)}"][aria-expanded]`);
+        if (controller && !controller.contains(el)) {
+          out.accordion = clean(textOf(controller), 60);
+          out.accordionExpanded = controller.getAttribute('aria-expanded') === 'true';
+          break;
+        }
+      }
+    }
+    const form = el.closest('form, [role="form"]');
+    if (form) {
+      const id = form.getAttribute('id');
+      const name = nameOfContainer(form) || form.getAttribute('name') || (id && !generatedId(id) ? id : '');
+      if (name) out.form = clean(name, 60);
+    }
+    const row = el.closest('tr, [role="row"]');
+    if (row) {
+      // La clé de la ligne : sa première cellule qui ne contient pas la cible (jamais une saisie).
+      const cell = Array.from(
+        row.querySelectorAll('th, td, [role="cell"], [role="gridcell"], [role="rowheader"]'),
+      ).find((candidate) => !candidate.contains(el) && clean(textOf(candidate)));
+      if (cell) out.row = clean(textOf(cell), 40);
+    }
+    // Une option connaît la liste qui la porte, et la liste le contrôle qui l'ouvre.
+    const listbox = el.closest(
+      '[role="listbox"], select, mat-select, .mat-mdc-select-panel, .cdk-overlay-pane',
+    );
+    if (listbox && el !== listbox) {
+      const id = listbox.getAttribute('id');
+      const control =
+        listbox.tagName.toLowerCase() === 'select' || listbox.tagName.toLowerCase() === 'mat-select'
+          ? listbox
+          : id
+            ? document.querySelector(`[aria-controls="${CSS.escape(id)}"], [aria-owns="${CSS.escape(id)}"]`)
+            : null;
+      const label = control
+        ? labelOf(control) || nameOfContainer(control) || clean(control.getAttribute('aria-label'))
+        : '';
+      if (label) out.listboxOwner = clean(label, 60);
+    }
+    const menu = el.closest('[role="menu"], [role="menubar"], mat-menu, .mat-mdc-menu-panel');
+    if (menu) {
+      const id = menu.getAttribute('id');
+      const trigger = id ? document.querySelector(`[aria-controls="${CSS.escape(id)}"]`) : null;
+      const name = nameOfContainer(menu) || (trigger ? clean(textOf(trigger), 60) : '');
+      if (name) out.menu = name;
+    }
+    // Le propriétaire : le conteneur sémantique le plus proche, sinon le composant maison.
+    const container = el.closest(
+      '[role="dialog"], [role="alertdialog"], dialog, mat-dialog-container, [role="tabpanel"], mat-tab-body, mat-expansion-panel, details, [role="menu"], [role="listbox"], [role="toolbar"], mat-toolbar, tr, [role="row"], fieldset, form, [role="form"], mat-card, [role="region"], section',
+    );
+    if (container && container !== el) {
+      const tag = container.tagName.toLowerCase();
+      const role = container.getAttribute('role') ?? '';
+      const kind =
+        /dialog/.test(role) || tag === 'dialog' || tag === 'mat-dialog-container'
+          ? 'dialog'
+          : role === 'tabpanel' || tag === 'mat-tab-body'
+            ? 'tab'
+            : tag === 'mat-expansion-panel' || tag === 'details'
+              ? 'accordion'
+              : role === 'menu'
+                ? 'menu'
+                : role === 'listbox'
+                  ? 'listbox'
+                  : role === 'toolbar' || tag === 'mat-toolbar'
+                    ? 'toolbar'
+                    : tag === 'tr' || role === 'row'
+                      ? 'row'
+                      : tag === 'fieldset'
+                        ? 'fieldset'
+                        : tag === 'form' || role === 'form'
+                          ? 'form'
+                          : tag === 'mat-card'
+                            ? 'card'
+                            : 'section';
+      const name =
+        kind === 'tab'
+          ? (out.tab as string | undefined)
+          : kind === 'accordion'
+            ? (out.accordion as string | undefined)
+            : kind === 'row'
+              ? (out.row as string | undefined)
+              : kind === 'listbox'
+                ? (out.listboxOwner as string | undefined)
+                : kind === 'menu'
+                  ? (out.menu as string | undefined)
+                  : nameOfContainer(container);
+      out.ownerKind = kind;
+      if (name) out.ownerName = clean(name, 60);
+    } else {
+      // Un composant maison inconnu : au moins sa balise (découverte générique).
+      let node: Element | null = el.parentElement;
+      for (let depth = 0; node && depth < 6; depth += 1, node = node.parentElement)
+        if (node.tagName.includes('-')) {
+          out.ownerKind = 'component';
+          out.ownerName = node.tagName.toLowerCase();
+          break;
+        }
+    }
+    // L'état d'une case / d'un radio / d'un interrupteur AVANT l'action.
+    const role = roleOf(el);
+    if (['checkbox', 'radio', 'switch'].includes(role)) {
+      const native = (el as HTMLInputElement).checked;
+      const aria = el.getAttribute('aria-checked');
+      out.checked =
+        typeof native === 'boolean' && el.tagName.toLowerCase() === 'input' ? native : aria === 'true';
+    }
+    return out;
+  };
+
   const roleOf = (el: Element): string => {
     const explicit = el.getAttribute('role');
     if (explicit) return explicit.split(' ')[0] ?? '';
@@ -518,6 +681,7 @@ export function installRecorder(
       ...(el.getAttribute('autocomplete') ? { autocomplete: el.getAttribute('autocomplete') } : {}),
       ...(el.getAttribute('placeholder') ? { placeholder: clean(el.getAttribute('placeholder')) } : {}),
       ...(el.getAttribute('href') ? { href: (el as HTMLAnchorElement).href } : {}),
+      ...ownerOf(el),
       css,
       cssStable: stable,
       domInstance: instanceOf(el),
@@ -884,6 +1048,16 @@ export function installRecorder(
       selected,
       ...(tab ? { activeTab: clean(textOf(tab), 60) } : {}),
       peers,
+      // L'ÉCRAN au début du geste (avant le gestionnaire de l'application) : les noms des contrôles et
+      // titres visibles. Ce que l'action PRÉCÉDENTE a laissé ; ce qui n'y est pas encore n'est pas son effet.
+      controls: Array.from(
+        new Set(
+          Array.from(document.querySelectorAll(`${CANDIDATES}, h1, h2, h3, h4, [role="heading"]`))
+            .filter((node) => !node.closest(`[${OVERLAY}]`) && visible(node))
+            .map((node) => clean(nameOf(node) || labelOf(node) || textOf(node), 60).toLowerCase())
+            .filter(Boolean),
+        ),
+      ).slice(0, 150),
       loading: busy,
       phase,
       generation: generationNow(),

@@ -170,13 +170,39 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
       ? { effects: action.expectedEffects }
       : {};
   // L'empreinte, quand le localisateur seul ne garantit pas le bon élément (CSS, position).
+  // Et quand elle porte le CONTEXTE de l'interaction (propriétaire, onglet, accordéon, dialogue,
+  // formulaire, ligne, liste) : deux « Apply » de deux dialogues ne se distinguent que par lui. Une
+  // case porte aussi l'état attendu après l'action (CHECKED_STATE_CHANGED vérifié au rejeu).
+  const recorded = action.target?.fingerprint;
+  const contextual =
+    recorded !== undefined &&
+    [
+      recorded.owner,
+      recorded.tab,
+      recorded.accordion,
+      recorded.dialog,
+      recorded.form,
+      recorded.row,
+      recorded.listbox,
+    ].some((value) => value !== undefined);
+  const toggle = action.type === 'CHECK' || action.type === 'UNCHECK';
   const fingerprint =
-    action.target?.fingerprint &&
+    recorded &&
     (target?.strategy === 'css' ||
-      action.target.quality === 'FRAGILE' ||
-      action.target.ambiguous ||
-      action.targetValidation?.repairApplied === true)
-      ? { fingerprint: action.target.fingerprint }
+      action.target?.quality === 'FRAGILE' ||
+      action.target?.ambiguous === true ||
+      action.targetValidation?.repairApplied === true ||
+      contextual ||
+      toggle)
+      ? {
+          fingerprint: {
+            ...recorded,
+            // Un radio est toujours « coché » par son choix ; une case suit l'action.
+            ...(toggle
+              ? { expectedState: action.type === 'UNCHECK' ? ('unchecked' as const) : ('checked' as const) }
+              : {}),
+          },
+        }
       : {};
   const common = { allow: allowOf(action), optional: false, ...effects, ...fingerprint };
   const label = labelOf(action);

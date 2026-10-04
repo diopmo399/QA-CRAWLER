@@ -1,4 +1,9 @@
-import type { FlowStep, FlowTarget } from '../config/flow-schema.js';
+import type { FlowStep, FlowTarget, TargetFingerprint } from '../config/flow-schema.js';
+import {
+  locateFirstFunctionalDivergence,
+  type ReplayedStepView,
+  type RequiredContext,
+} from './first-divergence.js';
 import {
   analyzeExpectedTarget,
   type ExpectedTargetAnalysis,
@@ -109,6 +114,10 @@ export interface HealRequest {
   technicalSymptom?: string;
   /** Une identité vérifiable a été enregistrée pour la cible (nom, texte, test id). */
   identifiable?: boolean;
+  /** L'acteur attendu du parcours (authorization.primaryActor), s'il est connu. */
+  expectedRole?: string;
+  /** Le parcours REJOUÉ jusqu'ici : le contexte fonctionnel avant / après chaque étape. */
+  history?: readonly ReplayedStepView[];
 }
 
 export interface HealResult {
@@ -176,10 +185,12 @@ export async function healWorkflow(
   const expectedTarget =
     // Un CHAMP absent : la question est fonctionnelle (qu'est-ce qui le rend disponible ?). Un contrôle
     // cliquable renommé sans ressemblance de nom reste l'affaire de la récupération existante.
+    // Toute interaction dont le CONTEXTE est enregistré (onglet, accordéon) : la même question.
     (request.symptom === 'TARGET_NOT_FOUND' || request.symptom === 'TARGET_MISMATCH') &&
     'target' in step &&
-    context.currentAction.field === true &&
-    context.currentAction.kind !== 'check'
+    ((context.currentAction.field === true && context.currentAction.kind !== 'check') ||
+      step.fingerprint?.tab !== undefined ||
+      step.fingerprint?.accordion !== undefined)
       ? analyzeExpectedTarget({
           current: context.currentAction,
           identifiable: request.identifiable ?? !isTechnicalTarget(step.target),
@@ -195,8 +206,21 @@ export async function healWorkflow(
           previousDeferred: request.previous?.deferredEffect === true,
           revealers: ports.revealersOf?.(context.currentAction.label, context.currentAction.role) ?? [],
           ...(ports.synonyms ? { synonyms: (term: string) => ports.synonyms?.(term) ?? [] } : {}),
+          ...(step.fingerprint?.tab || step.fingerprint?.accordion
+            ? {
+                recordedContext: {
+                  ...(step.fingerprint.tab ? { tab: step.fingerprint.tab } : {}),
+                  ...(step.fingerprint.accordion ? { accordion: step.fingerprint.accordion } : {}),
+                },
+              }
+            : {}),
         })
       : undefined;
+  if (expectedTarget?.contextMismatch)
+    ports.emit(
+      'TARGET_CONTEXT_MISMATCH',
+      `${expectedTarget.contextMismatch.cause}: expected ${expectedTarget.contextMismatch.expected}, actual ${expectedTarget.contextMismatch.actual ?? 'none'} (${expectedTarget.contextMismatch.classification})`,
+    );
   if (expectedTarget)
     ports.emit(
       'EXPECTED_TARGET_ANALYZED',
@@ -206,7 +230,55 @@ export async function healWorkflow(
     ...divergenceInput,
     ...(request.technicalSymptom ? { technicalSymptom: request.technicalSymptom } : {}),
     ...(expectedTarget ? { expectedTarget } : {}),
+    ...(request.expectedRole ? { expectedRole: request.expectedRole } : {}),
   });
+  // FIRST FUNCTIONAL DIVERGENCE : la cible exige un contexte (onglet, section, dialogue) ; quelle
+  // étape PLUS TÔT l'a perdu (ou ne l'a pas établi) ? La cause racine est là, pas à l'étape en échec.
+  // Le contexte exigé : celui de la cible de l'étape — et, quand l'étape a échoué sur son point de
+  // contrôle « cible suivante disponible » (aucun effet appris), celui de la cible SUIVANTE.
+  const following = request.steps[request.position + 1];
+  const contextOf = (fingerprint: TargetFingerprint | undefined): RequiredContext => ({
+    ...(fingerprint?.tab ? { tab: fingerprint.tab } : {}),
+    ...(fingerprint?.accordion ? { accordion: fingerprint.accordion } : {}),
+    ...(fingerprint?.dialog ? { dialog: fingerprint.dialog } : {}),
+  });
+  const checkpointFailure =
+    !effects && (request.symptom === 'NO_EFFECT' || request.symptom === 'WRONG_EFFECT');
+  // Chaque dimension est vérifiée séparément : celle de l'étape prime, celle de la suivante complète.
+  const required: RequiredContext = {
+    ...(checkpointFailure && following && 'target' in following ? contextOf(following.fingerprint) : {}),
+    ...('target' in step ? contextOf(step.fingerprint) : {}),
+  };
+  if (request.history && request.history.length > 0 && Object.keys(required).length > 0) {
+    const visibleControls = screen.controls.filter((control) => control.visible);
+    const located = locateFirstFunctionalDivergence({
+      failedStep: index,
+      required,
+      history: request.history,
+      current: {
+        route: screen.route,
+        selectedTabs: visibleControls
+          .filter((control) => control.role === 'tab' && control.selected)
+          .map((control) => control.name),
+        expandedSections: visibleControls
+          .filter((control) => control.expanded === true)
+          .map((control) => control.name),
+        ...(screen.overlay ? { dialog: screen.overlay } : {}),
+      },
+    });
+    if (located.stepIndex < index) {
+      analysis = { ...analysis, rootStepIndex: located.stepIndex, firstFunctionalDivergence: located };
+      ports.emit(
+        'FIRST_FUNCTIONAL_DIVERGENCE_LOCATED',
+        `FIRST_FUNCTIONAL_DIVERGENCE=${String(located.stepIndex)} (failed at ${String(index)}): ${located.reasons.join('; ')}`,
+      );
+    }
+  }
+  if (analysis.authContext)
+    ports.emit(
+      'AUTH_CONTEXT_DIVERGENCE',
+      `${analysis.authContext.cause}: expected ${analysis.authContext.expectedRole ?? 'the recorded session'}${analysis.authContext.observedRole ? `, observed ${analysis.authContext.observedRole}` : ''}; refused ${analysis.authContext.observedCapabilities?.join(', ') || '—'} (never bypassed)`,
+    );
   if (!options.analyzeDivergence)
     analysis = {
       ...analysis,

@@ -120,7 +120,10 @@ describe('Human flow recorder (E2E)', () => {
     expect(flow.testData?.values['user.firstName']).toMatchObject({ strategy: 'GENERATE_AT_REPLAY' });
     // Le littéral métier reste ; la valeur pré-remplie (Country) et la case revenue en arrière : aucune étape.
     expect(flow.steps).toContainEqual(expect.objectContaining({ kind: 'select', option: 'Business' }));
-    expect(yaml).not.toMatch(/Country|Newsletter/);
+    // Aucune ÉTAPE ne les vise (un libellé voisin peut figurer dans l'empreinte d'un bouton : du contexte).
+    expect(
+      flow.steps.map((step) => ('target' in step ? JSON.stringify(step.target) : '')).join(' '),
+    ).not.toMatch(/Country|Newsletter/);
     // PRESERVE FIRST : les onglets cliqués par l'humain (Reports, puis Users) restent des étapes —
     // le détour n'est retiré que par l'optimiseur séparé, jamais dans generated.flow.yaml.
     expect(

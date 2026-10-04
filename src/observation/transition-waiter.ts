@@ -29,7 +29,11 @@ export type TransitionSignalKind =
   | 'EXPECTED_EFFECT_OBSERVED'
   | 'NEXT_ACTION_TARGET_AVAILABLE'
   | 'NEXT_ACTION_TARGET_NOT_READY'
-  | 'UI_STABLE';
+  | 'UI_STABLE'
+  /** TransitionSuccessPredicate : la route / le dialogue ont changé et l'interface est durablement stable. */
+  | 'FUNCTIONAL_STATE_REACHED'
+  /** TransitionProgressDetector : plus aucun progrès depuis noProgressTimeoutMs (conclusion sans la borne). */
+  | 'NO_PROGRESS';
 
 export interface TransitionSignal {
   kind: TransitionSignalKind;
@@ -74,6 +78,11 @@ export interface TransitionSettings {
   observeNetwork: boolean;
   observeDialogs: boolean;
   observeLoaders: boolean;
+  /**
+   * NO_PROGRESS_TIMEOUT : sans aucun progrès (mutation, signal, réseau) depuis ce délai, l'interface
+   * stable, l'attente conclut sans attendre la borne. Défaut : max(3000, 6 × stabilityWindowMs).
+   */
+  noProgressTimeoutMs?: number;
 }
 
 /** Ce que l'attente sait AVANT de commencer (déduit de l'action, des effets enregistrés, de la suite). */
@@ -127,6 +136,9 @@ export class TransitionTracker {
   private nextPresent = false;
   private nextReason: string | undefined;
   private network = { started: 0, completed: 0 };
+  /** TransitionProgressDetector : le dernier instant où quelque chose a progressé. */
+  private lastProgressAt = 0;
+  private lastMutations = 0;
 
   constructor(
     private readonly expectation: TransitionExpectation,
@@ -137,6 +149,8 @@ export class TransitionTracker {
     const key = `${kind}|${detail ?? ''}`;
     if (!repeat && this.seen.has(key)) return;
     this.seen.add(key);
+    if (kind !== 'UI_STABLE' && kind !== 'NO_PROGRESS')
+      this.lastProgressAt = Math.max(this.lastProgressAt, atMs);
     if (this.signals.length < 60) this.signals.push({ kind, atMs, ...(detail ? { detail } : {}) });
   }
 
@@ -178,6 +192,12 @@ export class TransitionTracker {
       if (sample.nextReason) this.nextReason = sample.nextReason;
     }
 
+    // Le DOM qui bouge, le réseau qui travaille : du progrès (même sans nouveau signal).
+    if (sample.mutations > this.lastMutations) {
+      this.lastMutations = sample.mutations;
+      this.lastProgressAt = Math.max(this.lastProgressAt, at - Math.max(0, sample.msSinceMutation));
+    }
+    if (sample.network.pending > 0) this.lastProgressAt = at;
     const loaderBusy = s.observeLoaders && sample.loaderVisible;
     const networkBusy = s.observeNetwork && sample.network.pending > 0;
     const quiet = !s.observeDomChanges || sample.msSinceMutation >= s.stabilityWindowMs;
@@ -204,6 +224,19 @@ export class TransitionTracker {
         this.signal('NEXT_ACTION_TARGET_AVAILABLE', at, 'fingerprint differs');
         return finish('TRANSITION_CONFIRMED', 0.5);
       }
+      // TRANSITION SUCCESS PREDICATE : URL DID NOT CHANGE ≠ NO TRANSITION, et l'inverse — une route
+      // changée (ou un dialogue ouvert / fermé) PUIS une interface durablement stable est un état
+      // fonctionnel atteint : l'attente s'arrête, l'ActionEffectVerifier juge les effets déclarés.
+      const functionalChange =
+        this.seen.has('URL_CHANGED|') ||
+        this.seen.has('ROUTE_CHANGED|') ||
+        this.seen.has('DIALOG_OPENED|') ||
+        this.seen.has('DIALOG_CLOSED|');
+      if (functionalChange && stable && sample.msSinceMutation >= 2 * s.stabilityWindowMs) {
+        this.signal('FUNCTIONAL_STATE_REACHED', at, 'route or dialog changed, UI stable');
+        return finish('TRANSITION_CONFIRMED', 0.7);
+      }
+      if (this.noProgress(at, stable)) return finish('TIMEOUT', 0.2);
       return timedOut ? finish('TIMEOUT', 0.2) : undefined;
     }
     if (stable) {
@@ -224,6 +257,18 @@ export class TransitionTracker {
     return timedOut ? finish('TIMEOUT', 0.2) : undefined;
   }
 
+  /**
+   * TRANSITION PROGRESS DETECTOR : TIMEOUT only when no meaningful progress remains. Une interface
+   * stable, sans mutation, sans requête, sans nouveau signal depuis noProgressTimeoutMs : attendre la
+   * borne n'apprendrait rien de plus.
+   */
+  private noProgress(at: number, stable: boolean): boolean {
+    const limit = this.settings.noProgressTimeoutMs ?? Math.max(3000, 6 * this.settings.stabilityWindowMs);
+    if (!stable || at - this.lastProgressAt < limit) return false;
+    this.signal('NO_PROGRESS', at, `no progress for ${String(Math.round(at - this.lastProgressAt))} ms`);
+    return true;
+  }
+
   private result(
     status: TransitionWaitStatus,
     sample: TransitionSample,
@@ -233,6 +278,8 @@ export class TransitionTracker {
   ): TransitionWaitResult {
     const missing: string[] = [];
     if (status === 'TIMEOUT' || timedOut) {
+      if (this.signals.some((signal) => signal.kind === 'NO_PROGRESS'))
+        missing.push('NO_PROGRESS_TIMEOUT (nothing changed any more: concluded before the bound)');
       if (this.expectation.effectsDeclared && !this.effect) missing.push('EXPECTED_EFFECT_OBSERVED');
       if (this.expectation.nextAwaited && this.next !== true)
         missing.push(`NEXT_ACTION_TARGET_AVAILABLE${this.nextReason ? ` (${this.nextReason})` : ''}`);

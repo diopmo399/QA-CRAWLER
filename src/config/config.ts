@@ -1408,6 +1408,8 @@ const replaySchema = z
         noTransitionCapMs: z.number().int().min(100).max(30_000).default(1500),
         /** Rien observé, rien de précis attendu : au-delà, l'attente conclut (sans attendre la borne). */
         graceMs: z.number().int().min(100).max(30_000).default(1000),
+        /** Sans aucun progrès depuis ce délai (interface stable, ni mutation, ni requête) : conclure sans attendre la borne. */
+        noProgressTimeoutMs: z.number().int().min(500).max(60_000).optional(),
         /** Une requête partie dans ce délai après l'action lui est corrélée (une interrogation plus tardive, non). */
         networkCorrelationMs: z.number().int().min(0).max(30_000).default(1500),
         /** Une requête corrélée encore en attente au-delà ne bloque plus la stabilité (connexion persistante). */

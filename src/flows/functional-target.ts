@@ -69,6 +69,15 @@ export interface FunctionalTargetIdentity {
   nearbyText?: string[];
   /** Le localisateur enregistré est un chemin de positions (nth-…) : une preuve faible. */
   fragileLocator?: boolean;
+  // INTERACTION OWNER et contexte structurel enregistrés (absents d'un ancien enregistrement).
+  /** « dialog:Filter », « listbox:Operator », « row:Request 42 ». */
+  owner?: string;
+  tab?: string;
+  accordion?: string;
+  form?: string;
+  row?: string;
+  /** Le contrôle qui porte une option (SELECT d'une liste maison). */
+  listbox?: string;
 }
 
 /** Le moment du parcours : avant, maintenant, après — des preuves, jamais des vérités. */
@@ -119,6 +128,17 @@ export interface FunctionalCandidate {
   stableAttributes: Record<string, string>;
   /** L'indice CSS (id stable…) : affiché, jamais une vérité. */
   cssHint?: string;
+  /** Le propriétaire et le contexte structurel, lus comme à l'enregistrement. */
+  owner?: string;
+  tab?: string;
+  /** L'onglet du candidat est-il sélectionné ? */
+  tabSelected?: boolean;
+  accordion?: string;
+  accordionExpanded?: boolean;
+  form?: string;
+  row?: string;
+  /** L'id ressemble à un id généré (mat-input-12, :r3:) : jamais une preuve d'identité. */
+  generatedId?: boolean;
 }
 
 export interface ScoredCandidate extends FunctionalCandidate {
@@ -160,6 +180,9 @@ export interface TargetResolutionTrace {
   runtime: { locator: string; fingerprintVerdict: string; reasons: string[] };
   rerender: RerenderAnalysis;
   identity: FunctionalTargetIdentity;
+  /** L'identité d'interaction (type, intention, propriétaire, contexte) et la clé d'action en contexte. */
+  interaction?: { type: string; semanticIntent: string; adapter: string; owner?: string; confidence: number };
+  actionContext?: { key: string; parts: Record<string, string> };
   temporal: TemporalActionContext;
   screen?: ScreenSemanticContext;
   candidates: {
@@ -350,6 +373,12 @@ export function functionalIdentityOf(
     ...(step.target.strategy === 'css' && /:nth-(of-type|child)|>\s*div/.test(step.target.value ?? '')
       ? { fragileLocator: true }
       : {}),
+    ...(fingerprint?.owner ? { owner: fingerprint.owner } : {}),
+    ...(fingerprint?.tab ? { tab: fingerprint.tab } : {}),
+    ...(fingerprint?.accordion ? { accordion: fingerprint.accordion } : {}),
+    ...(fingerprint?.form ? { form: fingerprint.form } : {}),
+    ...(fingerprint?.row ? { row: fingerprint.row } : {}),
+    ...(fingerprint?.listbox ? { listbox: fingerprint.listbox } : {}),
   };
 }
 
@@ -526,6 +555,89 @@ function scanCandidates(
       .filter((text) => text && text.length <= 60);
     const label = labelOf(el);
     const elementId = el.getAttribute('id');
+    // INTERACTION OWNER, lu comme à l'enregistrement : onglet, accordéon, formulaire, ligne, propriétaire.
+    const context: Record<string, string | boolean> = {};
+    const panel = composedClosest(el, '[role="tabpanel"], mat-tab-body');
+    if (panel) {
+      const panelId = panel.getAttribute('id');
+      const by = panel.getAttribute('aria-labelledby');
+      const tab =
+        (panelId ? document.querySelector(`[role="tab"][aria-controls="${CSS.escape(panelId)}"]`) : null) ??
+        (by ? document.getElementById(by.split(/\s+/)[0] ?? '') : null);
+      if (tab) {
+        context.tab = clean(tab.textContent);
+        context.tabSelected = tab.getAttribute('aria-selected') === 'true';
+      }
+    }
+    const expansion = composedClosest(el, 'mat-expansion-panel, details');
+    if (expansion) {
+      const header = expansion.querySelector(':scope > mat-expansion-panel-header, :scope > summary');
+      context.accordion = clean(header?.textContent);
+      context.accordionExpanded =
+        expansion.tagName.toLowerCase() === 'details'
+          ? (expansion as HTMLDetailsElement).open
+          : expansion.classList.contains('mat-expanded') || header?.getAttribute('aria-expanded') === 'true';
+    } else
+      for (let node = el.parentElement, depth = 0; node && depth < 8; node = node.parentElement, depth += 1) {
+        if (!node.id) continue;
+        const controller = document.querySelector(`[aria-controls="${CSS.escape(node.id)}"][aria-expanded]`);
+        if (controller && !controller.contains(el)) {
+          context.accordion = clean(controller.textContent);
+          context.accordionExpanded = controller.getAttribute('aria-expanded') === 'true';
+          break;
+        }
+      }
+    const form = composedClosest(el, 'form, [role="form"]');
+    const formName = form
+      ? clean(form.getAttribute('aria-label') ?? form.getAttribute('name')) || dialogName(form)
+      : '';
+    if (formName) context.form = formName;
+    const row = composedClosest(el, 'tr, [role="row"]');
+    const cell = row
+      ? Array.from(row.querySelectorAll('th, td, [role="cell"], [role="gridcell"], [role="rowheader"]')).find(
+          (candidate) => !candidate.contains(el) && clean(candidate.textContent),
+        )
+      : undefined;
+    if (cell) context.row = clean(cell.textContent, 40);
+    const owner = composedClosest(
+      el,
+      '[role="dialog"], [role="alertdialog"], dialog, mat-dialog-container, [role="tabpanel"], mat-tab-body, mat-expansion-panel, details, [role="menu"], [role="listbox"], [role="toolbar"], mat-toolbar, tr, [role="row"], fieldset, form, [role="form"], mat-card, [role="region"], section',
+    );
+    if (owner) {
+      const tag = owner.tagName.toLowerCase();
+      const role = owner.getAttribute('role') ?? '';
+      const kind =
+        /dialog/.test(role) || tag === 'dialog' || tag === 'mat-dialog-container'
+          ? 'dialog'
+          : role === 'tabpanel' || tag === 'mat-tab-body'
+            ? 'tab'
+            : tag === 'mat-expansion-panel' || tag === 'details'
+              ? 'accordion'
+              : role === 'menu'
+                ? 'menu'
+                : role === 'listbox'
+                  ? 'listbox'
+                  : role === 'toolbar' || tag === 'mat-toolbar'
+                    ? 'toolbar'
+                    : tag === 'tr' || role === 'row'
+                      ? 'row'
+                      : tag === 'fieldset'
+                        ? 'fieldset'
+                        : tag === 'form' || role === 'form'
+                          ? 'form'
+                          : tag === 'mat-card'
+                            ? 'card'
+                            : 'section';
+      const name =
+        kind === 'tab'
+          ? context.tab
+          : kind === 'accordion'
+            ? context.accordion
+            : kind === 'row'
+              ? context.row
+              : dialogName(owner);
+      if (typeof name === 'string' && name) context.owner = `${kind}:${name}`;
+    }
     candidates.push({
       id,
       tag: el.tagName.toLowerCase(),
@@ -548,6 +660,10 @@ function scanCandidates(
       nearText: [...new Set(near)].slice(0, 3),
       stableAttributes: stable,
       ...(elementId ? { cssHint: `#${elementId}` } : {}),
+      ...context,
+      ...(elementId && /^(mat-|cdk-|ng-|mui-|:r)|\d{3,}|[-_]\d+$/.test(elementId)
+        ? { generatedId: true }
+        : {}),
     });
   }
   // L'ÉCRAN, compact : la fenêtre ouverte, les choix affichés, les contrôles et actions visibles.
@@ -760,6 +876,19 @@ export const TARGET_SCORE_WEIGHTS = {
   unlabelledTarget: 0.15,
   contextMismatchPenalty: -0.2,
   sharedId: 0.02,
+  // INTERACTION OWNER et contexte : ce qui distingue deux « Apply » de deux dialogues, deux listes
+  // pareilles de deux formulaires, une case d'une ligne d'une autre.
+  ownerMatch: 0.15,
+  ownerMismatch: -0.2,
+  tabMatch: 0.1,
+  tabMismatch: -0.25,
+  accordionMatch: 0.1,
+  accordionMismatch: -0.2,
+  formMatch: 0.1,
+  formMismatch: -0.15,
+  rowMatch: 0.15,
+  rowMismatch: -0.3,
+  generatedIdPenalty: -0.05,
 } as const;
 
 /**
@@ -946,6 +1075,34 @@ export function scoreCandidates(
         components.workflowContext = TARGET_SCORE_WEIGHTS.workflowContext;
         prove('WORKFLOW_CONTEXT_MATCH', 'POSITIVE', `"${found}" was chosen just before`);
       }
+      // INTERACTION OWNER et contexte structurel : chaque dimension connue des DEUX côtés est une
+      // preuve (positive ou négative) ; inconnue d'un côté, elle ne pèse pas.
+      const contextual = (
+        dimension: 'owner' | 'tab' | 'accordion' | 'form' | 'row',
+        match: number,
+        mismatch: number,
+      ): void => {
+        const recorded = identity[dimension];
+        const observed = candidate[dimension];
+        if (!recorded || !observed) return;
+        const same = normalize(recorded) === normalize(observed);
+        components[`${dimension}Context`] = same ? match : mismatch;
+        prove(
+          `${dimension.toUpperCase()}_${same ? 'MATCH' : 'MISMATCH'}`,
+          same ? 'POSITIVE' : 'NEGATIVE',
+          `${dimension} "${observed}" (recorded "${recorded}")`,
+        );
+      };
+      contextual('owner', TARGET_SCORE_WEIGHTS.ownerMatch, TARGET_SCORE_WEIGHTS.ownerMismatch);
+      contextual('tab', TARGET_SCORE_WEIGHTS.tabMatch, TARGET_SCORE_WEIGHTS.tabMismatch);
+      contextual('accordion', TARGET_SCORE_WEIGHTS.accordionMatch, TARGET_SCORE_WEIGHTS.accordionMismatch);
+      contextual('form', TARGET_SCORE_WEIGHTS.formMatch, TARGET_SCORE_WEIGHTS.formMismatch);
+      contextual('row', TARGET_SCORE_WEIGHTS.rowMatch, TARGET_SCORE_WEIGHTS.rowMismatch);
+      // Un id généré (mat-input-12) qui correspond n'est pas une preuve ; il ne retire rien sinon.
+      if (candidate.generatedId && identity.id && candidate.stableAttributes.id === identity.id) {
+        components.generatedId = TARGET_SCORE_WEIGHTS.generatedIdPenalty;
+        prove('GENERATED_ID', 'NEGATIVE', `id "${identity.id}" looks generated: not an identity`);
+      }
       const base = wanted ? 0 : TARGET_SCORE_WEIGHTS.unlabelledTarget;
       if (base) components.unlabelledTarget = base;
       // Jamais plafonné à 1 pour CLASSER : deux candidats « saturés » (empreinte riche) resteraient
@@ -993,9 +1150,12 @@ export function decide(
   return {
     status: 'AMBIGUOUS',
     ranked: [...ranked],
-    reason: second
-      ? `${best.id} ${String(best.score)} and ${second.id} ${String(second.score)} are too close: never the first one by chance`
-      : `${best.id} ${String(best.score)} is not strong enough on its own`,
+    reason:
+      best.score < minScore
+        ? `${best.id} ${String(best.score)} is not strong enough on its own (minimum ${String(minScore)})`
+        : second
+          ? `${best.id} ${String(best.score)} and ${second.id} ${String(second.score)} are too close: never the first one by chance`
+          : `${best.id} ${String(best.score)} is not strong enough on its own`,
   };
 }
 
@@ -1141,7 +1301,12 @@ export function traceText(trace: TargetResolutionTrace): string[] {
     `runtime: ${trace.runtime.locator} fingerprint=${trace.runtime.fingerprintVerdict}`,
     `rerender: ${trace.rerender.detected ? 'DETECTED' : 'not detected'}`,
     `functional identity: ${trace.identity.businessConcept ?? trace.identity.semanticRole}`,
-    `context: ${[trace.identity.dialog ? `dialog=${trace.identity.dialog}` : '', ...Object.entries(trace.identity.configuration).map(([key, value]) => `${key}=${value}`)].filter(Boolean).join(' ') || '—'}`,
+    ...(trace.interaction
+      ? [
+          `interaction: ${trace.interaction.type} ${trace.interaction.semanticIntent} (${trace.interaction.adapter}${trace.interaction.owner ? `, owner ${trace.interaction.owner}` : ''}, confidence ${String(trace.interaction.confidence)})${trace.actionContext ? ` ${trace.actionContext.key}` : ''}`,
+        ]
+      : []),
+    `context: ${[trace.identity.dialog ? `dialog=${trace.identity.dialog}` : '', trace.identity.tab ? `tab=${trace.identity.tab}` : '', trace.identity.accordion ? `accordion=${trace.identity.accordion}` : '', trace.identity.form ? `form=${trace.identity.form}` : '', trace.identity.row ? `row=${trace.identity.row}` : '', ...Object.entries(trace.identity.configuration).map(([key, value]) => `${key}=${value}`)].filter(Boolean).join(' ') || '—'}`,
     `previous: ${trace.temporal.previousActions.map((action) => `${action.type} ${action.target}${action.value ? ` = ${action.value}` : ''}`).join(', ') || '—'}`,
     `next: ${trace.temporal.nextActions.map((action) => `${action.type} ${action.target}`).join(', ') || '—'}`,
     `candidates: ${trace.candidates.map((candidate) => `${candidate.id} ${String(candidate.score)}${candidate.rejected ? ' (rejected)' : ''}`).join(', ') || 'none'}`,
