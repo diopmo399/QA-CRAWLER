@@ -137,8 +137,9 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     candidates.push({
       target: { strategy: 'css', value: `#${element.elementId}` },
       quality: 'CSS_STABLE',
-      unique: true,
-      why: `stable id "${element.elementId}"`,
+      // Un id dupliqué (#valueInput ×4) désigne plusieurs éléments : jamais une identité unique.
+      unique: (element.sameId ?? 1) <= 1,
+      why: `stable id "${element.elementId}"${(element.sameId ?? 1) > 1 ? ` (shared by ${String(element.sameId)} elements)` : ''}`,
     });
   const fragile: FlowTarget = { strategy: 'css', value: element.css };
   candidates.push({
@@ -174,6 +175,7 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     element.formControlName,
     element.nameAttr,
   ].find((text): text is string => readable(text));
+  const nearby = (element.nearbyText ?? []).filter((text) => readable(text)).slice(0, 4);
   // L'empreinte : ce qui identifie le MÊME élément au rejeu, même si son localisateur change.
   const fingerprint: TargetFingerprint = {
     ...(role ? { role } : {}),
@@ -188,6 +190,15 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     ...(element.formControlName ? { formControl: element.formControlName } : {}),
     ...(readable(element.placeholder) ? { placeholder: element.placeholder } : {}),
     ...(semanticId ? { semanticId } : {}),
+    // IDENTITÉ CONTEXTUALISÉE : de quoi départager plusieurs éléments trouvés par le même localisateur.
+    ...(element.elementId && !element.generatedId ? { id: element.elementId } : {}),
+    ...(element.inputType ? { inputType: element.inputType } : {}),
+    ...(element.dialogName && readable(element.dialogName) ? { dialog: element.dialogName } : {}),
+    ...(element.formField && readable(element.formField) ? { formField: element.formField } : {}),
+    ...(nearby.length > 0 ? { nearbyText: nearby } : {}),
+    ...(element.nameAttr && !/\d{2,}/.test(element.nameAttr)
+      ? { stableAttributes: { name: element.nameAttr } }
+      : {}),
   };
   return {
     target: chosen.target,
