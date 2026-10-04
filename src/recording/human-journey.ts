@@ -1,3 +1,4 @@
+import { classifyEffects, expectedEffectsFrom } from './effect-causality.js';
 import type { StepEffects } from '../config/flow-schema.js';
 import type {
   RawRecordedEvent,
@@ -281,10 +282,17 @@ export function attributeEffects(
     const first = actions[start];
     if (!first) break;
     let end = start;
+    // UNE observation partagée (même identité d'observation) ; un ancien enregistrement sans identité :
+    // le même écran d'après (comportement historique).
+    const sameObservation = (next: SemanticRecordedAction | undefined): boolean =>
+      next !== undefined &&
+      (first.observationId !== undefined && next.observationId !== undefined
+        ? next.observationId === first.observationId
+        : next.stateAfter === first.stateAfter);
     while (
       first.stateAfter !== undefined &&
       first.type !== 'NAVIGATE' &&
-      actions[end + 1]?.stateAfter === first.stateAfter &&
+      sameObservation(actions[end + 1]) &&
       actions[end + 1]?.type !== 'NAVIGATE'
     )
       end += 1;
@@ -292,20 +300,29 @@ export function attributeEffects(
     const before = first.stateBefore;
     const enablers = group.filter((action) => ENABLING.has(action.type));
     if (group.length > 1) for (const action of enablers) if (before) action.stateBefore = before;
-    // Le premier geste qui peut produire l'effet en est la cause (les suivants ont agi sur l'écran déjà changé).
-    const owner = enablers[0] ?? group.at(-1);
-    const effects = domEffects(
-      before ? stateById.get(before) : undefined,
-      first.stateAfter ? stateById.get(first.stateAfter) : undefined,
-    );
+    // THE NEXT HUMAN ACTION CREATES A STRONG CAUSAL BOUNDARY : un écran partagé revient au geste le
+    // PLUS RÉCENT avant l'observation (une saisie validée par le clic qui suit : ce clic). Les gestes
+    // plus anciens du groupe ne gardent que leurs effets prouvés par identité (réseau, navigation).
+    const owner = enablers.at(-1) ?? group.at(-1);
+    const beforeState = before ? stateById.get(before) : undefined;
+    const afterState = first.stateAfter ? stateById.get(first.stateAfter) : undefined;
+    const effects = domEffects(beforeState, afterState);
     if (owner && effects.length > 0) owner.domEffects = effects;
-    if (owner) {
-      const learned = learnExpectedEffects(
-        before ? stateById.get(before) : undefined,
-        first.stateAfter ? stateById.get(first.stateAfter) : undefined,
-        owner,
-      );
-      if (learned) owner.expectedEffects = learned;
+    const nextAction = actions[end + 1];
+    for (const action of group) {
+      if (action !== owner && !ENABLING.has(action.type)) continue;
+      const candidates = classifyEffects({
+        action,
+        learned: learnExpectedEffects(beforeState, afterState, action),
+        ownsScreen: action === owner,
+        screenShared: enablers.length > 1,
+        ...(owner && action !== owner ? { screenOwner: owner } : {}),
+        ...(nextAction ? { next: nextAction } : {}),
+      });
+      action.effectCausality = candidates;
+      const learned = expectedEffectsFrom(action, candidates);
+      if (learned) action.expectedEffects = learned;
+      else delete action.expectedEffects;
     }
     start = end + 1;
   }

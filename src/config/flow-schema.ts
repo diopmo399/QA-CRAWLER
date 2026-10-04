@@ -214,6 +214,24 @@ const effectsSchema = z
     route: nonEmpty.optional(),
     request: nonEmpty.optional(),
     required: z.boolean().optional(),
+    /** Effets FACULTATIFS (POSSIBLY_CORRELATED) : jamais une raison d'échec. */
+    optional: z.array(nonEmpty).max(20).optional(),
+    /** Effets INFORMATIFS : consignés, jamais vérifiés. */
+    informational: z.array(nonEmpty).max(20).optional(),
+    /** D'où viennent ces attentes : l'action propriétaire, la causalité et la confiance de chaque effet. */
+    provenance: z
+      .object({
+        actionId: nonEmpty,
+        effects: z
+          .array(
+            z
+              .object({ effect: nonEmpty, causality: nonEmpty, confidence: z.number().min(0).max(1) })
+              .strict(),
+          )
+          .max(40),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -440,6 +458,12 @@ export interface StepEffects {
   route?: string;
   request?: string;
   required?: boolean;
+  /** Facultatifs (POSSIBLY_CORRELATED) : jamais une raison d'échec. */
+  optional?: string[];
+  /** Informatifs : jamais vérifiés. */
+  informational?: string[];
+  /** Provenance causale (propriétaire, causalité, confiance) ; absente d'un ancien enregistrement. */
+  provenance?: { actionId: string; effects: { effect: string; causality: string; confidence: number }[] };
 }
 
 export interface TargetFingerprint {

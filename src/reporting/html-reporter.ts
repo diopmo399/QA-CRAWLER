@@ -415,6 +415,11 @@ function effectBlock(step: FlowStepReport): string {
     ...(effect.expected.length > 0 ? [`expected: ${effect.expected.map(esc).join(', ')}`] : []),
     ...(effect.observed.length > 0 ? [`observed: ${effect.observed.map(esc).join(', ')}`] : []),
     ...(effect.recovery.length > 0 ? [`recovery: ${effect.recovery.map(esc).join(' · ')}`] : []),
+    ...(step.recordingModelDivergence
+      ? [
+          `<b>recording-model divergence</b>: ${esc(step.recordingModelDivergence.classification)} — suspect expectations ${step.recordingModelDivergence.suspectEffects.map(esc).join(', ')} (not an application divergence)`,
+        ]
+      : []),
   ];
   return `<div class="muted">${lines.join('<br>')}</div>`;
 }

@@ -495,8 +495,22 @@ export class HumanFlowRecorder {
     // Un clic sur un élément non reconnu est observé aussi : s'il change l'écran, c'est une action humaine.
     const observed = !event.noise || event.noise === NON_INTERACTIVE_NOISE;
     if (event.type !== 'input' && event.type !== 'keydown' && event.type !== 'filechooser' && observed) {
+      // THE NEXT HUMAN ACTION CREATES A STRONG CAUSAL BOUNDARY : les actions encore en attente de leur
+      // écran sont observées MAINTENANT, avant les effets de celle-ci (jamais un écran partagé avec elle).
+      if (this.awaiting.length > 0) {
+        const boundary = this.awaiting;
+        this.awaiting = [];
+        for (const pending of boundary) pending.observationClosedBy = event.id;
+        this.emit(
+          'RECORDING_ACTION_WINDOW_CLOSED',
+          `${boundary.map((pending) => pending.id).join(', ')} closed by the next human action ${event.id}`,
+          { ids: boundary.map((pending) => pending.id), closedBy: event.id },
+        );
+        this.track(this.observeNow(boundary));
+      }
       this.openWindow(event);
       this.awaiting.push(event);
+      this.emit('RECORDING_ACTION_WINDOW_OPENED', `${event.id} ${event.type}`, { id: event.id });
       this.schedule();
     }
     return event;
@@ -534,24 +548,30 @@ export class HumanFlowRecorder {
     }, this.options.config.recording.settleMs);
   }
 
-  /** Observe l'écran courant et le donne aux événements qui l'attendent. */
-  private async observeNow(): Promise<void> {
+  /** Observe l'écran courant et le donne aux événements qui l'attendent (ou à ceux d'une frontière). */
+  private async observeNow(boundary?: RawRecordedEvent[]): Promise<void> {
     if (this.observing) await this.observing.catch(() => undefined);
-    const run = this.observe();
+    const run = this.observe(boundary);
     this.observing = run;
     await run.catch(() => undefined);
   }
 
-  private async observe(): Promise<void> {
+  private observations = 0;
+
+  private async observe(boundary?: RawRecordedEvent[]): Promise<void> {
     const page = this.page;
     if (!page || page.isClosed()) return;
     // Les événements arrivés pendant l'observation attendront la suivante.
-    const waiting = this.awaiting;
-    this.awaiting = [];
-    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => undefined);
+    const waiting = boundary ?? this.awaiting;
+    if (!boundary) this.awaiting = [];
+    // À une frontière, l'écran est capté tout de suite : attendre le réseau laisserait entrer les
+    // effets de l'action suivante (UI STABILITY DOES NOT PROVE EFFECT OWNERSHIP).
+    if (!boundary) await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => undefined);
     const snapshot = await this.observer.observe(page).catch(() => undefined);
     if (!snapshot) {
-      this.awaiting = [...waiting, ...this.awaiting];
+      // Une frontière sans écran lisible (page en navigation) : ces actions restent SANS écran d'après,
+      // jamais fusionnées avec la suivante.
+      if (!boundary) this.awaiting = [...waiting, ...this.awaiting];
       return;
     }
     const detected = this.detector.detect(snapshot);
@@ -571,6 +591,7 @@ export class HumanFlowRecorder {
         .map((element) => `${element.role}:${element.name}`)
         .slice(0, 300),
       ...(snapshot.structure ? { tableRows: snapshot.structure.tableRows } : {}),
+      observedAt: this.now(),
     };
     // Le même écran, inchangé : l'observation précédente suffit (la session reste bornée).
     const previous = this.session.states.at(-1);
@@ -580,7 +601,14 @@ export class HumanFlowRecorder {
       this.snapshots.set(state.id, snapshot);
     }
     const kept = same || this.session.states.length >= MAX_OBSERVATIONS ? (previous ?? state) : state;
-    for (const event of waiting) event.stateAfter = kept.id;
+    // L'IDENTITÉ de cette observation (distincte de l'écran : deux observations d'un écran inchangé ne
+    // sont pas UNE observation partagée — seules les actions de la même observation se la disputent).
+    this.observations += 1;
+    const observationId = `v${String(this.observations)}`;
+    for (const event of waiting) {
+      event.stateAfter = kept.id;
+      event.observationId = observationId;
+    }
     // L'écran est stable : la fenêtre réseau de la dernière action se ferme.
     if (this.window && waiting.includes(this.window)) await this.closeWindow();
   }

@@ -20,7 +20,9 @@ import type { AddressInfo } from 'node:net';
  * est RECRÉÉ dans le shadow root OUVERT d'un composant `value-field`, libellé « Criteria » : même
  * #valueInput pour Playwright, invisible pour un querySelectorAll, empreinte différente), `shadowLoose`
  * (idem, précédé d'un bouton « Reset » et lu « combobox » : les preuves se contredisent, aucune
- * décision déterministe).
+ * décision déterministe), `navigate` (Apply appelle /api/search et affiche les résultats avec
+ * « Process request » — une ligne existe dès le chargement —, qui NAVIGUE vers /process : l'effet de l'action SUIVANTE), `navigateBroken` (la recherche répond 500 :
+ * la liste disparaît — une vraie régression).
  */
 export interface FilterApp {
   url: string;
@@ -50,18 +52,42 @@ const page = (
 </div>
 ${variant === 'wrongSection' ? '<section aria-label="Archive"><h2>Archive</h2><label>Archive search <input id="archiveSearch"></label></section>' : ''}
 <p id="result"></p>
+${variant.startsWith('navigate') ? '<ul id="rows"><li>Company initial <button type="button" class="process">Process request</button></li></ul>' : ''}
 <p>Applied <span id="count">0</span> time(s)</p>
 </main><script>
   document.getElementById('open').addEventListener('click', (event) => {
     document.getElementById('panel').classList.remove('hidden');
     ${variant === 'hideOpener' ? "event.currentTarget.classList.add('hidden');" : ''}
   });
+  ${
+    variant.startsWith('navigate')
+      ? `// La ligne « Process request » existe AVANT Apply (le cas réel) ; Apply la rafraîchit.
+  document.addEventListener('click', (event) => {
+    if (!event.target.classList?.contains('process')) return;
+    history.pushState({}, '', '/process');
+    document.querySelector('main').innerHTML = '<h1>Process</h1><p>Processing</p><button type="button" id="back">Back</button>';
+  });`
+      : ''
+  }
   let count = 0;
   document.getElementById('apply').addEventListener('click', () => {
     count += 1;
     document.getElementById('count').textContent = String(count);
     const value = (document.querySelector('#valueBox input') ?? document.querySelector('#valueBox value-field')?.shadowRoot?.querySelector('input'))?.value ?? '';
     ${variant === 'closeOnApply' ? "document.getElementById('panel').classList.add('hidden');" : ''}
+    ${
+      variant === 'navigate' || variant === 'navigateBroken'
+        ? `fetch('${variant === 'navigateBroken' ? '/api/broken' : '/api/search'}?value=' + encodeURIComponent(value)).then((response) => {
+      if (!response.ok) throw new Error(String(response.status));
+      return response.json();
+    }).then((rows) => {
+      document.getElementById('rows').innerHTML = rows.map((row) => '<li>' + row + ' <button type="button" class="process">Process request</button></li>').join('');
+    }).catch(() => {
+      // La recherche échoue : la liste disparaît, l'action suivante n'est plus possible.
+      document.getElementById('rows').innerHTML = '';
+    });`
+        : ''
+    }
     document.getElementById('result').textContent = value
       ? 'Filtered: ' + document.getElementById('field').value + ' ' + document.getElementById('operator').value + ' ' + value
       : '';
@@ -131,7 +157,20 @@ ${variant === 'wrongSection' ? '<section aria-label="Archive"><h2>Archive</h2><l
 
 export async function startFilterApp(): Promise<FilterApp> {
   const server: Server = createServer((request, response) => {
-    const variant = new URL(request.url ?? '/', 'http://x').searchParams.get('variant') ?? 'default';
+    const url = new URL(request.url ?? '/', 'http://x');
+    if (url.pathname === '/api/broken') {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end('{}');
+      return;
+    }
+    if (url.pathname === '/api/search') {
+      setTimeout(() => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify([`Company ${url.searchParams.get('value') ?? ''}`]));
+      }, 120);
+      return;
+    }
+    const variant = url.searchParams.get('variant') ?? 'default';
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     response.end(page(variant));
   });
