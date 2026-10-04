@@ -231,6 +231,8 @@ export interface RecordedElement {
   cssMatches?: number;
   /** Sa position parmi ces éléments (0 = premier) : le dernier recours, jamais une identité. */
   cssIndex?: number;
+  /** Un CONTENEUR de plusieurs contrôles (en-tête d'onglets, barre d'outils) : leurs noms. */
+  containerOf?: string[];
   /** formControlName lu sur le composant HÔTE (un input dans <app-input formcontrolname="x">). */
   formControlFromHost?: boolean;
   /** L'identité portée par l'ancêtre le plus proche (formControlName, data-testid, name, section…). */

@@ -25,22 +25,20 @@ interface Spec {
   quality?: RecordedFlowStep['quality'];
 }
 
-const click = (name: string, row?: string): FlowStep =>
-  ({
-    kind: 'click',
-    target: { strategy: 'text', value: name },
-    allow: [],
-    optional: false,
-    ...(row ? { fingerprint: { row } } : {}),
-  });
-const fill = (label: string): FlowStep =>
-  ({
-    kind: 'fill',
-    target: { strategy: 'label', value: label },
-    value: 'x',
-    allow: [],
-    optional: false,
-  });
+const click = (name: string, row?: string): FlowStep => ({
+  kind: 'click',
+  target: { strategy: 'text', value: name },
+  allow: [],
+  optional: false,
+  ...(row ? { fingerprint: { row } } : {}),
+});
+const fill = (label: string): FlowStep => ({
+  kind: 'fill',
+  target: { strategy: 'label', value: label },
+  value: 'x',
+  allow: [],
+  optional: false,
+});
 const expectText = (text: string): FlowStep =>
   ({ kind: 'expect', expect: { text }, allow: [], optional: false }) as unknown as FlowStep;
 
@@ -135,6 +133,21 @@ describe('FlowAuditor — deterministic rules', () => {
       severity: 'ERROR',
       steps: [1, 2],
     });
+  });
+
+  it('CONTAINER_CLICK: a click recorded on a tab header (the text of both tabs) is flagged with its controls', () => {
+    const result = recordingOf([
+      { step: click('Company'), label: 'Company', effect: { dom: ['+ button:Interview'] } },
+      { step: click('Company Individual'), label: 'Company Individual' },
+      { step: expectText('Interview'), label: 'expect' },
+    ]);
+    (result.session as unknown as { rawEvents: unknown[] }).rawEvents = [
+      { id: 'r2', type: 'click', element: { containerOf: ['Company', 'Individual'] } },
+    ];
+    const container = deterministicFlowFindings(result).find((finding) => finding.rule === 'CONTAINER_CLICK');
+    expect(container).toMatchObject({ severity: 'WARNING', steps: [2] });
+    expect(container?.message).toMatch(/container holding several controls \(Company, Individual\)/);
+    expect(container?.suggestion).toMatch(/the click did nothing: remove this step/);
   });
 
   it('a clean flow (effects, final check) has no finding', () => {

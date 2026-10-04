@@ -1061,6 +1061,14 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ...optional('menu', str('menu', 60) ? redactText(str('menu', 60) ?? '') : undefined),
     ...(typeof raw.checked === 'boolean' ? { checked: raw.checked } : {}),
     ...(raw.formControlFromHost === true ? { formControlFromHost: true } : {}),
+    ...(Array.isArray(raw.containerOf)
+      ? {
+          containerOf: raw.containerOf
+            .filter((entry): entry is string => typeof entry === 'string' && entry !== '')
+            .slice(0, 6)
+            .map((entry) => redactText(text(entry, 40))),
+        }
+      : {}),
     ...(isObject(raw.hostIdentity) ? hostIdentityOf(raw.hostIdentity) : {}),
     ...(isObject(raw.selectors) ? selectorsOf(raw.selectors) : {}),
   };

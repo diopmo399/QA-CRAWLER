@@ -625,6 +625,15 @@ export function installRecorder(
       count();
     }
     const host = analysis?.host;
+    // UN CONTENEUR DE CONTRÔLES (un en-tête d'onglets, une barre d'outils) : le clic est tombé ENTRE eux.
+    // Gardé (une ligne cliquable contient aussi des boutons), mais signalé avec ses contrôles.
+    const containerOf = el.matches(FIELD)
+      ? []
+      : Array.from(el.querySelectorAll(CANDIDATES))
+          .filter((child) => child !== el && isVisible(child))
+          .map((child) => clean(nameOf(child), 40))
+          .filter(Boolean)
+          .slice(0, 6);
     const ownControl = el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name');
     const compact = (candidate: SelectorAnalysis['structural']): Record<string, unknown> => ({
       selector: candidate.selector,
@@ -733,6 +742,7 @@ export function installRecorder(
         : host?.attribute === 'formcontrolname'
           ? { formControlName: host.value, formControlFromHost: true }
           : {}),
+      ...(containerOf.length >= 2 ? { containerOf } : {}),
       ...(host
         ? { hostIdentity: { tag: host.tag, attribute: host.attribute, value: host.value, depth: host.depth } }
         : {}),

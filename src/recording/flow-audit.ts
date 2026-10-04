@@ -31,6 +31,7 @@ export type FlowAuditRule =
   | 'FRAGILE_TARGET'
   | 'UNRESOLVED_STEP'
   | 'TARGET_NOT_SEEN_ON_SCREEN'
+  | 'CONTAINER_CLICK'
   | 'AI_FINDING';
 
 export type FlowAuditSeverity = 'INFO' | 'WARNING' | 'ERROR';
@@ -251,6 +252,25 @@ export function deterministicFlowFindings(result: RecordingResult): FlowAuditFin
         suggestion: 'keep it if it prepares the next step; otherwise remove it',
         evidence: ['no screen change, navigation or request observed'],
       });
+  // Un clic sur un CONTENEUR de contrôles (le texte de plusieurs onglets / boutons) : tombé entre eux.
+  const raw = new Map(result.session.rawEvents.map((event) => [event.id, event]));
+  for (const current of facts) {
+    if (current.recorded.step.kind !== 'click') continue;
+    const children = current.recorded.rawEventIds
+      .map((id) => raw.get(id)?.element?.containerOf)
+      .find((list): list is string[] => list !== undefined && list.length >= 2);
+    if (!children) continue;
+    add({
+      rule: 'CONTAINER_CLICK',
+      severity: 'WARNING',
+      steps: [current.index],
+      message: `step ${String(current.index)} clicks a container holding several controls (${children.slice(0, 4).join(', ')}): the click landed between them`,
+      suggestion: current.effect
+        ? `check the target: one of ${children.slice(0, 4).join(', ')} is probably the intended one`
+        : 'the click did nothing: remove this step',
+      evidence: [`container of ${String(children.length)} control(s)`],
+    });
+  }
   // 5. Des saisies à la fin, jamais envoyées.
   const elements = facts.filter((entry) => 'target' in entry.recorded.step);
   const trailing: StepFacts[] = [];

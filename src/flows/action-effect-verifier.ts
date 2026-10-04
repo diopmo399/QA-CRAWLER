@@ -455,6 +455,29 @@ export function verifyEffects(input: {
       reasons: [`observed: ${met.join(', ')}`],
     };
   const changed = observed.length > 0;
+  // EFFECT ALREADY PRESENT : rien n'a bougé, mais TOUT l'état attendu est déjà là (les contrôles
+  // enregistrés visibles, ceux qui devaient disparaître absents, la bonne route) — établi par une étape
+  // précédente (l'onglet était déjà sélectionné). L'état fonctionnel est celui de l'enregistrement : ce
+  // n'est pas un « aucun effet ». Jamais quand une écriture attendue manque, jamais pour un état partiel.
+  const appears = effects?.appears ?? [];
+  const disappears = effects?.disappears ?? [];
+  const alreadyThere =
+    !changed &&
+    (appears.length > 0 || disappears.length > 0 || effects?.route !== undefined) &&
+    effects?.request === undefined &&
+    appears.every((control) => present(input.afterControls, control)) &&
+    disappears.every((control) => !present(input.afterControls, control)) &&
+    (effects?.route === undefined || routeMatches(effects.route, input.afterRoute)) &&
+    (input.nextTarget === undefined || input.nextTarget.after);
+  if (alreadyThere)
+    return {
+      status: 'CONFIRMED',
+      expected,
+      observed: [...appears.map((control) => `+ ${control} (already present)`)].slice(0, 5),
+      reasons: [
+        'EFFECT_ALREADY_PRESENT: the expected state was already established before the action (by an earlier step); nothing had to change',
+      ],
+    };
   // Seule attente : la cible suivante. L'écran a changé : un écran intermédiaire (étape insérée,
   // dry run) est possible, l'étape suivante dira si c'est une divergence. Rien n'a bougé : NO_EFFECT.
   const learned = expected.length - (input.nextTarget && !input.nextTarget.before ? 1 : 0);

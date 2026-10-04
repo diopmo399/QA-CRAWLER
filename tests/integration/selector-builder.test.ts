@@ -167,4 +167,21 @@ describe('Screen inventory in the capture script (real page)', () => {
     expect(inventories.map((entry) => entry.reason)).toEqual(['SCREEN_ARRIVED', 'STRUCTURE_CHANGED']);
     expect(inventories[1]?.elements).toBe(6);
   });
+
+  it('a click that lands BETWEEN two tabs, on their header, is marked as a container click with its controls', async () => {
+    const { elements } = await install(
+      '<div class="tab-header" tabindex="0" style="display:flex;gap:40px;padding:20px;cursor:pointer"><button role="tab">Company</button><button role="tab">Individual</button></div>',
+    );
+    const box = await page.locator('.tab-header').boundingBox();
+    if (!box) throw new Error('no header');
+    // Le coin du conteneur : ni l'un ni l'autre onglet.
+    await page.mouse.click(box.x + 5, box.y + 5);
+    await page.waitForTimeout(300);
+    const clicked = elements.find((element) => Array.isArray(element.containerOf));
+    expect(clicked?.containerOf).toEqual(['Company', 'Individual']);
+    // Un vrai onglet cliqué n'est jamais un conteneur.
+    await page.getByRole('tab', { name: 'Individual' }).click();
+    await page.waitForTimeout(300);
+    expect(elements.at(-1)?.containerOf).toBeUndefined();
+  });
 });
