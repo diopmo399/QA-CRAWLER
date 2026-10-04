@@ -154,6 +154,11 @@ export interface TargetResolutionTrace {
     positive?: string[];
     negative?: string[];
   }[];
+  /**
+   * La synchronisation de l'étape PRÉCÉDENTE (transition, signaux, ce qui manquait, stabilité) : le
+   * conseiller ne juge qu'APRÈS attente, stabilisation, observation fraîche et relecture de la cible.
+   */
+  previousTransition?: { status: string; signals: string[]; missing: string[]; stable: boolean };
   /** Le scan de la page a échoué : la raison (jamais avalée en silence). */
   scanError?: string;
   /** CONTRADICTORY_EVIDENCE : la cible retenue (ou la meilleure) a des preuves positives ET négatives. */
@@ -1021,6 +1026,7 @@ export function targetResolutionRequest(
       configuration: trace.identity.configuration,
     },
     fingerprintMismatch: trace.runtime.reasons.slice(0, 4),
+    ...(trace.previousTransition ? { transitionSignalsObserved: trace.previousTransition } : {}),
     ...(trace.screen ? { screen: trace.screen } : {}),
     resolutionFailure: {
       type: trace.status,

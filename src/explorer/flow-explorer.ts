@@ -85,6 +85,26 @@ function pathOf(url: string): string {
   }
 }
 
+/** Pourquoi une transition a atteint sa borne : l'écran ne s'est jamais stabilisé, ou il est stable sans l'effet attendu. */
+function transitionTimeoutText(result: TransitionWaitResult, who: string): string {
+  return result.stable
+    ? `${who}: the expected transition never came — ${result.missing.join('; ') || 'nothing observed'}`
+    : `${who}: the screen never settled — ${result.missing.join('; ')}`;
+}
+
+/** Le rapport de synchronisation d'une étape (exécution, transition, signaux, stabilité, préparation de la suite). */
+function synchronizationReportOf(result: TransitionWaitResult): StepSynchronizationReport {
+  return {
+    execution: 'EXECUTED',
+    transition: result.status,
+    signals: result.evidence,
+    missing: result.missing,
+    stability: { stable: result.stable, durationMs: result.stabilityDurationMs },
+    durationMs: result.durationMs,
+    nextAction: result.nextAction,
+  };
+}
+
 /** Le type HTML qui fait générer la bonne valeur à un générateur nommé (testData: { generator: email }). */
 const GENERATOR_TYPES: Readonly<Record<string, string>> = {
   email: 'email',
@@ -140,6 +160,7 @@ import type {
   FlowStepReport,
   SemanticResolutionReport,
   StepEffectReport,
+  StepSynchronizationReport,
 } from '../model/flow-run.js';
 import { isAtLeast, type Issue, type IssueType, type Severity } from '../model/issue.js';
 import type { NetworkExchange } from '../model/network.js';
@@ -148,6 +169,12 @@ import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
 import { UIObserver } from '../observation/ui-observer.js';
 import { waitForScreenReady } from '../observation/screen-ready.js';
+import {
+  expectationOf,
+  installTransitionProbe,
+  UITransitionWaiter,
+  type TransitionWaitResult,
+} from '../observation/transition-waiter.js';
 import { fieldLabel, formFieldsFor } from '../forms/form-fields.js';
 import { StaticApplicationAnalyzer, type StaticAnalysisEvent } from '../static-analysis/static-analyzer.js';
 import { StaticKnowledge, annotateStaticFields } from '../static-analysis/static-knowledge.js';
@@ -505,6 +532,10 @@ export class FlowExplorer {
   /** AI REASONING ADVISOR (optionnel) : absent en mode OFF — aucun client, aucun appel. */
   readonly ai: IntelligenceGateway | undefined;
   private readonly aiContext: IntelligenceContextBuilder;
+  /** REPLAY TRANSITION SYNCHRONIZATION : observe la transition d'une action, n'agit jamais. */
+  private readonly transitionWaiter: UITransitionWaiter;
+  /** La transition de l'étape précédente : une cible introuvable juste après un TIMEOUT n'est pas une divergence fonctionnelle. */
+  private lastTransition: TransitionWaitResult | undefined;
   /** Les artefacts de débogage des résolutions de cible (un fichier par résolution, réécrit à la vérification). */
   private readonly resolutionFiles = new WeakMap<TargetResolutionTrace, string>();
   private resolutionCount = 0;
@@ -774,6 +805,18 @@ export class FlowExplorer {
       exploration.readyTimeoutMs,
     );
     this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs, exploration.readyTimeoutMs);
+    const sync = config.replay.synchronization;
+    this.transitionWaiter = new UITransitionWaiter({
+      transitionTimeoutMs: sync.transitionTimeoutMs,
+      stabilityWindowMs: sync.stabilityWindowMs,
+      noTransitionCapMs: sync.noTransitionCapMs,
+      graceMs: sync.graceMs,
+      observeDomChanges: sync.observeDomChanges,
+      observeRouteChanges: sync.observeRouteChanges,
+      observeNetwork: sync.observeNetwork,
+      observeDialogs: sync.observeDialogs,
+      observeLoaders: sync.observeLoaders,
+    });
     this.env = options.env ?? process.env;
     const origins = new AllowedOriginPolicy(
       new URL(config.target.startAt, config.target.baseUrl).origin,
@@ -3963,8 +4006,18 @@ export class FlowExplorer {
     const diverged = (
       symptom: DivergenceSymptom,
       failure: { page: Page; context?: PageContext; report: FlowStepReport },
-    ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> =>
-      this.healDivergence(symptom, failure, {
+    ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> => {
+      // FIRST FUNCTIONAL DIVERGENCE ≠ écran pas encore prêt : juste après une transition qui n'a jamais
+      // fini (TIMEOUT, écran instable), une cible absente est un problème TEMPOREL, dit comme tel.
+      const previous = this.lastTransition;
+      if (
+        (symptom === 'TARGET_NOT_FOUND' || symptom === 'TARGET_MISMATCH') &&
+        previous?.status === 'TIMEOUT' &&
+        failure.report.reason &&
+        !failure.report.reason.startsWith('TRANSITION_TIMEOUT')
+      )
+        failure.report.reason = `TRANSITION_TIMEOUT (${transitionTimeoutText(previous, 'the previous step')}) — ${failure.report.reason}`;
+      return this.healDivergence(symptom, failure, {
         browser,
         observers,
         flow,
@@ -3973,10 +4026,19 @@ export class FlowExplorer {
         timeout,
         finish: (status, extra) => done(status, extra),
       });
+    };
+    // AVANT de localiser la cible courante (une résolution par section remplace les marques posées) :
+    // la cible de l'étape suivante est-elle déjà là, et déjà prête ?
+    const next = verifying && replay.verifyNextActionPrecondition ? this.nextStepTarget() : undefined;
+    const nextBefore = next ? await this.targetAvailable(page, next, 150) : undefined;
+    const sync = this.synchronizationOn() ? replay.synchronization : undefined;
+    const nextStep = sync?.useNextActionAsCheckpoint ? this.nextFlowStep() : undefined;
+    const nextReadyBefore = nextStep ? (await this.nextReadiness(page, nextStep)).ready : undefined;
     // « Où est-il ? » — et est-ce bien LUI ? (un CSS structurel peut viser un autre élément)
     const fingerprint = step.fingerprint;
     let located: Locator | string | undefined;
     let resolution: TargetResolutionTrace | undefined;
+    let reacquiredTarget: string | undefined;
     if (
       fingerprint &&
       replay.locatorHealing &&
@@ -4012,10 +4074,26 @@ export class FlowExplorer {
           'target identity not verifiable (no recorded name; element re-rendered)',
         ];
       }
-      const match =
+      let match =
         observed.tag === undefined && !identifiable
-          ? { verdict: 'WEAK_MATCH' as const, score: 0.4, reasons: [] }
+          ? { verdict: 'WEAK_MATCH' as const, score: 0.4, reasons: [] as string[] }
           : matchFingerprint(fingerprint, observed);
+      // RERENDER : la cible a peut-être été lue PENDANT un rendu (ancien nœud, nouveau nœud à venir).
+      // Re-observer après stabilisation, re-résoudre sur le DOM frais, relire l'empreinte — avant
+      // toute conclusion de mismatch (et avant tout conseiller : un rendu lent n'est pas une ambiguïté).
+      if (
+        match.verdict === 'MISMATCH' &&
+        this.synchronizationOn() &&
+        replay.synchronization.reacquireAfterRerender
+      ) {
+        const reacquired = await this.reacquireAfterRerender(page, step.target, fingerprint, timeout);
+        if (reacquired) {
+          located = reacquired.locator;
+          match = reacquired.match;
+          effect.reasons = [...effect.reasons, 'TARGET_REACQUIRED_AFTER_RERENDER'];
+          reacquiredTarget = `${describeTarget(step.target)} (${match.verdict} ${String(match.score)})`;
+        }
+      }
       effect.targetMatch = { verdict: match.verdict, score: match.score };
       if (match.verdict === 'MISMATCH' && replay.locator.rejectFingerprintMismatch) {
         const healed = replay.locatorHealing
@@ -4275,8 +4353,8 @@ export class FlowExplorer {
     // BEFORE SNAPSHOT : les contrôles visibles, la route, et la cible de l'étape suivante (déjà là ?).
     const controlsBefore = controlsOf(snapshotBefore);
     const routeBefore = pathOf(before.url);
-    const next = verifying && replay.verifyNextActionPrecondition ? this.nextStepTarget() : undefined;
-    const nextBefore = next ? await this.targetAvailable(page, next, 150) : undefined;
+    // TRANSITION SYNCHRONIZATION : la sonde est posée juste AVANT l'action.
+    const probeBefore = sync ? await installTransitionProbe(page) : undefined;
     if (this.functional) {
       this.formNetwork.startFunctional(`action-${action.id}`);
       this.functional.onActionSelected({ label: actionLabel(action), type: action.type });
@@ -4286,8 +4364,31 @@ export class FlowExplorer {
     const mayWrite =
       step.allow.some((allowed) => allowed === 'MUTATION' || allowed === 'DANGEROUS') ||
       (this.patternsByState.get(before.stateId) ?? []).some((pattern) => pattern.type === 'LOGIN');
-    const perform = (): Promise<string | undefined> =>
-      this.flowSteps.perform(page, locator, elementAction, timeout);
+    // ACTION_EXECUTED ≠ TRANSITION_COMPLETED : la transition fait partie de l'action — elle est attendue
+    // dans la même fenêtre (une écriture permise par l'étape part souvent APRÈS le retour du clic).
+    let transition: TransitionWaitResult | undefined;
+    const perform = async (): Promise<string | undefined> => {
+      const failure = await this.flowSteps.perform(
+        page,
+        locator,
+        elementAction,
+        timeout,
+        probeBefore === undefined,
+      );
+      if (failure || !sync || !probeBefore) return failure;
+      // Observer ce que l'application fait encore (vue, rendu, dialogue, données, réseau), attendre
+      // la transition pertinente puis la stabilité — jamais un sommeil fixe ; rien n'est rejoué.
+      transition = await this.waitTransition(page, {
+        actionId: action.id,
+        label: `${step.kind} ${describeTarget(step.target)}`,
+        kind: step.kind,
+        effects: sync.useExpectedEffects ? step.effects : undefined,
+        nextStep,
+        nextReadyBefore,
+        before: probeBefore,
+      });
+      return undefined;
+    };
     const error = mayWrite ? await this.writeGuard.permit(`flow ${flow.name}`, perform) : await perform();
     this.actionsExecuted += 1;
     const raised = this.interactions.since(interactionMark);
@@ -4335,6 +4436,14 @@ export class FlowExplorer {
         }),
       };
     }
+
+    if (transition) {
+      const base = done;
+      const report = synchronizationReportOf(transition);
+      if (reacquiredTarget) report.reacquired = reacquiredTarget;
+      done = (status, extra) => base(status, { ...extra, synchronization: report });
+    }
+    this.lastTransition = transition;
 
     // FAIL AT FIRST FUNCTIONAL DIVERGENCE : une saisie est PROUVÉE par la valeur lue ensuite. Une
     // cible résolue fonctionnellement n'est confirmée que par cet effet (jamais par son score).
@@ -4459,8 +4568,11 @@ export class FlowExplorer {
         verification.status === 'NO_EFFECT' || verification.status === 'WRONG_EFFECT';
       let verification = await check();
       // UI STABILIZATION : attendre l'effet attendu (sur condition, borné), jamais un sommeil fixe.
+      // Déjà attendu par la synchronisation (borne atteinte) : pas une seconde attente.
+      const alreadyWaited = transition?.status === 'TIMEOUT';
       if (
         failed(verification) &&
+        !alreadyWaited &&
         (await this.waitForEffect(page, step.effects, awaitedNext, replay.effectTimeoutMs))
       ) {
         after = await this.observeState(page, before.metadata.depth + 1);
@@ -4515,6 +4627,10 @@ export class FlowExplorer {
           }
         }
       }
+      this.emitHealing(
+        'EFFECT_VERIFY',
+        `${actionLabel(action)}: expected=${verification.expected.join(', ') || '—'} observed=${verification.observed.join(', ') || '—'} → ${verification.status === 'CONFIRMED' ? 'ACTION_CONFIRMED' : verification.status}`,
+      );
       effect.status = verification.status;
       effect.expected = verification.expected;
       effect.observed = verification.observed;
@@ -4558,7 +4674,9 @@ export class FlowExplorer {
             page,
             context: after,
             report: done('FAILED', {
-              reason: `ACTION_NOT_CONFIRMED (${verification.status === 'AMBIGUOUS' ? 'MUTATION_EFFECT_AMBIGUOUS' : verification.status}): click executed, expected ${verification.expected.join(', ') || 'an effect'}; observed ${verification.observed.join(', ') || 'no relevant change'}`,
+              // L'écran n'a jamais fini sa transition : un problème TEMPOREL, dit d'abord. Écran stable
+              // sans l'effet : une vraie absence d'effet (la borne n'est qu'un complément).
+              reason: `${transition?.status === 'TIMEOUT' && !transition.stable ? `TRANSITION_TIMEOUT (${transitionTimeoutText(transition, 'this action')}) — ` : ''}ACTION_NOT_CONFIRMED (${verification.status === 'AMBIGUOUS' ? 'MUTATION_EFFECT_AMBIGUOUS' : verification.status}): click executed, expected ${verification.expected.join(', ') || 'an effect'}; observed ${verification.observed.join(', ') || 'no relevant change'}${transition?.status === 'TIMEOUT' && transition.stable ? ` (transition TIMEOUT after ${String(transition.durationMs)} ms, screen stable: the expected transition never came)` : ''}`,
               stateId: after.stateId,
               url: after.url,
               classification: action.classification,
@@ -4590,6 +4708,159 @@ export class FlowExplorer {
       return 'target' in step ? step.target : undefined;
     }
     return undefined;
+  }
+
+  /** La prochaine étape d'action du flow (les vérifications expect sont sautées). */
+  private nextFlowStep(): Extract<FlowStep, { target: unknown }> | undefined {
+    const position = this.stepPosition;
+    if (!position) return undefined;
+    for (const step of position.flow.steps.slice(position.index)) {
+      if (step.kind === 'expect' || step.kind === 'screenshot' || step.kind === 'manual') continue;
+      if (step.optional) return undefined;
+      return 'target' in step ? step : undefined;
+    }
+    return undefined;
+  }
+
+  /**
+   * TARGET_REACQUIRED_AFTER_RERENDER : attendre que l'écran soit calme (sans action, borné), puis
+   * re-résoudre la cible sur le DOM frais et relire son empreinte. undefined : toujours un autre élément.
+   */
+  private async reacquireAfterRerender(
+    page: Page,
+    target: FlowTarget,
+    fingerprint: TargetFingerprint,
+    timeout: number,
+  ): Promise<{ locator: Locator; match: ReturnType<typeof matchFingerprint> } | undefined> {
+    const before = await installTransitionProbe(page);
+    if (!before) return undefined;
+    const settled = await this.transitionWaiter.waitForTransition({
+      page,
+      expectation: { expected: false, effectsDeclared: false, nextAwaited: false, nextKnown: false },
+      before,
+    });
+    const again = await this.flowSteps.locate(page, target, Math.min(timeout, 2000));
+    if (typeof again === 'string') return undefined;
+    const match = matchFingerprint(fingerprint, await readTarget(again));
+    if (match.verdict === 'MISMATCH') return undefined;
+    this.emitHealing(
+      'TARGET_REACQUIRED_AFTER_RERENDER',
+      `${describeTarget(target)}: ${match.verdict} ${String(match.score)} after ${String(settled.durationMs)} ms of stabilization`,
+    );
+    return { locator: again, match };
+  }
+
+  private synchronizationOn(): boolean {
+    return this.config.replay.uiStabilization && this.config.replay.synchronization.enabled;
+  }
+
+  /**
+   * NEXT ACTION READINESS : la cible de l'étape suivante, résolue sur le DOM FRAIS (le résolveur
+   * sémantique et contextuel existant), visible, active, et dont l'empreinte correspond — jamais
+   * seulement « un élément existe pour le localisateur brut ». Lecture seule.
+   */
+  private async nextReadiness(
+    page: Page,
+    step: Extract<FlowStep, { target: unknown }>,
+  ): Promise<{ ready: boolean; present?: boolean; reason?: string }> {
+    const found = await this.flowSteps.locate(page, step.target, 50);
+    if (typeof found === 'string') return { ready: false, reason: 'not on the screen yet' };
+    if (!(await found.isEnabled({ timeout: 200 }).catch(() => false)))
+      return { ready: false, reason: 'present but disabled' };
+    if (step.fingerprint && this.config.replay.targetFingerprintMatching) {
+      const match = matchFingerprint(step.fingerprint, await readTarget(found));
+      if (match.verdict === 'MISMATCH')
+        return {
+          ready: false,
+          present: true,
+          reason: `fingerprint differs (${match.reasons.slice(0, 1).join('')})`,
+        };
+    }
+    return { ready: true };
+  }
+
+  /** L'effet enregistré est-il visible MAINTENANT ? (un contrôle apparu, la route attendue) */
+  private async effectVisible(page: Page, effects: StepEffects): Promise<boolean> {
+    if (effects.route) {
+      const pattern = effects.route;
+      if (routeMatches(pattern, pathOf(page.url()))) return true;
+    }
+    for (const control of (effects.appears ?? []).slice(0, 3)) {
+      const colon = control.indexOf(':');
+      const role = colon > 0 && !control.slice(0, colon).includes(' ') ? control.slice(0, colon) : undefined;
+      const name = role ? control.slice(colon + 1) : control;
+      const target: FlowTarget = role ? { strategy: 'role', role, name } : { strategy: 'text', value: name };
+      if (typeof (await this.flowSteps.locate(page, target, 50)) !== 'string') return true;
+    }
+    return false;
+  }
+
+  /**
+   * UITransitionWaiter, côté explorateur : il fournit l'action, ses effets enregistrés, la
+   * préparation de l'action suivante et le réseau corrélé ; il journalise chaque signal.
+   */
+  private async waitTransition(
+    page: Page,
+    input: {
+      actionId: string;
+      label: string;
+      kind: string;
+      effects: StepEffects | undefined;
+      nextStep: Extract<FlowStep, { target: unknown }> | undefined;
+      nextReadyBefore: boolean | undefined;
+      before: { href: string; route: string; dialogs: number };
+    },
+  ): Promise<TransitionWaitResult> {
+    const sync = this.config.replay.synchronization;
+    const effectsDeclared =
+      input.effects !== undefined &&
+      (input.effects.route !== undefined || (input.effects.appears?.length ?? 0) > 0);
+    const expectation = expectationOf({
+      kind: input.kind,
+      effectsDeclared,
+      nextKnown: input.nextStep !== undefined,
+      nextReadyBefore: input.nextReadyBefore,
+    });
+    this.emitHealing('ACTION_EXECUTED', input.label);
+    this.emitHealing(
+      'TRANSITION_WAIT',
+      `${input.label}: ${expectation.expected ? 'transition expected' : 'no transition expected'}${effectsDeclared ? ' · expected effects' : ''}${expectation.nextAwaited && input.nextStep ? ` · awaiting next target ${describeTarget(input.nextStep.target)}` : ''} (bound ${String(sync.transitionTimeoutMs)} ms)`,
+    );
+    const effects = input.effects;
+    const nextStep = input.nextStep;
+    const result = await this.transitionWaiter.waitForTransition({
+      page,
+      expectation,
+      before: input.before,
+      ...(sync.observeNetwork
+        ? {
+            network: () =>
+              this.networkTrace.activity(input.actionId, {
+                correlationMs: sync.networkCorrelationMs,
+                pendingCapMs: sync.networkPendingCapMs,
+              }),
+          }
+        : {}),
+      ...(effects && effectsDeclared ? { effectObserved: () => this.effectVisible(page, effects) } : {}),
+      ...(nextStep ? { nextReady: () => this.nextReadiness(page, nextStep) } : {}),
+      onSignal: (signal) => {
+        this.emitHealing(
+          signal.kind === 'UI_STABLE' ? 'UI_STABLE' : 'TRANSITION_SIGNAL',
+          `${signal.kind}${signal.detail ? ` ${signal.detail}` : ''} +${String(signal.atMs)} ms`,
+        );
+      },
+    });
+    if (result.status === 'TIMEOUT')
+      this.emitHealing(
+        'TRANSITION_TIMEOUT',
+        `${input.label}: timeout=${String(sync.transitionTimeoutMs)}ms signals=${result.evidence.join(', ') || 'none'} expected=${result.missing.join(', ') || '—'} result=TRANSITION_TIMEOUT`,
+      );
+    else
+      this.emitHealing(
+        result.status === 'NEXT_ACTION_READY' ? 'NEXT_ACTION_READY' : 'TRANSITION_CONFIRMED',
+        `${input.label}: ${result.status} in ${String(result.durationMs)} ms (stable ${String(result.stabilityDurationMs)} ms)`,
+      );
+    return result;
   }
 
   private async targetAvailable(page: Page, target: FlowTarget, timeoutMs: number): Promise<boolean> {
@@ -4736,6 +5007,16 @@ export class FlowExplorer {
           .map((entry) => `${entry.kind}: ${entry.detail}`),
       })),
       ...(found.scanError ? { scanError: found.scanError } : {}),
+      ...(this.lastTransition
+        ? {
+            previousTransition: {
+              status: this.lastTransition.status,
+              signals: this.lastTransition.evidence.slice(0, 12),
+              missing: this.lastTransition.missing,
+              stable: this.lastTransition.stable,
+            },
+          }
+        : {}),
       ...(best ? { evidenceStatus: contradictory ? 'CONTRADICTORY_EVIDENCE' : 'CONSISTENT' } : {}),
       decision: decision.status,
       reason: decision.reason,

@@ -198,13 +198,42 @@ export function observeEffects(
   };
 }
 
-/** « button:Suivant » ou « Suivant » présent à l'écran (le rôle peut avoir changé : le nom suffit). */
+/**
+ * Les rôles qui peuvent se remplacer pour un MÊME contrôle (un re-rendu lit un bouton comme un lien,
+ * un champ texte comme une liste à saisie) : jamais un bouton pour un dialogue, ni un champ pour un onglet.
+ */
+const ROLE_FAMILIES: readonly (readonly string[])[] = [
+  ['button', 'link', 'menuitem'],
+  ['textbox', 'searchbox', 'combobox', 'spinbutton'],
+  ['dialog', 'alertdialog'],
+  ['checkbox', 'switch', 'menuitemcheckbox'],
+  ['radio', 'menuitemradio'],
+  ['tab'],
+  ['listbox', 'menu', 'grid', 'tree', 'table'],
+  ['option', 'row', 'treeitem'],
+];
+
+/** Deux rôles désignent-ils le même genre de contrôle ? */
+export function compatibleRoles(expected: string, observed: string): boolean {
+  if (expected === observed) return true;
+  return ROLE_FAMILIES.some((family) => family.includes(expected) && family.includes(observed));
+}
+
+/**
+ * « button:Suivant » ou « Suivant » présent à l'écran. Avec un rôle, le nom seul ne suffit pas : le
+ * rôle observé doit être de la même famille (un re-rendu peut lire un bouton comme un lien, jamais
+ * un bouton « Filter » comme le dialogue « Filter »). Sans rôle, le nom suffit.
+ */
 export function present(controls: Set<string>, expected: string): boolean {
   const colon = expected.indexOf(':');
   const role = colon > 0 && !expected.slice(0, colon).includes(' ') ? expected.slice(0, colon) : undefined;
   const name = normalize(role ? expected.slice(colon + 1) : expected);
   if (role && controls.has(`${role}:${name}`)) return true;
-  for (const control of controls) if (control.slice(control.indexOf(':') + 1) === name) return true;
+  for (const control of controls) {
+    const separator = control.indexOf(':');
+    if (control.slice(separator + 1) !== name) continue;
+    if (!role || compatibleRoles(role, control.slice(0, separator))) return true;
+  }
   return false;
 }
 
@@ -255,9 +284,14 @@ export function verifyEffects(input: {
   const expected: string[] = [];
   const met: string[] = [];
   const effects = input.effects;
+  // APPARU : présent après ET absent avant (un contrôle déjà là n'est pas l'effet de l'action).
+  const appeared = new Set(input.observed.appeared);
+  const before = new Set(
+    [...input.afterControls].filter((control) => !appeared.has(control)).concat(input.observed.disappeared),
+  );
   for (const control of effects?.appears ?? []) {
     expected.push(`+ ${control}`);
-    if (present(input.afterControls, control)) met.push(`+ ${control}`);
+    if (present(input.afterControls, control) && !present(before, control)) met.push(`+ ${control}`);
   }
   for (const control of effects?.disappears ?? []) {
     expected.push(`- ${control}`);

@@ -349,6 +349,8 @@ export class FlowStepExecutor {
     locator: Locator,
     action: FlowElementAction,
     timeoutMs: number,
+    /** false : la synchronisation des transitions (UITransitionWaiter) prend le relais — aucun sommeil fixe. */
+    settle = true,
   ): Promise<string | undefined> {
     try {
       switch (action.kind) {
@@ -369,7 +371,11 @@ export class FlowStepExecutor {
           break;
       }
       // Un clic peut changer d'écran : attendre qu'il soit affiché. Une saisie, non.
-      await this.settle(page, timeoutMs, action.kind === 'click');
+      if (settle) await this.settle(page, timeoutMs, action.kind === 'click');
+      else
+        await page
+          .waitForLoadState('domcontentloaded', { timeout: Math.min(timeoutMs, 5000) })
+          .catch(() => undefined);
       return undefined;
     } catch (error) {
       await this.settle(page, timeoutMs).catch(() => undefined);
