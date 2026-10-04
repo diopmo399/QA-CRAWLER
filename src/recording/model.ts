@@ -170,6 +170,19 @@ export interface RecordedElement {
   sameId?: number;
   /** Le champ fonctionnel qui contient l'élément (mat-form-field / fieldset / groupe) : son libellé. */
   formField?: string;
+  /**
+   * L'instance DOM, attribuée par l'enregistreur (e42) : deux événements du même nœud. Jamais un
+   * localisateur de rejeu ; seulement une preuve d'identité pendant l'enregistrement.
+   */
+  domInstance?: string;
+  /** Combien d'éléments le CSS enregistré désigne (> 1 : un localisateur générique, jamais une identité). */
+  cssMatches?: number;
+  /** Sa position parmi ces éléments (0 = premier) : le dernier recours, jamais une identité. */
+  cssIndex?: number;
+  /** Le profil de saisie : longueur maximale, clavier (numeric…), motif. */
+  maxLength?: number;
+  inputMode?: string;
+  pattern?: string;
   /** Le voisinage sémantique proche (libellés, titres, boutons) — jamais une valeur. */
   nearbyText?: string[];
   inputType?: string;
@@ -250,6 +263,8 @@ export interface RawRecordedEvent {
   drag?: RecordedDrag;
   /** L'écran juste AVANT l'action (pour valider une cible que l'action fait disparaître). */
   pre?: PreActionContext;
+  /** input / change : l'instance DOM de l'élément actif à ce moment (document.activeElement). */
+  activeDomInstance?: string;
   /** AUTO-VALIDATION immédiate de la cible (recherche à sec, jamais rejouée). */
   targetValidation?: RecordingTargetValidation;
   /** dialog : alert / confirm / prompt, et ce que l'humain (ou la règle d'enregistrement) a répondu. */
@@ -464,6 +479,10 @@ export interface RecordedCheckpoint {
 }
 
 export type RecordingWarningCode =
+  /** Plusieurs saisies de champs différents dans une seule action FILL (FIELD IDENTITY). */
+  | 'INVALID_FIELD_MERGE'
+  | 'POSSIBLY_INVALID_FIELD_MERGE'
+  | 'GENERIC_TEST_DATA_KEY'
   | 'AMBIGUOUS_RECORDED_TARGET'
   | 'FRAGILE_LOCATOR'
   | 'AMBIGUOUS_RECORDING_INTENT'
@@ -628,7 +647,19 @@ export type RecordingEventType =
   | 'HUMAN_JOURNEY_VALIDATED'
   | 'HUMAN_ACTION_LOST'
   | 'FLOW_OPTIMIZATION_STARTED'
-  | 'FLOW_OPTIMIZATION_COMPLETED';
+  | 'FLOW_OPTIMIZATION_COMPLETED'
+  /** FIELD IDENTITY : l'identité fonctionnelle d'un champ et les décisions de fusion de saisies. */
+  | 'FIELD_IDENTITY_CREATED'
+  | 'FIELD_IDENTITY_MATCHED'
+  | 'FIELD_IDENTITY_MISMATCH'
+  | 'FIELD_IDENTITY_AMBIGUOUS'
+  | 'TYPING_MERGE_EVALUATED'
+  | 'TYPING_MERGE_ACCEPTED'
+  | 'TYPING_MERGE_REJECTED'
+  | 'GENERIC_LOCATOR_DETECTED'
+  | 'NON_UNIQUE_FIELD_LOCATOR'
+  | 'TESTDATA_FIELD_BOUND'
+  | 'TESTDATA_FIELD_CONFLICT';
 
 export interface RecordingEvent {
   type: RecordingEventType;

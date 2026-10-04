@@ -1,5 +1,11 @@
 import { semanticKeyOf } from '../data/test-data-provider.js';
 import {
+  buildFieldIdentity,
+  fieldIdentityDigest,
+  fieldIdentityKey,
+  type FieldIdentity,
+} from './field-identity.js';
+import {
   isSensitiveKey,
   testDataSetDocument,
   type TestDataEntry,
@@ -137,6 +143,9 @@ interface Candidate {
   namespace?: string;
   write?: { actionId: string; kind: 'create' | 'update' };
   key: string;
+  /** L'identité fonctionnelle du champ (TEST DATA BELONGS TO A FUNCTIONAL FIELD, NOT TO A CSS SELECTOR). */
+  fieldKey: string;
+  identity: FieldIdentity;
   occurrence?: string;
   referenceTo?: Candidate;
   sameAs?: Candidate;
@@ -213,6 +222,7 @@ export function extractRecordedTestData(input: RecordedTestDataInput): RecordedT
     const typed = typedRaw ? input.typedValues.get(typedRaw) : undefined;
     const write = followingWrite(kept, index);
     const resolved = resolveTestDataKey(element, raw.value, write?.exchange);
+    const identity = buildFieldIdentity(element, raw.value, raw.pre?.cssCount);
     candidates.push({
       action,
       element,
@@ -225,6 +235,8 @@ export function extractRecordedTestData(input: RecordedTestDataInput): RecordedT
       ...(settings.namespaceByEntity && write?.entity ? { namespace: write.entity } : {}),
       ...(write ? { write: { actionId: write.actionId, kind: write.kind } } : {}),
       key: resolved.key,
+      fieldKey: fieldIdentityKey(identity) ?? `action:${action.id}`,
+      identity,
     });
   }
   // Les valeurs déjà là, gardées (PREFILLED_VALUE) : aucune donnée.
@@ -267,6 +279,62 @@ export function extractRecordedTestData(input: RecordedTestDataInput): RecordedT
     }
     candidate.key = prefix ? `${prefix}.${candidate.base}` : candidate.base;
   }
+
+  // 2b. Une clé = un champ fonctionnel. Deux champs DIFFÉRENTS qui obtiendraient la même clé (« value »,
+  //     un même libellé dans deux sections) ne la partagent jamais : le même champ ressaisi garde
+  //     initial / updated (étape 3) ; un autre champ reçoit sa propre clé.
+  const fieldsOfKey = new Map<string, string[]>();
+  for (const candidate of candidates) {
+    const fields = fieldsOfKey.get(candidate.key) ?? [];
+    if (!fields.includes(candidate.fieldKey)) fields.push(candidate.fieldKey);
+    fieldsOfKey.set(candidate.key, fields);
+  }
+  const used = new Set(candidates.map((candidate) => candidate.key));
+  for (const [key, all] of fieldsOfKey) {
+    if (all.length < 2) continue;
+    const owners = candidates.filter((candidate) => candidate.key === key);
+    // Un autre champ qui porte EXACTEMENT la même valeur (confirmation, recherche) : la même donnée.
+    const fields = all.filter(
+      (field, position) =>
+        position === 0 ||
+        !owners
+          .filter((candidate) => candidate.fieldKey === field)
+          .every((candidate) =>
+            owners.some((other) => all.indexOf(other.fieldKey) < position && sameValue(other, candidate)),
+          ),
+    );
+    if (fields.length < 2) continue;
+    const generic = owners.every((candidate) => candidate.keySource === 'fallback');
+    events.push({
+      type: 'TESTDATA_FIELD_CONFLICT',
+      message: `testData.${key}: ${String(fields.length)} different fields would share this key: each field gets its own (${generic ? 'field_<fingerprint>' : `${key}, ${key}2…`})`,
+    });
+    fields.forEach((field, position) => {
+      const owner = owners.find((candidate) => candidate.fieldKey === field);
+      if (!owner) return;
+      let next = key;
+      if (generic) next = `field_${fieldIdentityDigest(owner.identity)}`;
+      else if (position > 0)
+        for (let suffix = position + 1; next === key || used.has(next); suffix += 1)
+          next = `${key}${String(suffix)}`;
+      used.add(next);
+      for (const candidate of owners)
+        if (
+          candidate.fieldKey === field ||
+          // Les champs « même valeur » suivent le champ dont ils reprennent la valeur.
+          (!fields.includes(candidate.fieldKey) &&
+            owners.some((other) => other.fieldKey === field && sameValue(other, candidate)))
+        ) {
+          candidate.key = next;
+          candidate.base = next.split('.').at(-1) ?? next;
+        }
+    });
+  }
+  for (const candidate of candidates)
+    events.push({
+      type: 'TESTDATA_FIELD_BOUND',
+      message: `testData.${candidate.key} ← ${candidate.fieldKey}`,
+    });
 
   // 3. Occurrences : la même donnée (même empreinte) réutilise la clé ; une autre valeur pour la
   //    même clé n'écrase jamais la première (initial, updated, updated2…).
@@ -477,7 +545,9 @@ export function resolveTestDataKey(
   if (stable) return { key: stable, source: 'stable field name', ...(semanticType ? { semanticType } : {}) };
   if (semanticType && semantic === semanticType)
     return { key: semanticType, source: 'semantic field', semanticType };
-  const labelled = [element.label, element.guessedLabel, element.name]
+  // Le libellé du champ fonctionnel (mat-label non relié, legend), puis le placeholder : des noms
+  // humains de l'écran — jamais un CSS ni la position.
+  const labelled = [element.label, element.guessedLabel, element.name, element.formField, element.placeholder]
     .map((text) => (text ? camel(text) : ''))
     .find((key) => key !== '' && !MEANINGLESS.test(key));
   if (labelled) return { key: labelled, source: 'field label', ...(semanticType ? { semanticType } : {}) };

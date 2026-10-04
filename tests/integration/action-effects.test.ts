@@ -117,7 +117,9 @@ ${steps}
       status: 'FAILED',
       effect: { status: 'TARGET_MISMATCH', execution: 'NOT_EXECUTED' },
     });
-    expect(strict.steps[0]?.reason).toMatch(/^TARGET_FINGERPRINT_MISMATCH/);
+    // Le CSS désigne 2 éléments, aucun ne porte l'identité enregistrée : rien n'est choisi au hasard
+    // (jamais « le premier », même s'il correspondait par chance).
+    expect(strict.steps[0]?.reason).toMatch(/^(TARGET_FINGERPRINT_MISMATCH|TARGET_LOCATOR_NON_UNIQUE)/);
     expect(app.counts.settings).toBe(before);
   }, 90_000);
 

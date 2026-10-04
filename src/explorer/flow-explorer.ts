@@ -45,6 +45,7 @@ import {
   isFragileTarget,
   compatibleRoles,
   matchFingerprint,
+  verifyFieldFill,
   observeEffects,
   readTarget,
   routeMatches,
@@ -4113,12 +4114,34 @@ export class FlowExplorer {
           return diverged('TARGET_MISMATCH', {
             page,
             report: done('FAILED', {
-              reason: `TARGET_LOCATOR_NON_UNIQUE: ${String(rawMatches)} elements match ${describeTarget(step.target)} — ${resolved.trace.outcome ?? resolved.trace.status}: ${resolved.trace.reason} (nothing chosen arbitrarily, not executed)`,
+              reason: `TARGET_LOCATOR_NON_UNIQUE: ${String(rawMatches)} elements match ${describeTarget(step.target)} — ${resolved.trace.outcome ?? resolved.trace.status}: ${resolved.trace.reason} (nothing chosen arbitrarily, not executed)${step.kind === 'fill' ? ' — FIELD_IDENTITY_AMBIGUOUS' : ''}`,
               stateId: context.stateId,
               url: context.url,
               effect: { ...effect, status: 'TARGET_MISMATCH', reasons: [resolved.trace.reason] },
             }),
           });
+        // Aucun candidat ne porte l'identité enregistrée : jamais « le premier qui correspond ». Un
+        // localisateur sémantique retrouvé par l'empreinte (healing) peut encore la désigner ; sinon rien
+        // n'est exécuté (un FILL dans le mauvais champ est pire qu'un échec expliqué).
+        if (!resolved.locator) {
+          const healed = replay.locatorHealing
+            ? await this.healTarget(page, step.target, fingerprint, Math.min(timeout, 3000))
+            : undefined;
+          if (!healed)
+            return diverged('TARGET_MISMATCH', {
+              page,
+              report: done('FAILED', {
+                reason: `TARGET_LOCATOR_NON_UNIQUE: ${String(rawMatches)} elements match ${describeTarget(step.target)} — no candidate carries the recorded identity: ${resolved.trace.reason} (nothing chosen arbitrarily, not executed)${step.kind === 'fill' ? ' — FIELD_LOCATOR_NON_UNIQUE' : ''}`,
+                stateId: context.stateId,
+                url: context.url,
+                effect: { ...effect, status: 'TARGET_MISMATCH', reasons: [resolved.trace.reason] },
+              }),
+            });
+          located = healed.locator;
+          effect.healed = { from: describeTarget(step.target), to: describeTarget(healed.target) };
+          effect.locator = describeTarget(healed.target);
+          effect.targetMatch = healed.match;
+        }
         if (resolved.locator && resolved.chosen) {
           located = resolved.locator;
           contextual = true;
@@ -4565,11 +4588,41 @@ export class FlowExplorer {
       const held = await this.filledValue(page, locator, step.target);
       // Une saisie ne navigue pas : une page quittée contredit la cible résolue (l'effet n'est pas celui attendu).
       const navigated = resolution !== undefined && pathOf(page.url()) !== pathOf(before.url);
-      const confirmed = navigated
+      let confirmed = navigated
         ? false
         : held === undefined
           ? undefined
           : sameFilledValue(held, elementAction.value);
+      // TARGET RESOLUTION MUST IDENTIFY THE FIELD BEFORE TRUSTING THE VALUE : le champ rempli est-il
+      // celui enregistré ? (une valeur « tenue » par un AUTRE champ n'est pas une saisie confirmée).
+      // Seulement si l'identité n'a pas déjà été vérifiée avant d'agir (empreinte, contexte, healing).
+      const fieldCheck =
+        step.fingerprint && !navigated
+          ? verifyFieldFill({
+              expected: step.fingerprint,
+              observed:
+                effect.targetMatch === undefined
+                  ? await readTarget(locator).catch(() => undefined)
+                  : undefined,
+              valueHeld: confirmed,
+            })
+          : undefined;
+      if (fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH') {
+        confirmed = false;
+        this.emitHealing(
+          'REPLAY_FIELD_TARGET_MISMATCH',
+          `${actionLabel(action)}: ${fieldCheck.reasons.join('; ')}`,
+        );
+      } else if (fieldCheck && fieldCheck.verdict !== 'UNKNOWN') {
+        this.emitHealing(
+          'REPLAY_FIELD_TARGET_CONFIRMED',
+          `${actionLabel(action)}: the filled field is the recorded one`,
+        );
+        this.emitHealing(
+          fieldCheck.verdict === 'CONFIRMED' ? 'REPLAY_FIELD_VALUE_CONFIRMED' : 'REPLAY_FIELD_VALUE_MISMATCH',
+          `${actionLabel(action)}: ${fieldCheck.reasons.join('; ')}`,
+        );
+      }
       if (resolution)
         await this.confirmTargetResolution(
           page,
@@ -4583,16 +4636,23 @@ export class FlowExplorer {
           page,
           context: before,
           report: done('FAILED', {
-            reason: `ACTION_EFFECT_NOT_CONFIRMED: ${navigated ? 'unexpected navigation after the fill' : 'the field does not hold the filled value'}${resolution ? ` (${resolution.status} ${resolution.resolution ?? ''}: the resolution is rejected)` : ''}`,
+            reason: `ACTION_EFFECT_NOT_CONFIRMED: ${navigated ? 'unexpected navigation after the fill' : fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH' || fieldCheck?.verdict === 'FIELD_VALUE_MISMATCH' ? `${fieldCheck.verdict} — ${fieldCheck.reasons.join('; ')}` : 'the field does not hold the filled value'}${resolution ? ` (${resolution.status} ${resolution.resolution ?? ''}: the resolution is rejected)` : ''}`,
             stateId: before.stateId,
             url: before.url,
             classification: action.classification,
             effect: {
               ...effect,
               execution: 'EXECUTED',
-              status: 'WRONG_EFFECT',
-              expected: ['VALUE_CHANGED'],
-              observed: ['value not held by the field'],
+              status: fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH' ? 'TARGET_MISMATCH' : 'WRONG_EFFECT',
+              expected:
+                fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH'
+                  ? ['FIELD_IDENTITY', 'VALUE_CHANGED']
+                  : ['VALUE_CHANGED'],
+              observed: [
+                fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH'
+                  ? 'another field received the value'
+                  : 'value not held by the field',
+              ],
               reasons: [...effect.reasons, 'ACTION_EFFECT_NOT_CONFIRMED'],
             },
           }),

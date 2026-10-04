@@ -15,7 +15,14 @@ import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
 import type { RecordingEvent } from './model.js';
 import type { IntelligenceProvider } from '../ai/provider.js';
-import { processRecording, TEST_DATA_FILE, type RecordingResult } from './process-recording.js';
+import {
+  describeFieldIdentity,
+  processRecording,
+  TEST_DATA_FILE,
+  type RecordingResult,
+} from './process-recording.js';
+import { fieldIdentityKey, fieldIdentityOfEvent } from './field-identity.js';
+import { validateFieldMerges } from './field-merge-validator.js';
 import { recordingHtml, type ReplayOutcome } from './recording-report.js';
 import { createIntelligenceGateway, effectiveMode } from '../ai/factory.js';
 import type { IntelligenceGateway } from '../ai/gateway.js';
@@ -255,6 +262,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }),
   );
   await write('action-preservation.json', json(result.journey.accounts));
+  // FIELD IDENTITY : chaque saisie, l'identité de son champ ; chaque fusion, sa décision et ses raisons.
+  await write('typing-merge-decisions.json', json(typingMergeReport(result)));
   // AI CONTEXT AUDIT : ce qui a été envoyé au conseiller, assaini (jamais un secret ni une saisie).
   const aiContexts = recorder.session.rawEvents
     .filter((event) => event.targetValidation?.aiAudit?.context)
@@ -614,4 +623,36 @@ function sessionMeta(result: RecordingResult): Record<string, unknown> {
 
 function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/** h013 → { identité, valeur (forme et longueur seulement), action } ; puis les décisions de fusion. */
+function typingMergeReport(result: RecordingResult): Record<string, unknown> {
+  const inputs = result.session.rawEvents
+    .filter((event) => (event.type === 'input' || event.type === 'change') && event.element)
+    .map((event) => {
+      const identity = fieldIdentityOfEvent(event);
+      const action = result.normalized.actions.find((candidate) => candidate.rawEventIds.includes(event.id));
+      return {
+        rawEventId: event.id,
+        ...(action ? { actionId: action.id } : {}),
+        ...(action?.dropped ? { status: `DROPPED: ${action.dropped}` } : action ? { status: 'KEPT' } : {}),
+        ...(identity
+          ? {
+              fieldKey: fieldIdentityKey(identity) ?? null,
+              fieldIdentity: describeFieldIdentity(identity),
+              recorderElementId: identity.domInstance,
+              valueProfile: identity.valueProfile,
+              locatorUniqueness: identity.locatorUniqueness,
+            }
+          : {}),
+        ...(action?.value?.testData ? { testData: action.value.testData } : {}),
+      };
+    });
+  return {
+    inputs,
+    validation: validateFieldMerges(result.normalized.actions, result.session.rawEvents),
+    decisions: result.normalized.mergeDecisions.map(
+      ({ previousIdentity: _previous, currentIdentity: _current, ...decision }) => decision,
+    ),
+  };
 }
