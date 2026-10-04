@@ -171,6 +171,7 @@ import type { UiSnapshot } from '../model/ui-snapshot.js';
 import { StateDetector, stateSubtitle } from '../observation/state-detector.js';
 import { UIObserver } from '../observation/ui-observer.js';
 import { waitForScreenReady } from '../observation/screen-ready.js';
+import { analyzeWrongEffect, type WrongEffectAnalysis } from '../flows/wrong-effect-analyzer.js';
 import {
   expectationOf,
   installTransitionProbe,
@@ -4752,9 +4753,32 @@ export class FlowExplorer {
         after = await this.observeState(page, before.metadata.depth + 1);
         verification = await check();
       }
+      // ROOT CAUSE BEFORE RECOVERY : pourquoi l'effet manque ? Une attente enregistrée qui décrit la
+      // SUITE du parcours (contamination temporelle) n'est pas une cible à réparer.
+      let suspect: WrongEffectAnalysis | undefined;
+      if (failed(verification)) {
+        const index =
+          this.stepPosition?.flow === flow ? this.stepPosition.index - 1 : flow.steps.indexOf(step);
+        const analysis = analyzeWrongEffect({
+          verification,
+          effects: step.effects,
+          steps: flow.steps,
+          index,
+          writes,
+          requests,
+          routeChanged: routeBefore !== pathOf(after.url),
+          nextTargetAvailable: next ? await this.targetAvailable(page, next, 300) : undefined,
+          screenNeverSettled: transition?.status === 'TIMEOUT' && !transition.stable,
+        });
+        this.emitHealing(
+          'WRONG_EFFECT_ANALYZED',
+          `${actionLabel(action)}: ${analysis.classification} — ${analysis.reasons.join('; ')}`,
+        );
+        if (analysis.classification === 'RECORDED_EXPECTATION_CONTAMINATED') suspect = analysis;
+      }
       // RECOVERY : une action sûre est retentée (même cible re-résolue, puis les autres localisateurs
       // de son empreinte) ; une action qui écrit ne l'est JAMAIS automatiquement (pas de double envoi).
-      if (failed(verification) && replay.recovery.enabled) {
+      if (failed(verification) && replay.recovery.enabled && !suspect) {
         if (mutation && !replay.recovery.retryMutations)
           effect.recovery.push('none: an action that writes is never retried automatically');
         else if (replay.recovery.retrySafeActions) {
@@ -4815,14 +4839,46 @@ export class FlowExplorer {
         await this.confirmTargetResolution(
           page,
           resolution,
-          verification.status === 'CONFIRMED' ? true : failed(verification) ? false : undefined,
-          failed(verification)
+          // Une attente suspecte (contamination de l'enregistrement) ne prouve rien contre la cible.
+          verification.status === 'CONFIRMED' ? true : failed(verification) && !suspect ? false : undefined,
+          failed(verification) && !suspect
             ? `ACTION_EFFECT_MISMATCH: expected ${verification.expected.join(', ') || 'an effect'}; observed ${verification.observed.join(', ') || 'no relevant change'}`
             : undefined,
           verification.status === 'CONFIRMED'
             ? `ACTION_CONFIRMED (${verification.reasons.join('; ')})`
             : undefined,
         );
+      if (suspect) {
+        // ACTION_EXECUTED + RUNTIME_EFFECT_CONFIRMED + RECORDED_EXPECTATION_SUSPECT : aucune récupération
+        // (pas d'expérimentation sur une cible correcte) ; la divergence du MODÈLE d'enregistrement est
+        // gardée dans le rapport, distincte d'une divergence applicative ; la suite vérifie le parcours.
+        effect.status = 'EXPECTATION_SUSPECT';
+        effect.reasons = [...suspect.reasons, `suspect expectations: ${suspect.suspectEffects.join(', ')}`];
+        this.emitHealing(
+          'REPLAY_EXPECTATION_SUSPECTED',
+          `${actionLabel(action)}: ${suspect.suspectEffects.join(', ')} describe a later step`,
+        );
+        this.emitHealing(
+          'REPLAY_RECORDING_MODEL_DIVERGENCE',
+          `${actionLabel(action)}: RECORDED_EXPECTATION_CONTAMINATED — not an application divergence (no recovery)`,
+        );
+        return {
+          page,
+          context: after,
+          report: done('PASSED', {
+            reason: `REPLAY_INCONCLUSIVE_EXPECTATION_DRIFT: RECORDED_EXPECTATION_CONTAMINATED — expected ${suspect.suspectEffects.join(', ')} (a later step); ${suspect.reasons.slice(1).join('; ')}`,
+            stateId: after.stateId,
+            url: after.url,
+            classification: action.classification,
+            effect,
+            recordingModelDivergence: {
+              classification: 'RECORDED_EXPECTATION_CONTAMINATED',
+              suspectEffects: suspect.suspectEffects,
+              reasons: suspect.reasons,
+            },
+          }),
+        };
+      }
       const intelligent = replay.intelligentRecovery;
       if (
         verification.status === 'WRONG_EFFECT' &&

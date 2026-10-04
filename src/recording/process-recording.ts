@@ -1,3 +1,4 @@
+import { validateRecordingConsistency, type RecordingConsistencyReport } from './recording-consistency.js';
 import type { ScenarioConfig } from '../config/config.js';
 import { ActionDiscovery } from '../discovery/action-discovery.js';
 import { FlowGraph } from '../graph/flow-graph.js';
@@ -45,6 +46,8 @@ export interface RecordingResult {
   preservation: PreservationReport;
   /** HUMAN JOURNEY : chaque interaction humaine, son statut, les dépendances, les phases. */
   journey: HumanJourneyResult;
+  /** RECORDING CONSISTENCY : la cause de chaque effet attendu, la contamination, la chronologie. */
+  consistency: RecordingConsistencyReport;
   /** AUTO-VALIDATION DES CIBLES : chaque action, sa validation immédiate, la confiance de rejeu. */
   targetValidation: TargetValidationReport;
   fidelity: 'EXACT' | 'SEMANTIC' | 'OPTIMIZED';
@@ -191,6 +194,29 @@ export function processRecording(
   // l'enregistrement remplace la représentation brute ; le groupe sémantique donne le contexte.
   applyTargetValidations(normalized.kept, session.rawEvents);
   groupSemanticActions(normalized.kept);
+  // CAUSE → EFFET : chaque attente relue (effets futurs écartés, propriété disputée, route d'une autre action).
+  const consistency = validateRecordingConsistency(normalized.kept, session.states, session.rawEvents);
+  for (const action of consistency.actions) {
+    for (const effect of action.required)
+      emit('EFFECT_ASSIGNED_TO_ACTION', `${action.actionId} ${action.action}: ${effect}`);
+    for (const effect of action.optional)
+      emit('EFFECT_MARKED_OPTIONAL', `${action.actionId} ${action.action}: ${effect}`);
+    for (const issue of action.issues)
+      if (issue.resolved)
+        emit(
+          issue.probableOwner ? 'EFFECT_REASSIGNED' : 'EFFECT_REJECTED_FROM_ACTION',
+          `${action.actionId} ${action.action}: ${issue.effect}${issue.probableOwner ? ` → ${issue.probableOwner}` : ''} (${issue.detail})`,
+        );
+      else
+        emit(
+          'RECORDING_EFFECT_CONTAMINATION_DETECTED',
+          `${action.actionId} ${action.action}: ${issue.type} ${issue.effect}${issue.probableOwner ? ` (probable owner ${issue.probableOwner})` : ''}`,
+        );
+  }
+  emit(
+    'RECORDING_CONSISTENCY_VALIDATED',
+    `${consistency.status}: ${String(consistency.actions.filter((action) => action.status !== 'CLEAN').length)} suspect action(s) of ${String(consistency.actions.length)}`,
+  );
   const outcomes = inferOutcomes(normalized.kept, session.states, normalized.negative);
   emit(
     'OUTCOME_INFERRED',
@@ -360,6 +386,7 @@ export function processRecording(
     ...(correlation ? { correlation } : {}),
     ...(testData ? { testData } : {}),
     journey,
+    consistency,
     targetValidation,
     fidelity,
     ...(optimized ? { optimized } : {}),

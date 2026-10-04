@@ -50,6 +50,15 @@ export interface FlowStepReport {
    * l'action suivante. Distingue un problème de localisateur, de transition, d'effet ou une régression.
    */
   synchronization?: StepSynchronizationReport;
+  /**
+   * RECORDING-MODEL DIVERGENCE : l'action a fonctionné au runtime, mais l'attente enregistrée décrit
+   * la SUITE du parcours (contamination temporelle). Pas une divergence applicative.
+   */
+  recordingModelDivergence?: {
+    classification: 'RECORDED_EXPECTATION_CONTAMINATED';
+    suspectEffects: string[];
+    reasons: string[];
+  };
 }
 
 export interface StepSynchronizationReport {
@@ -75,7 +84,9 @@ export interface StepEffectReport {
     | 'AMBIGUOUS'
     | 'NOT_REQUIRED'
     | 'NOT_VERIFIED'
-    | 'TARGET_MISMATCH';
+    | 'TARGET_MISMATCH'
+    /** L'action a fonctionné, l'attente enregistrée est douteuse (contamination) : jamais un succès silencieux. */
+    | 'EXPECTATION_SUSPECT';
   expected: string[];
   observed: string[];
   reasons: string[];

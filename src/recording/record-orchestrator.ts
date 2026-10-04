@@ -1,3 +1,4 @@
+import { timelineLines } from './recording-consistency.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Page } from 'playwright';
@@ -274,6 +275,11 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       context: event.targetValidation?.aiAudit?.context,
     }));
   if (aiContexts.length > 0) await write('ai-context-summary.json', json({ audits: aiContexts }));
+  // CAUSE → EFFET : chaque attente avec sa causalité, la contamination détectée, la chronologie.
+  await write(
+    'recording-validation.json',
+    json({ ...result.consistency, timelineText: timelineLines(result.consistency) }),
+  );
   // AUTO-VALIDATION DES CIBLES : avant, réparation, après, audit — et la confiance de rejeu.
   await write(
     'target-validation.json',
