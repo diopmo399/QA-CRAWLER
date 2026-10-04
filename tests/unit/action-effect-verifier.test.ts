@@ -151,6 +151,34 @@ describe('ActionEffectVerifier', () => {
     expect(present(controls('link:company interview'), 'button:Company interview')).toBe(true);
     expect(present(controls('button:tasks'), 'Company interview')).toBe(false);
   });
+
+  it('the role is respected: a "Filter" BUTTON never satisfies the "Filter" DIALOG; a compatible role still does', () => {
+    expect(present(controls('button:filter'), 'dialog:Filter')).toBe(false);
+    expect(present(controls('alertdialog:filter'), 'dialog:Filter')).toBe(true);
+    expect(present(controls('combobox:value'), 'textbox:Value')).toBe(true);
+    expect(present(controls('tab:filter'), 'button:Filter')).toBe(false);
+    expect(present(controls('button:filter'), 'Filter')).toBe(true);
+  });
+
+  it('an expected appearance must APPEAR: a control already on the screen before the action is not its effect', () => {
+    const verify = (before: Set<string>, after: Set<string>) =>
+      verifyEffects({
+        effects: { appears: ['dialog:Filter'] },
+        observed: observeEffects(before, after, '/', '/', []),
+        afterControls: after,
+        afterRoute: '/',
+        mutation: false,
+        writes: [],
+      }).status;
+    // Le bouton « Filter » est là avant et après : rien n'est apparu, le dialogue n'est pas venu.
+    expect(verify(controls('button:filter'), controls('button:filter'))).toBe('NO_EFFECT');
+    // Le dialogue était DÉJÀ ouvert : il n'est pas l'effet de cette action.
+    expect(verify(controls('dialog:filter'), controls('dialog:filter', 'button:apply'))).not.toBe(
+      'CONFIRMED',
+    );
+    // Le dialogue apparaît : confirmé.
+    expect(verify(controls('button:filter'), controls('button:filter', 'dialog:filter'))).toBe('CONFIRMED');
+  });
 });
 
 describe('expectation learning during the recording (§8 / §9)', () => {

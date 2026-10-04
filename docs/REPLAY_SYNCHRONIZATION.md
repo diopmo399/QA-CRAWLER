@@ -132,6 +132,20 @@ Après synchronisation, une vraie divergence **reste** une divergence : la récu
 
 Quand la synchronisation a déjà atteint sa borne, `waitForEffect` n'attend pas une seconde fois.
 
+## Effets attendus : rôle respecté, apparition réelle
+
+L'ActionEffectVerifier applique deux règles :
+
+- **Rôle compatible.** Un effet `appears: dialog:Filter` n'est jamais satisfait par un _bouton_
+  « Filter ». Le nom seul ne suffit que pour un rôle de la même famille, car un re-rendu peut
+  changer le rôle lu :
+  - bouton / lien / élément de menu ;
+  - textbox / combobox / searchbox ;
+  - dialog / alertdialog ;
+  - etc.
+- **Apparition réelle.** Un `appears` exige un contrôle **absent avant** l'action. Un contrôle déjà
+  à l'écran n'est pas l'effet de l'action.
+
 ## Ce qui ne change pas
 
 - **Pas de sommeil fixe.** Avec la synchronisation active, le sommeil `settleTimeMs` après

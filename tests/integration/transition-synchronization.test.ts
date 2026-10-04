@@ -201,7 +201,7 @@ ${steps}`,
     const report = await replay(
       'nothing',
       `      - click: { role: button, name: Filter }
-        effects: { appears: ["dialog:Search filters"] }
+        effects: { appears: ["dialog:Filter"] }
       - fill: { label: Value, value: alpha }
 `,
       { sync: 'synchronization: { transitionTimeoutMs: 2500 }' },
@@ -221,7 +221,7 @@ ${steps}`,
     const report = await replay(
       'nothing',
       `      - click: { role: button, name: Filter }
-        effects: { appears: ["dialog:Search filters"] }
+        effects: { appears: ["dialog:Filter"] }
       - fill: { label: Value, value: alpha }
 `,
       { sync: 'verifyActionEffects: false, synchronization: { transitionTimeoutMs: 2500 }' },
