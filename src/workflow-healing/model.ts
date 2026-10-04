@@ -465,6 +465,8 @@ export const HEALING_EVENTS = [
   'REPLAY_FIELD_VALUE_MISMATCH',
   'FAST_PATH_SELECTED',
   'DEEP_PATH_SELECTED',
+  'LOCATOR_UNIQUE',
+  'LOCATOR_AMBIGUOUS',
 ] as const;
 export type HealingEvent = (typeof HEALING_EVENTS)[number];
 

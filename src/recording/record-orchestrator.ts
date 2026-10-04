@@ -1,3 +1,4 @@
+import { screenInventorySummary, screenInventoryText } from './screen-inventory.js';
 import { timelineLines } from './recording-consistency.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -262,6 +263,14 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }),
   );
   await write('action-preservation.json', json(result.journey.accounts));
+  // SCREEN ELEMENT INVENTORY : chaque écran inventorié avant les interactions (sélecteurs, ambiguïté).
+  if (recorder.inventories.length > 0) {
+    await write(
+      'screen-inventory.json',
+      json({ summary: screenInventorySummary(recorder.inventories), screens: recorder.inventories }),
+    );
+    await write('screen-inventory.txt', `${screenInventoryText(recorder.inventories).join('\n')}\n`);
+  }
   // FIELD IDENTITY : chaque saisie, l'identité de son champ ; chaque fusion, sa décision et ses raisons.
   await write('typing-merge-decisions.json', json(typingMergeReport(result)));
   // AI CONTEXT AUDIT : ce qui a été envoyé au conseiller, assaini (jamais un secret ni une saisie).

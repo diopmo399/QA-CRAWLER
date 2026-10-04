@@ -48,8 +48,10 @@ import {
   verifyFieldFill,
   observeEffects,
   readTarget,
+  classifyValueLoss,
   requestCompleted,
   routeMatches,
+  type FieldProbe,
   verifyEffects,
   type EffectVerification,
 } from '../flows/action-effect-verifier.js';
@@ -160,6 +162,7 @@ import {
 import type {
   FlowRunReport,
   FlowStatus,
+  CssResolutionReport,
   FlowStepReport,
   SemanticResolutionReport,
   StepEffectReport,
@@ -4177,7 +4180,15 @@ export class FlowExplorer {
         effect.targetMatch = healed.match;
       }
     }
-    located ??= await this.flowSteps.locate(page, step.target, timeout);
+    // Un CSS ambigu n'est jamais exécuté sur sa première correspondance : seule la résolution par
+    // l'empreinte (ci-dessous) peut départager ; sans elle, le localisateur est strict.
+    const disambiguated =
+      fingerprint !== undefined &&
+      replay.functionalTargetResolution.enabled &&
+      replay.functionalTargetResolution.resolveNonUniqueLocators &&
+      step.target.nth === undefined &&
+      step.target.section === undefined;
+    located ??= await this.flowSteps.locate(page, step.target, timeout, { strict: !disambiguated });
     // LOCATOR ≠ TARGET IDENTITY : un localisateur qui désigne PLUSIEURS éléments n'est qu'un générateur
     // de candidats. Jamais « le premier qui correspond » : le contexte (empreinte, fenêtre, champ,
     // parcours) départage ; une ambiguïté reste une ambiguïté (aucun choix arbitraire).
@@ -4268,6 +4279,18 @@ export class FlowExplorer {
           effect.targetMatch = { verdict: 'CONTEXTUAL_MATCH', score: resolved.chosen.score };
           effect.reasons = [...effect.reasons, `CONTEXTUAL_MATCH among ${String(rawMatches)} candidates`];
         }
+      }
+    }
+    // CSS REPLAY : le CSS PRÉFÉRÉ enregistré est vérifié sur le DOM ACTUEL (jamais réutilisé aveuglément).
+    if (typeof located !== 'string' && fingerprint?.css) {
+      const css = await this.cssResolutionOf(page, located, fingerprint.css);
+      if (css) {
+        const base = done;
+        done = (status, extra) => base(status, { ...extra, cssResolution: css });
+        this.emitHealing(
+          css.resolution === 'CSS_CONFIRMED' ? 'LOCATOR_UNIQUE' : 'LOCATOR_AMBIGUOUS',
+          `${step.kind} ${describeTarget(step.target)}: preferred css ${css.recordedPreferred} — recorded ${String(css.recordedMatches ?? '?')} match(es), current ${String(css.currentMatches)} → ${css.resolution}`,
+        );
       }
     }
     if (
@@ -4772,11 +4795,19 @@ export class FlowExplorer {
         );
       if (confirmed === false) {
         if (this.functional) await this.formNetwork.stopFunctional(`action-${action.id}`);
+        // VALUE LOSS : pourquoi, lu sur le TARGET RÉEL résolu (mauvais champ, effacé, remplacé, re-rendu…).
+        const loss = navigated
+          ? undefined
+          : classifyValueLoss({
+              expected: elementAction.value,
+              probe: await this.probeFilledField(page, locator, step.target),
+              wrongTarget: fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH',
+            });
         return {
           page,
           context: before,
           report: done('FAILED', {
-            reason: `ACTION_EFFECT_NOT_CONFIRMED: ${navigated ? 'unexpected navigation after the fill' : fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH' || fieldCheck?.verdict === 'FIELD_VALUE_MISMATCH' ? `${fieldCheck.verdict} — ${fieldCheck.reasons.join('; ')}` : 'the field does not hold the filled value'}${resolution ? ` (${resolution.status} ${resolution.resolution ?? ''}: the resolution is rejected)` : ''}`,
+            reason: `ACTION_EFFECT_NOT_CONFIRMED: ${navigated ? 'unexpected navigation after the fill' : fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH' || fieldCheck?.verdict === 'FIELD_VALUE_MISMATCH' ? `${fieldCheck.verdict} — ${fieldCheck.reasons.join('; ')}` : 'the field does not hold the filled value'}${loss ? ` — ${loss.kind}: ${loss.reason}` : ''}${resolution ? ` (${resolution.status} ${resolution.resolution ?? ''}: the resolution is rejected)` : ''}`,
             stateId: before.stateId,
             url: before.url,
             classification: action.classification,
@@ -5797,6 +5828,84 @@ export class FlowExplorer {
   }
 
   /** La valeur que tient le champ (relu ; s'il a été re-rendu, retrouvé par son localisateur). */
+  /** Le CSS préféré enregistré, compté sur le DOM actuel : désigne-t-il UN élément, celui utilisé ? */
+  private async cssResolutionOf(
+    page: Page,
+    located: Locator,
+    css: NonNullable<TargetFingerprint['css']>,
+  ): Promise<CssResolutionReport | undefined> {
+    const preferred = css.preferred;
+    if (!preferred) return undefined;
+    const count = async (selector: string): Promise<number> =>
+      page
+        .locator(selector)
+        .count()
+        .catch(() => 0);
+    const currentMatches = await count(preferred.selector);
+    const same =
+      currentMatches === 1
+        ? await located
+            .evaluate((el, selector) => document.querySelector(selector) === el, preferred.selector)
+            .catch(() => false)
+        : false;
+    return {
+      recordedPreferred: preferred.selector,
+      ...(preferred.matchCount !== undefined ? { recordedMatches: preferred.matchCount } : {}),
+      currentMatches,
+      resolution:
+        currentMatches === 0
+          ? 'CSS_NOT_FOUND'
+          : currentMatches > 1
+            ? 'CSS_AMBIGUOUS'
+            : same
+              ? 'CSS_CONFIRMED'
+              : 'CSS_CONFLICT',
+      ...(css.fallback
+        ? {
+            fallback: {
+              selector: css.fallback.selector,
+              ...(css.fallback.matchCount !== undefined ? { recordedMatches: css.fallback.matchCount } : {}),
+              currentMatches: await count(css.fallback.selector),
+            },
+          }
+        : {}),
+    };
+  }
+
+  /** Le champ réellement rempli, relu : attaché ? sa valeur, invalide ? sinon son remplaçant (re-rendu). */
+  private async probeFilledField(
+    page: Page,
+    locator: Locator,
+    target: FlowTarget,
+  ): Promise<FieldProbe | undefined> {
+    const read = await locator
+      .evaluate((el) => {
+        const input = el as HTMLInputElement;
+        const box = el.closest('mat-form-field, .mat-mdc-form-field, .form-group, fieldset');
+        const error = box?.querySelector(
+          'mat-error, .mat-mdc-form-field-error, .invalid-feedback, [role="alert"]',
+        );
+        return {
+          attached: el.isConnected,
+          value: typeof input.value === 'string' ? input.value : undefined,
+          invalid:
+            el.getAttribute('aria-invalid') === 'true' ||
+            (error !== null && error !== undefined && (error.textContent || '').trim() !== ''),
+        };
+      })
+      .catch(() => ({ attached: false, value: undefined, invalid: false }));
+    if (read.attached)
+      return {
+        attached: true,
+        ...(read.value !== undefined ? { value: read.value } : {}),
+        ...(read.invalid ? { invalid: true } : {}),
+      };
+    const again = await this.flowSteps.locate(page, target, 500);
+    const rerendered =
+      typeof again === 'string' ? undefined : await again.inputValue({ timeout: 500 }).catch(() => undefined);
+    return { attached: false, ...(rerendered !== undefined ? { rerenderedValue: rerendered } : {}) };
+  }
+
   private async filledValue(page: Page, locator: Locator, target: FlowTarget): Promise<string | undefined> {
     const held = await locator.inputValue({ timeout: 1000 }).catch(() => undefined);
     if (held !== undefined) return held;
@@ -5888,7 +5997,7 @@ export class FlowExplorer {
     { locator: Locator; target: FlowTarget; match: { verdict: string; score: number } } | undefined
   > {
     for (const candidate of healingCandidates(fingerprint, target)) {
-      const found = await this.flowSteps.locate(page, candidate, Math.min(timeoutMs, 1500));
+      const found = await this.flowSteps.locate(page, candidate, Math.min(timeoutMs, 1500), { strict: true });
       if (typeof found === 'string') continue;
       const observed = await readTarget(found);
       const match = matchFingerprint(fingerprint, observed);

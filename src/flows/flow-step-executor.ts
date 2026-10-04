@@ -74,7 +74,17 @@ export class FlowStepExecutor {
    * ouverte s'il y en a une (ce que l'utilisateur voit au-dessus : la page derrière
    * une fenêtre modale ne peut pas être cliquée), sinon la première correspondance.
    */
-  async locate(page: Page, target: FlowTarget, timeoutMs: number): Promise<Locator | string> {
+  async locate(
+    page: Page,
+    target: FlowTarget,
+    timeoutMs: number,
+    /**
+     * NEVER BLINDLY EXECUTE AN AMBIGUOUS LOCATOR : un CSS qui désigne plusieurs éléments visibles (hors
+     * d'une fenêtre ouverte qui les départage) est refusé — jamais « le premier ». Sans `strict`, le
+     * comportement historique (l'appelant départage lui-même, par l'empreinte et le contexte).
+     */
+    options: { strict?: boolean } = {},
+  ): Promise<Locator | string> {
     if (
       target.section !== undefined &&
       target.nth === undefined &&
@@ -93,15 +103,22 @@ export class FlowStepExecutor {
       let index = target.nth ?? 0;
       if (target.nth === undefined) {
         await base.first().waitFor({ state: 'attached', timeout: timeoutMs });
-        index = await base.evaluateAll((elements) => {
+        const picked = await base.evaluateAll((elements) => {
           const MODAL =
             '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open], .cdk-overlay-pane';
-          const inModal = elements.findIndex((el) => {
+          const shown = (el: Element): boolean => {
             const rect = el.getBoundingClientRect();
-            return el.closest(MODAL) !== null && (rect.width > 0 || rect.height > 0);
-          });
-          return inModal >= 0 ? inModal : 0;
+            return (rect.width > 0 || rect.height > 0) && getComputedStyle(el).visibility !== 'hidden';
+          };
+          const visible = elements.filter(shown).length;
+          const modal = elements.filter((el) => el.closest(MODAL) !== null && shown(el));
+          const inModal = modal[0] ? elements.indexOf(modal[0]) : -1;
+          return { index: inModal >= 0 ? inModal : 0, visible, inModal: modal.length };
         });
+        index = picked.index;
+        // Plusieurs éléments visibles, et pas exactement un dans la fenêtre ouverte : rien de choisi.
+        if (options.strict && target.strategy === 'css' && picked.visible > 1 && picked.inModal !== 1)
+          return `AMBIGUOUS_TARGET: AMBIGUOUS_LOCATOR — ${String(picked.visible)} visible elements match css "${target.value ?? ''}" (never the first one; nothing executed)`;
       }
       const locator = base.nth(index);
       await locator.waitFor({ state: 'visible', timeout: timeoutMs });

@@ -193,7 +193,9 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
       action.target?.ambiguous === true ||
       action.targetValidation?.repairApplied === true ||
       contextual ||
-      toggle)
+      toggle ||
+      // Un champ dont le CSS discriminant est connu : le CSS est gardé (préféré + repli) pour le rejeu.
+      (recorded.css !== undefined && (action.type === 'FILL' || action.type === 'SELECT')))
       ? {
           fingerprint: {
             ...recorded,

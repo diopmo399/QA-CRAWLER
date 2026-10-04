@@ -19,13 +19,17 @@ import type {
   PreActionCandidate,
   PreActionContext,
   RecordedDrag,
+  RecordedCssCandidate,
   RecordedDropZone,
   RecordedElement,
+  RecordedSelectors,
   RecordedState,
   RecordedValueFacts,
   RecordingEvent,
   RecordingEventType,
   RecordingSession,
+  ScreenInventory,
+  ScreenInventoryElement,
 } from './model.js';
 
 const BINDING = '__qaCrawlerRecord';
@@ -147,6 +151,9 @@ export class HumanFlowRecorder {
     const { recording } = this.options.config;
     await context.exposeBinding(BINDING, (source, payload: unknown) => {
       this.onPayload(source.page, payload);
+    });
+    await context.exposeBinding(`${BINDING}_inventory`, (source, payload: unknown) => {
+      this.onInventory(source.page, payload);
     });
     const script = captureScript({
       binding: BINDING,
@@ -416,6 +423,22 @@ export class HumanFlowRecorder {
       dialog: { kind, accepted: accept, message: redactText(dialog.message()).slice(0, 120) },
     });
     await (accept ? dialog.accept() : dialog.dismiss()).catch(() => undefined);
+  }
+
+  /** SCREEN ELEMENT INVENTORY : chaque écran inventorié pendant l'enregistrement (borné). */
+  readonly inventories: ScreenInventory[] = [];
+
+  private onInventory(page: Page | undefined, payload: unknown): void {
+    if ((page && page !== this.page) || this.closed || this.paused) return;
+    const inventory = sanitizeInventory(payload);
+    if (!inventory || this.inventories.length >= 100) return;
+    this.inventories.push(inventory);
+    const ambiguous = inventory.descriptors.filter((entry) => entry.status === 'AMBIGUOUS').length;
+    this.emit(
+      'SCREEN_INVENTORY_COMPLETED',
+      `${inventory.screen ?? inventory.url}: ${String(inventory.elements)} interactive element(s), ${String(ambiguous)} without a unique selector (${inventory.reason}, ${String(inventory.durationMs)} ms)`,
+      { elements: inventory.elements, ambiguous, reason: inventory.reason },
+    );
   }
 
   private onPayload(page: Page | undefined, payload: unknown): void {
@@ -1037,6 +1060,135 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ),
     ...optional('menu', str('menu', 60) ? redactText(str('menu', 60) ?? '') : undefined),
     ...(typeof raw.checked === 'boolean' ? { checked: raw.checked } : {}),
+    ...(raw.formControlFromHost === true ? { formControlFromHost: true } : {}),
+    ...(isObject(raw.hostIdentity) ? hostIdentityOf(raw.hostIdentity) : {}),
+    ...(isObject(raw.selectors) ? selectorsOf(raw.selectors) : {}),
+  };
+}
+
+const KINDS =
+  /^(TEST_ID|STABLE_ID|FORM_CONTROL|NAME|ARIA|HOST_BINDING|CONTEXTUAL|COMPONENT|STABLE_CLASS|STRUCTURAL)$/;
+
+/** Un candidat CSS envoyé par la page : un sélecteur borné et expurgé, des nombres vérifiés. */
+function cssCandidateOf(raw: unknown): RecordedCssCandidate | undefined {
+  if (!isObject(raw) || typeof raw.selector !== 'string' || raw.selector === '') return undefined;
+  const number = (value: unknown, max: number): number =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(value, max)) : 0;
+  return {
+    selector: redactText(text(raw.selector, 400)),
+    kind: typeof raw.kind === 'string' && KINDS.test(raw.kind) ? raw.kind : 'STRUCTURAL',
+    matchCount: Math.round(number(raw.matchCount, 100_000)),
+    confidence: number(raw.confidence, 1),
+    ...(raw.dynamic === true ? { dynamic: true } : {}),
+    ...(raw.structural === true ? { structural: true } : {}),
+  };
+}
+
+function selectorsOf(raw: Record<string, unknown>): { selectors?: RecordedSelectors } {
+  const structural = cssCandidateOf(raw.structural);
+  if (!structural) return {};
+  const preferred = cssCandidateOf(raw.preferred);
+  const ambiguity = isObject(raw.ambiguity) ? raw.ambiguity : {};
+  const level = ambiguity.level;
+  return {
+    selectors: {
+      ...(preferred ? { preferred } : {}),
+      structural,
+      candidates: (Array.isArray(raw.candidates) ? raw.candidates : [])
+        .slice(0, 5)
+        .map(cssCandidateOf)
+        .filter((entry): entry is RecordedCssCandidate => entry !== undefined),
+      ambiguity: {
+        level: level === 'NONE' || level === 'LOW' || level === 'MEDIUM' || level === 'HIGH' ? level : 'HIGH',
+        reasons: (Array.isArray(ambiguity.reasons) ? ambiguity.reasons : [])
+          .filter((reason): reason is string => typeof reason === 'string' && /^[A-Z_]{3,30}$/.test(reason))
+          .slice(0, 6),
+        structuralMatches:
+          typeof ambiguity.structuralMatches === 'number' && Number.isFinite(ambiguity.structuralMatches)
+            ? Math.max(0, Math.round(ambiguity.structuralMatches))
+            : 0,
+      },
+      inventory: raw.inventory === 'INVENTORY' ? 'INVENTORY' : 'LOCAL',
+    },
+  };
+}
+
+function hostIdentityOf(raw: Record<string, unknown>): { hostIdentity?: RecordedElement['hostIdentity'] } {
+  if (
+    typeof raw.tag !== 'string' ||
+    !/^[a-z][a-z0-9-]{0,60}$/.test(raw.tag) ||
+    typeof raw.attribute !== 'string' ||
+    !/^[a-z][a-z-]{0,30}$/.test(raw.attribute) ||
+    typeof raw.value !== 'string' ||
+    raw.value === ''
+  )
+    return {};
+  return {
+    hostIdentity: {
+      tag: raw.tag,
+      attribute: raw.attribute,
+      value: redactText(text(raw.value, 80)),
+      depth: typeof raw.depth === 'number' && Number.isFinite(raw.depth) ? Math.round(raw.depth) : 0,
+    },
+  };
+}
+
+/** L'inventaire d'un écran envoyé par la page : bornée, expurgée, jamais une valeur saisie. */
+export function sanitizeInventory(payload: unknown): ScreenInventory | undefined {
+  if (!isObject(payload) || !Array.isArray(payload.descriptors)) return undefined;
+  const count = (value: unknown, max = 100_000): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.min(Math.round(value), max))
+      : undefined;
+  const descriptors = payload.descriptors
+    .slice(0, 150)
+    .filter(isObject)
+    .map((raw): ScreenInventoryElement => {
+      const str = (key: string, max = 120): string | undefined =>
+        typeof raw[key] === 'string' && raw[key] !== '' ? redactText(text(raw[key], max)) : undefined;
+      return {
+        elementId: /^[A-Z]{3,10}-\d{3}$/.test(String(raw.elementId)) ? String(raw.elementId) : 'ELEMENT-000',
+        kind: /^[A-Z]{3,10}$/.test(String(raw.kind)) ? String(raw.kind) : 'ELEMENT',
+        tag: /^[a-z][a-z0-9-]{0,60}$/.test(String(raw.tag)) ? String(raw.tag) : 'element',
+        ...(str('role', 30) ? { role: str('role', 30) } : {}),
+        ...(str('label', 60) ? { label: str('label', 60) } : {}),
+        ...(str('formControlName', 80) ? { formControlName: str('formControlName', 80) } : {}),
+        ...(str('preferredCss', 400) ? { preferredCss: str('preferredCss', 400) } : {}),
+        ...(count(raw.preferredMatches) !== undefined
+          ? { preferredMatches: count(raw.preferredMatches) }
+          : {}),
+        ...(typeof raw.confidence === 'number'
+          ? { confidence: Math.max(0, Math.min(raw.confidence, 1)) }
+          : {}),
+        ...(str('structuralCss', 400) ? { structuralCss: str('structuralCss', 400) } : {}),
+        ...(count(raw.structuralMatches) !== undefined
+          ? { structuralMatches: count(raw.structuralMatches) }
+          : {}),
+        ...(typeof raw.ambiguity === 'string' && /^(NONE|LOW|MEDIUM|HIGH)$/.test(raw.ambiguity)
+          ? { ambiguity: raw.ambiguity }
+          : {}),
+        ...(Array.isArray(raw.reasons)
+          ? {
+              reasons: raw.reasons
+                .filter(
+                  (reason): reason is string => typeof reason === 'string' && /^[A-Z_]{3,30}$/.test(reason),
+                )
+                .slice(0, 6),
+            }
+          : {}),
+        status: raw.status === 'UNIQUE' ? 'UNIQUE' : 'AMBIGUOUS',
+      };
+    });
+  return {
+    at: count(payload.at, Number.MAX_SAFE_INTEGER) ?? 0,
+    url: typeof payload.url === 'string' ? redactUrl(payload.url.slice(0, 2000)) : '',
+    ...(typeof payload.screen === 'string' && payload.screen !== ''
+      ? { screen: redactText(text(payload.screen, 80)) }
+      : {}),
+    reason: /^[A-Z_]{3,30}$/.test(String(payload.reason)) ? String(payload.reason) : 'SCREEN_ARRIVED',
+    elements: descriptors.length,
+    durationMs: count(payload.durationMs, 600_000) ?? 0,
+    descriptors,
   };
 }
 

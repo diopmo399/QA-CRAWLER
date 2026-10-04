@@ -111,7 +111,11 @@ describe('Human flow recorder (E2E)', () => {
     const flow = generatedFlow(yaml, outcome.directory);
     expect(flow.startAt).toBe('/users');
     const steps = flow.steps.map((step) => JSON.stringify(step));
-    expect(yaml).not.toMatch(/mat-input|nth-child|nth-of-type/);
+    // Aucune CIBLE d'étape fragile (le repli structurel peut vivre dans l'empreinte, jamais comme cible).
+    const targets = flow.steps.map((step) => ('target' in step ? JSON.stringify(step.target) : ''));
+    expect(targets.join('\n')).not.toMatch(/mat-input|nth-child|nth-of-type/);
+    // Un id généré n'est jamais un CSS préféré (il reste au plus un indice de l'empreinte).
+    expect(yaml).not.toMatch(/selector: #mat-input/);
     expect(flow.steps.filter((step) => step.kind === 'fill')).toHaveLength(2);
     // Les données portent l'entité écrite (POST /api/users) ; prénom et e-mail sont régénérés au rejeu.
     expect(steps.some((step) => step.includes('"testData":"user.firstName"'))).toBe(true);

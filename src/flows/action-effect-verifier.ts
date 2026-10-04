@@ -32,6 +32,9 @@ export interface ObservedTarget {
   dialog?: string;
   id?: string;
   inputType?: string;
+  /** formControlName de l'élément, sinon de son composant hôte (un ancêtre proche). */
+  formControl?: string;
+  maxLength?: number;
 }
 
 export interface FingerprintMatch {
@@ -121,6 +124,21 @@ function baseMatch(expected: TargetFingerprint, observed: ObservedTarget): Finge
     }
   }
   if (expected.tag && observed.tag && expected.tag === observed.tag) score += 0.1;
+  // formControlName (de l'élément ou de son hôte) : une identité technique du champ. Un AUTRE nom de
+  // contrôle désigne un autre champ, même avec la même structure Material.
+  if (expected.formControl && observed.formControl) {
+    if (expected.formControl !== observed.formControl)
+      return {
+        verdict: 'MISMATCH',
+        score: 0,
+        reasons: [
+          ...reasons,
+          `formControlName "${observed.formControl}" instead of "${expected.formControl}"`,
+        ],
+      };
+    score += 0.25;
+    reasons.push('same formControlName');
+  }
   // LE CONTEXTE : un élément identique d'une AUTRE section n'est pas la cible (Filtres ≠ Général).
   const context = sectionMatch(expected.section, observed.section);
   if (context === 'OTHER')
@@ -176,9 +194,18 @@ export function matchFingerprint(expected: TargetFingerprint, observed: Observed
   check('structural', 'ID', same(expected.id, observed.id), 0.5);
   check('structural', 'TAG', same(expected.tag, observed.tag), 0.3);
   check('structural', 'INPUT_TYPE', same(expected.inputType, observed.inputType), 0.2);
+  check('identity', 'FORM_CONTROL', same(expected.formControl, observed.formControl), 0.6);
+  check(
+    'structural',
+    'MAX_LENGTH',
+    expected.maxLength === undefined || observed.maxLength === undefined
+      ? undefined
+      : expected.maxLength === observed.maxLength,
+    0.2,
+  );
   // Une autre identité (nom, section, testId) : HARD. Seule la fenêtre ou la structure a bougé : SOFT.
   const hard = mismatched.some((evidence) =>
-    ['TEST_ID', 'ACCESSIBLE_NAME', 'SECTION', 'LABEL'].includes(evidence),
+    ['TEST_ID', 'ACCESSIBLE_NAME', 'SECTION', 'LABEL', 'FORM_CONTROL'].includes(evidence),
   );
   const severity = mismatched.length === 0 ? 'NONE' : hard || base.verdict === 'MISMATCH' ? 'HARD' : 'SOFT';
   const round = (value: number): number => Number(Math.min(1, value).toFixed(2));
@@ -230,12 +257,20 @@ let probes = 0;
  */
 export function healingCandidates(fingerprint: TargetFingerprint, current: FlowTarget): FlowTarget[] {
   const candidates: FlowTarget[] = [];
+  // Le CSS PRÉFÉRÉ enregistré (minimum stable discriminant), puis le repli structurel : chacun n'est
+  // retenu que s'il désigne UN élément et que l'empreinte le confirme (jamais le premier d'une liste).
+  if (fingerprint.css?.preferred)
+    candidates.push({ strategy: 'css', value: fingerprint.css.preferred.selector });
   if (fingerprint.role && fingerprint.name)
     candidates.push({ strategy: 'role', role: fingerprint.role, name: fingerprint.name });
   if (fingerprint.testId) candidates.push({ strategy: 'testId', value: fingerprint.testId });
   if (fingerprint.name) candidates.push({ strategy: 'text', value: fingerprint.name });
   if (fingerprint.text && fingerprint.text !== fingerprint.name)
     candidates.push({ strategy: 'text', value: fingerprint.text });
+  if (fingerprint.label && fingerprint.label !== fingerprint.name)
+    candidates.push({ strategy: 'label', value: fingerprint.label });
+  if (fingerprint.css?.fallback)
+    candidates.push({ strategy: 'css', value: fingerprint.css.fallback.selector });
   const same = (a: FlowTarget, b: FlowTarget): boolean =>
     a.strategy === b.strategy && a.value === b.value && a.role === b.role && a.name === b.name;
   return candidates.filter((candidate) => !same(candidate, current));
@@ -514,8 +549,16 @@ export async function readTarget(target: Locator | ElementHandle, page?: Page): 
           )
         : '';
       const id = el.getAttribute('id');
+      // formControlName : sur l'élément, sinon sur un ancêtre proche (le composant hôte Angular).
+      let formControl = el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name');
+      for (let node = el.parentElement, depth = 1; !formControl && node && depth <= 8; depth += 1) {
+        formControl = node.getAttribute('formcontrolname');
+        node = node.parentElement;
+      }
       return {
         tag,
+        ...(formControl ? { formControl } : {}),
+        ...(input.maxLength > 0 ? { maxLength: input.maxLength } : {}),
         ...(role ? { role } : {}),
         ...(name ? { name } : {}),
         ...(text ? { text } : {}),
@@ -587,6 +630,66 @@ export function verifyFieldFill(input: {
       reasons: [`the field${expectedName ? ` "${expectedName}"` : ''} holds the filled value`],
     };
   return { verdict: 'UNKNOWN', reasons: ['the value could not be read'] };
+}
+
+/**
+ * VALUE LOSS : pourquoi le champ ne tient pas la valeur saisie — jamais un seul « WRONG_EFFECT ».
+ * Lu sur le TARGET RÉEL qui a été résolu (attaché ? re-rendu ? invalide ? vide ? autre valeur ?).
+ */
+export type ValueLossKind =
+  | 'WRONG_TARGET'
+  | 'FIELD_DISAPPEARED'
+  | 'FIELD_RERENDERED'
+  | 'VALIDATION_REJECTED'
+  | 'VALUE_CLEARED'
+  | 'VALUE_REJECTED_BY_APPLICATION'
+  | 'VALUE_REPLACED'
+  | 'UNKNOWN_VALUE_LOSS';
+
+export interface FieldProbe {
+  /** L'élément rempli est-il encore dans le document ? */
+  attached: boolean;
+  /** Sa valeur actuelle (undefined : illisible). */
+  value?: string;
+  /** aria-invalid, ou un message d'erreur visible dans son champ. */
+  invalid?: boolean;
+  /** Un élément équivalent retrouvé après un re-rendu (même localisateur) : sa valeur. */
+  rerenderedValue?: string;
+}
+
+export function classifyValueLoss(input: {
+  expected: string;
+  probe: FieldProbe | undefined;
+  wrongTarget?: boolean;
+}): { kind: ValueLossKind; reason: string } {
+  const { expected, probe } = input;
+  if (input.wrongTarget) return { kind: 'WRONG_TARGET', reason: 'another field received the value' };
+  if (!probe) return { kind: 'UNKNOWN_VALUE_LOSS', reason: 'the field could not be read again' };
+  if (!probe.attached)
+    return probe.rerenderedValue !== undefined
+      ? {
+          kind: 'FIELD_RERENDERED',
+          reason: `the filled element was replaced by a new one${probe.rerenderedValue === '' ? ' (empty)' : ' holding another value'}`,
+        }
+      : { kind: 'FIELD_DISAPPEARED', reason: 'the filled field is no longer on the screen' };
+  const value = probe.value;
+  if (probe.invalid && value !== expected)
+    return { kind: 'VALIDATION_REJECTED', reason: 'the application marks the field invalid' };
+  if (value === undefined) return { kind: 'UNKNOWN_VALUE_LOSS', reason: 'the value could not be read' };
+  if (value.trim() === '' && expected.trim() !== '')
+    return { kind: 'VALUE_CLEARED', reason: 'the field was emptied after the fill' };
+  // Une valeur tronquée, filtrée ou masquée par l'application (maxlength, masque de saisie).
+  const strip = (text: string): string => text.replace(/[\s.\-_/()]/g, '');
+  if (
+    expected.startsWith(value) ||
+    strip(expected).startsWith(strip(value)) ||
+    strip(value) === strip(expected)
+  )
+    return {
+      kind: 'VALUE_REJECTED_BY_APPLICATION',
+      reason: 'the application kept only part of the value (mask, length)',
+    };
+  return { kind: 'VALUE_REPLACED', reason: 'the field holds another value (overwritten after the fill)' };
 }
 
 /**
