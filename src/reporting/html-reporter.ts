@@ -443,6 +443,7 @@ function targetResolutionBlock(step: FlowStepReport): string {
       ? 'FUNCTIONALLY_EQUIVALENT'
       : undefined,
     trace.status === 'TARGET_HEALED' ? 'HEALED' : undefined,
+    trace.outcome === 'CONTEXTUAL_MATCH' ? 'CONTEXTUAL_MATCH' : undefined,
     trace.ai.outcome === 'VALIDATED' ? 'AI_ASSISTED' : undefined,
     trace.decision === 'AMBIGUOUS' && !trace.resolution ? 'AMBIGUOUS' : undefined,
     trace.evidenceStatus === 'CONTRADICTORY_EVIDENCE' ? 'CONTRADICTORY_EVIDENCE' : undefined,
@@ -450,8 +451,44 @@ function targetResolutionBlock(step: FlowStepReport): string {
     trace.runtimeVerification?.status === 'CONFIRMED' ? 'RUNTIME_CONFIRMED' : undefined,
     trace.runtimeVerification?.status === 'REJECTED' ? 'RUNTIME_REJECTED' : undefined,
   ].filter((badge): badge is string => badge !== undefined);
+  const selected = trace.candidates.find((candidate) => candidate.id === trace.resolution);
+  const context = [
+    trace.identity.dialog ? `Dialog: ${trace.identity.dialog}` : '',
+    trace.identity.label ? `Field: ${trace.identity.label}` : '',
+    ...Object.entries(trace.identity.configuration).map(([key, value]) => `${key}: ${value}`),
+  ].filter(Boolean);
   const rows: [string, string][] = [
-    ['Recorded target', trace.recorded.locator],
+    ['Target', trace.action],
+    ['Recorded locator', trace.recorded.locator],
+    ...(trace.rawMatches !== undefined
+      ? [
+          ['Raw matches', `${String(trace.rawMatches)}${trace.trigger ? ` (${trace.trigger})` : ''}`] as [
+            string,
+            string,
+          ],
+        ]
+      : []),
+    ...(selected ? [['Selected target', `${selected.id} — ${selected.summary}`] as [string, string]] : []),
+    ...(context.length > 0 ? [['Context', context.join('\n')] as [string, string]] : []),
+    ...(trace.outcome
+      ? [
+          [
+            'Resolution',
+            `${trace.outcome} · confidence ${String(trace.confidence ?? 0)}${trace.ambiguity ? ` · best ${String(trace.ambiguity.bestScore)} / second ${String(trace.ambiguity.secondBestScore)} (gap ${String(trace.ambiguity.scoreGap)})` : ''}`,
+          ] as [string, string],
+        ]
+      : []),
+    ...(trace.candidates.some((candidate) => candidate.rejected)
+      ? [
+          [
+            'Rejected candidates',
+            trace.candidates
+              .filter((candidate) => candidate.rejected)
+              .map((candidate) => `${candidate.id}: ${candidate.rejected ?? ''} — ${candidate.summary}`)
+              .join('\n'),
+          ] as [string, string],
+        ]
+      : []),
     [
       'Runtime target',
       `${trace.runtime.locator} (fingerprint ${trace.runtime.fingerprintVerdict}: ${trace.runtime.reasons.join('; ')})`,

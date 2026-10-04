@@ -16,7 +16,9 @@ import type { AddressInfo } from 'node:net';
  * au choix de l'opérateur avec un autre mat-label — même id, nouveau nœud), `wrongSection` (au choix
  * de l'opérateur, le champ disparaît et `#valueInput` désigne un champ d'une AUTRE section),
  * `ambiguous` (deux champs pareils recréés, le second refuse toute saisie), `swallow` (le champ valeur
- * refuse toute saisie : la valeur n'est jamais tenue), `shadow` (au choix de l'opérateur, le champ
+ * refuse toute saisie : la valeur n'est jamais tenue), `duplicates` (QUATRE #valueInput : un caché, un dans
+ * le panneau « Search panel » (Date), un « Like » dans la fenêtre Filter AVANT le bon, et le bon
+ * « Company name » — seul ce dernier est lu par Apply), `shadow` (au choix de l'opérateur, le champ
  * est RECRÉÉ dans le shadow root OUVERT d'un composant `value-field`, libellé « Criteria » : même
  * #valueInput pour Playwright, invisible pour un querySelectorAll, empreinte différente), `shadowLoose`
  * (idem, précédé d'un bouton « Reset » et lu « combobox » : les preuves se contredisent, aucune
@@ -34,17 +36,21 @@ const page = (
 ): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Requests</title>
 <style>.hidden{display:none}</style></head><body><main>
 <h1>Requests</h1>
+${variant === 'duplicates' ? '<input id="valueInput" style="display:none"><section aria-label="Search panel"><h2>Search panel</h2><label>Date <input id="valueInput"></label></section>' : ''}
 <label>Search <input id="search" placeholder="Search requests"></label>
 <button type="button" id="open">Filter</button>
 <div role="dialog" aria-label="Filter" id="panel" class="hidden">
   <label>Field <select id="field"><option value="">--</option><option>Company name</option><option>City</option></select></label>
   <label>Operator <select id="operator"><option value="">--</option><option>Like</option><option>Equals</option></select></label>
+  ${variant === 'duplicates' ? '<mat-form-field><mat-label>Like</mat-label><input id="valueInput"></mat-form-field>' : ''}
   <div id="valueBox">${
-    ['relabel', 'wrongSection', 'ambiguous', 'shadow', 'shadowLoose'].includes(variant)
-      ? '<mat-form-field><mat-label>Search term</mat-label><input id="valueInput"></mat-form-field>'
-      : variant === 'material'
-        ? '<mat-form-field><mat-label>Value</mat-label><input id="valueInput" list="hints"></mat-form-field>'
-        : '<input id="valueInput" list="hints">'
+    variant === 'duplicates'
+      ? '<mat-form-field><mat-label>Company name</mat-label><input id="valueInput"></mat-form-field>'
+      : ['relabel', 'wrongSection', 'ambiguous', 'shadow', 'shadowLoose'].includes(variant)
+        ? '<mat-form-field><mat-label>Search term</mat-label><input id="valueInput"></mat-form-field>'
+        : variant === 'material'
+          ? '<mat-form-field><mat-label>Value</mat-label><input id="valueInput" list="hints"></mat-form-field>'
+          : '<input id="valueInput" list="hints">'
   }</div>
   ${variant === 'twins' ? '<div><input class="extra"></div><div><input class="extra"></div>' : ''}
   <datalist id="hints"><option>alpha</option><option>beta</option></datalist>

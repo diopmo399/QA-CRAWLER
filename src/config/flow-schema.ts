@@ -255,6 +255,18 @@ const fingerprintSchema = z
     formControl: nonEmpty.optional(),
     placeholder: nonEmpty.optional(),
     semanticId: nonEmpty.optional(),
+    // IDENTITÉ CONTEXTUALISÉE (facultative : un ancien enregistrement reste valide sans elle).
+    /** L'id de l'élément (un indice parmi d'autres : « #id » n'est jamais une identité à lui seul). */
+    id: nonEmpty.optional(),
+    inputType: nonEmpty.optional(),
+    /** La fenêtre / le dialogue qui contenait la cible (« Filter »). */
+    dialog: nonEmpty.optional(),
+    /** Le champ fonctionnel (mat-form-field, fieldset) : son libellé. */
+    formField: nonEmpty.optional(),
+    /** Le voisinage sémantique (libellés, titres, boutons proches). */
+    nearbyText: z.array(nonEmpty).max(8).optional(),
+    /** Attributs métier stables (name, formcontrolname, aria-label…). */
+    stableAttributes: z.record(z.string(), z.string()).optional(),
   })
   .strict();
 
@@ -479,6 +491,12 @@ export interface TargetFingerprint {
   formControl?: string;
   placeholder?: string;
   semanticId?: string;
+  id?: string;
+  inputType?: string;
+  dialog?: string;
+  formField?: string;
+  nearbyText?: string[];
+  stableAttributes?: Record<string, string>;
 }
 
 interface StepCommon {

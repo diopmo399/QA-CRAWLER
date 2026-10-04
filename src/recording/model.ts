@@ -166,6 +166,12 @@ export interface RecordedElement {
   elementId?: string;
   /** L'id semble généré (mat-input-23, :r1:, cdk-…) : jamais utilisé pour localiser. */
   generatedId?: boolean;
+  /** Nombre d'éléments qui portent le MÊME id (> 1 : « #id » n'est pas une identité). */
+  sameId?: number;
+  /** Le champ fonctionnel qui contient l'élément (mat-form-field / fieldset / groupe) : son libellé. */
+  formField?: string;
+  /** Le voisinage sémantique proche (libellés, titres, boutons) — jamais une valeur. */
+  nearbyText?: string[];
   inputType?: string;
   autocomplete?: string;
   placeholder?: string;

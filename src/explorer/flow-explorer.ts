@@ -43,6 +43,7 @@ import {
   normalize as normalizeControl,
   healingCandidates,
   isFragileTarget,
+  compatibleRoles,
   matchFingerprint,
   observeEffects,
   readTarget,
@@ -251,8 +252,10 @@ import {
   targetResolutionRequest,
   temporalLine,
   traceText,
+  resolutionOutcomeOf,
   type ScoredCandidate,
   type TargetResolutionTrace,
+  type TargetResolutionTrigger,
 } from '../flows/functional-target.js';
 import type { FailureKind, RecoveryEvent, RecoverySummary, StuckEvent } from '../recovery/recovery-model.js';
 import { StuckDetector } from '../recovery/stuck-detector.js';
@@ -4055,7 +4058,83 @@ export class FlowExplorer {
       }
     }
     located ??= await this.flowSteps.locate(page, step.target, timeout);
-    if (typeof located !== 'string' && fingerprint && replay.targetFingerprintMatching && !effect.healed) {
+    // LOCATOR ≠ TARGET IDENTITY : un localisateur qui désigne PLUSIEURS éléments n'est qu'un générateur
+    // de candidats. Jamais « le premier qui correspond » : le contexte (empreinte, fenêtre, champ,
+    // parcours) départage ; une ambiguïté reste une ambiguïté (aucun choix arbitraire).
+    let contextual = false;
+    if (
+      typeof located !== 'string' &&
+      !effect.healed &&
+      // Une étape enregistrée (empreinte) ; un flow écrit à la main garde ses règles (fenêtre ouverte d'abord).
+      fingerprint !== undefined &&
+      replay.functionalTargetResolution.enabled &&
+      replay.functionalTargetResolution.resolveNonUniqueLocators &&
+      step.target.nth === undefined &&
+      step.target.section === undefined
+    ) {
+      // Seules les correspondances VISIBLES peuvent être confondues (une copie cachée ne l'est jamais).
+      const rawMatches = await toLocator(page, step.target)
+        .evaluateAll(
+          (elements) =>
+            elements.filter((el) => {
+              const rect = el.getBoundingClientRect();
+              const style = getComputedStyle(el);
+              return (
+                (rect.width > 0 || rect.height > 0) &&
+                style.visibility !== 'hidden' &&
+                style.display !== 'none'
+              );
+            }).length,
+        )
+        .catch(() => 1);
+      if (rawMatches > 1) {
+        this.emitHealing(
+          'TARGET_LOCATOR_NON_UNIQUE',
+          `${step.kind} ${describeTarget(step.target)}: ${String(rawMatches)} elements match the recorded locator`,
+        );
+        const resolved = await this.resolveFunctionalTarget(
+          page,
+          flow,
+          step,
+          fingerprint,
+          { reasons: [`${String(rawMatches)} elements match the recorded locator`] },
+          located,
+          'LOCATOR_NON_UNIQUE',
+          rawMatches,
+        );
+        // AMBIGUOUS : plusieurs candidats aussi plausibles — jamais un choix arbitraire, rien d'exécuté.
+        // Aucun candidat convaincant : le chemin strict habituel (empreinte vérifiée, healing) décide.
+        if (resolved.locator || resolved.trace.outcome === 'AMBIGUOUS') {
+          resolution = resolved.trace;
+          const base = done;
+          done = (status, extra) => base(status, { ...extra, targetResolution: resolved.trace });
+        }
+        if (resolved.trace.outcome === 'AMBIGUOUS')
+          return diverged('TARGET_MISMATCH', {
+            page,
+            report: done('FAILED', {
+              reason: `TARGET_LOCATOR_NON_UNIQUE: ${String(rawMatches)} elements match ${describeTarget(step.target)} — ${resolved.trace.outcome ?? resolved.trace.status}: ${resolved.trace.reason} (nothing chosen arbitrarily, not executed)`,
+              stateId: context.stateId,
+              url: context.url,
+              effect: { ...effect, status: 'TARGET_MISMATCH', reasons: [resolved.trace.reason] },
+            }),
+          });
+        if (resolved.locator && resolved.chosen) {
+          located = resolved.locator;
+          contextual = true;
+          effect.locator = resolved.chosen.cssHint ?? describeTarget(step.target);
+          effect.targetMatch = { verdict: 'CONTEXTUAL_MATCH', score: resolved.chosen.score };
+          effect.reasons = [...effect.reasons, `CONTEXTUAL_MATCH among ${String(rawMatches)} candidates`];
+        }
+      }
+    }
+    if (
+      typeof located !== 'string' &&
+      fingerprint &&
+      replay.targetFingerprintMatching &&
+      !effect.healed &&
+      !contextual
+    ) {
       // Un élément re-rendu entre la localisation et la lecture se relit (au plus deux fois) :
       // une lecture ratée n'est jamais la preuve qu'il s'agit d'un autre élément.
       let observed = await readTarget(located);
@@ -4154,6 +4233,40 @@ export class FlowExplorer {
         effect.healed = { from: describeTarget(step.target), to: describeTarget(healed.target) };
         effect.locator = describeTarget(healed.target);
         effect.targetMatch = healed.match;
+      }
+    }
+    // HEALING CONTEXTUEL : le localisateur enregistré ne trouve plus rien, l'empreinte simple non plus.
+    // Les candidats de l'écran sont comparés à l'identité contextualisée (rôle, libellé, champ, fenêtre,
+    // parcours) ; le healing n'est APPRIS qu'après confirmation par l'effet runtime.
+    if (
+      typeof located === 'string' &&
+      fingerprint &&
+      replay.locatorHealing &&
+      replay.functionalTargetResolution.enabled &&
+      step.target.section === undefined
+    ) {
+      this.emitHealing('TARGET_HEALING_REQUESTED', `${step.kind} ${describeTarget(step.target)}: ${located}`);
+      const healed = await this.resolveFunctionalTarget(
+        page,
+        flow,
+        step,
+        fingerprint,
+        { reasons: [located] },
+        undefined,
+        'LOCATOR_NOT_FOUND',
+        0,
+      );
+      if (healed.locator && healed.chosen) {
+        resolution = healed.trace;
+        const base = done;
+        done = (status, extra) => base(status, { ...extra, targetResolution: healed.trace });
+        located = healed.locator;
+        effect.healed = {
+          from: describeTarget(step.target),
+          to: `${healed.trace.outcome ?? 'HEALED'} ${healed.chosen.id}: ${candidateSummary(healed.chosen)}`,
+        };
+        effect.locator = healed.chosen.cssHint ?? describeTarget(step.target);
+        effect.targetMatch = { verdict: 'HEALED', score: healed.chosen.score };
       }
     }
     // Un nom accessible trouvé par correspondance PARTIELLE (« Company information » dans
@@ -4485,7 +4598,8 @@ export class FlowExplorer {
           }),
         };
       }
-    } else if (resolution) await this.confirmTargetResolution(page, resolution, undefined);
+    } else if (resolution && (elementAction.kind === 'fill' || !verifying))
+      await this.confirmTargetResolution(page, resolution, undefined);
 
     // « Que s'est-il passé ? »
     let after = await this.observeState(page, before.metadata.depth + 1);
@@ -4659,6 +4773,21 @@ export class FlowExplorer {
       effect.expected = verification.expected;
       effect.observed = verification.observed;
       effect.reasons = verification.reasons;
+      // TARGET_CONFIRMED ≠ ACTION_CONFIRMED : une cible résolue (contexte, healing) n'est confirmée
+      // que par l'effet observé — l'ActionEffectVerifier reste la preuve finale.
+      if (resolution)
+        await this.confirmTargetResolution(
+          page,
+          resolution,
+          // Une attente suspecte (contamination de l'enregistrement) ne prouve rien contre la cible.
+          verification.status === 'CONFIRMED' ? true : failed(verification) && !suspect ? false : undefined,
+          failed(verification) && !suspect
+            ? `ACTION_EFFECT_MISMATCH: expected ${verification.expected.join(', ') || 'an effect'}; observed ${verification.observed.join(', ') || 'no relevant change'}`
+            : undefined,
+          verification.status === 'CONFIRMED'
+            ? `ACTION_CONFIRMED (${verification.reasons.join('; ')})`
+            : undefined,
+        );
       if (suspect) {
         // ACTION_EXECUTED + RUNTIME_EFFECT_CONFIRMED + RECORDED_EXPECTATION_SUSPECT : aucune récupération
         // (pas d'expérimentation sur une cible correcte) ; la divergence du MODÈLE d'enregistrement est
@@ -4819,7 +4948,11 @@ export class FlowExplorer {
     step: Extract<FlowStep, { target: unknown }>,
   ): Promise<{ ready: boolean; present?: boolean; reason?: string }> {
     const found = await this.flowSteps.locate(page, step.target, 50);
-    if (typeof found === 'string') return { ready: false, reason: 'not on the screen yet' };
+    if (typeof found === 'string')
+      // Localisateur périmé : la cible peut être là sous une autre forme (résolue par son contexte).
+      return (await this.contextuallyAvailable(page, step))
+        ? { ready: true, reason: 'resolved by its context (recorded locator not found)' }
+        : { ready: false, reason: 'not on the screen yet' };
     if (!(await found.isEnabled({ timeout: 200 }).catch(() => false)))
       return { ready: false, reason: 'present but disabled' };
     if (step.fingerprint && this.config.replay.targetFingerprintMatching) {
@@ -4918,8 +5051,39 @@ export class FlowExplorer {
     return result;
   }
 
+  /**
+   * La cible d'une étape est-elle là ? Le localisateur brut d'abord ; s'il ne trouve rien et que
+   * c'est la cible de l'étape SUIVANTE (avec une empreinte), sa résolution contextuelle (lecture seule) :
+   * un localisateur périmé n'est pas la preuve que l'élément manque.
+   */
   private async targetAvailable(page: Page, target: FlowTarget, timeoutMs: number): Promise<boolean> {
-    return typeof (await this.flowSteps.locate(page, target, timeoutMs)) !== 'string';
+    if (typeof (await this.flowSteps.locate(page, target, timeoutMs)) !== 'string') return true;
+    const next = this.nextFlowStep();
+    return next?.target === target ? this.contextuallyAvailable(page, next) : false;
+  }
+
+  /** La cible d'une étape est-elle RÉSOLUE par son contexte (empreinte, fenêtre, champ, parcours) ? */
+  private async contextuallyAvailable(
+    page: Page,
+    step: Extract<FlowStep, { target: unknown }>,
+  ): Promise<boolean> {
+    const settings = this.config.replay.functionalTargetResolution;
+    const flow = this.stepPosition?.flow;
+    if (!step.fingerprint || !settings.enabled || !flow) return false;
+    const index = flow.steps.indexOf(step);
+    if (index < 0) return false;
+    const found = await discoverCandidates(page, step, settings.maxCandidates);
+    const decision = decide(
+      scoreCandidates(
+        functionalIdentityOf(step, flow.steps, index),
+        buildTemporalContext(flow.steps, index),
+        found.candidates,
+      ),
+      settings.minScore,
+      settings.ambiguityMargin,
+    );
+    await clearCandidateMarks(page, found.token);
+    return decision.status === 'RESOLVED';
   }
 
   /**
@@ -4978,6 +5142,9 @@ export class FlowExplorer {
     fingerprint: TargetFingerprint,
     mismatch: { score?: number; reasons: readonly string[] },
     located: Locator | undefined,
+    /** Pourquoi résoudre : une empreinte qui diffère, un localisateur NON UNIQUE, ou introuvable. */
+    cause: TargetResolutionTrigger = 'FINGERPRINT_MISMATCH',
+    rawMatches?: number,
   ): Promise<{ locator?: Locator; chosen?: ScoredCandidate; trace: TargetResolutionTrace }> {
     const settings = this.config.replay.functionalTargetResolution;
     const reasons = mismatch.reasons;
@@ -5041,9 +5208,16 @@ export class FlowExplorer {
       recorded: { locator: describeTarget(step.target), fingerprint },
       runtime: {
         locator: describeTarget(step.target),
-        fingerprintVerdict: 'MISMATCH',
+        fingerprintVerdict:
+          cause === 'LOCATOR_NON_UNIQUE'
+            ? `NON_UNIQUE (${String(rawMatches ?? 0)} matches)`
+            : cause === 'LOCATOR_NOT_FOUND'
+              ? 'NOT_FOUND'
+              : 'MISMATCH',
         reasons: [...reasons],
       },
+      trigger: cause,
+      ...(rawMatches !== undefined ? { rawMatches } : {}),
       rerender: { detected: false, evidence: [] },
       identity,
       temporal,
@@ -5107,15 +5281,21 @@ export class FlowExplorer {
       }
     }
     if (chosen) {
-      trace.rerender = analyzeRerender(chosen, temporal, reasons);
+      // Un localisateur non unique n'a rien à voir avec un re-rendu : c'est le contexte qui a tranché.
+      trace.rerender =
+        cause === 'FINGERPRINT_MISMATCH'
+          ? analyzeRerender(chosen, temporal, reasons)
+          : { detected: false, evidence: [] };
       trace.resolution = chosen.id;
       if (trace.ai.outcome === 'VALIDATED') trace.status = 'TARGET_AI_ASSISTED';
       else
         trace.status = trace.rerender.detected
           ? 'TARGET_RERENDERED'
-          : chosen.matchesRecordedLocator
-            ? 'TARGET_FUNCTIONALLY_EQUIVALENT'
-            : 'TARGET_HEALED';
+          : cause === 'LOCATOR_NON_UNIQUE'
+            ? 'TARGET_CONTEXTUAL_MATCH'
+            : chosen.matchesRecordedLocator
+              ? 'TARGET_FUNCTIONALLY_EQUIVALENT'
+              : 'TARGET_HEALED';
       if (trace.rerender.detected)
         this.emitHealing('TARGET_RERENDERED', `${trace.action}: ${trace.rerender.evidence.join('; ')}`);
       await clearCandidateMarks(page, found.token, chosen.id);
@@ -5134,6 +5314,22 @@ export class FlowExplorer {
       trace.final = 'TARGET_UNRESOLVED';
       await clearCandidateMarks(page, found.token);
     }
+    Object.assign(trace, resolutionOutcomeOf(trace, ranked, chosen, cause));
+    if (trace.outcome === 'CONTEXTUAL_MATCH')
+      this.emitHealing(
+        'TARGET_CONTEXTUAL_MATCH',
+        `${trace.action}: ${chosen ? candidateSummary(chosen) : ''} · confidence ${String(trace.confidence ?? 0)}`,
+      );
+    else if (trace.outcome === 'HEALED')
+      this.emitHealing(
+        'TARGET_HEALED',
+        `${trace.action}: ${chosen ? candidateSummary(chosen) : ''} (to be confirmed by the runtime effect)`,
+      );
+    else if (trace.outcome === 'AMBIGUOUS')
+      this.emitHealing(
+        'TARGET_AMBIGUOUS',
+        `${trace.action}: best ${String(trace.ambiguity?.bestScore ?? 0)} / second ${String(trace.ambiguity?.secondBestScore ?? 0)} — nothing chosen arbitrarily`,
+      );
     this.emitHealing('TARGET_RESOLUTION', traceText(trace).join(' | '));
     await this.writeResolutionArtifact(trace);
     return {
@@ -5359,6 +5555,8 @@ export class FlowExplorer {
     trace: TargetResolutionTrace,
     confirmed: boolean | undefined,
     contradiction?: string,
+    /** Ce qui a confirmé l'effet (un clic : ACTION_CONFIRMED et l'effet observé). */
+    confirmation?: string,
   ): Promise<void> {
     const next = this.nextStepTarget();
     trace.nextAction = next
@@ -5372,11 +5570,22 @@ export class FlowExplorer {
         : confirmed
           ? {
               status: 'CONFIRMED',
-              detail: `VALUE_CHANGED confirmed${trace.nextAction === 'AVAILABLE' ? '; the next action remains available' : ''}`,
+              detail: `${confirmation ?? 'VALUE_CHANGED confirmed'}${trace.nextAction === 'AVAILABLE' ? '; the next action remains available' : ''}`,
             }
           : { status: 'REJECTED', detail: contradiction ?? 'the field does not hold the filled value' };
-    trace.final = confirmed === false ? 'TARGET_RECOVERY_REJECTED' : 'TARGET_RECOVERED_AND_CONFIRMED';
-    if (confirmed !== false)
+    trace.final =
+      confirmed === false
+        ? 'TARGET_RECOVERY_REJECTED'
+        : confirmed
+          ? 'TARGET_RECOVERED_AND_CONFIRMED'
+          : 'TARGET_RESOLVED_NOT_VERIFIED';
+    // NE PAS APPRENDRE AVANT CONFIRMATION : une connaissance candidate seulement si l'effet est prouvé.
+    if (trace.outcome === 'HEALED')
+      this.emitHealing(
+        confirmed ? 'TARGET_HEALING_CONFIRMED' : 'TARGET_HEALING_REJECTED',
+        `${trace.action}: ${confirmed ? 'runtime effect confirmed — knowledge candidate' : confirmed === false ? 'runtime effect contradicted — nothing learned' : 'effect not verifiable — nothing learned'}`,
+      );
+    if (confirmed)
       trace.knowledge = {
         functionalTarget: trace.identity.businessConcept ?? trace.identity.semanticRole,
         context: {
@@ -5396,10 +5605,10 @@ export class FlowExplorer {
         status: 'CANDIDATE',
         globallyTrusted: false,
       };
-    if (trace.ai.outcome === 'VALIDATED' && trace.ai.auditId) {
-      this.aiRuntime(trace.ai.auditId, confirmed !== false, trace.runtimeVerification.detail);
+    if (trace.ai.outcome === 'VALIDATED' && trace.ai.auditId && confirmed !== undefined) {
+      this.aiRuntime(trace.ai.auditId, confirmed, trace.runtimeVerification.detail);
       this.emitHealing(
-        confirmed === false ? 'AI_TARGET_RUNTIME_CONTRADICTED' : 'AI_TARGET_RUNTIME_CONFIRMED',
+        !confirmed ? 'AI_TARGET_RUNTIME_CONTRADICTED' : 'AI_TARGET_RUNTIME_CONFIRMED',
         `${trace.action}: ${trace.runtimeVerification.detail}`,
       );
     }
@@ -5422,8 +5631,14 @@ export class FlowExplorer {
     for (const candidate of healingCandidates(fingerprint, target)) {
       const found = await this.flowSteps.locate(page, candidate, Math.min(timeoutMs, 1500));
       if (typeof found === 'string') continue;
-      const match = matchFingerprint(fingerprint, await readTarget(found));
-      if (match.verdict !== 'MISMATCH')
+      const observed = await readTarget(found);
+      const match = matchFingerprint(fingerprint, observed);
+      // FOUND ELEMENT ≠ CORRECT ELEMENT : le même nom sur un autre GENRE d'élément (le libellé, une
+      // option, un titre « Company name » pour un champ) n'est jamais la cible.
+      const sameKind =
+        (!fingerprint.tag || !observed.tag || fingerprint.tag === observed.tag) &&
+        (!fingerprint.role || !observed.role || compatibleRoles(fingerprint.role, observed.role));
+      if (match.verdict !== 'MISMATCH' && sameKind)
         return { locator: found, target: candidate, match: { verdict: match.verdict, score: match.score } };
     }
     return undefined;

@@ -28,12 +28,25 @@ export interface ObservedTarget {
   testId?: string;
   /** Le chemin de sections de l'élément trouvé (« Général », « Colonnes > Disponibles »). */
   section?: string;
+  /** La fenêtre qui le contient (aria-label ou titre). */
+  dialog?: string;
+  id?: string;
+  inputType?: string;
 }
 
 export interface FingerprintMatch {
   verdict: FingerprintVerdict;
   score: number;
   reasons: string[];
+  /**
+   * Les composantes, séparées (jamais seulement MATCH / MISMATCH) : identité (testId, nom, rôle),
+   * contexte (section, fenêtre, champ), sémantique (libellé), structure (id, balise, type).
+   */
+  components?: { identity: number; context: number; semantic: number; structural: number };
+  matchedEvidence?: string[];
+  mismatchedEvidence?: string[];
+  /** HARD : une autre identité (autre nom, autre section) ; SOFT : un contexte qui a bougé (fenêtre renommée). */
+  severity?: 'NONE' | 'SOFT' | 'HARD';
 }
 
 export interface ObservedEffects {
@@ -64,7 +77,7 @@ export const normalize = (text: string | undefined): string =>
  * structurel (main > div:nth-of-type(3)) peut désigner un autre élément après un changement
  * de l'écran : le nom, le texte, le test id et le rôle le disent avant de cliquer.
  */
-export function matchFingerprint(expected: TargetFingerprint, observed: ObservedTarget): FingerprintMatch {
+function baseMatch(expected: TargetFingerprint, observed: ObservedTarget): FingerprintMatch {
   const reasons: string[] = [];
   // Rien n'a pu être lu (élément détaché, re-rendu) : ce n'est PAS la preuve d'un autre élément.
   if (observed.tag === undefined && !observed.role && !observed.name && !observed.text && !observed.testId)
@@ -124,6 +137,69 @@ export function matchFingerprint(expected: TargetFingerprint, observed: Observed
   const verdict: FingerprintVerdict =
     score >= 0.9 ? 'EXACT_MATCH' : score >= 0.7 ? 'STRONG_MATCH' : score >= 0.45 ? 'WEAK_MATCH' : 'MISMATCH';
   return { verdict, score: Number(score.toFixed(2)), reasons };
+}
+
+/**
+ * TARGET FINGERPRINT MATCHER : le verdict historique (nom, rôle, balise, section), complété par des
+ * composantes et des preuves explicables. La fenêtre et le champ enregistrés (identité contextualisée)
+ * ne changent le verdict que par leur sévérité : une fenêtre renommée est un écart SOFT, un autre nom
+ * ou une autre section un écart HARD.
+ */
+export function matchFingerprint(expected: TargetFingerprint, observed: ObservedTarget): FingerprintMatch {
+  const base = baseMatch(expected, observed);
+  const matched: string[] = [];
+  const mismatched: string[] = [];
+  const components = { identity: 0, context: 0, semantic: 0, structural: 0 };
+  const same = (a: string | undefined, b: string | undefined): boolean | undefined =>
+    a === undefined || b === undefined ? undefined : normalize(a) === normalize(b);
+  const check = (
+    kind: keyof typeof components,
+    label: string,
+    result: boolean | undefined,
+    weight: number,
+  ): void => {
+    if (result === undefined) return;
+    if (result) {
+      components[kind] += weight;
+      matched.push(label);
+    } else mismatched.push(label);
+  };
+  check('identity', 'TEST_ID', same(expected.testId, observed.testId), 1);
+  const wanted = expected.name ?? expected.text;
+  const found = observed.name ?? observed.text;
+  check('identity', 'ACCESSIBLE_NAME', same(wanted, found), 0.6);
+  check('identity', 'ROLE', same(expected.role, observed.role), 0.4);
+  check('semantic', 'LABEL', same(expected.label ?? expected.formField, observed.name), 1);
+  const section = sectionMatch(expected.section, observed.section);
+  check('context', 'SECTION', section === 'UNKNOWN' ? undefined : section === 'SAME', 0.5);
+  check('context', 'DIALOG', same(expected.dialog, observed.dialog), 0.5);
+  check('structural', 'ID', same(expected.id, observed.id), 0.5);
+  check('structural', 'TAG', same(expected.tag, observed.tag), 0.3);
+  check('structural', 'INPUT_TYPE', same(expected.inputType, observed.inputType), 0.2);
+  // Une autre identité (nom, section, testId) : HARD. Seule la fenêtre ou la structure a bougé : SOFT.
+  const hard = mismatched.some((evidence) =>
+    ['TEST_ID', 'ACCESSIBLE_NAME', 'SECTION', 'LABEL'].includes(evidence),
+  );
+  const severity = mismatched.length === 0 ? 'NONE' : hard || base.verdict === 'MISMATCH' ? 'HARD' : 'SOFT';
+  const round = (value: number): number => Number(Math.min(1, value).toFixed(2));
+  return {
+    ...base,
+    reasons: [
+      ...base.reasons,
+      ...(expected.dialog && observed.dialog && same(expected.dialog, observed.dialog) === false
+        ? [`dialog "${observed.dialog}" instead of "${expected.dialog}" (soft)`]
+        : []),
+    ],
+    components: {
+      identity: round(components.identity),
+      context: round(components.context),
+      semantic: round(components.semantic),
+      structural: round(components.structural),
+    },
+    matchedEvidence: matched,
+    mismatchedEvidence: mismatched,
+    severity,
+  };
 }
 
 /**
@@ -428,12 +504,25 @@ export async function readTarget(target: Locator | ElementHandle, page?: Page): 
       const testId = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy']
         .map((attribute) => el.getAttribute(attribute))
         .find((value) => value);
+      const dialogBox = el.closest(
+        '[role="dialog"], [role="alertdialog"], dialog, [aria-modal="true"], mat-dialog-container',
+      );
+      const dialog = dialogBox
+        ? clean(
+            dialogBox.getAttribute('aria-label') ??
+              dialogBox.querySelector('h1, h2, h3, [role="heading"]')?.textContent,
+          )
+        : '';
+      const id = el.getAttribute('id');
       return {
         tag,
         ...(role ? { role } : {}),
         ...(name ? { name } : {}),
         ...(text ? { text } : {}),
         ...(testId ? { testId } : {}),
+        ...(dialog ? { dialog } : {}),
+        ...(id ? { id } : {}),
+        ...(tag === 'input' ? { inputType: (input.type || 'text').toLowerCase() } : {}),
       };
     })
     .catch((): ObservedTarget => ({}));

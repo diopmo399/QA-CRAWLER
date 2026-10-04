@@ -1462,6 +1462,11 @@ const replaySchema = z
         maxCandidates: z.number().int().min(2).max(40).default(12),
         /** Une saisie résolue fonctionnellement doit être PROUVÉE par la valeur lue ensuite. */
         verifyFillValue: z.boolean().default(true),
+        /**
+         * LOCATOR ≠ TARGET IDENTITY : un localisateur qui désigne plusieurs éléments (#valueInput ×4)
+         * n'est qu'un générateur de candidats ; le contexte départage, jamais « le premier qui correspond ».
+         */
+        resolveNonUniqueLocators: z.boolean().default(true),
       })
       .strict()
       .default({}),

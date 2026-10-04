@@ -30,12 +30,20 @@ export type TargetResolutionStatus =
   | 'TARGET_CONTEXT_MISMATCH'
   | 'TARGET_FUNCTIONAL_MISMATCH'
   | 'TARGET_CONTRADICTORY_EVIDENCE'
+  | 'TARGET_CONTEXTUAL_MATCH'
   | 'TARGET_NO_CANDIDATE'
   | 'TARGET_RUNTIME_CONFIRMED'
   | 'TARGET_RUNTIME_REJECTED'
   | 'TARGET_REQUIRES_REPLAY_VALIDATION';
 
 export type TargetInteraction = 'FILL' | 'SELECT' | 'CLICK' | 'CHECK';
+
+/** Pourquoi une cible est résolue par ses candidats : empreinte qui diffère, localisateur non unique, introuvable. */
+export type TargetResolutionTrigger = 'FINGERPRINT_MISMATCH' | 'LOCATOR_NON_UNIQUE' | 'LOCATOR_NOT_FOUND';
+
+/** Le résultat d'une résolution, en une ligne : EXACT … NOT_FOUND / MISMATCH. */
+export type TargetResolutionOutcome =
+  'EXACT' | 'CONTEXTUAL_MATCH' | 'HEALED' | 'AMBIGUOUS' | 'NOT_FOUND' | 'MISMATCH';
 
 /** Ce que l'élément FAIT dans le parcours, pas le nœud qui le porte. */
 export interface FunctionalTargetIdentity {
@@ -51,6 +59,16 @@ export interface FunctionalTargetIdentity {
   dialog?: string;
   /** Les choix faits juste avant dans la même section (libellé → option) : field, operator… */
   configuration: Record<string, string>;
+  // IDENTITÉ CONTEXTUALISÉE (empreinte enrichie ; absente d'un ancien enregistrement).
+  testId?: string;
+  /** Le libellé du champ fonctionnel (mat-form-field, fieldset). */
+  formField?: string;
+  /** L'id enregistré : un indice faible (un id peut être partagé). */
+  id?: string;
+  stableAttributes?: Record<string, string>;
+  nearbyText?: string[];
+  /** Le localisateur enregistré est un chemin de positions (nth-…) : une preuve faible. */
+  fragileLocator?: boolean;
 }
 
 /** Le moment du parcours : avant, maintenant, après — des preuves, jamais des vérités. */
@@ -159,6 +177,14 @@ export interface TargetResolutionTrace {
    * conseiller ne juge qu'APRÈS attente, stabilisation, observation fraîche et relecture de la cible.
    */
   previousTransition?: { status: string; signals: string[]; missing: string[]; stable: boolean };
+  /** Pourquoi la résolution a eu lieu, et combien d'éléments le localisateur enregistré trouvait. */
+  trigger?: TargetResolutionTrigger;
+  rawMatches?: number;
+  /** EXACT / CONTEXTUAL_MATCH / HEALED / AMBIGUOUS / NOT_FOUND / MISMATCH. */
+  outcome?: TargetResolutionOutcome;
+  /** Le score du candidat retenu (ou du meilleur), et l'écart avec le deuxième. */
+  confidence?: number;
+  ambiguity?: { bestScore: number; secondBestScore: number; scoreGap: number };
   /** Le scan de la page a échoué : la raison (jamais avalée en silence). */
   scanError?: string;
   /** CONTRADICTORY_EVIDENCE : la cible retenue (ou la meilleure) a des preuves positives ET négatives. */
@@ -182,7 +208,11 @@ export interface TargetResolutionTrace {
   status: TargetResolutionStatus;
   runtimeVerification?: { status: 'CONFIRMED' | 'REJECTED' | 'NOT_VERIFIED'; detail: string };
   nextAction?: 'AVAILABLE' | 'NOT_AVAILABLE' | 'NOT_CHECKED';
-  final?: 'TARGET_RECOVERED_AND_CONFIRMED' | 'TARGET_RECOVERY_REJECTED' | 'TARGET_UNRESOLVED';
+  final?:
+    | 'TARGET_RECOVERED_AND_CONFIRMED'
+    | 'TARGET_RECOVERY_REJECTED'
+    | 'TARGET_RESOLVED_NOT_VERIFIED'
+    | 'TARGET_UNRESOLVED';
   /** Une connaissance CANDIDATE (jamais une vérité globale) : à confirmer par d'autres rejeux. */
   knowledge?: {
     functionalTarget: string;
@@ -308,8 +338,18 @@ export function functionalIdentityOf(
     ...(fingerprint?.role ? { role: fingerprint.role } : {}),
     ...(fingerprint?.tag ? { tag: fingerprint.tag } : {}),
     ...(section ? { section } : {}),
-    ...(fingerprint?.context ? { dialog: fingerprint.context } : {}),
+    ...((fingerprint?.dialog ?? fingerprint?.context)
+      ? { dialog: fingerprint.dialog ?? fingerprint.context }
+      : {}),
     configuration,
+    ...(fingerprint?.testId ? { testId: fingerprint.testId } : {}),
+    ...(fingerprint?.formField ? { formField: fingerprint.formField } : {}),
+    ...(fingerprint?.id ? { id: fingerprint.id } : {}),
+    ...(fingerprint?.stableAttributes ? { stableAttributes: fingerprint.stableAttributes } : {}),
+    ...(fingerprint?.nearbyText ? { nearbyText: fingerprint.nearbyText } : {}),
+    ...(step.target.strategy === 'css' && /:nth-(of-type|child)|>\s*div/.test(step.target.value ?? '')
+      ? { fragileLocator: true }
+      : {}),
   };
 }
 
@@ -689,6 +729,40 @@ export async function clearCandidateMarks(page: Page, token: string, keep?: stri
 }
 
 /**
+ * LES POIDS du scoring des candidats, centralisés (jamais dispersés dans le code) — du plus fort au
+ * plus faible : testId stable, rôle + nom / libellé, champ fonctionnel, concept métier, contexte
+ * (section, fenêtre), attributs métier stables, voisinage et parcours, puis la structure (id partagé,
+ * localisateur positionnel : une confiance faible). Les pénalités sont des preuves NÉGATIVES ; les
+ * contradictions DURES (caché, désactivé, autre contexte) écartent avant tout score.
+ */
+export const TARGET_SCORE_WEIGHTS = {
+  testIdMatch: 0.3,
+  testIdMismatch: -0.3,
+  labelExact: 0.25,
+  labelPartial: 0.15,
+  labelMismatch: -0.1,
+  section: 0.2,
+  formField: 0.1,
+  previousAction: 0.15,
+  locatorIdentity: 0.15,
+  /** Un localisateur positionnel (nth-…) qui désigne un candidat : presque rien. */
+  fragileLocatorIdentity: 0.03,
+  roleExact: 0.1,
+  roleCompatible: 0.05,
+  roleMismatch: -0.1,
+  dialogMatch: 0.05,
+  dialogMismatch: -0.15,
+  businessConcept: 0.1,
+  stableAttribute: 0.1,
+  nearbyText: 0.05,
+  workflowContext: 0.05,
+  nextAction: 0.1,
+  unlabelledTarget: 0.15,
+  contextMismatchPenalty: -0.2,
+  sharedId: 0.02,
+} as const;
+
+/**
  * FUNCTIONAL TARGET SCORER. Les poids reflètent la FORCE de chaque preuve :
  *  - identité (libellé 0.25, section 0.20, contrôle précédent portant le dernier choix 0.15, concept
  *    métier nommé par le libellé 0.10) : ce que l'humain voyait et ce qui distingue deux champs pareils ;
@@ -747,7 +821,7 @@ export function scoreCandidates(
           `section "${candidate.section ?? ''}" instead of "${identity.section ?? ''}" (context mismatch)`,
         );
       if (section === 'OTHER') {
-        components.contextMismatchPenalty = -0.2;
+        components.contextMismatchPenalty = TARGET_SCORE_WEIGHTS.contextMismatchPenalty;
         prove(
           'SECTION_PATH_CHANGED',
           'NEGATIVE',
@@ -758,7 +832,11 @@ export function scoreCandidates(
       const found = normalize(candidate.label ?? candidate.name);
       if (wanted) {
         components.label =
-          found === wanted ? 0.25 : found && (found.includes(wanted) || wanted.includes(found)) ? 0.15 : -0.1;
+          found === wanted
+            ? TARGET_SCORE_WEIGHTS.labelExact
+            : found && (found.includes(wanted) || wanted.includes(found))
+              ? TARGET_SCORE_WEIGHTS.labelPartial
+              : TARGET_SCORE_WEIGHTS.labelMismatch;
         prove(
           components.label > 0 ? 'LABEL_MATCH' : 'LABEL_CHANGED',
           components.label > 0 ? 'POSITIVE' : 'NEGATIVE',
@@ -766,7 +844,7 @@ export function scoreCandidates(
         );
       }
       if (section === 'SAME') {
-        components.section = 0.2;
+        components.section = TARGET_SCORE_WEIGHTS.section;
         prove('SECTION_MATCH', 'POSITIVE', `section "${candidate.section ?? ''}"`);
       }
       // Le contrôle précédent porte le dernier choix fait (« operator: Like ») : la cible est la suite.
@@ -775,24 +853,30 @@ export function scoreCandidates(
         candidate.previousControl &&
         normalize(candidate.previousControl).includes(normalize(lastChoice))
       ) {
-        components.previousActionCompatibility = 0.15;
+        components.previousActionCompatibility = TARGET_SCORE_WEIGHTS.previousAction;
         prove('PREVIOUS_ACTION', 'POSITIVE', `right after ${candidate.previousControl}`);
       }
-      if (candidate.matchesRecordedLocator) components.locatorIdentity = 0.15;
+      // UNIQUE CSS SELECTOR ≠ STABLE TARGET : un chemin de positions n'est qu'une preuve faible.
+      if (candidate.matchesRecordedLocator)
+        components.locatorIdentity = identity.fragileLocator
+          ? TARGET_SCORE_WEIGHTS.fragileLocatorIdentity
+          : TARGET_SCORE_WEIGHTS.locatorIdentity;
       if (identity.role && candidate.role) {
         components.role =
           identity.role === candidate.role
-            ? 0.1
+            ? TARGET_SCORE_WEIGHTS.roleExact
             : ['textbox', 'combobox', 'searchbox'].includes(identity.role) &&
                 ['textbox', 'combobox', 'searchbox'].includes(candidate.role)
-              ? 0.05
-              : -0.1;
+              ? TARGET_SCORE_WEIGHTS.roleCompatible
+              : TARGET_SCORE_WEIGHTS.roleMismatch;
         if (identity.role !== candidate.role)
           prove('ROLE_CHANGED', 'NEGATIVE', `role ${candidate.role} instead of ${identity.role}`);
       }
       // La fenêtre : la cible était dans « Filter » ; un champ hors de toute fenêtre n'est pas du contexte.
       if (identity.dialog) {
-        components.dialog = sameDialog ? 0.05 : -0.15;
+        components.dialog = sameDialog
+          ? TARGET_SCORE_WEIGHTS.dialogMatch
+          : TARGET_SCORE_WEIGHTS.dialogMismatch;
         prove(
           sameDialog ? 'DIALOG_MATCH' : 'DIALOG_MISMATCH',
           sameDialog ? 'POSITIVE' : 'NEGATIVE',
@@ -802,7 +886,7 @@ export function scoreCandidates(
       // Le concept métier (filter.value) nommé par le libellé actuel (« Value ») : une preuve sémantique.
       const concept = normalize(identity.businessConcept?.split('.').at(-1)?.replace(/[_-]+/g, ' '));
       if (concept && found && (found === concept || found.split(' ').includes(concept))) {
-        components.businessConceptMatch = 0.1;
+        components.businessConceptMatch = TARGET_SCORE_WEIGHTS.businessConcept;
         prove('BUSINESS_CONCEPT', 'POSITIVE', `"${found}" names ${identity.businessConcept ?? ''}`);
       }
       if (
@@ -810,7 +894,7 @@ export function scoreCandidates(
         candidate.nextControl &&
         normalize(candidate.nextControl).includes(normalize(nextTarget))
       ) {
-        components.nextActionCompatibility = 0.1;
+        components.nextActionCompatibility = TARGET_SCORE_WEIGHTS.nextAction;
         prove(
           'NEXT_ACTION',
           'POSITIVE',
@@ -818,14 +902,58 @@ export function scoreCandidates(
         );
       }
       // Un champ sans libellé enregistré : son identité tient au contexte (section, parcours, structure).
-      const base = wanted ? 0 : 0.15;
+      // IDENTITÉ CONTEXTUALISÉE : testId, champ fonctionnel, attributs métier, voisinage, parcours.
+      const testId = candidate.stableAttributes['data-testid'];
+      if (identity.testId && testId) {
+        components.testId =
+          testId === identity.testId ? TARGET_SCORE_WEIGHTS.testIdMatch : TARGET_SCORE_WEIGHTS.testIdMismatch;
+        prove(
+          testId === identity.testId ? 'TEST_ID_MATCH' : 'TEST_ID_CHANGED',
+          testId === identity.testId ? 'POSITIVE' : 'NEGATIVE',
+          `data-testid "${testId}" (recorded "${identity.testId}")`,
+        );
+      }
+      if (identity.formField && found && normalize(identity.formField) === found) {
+        components.formField = TARGET_SCORE_WEIGHTS.formField;
+        prove('FORM_FIELD_MATCH', 'POSITIVE', `field "${identity.formField}"`);
+      }
+      const stable = Object.entries(identity.stableAttributes ?? {}).filter(
+        ([key, value]) => candidate.stableAttributes[key] === value,
+      );
+      if (stable.length > 0) {
+        components.stableAttribute = TARGET_SCORE_WEIGHTS.stableAttribute;
+        prove(
+          'STABLE_ATTRIBUTE_MATCH',
+          'POSITIVE',
+          stable.map(([key, value]) => `${key}="${value}"`).join(' '),
+        );
+      }
+      if (identity.id && candidate.stableAttributes.id === identity.id)
+        components.sharedId = TARGET_SCORE_WEIGHTS.sharedId;
+      const around = [candidate.previousControl, candidate.nextControl, ...candidate.nearText]
+        .filter((text): text is string => Boolean(text))
+        .map((text) => normalize(text));
+      const near = (identity.nearbyText ?? []).filter((text) =>
+        around.some((other) => other.includes(normalize(text))),
+      );
+      if (near.length > 0) {
+        components.nearbyText = TARGET_SCORE_WEIGHTS.nearbyText;
+        prove('NEARBY_TEXT_MATCH', 'POSITIVE', near.slice(0, 3).join(', '));
+      }
+      // Le parcours : le libellé du candidat nomme un choix fait juste avant (l'attribut choisi).
+      const chosen = Object.values(identity.configuration).map((value) => normalize(value));
+      if (found && chosen.includes(found)) {
+        components.workflowContext = TARGET_SCORE_WEIGHTS.workflowContext;
+        prove('WORKFLOW_CONTEXT_MATCH', 'POSITIVE', `"${found}" was chosen just before`);
+      }
+      const base = wanted ? 0 : TARGET_SCORE_WEIGHTS.unlabelledTarget;
       if (base) components.unlabelledTarget = base;
+      // Jamais plafonné à 1 pour CLASSER : deux candidats « saturés » (empreinte riche) resteraient
+      // indiscernables et la preuve qui les départage (le parcours) serait perdue. La confiance
+      // affichée, elle, est bornée (resolutionOutcomeOf).
       const score = Math.max(
         0,
-        Math.min(
-          1,
-          Object.values(components).reduce((sum, value) => sum + value, 0),
-        ),
+        Object.values(components).reduce((sum, value) => sum + value, 0),
       );
       const contradictions = evidence
         .filter((entry) => entry.polarity === 'NEGATIVE')
@@ -888,6 +1016,44 @@ export function aiTriggerOf(decision: FunctionalDecision): string | undefined {
   if (best?.matchesRecordedLocator && (best.contradictions?.length ?? 0) > 0)
     return 'CONTRADICTORY_TARGET_EVIDENCE';
   return decision.status === 'AMBIGUOUS' ? 'TARGET_LOW_CONFIDENCE' : 'TARGET_FUNCTIONAL_MISMATCH';
+}
+
+/**
+ * L'issue d'une résolution : CONTEXTUAL_MATCH (le contexte a départagé plusieurs éléments du même
+ * localisateur), HEALED (le localisateur ne trouvait plus rien, ou un autre élément), AMBIGUOUS
+ * (jamais un choix arbitraire), NOT_FOUND (aucun candidat), MISMATCH (aucun ne remplit la fonction).
+ */
+export function resolutionOutcomeOf(
+  trace: Pick<TargetResolutionTrace, 'status' | 'decision'>,
+  ranked: readonly ScoredCandidate[],
+  chosen: ScoredCandidate | undefined,
+  trigger: TargetResolutionTrigger,
+): Pick<TargetResolutionTrace, 'outcome' | 'confidence' | 'ambiguity'> {
+  const viable = ranked.filter((candidate) => !candidate.rejected);
+  const [best, second] = viable;
+  const ambiguity =
+    best && second
+      ? {
+          bestScore: best.score,
+          secondBestScore: second.score,
+          scoreGap: Number((best.score - second.score).toFixed(2)),
+        }
+      : undefined;
+  const outcome: TargetResolutionOutcome = chosen
+    ? trigger === 'LOCATOR_NOT_FOUND' ||
+      (trigger === 'FINGERPRINT_MISMATCH' && !chosen.matchesRecordedLocator)
+      ? 'HEALED'
+      : 'CONTEXTUAL_MATCH'
+    : ranked.length === 0
+      ? 'NOT_FOUND'
+      : trace.status === 'TARGET_AMBIGUOUS' || (trace.decision === 'AMBIGUOUS' && viable.length >= 2)
+        ? 'AMBIGUOUS'
+        : 'MISMATCH';
+  return {
+    outcome,
+    confidence: Math.min(1, (chosen ?? best)?.score ?? 0),
+    ...(ambiguity ? { ambiguity } : {}),
+  };
 }
 
 /**
@@ -971,7 +1137,7 @@ export function redactDeep<T>(value: T): T {
 export function traceText(trace: TargetResolutionTrace): string[] {
   return [
     `[TARGET_RESOLUTION] action=${trace.action}`,
-    `recorded: ${trace.recorded.locator}`,
+    `recordedLocator=${trace.recorded.locator}${trace.rawMatches !== undefined ? ` rawMatches=${String(trace.rawMatches)}` : ''}${trace.trigger ? ` trigger=${trace.trigger}` : ''}`,
     `runtime: ${trace.runtime.locator} fingerprint=${trace.runtime.fingerprintVerdict}`,
     `rerender: ${trace.rerender.detected ? 'DETECTED' : 'not detected'}`,
     `functional identity: ${trace.identity.businessConcept ?? trace.identity.semanticRole}`,
@@ -981,7 +1147,7 @@ export function traceText(trace: TargetResolutionTrace): string[] {
     `candidates: ${trace.candidates.map((candidate) => `${candidate.id} ${String(candidate.score)}${candidate.rejected ? ' (rejected)' : ''}`).join(', ') || 'none'}`,
     `resolution: ${trace.resolution ?? trace.decision} — ${trace.reason}`,
     `AI: ${trace.ai.requested ? `${trace.ai.outcome ?? 'requested'}${trace.ai.proposal ? ` proposal=${trace.ai.proposal}` : ''}` : 'not required'}`,
-    `status: ${trace.status}${trace.final ? ` → ${trace.final}` : ''}`,
+    `status: ${trace.status}${trace.outcome ? ` (${trace.outcome}${trace.confidence !== undefined ? `, confidence ${String(trace.confidence)}` : ''})` : ''}${trace.final ? ` → ${trace.final}` : ''}`,
   ];
 }
 
