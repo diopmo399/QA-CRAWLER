@@ -1,3 +1,4 @@
+import { annotateFlowYaml, auditGeneratedFlow, flowAuditText, type FlowAuditReport } from './flow-audit.js';
 import { screenInventorySummary, screenInventoryText } from './screen-inventory.js';
 import { timelineLines } from './recording-consistency.js';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -375,6 +376,33 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       return undefined;
     }
   };
+  let flowAudit: FlowAuditReport | undefined;
+  const runFlowAudit = async (
+    gateway: IntelligenceGateway | undefined,
+  ): Promise<FlowAuditReport | undefined> => {
+    try {
+      const report = await auditGeneratedFlow({
+        result,
+        settings: config.recording.flowAudit,
+        intelligenceMode: mode,
+        ...(gateway ? { gateway } : {}),
+        minProposalConfidence: config.ai.thresholds.minProposalConfidence,
+      });
+      onEvent({
+        type: 'RECORDING_FLOW_AUDITED',
+        at: new Date().toISOString(),
+        message: `flow audit: ${String(report.summary.errors)} error(s), ${String(report.summary.warnings)} warning(s), ${String(report.summary.infos)} info(s) (${String(report.aiCalls)} AI call(s), ${String(report.summary.aiConfirmed)} confirmed, ${String(report.summary.aiProposals)} AI proposal(s)) — the flow is never modified`,
+      });
+      return report;
+    } catch (error) {
+      onEvent({
+        type: 'RECORDING_FLOW_AUDITED',
+        at: new Date().toISOString(),
+        message: `flow audit skipped: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return undefined;
+    }
+  };
   if (mode !== 'OFF') {
     try {
       intelligence = await enrichRecording({
@@ -404,12 +432,23 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     stopClock.mark('AI enrichment');
     semanticAudit = await runSemanticAudit(gateway);
     stopClock.mark('semantic audit');
+    flowAudit = await runFlowAudit(gateway);
+    stopClock.mark('flow audit');
     await gateway?.close();
   } else {
     semanticAudit = await runSemanticAudit(undefined);
     stopClock.mark('semantic audit');
+    flowAudit = await runFlowAudit(undefined);
+    stopClock.mark('flow audit');
   }
   if (semanticAudit) await write('semantic-audit.json', json(semanticAudit));
+  // FLOW AUDIT : le flow généré relu dans son ensemble (règles toujours ; conseiller si ai.mode ≠ OFF).
+  if (flowAudit) {
+    await write('flow-audit.json', json(flowAudit));
+    await write('flow-audit.txt', `${flowAuditText(flowAudit).join('\n')}\n`);
+    if (format !== 'gherkin' && flowAudit.findings.length > 0)
+      await write('generated.flow.yaml', annotateFlowYaml(result.files.yaml, flowAudit));
+  }
 
   let replay: ReplayOutcome = { status: 'NOT_VALIDATED' };
   if (request.validate ?? config.recording.validate) {

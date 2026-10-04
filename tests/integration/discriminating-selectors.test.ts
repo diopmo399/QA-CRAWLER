@@ -88,6 +88,19 @@ describe('Discriminating CSS selectors (record → replay, real browser)', () =>
     expect(steps[0]?.fingerprint?.maxLength).toBe(5);
   });
 
+  it('FLOW AUDIT: the generated flow is reviewed as a whole (flow-audit.json), never modified; a clean flow has no finding', async () => {
+    const audit = JSON.parse(await readFile(path.join(outcome.directory, 'flow-audit.json'), 'utf8')) as {
+      flowModified: boolean;
+      aiCalls: number;
+      findings: { rule: string }[];
+    };
+    expect(audit.flowModified).toBe(false);
+    // ai.mode OFF par défaut : les règles seulement, aucun appel.
+    expect(audit.aiCalls).toBe(0);
+    expect(audit.findings.map((finding) => finding.rule)).toEqual([]);
+    expect(events.map((event) => event.type)).toContain('RECORDING_FLOW_AUDITED');
+  });
+
   it('§20 / §26 the screen was inventoried BEFORE the interactions; the typing reused the inventory descriptors', async () => {
     const inventory = await readFile(path.join(outcome.directory, 'screen-inventory.txt'), 'utf8');
     expect(inventory).toMatch(/Screen: Create request/);

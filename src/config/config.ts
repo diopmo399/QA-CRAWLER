@@ -1324,6 +1324,19 @@ const recordingSchema = z
       })
       .strict()
       .default({}),
+    /**
+     * FLOW AUDIT : le flow GÉNÉRÉ relu dans son ensemble (étapes dupliquées, clic sans effet avant le
+     * même clic, double écriture, saisies jamais envoyées, aucune vérification finale…) ; le conseiller
+     * (ai.mode ≠ OFF) confirme / conteste et signale le reste. Le flow n'est jamais modifié.
+     */
+    flowAudit: z
+      .object({
+        enabled: z.boolean().default(true),
+        ai: z.boolean().default(true),
+        maxCalls: z.number().int().min(0).max(50).default(5),
+      })
+      .strict()
+      .default({}),
     intelligenceAudit: z
       .object({
         enabled: z.boolean().default(true),

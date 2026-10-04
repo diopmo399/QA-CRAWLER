@@ -861,3 +861,40 @@ recording:
   dédiée de vérification de position.
 - L'humain qui va très vite peut regrouper plusieurs actions dans une même observation de
   l'écran : l'ordre et les requêtes restent justes, l'écran intermédiaire peut manquer.
+
+## Flow audit (`flow-audit.json`, `flow-audit.txt`)
+
+Après l'enregistrement, le **flow généré est relu dans son ensemble** (`src/recording/flow-audit.ts`) —
+l'audit sémantique, lui, juge chaque action isolément.
+
+Règles déterministes (toujours, sans appel) :
+
+| Règle                                 | Sévérité | Constat                                                                                         |
+| ------------------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `EFFECTLESS_CLICK_BEFORE_SAME_TARGET` | WARNING  | un clic sans effet suivi du même clic qui a l'effet (au rejeu, le premier peut déjà naviguer)   |
+| `CONSECUTIVE_DUPLICATE_STEP`          | WARNING  | deux étapes consécutives identiques (même action, même cible, même ligne / section / fenêtre)   |
+| `DOUBLE_MUTATION_RISK`                | ERROR    | deux étapes d'action consécutives envoient la même écriture (POST / PUT / PATCH / DELETE)       |
+| `TRAILING_INPUT_NOT_SUBMITTED`        | WARNING  | le flow finit par des saisies jamais envoyées                                                   |
+| `NO_FINAL_CHECK`                      | WARNING  | aucune vérification : un rejeu qui atteint la dernière étape passe même si le résultat est faux |
+| `FRAGILE_TARGET` / `AMBIGUOUS_TARGET` | WARNING  | une cible par position, ou une cible ambiguë                                                    |
+| `UNRESOLVED_STEP`                     | INFO     | une étape sans effet observé, que rien d'autre n'explique                                       |
+| `TARGET_NOT_SEEN_ON_SCREEN`           | INFO     | la cible d'un clic n'était pas parmi les contrôles observés juste avant                         |
+
+Avec `ai.mode` ≠ OFF (`recording.flowAudit.ai`, `maxCalls`, défaut 5), le conseiller (même passerelle,
+contexte RECORDING, avis seulement) **confirme ou conteste** chaque constat (`AI_CONFIRMED`,
+`AI_DISPUTED`, `AI_INCONCLUSIVE`), puis relit tout le flow et signale l'étape la plus douteuse que les
+règles n'ont pas vue (`AI_FINDING`, origine `AI_PROPOSAL`). Les étapes lui sont données comme candidates
+et des faits d'interface comme preuves — jamais une valeur saisie.
+
+**Le flow n'est jamais modifié** (`flowModified: false`) : chaque constat est une revue à faire. Il
+apparaît en commentaire au-dessus de l'étape concernée dans `generated.flow.yaml` :
+
+```yaml
+steps:
+  # FLOW AUDIT F1 [WARNING] EFFECTLESS_CLICK_BEFORE_SAME_TARGET (AI_CONFIRMED): remove step 2 (a click that did nothing: …)
+  # UNRESOLVED_HUMAN_ACTION · ACCESSIBLE · h013 · raw r19
+  - click:
+      text: Process request
+```
+
+Événement : `RECORDING_FLOW_AUDITED`. Configuration : `recording.flowAudit: { enabled, ai, maxCalls }`.
