@@ -97,7 +97,15 @@ export class NetworkTraceRecorder implements PageObserver {
   activity(
     actionId: string,
     options: { correlationMs: number; pendingCapMs: number },
-  ): { started: number; pending: number; completed: number; lastStarted?: string; lastCompleted?: string } {
+  ): {
+    started: number;
+    pending: number;
+    completed: number;
+    lastStarted?: string;
+    lastCompleted?: string;
+    /** Chaque requête terminée : « MÉTHODE /chemin statut ». */
+    completedRequests?: string[];
+  } {
     const window = this.current;
     if (window?.actionId !== actionId) return { started: 0, pending: 0, completed: 0 };
     const origin = window.startedAt.getTime();
@@ -129,6 +137,7 @@ export class NetworkTraceRecorder implements PageObserver {
       completed: done.length,
       ...(lastStarted ? { lastStarted: label(lastStarted) } : {}),
       ...(lastCompleted ? { lastCompleted: label(lastCompleted) } : {}),
+      ...(done.length > 0 ? { completedRequests: done.map(label) } : {}),
     };
   }
 

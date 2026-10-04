@@ -163,5 +163,7 @@ export interface ExplorationResult {
     decisionTrace?: string;
     /** Base de connaissances mise à jour. */
     knowledge?: string;
+    /** Traces de performance par action, résumé, actions lentes (performance.tracing). */
+    performance?: string;
   };
 }

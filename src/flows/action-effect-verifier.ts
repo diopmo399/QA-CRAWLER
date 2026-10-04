@@ -588,3 +588,21 @@ export function verifyFieldFill(input: {
     };
   return { verdict: 'UNKNOWN', reasons: ['the value could not be read'] };
 }
+
+/**
+ * La requête enregistrée (« POST /api/x ») est-elle TERMINÉE avec succès (2xx / 3xx) pendant l'action ?
+ * Une preuve positive de l'effet ; une erreur n'en est pas une (l'ActionEffectVerifier jugera).
+ */
+export function requestCompleted(expected: string, completed: readonly string[] | undefined): boolean {
+  const [method, pattern] = expected.trim().split(/\s+/, 2);
+  if (!method || !pattern) return false;
+  return (completed ?? []).some((entry) => {
+    const [entryMethod, path, status] = entry.split(' ');
+    return (
+      entryMethod?.toUpperCase() === method.toUpperCase() &&
+      path !== undefined &&
+      routeMatches(pattern, path) &&
+      /^[23]\d\d$/.test(status ?? '')
+    );
+  });
+}

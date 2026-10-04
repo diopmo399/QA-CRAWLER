@@ -32,6 +32,7 @@ export type TransitionSignalKind =
   | 'UI_STABLE'
   /** TransitionSuccessPredicate : la route / le dialogue ont changé et l'interface est durablement stable. */
   | 'FUNCTIONAL_STATE_REACHED'
+  | 'CONDITION_CONFIRMED'
   /** TransitionProgressDetector : plus aucun progrès depuis noProgressTimeoutMs (conclusion sans la borne). */
   | 'NO_PROGRESS';
 
@@ -83,6 +84,12 @@ export interface TransitionSettings {
    * stable, l'attente conclut sans attendre la borne. Défaut : max(3000, 6 × stabilityWindowMs).
    */
   noProgressTimeoutMs?: number;
+  /**
+   * FAST_PATH (situation connue) : une preuve POSITIVE — l'effet enregistré observé, la cible suivante
+   * prête — n'exige plus que ce calme court (DOM, réseau, chargement) au lieu de stabilityWindowMs.
+   * Absent : le chemin profond, la fenêtre complète. Jamais une borne : une condition.
+   */
+  confirmationQuietMs?: number;
 }
 
 /** Ce que l'attente sait AVANT de commencer (déduit de l'action, des effets enregistrés, de la suite). */
@@ -149,7 +156,7 @@ export class TransitionTracker {
     const key = `${kind}|${detail ?? ''}`;
     if (!repeat && this.seen.has(key)) return;
     this.seen.add(key);
-    if (kind !== 'UI_STABLE' && kind !== 'NO_PROGRESS')
+    if (kind !== 'UI_STABLE' && kind !== 'NO_PROGRESS' && kind !== 'CONDITION_CONFIRMED')
       this.lastProgressAt = Math.max(this.lastProgressAt, atMs);
     if (this.signals.length < 60) this.signals.push({ kind, atMs, ...(detail ? { detail } : {}) });
   }
@@ -200,11 +207,26 @@ export class TransitionTracker {
     if (sample.network.pending > 0) this.lastProgressAt = at;
     const loaderBusy = s.observeLoaders && sample.loaderVisible;
     const networkBusy = s.observeNetwork && sample.network.pending > 0;
-    const quiet = !s.observeDomChanges || sample.msSinceMutation >= s.stabilityWindowMs;
+    // CONDITION-DRIVEN : la preuve positive déjà là, une confirmation courte suffit (FAST_PATH) ; sinon
+    // la fenêtre de stabilité complète. La confirmation n'est jamais plus courte que son propre délai
+    // depuis l'action (une réaction tardive de l'application a le temps de commencer).
+    const evidence = this.effect || this.next === true;
+    const confirming =
+      s.confirmationQuietMs !== undefined && evidence && s.confirmationQuietMs < s.stabilityWindowMs;
+    const window = confirming ? (s.confirmationQuietMs ?? s.stabilityWindowMs) : s.stabilityWindowMs;
+    const quiet = !s.observeDomChanges || (sample.msSinceMutation >= window && at >= window);
     const stable = quiet && !loaderBusy && !networkBusy;
     const timedOut = at >= s.transitionTimeoutMs;
     const finish = (status: TransitionWaitStatus, confidence: number): TransitionWaitResult => {
-      if (stable) this.signal('UI_STABLE', at, `${String(Math.round(sample.msSinceMutation))} ms`);
+      if (stable) {
+        if (confirming && sample.msSinceMutation < s.stabilityWindowMs)
+          this.signal(
+            'CONDITION_CONFIRMED',
+            at,
+            `positive evidence, quiet ${String(Math.round(sample.msSinceMutation))} ms`,
+          );
+        this.signal('UI_STABLE', at, `${String(Math.round(sample.msSinceMutation))} ms`);
+      }
       return this.result(status, sample, stable, confidence, timedOut);
     };
 
@@ -445,6 +467,8 @@ export interface TransitionWaitContext {
   /** La cible de l'action suivante est-elle prête (résolue sur le DOM frais, empreinte, actionnable) ? */
   nextReady?: () => Promise<{ ready: boolean; present?: boolean; reason?: string }>;
   onSignal?: (signal: TransitionSignal) => void;
+  /** FAST_PATH : la confirmation courte d'une preuve positive (TransitionSettings.confirmationQuietMs). */
+  confirmationQuietMs?: number;
 }
 
 /**
@@ -460,7 +484,12 @@ export class UITransitionWaiter {
 
   async waitForTransition(context: TransitionWaitContext): Promise<TransitionWaitResult> {
     const { page } = context;
-    const tracker = new TransitionTracker(context.expectation, this.settings);
+    const tracker = new TransitionTracker(context.expectation, {
+      ...this.settings,
+      ...(context.confirmationQuietMs !== undefined
+        ? { confirmationQuietMs: context.confirmationQuietMs }
+        : {}),
+    });
     const started = Date.now();
     let lastCheck = -Infinity;
     let probeMutations = 0;

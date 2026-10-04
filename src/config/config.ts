@@ -826,6 +826,46 @@ const flowGenerationSchema = z
   })
   .strict();
 
+/**
+ * PERFORMANCE : mesurer (traces par action, attentes, résumé, actions lentes). Les seuils sont des
+ * budgets de DIAGNOSTIC, jamais des délais d'abandon : une application lente reste testable.
+ */
+const performanceSchema = z
+  .object({
+    /**
+     * FAST PATH : une étape enregistrée, résolue directement, sans divergence avant, attend sa preuve
+     * positive (effet enregistré, cible suivante prête) puis un calme COURT (confirmationQuietMs) au lieu
+     * de la fenêtre de stabilité complète. Toutes les vérifications restent (effets, valeurs, sécurité).
+     */
+    fastPath: z
+      .object({
+        enabled: z.boolean().default(true),
+        confirmationQuietMs: z.number().int().min(50).max(5000).default(150),
+      })
+      .strict()
+      .default({}),
+    /**
+     * PERFORMANCE BASELINE : un fichier (performance-baseline.json). Absent : il est créé par ce run ;
+     * présent : ce run lui est comparé (PERFORMANCE_REGRESSION au-delà de tolerance ET de 500 ms).
+     */
+    baseline: z
+      .object({
+        file: z.string().min(1).optional(),
+        tolerance: z.number().min(1).max(10).default(1.3),
+      })
+      .strict()
+      .default({}),
+    tracing: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Une action plus lente : SLOW_ACTION_DETECTED (phase, durée, cause, preuves). */
+        slowActionThresholdMs: z.number().int().min(100).default(2000),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
 /** Journal du moteur (reports/engine-log.jsonl) : ce que l'explorateur a fait, étape par étape. */
 const loggingSchema = z
   .object({
@@ -1980,6 +2020,7 @@ export const scenarioSchema = z
     recovery: recoverySchema.default({}),
     accessibility: accessibilitySchema.default({}),
     logging: loggingSchema.default({}),
+    performance: performanceSchema.default({}),
     flowGeneration: flowGenerationSchema.default({}),
     actors: z.array(actorSchema).default([]),
     authorization: authorizationSchema.default({}),

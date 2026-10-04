@@ -1,0 +1,1381 @@
+{
+  "client-context": {
+    "summary": {
+      "totalRunMs": 5185,
+      "actions": 7,
+      "buckets": [
+        {
+          "name": "Transition waiting",
+          "durationMs": 2969,
+          "share": 0.5726133076181292
+        },
+        {
+          "name": "State observation",
+          "durationMs": 276,
+          "share": 0.053230472516875606
+        },
+        {
+          "name": "Other (not instrumented)",
+          "durationMs": 200,
+          "share": 0.03857280617164899
+        },
+        {
+          "name": "Browser execution",
+          "durationMs": 143,
+          "share": 0.027579556412729026
+        },
+        {
+          "name": "Target resolution",
+          "durationMs": 56,
+          "share": 0.010800385728061716
+        },
+        {
+          "name": "Effect verification",
+          "durationMs": 3,
+          "share": 0.0005785920925747348
+        },
+        {
+          "name": "Knowledge / learning",
+          "durationMs": 1,
+          "share": 0.00019286403085824494
+        },
+        {
+          "name": "Reporting",
+          "durationMs": 0,
+          "share": 0
+        }
+      ],
+      "cache": {
+        "hits": 0,
+        "misses": 0,
+        "ratio": 0
+      },
+      "medianActionMs": 559,
+      "p95ActionMs": 860,
+      "averageActionMs": 521,
+      "waitMs": 2543,
+      "usefulWaitMs": 202,
+      "confirmationWaitMs": 2341,
+      "wastedWaitMs": 0,
+      "timeouts": 0,
+      "recoveries": 0,
+      "slowest": [
+        {
+          "step": 1,
+          "description": "click role=tab[name=\"Company\"]",
+          "durationMs": 860,
+          "cause": "TRANSITION-WAIT"
+        },
+        {
+          "step": 5,
+          "description": "click role=button[name=\"Edit request\"]",
+          "durationMs": 579,
+          "cause": "TRANSITION-WAIT"
+        },
+        {
+          "step": 4,
+          "description": "click role=button[name=\"Filter\"]",
+          "durationMs": 577,
+          "cause": "TRANSITION-WAIT"
+        },
+        {
+          "step": 2,
+          "description": "fill label=\"Business number\" = ${testData:apply.businessNumber}",
+          "durationMs": 559,
+          "cause": "TRANSITION-WAIT"
+        },
+        {
+          "step": 6,
+          "description": "click role=button[name=\"Apply\"]",
+          "durationMs": 554,
+          "cause": "TRANSITION-WAIT"
+        }
+      ],
+      "topPhases": [
+        {
+          "name": "transition-wait",
+          "durationMs": 2560,
+          "count": 6
+        },
+        {
+          "name": "next-target-probe",
+          "durationMs": 645,
+          "count": 20
+        },
+        {
+          "name": "locate",
+          "durationMs": 551,
+          "count": 32
+        },
+        {
+          "name": "state-observation",
+          "durationMs": 276,
+          "count": 12
+        },
+        {
+          "name": "execute",
+          "durationMs": 143,
+          "count": 6
+        },
+        {
+          "name": "fill-verification",
+          "durationMs": 3,
+          "count": 1
+        },
+        {
+          "name": "cognitive-observation",
+          "durationMs": 1,
+          "count": 6
+        },
+        {
+          "name": "screenshot",
+          "durationMs": 0,
+          "count": 6
+        },
+        {
+          "name": "assertion",
+          "durationMs": 0,
+          "count": 1
+        }
+      ]
+    },
+    "actions": [
+      {
+        "step": 1,
+        "kind": "click",
+        "description": "click role=tab[name=\"Company\"]",
+        "totalDurationMs": 860,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 199,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 215
+          },
+          {
+            "name": "locate",
+            "durationMs": 62,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 75
+          },
+          {
+            "name": "locate",
+            "durationMs": 11
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 15
+          },
+          {
+            "name": "execute",
+            "durationMs": 33
+          },
+          {
+            "name": "locate",
+            "durationMs": 12,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 12,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 31,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 13,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 10,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 33,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 415
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 49
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 1
+          },
+          {
+            "name": "locate",
+            "durationMs": 13,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 13
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 1854,
+            "completedAt": 2267,
+            "durationMs": 413,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": [
+              "DOM_CHANGED@45",
+              "EXPECTED_EFFECT_OBSERVED@45",
+              "NEXT_ACTION_TARGET_AVAILABLE@45",
+              "UI_STABLE@413"
+            ],
+            "usefulWaitMs": 45,
+            "confirmationWaitMs": 368,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 2,
+        "kind": "fill",
+        "description": "fill label=\"Business number\" = ${testData:apply.businessNumber}",
+        "totalDurationMs": 559,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 13,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 34
+          },
+          {
+            "name": "locate",
+            "durationMs": 12
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 12
+          },
+          {
+            "name": "execute",
+            "durationMs": 9
+          },
+          {
+            "name": "locate",
+            "durationMs": 10,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 28,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 14,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 32,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 443
+          },
+          {
+            "name": "fill-verification",
+            "durationMs": 3
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 12
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 0
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 2435,
+            "completedAt": 2874,
+            "durationMs": 439,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": ["NEXT_ACTION_TARGET_AVAILABLE@29", "UI_STABLE@439"],
+            "usefulWaitMs": 29,
+            "confirmationWaitMs": 410,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 3,
+        "kind": "check",
+        "description": "check label=\"Interview done\"",
+        "totalDurationMs": 519,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 8,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 8
+          },
+          {
+            "name": "locate",
+            "durationMs": 7,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 9
+          },
+          {
+            "name": "locate",
+            "durationMs": 10
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 12
+          },
+          {
+            "name": "execute",
+            "durationMs": 20
+          },
+          {
+            "name": "locate",
+            "durationMs": 9,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 12,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 12,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 17,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 414
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 12
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 0
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 2984,
+            "completedAt": 3395,
+            "durationMs": 411,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": ["NEXT_ACTION_TARGET_AVAILABLE@13", "UI_STABLE@411"],
+            "usefulWaitMs": 13,
+            "confirmationWaitMs": 398,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 4,
+        "kind": "click",
+        "description": "click role=button[name=\"Filter\"]",
+        "totalDurationMs": 577,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 10,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 10
+          },
+          {
+            "name": "locate",
+            "durationMs": 9,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 11
+          },
+          {
+            "name": "locate",
+            "durationMs": 9
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 10
+          },
+          {
+            "name": "execute",
+            "durationMs": 21
+          },
+          {
+            "name": "locate",
+            "durationMs": 11,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 9,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 11,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 13,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 9,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 11,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 431
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 57
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 0
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 3503,
+            "completedAt": 3931,
+            "durationMs": 428,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": [
+              "DOM_CHANGED@24",
+              "DIALOG_OPENED@24",
+              "EXPECTED_EFFECT_OBSERVED@24",
+              "NEXT_ACTION_TARGET_AVAILABLE@24",
+              "UI_STABLE@428"
+            ],
+            "usefulWaitMs": 24,
+            "confirmationWaitMs": 404,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 5,
+        "kind": "click",
+        "description": "click role=button[name=\"Edit request\"]",
+        "totalDurationMs": 579,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 6,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 6
+          },
+          {
+            "name": "locate",
+            "durationMs": 4,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 28
+          },
+          {
+            "name": "locate",
+            "durationMs": 9
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 12
+          },
+          {
+            "name": "execute",
+            "durationMs": 30
+          },
+          {
+            "name": "locate",
+            "durationMs": 10,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 4,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 22,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 12,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 4,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 39,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 415
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 54
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 0
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 4101,
+            "completedAt": 4514,
+            "durationMs": 413,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": [
+              "DOM_CHANGED@35",
+              "DIALOG_OPENED@35",
+              "EXPECTED_EFFECT_OBSERVED@35",
+              "NEXT_ACTION_TARGET_AVAILABLE@35",
+              "UI_STABLE@413"
+            ],
+            "usefulWaitMs": 35,
+            "confirmationWaitMs": 378,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 6,
+        "kind": "click",
+        "description": "click role=button[name=\"Apply\"]",
+        "totalDurationMs": 554,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 5
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 16
+          },
+          {
+            "name": "execute",
+            "durationMs": 30
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 442
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 15
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 0
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 4669,
+            "completedAt": 5108,
+            "durationMs": 439,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": [
+              "NETWORK_ACTIVITY_STARTED@2",
+              "DOM_CHANGED@56",
+              "NETWORK_ACTIVITY_COMPLETED@56",
+              "UI_STABLE@439"
+            ],
+            "usefulWaitMs": 56,
+            "confirmationWaitMs": 383,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 7,
+        "kind": "expect",
+        "description": "expect response POST \"/api/apply\" 2xx",
+        "totalDurationMs": 0,
+        "phases": [
+          {
+            "name": "assertion",
+            "durationMs": 0
+          }
+        ],
+        "waits": []
+      }
+    ]
+  },
+  "list-filter-process": {
+    "summary": {
+      "totalRunMs": 5378,
+      "actions": 7,
+      "buckets": [
+        {
+          "name": "Transition waiting",
+          "durationMs": 3157,
+          "share": 0.5870211974711789
+        },
+        {
+          "name": "State observation",
+          "durationMs": 246,
+          "share": 0.045741911491260695
+        },
+        {
+          "name": "Other (not instrumented)",
+          "durationMs": 196,
+          "share": 0.03644477500929714
+        },
+        {
+          "name": "Browser execution",
+          "durationMs": 108,
+          "share": 0.02008181480104128
+        },
+        {
+          "name": "Target resolution",
+          "durationMs": 59,
+          "share": 0.010970621048716996
+        },
+        {
+          "name": "Effect verification",
+          "durationMs": 4,
+          "share": 0.0007437709185570844
+        },
+        {
+          "name": "Knowledge / learning",
+          "durationMs": 2,
+          "share": 0.0003718854592785422
+        },
+        {
+          "name": "Reporting",
+          "durationMs": 0,
+          "share": 0
+        }
+      ],
+      "cache": {
+        "hits": 0,
+        "misses": 0,
+        "ratio": 0
+      },
+      "medianActionMs": 570,
+      "p95ActionMs": 873,
+      "averageActionMs": 539,
+      "waitMs": 2705,
+      "usefulWaitMs": 320,
+      "confirmationWaitMs": 2385,
+      "wastedWaitMs": 0,
+      "timeouts": 0,
+      "recoveries": 0,
+      "slowest": [
+        {
+          "step": 1,
+          "description": "click role=button[name=\"Filter\"]",
+          "durationMs": 873,
+          "cause": "TRANSITION-WAIT"
+        },
+        {
+          "step": 5,
+          "description": "click role=button[name=\"Apply\"]",
+          "durationMs": 651,
+          "cause": "TRANSITION-WAIT"
+        },
+        {
+          "step": 2,
+          "description": "select label=\"Field\" = \"Company name\"",
+          "durationMs": 577,
+          "cause": "TRANSITION-WAIT"
+        },
+        {
+          "step": 3,
+          "description": "select label=\"Operator\" = \"Like\"",
+          "durationMs": 570,
+          "cause": "TRANSITION-WAIT"
+        },
+        {
+          "step": 6,
+          "description": "click role=button[name=\"Process request\"]",
+          "durationMs": 566,
+          "cause": "TRANSITION-WAIT"
+        }
+      ],
+      "topPhases": [
+        {
+          "name": "transition-wait",
+          "durationMs": 2721,
+          "count": 6
+        },
+        {
+          "name": "next-target-probe",
+          "durationMs": 723,
+          "count": 21
+        },
+        {
+          "name": "locate",
+          "durationMs": 549,
+          "count": 29
+        },
+        {
+          "name": "state-observation",
+          "durationMs": 246,
+          "count": 12
+        },
+        {
+          "name": "execute",
+          "durationMs": 108,
+          "count": 6
+        },
+        {
+          "name": "fill-verification",
+          "durationMs": 3,
+          "count": 1
+        },
+        {
+          "name": "cognitive-observation",
+          "durationMs": 2,
+          "count": 6
+        },
+        {
+          "name": "assertion",
+          "durationMs": 1,
+          "count": 1
+        },
+        {
+          "name": "screenshot",
+          "durationMs": 0,
+          "count": 6
+        }
+      ]
+    },
+    "actions": [
+      {
+        "step": 1,
+        "kind": "click",
+        "description": "click role=button[name=\"Filter\"]",
+        "totalDurationMs": 873,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 194,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 214
+          },
+          {
+            "name": "locate",
+            "durationMs": 63,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 77
+          },
+          {
+            "name": "locate",
+            "durationMs": 11
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 15
+          },
+          {
+            "name": "execute",
+            "durationMs": 23
+          },
+          {
+            "name": "locate",
+            "durationMs": 11,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 13,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 36,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 12,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 12,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 33,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 425
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 58
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 1
+          },
+          {
+            "name": "locate",
+            "durationMs": 13,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 13
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 1901,
+            "completedAt": 2322,
+            "durationMs": 421,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": [
+              "DOM_CHANGED@49",
+              "DIALOG_OPENED@49",
+              "EXPECTED_EFFECT_OBSERVED@49",
+              "NEXT_ACTION_TARGET_AVAILABLE@49",
+              "UI_STABLE@421"
+            ],
+            "usefulWaitMs": 49,
+            "confirmationWaitMs": 372,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 2,
+        "kind": "select",
+        "description": "select label=\"Field\" = \"Company name\"",
+        "totalDurationMs": 577,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 11,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 11
+          },
+          {
+            "name": "locate",
+            "durationMs": 13,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 32
+          },
+          {
+            "name": "locate",
+            "durationMs": 12
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 13
+          },
+          {
+            "name": "execute",
+            "durationMs": 15
+          },
+          {
+            "name": "locate",
+            "durationMs": 10,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 30,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 13,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 32,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 447
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 15
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 0
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 2515,
+            "completedAt": 2959,
+            "durationMs": 444,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": ["NEXT_ACTION_TARGET_AVAILABLE@31", "UI_STABLE@444"],
+            "usefulWaitMs": 31,
+            "confirmationWaitMs": 413,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 3,
+        "kind": "select",
+        "description": "select label=\"Operator\" = \"Like\"",
+        "totalDurationMs": 570,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 12,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 12
+          },
+          {
+            "name": "locate",
+            "durationMs": 9,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 31
+          },
+          {
+            "name": "locate",
+            "durationMs": 12
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 12
+          },
+          {
+            "name": "execute",
+            "durationMs": 13
+          },
+          {
+            "name": "locate",
+            "durationMs": 10,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 29,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 11,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 31,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 443
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 14
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 0
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 3090,
+            "completedAt": 3531,
+            "durationMs": 441,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": ["NEXT_ACTION_TARGET_AVAILABLE@31", "UI_STABLE@441"],
+            "usefulWaitMs": 31,
+            "confirmationWaitMs": 410,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 4,
+        "kind": "fill",
+        "description": "fill css=#valueInput = ${testData:valueInput}",
+        "totalDurationMs": 534,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 10,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 29
+          },
+          {
+            "name": "locate",
+            "durationMs": 7
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 13
+          },
+          {
+            "name": "execute",
+            "durationMs": 9
+          },
+          {
+            "name": "locate",
+            "durationMs": 10,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 26,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 11,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 27,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 432
+          },
+          {
+            "name": "fill-verification",
+            "durationMs": 3
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 14
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 0
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 3634,
+            "completedAt": 4063,
+            "durationMs": 429,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": ["NEXT_ACTION_TARGET_AVAILABLE@28", "UI_STABLE@429"],
+            "usefulWaitMs": 28,
+            "confirmationWaitMs": 401,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 5,
+        "kind": "click",
+        "description": "click role=button[name=\"Apply\"]",
+        "totalDurationMs": 651,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 8,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 8
+          },
+          {
+            "name": "locate",
+            "durationMs": 7,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 9
+          },
+          {
+            "name": "locate",
+            "durationMs": 7
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 11
+          },
+          {
+            "name": "execute",
+            "durationMs": 21
+          },
+          {
+            "name": "locate",
+            "durationMs": 10,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 12,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 13,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 15,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "locate",
+            "durationMs": 14,
+            "parent": "next-target-probe"
+          },
+          {
+            "name": "next-target-probe",
+            "durationMs": 16,
+            "parent": "transition-wait"
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 538
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 15
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 0
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 4180,
+            "completedAt": 4716,
+            "durationMs": 536,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": [
+              "DOM_CHANGED@14",
+              "NETWORK_ACTIVITY_STARTED@14",
+              "NEXT_ACTION_TARGET_AVAILABLE@14",
+              "NETWORK_ACTIVITY_COMPLETED@179",
+              "UI_STABLE@536"
+            ],
+            "usefulWaitMs": 179,
+            "confirmationWaitMs": 357,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 6,
+        "kind": "click",
+        "description": "click role=button[name=\"Process request\"]",
+        "totalDurationMs": 566,
+        "phases": [
+          {
+            "name": "locate",
+            "durationMs": 10
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 13
+          },
+          {
+            "name": "execute",
+            "durationMs": 27
+          },
+          {
+            "name": "transition-wait",
+            "durationMs": 436
+          },
+          {
+            "name": "state-observation",
+            "durationMs": 53
+          },
+          {
+            "name": "screenshot",
+            "durationMs": 0
+          },
+          {
+            "name": "cognitive-observation",
+            "durationMs": 1
+          }
+        ],
+        "waits": [
+          {
+            "type": "transition",
+            "startedAt": 4812,
+            "completedAt": 5246,
+            "durationMs": 434,
+            "terminationReason": "CONDITION_MET",
+            "signalsObserved": [
+              "DOM_CHANGED@2",
+              "URL_CHANGED@2",
+              "ROUTE_CHANGED@2",
+              "DIALOG_CLOSED@2",
+              "EXPECTED_EFFECT_OBSERVED@2",
+              "UI_STABLE@434"
+            ],
+            "usefulWaitMs": 2,
+            "confirmationWaitMs": 432,
+            "wastedWaitMs": 0
+          }
+        ]
+      },
+      {
+        "step": 7,
+        "kind": "expect",
+        "description": "expect url contains \"/process\"",
+        "totalDurationMs": 1,
+        "phases": [
+          {
+            "name": "assertion",
+            "durationMs": 1
+          }
+        ],
+        "waits": []
+      }
+    ]
+  }
+}
