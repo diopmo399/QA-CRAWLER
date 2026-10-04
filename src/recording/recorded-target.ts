@@ -227,6 +227,17 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     ...(element.nameAttr && !/\d{2,}/.test(element.nameAttr)
       ? { stableAttributes: { name: element.nameAttr } }
       : {}),
+    // INTERACTION OWNER : le conteneur qui possède l'interaction, et le contexte structurel.
+    ...(element.ownerKind && readable(element.ownerName)
+      ? { owner: `${element.ownerKind}:${element.ownerName}` }
+      : element.ownerKind === 'component' && element.ownerName
+        ? { owner: `component:${element.ownerName}` }
+        : {}),
+    ...(readable(element.tab) ? { tab: element.tab } : {}),
+    ...(readable(element.accordion) ? { accordion: element.accordion } : {}),
+    ...(readable(element.form) ? { form: element.form } : {}),
+    ...(readable(element.row) ? { row: element.row } : {}),
+    ...(readable(element.listboxOwner) ? { listbox: element.listboxOwner } : {}),
   };
   return {
     target: chosen.target,

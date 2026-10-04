@@ -760,6 +760,13 @@ function preOf(raw: Record<string, unknown>): PreActionContext {
         return { role: str(entry.role, 30), name: str(entry.name, 60), ...(section ? { section } : {}) };
       }),
     loading: raw.loading === true,
+    ...(Array.isArray(raw.controls)
+      ? {
+          controls: list(raw.controls, 150)
+            .map((entry) => str(entry, 60))
+            .filter(Boolean),
+        }
+      : {}),
     ...(typeof raw.phase === 'string' && /^[A-Z_]{3,20}$/.test(raw.phase) ? { phase: raw.phase } : {}),
     ...(typeof raw.generation === 'number' ? { generation: num(raw.generation) } : {}),
     ...(typeof raw.sentGeneration === 'number' ? { sentGeneration: num(raw.sentGeneration) } : {}),
@@ -1008,6 +1015,28 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
       /^[a-z]{1,20}$/.test(str('inputMode', 20) ?? '') ? str('inputMode', 20) : undefined,
     ),
     ...optional('pattern', str('pattern', 120)),
+    // INTERACTION OWNER et contexte structurel (textes d'interface, expurgés).
+    ...optional(
+      'ownerKind',
+      /^(dialog|tab|accordion|form|fieldset|card|row|menu|listbox|toolbar|section|component)$/.test(
+        str('ownerKind', 20) ?? '',
+      )
+        ? str('ownerKind', 20)
+        : undefined,
+    ),
+    ...optional('ownerName', str('ownerName', 60) ? redactText(str('ownerName', 60) ?? '') : undefined),
+    ...optional('tab', str('tab', 60) ? redactText(str('tab', 60) ?? '') : undefined),
+    ...(typeof raw.tabSelected === 'boolean' ? { tabSelected: raw.tabSelected } : {}),
+    ...optional('accordion', str('accordion', 60) ? redactText(str('accordion', 60) ?? '') : undefined),
+    ...(typeof raw.accordionExpanded === 'boolean' ? { accordionExpanded: raw.accordionExpanded } : {}),
+    ...optional('form', str('form', 60) ? redactText(str('form', 60) ?? '') : undefined),
+    ...optional('row', str('row', 40) ? redactText(str('row', 40) ?? '') : undefined),
+    ...optional(
+      'listboxOwner',
+      str('listboxOwner', 60) ? redactText(str('listboxOwner', 60) ?? '') : undefined,
+    ),
+    ...optional('menu', str('menu', 60) ? redactText(str('menu', 60) ?? '') : undefined),
+    ...(typeof raw.checked === 'boolean' ? { checked: raw.checked } : {}),
   };
 }
 

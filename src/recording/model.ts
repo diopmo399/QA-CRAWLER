@@ -89,6 +89,11 @@ export interface PreActionContext {
   peers: { role: string; name: string; section?: string }[];
   /** Un indicateur de chargement était visible. */
   loading: boolean;
+  /**
+   * Les noms des contrôles et titres visibles au DÉBUT du geste (en minuscules). Ce que l'action
+   * précédente a laissé : un contrôle absent ici est apparu APRÈS le début de ce geste.
+   */
+  controls?: string[];
   /** L'événement qui a figé la preuve : POINTERDOWN, FOCUSIN, BEFOREINPUT, KEYDOWN, DRAGSTART ; AT_EVENT = repli tardif. */
   phase?: string;
   /** Génération du DOM à la capture, puis à l'envoi (l'état AVANT l'action, voulu historique). */
@@ -179,6 +184,28 @@ export interface RecordedElement {
   cssMatches?: number;
   /** Sa position parmi ces éléments (0 = premier) : le dernier recours, jamais une identité. */
   cssIndex?: number;
+  /**
+   * INTERACTION OWNER : le conteneur sémantique qui possède l'interaction (dialog, tab, accordion,
+   * form, fieldset, card, row, menu, listbox, toolbar, section, component) et son nom.
+   */
+  ownerKind?: string;
+  ownerName?: string;
+  /** L'onglet qui commande le panneau de la cible, et s'il était sélectionné. */
+  tab?: string;
+  tabSelected?: boolean;
+  /** Le panneau repliable (accordéon) de la cible, et s'il était ouvert. */
+  accordion?: string;
+  accordionExpanded?: boolean;
+  /** Le formulaire (nom, aria-label, id stable). */
+  form?: string;
+  /** La clé de la ligne de tableau (première cellule). */
+  row?: string;
+  /** Le contrôle qui ouvre la liste d'une option (« Operator »). */
+  listboxOwner?: string;
+  /** Le menu (nom ou déclencheur). */
+  menu?: string;
+  /** L'état d'une case / d'un radio AVANT l'action. */
+  checked?: boolean;
   /** Le profil de saisie : longueur maximale, clavier (numeric…), motif. */
   maxLength?: number;
   inputMode?: string;
@@ -429,6 +456,9 @@ export interface SemanticRecordedAction {
   expectedEffects?: StepEffects;
   /** Les effets candidats et leur attribution causale (retenus, facultatifs, écartés). */
   effectCausality?: CausalEffectCandidate[];
+  /** L'écran au début du geste (pre.controls) : la preuve de ce qui existait AVANT cette action. */
+  preActionControls?: string[];
+  preActionRoute?: string;
   /** L'observation de cette action a été fermée par l'action humaine suivante. */
   observationClosedBy?: string;
   /** L'observation qui a donné stateAfter (unique par observation). */

@@ -426,7 +426,7 @@ représentation que je viens de construire, retrouverais-je EXACTEMENT l'éléme
   l'application) relève l'écran tel que l'humain le voyait : route, titre, fenêtre ouverte, titres,
   unicité de la cible (CSS, texte, rôle + nom, libellé), choix déjà faits (listes, cases — jamais
   une saisie libre), onglet actif, éléments du même genre, chargement en cours. Quand l'action fait
-  disparaître sa cible (un bouton « Filtre » qui ouvre une fenêtre et se masque), l'ordre est :
+  disparaître sa cible (un bouton « Filter » qui ouvre une fenêtre et se masque), l'ordre est :
   résolution live → élément original → contexte pré-action. Une cible unique avant l'action est
   `VALIDATED_PRE_ACTION` ; avec un effet observé après (fenêtre apparue, route, titre),
   `VALIDATED_WITH_EFFECT` (`semanticallyConfirmed`). L'effet ne remplace jamais l'identité : il

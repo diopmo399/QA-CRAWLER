@@ -64,6 +64,19 @@ export interface ExpectedTargetAnalysis {
   /** Contrôles proches à l'écran (même rôle, nom voisin) : un localisateur périmé possible. */
   semanticMatches: string[];
   parentSection?: { label: string; state: 'CLOSED' | 'UNSELECTED_TAB'; evidence: string };
+  /**
+   * TARGET_CONTEXT_MISMATCH : la cible a été ENREGISTRÉE dans un contexte (onglet, accordéon) qui
+   * n'est pas celui affiché. Une preuve exacte (pas une ressemblance de libellés) : ne pas chercher
+   * frénétiquement le localisateur, atteindre le contexte (si une action SAFE le permet).
+   */
+  contextMismatch?: {
+    type: 'TARGET_CONTEXT_MISMATCH';
+    cause: 'WRONG_TAB_SELECTED' | 'PARENT_SECTION_CLOSED';
+    /** TARGET_NOT_RENDERED_BECAUSE_PARENT_CLOSED pour un accordéon fermé. */
+    classification: 'TARGET_NOT_RENDERED_BECAUSE_WRONG_TAB' | 'TARGET_NOT_RENDERED_BECAUSE_PARENT_CLOSED';
+    expected: string;
+    actual?: string;
+  };
   revealers: TargetRevealer[];
   /** FILL X ← X_AVAILABLE ← SECTION_OPEN ← CHOICE_MADE (du but vers la cause). */
   preconditionChain: string[];
@@ -104,6 +117,8 @@ export function analyzeExpectedTarget(input: {
   previousDeferred?: boolean;
   revealers?: readonly KnownRevealer[];
   synonyms?: (term: string) => readonly string[];
+  /** Le contexte ENREGISTRÉ de la cible (empreinte : onglet, accordéon). */
+  recordedContext?: { tab?: string; accordion?: string };
 }): ExpectedTargetAnalysis {
   const { current, probe } = input;
   const visible = input.controls.filter((control) => control.visible);
@@ -208,19 +223,62 @@ export function analyzeExpectedTarget(input: {
     );
   const closedSection = [...collapsed].sort((a, b) => related(b) - related(a))[0];
   const otherTab = [...tabs].sort((a, b) => related(b) - related(a))[0];
-  const parentSection = closedSection
-    ? {
-        label: `${closedSection.role}:${closedSection.name}`,
-        state: 'CLOSED' as const,
-        evidence: `"${closedSection.name}" is collapsed (aria-expanded=false)`,
-      }
-    : otherTab
+  // LE CONTEXTE ENREGISTRÉ d'abord : l'onglet / l'accordéon où la cible vivait, comparé à l'écran.
+  const recordedTab = input.recordedContext?.tab;
+  const recordedAccordion = input.recordedContext?.accordion;
+  const tabControl = recordedTab
+    ? visible.find((control) => control.role === 'tab' && normalize(control.name) === normalize(recordedTab))
+    : undefined;
+  const accordionControl = recordedAccordion
+    ? visible.find(
+        (control) =>
+          control.expanded !== undefined && normalize(control.name) === normalize(recordedAccordion),
+      )
+    : undefined;
+  const selectedTabs = visible.filter((control) => control.role === 'tab' && control.selected === true);
+  const contextMismatch: ExpectedTargetAnalysis['contextMismatch'] =
+    tabControl && tabControl.selected === false
       ? {
-          label: `tab:${otherTab.name}`,
-          state: 'UNSELECTED_TAB' as const,
-          evidence: `tab "${otherTab.name}" is not selected`,
+          type: 'TARGET_CONTEXT_MISMATCH',
+          cause: 'WRONG_TAB_SELECTED',
+          classification: 'TARGET_NOT_RENDERED_BECAUSE_WRONG_TAB',
+          expected: tabControl.name,
+          ...(selectedTabs[0] ? { actual: selectedTabs.map((control) => control.name).join(', ') } : {}),
         }
-      : undefined;
+      : accordionControl && accordionControl.expanded === false
+        ? {
+            type: 'TARGET_CONTEXT_MISMATCH',
+            cause: 'PARENT_SECTION_CLOSED',
+            classification: 'TARGET_NOT_RENDERED_BECAUSE_PARENT_CLOSED',
+            expected: `${accordionControl.name} (open)`,
+            actual: `${accordionControl.name} (closed)`,
+          }
+        : undefined;
+  const parentSection = contextMismatch
+    ? contextMismatch.cause === 'WRONG_TAB_SELECTED' && tabControl
+      ? {
+          label: `tab:${tabControl.name}`,
+          state: 'UNSELECTED_TAB' as const,
+          evidence: `recorded in tab "${tabControl.name}"; the selected tab is "${contextMismatch.actual ?? 'none'}"`,
+        }
+      : {
+          label: `${accordionControl?.role ?? 'button'}:${accordionControl?.name ?? ''}`,
+          state: 'CLOSED' as const,
+          evidence: `recorded in section "${accordionControl?.name ?? ''}", which is collapsed (aria-expanded=false)`,
+        }
+    : closedSection
+      ? {
+          label: `${closedSection.role}:${closedSection.name}`,
+          state: 'CLOSED' as const,
+          evidence: `"${closedSection.name}" is collapsed (aria-expanded=false)`,
+        }
+      : otherTab
+        ? {
+            label: `tab:${otherTab.name}`,
+            state: 'UNSELECTED_TAB' as const,
+            evidence: `tab "${otherTab.name}" is not selected`,
+          }
+        : undefined;
 
   // ---- chaîne de préconditions (du but vers la cause la plus profonde)
   const chain = [`${current.kind.toUpperCase()} ${label}`, `${subject}_AVAILABLE`];
@@ -257,6 +315,16 @@ export function analyzeExpectedTarget(input: {
     add('ASYNC_DATA_NOT_READY', 0.6, 'the element is re-rendered while it is read');
   else {
     add('TARGET_NOT_RENDERED', 0.7, `"${label}" is not rendered`);
+    // Le contexte enregistré n'est pas celui affiché : une preuve exacte, la cause la plus forte.
+    if (contextMismatch)
+      add(
+        contextMismatch.cause,
+        contextMismatch.cause === 'WRONG_TAB_SELECTED' ? 0.92 : 0.9,
+        contextMismatch.cause === 'WRONG_TAB_SELECTED'
+          ? `TARGET_CONTEXT_MISMATCH: expected tab "${contextMismatch.expected}", actual "${contextMismatch.actual ?? 'none'}"`
+          : `TARGET_NOT_RENDERED_BECAUSE_PARENT_CLOSED: "${recordedAccordion ?? ''}" is collapsed`,
+        'RECORDING',
+      );
     // Un localisateur ne peut pas être « périmé » vers une cible qui n'existe pas.
     add('LOCATOR_STALE', 0.15, 'no element of the same kind with a close name');
     if (parentSection)
@@ -290,6 +358,7 @@ export function analyzeExpectedTarget(input: {
     presence,
     semanticMatches,
     ...(parentSection ? { parentSection } : {}),
+    ...(contextMismatch ? { contextMismatch } : {}),
     revealers,
     preconditionChain: chain,
     missingPreconditions: missing,

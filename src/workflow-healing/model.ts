@@ -1,3 +1,4 @@
+import type { FirstFunctionalDivergence } from './first-divergence.js';
 /**
  * WORKFLOW SELF-HEALING — le modèle.
  *
@@ -123,6 +124,13 @@ export interface DivergenceAnalysis {
    * on ne contourne ni une autorisation, ni une régression.
    */
   recoverable: boolean;
+  /**
+   * AUTH_CONTEXT_DIVERGENCE : la session ou les droits ont changé. Jamais contourné : la récupération
+   * est interdite, la SafetyPolicy garde l'autorité finale.
+   */
+  authContext?: AuthContextDivergence;
+  /** FIRST FUNCTIONAL DIVERGENCE : l'étape (plus tôt) qui a perdu le contexte requis. */
+  firstFunctionalDivergence?: FirstFunctionalDivergence;
 }
 
 /** Une étape du parcours, vue par son sens (jamais par sa valeur saisie). */
@@ -413,6 +421,13 @@ export const HEALING_EVENTS = [
   'PREREQUISITE_DISCOVERED',
   'SUGGESTED_FLOW_UPDATE_CREATED',
   'EXPECTED_TARGET_ANALYZED',
+  'TARGET_CONTEXT_MISMATCH',
+  'AUTH_CONTEXT_DIVERGENCE',
+  'FIRST_FUNCTIONAL_DIVERGENCE_LOCATED',
+  'CHECKED_STATE_CHANGED',
+  'CHECKED_STATE_NOT_CHANGED',
+  'TRANSITION_PROGRESS',
+  'TRANSITION_NO_PROGRESS',
   'TARGET_RESOLUTION',
   'TARGET_RERENDERED',
   'TARGET_CONTEXT',
@@ -455,4 +470,17 @@ export interface HealingEventRecord {
   at: string;
   event: HealingEvent;
   message: string;
+}
+
+/** Ce qui est attendu et observé de l'autorisation, quand c'est connu. */
+export interface AuthContextDivergence {
+  type: 'AUTH_CONTEXT_DIVERGENCE';
+  cause: 'AUTH_STATE_CHANGED' | 'ROLE_PERMISSION_CHANGED';
+  expectedRole?: string;
+  observedRole?: string;
+  /** Ce que le parcours enregistré faisait à cet endroit. */
+  expectedCapabilities?: string[];
+  /** Ce que l'application refuse maintenant (requêtes 401 / 403, écran de connexion). */
+  observedCapabilities?: string[];
+  evidence: string[];
 }

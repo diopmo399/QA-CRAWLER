@@ -267,6 +267,21 @@ const fingerprintSchema = z
     nearbyText: z.array(nonEmpty).max(8).optional(),
     /** Attributs métier stables (name, formcontrolname, aria-label…). */
     stableAttributes: z.record(z.string(), z.string()).optional(),
+    // INTERACTION OWNER et contexte structurel (facultatifs : un ancien enregistrement reste valide).
+    /** Le propriétaire de l'interaction : « dialog:Filter », « listbox:Operator », « row:Request 42 ». */
+    owner: nonEmpty.optional(),
+    /** L'onglet qui contenait la cible (« Company »). */
+    tab: nonEmpty.optional(),
+    /** Le panneau repliable qui contenait la cible (« Interview »). */
+    accordion: nonEmpty.optional(),
+    /** Le formulaire (« Create request »). */
+    form: nonEmpty.optional(),
+    /** La ligne de tableau (sa clé). */
+    row: nonEmpty.optional(),
+    /** Le contrôle qui porte une option (« Operator »). */
+    listbox: nonEmpty.optional(),
+    /** L'état attendu après l'action (une case : checked / unchecked). */
+    expectedState: z.enum(['checked', 'unchecked']).optional(),
   })
   .strict();
 
@@ -497,6 +512,13 @@ export interface TargetFingerprint {
   formField?: string;
   nearbyText?: string[];
   stableAttributes?: Record<string, string>;
+  owner?: string;
+  tab?: string;
+  accordion?: string;
+  form?: string;
+  row?: string;
+  listbox?: string;
+  expectedState?: 'checked' | 'unchecked';
 }
 
 interface StepCommon {

@@ -169,8 +169,9 @@ export function inferFunctionalGoal(
     seen.add(key);
     predicates.push(predicate);
   };
-  // Un champ introuvable : l'objectif est d'abord que CE champ soit disponible.
-  if (context.currentAction.field && context.currentAction.kind !== 'check' && context.currentAction.label) {
+  // Un champ (ou une case) introuvable : l'objectif est d'abord que CE contrôle soit disponible — sinon
+  // la cible de l'étape SUIVANTE, déjà visible, ferait croire l'objectif atteint sans avoir agi.
+  if (context.currentAction.field && context.currentAction.label) {
     push({
       kind: 'VISIBLE_FIELD',
       value: context.currentAction.label,

@@ -44,6 +44,11 @@ export interface CausalEffectCandidate {
   /** L'identifiant qui prouve le lien (fenêtre réseau, navigation corrélée). */
   correlationId?: string;
   classification: EffectCausality;
+  /**
+   * EFFECT_REASSIGNED : écarté de cette action parce que la capture pré-action de l'action suivante
+   * prouve qu'il est venu APRÈS le début de son geste — il revient à l'action suivante.
+   */
+  reassignTo?: string;
 }
 
 const REQUIRED: readonly EffectCausality[] = ['DIRECT', 'STRONGLY_CORRELATED'];
@@ -115,8 +120,39 @@ export function classifyEffects(input: {
     closedByNext &&
     learned.route !== undefined &&
     [...nextRoutes].some((candidate) => routeTemplateEquals(candidate, learned.route ?? ''));
+  // L'écran au DÉBUT du geste suivant (capture pré-action, avant son gestionnaire) : ce que CETTE
+  // action a laissé. Un contrôle apparu qui n'y est pas encore est apparu après le début du geste
+  // suivant (un dialogue ouvert de façon synchrone par lui) : jamais un effet de cette action.
+  const nextBefore = closedByNext && next?.preActionControls ? new Set(next.preActionControls) : undefined;
+  const nameOf = (effect: string): string =>
+    effect
+      .slice(effect.indexOf(':') + 1)
+      .trim()
+      .toLowerCase();
   // L'écran : à cette action seulement si elle est le geste le plus récent avant l'observation.
   const screen = (kind: CausalEffectKind, effect: string): void => {
+    if (kind === 'APPEARS' && nextBefore && !nextBefore.has(nameOf(effect.slice(2)))) {
+      add(
+        kind,
+        effect,
+        'BELONGS_TO_NEXT_ACTION',
+        [
+          `absent when the next human action (${next?.id ?? '?'}) started (pre-action capture): it appeared after it`,
+        ],
+        next ? { reassignTo: next.id } : {},
+      );
+      return;
+    }
+    if (kind === 'DISAPPEARS' && nextBefore && nextBefore.has(nameOf(effect.slice(2)))) {
+      add(
+        kind,
+        effect,
+        'BELONGS_TO_NEXT_ACTION',
+        [`still present when the next human action (${next?.id ?? '?'}) started: it disappeared after it`],
+        next ? { reassignTo: next.id } : {},
+      );
+      return;
+    }
     if (screenOfNext) {
       add(kind, effect, 'BELONGS_TO_NEXT_ACTION', [
         `observed at the boundary after the navigation of the next action (${next?.id ?? '?'})`,

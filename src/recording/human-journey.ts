@@ -1,4 +1,4 @@
-import { classifyEffects, expectedEffectsFrom } from './effect-causality.js';
+import { type CausalEffectCandidate, classifyEffects, expectedEffectsFrom } from './effect-causality.js';
 import type { StepEffects } from '../config/flow-schema.js';
 import type {
   RawRecordedEvent,
@@ -277,6 +277,9 @@ export function attributeEffects(
   states: readonly RecordedState[],
 ): void {
   const stateById = new Map(states.map((state) => [state.id, state]));
+  // EFFECT_REASSIGNED : les effets qu'une action a dû écarter (venus APRÈS le début du geste suivant,
+  // capture pré-action à l'appui) reviennent à ce geste suivant.
+  const inherited = new Map<string, CausalEffectCandidate[]>();
   let start = 0;
   while (start < actions.length) {
     const first = actions[start];
@@ -319,8 +322,26 @@ export function attributeEffects(
         ...(owner && action !== owner ? { screenOwner: owner } : {}),
         ...(nextAction ? { next: nextAction } : {}),
       });
-      action.effectCausality = candidates;
-      const learned = expectedEffectsFrom(action, candidates);
+      for (const candidate of candidates)
+        if (candidate.reassignTo)
+          inherited.set(candidate.reassignTo, [...(inherited.get(candidate.reassignTo) ?? []), candidate]);
+      for (const candidate of inherited.get(action.id) ?? [])
+        if (!candidates.some((own) => own.effect === candidate.effect))
+          candidates.push({
+            ...candidate,
+            actionId: action.id,
+            ownerActionId: action.id,
+            classification: 'STRONGLY_CORRELATED',
+            causalConfidence: 0.85,
+            temporalConfidence: 0.9,
+            startedBeforeNextHumanAction: true,
+            evidence: [
+              `reassigned from ${candidate.actionId}: observed at its boundary, after this action started (pre-action capture)`,
+            ],
+            reassignTo: undefined,
+          });
+      action.effectCausality = candidates.map(({ reassignTo: _reassign, ...candidate }) => candidate);
+      const learned = expectedEffectsFrom(action, action.effectCausality);
       if (learned) action.expectedEffects = learned;
       else delete action.expectedEffects;
     }

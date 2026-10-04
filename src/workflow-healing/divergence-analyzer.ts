@@ -1,5 +1,6 @@
 import type { StepEffects } from '../config/flow-schema.js';
 import type {
+  AuthContextDivergence,
   DivergenceAnalysis,
   DivergenceCategory,
   DivergenceSymptom,
@@ -41,6 +42,8 @@ export interface DivergenceInput {
   technicalSymptom?: string;
   /** La cible attendue comprise : présente ? voisine ? absente — et pourquoi. */
   expectedTarget?: ExpectedTargetAnalysis;
+  /** L'acteur (rôle) attendu du parcours, s'il est connu (flows[].actor). */
+  expectedRole?: string;
 }
 
 const PERMISSION_TEXT =
@@ -274,7 +277,29 @@ export function analyzeDivergence(input: DivergenceInput): DivergenceAnalysis {
         }
       : undefined;
   const deferred = input.previous?.deferredEffect === true;
+  // AUTH_CONTEXT_DIVERGENCE : une cause d'autorisation qui bloque est décrite, jamais contournée.
+  const auth = causes.find(
+    (cause) =>
+      (cause.category === 'AUTH_STATE_CHANGED' || cause.category === 'ROLE_PERMISSION_CHANGED') &&
+      cause.confidence >= 0.7,
+  );
+  const authContext: AuthContextDivergence | undefined = auth
+    ? {
+        type: 'AUTH_CONTEXT_DIVERGENCE',
+        cause: auth.category as AuthContextDivergence['cause'],
+        ...(input.expectedRole ? { expectedRole: input.expectedRole } : {}),
+        ...(screen.loginFormVisible ? { observedRole: 'signed out (sign-in form displayed)' } : {}),
+        expectedCapabilities: [`${expected.kind} ${expected.label}`],
+        observedCapabilities: [
+          ...unauthorized.map((exchange) => `${exchange.request} → 401`),
+          ...forbidden.map((exchange) => `${exchange.request} → 403`),
+          ...(permissionText ? [`screen: "${permissionText}"`] : []),
+        ].slice(0, 6),
+        evidence: auth.evidence.map((entry) => entry.detail),
+      }
+    : undefined;
   return {
+    ...(authContext ? { authContext } : {}),
     actionId: input.actionId,
     stepIndex: input.stepIndex,
     symptom: input.symptom,
