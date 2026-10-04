@@ -425,6 +425,13 @@ function progressListener(quiet: boolean): ExplorationListener {
         if (effect.recovery.length > 0)
           logger.info(color.dim(`       recovery: ${effect.recovery.join(' · ')}`));
       }
+      // RECORDING-MODEL DIVERGENCE : l'action a fonctionné, l'attente enregistrée décrit la suite.
+      if (step.recordingModelDivergence)
+        logger.info(
+          color.yellow(
+            `       ⚠ RECORDED EXPECTATION SUSPECT (${step.recordingModelDivergence.classification}): ${step.recordingModelDivergence.suspectEffects.join(', ')} — not an application divergence, no recovery`,
+          ),
+        );
       // WORKFLOW SELF-HEALING : pourquoi, quel objectif, quel chemin, quelle preuve.
       if (step.recovery) {
         const reached =

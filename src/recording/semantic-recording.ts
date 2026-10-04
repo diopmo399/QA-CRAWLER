@@ -60,6 +60,8 @@ export function resolveSemanticActions(
       evidence: [],
       ...(stateBefore ? { stateBefore } : {}),
       ...(event.stateAfter ? { stateAfter: event.stateAfter } : {}),
+      ...(event.observationClosedBy ? { observationClosedBy: event.observationClosedBy } : {}),
+      ...(event.observationId ? { observationId: event.observationId } : {}),
       ...extra,
     };
     actions.push(action);
@@ -86,6 +88,8 @@ export function resolveSemanticActions(
       action.stateAfter = event.stateAfter;
       stateBefore = event.stateAfter;
     }
+    if (event.observationClosedBy) action.observationClosedBy = event.observationClosedBy;
+    if (event.observationId) action.observationId = event.observationId;
     action.merged = action.merged ? `${action.merged}; ${why}` : why;
   };
 

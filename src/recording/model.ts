@@ -1,3 +1,4 @@
+import type { CausalEffectCandidate } from './effect-causality.js';
 import type {
   FlowExpectation,
   FlowStep,
@@ -265,6 +266,10 @@ export interface RawRecordedEvent {
   noise?: string;
   /** L'observation de l'écran une fois l'action terminée (RecordedState.id), et les requêtes qu'elle a déclenchées. */
   stateAfter?: string;
+  /** L'observation de cette action a été fermée par l'action humaine suivante (frontière causale). */
+  observationClosedBy?: string;
+  /** L'observation (unique) qui a donné stateAfter : des actions de la MÊME observation partagent un écran. */
+  observationId?: string;
   network?: FunctionalExchange[];
 }
 
@@ -350,6 +355,8 @@ export interface RecordedState {
   controls: string[];
   /** Les lignes du plus grand tableau (une liste d'entités). */
   tableRows?: number;
+  /** Quand l'écran a été observé (horloge de l'enregistreur) : la chronologie, pas une preuve de cause. */
+  observedAt?: number;
 }
 
 export interface SemanticRecordedAction {
@@ -405,6 +412,12 @@ export interface SemanticRecordedAction {
   domEffects?: string[];
   /** Les effets attendus au rejeu, appris de l'enregistrement (contrôles apparus, route, requête). */
   expectedEffects?: StepEffects;
+  /** Les effets candidats et leur attribution causale (retenus, facultatifs, écartés). */
+  effectCausality?: CausalEffectCandidate[];
+  /** L'observation de cette action a été fermée par l'action humaine suivante. */
+  observationClosedBy?: string;
+  /** L'observation qui a donné stateAfter (unique par observation). */
+  observationId?: string;
   /** DRAG_AND_DROP : l'élément, ses zones, et l'effet ITEM_MOVED observé à l'enregistrement. */
   drag?: RecordedDrag;
   /** La validation immédiate de sa cible (statut, tentatives, réparation, audit). */
@@ -555,6 +568,15 @@ export interface RecordingSession {
 
 export type RecordingEventType =
   | 'RECORDING_STARTED'
+  | 'RECORDING_ACTION_WINDOW_OPENED'
+  | 'RECORDING_ACTION_WINDOW_CLOSED'
+  | 'EFFECT_CAUSALITY_EVALUATED'
+  | 'EFFECT_ASSIGNED_TO_ACTION'
+  | 'EFFECT_REJECTED_FROM_ACTION'
+  | 'EFFECT_REASSIGNED'
+  | 'EFFECT_MARKED_OPTIONAL'
+  | 'RECORDING_EFFECT_CONTAMINATION_DETECTED'
+  | 'RECORDING_CONSISTENCY_VALIDATED'
   | 'RAW_EVENT_CAPTURED'
   | 'SEMANTIC_ACTION_RESOLVED'
   | 'CHECKPOINT_ADDED'
