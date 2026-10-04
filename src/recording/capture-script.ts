@@ -427,6 +427,29 @@ export function installRecorder(
     const sectionPath = sectionOf(el);
     const context = sectionPath.at(-1) ?? contextOf(el);
     const humanLabel = label || guessed || clean(el.getAttribute('placeholder'));
+    // UNIQUE CSS SELECTOR ≠ STABLE TARGET : combien d'éléments portent le même id (un #valueInput dupliqué).
+    let sameId = 0;
+    if (id) for (const twin of Array.from(document.querySelectorAll('[id]'))) if (twin.id === id) sameId += 1;
+    // Le CHAMP fonctionnel (mat-form-field, fieldset, groupe) et le voisinage sémantique proche :
+    // des libellés, titres et boutons — jamais une valeur saisie.
+    const fieldBox = el.closest('mat-form-field, .mat-mdc-form-field, fieldset, [role="group"], .form-group');
+    const formField = fieldBox
+      ? clean(
+          fieldBox.querySelector('mat-label, legend, label')?.textContent ??
+            fieldBox.getAttribute('aria-label'),
+          60,
+        )
+      : '';
+    const around = (fieldBox ?? el).parentElement;
+    const nearbyText = around
+      ? Array.from(
+          around.querySelectorAll('label, legend, mat-label, h1, h2, h3, h4, [role="heading"], button'),
+        )
+          .filter((node) => !node.contains(el) && isVisible(node))
+          .map((node) => clean(node.textContent, 40))
+          .filter((text) => text && text !== label && text !== name)
+          .slice(0, 4)
+      : [];
     let sameLabelInSection = 0;
     if (humanLabel && el.matches(FIELD)) {
       const section = sectionPath.join(' > ');
@@ -456,7 +479,9 @@ export function installRecorder(
       ...((el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name'))
         ? { formControlName: el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name') }
         : {}),
-      ...(id ? { elementId: id, generatedId: generatedId(id) } : {}),
+      ...(id ? { elementId: id, generatedId: generatedId(id), ...(sameId > 1 ? { sameId } : {}) } : {}),
+      ...(formField ? { formField } : {}),
+      ...(nearbyText.length > 0 ? { nearbyText } : {}),
       ...(type ? { inputType: type } : {}),
       ...(el.getAttribute('autocomplete') ? { autocomplete: el.getAttribute('autocomplete') } : {}),
       ...(el.getAttribute('placeholder') ? { placeholder: clean(el.getAttribute('placeholder')) } : {}),
