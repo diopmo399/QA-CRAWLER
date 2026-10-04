@@ -20,6 +20,8 @@ export interface SafeNormalizationOptions {
   mergeTyping?: boolean;
   /** EXACT : false (chaque valeur saisie reste une étape). */
   collapseCorrections?: boolean;
+  /** Un clic sans effet aussitôt répété sur la même cible avec effet : une seule étape. EXACT : false. */
+  mergeRetryClicks?: boolean;
   /** Actions à ne jamais fusionner ni retirer (effet sur l'écran, dépendance d'une action suivante). */
   preserve?: ReadonlySet<string>;
 }
@@ -157,6 +159,34 @@ export function normalizeRecording(
       stats.mergedInputs += 1;
     }
     previous = action;
+  }
+
+  // 2b. RETRY CLICK : deux clics consécutifs sur la MÊME cible (même libellé, même ligne / section),
+  //     rapprochés, sans rien entre eux ; le premier n'a RIEN produit (écran, navigation, requête), le
+  //     second produit l'effet. L'humain a recliqué parce que rien ne se passait (ou a cliqué la cellule
+  //     puis le lien qu'elle contient) : une seule intention, l'étape qui a l'effet. Un clic qui a lui-même
+  //     un effet n'est jamais retiré (un compteur « + », un bouton de pagination restent tous gardés).
+  if (safe.mergeRetryClicks ?? true) {
+    let before: SemanticRecordedAction | undefined;
+    for (const action of live()) {
+      if (
+        before &&
+        before.type === 'CLICK' &&
+        action.type === 'CLICK' &&
+        !keep(before) &&
+        action.at - before.at <= RETRY_CLICK_MS &&
+        sameClickTarget(before, action) &&
+        !hasEffect(before) &&
+        hasEffect(action)
+      ) {
+        before.dropped = `retry click: "${before.target?.label ?? 'click'}" had no effect, the next click on the same target did (RETRY_CLICK_MERGED)`;
+        action.evidence.push(
+          `RETRY_CLICK_MERGED: the previous click on the same target (${before.rawEventIds.join(', ')}) had no effect`,
+        );
+        action.provenance = 'NORMALIZED_FROM_HUMAN';
+      }
+      before = action;
+    }
   }
 
   // 3. Cycle invalide → corrigé → renvoyé.
@@ -302,6 +332,40 @@ function failedValidation(action: SemanticRecordedAction, states: Map<string, Re
 
 function causesNavigation(action: SemanticRecordedAction): boolean {
   return ['CLICK', 'SUBMIT', 'CONFIRM', 'SELECT', 'CHECK'].includes(action.type);
+}
+
+/** Un clic suivi de l'autre en moins de ce délai : un « reclic » possible (jamais au-delà). */
+const RETRY_CLICK_MS = 2500;
+
+/** L'action a-t-elle produit quelque chose d'observable (écran, navigation, requête) ? */
+function hasEffect(action: SemanticRecordedAction): boolean {
+  return (
+    (action.domEffects ?? []).length > 0 ||
+    action.navigation !== undefined ||
+    action.network.length > 0 ||
+    action.checkpoint !== undefined
+  );
+}
+
+/**
+ * La même cible de clic : le même libellé lu par l'humain, et le même contexte quand les deux le
+ * portent (ligne, section, fenêtre). Une cellule et le lien qu'elle contient (même texte, même ligne)
+ * sont la même cible ; deux « Edit » de deux lignes ne le sont jamais.
+ */
+function sameClickTarget(a: SemanticRecordedAction, b: SemanticRecordedAction): boolean {
+  const norm = (text: string | undefined): string => (text ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const labelA = norm(a.target?.label);
+  if (!labelA || labelA !== norm(b.target?.label)) return false;
+  const fa = a.target?.fingerprint;
+  const fb = b.target?.fingerprint;
+  const compatible = (x: string | undefined, y: string | undefined): boolean =>
+    x === undefined || y === undefined || norm(x) === norm(y);
+  return (
+    compatible(fa?.row, fb?.row) &&
+    compatible(fa?.section, fb?.section) &&
+    compatible(fa?.dialog, fb?.dialog) &&
+    compatible(fa?.tab, fb?.tab)
+  );
 }
 
 function sameTarget(a: SemanticRecordedAction, b: SemanticRecordedAction): boolean {

@@ -182,6 +182,8 @@ export function processRecording(
       mergeTyping: recording.normalization.mergeTyping,
       // EXACT : chaque valeur saisie reste une étape.
       collapseCorrections: fidelity !== 'EXACT' && recording.normalization.collapseCorrections,
+      // Un reclic sans effet sur la même cible : une seule étape (EXACT : chaque clic reste une étape).
+      mergeRetryClicks: fidelity !== 'EXACT',
       preserve,
     },
   );

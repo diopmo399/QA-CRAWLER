@@ -89,6 +89,13 @@ NOT SELECTED
   entre elles, sont signalées (`TYPING_CONSOLIDATION_CANDIDATE`, `HUMAN_CORRECTION`, `REPEATED_ACTION`),
   jamais supprimées.
 
+- **RETRY_CLICK_MERGED** (normalisation, hors fidélité EXACT) : deux clics consécutifs sur la même cible
+  (même libellé, même ligne / section / fenêtre), à moins de 2,5 s, sans rien entre eux, dont le PREMIER
+  n'a rien produit (ni écran, ni navigation, ni requête) et le SECOND produit l'effet — l'humain a cliqué
+  la cellule puis le lien qu'elle contient, ou a recliqué parce que rien ne se passait. Une seule étape :
+  celle qui a l'effet ; le premier clic est compté MERGED (règle `RETRY_CLICK_MERGED`), jamais perdu. Un
+  clic qui a lui-même un effet n'est jamais retiré ; deux lignes différentes ne se confondent jamais.
+
 ## 4. Rejeu
 
 - **NEVER BLINDLY EXECUTE AN AMBIGUOUS LOCATOR** : un CSS qui désigne plusieurs éléments visibles (hors
