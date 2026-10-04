@@ -142,20 +142,48 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
       why: `stable id "${element.elementId}"${(element.sameId ?? 1) > 1 ? ` (shared by ${String(element.sameId)} elements)` : ''}`,
     });
   const fragile: FlowTarget = { strategy: 'css', value: element.css };
+  // SAME CSS ≠ SAME FIELD : un CSS qui désigne plusieurs éléments (« mat-form-field > … > input »)
+  // n'est jamais déclaré unique ; l'empreinte (libellé du champ, contexte) le départage au rejeu.
+  const cssMatches = element.cssMatches ?? 1;
   candidates.push({
     target: fragile,
     quality: element.cssStable ? 'CSS_STABLE' : 'FRAGILE',
-    unique: true,
-    why: element.cssStable ? 'stable selector' : 'position in the page (fragile)',
+    unique: cssMatches <= 1,
+    why:
+      cssMatches > 1
+        ? `generic selector (matches ${String(cssMatches)} elements)`
+        : element.cssStable
+          ? 'stable selector'
+          : 'position in the page (fragile)',
   });
 
-  const best = candidates.find((candidate) => candidate.unique) ?? candidates[0];
+  // Rien d'unique : le chemin fragile (le dernier candidat), comme avant.
+  const best = candidates.find((candidate) => candidate.unique) ?? candidates.at(-1);
   const first = candidates[0];
   const reasons: string[] = [];
   let chosen = best ?? { target: fragile, quality: 'FRAGILE' as const, unique: true, why: 'no locator' };
   let ambiguous = false;
-  // Le meilleur localisateur lisible désigne plusieurs éléments, et seul un chemin fragile reste.
-  if (first && !first.unique && chosen.quality === 'FRAGILE') {
+  // Le CSS générique est le seul localisateur : l'empreinte départage-t-elle les candidats ?
+  const distinguishing = [element.formField, element.placeholder, guessed, label, element.dialogName].some(
+    (text) => readable(text),
+  );
+  if (first === chosen && !chosen.unique && chosen.target === fragile) {
+    // Rien d'autre ne distingue le champ : SA position parmi les correspondances, enregistrée sur
+    // l'élément que l'humain a réellement utilisé (dernier recours, jamais un « premier » arbitraire).
+    const position = !distinguishing && element.cssIndex !== undefined ? element.cssIndex : undefined;
+    ambiguous = !distinguishing && position === undefined;
+    if (position !== undefined) chosen = { ...chosen, target: { ...fragile, nth: position } };
+    reasons.push(
+      `GENERIC_LOCATOR_DETECTED: ${chosen.why}; ${
+        distinguishing
+          ? `the fingerprint identifies the field (${[element.formField, element.placeholder, guessed, label].filter((text) => readable(text)).join(', ')})`
+          : position !== undefined
+            ? `nothing else distinguishes the field: recorded position ${String(position + 1)} of ${String(element.cssMatches ?? 0)} (last resort)`
+            : 'nothing distinguishes the field'
+      }`,
+    );
+  } else if (first && !first.unique && chosen.quality === 'FRAGILE') {
+    // Le meilleur localisateur lisible désigne plusieurs éléments, et seul un chemin fragile reste.
     ambiguous = true;
     chosen = {
       ...first,

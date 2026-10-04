@@ -375,6 +375,25 @@ export function installRecorder(
     return SENSITIVE_WORDS.test(words);
   };
 
+  // L'INSTANCE DOM : un identifiant d'enregistrement par élément rencontré (e1, e2…). Jamais un
+  // localisateur de rejeu : il dit seulement que deux événements viennent (ou non) du même nœud.
+  const instances = new WeakMap<Element, string>();
+  let instanceCount = 0;
+  const instanceOf = (el: Element): string => {
+    let id = instances.get(el);
+    if (!id) {
+      instanceCount += 1;
+      id = `e${String(instanceCount)}`;
+      instances.set(el, id);
+    }
+    return id;
+  };
+  /** L'élément actif, à travers les shadow roots ouverts. */
+  const activeOf = (): Element | null => {
+    let active: Element | null = document.activeElement;
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+    return active;
+  };
   const describe = (el: Element): Record<string, unknown> => {
     const role = roleOf(el);
     const name = nameOf(el);
@@ -383,6 +402,19 @@ export function installRecorder(
     const guessed = !label && !name && el.matches(FIELD) ? guessLabel(el) : '';
     const input = el as HTMLInputElement;
     const { css, stable } = cssOf(el);
+    // SAME CSS ≠ SAME FIELD : combien d'éléments ce CSS désigne (dans la racine du nœud).
+    let cssMatches = 0;
+    let cssIndex = -1;
+    try {
+      // Dans un shadow DOM, le CSS est préfixé par l'hôte : querySelectorAll ne le lit pas.
+      if (el.getRootNode() === document) {
+        const matching = Array.from(document.querySelectorAll(css));
+        cssMatches = matching.length;
+        cssIndex = matching.indexOf(el);
+      }
+    } catch {
+      cssMatches = 0;
+    }
     const id = el.getAttribute('id') ?? undefined;
     let sameRoleName = 0;
     let roleNameIndex = 0;
@@ -488,6 +520,11 @@ export function installRecorder(
       ...(el.getAttribute('href') ? { href: (el as HTMLAnchorElement).href } : {}),
       css,
       cssStable: stable,
+      domInstance: instanceOf(el),
+      ...(cssMatches > 1 ? { cssMatches, ...(cssIndex >= 0 ? { cssIndex } : {}) } : {}),
+      ...(input.maxLength > 0 ? { maxLength: input.maxLength } : {}),
+      ...(el.getAttribute('inputmode') ? { inputMode: el.getAttribute('inputmode') } : {}),
+      ...(el.getAttribute('pattern') ? { pattern: el.getAttribute('pattern') } : {}),
       inForm: form !== null,
       isSubmit,
       inNavigation:
@@ -1168,7 +1205,15 @@ export function installRecorder(
         el,
         window.setTimeout(() => {
           pending.delete(el);
-          send({ type: 'input', element: describe(el), value: valueFacts(el) }, el);
+          send(
+            {
+              type: 'input',
+              element: describe(el),
+              value: valueFacts(el),
+              ...(activeOf() ? { activeDomInstance: instanceOf(activeOf() as Element) } : {}),
+            },
+            el,
+          );
         }, options.inputDebounceMs),
       );
     },
@@ -1181,7 +1226,15 @@ export function installRecorder(
       window.clearTimeout(timer);
       pending.delete(el);
     }
-    send({ type: 'change', element: describe(el), value: valueFacts(el) }, el);
+    send(
+      {
+        type: 'change',
+        element: describe(el),
+        value: valueFacts(el),
+        ...(activeOf() ? { activeDomInstance: instanceOf(activeOf() as Element) } : {}),
+      },
+      el,
+    );
     started.delete(el);
   };
   document.addEventListener(

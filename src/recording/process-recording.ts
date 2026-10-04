@@ -14,6 +14,8 @@ import type {
 } from './model.js';
 import { correlateActions, type CorrelationResult } from './action-correlation.js';
 import { normalizeRecording, type NormalizedRecording } from './normalizer.js';
+import { fieldIdentityKey, fieldIdentityOfEvent, type FieldIdentity } from './field-identity.js';
+import { validateFieldMerges } from './field-merge-validator.js';
 import {
   applyTargetValidations,
   groupSemanticActions,
@@ -180,6 +182,7 @@ export function processRecording(
     },
   );
   session.semanticActions = normalized.actions;
+  emitFieldIdentity(session.rawEvents, normalized, emit);
   emit(
     'RECORDING_NORMALIZED',
     `${String(normalized.kept.length)} action(s) kept of ${String(normalized.actions.length)}: ${String(normalized.stats.mergedInputs)} input(s) merged, ${String(normalized.stats.collapsedCorrections)} correction(s), ${String(normalized.stats.removedDetours)} detour(s), ${String(normalized.stats.removedNoise)} noise event(s)`,
@@ -342,6 +345,12 @@ export function processRecording(
     ...preservation.warnings,
     ...(testData?.warnings ?? []),
     ...journey.warnings,
+    // FIELD IDENTITY : une fusion de saisies de champs différents est signalée, jamais tue.
+    ...validateFieldMerges(normalized.actions, session.rawEvents).map((issue) => ({
+      code: issue.type,
+      message: `${issue.rawEventIds.join(', ')}: ${issue.reasons.join('; ')}`,
+      actionId: issue.actionId,
+    })),
   ];
   return {
     session,
@@ -456,4 +465,67 @@ function dedupe(warnings: RecordingWarning[]): RecordingWarning[] {
     seen.add(key);
     return true;
   });
+}
+
+/** FIELD IDENTITY : chaque champ saisi, son identité ; chaque décision de fusion, ses raisons. */
+function emitFieldIdentity(
+  rawEvents: RecordingSession['rawEvents'],
+  normalized: NormalizedRecording,
+  emit: (type: RecordingEventType, message: string) => void,
+): void {
+  const seen = new Set<string>();
+  for (const event of rawEvents) {
+    if ((event.type !== 'input' && event.type !== 'change') || !event.element) continue;
+    const identity = fieldIdentityOfEvent(event);
+    if (!identity) continue;
+    const key = fieldIdentityKey(identity) ?? `raw:${event.id}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      emit('FIELD_IDENTITY_CREATED', `${event.id}: ${describeFieldIdentity(identity)}`);
+    }
+    if (identity.locatorUniqueness === 'NON_UNIQUE') {
+      emit(
+        'NON_UNIQUE_FIELD_LOCATOR',
+        `${event.id}: css "${identity.domPathFingerprint}" matches several elements: it cannot identify the field alone`,
+      );
+      if (!/^(#|\[|[a-z]+\[)/i.test(identity.domPathFingerprint))
+        emit('GENERIC_LOCATOR_DETECTED', `${event.id}: structural css "${identity.domPathFingerprint}"`);
+    }
+  }
+  for (const decision of normalized.mergeDecisions) {
+    const pair = `${decision.previousRawEventIds.join('+')} + ${decision.currentRawEventIds.join('+')}`;
+    emit(
+      'TYPING_MERGE_EVALUATED',
+      `${decision.rule} ${pair}: ${decision.verdict} (${decision.confidence.toFixed(2)}) — ${decision.reasons.join('; ')}`,
+    );
+    emit(
+      decision.verdict === 'DIFFERENT_FIELD'
+        ? 'FIELD_IDENTITY_MISMATCH'
+        : decision.verdict === 'AMBIGUOUS_FIELD'
+          ? 'FIELD_IDENTITY_AMBIGUOUS'
+          : 'FIELD_IDENTITY_MATCHED',
+      `${pair}: ${decision.verdict}`,
+    );
+    emit(
+      decision.decision === 'MERGE' ? 'TYPING_MERGE_ACCEPTED' : 'TYPING_MERGE_REJECTED',
+      `${pair}: ${decision.decision}`,
+    );
+  }
+}
+
+/** « label "Employee number", e3, NUMERIC maxlength 5 » : de quoi relire une identité. */
+export function describeFieldIdentity(identity: FieldIdentity): string {
+  return [
+    identity.formControlName ? `formControlName "${identity.formControlName}"` : '',
+    identity.label ? `label "${identity.label}"` : '',
+    identity.formField && identity.formField !== identity.label ? `field "${identity.formField}"` : '',
+    identity.placeholder ? `placeholder "${identity.placeholder}"` : '',
+    identity.sectionContext ? `section "${identity.sectionContext}"` : '',
+    identity.dialogContext ? `dialog "${identity.dialogContext}"` : '',
+    identity.domInstance ? `instance ${identity.domInstance}` : '',
+    `${identity.valueProfile.type}${identity.valueProfile.maxLength !== undefined ? ` maxlength ${String(identity.valueProfile.maxLength)}` : ''}`,
+    `locator ${identity.locatorUniqueness}`,
+  ]
+    .filter(Boolean)
+    .join(', ');
 }

@@ -692,6 +692,9 @@ export function sanitize(
       ? { control }
       : {}),
     ...(typeof payload.noise === 'string' ? { noise: text(payload.noise, 80) } : {}),
+    ...(typeof payload.activeDomInstance === 'string' && /^e\d{1,9}$/.test(payload.activeDomInstance)
+      ? { activeDomInstance: payload.activeDomInstance }
+      : {}),
     ...(type === 'drag' && isObject(payload.drag) ? dragOf(payload.drag) : {}),
     ...(isObject(payload.pre) ? { pre: preOf(payload.pre) } : {}),
   };
@@ -949,6 +952,34 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ),
     ...(bool('inShadow') ? { inShadow: true } : {}),
     ...(bool('hasOptions') ? { hasOptions: true } : {}),
+    // IDENTITÉ CONTEXTUALISÉE / FIELD IDENTITY : le libellé du champ fonctionnel, le voisinage, un id
+    // dupliqué, l'instance DOM de l'enregistreur, l'unicité du CSS, le profil de saisie.
+    ...optional('formField', str('formField', 60) ? redactText(str('formField', 60) ?? '') : undefined),
+    ...(Array.isArray(raw.nearbyText)
+      ? {
+          nearbyText: raw.nearbyText
+            .filter((entry): entry is string => typeof entry === 'string' && entry !== '')
+            .slice(0, 6)
+            .map((entry) => redactText(text(entry, 40))),
+        }
+      : {}),
+    ...(num('sameId') > 1 ? { sameId: num('sameId') } : {}),
+    ...optional(
+      'domInstance',
+      /^e\d{1,9}$/.test(str('domInstance', 12) ?? '') ? str('domInstance', 12) : undefined,
+    ),
+    ...(num('cssMatches') > 1
+      ? {
+          cssMatches: num('cssMatches'),
+          ...(typeof raw.cssIndex === 'number' ? { cssIndex: num('cssIndex') } : {}),
+        }
+      : {}),
+    ...(num('maxLength') > 0 ? { maxLength: num('maxLength') } : {}),
+    ...optional(
+      'inputMode',
+      /^[a-z]{1,20}$/.test(str('inputMode', 20) ?? '') ? str('inputMode', 20) : undefined,
+    ),
+    ...optional('pattern', str('pattern', 120)),
   };
 }
 

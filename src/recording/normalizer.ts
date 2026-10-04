@@ -1,4 +1,11 @@
 import type { RawRecordedEvent, RecordedState, RecordingWarning, SemanticRecordedAction } from './model.js';
+import {
+  fieldIdentityOfEvent,
+  matchFieldIdentity,
+  sameFunctionalField,
+  type FieldIdentity,
+  type FieldIdentityMatch,
+} from './field-identity.js';
 import { classifyRecordedValue, type ValueClassifierOptions } from './value-classifier.js';
 
 /** Une navigation qui suit une action de si près en est la conséquence (redirection, route d'une SPA). */
@@ -25,6 +32,27 @@ export interface NormalizationStats {
   preexistingValues: number;
 }
 
+/**
+ * TYPING MERGE DECISION : chaque fusion (ou refus de fusion) de deux saisies est expliquée.
+ * PRESERVE FIRST, MERGE ONLY WITH EVIDENCE : en cas de doute, deux actions plutôt qu'une saisie perdue.
+ */
+export interface TypingMergeDecision {
+  previousActionId: string;
+  currentActionId: string;
+  /** Les événements bruts des deux saisies (h013 → h015). */
+  previousRawEventIds: string[];
+  currentRawEventIds: string[];
+  /** TYPING_MERGED (saisies successives) ou CORRECTION (le même champ ressaisi plus tard). */
+  rule: 'TYPING_MERGED' | 'CORRECTION';
+  decision: 'MERGE' | 'KEEP_SEPARATE' | 'AMBIGUOUS_KEEP_SEPARATE';
+  verdict: FieldIdentityMatch['verdict'];
+  confidence: number;
+  reasons: string[];
+  /** Les identités comparées (de quoi relire la décision). */
+  previousIdentity?: FieldIdentity;
+  currentIdentity?: FieldIdentity;
+}
+
 export interface NormalizedRecording {
   /** Toutes les actions sémantiques, annotées (dropped / merged) : la trace n'est jamais réécrite. */
   actions: SemanticRecordedAction[];
@@ -34,6 +62,8 @@ export interface NormalizedRecording {
   warnings: RecordingWarning[];
   /** L'humain a montré une erreur de validation exprès (point de contrôle sur l'erreur). */
   negative: boolean;
+  /** Chaque décision de fusion de saisies, avec ses preuves. */
+  mergeDecisions: TypingMergeDecision[];
 }
 
 /**
@@ -107,16 +137,19 @@ export function normalizeRecording(
     previousRoute = action.route;
   }
 
-  // 2. Saisies successives d'un même champ : une seule action, la dernière valeur.
+  // 2. Saisies successives d'un même champ : une seule action, la dernière valeur — seulement si
+  //    l'IDENTITÉ FONCTIONNELLE le prouve (jamais un localisateur identique à lui seul).
+  const mergeDecisions: TypingMergeDecision[] = [];
+  const decide = new FieldMergeJudge(events);
   let previous: SemanticRecordedAction | undefined;
   for (const action of live()) {
-    if (
-      mergeTyping &&
-      action.type === 'FILL' &&
-      previous?.type === 'FILL' &&
-      fieldKey(previous) === fieldKey(action) &&
-      !protectedAction(previous)
-    ) {
+    if (mergeTyping && action.type === 'FILL' && previous?.type === 'FILL' && !protectedAction(previous)) {
+      const decision = decide.judge(previous, action, 'TYPING_MERGED');
+      mergeDecisions.push(decision);
+      if (decision.decision !== 'MERGE') {
+        previous = action;
+        continue;
+      }
       previous.dropped = 'merged into the next input of the same field';
       action.rawEventIds = [...previous.rawEventIds, ...action.rawEventIds];
       action.merged = 'successive inputs of the same field';
@@ -157,7 +190,24 @@ export function normalizeRecording(
     const lastOf = new Map<string, SemanticRecordedAction>();
     for (const action of segment) {
       if (!['FILL', 'SELECT', 'CHECK', 'UNCHECK'].includes(action.type)) continue;
-      const key = `${action.type === 'UNCHECK' ? 'CHECK' : action.type === 'CHECK' && action.option ? `RADIO:${action.option}` : action.type}|${fieldKey(action)}`;
+      const kind =
+        action.type === 'UNCHECK'
+          ? 'CHECK'
+          : action.type === 'CHECK' && action.option
+            ? `RADIO:${action.option}`
+            : action.type;
+      // La valeur précédente du MÊME champ fonctionnel (identité prouvée), jamais d'un champ au même CSS.
+      let key = '';
+      for (const [candidateKey, candidate] of lastOf) {
+        if (!candidateKey.startsWith(`${kind}|`)) continue;
+        const decision = decide.judge(candidate, action, 'CORRECTION');
+        if (decision.decision === 'MERGE') {
+          key = candidateKey;
+          if (collapseCorrections && !keep(candidate)) mergeDecisions.push(decision);
+          break;
+        }
+      }
+      key ||= `${kind}|${action.id}`;
       const earlier = lastOf.get(key);
       // Une correction n'est fusionnée que si rien n'a dépendu de la valeur intermédiaire.
       if (earlier && collapseCorrections && !keep(earlier)) {
@@ -172,6 +222,7 @@ export function normalizeRecording(
           continue;
         }
         earlier.dropped = 'corrected later';
+        lastOf.delete(key);
         action.rawEventIds = [...earlier.rawEventIds, ...action.rawEventIds];
         action.merged = action.merged ? `${action.merged}; correction` : 'correction of an earlier value';
         action.provenance = 'NORMALIZED_FROM_HUMAN';
@@ -211,7 +262,7 @@ export function normalizeRecording(
 
   // Les détours (un onglet ouvert puis quitté) ne sont PAS retirés ici : c'est de l'optimisation
   // (FlowOptimizer, optimized.flow.yaml), jamais une normalisation du parcours humain.
-  return { actions, kept: live(), stats, warnings, negative };
+  return { actions, kept: live(), stats, warnings, negative, mergeDecisions };
 }
 
 /** Jamais écartée : elle écrit (requête acceptée), change un état métier, ou porte un point de contrôle. */
@@ -261,8 +312,98 @@ function sameTarget(a: SemanticRecordedAction, b: SemanticRecordedAction): boole
   );
 }
 
-function fieldKey(action: SemanticRecordedAction): string {
-  return action.target ? JSON.stringify(action.target.target) : action.id;
+/**
+ * Le juge des fusions : l'identité de la dernière saisie de l'action précédente contre celle de la
+ * première saisie de l'action courante, et les frontières entre les deux (un clic de focus dans un
+ * AUTRE champ : FOCUS_CHANGED_TO_DIFFERENT_FIELD).
+ */
+class FieldMergeJudge {
+  private readonly byId: Map<string, RawRecordedEvent>;
+  constructor(private readonly events: readonly RawRecordedEvent[]) {
+    this.byId = new Map(events.map((event) => [event.id, event]));
+  }
+
+  judge(
+    previous: SemanticRecordedAction,
+    current: SemanticRecordedAction,
+    rule: TypingMergeDecision['rule'],
+  ): TypingMergeDecision {
+    const lastRaw = this.withElement([...previous.rawEventIds].reverse());
+    const firstRaw = this.withElement(current.rawEventIds);
+    const a = fieldIdentityOfEvent(lastRaw);
+    const b = fieldIdentityOfEvent(firstRaw);
+    const base = {
+      previousActionId: previous.id,
+      currentActionId: current.id,
+      previousRawEventIds: [...previous.rawEventIds],
+      currentRawEventIds: [...current.rawEventIds],
+      rule,
+      ...(a ? { previousIdentity: a } : {}),
+      ...(b ? { currentIdentity: b } : {}),
+    };
+    if (!a || !b) {
+      // Sans élément décrit : seul un localisateur sémantique identique (jamais un CSS fragile) suffit.
+      const same =
+        previous.target !== undefined &&
+        current.target !== undefined &&
+        previous.target.quality !== 'FRAGILE' &&
+        JSON.stringify(previous.target.target) === JSON.stringify(current.target.target);
+      return {
+        ...base,
+        decision: same ? 'MERGE' : 'AMBIGUOUS_KEEP_SEPARATE',
+        verdict: same ? 'STRONG_SAME_FIELD' : 'AMBIGUOUS_FIELD',
+        confidence: same ? 0.8 : 0.3,
+        reasons: [same ? 'same semantic locator (no element description)' : 'no field identity to compare'],
+      };
+    }
+    const match = matchFieldIdentity(a, b);
+    const reasons = [...match.confidence.reasons];
+    // Une frontière forte : entre les deux saisies, le focus est passé dans un AUTRE champ.
+    if (match.verdict !== 'EXACT_SAME_FIELD' && rule === 'TYPING_MERGED' && lastRaw && firstRaw) {
+      const boundary = this.events.find((event) => {
+        if (event.sequence <= lastRaw.sequence || event.sequence >= firstRaw.sequence) return false;
+        const other = fieldIdentityOfEvent(event);
+        return (
+          (event.type === 'click' || event.type === 'input' || event.type === 'change') &&
+          other !== undefined &&
+          matchFieldIdentity(a, other).verdict !== 'EXACT_SAME_FIELD' &&
+          (other.domInstance !== undefined || matchFieldIdentity(a, other).verdict === 'DIFFERENT_FIELD')
+        );
+      });
+      if (boundary) {
+        return {
+          ...base,
+          decision: 'KEEP_SEPARATE',
+          verdict: match.verdict === 'STRONG_SAME_FIELD' ? 'AMBIGUOUS_FIELD' : match.verdict,
+          confidence: Math.min(match.confidence.score, 0.3),
+          reasons: [`FOCUS_CHANGED_TO_DIFFERENT_FIELD (${boundary.id})`, ...reasons],
+        };
+      }
+    }
+    // L'élément actif au moment de la saisie n'est pas celui de la saisie précédente.
+    const active = firstRaw?.activeDomInstance;
+    if (match.verdict !== 'EXACT_SAME_FIELD' && active && a.domInstance && active !== a.domInstance)
+      reasons.push(`active element ${active} ≠ ${a.domInstance}`);
+    return {
+      ...base,
+      decision: sameFunctionalField(match)
+        ? 'MERGE'
+        : match.verdict === 'AMBIGUOUS_FIELD'
+          ? 'AMBIGUOUS_KEEP_SEPARATE'
+          : 'KEEP_SEPARATE',
+      verdict: match.verdict,
+      confidence: match.confidence.score,
+      reasons,
+    };
+  }
+
+  private withElement(ids: readonly string[]): RawRecordedEvent | undefined {
+    for (const id of ids) {
+      const event = this.byId.get(id);
+      if (event?.element) return event;
+    }
+    return undefined;
+  }
 }
 
 /** role:nom, la forme des contrôles d'un RecordedState. */

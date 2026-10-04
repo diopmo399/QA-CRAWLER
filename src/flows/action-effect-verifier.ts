@@ -548,3 +548,43 @@ export async function readSection(target: Locator | ElementHandle, page?: Page):
   const path = (await owner.evaluate(sectionPathExpression(token)).catch(() => null)) as string[] | null;
   return path && path.length > 0 ? path.join(' > ') : undefined;
 }
+
+/**
+ * POST-FILL VERIFICATION : l'identité du champ rempli d'abord, la valeur ensuite — deux causes
+ * jamais mélangées. FIELD_TARGET_MISMATCH : un autre champ a reçu la valeur (même si elle y est) ;
+ * FIELD_VALUE_MISMATCH : le bon champ ne tient pas la valeur.
+ */
+export type FieldFillVerdict = 'CONFIRMED' | 'FIELD_TARGET_MISMATCH' | 'FIELD_VALUE_MISMATCH' | 'UNKNOWN';
+
+export function verifyFieldFill(input: {
+  expected: TargetFingerprint | undefined;
+  observed: ObservedTarget | undefined;
+  /** La valeur lue est-elle celle saisie ? (undefined : illisible) */
+  valueHeld: boolean | undefined;
+}): { verdict: FieldFillVerdict; reasons: string[] } {
+  const match =
+    input.expected && input.observed ? matchFingerprint(input.expected, input.observed) : undefined;
+  const expectedName = input.expected?.label ?? input.expected?.formField ?? input.expected?.name;
+  // Seule une autre IDENTITÉ (libellé, nom, section, test id) prouve un autre champ.
+  if (match?.severity === 'HARD')
+    return {
+      verdict: 'FIELD_TARGET_MISMATCH',
+      reasons: [
+        `the filled element is "${input.observed?.name ?? input.observed?.tag ?? '?'}", not "${expectedName ?? 'the recorded field'}"`,
+        ...(match.mismatchedEvidence ?? []).map((evidence) => `different ${evidence.toLowerCase()}`),
+      ],
+    };
+  if (input.valueHeld === false)
+    return {
+      verdict: 'FIELD_VALUE_MISMATCH',
+      reasons: [
+        `the field${expectedName ? ` "${expectedName}"` : ''} is the recorded one, but it does not hold the filled value`,
+      ],
+    };
+  if (input.valueHeld === true)
+    return {
+      verdict: 'CONFIRMED',
+      reasons: [`the field${expectedName ? ` "${expectedName}"` : ''} holds the filled value`],
+    };
+  return { verdict: 'UNKNOWN', reasons: ['the value could not be read'] };
+}
