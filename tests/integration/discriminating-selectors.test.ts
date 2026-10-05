@@ -189,6 +189,36 @@ flows:
     expect(lastSaved()?.branchNumber).toMatch(/^\d{5}$/);
   }, 120_000);
 
+  it('VALUE_RESTORED_AFTER_APPLICATION_RESET: the application empties a field right after the fill (late form initialization) — filled again ONCE after the screen settled, then confirmed', async () => {
+    const before = app.saved.length;
+    const { report, log } = await replay('late-init');
+    expect(report.status, describeRun(report)).toBe('PASSED');
+    expect(log).toContain('"VALUE_RESTORED_AFTER_APPLICATION_RESET"');
+    expect(log).toMatch(/"VALUE_RESTORED_AFTER_APPLICATION_RESET","message":"Legal name: VALUE_CLEARED/);
+    expect(app.saved.length).toBe(before + 1);
+    expect(lastSaved()?.legalName).not.toBe('');
+    expect(new Set(Object.values(lastSaved() ?? {})).size).toBe(4);
+  }, 120_000);
+
+  it('a field the application empties EVERY time is a real value loss: one restore only, then ACTION_EFFECT_NOT_CONFIRMED (VALUE_CLEARED), nothing saved', async () => {
+    const before = app.saved.length;
+    const { report, log } = await replay('always-reset');
+    const failed = report.steps.find((step) => step.status === 'FAILED');
+    expect(failed?.reason, describeRun(report)).toMatch(
+      /ACTION_EFFECT_NOT_CONFIRMED: .*VALUE_CLEARED: the field was emptied after the fill; filled again once after the screen settled — the application removed it again/,
+    );
+    expect(log.match(/"VALUE_RESTORED_AFTER_APPLICATION_RESET"/g)).toBeNull();
+    expect(log).toContain('"VALUE_RESTORE_FAILED"');
+    expect(app.saved.length).toBe(before);
+  }, 120_000);
+
+  it('FILLED_VALUE_LOST_BEFORE_SUBMIT: a later step empties an already confirmed field — reported before the write, never filled again silently', async () => {
+    const { log } = await replay('dependent-reset');
+    expect(log).toMatch(/"FILLED_VALUE_LOST_BEFORE_SUBMIT","message":"Legal name: VALUE_CLEARED/);
+    expect(log).not.toContain('"VALUE_RESTORED_AFTER_APPLICATION_RESET"');
+    expect(lastSaved()?.legalName).toBe('');
+  }, 120_000);
+
   it('§19 / §31 an OLD flow (generic CSS only, no fingerprint) whose CSS matches several fields: AMBIGUOUS_TARGET, never the first one, nothing filled', async () => {
     const before = app.saved.length;
     const { report } = await replay('default', undefined, {

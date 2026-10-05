@@ -716,6 +716,21 @@ export function classifyValueLoss(input: {
 }
 
 /**
+ * VALUE_RESTORED_AFTER_APPLICATION_RESET : seule une valeur que l'APPLICATION a retirée du champ
+ * enregistré (vidé, écrasé, élément re-rendu) peut être refaite — une fois. Jamais un mauvais champ,
+ * un champ disparu, une valeur refusée (validation, masque) ni une navigation : ce sont des divergences.
+ */
+export const RESTORABLE_VALUE_LOSSES: readonly ValueLossKind[] = [
+  'VALUE_CLEARED',
+  'VALUE_REPLACED',
+  'FIELD_RERENDERED',
+];
+
+export function restorableValueLoss(loss: { kind: ValueLossKind } | undefined): boolean {
+  return loss !== undefined && RESTORABLE_VALUE_LOSSES.includes(loss.kind);
+}
+
+/**
  * La requête enregistrée (« POST /api/x ») est-elle TERMINÉE avec succès (2xx / 3xx) pendant l'action ?
  * Une preuve positive de l'effet ; une erreur n'en est pas une (l'ActionEffectVerifier jugera).
  */

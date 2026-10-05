@@ -113,6 +113,17 @@ NOT SELECTED
 - **Perte de valeur** (`classifyValueLoss`, sur le TARGET RÉEL) : `WRONG_TARGET`, `FIELD_DISAPPEARED`,
   `FIELD_RERENDERED`, `VALIDATION_REJECTED`, `VALUE_CLEARED`, `VALUE_REJECTED_BY_APPLICATION`,
   `VALUE_REPLACED`, `UNKNOWN_VALUE_LOSS`.
+- **Valeur retirée par l'application** (`VALUE_RESTORED_AFTER_APPLICATION_RESET`) : un champ vidé, écrasé
+  ou re-rendu juste après la saisie (formulaire initialisé tardivement, champ dépendant réinitialisé) est
+  rempli de nouveau UNE fois — après stabilisation de l'écran (réseau corrélé terminé, DOM calme, jamais
+  un sommeil), sur le même champ (CSS ambigu refusé, empreinte vérifiée), puis relu. Retirée de nouveau :
+  `ACTION_EFFECT_NOT_CONFIRMED … filled again once … the application removed it again`
+  (`VALUE_RESTORE_FAILED`). Jamais pour un mauvais champ, un champ disparu, une valeur refusée ou
+  tronquée (validation, masque). `replay.functionalTargetResolution.restoreValueAfterApplicationReset`.
+- **Saisie perdue avant l'écriture** (`FILLED_VALUE_LOST_BEFORE_SUBMIT`) : avant une étape `allow:
+[MUTATION]`, les saisies confirmées sur cet écran sont relues ; une valeur perdue depuis est SIGNALÉE
+  (journal + `effect.recovery` de l'étape), jamais refaite en silence — un champ dépendant réinitialisé
+  peut être voulu. `replay.functionalTargetResolution.checkFilledValuesBeforeSubmit`.
 
 ## 5. Observabilité
 

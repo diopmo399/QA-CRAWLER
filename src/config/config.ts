@@ -1518,6 +1518,17 @@ const replaySchema = z
         /** Une saisie résolue fonctionnellement doit être PROUVÉE par la valeur lue ensuite. */
         verifyFillValue: z.boolean().default(true),
         /**
+         * VALUE_RESTORED_AFTER_APPLICATION_RESET : une saisie vidée, écrasée ou re-rendue par l'application
+         * juste après (initialisation tardive du formulaire, champ dépendant réinitialisé) est refaite UNE
+         * fois, après stabilisation de l'écran et sur le même champ (empreinte vérifiée) — jamais plus.
+         */
+        restoreValueAfterApplicationReset: z.boolean().default(true),
+        /**
+         * Avant une étape qui écrit (allow MUTATION), relire les champs remplis sur cet écran : une valeur
+         * perdue entre-temps est SIGNALÉE (FILLED_VALUE_LOST_BEFORE_SUBMIT), jamais refaite en silence.
+         */
+        checkFilledValuesBeforeSubmit: z.boolean().default(true),
+        /**
          * LOCATOR ≠ TARGET IDENTITY : un localisateur qui désigne plusieurs éléments (#valueInput ×4)
          * n'est qu'un générateur de candidats ; le contexte départage, jamais « le premier qui correspond ».
          */

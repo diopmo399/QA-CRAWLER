@@ -10,7 +10,11 @@ import type { AddressInfo } from 'node:net';
  *
  * Variantes : `v2` (le composant de masque est renommé app-masked-input et le DOM interne Material
  * gagne une enveloppe : le CSS préféré enregistré ne trouve plus rien), `shuffled` (l'ordre des champs
- * change : un chemin de positions viserait un autre champ). « Save » envoie les quatre valeurs.
+ * change : un chemin de positions viserait un autre champ), `late-init` (la première saisie dans
+ * « Legal name » déclenche le chargement tardif des valeurs par défaut, qui VIDE ce champ une fois — un
+ * formulaire initialisé après coup), `always-reset` (le champ est vidé après chaque saisie : une vraie
+ * perte, jamais masquée), `dependent-reset` (remplir le prénom du contact vide « Legal name », déjà
+ * confirmé : signalé avant l'écriture). « Save » envoie les quatre valeurs.
  */
 export interface RequestCreationApp {
   url: string;
@@ -69,6 +73,23 @@ ${field(fields[3], 3)}
   // Le masque : seulement des chiffres (comme un composant de saisie masquée).
   for (const input of document.querySelectorAll('app-input-mask input, app-masked-input input'))
     input.addEventListener('input', () => { input.value = input.value.replace(/\\D/g, '').slice(0, 5); });
+  const variant = ${JSON.stringify(variant)};
+  if (variant === 'late-init' || variant === 'always-reset') {
+    const legal = document.querySelector('[formcontrolname="legalName"] input');
+    let loaded = false;
+    legal.addEventListener('input', async () => {
+      if (loaded && variant === 'late-init') return;
+      loaded = true;
+      await fetch('/api/defaults');
+      // Les valeurs par défaut arrivent : le formulaire est (ré)initialisé, la saisie est perdue.
+      legal.value = '';
+    });
+  }
+  if (variant === 'dependent-reset')
+    // Un champ dépendant : saisir le prénom du contact réinitialise « Legal name », déjà saisi.
+    document.querySelector('[formcontrolname="contactFirstName"] input').addEventListener('input', () => {
+      document.querySelector('[formcontrolname="legalName"] input').value = '';
+    });
   document.getElementById('save').addEventListener('click', async () => {
     const values = {};
     for (const host of document.querySelectorAll('[formcontrolname]'))
@@ -90,6 +111,13 @@ export async function startRequestCreationApp(): Promise<RequestCreationApp> {
         response.writeHead(201, { 'content-type': 'application/json' });
         response.end('{"id":1}');
       });
+      return;
+    }
+    if (request.url === '/api/defaults') {
+      setTimeout(() => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{}');
+      }, 400);
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });

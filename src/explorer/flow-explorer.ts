@@ -49,11 +49,13 @@ import {
   observeEffects,
   readTarget,
   classifyValueLoss,
+  restorableValueLoss,
   requestCompleted,
   routeMatches,
   type FieldProbe,
   verifyEffects,
   type EffectVerification,
+  type ValueLossKind,
 } from '../flows/action-effect-verifier.js';
 import { suggestedFeature, suggestedFlowYaml } from '../dry-run/suggested-flow.js';
 import type { RecoveryInput } from '../knowledge/knowledge-model.js';
@@ -695,6 +697,9 @@ export class FlowExplorer {
   private stepDepth = 0;
   /** Statut de la dernière étape terminée (le chemin rapide suppose que tout allait bien avant). */
   private previousStepStatus: string | undefined;
+  /** Les saisies confirmées sur l'écran courant : relues avant une étape qui écrit. */
+  private filledOnScreen: { key: string; route: string; target: FlowTarget; value: string; label: string }[] =
+    [];
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -2753,6 +2758,7 @@ export class FlowExplorer {
     this.flowNetwork = [];
     this.stepContexts = [];
     this.previousStepStatus = undefined;
+    this.filledOnScreen = [];
     this.flowRecordedKeys.clear();
     this.scenario = { values: [] };
     this.listener.onFlowStart?.(flow);
@@ -4664,6 +4670,16 @@ export class FlowExplorer {
       fastPath.path === 'FAST_PATH' ? 'FAST_PATH_SELECTED' : 'DEEP_PATH_SELECTED',
       `${step.kind} ${describeTarget(step.target)}${fastPath.reasons.length > 0 ? `: ${fastPath.reasons.join(', ')}` : ''}`,
     );
+    // FILLED_VALUE_LOST_BEFORE_SUBMIT : avant d'écrire, les saisies de cet écran sont-elles encore là ?
+    // Une valeur perdue entre-temps est signalée (jamais refaite en silence : elle peut être voulue).
+    const lostBeforeSubmit =
+      mayWrite && step.kind === 'click' && replay.functionalTargetResolution.checkFilledValuesBeforeSubmit
+        ? await this.filledValuesLost(page)
+        : [];
+    for (const lost of lostBeforeSubmit) {
+      this.emitHealing('FILLED_VALUE_LOST_BEFORE_SUBMIT', `${lost.label}: ${lost.kind} — ${lost.reason}`);
+      effect.recovery.push(`FILLED_VALUE_LOST_BEFORE_SUBMIT: ${lost.label} (${lost.kind})`);
+    }
     const perform = async (): Promise<string | undefined> => {
       const failure = await this.flowSteps.perform(
         page,
@@ -4756,6 +4772,52 @@ export class FlowExplorer {
         : held === undefined
           ? undefined
           : sameFilledValue(held, elementAction.value);
+      // VALUE_RESTORED_AFTER_APPLICATION_RESET : l'application a retiré la valeur du champ (formulaire
+      // initialisé tardivement, champ dépendant réinitialisé, élément re-rendu) — refaite UNE fois, après
+      // stabilisation, sur le même champ ; sinon la perte est classée et l'étape échoue.
+      let filledLocator: Locator = locator;
+      let restore: { attempted: boolean; restored: boolean; loss?: { kind: ValueLossKind; reason: string } } =
+        {
+          attempted: false,
+          restored: false,
+        };
+      if (
+        confirmed === false &&
+        !navigated &&
+        replay.functionalTargetResolution.restoreValueAfterApplicationReset
+      ) {
+        const loss = classifyValueLoss({
+          expected: elementAction.value,
+          probe: await this.probeFilledField(page, locator, step.target),
+        });
+        restore = { attempted: false, restored: false, loss };
+        if (restorableValueLoss(loss)) {
+          const again = await this.refillAfterApplicationReset(
+            page,
+            step.target,
+            step.fingerprint,
+            elementAction.value,
+            {
+              actionId: action.id,
+              timeout,
+            },
+          );
+          restore = { attempted: true, restored: again?.held === true, loss };
+          if (again?.held === true) {
+            filledLocator = again.locator;
+            confirmed = true;
+            effect.recovery.push(`VALUE_RESTORED_AFTER_APPLICATION_RESET: ${loss.kind}`);
+            this.emitHealing(
+              'VALUE_RESTORED_AFTER_APPLICATION_RESET',
+              `${actionLabel(action)}: ${loss.kind} — ${loss.reason}; filled again once after the screen settled, the field now holds the value`,
+            );
+          } else
+            this.emitHealing(
+              'VALUE_RESTORE_FAILED',
+              `${actionLabel(action)}: ${loss.kind} — ${again ? 'filled again once, the application removed the value again' : 'the recorded field could not be found again (or is another field)'}`,
+            );
+        }
+      }
       // TARGET RESOLUTION MUST IDENTIFY THE FIELD BEFORE TRUSTING THE VALUE : le champ rempli est-il
       // celui enregistré ? (une valeur « tenue » par un AUTRE champ n'est pas une saisie confirmée).
       // Seulement si l'identité n'a pas déjà été vérifiée avant d'agir (empreinte, contexte, healing).
@@ -4765,7 +4827,7 @@ export class FlowExplorer {
               expected: step.fingerprint,
               observed:
                 effect.targetMatch === undefined
-                  ? await readTarget(locator).catch(() => undefined)
+                  ? await readTarget(filledLocator).catch(() => undefined)
                   : undefined,
               valueHeld: confirmed,
             })
@@ -4798,11 +4860,18 @@ export class FlowExplorer {
         // VALUE LOSS : pourquoi, lu sur le TARGET RÉEL résolu (mauvais champ, effacé, remplacé, re-rendu…).
         const loss = navigated
           ? undefined
-          : classifyValueLoss({
-              expected: elementAction.value,
-              probe: await this.probeFilledField(page, locator, step.target),
-              wrongTarget: fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH',
-            });
+          : fieldCheck?.verdict !== 'FIELD_TARGET_MISMATCH' && restore.loss
+            ? restore.attempted
+              ? {
+                  kind: restore.loss.kind,
+                  reason: `${restore.loss.reason}; filled again once after the screen settled — the application removed it again`,
+                }
+              : restore.loss
+            : classifyValueLoss({
+                expected: elementAction.value,
+                probe: await this.probeFilledField(page, filledLocator, step.target),
+                wrongTarget: fieldCheck?.verdict === 'FIELD_TARGET_MISMATCH',
+              });
         return {
           page,
           context: before,
@@ -4829,6 +4898,8 @@ export class FlowExplorer {
           }),
         };
       }
+      if (confirmed === true)
+        this.rememberFilled(page, step.target, elementAction.value, actionLabel(action));
     } else if (resolution && (elementAction.kind === 'fill' || !verifying))
       await this.confirmTargetResolution(page, resolution, undefined);
     // CHECKED_STATE_CHANGED : une case est prouvée par son état relu, pas par un clic réussi.
@@ -5879,20 +5950,24 @@ export class FlowExplorer {
     target: FlowTarget,
   ): Promise<FieldProbe | undefined> {
     const read = await locator
-      .evaluate((el) => {
-        const input = el as HTMLInputElement;
-        const box = el.closest('mat-form-field, .mat-mdc-form-field, .form-group, fieldset');
-        const error = box?.querySelector(
-          'mat-error, .mat-mdc-form-field-error, .invalid-feedback, [role="alert"]',
-        );
-        return {
-          attached: el.isConnected,
-          value: typeof input.value === 'string' ? input.value : undefined,
-          invalid:
-            el.getAttribute('aria-invalid') === 'true' ||
-            (error !== null && error !== undefined && (error.textContent || '').trim() !== ''),
-        };
-      })
+      .evaluate(
+        (el) => {
+          const input = el as HTMLInputElement;
+          const box = el.closest('mat-form-field, .mat-mdc-form-field, .form-group, fieldset');
+          const error = box?.querySelector(
+            'mat-error, .mat-mdc-form-field-error, .invalid-feedback, [role="alert"]',
+          );
+          return {
+            attached: el.isConnected,
+            value: typeof input.value === 'string' ? input.value : undefined,
+            invalid:
+              el.getAttribute('aria-invalid') === 'true' ||
+              (error !== null && error !== undefined && (error.textContent || '').trim() !== ''),
+          };
+        },
+        undefined,
+        { timeout: 500 },
+      )
       .catch(() => ({ attached: false, value: undefined, invalid: false }));
     if (read.attached)
       return {
@@ -5903,7 +5978,86 @@ export class FlowExplorer {
     const again = await this.flowSteps.locate(page, target, 500);
     const rerendered =
       typeof again === 'string' ? undefined : await again.inputValue({ timeout: 500 }).catch(() => undefined);
+    // Un marqueur de résolution contextuelle (data-qa-crawler-target) est retiré à la résolution suivante :
+    // sa disparition ne dit pas que le champ a été re-rendu — le champ retrouvé est lu comme le même.
+    if (
+      (locator as unknown as { toString(): string }).toString().includes('data-qa-crawler-target') &&
+      rerendered !== undefined
+    )
+      return { attached: true, value: rerendered };
     return { attached: false, ...(rerendered !== undefined ? { rerenderedValue: rerendered } : {}) };
+  }
+
+  /**
+   * VALUE_RESTORED_AFTER_APPLICATION_RESET : attendre que l'écran soit calme (réseau corrélé terminé,
+   * DOM stable — jamais un sommeil fixe), retrouver LE champ enregistré (CSS ambigu refusé, empreinte
+   * vérifiée), le remplir une seule fois, attendre de nouveau le calme, puis relire. undefined : le
+   * champ n'est plus trouvable ou c'est un autre — rien n'est rempli.
+   */
+  private async refillAfterApplicationReset(
+    page: Page,
+    target: FlowTarget,
+    fingerprint: TargetFingerprint | undefined,
+    value: string,
+    input: { actionId: string; timeout: number },
+  ): Promise<{ locator: Locator; held: boolean } | undefined> {
+    const sync = this.config.replay.synchronization;
+    const settle = async (): Promise<void> => {
+      const before = await installTransitionProbe(page);
+      if (!before) return;
+      await this.transitionWaiter.waitForTransition({
+        page,
+        expectation: { expected: false, effectsDeclared: false, nextAwaited: false, nextKnown: false },
+        before,
+        ...(sync.observeNetwork
+          ? {
+              network: () =>
+                this.networkTrace.activity(input.actionId, {
+                  correlationMs: sync.networkCorrelationMs,
+                  pendingCapMs: sync.networkPendingCapMs,
+                }),
+            }
+          : {}),
+      });
+    };
+    await settle();
+    const again = await this.flowSteps.locate(page, target, Math.min(input.timeout, 2000), { strict: true });
+    if (typeof again === 'string') return undefined;
+    if (fingerprint && matchFingerprint(fingerprint, await readTarget(again)).verdict === 'MISMATCH')
+      return undefined;
+    const failure = await this.flowSteps.perform(page, again, { kind: 'fill', value }, input.timeout, false);
+    if (failure) return undefined;
+    await settle();
+    const held = await this.filledValue(page, again, target);
+    return { locator: again, held: held !== undefined && sameFilledValue(held, value) };
+  }
+
+  /** Une saisie confirmée : relue avant la prochaine étape qui écrit sur le même écran. */
+  private rememberFilled(page: Page, target: FlowTarget, value: string, label: string): void {
+    const route = pathOf(page.url());
+    const key = describeTarget(target);
+    // Un autre écran : les saisies précédentes ne le concernent plus ; le même champ rempli de nouveau
+    // ne garde que la dernière valeur (une correction du parcours).
+    this.filledOnScreen = this.filledOnScreen.filter((entry) => entry.route === route && entry.key !== key);
+    this.filledOnScreen.push({ key, route, target, value, label });
+  }
+
+  /** Les saisies de cet écran que l'application a retirées depuis (vidées, écrasées). Lecture seule. */
+  private async filledValuesLost(
+    page: Page,
+  ): Promise<{ label: string; kind: ValueLossKind; reason: string }[]> {
+    const route = pathOf(page.url());
+    const lost: { label: string; kind: ValueLossKind; reason: string }[] = [];
+    for (const entry of this.filledOnScreen.filter((item) => item.route === route).slice(-20)) {
+      const found = await this.flowSteps.locate(page, entry.target, 200, { strict: true });
+      // Un champ caché ou retiré par le parcours (section repliée, étape suivante) n'est pas une perte.
+      if (typeof found === 'string') continue;
+      const held = await found.inputValue({ timeout: 300 }).catch(() => undefined);
+      if (held === undefined || sameFilledValue(held, entry.value)) continue;
+      const loss = classifyValueLoss({ expected: entry.value, probe: { attached: true, value: held } });
+      if (restorableValueLoss(loss)) lost.push({ label: entry.label, ...loss });
+    }
+    return lost;
   }
 
   private async filledValue(page: Page, locator: Locator, target: FlowTarget): Promise<string | undefined> {
