@@ -57,6 +57,47 @@ describe('ScreenReadinessService — the control’s own skin is never an obstac
     expect(state.durationMs).toBeLessThan(800);
   });
 
+  it('the LABEL is the target ("click text=No") and its own radio input sits over it: READY, never target_covered', async () => {
+    await setContent(`
+      <app-radio-group formcontrolname="needsFunding">
+        <app-radio style="position:relative;display:inline-block;padding:4px">
+          <input id="n1" type="radio" name="g2" value="NO" style="position:absolute;inset:0;opacity:0;margin:0;width:100%;height:100%">
+          <label for="n1" style="padding:4px 4px 4px 24px">No</label>
+        </app-radio>
+      </app-radio-group>`);
+    const state = await service().waitUntilReady(page, {
+      target: page.getByText('No', { exact: true }),
+      kind: 'click',
+    });
+    expect(state.status, readinessSummary(state)).toBe('READY');
+    expect(state.reasons).not.toContain('target_covered');
+  });
+
+  it('a design-system radio: the native input hidden with position:fixed + opacity:0 over its label (no for=): READY', async () => {
+    await setContent(
+      `
+      <app-radio style="display:inline-block">
+        <label id="lbl" style="display:inline-block;padding:4px 4px 4px 24px">Non</label>
+        <input id="native" type="radio" name="g3" value="NON" style="position:fixed;opacity:0;margin:0">
+      </app-radio>`,
+      `const box = document.getElementById('lbl').getBoundingClientRect();
+       Object.assign(document.getElementById('native').style, {
+         left: box.left + 'px', top: box.top + 'px', width: box.width + 'px', height: box.height + 'px',
+       });`,
+    );
+    const label = page.getByText('Non', { exact: true });
+    // Le cas réel : le pointeur au centre du libellé tombe sur l'input natif (invisible, fixe).
+    expect(
+      await label.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.id;
+      }),
+    ).toBe('native');
+    const state = await service().waitUntilReady(page, { target: label, kind: 'click' });
+    expect(state.status, readinessSummary(state)).toBe('READY');
+    expect(state.reasons).not.toContain('target_covered');
+  });
+
   it('a checkbox inside its <label> with a styled box over it, and a Material-like wrapper: READY', async () => {
     await setContent(`
       <label class="box" style="position:relative;display:inline-block;padding:4px 4px 4px 28px">
