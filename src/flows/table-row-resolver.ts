@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Frame, Page } from 'playwright';
 
 /**
  * TABLE ROW RESOLVER — « la ligne dont la colonne Business key vaut 2935 », jamais « la 3e ligne ».
@@ -18,18 +18,79 @@ export type RowPick = 'unique' | 'first' | 'last';
 export type RowScan =
   | { status: 'FOUND'; token: string; matches: number; columns: string[] }
   | { status: 'AMBIGUOUS'; matches: number; samples: string[]; columns: string[] }
-  | { status: 'NONE'; rows: number; columns: string[]; missingColumns: string[]; signature: string };
+  | {
+      status: 'NONE';
+      rows: number;
+      /** Tableaux vus (document, shadow roots, cadres) : 0 = aucun tableau à l'écran. */
+      tables: number;
+      columns: string[];
+      missingColumns: string[];
+      signature: string;
+    };
 
 export const ROW_ATTRIBUTE = 'data-qa-crawler-row';
 
-/** Lit les tableaux de la page et marque LA ligne qui correspond (attribut data-qa-crawler-row). */
+/**
+ * Lit les tableaux de la page — document, shadow roots ouverts et CADRES (iframes d'un shell de
+ * micro-frontends) — et marque LA ligne qui correspond (attribut data-qa-crawler-row) dans son cadre.
+ */
 export async function scanTableRows(
   page: Page,
   criteria: Record<string, string>,
   pick: RowPick,
   token: string,
+): Promise<RowScan & { frame?: Frame; tableFrame?: Frame }> {
+  const scans: { frame: Frame; scan: RowScan }[] = [];
+  for (const frame of page.frames()) {
+    const scan = await scanFrame(frame, criteria, pick, token).catch(() => undefined);
+    if (scan) scans.push({ frame, scan });
+  }
+  const found = scans.filter((entry) => entry.scan.status === 'FOUND');
+  const ambiguous = scans.find((entry) => entry.scan.status === 'AMBIGUOUS');
+  const columns = [...new Set(scans.flatMap((entry) => entry.scan.columns))];
+  if (ambiguous) return ambiguous.scan;
+  // Une ligne par cadre, plusieurs cadres : ambiguë pour `unique`, sinon le premier / dernier cadre.
+  if (found.length > 1 && pick === 'unique')
+    return {
+      status: 'AMBIGUOUS',
+      matches: found.reduce(
+        (sum, entry) => sum + (entry.scan.status === 'FOUND' ? entry.scan.matches : 0),
+        0,
+      ),
+      samples: [],
+      columns,
+    };
+  const chosen = pick === 'last' ? found.at(-1) : found[0];
+  if (chosen) return { ...chosen.scan, frame: chosen.frame };
+  const none = scans.map((entry) => entry.scan).filter((scan) => scan.status === 'NONE');
+  // Le cadre qui porte le tableau (le plus de lignes) : c'est là que la pagination se fait.
+  const tableFrame = scans
+    .filter((entry) => entry.scan.status === 'NONE' && entry.scan.tables > 0)
+    .sort(
+      (a, b) => (b.scan.status === 'NONE' ? b.scan.rows : 0) - (a.scan.status === 'NONE' ? a.scan.rows : 0),
+    )[0]?.frame;
+  const paged = scans.find((entry) => entry.frame === tableFrame)?.scan;
+  const missing = none.length > 0 ? none.map((scan) => new Set(scan.missingColumns)) : [];
+  return {
+    status: 'NONE',
+    rows: none.reduce((sum, scan) => sum + scan.rows, 0),
+    tables: none.reduce((sum, scan) => sum + scan.tables, 0),
+    columns,
+    // Une colonne manque si AUCUN cadre ne l'a.
+    missingColumns: Object.keys(criteria).filter((column) => missing.every((set) => set.has(column))),
+    // La signature du cadre paginé : c'est elle qui doit changer quand la page suivante arrive.
+    signature: paged?.status === 'NONE' ? paged.signature : none.map((scan) => scan.signature).join('#'),
+    ...(tableFrame ? { tableFrame } : {}),
+  };
+}
+
+async function scanFrame(
+  frame: Frame,
+  criteria: Record<string, string>,
+  pick: RowPick,
+  token: string,
 ): Promise<RowScan> {
-  return page.evaluate(
+  return frame.evaluate(
     ({ criteria: wanted, pick: mode, token: mark, attribute }) => {
       const normalize = (text: string | null | undefined): string =>
         (text ?? '')
@@ -45,8 +106,15 @@ export async function scanTableRows(
         const rect = el.getBoundingClientRect();
         return (rect.width > 0 || rect.height > 0) && getComputedStyle(el).visibility !== 'hidden';
       };
-      for (const old of Array.from(document.querySelectorAll(`[${attribute}]`)))
-        old.removeAttribute(attribute);
+      // Le document ET les shadow roots ouverts (micro-frontends, Angular Elements, web components) :
+      // un querySelectorAll du document ne les traverse pas.
+      const roots: ParentNode[] = [document];
+      for (let index = 0; index < roots.length; index += 1)
+        for (const element of Array.from((roots[index] as ParentNode).querySelectorAll('*')))
+          if (element.shadowRoot) roots.push(element.shadowRoot);
+      const all = (selector: string): Element[] =>
+        roots.flatMap((root) => Array.from(root.querySelectorAll(selector)));
+      for (const old of all(`[${attribute}]`)) old.removeAttribute(attribute);
       const CONTAINER = 'table, [role="grid"], [role="table"], [role="treegrid"], mat-table';
       const CELL = 'td, th, [role="cell"], [role="gridcell"], [role="rowheader"], mat-cell';
       const HEADER_CELL = 'th, [role="columnheader"], mat-header-cell';
@@ -74,7 +142,7 @@ export async function scanTableRows(
             row.querySelector('td, [role="cell"], [role="gridcell"], mat-cell') !== null &&
             shown(row),
         );
-      const containers = Array.from(document.querySelectorAll(CONTAINER)).filter(
+      const containers = all(CONTAINER).filter(
         (container) => !container.parentElement?.closest(CONTAINER) && shown(container),
       );
       const entries = Object.entries(wanted).map(([column, value]) => ({
@@ -122,12 +190,19 @@ export async function scanTableRows(
       }
       const columns = [...allColumns];
       if (matches.length === 0) {
-        const signature = Array.from(document.querySelectorAll('tr, [role="row"], mat-row'))
+        const signature = all('tr, [role="row"], mat-row')
           .filter((row) => row.querySelector('td, [role="cell"], [role="gridcell"], mat-cell') !== null)
           .slice(0, 3)
           .map((row) => normalize(row.textContent).slice(0, 60))
           .join('|');
-        return { status: 'NONE' as const, rows: total, columns, missingColumns: [...missing], signature };
+        return {
+          status: 'NONE' as const,
+          rows: total,
+          tables: containers.length,
+          columns,
+          missingColumns: [...missing],
+          signature,
+        };
       }
       if (matches.length > 1 && mode === 'unique')
         return {
@@ -151,7 +226,7 @@ const FIRST_PAGE =
   '.mat-mdc-paginator-navigation-first, .mat-paginator-navigation-first, [aria-label*="first page" i], [aria-label*="première page" i], [title*="première page" i], [title*="first page" i]';
 
 /** Clique le contrôle de pagination s'il est visible et actif ; false sinon. */
-export async function goToPage(page: Page, which: 'next' | 'first'): Promise<boolean> {
+export async function goToPage(page: Page | Frame, which: 'next' | 'first'): Promise<boolean> {
   const control = page.locator(which === 'next' ? NEXT_PAGE : FIRST_PAGE).first();
   if ((await control.count()) === 0) return false;
   const usable = await control
@@ -169,15 +244,23 @@ export async function goToPage(page: Page, which: 'next' | 'first'): Promise<boo
 }
 
 /** Attend que les lignes affichées changent (la page suivante est arrivée), borné. */
-export async function waitForRowsChange(page: Page, signature: string, timeoutMs: number): Promise<void> {
+export async function waitForRowsChange(
+  page: Page | Frame,
+  signature: string,
+  timeoutMs: number,
+): Promise<void> {
   await page
     .waitForFunction(
       (before) => {
         const normalize = (text: string | null): string =>
           (text ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-        const rows = Array.from(document.querySelectorAll('tr, [role="row"], mat-row')).filter(
-          (row) => row.querySelector('td, [role="cell"], [role="gridcell"], mat-cell') !== null,
-        );
+        const roots: ParentNode[] = [document];
+        for (let index = 0; index < roots.length; index += 1)
+          for (const element of Array.from((roots[index] as ParentNode).querySelectorAll('*')))
+            if (element.shadowRoot) roots.push(element.shadowRoot);
+        const rows = roots
+          .flatMap((root) => Array.from(root.querySelectorAll('tr, [role="row"], mat-row')))
+          .filter((row) => row.querySelector('td, [role="cell"], [role="gridcell"], mat-cell') !== null);
         const now = rows
           .slice(0, 3)
           .map((row) => normalize(row.textContent).slice(0, 60))

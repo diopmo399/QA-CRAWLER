@@ -4263,7 +4263,10 @@ export class FlowExplorer {
       replay.functionalTargetResolution.resolveNonUniqueLocators &&
       step.target.nth === undefined &&
       step.target.section === undefined;
-    located ??= await this.flowSteps.locate(page, step.target, timeout, { strict: !disambiguated });
+    located ??= await this.flowSteps.locate(page, step.target, timeout, {
+      strict: !disambiguated,
+      paginate: true,
+    });
     // LOCATOR ≠ TARGET IDENTITY : un localisateur qui désigne PLUSIEURS éléments n'est qu'un générateur
     // de candidats. Jamais « le premier qui correspond » : le contexte (empreinte, fenêtre, champ,
     // parcours) départage ; une ambiguïté reste une ambiguïté (aucun choix arbitraire).

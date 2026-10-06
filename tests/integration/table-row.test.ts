@@ -62,6 +62,8 @@ flows:
     ['reverse order', '?order=desc'],
     ['new tasks inserted at the top', '?fresh=1'],
     ['ARIA / Material grid (mat-row, mat-cell, sort icon in the header)', '?material=1&order=desc'],
+    ['micro-frontend: the table inside an open shadow root', '?shadow=1&order=desc'],
+    ['micro-frontend: the table inside an iframe of the shell', '?frame=1&material=1'],
   ])(
     'the row of business key 2935 is always the one processed — %s',
     async (_label, query) => {
