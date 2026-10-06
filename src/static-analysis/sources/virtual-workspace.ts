@@ -118,6 +118,11 @@ export class VirtualSourceWorkspace {
     return this.entries.has(filePath);
   }
 
+  /** L'empreinte du contenu déjà gardé à ce chemin (undefined : chemin libre). */
+  hashOf(filePath: string): string | undefined {
+    return this.entries.get(filePath)?.file.hash;
+  }
+
   origins(): Set<StaticSourceOrigin> {
     return new Set([...this.entries.values()].map((entry) => entry.provenance.origin));
   }

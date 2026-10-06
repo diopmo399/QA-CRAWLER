@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
 import { chromium } from 'playwright';
 import { parseConfig } from '../../src/config/config-loader.js';
 import { runDryRun } from '../../src/dry-run/dry-run-orchestrator.js';
@@ -230,6 +230,9 @@ describe('source maps: from a deployed URL only, the mute contact input is resol
     'src/app/users/user.models.ts',
   ];
 
+  /** Micro-frontend : le code de l'application servi par un autre hôte (localhost) que la page. */
+  let remoteMode = false;
+
   beforeAll(async () => {
     dir = await mkdtemp(path.join(tmpdir(), 'qa-sourcemap-e2e-'));
     await writeFile(path.join(dir, 'courriel.feature'), FEATURE);
@@ -283,6 +286,13 @@ describe('source maps: from a deployed URL only, the mute contact input is resol
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end(
           '<!doctype html><html><body><h1>App</h1><script src="/plain.js"></script></body></html>',
+        );
+      } else if (remoteMode) {
+        // Micro-frontend : le code de l'application est servi par un AUTRE hôte que la page.
+        const port = String((server.address() as AddressInfo).port);
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end(
+          PAGE.replace('</body>', `<script src="http://localhost:${port}/main.js"></script></body>`),
         );
       } else {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -349,6 +359,56 @@ output:
     const everything = [html, log, JSON.stringify(result)].join('\n');
     expect(everything).not.toContain(MARKER);
     expect(everything).not.toContain('fixture-constant-not-a-real-key');
+  }, 120_000);
+
+  it('MICRO-FRONTEND: the application code served by another host is read only when that host is allowed for reading (staticAnalysis.bundle.allowedHosts) — never navigated', async () => {
+    const run = async (allowed: string) => {
+      const reports = await mkdtemp(path.join(dir, 'remote-'));
+      const { config } = parseConfig(
+        `
+mission: { name: sourcemap-remote }
+target: { baseUrl: ${url}, startAt: /administration/users/new }
+exploration: { autonomous: false, actionTimeoutMs: 3000, settleTimeMs: 50 }
+gherkin: { semanticResolution: { enabled: true } }
+flows:
+  - gherkin: ${path.join(dir, 'courriel.feature')}
+staticAnalysis:
+  enabled: true
+  mode: auto
+  cache: { enabled: false }
+  bundle: { allowedHosts: [${allowed}] }
+report: { failOnSeverity: NONE }
+output:
+  reportsDir: ${path.join(reports, 'reports')}
+  screenshotsDir: ${path.join(reports, 'screenshots')}
+`,
+        {},
+        {},
+      );
+      return (await runMission(config)).result;
+    };
+    const remote = `${url.replace('127.0.0.1', 'localhost')}/main.js`;
+    remoteMode = true;
+    onTestFinished(() => {
+      remoteMode = false;
+    });
+    const blocked = await run('');
+    const skipped = blocked.staticAnalysis?.discovery?.entries.find((entry) => entry.url === remote);
+    expect(skipped).toMatchObject({ status: 'SKIPPED' });
+    expect(skipped?.reason).toMatch(
+      /^origin not allowed: localhost \(add it to staticAnalysis\.bundle\.allowedHosts/,
+    );
+    const read = await run('localhost');
+    expect(read.staticAnalysis?.discovery?.entries.find((entry) => entry.url === remote)).toMatchObject({
+      status: 'SOURCE_MAP',
+    });
+    // Le seul code de l'application vient de l'autre hôte : c'est lui qui a été analysé.
+    expect(read.staticAnalysis?.discovery?.entries.map((entry) => new URL(entry.url).hostname)).toEqual([
+      'localhost',
+    ]);
+    expect(read.staticAnalysis?.confirmedFields).toContain('CreateUserComponent#contact');
+    // Lire n'est pas naviguer : aucun état visité sur l'autre hôte.
+    expect(JSON.stringify(read.states)).not.toContain('localhost');
   }, 120_000);
 
   const runtimeWorkspace = async (pagePath: string, lazyWait = 0) => {

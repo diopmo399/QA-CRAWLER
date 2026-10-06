@@ -78,6 +78,11 @@ staticAnalysis:
 ## 3. Sécurité
 
 - Scripts et source maps lus seulement sur les **hôtes autorisés** par la mission, avec la session du navigateur, **sans redirection**.
+- **Micro-frontends** (single-spa, module federation) : le code de l'application est souvent servi par des hôtes
+  VOISINS de la page (le shell sur un hôte, chaque application sur le sien). Ces scripts sont `SKIPPED origin not
+allowed: <hôte>` tant que leur hôte n'est pas autorisé **en lecture** :
+  `staticAnalysis.bundle.allowedHosts: ["*.apps.example.com"]`. Lire n'est pas naviguer : le crawler fait un GET du
+  JavaScript et de sa source map, il ne visite jamais ces hôtes (`safety.allowedHosts` reste la liste de navigation).
 - Aucune adresse devinée : seules les références publiées (commentaire, en-tête, inline) sont suivies.
 - Tailles bornées **avant** décodage ; JSON validé (v3, formes de `sources` / `sourcesContent`) ; index maps à sections inline seulement.
 - Chemins non fiables : schémas `webpack:`, `ng:`, `file:`, `http(s):` réduits ; autres schémas (`javascript:`, `data:`) rejetés ; caractères de contrôle rejetés ; `..` bornés à la racine ; chemins absolus d'un poste de build réduits à partir de `src/`. `sourceRoot` suit les mêmes règles.
@@ -92,7 +97,7 @@ staticAnalysis:
 
 La section « Analyse statique » gagne « Découverte des sources » : stratégie, origines, bundles lus (dont à la demande), source maps (référencées / chargées / partielles / rejetées), sources extraites, bundles sans source map, conflits, écarts dépôt ↔ build, empreinte des bundles, et un tableau bundle → source map → état → nombre de sources. Chaque résolution de champ cite l'origine de son code : `[code from SOURCE_MAP https://…/main.js.map]`.
 
-Un bundle non lu dit pourquoi, dans la colonne « État » : `too large (6.4 MB > limit 2.0 MB: raise staticAnalysis.budgets.maxFileSizeBytes or maxSourceMapBytes)`, `redirected (HTTP 302): redirects are not followed`, `HTTP 401`, `timed out (10 s)`, `network error`, `origin not allowed`.
+Un bundle non lu dit pourquoi, dans la colonne « État » : `too large (6.4 MB > limit 2.0 MB: raise staticAnalysis.budgets.maxFileSizeBytes or maxSourceMapBytes)`, `redirected (HTTP 302): redirects are not followed`, `HTTP 401`, `timed out (10 s)`, `network error`, `origin not allowed: <hôte> (add it to staticAnalysis.bundle.allowedHosts to read its code)`.
 
 ## 6. Performance
 

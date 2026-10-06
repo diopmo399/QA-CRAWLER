@@ -1,3 +1,4 @@
+import { hostMatches } from '../config/config-loader.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -3360,7 +3361,14 @@ export class FlowExplorer {
       page && settings.bundle.enabled
         ? new RuntimeBundleSourceProvider({
             fetch: playwrightFetcher(page),
-            isAllowedUrl: (url) => this.safety.navigation.isAllowedHost(new URL(url).hostname),
+            // Lire le code : les hôtes de navigation, et ceux des scripts autorisés en lecture seule.
+            isAllowedUrl: (url) => {
+              const host = new URL(url).hostname;
+              return (
+                this.safety.navigation.isAllowedHost(host) ||
+                settings.bundle.allowedHosts.some((pattern) => hostMatches(host, pattern))
+              );
+            },
             sourceMaps: {
               enabled: strategy !== 'bundle' && settings.sourceMaps.enabled && settings.bundle.sourceMaps,
               inline: settings.sourceMaps.inline,
