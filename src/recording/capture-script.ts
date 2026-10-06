@@ -1,4 +1,4 @@
-import { selectorAnalyzerSource, type SelectorAnalysis } from './selector-builder.js';
+import { isDynamicValue, selectorAnalyzerSource, type SelectorAnalysis } from './selector-builder.js';
 import { sectionPathOf } from './semantic-dom.js';
 
 /**
@@ -48,6 +48,8 @@ export function installRecorder(
   sectionOf: (el: Element) => string[] = () => [],
   /** DISCRIMINATING CSS SELECTOR BUILDER (selector-builder) : les candidats CSS comptés sur le DOM. */
   selectorsOf: (el: Element) => SelectorAnalysis | undefined = () => undefined,
+  /** DynamicAttributeDetector (selector-builder) : un attribut généré n'ancre jamais un sélecteur. */
+  dynamicAttribute: typeof isDynamicValue = () => false,
 ): void {
   const global = window as unknown as Record<string, unknown>;
   if (global.__qaCrawlerRecorderInstalled === true) return;
@@ -384,6 +386,9 @@ export function installRecorder(
     const tag = el.tagName.toLowerCase();
     if (tag === 'a' && el.hasAttribute('href')) return 'link';
     if (tag === 'button' || tag === 'summary') return 'button';
+    // Une case Material : l'hôte porte le rôle quand il enveloppe une seule case native.
+    if (tag === 'mat-checkbox' && el.querySelectorAll('input[type="checkbox"]').length === 1)
+      return 'checkbox';
     if (tag === 'select') return (el as HTMLSelectElement).multiple ? 'listbox' : 'combobox';
     if (tag === 'mat-select') return 'combobox';
     if (tag === 'textarea') return 'textbox';
@@ -503,7 +508,8 @@ export function installRecorder(
     const id = el.getAttribute('id');
     if (id && !generatedId(id)) return { css: `#${escape(id)}`, stable: true };
     const name = el.getAttribute('name');
-    if (name && !/\d{2,}/.test(name)) return { css: `${tag}[name="${name}"]`, stable: true };
+    if (name && !/\d{2,}/.test(name) && !dynamicAttribute('attribute', name))
+      return { css: `${tag}[name="${name}"]`, stable: true };
     const control = el.getAttribute('formcontrolname');
     if (control) return { css: `[formcontrolname="${control}"]`, stable: true };
     // Dernier recours : un chemin de positions, fragile (signalé comme tel).
@@ -1537,9 +1543,19 @@ export function installRecorder(
       // corrélation peut encore promouvoir s'il précède une navigation).
       let target = el;
       if (!noise && !el.matches(CANDIDATES)) {
-        const clickable = functionalTarget(event);
-        if (clickable) target = clickable;
-        else noise = 'click on a non-interactive element';
+        // Un clic DANS l'enveloppe d'une seule case (libellé, mat-checkbox, role=checkbox) : c'est la case.
+        // Dans un <label>, le navigateur la bascule et « change » l'enregistre ; sinon l'hôte est la cible.
+        const wrapper = el.closest('mat-checkbox, [role="checkbox"], label');
+        const boxes = wrapper?.querySelectorAll('input[type="checkbox"]');
+        const box = boxes?.length === 1 ? boxes[0] : undefined;
+        if (wrapper && box && (wrapper.tagName.toLowerCase() === 'label' || box.closest('label')))
+          noise = 'toggle (recorded by change)';
+        else if (wrapper && box) target = wrapper;
+        else {
+          const clickable = functionalTarget(event);
+          if (clickable) target = clickable;
+          else noise = 'click on a non-interactive element';
+        }
       }
       send(
         {
@@ -1727,6 +1743,6 @@ export function installRecorder(
 export function captureScript(options: CaptureOptions): string {
   return [
     'if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
-    `(${installRecorder.toString()})(${JSON.stringify(options)}, ${sectionPathOf.toString()}, ${selectorAnalyzerSource()});`,
+    `(${installRecorder.toString()})(${JSON.stringify(options)}, ${sectionPathOf.toString()}, ${selectorAnalyzerSource()}, ${isDynamicValue.toString()});`,
   ].join('\n');
 }

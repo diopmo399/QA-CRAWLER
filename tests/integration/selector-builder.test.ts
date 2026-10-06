@@ -130,6 +130,27 @@ describe('Screen inventory in the capture script (real page)', () => {
     return { inventories, elements };
   };
 
+  const installWithEvents = async (
+    html: string,
+  ): Promise<{ elements: Record<string, unknown>[]; events: { type: string; noise?: string }[] }> => {
+    const elements: Record<string, unknown>[] = [];
+    const events: { type: string; noise?: string }[] = [];
+    await page.exposeBinding(
+      'qaTest',
+      (_source, payload: { type: string; noise?: string; element?: Record<string, unknown> }) => {
+        events.push({ type: payload.type, ...(payload.noise ? { noise: payload.noise } : {}) });
+        if (payload.element && !payload.noise) elements.push(payload.element);
+      },
+    );
+    await page.exposeBinding('qaTest_inventory', () => undefined);
+    await page.setContent(`<main><h1>Preferences</h1><form>${html}</form></main>`);
+    await page.evaluate(
+      captureScript({ binding: 'qaTest', salt: 'salt', overlay: false, inputDebounceMs: 100 }),
+    );
+    await page.waitForTimeout(400);
+    return { elements, events };
+  };
+
   it('TEST 15 / 16 the screen is inventoried once; typing reuses it (no new inventory); a field added later is analysed locally, and a structural change refreshes the inventory', async () => {
     const { inventories, elements } = await install(
       material('app-input', 'formcontrolname="legalName"', 'Legal name', 0) +
@@ -183,5 +204,34 @@ describe('Screen inventory in the capture script (real page)', () => {
     await page.getByRole('tab', { name: 'Individual' }).click();
     await page.waitForTimeout(300);
     expect(elements.at(-1)?.containerOf).toBeUndefined();
+  });
+  it('a click INSIDE a single-checkbox wrapper is the checkbox: in a <label> only the change is kept (no duplicate click); a Material host without label is the target, with the checkbox role', async () => {
+    const { elements, events } = await installWithEvents(
+      '<mat-checkbox class="legacy"><label style="cursor:pointer"><span class="box" style="display:inline-block;width:20px;height:20px;background:#ccc"><input type="checkbox" style="position:absolute;opacity:0;width:1px;height:1px"></span><span>Accept terms</span></label></mat-checkbox>' +
+        '<mat-checkbox class="host"><div><div style="position:relative;width:20px;height:20px"><input id="c2" type="checkbox" style="position:absolute;opacity:0;width:1px;height:1px"><div class="bg" style="width:20px;height:20px;background:#ccc"></div></div><label for="c2">Newsletter</label></div></mat-checkbox>',
+    );
+    await page.locator('.legacy .box').click();
+    await page.waitForTimeout(300);
+    const kept = events.filter((event) => !event.noise).map((event) => event.type);
+    expect(kept).toEqual(['change']);
+    await page.locator('.host .bg').click();
+    await page.waitForTimeout(300);
+    const host = elements.at(-1);
+    expect(host).toMatchObject({ tag: 'mat-checkbox', role: 'checkbox' });
+  });
+
+  it('a generated name attribute (framework prefix + counter) never anchors the simple css', async () => {
+    const { elements } = await installWithEvents(
+      '<input name="mat-input-7" placeholder="Code" style="width:120px"><input name="city" placeholder="City" style="width:120px">',
+    );
+    // Une saisie (pas un clic de focus) : le champ est décrit, avec son CSS simple.
+    for (const placeholder of ['Code', 'City']) {
+      await page.locator(`[placeholder="${placeholder}"]`).pressSequentially('AB', { delay: 30 });
+      await page.locator(`[placeholder="${placeholder}"]`).blur();
+    }
+    await page.waitForTimeout(500);
+    const css = elements.map((element) => element.css);
+    expect(css).not.toContain('input[name="mat-input-7"]');
+    expect(css).toContain('input[name="city"]');
   });
 });
