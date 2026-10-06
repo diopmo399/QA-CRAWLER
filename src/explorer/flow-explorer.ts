@@ -57,6 +57,7 @@ import {
   type EffectVerification,
   type ValueLossKind,
 } from '../flows/action-effect-verifier.js';
+import { fetchGitSources } from '../static-analysis/sources/git-source.js';
 import { suggestedFeature, suggestedFlowYaml } from '../dry-run/suggested-flow.js';
 import type { RecoveryInput } from '../knowledge/knowledge-model.js';
 import { buildRecoveredFlow, detectFlowDrift } from '../workflow-healing/flow-drift.js';
@@ -3346,7 +3347,7 @@ export class FlowExplorer {
       },
     });
     this.staticAnalyzer = analyzer;
-    const root = settings.source.enabled ? settings.source.root : undefined;
+    const root = settings.source.enabled ? (settings.source.root ?? (await this.gitSourceRoot())) : undefined;
     // SOURCE : le dépôt seul, lu exactement comme avant.
     if (settings.mode === 'source') {
       if (!root) {
@@ -3439,6 +3440,36 @@ export class FlowExplorer {
     for (const route of current?.graph.routes ?? [])
       if (route.truth === 'RUNTIME_CONFIRMED') next.confirmRoute(route.path);
     return next;
+  }
+
+  /**
+   * GIT SOURCE : sans `source.root`, les dépôts `staticAnalysis.source.git` sont clonés (lecture seule) ou
+   * mis à jour, une fois par run ; leur racine devient celle du dépôt. Un échec n'arrête rien.
+   */
+  private gitSource: Promise<string | undefined> | undefined;
+  private gitSourceRoot(): Promise<string | undefined> {
+    const source = this.config.staticAnalysis.source;
+    if (source.git.length === 0) return Promise.resolve(undefined);
+    this.gitSource ??= fetchGitSources({
+      repositories: source.git,
+      directory:
+        source.gitDirectory ??
+        path.join(path.dirname(path.resolve(this.config.output.reportsDir)), '.qa-crawler', 'sources'),
+      env: this.env,
+      timeoutMs: source.gitTimeoutMs,
+    }).then((result) => {
+      for (const repo of result.repositories)
+        this.emitStatic(
+          repo.status === 'FAILED' ? 'GIT_SOURCE_FAILED' : 'GIT_SOURCE_FETCHED',
+          repo.status === 'FAILED'
+            ? `${repo.url} (${repo.ref}): ${repo.reason ?? 'failed'}`
+            : `${repo.url} (${repo.ref}) ${repo.status.toLowerCase()} at ${repo.commit ?? '?'}`,
+        );
+      for (const note of result.notes.filter((entry) => !entry.startsWith('GIT_SOURCE_FAILED')))
+        this.emitStatic('GIT_SOURCE_FETCHED', note);
+      return result.root;
+    });
+    return this.gitSource;
   }
 
   private staticUnavailable(reason: string): void {

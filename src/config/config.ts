@@ -888,6 +888,30 @@ const loggingSchema = z
  * (formControlName → propriété de requête → DTO → API → OpenAPI). Désactivée par
  * défaut : sans elle, rien ne change. Le code est lu, jamais exécuté.
  */
+/** Un dépôt Git du code de l'application (analyse statique, lecture seule). */
+const gitRepositorySchema = z
+  .object({
+    /** https://…, ssh://… ou git@hôte:groupe/projet.git (agent SSH local). Jamais d'identifiant dans l'URL. */
+    url: nonEmpty,
+    /** Branche ou tag (défaut : la branche par défaut du dépôt). */
+    ref: nonEmpty.optional(),
+    /** Sous-dossier du dépôt à analyser (monorepo : apps/task-list). */
+    path: nonEmpty.optional(),
+    /** Nom du clone local (défaut : déduit de l'URL). */
+    name: z
+      .string()
+      .regex(/^[A-Za-z0-9._-]{1,60}$/)
+      .optional(),
+    /** Variable d'environnement du jeton (HTTPS) : GitHub, GitLab, Azure DevOps, Bitbucket. */
+    tokenEnv: nonEmpty.optional(),
+    /** Variable d'environnement du nom d'utilisateur associé au jeton (défaut : x-access-token). */
+    usernameEnv: nonEmpty.optional(),
+  })
+  .strict()
+  .refine((repo) => !/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]*:[^/@\s]*@/i.test(repo.url), {
+    message: 'no credentials in the git url: use tokenEnv (an environment variable)',
+  });
+
 const staticAnalysisSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -904,6 +928,19 @@ const staticAnalysisSchema = z
         enabled: z.boolean().default(true),
         /** Racine du dépôt de l'application (relative au fichier de mission). */
         root: nonEmpty.optional(),
+        /**
+         * Le code source depuis GIT : un ou plusieurs dépôts (micro-frontends : le shell et chaque
+         * application) clonés en LECTURE SEULE (clone léger, une seule branche), mis à jour à chaque run.
+         * Ignoré si `root` est donné. Le jeton vient d'une variable d'environnement, jamais du fichier.
+         */
+        git: z
+          .union([gitRepositorySchema, z.array(gitRepositorySchema)])
+          .transform((value) => (Array.isArray(value) ? value : [value]))
+          .default([]),
+        /** Dossier des clones (défaut : .qa-crawler/sources à côté des rapports ; jamais versionné). */
+        gitDirectory: nonEmpty.optional(),
+        /** Borne d'un clone / d'une mise à jour. */
+        gitTimeoutMs: z.number().int().min(5_000).max(1_800_000).default(180_000),
       })
       .strict()
       .default({}),
