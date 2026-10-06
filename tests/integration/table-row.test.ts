@@ -71,6 +71,8 @@ flows:
       // Après le dernier flow, le run dit ce qu'il fait jusqu'aux rapports.
       const finishing = runProgress.splice(0);
       expect(finishing.map((update) => update.label)).toEqual([
+        'Closing the browser',
+        'Saving the memory',
         'Closing the run',
         'Comparing with earlier runs',
         'Saving the knowledge',

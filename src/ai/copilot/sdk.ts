@@ -71,6 +71,8 @@ export type CopilotModelInfo = SdkModelInfo;
 export interface CopilotClientLike {
   start(): Promise<void>;
   stop(): Promise<unknown>;
+  /** Arrêt immédiat (processus du runtime tué) : quand `stop()` ne rend pas la main. */
+  forceStop?(): Promise<void>;
   getAuthStatus(): Promise<{ isAuthenticated: boolean }>;
   listModels(): Promise<CopilotModelInfo[]>;
   createSession(config: CopilotSessionConfig): Promise<CopilotSessionLike>;

@@ -927,8 +927,12 @@ Les boutons disparaissent dès l'arrêt.
 6. Validating by replay : avec `--validate` seulement.
 7. Writing the report.
 
-**Fin d'un run** (`learn`, `verify`, `explore`) : après le dernier flow, la même barre « Finishing the run » suit ces phases :
+**Fin d'un run** (`learn`, `verify`, `explore`) : la barre « Finishing the run » démarre **dès la fin du dernier flow**, pas après les rapports. Ses phases :
 
+- Waiting for open tabs and downloads (seulement s'il en reste, avec leur nombre) ;
+- Closing the browser ;
+- Stopping the intelligence client (si `ai.mode` ≠ OFF) ;
+- Saving the memory ;
 - Closing the run ;
 - Checking the other actors (multi-acteurs) ;
 - Comparing with earlier runs ;
@@ -936,6 +940,16 @@ Les boutons disparaissent dès l'arrêt.
 - Writing the artifacts ;
 - Saving the baseline (`learn`) ;
 - Writing the reports.
+
+**Conseiller d'intelligence (Copilot…) pendant le run :** chaque appel affiche une ligne animée, « Intelligence advisor — waiting for the answer (<déclencheur>) · 4.2 s ». À la fin de l'appel :
+
+- « answer received from <modèle> » ;
+- ou « no answer in time », et la décision déterministe est gardée ;
+- ou « unavailable ».
+
+Une proposition acceptée ou écartée est ensuite affichée sur sa propre ligne.
+
+**Fermeture bornée :** la fermeture du client d'intelligence prend au plus 5 s par étape, puis le runtime est arrêté de force. Le processus se termine au plus 3 s après le résumé, même si un client reste ouvert. Le terminal ne reste donc jamais « en attente ».
 
 **Comportement de l'affichage :**
 

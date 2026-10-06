@@ -25,6 +25,9 @@ export function seconds(ms: number): string {
 
 /** La ligne d'une mise à jour (sans couleur) : testable, et la même pour les deux affichages. */
 export function progressLine(update: ProgressUpdate, frame = '', elapsedMs = update.elapsedMs): string {
+  // Sans phases connues (attente d'une réponse) : seulement l'activité et le temps qui passe.
+  if (update.total === 0)
+    return `${frame ? `${frame} ` : ''}${update.task} — ${update.label}${update.detail ? ` — ${update.detail}` : ''} · ${seconds(elapsedMs)}`;
   const total = Math.max(1, update.total);
   const step = Math.min(update.step, total);
   const filled = Math.round((Math.max(0, step - 1) / total) * BAR);

@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ProgressTracker, type ProgressSink } from './progress/progress.js';
+import { EXPLORER_CLOSING_PHASES } from './explorer/flow-explorer.js';
+import { effectiveMode } from './ai/factory.js';
 import { BaselineStore, runIdOf, type Baseline, type BaselineMetadata } from './baseline/baseline-store.js';
 import { sourceInfo } from './baseline/source-info.js';
 import type { MissionMode, ScenarioConfig } from './config/config.js';
@@ -203,7 +205,24 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       { flushEvery: config.persistence.flushEvery },
     );
   await recorder?.start();
+  const authorizationChecks = config.actors.length > 0 && config.authorization.enabled;
+  // Dès la fin du dernier flow : navigateur, client d'intelligence, mémoire, puis rapports.
+  const progress = new ProgressTracker(
+    'Finishing the run',
+    [
+      ...Object.values(EXPLORER_CLOSING_PHASES).filter(
+        (phase) => phase !== EXPLORER_CLOSING_PHASES.intelligence || effectiveMode(config.ai) !== 'OFF',
+      ),
+      ...Object.values(RUN_PHASES).filter(
+        (phase) =>
+          (phase !== RUN_PHASES.actors || authorizationChecks) &&
+          (phase !== RUN_PHASES.baseline || mode === 'learn'),
+      ),
+    ],
+    options.onProgress,
+  );
   const explorer = new FlowExplorer(config, {
+    progress,
     semantics,
     knowledge,
     memory,
@@ -246,16 +265,6 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     await persistence.provider?.close().catch(() => undefined);
     throw error;
   }
-  const authorizationChecks = config.actors.length > 0 && config.authorization.enabled;
-  const progress = new ProgressTracker(
-    'Finishing the run',
-    Object.values(RUN_PHASES).filter(
-      (phase) =>
-        (phase !== RUN_PHASES.actors || authorizationChecks) &&
-        (phase !== RUN_PHASES.baseline || mode === 'learn'),
-    ),
-    options.onProgress,
-  );
   progress.start(RUN_PHASES.close);
   // RUN_FINISHED : ce qui attend est écrit, le run est clos, la connexion fermée.
   recorder?.recordBlockedEdges(outcome.graph.toJSON().edges);
