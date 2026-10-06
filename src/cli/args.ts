@@ -58,6 +58,8 @@ Commands (default: mission.mode, else explore):
   record   Record a human demonstration in Chromium and turn it into an imposed
            flow (flow.yaml + .feature): qa-crawler record --url <address> --name <flow>
            (qa-crawler record --help for its options)
+  sources  Fetch the application code from git and analyse it once, outside the runs
+           (staticAnalysis.source.git): qa-crawler sources <mission>
 
 Options:
   -c, --config <file>         Mission YAML file (or pass it as the first argument)

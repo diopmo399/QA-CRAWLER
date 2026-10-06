@@ -162,13 +162,14 @@ function resolveTestDataFiles(raw: Record<string, unknown>, baseDir: string): Re
 
 /** staticAnalysis.source.root, comme les .feature : relatif au fichier de mission. */
 function resolveStaticRoot(raw: Record<string, unknown>, baseDir: string): Record<string, unknown> {
-  const analysis = raw.staticAnalysis as { source?: { root?: unknown } } | undefined;
-  const root = analysis?.source?.root;
-  if (!analysis || typeof root !== 'string' || path.isAbsolute(root)) return raw;
-  return {
-    ...raw,
-    staticAnalysis: { ...analysis, source: { ...analysis.source, root: path.resolve(baseDir, root) } },
-  };
+  const analysis = raw.staticAnalysis as { source?: { root?: unknown; gitDirectory?: unknown } } | undefined;
+  if (!analysis?.source) return raw;
+  const relative = (value: unknown): unknown =>
+    typeof value === 'string' && !path.isAbsolute(value) ? path.resolve(baseDir, value) : value;
+  const source = { ...analysis.source };
+  if (source.root !== undefined) source.root = relative(source.root);
+  if (source.gitDirectory !== undefined) source.gitDirectory = relative(source.gitDirectory);
+  return { ...raw, staticAnalysis: { ...analysis, source } };
 }
 
 /**

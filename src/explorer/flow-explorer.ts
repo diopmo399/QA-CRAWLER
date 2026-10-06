@@ -58,6 +58,13 @@ import {
   type EffectVerification,
   type ValueLossKind,
 } from '../flows/action-effect-verifier.js';
+import { fetchGitSources } from '../static-analysis/sources/git-source.js';
+import {
+  describePrepared,
+  gitDirectoryOf,
+  readPreparedKnowledge,
+  staticAnalyzerOptionsOf,
+} from '../static-analysis/sources/prepared-source.js';
 import { suggestedFeature, suggestedFlowYaml } from '../dry-run/suggested-flow.js';
 import type { RecoveryInput } from '../knowledge/knowledge-model.js';
 import { buildRecoveredFlow, detectFlowDrift } from '../workflow-healing/flow-drift.js';
@@ -3326,28 +3333,27 @@ export class FlowExplorer {
 
   private async loadStaticKnowledge(page?: Page): Promise<StaticKnowledge | undefined> {
     const settings = this.config.staticAnalysis;
-    const analyzer = new StaticApplicationAnalyzer({
-      applicationId: this.config.mission.name,
-      ...((settings.version ?? this.env.QA_VERSION)
-        ? { version: settings.version ?? this.env.QA_VERSION }
-        : {}),
-      ...((settings.commit ?? this.env.QA_COMMIT) ? { commit: settings.commit ?? this.env.QA_COMMIT } : {}),
-      features: settings.features,
-      analyzers: settings.analyzers,
-      budgets: settings.budgets,
-      ...(settings.cache.enabled
-        ? {
-            cacheDirectory:
-              settings.cache.directory ??
-              path.join(path.dirname(path.resolve(this.config.output.reportsDir)), 'knowledge', 'static'),
-          }
-        : {}),
-      onEvent: (event, message) => {
+    const analyzer = new StaticApplicationAnalyzer(
+      staticAnalyzerOptionsOf(this.config, this.env, (event, message) => {
         this.emitStatic(event, message);
-      },
-    });
+      }),
+    );
     this.staticAnalyzer = analyzer;
-    const root = settings.source.enabled ? settings.source.root : undefined;
+    // GIT préparé (`qa-crawler sources`) : la connaissance est lue telle quelle — aucun git, aucune analyse.
+    const git = settings.source.enabled && !settings.source.root && settings.source.git.length > 0;
+    if (git && settings.source.gitFetch === 'command') {
+      const prepared = await readPreparedKnowledge(this.config);
+      if (prepared.status === 'READY') {
+        this.emitStatic('GIT_SOURCE_PREPARED', describePrepared(prepared.knowledge));
+        return this.knowledgeOf({ graph: prepared.knowledge.graph, cache: 'HIT' });
+      }
+      this.emitStatic('GIT_SOURCE_NOT_PREPARED', prepared.reason);
+      this.staticWarnings.push(prepared.reason);
+    }
+    const root = settings.source.enabled
+      ? (settings.source.root ??
+        (git && settings.source.gitFetch === 'run' ? await this.gitSourceRoot() : undefined))
+      : undefined;
     // SOURCE : le dépôt seul, lu exactement comme avant.
     if (settings.mode === 'source') {
       if (!root) {
@@ -3447,6 +3453,34 @@ export class FlowExplorer {
     for (const route of current?.graph.routes ?? [])
       if (route.truth === 'RUNTIME_CONFIRMED') next.confirmRoute(route.path);
     return next;
+  }
+
+  /**
+   * GIT SOURCE (`gitFetch: run`) : sans `source.root`, les dépôts `staticAnalysis.source.git` sont clonés
+   * (lecture seule) ou mis à jour, une fois par run ; leur racine devient celle du dépôt. Un échec n'arrête rien.
+   */
+  private gitSource: Promise<string | undefined> | undefined;
+  private gitSourceRoot(): Promise<string | undefined> {
+    const source = this.config.staticAnalysis.source;
+    if (source.git.length === 0) return Promise.resolve(undefined);
+    this.gitSource ??= fetchGitSources({
+      repositories: source.git,
+      directory: gitDirectoryOf(this.config),
+      env: this.env,
+      timeoutMs: source.gitTimeoutMs,
+    }).then((result) => {
+      for (const repo of result.repositories)
+        this.emitStatic(
+          repo.status === 'FAILED' ? 'GIT_SOURCE_FAILED' : 'GIT_SOURCE_FETCHED',
+          repo.status === 'FAILED'
+            ? `${repo.url} (${repo.ref}): ${repo.reason ?? 'failed'}`
+            : `${repo.url} (${repo.ref}) ${repo.status.toLowerCase()} at ${repo.commit ?? '?'}`,
+        );
+      for (const note of result.notes.filter((entry) => !entry.startsWith('GIT_SOURCE_FAILED')))
+        this.emitStatic('GIT_SOURCE_FETCHED', note);
+      return result.root;
+    });
+    return this.gitSource;
   }
 
   private staticUnavailable(reason: string): void {
@@ -8396,7 +8430,7 @@ export class FlowExplorer {
     const summary = this.coordinator.summary();
     const useful =
       this.config.rules.enabled || summary.fieldStates.length > 0 || summary.dependencies.length > 0;
-    return useful ? { formRules: summary } : {};
+    return useful ? { formRules: { ...summary, rulesEnabled: this.config.rules.enabled } } : {};
   }
 
   private staticSummary(): StaticAnalysisSummary {
