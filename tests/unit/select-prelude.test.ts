@@ -99,7 +99,7 @@ describe('SELECT PRELUDE', () => {
       run([click({ network: [{ method: 'GET', path: '/api/countries', status: 200 }] }), select]).kept,
     ).toHaveLength(2);
     const elsewhere = action('s1', 'SELECT', 'Country', { stateBefore: 's2' });
-    (elsewhere.target as { fingerprint: Record<string, string> }).fingerprint.section = 'Billing';
+    (elsewhere.target as unknown as { fingerprint: Record<string, string> }).fingerprint.section = 'Billing';
     expect(run([click(), elsewhere]).kept).toHaveLength(2);
     const changed = state('s2', [...OPEN.controls, 'button:Delete']);
     expect(run([click(), select], [BEFORE, changed]).kept).toHaveLength(2);
