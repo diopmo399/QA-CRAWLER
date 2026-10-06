@@ -107,6 +107,14 @@ interface InventoriedBundle {
  * Les chunks chargés plus tard (routes à la demande) s'ajoutent par observe() puis
  * extractPending() : le workspace s'enrichit, l'analyse est refaite sur l'ensemble.
  */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
 export class RuntimeBundleSourceProvider implements StaticSourceProvider {
   readonly origin = 'SOURCE_MAP' as const;
   readonly inventory = new BundleInventory();
@@ -200,7 +208,14 @@ export class RuntimeBundleSourceProvider implements StaticSourceProvider {
   private async inventoryOne(url: string, lazy: boolean): Promise<void> {
     const { budgets } = this.options;
     if (!this.allowed(url)) {
-      this.inventory.record(this.descriptor(url, lazy, 'SKIPPED', 'origin not allowed'));
+      this.inventory.record(
+        this.descriptor(
+          url,
+          lazy,
+          'SKIPPED',
+          `origin not allowed: ${hostOf(url)} (add it to staticAnalysis.bundle.allowedHosts to read its code)`,
+        ),
+      );
       return;
     }
     const read = this.inventory.all().filter((bundle) => bundle.contentHash).length;

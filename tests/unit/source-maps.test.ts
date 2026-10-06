@@ -356,7 +356,10 @@ describe('Runtime bundles → source maps → workspace', () => {
     runtime.observe('https://cdn.other.test/lib.js');
     await runtime.provide(workspace());
     expect(server.calls).toEqual([]);
-    expect(runtime.inventory.all()[0]).toMatchObject({ status: 'SKIPPED', reason: 'origin not allowed' });
+    expect(runtime.inventory.all()[0]).toMatchObject({ status: 'SKIPPED' });
+    expect(runtime.inventory.all()[0]?.reason).toMatch(
+      /^origin not allowed: cdn\.other\.test \(add it to staticAnalysis\.bundle\.allowedHosts/,
+    );
   });
 
   it.each([
