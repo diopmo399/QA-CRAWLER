@@ -269,8 +269,22 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
       : {}),
     ...ambiguityRecordOf(element),
   };
+  // TABLE ROW : la cible est dans une ligne de tableau dont une colonne est une clé unique — la ligne
+  // est désignée par cette valeur (jamais par sa position : l'ordre du tableau change).
+  let target = chosen.target;
+  if (element.rowKey && element.rowKey.length > 0) {
+    const { nth: _position, ...withoutPosition } = target;
+    target = {
+      ...withoutPosition,
+      row: Object.fromEntries(element.rowKey.map((entry) => [entry.column, entry.value])),
+    };
+    ambiguous = false;
+    reasons.push(
+      `TABLE_ROW: row identified by ${element.rowKey.map((entry) => `${entry.column}=${entry.value}`).join(', ')} (never its position)`,
+    );
+  }
   return {
-    target: chosen.target,
+    target,
     quality: chosen.quality,
     fingerprint,
     label: humanName ?? element.componentTag ?? element.tag,

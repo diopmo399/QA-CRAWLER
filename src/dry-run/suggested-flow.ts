@@ -168,6 +168,8 @@ function rawTarget(target: FlowTarget): Record<string, unknown> {
     ...(target.nth !== undefined ? { nth: target.nth } : {}),
     ...(target.section !== undefined ? { section: target.section } : {}),
     ...(target.semanticId !== undefined ? { semanticId: target.semanticId } : {}),
+    ...(target.row !== undefined ? { row: target.row } : {}),
+    ...(target.rowPick !== undefined ? { rowPick: target.rowPick } : {}),
   };
   if (target.strategy === 'role')
     return { role: target.role, ...(target.name !== undefined ? { name: target.name } : {}), ...options };

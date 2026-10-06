@@ -43,6 +43,15 @@ const targetShape = {
   section: nonEmpty.optional(),
   /** L'identité sémantique de la cible (general.priority) : un nom stable, pas un localisateur. */
   semanticId: nonEmpty.optional(),
+  /**
+   * LA LIGNE d'un tableau, par ses valeurs — jamais par sa position : `{ "Business key": "2935" }`
+   * (la ligne exacte) ou `{ "Status": "NEW" }` avec `rowPick: first` (une ligne qui convient).
+   * Colonne : son en-tête (ou `#3`, 3e colonne). Valeur : texte exact (casse et espaces ignorés),
+   * `~texte` pour « contient ». Les pages suivantes du tableau sont parcourues au fil de la recherche.
+   */
+  row: z.record(nonEmpty, z.union([nonEmpty, z.number().transform(String)])).optional(),
+  /** Plusieurs lignes correspondent : `unique` (défaut : sinon AMBIGUOUS_ROW, rien d'exécuté), `first`, `last`. */
+  rowPick: z.enum(['unique', 'first', 'last']).optional(),
 };
 
 type TargetInput = { [K in keyof typeof targetShape]?: unknown };
@@ -498,6 +507,9 @@ export interface FlowTarget {
   /** La section de la cible : le résolveur contextuel ne prend jamais un élément d'une autre section. */
   section?: string;
   semanticId?: string;
+  /** La ligne du tableau qui porte la cible : colonne → valeur (jamais une position). */
+  row?: Record<string, string>;
+  rowPick?: 'unique' | 'first' | 'last';
 }
 
 export type FlowValue = string | { env: string } | { testData: string };
@@ -619,8 +631,12 @@ function toTarget(input: {
   nth?: number | undefined;
   section?: string | undefined;
   semanticId?: string | undefined;
+  row?: Record<string, string> | undefined;
+  rowPick?: 'unique' | 'first' | 'last' | undefined;
 }): FlowTarget {
   const options = {
+    ...(input.row !== undefined && Object.keys(input.row).length > 0 ? { row: input.row } : {}),
+    ...(input.rowPick !== undefined ? { rowPick: input.rowPick } : {}),
     ...(input.exact !== undefined ? { exact: input.exact } : {}),
     ...(input.nth !== undefined ? { nth: input.nth } : {}),
     ...(input.section !== undefined ? { section: input.section } : {}),
@@ -642,6 +658,15 @@ function toTarget(input: {
 
 /** Description lisible d'une cible, pour les logs et les rapports : role=button[name="Suivant"]. */
 export function describeTarget(target: FlowTarget): string {
+  const row = target.row
+    ? ` in row {${Object.entries(target.row)
+        .map(([column, value]) => `${column}=${value}`)
+        .join(', ')}}${target.rowPick && target.rowPick !== 'unique' ? ` (${target.rowPick})` : ''}`
+    : '';
+  return describeBaseTarget(target) + row;
+}
+
+function describeBaseTarget(target: FlowTarget): string {
   const nth = target.nth !== undefined && target.nth > 0 ? ` [${target.nth}]` : '';
   switch (target.strategy) {
     case 'role':

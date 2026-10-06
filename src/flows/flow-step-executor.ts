@@ -1,7 +1,14 @@
 import type { Locator, Page } from 'playwright';
 import { setCheckedRobust } from '../execution/checkable.js';
-import type { FlowExpectation, FlowTarget } from '../config/flow-schema.js';
+import { describeTarget, type FlowExpectation, type FlowTarget } from '../config/flow-schema.js';
 import { toLocator } from '../execution/locator-resolver.js';
+import {
+  describeRow,
+  goToPage,
+  ROW_ATTRIBUTE,
+  scanTableRows,
+  waitForRowsChange,
+} from './table-row-resolver.js';
 import type { NetworkExchange } from '../model/network.js';
 import { waitForScreenReady } from '../observation/screen-ready.js';
 import { pathPatternToRegex } from '../policies/navigation-policy.js';
@@ -29,6 +36,7 @@ export interface DragOutcome {
 
 const FIELD_ROLES = new Set(['textbox', 'combobox', 'searchbox', 'spinbutton']);
 let contextualTokens = 0;
+let rowTokens = 0;
 
 /**
  * Messages d'erreur visibles : les mêmes que ceux que l'UIObserver associe aux champs
@@ -85,6 +93,7 @@ export class FlowStepExecutor {
      */
     options: { strict?: boolean } = {},
   ): Promise<Locator | string> {
+    if (target.row !== undefined) return this.locateInRow(page, target, timeoutMs);
     if (
       target.section !== undefined &&
       target.nth === undefined &&
@@ -128,6 +137,69 @@ export class FlowStepExecutor {
       return count === 0
         ? `element not found within ${timeoutMs} ms`
         : `element not visible within ${timeoutMs} ms (${count} match(es)): ${firstLine(error)}`;
+    }
+  }
+
+  /** Le nombre maximal de pages d'un tableau parcourues pour trouver une ligne. */
+  static readonly MAX_TABLE_PAGES = 20;
+
+  /**
+   * TABLE ROW : la ligne est trouvée par ses valeurs (colonne → valeur), sur la page courante puis les
+   * suivantes ; la cible est cherchée DANS cette ligne. Jamais une position ; plusieurs lignes avec
+   * `unique` → AMBIGUOUS_ROW, rien n'est exécuté.
+   */
+  private async locateInRow(page: Page, target: FlowTarget, timeoutMs: number): Promise<Locator | string> {
+    const criteria = target.row ?? {};
+    const pick = target.rowPick ?? 'unique';
+    rowTokens += 1;
+    const token = `row-${String(rowTokens)}`;
+    const deadline = Date.now() + timeoutMs;
+    let scan = await scanTableRows(page, criteria, pick, token);
+    // Le tableau arrive (requête en cours) : réessayer jusqu'au délai avant de parcourir les pages.
+    while (scan.status === 'NONE' && scan.rows === 0 && Date.now() < deadline) {
+      await page.waitForTimeout(150);
+      scan = await scanTableRows(page, criteria, pick, token);
+    }
+    let pages = 1;
+    let read = scan.status === 'NONE' ? scan.rows : 0;
+    if (scan.status === 'NONE' && scan.missingColumns.length === 0) {
+      // Repartir de la première page (une étape précédente a pu paginer), puis avancer page par page.
+      const before = scan.signature;
+      if (await goToPage(page, 'first')) {
+        await waitForRowsChange(page, before, Math.min(timeoutMs, 5000));
+        scan = await scanTableRows(page, criteria, pick, token);
+        read = scan.status === 'NONE' ? scan.rows : 0;
+      }
+      while (scan.status === 'NONE' && pages < FlowStepExecutor.MAX_TABLE_PAGES) {
+        const signature = scan.signature;
+        if (!(await goToPage(page, 'next'))) break;
+        pages += 1;
+        await waitForRowsChange(page, signature, Math.min(timeoutMs, 5000));
+        scan = await scanTableRows(page, criteria, pick, token);
+        if (scan.status === 'NONE') read += scan.rows;
+      }
+    }
+    const wanted = describeRow(criteria);
+    if (scan.status === 'AMBIGUOUS')
+      return `AMBIGUOUS_TARGET: AMBIGUOUS_ROW — ${String(scan.matches)} rows match {${wanted}} (rowPick: unique; add a column to the row criteria, or rowPick: first) — nothing executed`;
+    if (scan.status === 'NONE')
+      return scan.missingColumns.length > 0
+        ? `ROW_NOT_FOUND: no table column "${scan.missingColumns.join('", "')}" (columns: ${scan.columns.join(', ') || 'none'})`
+        : `ROW_NOT_FOUND: no row matches {${wanted}} (${String(read)} row(s) read on ${String(pages)} page(s))`;
+    const scope = page.locator(`[${ROW_ATTRIBUTE}="${scan.token}"]`);
+    const inside = toLocator(scope, {
+      strategy: target.strategy,
+      ...(target.role !== undefined ? { role: target.role } : {}),
+      ...(target.name !== undefined ? { name: target.name } : {}),
+      ...(target.value !== undefined ? { value: target.value } : {}),
+      ...(target.exact !== undefined ? { exact: target.exact } : {}),
+    });
+    const locator = inside.nth(target.nth ?? 0);
+    try {
+      await locator.waitFor({ state: 'visible', timeout: Math.max(500, deadline - Date.now()) });
+      return locator;
+    } catch {
+      return `element not found in the row {${wanted}}: ${describeTarget({ ...target, row: undefined })}`;
     }
   }
 

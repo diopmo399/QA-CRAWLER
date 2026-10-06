@@ -752,6 +752,22 @@ export function sanitize(
 }
 
 /** Le contexte pré-action envoyé par la page : textes d'interface bornés et expurgés, nombres stricts. */
+/** L'identité de la ligne (colonne → valeur), bornée et expurgée. */
+function rowKeyOf(raw: unknown): { rowKey?: { column: string; value: string }[] } {
+  if (!Array.isArray(raw)) return {};
+  const entries = raw
+    .slice(0, 2)
+    .map((entry: unknown) => {
+      if (!isObject(entry) || typeof entry.column !== 'string' || typeof entry.value !== 'string')
+        return undefined;
+      const column = redactText(entry.column.trim().slice(0, 40));
+      const value = redactText(entry.value.trim().slice(0, 60));
+      return column && value ? { column, value } : undefined;
+    })
+    .filter((entry): entry is { column: string; value: string } => entry !== undefined);
+  return entries.length > 0 ? { rowKey: entries } : {};
+}
+
 function preOf(raw: Record<string, unknown>): PreActionContext {
   const str = (value: unknown, max: number): string =>
     typeof value === 'string' ? redactText(text(value, max)) : '';
@@ -1054,6 +1070,7 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ...(typeof raw.accordionExpanded === 'boolean' ? { accordionExpanded: raw.accordionExpanded } : {}),
     ...optional('form', str('form', 60) ? redactText(str('form', 60) ?? '') : undefined),
     ...optional('row', str('row', 40) ? redactText(str('row', 40) ?? '') : undefined),
+    ...rowKeyOf(raw.rowKey),
     ...optional(
       'listboxOwner',
       str('listboxOwner', 60) ? redactText(str('listboxOwner', 60) ?? '') : undefined,

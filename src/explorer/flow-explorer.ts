@@ -4168,7 +4168,9 @@ export class FlowExplorer {
     const nextStep = sync?.useNextActionAsCheckpoint ? this.nextFlowStep() : undefined;
     const nextReadyBefore = nextStep ? (await this.nextReadiness(page, nextStep)).ready : undefined;
     // « Où est-il ? » — et est-ce bien LUI ? (un CSS structurel peut viser un autre élément)
-    const fingerprint = step.fingerprint;
+    // Une cible désignée DANS UNE LIGNE (row: colonne → valeur) : la ligne fait foi. Aucune réparation par
+    // l'empreinte ne peut la remplacer par l'élément d'une autre ligne (l'ordre du tableau a pu changer).
+    const fingerprint = step.target.row ? undefined : step.fingerprint;
     let located: Locator | string | undefined;
     let resolution: TargetResolutionTrace | undefined;
     let reacquiredTarget: string | undefined;
