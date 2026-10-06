@@ -2,6 +2,32 @@
 
 Quand ni `source.root` (le code sur le disque) ni les source maps publiées ne sont disponibles, l'analyse statique peut lire le code **depuis le dépôt git** de l'application. Une application minifiée sans source map ne donne qu'une couverture LIMITED. Le code du dépôt donne les noms d'origine : champs, validateurs, DTO, routes et règles.
 
+## Une commande à part : `qa-crawler sources`
+
+Récupérer le dépôt et analyser son code prend du temps : clone, lecture de milliers de fichiers, analyse. Ce travail est donc **isolé dans une commande**, lancée quand le code de l'application change (une fois par jour, ou dans la CI après un merge) :
+
+```bash
+qa-crawler sources mission.yaml          # npm run qa -- sources mission.yaml
+# ✓ https://git.example.test/team/app.git (main) updated @ 3f2a9c1b7d4e
+# Prepared in 41.3 s: 812 file(s), 37 form(s), 402 field(s), 58 route(s), 96 rule(s) — coverage FULL.
+```
+
+La commande :
+
+1. clone ou met à jour les dépôts ;
+2. les analyse : champs, formulaires, routes, règles de l'application ;
+3. écrit la **connaissance préparée** à côté des clones, dans `<ensemble>.knowledge.json`.
+
+Le run, lui, **lit cette connaissance telle quelle**. Il ne fait aucun appel git, aucune lecture et aucune analyse du code, donc ce temps n'est jamais payé pendant un test. L'événement `GIT_SOURCE_PREPARED` du run donne les dépôts, les commits et l'âge de la préparation.
+
+- **Pas encore préparé**, ou préparé par une autre version de l'analyseur : le run le dit (`GIT_SOURCE_NOT_PREPARED : run qa-crawler sources <mission> first`) et continue sans ce code (bundles et source maps selon `mode`). Il ne lance jamais git lui-même.
+- **Codes de sortie de la commande :**
+  - 0 : tout est préparé ;
+  - 1 : un dépôt en échec (les autres sont analysés), ou rien d'analysable ;
+  - 2 : usage ou mission invalide.
+- **En cas d'échec**, la connaissance précédente est gardée.
+- **Pour revenir à l'ancien comportement**, récupération et analyse au début de chaque run : `staticAnalysis.source.gitFetch: run`.
+
 ## Configuration
 
 ```yaml
@@ -17,6 +43,7 @@ staticAnalysis:
       # usernameEnv: GIT_USER   # optionnel ; sinon « x-access-token »
     # gitDirectory: ./.qa-crawler/sources   # où cloner (défaut : à côté du dossier des rapports)
     # gitTimeoutMs: 180000
+    # gitFetch: command   # défaut : préparé par `qa-crawler sources` ; « run » : à chaque run
 ```
 
 Pour plusieurs dépôts, par exemple des micro-frontends (le shell plus chaque application), donnez une liste :
@@ -52,7 +79,7 @@ Chaque règle part de STATIC_DISCOVERED (lue dans le code), puis passe à RUNTIM
 
 ## Comportement
 
-- **Clone léger, lecture seule.** Le premier run fait `--depth 1`, une seule branche, sans tags ni sous-modules. Les runs suivants font `fetch` puis `checkout --force` sur la révision distante.
+- **Clone léger, lecture seule.** La première préparation fait `--depth 1`, une seule branche, sans tags ni sous-modules. Les suivantes font `fetch` puis `checkout --force` sur la révision distante.
 - **Rien n'est poussé.** Aucun commit n'est fait et aucun hook n'est exécuté (`core.hooksPath` vide).
 - **Un dossier par ensemble de dépôts** (empreinte des URL, ref et path). Deux missions qui n'analysent pas les mêmes dépôts ne se mélangent pas.
 - **Cache de l'analyse.** Le code inchangé (même empreinte) n'est pas ré-analysé.

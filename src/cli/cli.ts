@@ -14,6 +14,7 @@ import { storageLabel } from '../reporting/persistence-section.js';
 import { HELP_TEXT, parseCliArgs, UsageError } from './args.js';
 import { runDryRunCli } from './dry-run-command.js';
 import { runRecordCli } from './record-command.js';
+import { runSourcesCli } from './sources-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
 import { driftLines, recoveryLines } from '../workflow-healing/explain.js';
@@ -50,6 +51,8 @@ export async function runCli(input: string[]): Promise<number> {
   if (argv[0] === 'dry-run') return runDryRunCli(argv.slice(1));
   // RECORD : un humain montre le flow, le crawler en fait un flow imposé.
   if (argv[0] === 'record') return runRecordCli(argv.slice(1));
+  // SOURCES : le code de l'application récupéré (git) et analysé une fois, hors des runs.
+  if (argv[0] === 'sources') return runSourcesCli(argv.slice(1));
   let args;
   try {
     args = parseCliArgs(argv);

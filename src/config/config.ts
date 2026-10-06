@@ -941,6 +941,13 @@ const staticAnalysisSchema = z
         gitDirectory: nonEmpty.optional(),
         /** Borne d'un clone / d'une mise à jour. */
         gitTimeoutMs: z.number().int().min(5_000).max(1_800_000).default(180_000),
+        /**
+         * QUAND le dépôt est récupéré et analysé :
+         *  - `command` (défaut) : SEULEMENT par la commande `qa-crawler sources <mission>` ; le run lit
+         *    la connaissance préparée (aucun appel git, aucune lecture ni analyse du code pendant le run) ;
+         *  - `run` : à chaque run (clone / mise à jour puis analyse au démarrage).
+         */
+        gitFetch: z.enum(['command', 'run']).default('command'),
       })
       .strict()
       .default({}),

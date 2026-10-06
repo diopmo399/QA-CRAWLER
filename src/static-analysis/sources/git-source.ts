@@ -111,6 +111,18 @@ async function exists(target: string): Promise<boolean> {
   }
 }
 
+/**
+ * Un dossier par ENSEMBLE de dépôts (URL, ref, path) : la racine d'analyse ne contient que les dépôts
+ * de cette mission ; la connaissance préparée de cet ensemble est à côté (`<dossier>.knowledge.json`).
+ */
+export function gitSetDirectory(repositories: GitRepository[], directory: string): string {
+  const set = createHash('sha256')
+    .update(repositories.map((repo) => `${repo.url}#${repo.ref ?? ''}#${repo.path ?? ''}`).join('\n'))
+    .digest('hex')
+    .slice(0, 12);
+  return path.join(directory, set);
+}
+
 /** Clone (ou met à jour) chaque dépôt ; renvoie la racine à analyser. */
 export async function fetchGitSources(input: {
   repositories: GitRepository[];
@@ -121,12 +133,7 @@ export async function fetchGitSources(input: {
 }): Promise<GitSourceResult> {
   const result: GitSourceResult = { repositories: [], notes: [] };
   if (input.repositories.length === 0) return result;
-  // Un dossier par ENSEMBLE de dépôts : la racine d'analyse ne contient que les dépôts de cette mission.
-  const set = createHash('sha256')
-    .update(input.repositories.map((repo) => `${repo.url}#${repo.ref ?? ''}#${repo.path ?? ''}`).join('\n'))
-    .digest('hex')
-    .slice(0, 12);
-  const directory = path.join(input.directory, set);
+  const directory = gitSetDirectory(input.repositories, input.directory);
   await mkdir(directory, { recursive: true });
   const roots: { name: string; root: string }[] = [];
   for (const repo of input.repositories) {

@@ -1,11 +1,13 @@
 import { execFileSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { cp, mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { ScenarioConfig } from '../../src/config/config.js';
 import { parseConfig } from '../../src/config/config-loader.js';
+import { prepareGitSources } from '../../src/static-analysis/sources/prepared-source.js';
 import type { ExplorationResult } from '../../src/model/exploration-result.js';
 import { runMission } from '../../src/orchestrator.js';
 
@@ -31,17 +33,15 @@ const PAGE = `<!doctype html><html><body>
 /**
  * GIT SOURCE : l'analyse statique lit le code depuis le DÉPÔT git de l'application (clone léger,
  * lecture seule), sans `source.root` local ni source map — le champ muet est résolu par ce code.
+ * Par défaut (`gitFetch: command`), récupération et analyse sont faites par `qa-crawler sources`,
+ * une fois : le run lit la connaissance préparée, sans git ni lecture du code.
  */
 describe('static analysis from the git repository of the application (Chromium)', () => {
   let server: Server;
   let url: string;
   let dir: string;
-  let repository: string;
 
-  const run = async (git: string): Promise<{ result: ExplorationResult; reports: string }> => {
-    const reports = await mkdtemp(path.join(dir, 'run-'));
-    const { config } = parseConfig(
-      `
+  const mission = (git: string, sources: string, extra = ''): string => `
 mission: { name: static-git }
 target: { baseUrl: ${url}, startAt: /administration/users/new }
 exploration: { autonomous: false, actionTimeoutMs: 3000, settleTimeMs: 50 }
@@ -51,7 +51,8 @@ staticAnalysis:
   enabled: true
   source:
     git: ${git}
-    gitDirectory: ${path.join(dir, 'sources')}
+    gitDirectory: ${sources}
+${extra}
 flows:
   - name: yaml-email
     startAt: /administration/users/new
@@ -60,19 +61,22 @@ flows:
       - expect: { text: contact=git@example.test }
 report: { failOnSeverity: NONE }
 output:
-  reportsDir: ${path.join(reports, 'reports')}
-  screenshotsDir: ${path.join(reports, 'screenshots')}
-`,
-      {},
-      {},
-    );
-    return { result: (await runMission(config, { env: {} })).result, reports };
+  reportsDir: REPORTS/reports
+  screenshotsDir: REPORTS/screenshots
+`;
+  const configOf = (text: string, reports: string): ScenarioConfig =>
+    parseConfig(text.replaceAll('REPORTS', reports), {}, {}).config;
+  const run = async (text: string): Promise<{ result: ExplorationResult; reports: string; log: string }> => {
+    const reports = await mkdtemp(path.join(dir, 'run-'));
+    const { result } = await runMission(configOf(text, reports), { env: {} });
+    return { result, reports, log: await findLog(reports) };
   };
+  const flowStatus = (result: ExplorationResult): string | undefined =>
+    result.flows.find((entry) => entry.name === 'yaml-email')?.status;
 
-  beforeAll(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'qa-static-git-'));
-    // Le dépôt de l'application : le code Angular dans un sous-dossier, comme un mono-repo.
-    repository = path.join(dir, 'app-repo');
+  /** Le dépôt de l'application : le code Angular dans un sous-dossier, comme un mono-repo. */
+  const repositoryOf = async (name: string): Promise<string> => {
+    const repository = path.join(dir, name);
     await cp(FIXTURE, path.join(repository, 'frontend'), { recursive: true });
     const git = (...args: string[]): void => {
       execFileSync('git', ['-c', 'user.email=qa@example.test', '-c', 'user.name=qa', ...args], {
@@ -83,6 +87,11 @@ output:
     git('init', '-q', '-b', 'main');
     git('add', '.');
     git('commit', '-q', '-m', 'app');
+    return repository;
+  };
+
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'qa-static-git-'));
     server = createServer((_request, response) => {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       response.end(PAGE);
@@ -95,32 +104,70 @@ output:
     await new Promise((resolve) => server.close(resolve));
   });
 
-  it('the repository is cloned (ref + path), analysed, and the mute input is resolved by its code; the next run updates the clone', async () => {
-    const git = JSON.stringify({ url: `file://${repository}`, ref: 'main', path: 'frontend' });
-    const { result } = await run(git);
-    const flow = result.flows.find((entry) => entry.name === 'yaml-email');
-    expect(flow?.status, JSON.stringify(flow?.steps.map((step) => [step.description, step.reason]))).toBe(
+  it('`sources` prepares the code once; the run reads the prepared knowledge — no git, no source read (repository and clones deleted)', async () => {
+    const repository = await repositoryOf('prepared-repo');
+    const sources = path.join(dir, 'prepared-sources');
+    const text = mission(
+      JSON.stringify({ url: `file://${repository}`, ref: 'main', path: 'frontend' }),
+      sources,
+    );
+    const prepared = await prepareGitSources({ config: configOf(text, dir), env: {} });
+    expect(prepared.knowledge?.graph.fields.length).toBeGreaterThan(0);
+    // Plus de dépôt, plus de clone : seule la connaissance préparée reste.
+    await rm(repository, { recursive: true, force: true });
+    for (const entry of await readdir(sources))
+      if (!entry.endsWith('.knowledge.json')) await rm(path.join(sources, entry), { recursive: true });
+
+    const { result, log } = await run(text);
+    expect(flowStatus(result), JSON.stringify(result.flows[0]?.steps.map((step) => step.reason))).toBe(
       'PASSED',
     );
     expect(result.staticAnalysis).toMatchObject({ status: 'USED', framework: 'ANGULAR', mode: 'SOURCE' });
     expect(result.staticAnalysis?.confirmedFields).toContain('CreateUserComponent#contact');
-    // Un dossier par ensemble de dépôts, le clone dedans ; le run suivant le met à jour (pas de re-clone).
-    const sets = await readdir(path.join(dir, 'sources'));
-    expect(sets).toHaveLength(1);
-    expect(await readdir(path.join(dir, 'sources', sets[0] ?? ''))).toHaveLength(1);
-
-    const again = await run(git);
-    expect(again.result.flows.find((entry) => entry.name === 'yaml-email')?.status).toBe('PASSED');
-    expect(await findLog(again.reports)).toMatch(/GIT_SOURCE_FETCHED[^\n]*updated/);
+    expect(log).toMatch(/GIT_SOURCE_PREPARED[^\n]*prepared-repo \(main\) @ [0-9a-f]{12}/);
+    expect(log).not.toContain('GIT_SOURCE_FETCHED');
   }, 180_000);
 
-  it('a repository that cannot be read: the run continues without the code, the reason is reported (never an exception)', async () => {
-    const { result, reports } = await run(
-      JSON.stringify({ url: `file://${path.join(dir, 'missing-repo')}` }),
+  it('not prepared: the run says so (run `qa-crawler sources`), never fetches, and continues without the code', async () => {
+    const repository = await repositoryOf('unprepared-repo');
+    const { result, log } = await run(
+      mission(JSON.stringify({ url: `file://${repository}` }), path.join(dir, 'unprepared-sources')),
     );
     expect(result.flows).toHaveLength(1);
     expect(result.staticAnalysis?.status).not.toBe('USED');
-    expect(await findLog(reports)).toMatch(/GIT_SOURCE_FAILED[^\n]*fatal:/);
+    expect(log).toMatch(/GIT_SOURCE_NOT_PREPARED[^\n]*qa-crawler sources/);
+    expect(log).not.toContain('GIT_SOURCE_FETCHED');
+  }, 180_000);
+
+  it('gitFetch: run — the repository is cloned (ref + path) and analysed at the start of the run; the next run updates the clone', async () => {
+    const repository = await repositoryOf('run-repo');
+    const sources = path.join(dir, 'run-sources');
+    const text = mission(
+      JSON.stringify({ url: `file://${repository}`, ref: 'main', path: 'frontend' }),
+      sources,
+    ).replace('    gitDirectory:', '    gitFetch: run\n    gitDirectory:');
+    const { result } = await run(text);
+    expect(flowStatus(result)).toBe('PASSED');
+    expect(result.staticAnalysis).toMatchObject({ status: 'USED', framework: 'ANGULAR', mode: 'SOURCE' });
+    // Un dossier par ensemble de dépôts, le clone dedans ; le run suivant le met à jour (pas de re-clone).
+    const sets = await readdir(sources);
+    expect(sets).toHaveLength(1);
+    expect(await readdir(path.join(sources, sets[0] ?? ''))).toHaveLength(1);
+
+    const again = await run(text);
+    expect(flowStatus(again.result)).toBe('PASSED');
+    expect(again.log).toMatch(/GIT_SOURCE_FETCHED[^\n]*updated/);
+  }, 180_000);
+
+  it('gitFetch: run — a repository that cannot be read: the run continues without the code, the reason is reported', async () => {
+    const text = mission(
+      JSON.stringify({ url: `file://${path.join(dir, 'missing-repo')}` }),
+      path.join(dir, 'missing-sources'),
+    ).replace('    gitDirectory:', '    gitFetch: run\n    gitDirectory:');
+    const { result, log } = await run(text);
+    expect(result.flows).toHaveLength(1);
+    expect(result.staticAnalysis?.status).not.toBe('USED');
+    expect(log).toMatch(/GIT_SOURCE_FAILED[^\n]*fatal:/);
   }, 180_000);
 });
 

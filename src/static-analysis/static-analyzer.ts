@@ -29,6 +29,8 @@ export type StaticAnalysisEvent =
   | 'STATIC_PATH_REJECTED'
   | 'GIT_SOURCE_FETCHED'
   | 'GIT_SOURCE_FAILED'
+  | 'GIT_SOURCE_PREPARED'
+  | 'GIT_SOURCE_NOT_PREPARED'
   | SourceDiscoveryEvent;
 
 export type StaticEventSink = (event: StaticAnalysisEvent, message: string) => void;

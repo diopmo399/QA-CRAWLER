@@ -3,7 +3,9 @@ import { cp, mkdtemp, readFile, readdir, writeFile, mkdir } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { parseConfig } from '../../src/config/config-loader.js';
+import { runSourcesCli } from '../../src/cli/sources-command.js';
+import { loadConfigFile, parseConfig } from '../../src/config/config-loader.js';
+import { readPreparedKnowledge } from '../../src/static-analysis/sources/prepared-source.js';
 import { fetchGitSources } from '../../src/static-analysis/sources/git-source.js';
 import { StaticApplicationAnalyzer } from '../../src/static-analysis/static-analyzer.js';
 import { staticAnalyzerOptions } from '../helpers.js';
@@ -162,4 +164,62 @@ it('RULES: the application rules are read from the cloned code (same rules as a 
   expect(names).toContain('ACCOUNT_TYPE_BUSINESS_REQUIRES_COMPANY_NUMBER');
   expect(names).toContain('COUNTRY_CA_REQUIRES_PROVINCE');
   expect(names.sort()).toEqual(local.map((rule) => rule.name).sort());
+});
+
+describe('qa-crawler sources (the git source prepared once, outside the runs)', () => {
+  const missionFile = async (name: string, git: string): Promise<string> => {
+    const dir = path.join(base, `mission-${name}`);
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, 'mission.yaml');
+    await writeFile(
+      file,
+      `mission: { name: ${name} }
+target: { baseUrl: http://127.0.0.1:9 }
+staticAnalysis:
+  enabled: true
+  source:
+    git: ${git}
+    gitDirectory: ./clones
+output: { reportsDir: ./reports }
+`,
+    );
+    return file;
+  };
+
+  it('fetches, analyses, writes the prepared knowledge (exit 0); the run reads it; another analyzer version is never reused', async () => {
+    const fixture = path.resolve('tests/fixtures/static-apps/angular');
+    const dir = path.join(base, 'cli-repo');
+    await cp(fixture, dir, { recursive: true });
+    run(dir, 'init', '-q', '-b', 'main');
+    run(dir, 'add', '-A');
+    run(dir, 'commit', '-q', '-m', 'init');
+    const file = await missionFile('cli', JSON.stringify({ url: `file://${dir}`, ref: 'main' }));
+    expect(await runSourcesCli([file, '--quiet'], {})).toBe(0);
+    const { config } = await loadConfigFile(file, {}, {});
+    const read = await readPreparedKnowledge(config);
+    expect(read.status).toBe('READY');
+    if (read.status !== 'READY') return;
+    expect(read.file.startsWith(path.join(path.dirname(file), 'clones'))).toBe(true);
+    expect(read.knowledge.graph.fields.length).toBeGreaterThan(0);
+    expect(read.knowledge.repositories[0]).toMatchObject({ status: 'CLONED', ref: 'main' });
+    // Une seconde préparation met le clone à jour.
+    expect(await runSourcesCli(['-c', file, '-q'], {})).toBe(0);
+    const again = await readPreparedKnowledge(config);
+    expect(again.status === 'READY' && again.knowledge.repositories[0]?.status).toBe('UPDATED');
+
+    await writeFile(read.file, JSON.stringify({ ...read.knowledge, analyzerVersion: '0.0.1' }));
+    const stale = await readPreparedKnowledge(config);
+    expect(stale).toMatchObject({ status: 'STALE' });
+    expect(stale.status !== 'READY' && stale.reason).toContain('qa-crawler sources');
+  });
+
+  it('a repository that cannot be read: exit 1, nothing written; no repository configured: exit 2', async () => {
+    const file = await missionFile('missing', JSON.stringify({ url: `file://${path.join(base, 'nope')}` }));
+    expect(await runSourcesCli([file, '-q'], {})).toBe(1);
+    const { config } = await loadConfigFile(file, {}, {});
+    expect((await readPreparedKnowledge(config)).status).toBe('MISSING');
+    const none = await missionFile('none', '[]');
+    expect(await runSourcesCli([none, '-q'], {})).toBe(2);
+    expect(await runSourcesCli([], {})).toBe(2);
+  });
 });
