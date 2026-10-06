@@ -8417,7 +8417,7 @@ export class FlowExplorer {
     const summary = this.coordinator.summary();
     const useful =
       this.config.rules.enabled || summary.fieldStates.length > 0 || summary.dependencies.length > 0;
-    return useful ? { formRules: summary } : {};
+    return useful ? { formRules: { ...summary, rulesEnabled: this.config.rules.enabled } } : {};
   }
 
   private staticSummary(): StaticAnalysisSummary {

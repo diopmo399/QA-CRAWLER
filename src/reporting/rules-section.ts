@@ -42,6 +42,14 @@ const TEXTS = {
     tree: 'Rule graph',
     dependencies: 'Field dependencies',
     dependencyColumns: ['From', 'To', 'Kind', 'Evidence', 'When'],
+    noRules: {
+      noCode: (status: string) =>
+        `No rule found: no application code was read (static analysis ${status}). Rules are read in the code: set staticAnalysis.source.git (the repository) or source.root.`,
+      bundle:
+        'No rule found: only the minified bundles were read (BUNDLE) — the conditions of the forms cannot be read there. Give the source code (staticAnalysis.source.git) or publish the source maps.',
+      noForm: (files: number) =>
+        `No rule found in the ${String(files)} file(s) read: no reactive form (FormGroup / FormBuilder) with a condition was recognised. Check staticAnalysis.source.git path (the front-end folder).`,
+    },
   },
   fr: {
     formState: 'État des formulaires',
@@ -78,6 +86,14 @@ const TEXTS = {
     tree: 'Graphe des règles',
     dependencies: 'Dépendances entre champs',
     dependencyColumns: ['De', 'Vers', 'Genre', 'Preuve', 'Quand'],
+    noRules: {
+      noCode: (status: string) =>
+        `Aucune règle : aucun code de l’application n’a été lu (analyse statique ${status}). Les règles se lisent dans le code : renseignez staticAnalysis.source.git (le dépôt) ou source.root.`,
+      bundle:
+        'Aucune règle : seuls les bundles minifiés ont été lus (BUNDLE) — les conditions des formulaires ne s’y lisent pas. Donnez le code source (staticAnalysis.source.git) ou publiez les source maps.',
+      noForm: (files: number) =>
+        `Aucune règle dans les ${String(files)} fichier(s) lus : aucun formulaire réactif (FormGroup / FormBuilder) avec une condition n’a été reconnu. Vérifiez le path de staticAnalysis.source.git (le dossier du front-end).`,
+    },
   },
 } as const;
 
@@ -95,6 +111,15 @@ const VERDICT_MARK: Record<string, string> = {
   INCONCLUSIVE: '?',
   NOT_VERIFIED: '·',
 };
+
+/** Pourquoi la section des règles est vide : rien lu, seulement du minifié, ou aucun formulaire reconnu. */
+function whyNoRules(result: ExplorationResult, language: ReportLanguage): string {
+  const texts = TEXTS[language].noRules;
+  const analysis = result.staticAnalysis;
+  if (!analysis || analysis.status !== 'USED') return texts.noCode(analysis?.status ?? 'DISABLED');
+  if (analysis.mode === 'BUNDLE') return texts.bundle;
+  return texts.noForm(analysis.files ?? 0);
+}
 
 export function rulesSection(result: ExplorationResult, language: ReportLanguage): string {
   const summary = result.formRules;
@@ -183,8 +208,14 @@ export function rulesSection(result: ExplorationResult, language: ReportLanguage
             .join('')}</ul></li>`,
       )
       .join('');
+    const empty = coverage.discovered === 0 ? whyNoRules(result, language) : undefined;
     parts.push(
-      `<section><h2>${esc(t.rules)}</h2><p class="muted">${esc(t.rulesHint)}</p>${coverageTable}${items}<h3>${esc(t.tree)}</h3><ul>${tree}</ul></section>`,
+      `<section><h2>${esc(t.rules)}</h2><p class="muted">${esc(t.rulesHint)}</p>${empty ? `<p><strong>${esc(empty)}</strong></p>` : ''}${coverageTable}${items}<h3>${esc(t.tree)}</h3><ul>${tree}</ul></section>`,
+    );
+  } else if (summary.rulesEnabled) {
+    // Règles activées mais aucune connaissance du code : la section dit pourquoi elle est vide.
+    parts.push(
+      `<section><h2>${esc(t.rules)}</h2><p><strong>${esc(whyNoRules(result, language))}</strong></p></section>`,
     );
   }
 

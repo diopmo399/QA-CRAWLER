@@ -64,6 +64,8 @@ export interface RuleReportItem {
 }
 
 export interface FormRulesSummary {
+  /** Règles activées (la section s'affiche même vide, avec la raison). */
+  rulesEnabled?: boolean;
   fieldStates: { stateId: string; route: string; fields: FieldStateReport[] }[];
   dependencies: FieldDependency[];
   rules?: {

@@ -31,6 +31,25 @@ Chaque dépôt est cloné dans son dossier. La racine analysée est alors le dos
 
 `source.root`, s'il est renseigné, reste prioritaire : le dépôt n'est alors pas cloné.
 
+## Règles de l'application
+
+Les règles se **lisent dans le code**. Exemples : « type = business → numéro obligatoire », « âge < 18 → tuteur », « pays change → provinces chargées ». Un bundle minifié ne les contient pas sous une forme lisible. Avec le dépôt, elles sont extraites puis vérifiées dans le navigateur :
+
+```yaml
+staticAnalysis:
+  enabled: true
+  source:
+    git: { url: https://git.example.test/team/app.git, ref: main, path: frontend, tokenEnv: GIT_TOKEN }
+rules:
+  enabled: true # désactivé par défaut
+```
+
+Chaque règle part de STATIC_DISCOVERED (lue dans le code), puis passe à RUNTIME_CONFIRMED, RUNTIME_CONTRADICTED ou NOT_VERIFIED. Si la section du rapport reste vide, elle dit pourquoi :
+
+- **aucun code lu** : analyse statique indisponible ou désactivée ;
+- **seulement des bundles minifiés** (BUNDLE) ;
+- **N fichiers lus mais aucun formulaire réactif reconnu** : le `path` ne pointe probablement pas sur le dossier du front-end.
+
 ## Comportement
 
 - **Clone léger, lecture seule.** Le premier run fait `--depth 1`, une seule branche, sans tags ni sous-modules. Les runs suivants font `fetch` puis `checkout --force` sur la révision distante.

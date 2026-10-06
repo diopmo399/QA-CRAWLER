@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/config/config-loader.js';
 import { fetchGitSources } from '../../src/static-analysis/sources/git-source.js';
+import { StaticApplicationAnalyzer } from '../../src/static-analysis/static-analyzer.js';
+import { staticAnalyzerOptions } from '../helpers.js';
 
 /**
  * GIT SOURCE : le code lu depuis de vrais dépôts Git (locaux, file://) — clone léger, mise à jour,
@@ -137,4 +139,27 @@ describe('fetchGitSources (real git, file:// repositories)', () => {
       /no credentials in the git url/,
     );
   });
+});
+
+it('RULES: the application rules are read from the cloned code (same rules as a local source.root)', async () => {
+  const fixture = path.resolve('tests/fixtures/static-apps/accounts');
+  const dir = path.join(base, 'accounts-repo');
+  await cp(fixture, path.join(dir, 'web'), { recursive: true });
+  run(dir, 'init', '-q', '-b', 'main');
+  run(dir, 'add', '-A');
+  run(dir, 'commit', '-q', '-m', 'init');
+  const fetched = await fetchGitSources({
+    repositories: [{ url: `file://${dir}`, ref: 'main', path: 'web' }],
+    directory: path.join(base, 'rules-sources'),
+    env: {},
+    timeoutMs: 60_000,
+  });
+  expect(fetched.root).toBeDefined();
+  const analyzer = new StaticApplicationAnalyzer(staticAnalyzerOptions());
+  const cloned = (await analyzer.analyzeSource(fetched.root ?? '')).graph.rules ?? [];
+  const local = (await analyzer.analyzeSource(fixture)).graph.rules ?? [];
+  const names = cloned.map((rule) => rule.name);
+  expect(names).toContain('ACCOUNT_TYPE_BUSINESS_REQUIRES_COMPANY_NUMBER');
+  expect(names).toContain('COUNTRY_CA_REQUIRES_PROVINCE');
+  expect(names.sort()).toEqual(local.map((rule) => rule.name).sort());
 });
