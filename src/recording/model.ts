@@ -255,6 +255,11 @@ export interface RecordedElement {
   form?: string;
   /** La clé de la ligne de tableau (première cellule). */
   row?: string;
+  /**
+   * L'IDENTITÉ DE LA LIGNE : la colonne (ou la paire) dont la valeur est unique parmi les lignes du
+   * tableau (« Business key = 2935 ») — ce qui désigne la même ligne quel que soit l'ordre du tableau.
+   */
+  rowKey?: { column: string; value: string }[];
   /** Le contrôle qui ouvre la liste d'une option (« Operator »). */
   listboxOwner?: string;
   /** Le menu (nom ou déclencheur). */

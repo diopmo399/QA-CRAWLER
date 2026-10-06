@@ -1,3 +1,4 @@
+import { hostMatches } from '../config/config-loader.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -3366,7 +3367,14 @@ export class FlowExplorer {
       page && settings.bundle.enabled
         ? new RuntimeBundleSourceProvider({
             fetch: playwrightFetcher(page),
-            isAllowedUrl: (url) => this.safety.navigation.isAllowedHost(new URL(url).hostname),
+            // Lire le code : les hôtes de navigation, et ceux des scripts autorisés en lecture seule.
+            isAllowedUrl: (url) => {
+              const host = new URL(url).hostname;
+              return (
+                this.safety.navigation.isAllowedHost(host) ||
+                settings.bundle.allowedHosts.some((pattern) => hostMatches(host, pattern))
+              );
+            },
             sourceMaps: {
               enabled: strategy !== 'bundle' && settings.sourceMaps.enabled && settings.bundle.sourceMaps,
               inline: settings.sourceMaps.inline,
@@ -4202,7 +4210,9 @@ export class FlowExplorer {
     const nextStep = sync?.useNextActionAsCheckpoint ? this.nextFlowStep() : undefined;
     const nextReadyBefore = nextStep ? (await this.nextReadiness(page, nextStep)).ready : undefined;
     // « Où est-il ? » — et est-ce bien LUI ? (un CSS structurel peut viser un autre élément)
-    const fingerprint = step.fingerprint;
+    // Une cible désignée DANS UNE LIGNE (row: colonne → valeur) : la ligne fait foi. Aucune réparation par
+    // l'empreinte ne peut la remplacer par l'élément d'une autre ligne (l'ordre du tableau a pu changer).
+    const fingerprint = step.target.row ? undefined : step.fingerprint;
     let located: Locator | string | undefined;
     let resolution: TargetResolutionTrace | undefined;
     let reacquiredTarget: string | undefined;

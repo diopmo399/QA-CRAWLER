@@ -956,6 +956,12 @@ const staticAnalysisSchema = z
         enabled: z.boolean().default(true),
         /** Lire les source maps (sourcesContent) quand le serveur les publie. */
         sourceMaps: z.boolean().default(true),
+        /**
+         * Hôtes dont les SCRIPTS peuvent être LUS (GET du JavaScript et de sa source map), en plus des
+         * hôtes de navigation (safety.allowedHosts). Pour les micro-frontends servis par des hôtes voisins :
+         * le crawler n'y navigue jamais, il lit seulement le code. `*.example.com` accepté.
+         */
+        allowedHosts: z.array(nonEmpty).default([]),
       })
       .strict()
       .default({}),

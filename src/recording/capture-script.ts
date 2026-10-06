@@ -291,6 +291,8 @@ export function installRecorder(
         row.querySelectorAll('th, td, [role="cell"], [role="gridcell"], [role="rowheader"]'),
       ).find((candidate) => !candidate.contains(el) && clean(textOf(candidate)));
       if (cell) out.row = clean(textOf(cell), 40);
+      const key = rowKeyOf(el, row);
+      if (key) out.rowKey = key;
     }
     // Une option connaît la liste qui la porte, et la liste le contrôle qui l'ouvre.
     const listbox = el.closest(
@@ -378,6 +380,74 @@ export function installRecorder(
         typeof native === 'boolean' && el.tagName.toLowerCase() === 'input' ? native : aria === 'true';
     }
     return out;
+  };
+
+  /**
+   * LA CLÉ DE LA LIGNE : la colonne (puis la paire de colonnes) dont les valeurs sont UNIQUES parmi les
+   * lignes visibles du tableau — un identifiant (« Business key », « ID », « N° ») de préférence à un
+   * nom, jamais une date ; la colonne de la cible est exclue (le lien « Process request » de chaque ligne).
+   */
+  const rowKeyOf = (el: Element, row: Element): { column: string; value: string }[] | undefined => {
+    const container = row.closest('table, [role="grid"], [role="table"], [role="treegrid"], mat-table');
+    if (!container) return undefined;
+    const CELLS = 'td, th, [role="cell"], [role="gridcell"], [role="rowheader"], mat-cell';
+    const headerRow =
+      container.querySelector('thead tr, mat-header-row') ??
+      Array.from(container.querySelectorAll('[role="row"], tr')).find(
+        (candidate) => candidate.querySelector('th, [role="columnheader"], mat-header-cell') !== null,
+      );
+    if (!headerRow) return undefined;
+    const headers = Array.from(headerRow.querySelectorAll('th, [role="columnheader"], mat-header-cell')).map(
+      (cell) => clean(cell.textContent.replace(/[↑↓▲▼⇅]/g, ''), 40),
+    );
+    const rows = Array.from(container.querySelectorAll('tr, [role="row"], mat-row'))
+      .filter(
+        (candidate) =>
+          candidate !== headerRow &&
+          candidate.querySelector('td, [role="cell"], [role="gridcell"], mat-cell') !== null,
+      )
+      .slice(0, 200);
+    if (rows.length === 0 || !rows.includes(row)) return undefined;
+    const cellsOf = (candidate: Element): Element[] =>
+      Array.from(candidate.querySelectorAll(CELLS)).filter(
+        (cell) => cell.closest('tr, [role="row"], mat-row') === candidate,
+      );
+    const own = cellsOf(row);
+    const targetColumn = own.findIndex((cell) => cell.contains(el));
+    const value = (candidate: Element, index: number): string =>
+      clean(cellsOf(candidate)[index]?.textContent ?? '', 60);
+    const ID_HEADER = /(\bid\b|key|cl[ée]|code|num[ée]ro|n°|\bno\b|r[ée]f|number|#)/i;
+    const DATE = /\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{1,2}:\d{2}/;
+    const scored = headers
+      .map((header, index) => {
+        if (index === targetColumn || !header) return undefined;
+        const values = rows.map((candidate) => value(candidate, index));
+        const mine = value(row, index);
+        if (!mine) return undefined;
+        const unique = new Set(values).size === values.length && values.every(Boolean);
+        let score = 0;
+        if (ID_HEADER.test(header)) score += 3;
+        if (/^[A-Z0-9][A-Z0-9\-_/.]{0,24}$/i.test(mine) && /\d/.test(mine)) score += 2;
+        if (DATE.test(mine)) score -= 3;
+        if (mine.length > 30) score -= 1;
+        return { index, header, mine, values, unique, score };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
+      .sort((a, b) => b.score - a.score);
+    const single = scored.find((entry) => entry.unique && entry.score >= 0);
+    if (single) return [{ column: single.header, value: single.mine }];
+    // Aucune colonne seule : la première paire (des colonnes les mieux notées) unique.
+    const top = scored.slice(0, 6);
+    for (const [i, first] of top.entries())
+      for (const second of top.slice(i + 1)) {
+        const pairs = rows.map((_, r) => `${first.values[r] ?? ''}\u0000${second.values[r] ?? ''}`);
+        if (new Set(pairs).size === pairs.length)
+          return [
+            { column: first.header, value: first.mine },
+            { column: second.header, value: second.mine },
+          ];
+      }
+    return undefined;
   };
 
   const roleOf = (el: Element): string => {
