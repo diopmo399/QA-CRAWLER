@@ -78,16 +78,34 @@ export function analyzeDivergence(input: DivergenceInput): DivergenceAnalysis {
   // Session, droits : la récupération est interdite (jamais de contournement d'une autorisation).
   const unauthorized = input.network.filter((exchange) => exchange.status === 401);
   const forbidden = input.network.filter((exchange) => exchange.status === 403);
+  // Un 401 isolé, sans écran de connexion, pendant que d'AUTRES requêtes réussissent : un appel de fond
+  // refusé (un service annexe), pas une session perdue — un indice faible qui ne bloque pas la reprise.
+  const succeeded = input.network.filter(
+    (exchange) => exchange.status !== undefined && exchange.status >= 200 && exchange.status < 400,
+  );
+  const backgroundOnly = !screen.loginFormVisible && unauthorized.length > 0 && succeeded.length > 0;
   if (screen.loginFormVisible || unauthorized.length > 0)
-    add('AUTH_STATE_CHANGED', screen.loginFormVisible && unauthorized.length > 0 ? 0.92 : 0.8, [
-      ...(screen.loginFormVisible
-        ? [{ source: 'RUNTIME' as const, detail: 'a sign-in form is displayed' }]
-        : []),
-      ...unauthorized.slice(0, 2).map((exchange) => ({
-        source: 'NETWORK' as const,
-        detail: `${exchange.request} answered 401`,
-      })),
-    ]);
+    add(
+      'AUTH_STATE_CHANGED',
+      screen.loginFormVisible && unauthorized.length > 0 ? 0.92 : backgroundOnly ? 0.35 : 0.8,
+      [
+        ...(backgroundOnly
+          ? [
+              {
+                source: 'NETWORK' as const,
+                detail: `${String(succeeded.length)} other request(s) succeeded and no sign-in form is displayed: the session is still valid (a background request was refused)`,
+              },
+            ]
+          : []),
+        ...(screen.loginFormVisible
+          ? [{ source: 'RUNTIME' as const, detail: 'a sign-in form is displayed' }]
+          : []),
+        ...unauthorized.slice(0, 2).map((exchange) => ({
+          source: 'NETWORK' as const,
+          detail: `${exchange.request} answered 401`,
+        })),
+      ],
+    );
   const permissionText = PERMISSION_TEXT.exec(screen.text)?.[0];
   if (forbidden.length > 0 || permissionText)
     add(

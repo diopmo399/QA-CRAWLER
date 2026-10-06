@@ -236,6 +236,14 @@ const effectsSchema = z
   .strict();
 
 /** L'empreinte de la cible enregistrée : vérifiée avant de cliquer (un CSS structurel peut viser un autre élément). */
+const cssRecordSchema = z
+  .object({
+    selector: nonEmpty,
+    matchCount: z.number().int().min(0).optional(),
+    confidence: z.number().min(0).max(1).optional(),
+  })
+  .strict();
+
 const fingerprintSchema = z
   .object({
     role: nonEmpty.optional(),
@@ -282,6 +290,30 @@ const fingerprintSchema = z
     listbox: nonEmpty.optional(),
     /** L'état attendu après l'action (une case : checked / unchecked). */
     expectedState: z.enum(['checked', 'unchecked']).optional(),
+    // DISCRIMINATING CSS (facultatif : un ancien enregistrement reste valide sans lui).
+    /**
+     * Le CSS PRÉFÉRÉ (minimum stable discriminant) et le chemin STRUCTUREL de repli, avec leur nombre
+     * de correspondances à l'enregistrement : vérifiés sur l'écran courant au rejeu, jamais exécutés
+     * aveuglément s'ils désignent plusieurs éléments.
+     */
+    css: z
+      .object({
+        preferred: cssRecordSchema.optional(),
+        fallback: cssRecordSchema.optional(),
+      })
+      .strict()
+      .optional(),
+    /** L'identité du composant hôte (« app-input-mask[formcontrolname=\"branch\"] »). */
+    host: nonEmpty.optional(),
+    maxLength: z.number().int().positive().optional(),
+    /** L'ambiguïté connue à l'enregistrement (NONE / LOW / MEDIUM / HIGH) et ses raisons. */
+    ambiguity: z
+      .object({
+        level: z.enum(['NONE', 'LOW', 'MEDIUM', 'HIGH']),
+        reasons: z.array(nonEmpty).max(8).default([]),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -519,6 +551,17 @@ export interface TargetFingerprint {
   row?: string;
   listbox?: string;
   expectedState?: 'checked' | 'unchecked';
+  css?: { preferred?: RecordedCss; fallback?: RecordedCss };
+  host?: string;
+  maxLength?: number;
+  ambiguity?: { level: 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH'; reasons: string[] };
+}
+
+/** Un CSS enregistré : son sélecteur, combien d'éléments il désignait, sa confiance. */
+export interface RecordedCss {
+  selector: string;
+  matchCount?: number;
+  confidence?: number;
 }
 
 interface StepCommon {

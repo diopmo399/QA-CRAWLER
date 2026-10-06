@@ -1,3 +1,4 @@
+import { detectDuplicateTargetActions } from './duplicate-target.js';
 import { validateRecordingConsistency, type RecordingConsistencyReport } from './recording-consistency.js';
 import type { ScenarioConfig } from '../config/config.js';
 import { ActionDiscovery } from '../discovery/action-discovery.js';
@@ -181,6 +182,9 @@ export function processRecording(
       mergeTyping: recording.normalization.mergeTyping,
       // EXACT : chaque valeur saisie reste une étape.
       collapseCorrections: fidelity !== 'EXACT' && recording.normalization.collapseCorrections,
+      // Un reclic sans effet sur la même cible : une seule étape (EXACT : chaque clic reste une étape).
+      mergeRetryClicks: fidelity !== 'EXACT',
+      mergeSelectPreludeClicks: fidelity !== 'EXACT',
       preserve,
     },
   );
@@ -519,6 +523,35 @@ function emitFieldIdentity(
         emit('GENERIC_LOCATOR_DETECTED', `${event.id}: structural css "${identity.domPathFingerprint}"`);
     }
   }
+  // DISCRIMINATING SELECTORS : la cible venait-elle de l'inventaire de l'écran ? quel CSS a été retenu ?
+  const described = new Set<string>();
+  for (const event of rawEvents) {
+    const selectors = event.element?.selectors;
+    if (!selectors || !event.element) continue;
+    const identity = fieldIdentityOfEvent(event);
+    const key = (identity ? fieldIdentityKey(identity) : undefined) ?? event.element.css;
+    if (described.has(key)) continue;
+    described.add(key);
+    emit(
+      selectors.inventory === 'INVENTORY' ? 'TARGET_MATCHED_FROM_INVENTORY' : 'TARGET_INVENTORY_MISS',
+      `${event.id}: ${selectors.inventory === 'INVENTORY' ? 'descriptor reused from the screen inventory' : 'analysed locally (not in the inventory yet)'}`,
+    );
+    if (selectors.preferred && !selectors.preferred.structural && !selectors.preferred.dynamic)
+      emit(
+        'CSS_CANDIDATE_SELECTED',
+        `${event.id}: ${selectors.preferred.selector} (${selectors.preferred.kind}, ${String(selectors.preferred.matchCount)} match, confidence ${String(selectors.preferred.confidence)})${selectors.structural.matchCount > 1 ? ` — structural fallback ${selectors.structural.selector} matches ${String(selectors.structural.matchCount)}: not selected` : ''}`,
+      );
+    else
+      emit(
+        'LOCATOR_AMBIGUOUS',
+        `${event.id}: no stable unique selector (${selectors.ambiguity.level}: ${selectors.ambiguity.reasons.join(', ') || '—'})`,
+      );
+  }
+  for (const duplicate of detectDuplicateTargetActions(normalized.kept))
+    emit(
+      'DUPLICATE_TARGET_ACTION_DETECTED',
+      `${duplicate.firstActionId} → ${duplicate.secondActionId} ${duplicate.type} "${duplicate.target}": ${duplicate.classification} — ${duplicate.reasons.join('; ')}`,
+    );
   for (const decision of normalized.mergeDecisions) {
     const pair = `${decision.previousRawEventIds.join('+')} + ${decision.currentRawEventIds.join('+')}`;
     emit(

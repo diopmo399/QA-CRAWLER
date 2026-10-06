@@ -126,7 +126,8 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
       unique: true,
       why: `name attribute "${element.nameAttr}"`,
     });
-  if (element.formControlName)
+  // Un formControlName HÉRITÉ d'un hôte n'est pas sur l'élément : « [formcontrolname=x] » viserait l'hôte.
+  if (element.formControlName && !element.formControlFromHost)
     candidates.push({
       target: { strategy: 'css', value: `[formcontrolname="${element.formControlName}"]` },
       quality: 'FRAMEWORK_BINDING',
@@ -141,16 +142,34 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
       unique: (element.sameId ?? 1) <= 1,
       why: `stable id "${element.elementId}"${(element.sameId ?? 1) > 1 ? ` (shared by ${String(element.sameId)} elements)` : ''}`,
     });
+  // DISCRIMINATING CSS : le CSS capturé EST le candidat préféré (identité d'un hôte, contexte) quand le
+  // CSS propre de l'élément ne le distinguait pas ; sa qualité est celle de son ancre.
+  const preferred = element.selectors?.preferred;
+  const discriminating =
+    preferred !== undefined &&
+    preferred.selector === element.css &&
+    preferred.matchCount === 1 &&
+    !preferred.structural &&
+    !preferred.dynamic;
   const fragile: FlowTarget = { strategy: 'css', value: element.css };
   // SAME CSS ≠ SAME FIELD : un CSS qui désigne plusieurs éléments (« mat-form-field > … > input »)
   // n'est jamais déclaré unique ; l'empreinte (libellé du champ, contexte) le départage au rejeu.
   const cssMatches = element.cssMatches ?? 1;
   candidates.push({
     target: fragile,
-    quality: element.cssStable ? 'CSS_STABLE' : 'FRAGILE',
+    quality: discriminating
+      ? preferred.kind === 'HOST_BINDING' || preferred.kind === 'FORM_CONTROL'
+        ? 'FRAMEWORK_BINDING'
+        : preferred.kind === 'TEST_ID' || preferred.kind === 'NAME'
+          ? 'STABLE_ATTRIBUTE'
+          : 'CSS_STABLE'
+      : element.cssStable
+        ? 'CSS_STABLE'
+        : 'FRAGILE',
     unique: cssMatches <= 1,
-    why:
-      cssMatches > 1
+    why: discriminating
+      ? `discriminating selector ${element.css} (${preferred.kind}, unique, confidence ${String(preferred.confidence)})`
+      : cssMatches > 1
         ? `generic selector (matches ${String(cssMatches)} elements)`
         : element.cssStable
           ? 'stable selector'
@@ -238,6 +257,17 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     ...(readable(element.form) ? { form: element.form } : {}),
     ...(readable(element.row) ? { row: element.row } : {}),
     ...(readable(element.listboxOwner) ? { listbox: element.listboxOwner } : {}),
+    // DISCRIMINATING CSS : le préféré et le structurel (repli), comptés à l'enregistrement.
+    ...cssRecordOf(element),
+    ...(element.hostIdentity
+      ? {
+          host: `${element.hostIdentity.tag}[${element.hostIdentity.attribute}="${element.hostIdentity.value}"]`,
+        }
+      : {}),
+    ...(element.maxLength !== undefined && element.maxLength > 0 && element.maxLength < 100_000
+      ? { maxLength: element.maxLength }
+      : {}),
+    ...ambiguityRecordOf(element),
   };
   return {
     target: chosen.target,
@@ -251,6 +281,42 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     ambiguous,
     reasons,
   };
+}
+
+/** Le CSS préféré et le repli structurel d'un élément, tels qu'enregistrés (jamais une identité seule). */
+function cssRecordOf(element: RecordedElement): Pick<TargetFingerprint, 'css'> {
+  const selectors = element.selectors;
+  if (!selectors) return {};
+  const preferred =
+    selectors.preferred && !selectors.preferred.structural && !selectors.preferred.dynamic
+      ? selectors.preferred
+      : undefined;
+  const fallback =
+    selectors.structural.selector !== preferred?.selector && selectors.structural.matchCount > 0
+      ? selectors.structural
+      : undefined;
+  if (!preferred && !fallback) return {};
+  const record = (candidate: { selector: string; matchCount: number; confidence: number }) => ({
+    selector: candidate.selector,
+    matchCount: candidate.matchCount,
+    confidence: candidate.confidence,
+  });
+  return {
+    css: {
+      ...(preferred ? { preferred: record(preferred) } : {}),
+      ...(fallback ? { fallback: record(fallback) } : {}),
+    },
+  };
+}
+
+/** AMBIGUITY SCORE : le niveau connu à l'enregistrement, avec les libellés répétés. */
+function ambiguityRecordOf(element: RecordedElement): Pick<TargetFingerprint, 'ambiguity'> {
+  const known = element.selectors?.ambiguity;
+  const reasons = [...(known?.reasons ?? [])];
+  if (element.sameLabel > 1 && !reasons.includes('REPEATED_LABEL')) reasons.push('REPEATED_LABEL');
+  if (!known && reasons.length === 0) return {};
+  const level = known?.level ?? 'LOW';
+  return { ambiguity: { level: level === 'NONE' && reasons.length > 0 ? 'LOW' : level, reasons } };
 }
 
 /** « general.priorite » : la section la plus proche et le nom humain, en identifiant stable. */

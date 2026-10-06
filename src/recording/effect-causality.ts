@@ -1,6 +1,9 @@
 import type { StepEffects } from '../config/flow-schema.js';
 import type { SemanticRecordedAction } from './model.js';
 
+/** capture-script borne la liste des contrôles pré-action à ce nombre. */
+export const PRE_ACTION_CONTROLS_CAP = 150;
+
 /**
  * ACTION EFFECT CORRELATION : TIME DOES NOT PROVE CAUSALITY.
  *
@@ -120,10 +123,15 @@ export function classifyEffects(input: {
     closedByNext &&
     learned.route !== undefined &&
     [...nextRoutes].some((candidate) => routeTemplateEquals(candidate, learned.route ?? ''));
-  // L'écran au DÉBUT du geste suivant (capture pré-action, avant son gestionnaire) : ce que CETTE
-  // action a laissé. Un contrôle apparu qui n'y est pas encore est apparu après le début du geste
-  // suivant (un dialogue ouvert de façon synchrone par lui) : jamais un effet de cette action.
-  const nextBefore = closedByNext && next?.preActionControls ? new Set(next.preActionControls) : undefined;
+  // L'écran au DÉBUT d'un geste (capture pré-action, avant son gestionnaire) : une preuve indépendante
+  // de la façon dont l'observation précédente s'est terminée (geste suivant ou minuteur).
+  const nextBefore = next?.preActionControls ? new Set(next.preActionControls) : undefined;
+  const actionBefore = action.preActionControls ? new Set(action.preActionControls) : undefined;
+  // La capture est bornée (PRE_ACTION_CONTROLS_CAP) : une liste pleine ne prouve aucune absence.
+  const complete = (controls: readonly string[] | undefined): boolean =>
+    controls !== undefined && controls.length < PRE_ACTION_CONTROLS_CAP;
+  const nextBeforeComplete = complete(next?.preActionControls);
+  const actionBeforeComplete = complete(action.preActionControls);
   const nameOf = (effect: string): string =>
     effect
       .slice(effect.indexOf(':') + 1)
@@ -131,7 +139,33 @@ export function classifyEffects(input: {
       .toLowerCase();
   // L'écran : à cette action seulement si elle est le geste le plus récent avant l'observation.
   const screen = (kind: CausalEffectKind, effect: string): void => {
-    if (kind === 'APPEARS' && nextBefore && !nextBefore.has(nameOf(effect.slice(2)))) {
+    const name = kind === 'ROUTE' ? undefined : nameOf(effect.slice(2));
+    // Déjà là (ou déjà absent) AVANT ce geste : l'action ne l'a pas produit — jamais attribué.
+    if (
+      name !== undefined &&
+      ((kind === 'APPEARS' && actionBefore?.has(name)) ||
+        (kind === 'DISAPPEARS' && actionBeforeComplete && actionBefore && !actionBefore.has(name)))
+    ) {
+      add(kind, effect, 'AMBIGUOUS', [
+        `already ${kind === 'APPEARS' ? 'present' : 'absent'} before this human action (${action.id})`,
+      ]);
+      return;
+    }
+    // Un contrôle apparu qui n'est pas encore là au début du geste suivant est apparu APRÈS lui (un
+    // dialogue ouvert de façon synchrone) : jamais un effet de cette action.
+    if (
+      kind === 'APPEARS' &&
+      name !== undefined &&
+      nextBeforeComplete &&
+      nextBefore &&
+      !nextBefore.has(name)
+    ) {
+      if (!closedByNext) {
+        add(kind, effect, 'AMBIGUOUS', [
+          `present in the intermediate observation but absent before the next human action (${next?.id ?? '?'})`,
+        ]);
+        return;
+      }
       add(
         kind,
         effect,
@@ -143,7 +177,13 @@ export function classifyEffects(input: {
       );
       return;
     }
-    if (kind === 'DISAPPEARS' && nextBefore && nextBefore.has(nameOf(effect.slice(2)))) {
+    if (kind === 'DISAPPEARS' && name !== undefined && nextBefore?.has(name)) {
+      if (!closedByNext) {
+        add(kind, effect, 'AMBIGUOUS', [
+          `absent in the intermediate observation but present before the next human action (${next?.id ?? '?'})`,
+        ]);
+        return;
+      }
       add(
         kind,
         effect,

@@ -70,13 +70,13 @@ ${flow}`,
   const describeFlow = (report: FlowRunReport): string =>
     JSON.stringify(report.steps.map((step) => [step.index, step.status, step.reason]));
 
-  it('OLD behavior (non-unique resolution off, old fingerprint): the first #valueInput of the dialog is filled — Playwright succeeds, the filter is NOT applied, the flow fails later', async () => {
+  it('non-unique resolution off (old fingerprint): the ambiguous #valueInput is NEVER filled on its first match — AMBIGUOUS_TARGET, nothing executed (formerly: the wrong field was filled and the flow failed later)', async () => {
     const report = await replay(FLOW(LEGACY), {
       replay: 'functionalTargetResolution: { resolveNonUniqueLocators: false }',
     });
-    expect(fillOf(report)?.status).toBe('PASSED');
+    expect(fillOf(report)?.status, describeFlow(report)).toBe('FAILED');
+    expect(fillOf(report)?.reason).toMatch(/AMBIGUOUS_TARGET: AMBIGUOUS_LOCATOR/);
     expect(report.status).toBe('FAILED');
-    expect(report.steps.at(-1)?.status).toBe('FAILED');
   }, 90_000);
 
   it('E2E (§25) the enriched identity: non-unique detected, every candidate scored, dialog + label + workflow context select the right field, only it is filled, Apply → the filter is really applied — PASS', async () => {

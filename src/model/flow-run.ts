@@ -46,6 +46,11 @@ export interface FlowStepReport {
   /** La résolution FONCTIONNELLE d'une cible dont l'empreinte ne correspondait plus (trace complète). */
   targetResolution?: TargetResolutionTrace;
   /**
+   * TARGET RESOLUTION par le CSS enregistré : le CSS préféré, ses correspondances à l'enregistrement et
+   * maintenant, et le verdict (CSS_CONFIRMED : il désigne UN élément, celui qui est utilisé).
+   */
+  cssResolution?: CssResolutionReport;
+  /**
    * REPLAY TRANSITION SYNCHRONIZATION : exécution → transition → stabilité → préparation de
    * l'action suivante. Distingue un problème de localisateur, de transition, d'effet ou une régression.
    */
@@ -152,4 +157,13 @@ export interface FlowRunReport {
   divergence?: FlowDivergence;
   /** FLOW DRIFT : le flow marche-t-il encore tel quel, ou seulement grâce aux récupérations ? */
   drift?: FlowDriftReport;
+}
+
+export interface CssResolutionReport {
+  recordedPreferred: string;
+  recordedMatches?: number;
+  currentMatches: number;
+  resolution: 'CSS_CONFIRMED' | 'CSS_AMBIGUOUS' | 'CSS_CONFLICT' | 'CSS_NOT_FOUND';
+  /** Le CSS structurel de repli enregistré, et ses correspondances actuelles. */
+  fallback?: { selector: string; recordedMatches?: number; currentMatches: number };
 }

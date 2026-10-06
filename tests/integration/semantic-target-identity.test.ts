@@ -1,6 +1,7 @@
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/config/config-loader.js';
 import type { FlowRunReport } from '../../src/model/flow-run.js';
@@ -73,7 +74,12 @@ ${steps}
     expect(yaml).toMatch(/label: Priority\s+section: (Report settings > )?General/);
     expect(yaml).toMatch(/label: Search\s+section: (Report settings > )?Columns/);
     expect(yaml).toMatch(/label: Search\s+section: (Report settings > )?Filters/);
-    expect(yaml).not.toMatch(/css:|nth-of-type/);
+    // Les CIBLES sont sémantiques : aucune étape ne vise un CSS (le CSS discriminant et son repli
+    // structurel sont gardés dans l'empreinte, pour confirmer et réparer au rejeu).
+    const steps = (parseYaml(yaml) as { steps: Record<string, Record<string, unknown> | undefined>[] }).steps;
+    for (const step of steps)
+      for (const kind of ['fill', 'click', 'select', 'check'])
+        expect(step[kind]?.css, JSON.stringify(step)).toBeUndefined();
     const feature = await readFile(path.join(outcome.directory, 'generated.feature'), 'utf8');
     expect(feature).toMatch(/"Search" (in the|dans la) section "(Report settings > )?Columns"/);
     // RECORDING SEMANTIC AUDIT : écrit à chaque enregistrement ; intelligence OFF → aucun appel.

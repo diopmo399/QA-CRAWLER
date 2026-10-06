@@ -142,7 +142,14 @@ export function buildFieldIdentity(
     ...(element.role ? { role: element.role } : {}),
     ...(element.inDialog && element.dialogName ? { dialogContext: element.dialogName } : {}),
     ...(section ? { sectionContext: section } : {}),
-    ...(element.componentTag ? { componentIdentity: element.componentTag } : {}),
+    // L'hôte identifié (app-input[formcontrolname="x"]) avant la seule balise du composant.
+    ...(element.hostIdentity
+      ? {
+          componentIdentity: `${element.hostIdentity.tag}[${element.hostIdentity.attribute}="${element.hostIdentity.value}"]`,
+        }
+      : element.componentTag
+        ? { componentIdentity: element.componentTag }
+        : {}),
     ...(element.nearbyText && element.nearbyText.length > 0 ? { nearbyText: element.nearbyText } : {}),
     ...(semantic ? { semanticConcept: semantic } : {}),
     domPathFingerprint: element.css,

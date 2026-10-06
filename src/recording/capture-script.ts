@@ -1,3 +1,4 @@
+import { isDynamicValue, selectorAnalyzerSource, type SelectorAnalysis } from './selector-builder.js';
 import { sectionPathOf } from './semantic-dom.js';
 
 /**
@@ -45,6 +46,10 @@ export function installRecorder(
   options: CaptureOptions,
   /** sectionPathOf (semantic-dom) : le même chemin de sections qu'au rejeu. */
   sectionOf: (el: Element) => string[] = () => [],
+  /** DISCRIMINATING CSS SELECTOR BUILDER (selector-builder) : les candidats CSS comptés sur le DOM. */
+  selectorsOf: (el: Element) => SelectorAnalysis | undefined = () => undefined,
+  /** DynamicAttributeDetector (selector-builder) : un attribut généré n'ancre jamais un sélecteur. */
+  dynamicAttribute: typeof isDynamicValue = () => false,
 ): void {
   const global = window as unknown as Record<string, unknown>;
   if (global.__qaCrawlerRecorderInstalled === true) return;
@@ -381,6 +386,9 @@ export function installRecorder(
     const tag = el.tagName.toLowerCase();
     if (tag === 'a' && el.hasAttribute('href')) return 'link';
     if (tag === 'button' || tag === 'summary') return 'button';
+    // Une case Material : l'hôte porte le rôle quand il enveloppe une seule case native.
+    if (tag === 'mat-checkbox' && el.querySelectorAll('input[type="checkbox"]').length === 1)
+      return 'checkbox';
     if (tag === 'select') return (el as HTMLSelectElement).multiple ? 'listbox' : 'combobox';
     if (tag === 'mat-select') return 'combobox';
     if (tag === 'textarea') return 'textbox';
@@ -500,7 +508,8 @@ export function installRecorder(
     const id = el.getAttribute('id');
     if (id && !generatedId(id)) return { css: `#${escape(id)}`, stable: true };
     const name = el.getAttribute('name');
-    if (name && !/\d{2,}/.test(name)) return { css: `${tag}[name="${name}"]`, stable: true };
+    if (name && !/\d{2,}/.test(name) && !dynamicAttribute('attribute', name))
+      return { css: `${tag}[name="${name}"]`, stable: true };
     const control = el.getAttribute('formcontrolname');
     if (control) return { css: `[formcontrolname="${control}"]`, stable: true };
     // Dernier recours : un chemin de positions, fragile (signalé comme tel).
@@ -520,6 +529,30 @@ export function installRecorder(
       node = parent;
     }
     return { css: parts.join(' > '), stable: false };
+  };
+
+  // SCREEN ELEMENT INVENTORY : l'analyse CSS de chaque élément interactif, faite à l'arrivée d'un écran
+  // et RÉUTILISÉE par les événements (une frappe ne relance rien) ; validée légèrement (le CSS préféré
+  // désigne-t-il toujours cet élément, et lui seul ?), refaite sinon (un élément apparu après l'inventaire).
+  const analyses = new WeakMap<Element, SelectorAnalysis>();
+  const analysisOf = (el: Element): { analysis?: SelectorAnalysis; source: 'INVENTORY' | 'LOCAL' } => {
+    const known = analyses.get(el);
+    if (known?.preferred) {
+      try {
+        const matching = document.querySelectorAll(known.preferred.selector);
+        if (matching.length === 1 && matching[0] === el) return { analysis: known, source: 'INVENTORY' };
+      } catch {
+        // un sélecteur devenu invalide : l'analyse est refaite
+      }
+    }
+    let analysis: SelectorAnalysis | undefined;
+    try {
+      analysis = selectorsOf(el);
+    } catch {
+      analysis = undefined;
+    }
+    if (analysis) analyses.set(el, analysis);
+    return { ...(analysis ? { analysis } : {}), source: 'LOCAL' };
   };
 
   const sensitiveField = (el: Element): boolean => {
@@ -564,20 +597,58 @@ export function installRecorder(
     const tag = el.tagName.toLowerCase();
     const guessed = !label && !name && el.matches(FIELD) ? guessLabel(el) : '';
     const input = el as HTMLInputElement;
-    const { css, stable } = cssOf(el);
+    const own = cssOf(el);
+    let css = own.css;
+    let stable = own.stable;
     // SAME CSS ≠ SAME FIELD : combien d'éléments ce CSS désigne (dans la racine du nœud).
     let cssMatches = 0;
     let cssIndex = -1;
-    try {
-      // Dans un shadow DOM, le CSS est préfixé par l'hôte : querySelectorAll ne le lit pas.
-      if (el.getRootNode() === document) {
-        const matching = Array.from(document.querySelectorAll(css));
-        cssMatches = matching.length;
-        cssIndex = matching.indexOf(el);
+    const count = (): void => {
+      try {
+        // Dans un shadow DOM, le CSS est préfixé par l'hôte : querySelectorAll ne le lit pas.
+        if (el.getRootNode() === document) {
+          const matching = Array.from(document.querySelectorAll(css));
+          cssMatches = matching.length;
+          cssIndex = matching.indexOf(el);
+        }
+      } catch {
+        cssMatches = 0;
       }
-    } catch {
-      cssMatches = 0;
+    };
+    count();
+    // PRESERVE CSS, ENRICH CSS : un CSS propre, stable et unique est gardé ; sinon le meilleur candidat
+    // discriminant (identité d'un hôte, contexte) le remplace — le chemin structurel reste en repli.
+    const { analysis, source } = analysisOf(el);
+    const discriminating =
+      analysis?.preferred &&
+      !analysis.preferred.usesStructuralIndex &&
+      !analysis.preferred.usesDynamicAttribute
+        ? analysis.preferred
+        : undefined;
+    if (discriminating && !(stable && cssMatches <= 1) && discriminating.selector !== css) {
+      css = discriminating.selector;
+      stable = true;
+      count();
     }
+    const host = analysis?.host;
+    // UN CONTENEUR DE CONTRÔLES (un en-tête d'onglets, une barre d'outils) : le clic est tombé ENTRE eux.
+    // Gardé (une ligne cliquable contient aussi des boutons), mais signalé avec ses contrôles.
+    const containerOf = el.matches(FIELD)
+      ? []
+      : Array.from(el.querySelectorAll(CANDIDATES))
+          .filter((child) => child !== el && isVisible(child))
+          .map((child) => clean(nameOf(child), 40))
+          .filter(Boolean)
+          .slice(0, 6);
+    const ownControl = el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name');
+    const compact = (candidate: SelectorAnalysis['structural']): Record<string, unknown> => ({
+      selector: candidate.selector,
+      kind: candidate.kind,
+      matchCount: candidate.matchCount,
+      confidence: candidate.confidence,
+      ...(candidate.usesDynamicAttribute ? { dynamic: true } : {}),
+      ...(candidate.usesStructuralIndex ? { structural: true } : {}),
+    });
     const id = el.getAttribute('id') ?? undefined;
     let sameRoleName = 0;
     let roleNameIndex = 0;
@@ -671,8 +742,26 @@ export function installRecorder(
       ...(guessed ? { guessedLabel: guessed } : {}),
       ...(testIdEntry ? { testId, testIdAttribute: testIdEntry[0] } : {}),
       ...(el.getAttribute('name') ? { nameAttr: el.getAttribute('name') } : {}),
-      ...((el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name'))
-        ? { formControlName: el.getAttribute('formcontrolname') ?? el.getAttribute('ng-reflect-name') }
+      // formControlName : sur l'élément, sinon sur son composant HÔTE (un input dans <app-input formcontrolname>).
+      ...(ownControl
+        ? { formControlName: ownControl }
+        : host?.attribute === 'formcontrolname'
+          ? { formControlName: host.value, formControlFromHost: true }
+          : {}),
+      ...(containerOf.length >= 2 ? { containerOf } : {}),
+      ...(host
+        ? { hostIdentity: { tag: host.tag, attribute: host.attribute, value: host.value, depth: host.depth } }
+        : {}),
+      ...(analysis
+        ? {
+            selectors: {
+              ...(analysis.preferred ? { preferred: compact(analysis.preferred) } : {}),
+              structural: compact(analysis.structural),
+              candidates: analysis.candidates.slice(0, 5).map(compact),
+              ambiguity: analysis.ambiguity,
+              inventory: source,
+            },
+          }
         : {}),
       ...(id ? { elementId: id, generatedId: generatedId(id), ...(sameId > 1 ? { sameId } : {}) } : {}),
       ...(formField ? { formField } : {}),
@@ -716,6 +805,115 @@ export function installRecorder(
       ...(tag === 'select' || el.hasAttribute('list') ? { hasOptions: true } : {}),
     };
   };
+
+  // SCREEN INVENTORY : à l'arrivée d'un écran (route), d'une fenêtre, ou après un changement de
+  // structure important (des contrôles apparus / disparus), l'inventaire des éléments interactifs est
+  // construit AVANT les interactions humaines, et envoyé (jamais une valeur saisie). Une frappe ne le
+  // relance pas : seules les mutations de structure le déclenchent, après un calme.
+  const DIALOGS =
+    '[role="dialog"], [role="alertdialog"], dialog[open], [aria-modal="true"], mat-dialog-container';
+  let lastScreenKey = '';
+  let inventoryTimer: number | undefined;
+  const interactiveNow = (): Element[] =>
+    Array.from(document.querySelectorAll(CANDIDATES)).filter(
+      (el) => !el.closest(`[${OVERLAY}]`) && isVisible(el),
+    );
+  const screenKeyOf = (elements: readonly Element[]): string => {
+    const dialogs = Array.from(document.querySelectorAll(DIALOGS)).filter(isVisible).length;
+    return `${location.pathname}${location.hash}|${String(dialogs)}|${String(Math.round(elements.length / 5))}`;
+  };
+  const kindOf = (el: Element): string => {
+    if (el.matches(FIELD)) return 'INPUT';
+    const role = roleOf(el);
+    if (role === 'link') return 'LINK';
+    if (['checkbox', 'radio', 'switch'].includes(role)) return 'TOGGLE';
+    if (['combobox', 'listbox', 'option'].includes(role) || el.tagName === 'MAT-SELECT') return 'SELECT';
+    return 'BUTTON';
+  };
+  const buildInventory = (reason: string): void => {
+    const begun = performance.now();
+    const elements = interactiveNow().slice(0, 150);
+    lastScreenKey = screenKeyOf(elements);
+    const counters = new Map<string, number>();
+    const descriptors = elements.map((el) => {
+      const kind = kindOf(el);
+      const ordinal = (counters.get(kind) ?? 0) + 1;
+      counters.set(kind, ordinal);
+      const { analysis } = analysisOf(el);
+      const control =
+        el.getAttribute('formcontrolname') ??
+        (analysis?.host?.attribute === 'formcontrolname' ? analysis.host.value : undefined);
+      const label = clean(labelOf(el) || nameOf(el), 60);
+      return {
+        elementId: `${kind}-${String(ordinal).padStart(3, '0')}`,
+        kind,
+        tag: el.tagName.toLowerCase(),
+        role: roleOf(el),
+        ...(label ? { label } : {}),
+        ...(control ? { formControlName: control } : {}),
+        ...(analysis?.preferred
+          ? {
+              preferredCss: analysis.preferred.selector,
+              preferredMatches: analysis.preferred.matchCount,
+              confidence: analysis.preferred.confidence,
+            }
+          : {}),
+        ...(analysis
+          ? {
+              structuralCss: analysis.structural.selector,
+              structuralMatches: analysis.structural.matchCount,
+              ambiguity: analysis.ambiguity.level,
+              reasons: analysis.ambiguity.reasons,
+            }
+          : {}),
+        status: analysis?.preferred ? 'UNIQUE' : 'AMBIGUOUS',
+      };
+    });
+    const heading = document.querySelector(
+      `${DIALOGS} h1, ${DIALOGS} h2, main h1, h1, [role="heading"][aria-level="1"]`,
+    );
+    const fn = global[`${options.binding}_inventory`];
+    if (typeof fn !== 'function') return;
+    (fn as (value: unknown) => Promise<unknown>)({
+      at: Date.now(),
+      url: location.href,
+      screen: clean(heading?.textContent ?? document.title, 80),
+      reason,
+      elements: descriptors.length,
+      durationMs: Math.round(performance.now() - begun),
+      descriptors,
+    }).catch(() => undefined);
+  };
+  const checkScreen = (): void => {
+    inventoryTimer = undefined;
+    if (paused) return;
+    const key = screenKeyOf(interactiveNow());
+    if (key === lastScreenKey) return;
+    const [route, dialogs] = key.split('|');
+    const [lastRoute, lastDialogs] = lastScreenKey.split('|');
+    buildInventory(
+      lastScreenKey === ''
+        ? 'SCREEN_ARRIVED'
+        : route !== lastRoute
+          ? 'ROUTE_CHANGED'
+          : dialogs !== lastDialogs
+            ? 'DIALOG_CHANGED'
+            : 'STRUCTURE_CHANGED',
+    );
+  };
+  const scheduleInventory = (): void => {
+    if (inventoryTimer !== undefined) window.clearTimeout(inventoryTimer);
+    inventoryTimer = window.setTimeout(checkScreen, 400);
+  };
+  try {
+    new MutationObserver((records) => {
+      if (records.some((record) => record.type === 'childList')) scheduleInventory();
+    }).observe(document, { childList: true, subtree: true });
+  } catch {
+    // sans observateur : seulement l'inventaire initial
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scheduleInventory);
+  else scheduleInventory();
 
   const shapeOf = (value: string): string => {
     const text = value.trim();
@@ -1345,9 +1543,19 @@ export function installRecorder(
       // corrélation peut encore promouvoir s'il précède une navigation).
       let target = el;
       if (!noise && !el.matches(CANDIDATES)) {
-        const clickable = functionalTarget(event);
-        if (clickable) target = clickable;
-        else noise = 'click on a non-interactive element';
+        // Un clic DANS l'enveloppe d'une seule case (libellé, mat-checkbox, role=checkbox) : c'est la case.
+        // Dans un <label>, le navigateur la bascule et « change » l'enregistre ; sinon l'hôte est la cible.
+        const wrapper = el.closest('mat-checkbox, [role="checkbox"], label');
+        const boxes = wrapper?.querySelectorAll('input[type="checkbox"]');
+        const box = boxes?.length === 1 ? boxes[0] : undefined;
+        if (wrapper && box && (wrapper.tagName.toLowerCase() === 'label' || box.closest('label')))
+          noise = 'toggle (recorded by change)';
+        else if (wrapper && box) target = wrapper;
+        else {
+          const clickable = functionalTarget(event);
+          if (clickable) target = clickable;
+          else noise = 'click on a non-interactive element';
+        }
       }
       send(
         {
@@ -1535,6 +1743,6 @@ export function installRecorder(
 export function captureScript(options: CaptureOptions): string {
   return [
     'if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
-    `(${installRecorder.toString()})(${JSON.stringify(options)}, ${sectionPathOf.toString()});`,
+    `(${installRecorder.toString()})(${JSON.stringify(options)}, ${sectionPathOf.toString()}, ${selectorAnalyzerSource()}, ${isDynamicValue.toString()});`,
   ].join('\n');
 }

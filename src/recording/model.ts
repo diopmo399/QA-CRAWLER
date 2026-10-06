@@ -152,6 +152,53 @@ export interface PreActionTargetSnapshot extends PreActionCandidate {
 }
 
 /** Un élément tel que le navigateur le décrit au moment de l'événement (jamais sa valeur). */
+export interface RecordedCssCandidate {
+  selector: string;
+  kind: string;
+  matchCount: number;
+  confidence: number;
+  dynamic?: boolean;
+  structural?: boolean;
+}
+
+export interface RecordedSelectors {
+  preferred?: RecordedCssCandidate;
+  structural: RecordedCssCandidate;
+  candidates: RecordedCssCandidate[];
+  ambiguity: { level: 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH'; reasons: string[]; structuralMatches: number };
+  /** L'analyse venait de l'inventaire de l'écran (INVENTORY) ou d'une analyse locale (LOCAL). */
+  inventory: 'INVENTORY' | 'LOCAL';
+}
+
+/** Un élément interactif de l'inventaire d'un écran (jamais une valeur saisie). */
+export interface ScreenInventoryElement {
+  elementId: string;
+  kind: string;
+  tag: string;
+  role?: string;
+  label?: string;
+  formControlName?: string;
+  preferredCss?: string;
+  preferredMatches?: number;
+  confidence?: number;
+  structuralCss?: string;
+  structuralMatches?: number;
+  ambiguity?: string;
+  reasons?: string[];
+  status: 'UNIQUE' | 'AMBIGUOUS';
+}
+
+/** SCREEN ELEMENT INVENTORY : les éléments interactifs d'un écran, connus AVANT les interactions. */
+export interface ScreenInventory {
+  at: number;
+  url: string;
+  screen?: string;
+  reason: string;
+  elements: number;
+  durationMs: number;
+  descriptors: ScreenInventoryElement[];
+}
+
 export interface RecordedElement {
   tag: string;
   role: string;
@@ -184,6 +231,14 @@ export interface RecordedElement {
   cssMatches?: number;
   /** Sa position parmi ces éléments (0 = premier) : le dernier recours, jamais une identité. */
   cssIndex?: number;
+  /** Un CONTENEUR de plusieurs contrôles (en-tête d'onglets, barre d'outils) : leurs noms. */
+  containerOf?: string[];
+  /** formControlName lu sur le composant HÔTE (un input dans <app-input formcontrolname="x">). */
+  formControlFromHost?: boolean;
+  /** L'identité portée par l'ancêtre le plus proche (formControlName, data-testid, name, section…). */
+  hostIdentity?: { tag: string; attribute: string; value: string; depth: number };
+  /** DISCRIMINATING CSS : le préféré, le structurel (repli), les candidats comptés, l'ambiguïté. */
+  selectors?: RecordedSelectors;
   /**
    * INTERACTION OWNER : le conteneur sémantique qui possède l'interaction (dialog, tab, accordion,
    * form, fieldset, card, row, menu, listbox, toolbar, section, component) et son nom.
@@ -645,6 +700,7 @@ export type RecordingEventType =
   | 'RECORDING_COMPLETED'
   | 'RECORDING_ENRICHED'
   | 'RECORDING_SEMANTIC_AUDITED'
+  | 'RECORDING_FLOW_AUDITED'
   | 'TARGET_VALIDATION'
   | 'RECORDING_FAILED'
   | 'ACTION_CORRELATION_STARTED'
@@ -689,7 +745,14 @@ export type RecordingEventType =
   | 'GENERIC_LOCATOR_DETECTED'
   | 'NON_UNIQUE_FIELD_LOCATOR'
   | 'TESTDATA_FIELD_BOUND'
-  | 'TESTDATA_FIELD_CONFLICT';
+  | 'TESTDATA_FIELD_CONFLICT'
+  /** DISCRIMINATING SELECTORS : inventaire d'écran, candidats CSS, actions dupliquées. */
+  | 'SCREEN_INVENTORY_COMPLETED'
+  | 'TARGET_MATCHED_FROM_INVENTORY'
+  | 'TARGET_INVENTORY_MISS'
+  | 'LOCATOR_AMBIGUOUS'
+  | 'CSS_CANDIDATE_SELECTED'
+  | 'DUPLICATE_TARGET_ACTION_DETECTED';
 
 export interface RecordingEvent {
   type: RecordingEventType;

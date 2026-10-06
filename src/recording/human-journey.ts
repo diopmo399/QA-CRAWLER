@@ -685,6 +685,7 @@ function droppedStatus(
 ): Pick<InteractionAccount, 'status' | 'reason' | 'rule'> {
   const reason = action.dropped ?? '';
   if (/^merged into the next input/.test(reason)) return { status: 'MERGED', rule: 'TYPING_MERGED', reason };
+  if (/^retry click/.test(reason)) return { status: 'MERGED', rule: 'RETRY_CLICK_MERGED', reason };
   if (/corrected later|toggled back/.test(reason))
     return { status: 'COLLAPSED_CORRECTION', rule: 'CORRECTION_BEFORE_VALIDATION', reason };
   if (/failed validation attempt/.test(reason))

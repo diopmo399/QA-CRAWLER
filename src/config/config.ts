@@ -1324,6 +1324,19 @@ const recordingSchema = z
       })
       .strict()
       .default({}),
+    /**
+     * FLOW AUDIT : le flow GÉNÉRÉ relu dans son ensemble (étapes dupliquées, clic sans effet avant le
+     * même clic, double écriture, saisies jamais envoyées, aucune vérification finale…) ; le conseiller
+     * (ai.mode ≠ OFF) confirme / conteste et signale le reste. Le flow n'est jamais modifié.
+     */
+    flowAudit: z
+      .object({
+        enabled: z.boolean().default(true),
+        ai: z.boolean().default(true),
+        maxCalls: z.number().int().min(0).max(50).default(5),
+      })
+      .strict()
+      .default({}),
     intelligenceAudit: z
       .object({
         enabled: z.boolean().default(true),
@@ -1504,6 +1517,17 @@ const replaySchema = z
         maxCandidates: z.number().int().min(2).max(40).default(12),
         /** Une saisie résolue fonctionnellement doit être PROUVÉE par la valeur lue ensuite. */
         verifyFillValue: z.boolean().default(true),
+        /**
+         * VALUE_RESTORED_AFTER_APPLICATION_RESET : une saisie vidée, écrasée ou re-rendue par l'application
+         * juste après (initialisation tardive du formulaire, champ dépendant réinitialisé) est refaite UNE
+         * fois, après stabilisation de l'écran et sur le même champ (empreinte vérifiée) — jamais plus.
+         */
+        restoreValueAfterApplicationReset: z.boolean().default(true),
+        /**
+         * Avant une étape qui écrit (allow MUTATION), relire les champs remplis sur cet écran : une valeur
+         * perdue entre-temps est SIGNALÉE (FILLED_VALUE_LOST_BEFORE_SUBMIT), jamais refaite en silence.
+         */
+        checkFilledValuesBeforeSubmit: z.boolean().default(true),
         /**
          * LOCATOR ≠ TARGET IDENTITY : un localisateur qui désigne plusieurs éléments (#valueInput ×4)
          * n'est qu'un générateur de candidats ; le contexte départage, jamais « le premier qui correspond ».

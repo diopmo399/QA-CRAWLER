@@ -62,9 +62,8 @@ export function resolveSemanticActions(
       ...(event.stateAfter ? { stateAfter: event.stateAfter } : {}),
       ...(event.observationClosedBy ? { observationClosedBy: event.observationClosedBy } : {}),
       ...(event.observationId ? { observationId: event.observationId } : {}),
-      ...(event.pre?.controls && event.pre.controls.length > 0
-        ? { preActionControls: event.pre.controls }
-        : {}),
+      // Une liste vide est une preuve (rien n'était à l'écran) : gardée.
+      ...(event.pre?.controls ? { preActionControls: event.pre.controls } : {}),
       ...(event.pre?.route ? { preActionRoute: event.pre.route } : {}),
       ...extra,
     };
