@@ -424,8 +424,21 @@ export class RuntimeBundleSourceProvider implements StaticSourceProvider {
       pathname = 'bundle.js';
     }
     if (!/\.(m?js|cjs)$/.test(pathname)) pathname = `${pathname}.js`;
+    // Micro-frontends : chaque application a SON main.js sur SON hôte. Le même chemin déjà pris par un
+    // autre bundle : le chemin est qualifié par l'hôte (jamais un conflit qui écarterait une application).
+    let path = `bundle/${pathname}`;
+    const taken = workspace.hashOf(path);
+    if (taken !== undefined && taken !== sha256(bundle.text)) {
+      let host = 'other-host';
+      try {
+        host = new URL(bundle.url).hostname || host;
+      } catch {
+        // garde le nom générique
+      }
+      path = `bundle/${host}/${pathname}`;
+    }
     const outcome = workspace.add({
-      path: `bundle/${pathname}`,
+      path,
       text: bundle.text,
       origin: 'BUNDLE',
       bundleUrl: bundle.display,

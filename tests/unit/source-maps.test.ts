@@ -350,6 +350,27 @@ describe('Runtime bundles → source maps → workspace', () => {
     expect(runtime.inventory.all()[0]?.status).toBe('BUNDLE_ONLY');
   });
 
+  it('MICRO-FRONTENDS: two applications each with their own main.js on their own host are both kept (host-qualified path), never a conflict that drops one', async () => {
+    const other = 'https://second.example.test';
+    const server = fakeServer({
+      [`${ORIGIN}/main.js`]: 'class A{}',
+      [`${other}/main.js`]: 'class B{}',
+    });
+    const runtime = provider(server.fetch, {
+      isAllowedUrl: (url) => ['app.example.test', 'second.example.test'].includes(new URL(url).hostname),
+    });
+    runtime.observe(`${ORIGIN}/main.js`);
+    runtime.observe(`${other}/main.js`);
+    runtime.observe(`${ORIGIN}/main.js`);
+    const ws = workspace();
+    await runtime.provide(ws);
+    expect(ws.provenance().map((entry) => entry.path)).toEqual([
+      'bundle/main.js',
+      'bundle/second.example.test/main.js',
+    ]);
+    expect(ws.conflicts).toEqual([]);
+  });
+
   it('a bundle from a host that is not allowed is never read', async () => {
     const server = fakeServer({});
     const runtime = provider(server.fetch);

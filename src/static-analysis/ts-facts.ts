@@ -322,7 +322,10 @@ export function extractFacts(
       const call = ts.isCallExpression(element) ? element : undefined;
       const access = call ? call.expression : element;
       if (!ts.isPropertyAccessExpression(access)) continue;
-      if (access.expression.getText(source) !== 'Validators') continue;
+      // Un build de production renomme la classe : `Validators.required` devient `Ue.required`. Dans la
+      // liste des validateurs d'un contrôle, un identifiant suivi d'un nom de validateur connu en est un.
+      const owner = access.expression.getText(source);
+      if (owner !== 'Validators' && !/^[A-Za-z_$][\w$]{0,3}$/.test(owner)) continue;
       const kind = access.name.text as StaticValidatorKind;
       if (!VALIDATOR_KINDS.has(kind)) continue;
       const argument = call?.arguments[0];
