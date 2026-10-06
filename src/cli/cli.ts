@@ -149,7 +149,12 @@ export async function runCli(input: string[]): Promise<number> {
         finishing.sink(update);
       },
       listener: {
-        ...progressListener(args.quiet),
+        // QA_DEBUG=1 (ou logging.level: debug) : chaque décision d'exécution expliquée dans le terminal.
+        ...progressListener(
+          args.quiet,
+          ['1', 'true', 'click', 'all'].includes((process.env.QA_DEBUG ?? '').toLowerCase()) ||
+            ['DEBUG', 'TRACE'].includes(config.logging.level),
+        ),
         ...(args.quiet ? {} : { onIntelligence: advisor.onIntelligence }),
       },
       mode,
@@ -349,7 +354,7 @@ export function synchronizationLines(sync: FlowStepReport['synchronization']): s
   ];
 }
 
-function progressListener(quiet: boolean): ExplorationListener {
+function progressListener(quiet: boolean, debug = false): ExplorationListener {
   let step = 0;
   return {
     onAuthenticated(description) {
@@ -502,6 +507,9 @@ function progressListener(quiet: boolean): ExplorationListener {
           `      ${event.type === 'NAVIGATION_RECOVERY_FAILED' ? color.yellow(line) : color.dim(line)}`,
         );
       }
+    },
+    onDebug(category, line) {
+      if (debug) logger.info(color.dim(`      [debug ${category.toLowerCase()}] ${line}`));
     },
     onInteractionLog(line) {
       // Structuré, sans secret : [BROWSER_INTERACTION] type=HTTP_AUTH origin=… handler=… status=… attempt=1

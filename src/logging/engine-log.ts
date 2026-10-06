@@ -17,6 +17,7 @@ export type EngineEvent =
   | CognitiveEvent
   | AiEvent
   | 'AUTHENTICATED'
+  | 'EXECUTION_DEBUG'
   | 'FLOW_STATE_DISCOVERED'
   | 'FLOW_STATE_REVISITED'
   | 'ACTION_SELECTED'
@@ -133,6 +134,9 @@ export class EngineEventLog {
     return {
       onAuthenticated: (description) => {
         this.log('INFO', 'AUTHENTICATED', description);
+      },
+      onDebug: (category, line) => {
+        this.log('DEBUG', 'EXECUTION_DEBUG', `[${category}] ${line}`);
       },
       onState: (context, isNew) => {
         this.log(

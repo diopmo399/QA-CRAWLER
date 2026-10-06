@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import { clickRobust } from '../execution/robust-click.js';
 import { setCheckedRobust } from '../execution/checkable.js';
 import { describeTarget, type FlowExpectation, type FlowTarget } from '../config/flow-schema.js';
 import { toLocator } from '../execution/locator-resolver.js';
@@ -75,6 +76,9 @@ export class FlowStepExecutor {
     /** Attente au plus que l'écran soit affiché (plus de roue de chargement, DOM stable). */
     private readonly readyTimeoutMs = 0,
   ) {}
+
+  /** Journal de débogage (QA_DEBUG / logging.level DEBUG) : chaque décision de clic, expliquée. */
+  debug: ((line: string) => void) | undefined;
 
   /**
    * L'élément, une fois visible ; un message d'erreur sinon. Avec `nth`, cette
@@ -462,7 +466,8 @@ export class FlowStepExecutor {
     try {
       switch (action.kind) {
         case 'click':
-          await locator.click({ timeout: timeoutMs });
+          // Le contrôle de la cible posé sur elle (radio natif sur son libellé) n'est jamais un obstacle.
+          await clickRobust(locator, timeoutMs, this.debug);
           break;
         case 'check':
           await setCheckedRobust(locator, true, timeoutMs);

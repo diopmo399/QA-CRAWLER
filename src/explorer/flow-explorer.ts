@@ -378,6 +378,8 @@ export interface ExplorationListener {
   onInteraction?(result: BrowserInteractionResult): void;
   /** Ligne de log structurée d'une interaction du navigateur (aucun secret). */
   onInteractionLog?(line: string): void;
+  /** Débogage (QA_DEBUG=1 ou logging.level DEBUG) : le détail d'une décision d'exécution (clic…). */
+  onDebug?(category: string, line: string): void;
   /**
    * Une phrase d'intention Gherkin a été résolue (ou non) puis exécutée :
    * SEMANTIC_RESOLUTION_SUCCEEDED / FAILED / AMBIGUOUS. Jamais une valeur saisie.
@@ -858,6 +860,7 @@ export class FlowExplorer {
       exploration.readyTimeoutMs,
     );
     this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs, exploration.readyTimeoutMs);
+    this.flowSteps.debug = (line) => this.listener.onDebug?.('CLICK', line);
     const sync = config.replay.synchronization;
     this.transitionWaiter = new UITransitionWaiter({
       transitionTimeoutMs: sync.transitionTimeoutMs,
