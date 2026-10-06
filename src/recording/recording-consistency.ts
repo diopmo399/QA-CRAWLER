@@ -14,7 +14,8 @@ export interface RecordingConsistencyIssue {
     | 'FUTURE_ACTION_EFFECT_CONTAMINATION'
     | 'ROUTE_OWNED_BY_ANOTHER_ACTION'
     | 'OWNERSHIP_CONFLICT'
-    | 'LOW_CONFIDENCE_REQUIRED_EFFECT';
+    | 'LOW_CONFIDENCE_REQUIRED_EFFECT'
+    | 'TRANSIENT_SCREEN_EFFECT';
   effect: string;
   probableOwner?: string;
   /** true : l'attribution causale l'a déjà écarté des attentes (consigné pour l'explication). */
@@ -79,6 +80,17 @@ export function validateRecordingConsistency(
           ...(candidate.ownerActionId ? { probableOwner: candidate.ownerActionId } : {}),
           resolved: true,
           detail: `rejected from this action: ${candidate.evidence.join('; ')}`,
+        });
+      // Un contrôle passager (déjà là avant, ou disparu avant le geste suivant) : écarté des attentes.
+      else if (
+        candidate.classification === 'AMBIGUOUS' &&
+        (candidate.kind === 'APPEARS' || candidate.kind === 'DISAPPEARS')
+      )
+        issues.push({
+          type: 'TRANSIENT_SCREEN_EFFECT',
+          effect: candidate.effect,
+          resolved: true,
+          detail: `rejected from required effects: ${candidate.evidence.join('; ')}`,
         });
     // Une route attendue que la corrélation attribue à une action PLUS TARDIVE.
     const route = action.expectedEffects?.route;

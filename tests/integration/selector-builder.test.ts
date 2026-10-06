@@ -96,6 +96,17 @@ describe('DiscriminatingCssSelectorBuilder (real DOM)', () => {
     expect(named[1]?.structural.usesStructuralIndex).toBe(true);
   });
 
+  it('the radio buttons of a group share their host binding: the option value tells them apart (one unique selector each)', async () => {
+    const result = await analyse(
+      '<app-radio-group formcontrolname="contactMethod"><label><input type="radio" name="g1" value="EMAIL"> Email</label><label><input type="radio" name="g1" value="PHONE"> Phone</label></app-radio-group>',
+    );
+    expect(result.map((entry) => entry.preferred?.selector)).toEqual([
+      'app-radio-group[formcontrolname="contactMethod"] input[value="EMAIL"]',
+      'app-radio-group[formcontrolname="contactMethod"] input[value="PHONE"]',
+    ]);
+    expect(result[0]?.preferred).toMatchObject({ kind: 'HOST_BINDING', matchCount: 1 });
+  });
+
   it('TEST 11 the structural selector is always kept as fallback, with its match count', async () => {
     const result = await analyse(
       material('app-input', 'formcontrolname="a"', 'A', 0) +

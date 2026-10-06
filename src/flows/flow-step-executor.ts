@@ -487,7 +487,9 @@ export class FlowStepExecutor {
       await locator.selectOption({ label: option }, { timeout: timeoutMs });
       return;
     }
-    await locator.click({ timeout: timeoutMs });
+    // Une liste déjà ouverte (aria-expanded) n'est pas recliquée : ce clic la refermerait.
+    if ((await locator.getAttribute('aria-expanded').catch(() => null)) !== 'true')
+      await locator.click({ timeout: timeoutMs });
     await page.getByRole('option', { name: option }).first().click({ timeout: timeoutMs });
   }
 

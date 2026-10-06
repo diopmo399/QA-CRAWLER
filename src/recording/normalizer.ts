@@ -6,6 +6,7 @@ import {
   type FieldIdentity,
   type FieldIdentityMatch,
 } from './field-identity.js';
+import { attributeEffects } from './human-journey.js';
 import { classifyRecordedValue, type ValueClassifierOptions } from './value-classifier.js';
 
 /** Une navigation qui suit une action de si près en est la conséquence (redirection, route d'une SPA). */
@@ -22,6 +23,8 @@ export interface SafeNormalizationOptions {
   collapseCorrections?: boolean;
   /** Un clic sans effet aussitôt répété sur la même cible avec effet : une seule étape. EXACT : false. */
   mergeRetryClicks?: boolean;
+  /** Un clic passif sur l'enveloppe d'une liste, qui n'a fait qu'ouvrir ses options, fusionné dans le SELECT suivant. EXACT : false. */
+  mergeSelectPreludeClicks?: boolean;
   /** Actions à ne jamais fusionner ni retirer (effet sur l'écran, dépendance d'une action suivante). */
   preserve?: ReadonlySet<string>;
 }
@@ -189,6 +192,63 @@ export function normalizeRecording(
     }
   }
 
+  // 2c. SELECT PRELUDE : un clic sur une enveloppe SANS rôle (le conteneur d'une liste maison) dont le
+  //     seul effet est d'afficher des options, suivi du choix dans CETTE liste (même section / fenêtre,
+  //     libellé qui la contient) : une seule intention, le choix. Rien d'autre ne doit avoir changé.
+  let mergedSelectPrelude = false;
+  if (safe.mergeSelectPreludeClicks ?? true) {
+    const contextOf = (action: SemanticRecordedAction): string | undefined =>
+      action.target?.fingerprint?.dialog ?? action.target?.fingerprint?.section;
+    const nameOf = (text: string | undefined): string =>
+      (text ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const consecutive = live();
+    for (let index = 0; index < consecutive.length - 1; index += 1) {
+      const click = consecutive[index];
+      const selection = consecutive[index + 1];
+      if (!click || !selection || click.type !== 'CLICK' || selection.type !== 'SELECT') continue;
+      const element = rawById.get(click.rawEventIds[0] ?? '')?.element;
+      const before = click.stateBefore ? stateById.get(click.stateBefore) : undefined;
+      const after = click.stateAfter ? stateById.get(click.stateAfter) : undefined;
+      if (
+        !element ||
+        element.role ||
+        ['a', 'button', 'input', 'select', 'mat-select'].includes(element.tag.toLowerCase()) ||
+        click.classification === 'MUTATION' ||
+        click.classification === 'DANGEROUS' ||
+        keep(click) ||
+        click.network.length > 0 ||
+        click.navigation ||
+        !before ||
+        !after ||
+        before.route !== after.route ||
+        before.dialogs.join('\0') !== after.dialogs.join('\0') ||
+        before.invalidFields !== after.invalidFields ||
+        !contextOf(click) ||
+        contextOf(click) !== contextOf(selection) ||
+        nameOf(selection.target?.label).length < 4 ||
+        !nameOf(click.target?.label).includes(nameOf(selection.target?.label))
+      )
+        continue;
+      const oldControls = new Set(before.controls);
+      const newControls = new Set(after.controls);
+      const added = [...newControls].filter((control) => !oldControls.has(control));
+      const removed = [...oldControls].filter((control) => !newControls.has(control));
+      if (
+        added.length === 0 ||
+        added.some((control) => !control.startsWith('option:')) ||
+        removed.some((control) => !control.startsWith('option:'))
+      )
+        continue;
+      click.dropped = 'select prelude: passive container click only opened options for the next selection';
+      selection.rawEventIds = [...click.rawEventIds, ...selection.rawEventIds];
+      selection.merged = selection.merged ? `${selection.merged}; select prelude` : 'select prelude';
+      selection.provenance = 'NORMALIZED_FROM_HUMAN';
+      if (click.stateBefore) selection.stateBefore = click.stateBefore;
+      delete selection.domEffects;
+      mergedSelectPrelude = true;
+    }
+  }
+
   // 3. Cycle invalide → corrigé → renvoyé.
   let negative = false;
   const kept = live();
@@ -292,6 +352,8 @@ export function normalizeRecording(
 
   // Les détours (un onglet ouvert puis quitté) ne sont PAS retirés ici : c'est de l'optimisation
   // (FlowOptimizer, optimized.flow.yaml), jamais une normalisation du parcours humain.
+  // Le choix a pris l'écran de départ du clic fusionné : ses effets sont réattribués.
+  if (mergedSelectPrelude) attributeEffects(live(), states);
   return { actions, kept: live(), stats, warnings, negative, mergeDecisions };
 }
 

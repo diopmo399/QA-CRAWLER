@@ -294,6 +294,21 @@ export function analyzeSelectors(el: Element, helpers: SelectorHelpers): Selecto
   let found = candidates.some((candidate) => candidate.unique && !candidate.usesDynamicAttribute);
   // MINIMUM STABLE DISCRIMINATING SELECTOR : l'ancre la plus proche d'abord ; on s'arrête au premier unique.
   for (const anchor of identified) {
+    // Les boutons d'un groupe radio partagent l'hôte (formControlName) : leur valeur d'option les départage.
+    const optionValue =
+      tag === 'input' && (el as HTMLInputElement).type === 'radio' ? el.getAttribute('value') : null;
+    if (
+      anchor.binding &&
+      optionValue &&
+      optionValue.length <= 80 &&
+      !helpers.isDynamic('attribute', optionValue) &&
+      add(`${anchor.selector} input${attr('value', optionValue)}`, 'HOST_BINDING', [
+        `${anchor.attribute ?? ''}="${anchor.value ?? ''}" and radio option value`,
+      ])
+    ) {
+      found = true;
+      break;
+    }
     const unique = add(`${anchor.selector} ${tag}`, anchor.binding ? 'HOST_BINDING' : 'CONTEXTUAL', [
       `${anchor.attribute ?? ''}="${anchor.value ?? ''}" on ancestor <${anchor.node.tagName.toLowerCase()}>`,
     ]);

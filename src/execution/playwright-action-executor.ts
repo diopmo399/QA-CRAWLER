@@ -334,7 +334,9 @@ export class PlaywrightActionExecutor {
       await locator.selectOption(label ? { label } : { index: 0 }, { timeout });
       return;
     }
-    await this.click(locator, timeout);
+    // Une liste déjà ouverte (aria-expanded) n'est pas recliquée : ce clic la refermerait.
+    if ((await locator.getAttribute('aria-expanded').catch(() => null)) !== 'true')
+      await this.click(locator, timeout);
     const options = page.locator('[role="option"]:visible:not([aria-disabled="true"])');
     await options.first().waitFor({ state: 'visible', timeout });
     if (label) {
