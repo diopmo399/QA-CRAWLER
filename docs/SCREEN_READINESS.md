@@ -39,3 +39,35 @@ target now?** It waits for what really prevents acting, and only for that.
 `pollIntervalMs` (100; the wait wakes up early on the next DOM mutation).
 
 Tests: `tests/integration/screen-readiness.test.ts` (17 real-browser cases).
+
+## Clic robuste : le contrôle de la cible n'est jamais un obstacle
+
+**Le problème :** Playwright refuse un clic tant qu'un autre élément reçoit le pointeur au point visé (« … intercepts pointer events »), et réessaie jusqu'au délai (20 s). C'est correct pour un vrai obstacle. C'est faux quand cet élément est **le contrôle de la cible**. Exemple : l'input natif invisible d'un radio, posé en `position: fixed` sur son libellé « No ».
+
+**Le clic (`click` d'un flow) procède en trois temps :**
+
+1. **Essai** (`trial`) : si la cible est actionnable, clic normal.
+2. **Sinon, diagnostic au centre de la cible.** L'élément reçu est classé :
+   - `SELF` : la cible elle-même ;
+   - `OWN_CONTROL` : le contrôle de la cible (`label.control`, ou l'unique champ de son enveloppe) ;
+   - `FOREIGN` : un autre élément ;
+   - `NONE` : rien.
+3. **Selon le diagnostic :**
+   - `OWN_CONTROL` : clic au **même endroit** (force), comme un humain. Si l'option d'un libellé de radio ou de case est encore non cochée, son contrôle est cliqué.
+   - `FOREIGN` : **jamais forcé**. Le clic normal attend la disparition de l'obstacle jusqu'au délai. L'erreur dit ce qui recouvre la cible, par exemple `— on top of the target: <div> (FOREIGN)`.
+
+## Journal de débogage
+
+```bash
+QA_DEBUG=1 npm run qa -- explore mission.yaml       # Windows : set QA_DEBUG=1
+```
+
+Avec `QA_DEBUG=1`, ou `logging: { level: debug }` dans la mission, le terminal affiche chaque décision de clic :
+
+```
+[debug click] click: not actionable after 1503 ms — target <label> "No", on top <input[type=radio] name=g> (OWN_CONTROL), own control <input[type=radio] name=g>
+[debug click] click: playwright: - <input type="radio" …> intercepts pointer events
+[debug click] click: the element on top is the target’s own control — clicking at the same point (force)
+```
+
+Les mêmes lignes sont écrites dans `engine-log.jsonl` (événement `EXECUTION_DEBUG`, niveau DEBUG).

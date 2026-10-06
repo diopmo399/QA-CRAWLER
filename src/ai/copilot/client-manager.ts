@@ -99,14 +99,27 @@ export class CopilotClientManager {
     await session.disconnect().catch(() => undefined);
   }
 
-  async close(): Promise<void> {
+  /**
+   * Ferme la session puis le runtime, BORNÉ : un runtime qui ne répond plus (requête en cours,
+   * réseau lent) ne bloque jamais la fin du run — au-delà du délai, il est arrêté de force.
+   */
+  async close(timeoutMs = CLOSE_TIMEOUT_MS): Promise<void> {
     const session = this.session;
     this.session = undefined;
-    await session?.disconnect().catch(() => undefined);
+    if (session)
+      await withTimeout(session.disconnect(), timeoutMs, 'session disconnect').catch(() => undefined);
     const client = this.client;
     this.client = undefined;
     this.starting = undefined;
-    await client?.stop().catch(() => undefined);
+    if (!client) return;
+    const stopped = await withTimeout(client.stop(), timeoutMs, 'runtime stop').then(
+      () => true,
+      () => false,
+    );
+    if (!stopped)
+      await withTimeout(client.forceStop?.() ?? Promise.resolve(), timeoutMs, 'force stop').catch(
+        () => undefined,
+      );
   }
 
   private ensureStarted(): Promise<CopilotClientLike> {
@@ -141,6 +154,9 @@ function describe(error: unknown): string {
     .replace(/\b(gh[pousr]_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,})\b/g, '[REDACTED]')
     .slice(0, 200);
 }
+
+/** Délai maximal de chaque étape de la fermeture (session, runtime, arrêt forcé). */
+const CLOSE_TIMEOUT_MS = 5_000;
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;

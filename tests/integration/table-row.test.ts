@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/config/config-loader.js';
 import type { FlowRunReport } from '../../src/model/flow-run.js';
 import { runMission } from '../../src/orchestrator.js';
+import type { ProgressUpdate } from '../../src/progress/progress.js';
 import { runRecording } from '../../src/recording/record-orchestrator.js';
 import { parse as parseYaml } from 'yaml';
 import { startTaskListApp, type TaskListApp } from '../fixtures/task-list-app.js';
@@ -45,9 +46,13 @@ flows:
       {},
       {},
     );
-    const { result } = await runMission(config, { env: {} });
+    const { result } = await runMission(config, {
+      env: {},
+      onProgress: (update) => runProgress.push(update),
+    });
     return result.flows[0] as FlowRunReport;
   };
+  const runProgress: ProgressUpdate[] = [];
   const describeRun = (report: FlowRunReport): string =>
     JSON.stringify(report.steps.map((step) => [step.description, step.status, step.reason]));
   const KEY = { text: 'Process request', row: { 'Business key': '2935' } };
@@ -57,12 +62,27 @@ flows:
     ['reverse order', '?order=desc'],
     ['new tasks inserted at the top', '?fresh=1'],
     ['ARIA / Material grid (mat-row, mat-cell, sort icon in the header)', '?material=1&order=desc'],
+    ['micro-frontend: the table inside an open shadow root', '?shadow=1&order=desc'],
+    ['micro-frontend: the table inside an iframe of the shell', '?frame=1&material=1'],
   ])(
     'the row of business key 2935 is always the one processed — %s',
     async (_label, query) => {
       const report = await run(query, KEY, 'Task 2935');
       expect(report.status, describeRun(report)).toBe('PASSED');
       expect(report.steps[0]?.description).toContain('in row {Business key=2935}');
+      // Après le dernier flow, le run dit ce qu'il fait jusqu'aux rapports.
+      const finishing = runProgress.splice(0);
+      expect(finishing.map((update) => update.label)).toEqual([
+        'Closing the browser',
+        'Saving the memory',
+        'Closing the run',
+        'Comparing with earlier runs',
+        'Saving the knowledge',
+        'Writing the artifacts',
+        'Writing the reports',
+        '1 flow(s), 0 issue(s)',
+      ]);
+      expect(finishing.at(-1)).toMatchObject({ state: 'DONE', task: 'Finishing the run' });
     },
     120_000,
   );
@@ -116,7 +136,9 @@ flows:
     );
   }, 120_000);
   it('RECORDING: the click on the repeated link records the row by its unique key column (Business key), never its position — and the replay finds it in another order', async () => {
+    const progress: ProgressUpdate[] = [];
     const outcome = await runRecording({
+      onProgress: (update) => progress.push(update),
       name: 'process task',
       url: `${app.url}/`,
       overrides: { headless: true, reportsDir: path.join(dir, 'recording') },
@@ -138,6 +160,18 @@ flows:
     const click = flow.steps.find((step) => step.click)?.click;
     expect(click?.row, JSON.stringify(flow.steps)).toEqual({ 'Business key': '2930' });
     expect(click?.nth).toBeUndefined();
+    // Après l'arrêt : chaque phase de la finalisation est annoncée, dans l'ordre, jusqu'à DONE.
+    const phases = [...new Set(progress.filter((u) => u.state === 'RUNNING').map((u) => u.label))];
+    expect(phases).toEqual([
+      'Finishing the capture',
+      'Closing the browser',
+      'Building the flow',
+      'Writing the files',
+      'Auditing the flow',
+      'Writing the report',
+    ]);
+    expect(progress.at(-1)).toMatchObject({ state: 'DONE', task: 'Finalizing the recording', total: 6 });
+    expect(progress.at(-1)?.label).toMatch(/^\d+ step\(s\)$/);
     for (const query of ['?order=desc', '?fresh=1']) {
       const report = await run(query, click ?? {}, 'Task 2930');
       expect(report.status, `${query}: ${describeRun(report)}`).toBe('PASSED');

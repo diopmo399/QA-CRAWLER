@@ -12,6 +12,7 @@ import {
 } from '../recording/record-orchestrator.js';
 import { UsageError } from './args.js';
 import { color, logger } from './logger.js';
+import { terminalProgress } from './progress-renderer.js';
 
 export const RECORD_HELP = `qa-crawler record — turn a human demonstration into an imposed flow
 
@@ -139,8 +140,11 @@ export async function runRecordCli(argv: string[]): Promise<number> {
   if (args.url) logger.info(`  Start    : ${args.url}`);
   logger.info('');
   let outcome: RecordOutcome;
+  // Après Stop : une barre de progression tant que le système finalise (flow, audits, rapport).
+  const progress = terminalProgress();
   try {
     outcome = await runRecording({
+      onProgress: progress.sink,
       name: args.name,
       ...(args.url !== undefined ? { url: args.url } : {}),
       ...(args.configPath !== undefined ? { missionFile: args.configPath } : {}),
@@ -155,6 +159,7 @@ export async function runRecordCli(argv: string[]): Promise<number> {
       ...(process.stdin.isTTY ? { control: terminalControl } : { control: signalControl }),
     });
   } catch (error) {
+    progress.stop();
     if (error instanceof ConfigError) {
       logger.error(error.message);
       return 2;

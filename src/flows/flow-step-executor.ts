@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import { clickRobust } from '../execution/robust-click.js';
 import { setCheckedRobust } from '../execution/checkable.js';
 import { describeTarget, type FlowExpectation, type FlowTarget } from '../config/flow-schema.js';
 import { toLocator } from '../execution/locator-resolver.js';
@@ -76,6 +77,9 @@ export class FlowStepExecutor {
     private readonly readyTimeoutMs = 0,
   ) {}
 
+  /** Journal de débogage (QA_DEBUG / logging.level DEBUG) : chaque décision de clic, expliquée. */
+  debug: ((line: string) => void) | undefined;
+
   /**
    * L'élément, une fois visible ; un message d'erreur sinon. Avec `nth`, cette
    * correspondance ; sans lui, la première correspondance visible dans une fenêtre
@@ -91,9 +95,13 @@ export class FlowStepExecutor {
      * d'une fenêtre ouverte qui les départage) est refusé — jamais « le premier ». Sans `strict`, le
      * comportement historique (l'appelant départage lui-même, par l'empreinte et le contexte).
      */
-    options: { strict?: boolean } = {},
+    /**
+     * paginate : l'EXÉCUTION de l'étape peut parcourir les pages d'un tableau pour trouver la ligne ;
+     * toute autre recherche (sonde, vérification, récupération) ne lit que la page affichée.
+     */
+    options: { strict?: boolean; paginate?: boolean } = {},
   ): Promise<Locator | string> {
-    if (target.row !== undefined) return this.locateInRow(page, target, timeoutMs);
+    if (target.row !== undefined) return this.locateInRow(page, target, timeoutMs, options.paginate !== true);
     if (
       target.section !== undefined &&
       target.nth === undefined &&
@@ -148,7 +156,16 @@ export class FlowStepExecutor {
    * suivantes ; la cible est cherchée DANS cette ligne. Jamais une position ; plusieurs lignes avec
    * `unique` → AMBIGUOUS_ROW, rien n'est exécuté.
    */
-  private async locateInRow(page: Page, target: FlowTarget, timeoutMs: number): Promise<Locator | string> {
+  /**
+   * readOnly : une sonde (la cible suivante est-elle prête ?) ne pagine jamais le tableau — seule
+   * l'exécution de l'étape agit sur la page.
+   */
+  private async locateInRow(
+    page: Page,
+    target: FlowTarget,
+    timeoutMs: number,
+    readOnly = false,
+  ): Promise<Locator | string> {
     const criteria = target.row ?? {};
     const pick = target.rowPick ?? 'unique';
     rowTokens += 1;
@@ -162,19 +179,21 @@ export class FlowStepExecutor {
     }
     let pages = 1;
     let read = scan.status === 'NONE' ? scan.rows : 0;
-    if (scan.status === 'NONE' && scan.missingColumns.length === 0) {
+    if (scan.status === 'NONE' && scan.missingColumns.length === 0 && !readOnly) {
+      // La pagination du tableau, dans le cadre qui le porte (page, ou iframe d'un shell).
+      const pager = scan.tableFrame ?? page;
       // Repartir de la première page (une étape précédente a pu paginer), puis avancer page par page.
       const before = scan.signature;
-      if (await goToPage(page, 'first')) {
-        await waitForRowsChange(page, before, Math.min(timeoutMs, 5000));
+      if (await goToPage(pager, 'first')) {
+        await waitForRowsChange(pager, before, Math.min(timeoutMs, 5000));
         scan = await scanTableRows(page, criteria, pick, token);
         read = scan.status === 'NONE' ? scan.rows : 0;
       }
       while (scan.status === 'NONE' && pages < FlowStepExecutor.MAX_TABLE_PAGES) {
         const signature = scan.signature;
-        if (!(await goToPage(page, 'next'))) break;
+        if (!(await goToPage(pager, 'next'))) break;
         pages += 1;
-        await waitForRowsChange(page, signature, Math.min(timeoutMs, 5000));
+        await waitForRowsChange(pager, signature, Math.min(timeoutMs, 5000));
         scan = await scanTableRows(page, criteria, pick, token);
         if (scan.status === 'NONE') read += scan.rows;
       }
@@ -184,9 +203,12 @@ export class FlowStepExecutor {
       return `AMBIGUOUS_TARGET: AMBIGUOUS_ROW — ${String(scan.matches)} rows match {${wanted}} (rowPick: unique; add a column to the row criteria, or rowPick: first) — nothing executed`;
     if (scan.status === 'NONE')
       return scan.missingColumns.length > 0
-        ? `ROW_NOT_FOUND: no table column "${scan.missingColumns.join('", "')}" (columns: ${scan.columns.join(', ') || 'none'})`
+        ? scan.tables === 0
+          ? `ROW_NOT_FOUND: no table on the screen (document, shadow roots and frames read) — the table never appeared within ${String(timeoutMs)} ms`
+          : `ROW_NOT_FOUND: no table column "${scan.missingColumns.join('", "')}" (columns: ${scan.columns.join(', ') || 'none'})`
         : `ROW_NOT_FOUND: no row matches {${wanted}} (${String(read)} row(s) read on ${String(pages)} page(s))`;
-    const scope = page.locator(`[${ROW_ATTRIBUTE}="${scan.token}"]`);
+    // La ligne marquée, dans SON cadre (un shell de micro-frontends peut charger le tableau dans une iframe).
+    const scope = (scan.frame ?? page).locator(`[${ROW_ATTRIBUTE}="${scan.token}"]`);
     const inside = toLocator(scope, {
       strategy: target.strategy,
       ...(target.role !== undefined ? { role: target.role } : {}),
@@ -444,7 +466,8 @@ export class FlowStepExecutor {
     try {
       switch (action.kind) {
         case 'click':
-          await locator.click({ timeout: timeoutMs });
+          // Le contrôle de la cible posé sur elle (radio natif sur son libellé) n'est jamais un obstacle.
+          await clickRobust(locator, timeoutMs, this.debug);
           break;
         case 'check':
           await setCheckedRobust(locator, true, timeoutMs);

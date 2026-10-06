@@ -33,3 +33,21 @@ unique, the first unique pair of columns is used. The generated flow carries
 
 To process "a task in this state" rather than "this task", replace the key by criteria in the
 generated flow (`row: { Status: NEW }, rowPick: first`).
+
+## Micro-frontends : shadow DOM et iframes
+
+Un shell de micro-frontends monte souvent l'application dans le **shadow root** d'un web component (Angular Elements, module federation), ou dans une **iframe**.
+
+**Avant :** les clics Playwright traversaient ces frontières, mais la lecture du tableau ne lisait que le `document`. Résultat : `ROW_NOT_FOUND: no table column "…" (columns: none)` alors que le tableau était bien à l'écran.
+
+**Maintenant**, la lecture couvre :
+
+- le document ;
+- tous les **shadow roots ouverts**, récursivement ;
+- tous les **cadres** de la page.
+
+La ligne trouvée est cherchée et cliquée **dans son cadre**, et la pagination se fait dans le cadre qui porte le tableau. Une ligne présente dans plusieurs cadres compte comme plusieurs lignes : avec `rowPick: unique`, c'est `AMBIGUOUS_ROW`.
+
+**Message quand aucun tableau n'est visible :** `ROW_NOT_FOUND: no table on the screen (document, shadow roots and frames read) — the table never appeared within N ms`. Il remplace le trompeur « columns: none ».
+
+**Les sondes ne paginent jamais.** Pendant qu'une étape attend sa transition, le crawler vérifie si la cible de l'étape suivante est prête. Cette vérification ne lit que la page affichée et ne clique jamais « page suivante ». Seule l'exécution de l'étape parcourt les pages du tableau.

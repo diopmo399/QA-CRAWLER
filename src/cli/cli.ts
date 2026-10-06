@@ -17,6 +17,8 @@ import { runRecordCli } from './record-command.js';
 import { runSourcesCli } from './sources-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
+import { terminalProgress } from './progress-renderer.js';
+import { intelligenceActivity } from './intelligence-activity.js';
 import { driftLines, recoveryLines } from '../workflow-healing/explain.js';
 
 export const EXIT = { OK: 0, ISSUES: 1, USAGE: 2, RUNTIME: 3 } as const;
@@ -133,9 +135,28 @@ export async function runCli(input: string[]): Promise<number> {
   for (const warning of warnings) logger.warn(`  ! ${warning}`);
   logger.info('');
 
+  // Après le dernier flow : une barre de progression tant que le run se termine (rapports, mémoire…).
+  const finishing = terminalProgress();
+  // Les appels au conseiller d'intelligence (Copilot…) : visibles pendant qu'ils durent.
+  const advisorLine = terminalProgress();
+  const advisor = intelligenceActivity(advisorLine.sink, () => {
+    advisorLine.stop();
+  });
   try {
     const outcome = await runMission(config, {
-      listener: progressListener(args.quiet),
+      onProgress: (update) => {
+        advisor.stop();
+        finishing.sink(update);
+      },
+      listener: {
+        // QA_DEBUG=1 (ou logging.level: debug) : chaque décision d'exécution expliquée dans le terminal.
+        ...progressListener(
+          args.quiet,
+          ['1', 'true', 'click', 'all'].includes((process.env.QA_DEBUG ?? '').toLowerCase()) ||
+            ['DEBUG', 'TRACE'].includes(config.logging.level),
+        ),
+        ...(args.quiet ? {} : { onIntelligence: advisor.onIntelligence }),
+      },
       mode,
       ...(args.baselineDir !== undefined ? { baselineDir: args.baselineDir } : {}),
     });
@@ -299,6 +320,8 @@ export async function runCli(input: string[]): Promise<number> {
     );
     return EXIT.ISSUES;
   } catch (error) {
+    finishing.stop();
+    advisor.stop();
     if (error instanceof BaselineMissingError) {
       logger.error(`Error: ${error.message}`);
       return EXIT.USAGE;
@@ -331,7 +354,7 @@ export function synchronizationLines(sync: FlowStepReport['synchronization']): s
   ];
 }
 
-function progressListener(quiet: boolean): ExplorationListener {
+function progressListener(quiet: boolean, debug = false): ExplorationListener {
   let step = 0;
   return {
     onAuthenticated(description) {
@@ -484,6 +507,9 @@ function progressListener(quiet: boolean): ExplorationListener {
           `      ${event.type === 'NAVIGATION_RECOVERY_FAILED' ? color.yellow(line) : color.dim(line)}`,
         );
       }
+    },
+    onDebug(category, line) {
+      if (debug) logger.info(color.dim(`      [debug ${category.toLowerCase()}] ${line}`));
     },
     onInteractionLog(line) {
       // Structuré, sans secret : [BROWSER_INTERACTION] type=HTTP_AUTH origin=… handler=… status=… attempt=1

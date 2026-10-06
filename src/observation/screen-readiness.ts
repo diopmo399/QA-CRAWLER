@@ -512,6 +512,23 @@ export class ScreenReadinessService {
               'input:not([type="hidden"]), button, select, textarea, a[href], [role="radio"], [role="checkbox"], [role="button"]',
             ).length <= 1;
           const checkable = tag === 'input' && ['radio', 'checkbox'].includes(input.type);
+          // Une cible LIBELLÉ : son contrôle (label.control, ou l'unique champ de son enveloppe) est le sien.
+          const labelControl = ((): Element | null => {
+            if (tag !== 'label') return null;
+            const control = (el as HTMLLabelElement).control;
+            if (control) return control;
+            let node: Element | null = el.parentElement;
+            for (
+              let depth = 0;
+              node && node !== doc.body && depth < 4;
+              depth += 1, node = node.parentElement
+            ) {
+              const fields = node.querySelectorAll('input:not([type="hidden"]), select, textarea');
+              if (fields.length > 1) return null;
+              if (fields.length === 1) return fields[0] ?? null;
+            }
+            return null;
+          })();
           const controlRoot = ((): Element | null => {
             const wrapper = el.closest(
               'mat-radio-button, mat-checkbox, mat-slide-toggle, [role="radio"], [role="checkbox"], [role="switch"], [role="option"], mat-select, [role="combobox"]',
@@ -585,6 +602,7 @@ export class ScreenReadinessService {
               within(interaction, node) ||
               within(node, interaction) ||
               labels.some((label) => within(label, node)) ||
+              (labelControl !== null && (node === labelControl || within(labelControl, node))) ||
               (controlRoot !== null && within(controlRoot, node)));
           // UN VRAI CALQUE : modal / fond / chargeur, ou un élément fixe / collant posé au-dessus.
           const overlayOf = (node: Element): Element | null => {
@@ -597,7 +615,13 @@ export class ScreenReadinessService {
               )
                 return current;
               const position = style(current).position;
-              if (position === 'fixed' || position === 'sticky') return current;
+              // Un élément invisible (opacité nulle : l'input natif masqué d'un radio) n'est pas un calque.
+              if (
+                (position === 'fixed' || position === 'sticky') &&
+                Number(style(current).opacity) > 0.05 &&
+                current.getBoundingClientRect().width * current.getBoundingClientRect().height > 64
+              )
+                return current;
               current = current.parentElement;
             }
             return null;

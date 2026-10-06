@@ -156,6 +156,11 @@ export class BrowserEventDiscovery {
    * machine lente, un nouvel onglet peut n'être traité qu'après la dernière étape ; fermer le
    * navigateur avant le perdrait.
    */
+  /** Onglets en ouverture et traitements en cours (affichés pendant l'attente de fin de run). */
+  pendingCount(): number {
+    return this.inFlight.size + this.openingTargets.size;
+  }
+
   async settle(timeoutMs = 5_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while ((this.inFlight.size > 0 || this.openingTargets.size > 0) && Date.now() < deadline) {

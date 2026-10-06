@@ -11,6 +11,7 @@ import {
   type DiscoveredCandidate,
 } from '../ai/context-builder.js';
 import { createIntelligenceGateway } from '../ai/factory.js';
+import type { ProgressTracker } from '../progress/progress.js';
 import type { AiEventRecord, IntelligenceGateway } from '../ai/gateway.js';
 import type { ProposalValidation } from '../ai/proposal-validator.js';
 import { intelligenceDecisionsArtifact } from '../ai/decision-report.js';
@@ -377,6 +378,8 @@ export interface ExplorationListener {
   onInteraction?(result: BrowserInteractionResult): void;
   /** Ligne de log structurée d'une interaction du navigateur (aucun secret). */
   onInteractionLog?(line: string): void;
+  /** Débogage (QA_DEBUG=1 ou logging.level DEBUG) : le détail d'une décision d'exécution (clic…). */
+  onDebug?(category: string, line: string): void;
   /**
    * Une phrase d'intention Gherkin a été résolue (ou non) puis exécutée :
    * SEMANTIC_RESOLUTION_SUCCEEDED / FAILED / AMBIGUOUS. Jamais une valeur saisie.
@@ -402,8 +405,18 @@ export interface ExplorationListener {
   onIntelligence?(event: AiEventRecord): void;
 }
 
+/** Ce que l'explorateur fait après le dernier flow, avant de rendre la main (annoncé : rien n'a l'air bloqué). */
+export const EXPLORER_CLOSING_PHASES = {
+  events: 'Waiting for open tabs and downloads',
+  browser: 'Closing the browser',
+  intelligence: 'Stopping the intelligence client',
+  memory: 'Saving the memory',
+} as const;
+
 export interface FlowExplorerOptions {
   memory: FlowMemory;
+  /** La progression de la fin du run (navigateur, client d'intelligence, mémoire…). */
+  progress?: ProgressTracker;
   /**
    * Observation de l'écran (point d'extension : vision, captures, tests). Reçoit le garde de
    * navigation de l'explorateur, pour que ses lectures soient relues après une navigation.
@@ -589,6 +602,7 @@ export class FlowExplorer {
   /** Interactions du navigateur hors du DOM (fenêtre de connexion native, dialogues JS, popups, téléchargements…). */
   private readonly interactions: BrowserInteractionManager;
   private readonly browserEvents: BrowserEventDiscovery;
+  private readonly progress: ProgressTracker | undefined;
   private readonly credentials: EnvironmentCredentialProvider;
   /** Connexion HTTP confiée au navigateur (une origine, un profil) : aucune course avec les popups. */
   private readonly browserCredentials: BrowserHttpCredentials | undefined;
@@ -714,6 +728,7 @@ export class FlowExplorer {
     options: FlowExplorerOptions,
   ) {
     const { exploration, goals } = config;
+    this.progress = options.progress;
     this.dryRunHook = options.dryRun;
     this.historyAvailable = options.historyAvailable ?? false;
     this.safety = new SafetyPolicy(config.safety);
@@ -845,6 +860,7 @@ export class FlowExplorer {
       exploration.readyTimeoutMs,
     );
     this.flowSteps = new FlowStepExecutor(exploration.settleTimeMs, exploration.readyTimeoutMs);
+    this.flowSteps.debug = (line) => this.listener.onDebug?.('CLICK', line);
     const sync = config.replay.synchronization;
     this.transitionWaiter = new UITransitionWaiter({
       transitionTimeoutMs: sync.transitionTimeoutMs,
@@ -1307,6 +1323,13 @@ export class FlowExplorer {
       // le temps de charger la page (popupLoadTimeoutMs), de l'observer et de la laisser ouverte si demandé.
       const { exploration, browserInteractions } = this.config;
       const popupLoad = Math.min(exploration.navigationTimeoutMs, 5_000);
+      const progress = this.progress;
+      const waiting = this.browserEvents.pendingCount();
+      if (waiting > 0)
+        progress?.start(
+          EXPLORER_CLOSING_PHASES.events,
+          `${String(waiting)} tab(s) or download(s) still being handled`,
+        );
       await this.browserEvents
         .settle(
           Math.max(
@@ -1315,10 +1338,15 @@ export class FlowExplorer {
           ),
         )
         .catch(() => undefined);
+      progress?.start(EXPLORER_CLOSING_PHASES.browser);
       await browser.close();
       // Le client d'intelligence (s'il a été créé) s'arrête avec le run, quoi qu'il arrive.
-      await this.ai?.close();
+      if (this.ai) {
+        progress?.start(EXPLORER_CLOSING_PHASES.intelligence);
+        await this.ai.close();
+      }
     }
+    this.progress?.start(EXPLORER_CLOSING_PHASES.memory);
     await this.memory.save(this.graph);
     await this.coordinator.persist();
     await this.functional?.persist();
@@ -4238,7 +4266,10 @@ export class FlowExplorer {
       replay.functionalTargetResolution.resolveNonUniqueLocators &&
       step.target.nth === undefined &&
       step.target.section === undefined;
-    located ??= await this.flowSteps.locate(page, step.target, timeout, { strict: !disambiguated });
+    located ??= await this.flowSteps.locate(page, step.target, timeout, {
+      strict: !disambiguated,
+      paginate: true,
+    });
     // LOCATOR ≠ TARGET IDENTITY : un localisateur qui désigne PLUSIEURS éléments n'est qu'un générateur
     // de candidats. Jamais « le premier qui correspond » : le contexte (empreinte, fenêtre, champ,
     // parcours) départage ; une ambiguïté reste une ambiguïté (aucun choix arbitraire).
