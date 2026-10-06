@@ -4,6 +4,7 @@ import { timelineLines } from './recording-consistency.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Page } from 'playwright';
+import { ProgressTracker, type ProgressSink } from '../progress/progress.js';
 import { stringify as stringifyYaml } from 'yaml';
 import { createAuthenticator } from '../auth/authenticator.js';
 import { BrowserManager } from '../browser/browser-manager.js';
@@ -64,7 +65,20 @@ export interface RecordRequest {
   intelligenceProvider?: IntelligenceProvider;
   /** Le terminal : Entrée pour arrêter, « c » pour un point de contrôle… ; renvoie de quoi se détacher. */
   control?: (recorder: HumanFlowRecorder) => () => void;
+  /** La progression après l'arrêt (finalisation, flow, audits, rejeu, rapport) : le système travaille. */
+  onProgress?: ProgressSink;
 }
+
+/** Les phases après l'arrêt, dans l'ordre. */
+export const RECORDING_PHASES = {
+  capture: 'Finishing the capture',
+  browser: 'Closing the browser',
+  flow: 'Building the flow',
+  files: 'Writing the files',
+  audit: 'Auditing the flow',
+  replay: 'Validating by replay',
+  report: 'Writing the report',
+} as const;
 
 export interface RecordOutcome {
   result: RecordingResult;
@@ -169,6 +183,13 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     ...(targetValidator ? { targetValidator } : {}),
   });
   const browser = new BrowserManager(config.browser);
+  const validate = request.validate ?? config.recording.validate;
+  // La progression commence à l'arrêt : finalisation, flow, audits, rejeu, rapport.
+  const progress = new ProgressTracker(
+    'Finalizing the recording',
+    Object.values(RECORDING_PHASES).filter((phase) => validate || phase !== RECORDING_PHASES.replay),
+    request.onProgress,
+  );
   let stopReason: StopReason = 'api';
   let detach: (() => void) | undefined;
   try {
@@ -196,10 +217,14 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }
     stopReason = await recorder.stopped;
     stopClock.start = Date.now();
-    await recorder.stop();
+    progress.start(RECORDING_PHASES.capture);
+    await recorder.stop((detail) => {
+      progress.detail(detail);
+    });
     stopClock.mark('recorder stop (total)');
   } catch (error) {
     recorder.session.status = 'FAILED';
+    progress.fail(error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error));
     onEvent({
       type: 'RECORDING_FAILED',
       at: new Date().toISOString(),
@@ -209,6 +234,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     throw error;
   } finally {
     detach?.();
+    progress.start(RECORDING_PHASES.browser);
     await browser.close();
     stopClock.mark('browser close');
   }
@@ -216,16 +242,19 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   const language =
     request.language ?? config.recording.language ?? (config.report.language === 'fr' ? 'fr' : 'en');
   stopClock.mark('(pre-processing)');
-  const result = processRecording(recorder.session, config, {
-    language,
-    snapshot: (observationId) => recorder.snapshot(observationId),
-    onEvent,
-    typedValues: recorder.typedValues,
-  });
+  const result = await progress.run(RECORDING_PHASES.flow, () =>
+    processRecording(recorder.session, config, {
+      language,
+      snapshot: (observationId) => recorder.snapshot(observationId),
+      onEvent,
+      typedValues: recorder.typedValues,
+    }),
+  );
   // Les textes saisis ne servent plus : effacés de la mémoire du recorder.
   recorder.typedValues.clear();
   stopClock.mark('processing (journey, flow, test data)');
   const format = request.outputFormat ?? config.recording.outputFormat;
+  progress.start(RECORDING_PHASES.files);
   await mkdir(directory, { recursive: true });
   const files: Record<string, string> = {};
   const write = async (name: string, content: string): Promise<void> => {
@@ -346,6 +375,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   if (config.recording.knowledge) await rememberRecording(config, result, env).catch(() => undefined);
   stopClock.mark('knowledge');
 
+  progress.start(RECORDING_PHASES.audit, mode !== 'OFF' ? 'with the intelligence advisor' : undefined);
   // RECORDING INTELLIGENCE : comprendre (jamais modifier) le parcours humain, après la capture.
   let intelligence: RecordingIntelligence | undefined;
   // RECORDING SEMANTIC AUDIT : le déterministe toujours ; le conseiller seulement si ai.mode ≠ OFF.
@@ -451,7 +481,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   }
 
   let replay: ReplayOutcome = { status: 'NOT_VALIDATED' };
-  if (request.validate ?? config.recording.validate) {
+  if (validate) {
+    progress.start(RECORDING_PHASES.replay, 'the generated flow is replayed in a new browser');
     onEvent({
       type: 'REPLAY_VALIDATION_STARTED',
       at: new Date().toISOString(),
@@ -473,6 +504,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     at: new Date().toISOString(),
     message: `${String(result.flow.steps.length)} step(s) · ${replay.status}`,
   });
+  progress.start(RECORDING_PHASES.report);
   await write('recording-events.jsonl', log.toJsonLines());
   await write(
     'index.html',
@@ -484,6 +516,9 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       ...(intelligence ? { intelligence } : {}),
       ...(semanticAudit ? { audit: semanticAudit } : {}),
     }),
+  );
+  progress.done(
+    `${String(result.flow.steps.length)} step(s)${replay.status === 'NOT_VALIDATED' ? '' : ` · ${replay.status}`}`,
   );
   return {
     result,

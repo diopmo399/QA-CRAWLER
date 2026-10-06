@@ -17,6 +17,7 @@ import { runRecordCli } from './record-command.js';
 import { runSourcesCli } from './sources-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
+import { terminalProgress } from './progress-renderer.js';
 import { driftLines, recoveryLines } from '../workflow-healing/explain.js';
 
 export const EXIT = { OK: 0, ISSUES: 1, USAGE: 2, RUNTIME: 3 } as const;
@@ -133,8 +134,11 @@ export async function runCli(input: string[]): Promise<number> {
   for (const warning of warnings) logger.warn(`  ! ${warning}`);
   logger.info('');
 
+  // Après le dernier flow : une barre de progression tant que le run se termine (rapports, mémoire…).
+  const finishing = terminalProgress();
   try {
     const outcome = await runMission(config, {
+      onProgress: finishing.sink,
       listener: progressListener(args.quiet),
       mode,
       ...(args.baselineDir !== undefined ? { baselineDir: args.baselineDir } : {}),
@@ -299,6 +303,7 @@ export async function runCli(input: string[]): Promise<number> {
     );
     return EXIT.ISSUES;
   } catch (error) {
+    finishing.stop();
     if (error instanceof BaselineMissingError) {
       logger.error(`Error: ${error.message}`);
       return EXIT.USAGE;

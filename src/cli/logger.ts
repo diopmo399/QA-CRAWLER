@@ -14,15 +14,24 @@ export const color = {
   cyan: wrap('36'),
 };
 
+/** Une ligne de progression affichée : effacée avant chaque message, redessinée ensuite. */
+let beforeWrite: (() => void) | undefined;
+export function setLoggerInterrupt(hook: (() => void) | undefined): void {
+  beforeWrite = hook;
+}
+
 /** Sortie console de la CLI. Tout passe par le masquage des secrets. */
 export const logger = {
   info(message: string): void {
+    beforeWrite?.();
     console.log(redactText(message));
   },
   warn(message: string): void {
+    beforeWrite?.();
     console.warn(color.yellow(redactText(message)));
   },
   error(message: string): void {
+    beforeWrite?.();
     console.error(color.red(redactText(message)));
   },
 };

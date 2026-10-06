@@ -898,3 +898,47 @@ steps:
 ```
 
 Événement : `RECORDING_FLOW_AUDITED`. Configuration : `recording.flowAudit: { enabled, ai, maxCalls }`.
+
+## Progression après l'arrêt
+
+Après **Stop**, le système continue de travailler avant de rendre la main. Sans retour, ce temps ressemblait à un blocage. Il est maintenant **montré** à deux endroits.
+
+**Dans le navigateur** (encore ouvert pendant la finalisation de la capture), le bandeau devient :
+
+- « ⏳ FINALIZING — N pending task(s) », avec une barre animée, pendant que les validations en file se terminent ;
+- « ✓ CAPTURE DONE — building the flow (see the terminal) » juste avant la fermeture.
+
+Les boutons disparaissent dès l'arrêt.
+
+**Dans le terminal**, une ligne animée affiche la tâche, la barre, la phase sur le total, un détail et le temps écoulé :
+
+```
+⠹ Finalizing the recording [█████░░░░░░░░░░░░░] 3/6 Building the flow · 4.2 s
+✓ Finalizing the recording — 12 step(s) · REPLAY_CONFIRMED (38.5 s)
+```
+
+**Les phases :**
+
+1. Finishing the capture : saisies en attente, dernier écran, validations en file (compte à rebours).
+2. Closing the browser.
+3. Building the flow.
+4. Writing the files.
+5. Auditing the flow : avec le conseiller d'intelligence si `ai.mode` ≠ OFF.
+6. Validating by replay : avec `--validate` seulement.
+7. Writing the report.
+
+**Fin d'un run** (`learn`, `verify`, `explore`) : après le dernier flow, la même barre « Finishing the run » suit ces phases :
+
+- Closing the run ;
+- Checking the other actors (multi-acteurs) ;
+- Comparing with earlier runs ;
+- Saving the knowledge ;
+- Writing the artifacts ;
+- Saving the baseline (`learn`) ;
+- Writing the reports.
+
+**Comportement de l'affichage :**
+
+- **Sortie redirigée** (CI, fichier, variable `CI`) : une ligne par phase, sans animation.
+- **Messages ordinaires** : ils effacent la ligne animée, qui revient ensuite.
+- **Code d'intégration** : il reçoit les mêmes mises à jour avec `onProgress` (de `runRecording` et `runMission`).

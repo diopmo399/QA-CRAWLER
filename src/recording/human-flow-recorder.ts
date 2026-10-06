@@ -253,12 +253,32 @@ export class HumanFlowRecorder {
   /** Le temps de chaque phase de l'arrêt (ms) : le bilan dit où passe le temps. */
   readonly stopTimings: { phase: string; ms: number }[] = [];
 
-  /** Arrête : dernière observation, réseau fermé, puis la session (statut PROCESSING). */
-  async stop(): Promise<RecordingSession> {
+  /**
+   * Le bandeau de la page pendant la finalisation (le navigateur est encore ouvert) : l'humain voit
+   * que le système travaille. Jamais capturé (le bandeau est exclu de l'observation).
+   */
+  async showStatus(text: string): Promise<void> {
+    const page = this.page;
+    if (!page || page.isClosed()) return;
+    await page
+      .evaluate((value) => {
+        (
+          window as unknown as { __qaCrawlerRecorder?: { setStatus(text: string): void } }
+        ).__qaCrawlerRecorder?.setStatus(value);
+      }, text)
+      .catch(() => undefined);
+  }
+
+  /**
+   * Arrête : dernière observation, réseau fermé, puis la session (statut PROCESSING).
+   * progress : le détail de la finalisation (travaux restants), aussi montré dans le bandeau.
+   */
+  async stop(progress?: (detail: string) => void): Promise<RecordingSession> {
     if (this.stopping) return this.session;
     this.stopping = true;
     this.resolveStop('api');
     const reason = await this.stopped;
+    await this.showStatus('⏳ FINALIZING…');
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     // Plus aucun appel IA pour les validations encore en file : un Stop ne les attend pas.
@@ -291,7 +311,21 @@ export class HumanFlowRecorder {
         'RECORDING_STOPPING',
         `finishing ${String(queued)} target validation(s) and ${String(Math.max(0, this.pending.size - queued))} other pending task(s) — no AI call any more`,
       );
-    await timed('pending validations and observations', () => Promise.allSettled([...this.pending]));
+    const remaining = (): void => {
+      const left = this.pending.size;
+      if (left === 0) return;
+      const text = `${String(left)} pending task(s)`;
+      progress?.(text);
+      void this.showStatus(`⏳ FINALIZING — ${text}`);
+    };
+    remaining();
+    const ticker = setInterval(remaining, 500);
+    try {
+      await timed('pending validations and observations', () => Promise.allSettled([...this.pending]));
+    } finally {
+      clearInterval(ticker);
+    }
+    await this.showStatus('✓ CAPTURE DONE — building the flow (see the terminal)');
     if (this.window) await this.closeWindow();
     if (this.page) this.network.detach(this.page);
     dedupeNetwork(this.session.rawEvents);

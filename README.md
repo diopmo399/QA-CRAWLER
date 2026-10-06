@@ -763,6 +763,8 @@ npm run qa -- record -c mission.yaml --name "Create user" --url /users --validat
 
 Un bandeau **● RECORDING** (Checkpoint, Pause, Stop) s'affiche dans la page ; le terminal pilote aussi (Entrée pour arrêter, `c <libellé>` pour un point de contrôle, `p` pour la pause). La capture est passive (rien n'est empêché ni intercepté) et **aucune saisie en clair** ne quitte la page. Le nettoyage retire le bruit, fusionne les saisies, garde la valeur finale d'un champ corrigé, retire les détours ; un envoi refusé puis corrigé est un scénario de validation négatif s'il porte un point de contrôle. `--validate` rejoue le flow généré par le Dry Run (`REPLAY_CONFIRMED` / `REPLAY_FAILED`) sans jamais le modifier ; la SafetyPolicy reste absolue. Fichiers sous `<reportsDir>/recordings/<nom>/`, avec un rapport RAW → SEMANTIC → FINAL qui explique chaque étape. Détails : [docs/HUMAN_FLOW_RECORDER.md](docs/HUMAN_FLOW_RECORDER.md).
 
+**Progression** : après Stop (et après le dernier flow d'un run), une barre animée dit ce que le système fait : finalisation, flow, audits, rejeu, rapports ; le bandeau du navigateur affiche « ⏳ FINALIZING » pendant la finalisation de la capture. Détails : [docs/HUMAN_FLOW_RECORDER.md](docs/HUMAN_FLOW_RECORDER.md#progression-après-larrêt).
+
 ## Analyse statique : le code comme source de preuves
 
 Un champ **pauvre** du DOM — `<input type="text" formControlName="contact">`, sans libellé, sans `aria-label`, sans `placeholder`, sans `name` utile — ne dit pas ce qu'il attend. Le code, lui, le dit :

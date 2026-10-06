@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { ProgressTracker, type ProgressSink } from './progress/progress.js';
 import { BaselineStore, runIdOf, type Baseline, type BaselineMetadata } from './baseline/baseline-store.js';
 import { sourceInfo } from './baseline/source-info.js';
 import type { MissionMode, ScenarioConfig } from './config/config.js';
@@ -84,7 +85,20 @@ export interface RunOptions {
   dryRun?: FlowExplorerOptions['dryRun'];
   /** Fournisseur d'intelligence injecté par programme (remplace ai.provider ; sans effet en OFF). */
   intelligenceProvider?: FlowExplorerOptions['intelligenceProvider'];
+  /** La progression après le dernier flow (autres acteurs, régression, mémoire, rapports). */
+  onProgress?: ProgressSink;
 }
+
+/** Les phases après le dernier flow, dans l'ordre. */
+export const RUN_PHASES = {
+  close: 'Closing the run',
+  actors: 'Checking the other actors',
+  history: 'Comparing with earlier runs',
+  knowledge: 'Saving the knowledge',
+  artifacts: 'Writing the artifacts',
+  baseline: 'Saving the baseline',
+  reports: 'Writing the reports',
+} as const;
 
 /** verify a besoin d'une baseline : `learn` d'abord. */
 export class BaselineMissingError extends Error {
@@ -232,6 +246,17 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     await persistence.provider?.close().catch(() => undefined);
     throw error;
   }
+  const authorizationChecks = config.actors.length > 0 && config.authorization.enabled;
+  const progress = new ProgressTracker(
+    'Finishing the run',
+    Object.values(RUN_PHASES).filter(
+      (phase) =>
+        (phase !== RUN_PHASES.actors || authorizationChecks) &&
+        (phase !== RUN_PHASES.baseline || mode === 'learn'),
+    ),
+    options.onProgress,
+  );
+  progress.start(RUN_PHASES.close);
   // RUN_FINISHED : ce qui attend est écrit, le run est clos, la connexion fermée.
   recorder?.recordBlockedEdges(outcome.graph.toJSON().edges);
   await recorder?.finish('COMPLETED');
@@ -239,7 +264,8 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
 
   // Les autres acteurs ouvrent les écrans trouvés : qu'atteint chacun ?
   let authorization: AuthorizationReport | undefined;
-  if (config.actors.length > 0 && config.authorization.enabled) {
+  if (authorizationChecks) {
+    progress.start(RUN_PHASES.actors, 'each actor opens the screens found');
     const targets = outcome.graph
       .allNodes()
       .map((node) => ({ stateId: node.id, label: node.label, url: node.url }));
@@ -273,6 +299,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
 
   // RÉGRESSION : l'évolution des flows et le cycle de vie des anomalies, d'un run à l'autre
   // (persistance active, mémoire non coupée). Une erreur de stockage n'arrête jamais le run.
+  progress.start(RUN_PHASES.history);
   const regression = await regressionOf(config, persistence.provider, memoryMode, {
     applicationId,
     graph: current,
@@ -290,6 +317,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   });
   await persistence.provider?.close().catch(() => undefined);
 
+  progress.start(RUN_PHASES.knowledge);
   if (knowledgeFile) await knowledge.save();
 
   const result = buildResult(outcome, config);
@@ -351,6 +379,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     recorder,
     applicationId,
   );
+  progress.start(RUN_PHASES.artifacts);
   if (config.logging.decisionTrace && outcome.decisionTraces) {
     await mkdir(config.output.reportsDir, { recursive: true });
     const file = path.join(config.output.reportsDir, 'decision-trace.json');
@@ -464,6 +493,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     if (baseline.metadata) result.baseline = baseline.metadata;
   }
   if (mode === 'learn') {
+    progress.start(RUN_PHASES.baseline);
     const createdAt = new Date().toISOString();
     const source = await sourceInfo(config.baseline, env);
     const metadata: BaselineMetadata = {
@@ -485,7 +515,9 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     result.artifacts.baseline = store.graphFile;
   }
 
+  progress.start(RUN_PHASES.reports);
   const written = await writeReports(result, config.output, memory.location, config.report.language);
+  progress.done(`${String(written.flows.length)} flow(s), ${String(written.issues.length)} issue(s)`);
   const threshold = config.report.failOnSeverity;
   const failingIssues =
     threshold === 'NONE' ? [] : written.issues.filter((issue) => isAtLeast(issue.severity, threshold));

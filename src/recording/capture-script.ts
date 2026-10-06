@@ -1761,7 +1761,11 @@ export function installRecorder(
   const render = (): void => {
     if (!root) return;
     const label = root.querySelector('.state');
-    if (label) label.textContent = paused ? '❚❚ PAUSED' : `● ${status}`;
+    if (label) label.textContent = paused ? '❚❚ PAUSED' : status === 'RECORDING' ? `● ${status}` : status;
+    // Après Stop : plus de commandes ; une barre animée tant que le système finalise.
+    const bar = root.querySelector('.bar');
+    bar?.classList.toggle('ended', status !== 'RECORDING');
+    bar?.classList.toggle('working', status.startsWith('⏳'));
     const toggle = root.querySelector('[data-act="pause"]');
     if (toggle) toggle.textContent = paused ? 'Resume' : 'Pause';
   };
@@ -1781,7 +1785,12 @@ export function installRecorder(
       input{font:inherit;width:120px;padding:2px 4px;border-radius:4px;border:1px solid #555;background:#2d333b;color:#fff}
       button{font:inherit;cursor:pointer;border:0;border-radius:4px;padding:3px 8px;background:#444c56;color:#fff}
       button[data-act="stop"]{background:#d1242f}
-    </style><div class="bar"><span class="state">● RECORDING</span><input placeholder="checkpoint label" maxlength="80"><button data-act="checkpoint">Checkpoint</button><button data-act="pause">Pause</button><button data-act="stop">Stop</button></div>`;
+      .busy{display:none;width:72px;height:4px;border-radius:2px;background:linear-gradient(90deg,#444c56 0%,#4ac26b 50%,#444c56 100%);background-size:200% 100%;animation:qa-busy 1s linear infinite}
+      .bar.working .busy{display:inline-block}
+      .bar.ended input,.bar.ended button{display:none}
+      .bar.ended .state{color:#4ac26b}
+      @keyframes qa-busy{from{background-position:200% 0}to{background-position:0 0}}
+    </style><div class="bar"><span class="state">● RECORDING</span><span class="busy"></span><input placeholder="checkpoint label" maxlength="80"><button data-act="checkpoint">Checkpoint</button><button data-act="pause">Pause</button><button data-act="stop">Stop</button></div>`;
     root.addEventListener('click', (event) => {
       const button = event.target instanceof Element ? event.target.closest('button') : null;
       const act = button?.getAttribute('data-act');
