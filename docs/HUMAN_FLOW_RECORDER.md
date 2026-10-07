@@ -188,6 +188,47 @@ ancien enregistrement. L'IA ne choisit jamais une cible pendant l'enregistrement
 Raisons d'un événement ignoré : `element_not_interacted`, `duplicate_event`, `ambiguous_target`,
 `blocked_by_policy`, `buffer_overflow`. Jamais une valeur saisie dans la trace (sa forme et sa longueur).
 
+### Sources de capture : CURRENT, PLAYWRIGHT, HYBRID
+
+```yaml
+recording:
+  mode: current # current (défaut) | playwright | hybrid
+  playwrightRecording: false # true pour activer playwright / hybrid
+```
+
+Le navigateur reste la seule source de vérité. Un enregistrement suit toujours ce chemin :
+
+```
+GESTE DANS LE NAVIGATEUR → ÉVÉNEMENT BRUT → SOURCES (current | playwright) → COORDINATEUR
+  → RÉSOLUTION DE LA CIBLE → VALIDATION → ACTION ENREGISTRÉE → (ANALYSE → INTENTION)
+```
+
+et jamais `FLOW / INTENT / MÉMOIRE / DÉCOUVERTE / IA → RECORDER`. Le coordinateur
+(`RecordingCoordinator`) refuse toute observation dont l'origine n'est pas le navigateur.
+
+| Mode           | Ce qui change                                                                                                                                                                                                                                                                            |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **CURRENT**    | Rien : le recorder actuel seul, aucun appel à Playwright, aucun fichier en plus (défaut).                                                                                                                                                                                                |
+| **PLAYWRIGHT** | Les gestes restent ceux du recorder (le navigateur). Pour chacun, Playwright donne SON localisateur de l'élément touché (`getByRole('button', { name: 'Continuer' })`), compté dans la page ; unique, sur le même élément et cohérent avec l'élément d'avant le geste, il passe devant.  |
+| **HYBRID**     | Les deux sources : le meilleur localisateur à son rang (test id, rôle + nom, libellé, placeholder, texte, attribut, CSS, position en dernier recours) ; un geste vu par les deux sources (navigation, popup, dialogue, téléchargement) n'est qu'UNE action, les deux références gardées. |
+
+**Playwright n'intercepte, ne bloque ni ne rejoue aucun geste** : il ne fait que localiser
+l'élément réellement touché (l'enregistreur `codegen` de Playwright, qui consomme le clic et le
+rejoue lui-même, n'est pas utilisé). Il lit la page **après** le geste : un localisateur qui ne
+décrit plus l'élément tel qu'il était avant (un bouton « Confirmer » devenu « Confirmé ») est
+refusé, la raison gardée. Un localisateur positionnel (`.nth(1)`) ou chaîné n'est jamais une cible.
+
+L'API utilisée (`Locator._resolveSelector`) est privée : elle est détectée au démarrage ; absente,
+l'enregistrement repasse en CURRENT avec un avertissement. `playwright` / `hybrid` sans
+`playwrightRecording: true` donnent CURRENT (avec un avertissement).
+
+Traces : `raw-recording.json` garde, par événement, `element.rawTag` (la balise réellement
+touchée, ex. `span`), `element.playwright` (localisateur, stratégie, correspondances, même
+élément, raison) et, en HYBRID, `sources` / `correlatedWith` (`r17 ≡ p1`).
+`recording-sources.json` résume les sources, les corrélations et les localisateurs. Le mode
+développeur du panneau montre `rawTarget`, `resolvedTarget`, `locator`, `locatorStrategy`,
+`matches`.
+
 ### Normalisation
 
 - **Bruit** : clics de focus dans un champ, touches, clics sur un libellé : fusionnés dans
@@ -890,6 +931,8 @@ recording:
   enabled: true # false : la commande record refuse de démarrer (sans effet sur run)
   outputFormat: both # yaml | gherkin | both
   language: fr # langue du .feature (défaut : report.language)
+  mode: current # sources de capture : current | playwright | hybrid
+  playwrightRecording: false # active playwright / hybrid (jamais d'interception)
   overlay: true # le bandeau ● REC (minuteur, Pause, Annuler, Arrêter, notifications)
   panel: true # la fenêtre « QA-CRAWLER Recorder » (timeline, détails, ambiguïtés, revue, analyse)
   panelPreview: true # l'aperçu de l'application dans la fenêtre (image en mémoire, jamais écrite)

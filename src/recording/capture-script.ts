@@ -103,8 +103,12 @@ export function installRecorder(
   } = {};
   /** Ce que la description de l'événement ajoute (le composant du chemin) : gardé sur la description d'avant. */
   const keepOf = (element: unknown): Record<string, unknown> => {
-    const component = (element as { componentTag?: unknown } | null)?.componentTag;
-    return typeof component === 'string' ? { componentTag: component } : {};
+    const { componentTag, rawTag } = (element ?? {}) as { componentTag?: unknown; rawTag?: unknown };
+    return {
+      ...(typeof componentTag === 'string' ? { componentTag } : {}),
+      // La balise réellement touchée (un <span> dans le bouton) : une trace du geste, gardée.
+      ...(typeof rawTag === 'string' ? { rawTag } : {}),
+    };
   };
   const send = (payload: Record<string, unknown>, original?: Element | null, zone?: Element | null): void => {
     if (paused && payload.type !== 'control') return;
@@ -1632,7 +1636,12 @@ export function installRecorder(
       send(
         {
           type: 'click',
-          element: { ...describe(target), ...(component ? { componentTag: component } : {}) },
+          element: {
+            ...describe(target),
+            ...(component ? { componentTag: component } : {}),
+            // La balise réellement touchée (un <span> dans le bouton) : une trace, jamais une cible.
+            ...(origin && origin !== target ? { rawTag: origin.tagName.toLowerCase() } : {}),
+          },
           ...(noise ? { noise } : {}),
         },
         noise ? null : target,

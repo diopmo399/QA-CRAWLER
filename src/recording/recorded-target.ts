@@ -1,5 +1,6 @@
 import type { FlowTarget, TargetFingerprint } from '../config/flow-schema.js';
 import type { LocatorQuality, RecordedElement, RecordedTarget } from './model.js';
+import { LOCATOR_PRIORITY, qualityOf, usableEvidence } from './sources/playwright-locator.js';
 
 /** Rôles qu'une phrase Gherkin sait nommer (« le bouton », « le lien », « l'onglet », « le menu »). */
 const CLICK_ROLES = new Set(['button', 'link', 'tab', 'menuitem']);
@@ -176,6 +177,26 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
           : 'position in the page (fragile)',
   });
 
+  // PLAYWRIGHT / HYBRID : le localisateur de Playwright, lu sur l'élément réellement touché, unique et
+  // sur ce même élément. PLAYWRIGHT : il passe devant ; HYBRID : à son rang (testId, rôle + nom,
+  // libellé, placeholder, texte, attribut, CSS) ; CURRENT : jamais présent.
+  const playwright = element.playwright;
+  let playwrightCandidate: (typeof candidates)[number] | undefined;
+  if (usableEvidence(playwright)) {
+    playwrightCandidate = {
+      target: playwright.target,
+      quality: qualityOf(playwright.strategy),
+      unique: true,
+      why: `Playwright locator ${playwright.locator ?? playwright.selector ?? ''} (unique, the touched element)`,
+    };
+    const rank = rankOf(playwrightCandidate);
+    const at =
+      playwright.mode === 'PLAYWRIGHT'
+        ? 0
+        : candidates.findIndex((candidate) => candidate.unique && rankOf(candidate) > rank);
+    candidates.splice(at < 0 ? candidates.length - 1 : at, 0, playwrightCandidate);
+  }
+
   // Rien d'unique : le chemin fragile (le dernier candidat), comme avant.
   const best = candidates.find((candidate) => candidate.unique) ?? candidates.at(-1);
   const first = candidates[0];
@@ -213,6 +234,16 @@ export function resolveRecordedTarget(element: RecordedElement, use: TargetUse):
     reasons.push(`${first.why} is not unique: ${chosen.why} used instead`);
   }
   reasons.unshift(`chosen: ${chosen.why} (${chosen.quality})`);
+  if (playwright && !playwrightCandidate)
+    reasons.push(
+      `Playwright locator not used: ${playwright.locator ?? playwright.status}${
+        playwright.reason
+          ? ` (${playwright.reason})`
+          : playwright.matchCount !== undefined
+            ? ` (${String(playwright.matchCount)} match(es))`
+            : ''
+      }`,
+    );
   const humanName = [
     label,
     name,
@@ -347,4 +378,20 @@ export function semanticIdOf(section: string | undefined, name: string | undefin
   const scope = section?.split('>').at(-1)?.trim();
   const id = [scope ? slug(scope) : '', slug(name)].filter(Boolean).join('.');
   return id || undefined;
+}
+
+/**
+ * Le rang d'un localisateur, à la manière de Playwright (1 = le meilleur) : test id, rôle + nom,
+ * libellé, placeholder, texte, attribut stable, CSS stable, position.
+ */
+function rankOf(candidate: { target: FlowTarget; quality: LocatorQuality }): number {
+  const { target } = candidate;
+  if (target.strategy === 'testId') return LOCATOR_PRIORITY.testId;
+  if (target.strategy === 'role') return LOCATOR_PRIORITY.role;
+  if (target.strategy === 'label') return LOCATOR_PRIORITY.label;
+  if (target.strategy === 'text') return LOCATOR_PRIORITY.text;
+  if ((target.value ?? '').startsWith('[placeholder=')) return LOCATOR_PRIORITY.placeholder;
+  if (candidate.quality === 'STABLE_ATTRIBUTE' || candidate.quality === 'FRAMEWORK_BINDING') return 7;
+  if (candidate.quality === 'CSS_STABLE') return LOCATOR_PRIORITY.css;
+  return 10;
 }

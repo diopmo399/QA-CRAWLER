@@ -1267,6 +1267,15 @@ const recordingSchema = z
     outputFormat: z.enum(['yaml', 'gherkin', 'both']).default('both'),
     /** Langue du .feature (par défaut : report.language). */
     language: z.enum(['fr', 'en']).optional(),
+    /**
+     * LES SOURCES DE CAPTURE. current (défaut) : le recorder actuel seul, comportement inchangé.
+     * playwright : les gestes réels du recorder, la cible et le localisateur de Playwright.
+     * hybrid : les deux, le meilleur localisateur, une seule action par geste. playwright et hybrid
+     * n'agissent que si playwrightRecording est vrai (sinon current, avec un avertissement).
+     * Playwright n'intercepte ni ne rejoue jamais un geste : il localise l'élément réellement touché.
+     */
+    mode: z.enum(['current', 'playwright', 'hybrid']).default('current'),
+    playwrightRecording: z.boolean().default(false),
     /** Le bandeau « ● RECORDING » (Stop, Checkpoint, Pause) dans la page. */
     overlay: z.boolean().default(true),
     /**
