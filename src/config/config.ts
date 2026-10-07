@@ -1274,6 +1274,8 @@ const recordingSchema = z
      * détails, ambiguïtés, qualité ; après Stop, la revue (rejouer, modifier, sauvegarder) et l'analyse.
      */
     panel: z.boolean().default(true),
+    /** L'aperçu de l'application dans la fenêtre (une image de la page, en mémoire seulement, jamais écrite). */
+    panelPreview: z.boolean().default(true),
     /** Où « Sauvegarder » copie le flow (par défaut : flows/ à côté du dossier des rapports). */
     flowsDirectory: z.string().optional(),
     /** Se connecter (auth de la mission) avant de commencer : la connexion n'est pas enregistrée. */

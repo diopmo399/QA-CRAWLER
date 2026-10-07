@@ -21,6 +21,10 @@ export type PanelPhase = 'RECORDING' | 'PAUSED' | 'FINALIZING' | 'REVIEW';
 export interface PanelStep {
   id: string;
   index: number;
+  /** click, fill, check… (l'icône de la ligne). */
+  kind: string;
+  /** La validation dite point par point (panneau de détails) : uniquement ce qui a été vérifié. */
+  checks: { ok: boolean; text: string }[];
   description: string;
   detail?: string;
   status: LiveActionStatus;
@@ -73,14 +77,85 @@ export interface PanelState {
   notice?: { actionId?: string; kind: 'error' | 'info'; message: string };
   replay?: PanelReplay;
   saved?: { directory: string; files: string[] };
+  /**
+   * L'APERÇU de l'application (une image de la page, en mémoire seulement) et le cadre de l'élément
+   * sélectionné, à sa position réelle.
+   */
+  preview?: {
+    image: string;
+    url: string;
+    width: number;
+    height: number;
+    highlight?: { actionId: string; x: number; y: number; width: number; height: number; label?: string };
+  };
   analysis: PanelAnalysis;
   directory?: string;
 }
 
-export function liveStep(action: LiveAction): PanelStep {
+const CHECKS = {
+  fr: {
+    confirmed: 'Action confirmée',
+    found: (n: number) => `Élément retrouvé (${String(n)} correspondance${n > 1 ? 's' : ''})`,
+    ambiguous: (n: number) => `${String(n)} éléments correspondent`,
+    notFound: 'Élément non retrouvé',
+    pending: 'Validation en cours',
+    navigation: (route: string) => `Navigation déclenchée → ${route}`,
+    effect: (effect: string) => `Effet observé : ${effect}`,
+    resolved: "Élément touché confirmé par l'utilisateur",
+    ignored: "Ambiguïté laissée par l'utilisateur",
+    unverified: 'Cible non vérifiable',
+    stable: 'Sélecteur stable',
+    fragile: 'Sélecteur fragile',
+  },
+  en: {
+    confirmed: 'Action confirmed',
+    found: (n: number) => `Element found (${String(n)} match${n > 1 ? 'es' : ''})`,
+    ambiguous: (n: number) => `${String(n)} elements match`,
+    notFound: 'Element not found again',
+    pending: 'Being validated',
+    navigation: (route: string) => `Navigation triggered → ${route}`,
+    effect: (effect: string) => `Effect observed: ${effect}`,
+    resolved: 'Touched element confirmed by the user',
+    ignored: 'Ambiguity left by the user',
+    unverified: 'Target not verifiable',
+    stable: 'Stable selector',
+    fragile: 'Fragile selector',
+  },
+} as const;
+
+/** La validation d'une action dite point par point — seulement ce qui a vraiment été vérifié. */
+export function checksOf(action: LiveAction, language: 'fr' | 'en'): { ok: boolean; text: string }[] {
+  const text = CHECKS[language];
+  const checks: { ok: boolean; text: string }[] = [];
+  if (action.status === 'PENDING') return [{ ok: false, text: text.pending }];
+  if (action.status === 'CONFIRMED') checks.push({ ok: true, text: text.confirmed });
+  if (action.status === 'UNVERIFIED') checks.push({ ok: false, text: text.unverified });
+  if (action.status === 'FAILED') checks.push({ ok: false, text: text.notFound });
+  const count = action.evidence.candidates;
+  if (action.status === 'AMBIGUOUS' || (count !== undefined && count > 1 && action.resolution === undefined))
+    checks.push({ ok: false, text: text.ambiguous(Math.max(count ?? 2, 2)) });
+  else if (count !== undefined && action.status !== 'FAILED')
+    checks.push({ ok: true, text: text.found(count) });
+  if (action.resolution === 'RESOLVED') checks.push({ ok: true, text: text.resolved });
+  if (action.resolution === 'IGNORED') checks.push({ ok: false, text: text.ignored });
+  if (action.kind !== 'open' && action.kind !== 'navigate')
+    checks.push({
+      ok: action.facts.stableSelector,
+      text: action.facts.stableSelector ? text.stable : text.fragile,
+    });
+  if (action.evidence.navigatedTo)
+    checks.push({ ok: true, text: text.navigation(action.evidence.navigatedTo) });
+  for (const effect of (action.evidence.effects ?? []).slice(0, 3))
+    checks.push({ ok: true, text: text.effect(effect) });
+  return checks;
+}
+
+export function liveStep(action: LiveAction, language: 'fr' | 'en' = 'fr'): PanelStep {
   return {
     id: action.id,
     index: action.index,
+    kind: action.kind,
+    checks: checksOf(action, language),
     description: action.description,
     ...(action.detail ? { detail: action.detail } : {}),
     status: action.status,
@@ -189,9 +264,15 @@ export function reviewSteps(
     }
     const twin = live.find((action) => action.rawEventIds.some((id) => item.rawEventIds.includes(id)));
     const { status, statusText } = reviewStatus(item, text);
+    const validated = item.targetValidation;
     actions.push({
       id: item.id,
       index: actions.length + 1,
+      kind: item.step.kind,
+      checks: [
+        ...(twin ? checksOf(twin, language) : []),
+        ...(!twin && validated ? [{ ok: status === 'CONFIRMED', text: statusText }] : []),
+      ],
       description: twin && twin.kind !== 'open' ? twin.description : describeFlowStep(item.step, language),
       ...(twin?.detail ? { detail: twin.detail } : {}),
       status,

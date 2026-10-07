@@ -201,7 +201,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     ...(targetValidator ? { targetValidator } : {}),
     // La timeline en direct : la fenêtre se redessine tout de suite (jamais après une analyse).
     onTimeline: () => {
-      consoleUi?.render();
+      consoleUi?.timelineChanged();
     },
   });
   const browser = new BrowserManager(config.browser);
@@ -240,14 +240,15 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     // LA FENÊTRE DU RECORDER : un contexte séparé (jamais capturé) ; elle ne bloque jamais l'enregistrement.
     if (config.recording.panel && config.recording.overlay) {
       try {
-        const panelPage = await browser.newIsolatedPage({ viewport: { width: 480, height: 860 } });
+        const panelPage = await browser.newIsolatedPage({ viewport: { width: 1360, height: 900 } });
         consoleUi = new RecordingConsole(
           await RecorderPanel.open(panelPage, language),
           recorder,
           request.name,
           language,
         );
-        consoleUi.render();
+        consoleUi.withPreview = config.recording.panelPreview;
+        consoleUi.timelineChanged();
         await page.bringToFront().catch(() => undefined);
       } catch (error) {
         warnings.push(

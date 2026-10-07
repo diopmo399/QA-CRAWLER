@@ -45,6 +45,11 @@ export class RecordingConsole {
   private directory: string | undefined;
   private review: ((command: PanelCommand) => Promise<void>) | undefined;
   private busy = false;
+  private preview: PanelState['preview'];
+  private previewTimer: NodeJS.Timeout | undefined;
+  private capturing = false;
+  /** recording.panelPreview : l'aperçu de l'application dans la fenêtre. */
+  withPreview = true;
 
   constructor(
     private readonly panel: RecorderPanel,
@@ -64,6 +69,36 @@ export class RecordingConsole {
 
   render(): void {
     this.panel.render(this.state());
+  }
+
+  /** La timeline a changé (une action, une validation) : la fenêtre, puis un nouvel aperçu de la page. */
+  timelineChanged(): void {
+    this.render();
+    this.schedulePreview();
+  }
+
+  /** L'aperçu se rafraîchit après les changements (au plus une image toutes les 800 ms), jamais pendant un rejeu. */
+  private schedulePreview(): void {
+    if (!this.withPreview || this.previewTimer || this.phase === 'FINALIZING') return;
+    this.previewTimer = setTimeout(() => {
+      this.previewTimer = undefined;
+      void this.refreshPreview();
+    }, 800);
+    this.previewTimer.unref();
+  }
+
+  private async refreshPreview(highlight?: NonNullable<PanelState['preview']>['highlight']): Promise<void> {
+    if (!this.withPreview || this.capturing) return;
+    this.capturing = true;
+    try {
+      const shot = await this.recorder.preview();
+      if (!shot) return;
+      // Un cadre ne survit qu'à l'image où il a été mesuré (la page a pu bouger depuis).
+      this.preview = { ...shot, ...(highlight ? { highlight } : {}) };
+      this.panel.render(this.state());
+    } finally {
+      this.capturing = false;
+    }
   }
 
   async close(): Promise<void> {
@@ -211,8 +246,14 @@ export class RecordingConsole {
       case 'select': {
         if (!command.id) break;
         const live = this.liveIdOf(command.id);
-        const result = live ? await this.recorder.highlight(live) : 'NOT_FOUND';
-        this.highlight = { actionId: command.id, result };
+        const result = live ? await this.recorder.highlight(live) : { found: 'NOT_FOUND' as const };
+        this.highlight = { actionId: command.id, result: result.found };
+        // L'aperçu montre le même élément, à sa position réelle (jamais un cadre deviné).
+        await this.refreshPreview(
+          result.rect
+            ? { actionId: command.id, ...result.rect, ...(result.label ? { label: result.label } : {}) }
+            : undefined,
+        );
         break;
       }
       case 'resolve': {
@@ -224,6 +265,9 @@ export class RecordingConsole {
       }
       case 'ignore':
         if (command.id) this.recorder.ignoreAmbiguity(command.id);
+        break;
+      case 'refresh':
+        await this.refreshPreview();
         break;
       default:
         await this.review?.(command);
@@ -247,7 +291,7 @@ export class RecordingConsole {
     const inReview = this.phase === 'REVIEW' && this.result !== undefined;
     const review =
       inReview && this.result ? reviewSteps(this.result.flow, live.actions, this.language) : undefined;
-    const actions = review ? review.actions : live.actions.map(liveStep);
+    const actions = review ? review.actions : live.actions.map((action) => liveStep(action, this.language));
     const phase = this.phase === 'RECORDING' && this.recorder.isPaused ? 'PAUSED' : this.phase;
     return {
       language: this.language,
@@ -264,6 +308,7 @@ export class RecordingConsole {
       ...(this.notice ? { notice: this.notice } : {}),
       ...(this.replay ? { replay: this.replay } : {}),
       ...(this.saved ? { saved: this.saved } : {}),
+      ...(this.preview ? { preview: this.preview } : {}),
       analysis: this.analysis,
       ...(this.directory ? { directory: this.directory } : {}),
     };

@@ -1835,12 +1835,22 @@ export function installRecorder(
       }
       const box = root.querySelector<HTMLElement>('.highlight');
       if (!box) return 'NOT_FOUND';
+      global.__qaCrawlerLastRect = undefined;
       if (!element) {
         box.style.display = 'none';
         return 'NOT_FOUND';
       }
       element.scrollIntoView({ block: 'center', inline: 'nearest' });
       const rect = element.getBoundingClientRect();
+      // La position (l'aperçu de la fenêtre du recorder y dessine le même cadre).
+      global.__qaCrawlerLastRect = {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      };
       box.style.cssText = `display:block;left:${String(rect.left - 4)}px;top:${String(rect.top - 4)}px;width:${String(rect.width + 8)}px;height:${String(rect.height + 8)}px`;
       const tag = box.querySelector('span');
       if (tag) tag.textContent = clean(label, 60);

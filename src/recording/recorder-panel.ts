@@ -15,7 +15,8 @@ export interface PanelCommand {
     | 'replay'
     | 'save'
     | 'remove'
-    | 'finish';
+    | 'finish'
+    | 'refresh';
   id?: string;
   candidate?: number;
 }
@@ -32,6 +33,7 @@ const COMMANDS = new Set<PanelCommand['type']>([
   'save',
   'remove',
   'finish',
+  'refresh',
 ]);
 
 /**

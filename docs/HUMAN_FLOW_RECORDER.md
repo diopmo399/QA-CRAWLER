@@ -40,8 +40,19 @@ Deux surfaces, qui ne sont **jamais** enregistrées :
 USER ACTION → RECORDER → ACTION VALIDATION → RECORDED FLOW → REPLAY → (ANALYSIS → INTENT)
 ```
 
-- **En-tête** : `🔴 Enregistrement en cours` (ou `⏸ en pause`, `⏳ Finalisation…`, `✓ terminé`),
-  durée, nombre d'actions, Pause / Reprendre / Annuler / Arrêter.
+- **Disposition** : en-tête (QA-CRAWLER, **Mode développeur**) · barre d'état (`● Enregistrement en
+cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annuler) · onglets
+  **Enregistrement / Analyse / Aperçu** · trois colonnes sur un grand écran — **Parcours enregistré**
+  (et la qualité), **Aperçu de l'application**, **Détails de l'action** — deux puis une sur une
+  fenêtre plus étroite (l'aperçu passe dans son onglet) · **Résumé du recording** en bas (actions,
+  confirmées, ambiguës, échecs, durée, **Rejouer le parcours**, **Sauvegarder le flow**).
+- **Aperçu de l'application** (`recording.panelPreview: true`) : une image de la page, prise après
+  chaque action (au plus une toutes les 800 ms, sans le bandeau), **en mémoire seulement** — jamais
+  écrite ni journalisée. L'élément sélectionné y est encadré à sa position réelle.
+- **Détails de l'action** : étape _n_ sur _N_, informations générales (type, élément, texte, rôle),
+  sélecteurs et attributs (copiables), et la **validation point par point** — action confirmée,
+  élément retrouvé (_n_ correspondance(s)), sélecteur stable, navigation déclenchée, effets observés :
+  uniquement ce qui a vraiment été vérifié — puis les logs techniques.
 - **Timeline** : une ligne par action **réellement faite**, en mots simples (« Cliquer sur
   "Continuer" », « Saisir "Alex" dans "Prénom" », « Cocher "J'accepte les conditions" »,
   « Sélectionner "Québec" dans "Province" »). La ligne apparaît **dès la capture** (● en cours),
@@ -877,6 +888,7 @@ recording:
   language: fr # langue du .feature (défaut : report.language)
   overlay: true # le bandeau ● REC (minuteur, Pause, Annuler, Arrêter, notifications)
   panel: true # la fenêtre « QA-CRAWLER Recorder » (timeline, détails, ambiguïtés, revue, analyse)
+  panelPreview: true # l'aperçu de l'application dans la fenêtre (image en mémoire, jamais écrite)
   # flowsDirectory: flows # où « Sauvegarder » copie le flow (défaut : flows/ à côté des rapports)
   recordAfterAuthentication: true
   maxRawEvents: 5000

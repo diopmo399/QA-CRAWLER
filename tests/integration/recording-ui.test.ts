@@ -121,7 +121,7 @@ describe('Recording UI (recorder window)', () => {
       reviewDriver: async ({ panel }) => {
         // STOP → l'écran de revue.
         await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
-        seen.reviewText = await panel.locator('#panel-recording').innerText();
+        seen.reviewText = await panel.locator('body').innerText();
         // MODIFIER : retirer une étape la retire du flow (fichiers régénérés).
         await panel.getByRole('button', { name: '✎ Modifier' }).click();
         await panel.getByRole('button', { name: /Retirer l'étape « Cliquer sur "Action 7" »/ }).click();
@@ -150,7 +150,7 @@ describe('Recording UI (recorder window)', () => {
         await panel.getByRole('tab', { name: 'Enregistrement' }).click();
         seen.recordingTabText = await panel.locator('#panel-recording').innerText();
         // MODE DÉVELOPPEUR : les détails techniques.
-        await panel.getByRole('button', { name: 'Développeur' }).click();
+        await panel.getByRole('button', { name: 'Mode développeur' }).click();
         seen.devText = await timeline(panel).innerText();
         await panel.getByRole('button', { name: 'Fermer' }).click();
       },

@@ -68,6 +68,20 @@ export interface HumanFlowRecorderOptions {
   onTimeline?: (change: TimelineChange) => void;
 }
 
+/** La mise en évidence d'un élément : comment il a été retrouvé, et où (l'aperçu dessine le même cadre). */
+export interface HighlightResult {
+  found: 'ORIGINAL' | 'SELECTOR' | 'NOT_FOUND';
+  rect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    viewportWidth: number;
+    viewportHeight: number;
+  };
+  label?: string;
+}
+
 /** Ce qui vient de changer dans la timeline en direct. */
 export interface TimelineChange {
   reason: 'ADDED' | 'UPDATED' | 'CONFIRMED' | 'UNDONE' | 'RESOLVED' | 'IGNORED' | 'STATE';
@@ -353,24 +367,60 @@ export class HumanFlowRecorder {
    * Met en évidence dans la page l'élément d'une action : l'élément ORIGINAL s'il est encore là,
    * sinon celui que son sélecteur désigne SEUL ; jamais un élément deviné.
    */
-  async highlight(actionId: string): Promise<'ORIGINAL' | 'SELECTOR' | 'NOT_FOUND'> {
+  async highlight(actionId: string): Promise<HighlightResult> {
     const action = this.timeline.actions.find((entry) => entry.id === actionId);
     const page = this.page;
-    if (!action || !page || page.isClosed() || (!action.ref && !action.css)) return 'NOT_FOUND';
+    if (!action || !page || page.isClosed() || (!action.ref && !action.css)) return { found: 'NOT_FOUND' };
     // L'élément par son nom (jamais la valeur saisie).
     const label = action.technical.label ?? action.technical.name ?? action.technical.text ?? action.kind;
     return page
       .evaluate(
-        ({ ref, css, text }) =>
-          (
-            window as unknown as {
-              __qaCrawlerRecorder?: { highlight(ref?: string, css?: string, text?: string): string };
-            }
-          ).__qaCrawlerRecorder?.highlight(ref, css, text) ?? 'NOT_FOUND',
+        ({ ref, css, text }) => {
+          const global = window as unknown as {
+            __qaCrawlerRecorder?: { highlight(ref?: string, css?: string, text?: string): string };
+            __qaCrawlerLastRect?: HighlightResult['rect'];
+          };
+          const found = global.__qaCrawlerRecorder?.highlight(ref, css, text) ?? 'NOT_FOUND';
+          return { found, rect: global.__qaCrawlerLastRect };
+        },
         { ref: action.ref, css: action.css, text: label },
       )
-      .then((found) => (found === 'ORIGINAL' || found === 'SELECTOR' ? found : 'NOT_FOUND'))
-      .catch(() => 'NOT_FOUND' as const);
+      .then((result): HighlightResult =>
+        result.found === 'ORIGINAL' || result.found === 'SELECTOR'
+          ? { found: result.found, ...(result.rect ? { rect: result.rect, label } : {}) }
+          : { found: 'NOT_FOUND' },
+      )
+      .catch((): HighlightResult => ({ found: 'NOT_FOUND' }));
+  }
+
+  /**
+   * L'APERÇU de l'application pour la fenêtre du recorder : une image de la page (sans le bandeau),
+   * en mémoire seulement — jamais écrite, jamais journalisée.
+   */
+  async preview(): Promise<{ image: string; url: string; width: number; height: number } | undefined> {
+    const page = this.page;
+    if (!page || page.isClosed()) return undefined;
+    try {
+      const buffer = await page.screenshot({
+        type: 'jpeg',
+        quality: 70,
+        scale: 'css',
+        animations: 'allow',
+        caret: 'initial',
+        timeout: 3000,
+        style: 'qa-crawler-recorder{display:none!important}',
+      });
+      const size =
+        page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
+      return {
+        image: `data:image/jpeg;base64,${buffer.toString('base64')}`,
+        url: redactUrl(page.url()),
+        width: size.width,
+        height: size.height,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   /** La timeline a changé : le panneau, le bandeau (compteur, notification) et le journal (sans valeur). */

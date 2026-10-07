@@ -68,6 +68,8 @@ export interface LiveAction {
   resolution?: 'RESOLVED' | 'IGNORED';
   /** Les faits de qualité (vrais, jamais estimés). */
   facts: { stableSelector: boolean; uniqueTarget: boolean; afterRerender: boolean; mergedEvents: number };
+  /** Les preuves de la validation (panneau de détails) : nombre de correspondances, effets observés, navigation. */
+  evidence: { candidates?: number; effects?: string[]; navigatedTo?: string; reason?: string };
   at: number;
 }
 
@@ -218,6 +220,7 @@ export class LiveTimeline {
         ) {
           this.extend(last, event);
           last.detail = this.words.navigatedTo(page);
+          last.evidence.navigatedTo = page;
           return last;
         }
         return this.add(
@@ -355,6 +358,10 @@ export class LiveTimeline {
       validation.status !== 'VALIDATED_FRAGILE' &&
       (target === undefined || target.strategy !== 'css' || action.facts.stableSelector);
     action.facts.afterRerender = validation.status === 'VALIDATED_AFTER_RERENDER';
+    action.evidence.candidates = check.candidateCount;
+    action.evidence.reason = check.reason;
+    if (validation.effects && validation.effects.length > 0)
+      action.evidence.effects = validation.effects.slice(0, 6);
     if (VALIDATED_STATUSES.has(validation.status)) {
       action.status = 'CONFIRMED';
       action.statusText =
@@ -526,6 +533,7 @@ export class LiveTimeline {
       ...(ref ? { ref } : {}),
       ...(element?.css ? { css: element.css } : {}),
       technical: technicalOf(event),
+      evidence: {},
       facts: {
         stableSelector: element ? element.cssStable : true,
         uniqueTarget: true,
