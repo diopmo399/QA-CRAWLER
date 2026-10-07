@@ -114,7 +114,8 @@ export function recordingHtml(input: {
     <p class="muted">Start ${esc(session.startUrl)} · ${esc(session.startedAt)} → ${esc(session.endedAt ?? '')}${session.environment ? ` · environment ${esc(session.environment)}` : ''}${session.version ? ` · version ${esc(session.version)}` : ''}${session.role ? ` · role ${esc(session.role)}` : ''}</p>
     ${replay.reason ? `<p class="muted">Replay: ${esc(replay.reason)}${replay.report ? ` · <a href="${esc(replay.report)}">dry run report</a>` : ''}</p>` : ''}
   </section>
-  <section><h2>Understood intent</h2>
+  <section><h2>Semantic intent (post-recording layer)</h2>
+    <p class="muted">Inferred after the recording from the observed requests (semantic-intents.json); it never changes the recorded steps.</p>
     <p>${intent.workflow ? `<b>${esc(intent.workflow)}</b>${intent.api ? ` · ${esc(intent.api)}` : ''}` : 'No business write observed.'}${flow.negative ? ' · <b>negative validation flow</b>' : ''}</p>
     ${intent.transitions.length > 0 ? `<ul class="plain">${intent.transitions.map((transition) => `<li>${esc(transition.entity)}: ${esc(transition.from)} → ${esc(transition.to)}</li>`).join('')}</ul>` : ''}
     ${intent.evidence.length > 0 ? `<p class="muted">${esc(intent.evidence.join(' · '))}</p>` : ''}

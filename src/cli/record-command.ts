@@ -227,6 +227,11 @@ function printEvent(event: RecordingEvent): void {
     REPLAY_CONFIRMED: color.green,
     REPLAY_FAILED: color.red,
   };
+  // QA_DEBUG=1 (ou recorder) : la trace déterministe du recorder ([RECORDER] RAW EVENT … RECORDED / EVENT IGNORED).
+  if (event.type === 'RECORDER_DEBUG') {
+    if (recorderDebug()) logger.info(`  ${color.dim(event.message)}`);
+    return;
+  }
   // Le journal de validation des cibles : une ligne concise par étape ([TARGET_MISMATCH] …).
   if (event.type === 'TARGET_VALIDATION' && event.message.startsWith('[')) {
     const ok = /^\[TARGET_(VALIDATED|REVALIDATED|CAPTURED|VALIDATING)\]/.test(event.message);
@@ -236,6 +241,10 @@ function printEvent(event: RecordingEvent): void {
   }
   const paint = shown[event.type];
   if (paint) logger.info(`  ${paint(`[${event.type}]`)} ${event.message}`);
+}
+
+function recorderDebug(): boolean {
+  return ['1', 'true', 'recorder', 'all'].includes((process.env.QA_DEBUG ?? '').toLowerCase());
 }
 
 function printSummary(outcome: RecordOutcome): void {
@@ -249,7 +258,7 @@ function printSummary(outcome: RecordOutcome): void {
   line('Raw events', session.rawEvents.length);
   line('Semantic actions', normalized.actions.length);
   line('Final steps', flow.steps.length);
-  line('Intent', flow.intent.workflow ?? '-');
+  line('Semantic intent', `${flow.intent.workflow ?? '-'} (post-recording, semantic-intents.json)`);
   line('Assertions selected', q.assertions.selected);
   line('Ambiguous targets', q.ambiguousTargets);
   line('Fragile locators', q.fragileLocators);

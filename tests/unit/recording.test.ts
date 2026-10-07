@@ -487,15 +487,18 @@ describe('one model → flow.yaml and .feature', () => {
     }
   });
 
-  it('a target that only a selector reaches becomes an intent in both files', () => {
+  it('a target that only a selector reaches stays a concrete step on that element: never an intent', () => {
     const events = [
       raw('click', 1000, {
         element: button('Dark mode', { role: 'switch', text: undefined, testId: 'dark-mode' }),
       }),
     ];
     const result = processRecording(session(events, [state('o1', '/users')]), config, { language: 'en' });
-    expect(result.files.yaml).toContain('kind: CLICK');
-    expect(result.files.feature).toContain('I click on "Dark mode"');
+    expect(result.files.yaml).not.toMatch(/intent/);
+    expect(result.files.yaml).toContain('- click:');
+    expect(result.files.yaml).toContain('dark-mode');
+    // Le .feature ne sait pas la dire : un commentaire, jamais une phrase d'intention inventée.
+    expect(result.files.feature).not.toContain('I click on "Dark mode"');
   });
 
   it('a field without any name keeps its selector: never an intent on "input"', () => {
@@ -510,7 +513,7 @@ describe('one model → flow.yaml and .feature', () => {
     expect(result.files.yaml).toContain('css: "#search"');
   });
 
-  it('a field labelled only by the text just before it becomes an intent with that text', () => {
+  it('a field labelled only by the text just before it keeps its selector: never an intent', () => {
     const events = [
       raw('change', 1000, {
         element: element({ label: undefined, name: '', guessedLabel: 'Branch code', css: 'div > input' }),
@@ -518,8 +521,9 @@ describe('one model → flow.yaml and .feature', () => {
       }),
     ];
     const result = processRecording(session(events, [state('o1', '/users')]), config, { language: 'en' });
-    expect(result.files.yaml).toContain('field: Branch code');
-    expect(result.files.feature).toContain('Branch code');
+    expect(result.files.yaml).not.toMatch(/intent|field: Branch code/);
+    expect(result.files.yaml).toContain('- fill:');
+    expect(result.files.yaml).toContain('div > input');
   });
 
   it('a large recording is processed quickly (no heavy analysis per event)', () => {

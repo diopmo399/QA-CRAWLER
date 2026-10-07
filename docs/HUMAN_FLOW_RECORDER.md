@@ -75,8 +75,41 @@ attribut `name`) › **FRAMEWORK_BINDING** (`formControlName`) › **CSS_STABLE*
 › **FRAGILE** (position dans la page, en dernier recours, signalée). Un id généré
 (`mat-input-23`, `:r1:`, `cdk-…`) n'est jamais utilisé. Un nom qui désigne plusieurs
 éléments (Playwright sans `exact`) laisse la place à un attribut stable ; sinon la cible est
-**AMBIGUOUS_RECORDED_TARGET**. Une cible qu'aucune phrase Gherkin ne sait dire devient une
-**intention** (le SemanticResolver la retrouve au rejeu) dans les deux fichiers.
+**AMBIGUOUS_RECORDED_TARGET**. Une cible qu'aucune phrase Gherkin ne sait dire reste une étape
+concrète sur l'élément touché (son sélecteur dans le YAML, un commentaire dans le .feature) :
+**jamais une intention** (voir « Enregistrement déterministe »).
+
+### Enregistrement déterministe
+
+Trois niveaux, jamais mélangés :
+
+1. **RAW BROWSER EVENT** — ce que le navigateur a émis (`raw-recording.json`).
+2. **VALIDATED USER ACTION** — l'action humaine réellement faite sur l'élément réellement touché
+   (`recorded-flow.json`, `generated.flow.yaml`, `generated.feature`) : clic, saisie (valeur
+   finale seulement), case cochée / décochée (état avant et après), choix, touche, glisser-déposer.
+   Une navigation est l'**effet** du clic qui l'a causée (`effects.route`), pas une étape.
+3. **SEMANTIC INTENT** (facultatif) — déduit **après** l'enregistrement (`semantic-intents.json`,
+   `layer: SEMANTIC_POST_RECORDING`, `modifiesRecording: false`). Il ne modifie jamais le niveau 2.
+
+Le niveau 2 ne vient **que** des événements humains : jamais de l'Action Discovery (elle ne
+remplit que la carte `flow-graph.json`), de l'IA, des flows de la mission, de la mémoire ou d'un
+ancien enregistrement. L'IA ne choisit jamais une cible pendant l'enregistrement
+(`recording.targetValidation.aiAudit: false` par défaut) ; ses audits après coup
+(`flow-audit.json`, `semantic-audit.json`, `recording-intelligence.json`) sont des avis.
+
+**Débogage** : `QA_DEBUG=1` (ou `QA_DEBUG=recorder`) affiche la trace du recorder :
+
+```
+[RECORDER] RAW EVENT r6 type=change element=checkbox "Accept terms" css=input[name="terms"] checkedBefore=false checkedAfter=true
+[RECORDER] ELEMENT h005 [r6] CHECK "Accept terms" locator=label:"Accept terms" quality=SEMANTIC
+[RECORDER] VALIDATION h005 [r6] status=VALIDATED
+[RECORDER] STABILIZATION h005 [r6] screen=o1 closed-by=r8
+[RECORDER] RECORDED h005 [r6] step=s3 kind=check
+[RECORDER] EVENT IGNORED h004 [r5] reason=duplicate_event (CONTROL_LABEL_FOR_CHANGE, kept in h005)
+```
+
+Raisons d'un événement ignoré : `element_not_interacted`, `duplicate_event`, `ambiguous_target`,
+`blocked_by_policy`, `buffer_overflow`. Jamais une valeur saisie dans la trace (sa forme et sa longueur).
 
 ### Normalisation
 
@@ -724,8 +757,9 @@ final → rejeu.
 ## Résultats et vérifications
 
 Chaque action est corrélée au réseau (fenêtre par action), à l'écran observé après elle
-(UIObserver → StateDetector) et à l'intention métier (verbe + entité de l'écriture, comme
-l'apprentissage au runtime : `POST /api/users` après « Save » → `CREATE:USER`).
+(UIObserver → StateDetector) et, après coup, à l'intention métier (verbe + entité de l'écriture,
+comme l'apprentissage au runtime : `POST /api/users` après « Save » → `CREATE:USER`), écrite dans
+`semantic-intents.json` seulement (jamais dans le flow ni dans son en-tête).
 
 Vérifications candidates : `API_OUTCOME` (requête 2xx / 4xx), `ROUTE` (page atteinte, ou un
 bouton que seule la nouvelle page montre quand l'URL ne discrimine pas : `/users/new` contient
@@ -760,7 +794,7 @@ la session, la version et l'environnement. Les runs suivants la reprennent comme
 ## Fichiers
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,
-`recorded-flow.json`, `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
+`recorded-flow.json`, `semantic-intents.json` (l'intention, couche séparée), `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
 données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `target-validation.json`, `ai-context-summary.json`, `optimized.flow.yaml`
 (seulement avec l'optimiseur), `flow-graph.json` (la carte
 des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en nombres — sans
@@ -805,7 +839,7 @@ recording:
   targetValidation: # auto-validation de la cible juste après chaque action (recherche à sec)
     enabled: true
     maxDeterministicRepairAttempts: 2
-    aiAudit: true # le conseiller audite ce que le déterministe ne règle pas (ai.mode OFF → aucun appel)
+    aiAudit: false # true : le conseiller audite PENDANT l'enregistrement ce que le déterministe ne règle pas (OFF par défaut : enregistrement déterministe)
   intelligenceAudit: # relecture par l'intelligence (ai.*) ; ai.mode OFF → aucun appel
     enabled: true
     mode: SUSPICIOUS_ONLY # OFF | SUSPICIOUS_ONLY | FULL
@@ -853,7 +887,7 @@ recording:
 - Un `confirm()` pendant l'enregistrement est accepté (`recording.dialogs.confirm`) ; au
   rejeu, la règle des dialogues de la mission s'applique (`browserInteractions.dialogs`).
   Un `prompt()` est refusé (sa réponse serait une saisie).
-- Un envoi de fichier devient une intention `UPLOAD` sans fichier : à compléter.
+- Un envoi de fichier devient une étape `manual` (« upload a file into … ») : le fichier n'est jamais enregistré.
 - Un message affiché brièvement (toast) n'est proposé qu'en revue.
 - Glisser-déposer : l'élément est identifié par son texte visible ; une requête envoyée au
   dépôt peut être rattachée à l'action précédente (le glisser est envoyé 300 ms après le dépôt,

@@ -16,7 +16,7 @@ import { FunctionalKnowledgeStore } from '../knowledge/functional-knowledge-stor
 import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
-import type { RecordingEvent } from './model.js';
+import type { RecordedIntent, RecordingEvent } from './model.js';
 import type { IntelligenceProvider } from '../ai/provider.js';
 import {
   describeFieldIdentity,
@@ -38,6 +38,7 @@ import {
 import { auditRecordingSemantics, targetAuditAdvisor, type SemanticAuditReport } from './semantic-audit.js';
 import { RecordingTargetValidator, type TargetValidationStatus } from './target-validator.js';
 import { withSemanticGoal } from './validation-mode.js';
+import { recorderTrace } from './recorder-trace.js';
 
 export type RecordOutputFormat = 'yaml' | 'gherkin' | 'both';
 
@@ -94,7 +95,7 @@ export interface RecordOutcome {
 /**
  * RECORD : ouvrir Chromium (connecté si la mission le demande), laisser l'humain faire,
  * puis RAW → SEMANTIC → FINAL et écrire sous `<reportsDir>/recordings/<nom>/` :
- * raw-recording.json, semantic-recording.json, recorded-flow.json, generated.flow.yaml,
+ * raw-recording.json, semantic-recording.json, recorded-flow.json, semantic-intents.json, generated.flow.yaml,
  * generated.feature, flow-graph.json, recording-events.jsonl, index.html.
  * Le flow généré n'est jamais modifié par la validation.
  */
@@ -109,7 +110,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   const log = new EngineEventLog('INFO');
   const onEvent = (event: RecordingEvent): void => {
     // RAW_EVENT_CAPTURED : une ligne par événement brut, inutile dans le journal (la trace est dans raw-recording.json).
-    if (event.type !== 'RAW_EVENT_CAPTURED') log.log('INFO', event.type, event.message);
+    if (event.type !== 'RAW_EVENT_CAPTURED' && event.type !== 'RECORDER_DEBUG')
+      log.log('INFO', event.type, event.message);
     request.onEvent?.(event);
   };
   // LE TEMPS APRÈS « STOP », phase par phase : le bilan dit où il passe (jamais deviné).
@@ -252,6 +254,14 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   );
   // Les textes saisis ne servent plus : effacés de la mémoire du recorder.
   recorder.typedValues.clear();
+  // QA_DEBUG : chaque interaction humaine, enregistrée (élément, validation, stabilisation) ou ignorée (raison).
+  for (const line of recorderTrace({
+    events: result.session.rawEvents,
+    accounts: result.journey.accounts,
+    kept: result.normalized.kept,
+    steps: result.flow.steps,
+  }))
+    onEvent({ type: 'RECORDER_DEBUG', at: new Date().toISOString(), message: line });
   stopClock.mark('processing (journey, flow, test data)');
   const format = request.outputFormat ?? config.recording.outputFormat;
   progress.start(RECORDING_PHASES.files);
@@ -272,7 +282,14 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       actions: result.normalized.actions,
     }),
   );
-  await write('recorded-flow.json', json(result.flow));
+  // NIVEAU 2 (actions humaines validées) et NIVEAU 3 (intention) séparés : recorded-flow.json ne porte
+  // aucune intention ; l'intention métier déduite après coup est dans semantic-intents.json.
+  const { intent: semanticIntent, ...recordedFlow } = result.flow;
+  await write('recorded-flow.json', json(recordedFlow));
+  await write(
+    'semantic-intents.json',
+    json(semanticIntentsOf(result.flow.recordingSessionId, semanticIntent)),
+  );
   await write('flow-graph.json', json(result.graph));
   // Le jeu de données du flow (aucune valeur sensible : références à des variables d'environnement).
   if (result.testData && Object.keys(result.testData.set.values).length > 0)
@@ -562,6 +579,27 @@ async function recordingConfig(
   const startAt = absolute ? `${absolute.pathname}${absolute.search}${absolute.hash}` : (url ?? '/');
   const yaml = `mission: { name: ${JSON.stringify(request.name)} }\ntarget: { baseUrl: ${JSON.stringify(base)}, startAt: ${JSON.stringify(startAt)} }\n`;
   return parseConfig(yaml, request.overrides ?? {}, env);
+}
+
+/**
+ * SEMANTIC INTENT (niveau 3) : une couche POST-ENREGISTREMENT, déduite des échanges réseau observés,
+ * jamais écrite dans le flow (aucune étape `intent:`) et jamais relue pour en produire un.
+ */
+export function semanticIntentsOf(
+  recordingSessionId: string,
+  intent: RecordedIntent,
+): {
+  layer: 'SEMANTIC_POST_RECORDING';
+  recordingSessionId: string;
+  modifiesRecording: false;
+  intents: (RecordedIntent & { source: 'NETWORK_OBSERVATION' })[];
+} {
+  return {
+    layer: 'SEMANTIC_POST_RECORDING',
+    recordingSessionId,
+    modifiesRecording: false,
+    intents: intent.workflow ? [{ ...intent, source: 'NETWORK_OBSERVATION' }] : [],
+  };
 }
 
 /** La connaissance fonctionnelle (la même que les runs) : le workflow montré par l'humain, HUMAN_RECORDED. */
