@@ -49,6 +49,10 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
 - **Aperçu de l'application** (`recording.panelPreview: true`) : une image de la page, prise après
   chaque action (au plus une toutes les 800 ms, sans le bandeau), **en mémoire seulement** — jamais
   écrite ni journalisée. L'élément sélectionné y est encadré à sa position réelle.
+  **⧉ Détacher** ouvre l'aperçu dans sa propre fenêtre (**⛶ Plein écran** possible, par exemple
+  sur un second écran) : la fenêtre principale garde le parcours, les détails, la qualité et les
+  commandes, sur deux colonnes plus larges. **↩ Rattacher** (ou fermer la fenêtre de l'aperçu) le
+  remet à sa place. La fenêtre détachée suit l'élément sélectionné dans la fenêtre principale.
 - **Détails de l'action** : étape _n_ sur _N_, informations générales (type, élément, texte, rôle),
   sélecteurs et attributs (copiables), et la **validation point par point** — action confirmée,
   élément retrouvé (_n_ correspondance(s)), sélecteur stable, navigation déclenchée, effets observés :

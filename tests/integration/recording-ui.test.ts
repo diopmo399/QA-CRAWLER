@@ -283,3 +283,81 @@ async function injectAmbiguity(recorder: HumanFlowRecorder, label: string): Prom
   if (!updated) throw new Error('the ambiguity could not be applied');
   (recorder as unknown as { changed(change: unknown): void }).changed({ reason: 'UPDATED', action: updated });
 }
+
+/** Attend une condition (sans expect.poll, hors d'un test). */
+async function until(check: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('condition not met');
+}
+
+describe('Recording UI — detached preview window', () => {
+  let app: DeterministicRecordingApp;
+  const seen: Record<string, unknown> = {};
+
+  beforeAll(async () => {
+    app = await startDeterministicRecordingApp();
+    const dir = await mkdtemp(path.join(tmpdir(), 'qa-record-ui-detach-'));
+    await writeFile(
+      path.join(dir, 'mission.yaml'),
+      `mission: { name: recording-ui-detach }\ntarget: { baseUrl: ${app.url}, startAt: /form }\n`,
+    );
+    await runRecording({
+      name: 'Detached preview',
+      missionFile: path.join(dir, 'mission.yaml'),
+      overrides: { headless: true, reportsDir: path.join(dir, 'reports') },
+      env: {},
+      language: 'fr',
+      drive: async ({ page, panel }) => {
+        if (!panel) throw new Error('the recorder window did not open');
+        const browser = panel.context().browser();
+        const windows = (): Page[] =>
+          browser ? browser.contexts().flatMap((context) => context.pages()) : [];
+        const before = windows().length;
+        await panel.getByRole('button', { name: "Détacher l'aperçu dans sa propre fenêtre" }).click();
+        await panel
+          .getByText(/ouvert dans sa propre fenêtre/)
+          .first()
+          .waitFor();
+        await until(() => windows().length === before + 1);
+        const detached = windows().find(
+          (candidate) =>
+            candidate !== panel && candidate !== page && !windows().slice(0, before).includes(candidate),
+        );
+        if (!detached) throw new Error('no detached window');
+        seen.title = await detached.title();
+        seen.mainHasPreview = await panel.locator('#preview-card .viewport').count();
+        // Une action : la fenêtre détachée montre la page (l'image), la principale garde la timeline.
+        await page.getByRole('button', { name: 'Action 7', exact: true }).click();
+        await detached.locator('#preview-detached img').waitFor({ timeout: 10_000 });
+        await row(panel, /Cliquer sur "Action 7"/).waitFor();
+        seen.fullscreenButton = await detached.getByRole('button', { name: 'Plein écran' }).count();
+        // Rattacher : l'aperçu revient dans la fenêtre principale et la fenêtre détachée se ferme.
+        await detached.getByRole('button', { name: "Rattacher l'aperçu à la fenêtre principale" }).click();
+        await panel.locator('#preview-card .viewport').waitFor();
+        seen.detachedClosed = detached.isClosed();
+        // Détacher puis fermer la fenêtre : l'aperçu revient aussi.
+        await panel.getByRole('button', { name: "Détacher l'aperçu dans sa propre fenêtre" }).click();
+        await until(() => windows().length === before + 1);
+        const again = windows().find((candidate) => candidate !== panel && candidate !== page);
+        await again?.close();
+        await panel.locator('#preview-card .viewport').waitFor();
+        seen.reattachedOnClose = true;
+      },
+    });
+  }, 180_000);
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('the preview opens in its own window (full screen), the main window keeps the journey and details', () => {
+    expect(seen.title).toMatch(/Aperçu/);
+    expect(seen.mainHasPreview).toBe(0);
+    expect(seen.fullscreenButton).toBe(1);
+    expect(seen.detachedClosed).toBe(true);
+    expect(seen.reattachedOnClose).toBe(true);
+  });
+});

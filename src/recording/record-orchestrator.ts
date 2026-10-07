@@ -246,6 +246,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           recorder,
           request.name,
           language,
+          // ⧉ Détacher l'aperçu : une autre fenêtre isolée du même navigateur.
+          () => browser.newIsolatedPage({ viewport: { width: 1280, height: 860 } }),
         );
         consoleUi.withPreview = config.recording.panelPreview;
         consoleUi.timelineChanged();

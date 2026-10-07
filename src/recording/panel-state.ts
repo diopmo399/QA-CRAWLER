@@ -90,6 +90,8 @@ export interface PanelState {
   };
   analysis: PanelAnalysis;
   directory?: string;
+  /** L'aperçu est ouvert dans sa propre fenêtre (la fenêtre principale garde le parcours et les détails). */
+  previewDetached?: boolean;
 }
 
 const CHECKS = {

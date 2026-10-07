@@ -13,7 +13,31 @@
  * (jamais par la couleur seule), annonces aria-live. Responsive : trois colonnes sur un grand écran,
  * deux puis une sur une fenêtre plus étroite (l'aperçu passe alors dans son onglet).
  */
-export function recorderPanelHtml(language: 'fr' | 'en'): string {
+export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview' = 'main'): string {
+  // LA FENÊTRE DÉTACHÉE : l'aperçu seul, plein écran possible ; la fenêtre principale garde le reste.
+  if (mode === 'preview')
+    return `<!doctype html>
+<html lang="${language}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA-CRAWLER Recorder — ${language === 'fr' ? 'Aperçu' : 'Preview'}</title>
+<style>${CSS}</style>
+</head>
+<body data-mode="preview">
+<header class="topbar">
+  <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 3.5v17l16-8.5z" fill="currentColor"/></svg></span>
+  <span class="brand">QA-CRAWLER</span>
+  <span class="subtitle" id="subtitle"></span>
+  <span class="state small" id="state" aria-live="polite"></span>
+  <span class="spacer"></span>
+  <span class="actions-top" id="detached-actions"></span>
+</header>
+<main class="detached-main"><section class="card preview detached" id="preview-detached" aria-live="polite"></section></main>
+<div id="live" class="sr-only" aria-live="polite"></div>
+<script>${SCRIPT}</script>
+</body>
+</html>`;
   return `<!doctype html>
 <html lang="${language}">
 <head>
@@ -22,7 +46,7 @@ export function recorderPanelHtml(language: 'fr' | 'en'): string {
 <title>QA-CRAWLER Recorder</title>
 <style>${CSS}</style>
 </head>
-<body>
+<body data-mode="main">
 <header class="topbar">
   <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 3.5v17l16-8.5z" fill="currentColor"/></svg></span>
   <span class="brand">QA-CRAWLER</span>
@@ -48,7 +72,8 @@ export function recorderPanelHtml(language: 'fr' | 'en'): string {
 <main>
   <section id="panel-recording" role="tabpanel" aria-labelledby="tab-recording">
     <div id="review"></div>
-    <div class="grid">
+    <div id="detached-note"></div>
+    <div class="grid" id="grid">
       <div class="col-left">
         <section class="card journey" aria-labelledby="timeline-title">
           <header class="card-head"><h2 id="timeline-title"></h2><span class="badge" id="journey-count"></span></header>
@@ -251,6 +276,20 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .empty{color:var(--muted);font-style:italic}
 .sub{color:var(--muted);font-size:12px}
 @media (max-width:640px){.subtitle{display:none}.statusbar,.tabs,.progress{margin-left:12px;margin-right:12px}main{padding:12px}.stat{padding-right:8px}.summarybar{padding:10px 12px}}
+@media (min-width:780px){.grid.detached{grid-template-columns:minmax(300px,440px) minmax(0,1fr)}}
+.grid.detached .col-mid{display:none!important}
+.detached-note{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px 14px;border-radius:10px;background:var(--accent-soft);color:var(--fg);font-weight:600}
+.detached-note button{margin-left:auto}
+.preview:fullscreen{overflow:auto;padding:20px;background:var(--surface)}
+.preview:fullscreen .viewport img{max-height:calc(100vh - 160px);width:auto;max-width:100%;margin:0 auto}
+body[data-mode=preview]{background:var(--bg)}
+.detached-main{flex:1;padding:16px;display:flex;flex-direction:column}
+.preview.detached{flex:1;display:flex;flex-direction:column}
+.preview.detached .viewport{flex:1;display:flex;align-items:flex-start;justify-content:center;background:var(--surface-2)}
+.preview.detached .viewport img{max-height:calc(100vh - 230px);width:auto;max-width:100%}
+.preview.detached .viewport .frame{position:relative;display:inline-block;max-width:100%}
+.state.small{font-size:13px}
+.actions-top{display:flex;gap:8px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 `;
 
@@ -349,7 +388,9 @@ const SCRIPT = `
       replayFlow: '▶ Rejouer le parcours', saveFlow2: '💾 Sauvegarder le flow', afterStop: "Disponible après l'arrêt de l'enregistrement",
       pill: { CONFIRMED: 'Confirmée', PENDING: 'En cours', AMBIGUOUS: 'Ambiguë', FAILED: 'Échec', UNVERIFIED: 'Non vérifiable' },
       kindName: { open: 'Navigation', navigate: 'Navigation', click: 'Click', fill: 'Saisie', check: 'Case à cocher', uncheck: 'Case à cocher', choose: 'Choix', select: 'Sélection', key: 'Touche', drag: 'Glisser-déposer', upload: 'Fichier', dialog: 'Dialogue', goto: 'Navigation', dragAndDrop: 'Glisser-déposer', manual: 'Manuel' },
-      qualityShort: 'Qualité', seeDetail: 'Voir le détail'
+      qualityShort: 'Qualité', seeDetail: 'Voir le détail',
+      fullscreen: 'Plein écran', detach: 'Détacher', detachLabel: "Détacher l'aperçu dans sa propre fenêtre", attach: 'Rattacher', attachLabel: "Rattacher l'aperçu à la fenêtre principale",
+      detachedNote: "L'aperçu de l'application est ouvert dans sa propre fenêtre (plein écran possible)."
     },
     en: {
       subtitle: 'Journey recording', devMode: 'Developer mode', active: 'Active', inactive: 'Paused',
@@ -361,7 +402,9 @@ const SCRIPT = `
       replayFlow: '▶ Replay the journey', saveFlow2: '💾 Save the flow', afterStop: 'Available once the recording is stopped',
       pill: { CONFIRMED: 'Confirmed', PENDING: 'In progress', AMBIGUOUS: 'Ambiguous', FAILED: 'Failed', UNVERIFIED: 'Not verifiable' },
       kindName: { open: 'Navigation', navigate: 'Navigation', click: 'Click', fill: 'Typing', check: 'Checkbox', uncheck: 'Checkbox', choose: 'Choice', select: 'Select', key: 'Key', drag: 'Drag and drop', upload: 'File', dialog: 'Dialog', goto: 'Navigation', dragAndDrop: 'Drag and drop', manual: 'Manual' },
-      qualityShort: 'Quality', seeDetail: 'See the detail'
+      qualityShort: 'Quality', seeDetail: 'See the detail',
+      fullscreen: 'Full screen', detach: 'Detach', detachLabel: 'Detach the preview into its own window', attach: 'Reattach', attachLabel: 'Reattach the preview to the main window',
+      detachedNote: 'The application preview is open in its own window (full screen available).'
     }
   }[lang];
   Object.keys(X).forEach(function (k) { T[k] = X[k]; });
@@ -385,6 +428,13 @@ const SCRIPT = `
   var two = function (n) { return (n < 10 ? '0' : '') + n; };
   var clock = function (ms) { var s = Math.max(0, Math.floor(ms / 1000)); var h = Math.floor(s / 3600); return (h ? two(h) + ':' : '') + two(Math.floor((s % 3600) / 60)) + ':' + two(s % 60); };
   var announce = function (text) { $('live').textContent = text; };
+  var DETACHED = document.body.getAttribute('data-mode') === 'preview';
+  var fullscreen = function (el) {
+    try {
+      if (document.fullscreenElement) void document.exitFullscreen();
+      else if (el && el.requestFullscreen) void el.requestFullscreen();
+    } catch (e) { /* plein écran refusé par le navigateur */ }
+  };
   var short = function (text, n) { return text.length > n ? text.slice(0, n - 1) + '…' : text; };
   var recordingPhase = function () { return state && (state.phase === 'RECORDING' || state.phase === 'PAUSED'); };
 
@@ -529,28 +579,42 @@ const SCRIPT = `
 
   function previewHtml() {
     var pv = state.preview;
-    var h = '<header class="card-head"><h2>' + esc(T.previewTitle) + '</h2><span class="actions">' + button('↻', { cmd: 'refresh-preview', cls: 'ghost', aria: T.refresh, title: T.refresh }) + '</span></header>';
+    var h = '<header class="card-head"><h2>' + esc(T.previewTitle) + '</h2><span class="actions">' + button('↻', { cmd: 'refresh-preview', cls: 'ghost', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('⛶', { cmd: 'fullscreen', cls: 'ghost', aria: T.fullscreen, title: T.fullscreen }) + button('⧉ ' + T.detach, { cmd: 'detach', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
     h += '<div class="url"><span class="nav" aria-hidden="true">← →</span><span aria-hidden="true">🔒</span>' + esc(pv ? pv.url : '') + '</div>';
-    h += '<div class="viewport">';
+    h += '<div class="viewport">' + (DETACHED ? '<div class="frame">' : '');
     if (!pv) h += '<p class="placeholder">' + esc(T.noPreview) + '</p>';
     else {
       h += '<img alt="' + esc(T.previewTitle) + '" src="' + pv.image + '">';
       var hl = pv.highlight;
-      if (hl && hl.actionId === selected) {
+      // Détachée, la fenêtre suit la sélection faite dans la fenêtre principale.
+      if (hl && (DETACHED || hl.actionId === selected)) {
         var sx = 100 / pv.width, sy = 100 / pv.height;
         h += '<div class="hl" style="left:' + (hl.x * sx) + '%;top:' + (hl.y * sy) + '%;width:' + (hl.width * sx) + '%;height:' + (hl.height * sy) + '%"><span' + (hl.y / pv.height > 0.75 ? ' class="above"' : '') + '>' + esc(short(hl.label || '', 36)) + '</span></div>';
       }
     }
-    h += '</div>';
-    var hlState = state.highlight && state.highlight.actionId === selected ? state.highlight.result : null;
+    h += (DETACHED ? '</div>' : '') + '</div>';
+    var hlState = state.highlight && (DETACHED || state.highlight.actionId === selected) ? state.highlight.result : null;
     if (hlState && hlState !== 'NOT_FOUND' && pv && pv.highlight) h += '<div class="selnote" role="status"><span class="i" aria-hidden="true">✓</span><div><b>' + esc(T.selected) + '</b>' + esc(T.isHighlighted(pv.highlight.label || '')) + '</div></div>';
     else if (hlState === 'NOT_FOUND') h += '<div class="selnote warn" role="status"><span class="i" aria-hidden="true">!</span><div><b>' + esc(T.notFoundShort) + '</b></div></div>';
     return h;
   }
 
   function renderPreview() {
-    $('preview-card').innerHTML = previewHtml();
-    $('preview-full').innerHTML = previewHtml();
+    var detached = state.previewDetached === true;
+    var grid = $('grid');
+    grid.classList.toggle('detached', detached);
+    var note = detached ? '<div class="detached-note" role="status">⧉ ' + esc(T.detachedNote) + button('↩ ' + T.attach, { cmd: 'attach', aria: T.attachLabel }) + '</div>' : '';
+    $('detached-note').innerHTML = note;
+    $('preview-card').innerHTML = detached ? '' : previewHtml();
+    $('preview-full').innerHTML = detached ? note : previewHtml();
+  }
+
+  /** La fenêtre détachée : l'aperçu seul, l'état de l'enregistrement, Plein écran et Rattacher. */
+  function renderDetached() {
+    var p = state.phase, st = $('state');
+    st.className = 'state small ' + (p === 'RECORDING' ? 'rec' : p === 'PAUSED' ? 'paused' : p === 'REVIEW' ? 'done' : 'working');
+    st.textContent = (p === 'RECORDING' ? T.recording : p === 'PAUSED' ? '⏸ ' + T.paused : p === 'FINALIZING' ? T.finalizing : '✓ ' + T.review) + ' · ' + T.actions(state.summary.actions);
+    $('preview-detached').innerHTML = previewHtml();
   }
 
   function renderReview() {
@@ -602,6 +666,7 @@ const SCRIPT = `
 
   function render() {
     if (!state) return;
+    if (DETACHED) { renderDetached(); return; }
     renderHead(); renderReview(); renderSummary(); renderTimeline(); renderDetails(); renderQuality(); renderPreview(); renderFooter(); renderAnalysis(); tickTimer();
   }
 
@@ -635,6 +700,7 @@ const SCRIPT = `
     if (cmd === 'deselect') { selected = null; render(); return; }
     if (cmd === 'copy') { try { navigator.clipboard.writeText(id || ''); target.textContent = T.copied; } catch (e) { /* presse-papiers indisponible */ } return; }
     if (cmd === 'refresh-preview') { send({ type: 'refresh' }); return; }
+    if (cmd === 'fullscreen') { fullscreen(DETACHED ? document.documentElement : $('preview-card')); return; }
     if (cmd === 'open-resolve') { resolving = id; render(); return; }
     if (cmd === 'cancel-resolve') { resolving = null; render(); return; }
     if (cmd === 'confirm-resolve') {
@@ -647,12 +713,17 @@ const SCRIPT = `
     send({ type: cmd, id: id });
   });
 
-  document.querySelector('.tabs').addEventListener('keydown', function (event) {
+  if (!DETACHED) document.querySelector('.tabs').addEventListener('keydown', function (event) {
     if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
     var i = TABS.indexOf(tab), next = TABS[(i + (event.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length];
     selectTab(next); $('tab-' + next).focus();
   });
 
+  if (DETACHED) {
+    $('subtitle').textContent = T.previewTitle;
+    $('detached-actions').innerHTML = button('⛶ ' + T.fullscreen, { cmd: 'fullscreen', cls: 'primary', aria: T.fullscreen }) + button('↩ ' + T.attach, { cmd: 'attach', aria: T.attachLabel });
+    return;
+  }
   $('subtitle').textContent = T.subtitle;
   $('devtoggle').textContent = '</> ' + T.devMode;
   $('tab-recording').textContent = T.tabRecording; $('tab-analysis').textContent = T.tabAnalysis; $('tab-preview').textContent = T.tabPreview;

@@ -16,7 +16,9 @@ export interface PanelCommand {
     | 'save'
     | 'remove'
     | 'finish'
-    | 'refresh';
+    | 'refresh'
+    | 'detach'
+    | 'attach';
   id?: string;
   candidate?: number;
 }
@@ -34,6 +36,8 @@ const COMMANDS = new Set<PanelCommand['type']>([
   'remove',
   'finish',
   'refresh',
+  'detach',
+  'attach',
 ]);
 
 /**
@@ -55,13 +59,18 @@ export class RecorderPanel {
     });
   }
 
-  static async open(page: Page, language: 'fr' | 'en'): Promise<RecorderPanel> {
+  /** mode preview : la fenêtre détachée (l'aperçu de l'application seul, plein écran possible). */
+  static async open(
+    page: Page,
+    language: 'fr' | 'en',
+    mode: 'main' | 'preview' = 'main',
+  ): Promise<RecorderPanel> {
     const panel = new RecorderPanel(page);
     await page.exposeBinding('__qaPanelCommand', (_source, payload: unknown) => {
       const command = commandOf(payload);
       if (command) panel.handler?.(command);
     });
-    await page.setContent(recorderPanelHtml(language), { waitUntil: 'domcontentloaded' });
+    await page.setContent(recorderPanelHtml(language, mode), { waitUntil: 'domcontentloaded' });
     await page.bringToFront().catch(() => undefined);
     return panel;
   }

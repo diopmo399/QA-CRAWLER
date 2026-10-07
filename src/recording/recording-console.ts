@@ -15,7 +15,7 @@ import {
   type PanelState,
 } from './panel-state.js';
 import { generateFlowFiles } from './recorded-flow.js';
-import type { RecorderPanel, PanelCommand } from './recorder-panel.js';
+import { RecorderPanel, type PanelCommand } from './recorder-panel.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { RecordingResult } from './process-recording.js';
 import { TEST_DATA_FILE } from './process-recording.js';
@@ -51,11 +51,17 @@ export class RecordingConsole {
   /** recording.panelPreview : l'aperçu de l'application dans la fenêtre. */
   withPreview = true;
 
+  /** L'aperçu détaché dans sa propre fenêtre (plein écran possible). */
+  private detached: RecorderPanel | undefined;
+  private detaching = false;
+
   constructor(
     private readonly panel: RecorderPanel,
     private readonly recorder: HumanFlowRecorder,
     private readonly name: string,
     private readonly language: 'fr' | 'en',
+    /** Ouvre une fenêtre isolée (un contexte séparé du navigateur) : pour détacher l'aperçu. */
+    private readonly openWindow?: () => Promise<Page>,
   ) {
     panel.onCommand((command) => {
       void this.handle(command);
@@ -68,7 +74,41 @@ export class RecordingConsole {
   }
 
   render(): void {
-    this.panel.render(this.state());
+    const state = this.state();
+    this.panel.render(state);
+    this.detached?.render(state);
+  }
+
+  /** La fenêtre de l'aperçu détaché (tests, intégrations). */
+  get detachedPage(): Page | undefined {
+    return this.detached?.page;
+  }
+
+  /** ⧉ DÉTACHER : l'aperçu dans sa propre fenêtre ; la fermer (ou « Rattacher ») le remet à sa place. */
+  private async detach(): Promise<void> {
+    if (this.detached || this.detaching || !this.openWindow) return;
+    this.detaching = true;
+    try {
+      const window = await RecorderPanel.open(await this.openWindow(), this.language, 'preview');
+      this.detached = window;
+      window.onCommand((command) => {
+        void this.handle(command);
+      });
+      void window.closed.then(() => {
+        if (this.detached === window) this.detached = undefined;
+        this.render();
+      });
+      await window.page.bringToFront().catch(() => undefined);
+    } finally {
+      this.detaching = false;
+    }
+  }
+
+  private async attach(): Promise<void> {
+    const window = this.detached;
+    this.detached = undefined;
+    await window?.close();
+    await this.panel.page.bringToFront().catch(() => undefined);
   }
 
   /** La timeline a changé (une action, une validation) : la fenêtre, puis un nouvel aperçu de la page. */
@@ -95,13 +135,14 @@ export class RecordingConsole {
       if (!shot) return;
       // Un cadre ne survit qu'à l'image où il a été mesuré (la page a pu bouger depuis).
       this.preview = { ...shot, ...(highlight ? { highlight } : {}) };
-      this.panel.render(this.state());
+      this.render();
     } finally {
       this.capturing = false;
     }
   }
 
   async close(): Promise<void> {
+    await this.detached?.close();
     await this.panel.close();
   }
 
@@ -269,6 +310,12 @@ export class RecordingConsole {
       case 'refresh':
         await this.refreshPreview();
         break;
+      case 'detach':
+        await this.detach();
+        break;
+      case 'attach':
+        await this.attach();
+        break;
       default:
         await this.review?.(command);
         return;
@@ -309,6 +356,7 @@ export class RecordingConsole {
       ...(this.replay ? { replay: this.replay } : {}),
       ...(this.saved ? { saved: this.saved } : {}),
       ...(this.preview ? { preview: this.preview } : {}),
+      ...(this.detached ? { previewDetached: true } : {}),
       analysis: this.analysis,
       ...(this.directory ? { directory: this.directory } : {}),
     };
