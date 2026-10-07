@@ -24,15 +24,20 @@ Deux surfaces, qui ne sont **jamais** enregistrées :
    **Point de contrôle**, **Pause / Reprendre**, **↶ Annuler**, **■ Arrêter**, et une notification
    discrète après chaque action (`✓ Action enregistrée — Cliquer sur "Continuer"`, qui disparaît
    seule). Il vit dans un shadow root fermé (`data-qa-crawler-overlay`) : ni capturé, ni observé.
+   **Il ne cache pas l'application** : la poignée **⠿** le glisse (il se range dans le coin le plus
+   proche : en haut ou en bas, à gauche ou à droite) et **–** le réduit à une pastille
+   `● REC 00:42 ■ Arrêter ▢`. Sa place et sa taille suivent les pages ; ni le glisser ni la
+   réduction ne sont des actions enregistrées.
 2. **La fenêtre « QA-CRAWLER Recorder »** (`recording.panel: true`), une fenêtre à part (un contexte
    séparé du navigateur : ni cookies, ni scripts partagés avec l'application).
 
-| Geste                                | Bandeau / fenêtre               | Terminal                                |
-| ------------------------------------ | ------------------------------- | --------------------------------------- |
-| Arrêter                              | **■ Arrêter**                   | Entrée, Ctrl+C, ou fermer le navigateur |
-| Point de contrôle (« vérifier ici ») | **Point de contrôle** (libellé) | `c <libellé>` + Entrée                  |
-| Pause / reprise                      | **⏸ Pause** / **▶ Reprendre**   | `p` + Entrée                            |
-| Retirer la dernière action           | **↶ Annuler**                   |                                         |
+| Geste                                  | Bandeau / fenêtre                 | Terminal                                |
+| -------------------------------------- | --------------------------------- | --------------------------------------- |
+| Arrêter                                | **■ Arrêter**                     | Entrée, Ctrl+C, ou fermer le navigateur |
+| Point de contrôle (« vérifier ici »)   | **Point de contrôle** (libellé)   | `c <libellé>` + Entrée                  |
+| Pause / reprise                        | **⏸ Pause** / **▶ Reprendre**     | `p` + Entrée                            |
+| Retirer la dernière action             | **↶ Annuler**                     |                                         |
+| Dégager un bouton caché par le bandeau | **⠿** (glisser) / **–** (réduire) |                                         |
 
 ### La fenêtre du recorder
 
