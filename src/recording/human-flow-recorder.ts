@@ -1,3 +1,4 @@
+import { ignoredDebugLine, rawEventDebugLine } from './recorder-trace.js';
 import type { BrowserContext, CDPSession, Dialog, Download, Page } from 'playwright';
 import type { ScenarioConfig } from '../config/config.js';
 import { FormKnowledgeObserver } from '../forms/state/form-knowledge-observer.js';
@@ -524,6 +525,10 @@ export class HumanFlowRecorder {
     const max = this.options.config.recording.maxRawEvents;
     if (events.length >= max && !ESSENTIAL.has(input.type)) {
       this.session.droppedEvents += 1;
+      this.emit(
+        'RECORDER_DEBUG',
+        ignoredDebugLine(input.type, 'buffer_overflow', `more than ${String(max)} raw events`),
+      );
       if (!this.overflowWarned) {
         this.overflowWarned = true;
         this.session.warnings.push({
@@ -548,6 +553,7 @@ export class HumanFlowRecorder {
         id: event.id,
       },
     );
+    this.emit('RECORDER_DEBUG', rawEventDebugLine(event), { id: event.id });
     // Une action qui peut changer l'écran ou appeler le serveur : sa fenêtre réseau, puis l'écran observé.
     // Un clic sur un élément non reconnu est observé aussi : s'il change l'écran, c'est une action humaine.
     const observed = !event.noise || event.noise === NON_INTERACTIVE_NOISE;

@@ -1,7 +1,6 @@
 import type { FlowAllowance, FlowStep, FlowTarget, FlowValue } from '../config/flow-schema.js';
 import type { SuggestedFlowGraph } from '../dry-run/reconciliation-model.js';
 import { suggestedFeature, suggestedFlowYaml } from '../dry-run/suggested-flow.js';
-import type { GherkinIntent } from '../semantics/resolution/intent.js';
 import {
   emptyQuality,
   type AssertionCandidate,
@@ -13,7 +12,6 @@ import {
 } from './model.js';
 import { isWrite, protectedAction, type NormalizationStats } from './normalizer.js';
 import { selectedExpectations } from './outcomes.js';
-import { readable } from './recorded-target.js';
 
 const SENTENCE_ROLES = new Set(['button', 'link', 'tab', 'menuitem']);
 
@@ -31,8 +29,9 @@ export interface BuildRecordedFlowInput {
 /**
  * SEMANTIC → FINAL : le RecordedFlow, la représentation intermédiaire UNIQUE. Chaque
  * étape est une étape du schéma des flows imposés (goto / click / fill / select / check /
- * expect), avec une cible qu'une phrase Gherkin sait dire (libellé, rôle + nom, texte) ;
- * sinon une intention (le SemanticResolver la retrouve au rejeu). Les valeurs saisies
+ * expect), avec la cible de l'élément réellement touché (libellé, rôle + nom, texte, sinon
+ * sélecteur) ; JAMAIS une étape `intent:` (l'intention est une couche post-enregistrement,
+ * semantic-intents.json, qui ne modifie jamais le flow). Les valeurs saisies
  * sont des { testData }, les secrets des { env } : jamais une saisie.
  */
 export function buildRecordedFlow(input: BuildRecordedFlowInput): {
@@ -207,48 +206,30 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
         }
       : {};
   const common = { allow: allowOf(action), optional: false, ...effects, ...fingerprint };
-  const label = labelOf(action);
-  // Un élément sans nom (« input ») : son sélecteur, jamais une intention vide de sens. Une cible
-  // RÉPARÉE et revalidée pendant l'enregistrement reste une étape exécutable (prouvée sur l'élément).
-  const proven =
-    action.targetValidation?.repairApplied === true && !action.targetValidation.requiresReplayValidation;
-  const named = action.target?.named === true && !proven;
+  // ENREGISTREMENT DÉTERMINISTE : l'étape est l'action VALIDÉE sur l'élément réellement touché (sa
+  // cible), jamais une intention déduite. Une cible qu'une phrase Gherkin ne sait pas dire reste un
+  // sélecteur (le .feature la garde en commentaire) ; l'intention est une couche séparée, après coup.
   switch (action.type) {
     case 'CLICK':
-    case 'SUBMIT': {
-      if (!target) return undefined;
-      const step: FlowStep = { ...common, kind: 'click', target };
-      return gherkinTarget(step) || !named || !readable(label)
-        ? step
-        : intentStep(common, { kind: 'CLICK', target: label });
-    }
-    case 'FILL': {
-      if (!target || !action.value) return undefined;
-      const value = valueOf(action);
-      const step: FlowStep = { ...common, allow: [], kind: 'fill', target, value };
-      return gherkinTarget(step) || !named || !readable(label)
-        ? step
-        : intentStep({ ...common, allow: [] }, { kind: 'FILL', field: label, value });
-    }
-    case 'SELECT': {
-      if (!target || action.option === undefined) return undefined;
-      const step: FlowStep = { ...common, kind: 'select', target, option: action.option };
-      return gherkinTarget(step) || !named || !readable(label)
-        ? step
-        : intentStep(common, { kind: 'SELECT', field: label, option: action.option });
-    }
-    case 'CHECK':
-    case 'UNCHECK': {
-      if (!target) return undefined;
-      const step: FlowStep = { ...common, kind: action.type === 'CHECK' ? 'check' : 'uncheck', target };
-      return gherkinTarget(step) || !named || !readable(label)
-        ? step
-        : intentStep(common, { kind: 'CHECK', field: label, checked: action.type === 'CHECK' });
-    }
-    case 'UPLOAD':
-      return named && readable(label)
-        ? intentStep(common, { kind: 'UPLOAD', field: label, file: '' })
+    case 'SUBMIT':
+      return target ? { ...common, kind: 'click', target } : undefined;
+    case 'FILL':
+      // La valeur FINALE du champ (les frappes sont fusionnées par le normaliseur).
+      return target && action.value
+        ? { ...common, allow: [], kind: 'fill', target, value: valueOf(action) }
         : undefined;
+    case 'SELECT':
+      return target && action.option !== undefined
+        ? { ...common, kind: 'select', target, option: action.option }
+        : undefined;
+    case 'CHECK':
+    case 'UNCHECK':
+      return target ? { ...common, kind: action.type === 'CHECK' ? 'check' : 'uncheck', target } : undefined;
+    case 'UPLOAD': {
+      // Le fichier n'est jamais enregistré : l'action est GARDÉE, à rejouer à la main (jamais une intention).
+      const { fingerprint: _fingerprint, ...rest } = common;
+      return { ...rest, kind: 'manual', text: `upload a file into "${labelOf(action)}"` };
+    }
     case 'DRAG_AND_DROP': {
       const drag = action.drag;
       if (!drag) return undefined;
@@ -271,10 +252,6 @@ function stepOf(action: SemanticRecordedAction): FlowStep | undefined {
     default:
       return undefined;
   }
-}
-
-function intentStep(common: { allow: FlowAllowance[]; optional: boolean }, intent: GherkinIntent): FlowStep {
-  return { ...common, kind: 'intent', intent };
 }
 
 function valueOf(action: SemanticRecordedAction): FlowValue {
@@ -382,9 +359,6 @@ export function generateFlowFiles(
     options.testDataFile
       ? `Data in ${options.testDataFile} (recorded, generated at replay or business literals); secrets come from { env }, never from the file.`
       : 'Typed values are never recorded: { testData } is a valid value chosen at replay, secrets come from { env }.',
-    ...(flow.intent.workflow
-      ? [`Intent: ${flow.intent.workflow}${flow.intent.api ? ` (${flow.intent.api})` : ''}`]
-      : []),
     ...(flow.negative ? ['Negative validation flow: the refusal was shown on purpose (checkpoint).'] : []),
     'Review before use. The safety policy still applies when it is replayed.',
   ];

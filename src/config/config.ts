@@ -1369,8 +1369,12 @@ const recordingSchema = z
       .object({
         enabled: z.boolean().default(true),
         maxDeterministicRepairAttempts: z.number().int().min(0).max(5).default(2),
-        /** Le conseiller (ai.*, recording.intelligenceAudit) audite ce que le déterministe ne règle pas. */
-        aiAudit: z.boolean().default(true),
+        /**
+         * Le conseiller (ai.*, recording.intelligenceAudit) audite PENDANT l'enregistrement ce que le
+         * déterministe ne règle pas. OFF par défaut : l'enregistrement est déterministe (l'IA ne choisit
+         * jamais la cible d'une action humaine) ; l'IA reste disponible après coup (flowAudit, enrichissement).
+         */
+        aiAudit: z.boolean().default(false),
       })
       .strict()
       .default({}),
