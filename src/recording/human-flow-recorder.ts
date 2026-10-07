@@ -340,7 +340,7 @@ export class HumanFlowRecorder {
     if (last) last.userResolution = { candidateIndex, at: this.now() };
     this.emit(
       'AMBIGUITY_RESOLVED',
-      `action ${String(outcome.action.index)}: the touched element (#${String(candidateIndex + 1)}) is confirmed by the user`,
+      `action ${String(outcome.action.index)}: the touched element${candidateIndex >= 0 ? ` (#${String(candidateIndex + 1)})` : ''} is confirmed by the user`,
       {
         action: actionId,
         candidateIndex,
