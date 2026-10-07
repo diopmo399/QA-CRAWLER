@@ -66,8 +66,8 @@ export interface RecordRequest {
    */
   drive?: (session: { page: Page; recorder: HumanFlowRecorder; panel?: Page }) => Promise<void>;
   /**
-   * LA REVUE après Stop, dans la fenêtre du recorder : rejouer, modifier, sauvegarder ; le navigateur
-   * reste ouvert jusqu'à « Fermer » (ou la fermeture de la fenêtre). La commande record l'active en
+   * LA REVUE après Stop, dans la fenêtre du recorder : rejouer, modifier, sauvegarder ; la fenêtre du
+   * recorder reste ouverte jusqu'à « Fermer » (celle de l'application se ferme dès l'arrêt). La commande record l'active en
    * mode interactif ; sans elle, l'enregistrement se termine comme avant.
    */
   review?: boolean;
@@ -284,12 +284,12 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   } finally {
     detach?.();
     consoleUi?.stopped();
-    // La revue garde le navigateur (et sa fenêtre) ouvert jusqu'à « Fermer ».
-    if (!reviewing) {
-      progress.start(RECORDING_PHASES.browser);
-      await browser.close();
-      stopClock.mark('browser close');
-    }
+    // La revue garde la fenêtre du recorder jusqu'à « Fermer » ; la fenêtre de l'APPLICATION se ferme
+    // dès l'arrêt (le rejeu ouvre sa propre fenêtre, propre : jamais deux applications ouvertes).
+    progress.start(RECORDING_PHASES.browser);
+    if (reviewing) await browser.closeApplication();
+    else await browser.close();
+    stopClock.mark('browser close');
   }
   stopClock.mark('(pre-processing)');
   const result = await progress.run(RECORDING_PHASES.flow, () =>
@@ -575,7 +575,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     await runReplay();
     stopClock.mark('replay validation (--validate)');
   }
-  // LA REVUE : Rejouer → Valider → Sauvegarder, dans la fenêtre du recorder (le navigateur reste ouvert).
+  // LA REVUE : Rejouer → Valider → Sauvegarder, dans la fenêtre du recorder (l'application est fermée).
   if (reviewing && consoleUi) {
     const ui = consoleUi;
     const driverFailure = await ui.runReview({

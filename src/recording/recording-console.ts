@@ -286,6 +286,11 @@ export class RecordingConsole {
         break;
       case 'select': {
         if (!command.id) break;
+        // Après l'arrêt, l'application est fermée : les détails s'affichent, sans mise en évidence.
+        if (!recording) {
+          this.highlight = undefined;
+          break;
+        }
         const live = this.liveIdOf(command.id);
         const result = live ? await this.recorder.highlight(live) : { found: 'NOT_FOUND' as const };
         this.highlight = { actionId: command.id, result: result.found };

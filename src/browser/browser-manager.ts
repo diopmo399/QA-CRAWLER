@@ -60,6 +60,15 @@ export class BrowserManager {
     return context.newPage();
   }
 
+  /**
+   * Ferme la fenêtre de l'APPLICATION (son contexte et ses pages, popups comprises) ; le navigateur
+   * et ses contextes isolés (la fenêtre du recorder) restent ouverts.
+   */
+  async closeApplication(): Promise<void> {
+    await this.context?.close().catch(() => undefined);
+    this.context = undefined;
+  }
+
   get browserVersion(): string | undefined {
     return this.browser?.version();
   }
