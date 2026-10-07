@@ -18,15 +18,92 @@ npm run qa -- record --help
 
 ## Pendant l'enregistrement
 
-Un bandeau **● RECORDING** s'affiche en bas à droite de la page (Checkpoint, Pause, Stop).
-Il vit dans un shadow root fermé, sous un hôte marqué `data-qa-crawler-overlay` : il n'est
-ni enregistré, ni vu par l'observation de l'écran, ni dans les captures.
+Deux surfaces, qui ne sont **jamais** enregistrées :
 
-| Geste                                | Bandeau                             | Terminal                                |
-| ------------------------------------ | ----------------------------------- | --------------------------------------- |
-| Arrêter                              | **Stop**                            | Entrée, Ctrl+C, ou fermer le navigateur |
-| Point de contrôle (« vérifier ici ») | **Checkpoint** (libellé facultatif) | `c <libellé>` + Entrée                  |
-| Pause / reprise                      | **Pause** / **Resume**              | `p` + Entrée                            |
+1. **Le bandeau** en bas à droite de la page : `● REC`, minuteur, nombre d'actions,
+   **Point de contrôle**, **Pause / Reprendre**, **↶ Annuler**, **■ Arrêter**, et une notification
+   discrète après chaque action (`✓ Action enregistrée — Cliquer sur "Continuer"`, qui disparaît
+   seule). Il vit dans un shadow root fermé (`data-qa-crawler-overlay`) : ni capturé, ni observé.
+2. **La fenêtre « QA-CRAWLER Recorder »** (`recording.panel: true`), une fenêtre à part (un contexte
+   séparé du navigateur : ni cookies, ni scripts partagés avec l'application).
+
+| Geste                                | Bandeau / fenêtre               | Terminal                                |
+| ------------------------------------ | ------------------------------- | --------------------------------------- |
+| Arrêter                              | **■ Arrêter**                   | Entrée, Ctrl+C, ou fermer le navigateur |
+| Point de contrôle (« vérifier ici ») | **Point de contrôle** (libellé) | `c <libellé>` + Entrée                  |
+| Pause / reprise                      | **⏸ Pause** / **▶ Reprendre**   | `p` + Entrée                            |
+| Retirer la dernière action           | **↶ Annuler**                   |                                         |
+
+### La fenêtre du recorder
+
+```
+USER ACTION → RECORDER → ACTION VALIDATION → RECORDED FLOW → REPLAY → (ANALYSIS → INTENT)
+```
+
+- **Disposition** : en-tête (QA-CRAWLER, **Mode développeur**) · barre d'état (`● Enregistrement en
+cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annuler) · onglets
+  **Enregistrement / Analyse / Aperçu** · trois colonnes sur un grand écran — **Parcours enregistré**
+  (et la qualité), **Aperçu de l'application**, **Détails de l'action** — deux puis une sur une
+  fenêtre plus étroite (l'aperçu passe dans son onglet) · **Résumé du recording** en bas (actions,
+  confirmées, ambiguës, échecs, durée, **Rejouer le parcours**, **Sauvegarder le flow**).
+- **Aperçu de l'application** (`recording.panelPreview: true`) : une image de la page, prise après
+  chaque action (au plus une toutes les 800 ms, sans le bandeau), **en mémoire seulement** — jamais
+  écrite ni journalisée. L'élément sélectionné y est encadré à sa position réelle.
+  **⧉ Détacher** ouvre l'aperçu dans sa propre fenêtre (**⛶ Plein écran** possible, par exemple
+  sur un second écran) : la fenêtre principale garde le parcours, les détails, la qualité et les
+  commandes, sur deux colonnes plus larges. **↩ Rattacher** (ou fermer la fenêtre de l'aperçu) le
+  remet à sa place. La fenêtre détachée suit l'élément sélectionné dans la fenêtre principale.
+- **Détails de l'action** : étape _n_ sur _N_, informations générales (type, élément, texte, rôle),
+  sélecteurs et attributs (copiables), et la **validation point par point** — action confirmée,
+  élément retrouvé (_n_ correspondance(s)), sélecteur stable, navigation déclenchée, effets observés :
+  uniquement ce qui a vraiment été vérifié — puis les logs techniques.
+- **Timeline** : une ligne par action **réellement faite**, en mots simples (« Cliquer sur
+  "Continuer" », « Saisir "Alex" dans "Prénom" », « Cocher "J'accepte les conditions" »,
+  « Sélectionner "Québec" dans "Province" »). La ligne apparaît **dès la capture** (● en cours),
+  puis la validation de la cible, en arrière-plan, la passe à ✓ confirmée, ⚠ ambiguë, ✕ non
+  retrouvée (ou ○ non vérifiable). L'IA n'est jamais sur ce chemin. Une navigation est l'effet
+  du clic qui l'a causée (« → /done »), jamais une ligne à part.
+- **Valeurs** : montrées dans la fenêtre seulement, en mémoire (jamais écrites) ; un mot de passe,
+  un code ou une carte s'affiche toujours `••••`.
+- **Détails** (clic sur une ligne) : action, élément, type, sélecteur, rôle, texte, page, section,
+  validation — et l'élément est **mis en évidence dans la page** (l'original s'il existe encore,
+  sinon le seul élément que son sélecteur désigne) ; sinon « ⚠ Élément introuvable sur la page
+  actuelle ». Jamais un élément deviné.
+- **Ambiguïté** : jamais masquée ni résolue en silence. **Résoudre** liste les éléments qui
+  correspondent ; seul **l'élément réellement touché** peut être confirmé (en choisir un autre
+  enregistrerait une action jamais faite : il faut annuler et refaire). **Ignorer** la laisse
+  signalée (`AMBIGUITY_LEFT_BY_USER`, à vérifier au rejeu). La décision est gardée sur
+  l'événement brut et sur l'étape (`AMBIGUITY_CONFIRMED_BY_USER`).
+- **Résumé et qualité** : « ✓ Recording valide » ou « ⚠ nécessite une vérification » ; la qualité
+  est calculée sur des faits (actions confirmées, sélecteurs stables, cibles uniques, aucun
+  élément retrouvé seulement après un nouveau rendu, aucun doublon, aucune erreur) — jamais estimée.
+- **↶ Annuler** retire la dernière action **de l'enregistrement** : ses événements bruts (et ce
+  qu'elle a causé) sont marqués `undone` dans `raw-recording.json` et exclus du flow
+  (`USER_UNDONE_ACTIONS`). L'application n'est pas remise en arrière.
+- **Pause** : la page reste utilisable, rien n'est enregistré.
+- **Mode Utilisateur / Développeur** : en développeur, chaque ligne montre ses détails techniques
+  (`event`, `selector`, `role`, `frame`, `rawEventId`, `validation`…).
+- **Onglets Enregistrement / Analyse** : l'analyse (intents détectés avec leur confiance et
+  « Voir pourquoi », constats de l'audit du flow, suggestions de l'IA) n'apparaît **que** dans son
+  onglet, après l'arrêt, et ne modifie jamais l'enregistrement.
+
+### Après « Arrêter » : la revue
+
+`Enregistrement terminé ✓` — actions, confirmées, ambiguïtés, durée — puis :
+
+- **▶ Rejouer** (conseillé) : le flow est rejoué par le Dry Run (même SafetyPolicy), avec la
+  progression étape par étape ; ensuite « ✓ Replay réussi — 5 / 5 actions exécutées » ou
+  « ✕ Replay interrompu — Étape 2 sur 5 — Cliquer sur "Continuer" — Cause : élément introuvable »,
+  le détail technique dans **Voir les détails**, puis **Modifier l'étape** / **↻ Recommencer**.
+- **✎ Modifier** : retirer une étape d'action (et les vérifications qui en dépendent) ;
+  `generated.flow.yaml`, `.feature` et `recorded-flow.json` sont régénérés.
+- **💾 Sauvegarder** : l'enregistrement est un **brouillon** (`recording-status.json` :
+  `DRAFT`) ; sauvegarder copie le flow dans `recording.flowsDirectory` (défaut : `flows/<nom>/` à
+  côté du dossier des rapports) avec son jeu de données, et le marque `SAVED`.
+- **Fermer** termine (le navigateur se ferme).
+
+La revue est active avec `qa-crawler record` en mode interactif (navigateur visible, terminal) ;
+`--no-review` ou `--headless` terminent dès l'arrêt, comme avant.
 
 Avec une mission qui se connecte (`auth`), la connexion est faite **avant** l'enregistrement
 (`recording.recordAfterAuthentication: true`, par défaut) : elle n'est pas dans le flow, le
@@ -794,7 +871,7 @@ la session, la version et l'environnement. Les runs suivants la reprennent comme
 ## Fichiers
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,
-`recorded-flow.json`, `semantic-intents.json` (l'intention, couche séparée), `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
+`recorded-flow.json`, `semantic-intents.json` (l'intention, couche séparée), `recording-status.json` (`DRAFT` / `SAVED`), `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
 données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `target-validation.json`, `ai-context-summary.json`, `optimized.flow.yaml`
 (seulement avec l'optimiseur), `flow-graph.json` (la carte
 des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en nombres — sans
@@ -813,7 +890,10 @@ recording:
   enabled: true # false : la commande record refuse de démarrer (sans effet sur run)
   outputFormat: both # yaml | gherkin | both
   language: fr # langue du .feature (défaut : report.language)
-  overlay: true # le bandeau ● RECORDING
+  overlay: true # le bandeau ● REC (minuteur, Pause, Annuler, Arrêter, notifications)
+  panel: true # la fenêtre « QA-CRAWLER Recorder » (timeline, détails, ambiguïtés, revue, analyse)
+  panelPreview: true # l'aperçu de l'application dans la fenêtre (image en mémoire, jamais écrite)
+  # flowsDirectory: flows # où « Sauvegarder » copie le flow (défaut : flows/ à côté des rapports)
   recordAfterAuthentication: true
   maxRawEvents: 5000
   maxDurationMinutes: 60

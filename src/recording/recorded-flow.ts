@@ -337,6 +337,7 @@ export function toSuggestedFlow(flow: RecordedFlow): SuggestedFlowGraph {
               `target ${item.targetValidation.status}${item.targetValidation.repaired ? ' (repaired)' : ''}${item.targetValidation.requiresReplayValidation ? ' · REQUIRES_REPLAY_VALIDATION' : ''}`,
             ]
           : []),
+        ...(item.userDecision ? [item.userDecision] : []),
         `raw ${item.rawEventIds.join(',')}`,
       ].join(' · '),
     })),

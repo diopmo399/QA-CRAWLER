@@ -24,6 +24,8 @@ export interface CaptureOptions {
   /** Sel de la session : les empreintes ne se comparent qu'entre événements d'un même enregistrement. */
   salt: string;
   overlay: boolean;
+  /** La langue du bandeau (celle de l'enregistrement, jamais celle de l'application). */
+  language?: 'fr' | 'en';
   /** Délai (ms) avant d'envoyer une saisie en cours (les touches ne sont jamais envoyées une à une). */
   inputDebounceMs: number;
   /** Envoyer le texte saisi d'un champ non sensible (données de test) ; jamais pour un champ sensible. */
@@ -1743,7 +1745,30 @@ export function installRecorder(
     { capture: true, passive: true },
   );
 
-  // ---- le bandeau
+  // ---- le bandeau : état, minuteur, nombre d'actions, Pause / Annuler / Stop, notification, mise en évidence
+  const french = options.language === 'fr';
+  const say = {
+    recording: french ? 'REC' : 'REC',
+    paused: french ? 'EN PAUSE' : 'PAUSED',
+    actions: (count: number): string =>
+      french
+        ? `${String(count)} action${count > 1 ? 's' : ''}`
+        : `${String(count)} action${count === 1 ? '' : 's'}`,
+    pause: 'Pause',
+    resume: french ? 'Reprendre' : 'Resume',
+    undo: french ? '↶ Annuler' : '↶ Undo',
+    stop: french ? '■ Arrêter' : '■ Stop',
+    checkpoint: french ? 'Point de contrôle' : 'Checkpoint',
+    ok: french ? 'Action enregistrée' : 'Action recorded',
+    recorded: french ? 'Action enregistrée (non vérifiable)' : 'Action recorded (not verifiable)',
+    ambiguous: french
+      ? 'Action ambiguë — à résoudre dans le panneau'
+      : 'Ambiguous action — resolve it in the panel',
+    pausedNote: french ? 'Les actions ne sont plus enregistrées.' : 'Actions are not recorded.',
+  };
+  let info: { count: number; startedAt?: number } = { count: 0 };
+  let toastTimer: number | undefined;
+  let highlightTimer: number | undefined;
   const recorder = {
     setPaused: (value: boolean): void => {
       paused = value;
@@ -1753,22 +1778,123 @@ export function installRecorder(
       status = text;
       render();
     },
+    /** Le nombre d'actions, le début (minuteur) et la notification de la dernière action. */
+    setInfo: (value: {
+      count?: number;
+      startedAt?: number;
+      toast?: { title: string; text: string };
+    }): void => {
+      info = {
+        count: typeof value.count === 'number' ? value.count : info.count,
+        ...(typeof value.startedAt === 'number'
+          ? { startedAt: value.startedAt }
+          : info.startedAt !== undefined
+            ? { startedAt: info.startedAt }
+            : {}),
+      };
+      render();
+      if (value.toast && root) {
+        const toast = root.querySelector('.toast');
+        if (!toast) return;
+        const kind = value.toast.title;
+        toast.className = `toast show ${kind}`;
+        const title = toast.querySelector('b');
+        const text = toast.querySelector('span');
+        if (title)
+          title.textContent = kind === 'ok' ? say.ok : kind === 'ambiguous' ? say.ambiguous : say.recorded;
+        if (text) text.textContent = clean(value.toast.text, 90);
+        if (toastTimer !== undefined) window.clearTimeout(toastTimer);
+        // Discrète : elle disparaît seule et ne prend jamais le pointeur.
+        toastTimer = window.setTimeout(() => {
+          toast.className = 'toast';
+        }, 2500);
+      }
+    },
+    /**
+     * Met en évidence l'élément d'une action : l'ORIGINAL s'il est encore dans la page, sinon le
+     * seul élément que son sélecteur désigne ; jamais un élément deviné.
+     */
+    highlight: (ref?: string, css?: string, label?: string): string => {
+      if (!root) return 'NOT_FOUND';
+      let element: Element | null = null;
+      let how = 'NOT_FOUND';
+      const original = ref ? originals.get(ref) : undefined;
+      if (original?.isConnected) {
+        element = original;
+        how = 'ORIGINAL';
+      } else if (css) {
+        try {
+          const matches = document.querySelectorAll(css);
+          if (matches.length === 1) {
+            element = matches[0] ?? null;
+            how = 'SELECTOR';
+          }
+        } catch {
+          element = null;
+        }
+      }
+      const box = root.querySelector<HTMLElement>('.highlight');
+      if (!box) return 'NOT_FOUND';
+      global.__qaCrawlerLastRect = undefined;
+      if (!element) {
+        box.style.display = 'none';
+        return 'NOT_FOUND';
+      }
+      element.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const rect = element.getBoundingClientRect();
+      // La position (l'aperçu de la fenêtre du recorder y dessine le même cadre).
+      global.__qaCrawlerLastRect = {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      };
+      box.style.cssText = `display:block;left:${String(rect.left - 4)}px;top:${String(rect.top - 4)}px;width:${String(rect.width + 8)}px;height:${String(rect.height + 8)}px`;
+      const tag = box.querySelector('span');
+      if (tag) tag.textContent = clean(label, 60);
+      if (highlightTimer !== undefined) window.clearTimeout(highlightTimer);
+      highlightTimer = window.setTimeout(() => {
+        box.style.display = 'none';
+      }, 3000);
+      return how;
+    },
   };
   global.__qaCrawlerRecorder = recorder;
   let status = 'RECORDING';
   let host: HTMLElement | undefined;
   let root: ShadowRoot | undefined;
+  const two = (value: number): string => String(value).padStart(2, '0');
+  const elapsed = (): string => {
+    if (info.startedAt === undefined) return '';
+    const seconds = Math.max(0, Math.floor((Date.now() - info.startedAt) / 1000));
+    return `${two(Math.floor(seconds / 60))}:${two(seconds % 60)}`;
+  };
   const render = (): void => {
     if (!root) return;
     const label = root.querySelector('.state');
-    if (label) label.textContent = paused ? '❚❚ PAUSED' : status === 'RECORDING' ? `● ${status}` : status;
+    if (label) label.textContent = paused ? say.paused : status === 'RECORDING' ? say.recording : status;
+    const time = root.querySelector('.time');
+    if (time) time.textContent = status === 'RECORDING' ? elapsed() : '';
+    const count = root.querySelector('.count');
+    if (count) count.textContent = status === 'RECORDING' ? say.actions(info.count) : '';
+    const note = root.querySelector('.note');
+    if (note) note.textContent = paused && status === 'RECORDING' ? say.pausedNote : '';
     // Après Stop : plus de commandes ; une barre animée tant que le système finalise.
     const bar = root.querySelector('.bar');
     bar?.classList.toggle('ended', status !== 'RECORDING');
     bar?.classList.toggle('working', status.startsWith('⏳'));
+    bar?.classList.toggle('paused', paused);
     const toggle = root.querySelector('[data-act="pause"]');
-    if (toggle) toggle.textContent = paused ? 'Resume' : 'Pause';
+    if (toggle) toggle.textContent = paused ? `▶ ${say.resume}` : `⏸ ${say.pause}`;
   };
+  window.setInterval(() => {
+    if (root && status === 'RECORDING' && !paused) {
+      const time = root.querySelector('.time');
+      if (time) time.textContent = elapsed();
+    }
+  }, 1000);
   const mount = (): void => {
     // Un document sans racine (en cours de remplacement) : le bandeau viendra au prochain passage.
     const rootElement = document.querySelector(':root');
@@ -1780,17 +1906,40 @@ export function installRecorder(
     host.style.cssText = 'all:initial;position:fixed;right:12px;bottom:12px;z-index:2147483647';
     root = host.attachShadow({ mode: 'closed' });
     root.innerHTML = `<style>
-      .bar{font:12px/1.4 system-ui,sans-serif;background:#1f2328;color:#fff;border-radius:8px;padding:6px 8px;display:flex;gap:6px;align-items:center;box-shadow:0 2px 8px rgba(0,0,0,.35)}
-      .state{color:#ff6b6b;font-weight:600;white-space:nowrap}
-      input{font:inherit;width:120px;padding:2px 4px;border-radius:4px;border:1px solid #555;background:#2d333b;color:#fff}
-      button{font:inherit;cursor:pointer;border:0;border-radius:4px;padding:3px 8px;background:#444c56;color:#fff}
-      button[data-act="stop"]{background:#d1242f}
-      .busy{display:none;width:72px;height:4px;border-radius:2px;background:linear-gradient(90deg,#444c56 0%,#4ac26b 50%,#444c56 100%);background-size:200% 100%;animation:qa-busy 1s linear infinite}
+      .bar{font:500 12px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:rgba(11,16,32,.92);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#f8fafc;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:6px 6px 6px 14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;box-shadow:0 8px 28px rgba(2,6,23,.35);max-width:min(760px,calc(100vw - 24px))}
+      .state{color:#fecaca;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:7px;letter-spacing:.04em}
+      .state::before{content:"";width:9px;height:9px;border-radius:50%;background:#ef4444;animation:qa-pulse 1.6s infinite}
+      .bar.paused .state{color:#fde68a}
+      .bar.paused .state::before{background:#f59e0b;animation:none}
+      .time{font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums;color:#e2e8f0}
+      .count{color:#cbd5e1;white-space:nowrap;background:rgba(255,255,255,.08);border-radius:999px;padding:2px 8px}
+      .note{color:#fde68a;flex-basis:100%;font-size:11px;padding:0 4px}
+      .note:empty{display:none}
+      input{font:inherit;width:120px;padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff}
+      input::placeholder{color:#94a3b8}
+      button{font:inherit;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:4px 11px;background:rgba(255,255,255,.08);color:#f8fafc}
+      button:hover{background:rgba(255,255,255,.16)}
+      button:focus-visible,input:focus-visible{outline:2px solid #a5b4fc;outline-offset:1px}
+      button[data-act="stop"]{background:#e11d48;border-color:#e11d48}
+      .busy{display:none;width:72px;height:4px;border-radius:2px;background:linear-gradient(90deg,#334155 0%,#22d3ee 50%,#334155 100%);background-size:200% 100%;animation:qa-busy 1s linear infinite}
       .bar.working .busy{display:inline-block}
-      .bar.ended input,.bar.ended button{display:none}
-      .bar.ended .state{color:#4ac26b}
+      .bar.ended{padding-right:14px}
+      .bar.ended input,.bar.ended button,.bar.ended .time,.bar.ended .count{display:none}
+      .bar.ended .state{color:#6ee7b7}
+      .bar.ended .state::before{background:#10b981;animation:none}
+      .toast{position:absolute;right:0;bottom:calc(100% + 10px);min-width:240px;max-width:340px;background:#fff;color:#0f172a;border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px 10px 40px;font:13px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 12px 32px rgba(2,6,23,.18);opacity:0;transform:translateY(6px);transition:opacity .2s,transform .2s;pointer-events:none}
+      .toast::before{content:"✓";position:absolute;left:12px;top:11px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;color:#fff;background:#059669}
+      .toast.show{opacity:1;transform:none}
+      .toast.recorded::before{content:"○";background:#94a3b8}
+      .toast.ambiguous::before{content:"!";background:#d97706}
+      .toast b{display:block;font-weight:700}
+      .toast span{color:#475569}
+      .highlight{display:none;position:fixed;border:2px solid #6366f1;border-radius:10px;background:rgba(99,102,241,.08);pointer-events:none;box-shadow:0 0 0 6px rgba(99,102,241,.18)}
+      .highlight span{position:absolute;left:0;top:calc(100% + 6px);background:#4f46e5;color:#fff;font:600 11px/1.4 ui-sans-serif,system-ui,sans-serif;padding:2px 8px;border-radius:999px;white-space:nowrap;box-shadow:0 4px 12px rgba(79,70,229,.35)}
+      @keyframes qa-pulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.6)}70%{box-shadow:0 0 0 7px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
       @keyframes qa-busy{from{background-position:200% 0}to{background-position:0 0}}
-    </style><div class="bar"><span class="state">● RECORDING</span><span class="busy"></span><input placeholder="checkpoint label" maxlength="80"><button data-act="checkpoint">Checkpoint</button><button data-act="pause">Pause</button><button data-act="stop">Stop</button></div>`;
+      @media (prefers-reduced-motion:reduce){.toast{transition:none}.busy,.state::before{animation:none}}
+    </style><div class="highlight"><span></span></div><div class="toast" role="status"><b></b><span></span></div><div class="bar"><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><input placeholder="${say.checkpoint}" aria-label="${say.checkpoint}" maxlength="80"><button data-act="checkpoint">${say.checkpoint}</button><button data-act="pause">⏸ ${say.pause}</button><button data-act="undo">${say.undo}</button><button data-act="stop">${say.stop}</button><span class="note"></span></div>`;
     root.addEventListener('click', (event) => {
       const button = event.target instanceof Element ? event.target.closest('button') : null;
       const act = button?.getAttribute('data-act');
@@ -1804,6 +1953,8 @@ export function installRecorder(
         const next = !paused;
         send({ type: 'control', control: next ? 'pause' : 'resume' });
         recorder.setPaused(next);
+      } else if (act === 'undo') {
+        send({ type: 'control', control: 'undo' });
       } else if (act === 'stop') {
         send({ type: 'control', control: 'stop' });
         recorder.setStatus('STOPPED');

@@ -29,6 +29,13 @@ While recording (banner in the page, or this terminal):
   Stop         the banner's Stop button, Enter here, Ctrl+C, or close the browser
   Checkpoint   the banner's Checkpoint button, or "c <label>" + Enter here
   Pause        the banner's Pause button, or "p" + Enter here
+  Undo         the banner's Undo button: removes the last action from the recording
+
+The "QA-CRAWLER Recorder" window (a separate window, never recorded) shows each action
+as you do it (✓ confirmed, ● being validated, ⚠ ambiguous, ✕ not found again), its details,
+the ambiguities to resolve and the recording quality. After Stop, it is the review:
+Replay (recommended), Edit (remove a step), Save (copies the flow to flows/<name>/),
+and the Analysis tab (intents, findings — never mixed with the recorded actions).
 
 Options:
       --url <address>          Where to start (absolute, or a route of the mission)
@@ -39,6 +46,7 @@ Options:
       --validate               Replay the generated flow right after (dry run): REPLAY_CONFIRMED / REPLAY_FAILED
       --reports-dir <dir>      Files go to <dir>/recordings/<name>/
       --headless               No browser window (automation only: nobody can use it)
+      --no-review              Finish right after Stop (no review in the recorder window)
       --dotenv <file>          Environment variables to load (default: .env if present)
   -q, --quiet                  Only print the summary
   -h, --help                   Show this help
@@ -59,6 +67,8 @@ export interface RecordArgs {
   validate: boolean;
   reportsDir?: string;
   headless: boolean;
+  /** La revue après Stop (fenêtre du recorder) : rejouer, modifier, sauvegarder. */
+  review: boolean;
   quiet: boolean;
   help: boolean;
 }
@@ -79,6 +89,7 @@ export function parseRecordArgs(argv: string[]): RecordArgs {
         validate: { type: 'boolean', default: false },
         'reports-dir': { type: 'string' },
         headless: { type: 'boolean', default: false },
+        'no-review': { type: 'boolean', default: false },
         quiet: { type: 'boolean', short: 'q', default: false },
         help: { type: 'boolean', short: 'h', default: false },
       },
@@ -102,6 +113,7 @@ export function parseRecordArgs(argv: string[]): RecordArgs {
     validate: values.validate,
     ...(values['reports-dir'] !== undefined ? { reportsDir: values['reports-dir'] } : {}),
     headless: values.headless,
+    review: !values.headless && !values['no-review'],
     quiet: values.quiet,
     help: values.help,
   };
@@ -155,6 +167,8 @@ export async function runRecordCli(argv: string[]): Promise<number> {
       ...(args.outputFormat ? { outputFormat: args.outputFormat } : {}),
       ...(args.language ? { language: args.language } : {}),
       ...(args.validate ? { validate: true } : {}),
+      // La revue n'a de sens qu'avec quelqu'un devant la fenêtre.
+      ...(args.review && process.stdin.isTTY ? { review: true } : {}),
       ...(args.quiet ? {} : { onEvent: printEvent }),
       ...(process.stdin.isTTY ? { control: terminalControl } : { control: signalControl }),
     });

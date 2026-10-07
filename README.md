@@ -756,6 +756,8 @@ La mission donne la cible, la connexion, la sécurité, `gherkin.steps` et les f
 
 `qa-crawler record` ouvre Chromium sur l'application : vous vous en servez normalement, QA-CRAWLER observe, puis écrit **un** flow imposé propre, en `generated.flow.yaml` **et** `generated.feature` (la même représentation), utilisable tel quel par un run ou un Dry Run. Ce n'est pas un enregistreur de macros : des cibles stables (libellé, rôle + nom ; jamais `#mat-input-23` ni `nth-child`), une étape par intention (pas une par touche), des **données de test** à la place de ce que vous avez tapé (`value: { testData: request.title }`, dans un `test-data.yaml` cité par le flow et le `.feature` : textes gardés, e-mails et noms régénérés à chaque rejeu, codes métier gardés tels quels), les secrets en `{ env: … }`, les choix métier gardés (« Business »), et les résultats observés (requête `POST /api/users` 2xx, page atteinte).
 
+Pendant l'enregistrement, une fenêtre **« QA-CRAWLER Recorder »** (jamais enregistrée) montre chaque action réellement faite en mots simples (« Cliquer sur "Continuer" », ✓ confirmée, ⚠ ambiguë à résoudre, ✕ non retrouvée), ses détails (l'élément est mis en évidence dans la page), la qualité de l'enregistrement, Pause et ↶ Annuler. Après l'arrêt : **la revue** — ▶ Rejouer (conseillé), ✎ Modifier, 💾 Sauvegarder (le brouillon devient `flows/<nom>/`) — et l'onglet **Analyse** (intents, constats), toujours séparé des actions enregistrées. Voir [docs/HUMAN_FLOW_RECORDER.md](docs/HUMAN_FLOW_RECORDER.md#pendant-lenregistrement).
+
 ```bash
 npm run qa -- record --url https://qa.example.com/users --name "Create business user"
 npm run qa -- record -c mission.yaml --name "Create user" --url /users --validate
