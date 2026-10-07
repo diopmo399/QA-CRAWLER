@@ -148,8 +148,28 @@ ${FLOW}
       knowledgeCandidate: { origin: 'AI_PROPOSAL', runtimeConfirmed: true },
     });
     const log = await readFile(path.join(reportsDir, 'engine-log.jsonl'), 'utf8');
+    // PROPOSITION → CANDIDAT → SafetyPolicy → exécution → effet vérifié, dans cet ordre.
+    const sequence = [
+      'AI_PROPOSAL_RECEIVED',
+      'AI_PROPOSAL_VALIDATED',
+      'AI_PROPOSAL_CONVERTED_TO_RECOVERY_CANDIDATE',
+      'AI_RECOVERY_CANDIDATE_SELECTED',
+      'AI_RECOVERY_EXECUTED',
+      'AI_RECOVERY_EFFECT_CONFIRMED',
+    ];
+    const positions = sequence.map((event) => log.indexOf(`"${event}"`));
+    expect(
+      positions.every((position) => position >= 0),
+      JSON.stringify(positions),
+    ).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     for (const event of ['AI_TRIGGER_EVALUATED', 'AI_PROPOSAL_ACCEPTED', 'AI_RUNTIME_CONFIRMED'])
       expect(log).toContain(event);
+    expect(log).toMatch(
+      /AI_RECOVERY_CANDIDATE_SELECTED[^\n]*click tab \\"Enterprise Details\\"[^\n]*SAFETY=SAFE/,
+    );
+    // UNE consultation pour la divergence : pas d'analyse d'échec en plus.
+    expect(provider.requests).toHaveLength(1);
     const html = await readFile(path.join(reportsDir, 'index.html'), 'utf8');
     expect(html).toContain('AI Intelligence');
     expect(html).toContain('GOAL_CONFIRMED');
@@ -173,9 +193,50 @@ ${FLOW}
       origin: 'AI_PROPOSAL',
       runtimeConfirmed: false,
     });
-    expect(await readFile(path.join(reportsDir, 'engine-log.jsonl'), 'utf8')).toContain(
-      'AI_RUNTIME_CONTRADICTED',
-    );
+    const log = await readFile(path.join(reportsDir, 'engine-log.jsonl'), 'utf8');
+    expect(log).toContain('AI_RUNTIME_CONTRADICTED');
+    // EXÉCUTÉ ≠ CONFIRMÉ : l'effet attendu est absent → contredit, jamais appris.
+    expect(log).toContain('AI_RECOVERY_EXECUTED');
+    expect(log).toContain('AI_RECOVERY_EFFECT_CONTRADICTED');
+    expect(log).not.toContain('AI_RECOVERY_EFFECT_CONFIRMED');
+    // Une consultation pour la divergence : l'échec qui suit n'en déclenche pas une seconde.
+    expect(provider.requests).toHaveLength(1);
+  }, 180_000);
+
+  it('HYBRID: an action given only as the plan, with separate confidences (action 0.87, abstention 0.10) — a real recovery candidate, executed and confirmed', async () => {
+    const provider = new FakeIntelligenceProvider((request) => {
+      const tab = request.availableActions.find((action) => action.name === 'Enterprise Details');
+      return {
+        status: 'PROPOSAL',
+        intent: 'open company information section',
+        plan: { steps: [tab?.id ?? 'A999'] },
+        proposedGoal: { id: request.goal?.id ?? 'COMPANY_INFORMATION_AVAILABLE' },
+        expectedEffects: [{ kind: 'VISIBLE_FIELD', value: 'Company name' }],
+        supportingEvidenceIds: [],
+        uncertainties: [],
+        confidence: 0.89,
+        confidenceBreakdown: { action: 0.87, hypothesis: 0.82, goal: 0.94, abstention: 0.1, overall: 0.89 },
+      };
+    });
+    const { result, reportsDir, audit } = await run('hybrid-plan', '?v=ai', HYBRID, provider, LIMITED);
+    expect(result.flows[0]?.status).toBe('PASSED');
+    expect(openingStep(result)?.recovery?.outcome).toMatchObject({
+      status: 'GOAL_REACHED',
+      pathSource: 'AI_PROPOSAL',
+    });
+    const decision = (await audit()).decisions[0];
+    expect(decision).toMatchObject({ source: 'AI_PROPOSAL', runtimeResult: 'GOAL_CONFIRMED' });
+    expect(decision?.proposal?.confidences).toMatchObject({ action: 0.87, abstention: 0.1 });
+    expect(decision?.lifecycle.notExecutedReason).toBeUndefined();
+    const log = await readFile(path.join(reportsDir, 'engine-log.jsonl'), 'utf8');
+    expect(log).toContain('AI_RECOVERY_EFFECT_CONFIRMED');
+    expect(log).not.toContain('ADVISORY_ONLY');
+    // La divergence n'est jamais cachée : la récupération est un écart du flow enregistré, qui n'est pas modifié.
+    const drift = result.flows[0]?.drift;
+    expect(drift?.detected).toBe(true);
+    expect(drift?.result).toBe('PASS_WITH_GOAL_RECOVERY');
+    expect(drift?.facts.goalRecoveredActions).toBe(1);
+    expect(drift?.classification).toMatch(/STRUCTURAL_UI_DRIFT|WORKFLOW_DRIFT/);
   }, 180_000);
 
   it('§84 / §46 ASSIST: the same good proposal is only measured — nothing is executed on its behalf', async () => {

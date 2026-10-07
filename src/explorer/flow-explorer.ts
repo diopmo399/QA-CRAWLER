@@ -11,6 +11,7 @@ import {
   type DiscoveredCandidate,
 } from '../ai/context-builder.js';
 import { createIntelligenceGateway } from '../ai/factory.js';
+import { buildCopilotRecoveryCandidate } from '../ai/recovery-candidate.js';
 import type { ProgressTracker } from '../progress/progress.js';
 import type { AiEventRecord, IntelligenceGateway } from '../ai/gateway.js';
 import type { ProposalValidation } from '../ai/proposal-validator.js';
@@ -556,6 +557,11 @@ export class FlowExplorer {
   private readonly flowRecordedKeys = new Set<string>();
   /** L'étape en cours d'un flow (pour la précondition de l'étape suivante). */
   private stepPosition: { flow: FlowConfig; index: number } | undefined;
+  /** Les étapes dont la récupération a déjà consulté le fournisseur d'intelligence (une fois par divergence). */
+  private readonly aiConsultedSteps = new Set<string>();
+  private stepKey(index: number): string {
+    return `${this.stepPosition?.flow.name ?? ''}#${String(index)}`;
+  }
   /** Le rapport du flow en cours (l'étape précédente, pour le contexte de la divergence). */
   private currentFlowReport: FlowRunReport | undefined;
   /** Une récupération ne déclenche jamais une autre récupération (pas de boucle). */
@@ -5908,6 +5914,7 @@ export class FlowExplorer {
       knownEvidence: (id) => known.has(id),
     });
     this.learnAiProposal(result);
+    if (this.stepPosition) this.aiConsultedSteps.add(this.stepKey(this.stepPosition.index));
     trace.ai.auditId = result.record.id;
     const validation = result.validation;
     if (!validation) {
@@ -7022,11 +7029,24 @@ export class FlowExplorer {
       ...(this.config.ai.copilot.tools ? { tools: toolContextOf(built, sources) } : {}),
     });
     this.learnAiProposal(result);
-    if (!result.decision.accepted || !result.decision.actionId) return undefined;
+    // UNE consultation par divergence : l'analyse d'échec qui suivrait ne reconsulte pas le fournisseur.
+    if (this.stepPosition) this.aiConsultedSteps.add(this.stepKey(this.stepPosition.index));
+    // PROPOSITION → CANDIDAT DE RÉCUPÉRATION : validée, retenue par l'arbitre (SafetyPolicy, confiance de
+    // l'action), sur un identifiant du contexte — puis exécutée par le driver et vérifiée par l'objectif.
+    const build = buildCopilotRecoveryCandidate(result, {
+      goal: input.goal.id,
+      isKnownAction: (id) => built.candidateOf(id) !== undefined,
+    });
+    if ('rejected' in build) return undefined;
+    const candidate = build.candidate;
+    const chosen = built.candidateOf(candidate.actionId);
+    if (!chosen?.role) return undefined;
+    ai.notify(
+      'AI_RECOVERY_CANDIDATE_SELECTED',
+      `${result.record.id}: ${chosen.kind === 'check' ? 'check' : 'click'} ${chosen.role} "${chosen.name}" for goal ${candidate.goal} — SAFETY=${result.decision.safety?.classification ?? 'UNKNOWN'} — ${candidate.explainability.slice(0, 3).join(' · ')}`,
+    );
     const progressBefore = this.cognitive?.goalProgress()?.progress;
     if (progressBefore !== undefined) this.aiRecoveryProgress.set(result.record.id, progressBefore);
-    const chosen = built.candidateOf(result.decision.actionId);
-    if (!chosen?.role) return undefined;
     return {
       action: { kind: chosen.kind === 'check' ? 'check' : 'click', role: chosen.role, name: chosen.name },
       auditId: result.record.id,
@@ -7046,6 +7066,9 @@ export class FlowExplorer {
     const ai = this.ai;
     const cognitive = this.cognitive;
     if (!ai || !cognitive) return;
+    // La récupération de CETTE étape a déjà consulté le fournisseur : une seconde analyse (advisory)
+    // n'ajouterait qu'un appel, jamais une action — une divergence, une consultation.
+    if (this.aiConsultedSteps.has(this.stepKey(report.index))) return;
     const trigger = ai.evaluate({ deterministicConfidence: 0, unknownBusinessError: true });
     if (!trigger.shouldInvoke || !trigger.reason) return;
     const snapshot = await this.observer.observe(page).catch(() => undefined);
@@ -7297,6 +7320,18 @@ export class FlowExplorer {
         ? {
             advise: (input: AdviceInput) => this.adviseRecovery(input),
             adviceOutcome: (auditId: string, reached: boolean, detail: string) => {
+              // EXÉCUTÉ ≠ CONFIRMÉ : l'effet attendu (l'objectif) est vérifié au runtime.
+              const executed = reached || detail.includes(' not reached');
+              if (executed)
+                this.ai?.notify('AI_RECOVERY_EXECUTED', `${auditId}: executed by the deterministic driver`);
+              this.ai?.notify(
+                reached
+                  ? 'AI_RECOVERY_EFFECT_CONFIRMED'
+                  : executed
+                    ? 'AI_RECOVERY_EFFECT_CONTRADICTED'
+                    : 'AI_RECOVERY_FAILED',
+                `${auditId}: ${detail}`,
+              );
               this.aiRuntime(auditId, reached, detail, this.aiRecoveryProgress.get(auditId));
             },
           }

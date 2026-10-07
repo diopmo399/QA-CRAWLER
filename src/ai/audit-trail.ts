@@ -1,3 +1,4 @@
+import type { DecisionConfidence } from './decision-confidence.js';
 import {
   AI_FALLBACK_REASONS,
   CALL_RESPONSES,
@@ -78,6 +79,8 @@ export interface AiDecisionRecord {
     action?: string;
     intent?: string;
     confidence: number;
+    /** Les confiances nommées : action, hypothèse, objectif, preuves, sûreté, abstention, globale. */
+    confidences?: DecisionConfidence;
     evidenceIds: string[];
     uncertainties: string[];
     hypothesis?: string;
