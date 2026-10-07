@@ -244,6 +244,22 @@ export const intelligenceProposalSchema = z
     supportingEvidenceIds: z.array(shortText(80)).max(20),
     uncertainties: z.array(shortText(200)).max(10),
     confidence: z.number().min(0).max(1),
+    /**
+     * DES CONFIANCES SÉPARÉES : une abstention sûre (abstention 0.99) n'est jamais une action sûre.
+     * `confidence` reste la confiance globale (compatibilité) ; l'arbitre retient `action`.
+     */
+    confidenceBreakdown: z
+      .object({
+        action: z.number().min(0).max(1).optional(),
+        hypothesis: z.number().min(0).max(1).optional(),
+        goal: z.number().min(0).max(1).optional(),
+        evidence: z.number().min(0).max(1).optional(),
+        safety: z.number().min(0).max(1).optional(),
+        abstention: z.number().min(0).max(1).optional(),
+        overall: z.number().min(0).max(1).optional(),
+      })
+      .strict()
+      .optional(),
     summary: shortText(300).optional(),
     /** Audit d'enregistrement : l'identité sémantique proposée (appliquée seulement si le runtime confirme). */
     semanticTarget: z
@@ -317,6 +333,16 @@ export const INTELLIGENCE_PROPOSAL_JSON_SCHEMA: Record<string, unknown> = {
     supportingEvidenceIds: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 80 } },
     uncertainties: { type: 'array', maxItems: 10, items: { type: 'string', maxLength: 200 } },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
+    confidenceBreakdown: {
+      type: 'object',
+      additionalProperties: false,
+      properties: Object.fromEntries(
+        ['action', 'hypothesis', 'goal', 'evidence', 'safety', 'abstention', 'overall'].map((key) => [
+          key,
+          { type: 'number', minimum: 0, maximum: 1 },
+        ]),
+      ),
+    },
     summary: { type: 'string', maxLength: 300 },
   },
 };

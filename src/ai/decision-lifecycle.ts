@@ -1,3 +1,4 @@
+import { proposedActionOf } from './decision-confidence.js';
 import type { ArbiterDecision } from './hybrid-arbiter.js';
 import type { IntelligenceMode } from './model.js';
 import type { ProposalValidation } from './proposal-validator.js';
@@ -251,7 +252,7 @@ export function classifyDecision(input: ClassifyInput): AiDecisionLifecycle {
     });
   }
 
-  const proposed = proposal.selectedActionId;
+  const proposed = proposedActionOf(proposal);
   const compared: ShadowDecisionResult | undefined = proposed
     ? deterministic
       ? proposed === deterministic

@@ -929,3 +929,80 @@ ai:
   - une hypothèse IA ;
   - des compteurs cohérents ;
   - la trace et le rapport.
+
+## Proposition → candidat de récupération exécutable (HYBRID)
+
+**Principe :** le conseiller propose, QA-Crawler valide, la SafetyPolicy autorise, l'exécuteur déterministe agit, le runtime confirme, la connaissance apprend. Aucune étape n'est contournée. Le conseiller ne clique jamais lui-même.
+
+```
+Divergence → récupération déterministe → aucun candidat suffisant → déclencheur (RECOVERY_EXHAUSTED…)
+  → proposition → validation (schéma, actions, preuves) → arbitre (mode, SafetyPolicy, confiance DE L'ACTION)
+  → RecoveryCandidate (source COPILOT) → exécuteur déterministe → vérification de l'objectif / de l'effet
+  → runtime confirmé → candidat de connaissance (AI_PROPOSED + RUNTIME_CONFIRMED)
+```
+
+### Des confiances séparées
+
+Une proposition donne `confidenceBreakdown`, avec un score par question :
+
+| Score        | Ce qu'il mesure                                                          |
+| ------------ | ------------------------------------------------------------------------ |
+| `action`     | cette action est la bonne. **C'est lui que l'arbitre compare au seuil.** |
+| `hypothesis` | l'explication proposée est la bonne                                      |
+| `goal`       | l'objectif fonctionnel visé est le bon                                   |
+| `evidence`   | les preuves citées soutiennent la proposition                            |
+| `safety`     | l'action est sans risque (la SafetyPolicy reste seule juge)              |
+| `abstention` | il vaut mieux ne rien faire (`INCONCLUSIVE`, `NEED_MORE_EVIDENCE`)       |
+| `overall`    | la confiance globale déclarée                                            |
+
+**Lecture de ces scores :**
+
+- **Une abstention à 0.99 n'est jamais une action à 0.99.** L'arbitre l'écrit en clair : `proposal NEED_MORE_EVIDENCE (abstention confidence 0.99 — not an action confidence)`.
+- **Si une ancienne réponse ne donne que `confidence`**, ce nombre est lu comme la confiance de l'action pour une `PROPOSAL`, et comme la confiance de l'abstention sinon.
+- **L'audit garde les scores nommés.** Ils sont dans `proposal.confidences` de `intelligence.json`, et les journaux les écrivent par leur nom (`action 0.87 · abstention 0.10`).
+
+### L'action proposée
+
+L'action est `selectedActionId`, ou à défaut la **première étape du plan**, qui est validée elle aussi. Une `PROPOSAL` dont l'action n'était que dans le plan n'est donc plus classée « without action ».
+
+**L'action est toujours un identifiant du contexte envoyé.** Un identifiant inconnu est refusé deux fois :
+
+- par le validateur : `UNKNOWN_ACTION` ;
+- puis par le constructeur de candidat : `UNKNOWN_ACTION_ID`.
+
+Une preuve inconnue est refusée (`INVALID_EVIDENCE`). Aucun localisateur n'est jamais accepté du conseiller.
+
+### Une consultation par divergence
+
+La récupération (RECOVERY) consulte le conseiller **une fois**. L'analyse d'échec (FAILURE) qui suivrait sur la même étape ne le reconsulte pas. Ces analyses étaient advisory par construction (`ADVISORY_ONLY`), donc elles n'ajoutaient qu'un appel, jamais une action.
+
+`ADVISORY_ONLY` reste réservé aux analyses : FAILURE, BLOCKED_GOAL, HYPOTHESIS et RECORDING.
+
+### Événements
+
+| Événement                                                                                 | Quand                                                                |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `AI_PROPOSAL_RECEIVED`                                                                    | réception, avec les confiances nommées                               |
+| `AI_PROPOSAL_VALIDATED` / `AI_PROPOSAL_REJECTED`                                          | validation (schéma, actions, preuves)                                |
+| `AI_ABSTENTION_SELECTED`                                                                  | `INCONCLUSIVE` / `NEED_MORE_EVIDENCE`                                |
+| `AI_PROPOSAL_CONVERTED_TO_RECOVERY_CANDIDATE`                                             | retenue par l'arbitre en RECOVERY                                    |
+| `AI_RECOVERY_BLOCKED_BY_SAFETY`                                                           | la SafetyPolicy refuse                                               |
+| `AI_RECOVERY_CANDIDATE_SELECTED`                                                          | le candidat confié au driver (action, objectif, sûreté, explication) |
+| `AI_RECOVERY_EXECUTED`                                                                    | exécuté par le driver déterministe                                   |
+| `AI_RECOVERY_EFFECT_CONFIRMED` / `AI_RECOVERY_EFFECT_CONTRADICTED` / `AI_RECOVERY_FAILED` | vérification au runtime                                              |
+
+### Exemple (une V2 où un onglet remplace l'ancien bouton)
+
+```
+AI_PROPOSAL_RECEIVED  R-1 PROPOSAL — action 0.87 · hypothesis 0.82 · goal 0.94 · abstention 0.10 · overall 0.89
+AI_PROPOSAL_VALIDATED  AI-00001: schema valid, every referenced action exists
+AI_PROPOSAL_CONVERTED_TO_RECOVERY_CANDIDATE  AI-00001: A6 TAB "Enterprise Details"
+AI_RECOVERY_CANDIDATE_SELECTED  AI-00001: click tab "Enterprise Details" for goal COMPANY_INFORMATION_AVAILABLE — SAFETY=SAFE
+AI_RECOVERY_EXECUTED  AI-00001: executed by the deterministic driver
+AI_RECOVERY_EFFECT_CONFIRMED  AI-00001: goal COMPANY_INFORMATION_AVAILABLE reached: textbox "Company name", textbox "Business number"
+```
+
+**Résultat :** `PASS_WITH_GOAL_RECOVERY`.
+
+- **La dérive est enregistrée** (`STRUCTURAL_UI_DRIFT` / `WORKFLOW_DRIFT`), et le flow d'origine n'est jamais modifié.
+- **La récupération devient un candidat de connaissance** seulement après la confirmation au runtime et la réussite de l'étape suivante.

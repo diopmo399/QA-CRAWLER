@@ -1,3 +1,4 @@
+import { decisionConfidenceOf, describeConfidence, proposedActionOf } from './decision-confidence.js';
 import { sanitizeText } from '../persistence/sanitize.js';
 import {
   ADVISORY_CONTEXTS,
@@ -70,6 +71,15 @@ export const AI_EVENTS = [
   'AI_EFFECTIVE_MODEL_OBSERVED',
   'AI_SHADOW_RECORDED',
   'AI_DECISION_CLASSIFIED',
+  // La récupération proposée : candidat → SafetyPolicy → exécution → effet vérifié.
+  'AI_PROPOSAL_CONVERTED_TO_RECOVERY_CANDIDATE',
+  'AI_RECOVERY_CANDIDATE_SELECTED',
+  'AI_RECOVERY_BLOCKED_BY_SAFETY',
+  'AI_RECOVERY_EXECUTED',
+  'AI_RECOVERY_EFFECT_CONFIRMED',
+  'AI_RECOVERY_EFFECT_CONTRADICTED',
+  'AI_RECOVERY_FAILED',
+  'AI_ABSTENTION_SELECTED',
 ] as const;
 export type AiEvent = (typeof AI_EVENTS)[number];
 export interface AiEventRecord {
@@ -303,8 +313,12 @@ export class IntelligenceGateway {
       });
     }
 
-    this.emit('AI_PROPOSAL_RECEIVED', `${request.requestId} from ${result.model ?? this.options.providerId}`);
     const validation = validateIntelligenceProposal(result.raw, sanitized, input.knownEvidence);
+    const scores = validation.proposal ? decisionConfidenceOf(validation.proposal) : undefined;
+    this.emit(
+      'AI_PROPOSAL_RECEIVED',
+      `${request.requestId} from ${result.model ?? this.options.providerId}${validation.proposal ? ` ${validation.proposal.status}` : ''}${scores ? ` — ${describeConfidence(scores)}` : ''}`,
+    );
     const decision = arbitrate({
       mode: this.options.mode,
       deterministic: input.deterministic,
@@ -350,14 +364,15 @@ export class IntelligenceGateway {
         ? {
             proposal: {
               status: proposal.status,
-              ...(proposal.selectedActionId
+              ...(proposedActionOf(proposal)
                 ? {
-                    selectedActionId: proposal.selectedActionId,
-                    action: labelOf(request, proposal.selectedActionId),
+                    selectedActionId: proposedActionOf(proposal),
+                    action: labelOf(request, proposedActionOf(proposal) ?? ''),
                   }
                 : {}),
               ...(proposal.intent ? { intent: proposal.intent } : {}),
               confidence: round(proposal.confidence),
+              ...(scores ? { confidences: scores } : {}),
               evidenceIds: proposal.supportingEvidenceIds,
               uncertainties: proposal.uncertainties,
               ...(proposal.hypothesis ? { hypothesis: proposal.hypothesis.statement } : {}),
@@ -395,6 +410,23 @@ export class IntelligenceGateway {
       this.emit(
         'AI_PROPOSAL_REJECTED',
         `${record.id} ${validation.rejection}: ${validation.reasons.join('; ')}`,
+      );
+    // ABSTENTION : une décision à part, jamais confondue avec une proposition faible.
+    if (validation.valid && validation.proposal.status !== 'PROPOSAL')
+      this.emit(
+        'AI_ABSTENTION_SELECTED',
+        `${record.id} ${validation.proposal.status}: abstention confidence ${(scores?.abstention ?? 0).toFixed(2)} (not an action confidence)`,
+      );
+    if (decision.code === 'SAFETY' && input.context === 'RECOVERY')
+      this.emit(
+        'AI_RECOVERY_BLOCKED_BY_SAFETY',
+        `${record.id}: ${record.proposal?.selectedActionId ?? ''} ${record.proposal?.action ?? ''} — ${decision.reasons.join('; ')}`,
+      );
+    // RECOVERY, HYBRID : la proposition validée et retenue devient un CANDIDAT de récupération exécutable.
+    if (decision.accepted && input.context === 'RECOVERY')
+      this.emit(
+        'AI_PROPOSAL_CONVERTED_TO_RECOVERY_CANDIDATE',
+        `${record.id}: ${record.proposal?.selectedActionId ?? ''} ${record.proposal?.action ?? ''}${scores ? ` (${describeConfidence(scores)})` : ''}`,
       );
     if (decision.accepted)
       this.emit(
@@ -501,6 +533,11 @@ export class IntelligenceGateway {
       record.lifecycle.runtime = 'NOT_APPLICABLE';
       record.lifecycle.notExecutedReason = 'EXECUTOR_CHOSE_OTHER';
     }
+  }
+
+  /** Un événement du cycle de la récupération proposée (candidat, exécution, effet), par le même canal. */
+  notify(event: AiEvent, message: string): void {
+    this.emit(event, message);
   }
 
   /** Ce que la décision a apporté à la connaissance (une hypothèse proposée, soutenue ou contredite). */

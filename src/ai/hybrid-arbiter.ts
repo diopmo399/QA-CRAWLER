@@ -1,3 +1,4 @@
+import { decisionConfidenceOf, proposedActionOf } from './decision-confidence.js';
 import type { IntelligenceMode } from './model.js';
 import type { ProposalValidation } from './proposal-validator.js';
 
@@ -80,15 +81,20 @@ export function arbitrate(input: {
     code,
     ...extra,
   });
-  const proposed = validation?.valid ? validation.proposal.selectedActionId : undefined;
+  // L'action de la proposition : selectedActionId, ou la première étape de son plan (validée elle aussi).
+  const proposed = validation?.valid ? proposedActionOf(validation.proposal) : undefined;
   const disagreement = proposed !== undefined && proposed !== deterministic.actionId;
   if (input.mode === 'OFF') return keep('OFF', ['intelligence OFF']);
   if (!validation) return keep('NO_PROPOSAL', ['no proposal']);
   if (!validation.valid) return keep('INVALID', [`proposal rejected: ${validation.rejection}`]);
-  if (validation.proposal.status !== 'PROPOSAL' || !proposed)
+  const scores = decisionConfidenceOf(validation.proposal);
+  if (validation.proposal.status !== 'PROPOSAL')
+    // Une ABSTENTION : sa confiance mesure l'abstention, jamais une action.
     return keep('NOT_ACTIONABLE', [
-      `proposal ${validation.proposal.status}${proposed ? '' : ' without action'}`,
+      `proposal ${validation.proposal.status} (abstention confidence ${scores.abstention.toFixed(2)} — not an action confidence)`,
     ]);
+  if (!proposed)
+    return keep('NOT_ACTIONABLE', ['proposal PROPOSAL without action (no selectedActionId, no plan)']);
   const safety = input.safety(proposed);
   if (input.mode === 'ASSIST')
     return keep('ASSIST', ['ASSIST: the deterministic decision is executed; the proposal is recorded only'], {
@@ -108,11 +114,12 @@ export function arbitrate(input: {
       ],
       { disagreement, safety },
     );
-  const confidence = validation.proposal.confidence;
+  // La confiance DANS L'ACTION (pas l'abstention, pas l'hypothèse) est comparée au seuil.
+  const confidence = scores.action;
   if (confidence < thresholds.minProposalConfidence)
     return keep(
       'LOW_CONFIDENCE',
-      [`proposal confidence ${confidence.toFixed(2)} < ${thresholds.minProposalConfidence.toFixed(2)}`],
+      [`action confidence ${confidence.toFixed(2)} < ${thresholds.minProposalConfidence.toFixed(2)}`],
       {
         disagreement,
         safety,
@@ -126,7 +133,7 @@ export function arbitrate(input: {
     return keep(
       'MARGIN',
       [
-        `proposal confidence ${confidence.toFixed(2)} does not exceed deterministic ${deterministic.confidence.toFixed(2)} by ${thresholds.overrideMargin.toFixed(2)}`,
+        `action confidence ${confidence.toFixed(2)} does not exceed deterministic ${deterministic.confidence.toFixed(2)} by ${thresholds.overrideMargin.toFixed(2)}`,
       ],
       { disagreement, safety },
     );
@@ -143,7 +150,7 @@ export function arbitrate(input: {
       deterministic.actionId
         ? `deterministic ${deterministic.actionId} at ${deterministic.confidence.toFixed(2)} was weak`
         : 'no deterministic decision',
-      `proposal confidence ${confidence.toFixed(2)}`,
+      `action confidence ${confidence.toFixed(2)}`,
     ],
   };
 }
