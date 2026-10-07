@@ -1278,6 +1278,11 @@ const recordingSchema = z
     panelPreview: z.boolean().default(true),
     /** Où « Sauvegarder » copie le flow (par défaut : flows/ à côté du dossier des rapports). */
     flowsDirectory: z.string().optional(),
+    /**
+     * L'analyse du conseiller APRÈS l'enregistrement (enrichissement, audit sémantique, audit du flow) :
+     * durée totale au plus ; au-delà, ou dès qu'un appel dépasse son délai, le déterministe est gardé.
+     */
+    aiAnalysisBudgetMs: z.number().int().min(1000).max(900_000).default(90_000),
     /** Se connecter (auth de la mission) avant de commencer : la connexion n'est pas enregistrée. */
     recordAfterAuthentication: z.boolean().default(true),
     /** Événements bruts gardés au plus (les envois, navigations, changements et points de contrôle ne sont jamais perdus). */

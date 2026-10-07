@@ -763,6 +763,13 @@ tourne **en arrière-plan pendant la revue** : on peut déjà rejouer et sauvega
 enregistrement : `ai.triggers.recordingEnrichment: false`, `recording.flowAudit.ai: false`,
 `recording.intelligenceAudit.mode: OFF`.
 
+**Une durée bornée.** Cette analyse dure au plus `recording.aiAnalysisBudgetMs` (90 s par défaut) au
+total : chaque appel est coupé à ce qui reste, et plus aucun appel n'est fait passé l'échéance. Dès
+qu'un appel dépasse son délai (`ai.copilot.timeoutMs`) ou que le fournisseur est indisponible, les
+questions suivantes ne sont plus posées (avant : un délai dépassé par question, soit plusieurs
+minutes). Les constats déterministes sont toujours gardés ; l'arrêt est tracé
+(`AI analysis cut short (AI_TIMEOUT | ANALYSIS_TIME_BUDGET_EXHAUSTED …)`).
+
 **Avant.** Au « Stop », le recorder attendait toutes les validations de cible encore en file : elles
 sont sérialisées, et chacune pouvait consulter le conseiller (plusieurs secondes par appel). Venaient
 ensuite l'enrichissement et l'audit sémantique, avec leurs propres appels IA, faits les uns après les

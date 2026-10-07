@@ -523,6 +523,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   //    sinon comme avant, avant le rapport.
   const runAiAnalysis = async (): Promise<void> => {
     const started = Date.now();
+    // Une durée totale bornée, et plus aucun appel après un délai dépassé : jamais des minutes d'attente.
+    gateway?.limitTo({ deadlineAt: started + config.recording.aiAnalysisBudgetMs, stopOnFailure: true });
     try {
       intelligence = await enrichRecording({
         result,
@@ -550,6 +552,13 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }
     semanticAudit = (await runSemanticAudit(gateway)) ?? semanticAudit;
     flowAudit = (await runFlowAudit(gateway)) ?? flowAudit;
+    const stoppedBecause = gateway?.stoppedBecause;
+    if (stoppedBecause)
+      onEvent({
+        type: 'RECORDING_STOP_TIMING',
+        at: new Date().toISOString(),
+        message: `AI analysis cut short (${stoppedBecause}, budget ${String(config.recording.aiAnalysisBudgetMs / 1000)} s): the deterministic findings are kept`,
+      });
     await gateway?.close();
     await writeAudits();
     consoleUi?.setAnalysis(result, flowAudit, intelligence);
