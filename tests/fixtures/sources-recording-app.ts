@@ -69,7 +69,9 @@ export async function startSourcesRecordingApp(): Promise<SourcesRecordingApp> {
     url: `http://127.0.0.1:${String(port)}`,
     close: () =>
       new Promise<void>((resolve) => {
-        server.close(() => resolve());
+        server.close(() => {
+          resolve();
+        });
       }),
   };
 }
