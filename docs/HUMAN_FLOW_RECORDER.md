@@ -754,6 +754,15 @@ l'étape est en échec et la récupération est `NO_SAFE_RECOVERY` (jamais `RECO
 
 ### Arrêt (« Stop ») : ce qui reste à faire, et combien de temps
 
+**Le conseiller ne retarde jamais la revue.** Après l'arrêt, les audits déterministes (règles,
+sans appel) sont faits tout de suite. L'analyse par l'intelligence (`ai.mode` ≠ OFF :
+enrichissement, audit sémantique, audit du flow — plusieurs appels de quelques secondes chacun)
+tourne **en arrière-plan pendant la revue** : on peut déjà rejouer et sauvegarder, et l'onglet
+**Analyse** se complète (« Analyse par l'intelligence en cours… »). Sans revue (`--no-review`,
+`--headless`), elle est faite avant le rapport, comme avant. Pour ne pas l'utiliser du tout après un
+enregistrement : `ai.triggers.recordingEnrichment: false`, `recording.flowAudit.ai: false`,
+`recording.intelligenceAudit.mode: OFF`.
+
 **Avant.** Au « Stop », le recorder attendait toutes les validations de cible encore en file : elles
 sont sérialisées, et chacune pouvait consulter le conseiller (plusieurs secondes par appel). Venaient
 ensuite l'enrichissement et l'audit sémantique, avec leurs propres appels IA, faits les uns après les

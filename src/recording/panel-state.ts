@@ -59,6 +59,8 @@ export interface PanelAnalysis {
   intents: { label: string; detail?: string; confidence?: number; evidence: string[] }[];
   findings: { severity: string; message: string; suggestion?: string; origin: string }[];
   aiCandidates: number;
+  /** L'analyse du conseiller tourne encore en arrière-plan (la revue n'attend pas). */
+  running?: boolean;
 }
 
 export interface PanelState {

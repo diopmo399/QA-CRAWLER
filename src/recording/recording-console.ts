@@ -166,10 +166,12 @@ export class RecordingConsole {
   }
 
   /** L'ANALYSE (onglet séparé) : intention métier, constats, suggestions — jamais dans la timeline. */
+  /** running : l'analyse du conseiller tourne encore (en arrière-plan) ; les constats déterministes sont déjà là. */
   setAnalysis(
     result: RecordingResult,
     flowAudit?: FlowAuditReport,
     intelligence?: RecordingIntelligence,
+    running = false,
   ): void {
     const intent = result.flow.intent;
     this.analysis = {
@@ -196,6 +198,7 @@ export class RecordingConsole {
         origin: finding.origin,
       })),
       aiCandidates: intelligence?.candidates.length ?? 0,
+      ...(running ? { running: true } : {}),
     };
     this.render();
   }
