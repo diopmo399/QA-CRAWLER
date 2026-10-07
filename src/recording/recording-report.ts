@@ -14,6 +14,8 @@ export interface ReplayOutcome {
   dryRunStatus?: string;
   reason?: string;
   report?: string;
+  /** Chaque étape rejouée (position dans le flow, résultat, raisons) : la revue dit laquelle a échoué. */
+  steps?: { index: number; label: string; outcome: string; reasons: string[]; evidence: string[] }[];
 }
 
 const REPLAY_COLORS: Record<ReplayStatus, string> = {

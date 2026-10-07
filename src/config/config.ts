@@ -1269,6 +1269,13 @@ const recordingSchema = z
     language: z.enum(['fr', 'en']).optional(),
     /** Le bandeau « ● RECORDING » (Stop, Checkpoint, Pause) dans la page. */
     overlay: z.boolean().default(true),
+    /**
+     * La fenêtre « QA-CRAWLER Recorder » (contexte séparé, jamais enregistrée) : timeline des actions,
+     * détails, ambiguïtés, qualité ; après Stop, la revue (rejouer, modifier, sauvegarder) et l'analyse.
+     */
+    panel: z.boolean().default(true),
+    /** Où « Sauvegarder » copie le flow (par défaut : flows/ à côté du dossier des rapports). */
+    flowsDirectory: z.string().optional(),
     /** Se connecter (auth de la mission) avant de commencer : la connexion n'est pas enregistrée. */
     recordAfterAuthentication: z.boolean().default(true),
     /** Événements bruts gardés au plus (les envois, navigations, changements et points de contrôle ne sont jamais perdus). */

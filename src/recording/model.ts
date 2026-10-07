@@ -359,7 +359,7 @@ export interface RawRecordedEvent {
   /** checkpoint : libellé donné par l'humain. */
   label?: string;
   /** control : stop / pause / resume / checkpoint (depuis le bandeau). */
-  control?: 'stop' | 'pause' | 'resume' | 'checkpoint';
+  control?: 'stop' | 'pause' | 'resume' | 'checkpoint' | 'undo';
   /** popup / download : URL de la nouvelle page, extension du fichier. */
   target?: string;
   /** navigation : type de transition du navigateur (link, typed, reload, form_submit…, forward_back). */
@@ -373,6 +373,12 @@ export interface RawRecordedEvent {
   /** L'observation (unique) qui a donné stateAfter : des actions de la MÊME observation partagent un écran. */
   observationId?: string;
   network?: FunctionalExchange[];
+  /** ANNULÉ par l'humain (↶ Annuler) : gardé dans la trace brute, jamais dans le flow. */
+  undone?: boolean;
+  /** L'humain a confirmé l'élément touché d'une action ambiguë (son rang parmi les correspondances). */
+  userResolution?: { candidateIndex: number; at: number };
+  /** L'humain a choisi de laisser l'ambiguïté (elle reste signalée). */
+  ambiguityIgnored?: boolean;
 }
 
 export type SemanticActionType =
@@ -585,7 +591,9 @@ export type RecordingWarningCode =
   | 'TEST_DATA_COLLISION'
   | 'FLOW_GENERATION_LOST_HUMAN_ACTIONS'
   | 'UNSUPPORTED_EVENT'
-  | 'NO_OUTCOME_OBSERVED';
+  | 'NO_OUTCOME_OBSERVED'
+  /** Des actions retirées par l'humain (↶ Annuler) : exclues du flow, gardées dans la trace brute. */
+  | 'USER_UNDONE_ACTIONS';
 
 export interface RecordingWarning {
   code: RecordingWarningCode;
@@ -624,6 +632,8 @@ export interface RecordedFlowStep {
   targetValidation?: { status: string; repaired: boolean; requiresReplayValidation: boolean };
   /** Pourquoi cette étape (explicabilité du rapport). */
   explanation: string;
+  /** Une ambiguïté tranchée par l'humain (élément touché confirmé) ou laissée par lui (à vérifier au rejeu). */
+  userDecision?: 'AMBIGUITY_CONFIRMED_BY_USER' | 'AMBIGUITY_LEFT_BY_USER';
 }
 
 /** LA représentation intermédiaire : la seule source du YAML et du Gherkin. */
@@ -689,6 +699,13 @@ export type RecordingEventType =
   | 'RAW_EVENT_CAPTURED'
   /** QA_DEBUG : la trace déterministe du recorder ([RECORDER] RAW EVENT / ELEMENT / VALIDATION / RECORDED / EVENT IGNORED). */
   | 'RECORDER_DEBUG'
+  /** La timeline en direct (une action ajoutée, validée, annulée, résolue). */
+  | 'LIVE_ACTION_UPDATED'
+  | 'ACTION_UNDONE'
+  | 'AMBIGUITY_RESOLVED'
+  | 'AMBIGUITY_IGNORED'
+  | 'RECORDING_SAVED'
+  | 'RECORDING_STEP_REMOVED'
   | 'SEMANTIC_ACTION_RESOLVED'
   | 'CHECKPOINT_ADDED'
   | 'RECORDING_PAUSED'

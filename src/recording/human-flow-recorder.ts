@@ -1,4 +1,5 @@
 import { ignoredDebugLine, rawEventDebugLine } from './recorder-trace.js';
+import { LiveTimeline, type LiveAction } from './live-timeline.js';
 import type { BrowserContext, CDPSession, Dialog, Download, Page } from 'playwright';
 import type { ScenarioConfig } from '../config/config.js';
 import { FormKnowledgeObserver } from '../forms/state/form-knowledge-observer.js';
@@ -61,6 +62,16 @@ export interface HumanFlowRecorderOptions {
   now?: () => number;
   /** AUTO-VALIDATION de la cible juste après chaque action (absente : désactivée). */
   targetValidator?: RecordingTargetValidator;
+  /** La langue de la timeline et du bandeau (sinon recording.language, puis report.language). */
+  language?: 'fr' | 'en';
+  /** La timeline en direct a changé (une action ajoutée, validée, annulée, résolue) : le panneau se redessine. */
+  onTimeline?: (change: TimelineChange) => void;
+}
+
+/** Ce qui vient de changer dans la timeline en direct. */
+export interface TimelineChange {
+  reason: 'ADDED' | 'UPDATED' | 'CONFIRMED' | 'UNDONE' | 'RESOLVED' | 'IGNORED' | 'STATE';
+  action?: LiveAction;
 }
 
 /**
@@ -100,8 +111,20 @@ export class HumanFlowRecorder {
   private readonly snapshots = new Map<string, UiSnapshot>();
   private overflowWarned = false;
 
+  /**
+   * LA TIMELINE EN DIRECT : une ligne par action humaine, affichée dès la capture puis validée en
+   * arrière-plan (jamais une intention, une suggestion ou une action découverte).
+   */
+  readonly timeline: LiveTimeline;
+  /** Les actions déjà annoncées (✓ Action enregistrée) : une seule notification par action. */
+  private readonly announced = new Set<string>();
+
   constructor(private readonly options: HumanFlowRecorderOptions) {
     const { config } = options;
+    this.timeline = new LiveTimeline(
+      options.language ?? config.recording.language ?? (config.report.language === 'fr' ? 'fr' : 'en'),
+      options.targetValidator !== undefined,
+    );
     this.now = options.now ?? Date.now;
     this.safety = new SafetyPolicy(config.safety);
     this.observer = new UIObserver(400, new NavigationGuard(), this.salt);
@@ -160,6 +183,7 @@ export class HumanFlowRecorder {
       binding: BINDING,
       salt: this.salt,
       overlay: recording.overlay,
+      language: this.timeline.language,
       inputDebounceMs: recording.inputDebounceMs,
       recordValues: recording.testData.enabled && recording.testData.extractRecordedValues,
       maxValueLength: recording.testData.maxValueLength,
@@ -232,6 +256,7 @@ export class HumanFlowRecorder {
       })
       .catch(() => undefined);
     this.emit('RECORDING_PAUSED', 'paused');
+    this.changed({ reason: 'STATE' });
   }
 
   async resume(): Promise<void> {
@@ -244,11 +269,150 @@ export class HumanFlowRecorder {
       })
       .catch(() => undefined);
     this.emit('RECORDING_RESUMED', 'resumed');
+    this.changed({ reason: 'STATE' });
   }
 
   /** Demande l'arrêt (le terminal, l'API). */
   requestStop(reason: StopReason = 'api'): void {
     this.resolveStop(reason);
+  }
+
+  // ------------------------------------------------------------------ timeline (humain)
+
+  /** Le moment où l'enregistrement a commencé (le minuteur du bandeau et du panneau). */
+  get startedAt(): number {
+    return Date.parse(this.session.startedAt);
+  }
+
+  get isPaused(): boolean {
+    return this.paused;
+  }
+
+  /**
+   * ↶ ANNULER : retire la dernière action de l'ENREGISTREMENT (pas seulement de l'affichage) : ses
+   * événements bruts — et tout ce qui la suit (bruit, navigation qu'elle a causée) — sont marqués
+   * `undone` : gardés dans la trace brute, exclus du flow. L'application n'est pas remise en arrière.
+   */
+  undo(): LiveAction | undefined {
+    const action = this.timeline.undoLast();
+    if (!action) return undefined;
+    const previousEnd = this.timeline.actions.at(-1)?.lastSequence ?? 0;
+    const undone: string[] = [];
+    for (const event of this.session.rawEvents)
+      if (event.sequence > previousEnd && event.type !== 'control' && event.type !== 'checkpoint') {
+        event.undone = true;
+        undone.push(event.id);
+      }
+    this.emit(
+      'ACTION_UNDONE',
+      `action ${String(action.index)} (${action.kind}) removed from the recording: ${undone.join(', ')}`,
+      {
+        action: action.id,
+        rawEventIds: undone,
+      },
+    );
+    this.changed({ reason: 'UNDONE', action });
+    return action;
+  }
+
+  /**
+   * ⚠ → ✓ : l'humain confirme l'élément qu'il a touché parmi ceux qui correspondent. La confirmation
+   * est gardée sur l'événement brut (jamais une déduction) ; un autre élément que celui touché est refusé.
+   */
+  resolveAmbiguity(actionId: string, candidateIndex: number): ReturnType<LiveTimeline['resolve']> {
+    const outcome = this.timeline.resolve(actionId, candidateIndex);
+    if ('error' in outcome) return outcome;
+    const last = this.session.rawEvents.find((event) => event.id === outcome.action.rawEventIds.at(-1));
+    if (last) last.userResolution = { candidateIndex, at: this.now() };
+    this.emit(
+      'AMBIGUITY_RESOLVED',
+      `action ${String(outcome.action.index)}: the touched element (#${String(candidateIndex + 1)}) is confirmed by the user`,
+      {
+        action: actionId,
+        candidateIndex,
+      },
+    );
+    this.changed({ reason: 'RESOLVED', action: outcome.action });
+    return outcome;
+  }
+
+  /** L'humain laisse l'ambiguïté : elle reste signalée (jamais résolue en silence). */
+  ignoreAmbiguity(actionId: string): LiveAction | undefined {
+    const action = this.timeline.ignore(actionId);
+    if (!action) return undefined;
+    for (const event of this.session.rawEvents)
+      if (action.rawEventIds.includes(event.id)) event.ambiguityIgnored = true;
+    this.emit('AMBIGUITY_IGNORED', `action ${String(action.index)}: ambiguity left as is by the user`, {
+      action: actionId,
+    });
+    this.changed({ reason: 'IGNORED', action });
+    return action;
+  }
+
+  /**
+   * Met en évidence dans la page l'élément d'une action : l'élément ORIGINAL s'il est encore là,
+   * sinon celui que son sélecteur désigne SEUL ; jamais un élément deviné.
+   */
+  async highlight(actionId: string): Promise<'ORIGINAL' | 'SELECTOR' | 'NOT_FOUND'> {
+    const action = this.timeline.actions.find((entry) => entry.id === actionId);
+    const page = this.page;
+    if (!action || !page || page.isClosed() || (!action.ref && !action.css)) return 'NOT_FOUND';
+    // L'élément par son nom (jamais la valeur saisie).
+    const label = action.technical.label ?? action.technical.name ?? action.technical.text ?? action.kind;
+    return page
+      .evaluate(
+        ({ ref, css, text }) =>
+          (
+            window as unknown as {
+              __qaCrawlerRecorder?: { highlight(ref?: string, css?: string, text?: string): string };
+            }
+          ).__qaCrawlerRecorder?.highlight(ref, css, text) ?? 'NOT_FOUND',
+        { ref: action.ref, css: action.css, text: label },
+      )
+      .then((found) => (found === 'ORIGINAL' || found === 'SELECTOR' ? found : 'NOT_FOUND'))
+      .catch(() => 'NOT_FOUND' as const);
+  }
+
+  /** La timeline a changé : le panneau, le bandeau (compteur, notification) et le journal (sans valeur). */
+  private changed(change: TimelineChange): void {
+    const action = change.action;
+    if (action && change.reason !== 'STATE')
+      this.emit(
+        'LIVE_ACTION_UPDATED',
+        `${change.reason} action ${String(action.index)} ${action.kind} ${action.status}`,
+        { action: action.id, status: action.status },
+      );
+    try {
+      this.options.onTimeline?.(change);
+    } catch {
+      // l'affichage ne casse jamais l'enregistrement
+    }
+    // ✓ Action enregistrée : une fois par action, quand elle est confirmée (ou sans validation possible).
+    const announce =
+      action !== undefined &&
+      !this.announced.has(action.id) &&
+      (action.status === 'CONFIRMED' || action.status === 'UNVERIFIED') &&
+      action.kind !== 'open';
+    if (announce) this.announced.add(action.id);
+    const page = this.page;
+    if (!page || page.isClosed()) return;
+    const info = {
+      count: this.timeline.actions.length,
+      startedAt: this.startedAt,
+      ...(announce
+        ? { toast: { title: action.status === 'CONFIRMED' ? 'ok' : 'recorded', text: action.description } }
+        : {}),
+      ...(action?.status === 'AMBIGUOUS' && !action.resolution
+        ? { toast: { title: 'ambiguous', text: action.description } }
+        : {}),
+    };
+    void page
+      .evaluate((value) => {
+        (
+          window as unknown as { __qaCrawlerRecorder?: { setInfo?(info: unknown): void } }
+        ).__qaCrawlerRecorder?.setInfo?.(value);
+      }, info)
+      .catch(() => undefined);
   }
 
   /** Le temps de chaque phase de l'arrêt (ms) : le bilan dit où passe le temps. */
@@ -349,6 +513,24 @@ export class HumanFlowRecorder {
   private watchPage(page: Page): void {
     // La session CDP est ouverte d'emblée : la première navigation n'attend pas sa création.
     this.cdp ??= this.openCdp(page);
+    // Un nouveau document a un nouveau bandeau : il reprend le minuteur, le compteur et la pause.
+    page.on('load', () => {
+      if (this.closed) return;
+      void page
+        .evaluate(
+          (value) => {
+            const bar = (
+              window as unknown as {
+                __qaCrawlerRecorder?: { setInfo?(info: unknown): void; setPaused(value: boolean): void };
+              }
+            ).__qaCrawlerRecorder;
+            bar?.setInfo?.({ count: value.count, startedAt: value.startedAt });
+            if (value.paused) bar?.setPaused(true);
+          },
+          { count: this.timeline.actions.length, startedAt: this.startedAt, paused: this.paused },
+        )
+        .catch(() => undefined);
+    });
     page.on('framenavigated', (frame) => {
       if (frame !== page.mainFrame()) return;
       const last = [...this.session.rawEvents].reverse().find((event) => event.type === 'navigation');
@@ -488,25 +670,37 @@ export class HumanFlowRecorder {
       } else if (event.control === 'resume') {
         this.paused = false;
         this.emit('RECORDING_RESUMED', 'resumed from the page');
-      } else void this.checkpoint(event.label);
+      } else if (event.control === 'undo') this.undo();
+      else void this.checkpoint(event.label);
+      this.changed({ reason: 'STATE' });
       return;
     }
     if (this.paused) return;
-    const captured = this.capture({ ...event, at: event.at ?? this.now() });
     // VALIDATION IMMÉDIATE : tant que l'élément original existe encore (jamais l'action rejouée).
     const ref = isObject(payload) && typeof payload.ref === 'string' ? payload.ref.slice(0, 40) : undefined;
+    const captured = this.capture({ ...event, at: event.at ?? this.now() }, ref);
     const validator = this.options.targetValidator;
     // Toute action reçue est connue du validateur : celle qui SUIT une action incertaine en est une preuve.
     if (captured && validator) validator.observe(captured);
     if (captured && validator && page && !captured.noise && (captured.element || captured.drag))
       this.track(
         validator.validate(page, captured, ref).then((result) => {
-          if (result) captured.targetValidation = result;
+          if (!result) return;
+          captured.targetValidation = result;
+          // L'interface n'attend jamais la validation : elle met à jour la ligne déjà affichée.
+          const action = this.timeline.onValidation(captured.id, result);
+          if (action)
+            this.changed({ reason: action.status === 'CONFIRMED' ? 'CONFIRMED' : 'UPDATED', action });
         }),
       );
     // Le texte saisi (données de test) : hors de la trace brute, dans un coffre en mémoire.
     const typed = captured ? typedValueOf(payload, captured) : undefined;
-    if (captured && typed !== undefined) this.typedValues.set(captured.id, typed);
+    if (captured && typed !== undefined) {
+      this.typedValues.set(captured.id, typed);
+      // Montrée dans le panneau seulement (jamais écrite, jamais pour un champ sensible).
+      const action = this.timeline.setTypedValue(captured.id, typed);
+      if (action) this.changed({ reason: 'UPDATED', action });
+    }
   }
 
   /**
@@ -519,6 +713,7 @@ export class HumanFlowRecorder {
 
   private capture(
     input: Omit<RawRecordedEvent, 'id' | 'sequence'> & { at: number },
+    ref?: string,
   ): RawRecordedEvent | undefined {
     if (this.closed) return undefined;
     const events = this.session.rawEvents;
@@ -554,6 +749,11 @@ export class HumanFlowRecorder {
       },
     );
     this.emit('RECORDER_DEBUG', rawEventDebugLine(event), { id: event.id });
+    // LA TIMELINE : la ligne apparaît tout de suite (la validation suit en arrière-plan).
+    const before = this.timeline.actions.length;
+    const live = this.timeline.onEvent(event, ref);
+    if (live)
+      this.changed({ reason: this.timeline.actions.length > before ? 'ADDED' : 'UPDATED', action: live });
     // Une action qui peut changer l'écran ou appeler le serveur : sa fenêtre réseau, puis l'écran observé.
     // Un clic sur un élément non reconnu est observé aussi : s'il change l'écran, c'est une action humaine.
     const observed = !event.noise || event.noise === NON_INTERACTIVE_NOISE;
@@ -779,7 +979,11 @@ export function sanitize(
       ? { key: payload.key }
       : {}),
     ...(typeof payload.label === 'string' ? { label: text(payload.label, 80) } : {}),
-    ...(control === 'stop' || control === 'pause' || control === 'resume' || control === 'checkpoint'
+    ...(control === 'stop' ||
+    control === 'pause' ||
+    control === 'resume' ||
+    control === 'checkpoint' ||
+    control === 'undo'
       ? { control }
       : {}),
     ...(typeof payload.noise === 'string' ? { noise: text(payload.noise, 80) } : {}),

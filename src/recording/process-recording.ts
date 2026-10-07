@@ -73,7 +73,7 @@ export interface RecordingResult {
  * Une fonction pure sur la session terminée : rejouable sur une trace enregistrée.
  */
 export function processRecording(
-  session: RecordingSession,
+  recorded: RecordingSession,
   config: ScenarioConfig,
   options: {
     language: 'fr' | 'en';
@@ -86,6 +86,8 @@ export function processRecording(
   const emit = (type: RecordingEventType, message: string): void => {
     options.onEvent?.({ type, at: new Date().toISOString(), message });
   };
+  // ↶ ANNULÉ par l'humain : ces événements restent dans la trace brute, jamais dans le flow.
+  const session = withoutUndone(recorded);
   const safety = new SafetyPolicy(config.safety);
   // RAW → ACTION CORRELATION : chaque navigation rattachée à l'action humaine qui l'a causée (un effet, pas un goto).
   const settings = config.recording.actionCorrelation;
@@ -284,6 +286,12 @@ export function processRecording(
     dependencies,
   });
   annotateSteps(built.flow, journey, normalized.kept);
+  // Les décisions de l'humain sur une ambiguïté (panneau) : visibles sur l'étape, jamais silencieuses.
+  for (const step of built.flow.steps) {
+    const events = session.rawEvents.filter((event) => step.rawEventIds.includes(event.id));
+    if (events.some((event) => event.userResolution)) step.userDecision = 'AMBIGUITY_CONFIRMED_BY_USER';
+    else if (events.some((event) => event.ambiguityIgnored)) step.userDecision = 'AMBIGUITY_LEFT_BY_USER';
+  }
   // FINAL RECORDING AUDIT : à partir des validations immédiates (un écran passé n'est jamais « NOT_FOUND »).
   const targetValidation = targetValidationReport(normalized.kept, journey, {
     enabled: config.recording.targetValidation.enabled,
@@ -588,4 +596,21 @@ export function describeFieldIdentity(identity: FieldIdentity): string {
   ]
     .filter(Boolean)
     .join(', ');
+}
+
+/** La session sans les événements annulés par l'humain (↶ Annuler) ; signalés par un avertissement. */
+function withoutUndone(session: RecordingSession): RecordingSession {
+  const undone = session.rawEvents.filter((event) => event.undone === true);
+  if (undone.length === 0) return session;
+  return {
+    ...session,
+    rawEvents: session.rawEvents.filter((event) => event.undone !== true),
+    warnings: [
+      ...session.warnings,
+      {
+        code: 'USER_UNDONE_ACTIONS',
+        message: `${String(undone.length)} raw event(s) removed by the user (undo): ${undone.map((event) => event.id).join(', ')} — kept in raw-recording.json, never in the flow`,
+      },
+    ],
+  };
 }

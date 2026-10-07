@@ -39,6 +39,9 @@ import { auditRecordingSemantics, targetAuditAdvisor, type SemanticAuditReport }
 import { RecordingTargetValidator, type TargetValidationStatus } from './target-validator.js';
 import { withSemanticGoal } from './validation-mode.js';
 import { recorderTrace } from './recorder-trace.js';
+import { RecorderPanel } from './recorder-panel.js';
+import { RecordingConsole, removeFlowStep, saveRecordedFlow } from './recording-console.js';
+import { describeFlowStep, reviewSteps, type PanelReplay } from './panel-state.js';
 
 export type RecordOutputFormat = 'yaml' | 'gherkin' | 'both';
 
@@ -61,7 +64,15 @@ export interface RecordRequest {
    * Ce que fait « l'humain » : par défaut, attendre qu'il arrête (bandeau, terminal,
    * fermeture). Les tests y jouent la démonstration avec Playwright.
    */
-  drive?: (session: { page: Page; recorder: HumanFlowRecorder }) => Promise<void>;
+  drive?: (session: { page: Page; recorder: HumanFlowRecorder; panel?: Page }) => Promise<void>;
+  /**
+   * LA REVUE après Stop, dans la fenêtre du recorder : rejouer, modifier, sauvegarder ; le navigateur
+   * reste ouvert jusqu'à « Fermer » (ou la fermeture de la fenêtre). La commande record l'active en
+   * mode interactif ; sans elle, l'enregistrement se termine comme avant.
+   */
+  review?: boolean;
+  /** Tests, intégrations : pilote la fenêtre pendant la revue ; la revue se termine quand il se termine. */
+  reviewDriver?: (session: { panel: Page; recorder: HumanFlowRecorder }) => Promise<void>;
   /** Un fournisseur d'intelligence injecté (tests, intégrations) : remplace ai.provider. */
   intelligenceProvider?: IntelligenceProvider;
   /** Le terminal : Entrée pour arrêter, « c » pour un point de contrôle… ; renvoie de quoi se détacher. */
@@ -90,6 +101,8 @@ export interface RecordOutcome {
   warnings: string[];
   /** RECORDING SEMANTIC AUDIT (semantic-audit.json). */
   audit?: SemanticAuditReport;
+  /** « Sauvegarder » (revue) : où le flow a été copié. */
+  saved?: { directory: string; files: string[] };
 }
 
 /**
@@ -177,23 +190,35 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         },
       })
     : undefined;
+  const language =
+    request.language ?? config.recording.language ?? (config.report.language === 'fr' ? 'fr' : 'en');
   const recorder = new HumanFlowRecorder({
     name: request.name,
     config,
+    language,
     onEvent,
     ...identity,
     ...(targetValidator ? { targetValidator } : {}),
+    // La timeline en direct : la fenêtre se redessine tout de suite (jamais après une analyse).
+    onTimeline: () => {
+      consoleUi?.render();
+    },
   });
   const browser = new BrowserManager(config.browser);
+  let consoleUi: RecordingConsole | undefined;
   const validate = request.validate ?? config.recording.validate;
   // La progression commence à l'arrêt : finalisation, flow, audits, rejeu, rapport.
   const progress = new ProgressTracker(
     'Finalizing the recording',
     Object.values(RECORDING_PHASES).filter((phase) => validate || phase !== RECORDING_PHASES.replay),
-    request.onProgress,
+    (update) => {
+      consoleUi?.onProgress(update);
+      request.onProgress?.(update);
+    },
   );
   let stopReason: StopReason = 'api';
   let detach: (() => void) | undefined;
+  let reviewing = request.review === true || request.reviewDriver !== undefined;
   try {
     const authenticator = createAuthenticator(config.auth, config.target.baseUrl, env, startUrl);
     // La fenêtre de connexion d'une popup SSO : remplie par le navigateur (httpAuth.origins + profil).
@@ -212,9 +237,27 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       timeout: config.exploration.navigationTimeoutMs,
     });
     await recorder.attach(context, page);
+    // LA FENÊTRE DU RECORDER : un contexte séparé (jamais capturé) ; elle ne bloque jamais l'enregistrement.
+    if (config.recording.panel && config.recording.overlay) {
+      try {
+        const panelPage = await browser.newIsolatedPage({ viewport: { width: 480, height: 860 } });
+        consoleUi = new RecordingConsole(
+          await RecorderPanel.open(panelPage, language),
+          recorder,
+          request.name,
+          language,
+        );
+        consoleUi.render();
+        await page.bringToFront().catch(() => undefined);
+      } catch (error) {
+        warnings.push(
+          `the recorder window could not open: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     detach = request.control?.(recorder);
     if (request.drive) {
-      await request.drive({ page, recorder });
+      await request.drive({ page, recorder, ...(consoleUi ? { panel: consoleUi.page } : {}) });
       recorder.requestStop('api');
     }
     stopReason = await recorder.stopped;
@@ -233,16 +276,18 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       message: error instanceof Error ? error.message : String(error),
     });
     await gateway?.close();
+    reviewing = false;
     throw error;
   } finally {
     detach?.();
-    progress.start(RECORDING_PHASES.browser);
-    await browser.close();
-    stopClock.mark('browser close');
+    consoleUi?.stopped();
+    // La revue garde le navigateur (et sa fenêtre) ouvert jusqu'à « Fermer ».
+    if (!reviewing) {
+      progress.start(RECORDING_PHASES.browser);
+      await browser.close();
+      stopClock.mark('browser close');
+    }
   }
-
-  const language =
-    request.language ?? config.recording.language ?? (config.report.language === 'fr' ? 'fr' : 'en');
   stopClock.mark('(pre-processing)');
   const result = await progress.run(RECORDING_PHASES.flow, () =>
     processRecording(recorder.session, config, {
@@ -272,7 +317,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     files[name] = name;
   };
   // La trace brute ne contient aucune saisie : formes, empreintes salées (le sel n'est jamais écrit), libellés.
-  await write('raw-recording.json', json({ ...sessionMeta(result), rawEvents: result.session.rawEvents }));
+  // Toute la trace, y compris les événements annulés par l'humain (marqués `undone`, exclus du flow).
+  await write('raw-recording.json', json({ ...sessionMeta(result), rawEvents: recorder.session.rawEvents }));
   await write(
     'semantic-recording.json',
     json({
@@ -498,20 +544,81 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   }
 
   let replay: ReplayOutcome = { status: 'NOT_VALIDATED' };
-  if (validate) {
-    progress.start(RECORDING_PHASES.replay, 'the generated flow is replayed in a new browser');
+  let saved: RecordOutcome['saved'];
+  // UN BROUILLON tant que l'humain ne l'a pas sauvegardé (revue) : jamais un flow de la mission d'office.
+  await write('recording-status.json', json({ status: 'DRAFT', recordedAt: result.session.startedAt }));
+  // L'ANALYSE (onglet séparé) : disponible une fois le flow écrit, jamais dans la timeline.
+  consoleUi?.setAnalysis(result, flowAudit, intelligence);
+  const runReplay = async (onStep?: (executed: number, total: number) => void): Promise<ReplayOutcome> => {
     onEvent({
       type: 'REPLAY_VALIDATION_STARTED',
       at: new Date().toISOString(),
       message: 'replaying the generated flow (dry run)',
     });
-    replay = await validateReplay(request, directory, result, env);
+    replay = await validateReplay(request, directory, result, env, {
+      // Rejoué depuis la revue : visible comme l'enregistrement (sinon sans fenêtre, comme avant).
+      headless: reviewing ? config.browser.headless : true,
+      ...(onStep ? { onStep } : {}),
+    });
     onEvent({
       type: replay.status === 'REPLAY_CONFIRMED' ? 'REPLAY_CONFIRMED' : 'REPLAY_FAILED',
       at: new Date().toISOString(),
       message: replay.reason ?? replay.status,
     });
+    return replay;
+  };
+  if (validate) {
+    progress.start(RECORDING_PHASES.replay, 'the generated flow is replayed in a new browser');
+    await runReplay();
     stopClock.mark('replay validation (--validate)');
+  }
+  // LA REVUE : Rejouer → Valider → Sauvegarder, dans la fenêtre du recorder (le navigateur reste ouvert).
+  if (reviewing && consoleUi) {
+    const ui = consoleUi;
+    const driverFailure = await ui.runReview({
+      result,
+      directory,
+      ...(request.reviewDriver ? { until: () => request.reviewDriver?.({ panel: ui.page, recorder }) } : {}),
+      actions: {
+        replay: async (onStep) => panelReplayOf(await runReplay(onStep), result, recorder, language),
+        remove: async (stepId) => {
+          if (!removeFlowStep(result, stepId, language)) return false;
+          if (format !== 'gherkin') await write('generated.flow.yaml', result.files.yaml);
+          if (format !== 'yaml') await write('generated.feature', result.files.feature);
+          const { intent: _intent, ...recordedFlow } = result.flow;
+          await write('recorded-flow.json', json(recordedFlow));
+          onEvent({
+            type: 'RECORDING_STEP_REMOVED',
+            at: new Date().toISOString(),
+            message: `step ${stepId} removed by the user: ${String(result.flow.steps.length)} step(s) left`,
+          });
+          replay = { status: 'NOT_VALIDATED' };
+          saved = undefined;
+          return true;
+        },
+        save: async () => {
+          saved = await saveRecordedFlow({
+            config,
+            name: request.name,
+            directory,
+            result,
+            replayStatus: replay.status,
+          });
+          files['recording-status.json'] = 'recording-status.json';
+          onEvent({
+            type: 'RECORDING_SAVED',
+            at: new Date().toISOString(),
+            message: `flow saved to ${saved.directory} (${saved.files.join(', ')}); replay ${replay.status}`,
+          });
+          return saved;
+        },
+      },
+    });
+    await ui.close();
+    await browser.close();
+    stopClock.mark('review');
+    if (driverFailure !== undefined)
+      throw driverFailure instanceof Error ? driverFailure : new Error('the review driver failed');
   }
   result.session.status = 'COMPLETED';
   const stopTiming = stopTimingOf(stopClock, recorder.stopTimings, targetValidator?.deferredAudits ?? 0);
@@ -545,6 +652,80 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     stopReason,
     warnings,
     ...(semanticAudit ? { audit: semanticAudit } : {}),
+    ...(saved ? { saved } : {}),
+  };
+}
+
+/** Le résultat d'un rejeu, dit pour la fenêtre : l'étape qui échoue en mots simples, le détail ensuite. */
+function panelReplayOf(
+  outcome: ReplayOutcome,
+  result: RecordingResult,
+  recorder: HumanFlowRecorder,
+  language: 'fr' | 'en',
+): PanelReplay {
+  const french = language === 'fr';
+  // Les ACTIONS rejouées (les vérifications ajoutées ne sont pas des actions de l'humain).
+  const steps = (outcome.steps ?? []).filter(
+    (step) => result.flow.steps[step.index - 1]?.step.kind !== 'expect',
+  );
+  const total = steps.length;
+  const executed = steps.filter((step) => step.outcome === 'MATCHED').length;
+  const review = reviewSteps(result.flow, recorder.timeline.actions, language);
+  const describe = (index: number): { description: string; stepId?: string } => {
+    const flowStep = result.flow.steps[index - 1];
+    if (!flowStep) return { description: `#${String(index)}` };
+    const twin = review.actions.find((action) => action.id === flowStep.id);
+    return {
+      description: twin?.description ?? describeFlowStep(flowStep.step, language),
+      stepId: flowStep.id,
+    };
+  };
+  if (outcome.status === 'REPLAY_CONFIRMED')
+    return {
+      status: 'PASSED',
+      executed,
+      total,
+      checks: [
+        { ok: true, text: french ? 'Toutes les cibles retrouvées' : 'Every target found' },
+        {
+          ok: !steps.some((step) => step.outcome === 'AMBIGUOUS'),
+          text: french ? 'Aucune ambiguïté' : 'No ambiguity',
+        },
+        { ok: true, text: french ? 'Navigation conforme' : 'Navigation as recorded' },
+      ],
+      ...(outcome.report ? { report: outcome.report } : {}),
+    };
+  const failing =
+    steps.find((step) => step.outcome !== 'MATCHED') ??
+    (outcome.steps ?? []).find((step) => step.outcome !== 'MATCHED');
+  const cause: Record<string, [string, string]> = {
+    NOT_FOUND: ['élément introuvable', 'element not found'],
+    AMBIGUOUS: ['plusieurs éléments correspondent', 'several elements match'],
+    BLOCKED_BY_POLICY: ['bloquée par la politique de sécurité', 'blocked by the safety policy'],
+    ASSERTION_MISMATCH: ['le résultat attendu n’est pas observé', 'the expected result is not observed'],
+    NOT_VERIFIED: ['étape non atteinte', 'step not reached'],
+  };
+  const index = failing?.index ?? Math.min(executed + 1, Math.max(total, 1));
+  const said = describe(index);
+  const reason = failing ? cause[failing.outcome] : undefined;
+  return {
+    status: 'FAILED',
+    executed,
+    total,
+    failure: {
+      index,
+      ...(said.stepId ? { stepId: said.stepId } : {}),
+      description: said.description,
+      cause: reason ? reason[french ? 0 : 1] : (outcome.reason ?? outcome.status),
+      details: [
+        ...(failing
+          ? [`${failing.outcome} — ${failing.label}`, ...failing.reasons, ...failing.evidence]
+          : []),
+        ...(outcome.reason ? [outcome.reason] : []),
+        ...(outcome.report ? [outcome.report] : []),
+      ],
+    },
+    ...(outcome.report ? { report: outcome.report } : {}),
   };
 }
 
@@ -662,7 +843,10 @@ async function validateReplay(
   directory: string,
   result: RecordingResult,
   env: NodeJS.ProcessEnv,
+  options: { headless?: boolean; onStep?: (executed: number, total: number) => void } = {},
 ): Promise<ReplayOutcome> {
+  const total = result.flow.steps.filter((item) => item.step.kind !== 'expect').length;
+  let executed = 0;
   const scenarioFile = path.join(directory, 'replay.flow.yaml');
   await writeFile(scenarioFile, result.files.yaml, 'utf8');
   try {
@@ -673,19 +857,41 @@ async function validateReplay(
         ...request.overrides,
         ...(request.missionFile ? {} : { baseUrl: new URL(result.session.startUrl).origin }),
         reportsDir: path.join(directory, 'replay'),
-        headless: true,
+        headless: options.headless ?? true,
       },
       env,
       useHistory: false,
       isolatedMemory: true,
       outputFormat: 'yaml',
+      // La progression étape par étape (la fenêtre de revue).
+      onEvent: (event) => {
+        if (event.type !== 'INTENT_MATCHED') return;
+        const position = Number(event.intentId?.split('#').pop());
+        if (result.flow.steps[position - 1]?.step.kind === 'expect') return;
+        executed += 1;
+        options.onStep?.(Math.min(executed, total), total);
+      },
     });
+    const flow = outcome.flows[0];
+    const steps: NonNullable<ReplayOutcome['steps']> = flow
+      ? flow.graph.intents.map((intent) => {
+          const finding = flow.outcome.findings.find((entry) => entry.intentId === intent.id);
+          return {
+            index: intent.index,
+            label: intent.label,
+            outcome: finding?.outcome ?? 'NOT_VERIFIED',
+            reasons: finding?.reasons ?? [],
+            evidence: finding?.evidence ?? [],
+          };
+        })
+      : [];
     const confirmed = outcome.status === 'FULLY_MATCHED';
     const report = outcome.flows[0]
       ? path.relative(directory, path.join(outcome.flows[0].directory, 'index.html'))
       : undefined;
     return {
       status: confirmed ? 'REPLAY_CONFIRMED' : 'REPLAY_FAILED',
+      steps,
       dryRunStatus: outcome.status,
       reason: confirmed
         ? 'every step was found and executed on the application'

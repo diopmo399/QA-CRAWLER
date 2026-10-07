@@ -1,0 +1,343 @@
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import type { Page } from 'playwright';
+import type { ScenarioConfig } from '../config/config.js';
+import { slug } from '../knowledge/signatures.js';
+import type { ProgressUpdate } from '../progress/progress.js';
+import type { FlowAuditReport } from './flow-audit.js';
+import type { HumanFlowRecorder } from './human-flow-recorder.js';
+import {
+  summaryOf,
+  reviewSteps,
+  liveStep,
+  type PanelAnalysis,
+  type PanelReplay,
+  type PanelState,
+} from './panel-state.js';
+import { generateFlowFiles } from './recorded-flow.js';
+import type { RecorderPanel, PanelCommand } from './recorder-panel.js';
+import type { RecordingIntelligence } from './recording-intelligence.js';
+import type { RecordingResult } from './process-recording.js';
+import { TEST_DATA_FILE } from './process-recording.js';
+
+/** Ce que la revue sait faire (fourni par l'orchestrateur) : rejouer, retirer une étape, sauvegarder. */
+export interface ReviewActions {
+  replay: (onStep: (executed: number, total: number) => void) => Promise<PanelReplay>;
+  remove: (stepId: string) => Promise<boolean>;
+  save: () => Promise<{ directory: string; files: string[] }>;
+}
+
+/**
+ * LA CONSOLE DU RECORDER : relie la fenêtre « QA-CRAWLER Recorder » au recorder (pendant
+ * l'enregistrement) puis à la revue (après Stop). Elle construit l'état affiché ; elle ne décide
+ * de rien : chaque commande passe par le recorder ou par l'orchestrateur.
+ */
+export class RecordingConsole {
+  private phase: PanelState['phase'] = 'RECORDING';
+  private progress: PanelState['progress'];
+  private highlight: PanelState['highlight'];
+  private notice: PanelState['notice'];
+  private replay: PanelReplay | undefined;
+  private saved: PanelState['saved'];
+  private analysis: PanelAnalysis = { available: false, intents: [], findings: [], aiCandidates: 0 };
+  private endedAt: number | undefined;
+  private result: RecordingResult | undefined;
+  private directory: string | undefined;
+  private review: ((command: PanelCommand) => Promise<void>) | undefined;
+  private busy = false;
+
+  constructor(
+    private readonly panel: RecorderPanel,
+    private readonly recorder: HumanFlowRecorder,
+    private readonly name: string,
+    private readonly language: 'fr' | 'en',
+  ) {
+    panel.onCommand((command) => {
+      void this.handle(command);
+    });
+  }
+
+  /** La page de la fenêtre (tests, intégrations). */
+  get page(): Page {
+    return this.panel.page;
+  }
+
+  render(): void {
+    this.panel.render(this.state());
+  }
+
+  async close(): Promise<void> {
+    await this.panel.close();
+  }
+
+  /** La progression de la finalisation (après Stop). */
+  onProgress(update: ProgressUpdate): void {
+    if (this.phase === 'RECORDING' || this.phase === 'PAUSED') this.phase = 'FINALIZING';
+    this.endedAt ??= Date.now();
+    this.progress = {
+      label: update.label,
+      step: Math.min(update.step, update.total),
+      total: update.total,
+      ...(update.detail ? { detail: update.detail } : {}),
+    };
+    this.render();
+  }
+
+  stopped(): void {
+    this.phase = 'FINALIZING';
+    this.endedAt ??= Date.now();
+    this.render();
+  }
+
+  /** L'ANALYSE (onglet séparé) : intention métier, constats, suggestions — jamais dans la timeline. */
+  setAnalysis(
+    result: RecordingResult,
+    flowAudit?: FlowAuditReport,
+    intelligence?: RecordingIntelligence,
+  ): void {
+    const intent = result.flow.intent;
+    this.analysis = {
+      available: true,
+      intents: intent.workflow
+        ? [
+            {
+              label: intent.workflow,
+              ...(intent.api ? { detail: intent.api } : {}),
+              confidence: intent.confidence,
+              evidence: [
+                ...intent.evidence,
+                ...intent.transitions.map(
+                  (transition) => `${transition.entity}: ${transition.from} → ${transition.to}`,
+                ),
+              ],
+            },
+          ]
+        : [],
+      findings: (flowAudit?.findings ?? []).map((finding) => ({
+        severity: finding.severity,
+        message: finding.message,
+        ...(finding.suggestion ? { suggestion: finding.suggestion } : {}),
+        origin: finding.origin,
+      })),
+      aiCandidates: intelligence?.candidates.length ?? 0,
+    };
+    this.render();
+  }
+
+  /**
+   * LA REVUE après Stop : Rejouer → Valider → Sauvegarder. Se termine sur « Fermer », la fermeture
+   * de la fenêtre, ou quand `until` se termine (tests, intégrations).
+   */
+  async runReview(input: {
+    result: RecordingResult;
+    directory: string;
+    actions: ReviewActions;
+    /** Lancé une fois la revue prête (ses commandes acceptées) ; la revue se termine avec lui. */
+    until?: () => Promise<unknown> | undefined;
+  }): Promise<unknown> {
+    this.result = input.result;
+    this.directory = input.directory;
+    this.phase = 'REVIEW';
+    this.progress = undefined;
+    this.endedAt ??= Date.now();
+    this.render();
+    let failure: unknown;
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        this.review = undefined;
+        resolve();
+      };
+      this.review = async (command) => {
+        if (command.type === 'finish') {
+          finish();
+          return;
+        }
+        if (this.busy) return;
+        this.busy = true;
+        try {
+          if (command.type === 'replay') {
+            this.replay = { status: 'RUNNING', executed: 0, total: 0 };
+            this.render();
+            this.replay = await input.actions.replay((executed, total) => {
+              this.replay = { status: 'RUNNING', executed, total };
+              this.render();
+            });
+          } else if (command.type === 'remove' && command.id) {
+            // Le flow change : un rejeu fait avant ne le valide plus.
+            if (await input.actions.remove(command.id)) {
+              this.replay = undefined;
+              this.saved = undefined;
+            }
+          } else if (command.type === 'save') {
+            this.saved = await input.actions.save();
+          }
+        } finally {
+          this.busy = false;
+          this.render();
+        }
+      };
+      void this.panel.closed.then(finish);
+      const driven = input.until?.();
+      if (driven)
+        void driven.then(finish, (error: unknown) => {
+          failure = error;
+          finish();
+        });
+    });
+    // L'erreur du pilote (tests, intégrations) : rendue à l'appelant, jamais avalée.
+    return failure;
+  }
+
+  private async handle(command: PanelCommand): Promise<void> {
+    const recording = this.phase === 'RECORDING' || this.phase === 'PAUSED';
+    switch (command.type) {
+      case 'pause':
+        if (recording) await this.recorder.pause();
+        this.phase = this.recorder.isPaused ? 'PAUSED' : this.phase;
+        break;
+      case 'resume':
+        if (recording) await this.recorder.resume();
+        if (recording) this.phase = 'RECORDING';
+        break;
+      case 'stop':
+        if (recording) this.recorder.requestStop('overlay');
+        break;
+      case 'undo':
+        if (recording) this.recorder.undo();
+        break;
+      case 'select': {
+        if (!command.id) break;
+        const live = this.liveIdOf(command.id);
+        const result = live ? await this.recorder.highlight(live) : 'NOT_FOUND';
+        this.highlight = { actionId: command.id, result };
+        break;
+      }
+      case 'resolve': {
+        if (!command.id) break;
+        const outcome = this.recorder.resolveAmbiguity(command.id, command.candidate ?? -1);
+        this.notice =
+          'error' in outcome ? { actionId: command.id, kind: 'error', message: outcome.error } : undefined;
+        break;
+      }
+      case 'ignore':
+        if (command.id) this.recorder.ignoreAmbiguity(command.id);
+        break;
+      default:
+        await this.review?.(command);
+        return;
+    }
+    this.render();
+  }
+
+  /** Une étape de la revue → l'action en direct qui vient des mêmes événements bruts (mise en évidence). */
+  private liveIdOf(id: string): string | undefined {
+    const live = this.recorder.timeline.actions;
+    if (live.some((action) => action.id === id)) return id;
+    const step = this.result?.flow.steps.find((item) => item.id === id);
+    return step
+      ? live.find((action) => action.rawEventIds.some((raw) => step.rawEventIds.includes(raw)))?.id
+      : undefined;
+  }
+
+  state(): PanelState {
+    const live = this.recorder.timeline;
+    const inReview = this.phase === 'REVIEW' && this.result !== undefined;
+    const review =
+      inReview && this.result ? reviewSteps(this.result.flow, live.actions, this.language) : undefined;
+    const actions = review ? review.actions : live.actions.map(liveStep);
+    const phase = this.phase === 'RECORDING' && this.recorder.isPaused ? 'PAUSED' : this.phase;
+    return {
+      language: this.language,
+      name: this.name,
+      phase,
+      startedAt: this.recorder.startedAt,
+      ...(this.endedAt !== undefined ? { endedAt: this.endedAt } : {}),
+      actions,
+      checks: review?.checks ?? [],
+      summary: review ? summaryOf(actions) : live.summary(),
+      quality: live.quality(),
+      ...(this.progress ? { progress: this.progress } : {}),
+      ...(this.highlight ? { highlight: this.highlight } : {}),
+      ...(this.notice ? { notice: this.notice } : {}),
+      ...(this.replay ? { replay: this.replay } : {}),
+      ...(this.saved ? { saved: this.saved } : {}),
+      analysis: this.analysis,
+      ...(this.directory ? { directory: this.directory } : {}),
+    };
+  }
+}
+
+/**
+ * ✎ MODIFIER : retire une étape d'ACTION du flow (et les vérifications qui en dépendent), puis
+ * régénère flow.yaml et .feature depuis le même modèle. Une vérification seule n'est jamais retirée ici.
+ */
+export function removeFlowStep(result: RecordingResult, stepId: string, language: 'fr' | 'en'): boolean {
+  const target = result.flow.steps.find((item) => item.id === stepId);
+  if (!target || target.step.kind === 'expect') return false;
+  const actionIds = new Set(target.actionIds);
+  result.flow.steps = result.flow.steps.filter(
+    (item) =>
+      item !== target && !(item.step.kind === 'expect' && item.actionIds.some((id) => actionIds.has(id))),
+  );
+  const hasTestData = result.testData !== undefined && Object.keys(result.testData.set.values).length > 0;
+  result.files = generateFlowFiles(result.flow, {
+    language,
+    recordedAt: result.session.startedAt,
+    ...(hasTestData ? { testDataFile: TEST_DATA_FILE } : {}),
+  });
+  return true;
+}
+
+/**
+ * 💾 SAUVEGARDER : le brouillon (recordings/<nom>/) devient un flow de la mission, copié dans
+ * `recording.flowsDirectory` (par défaut flows/ à côté des rapports) avec son jeu de données.
+ */
+export async function saveRecordedFlow(input: {
+  config: ScenarioConfig;
+  name: string;
+  directory: string;
+  result: RecordingResult;
+  replayStatus: string;
+}): Promise<{ directory: string; files: string[] }> {
+  const base = slug(input.name) || 'recording';
+  const root =
+    input.config.recording.flowsDirectory ??
+    path.join(path.dirname(path.resolve(input.config.output.reportsDir)), 'flows');
+  const target = path.join(root, base);
+  await mkdir(target, { recursive: true });
+  const files: string[] = [];
+  const format = input.config.recording.outputFormat;
+  if (format !== 'gherkin') {
+    await writeFile(path.join(target, `${base}.flow.yaml`), input.result.files.yaml, 'utf8');
+    files.push(`${base}.flow.yaml`);
+  }
+  if (format !== 'yaml') {
+    await writeFile(path.join(target, `${base}.feature`), input.result.files.feature, 'utf8');
+    files.push(`${base}.feature`);
+  }
+  const hasTestData =
+    input.result.testData !== undefined && Object.keys(input.result.testData.set.values).length > 0;
+  if (hasTestData) {
+    await copyFile(path.join(input.directory, TEST_DATA_FILE), path.join(target, TEST_DATA_FILE));
+    files.push(TEST_DATA_FILE);
+  }
+  await writeFile(
+    path.join(input.directory, 'recording-status.json'),
+    `${JSON.stringify(
+      {
+        status: 'SAVED',
+        savedAt: new Date().toISOString(),
+        savedTo: target,
+        files,
+        replay: input.replayStatus,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+  return { directory: target, files };
+}

@@ -50,6 +50,16 @@ export class BrowserManager {
     return this.context.newPage();
   }
 
+  /**
+   * Une page dans un contexte SÉPARÉ du même navigateur (une autre fenêtre) : ni cookies, ni scripts,
+   * ni écouteurs partagés avec le contexte de l'application (le panneau du recorder, jamais capturé).
+   */
+  async newIsolatedPage(options: BrowserContextOptions = {}): Promise<Page> {
+    if (!this.browser) throw new Error('BrowserManager.start() must be called first');
+    const context = await this.browser.newContext({ acceptDownloads: false, ...options });
+    return context.newPage();
+  }
+
   get browserVersion(): string | undefined {
     return this.browser?.version();
   }
