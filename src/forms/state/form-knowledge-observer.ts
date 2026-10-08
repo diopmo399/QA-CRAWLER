@@ -2,6 +2,7 @@ import type { Page, Request, Response } from 'playwright';
 import {
   isStateCode,
   isStateKey,
+  type ExchangeIdentifier,
   type FieldShape,
   type FunctionalExchange,
   type StateCode,
@@ -48,6 +49,8 @@ export class FormKnowledgeObserver implements PageObserver {
     for (const window of this.windows.values()) if (window.length < 50) window.push(exchange);
     if (this.functional.size > 0 && this.salt !== undefined) {
       const entry: FunctionalExchange = { method: request.method(), path: pathOf(request.url()) };
+      const pathId = pathIdentifierOf(entry.path, this.salt);
+      if (pathId) entry.identifiers = [pathId];
       if (entry.method !== 'GET' && entry.method !== 'HEAD') {
         const body = parseJson(safePostData(request));
         const fields = shapeOf(body, this.salt);
@@ -65,6 +68,17 @@ export class FormKnowledgeObserver implements PageObserver {
     if (!entry) return;
     this.pending.delete(response.request());
     entry.status = response.status();
+    const salt = this.salt;
+    // L'identifiant d'une création donné par l'en-tête Location (/api/demandes/12345).
+    const location = response.headers().location;
+    if (salt !== undefined && location && entry.status < 400) {
+      const fromLocation = pathIdentifierOf(pathOf(new URL(location, response.url()).href), salt);
+      if (fromLocation)
+        entry.identifiers = [
+          ...(entry.identifiers ?? []),
+          { ...fromLocation, field: '(location)', source: 'location' },
+        ];
+    }
     // Le corps n'est lu que pour sa forme (jamais gardé) ; d'une lecture (GET), seulement le code d'état.
     if (!/json/i.test(response.headers()['content-type'] ?? '')) return;
     const read = response
@@ -78,6 +92,11 @@ export class FormKnowledgeObserver implements PageObserver {
         if (text.length > 200_000) return;
         const fields = shapeOf(body);
         if (fields) entry.responseFields = fields;
+        // L'écriture acceptée : ses identifiants (une création renvoie l'id de l'entité).
+        if (salt !== undefined && (entry.status ?? 0) < 400) {
+          const found = identifiersOf(body, salt);
+          if (found.length > 0) entry.identifiers = [...(entry.identifiers ?? []), ...found];
+        }
         const code = errorCodeOf(body);
         if (code && entry.status !== undefined && entry.status >= 400) entry.errorCode = code;
       })
@@ -204,4 +223,52 @@ export function stateCodeOf(body: unknown): StateCode | undefined {
   for (const [key, value] of Object.entries(body as Record<string, unknown>).slice(0, 80))
     if (isStateKey(key) && isStateCode(value)) return { field: key, code: value };
   return undefined;
+}
+
+/** Les clés qui portent un identifiant (id, uuid, reference, numero, demandeId, requestNumber…). */
+const IDENTIFIER_KEY = /^(id|uuid|guid|ref|reference|numero|number|no|code|key)$/i;
+const IDENTIFIER_SUFFIX = /[a-z](Id|ID|Uuid|Ref|Reference|Number|Numero|No)$/;
+/** Jamais un identifiant : un secret, un jeton, une session. */
+const SENSITIVE_KEY = /(token|secret|password|pass|pwd|session|auth|otp|cookie|signature|key$)/i;
+/** La forme d'un identifiant affichable : nombre, code court (DEM-2026-001), uuid. */
+const IDENTIFIER_VALUE = /^[A-Za-z0-9][A-Za-z0-9_\-./#]{0,39}$/;
+
+/**
+ * Les identifiants d'un corps JSON : au premier niveau et dans un objet enveloppe (data, result,
+ * item, entity, payload). Seules leurs empreintes sont sûres ; la valeur n'est gardée que si elle a
+ * la forme d'un identifiant.
+ */
+export function identifiersOf(body: unknown, salt: string): ExchangeIdentifier[] {
+  const found: ExchangeIdentifier[] = [];
+  const visit = (value: unknown, prefix: string): void => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    for (const [key, field] of Object.entries(value as Record<string, unknown>).slice(0, 80)) {
+      if (prefix === '' && /^(data|result|item|entity|payload|content)$/i.test(key)) visit(field, `${key}.`);
+      if (SENSITIVE_KEY.test(key) && !/^(id|key)$/i.test(key)) continue;
+      if (!IDENTIFIER_KEY.test(key) && !IDENTIFIER_SUFFIX.test(key)) continue;
+      if (typeof field !== 'string' && typeof field !== 'number') continue;
+      const text = String(field).trim();
+      if (text === '' || text.length > 64) continue;
+      found.push({
+        field: `${prefix}${key}`,
+        digest: valueDigest(text, salt),
+        ...(IDENTIFIER_VALUE.test(text) ? { value: text } : {}),
+        source: 'response',
+      });
+      if (found.length >= 8) return;
+    }
+  };
+  visit(body, '');
+  return found;
+}
+
+/** /api/demandes/12345 → l'identifiant 12345 (le dernier segment numérique, uuid ou code). */
+export function pathIdentifierOf(path: string, salt: string): ExchangeIdentifier | undefined {
+  const segments = path.split('/').filter(Boolean);
+  const last = segments.at(-1);
+  if (!last || segments.length < 2) return undefined;
+  const id =
+    /^\d+$/.test(last) || /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(last) || /^[A-Z]{2,}-[A-Z0-9-]+$/.test(last);
+  if (!id) return undefined;
+  return { field: '(path)', digest: valueDigest(last, salt), value: last, source: 'path' };
 }

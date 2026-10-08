@@ -1275,6 +1275,15 @@ const recordingSchema = z
      * Playwright n'intercepte ni ne rejoue jamais un geste : il localise l'élément réellement touché.
      */
     mode: z.enum(['current', 'playwright', 'hybrid']).default('current'),
+    /**
+     * L'INTERPRÉTATION MÉTIER du parcours (créer, rechercher, ouvrir une entité) : une couche au-dessus
+     * du flow enregistré (business-flow.json), jamais à sa place. ai : une ambiguïté (plusieurs entités
+     * possibles) peut être soumise à l'IA (ai.mode ≠ OFF), qui ne choisit que parmi les candidats observés.
+     */
+    business: z
+      .object({ enabled: z.boolean().default(true), ai: z.boolean().default(true) })
+      .strict()
+      .default({}),
     playwrightRecording: z.boolean().default(false),
     /** Le bandeau « ● RECORDING » (Stop, Checkpoint, Pause) dans la page. */
     overlay: z.boolean().default(true),

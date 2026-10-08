@@ -1,3 +1,6 @@
+import { detectBusinessEvents, type BusinessDetection } from './business/business-event-detector.js';
+import { buildBusinessFlow } from './business/business-flow.js';
+import type { BusinessFlowModel } from './business/model.js';
 import { detectDuplicateTargetActions } from './duplicate-target.js';
 import { validateRecordingConsistency, type RecordingConsistencyReport } from './recording-consistency.js';
 import type { ScenarioConfig } from '../config/config.js';
@@ -58,6 +61,11 @@ export interface RecordingResult {
     files: GeneratedFiles;
     removed: { actionId: string; label: string; reason: string }[];
   };
+  /**
+   * BUSINESS FLOW (absent si recording.business.enabled vaut false) : ce que le parcours signifie
+   * (créer, rechercher, ouvrir une entité), relié aux actions enregistrées — jamais à leur place.
+   */
+  business?: { detection: BusinessDetection; model: BusinessFlowModel };
   /** RECORDED TEST DATA (absent si recording.testData.enabled vaut false) : le jeu de données du flow. */
   testData?: RecordedTestDataResult;
   session: RecordingSession;
@@ -81,6 +89,8 @@ export function processRecording(
     onEvent?: (event: RecordingEvent) => void;
     /** Les textes saisis (champs non sensibles), par événement brut : jamais dans la trace. */
     typedValues?: ReadonlyMap<string, string>;
+    /** L'empreinte salée de la session (la même que celle des saisies et des réponses). */
+    digest?: (value: string) => string;
   },
 ): RecordingResult {
   const emit = (type: RecordingEventType, message: string): void => {
@@ -390,11 +400,29 @@ export function processRecording(
       actionId: issue.actionId,
     })),
   ];
+  // BUSINESS INTERPRETATION (déterministe, au-dessus du flow, jamais à sa place).
+  let business: RecordingResult['business'];
+  if (config.recording.business.enabled) {
+    const detection = detectBusinessEvents({
+      actions: normalized.kept,
+      states: session.states,
+      rawEvents: session.rawEvents,
+      steps: built.flow.steps,
+      ...(options.typedValues ? { typedValues: options.typedValues } : {}),
+      ...(options.digest ? { digest: options.digest } : {}),
+    });
+    business = { detection, model: buildBusinessFlow(session.name, detection) };
+    emit(
+      'BUSINESS_FLOW_DETECTED',
+      `${String(business.model.steps.length)} business step(s): ${business.model.steps.map((step) => `${step.action.toUpperCase()} ${step.entity ?? '?'} (${step.status})`).join(' → ') || 'none'}${business.model.unresolved.length ? `; ${String(business.model.unresolved.length)} unresolved` : ''}`,
+    );
+  }
   return {
     session,
     normalized,
     flow: built.flow,
     files,
+    ...(business ? { business } : {}),
     ...(correlation ? { correlation } : {}),
     ...(testData ? { testData } : {}),
     journey,

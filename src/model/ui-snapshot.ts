@@ -175,6 +175,11 @@ export interface PageStructure {
 export interface UiSignals {
   /** Textes des alertes, bannières d'erreur et snackbars visibles (5 au plus). */
   alerts: string[];
+  /**
+   * Messages de statut (role="status", aria-live="polite") : « Demande 12345 créée ». Séparés des
+   * alertes (les oracles d'anomalie ne les lisent pas).
+   */
+  statuses?: string[];
   /** Une roue de chargement, une barre de progression ou une zone aria-busy est visible. */
   busy: boolean;
   /** Rien à lire ni à faire à l'écran. */

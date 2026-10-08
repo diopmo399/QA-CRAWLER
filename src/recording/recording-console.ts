@@ -199,6 +199,7 @@ export class RecordingConsole {
       })),
       aiCandidates: intelligence?.candidates.length ?? 0,
       ...(running ? { running: true } : {}),
+      ...(result.business ? { business: businessOf(result) } : {}),
     };
     this.render();
   }
@@ -441,4 +442,34 @@ export async function saveRecordedFlow(input: {
     'utf8',
   );
   return { directory: target, files };
+}
+
+/** Le flow métier, dit pour la fenêtre : chaque étape, ses actions enregistrées, l'observé et le déduit. */
+function businessOf(result: RecordingResult): NonNullable<PanelAnalysis['business']> {
+  const model = result.business?.model;
+  const labels = new Map(
+    result.flow.steps.map((step, index) => [step.id, `${String(index + 1)}. ${step.label}`]),
+  );
+  const recorded = (ids: readonly string[]): string[] => ids.map((id) => labels.get(id) ?? id);
+  return {
+    steps: (model?.steps ?? []).map((step) => ({
+      action: step.action,
+      entity: step.entity ?? '?',
+      status: step.status,
+      confidence: step.confidence,
+      ...(step.outputs ? { output: step.outputs.id } : {}),
+      ...(step.outputs?.value !== undefined ? { outputValue: step.outputs.value } : {}),
+      ...(step.reference ? { reference: step.reference } : {}),
+      recorded: recorded(step.recordedActions),
+      observed: [...step.evidence.network, ...step.evidence.dom, ...step.evidence.navigation],
+      deduced: step.evidence.context,
+      ai: step.analyzer === 'AI_PROPOSAL',
+    })),
+    unresolved: (model?.unresolved ?? []).map((event) => ({
+      type: event.type,
+      status: event.status,
+      ...(event.candidates ? { candidates: event.candidates } : {}),
+      recorded: recorded(event.stepIds),
+    })),
+  };
 }

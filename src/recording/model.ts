@@ -470,6 +470,8 @@ export interface RecordedState {
   title: string;
   headings: string[];
   alerts: string[];
+  /** Messages de statut (role="status") : la confirmation d'une création, sans être une alerte. */
+  statuses?: string[];
   invalidFields: number;
   dialogs: string[];
   /** Rôle + nom des contrôles visibles (pour savoir ce qui était atteignable). */
@@ -713,6 +715,7 @@ export type RecordingEventType =
   /** QA_DEBUG : la trace déterministe du recorder ([RECORDER] RAW EVENT / ELEMENT / VALIDATION / RECORDED / EVENT IGNORED). */
   | 'RECORDER_DEBUG'
   | 'RECORDING_SOURCE'
+  | 'BUSINESS_FLOW_DETECTED'
   /** La timeline en direct (une action ajoutée, validée, annulée, résolue). */
   | 'LIVE_ACTION_UPDATED'
   | 'ACTION_UNDONE'

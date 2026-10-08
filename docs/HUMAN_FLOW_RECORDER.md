@@ -1085,6 +1085,58 @@ steps:
 
 Événement : `RECORDING_FLOW_AUDITED`. Configuration : `recording.flowAudit: { enabled, ai, maxCalls }`.
 
+## Parcours métier observable (`business-flow.json`)
+
+Le recording reste celui de Playwright (`recorded-flow.json`, `generated.flow.yaml`, sélecteurs,
+validation et réparation des cibles : inchangés). Une couche s'y **ajoute** — elle ne le remplace
+jamais :
+
+```
+OBSERVATION TECHNIQUE (actions, DOM, navigation, réseau)
+  → INTERPRÉTATION MÉTIER (BusinessEventDetector + EntityMemory)
+    → FLOW MÉTIER (BusinessFlowModel, relié aux étapes enregistrées)
+      → EXÉCUTION PLAYWRIGHT (le flow enregistré, inchangé)
+```
+
+**Événements métier** : `ENTITY_CREATED`, `ENTITY_SEARCHED`, `ENTITY_OPENED`, `ENTITY_UPDATED`,
+`ENTITY_DELETED`. Une réponse HTTP seule ne fait jamais une création : méthode, route d'API
+(`/api/demandes` → `demande`), statut, identifiant de la réponse (`id`, `data.reference`, en-tête
+`Location`), message affiché (« Demande 12345 créée », y compris `role="status"`), libellé du
+bouton (« Créer »), navigation (`/demandes/12345`) et actions précédentes (« Nouvelle demande »)
+sont pesés ensemble.
+
+**Mémoire des entités** : une création retenue produit une référence runtime
+(`$created.demande.id`, puis `.id2`…). Une saisie plus loin dont l'empreinte salée (ou la valeur)
+est celle de cet identifiant devient une **recherche** de l'entité (`SEARCH_REFERENCE`) ; le clic
+sur le résultat qui porte l'identifiant (texte, lien, route, `GET /api/demandes/12345`) devient
+son **ouverture** (`OPEN_REFERENCE`).
+
+**Confiance** : `CONFIRMED` ≥ 0,85, `PROBABLE` ≥ 0,60, sinon `UNKNOWN` ; `AMBIGUOUS` quand plusieurs
+entités sont possibles (API `dossiers`, écran « demande »). Seuls `CONFIRMED` et `PROBABLE`
+deviennent des étapes métier et des références ; le reste va dans `unresolved`, jamais une vérité.
+
+**IA facultative** (`recording.business.ai`, `ai.mode` ≠ OFF) : seulement pour une ambiguïté, en
+arrière-plan pendant la revue. Elle **choisit parmi les entités observées** ; un choix hors des
+candidats est rejeté, et un choix accepté reste `PROBABLE` (`analyzer: AI_PROPOSAL`). Sans IA,
+tout fonctionne.
+
+**Réseau et confidentialité** : des réponses d'écriture, seuls les **identifiants** sont lus — leur
+empreinte salée (comparable aux saisies, même sel), et leur valeur seulement si elle a la forme d'un
+identifiant (nombre, code court, uuid). Jamais un jeton, un secret, une session ; jamais un corps.
+
+`business-flow.json` : `entities`, `steps` (action, entité, `outputs` / `reference`, statut,
+confiance, `recordedActions` = étapes du flow, `actionIds`, `rawEventIds`, preuves `network` /
+`dom` / `navigation` / `context`), `relations`, `unresolved`, `events`, `memory`. L'onglet
+**Analyse** du recorder montre chaque étape métier, ses actions enregistrées, l'**observé** et le
+**déduit**, et les incertitudes à part.
+
+```yaml
+recording:
+  business:
+    enabled: true # false : aucune interprétation métier
+    ai: true # une ambiguïté peut être soumise à l'IA (ai.mode ≠ OFF)
+```
+
 ## Progression après l'arrêt
 
 Après **Stop**, le système continue de travailler avant de rendre la main. Sans retour, ce temps ressemblait à un blocage. Il est maintenant **montré** à deux endroits.
