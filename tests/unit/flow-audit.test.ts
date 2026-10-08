@@ -164,7 +164,11 @@ describe('FlowAuditor — deterministic rules', () => {
   });
 });
 
-function gateway(mode: IntelligenceMode, provider: FakeIntelligenceProvider): IntelligenceGateway {
+function gateway(
+  mode: IntelligenceMode,
+  provider: FakeIntelligenceProvider,
+  timeoutMs = 5_000,
+): IntelligenceGateway {
   const on = true;
   return new IntelligenceGateway({
     mode,
@@ -192,7 +196,7 @@ function gateway(mode: IntelligenceMode, provider: FakeIntelligenceProvider): In
       maxToolCallsPerRequest: 4,
       maxReasoningDurationMs: 60_000,
     },
-    timeoutMs: 5_000,
+    timeoutMs,
     maxRetries: 0,
     failOnUnavailable: false,
     sanitizer: new IntelligenceContextSanitizer(),
@@ -256,6 +260,54 @@ describe('FlowAuditor — the advisor reviews, never modifies', () => {
     expect(flowAuditText(report).join('\n')).toMatch(
       /EFFECTLESS_CLICK_BEFORE_SAME_TARGET — step\(s\) 2, 3 \(DETERMINISTIC, AI_CONFIRMED\)/,
     );
+  });
+
+  it('the analysis time budget: a slow advisor is cut at the deadline, then no further call is made', async () => {
+    const provider = new FakeIntelligenceProvider(advisor, { delayMs: 2_000 });
+    const advisorGateway = gateway('ASSIST', provider);
+    advisorGateway.limitTo({ deadlineAt: Date.now() + 150, stopOnFailure: true });
+    const started = Date.now();
+    const report = await auditGeneratedFlow({
+      result: REAL(),
+      settings,
+      intelligenceMode: 'ASSIST',
+      gateway: advisorGateway,
+    });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(provider.requests).toHaveLength(1);
+    expect(advisorGateway.stoppedBecause).toBeDefined();
+    // Les constats déterministes restent, sans avis du conseiller.
+    const retry = report.findings.find((finding) => finding.rule === 'EFFECTLESS_CLICK_BEFORE_SAME_TARGET');
+    expect(retry?.assessment).not.toBe('AI_CONFIRMED');
+  });
+
+  it('one timed-out call stops the whole analysis (never one timeout per remaining question)', async () => {
+    const provider = new FakeIntelligenceProvider(advisor, { delayMs: 300 });
+    const advisorGateway = gateway('ASSIST', provider, 50);
+    advisorGateway.limitTo({ deadlineAt: Date.now() + 60_000, stopOnFailure: true });
+    await auditGeneratedFlow({
+      result: REAL(),
+      settings,
+      intelligenceMode: 'ASSIST',
+      gateway: advisorGateway,
+    });
+    expect(provider.requests).toHaveLength(1);
+    expect(advisorGateway.stoppedBecause).toBe('AI_TIMEOUT');
+  });
+
+  it('a budget already spent: zero call', async () => {
+    const provider = new FakeIntelligenceProvider(advisor);
+    const advisorGateway = gateway('ASSIST', provider);
+    advisorGateway.limitTo({ deadlineAt: Date.now() - 1, stopOnFailure: true });
+    const report = await auditGeneratedFlow({
+      result: REAL(),
+      settings,
+      intelligenceMode: 'ASSIST',
+      gateway: advisorGateway,
+    });
+    expect(provider.requests).toHaveLength(0);
+    expect(report.aiCalls).toBe(0);
+    expect(advisorGateway.stoppedBecause).toBe('ANALYSIS_TIME_BUDGET_EXHAUSTED');
   });
 
   it('the YAML is annotated ABOVE the concerned step, its content unchanged', async () => {

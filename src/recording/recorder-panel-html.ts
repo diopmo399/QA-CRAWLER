@@ -272,6 +272,7 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .card-plain{margin-bottom:10px}
 .card .meta{color:var(--muted);font-size:12px;margin-top:2px}
 .card .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--accent-soft);color:var(--accent);margin-right:6px}
+.notice.running::before{content:"";display:inline-block;width:10px;height:10px;margin-right:8px;border:2px solid var(--accent);border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px}
 .notice{background:var(--accent-soft);border-radius:8px;padding:10px 12px;font-size:12px}
 .empty{color:var(--muted);font-style:italic}
 .sub{color:var(--muted);font-size:12px}
@@ -389,6 +390,7 @@ const SCRIPT = `
       pill: { CONFIRMED: 'Confirmée', PENDING: 'En cours', AMBIGUOUS: 'Ambiguë', FAILED: 'Échec', UNVERIFIED: 'Non vérifiable' },
       kindName: { open: 'Navigation', navigate: 'Navigation', click: 'Click', fill: 'Saisie', check: 'Case à cocher', uncheck: 'Case à cocher', choose: 'Choix', select: 'Sélection', key: 'Touche', drag: 'Glisser-déposer', upload: 'Fichier', dialog: 'Dialogue', goto: 'Navigation', dragAndDrop: 'Glisser-déposer', manual: 'Manuel' },
       qualityShort: 'Qualité', seeDetail: 'Voir le détail',
+      analysisRunning: "Analyse par l'intelligence en cours, en arrière-plan : vous pouvez déjà rejouer et sauvegarder.",
       fullscreen: 'Plein écran', detach: 'Détacher', detachLabel: "Détacher l'aperçu dans sa propre fenêtre", attach: 'Rattacher', attachLabel: "Rattacher l'aperçu à la fenêtre principale",
       detachedNote: "L'aperçu de l'application est ouvert dans sa propre fenêtre (plein écran possible)."
     },
@@ -403,6 +405,7 @@ const SCRIPT = `
       pill: { CONFIRMED: 'Confirmed', PENDING: 'In progress', AMBIGUOUS: 'Ambiguous', FAILED: 'Failed', UNVERIFIED: 'Not verifiable' },
       kindName: { open: 'Navigation', navigate: 'Navigation', click: 'Click', fill: 'Typing', check: 'Checkbox', uncheck: 'Checkbox', choose: 'Choice', select: 'Select', key: 'Key', drag: 'Drag and drop', upload: 'File', dialog: 'Dialog', goto: 'Navigation', dragAndDrop: 'Drag and drop', manual: 'Manual' },
       qualityShort: 'Quality', seeDetail: 'See the detail',
+      analysisRunning: 'Intelligence analysis running in the background: you can already replay and save.',
       fullscreen: 'Full screen', detach: 'Detach', detachLabel: 'Detach the preview into its own window', attach: 'Reattach', attachLabel: 'Reattach the preview to the main window',
       detachedNote: 'The application preview is open in its own window (full screen available).'
     }
@@ -652,6 +655,7 @@ const SCRIPT = `
     var a = state.analysis, el = $('panel-analysis');
     var h = '<div class="card card-plain"><h2>' + esc(T.analysisTitle) + '</h2><p class="notice">' + esc(T.analysisNote) + '</p>';
     if (!a.available) { el.innerHTML = h + '<p class="empty">' + esc(T.analysisWaiting) + '</p></div>'; return; }
+    if (a.running) h += '<p class="notice running" role="status">' + esc(T.analysisRunning) + '</p>';
     h += '</div><div class="card card-plain"><h2>' + esc(T.intents) + '</h2>';
     h += a.intents.length ? a.intents.map(function (i) {
       return '<div><b>' + esc(i.label) + '</b>' + (i.detail ? '<div class="meta">' + esc(i.detail) + '</div>' : '') + (i.confidence !== undefined ? '<div class="meta">' + esc(T.confidence) + ' : ' + Math.round(i.confidence * 100) + ' %</div>' : '') + (i.evidence.length ? '<details><summary>' + esc(T.why) + '</summary><ul>' + i.evidence.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul></details>' : '') + '</div>';

@@ -7,6 +7,7 @@ import type { RawRecordedEvent, RecordedFlowStep } from '../../src/recording/mod
 import type { HumanFlowRecorder } from '../../src/recording/human-flow-recorder.js';
 import { runRecording, type RecordOutcome } from '../../src/recording/record-orchestrator.js';
 import type { RecordingTargetValidation } from '../../src/recording/target-validator.js';
+import { FakeIntelligenceProvider } from '../fixtures/fake-intelligence-provider.js';
 import {
   startDeterministicRecordingApp,
   type DeterministicRecordingApp,
@@ -359,5 +360,60 @@ describe('Recording UI — detached preview window', () => {
     expect(seen.fullscreenButton).toBe(1);
     expect(seen.detachedClosed).toBe(true);
     expect(seen.reattachedOnClose).toBe(true);
+  });
+});
+
+describe('Recording UI — the intelligence advisor never delays the review', () => {
+  let app: DeterministicRecordingApp;
+  let outcome: RecordOutcome;
+  const seen: Record<string, unknown> = {};
+  const slowAi = new FakeIntelligenceProvider(
+    () => ({ status: 'INCONCLUSIVE', supportingEvidenceIds: [], uncertainties: [], confidence: 0 }),
+    { delayMs: 2000 },
+  );
+
+  beforeAll(async () => {
+    app = await startDeterministicRecordingApp();
+    const dir = await mkdtemp(path.join(tmpdir(), 'qa-record-ui-ai-'));
+    await writeFile(
+      path.join(dir, 'mission.yaml'),
+      `mission: { name: recording-ui-ai }\ntarget: { baseUrl: ${app.url}, startAt: /form }\nai: { enabled: true, mode: HYBRID }\n`,
+    );
+    outcome = await runRecording({
+      name: 'Slow advisor',
+      missionFile: path.join(dir, 'mission.yaml'),
+      overrides: { headless: true, reportsDir: path.join(dir, 'reports') },
+      env: {},
+      language: 'fr',
+      intelligenceProvider: slowAi,
+      drive: async ({ page }) => {
+        await page.getByRole('button', { name: 'Action 7', exact: true }).click();
+        await page.getByLabel('First name').fill('Alex');
+        await page.waitForTimeout(600);
+      },
+      reviewDriver: async ({ panel }) => {
+        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 30_000 });
+        // La revue est là pendant que le conseiller travaille encore.
+        await panel.getByRole('tab', { name: 'Analyse' }).click();
+        seen.runningWhileReviewing = await panel.getByText(/Analyse par l'intelligence en cours/).isVisible();
+        seen.callsWhenReviewShown = slowAi.requests.length;
+        // Puis l'analyse se complète dans l'onglet (sans bloquer la fenêtre).
+        await panel
+          .getByText(/Analyse par l'intelligence en cours/)
+          .waitFor({ state: 'detached', timeout: 120_000 });
+        seen.callsAfter = slowAi.requests.length;
+      },
+    });
+  }, 300_000);
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('the review shows up while the AI analysis still runs; the analysis completes in the background', async () => {
+    expect(seen.runningWhileReviewing).toBe(true);
+    expect(Number(seen.callsAfter)).toBeGreaterThan(Number(seen.callsWhenReviewShown));
+    await access(path.join(outcome.directory, 'recording-intelligence.json'));
+    await access(path.join(outcome.directory, 'flow-audit.json'));
   });
 });

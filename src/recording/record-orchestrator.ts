@@ -499,7 +499,32 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       return undefined;
     }
   };
-  if (mode !== 'OFF') {
+  // 1) LE DÉTERMINISTE, tout de suite (règles, sans appel) : le flow, ses constats et la revue
+  //    n'attendent jamais le conseiller.
+  semanticAudit = await runSemanticAudit(undefined);
+  stopClock.mark('semantic audit (deterministic)');
+  flowAudit = await runFlowAudit(undefined);
+  stopClock.mark('flow audit (deterministic)');
+  const writtenYaml = result.files.yaml;
+  const writeAudits = async (): Promise<void> => {
+    if (semanticAudit) await write('semantic-audit.json', json(semanticAudit));
+    // FLOW AUDIT : le flow généré relu dans son ensemble (règles toujours ; conseiller si ai.mode ≠ OFF).
+    if (flowAudit) {
+      await write('flow-audit.json', json(flowAudit));
+      await write('flow-audit.txt', `${flowAuditText(flowAudit).join('\n')}\n`);
+      // Les commentaires de l'audit ne vont que sur le flow qu'il a relu (jamais sur un flow modifié depuis).
+      if (format !== 'gherkin' && flowAudit.findings.length > 0 && result.files.yaml === writtenYaml)
+        await write('generated.flow.yaml', annotateFlowYaml(result.files.yaml, flowAudit));
+    }
+  };
+  await writeAudits();
+  // 2) LE CONSEILLER (ai.mode ≠ OFF) : enrichissement, audit sémantique, audit du flow — des avis,
+  //    jamais une modification. Pendant la revue, en ARRIÈRE-PLAN (l'onglet Analyse se complète) ;
+  //    sinon comme avant, avant le rapport.
+  const runAiAnalysis = async (): Promise<void> => {
+    const started = Date.now();
+    // Une durée totale bornée, et plus aucun appel après un délai dépassé : jamais des minutes d'attente.
+    gateway?.limitTo({ deadlineAt: started + config.recording.aiAnalysisBudgetMs, stopOnFailure: true });
     try {
       intelligence = await enrichRecording({
         result,
@@ -525,25 +550,30 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         message: `recording enrichment skipped: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
-    stopClock.mark('AI enrichment');
-    semanticAudit = await runSemanticAudit(gateway);
-    stopClock.mark('semantic audit');
-    flowAudit = await runFlowAudit(gateway);
-    stopClock.mark('flow audit');
+    semanticAudit = (await runSemanticAudit(gateway)) ?? semanticAudit;
+    flowAudit = (await runFlowAudit(gateway)) ?? flowAudit;
+    const stoppedBecause = gateway?.stoppedBecause;
+    if (stoppedBecause)
+      onEvent({
+        type: 'RECORDING_STOP_TIMING',
+        at: new Date().toISOString(),
+        message: `AI analysis cut short (${stoppedBecause}, budget ${String(config.recording.aiAnalysisBudgetMs / 1000)} s): the deterministic findings are kept`,
+      });
     await gateway?.close();
-  } else {
-    semanticAudit = await runSemanticAudit(undefined);
-    stopClock.mark('semantic audit');
-    flowAudit = await runFlowAudit(undefined);
-    stopClock.mark('flow audit');
-  }
-  if (semanticAudit) await write('semantic-audit.json', json(semanticAudit));
-  // FLOW AUDIT : le flow généré relu dans son ensemble (règles toujours ; conseiller si ai.mode ≠ OFF).
-  if (flowAudit) {
-    await write('flow-audit.json', json(flowAudit));
-    await write('flow-audit.txt', `${flowAuditText(flowAudit).join('\n')}\n`);
-    if (format !== 'gherkin' && flowAudit.findings.length > 0)
-      await write('generated.flow.yaml', annotateFlowYaml(result.files.yaml, flowAudit));
+    await writeAudits();
+    consoleUi?.setAnalysis(result, flowAudit, intelligence);
+    aiAnalysisMs = Date.now() - started;
+  };
+  let aiAnalysisMs = 0;
+  let aiAnalysis: Promise<void> | undefined;
+  if (mode !== 'OFF') {
+    if (reviewing && consoleUi) {
+      consoleUi.setAnalysis(result, flowAudit, intelligence, true);
+      aiAnalysis = runAiAnalysis().catch(() => undefined);
+    } else {
+      await runAiAnalysis();
+      stopClock.mark('AI analysis (enrichment, semantic audit, flow audit)');
+    }
   }
 
   let replay: ReplayOutcome = { status: 'NOT_VALIDATED' };
@@ -551,7 +581,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   // UN BROUILLON tant que l'humain ne l'a pas sauvegardé (revue) : jamais un flow de la mission d'office.
   await write('recording-status.json', json({ status: 'DRAFT', recordedAt: result.session.startedAt }));
   // L'ANALYSE (onglet séparé) : disponible une fois le flow écrit, jamais dans la timeline.
-  consoleUi?.setAnalysis(result, flowAudit, intelligence);
+  if (!aiAnalysis) consoleUi?.setAnalysis(result, flowAudit, intelligence);
   const runReplay = async (onStep?: (executed: number, total: number) => void): Promise<ReplayOutcome> => {
     onEvent({
       type: 'REPLAY_VALIDATION_STARTED',
@@ -617,6 +647,16 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         },
       },
     });
+    // L'analyse du conseiller a tourné pendant la revue : le rapport attend seulement ce qui reste.
+    if (aiAnalysis) {
+      progress.start(RECORDING_PHASES.audit, 'finishing the intelligence advisor analysis');
+      await aiAnalysis;
+      onEvent({
+        type: 'RECORDING_STOP_TIMING',
+        at: new Date().toISOString(),
+        message: `AI analysis ran in the background during the review (${(aiAnalysisMs / 1000).toFixed(1)} s)`,
+      });
+    }
     await ui.close();
     await browser.close();
     stopClock.mark('review');

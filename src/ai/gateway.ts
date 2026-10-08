@@ -147,6 +147,8 @@ export class IntelligenceGateway {
   private readonly policy: IntelligenceTriggerPolicy;
   private provider: IntelligenceProvider | undefined;
   private availability: Promise<boolean> | undefined;
+  private limit: { deadlineAt: number; stopOnFailure: boolean } | undefined;
+  private stopped: string | undefined;
 
   constructor(private readonly options: GatewayOptions) {
     this.policy = new IntelligenceTriggerPolicy(options.triggers, options.thresholds.deterministicConfidence);
@@ -162,10 +164,29 @@ export class IntelligenceGateway {
     return this.provider !== undefined;
   }
 
+  /**
+   * Borne une série d'appels (l'analyse après l'enregistrement) : plus aucun appel passé l'échéance,
+   * chaque appel coupé à ce qui reste, et (stopOnFailure) plus aucun après un délai dépassé ou un
+   * fournisseur indisponible — la décision déterministe est gardée.
+   */
+  limitTo(limit: { deadlineAt: number; stopOnFailure: boolean }): void {
+    this.limit = limit;
+    this.stopped = undefined;
+  }
+
+  /** Pourquoi les appels sont arrêtés (échéance ou échec), sinon undefined. */
+  get stoppedBecause(): string | undefined {
+    if (this.stopped) return this.stopped;
+    if (this.limit && this.now() >= this.limit.deadlineAt) return 'ANALYSIS_TIME_BUDGET_EXHAUSTED';
+    return undefined;
+  }
+
   /** Faut-il demander de l'aide ? Le FAST PATH déterministe est la règle. */
   evaluate(situation: TriggerSituation): IntelligenceTriggerDecision {
     if (this.options.mode === 'OFF')
       return { shouldInvoke: false, skippedBecause: 'MODE_OFF', evidence: situation.evidence ?? [] };
+    const stopped = this.stoppedBecause;
+    if (stopped) return { shouldInvoke: false, skippedBecause: stopped, evidence: situation.evidence ?? [] };
     const decision = this.policy.evaluate(situation);
     this.audit.triggersEvaluated += 1;
     if (decision.skippedBecause === 'FAST_PATH') this.audit.fastPath += 1;
@@ -259,12 +280,20 @@ export class IntelligenceGateway {
     if (!available) {
       const reason = provider.unavailableReason?.() ?? 'provider unavailable';
       this.emit('AI_UNAVAILABLE', `${this.options.providerId}: ${reason}`);
+      if (this.limit?.stopOnFailure) this.stopped = 'AI_UNAVAILABLE';
       if (this.options.failOnUnavailable) throw new IntelligenceUnavailableError(reason);
       return fallback('AI_UNAVAILABLE', [reason], redactions);
     }
 
     this.budget.begin(input.scope);
-    const timeoutMs = Math.min(this.options.timeoutMs, this.options.budgets.maxReasoningDurationMs);
+    const timeoutMs = Math.max(
+      1,
+      Math.min(
+        this.options.timeoutMs,
+        this.options.budgets.maxReasoningDurationMs,
+        this.limit ? this.limit.deadlineAt - this.now() : Number.POSITIVE_INFINITY,
+      ),
+    );
     let result: ProviderResult | undefined;
     let failure: { outcome: AiOutcome; reason: string; modelContext?: ModelExecutionContext } | undefined;
     for (let attempt = 0; attempt <= this.options.maxRetries; attempt++) {
@@ -307,6 +336,11 @@ export class IntelligenceGateway {
     if (failure || !result) {
       const reason = failure?.reason ?? 'no answer';
       if (failure?.outcome === 'AI_TIMEOUT') this.emit('AI_TIMEOUT', `${request.requestId}: ${reason}`);
+      if (
+        this.limit?.stopOnFailure &&
+        (failure?.outcome === 'AI_TIMEOUT' || failure?.outcome === 'AI_MODEL_UNAVAILABLE')
+      )
+        this.stopped = failure.outcome;
       return fallback(failure?.outcome ?? 'AI_ERROR', [reason], redactions, {
         complexity: { level: complexity.level, score: complexity.score, reasons: complexity.reasons },
         ...(failure?.modelContext ? { modelContext: failure.modelContext } : {}),
