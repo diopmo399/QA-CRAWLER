@@ -1765,8 +1765,16 @@ export function installRecorder(
       ? 'Action ambiguë — à résoudre dans le panneau'
       : 'Ambiguous action — resolve it in the panel',
     pausedNote: french ? 'Les actions ne sont plus enregistrées.' : 'Actions are not recorded.',
+    move: french ? 'Glisser pour déplacer le bandeau' : 'Drag to move the bar',
+    minimize: french ? 'Réduire le bandeau' : 'Minimize the bar',
+    expand: french ? 'Agrandir le bandeau' : 'Expand the bar',
   };
   let info: { count: number; startedAt?: number } = { count: 0 };
+  // OÙ EST LE BANDEAU : un coin de la fenêtre, réduit ou non (jamais sur un bouton de l'application
+  // que l'humain veut atteindre : il le glisse ailleurs ou le réduit, et le choix suit les pages).
+  type Corner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+  const CORNERS: readonly string[] = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
+  let dock: { corner: Corner; minimized: boolean } = { corner: 'bottom-right', minimized: false };
   let toastTimer: number | undefined;
   let highlightTimer: number | undefined;
   const recorder = {
@@ -1783,7 +1791,19 @@ export function installRecorder(
       count?: number;
       startedAt?: number;
       toast?: { title: string; text: string };
+      dock?: { corner?: string; minimized?: boolean };
     }): void => {
+      if (value.dock) {
+        dock = {
+          corner:
+            typeof value.dock.corner === 'string' && CORNERS.includes(value.dock.corner)
+              ? (value.dock.corner as Corner)
+              : dock.corner,
+          minimized: value.dock.minimized === true,
+        };
+        place();
+        render();
+      }
       info = {
         count: typeof value.count === 'number' ? value.count : info.count,
         ...(typeof value.startedAt === 'number'
@@ -1871,6 +1891,17 @@ export function installRecorder(
     const seconds = Math.max(0, Math.floor((Date.now() - info.startedAt) / 1000));
     return `${two(Math.floor(seconds / 60))}:${two(seconds % 60)}`;
   };
+  const place = (): void => {
+    if (!host) return;
+    const [vertical, horizontal] = dock.corner.split('-');
+    host.style.cssText = `all:initial;position:fixed;z-index:2147483647;${vertical === 'top' ? 'top' : 'bottom'}:12px;${horizontal === 'left' ? 'left' : 'right'}:12px`;
+    const toast = root?.querySelector<HTMLElement>('.toast');
+    // La notification s'ouvre vers l'intérieur de la fenêtre.
+    if (toast) toast.dataset.corner = dock.corner;
+  };
+  const sendDock = (): void => {
+    send({ type: 'control', control: 'dock', dock: { corner: dock.corner, minimized: dock.minimized } });
+  };
   const render = (): void => {
     if (!root) return;
     const label = root.querySelector('.state');
@@ -1886,6 +1917,13 @@ export function installRecorder(
     bar?.classList.toggle('ended', status !== 'RECORDING');
     bar?.classList.toggle('working', status.startsWith('⏳'));
     bar?.classList.toggle('paused', paused);
+    bar?.classList.toggle('min', dock.minimized);
+    const size = root.querySelector('[data-act="minimize"]');
+    if (size) {
+      size.textContent = dock.minimized ? '▢' : '–';
+      size.setAttribute('title', dock.minimized ? say.expand : say.minimize);
+      size.setAttribute('aria-label', dock.minimized ? say.expand : say.minimize);
+    }
     const toggle = root.querySelector('[data-act="pause"]');
     if (toggle) toggle.textContent = paused ? `▶ ${say.resume}` : `⏸ ${say.pause}`;
   };
@@ -1903,10 +1941,9 @@ export function installRecorder(
     host = document.createElement('qa-crawler-recorder');
     host.setAttribute(OVERLAY, 'true');
     host.setAttribute('aria-hidden', 'true');
-    host.style.cssText = 'all:initial;position:fixed;right:12px;bottom:12px;z-index:2147483647';
     root = host.attachShadow({ mode: 'closed' });
     root.innerHTML = `<style>
-      .bar{font:500 12px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:rgba(11,16,32,.92);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#f8fafc;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:6px 6px 6px 14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;box-shadow:0 8px 28px rgba(2,6,23,.35);max-width:min(760px,calc(100vw - 24px))}
+      .bar{font:500 12px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:rgba(11,16,32,.92);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#f8fafc;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:6px 6px 6px 6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;box-shadow:0 8px 28px rgba(2,6,23,.35);max-width:calc(100vw - 24px)}
       .state{color:#fecaca;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:7px;letter-spacing:.04em}
       .state::before{content:"";width:9px;height:9px;border-radius:50%;background:#ef4444;animation:qa-pulse 1.6s infinite}
       .bar.paused .state{color:#fde68a}
@@ -1923,13 +1960,22 @@ export function installRecorder(
       button[data-act="stop"]{background:#e11d48;border-color:#e11d48}
       .busy{display:none;width:72px;height:4px;border-radius:2px;background:linear-gradient(90deg,#334155 0%,#22d3ee 50%,#334155 100%);background-size:200% 100%;animation:qa-busy 1s linear infinite}
       .bar.working .busy{display:inline-block}
-      .bar.ended{padding-right:14px}
+      .bar.ended{padding:6px 14px}
+      .grip{cursor:grab;color:#94a3b8;font-size:14px;line-height:1;padding:4px 6px;border-radius:999px;user-select:none;touch-action:none}
+      .grip:hover{color:#f8fafc;background:rgba(255,255,255,.1)}
+      .bar.dragging,.bar.dragging .grip{cursor:grabbing}
+      .bar.min{padding:4px}
+      .bar.min input,.bar.min .count,.bar.min .note,.bar.min button:not([data-act="minimize"]):not([data-act="stop"]){display:none}
+      button[data-act="minimize"]{padding:2px 9px;min-width:28px}
+      .bar.ended .grip,.bar.ended button[data-act="minimize"]{display:none}
       .bar.ended input,.bar.ended button,.bar.ended .time,.bar.ended .count{display:none}
       .bar.ended .state{color:#6ee7b7}
       .bar.ended .state::before{background:#10b981;animation:none}
       .toast{position:absolute;right:0;bottom:calc(100% + 10px);min-width:240px;max-width:340px;background:#fff;color:#0f172a;border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px 10px 40px;font:13px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 12px 32px rgba(2,6,23,.18);opacity:0;transform:translateY(6px);transition:opacity .2s,transform .2s;pointer-events:none}
       .toast::before{content:"✓";position:absolute;left:12px;top:11px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;color:#fff;background:#059669}
       .toast.show{opacity:1;transform:none}
+      .toast[data-corner$="left"]{right:auto;left:0}
+      .toast[data-corner^="top"]{bottom:auto;top:calc(100% + 10px)}
       .toast.recorded::before{content:"○";background:#94a3b8}
       .toast.ambiguous::before{content:"!";background:#d97706}
       .toast b{display:block;font-weight:700}
@@ -1939,7 +1985,38 @@ export function installRecorder(
       @keyframes qa-pulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.6)}70%{box-shadow:0 0 0 7px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
       @keyframes qa-busy{from{background-position:200% 0}to{background-position:0 0}}
       @media (prefers-reduced-motion:reduce){.toast{transition:none}.busy,.state::before{animation:none}}
-    </style><div class="highlight"><span></span></div><div class="toast" role="status"><b></b><span></span></div><div class="bar"><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><input placeholder="${say.checkpoint}" aria-label="${say.checkpoint}" maxlength="80"><button data-act="checkpoint">${say.checkpoint}</button><button data-act="pause">⏸ ${say.pause}</button><button data-act="undo">${say.undo}</button><button data-act="stop">${say.stop}</button><span class="note"></span></div>`;
+    </style><div class="highlight"><span></span></div><div class="toast" role="status"><b></b><span></span></div><div class="bar"><span class="grip" title="${say.move}" aria-label="${say.move}">⠿</span><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><input placeholder="${say.checkpoint}" aria-label="${say.checkpoint}" maxlength="80"><button data-act="checkpoint">${say.checkpoint}</button><button data-act="pause">⏸ ${say.pause}</button><button data-act="undo">${say.undo}</button><button data-act="stop">${say.stop}</button><button data-act="minimize" title="${say.minimize}" aria-label="${say.minimize}">–</button><span class="note"></span></div>`;
+    // GLISSER le bandeau : il suit le pointeur, puis se range dans le coin le plus proche.
+    const grip = root.querySelector<HTMLElement>('.grip');
+    grip?.addEventListener('pointerdown', (down) => {
+      if (!host) return;
+      down.preventDefault();
+      const box = host.getBoundingClientRect();
+      const dx = down.clientX - box.left;
+      const dy = down.clientY - box.top;
+      grip.setPointerCapture(down.pointerId);
+      root?.querySelector('.bar')?.classList.add('dragging');
+      const move = (event: PointerEvent): void => {
+        if (!host) return;
+        const left = Math.min(Math.max(0, event.clientX - dx), window.innerWidth - box.width);
+        const top = Math.min(Math.max(0, event.clientY - dy), window.innerHeight - box.height);
+        host.style.cssText = `all:initial;position:fixed;z-index:2147483647;left:${String(left)}px;top:${String(top)}px`;
+      };
+      const up = (event: PointerEvent): void => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+        root?.querySelector('.bar')?.classList.remove('dragging');
+        const vertical = event.clientY < window.innerHeight / 2 ? 'top' : 'bottom';
+        const horizontal = event.clientX < window.innerWidth / 2 ? 'left' : 'right';
+        dock = { ...dock, corner: `${vertical}-${horizontal}` as Corner };
+        place();
+        sendDock();
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
     root.addEventListener('click', (event) => {
       const button = event.target instanceof Element ? event.target.closest('button') : null;
       const act = button?.getAttribute('data-act');
@@ -1955,12 +2032,17 @@ export function installRecorder(
         recorder.setPaused(next);
       } else if (act === 'undo') {
         send({ type: 'control', control: 'undo' });
+      } else if (act === 'minimize') {
+        dock = { ...dock, minimized: !dock.minimized };
+        render();
+        sendDock();
       } else if (act === 'stop') {
         send({ type: 'control', control: 'stop' });
         recorder.setStatus('STOPPED');
       }
     });
     rootElement.appendChild(host);
+    place();
     render();
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);

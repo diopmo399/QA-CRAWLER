@@ -26,6 +26,7 @@ import type {
   RecordedElement,
   RecordedSelectors,
   RecordedState,
+  OverlayDock,
   RecordedValueFacts,
   RecordingEvent,
   RecordingEventType,
@@ -111,6 +112,8 @@ export class HumanFlowRecorder {
   private context: BrowserContext | undefined;
   private page: Page | undefined;
   private paused = false;
+  /** Où l'humain a rangé le bandeau : il garde cette place d'une page à l'autre. */
+  private dock: OverlayDock = { corner: 'bottom-right', minimized: false };
   private stopping = false;
   /** Plus aucun événement accepté (après la dernière saisie en attente). */
   private closed = false;
@@ -574,10 +577,15 @@ export class HumanFlowRecorder {
                 __qaCrawlerRecorder?: { setInfo?(info: unknown): void; setPaused(value: boolean): void };
               }
             ).__qaCrawlerRecorder;
-            bar?.setInfo?.({ count: value.count, startedAt: value.startedAt });
+            bar?.setInfo?.({ count: value.count, startedAt: value.startedAt, dock: value.dock });
             if (value.paused) bar?.setPaused(true);
           },
-          { count: this.timeline.actions.length, startedAt: this.startedAt, paused: this.paused },
+          {
+            count: this.timeline.actions.length,
+            startedAt: this.startedAt,
+            paused: this.paused,
+            dock: this.dock,
+          },
         )
         .catch(() => undefined);
     });
@@ -713,6 +721,11 @@ export class HumanFlowRecorder {
     const event = sanitize(payload);
     if (!event) return;
     if (event.type === 'control') {
+      // Le bandeau déplacé ou réduit : sa place seulement, jamais une action ni un changement d'état.
+      if (event.control === 'dock') {
+        if (event.dock) this.dock = event.dock;
+        return;
+      }
       if (event.control === 'stop') this.resolveStop('overlay');
       else if (event.control === 'pause') {
         this.paused = true;
@@ -1033,9 +1046,11 @@ export function sanitize(
     control === 'pause' ||
     control === 'resume' ||
     control === 'checkpoint' ||
-    control === 'undo'
+    control === 'undo' ||
+    control === 'dock'
       ? { control }
       : {}),
+    ...(control === 'dock' && isObject(payload.dock) ? { dock: dockOf(payload.dock) } : {}),
     ...(typeof payload.noise === 'string' ? { noise: text(payload.noise, 80) } : {}),
     ...(typeof payload.activeDomInstance === 'string' && /^e\d{1,9}$/.test(payload.activeDomInstance)
       ? { activeDomInstance: payload.activeDomInstance }
@@ -1043,6 +1058,13 @@ export function sanitize(
     ...(type === 'drag' && isObject(payload.drag) ? dragOf(payload.drag) : {}),
     ...(isObject(payload.pre) ? { pre: preOf(payload.pre) } : {}),
   };
+}
+
+/** La place du bandeau : un coin connu (sinon en bas à droite), réduit ou non. */
+function dockOf(raw: Record<string, unknown>): OverlayDock {
+  const corners: readonly OverlayDock['corner'][] = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
+  const corner = corners.find((entry) => entry === raw.corner) ?? 'bottom-right';
+  return { corner, minimized: raw.minimized === true };
 }
 
 /** Le contexte pré-action envoyé par la page : textes d'interface bornés et expurgés, nombres stricts. */

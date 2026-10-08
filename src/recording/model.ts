@@ -358,8 +358,10 @@ export interface RawRecordedEvent {
   dialog?: { kind: string; accepted: boolean; message: string };
   /** checkpoint : libellé donné par l'humain. */
   label?: string;
-  /** control : stop / pause / resume / checkpoint (depuis le bandeau). */
-  control?: 'stop' | 'pause' | 'resume' | 'checkpoint' | 'undo';
+  /** control : stop / pause / resume / checkpoint / dock (depuis le bandeau). */
+  control?: 'stop' | 'pause' | 'resume' | 'checkpoint' | 'undo' | 'dock';
+  /** control dock : où l'humain a rangé le bandeau (un coin), réduit ou non. */
+  dock?: OverlayDock;
   /** popup / download : URL de la nouvelle page, extension du fichier. */
   target?: string;
   /** navigation : type de transition du navigateur (link, typed, reload, form_submit…, forward_back). */
@@ -813,4 +815,10 @@ export function emptyQuality(): RecordingQuality {
     removedDetours: 0,
     sensitiveRedacted: 0,
   };
+}
+
+/** La place du bandeau d'enregistrement dans la page : un coin, réduit ou non. */
+export interface OverlayDock {
+  corner: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+  minimized: boolean;
 }
