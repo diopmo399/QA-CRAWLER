@@ -1,3 +1,5 @@
+import { effectiveRecordingMode } from './sources/recording-coordinator.js';
+import { RecordingSourceSet } from './sources/recording-sources.js';
 import { annotateFlowYaml, auditGeneratedFlow, flowAuditText, type FlowAuditReport } from './flow-audit.js';
 import { screenInventorySummary, screenInventoryText } from './screen-inventory.js';
 import { timelineLines } from './recording-consistency.js';
@@ -192,11 +194,21 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     : undefined;
   const language =
     request.language ?? config.recording.language ?? (config.report.language === 'fr' ? 'fr' : 'en');
+  // LES SOURCES DE CAPTURE (recording.mode) : en CURRENT, aucune — le recorder reste celui d'avant.
+  const recordingMode = effectiveRecordingMode(config.recording);
+  if (recordingMode.warning) warnings.push(recordingMode.warning);
+  const sources =
+    recordingMode.mode === 'CURRENT'
+      ? undefined
+      : new RecordingSourceSet(recordingMode.mode, (type, message) => {
+          onEvent({ type, at: new Date().toISOString(), message });
+        });
   const recorder = new HumanFlowRecorder({
     name: request.name,
     config,
     language,
     onEvent,
+    ...(sources ? { sources } : {}),
     ...identity,
     ...(targetValidator ? { targetValidator } : {}),
     // La timeline en direct : la fenêtre se redessine tout de suite (jamais après une analyse).
@@ -322,6 +334,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   // La trace brute ne contient aucune saisie : formes, empreintes salées (le sel n'est jamais écrit), libellés.
   // Toute la trace, y compris les événements annulés par l'humain (marqués `undone`, exclus du flow).
   await write('raw-recording.json', json({ ...sessionMeta(result), rawEvents: recorder.session.rawEvents }));
+  // Les sources et leurs corrélations (PLAYWRIGHT, HYBRID) : ce que chaque source a vu, une action par geste.
+  if (sources) await write('recording-sources.json', json(sources.report()));
   await write(
     'semantic-recording.json',
     json({

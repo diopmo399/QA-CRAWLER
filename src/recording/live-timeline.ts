@@ -347,6 +347,15 @@ export class LiveTimeline {
     return action;
   }
 
+  /** Des détails techniques de plus sur l'action d'un événement brut (mode développeur seulement). */
+  annotate(rawEventId: string, entries: Record<string, string | undefined>): LiveAction | undefined {
+    const action = this.list.find((entry) => entry.rawEventIds.includes(rawEventId));
+    if (!action) return undefined;
+    for (const [key, value] of Object.entries(entries))
+      if (value !== undefined && value !== '') action.technical[key] = value;
+    return action;
+  }
+
   /** Le résultat de la validation immédiate d'un événement brut : ✓, ⚠ ou ✕. */
   onValidation(rawEventId: string, validation: RecordingTargetValidation): LiveAction | undefined {
     const action = this.list.find((entry) => entry.rawEventIds.includes(rawEventId));
@@ -630,6 +639,7 @@ function technicalOf(event: RawRecordedEvent): Record<string, string> {
     ['frame', 'main'],
     ['selector', element?.css],
     ['role', element?.role],
+    ['rawTarget', element?.rawTag],
     ['tag', element?.tag],
     ['name', clean(element?.name)],
     ['text', clean(element?.text)],

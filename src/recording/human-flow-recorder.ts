@@ -1,4 +1,5 @@
 import { ignoredDebugLine, rawEventDebugLine } from './recorder-trace.js';
+import type { RecordingSourceSet } from './sources/recording-sources.js';
 import { LiveTimeline, type LiveAction } from './live-timeline.js';
 import type { BrowserContext, CDPSession, Dialog, Download, Page } from 'playwright';
 import type { ScenarioConfig } from '../config/config.js';
@@ -67,6 +68,12 @@ export interface HumanFlowRecorderOptions {
   language?: 'fr' | 'en';
   /** La timeline en direct a changé (une action ajoutée, validée, annulée, résolue) : le panneau se redessine. */
   onTimeline?: (change: TimelineChange) => void;
+  /**
+   * LES SOURCES DE CAPTURE (recording.mode) : absentes ou CURRENT, le recorder fonctionne exactement
+   * comme avant. PLAYWRIGHT / HYBRID : le localisateur de Playwright est lu sur l'élément touché, et
+   * les événements de page des deux sources sont corrélés (un geste = une action).
+   */
+  sources?: RecordingSourceSet;
 }
 
 /** La mise en évidence d'un élément : comment il a été retrouvé, et où (l'aperçu dessine le même cadre). */
@@ -211,6 +218,27 @@ export class HumanFlowRecorder {
     await page.evaluate(script).catch(() => undefined);
     this.network.attach(page);
     this.watchPage(page);
+    const sources = this.options.sources;
+    if (sources) {
+      sources.onLocator = (event, evidence) => {
+        const action = this.timeline.annotate(event.id, {
+          resolvedTarget: event.element
+            ? `${event.element.tag}${event.element.role ? ` (${event.element.role})` : ''}`
+            : undefined,
+          locator: evidence.locator,
+          locatorStrategy: evidence.strategy,
+          matches: evidence.matchCount !== undefined ? String(evidence.matchCount) : undefined,
+          playwright:
+            evidence.status === 'RESOLVED'
+              ? evidence.sameElement
+                ? 'same element'
+                : 'another element'
+              : evidence.reason,
+        });
+        if (action) this.changed({ reason: 'UPDATED', action });
+      };
+      await sources.start(page, this.session.rawEvents, () => this.now());
+    }
     context.on('page', (popup) => {
       if (popup === this.page) return;
       this.capture({ type: 'popup', at: this.now(), url: popup.url(), target: '(new window)' });
@@ -502,6 +530,7 @@ export class HumanFlowRecorder {
     // Plus aucun appel IA pour les validations encore en file : un Stop ne les attend pas.
     const validator = this.options.targetValidator;
     validator?.drain();
+    await this.options.sources?.stop();
     const timed = async (phase: string, run: () => Promise<unknown>): Promise<void> => {
       const started = Date.now();
       await run();
@@ -745,17 +774,25 @@ export class HumanFlowRecorder {
     const validator = this.options.targetValidator;
     // Toute action reçue est connue du validateur : celle qui SUIT une action incertaine en est une preuve.
     if (captured && validator) validator.observe(captured);
+    // PLAYWRIGHT / HYBRID : le localisateur de Playwright, lu sur l'élément touché AVANT la
+    // validation (la cible validée est celle que le flow gardera). Jamais en CURRENT.
+    const sources = this.options.sources;
+    const located =
+      captured && page && sources?.playwright ? sources.resolve(page, captured, ref) : undefined;
     if (captured && validator && page && !captured.noise && (captured.element || captured.drag))
       this.track(
-        validator.validate(page, captured, ref).then((result) => {
-          if (!result) return;
-          captured.targetValidation = result;
-          // L'interface n'attend jamais la validation : elle met à jour la ligne déjà affichée.
-          const action = this.timeline.onValidation(captured.id, result);
-          if (action)
-            this.changed({ reason: action.status === 'CONFIRMED' ? 'CONFIRMED' : 'UPDATED', action });
-        }),
+        (located ?? Promise.resolve())
+          .then(() => validator.validate(page, captured, ref))
+          .then((result) => {
+            if (!result) return;
+            captured.targetValidation = result;
+            // L'interface n'attend jamais la validation : elle met à jour la ligne déjà affichée.
+            const action = this.timeline.onValidation(captured.id, result);
+            if (action)
+              this.changed({ reason: action.status === 'CONFIRMED' ? 'CONFIRMED' : 'UPDATED', action });
+          }),
       );
+    else if (located) this.track(located);
     // Le texte saisi (données de test) : hors de la trace brute, dans un coffre en mémoire.
     const typed = captured ? typedValueOf(payload, captured) : undefined;
     if (captured && typed !== undefined) {
@@ -804,6 +841,7 @@ export class HumanFlowRecorder {
       url: redactUrl(input.url),
     };
     events.push(event);
+    this.options.sources?.observeRaw(event);
     this.emit(
       'RAW_EVENT_CAPTURED',
       `${event.type}${event.element ? ` ${event.element.role || event.element.tag} "${event.element.name}"` : ''}`,
@@ -1357,6 +1395,10 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ...optional(
       'domInstance',
       /^e\d{1,9}$/.test(str('domInstance', 12) ?? '') ? str('domInstance', 12) : undefined,
+    ),
+    ...optional(
+      'rawTag',
+      /^[a-z][a-z0-9-]{0,39}$/.test(str('rawTag', 40) ?? '') ? str('rawTag', 40) : undefined,
     ),
     ...(num('cssMatches') > 1
       ? {

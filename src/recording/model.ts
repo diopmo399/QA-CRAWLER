@@ -1,3 +1,4 @@
+import type { PlaywrightTargetEvidence } from './sources/playwright-locator.js';
 import type { CausalEffectCandidate } from './effect-causality.js';
 import type {
   FlowExpectation,
@@ -227,6 +228,13 @@ export interface RecordedElement {
    * localisateur de rejeu ; seulement une preuve d'identité pendant l'enregistrement.
    */
   domInstance?: string;
+  /** La balise réellement touchée (un <span> dans un bouton) quand l'élément retenu est un ancêtre. */
+  rawTag?: string;
+  /**
+   * PLAYWRIGHT, HYBRID : le localisateur que Playwright génère pour l'élément réellement touché, compté
+   * dans la page au moment du geste (jamais un élément deviné).
+   */
+  playwright?: PlaywrightTargetEvidence & { mode: 'PLAYWRIGHT' | 'HYBRID' };
   /** Combien d'éléments le CSS enregistré désigne (> 1 : un localisateur générique, jamais une identité). */
   cssMatches?: number;
   /** Sa position parmi ces éléments (0 = premier) : le dernier recours, jamais une identité. */
@@ -346,6 +354,9 @@ export interface RawRecordedEvent {
   value?: RecordedValueFacts;
   /** keydown : la touche (Enter, Escape, Tab seulement). */
   key?: string;
+  /** HYBRID : le geste vu par les deux sources (une seule action), et l'observation de l'autre source. */
+  sources?: ('current' | 'playwright')[];
+  correlatedWith?: string;
   /** drag : le glisser-déposer corrélé (élément, zones, déplacement observé). */
   drag?: RecordedDrag;
   /** L'écran juste AVANT l'action (pour valider une cible que l'action fait disparaître). */
@@ -701,6 +712,7 @@ export type RecordingEventType =
   | 'RAW_EVENT_CAPTURED'
   /** QA_DEBUG : la trace déterministe du recorder ([RECORDER] RAW EVENT / ELEMENT / VALIDATION / RECORDED / EVENT IGNORED). */
   | 'RECORDER_DEBUG'
+  | 'RECORDING_SOURCE'
   /** La timeline en direct (une action ajoutée, validée, annulée, résolue). */
   | 'LIVE_ACTION_UPDATED'
   | 'ACTION_UNDONE'
