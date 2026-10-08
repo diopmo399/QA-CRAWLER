@@ -181,6 +181,36 @@ describe('Live timeline (what the human sees while recording)', () => {
     expect(other.summary().attention).toBe(0);
   });
 
+  it('an ambiguity always offers the touched element to validate, even when no match is marked as touched', () => {
+    for (const candidates of [
+      undefined,
+      [
+        { index: 0, original: false, name: 'Save', section: 'Main' },
+        { index: 1, original: false, name: 'Save', section: 'Side panel' },
+      ],
+    ]) {
+      const timeline = new LiveTimeline('fr');
+      const event = raw('click', 0, { element: element({ name: 'Save' }) });
+      timeline.onEvent(event);
+      timeline.onValidation(event.id, {
+        ...validation(event.id, 'AMBIGUOUS', candidates),
+        validationBefore: {
+          ...validation(event.id, 'AMBIGUOUS', candidates).validationBefore,
+          candidateCount: 2,
+        },
+      });
+      const action = timeline.actions[0];
+      // L'élément touché en premier, marqué comme tel ; les autres correspondances ensuite.
+      expect(action?.candidates?.[0]).toMatchObject({ index: -1, original: true });
+      expect(action?.candidates?.[0]?.label).toMatch(/Save — l'élément que vous avez touché/);
+      expect(action?.candidates).toHaveLength(1 + (candidates?.length ?? 0));
+      // Un autre élément reste refusé ; l'élément touché se valide.
+      if (candidates) expect(timeline.resolve(action?.id ?? '', 0)).toEqual({ error: 'NOT_TOUCHED' });
+      expect('action' in timeline.resolve(action?.id ?? '', -1)).toBe(true);
+      expect(timeline.actions[0]).toMatchObject({ status: 'CONFIRMED', resolution: 'RESOLVED' });
+    }
+  });
+
   it('undo removes the last action (never the page opening)', () => {
     const timeline = new LiveTimeline('fr');
     timeline.onEvent(raw('navigation', 0));

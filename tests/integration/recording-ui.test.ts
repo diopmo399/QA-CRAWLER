@@ -81,17 +81,17 @@ describe('Recording UI (recorder window)', () => {
         await injectAmbiguity(recorder, 'Value');
         await panel.getByText('⚠ Action ambiguë').waitFor();
         seen.ambiguousShown = true;
-        await panel.getByRole('button', { name: 'Résoudre' }).click();
+        // Le choix est proposé tout de suite : l'élément touché présélectionné.
+        expect(await panel.getByLabel(/élément touché/).isChecked()).toBe(true);
         await panel.getByLabel(/Primary/).check();
-        await panel.getByRole('button', { name: 'Confirmer' }).click();
+        await panel.getByRole('button', { name: '✓ Valider cet élément' }).click();
         await panel
           .getByRole('alert')
           .getByText(/pas l'élément que vous avez touché/)
           .waitFor();
         seen.refusedOtherElement = true;
-        await panel.getByRole('button', { name: 'Résoudre' }).click();
         await panel.getByLabel(/élément touché/).check();
-        await panel.getByRole('button', { name: 'Confirmer' }).click();
+        await panel.getByRole('button', { name: '✓ Valider cet élément' }).click();
         await panel.getByText(/Ambiguïté résolue/).waitFor();
         // DÉTAILS + MISE EN ÉVIDENCE dans la page.
         await row(panel, /First name/).click();

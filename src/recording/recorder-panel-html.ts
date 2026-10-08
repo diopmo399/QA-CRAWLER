@@ -114,7 +114,6 @@ const CSS = `
 }}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-html,body{height:100%}
 body{margin:0;font:13px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;min-height:100vh}
 button{font:inherit;cursor:pointer;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);border-radius:8px;padding:6px 12px;min-height:32px;font-weight:600;display:inline-flex;align-items:center;gap:6px;transition:background .15s,border-color .15s,box-shadow .15s}
 button:hover:not(:disabled){border-color:var(--muted)}
@@ -165,8 +164,15 @@ button.ghost{border-color:transparent;background:none;color:var(--muted)}
 main{flex:1;padding:12px 18px 18px;min-height:0}
 .grid{display:grid;grid-template-columns:1fr;gap:12px;align-items:start}
 .col-mid{display:none}
-@media (min-width:780px){.grid{grid-template-columns:minmax(280px,340px) minmax(0,1fr)}}
-@media (min-width:1180px){.grid{grid-template-columns:minmax(280px,320px) minmax(0,1fr) minmax(280px,340px)}.col-mid{display:block}}
+/* Grand écran : une application (en-tête et résumé fixes, la zone centrale défile) ; le détail et
+   l'aperçu restent visibles pendant qu'on fait défiler un long parcours. */
+@media (min-width:780px){
+  body[data-mode=main]{height:100vh;overflow:hidden}
+  body[data-mode=main] main{overflow:auto}
+  .grid{grid-template-columns:minmax(340px,1.1fr) minmax(0,1fr)}
+  .grid>.col-mid,.grid>.col-right{position:sticky;top:0}
+}
+@media (min-width:1180px){.grid{grid-template-columns:minmax(340px,420px) minmax(0,1fr) minmax(300px,380px)}.col-mid{display:block}}
 .col-left{display:grid;gap:12px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:12px 14px}
 .card-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
@@ -191,7 +197,7 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .kind.k-click{background:var(--orange-soft);color:var(--orange)} .kind.k-select,.kind.k-key{background:var(--pink-soft);color:var(--pink)}
 .desc{flex:1;min-width:0;font-weight:700;word-break:break-word}
 .desc .sub{display:block;color:var(--muted);font-weight:400;font-size:12px}
-.pill{display:inline-flex;align-items:center;gap:4px;margin-top:5px;font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--idle-soft);color:var(--muted)}
+.pill{display:flex;width:max-content;align-items:center;gap:4px;margin-top:5px;font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--idle-soft);color:var(--muted)}
 .CONFIRMED .pill{background:var(--ok-soft);color:var(--ok)} .PENDING .pill{background:var(--run-soft);color:var(--run)} .AMBIGUOUS .pill{background:var(--warn-soft);color:var(--warn)} .FAILED .pill{background:var(--bad-soft);color:var(--bad)}
 .PENDING .pill::after{content:"";width:9px;height:9px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite}
 .chev{color:var(--muted);align-self:center;font-size:16px}
@@ -203,6 +209,9 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .attention legend{font-weight:700;margin-bottom:6px}
 .attention label{display:flex;gap:8px;align-items:center;padding:8px 10px;margin-bottom:6px;border-radius:8px;background:var(--surface);border:1px solid var(--line);cursor:pointer}
 .attention label:has(input:checked){border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.attention label span{flex:1;min-width:0;word-break:break-word}
+.attention label em{font-style:normal;font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--ok-soft);color:var(--ok);flex:none}
+.attention .sub{margin:0 0 6px}
 .attention .error{color:var(--bad);margin-top:8px;font-weight:600}
 .remove{margin:6px 0 0}
 .remove button{color:var(--bad);border-color:transparent;background:var(--bad-soft)}
@@ -276,7 +285,20 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .notice{background:var(--accent-soft);border-radius:8px;padding:10px 12px;font-size:12px}
 .empty{color:var(--muted);font-style:italic}
 .sub{color:var(--muted);font-size:12px}
-@media (max-width:640px){.subtitle{display:none}.statusbar,.tabs,.progress{margin-left:12px;margin-right:12px}main{padding:12px}.stat{padding-right:8px}.summarybar{padding:10px 12px}}
+@media (max-width:640px){
+  .subtitle{display:none}.topbar{padding:8px 12px}
+  .statusbar,.tabs,.progress{margin-left:12px;margin-right:12px}
+  .statusbar{gap:8px}.statusbar .sep{display:none}.controls{flex-basis:100%}
+  .tabs{overflow-x:auto}.tabs [role=tab]{padding:8px 10px;white-space:nowrap}
+  main{padding:12px}
+  /* Le résumé reste en bas, compact : les nombres et les boutons, les libellés pour les lecteurs d'écran. */
+  .summarybar{padding:8px 12px;gap:8px}.summarybar h2{display:none}
+  .stat{padding-right:8px;gap:5px}.stat .i{width:20px;height:20px;font-size:10px}.stat b{font-size:13px}
+  .stat div span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .summarybar .buttons{margin-left:0;width:100%}.summarybar .buttons button{flex:1;justify-content:center}
+  .quality .qbody{flex-direction:column;align-items:stretch}.ring{margin:0 auto}
+  .details dl{grid-template-columns:1fr}.details dt{font-weight:700}
+}
 @media (min-width:780px){.grid.detached{grid-template-columns:minmax(300px,440px) minmax(0,1fr)}}
 .grid.detached .col-mid{display:none!important}
 .detached-note{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px 14px;border-radius:10px;background:var(--accent-soft);color:var(--fg);font-weight:600}
@@ -315,6 +337,8 @@ const SCRIPT = `
       attention: function (n) { return n + ' nécessite' + (n > 1 ? 'nt' : '') + ' votre attention'; },
       ambiguousTitle: '⚠ Action ambiguë', matches: function (n) { return n + ' éléments correspondent.'; },
       resolve: 'Résoudre', ignore: 'Ignorer', confirm: 'Confirmer', cancel: 'Annuler',
+      validate: '✓ Valider cet élément', show: '👁 Montrer dans la page', touchedTag: 'touché',
+      ambHelp: "Le rejeu pourrait viser un autre élément. Vérifiez dans la page l'élément mis en évidence, puis validez-le.",
       which: 'Quel élément voulez-vous enregistrer ?',
       notTouched: "Ce n'est pas l'élément que vous avez touché : annulez l'action (↶) et refaites-la sur le bon élément.",
       ignored: 'Laissée telle quelle : elle sera vérifiée au rejeu.',
@@ -354,6 +378,8 @@ const SCRIPT = `
       attention: function (n) { return n + ' need' + (n === 1 ? 's' : '') + ' your attention'; },
       ambiguousTitle: '⚠ Ambiguous action', matches: function (n) { return n + ' elements match.'; },
       resolve: 'Resolve', ignore: 'Ignore', confirm: 'Confirm', cancel: 'Cancel',
+      validate: '✓ Validate this element', show: '👁 Show in the page', touchedTag: 'touched',
+      ambHelp: 'The replay could aim at another element. Check the highlighted element in the page, then validate it.',
       which: 'Which element do you want to record?',
       notTouched: 'This is not the element you touched: undo the action (↶) and do it again on the right element.',
       ignored: 'Left as is: it will be checked at replay.',
@@ -424,7 +450,7 @@ const SCRIPT = `
     clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/></svg>'
   };
   var KIND_ICON = { open: 'link', navigate: 'link', goto: 'link', click: 'cursor', fill: 'text', check: 'check', uncheck: 'check', choose: 'check', select: 'list', key: 'hash', drag: 'move', dragAndDrop: 'move', upload: 'clip', manual: 'hash', dialog: 'list' };
-  var state = null, selected = null, resolving = null, dev = false, editing = false, tab = 'recording';
+  var state = null, selected = null, choice = {}, dev = false, editing = false, tab = 'recording';
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   var send = function (cmd) { try { window.__qaPanelCommand(cmd); } catch (e) { /* hors QA-CRAWLER */ } };
@@ -521,11 +547,11 @@ const SCRIPT = `
       h += '</span><span class="chev" aria-hidden="true">›</span></button>';
       if (step.status === 'AMBIGUOUS' && step.resolution !== 'IGNORED' && state.phase !== 'REVIEW') {
         h += '<div class="attention" role="group" aria-label="' + esc(T.ambiguousTitle) + '"><p><b>' + esc(T.ambiguousTitle) + '</b><br>' + esc(step.description) + '<br>' + esc(T.matches(Math.max((step.candidates || []).length, 2))) + '</p>';
-        if (resolving === step.id && step.candidates) {
-          h += '<fieldset><legend>' + esc(T.which) + '</legend>' + step.candidates.map(function (c) {
-            return '<label><input type="radio" name="cand-' + esc(step.id) + '" value="' + c.index + '"' + (c.original ? ' checked' : '') + '> ' + esc(c.label) + '</label>';
-          }).join('') + '</fieldset><div class="row">' + button(T.confirm, { cmd: 'confirm-resolve', id: step.id, cls: 'primary' }) + button(T.cancel, { cmd: 'cancel-resolve', id: step.id }) + '</div>';
-        } else h += '<div class="row">' + button(T.resolve, { cmd: 'open-resolve', id: step.id, cls: 'primary' }) + button(T.ignore, { cmd: 'ignore', id: step.id }) + '</div>';
+        // Le choix est là tout de suite : l'élément touché (présélectionné), les autres correspondances.
+        var cands = step.candidates && step.candidates.length ? step.candidates : [{ index: -1, original: true, label: T.touchedTag }];
+        h += '<p class="sub">' + esc(T.ambHelp) + '</p><fieldset><legend>' + esc(T.which) + '</legend>' + cands.map(function (c) {
+          return '<label class="cand' + (c.original ? ' touched' : '') + '"><input type="radio" name="cand-' + esc(step.id) + '" value="' + c.index + '"' + ((choice[step.id] !== undefined ? choice[step.id] === c.index : c.original) ? ' checked' : '') + '><span>' + esc(c.label) + '</span>' + (c.original ? '<em>' + esc(T.touchedTag) + '</em>' : '') + '</label>';
+        }).join('') + '</fieldset><div class="row">' + button(T.validate, { cmd: 'confirm-resolve', id: step.id, cls: 'primary' }) + button(T.show, { cmd: 'show', id: step.id }) + button(T.ignore, { cmd: 'ignore', id: step.id, cls: 'ghost' }) + '</div>';
         if (state.notice && state.notice.actionId === step.id) h += '<p class="error" role="alert">' + esc(state.notice.message === 'NOT_TOUCHED' ? T.notTouched : state.notice.message) + '</p>';
         h += '</div>';
       }
@@ -705,16 +731,21 @@ const SCRIPT = `
     if (cmd === 'copy') { try { navigator.clipboard.writeText(id || ''); target.textContent = T.copied; } catch (e) { /* presse-papiers indisponible */ } return; }
     if (cmd === 'refresh-preview') { send({ type: 'refresh' }); return; }
     if (cmd === 'fullscreen') { fullscreen(DETACHED ? document.documentElement : $('preview-card')); return; }
-    if (cmd === 'open-resolve') { resolving = id; render(); return; }
-    if (cmd === 'cancel-resolve') { resolving = null; render(); return; }
+    if (cmd === 'show') { selected = id; render(); send({ type: 'select', id: id }); return; }
     if (cmd === 'confirm-resolve') {
       var picked = document.querySelector('input[name="cand-' + id + '"]:checked');
       send({ type: 'resolve', id: id, candidate: picked ? Number(picked.value) : -1 });
-      resolving = null; return;
+      return;
     }
     if (cmd === 'edit') { editing = !editing; render(); return; }
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
     send({ type: cmd, id: id });
+  });
+
+  // Le choix d'un élément survit aux mises à jour du panneau (chaque action reconstruit la liste).
+  document.addEventListener('change', function (event) {
+    var input = event.target;
+    if (input instanceof HTMLInputElement && input.name.indexOf('cand-') === 0) choice[input.name.slice(5)] = Number(input.value);
   });
 
   if (!DETACHED) document.querySelector('.tabs').addEventListener('keydown', function (event) {

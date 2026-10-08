@@ -74,9 +74,13 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   validation — et l'élément est **mis en évidence dans la page** (l'original s'il existe encore,
   sinon le seul élément que son sélecteur désigne) ; sinon « ⚠ Élément introuvable sur la page
   actuelle ». Jamais un élément deviné.
-- **Ambiguïté** : jamais masquée ni résolue en silence. **Résoudre** liste les éléments qui
-  correspondent ; seul **l'élément réellement touché** peut être confirmé (en choisir un autre
-  enregistrerait une action jamais faite : il faut annuler et refaire). **Ignorer** la laisse
+- **Ambiguïté** : jamais masquée ni résolue en silence. Le choix s'affiche tout de suite sous
+  l'action : les éléments qui correspondent, **l'élément touché présélectionné** (marqué « touché »).
+  Si la validation ne sait pas lequel des éléments trouvés est le bon, l'élément touché est proposé
+  tel quel (« l'élément que vous avez touché ») : il y a toujours de quoi valider. **👁 Montrer dans
+  la page** le met en évidence, **✓ Valider cet élément** le confirme. Seul l'élément réellement
+  touché peut être confirmé (en choisir un autre enregistrerait une action jamais faite : il faut
+  annuler et refaire). **Ignorer** la laisse
   signalée (`AMBIGUITY_LEFT_BY_USER`, à vérifier au rejeu). La décision est gardée sur
   l'événement brut et sur l'étape (`AMBIGUITY_CONFIRMED_BY_USER`).
 - **Résumé et qualité** : « ✓ Recording valide » ou « ⚠ nécessite une vérification » ; la qualité

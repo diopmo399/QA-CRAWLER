@@ -130,6 +130,8 @@ const WORDS = {
     navigatedTo: (route: string) => `→ ${route}`,
     element: 'élément',
     touched: 'élément touché',
+    touchedElement: (name: string) =>
+      `${name} — l'élément que vous avez touché (mis en évidence dans la page)`,
     position: (index: number) => `n° ${String(index + 1)}`,
   },
   en: {
@@ -160,6 +162,7 @@ const WORDS = {
     navigatedTo: (route: string) => `→ ${route}`,
     element: 'element',
     touched: 'touched element',
+    touchedElement: (name: string) => `${name} — the element you touched (highlighted in the page)`,
     position: (index: number) => `#${String(index + 1)}`,
   },
 } as const;
@@ -383,6 +386,20 @@ export class LiveTimeline {
           .filter(Boolean)
           .join(' — '),
       }));
+      // L'élément TOUCHÉ est toujours connu (l'enregistreur l'a capturé) : si la liste des
+      // correspondances ne le désigne pas, il est proposé tel quel — l'humain a toujours de quoi valider.
+      if (!candidates.some((candidate) => candidate.original))
+        candidates.unshift({
+          index: -1,
+          original: true,
+          label: this.words.touchedElement(
+            action.technical.label ??
+              action.technical.name ??
+              action.technical.text ??
+              action.technical.field ??
+              this.words.element,
+          ),
+        });
       action.candidates = candidates;
       if (action.resolution) return action;
       action.status = 'AMBIGUOUS';
