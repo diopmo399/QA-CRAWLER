@@ -254,14 +254,19 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     // LA FENÊTRE DU RECORDER : un contexte séparé (jamais capturé) ; elle ne bloque jamais l'enregistrement.
     if (config.recording.panel && config.recording.overlay) {
       try {
-        const panelPage = await browser.newIsolatedPage({ viewport: { width: 1360, height: 900 } });
+        // À l'écran, la fenêtre suit sa VRAIE taille (jamais une page plus grande que l'écran : les
+        // boutons du bas sortaient de l'écran d'un portable) ; sans écran (headless), une taille fixe.
+        const windowSize = config.browser.headless
+          ? { viewport: { width: 1360, height: 900 } }
+          : { viewport: null };
+        const panelPage = await browser.newIsolatedPage(windowSize);
         consoleUi = new RecordingConsole(
           await RecorderPanel.open(panelPage, language),
           recorder,
           request.name,
           language,
           // ⧉ Détacher l'aperçu : une autre fenêtre isolée du même navigateur.
-          () => browser.newIsolatedPage({ viewport: { width: 1280, height: 860 } }),
+          () => browser.newIsolatedPage(windowSize),
         );
         consoleUi.withPreview = config.recording.panelPreview;
         consoleUi.timelineChanged();

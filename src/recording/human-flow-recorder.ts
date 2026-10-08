@@ -432,14 +432,16 @@ export class HumanFlowRecorder {
     const page = this.page;
     if (!page || page.isClosed()) return undefined;
     try {
+      // AUCUN EFFET VISIBLE dans l'application : ni feuille de style injectée (le bandeau masqué puis
+      // réaffiché faisait « flasher » l'écran), ni changement d'échelle émulé (scale 'css' sur un écran
+      // mis à l'échelle), ni animation figée, ni curseur masqué.
       const buffer = await page.screenshot({
         type: 'jpeg',
         quality: 70,
-        scale: 'css',
+        scale: 'device',
         animations: 'allow',
         caret: 'initial',
         timeout: 3000,
-        style: 'qa-crawler-recorder{display:none!important}',
       });
       const size =
         page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
