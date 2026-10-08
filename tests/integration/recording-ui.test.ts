@@ -44,6 +44,7 @@ describe('Recording UI (recorder window)', () => {
   let dir: string;
   let outcome: RecordOutcome;
   const seen: Record<string, unknown> = {};
+  let appPage: Page | undefined;
 
   beforeAll(async () => {
     app = await startDeterministicRecordingApp();
@@ -60,6 +61,7 @@ describe('Recording UI (recorder window)', () => {
       language: 'fr',
       drive: async ({ page, panel, recorder }) => {
         if (!panel) throw new Error('the recorder window did not open');
+        appPage = page;
         // CLICK → la ligne apparaît tout de suite.
         await page.getByRole('button', { name: 'Action 7', exact: true }).click();
         await row(panel, /Cliquer sur "Action 7"/).waitFor({ timeout: 3000 });
@@ -122,6 +124,9 @@ describe('Recording UI (recorder window)', () => {
       reviewDriver: async ({ panel }) => {
         // STOP → l'écran de revue.
         await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        // La fenêtre de l'application est fermée dès l'arrêt ; celle du recorder reste ouverte.
+        seen.appClosedAtReview = appPage?.isClosed() ?? false;
+        seen.panelOpenAtReview = !panel.isClosed();
         seen.reviewText = await panel.locator('body').innerText();
         // MODIFIER : retirer une étape la retire du flow (fichiers régénérés).
         await panel.getByRole('button', { name: '✎ Modifier' }).click();
@@ -191,6 +196,11 @@ describe('Recording UI (recorder window)', () => {
     expect(raw.find((event) => event.element?.name === 'Action 3')?.undone).toBe(true);
     expect((await steps()).some((item) => item.label === 'Action 3')).toBe(false);
     expect(await file('generated.flow.yaml')).not.toContain('Action 3');
+  });
+
+  it('stop closes the application window (the replay opens its own), the recorder window stays', () => {
+    expect(seen.appClosedAtReview).toBe(true);
+    expect(seen.panelOpenAtReview).toBe(true);
   });
 
   it('stop shows the review; edit removes a step from the flow files', async () => {

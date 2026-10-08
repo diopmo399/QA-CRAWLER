@@ -100,6 +100,10 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
 
 `Enregistrement terminé ✓` — actions, confirmées, ambiguïtés, durée — puis :
 
+La **fenêtre de l'application se ferme dès l'arrêt** ; seule la fenêtre du recorder reste ouverte.
+**▶ Rejouer** ouvre une fenêtre neuve (session propre, comme un vrai rejeu), refermée à la fin :
+jamais deux applications ouvertes en même temps.
+
 - **▶ Rejouer** (conseillé) : le flow est rejoué par le Dry Run (même SafetyPolicy), avec la
   progression étape par étape ; ensuite « ✓ Replay réussi — 5 / 5 actions exécutées » ou
   « ✕ Replay interrompu — Étape 2 sur 5 — Cliquer sur "Continuer" — Cause : élément introuvable »,
