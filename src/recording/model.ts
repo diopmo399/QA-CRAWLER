@@ -330,6 +330,8 @@ export interface RecordedValueFacts {
   shape: 'email' | 'number' | 'date' | 'phone' | 'url' | 'code' | 'text' | 'empty';
   /** Empreinte salée par session (jamais pour un champ sensible). */
   digest?: string;
+  /** La valeur contient au moins un chiffre (jamais pour un champ sensible) : un nom n'est pas un identifiant. */
+  hasDigit?: boolean;
   /** Empreinte de la valeur trouvée quand l'humain est entré dans le champ. */
   initialDigest?: string;
   /** Le navigateur juge le champ sensible (mot de passe, code à usage unique, carte…). */

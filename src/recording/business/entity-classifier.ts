@@ -61,8 +61,8 @@ const INFRASTRUCTURE_PATH =
 /** Ressources techniques : fichiers statiques, configuration, traductions. */
 const TECHNICAL_PATH =
   /\.(m?js|css|map|json|svg|png|jpe?g|gif|webp|ico|woff2?|ttf|html?)(\?|#|$)|(^|\/)(assets|static|i18n|locales?|fonts?|images?|config|configuration|env|settings|manifest)(\/|$)/i;
-/** Un nom technique : des mots en minuscules reliés par des tirets, sans chiffre. */
-const TECHNICAL_NAME = /^[a-z][a-z]*(-[a-z]+)+$/;
+/** Un nom technique : des mots reliés par des tirets sans chiffre, ou un nom versionné (icon-v4-4-0). */
+const TECHNICAL_NAME = /^[a-z][a-z]*(-[a-z]+)+$|^[a-z][a-z0-9]*(-[a-z0-9]+)*[-_.]v\d+([-_.]\d+)*$/i;
 
 const GESTURES: ReadonlySet<EntityEvidenceType> = new Set([
   'USER_INPUT',

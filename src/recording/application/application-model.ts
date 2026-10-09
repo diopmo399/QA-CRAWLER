@@ -63,6 +63,14 @@ const LIFECYCLE_ACTION: Partial<Record<LifecycleKind, BusinessActionKind>> = {
   DELETE: 'DELETE',
 };
 
+/** Les gestes qui posent un critère (un champ, une liste de choix, une case). */
+const CRITERIA_INPUT: ReadonlySet<SemanticRecordedAction['type']> = new Set([
+  'FILL',
+  'SELECT',
+  'CHECK',
+  'UNCHECK',
+]);
+
 export function buildApplicationModel(input: ApplicationModelInput): ApplicationInteractionModel {
   const { actions, states } = input;
   const evidence: InteractionEvidence[] = [];
@@ -365,9 +373,9 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       relations.add({
         type: 'RETRIEVED_BY',
         source: key,
-        target: `api:GET ${workspace.source.path}`,
+        target: `api:${workspace.collectionKey.replace(/^collection:/, '')}`,
         confidence: 0.95,
-        reason: `served by GET ${workspace.source.path}`,
+        reason: `served by ${workspace.collectionKey.replace(/^collection:/, '')}`,
         evidenceIds,
         observed: true,
       });
@@ -546,6 +554,71 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       evidenceIds,
     });
     referencesOf(task, record, evidenceIds);
+  }
+
+  // FILTER : des critères saisis DANS l'espace de travail, puis la même liste relue (quelle que soit
+  // la méthode) ou ses lignes changent, sans quitter le contexte. Les valeurs saisies ne sont jamais
+  // des entités ni écrites : seuls les libellés des champs sont gardés.
+  const rowsOf = (stateId: string | undefined): number | undefined =>
+    stateId ? stateById.get(stateId)?.tableRows : undefined;
+  for (const workspace of workspaces.values()) {
+    if (!workspace.contextKey) continue;
+    const collection = collections.find((entry) => entry.key === workspace.collectionKey);
+    let criteria: number[] = [];
+    for (const [index, action] of actions.entries()) {
+      if (before[index]?.key !== workspace.contextKey || switchAt.has(index)) {
+        criteria = [];
+        continue;
+      }
+      if (CRITERIA_INPUT.has(action.type)) criteria.push(index);
+      if (criteria.length === 0) continue;
+      const reread = collection?.observations.find((entry) => entry.actionIndex === index);
+      const rowsBefore = rowsOf(action.stateBefore);
+      const rowsAfter = rowsOf(action.stateAfter);
+      // Les lignes qui changent ne comptent que pour un geste qui déclenche (un clic) : pendant une
+      // saisie, la liste peut encore finir de se charger (l'écran d'avant est alors périmé).
+      const rowsChanged =
+        !CRITERIA_INPUT.has(action.type) &&
+        rowsBefore !== undefined &&
+        rowsAfter !== undefined &&
+        rowsBefore !== rowsAfter;
+      if (!reread && !rowsChanged) continue;
+      const labels = [
+        ...new Set(
+          criteria
+            .map((position) => actions[position]?.target?.label)
+            .filter((label): label is string => !!label),
+        ),
+      ].map((label) => `"${clip(label)}"`);
+      const named = labels.join(', ') || 'criteria';
+      const ids = criteria
+        .map((position) => actions[position]?.id)
+        .filter((id): id is string => id !== undefined);
+      if (!ids.includes(action.id)) ids.push(action.id);
+      const evidenceIds = [
+        ...(reread ? [reread.evidenceId] : []),
+        actionEvidence(
+          reread
+            ? `${named} then ${collection?.key.replace(/^collection:/, '') ?? 'the list'} read again (${String(reread.recordCount)} records), same context`
+            : `${named} then the rows changed (${String(rowsBefore)} → ${String(rowsAfter)}), same context`,
+          action,
+          reread ? 'NETWORK' : 'DOM',
+        ),
+      ];
+      const confidence = reread ? 0.8 : 0.6;
+      businessActions.push({
+        kind: 'FILTER',
+        subject: workspace.key,
+        contextKey: workspace.contextKey,
+        actionIds: ids,
+        stepIds: stepOf(ids),
+        confidence,
+        status: statusOf(confidence, evidenceIds.length, true),
+        reason: `the work list is narrowed by ${named}: the typed values are criteria, not entities`,
+        evidenceIds,
+      });
+      criteria = [];
+    }
   }
 
   // ---------------------------------------------------------------- 4. entités : contextes, création, retour à la liste
@@ -818,6 +891,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     SELECT_TASK: 1,
     SWITCH_CONTEXT: 2,
     SEARCH: 3,
+    FILTER: 3,
     OPEN: 4,
     CREATE: 4,
     RETRIEVE: 5,

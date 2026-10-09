@@ -3,11 +3,21 @@ import { recordsOf } from '../../src/forms/state/form-knowledge-observer.js';
 import { valueDigest } from '../../src/forms/state/value-digest.js';
 import type { FunctionalExchange } from '../../src/functional/model.js';
 import { buildApplicationModel } from '../../src/recording/application/application-model.js';
+import { inferOutcomes } from '../../src/recording/outcomes.js';
 import type { ApplicationInteractionModel } from '../../src/recording/application/model.js';
 import { detectBusinessEvents } from '../../src/recording/business/business-event-detector.js';
 import type { EntityEvidence } from '../../src/recording/business/entity-evidence.js';
-import { classifyEntity, CLASSIFICATION_WEIGHTS } from '../../src/recording/business/entity-classifier.js';
-import { identifierTokens, identityInPath, isIdSegment } from '../../src/recording/business/signals.js';
+import {
+  classifyEntity,
+  CLASSIFICATION_WEIGHTS,
+  technicalCategoryOf,
+} from '../../src/recording/business/entity-classifier.js';
+import {
+  identifierTokens,
+  identityInPath,
+  isIdSegment,
+  isListRead,
+} from '../../src/recording/business/signals.js';
 import type { RawRecordedEvent, RecordedState, SemanticRecordedAction } from '../../src/recording/model.js';
 
 /**
@@ -132,7 +142,13 @@ function app(start: StateSpec) {
         type: 'input',
         at: action.at,
         url: action.url,
-        value: { empty: false, length: value.length, shape, digest: digest(value) },
+        value: {
+          empty: false,
+          length: value.length,
+          shape,
+          ...(/\d/.test(value) ? { hasDigit: true } : {}),
+          digest: digest(value),
+        },
       });
       actions.push(action);
       return action;
@@ -151,6 +167,7 @@ function app(start: StateSpec) {
       });
     },
     actions,
+    states,
   };
 }
 
@@ -636,5 +653,123 @@ describe('Observe first, classify second: technical noise never becomes a busine
     });
     expect(model.actions[1]?.interpretation).toEqual(['SWITCH_CONTEXT']);
     expect(model.summary.actions).toEqual({ recorded: 2, validated: 0, interpreted: 1, uninterpreted: 1 });
+  });
+});
+
+describe('Criteria in the work list: a FILTER, never an entity', () => {
+  /** Une liste lue par un POST (des critères dans le corps) : une lecture, pas une création. */
+  const search = (path: string, body: unknown): FunctionalExchange => ({
+    ...read(path, body),
+    method: 'POST',
+  });
+
+  it('a name typed in the criteria + a choice + a click that reads the list again (POST): FILTER, then SELECT_TASK', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.click('Tasks', {
+      to: TASKS,
+      network: [
+        search('/bff/tasks', [
+          { taskId: 456, businessKey: 'ABC111' },
+          { taskId: 457, businessKey: 'ABC123' },
+        ]),
+      ],
+    });
+    run.click('ui-icon-v4-4-0');
+    const name = run.fill('Customer', 'Acme Corp', 'code');
+    const kind = run.fill('Kind', 'UPDATE', 'code');
+    const narrow = run.click('Apply', {
+      network: [search('/bff/tasks', [{ taskId: 457, businessKey: 'ABC123' }])],
+    });
+    run.click('Task 457 — ABC123', {
+      to: { url: '/items/ABC123', hosts: [SHELL, 'items-detail'] },
+      network: [read('/bff/items/ABC123', { businessKey: 'ABC123' })],
+    });
+    const model = run.build();
+    expect(subsequence(kinds(model), ['SWITCH_CONTEXT', 'FILTER', 'SELECT_TASK', 'OPEN'])).toBe(true);
+    const filter = model.businessActions.find((action) => action.kind === 'FILTER');
+    expect(filter).toMatchObject({
+      subject: model.workspaces[0]?.key,
+      contextKey: 'host:task-list',
+      actionIds: [name.id, kind.id, narrow.id],
+      status: 'OBSERVED',
+    });
+    expect(filter?.reason).toMatch(/"Customer", "Kind"/);
+    // La liste lue par POST est une lecture : un workspace réseau, jamais une création.
+    expect(model.workspaces[0]).toMatchObject({
+      collectionKey: 'collection:POST /bff/tasks',
+      source: { type: 'NETWORK', path: '/bff/tasks' },
+    });
+    expect(model.relationships).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'RETRIEVED_BY', target: 'api:POST /bff/tasks' }),
+      ]),
+    );
+    expect(kinds(model)).not.toContain('CREATE');
+    // Ni le nom saisi, ni le choix, ni l'icône versionnée ne deviennent des entités.
+    expect(model.entities.map((entity) => entity.key)).toEqual(['entity:item:ABC123']);
+    expect(JSON.stringify(model)).not.toContain('Acme');
+  });
+
+  it('no list read again and no rows changed: the criteria stay uninterpreted (UNKNOWN), never a FILTER', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.click('Tasks', { to: TASKS, network: [search('/bff/tasks', [{ taskId: 456 }])] });
+    run.fill('Customer', 'Acme Corp', 'code');
+    run.click('Apply');
+    const model = run.build();
+    expect(kinds(model)).not.toContain('FILTER');
+    expect(model.actions.slice(1).map((view) => view.interpretation)).toEqual([['UNKNOWN'], ['UNKNOWN']]);
+  });
+
+  it('typed text and versioned component names are not identities; a sign-in token POST is not a write', () => {
+    for (const name of ['ux-icon-v4-4-0', 'ui-icon-v4-4-0', 'button-v2'])
+      expect(isIdSegment(name)).toBe(false);
+    expect(identifierTokens('ui-icon-v4-4-0 Acme Corp')).toEqual([]);
+    expect(
+      classifyEntity(
+        {
+          identity: { value: 'ux-icon-v4-4-0', source: 'VISIBLE_TEXT', confidence: 0.5 },
+          resources: [],
+          provenance: 'DISCOVERED_DURING_RECORDING',
+          lifecycle: ['OPEN'],
+        },
+        [],
+      ).classification,
+    ).toBe('TECHNICAL_ENTITY');
+    expect(technicalCategoryOf('/auth/oidc/realm-1/protocol/openid-connect/token')?.category).toBe(
+      'AUTHENTICATION',
+    );
+    expect(isListRead({ records: [{ index: 0, identifiers: [] }] })).toBe(true);
+    expect(
+      isListRead({
+        records: [{ index: 0, identifiers: [] }],
+        identifiers: [{ source: 'response' }],
+      }),
+    ).toBe(false);
+    expect(isListRead({})).toBe(false);
+    // Un nom saisi (sans chiffre) n'est jamais une identité, même en majuscules ; un POST de jeton non plus.
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.fill('Name', 'ACME CORP', 'code');
+    run.click('Sign in', {
+      network: [
+        {
+          method: 'POST',
+          path: '/auth/oidc/realm-1/protocol/openid-connect/token',
+          status: 200,
+          identifiers: [
+            { field: 'session_state', digest: digest('S123'), value: 'S123', source: 'response' },
+          ],
+        },
+      ],
+    });
+    run.click('Apply', { network: [search('/bff/tasks', [{ taskId: 457 }])] });
+    const model = run.build();
+    expect(model.entities).toEqual([]);
+    expect(kinds(model)).not.toContain('CREATE');
+    // Ni le jeton ni la liste lue par POST ne sont une intention d'écriture (jamais « CREATE:TOKEN »).
+    const outcomes = inferOutcomes(run.actions, run.states, false);
+    expect(outcomes.intent.workflow).toBeUndefined();
+    expect(
+      outcomes.assertions.filter((assertion) => assertion.kind === 'API_OUTCOME' && assertion.selected),
+    ).toEqual([]);
   });
 });

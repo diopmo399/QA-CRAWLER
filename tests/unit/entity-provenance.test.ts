@@ -113,7 +113,13 @@ function journey(): Built & {
         type: 'input',
         at: action.at,
         url: action.url,
-        value: { empty: false, length: value.length, shape, digest: digest(value) },
+        value: {
+          empty: false,
+          length: value.length,
+          shape,
+          ...(/\d/.test(value) ? { hasDigit: true } : {}),
+          digest: digest(value),
+        },
       });
       built.actions.push(action);
       return action;

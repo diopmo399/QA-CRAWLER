@@ -112,6 +112,20 @@ safety:
       await page.getByRole('button', { name: 'Task 458' }).click();
       await pause(page, 1000);
     });
+    // Les critères de la liste : un bouton à icône, un nom saisi, un choix, puis la liste relue (POST).
+    sessions.filtered = await record('filtered', 'mfe', async (page) => {
+      await openTasks(page);
+      await page.locator('#toggle').click();
+      await pause(page);
+      await page.getByLabel('Customer').fill('Acme Corp');
+      await pause(page);
+      await page.getByLabel('Kind').selectOption('UPDATE');
+      await pause(page);
+      await page.getByRole('button', { name: 'Apply' }).click();
+      await pause(page, 800);
+      await page.getByRole('button', { name: 'Task 457' }).click();
+      await pause(page, 900);
+    });
     // J : la même application sans éléments personnalisés (routes de SPA seulement).
     sessions.plain = await record('plain', 'plain', async (page) => {
       await openTasks(page);
@@ -227,6 +241,29 @@ safety:
       sessions.created?.model.entities.find((entity) => entity.identity.value === 'ABC123')?.classification
         .classification,
     ).toBe('BUSINESS_ENTITY');
+  });
+
+  it('criteria in the task list: a typed name and a choice, then the list read again by POST → FILTER, never an entity', () => {
+    const model = sessions.filtered?.model;
+    expect(subsequence(kinds(sessions.filtered), ['FILTER', 'SELECT_TASK'])).toBe(true);
+    const filter = model?.businessActions.find((action) => action.kind === 'FILTER');
+    expect(filter?.subject).toBe(model?.workspaces[0]?.key);
+    expect(filter?.reason).toMatch(/Customer/);
+    expect(filter?.actionIds.length).toBeGreaterThanOrEqual(3);
+    // La liste lue par POST est une lecture : un workspace réseau, aucune création, aucune intention d'écriture.
+    expect(model?.workspaces[0]).toMatchObject({
+      collectionKey: 'collection:POST /bff/tasks',
+      source: { type: 'NETWORK', path: '/bff/tasks' },
+    });
+    expect(kinds(sessions.filtered)).not.toContain('CREATE');
+    expect(model?.tasks.map((task) => task.primary.value)).toEqual(['457']);
+    // Ni le nom saisi, ni l'icône versionnée ne deviennent des entités ; la saisie n'est jamais écrite.
+    expect(
+      model?.entities.some((entity) => /icon|#/.test(`${entity.key} ${entity.identity.value ?? ''}`)),
+    ).toBe(false);
+    expect(model?.entities.every((entity) => entity.identity.source !== 'USER_INPUT')).toBe(true);
+    expect(JSON.stringify(model)).not.toContain('Acme');
+    expect(JSON.stringify(sessions.filtered?.steps)).not.toMatch(/CREATE:|intent/);
   });
 
   it('recorded / validated / interpreted: every recorded action is kept, uninterpreted ones stay UNKNOWN', () => {

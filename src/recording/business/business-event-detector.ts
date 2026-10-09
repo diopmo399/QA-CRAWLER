@@ -2,7 +2,7 @@ import type { ExchangeIdentifier, FunctionalExchange } from '../../functional/mo
 import type { RawRecordedEvent, RecordedFlowStep, RecordedState, SemanticRecordedAction } from '../model.js';
 import { entityOf } from '../recorded-test-data.js';
 import type { EntityEvidence } from './entity-evidence.js';
-import { isBusinessCandidate, type EntityClassification } from './entity-classifier.js';
+import { isBusinessCandidate, technicalCategoryOf, type EntityClassification } from './entity-classifier.js';
 import { EntityMemory } from './entity-memory.js';
 import { trackEntities, type LifecycleKind, type TrackedEntity } from './entity-tracker.js';
 import {
@@ -22,6 +22,7 @@ import {
   fold,
   hasPathId,
   identifierTokens,
+  isListRead,
   labelOf,
   round,
   singular,
@@ -137,7 +138,14 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
     const after = action.stateAfter ? stateById.get(action.stateAfter) : undefined;
     const before = action.stateBefore ? stateById.get(action.stateBefore) : undefined;
     const writes = action.network.filter(
-      (exchange) => WRITE.has(exchange.method) && exchange.status !== undefined && exchange.status < 400,
+      (exchange) =>
+        WRITE.has(exchange.method) &&
+        exchange.status !== undefined &&
+        exchange.status < 400 &&
+        // Une liste servie par un POST est une LECTURE ; un appel d'authentification ou de
+        // configuration n'est jamais une écriture métier.
+        !isListRead(exchange) &&
+        technicalCategoryOf(exchange.path) === undefined,
     );
 
     // ---------------------------------------------------------------- écritures (création, mise à jour, suppression)

@@ -29,10 +29,34 @@ const TECHNICAL_SEGMENT =
 export function isIdSegment(segment: string): boolean {
   if (/^\d+$/.test(segment)) return true;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)) return true;
-  if (!/\d/.test(segment)) return false;
+  if (!isCodeLike(segment)) return false;
   return (
     /^[A-Za-z]{2,}[-_][A-Za-z0-9][A-Za-z0-9_-]*$/.test(segment) ||
     /^(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])[A-Za-z0-9]{4,40}$/.test(segment)
+  );
+}
+
+/**
+ * Un code d'enregistrement a au moins deux chiffres CONSÉCUTIFS (DEM-2026-001, ABC123) et aucun
+ * marqueur de version : « ux-icon-v4-4-0 », « lib-v2 », « h1 » sont des noms de composants.
+ */
+function isCodeLike(value: string): boolean {
+  if (!/\d{2,}/.test(value)) return false;
+  return !/(^|[-_.])v\d+([-_.]\d+)*$/i.test(value);
+}
+
+/**
+ * Une LECTURE faite par une écriture HTTP (POST de recherche, liste servie par un BFF) : la réponse
+ * est une liste d'enregistrements et ne désigne aucun objet créé. GET = lecture, POST = création ne
+ * sont que des indices : c'est la réponse qui tranche.
+ */
+export function isListRead(exchange: {
+  records?: readonly unknown[];
+  identifiers?: readonly { source: string }[];
+}): boolean {
+  return (
+    (exchange.records?.length ?? 0) > 0 &&
+    !(exchange.identifiers ?? []).some((id) => id.source === 'response' || id.source === 'location')
   );
 }
 
@@ -101,9 +125,10 @@ export function identifierTokens(text: string): string[] {
       /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*|\d{3,}/gi,
     ) ?? []),
   ];
-  // Un jeton sans chiffre (un mot avec des tirets) n'est jamais un identifiant.
+  // Un jeton sans chiffre (un mot avec des tirets) ou un nom versionné (icon-v4-4-0) n'est jamais
+  // un identifiant.
   const kept = [...new Set(tokens)]
-    .filter((token) => /\d/.test(token))
+    .filter((token) => /^\d+$/.test(token) || /^[0-9a-f]{8}-/i.test(token) || isCodeLike(token))
     .filter(
       (token, _, all) =>
         !all.some(

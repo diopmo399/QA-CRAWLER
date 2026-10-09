@@ -170,6 +170,7 @@ export type BusinessActionKind =
   | 'NAVIGATE'
   | 'CREATE'
   | 'SEARCH'
+  | 'FILTER'
   | 'OPEN'
   | 'RETRIEVE'
   | 'UPDATE'

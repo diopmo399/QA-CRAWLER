@@ -249,6 +249,31 @@ réseau, un script ou une configuration n'est pas une entité métier : il est d
 - **Identités multiples** : chaque entité garde ses candidats (`ENTITY_ID`, `BUSINESS_KEY`,
   `REFERENCE`, `UUID`, `CODE`…) avec source, confiance et preuves.
 
+## Critères de la liste de tasks : `FILTER`, jamais une entité
+
+Sur une vraie application, la liste de tasks est souvent lue par un **POST** (les critères dans le
+corps), et l'humain saisit un nom dans les critères avant de choisir une task.
+
+- **Une liste lue par un POST est une lecture** (`isListRead`) : la réponse est une liste et ne porte
+  aucun identifiant de réponse ni `Location`. Ses enregistrements sont gardés comme pour un GET ; la
+  collection (`collection:POST …`) peut devenir l'espace de travail réseau ; elle ne produit ni
+  création, ni intention, ni assertion d'écriture.
+- **Une saisie n'est une identité que si elle en a la forme** : un nombre, ou un code qui contient un
+  chiffre (fait `hasDigit`, la valeur n'est jamais écrite). Un nom saisi en capitales n'en est pas
+  une.
+- **Noms versionnés** (`icon-v4-4-0`) : des noms de composants, jamais des identifiants
+  (`TECHNICAL_ENTITY`).
+- **Jeton / authentification** : un POST vers un chemin d'authentification (`…/token`) n'est ni une
+  création, ni une intention (`CREATE:TOKEN` disparaît), ni une assertion retenue : il reste dans le
+  Technical Context.
+- **`FILTER`** (structurel, sans aucun libellé connu) : dans le contexte de l'espace de travail, des
+  critères (`FILL`, `SELECT`, `CHECK`, `UNCHECK`) puis un geste qui, **sans changer de contexte**, fait
+  relire la même liste (quelle que soit la méthode ; confiance 0,8), ou, pour un clic, change le
+  nombre de lignes affichées (0,6). Une saisie seule ne compte que si elle fait relire la liste : la
+  liste peut encore finir de se charger pendant qu'on tape. L'action `FILTER` pointe vers toutes ces
+  actions enregistrées et ne garde que les libellés des champs, jamais les valeurs. Sans relecture ni
+  changement de lignes, les critères restent `UNKNOWN`.
+
 ## Limites connues
 
 - Les **actions à l'intérieur d'une iframe** ne sont pas encore enregistrées (le script de capture

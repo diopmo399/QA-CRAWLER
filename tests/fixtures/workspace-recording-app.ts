@@ -10,6 +10,9 @@ import type { AddressInfo } from 'node:net';
  *   variant « mfe »    : chaque vue est un élément personnalisé dans <app-shell>
  *   variant « plain »  : les mêmes vues dans de simples <div> (seules les routes changent)
  *
+ * La liste de tasks est lue par un POST avec des critères (client, type), comme un vrai BFF ; un
+ * bouton à icône versionnée (<ui-icon-v4-4-0>) n'a pas de libellé.
+ *
  * Tasks au départ : 456 (créer un item), 457 (traiter l'item existant ABC777), 458 (revue, dans une
  * iframe). Une création ajoute une task de suivi 900 qui porte la nouvelle clé : l'identifiant de
  * la task n'est pas celui de l'item.
@@ -28,7 +31,7 @@ const page = (
 </${variant === 'mfe' ? 'app-shell' : 'div'}>
 <script>
   const MFE = ${JSON.stringify(variant === 'mfe')};
-  for (const tag of ['app-shell', 'task-list', 'items-create', 'items-detail', 'items-search', 'home-view'])
+  for (const tag of ['ui-icon-v4-4-0', 'app-shell', 'task-list', 'items-create', 'items-detail', 'items-search', 'home-view'])
     if (!customElements.get(tag)) customElements.define(tag, class extends HTMLElement {});
   const view = document.getElementById('view');
   const toast = document.getElementById('toast');
@@ -40,10 +43,11 @@ const page = (
     const path = location.pathname;
     if (toast.dataset.keep !== path) toast.textContent = '';
     if (path === '/tasks') {
-      mount('task-list', '<h1>Tasks</h1><table><tbody id="rows"></tbody></table><div id="frame"></div>');
+      mount('task-list', '<h1>Tasks</h1><section id="criteria"><button type="button" id="toggle"><ui-icon-v4-4-0></ui-icon-v4-4-0></button> <label>Customer <input id="customer" autocomplete="off"></label> <label>Kind <select id="kind"><option value="">Any</option><option>CREATE</option><option>UPDATE</option><option>REVIEW_FRAME</option></select></label> <button type="button" id="narrow">Apply</button></section><table><tbody id="rows"></tbody></table><div id="frame"></div>');
       // Bruit technique d'une vraie application : découverte OpenID et profil OIDC (jamais du métier).
       fetch('/.well-known/openid-configuration').then((r) => r.json()).then(() => fetch('/oidc/client-app-shell/userinfo'));
-      fetch('/bff/tasks').then((r) => r.json()).then((tasks) => {
+      // La liste est lue par un POST (des critères dans le corps) : une lecture, pas une écriture.
+      const load = (criteria) => fetch('/bff/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(criteria) }).then((r) => r.json()).then((tasks) => {
         document.getElementById('rows').innerHTML = tasks.map((t) =>
           '<tr><td><button type="button" class="task" data-id="' + t.taskId + '" data-type="' + t.type + '" data-key="' + (t.businessKey || '') + '">Task ' + t.taskId + '</button></td><td>' + t.type + '</td><td>' + (t.businessKey || '') + '</td></tr>').join('');
         for (const button of document.querySelectorAll('button.task'))
@@ -55,6 +59,9 @@ const page = (
             else go('/items/' + button.dataset.key);
           });
       });
+      load({});
+      document.getElementById('narrow').addEventListener('click', () =>
+        load({ customer: document.getElementById('customer').value, type: document.getElementById('kind').value }));
     } else if (path === '/items/new') {
       mount('items-create', '<h1>New item</h1><label>Name <input id="name" autocomplete="off"></label> <button type="button" id="create">Create</button>');
       document.getElementById('create').addEventListener('click', async () => {
@@ -103,15 +110,15 @@ export interface WorkspaceRecordingApp {
 export async function startWorkspaceRecordingApp(): Promise<WorkspaceRecordingApp> {
   const state = {
     variant: 'mfe' as WorkspaceVariant,
-    tasks: [] as { taskId: string; type: string; businessKey?: string }[],
+    tasks: [] as { taskId: string; type: string; businessKey?: string; customer: string }[],
     items: [] as string[],
     next: 123,
   };
   const reset = (): void => {
     state.tasks = [
-      { taskId: '456', type: 'CREATE' },
-      { taskId: '457', type: 'UPDATE', businessKey: 'ABC777' },
-      { taskId: '458', type: 'REVIEW_FRAME' },
+      { taskId: '456', type: 'CREATE', customer: 'Northwind Traders' },
+      { taskId: '457', type: 'UPDATE', businessKey: 'ABC777', customer: 'Acme Corp' },
+      { taskId: '458', type: 'REVIEW_FRAME', customer: 'Acme Corp' },
     ];
     state.items = ['ABC777'];
     state.next = 123;
@@ -137,7 +144,18 @@ export async function startWorkspaceRecordingApp(): Promise<WorkspaceRecordingAp
       return;
     }
     if (url.pathname === '/bff/tasks') {
-      json(200, state.tasks);
+      let body = '';
+      request.on('data', (chunk: Buffer) => (body += chunk.toString()));
+      request.on('end', () => {
+        const criteria = (body ? JSON.parse(body) : {}) as { customer?: string; type?: string };
+        json(
+          200,
+          state.tasks
+            .filter((task) => !criteria.type || task.type === criteria.type)
+            .filter((task) => !criteria.customer || task.customer.includes(criteria.customer))
+            .map(({ customer: _customer, ...task }) => task),
+        );
+      });
       return;
     }
     if (url.pathname === '/bff/items' && request.method === 'POST') {
@@ -145,7 +163,7 @@ export async function startWorkspaceRecordingApp(): Promise<WorkspaceRecordingAp
       const key = `ABC${String(state.next)}`;
       state.next += 1;
       state.items.push(key);
-      state.tasks.push({ taskId: '900', type: 'REVIEW', businessKey: key });
+      state.tasks.push({ taskId: '900', type: 'REVIEW', businessKey: key, customer: 'Northwind Traders' });
       json(201, { businessKey: key, status: 'NEW' });
       return;
     }

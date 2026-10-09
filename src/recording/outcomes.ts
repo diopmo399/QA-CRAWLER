@@ -1,3 +1,5 @@
+import { technicalCategoryOf } from './business/entity-classifier.js';
+import { isListRead } from './business/signals.js';
 import type { FlowExpectation } from '../config/flow-schema.js';
 import { apiTemplate, intentOf } from '../functional/runtime-learning.js';
 import type {
@@ -63,10 +65,12 @@ export function inferOutcomes(
       const template = apiTemplate(exchange.path);
       const status = exchange.status;
       if (!isWrite(exchange.method) || status === undefined) continue;
+      // Authentification, configuration, liste lue par un POST : jamais une intention métier.
+      const technical = technicalCategoryOf(exchange.path) !== undefined || isListRead(exchange);
       const accepted = status >= 200 && status < 300;
       const url = template.replace(/\{param\}/g, '*');
       if (accepted) {
-        wrote = true;
+        if (!technical) wrote = true;
         add({
           kind: 'API_OUTCOME',
           description: `${exchange.method} ${template} is accepted (${String(status)})`,
@@ -78,10 +82,12 @@ export function inferOutcomes(
           evidence: [
             `observed ${exchange.method} ${template} → ${String(status)} after "${action.target?.label ?? action.type}"`,
           ],
-          selected: true,
-          reason: 'the write the human triggered, accepted by the server',
+          selected: !technical,
+          reason: technical
+            ? 'a technical call (authentication, configuration) or a list read: observed, not asserted'
+            : 'the write the human triggered, accepted by the server',
         });
-        const found = intentOf(exchange.method, template, action.target?.label ?? '');
+        const found = technical ? undefined : intentOf(exchange.method, template, action.target?.label ?? '');
         if (found && !intent.workflow) {
           intent.workflow = `${found.verb}:${found.entity}`;
           intent.entity = found.entity;

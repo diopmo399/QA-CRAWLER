@@ -105,6 +105,12 @@ export class FormKnowledgeObserver implements PageObserver {
         if (salt !== undefined && (entry.status ?? 0) < 400) {
           const found = identifiersOf(body, salt);
           if (found.length > 0) entry.identifiers = [...(entry.identifiers ?? []), ...found];
+          // Une LISTE servie par une écriture HTTP (un POST de recherche, une liste d'un BFF) : ses
+          // enregistrements, comme pour une lecture. La méthode n'est qu'un indice.
+          if (isList(body)) {
+            const records = recordsOf(body, salt);
+            if (records.length > 0) entry.records = records;
+          }
         }
         const code = errorCodeOf(body);
         if (code && entry.status !== undefined && entry.status >= 400) entry.errorCode = code;
@@ -277,6 +283,21 @@ export function identifiersOf(body: unknown, salt: string): ExchangeIdentifier[]
 
 /** Un code alphanumérique (lettres + au moins deux chiffres : ABC123, X9Y8Z7) : une clé métier possible. */
 const ALNUM_CODE = /^(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])[A-Za-z0-9]{4,40}$/;
+
+/** Le corps est-il une liste d'objets (au premier niveau ou dans une propriété enveloppe) ? */
+function isList(body: unknown): boolean {
+  const objects = (value: unknown): boolean =>
+    Array.isArray(value) &&
+    value.some((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+  if (objects(body)) return true;
+  return (
+    !!body &&
+    typeof body === 'object' &&
+    Object.values(body as Record<string, unknown>)
+      .slice(0, 40)
+      .some(objects)
+  );
+}
 
 /**
  * Les ENREGISTREMENTS d'une réponse de lecture : un tableau d'objets (au premier niveau ou dans une

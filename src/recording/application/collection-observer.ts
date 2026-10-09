@@ -4,6 +4,7 @@ import {
   SEARCH_LABEL,
   identifierTokens,
   identityInPath,
+  isListRead,
   labelOf,
   routePattern,
   sameValue,
@@ -66,9 +67,10 @@ export function observeCollections(
   const collections = new Map<string, WorkCollection>();
   for (const [index, action] of actions.entries()) {
     for (const exchange of action.network) {
-      if (exchange.method !== 'GET' || !exchange.records?.length) continue;
+      // Une lecture (GET), ou une liste servie par une écriture HTTP (POST de recherche d'un BFF).
+      if (!exchange.records?.length || (exchange.method !== 'GET' && !isListRead(exchange))) continue;
       if (exchange.status === undefined || exchange.status >= 400) continue;
-      const key = `collection:GET ${routePattern(exchange.path, 6)}`;
+      const key = `collection:${exchange.method} ${routePattern(exchange.path, 6)}`;
       const records: CollectionRecord[] = exchange.records.map((record) => ({
         index: record.index,
         identityCandidates: candidatesOf(record.identifiers),
@@ -79,7 +81,7 @@ export function observeCollections(
         SEARCH_LABEL.test(labelOf(action)) ||
         (previous?.type === 'FILL' && SEARCH_LABEL.test(`${labelOf(previous)} ${labelOf(action)}`));
       const evidenceId = evidenceOf(
-        `GET ${exchange.path} → ${String(exchange.status)}: ${String(records.length)} identifiable record(s)${
+        `${exchange.method} ${exchange.path} → ${String(exchange.status)}: ${String(records.length)} identifiable record(s)${
           records[0]
             ? ` (e.g. ${records[0].identityCandidates
                 .map((candidate) => `${candidate.field ?? '?'}=${candidate.value ?? '(digest)'}`)
@@ -104,7 +106,7 @@ export function observeCollections(
       }
       collections.set(key, {
         key,
-        source: { type: 'NETWORK', method: 'GET', path: routePattern(exchange.path, 6) },
+        source: { type: 'NETWORK', method: exchange.method, path: routePattern(exchange.path, 6) },
         records,
         observations: [{ actionId: action.id, actionIndex: index, recordCount: records.length, evidenceId }],
         searchResults: search,
