@@ -4,7 +4,7 @@ import { LiveTimeline, type LiveAction } from './live-timeline.js';
 import type { BrowserContext, CDPSession, Dialog, Download, Page } from 'playwright';
 import type { ScenarioConfig } from '../config/config.js';
 import { FormKnowledgeObserver } from '../forms/state/form-knowledge-observer.js';
-import { newValueSalt } from '../forms/state/value-digest.js';
+import { newValueSalt, valueDigest } from '../forms/state/value-digest.js';
 import type { FunctionalExchange } from '../functional/model.js';
 import { NavigationGuard } from '../navigation/navigation-guard.js';
 import { StateDetector } from '../observation/state-detector.js';
@@ -432,14 +432,16 @@ export class HumanFlowRecorder {
     const page = this.page;
     if (!page || page.isClosed()) return undefined;
     try {
+      // AUCUN EFFET VISIBLE dans l'application : ni feuille de style injectée (le bandeau masqué puis
+      // réaffiché faisait « flasher » l'écran), ni changement d'échelle émulé (scale 'css' sur un écran
+      // mis à l'échelle), ni animation figée, ni curseur masqué.
       const buffer = await page.screenshot({
         type: 'jpeg',
         quality: 70,
-        scale: 'css',
+        scale: 'device',
         animations: 'allow',
         caret: 'initial',
         timeout: 3000,
-        style: 'qa-crawler-recorder{display:none!important}',
       });
       const size =
         page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
@@ -586,6 +588,11 @@ export class HumanFlowRecorder {
   }
 
   /** Les instantanés d'écran (pour la carte des flows) : jamais écrits tels quels. */
+  /** L'empreinte salée de la session : comparer une valeur à une saisie ou à une réponse, sans la garder. */
+  digest(value: string): string {
+    return valueDigest(value, this.salt);
+  }
+
   snapshot(observationId: string): UiSnapshot | undefined {
     return this.snapshots.get(observationId);
   }
@@ -948,6 +955,7 @@ export class HumanFlowRecorder {
       title: redactText(snapshot.title),
       headings: snapshot.headings.map(redactText),
       alerts: (snapshot.signals?.alerts ?? []).map(redactText),
+      ...(snapshot.signals?.statuses?.length ? { statuses: snapshot.signals.statuses.map(redactText) } : {}),
       invalidFields: snapshot.signals?.invalidFields ?? 0,
       dialogs: snapshot.dialogs,
       controls: snapshot.elements
@@ -997,6 +1005,7 @@ function sameObservation(a: RecordedState, b: RecordedState): boolean {
     a.invalidFields === b.invalidFields &&
     a.alerts.join('\n') === b.alerts.join('\n') &&
     a.dialogs.join('\n') === b.dialogs.join('\n') &&
+    (a.statuses ?? []).join('\n') === (b.statuses ?? []).join('\n') &&
     // L'empreinte de l'écran ne voit pas une section ouverte, un onglet, des champs devenus
     // visibles : les contrôles visibles, si (HUMAN JOURNEY : ce sont les effets d'un clic).
     a.controls.join('\n') === b.controls.join('\n')

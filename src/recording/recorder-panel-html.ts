@@ -166,9 +166,11 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .col-mid{display:none}
 /* Grand écran : une application (en-tête et résumé fixes, la zone centrale défile) ; le détail et
    l'aperçu restent visibles pendant qu'on fait défiler un long parcours. */
-@media (min-width:780px){
+@media (min-width:780px) and (min-height:560px){
   body[data-mode=main]{height:100vh;overflow:hidden}
   body[data-mode=main] main{overflow:auto}
+}
+@media (min-width:780px){
   .grid{grid-template-columns:minmax(340px,1.1fr) minmax(0,1fr)}
   .grid>.col-mid,.grid>.col-right{position:sticky;top:0}
 }
@@ -284,6 +286,16 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .notice.running::before{content:"";display:inline-block;width:10px;height:10px;margin-right:8px;border:2px solid var(--accent);border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px}
 .notice{background:var(--accent-soft);border-radius:8px;padding:10px 12px;font-size:12px}
 .empty{color:var(--muted);font-style:italic}
+.bflow{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+.bstep{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface)}
+.bstep.CONFIRMED{border-left:4px solid var(--ok)} .bstep.PROBABLE{border-left:4px solid var(--run)}
+.bhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bref{margin-top:4px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg)}
+.bbadge{font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--idle-soft);color:var(--muted)}
+.bbadge.CONFIRMED{background:var(--ok-soft);color:var(--ok)} .bbadge.PROBABLE{background:var(--run-soft);color:var(--run)} .bbadge.AMBIGUOUS{background:var(--warn-soft);color:var(--warn)}
+.barrow{text-align:center;color:var(--muted)}
+.bstep details{margin-top:4px} .bstep summary{cursor:pointer;color:var(--muted);font-size:12px}
+.bunres{padding-left:18px}
 .sub{color:var(--muted);font-size:12px}
 @media (max-width:640px){
   .subtitle{display:none}.topbar{padding:8px 12px}
@@ -357,6 +369,7 @@ const SCRIPT = `
       saved: '✓ Flow sauvegardé', remove: '✕ Retirer cette étape', removeLabel: function (d) { return "Retirer l'étape « " + d + ' » du flow'; },
       checks: function (n) { return 'Vérifications ajoutées au flow (' + n + ')'; }, checksNote: 'Déduites des résultats observés : ce ne sont pas des actions enregistrées.',
       analysisTitle: 'Analyse', analysisNote: "L'analyse ne modifie jamais le recording. Elle est disponible après l'arrêt.", analysisWaiting: "L'analyse sera disponible après l'arrêt de l'enregistrement.",
+      business: 'Interprétation métier', businessNote: "Déduite du parcours enregistré : jamais une étape ajoutée au flow.", noBusiness: 'Aucune interprétation métier sûre.', recordedActions: 'Actions enregistrées', observed: 'Observé', deduced: 'Déduit', uncertain: 'Incertain (jamais une vérité métier)', candidatesL: 'Possibles', bstatus: { CONFIRMED: 'Confirmé', PROBABLE: 'Probable', AMBIGUOUS: 'Ambigu', UNKNOWN: 'Inconnu' }, aiChoice: 'choix de l’IA parmi les candidats observés', referenceL: 'référence', baction: { create: 'CRÉER', search: 'RECHERCHER', open: 'OUVRIR', update: 'MODIFIER', delete: 'SUPPRIMER' },
       intents: 'Intents détectés', noIntent: 'Aucun intent détecté.', confidence: 'Confiance', why: 'Voir pourquoi', findings: 'Constats et suggestions', noFinding: 'Aucun constat.', ai: function (n) { return n + ' suggestion(s) de connaissance proposée(s) par l’IA (à revoir).'; },
       origin: { DETERMINISTIC: 'Analyse déterministe', AI_PROPOSAL: 'Proposition IA' },
       announceAdded: 'Action ajoutée : ', announceUndo: 'Dernière action retirée.', toReview: 'à vérifier'
@@ -398,6 +411,7 @@ const SCRIPT = `
       saved: '✓ Flow saved', remove: '✕ Remove this step', removeLabel: function (d) { return 'Remove the step "' + d + '" from the flow'; },
       checks: function (n) { return 'Checks added to the flow (' + n + ')'; }, checksNote: 'Inferred from the observed results: these are not recorded actions.',
       analysisTitle: 'Analysis', analysisNote: 'The analysis never changes the recording. It is available after Stop.', analysisWaiting: 'The analysis will be available once the recording is stopped.',
+      business: 'Business interpretation', businessNote: 'Deduced from the recorded journey: never a step added to the flow.', noBusiness: 'No reliable business interpretation.', recordedActions: 'Recorded actions', observed: 'Observed', deduced: 'Deduced', uncertain: 'Uncertain (never a business fact)', candidatesL: 'Possible', bstatus: { CONFIRMED: 'Confirmed', PROBABLE: 'Probable', AMBIGUOUS: 'Ambiguous', UNKNOWN: 'Unknown' }, aiChoice: 'AI choice among the observed candidates', referenceL: 'reference', baction: { create: 'CREATE', search: 'SEARCH', open: 'OPEN', update: 'UPDATE', delete: 'DELETE' },
       intents: 'Detected intents', noIntent: 'No intent detected.', confidence: 'Confidence', why: 'See why', findings: 'Findings and suggestions', noFinding: 'No finding.', ai: function (n) { return n + ' knowledge suggestion(s) proposed by the AI (to review).'; },
       origin: { DETERMINISTIC: 'Deterministic analysis', AI_PROPOSAL: 'AI proposal' },
       announceAdded: 'Action added: ', announceUndo: 'Last action removed.', toReview: 'to review'
@@ -488,7 +502,7 @@ const SCRIPT = `
       c += button(T.undo, { cmd: 'undo', aria: T.undoLabel, disabled: state.actions.length <= 1 });
       if (p === 'PAUSED') c += '<p class="note" role="note">' + esc(T.pausedNote) + '</p>';
     }
-    $('controls').innerHTML = c;
+    setHtml($('controls'), c);
     var pr = $('progress');
     if (state.progress && p === 'FINALIZING') {
       pr.hidden = false;
@@ -558,9 +572,9 @@ const SCRIPT = `
       if (editing && step.removable) h += '<div class="remove">' + button(T.remove, { cmd: 'remove', id: step.id, aria: T.removeLabel(step.description) }) + '</div>';
       return h + '</li>';
     }).join('');
-    $('timeline').innerHTML = html || '<li class="empty">' + esc(T.empty) + '</li>';
+    setHtml($('timeline'), html || '<li class="empty">' + esc(T.empty) + '</li>');
     var checks = state.checks || [];
-    $('checks').innerHTML = checks.length ? '<details class="checks"><summary>' + esc(T.checks(checks.length)) + '</summary><p class="sub">' + esc(T.checksNote) + '</p><ul>' + checks.map(function (c) { return '<li>' + esc(c.description) + '</li>'; }).join('') + '</ul></details>' : '';
+    setHtml($('checks'), checks.length ? '<details class="checks"><summary>' + esc(T.checks(checks.length)) + '</summary><p class="sub">' + esc(T.checksNote) + '</p><ul>' + checks.map(function (c) { return '<li>' + esc(c.description) + '</li>'; }).join('') + '</ul></details>' : '');
   }
 
   var GENERAL = ['kind', 'event', 'name', 'label', 'text', 'role', 'tag', 'page', 'section', 'field', 'provenance', 'locator', 'decision', 'resolution'];
@@ -569,7 +583,7 @@ const SCRIPT = `
   function renderDetails() {
     var box = $('details');
     var step = state.actions.find(function (s) { return s.id === selected; });
-    if (!step) { box.innerHTML = '<header class="card-head"><h2>' + esc(T.detailsTitle) + '</h2></header><p class="empty-details">' + esc(T.pick) + '</p>'; return; }
+    if (!step) { setHtml(box, '<header class="card-head"><h2>' + esc(T.detailsTitle) + '</h2></header><p class="empty-details">' + esc(T.pick) + '</p>'); return; }
     var t = step.technical;
     var h = '<header class="card-head"><h2>' + esc(T.detailsTitle) + '</h2><span class="actions">' + button('✕', { cmd: 'deselect', cls: 'ghost', aria: T.hideDetails }) + '</span></header>';
     h += '<span class="step">' + esc(T.stepOf2(step.index, state.actions.length)) + '</span>';
@@ -594,16 +608,16 @@ const SCRIPT = `
       h += '<p class="found ' + (r === 'NOT_FOUND' ? 'warn' : 'ok') + '" role="status">' + esc(T.found[r]) + '</p>';
     }
     h += '<details class="logs"><summary>' + esc(T.logs) + '</summary><span class="tech">' + esc(techLines(step)) + '</span></details>';
-    box.innerHTML = h;
+    setHtml(box, h);
   }
 
   function renderQuality() {
     var q = state.quality, el = $('quality');
     var h = '<header class="card-head"><h2>' + esc(T.quality) + '</h2></header>';
-    if (q.score === undefined) { el.innerHTML = h + '<p class="empty">' + esc(T.noQuality) + '</p>'; return; }
+    if (q.score === undefined) { setHtml(el, h + '<p class="empty">' + esc(T.noQuality) + '</p>'); return; }
     h += '<div class="qbody"><div class="ring" style="--p:' + q.score + '" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + q.score + '" aria-label="' + esc(T.quality) + '"><div><span><b>' + q.score + '%</b><br>' + esc(T.qualityShort) + '</span></div></div><ul>';
     q.checks.forEach(function (c) { if (c.total > 0) h += '<li class="' + (c.ok ? 'ok' : 'warn') + '"><span class="i" aria-hidden="true">' + (c.ok ? '✓' : '⚠') + '</span>' + esc(T.checksQ[c.id]) + '<span class="v">' + c.passed + '/' + c.total + '</span></li>'; });
-    el.innerHTML = h + '</ul></div>';
+    setHtml(el, h + '</ul></div>');
   }
 
   function previewHtml() {
@@ -633,9 +647,17 @@ const SCRIPT = `
     var grid = $('grid');
     grid.classList.toggle('detached', detached);
     var note = detached ? '<div class="detached-note" role="status">⧉ ' + esc(T.detachedNote) + button('↩ ' + T.attach, { cmd: 'attach', aria: T.attachLabel }) + '</div>' : '';
-    $('detached-note').innerHTML = note;
-    $('preview-card').innerHTML = detached ? '' : previewHtml();
-    $('preview-full').innerHTML = detached ? note : previewHtml();
+    setHtml($('detached-note'), note);
+    var preview = previewHtml();
+    setHtml($('preview-card'), detached ? '' : preview);
+    setHtml($('preview-full'), detached ? note : preview);
+  }
+
+  /** Réécrit un bloc seulement s'il a changé : l'image d'aperçu n'est jamais recréée pour rien (pas de clignotement). */
+  function setHtml(el, html) {
+    if (el.__html === html) return;
+    el.__html = html;
+    el.innerHTML = html;
   }
 
   /** La fenêtre détachée : l'aperçu seul, l'état de l'enregistrement, Plein écran et Rattacher. */
@@ -643,12 +665,12 @@ const SCRIPT = `
     var p = state.phase, st = $('state');
     st.className = 'state small ' + (p === 'RECORDING' ? 'rec' : p === 'PAUSED' ? 'paused' : p === 'REVIEW' ? 'done' : 'working');
     st.textContent = (p === 'RECORDING' ? T.recording : p === 'PAUSED' ? '⏸ ' + T.paused : p === 'FINALIZING' ? T.finalizing : '✓ ' + T.review) + ' · ' + T.actions(state.summary.actions);
-    $('preview-detached').innerHTML = previewHtml();
+    setHtml($('preview-detached'), previewHtml());
   }
 
   function renderReview() {
     var el = $('review');
-    if (state.phase !== 'REVIEW') { el.innerHTML = ''; return; }
+    if (state.phase !== 'REVIEW') { setHtml(el, ''); return; }
     var r = state.replay;
     var h = '<div class="review" role="region" aria-label="' + esc(T.done) + '"><h2>' + esc(T.done) + '</h2>';
     if (!r && !state.saved) h += '<p class="hint">' + esc(T.recommend) + '</p>';
@@ -660,7 +682,7 @@ const SCRIPT = `
       h += '<div class="actions">' + button(T.editStep, { cmd: 'edit-step', id: f.stepId || '' }) + button(T.restart, { cmd: 'replay' }) + '</div></div>';
     }
     if (state.saved) h += '<div class="result ok" role="status"><b>' + esc(T.saved) + '</b><p class="sub">' + esc(state.saved.directory) + '</p></div>';
-    el.innerHTML = h + '</div>';
+    setHtml(el, h + '</div>');
   }
 
   function renderFooter() {
@@ -674,14 +696,31 @@ const SCRIPT = `
     h += button(T.saveFlow2, { cmd: 'save', cls: 'success', disabled: !review || running, title: review ? '' : T.afterStop });
     if (review) h += button(T.finish, { cmd: 'finish', disabled: running });
     h += '</div>';
-    $('summarybar').innerHTML = h;
+    setHtml($('summarybar'), h);
   }
 
   function renderAnalysis() {
     var a = state.analysis, el = $('panel-analysis');
     var h = '<div class="card card-plain"><h2>' + esc(T.analysisTitle) + '</h2><p class="notice">' + esc(T.analysisNote) + '</p>';
-    if (!a.available) { el.innerHTML = h + '<p class="empty">' + esc(T.analysisWaiting) + '</p></div>'; return; }
+    if (!a.available) { setHtml(el, h + '<p class="empty">' + esc(T.analysisWaiting) + '</p></div>'); return; }
     if (a.running) h += '<p class="notice running" role="status">' + esc(T.analysisRunning) + '</p>';
+    if (a.business) {
+      var b = a.business;
+      h += '</div><div class="card card-plain business"><h2>' + esc(T.business) + '</h2><p class="sub">' + esc(T.businessNote) + '</p>';
+      h += b.steps.length ? '<ol class="bflow">' + b.steps.map(function (st) {
+        var line = st.output ? st.output + (st.outputValue !== undefined ? ' = ' + st.outputValue : '') : st.reference ? T.referenceL + ' = ' + st.reference : '';
+        var x = '<li class="bstep ' + st.status + '"><div class="bhead"><b>' + esc((T.baction[st.action] || st.action) + ' ' + st.entity.toUpperCase()) + '</b><span class="bbadge ' + st.status + '">' + esc(T.bstatus[st.status]) + ' · ' + Math.round(st.confidence * 100) + ' %</span></div>';
+        if (line) x += '<div class="bref">↳ ' + esc(line) + '</div>';
+        if (st.ai) x += '<div class="meta">' + esc(T.aiChoice) + '</div>';
+        x += '<details><summary>' + esc(T.recordedActions) + ' (' + st.recorded.length + ')</summary><ul>' + st.recorded.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul></details>';
+        if (st.observed.length) x += '<details><summary>' + esc(T.observed) + '</summary><ul>' + st.observed.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul></details>';
+        if (st.deduced.length) x += '<details><summary>' + esc(T.deduced) + '</summary><ul>' + st.deduced.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul></details>';
+        return x + '</li>';
+      }).join('<li class="barrow" aria-hidden="true">↓</li>') + '</ol>' : '<p class="empty">' + esc(T.noBusiness) + '</p>';
+      if (b.unresolved.length) h += '<h3>' + esc(T.uncertain) + '</h3><ul class="bunres">' + b.unresolved.map(function (u) {
+        return '<li><span class="bbadge ' + u.status + '">' + esc(T.bstatus[u.status] || u.status) + '</span> ' + esc(u.type) + (u.candidates ? ' — ' + esc(T.candidatesL) + ' : ' + esc(u.candidates.join(', ')) : '') + (u.recorded.length ? '<div class="meta">' + esc(u.recorded.join(' · ')) + '</div>' : '') + '</li>';
+      }).join('') + '</ul>';
+    }
     h += '</div><div class="card card-plain"><h2>' + esc(T.intents) + '</h2>';
     h += a.intents.length ? a.intents.map(function (i) {
       return '<div><b>' + esc(i.label) + '</b>' + (i.detail ? '<div class="meta">' + esc(i.detail) + '</div>' : '') + (i.confidence !== undefined ? '<div class="meta">' + esc(T.confidence) + ' : ' + Math.round(i.confidence * 100) + ' %</div>' : '') + (i.evidence.length ? '<details><summary>' + esc(T.why) + '</summary><ul>' + i.evidence.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul></details>' : '') + '</div>';
@@ -691,7 +730,7 @@ const SCRIPT = `
       return '<p><span class="tag">' + esc(f.severity) + '</span><b>' + esc(f.message) + '</b><br><span class="meta">' + esc(T.origin[f.origin] || f.origin) + '</span>' + (f.suggestion ? '<br>' + esc(f.suggestion) : '') + '</p>';
     }).join('') : '<p class="empty">' + esc(T.noFinding) + '</p>';
     if (a.aiCandidates > 0) h += '<p class="sub">' + esc(T.ai(a.aiCandidates)) + '</p>';
-    el.innerHTML = h + '</div>';
+    setHtml(el, h + '</div>');
   }
 
   function render() {

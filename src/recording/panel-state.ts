@@ -61,6 +61,28 @@ export interface PanelAnalysis {
   aiCandidates: number;
   /** L'analyse du conseiller tourne encore en arrière-plan (la revue n'attend pas). */
   running?: boolean;
+  /**
+   * L'INTERPRÉTATION MÉTIER : chaque étape (créer, rechercher, ouvrir…), les actions enregistrées
+   * qu'elle regroupe, ce qui a été OBSERVÉ (réseau, écran, navigation) et ce qui est DÉDUIT.
+   */
+  business?: {
+    steps: PanelBusinessStep[];
+    unresolved: { type: string; status: string; candidates?: string[]; recorded: string[] }[];
+  };
+}
+
+export interface PanelBusinessStep {
+  action: string;
+  entity: string;
+  status: 'CONFIRMED' | 'PROBABLE' | 'AMBIGUOUS' | 'UNKNOWN';
+  confidence: number;
+  output?: string;
+  outputValue?: string;
+  reference?: string;
+  recorded: string[];
+  observed: string[];
+  deduced: string[];
+  ai: boolean;
 }
 
 export interface PanelState {

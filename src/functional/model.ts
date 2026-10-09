@@ -375,6 +375,20 @@ export interface FunctionalExchange {
    */
   requestState?: StateCode;
   responseState?: StateCode;
+  /**
+   * Les IDENTIFIANTS de l'échange (réponse d'écriture, segment du chemin, en-tête Location) : une
+   * empreinte salée — comparable à une saisie — et la valeur seulement si elle a la forme d'un
+   * identifiant (nombre, code court), jamais celle d'une clé sensible.
+   */
+  identifiers?: ExchangeIdentifier[];
+}
+
+export interface ExchangeIdentifier {
+  /** id, demandeId, data.reference, (path), (location). */
+  field: string;
+  digest: string;
+  value?: string;
+  source: 'response' | 'path' | 'location';
 }
 
 export interface StateCode {

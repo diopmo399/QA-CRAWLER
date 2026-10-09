@@ -926,6 +926,11 @@ export function collectDomSnapshot(options: { maxElements: number; valueSalt?: s
         .map((el) => clean((el as HTMLElement).innerText, 160))
         .filter(Boolean)
         .slice(0, 5),
+      statuses: deepAll('[role="status"], [aria-live="polite"]')
+        .filter((el) => isVisible(el))
+        .map((el) => clean((el as HTMLElement).innerText, 160))
+        .filter(Boolean)
+        .slice(0, 5),
       // Chargement en cours : aria-busy, barres de progression et roues de chargement.
       busy: deepAll(
         '[aria-busy="true"], [role="progressbar"], mat-spinner, mat-progress-spinner, mat-progress-bar, ngx-spinner, .spinner, .loading, .loader, [class*="spinner"], [class*="skeleton"]',

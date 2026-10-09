@@ -1,3 +1,5 @@
+import { buildBusinessFlow } from './business/business-flow.js';
+import { LlmBusinessAnalyzer, gatewayEntityChooser } from './business/business-semantic-analyzer.js';
 import { effectiveRecordingMode } from './sources/recording-coordinator.js';
 import { RecordingSourceSet } from './sources/recording-sources.js';
 import { annotateFlowYaml, auditGeneratedFlow, flowAuditText, type FlowAuditReport } from './flow-audit.js';
@@ -252,14 +254,19 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     // LA FENÊTRE DU RECORDER : un contexte séparé (jamais capturé) ; elle ne bloque jamais l'enregistrement.
     if (config.recording.panel && config.recording.overlay) {
       try {
-        const panelPage = await browser.newIsolatedPage({ viewport: { width: 1360, height: 900 } });
+        // À l'écran, la fenêtre suit sa VRAIE taille (jamais une page plus grande que l'écran : les
+        // boutons du bas sortaient de l'écran d'un portable) ; sans écran (headless), une taille fixe.
+        const windowSize = config.browser.headless
+          ? { viewport: { width: 1360, height: 900 } }
+          : { viewport: null };
+        const panelPage = await browser.newIsolatedPage(windowSize);
         consoleUi = new RecordingConsole(
           await RecorderPanel.open(panelPage, language),
           recorder,
           request.name,
           language,
           // ⧉ Détacher l'aperçu : une autre fenêtre isolée du même navigateur.
-          () => browser.newIsolatedPage({ viewport: { width: 1280, height: 860 } }),
+          () => browser.newIsolatedPage(windowSize),
         );
         consoleUi.withPreview = config.recording.panelPreview;
         consoleUi.timelineChanged();
@@ -310,8 +317,17 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       snapshot: (observationId) => recorder.snapshot(observationId),
       onEvent,
       typedValues: recorder.typedValues,
+      digest: (value) => recorder.digest(value),
     }),
   );
+  // Une ambiguïté métier peut encore être soumise à l'IA (analyse en arrière-plan) : les saisies
+  // restent en mémoire jusque-là seulement (jamais écrites).
+  const businessTyped =
+    mode !== 'OFF' &&
+    config.recording.business.ai &&
+    result.business?.model.unresolved.some((event) => event.status === 'AMBIGUOUS') === true
+      ? new Map(recorder.typedValues)
+      : undefined;
   // Les textes saisis ne servent plus : effacés de la mémoire du recorder.
   recorder.typedValues.clear();
   // QA_DEBUG : chaque interaction humaine, enregistrée (élément, validation, stabilisation) ou ignorée (raison).
@@ -334,6 +350,16 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   // La trace brute ne contient aucune saisie : formes, empreintes salées (le sel n'est jamais écrit), libellés.
   // Toute la trace, y compris les événements annulés par l'humain (marqués `undone`, exclus du flow).
   await write('raw-recording.json', json({ ...sessionMeta(result), rawEvents: recorder.session.rawEvents }));
+  // LE FLOW MÉTIER : une couche au-dessus du flow enregistré (jamais à sa place).
+  const writeBusiness = async (): Promise<void> => {
+    if (!result.business) return;
+    const { model, detection } = result.business;
+    await write(
+      'business-flow.json',
+      json({ ...model, events: detection.events, memory: detection.memory.all }),
+    );
+  };
+  await writeBusiness();
   // Les sources et leurs corrélations (PLAYWRIGHT, HYBRID) : ce que chaque source a vu, une action par geste.
   if (sources) await write('recording-sources.json', json(sources.report()));
   await write(
@@ -566,6 +592,38 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }
     semanticAudit = (await runSemanticAudit(gateway)) ?? semanticAudit;
     flowAudit = (await runFlowAudit(gateway)) ?? flowAudit;
+    // UNE AMBIGUÏTÉ MÉTIER (plusieurs entités possibles) : l'IA choisit parmi les candidats observés,
+    // le détecteur revalide ; jamais au-delà de PROBABLE.
+    if (gateway && config.recording.business.ai && result.business && businessTyped) {
+      const analyzer = new LlmBusinessAnalyzer(gatewayEntityChooser(gateway, result.session.id));
+      const detection = await analyzer
+        .analyze({
+          actions: result.normalized.kept,
+          states: result.session.states,
+          rawEvents: result.session.rawEvents,
+          steps: result.flow.steps,
+          typedValues: businessTyped,
+          digest: (value) => recorder.digest(value),
+        })
+        .catch(() => undefined);
+      businessTyped.clear();
+      if (detection) {
+        result.business = { detection, model: buildBusinessFlow(result.session.name, detection) };
+        await writeBusiness();
+        onEvent({
+          type: 'BUSINESS_FLOW_DETECTED',
+          at: new Date().toISOString(),
+          message: `AI on ${String(analyzer.consultations.length)} ambiguity(ies): ${
+            analyzer.consultations
+              .map(
+                (entry) =>
+                  `${entry.eventId} → ${entry.answer ?? 'no answer'}${entry.accepted ? '' : ' (rejected)'}`,
+              )
+              .join(', ') || 'none'
+          }`,
+        });
+      }
+    }
     const stoppedBecause = gateway?.stoppedBecause;
     if (stoppedBecause)
       onEvent({
