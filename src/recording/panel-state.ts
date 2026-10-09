@@ -65,12 +65,28 @@ export interface PanelAnalysis {
    * L'INTERPRÉTATION MÉTIER : chaque étape (créer, rechercher, ouvrir…), les actions enregistrées
    * qu'elle regroupe, ce qui a été OBSERVÉ (réseau, écran, navigation) et ce qui est DÉDUIT.
    */
+  /** LE MODÈLE DE L'APPLICATION, en arbre (les actions techniques restent dans le parcours). */
+  application?: { tree: PanelTreeNode[] };
   business?: {
     steps: PanelBusinessStep[];
     unresolved: { type: string; status: string; candidates?: string[]; recorded: string[] }[];
     /** Les entités observées et leur PROVENANCE (créée, découverte, existante, inconnue, ambiguë). */
     entities?: PanelBusinessEntity[];
   };
+}
+
+/**
+ * Un nœud de l'arbre de l'application (Workspace → Task → MFE → Entity → actions) : son statut
+ * (observé, déduit, confirmé, incertain), sa confiance, ses preuves et les actions enregistrées.
+ */
+export interface PanelTreeNode {
+  label: string;
+  detail?: string;
+  status?: 'OBSERVED' | 'DEDUCED' | 'CONFIRMED' | 'UNCERTAIN';
+  confidence?: number;
+  evidence: string[];
+  recorded: string[];
+  children: PanelTreeNode[];
 }
 
 export interface PanelBusinessEntity {

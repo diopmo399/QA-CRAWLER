@@ -1220,6 +1220,19 @@ plafonne la confiance à 0,7, marque `AI_PROPOSAL` et garde les contradictions.
 observées. `trackEntities()` est une fonction pure (actions, états, événements bruts) : le rejeu et
 le crawler autonome peuvent l'appeler sur leurs propres observations.
 
+### Modèle de l'application (`application-model.json`)
+
+Au-dessus des entités, le Recorder construit un **Application Interaction Model** générique :
+contextes applicatifs (shell, espace de travail, micro-frontends — iframe, élément personnalisé ou
+route de SPA), collections lues (une liste servie par un BFF : seulement les identifiants de ses
+enregistrements), tasks sélectionnées (`taskId ≠ businessKey`), entités, relations
+(`REFERENCES`, `RESULTS_IN`, `CREATE_RESULT`, `NAVIGATES_TO`…) et actions métier (`SELECT_TASK`,
+`SWITCH_CONTEXT`, `CREATE`, `RETRIEVE`, `OPEN`…), chacune avec son statut (observé, déduit,
+confirmé, incertain), sa confiance, ses preuves et les actions Playwright d'origine. L'onglet
+**Analyse** le montre en arbre. Détails, règles de corrélation et limites :
+[APPLICATION_INTERACTION_MODEL.md](APPLICATION_INTERACTION_MODEL.md). Désactivable avec
+`recording.business.application: false`.
+
 ## Progression après l'arrêt
 
 Après **Stop**, le système continue de travailler avant de rendre la main. Sans retour, ce temps ressemblait à un blocage. Il est maintenant **montré** à deux endroits.

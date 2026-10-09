@@ -296,6 +296,10 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .barrow{text-align:center;color:var(--muted)}
 .bprov{font-size:11px;font-weight:600;border-radius:6px;padding:1px 8px;margin-left:6px;background:var(--idle-soft);color:var(--muted)}
 .bprov.CREATED_DURING_RECORDING{background:var(--ok-soft);color:var(--ok)} .bprov.DISCOVERED_DURING_RECORDING,.bprov.CONFIRMED_EXISTING{background:var(--run-soft);color:var(--run)} .bprov.AMBIGUOUS{background:var(--warn-soft);color:var(--warn)}
+.atree,.atree ul{list-style:none;margin:6px 0 0;padding:0 0 0 16px;border-left:1px dashed var(--line)} .atree{padding-left:0;border-left:0}
+.atree li{margin:6px 0} .atree .anode{display:flex;flex-wrap:wrap;align-items:center;gap:6px} .atree .anode b{font-size:13px}
+.ibadge{font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--idle-soft);color:var(--muted)}
+.ibadge.CONFIRMED{background:var(--ok-soft);color:var(--ok)} .ibadge.OBSERVED{background:var(--run-soft);color:var(--run)} .ibadge.UNCERTAIN{background:var(--warn-soft);color:var(--warn)}
 .bent{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px} .bent li{border:1px solid var(--line);border-radius:10px;padding:8px 12px}
 .bstep details{margin-top:4px} .bstep summary{cursor:pointer;color:var(--muted);font-size:12px}
 .bunres{padding-left:18px}
@@ -372,7 +376,7 @@ const SCRIPT = `
       saved: '✓ Flow sauvegardé', remove: '✕ Retirer cette étape', removeLabel: function (d) { return "Retirer l'étape « " + d + ' » du flow'; },
       checks: function (n) { return 'Vérifications ajoutées au flow (' + n + ')'; }, checksNote: 'Déduites des résultats observés : ce ne sont pas des actions enregistrées.',
       analysisTitle: 'Analyse', analysisNote: "L'analyse ne modifie jamais le recording. Elle est disponible après l'arrêt.", analysisWaiting: "L'analyse sera disponible après l'arrêt de l'enregistrement.",
-      business: 'Interprétation métier', businessNote: "Déduite du parcours enregistré : jamais une étape ajoutée au flow.", noBusiness: 'Aucune interprétation métier sûre.', recordedActions: 'Actions enregistrées', observed: 'Observé', deduced: 'Déduit', uncertain: 'Incertain (jamais une vérité métier)', candidatesL: 'Possibles', bstatus: { CONFIRMED: 'Confirmé', PROBABLE: 'Probable', AMBIGUOUS: 'Ambigu', UNKNOWN: 'Inconnu' }, aiChoice: 'choix de l’IA parmi les candidats observés', referenceL: 'référence', baction: { create: 'CRÉER', search: 'RECHERCHER', open: 'OUVRIR', update: 'MODIFIER', save: 'ENREGISTRER', delete: 'SUPPRIMER' }, entitiesL: 'Entités observées', provenanceL: { CREATED_DURING_RECORDING: 'créée pendant l’enregistrement', CONFIRMED_EXISTING: 'existait déjà (écran de départ)', DISCOVERED_DURING_RECORDING: 'découverte (origine inconnue)', UNKNOWN: 'provenance inconnue', AMBIGUOUS: 'provenance ambiguë' },
+      business: 'Interprétation métier', businessNote: "Déduite du parcours enregistré : jamais une étape ajoutée au flow.", noBusiness: 'Aucune interprétation métier sûre.', recordedActions: 'Actions enregistrées', observed: 'Observé', deduced: 'Déduit', uncertain: 'Incertain (jamais une vérité métier)', candidatesL: 'Possibles', bstatus: { CONFIRMED: 'Confirmé', PROBABLE: 'Probable', AMBIGUOUS: 'Ambigu', UNKNOWN: 'Inconnu' }, aiChoice: 'choix de l’IA parmi les candidats observés', referenceL: 'référence', baction: { create: 'CRÉER', search: 'RECHERCHER', open: 'OUVRIR', update: 'MODIFIER', save: 'ENREGISTRER', delete: 'SUPPRIMER' }, entitiesL: 'Entités observées', applicationL: 'Application', applicationNote: 'Ce que le Recorder comprend de l’application (contextes, tasks, entités, relations). Les actions techniques restent dans le parcours.', evidenceL: 'Preuves', istatus: { OBSERVED: 'Observé', DEDUCED: 'Déduit', CONFIRMED: 'Confirmé', UNCERTAIN: 'Incertain' }, provenanceL: { CREATED_DURING_RECORDING: 'créée pendant l’enregistrement', CONFIRMED_EXISTING: 'existait déjà (écran de départ)', DISCOVERED_DURING_RECORDING: 'découverte (origine inconnue)', UNKNOWN: 'provenance inconnue', AMBIGUOUS: 'provenance ambiguë' },
       intents: 'Intents détectés', noIntent: 'Aucun intent détecté.', confidence: 'Confiance', why: 'Voir pourquoi', findings: 'Constats et suggestions', noFinding: 'Aucun constat.', ai: function (n) { return n + ' suggestion(s) de connaissance proposée(s) par l’IA (à revoir).'; },
       origin: { DETERMINISTIC: 'Analyse déterministe', AI_PROPOSAL: 'Proposition IA' },
       announceAdded: 'Action ajoutée : ', announceUndo: 'Dernière action retirée.', toReview: 'à vérifier'
@@ -414,7 +418,7 @@ const SCRIPT = `
       saved: '✓ Flow saved', remove: '✕ Remove this step', removeLabel: function (d) { return 'Remove the step "' + d + '" from the flow'; },
       checks: function (n) { return 'Checks added to the flow (' + n + ')'; }, checksNote: 'Inferred from the observed results: these are not recorded actions.',
       analysisTitle: 'Analysis', analysisNote: 'The analysis never changes the recording. It is available after Stop.', analysisWaiting: 'The analysis will be available once the recording is stopped.',
-      business: 'Business interpretation', businessNote: 'Deduced from the recorded journey: never a step added to the flow.', noBusiness: 'No reliable business interpretation.', recordedActions: 'Recorded actions', observed: 'Observed', deduced: 'Deduced', uncertain: 'Uncertain (never a business fact)', candidatesL: 'Possible', bstatus: { CONFIRMED: 'Confirmed', PROBABLE: 'Probable', AMBIGUOUS: 'Ambiguous', UNKNOWN: 'Unknown' }, aiChoice: 'AI choice among the observed candidates', referenceL: 'reference', baction: { create: 'CREATE', search: 'SEARCH', open: 'OPEN', update: 'UPDATE', save: 'SAVE', delete: 'DELETE' }, entitiesL: 'Observed entities', provenanceL: { CREATED_DURING_RECORDING: 'created during the recording', CONFIRMED_EXISTING: 'already existed (starting screen)', DISCOVERED_DURING_RECORDING: 'discovered (origin unknown)', UNKNOWN: 'unknown provenance', AMBIGUOUS: 'ambiguous provenance' },
+      business: 'Business interpretation', businessNote: 'Deduced from the recorded journey: never a step added to the flow.', noBusiness: 'No reliable business interpretation.', recordedActions: 'Recorded actions', observed: 'Observed', deduced: 'Deduced', uncertain: 'Uncertain (never a business fact)', candidatesL: 'Possible', bstatus: { CONFIRMED: 'Confirmed', PROBABLE: 'Probable', AMBIGUOUS: 'Ambiguous', UNKNOWN: 'Unknown' }, aiChoice: 'AI choice among the observed candidates', referenceL: 'reference', baction: { create: 'CREATE', search: 'SEARCH', open: 'OPEN', update: 'UPDATE', save: 'SAVE', delete: 'DELETE' }, entitiesL: 'Observed entities', applicationL: 'Application', applicationNote: 'What the Recorder understands of the application (contexts, tasks, entities, relations). The technical actions stay in the journey.', evidenceL: 'Evidence', istatus: { OBSERVED: 'Observed', DEDUCED: 'Deduced', CONFIRMED: 'Confirmed', UNCERTAIN: 'Uncertain' }, provenanceL: { CREATED_DURING_RECORDING: 'created during the recording', CONFIRMED_EXISTING: 'already existed (starting screen)', DISCOVERED_DURING_RECORDING: 'discovered (origin unknown)', UNKNOWN: 'unknown provenance', AMBIGUOUS: 'ambiguous provenance' },
       intents: 'Detected intents', noIntent: 'No intent detected.', confidence: 'Confidence', why: 'See why', findings: 'Findings and suggestions', noFinding: 'No finding.', ai: function (n) { return n + ' knowledge suggestion(s) proposed by the AI (to review).'; },
       origin: { DETERMINISTIC: 'Deterministic analysis', AI_PROPOSAL: 'AI proposal' },
       announceAdded: 'Action added: ', announceUndo: 'Last action removed.', toReview: 'to review'
@@ -707,6 +711,19 @@ const SCRIPT = `
     var h = '<div class="card card-plain"><h2>' + esc(T.analysisTitle) + '</h2><p class="notice">' + esc(T.analysisNote) + '</p>';
     if (!a.available) { setHtml(el, h + '<p class="empty">' + esc(T.analysisWaiting) + '</p></div>'); return; }
     if (a.running) h += '<p class="notice running" role="status">' + esc(T.analysisRunning) + '</p>';
+    if (a.application && a.application.tree.length) {
+      var treeHtml = function (nodes) {
+        return '<ul>' + nodes.map(function (n) {
+          var x = '<li><div class="anode"><b>' + esc(n.label) + '</b>' + (n.status ? '<span class="ibadge ' + n.status + '">' + esc(T.istatus[n.status] || n.status) + (n.confidence !== undefined ? ' · ' + Math.round(n.confidence * 100) + ' %' : '') + '</span>' : '') + '</div>';
+          if (n.detail) x += '<div class="meta">' + esc(n.detail) + '</div>';
+          if (n.recorded.length) x += '<details><summary>' + esc(T.recordedActions) + ' (' + n.recorded.length + ')</summary><ul>' + n.recorded.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul></details>';
+          if (n.evidence.length) x += '<details><summary>' + esc(T.evidenceL) + ' (' + n.evidence.length + ')</summary><ul>' + n.evidence.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul></details>';
+          if (n.children.length) x += treeHtml(n.children);
+          return x + '</li>';
+        }).join('') + '</ul>';
+      };
+      h += '</div><div class="card card-plain application"><h2>' + esc(T.applicationL) + '</h2><p class="sub">' + esc(T.applicationNote) + '</p><div class="atree">' + treeHtml(a.application.tree) + '</div>';
+    }
     if (a.business) {
       var b = a.business;
       h += '</div><div class="card card-plain business"><h2>' + esc(T.business) + '</h2><p class="sub">' + esc(T.businessNote) + '</p>';

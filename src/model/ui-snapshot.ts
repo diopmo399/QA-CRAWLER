@@ -180,6 +180,10 @@ export interface UiSignals {
    * alertes (les oracles d'anomalie ne les lisent pas).
    */
   statuses?: string[];
+  /** Éléments personnalisés occupant une grande zone (shell, micro-frontend…) : leur balise. */
+  hosts?: string[];
+  /** Cadres visibles (iframe) : origine + chemin. */
+  frames?: string[];
   /** Une roue de chargement, une barre de progression ou une zone aria-busy est visible. */
   busy: boolean;
   /** Rien à lire ni à faire à l'écran. */

@@ -1,5 +1,6 @@
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ApplicationInteractionModel } from './application/model.js';
 import type { Page } from 'playwright';
 import type { ScenarioConfig } from '../config/config.js';
 import { slug } from '../knowledge/signatures.js';
@@ -13,6 +14,7 @@ import {
   type PanelAnalysis,
   type PanelReplay,
   type PanelState,
+  type PanelTreeNode,
 } from './panel-state.js';
 import { generateFlowFiles } from './recorded-flow.js';
 import { RecorderPanel, type PanelCommand } from './recorder-panel.js';
@@ -200,6 +202,7 @@ export class RecordingConsole {
       aiCandidates: intelligence?.candidates.length ?? 0,
       ...(running ? { running: true } : {}),
       ...(result.business ? { business: businessOf(result) } : {}),
+      ...(result.application ? { application: { tree: applicationTreeOf(result) } } : {}),
     };
     this.render();
   }
@@ -491,4 +494,128 @@ function businessOf(result: RecordingResult): NonNullable<PanelAnalysis['busines
         : [],
     ),
   };
+}
+
+/**
+ * L'arbre de l'application pour la fenêtre : Workspace → Task → contexte ouvert → entité → actions
+ * métier ; les entités sans task à la racine. Chaque nœud garde son statut, ses preuves et les
+ * actions enregistrées (les actions techniques restent accessibles dans le parcours).
+ */
+function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
+  const model = result.application;
+  if (!model) return [];
+  const labels = new Map(
+    result.flow.steps.map((step, index) => [step.id, `${String(index + 1)}. ${step.label}`]),
+  );
+  const stepOfAction = (id: string): string | undefined =>
+    result.flow.steps.find((step) => step.actionIds.includes(id))?.id;
+  const recorded = (actionIds: readonly string[]): string[] => [
+    ...new Set(actionIds.map((id) => labels.get(stepOfAction(id) ?? '') ?? id)),
+  ];
+  const evidenceText = (ids: readonly string[]): string[] =>
+    ids.map((id) => model.evidence.find((entry) => entry.id === id)?.description ?? id).slice(0, 8);
+  const contextName = (key: string): string =>
+    model.contexts.find((context) => context.key === key)?.name ?? key;
+  const actionNode = (action: ApplicationInteractionModel['businessActions'][number]): PanelTreeNode => ({
+    label: action.kind,
+    detail: action.reason,
+    status: action.status,
+    confidence: action.confidence,
+    evidence: evidenceText(action.evidenceIds),
+    recorded: recorded(action.actionIds),
+    children: [],
+  });
+  const entityNode = (
+    key: string,
+    via?: ApplicationInteractionModel['relationships'][number],
+  ): PanelTreeNode => {
+    const entity = model.entities.find((entry) => entry.key === key);
+    const identity = entity?.identity;
+    return {
+      label: `${entity?.type ?? 'entity'} ${identity?.value ?? key.split(':').at(-1) ?? ''}`,
+      detail: [
+        identity ? `${identity.type}${identity.field ? ` (${identity.field})` : ''}` : '',
+        entity ? `provenance ${entity.provenance.classification}` : '',
+        via ? `${via.type}: ${via.reason}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      ...(via ? { status: via.status, confidence: via.confidence } : {}),
+      evidence: evidenceText(via?.evidenceIds ?? []),
+      recorded: [],
+      children: model.businessActions
+        .filter((action) => action.subject === key && action.kind !== 'SWITCH_CONTEXT')
+        .map(actionNode),
+    };
+  };
+  const placed = new Set<string>();
+  const tree: PanelTreeNode[] = model.workspaces.map((workspace) => ({
+    label: `TASK WORKSPACE · ${workspace.source.type === 'NETWORK' ? `GET ${workspace.source.path}` : 'DOM'}`,
+    detail: [
+      workspace.reason,
+      workspace.source.type === 'NETWORK' && workspace.source.bffCandidate
+        ? `BFF candidate: ${workspace.source.bffCandidate.reasons.join('; ')}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+    status: workspace.status,
+    confidence: workspace.confidence,
+    evidence: evidenceText(workspace.evidenceIds),
+    recorded: [],
+    children: workspace.taskKeys.flatMap((taskKey) => {
+      const task = model.tasks.find((entry) => entry.key === taskKey);
+      if (!task) return [];
+      const own = model.relationships.filter(
+        (relation) => relation.source === taskKey || relation.target === taskKey,
+      );
+      const entityLinks = own.filter(
+        (relation) =>
+          (relation.type === 'REFERENCES' ||
+            relation.type === 'RESULTS_IN' ||
+            relation.type === 'CREATE_RESULT') &&
+          [relation.source, relation.target].some((key) => key.startsWith('entity:')),
+      );
+      const entityKeys = [
+        ...new Set(
+          entityLinks.map((relation) =>
+            relation.source.startsWith('entity:') ? relation.source : relation.target,
+          ),
+        ),
+      ].filter((key) => model.entities.some((entity) => entity.key === key));
+      for (const key of entityKeys) placed.add(key);
+      const opened = own.filter((relation) => relation.type === 'NAVIGATES_TO');
+      const entities = entityKeys.map((key) =>
+        entityNode(
+          key,
+          entityLinks.find((relation) => relation.source === key || relation.target === key),
+        ),
+      );
+      return [
+        {
+          label: `Task #${task.primary.value ?? '?'}`,
+          detail: task.identityCandidates
+            .map((candidate) => `${candidate.type} ${candidate.field ?? ''}=${candidate.value ?? '(digest)'}`)
+            .join(' · '),
+          status: task.status,
+          confidence: task.confidence,
+          evidence: evidenceText(task.evidenceIds),
+          recorded: recorded(task.selectedBy),
+          children: opened.length
+            ? opened.map((relation) => ({
+                label: `MFE ${contextName(relation.target)}`,
+                detail: relation.reason,
+                status: relation.status,
+                confidence: relation.confidence,
+                evidence: evidenceText(relation.evidenceIds),
+                recorded: recorded(relation.actionIds),
+                children: entities,
+              }))
+            : entities,
+        },
+      ];
+    }),
+  }));
+  for (const entity of model.entities) if (!placed.has(entity.key)) tree.push(entityNode(entity.key));
+  return tree;
 }

@@ -381,6 +381,20 @@ export interface FunctionalExchange {
    * identifiant (nombre, code court), jamais celle d'une clé sensible.
    */
   identifiers?: ExchangeIdentifier[];
+  /**
+   * Une LECTURE réussie : les enregistrements servis (une liste d'un BFF, un détail), réduits à
+   * leurs identifiants. Jamais un corps, jamais une valeur libre.
+   */
+  records?: ExchangeRecord[];
+}
+
+export interface ExchangeRecord {
+  /** Sa place dans la liste servie. */
+  index: number;
+  /** La propriété qui portait la liste (items, data…), si elle était enveloppée. */
+  container?: string;
+  identifiers: ExchangeIdentifier[];
+  state?: StateCode;
 }
 
 export interface ExchangeIdentifier {

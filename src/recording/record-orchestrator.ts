@@ -1,3 +1,4 @@
+import { buildApplicationModel } from './application/application-model.js';
 import { buildBusinessFlow } from './business/business-flow.js';
 import { LlmBusinessAnalyzer, gatewayEntityChooser } from './business/business-semantic-analyzer.js';
 import { effectiveRecordingMode } from './sources/recording-coordinator.js';
@@ -367,6 +368,11 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     );
   };
   await writeBusiness();
+  // LE MODÈLE DE L'APPLICATION : contextes, tasks, entités, relations, actions métier (avec preuves).
+  const writeApplication = async (): Promise<void> => {
+    if (result.application) await write('application-model.json', json(result.application));
+  };
+  await writeApplication();
   // Les sources et leurs corrélations (PLAYWRIGHT, HYBRID) : ce que chaque source a vu, une action par geste.
   if (sources) await write('recording-sources.json', json(sources.report()));
   await write(
@@ -618,6 +624,19 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       if (detection) {
         result.business = { detection, model: buildBusinessFlow(result.session.name, detection) };
         await writeBusiness();
+        if (result.application) {
+          result.application = buildApplicationModel({
+            actions: result.normalized.kept,
+            states: result.session.states,
+            rawEvents: result.session.rawEvents,
+            steps: result.flow.steps,
+            entities: detection.entities,
+            entityEvidence: detection.evidence,
+            ...(result.session.initialStateId ? { initialStateId: result.session.initialStateId } : {}),
+            digest: (value) => recorder.digest(value),
+          });
+          await writeApplication();
+        }
         onEvent({
           type: 'BUSINESS_FLOW_DETECTED',
           at: new Date().toISOString(),

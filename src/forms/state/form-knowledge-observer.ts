@@ -3,6 +3,7 @@ import {
   isStateCode,
   isStateKey,
   type ExchangeIdentifier,
+  type ExchangeRecord,
   type FieldShape,
   type FunctionalExchange,
   type StateCode,
@@ -88,7 +89,15 @@ export class FormKnowledgeObserver implements PageObserver {
         const body = parseJson(text);
         const state = stateCodeOf(body);
         if (state) entry.responseState = state;
-        if (entry.method === 'GET' && (entry.status ?? 0) < 400) return;
+        // Une lecture réussie : seulement les IDENTIFIANTS de ses enregistrements (une liste servie
+        // par un BFF, un détail) — empreinte salée, valeur si elle a la forme d'un identifiant.
+        if (entry.method === 'GET' && (entry.status ?? 0) < 400) {
+          if (salt !== undefined && text.length <= 2_000_000) {
+            const records = recordsOf(body, salt);
+            if (records.length > 0) entry.records = records;
+          }
+          return;
+        }
         if (text.length > 200_000) return;
         const fields = shapeOf(body);
         if (fields) entry.responseFields = fields;
@@ -227,9 +236,13 @@ export function stateCodeOf(body: unknown): StateCode | undefined {
 
 /** Les clés qui portent un identifiant (id, uuid, reference, numero, demandeId, requestNumber…). */
 const IDENTIFIER_KEY = /^(id|uuid|guid|ref|reference|numero|number|no|code|key)$/i;
-const IDENTIFIER_SUFFIX = /[a-z](Id|ID|Uuid|Ref|Reference|Number|Numero|No)$/;
-/** Jamais un identifiant : un secret, un jeton, une session. */
-const SENSITIVE_KEY = /(token|secret|password|pass|pwd|session|auth|otp|cookie|signature|key$)/i;
+const IDENTIFIER_SUFFIX = /[a-z](Id|ID|Uuid|Ref|Reference|Number|Numero|No|Key|Code)$/;
+/**
+ * Jamais un identifiant : un secret, un jeton, une session, une clé d'API ou de chiffrement. Une
+ * clé fonctionnelle (« …Key » d'un objet) reste lisible.
+ */
+const SENSITIVE_KEY =
+  /(token|secret|password|pass|pwd|session|auth|otp|cookie|signature|(api|private|access|public|signing|encryption|crypto|client|master)[-_]?key$)/i;
 /** La forme d'un identifiant affichable : nombre, code court (DEM-2026-001), uuid. */
 const IDENTIFIER_VALUE = /^[A-Za-z0-9][A-Za-z0-9_\-./#]{0,39}$/;
 
@@ -262,13 +275,58 @@ export function identifiersOf(body: unknown, salt: string): ExchangeIdentifier[]
   return found;
 }
 
+/** Un code alphanumérique (lettres + au moins deux chiffres : ABC123, X9Y8Z7) : une clé métier possible. */
+const ALNUM_CODE = /^(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])[A-Za-z0-9]{4,40}$/;
+
+/**
+ * Les ENREGISTREMENTS d'une réponse de lecture : un tableau d'objets (au premier niveau ou dans une
+ * propriété enveloppe), ou un objet seul. De chacun, seulement ses identifiants (50 au plus).
+ */
+export function recordsOf(body: unknown, salt: string): ExchangeRecord[] {
+  const list = (value: unknown): unknown[] | undefined =>
+    Array.isArray(value) && value.some((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+      ? value
+      : undefined;
+  let items = list(body);
+  let container: string | undefined;
+  if (!items && body && typeof body === 'object' && !Array.isArray(body))
+    for (const [key, value] of Object.entries(body as Record<string, unknown>).slice(0, 40)) {
+      const found = list(value);
+      if (found) {
+        items = found;
+        container = key;
+        break;
+      }
+    }
+  const records: ExchangeRecord[] = [];
+  for (const [index, item] of (
+    items ?? (body && typeof body === 'object' && !Array.isArray(body) ? [body] : [])
+  )
+    .slice(0, 50)
+    .entries()) {
+    const identifiers = identifiersOf(item, salt);
+    if (identifiers.length === 0) continue;
+    const state = stateCodeOf(item);
+    records.push({
+      index,
+      ...(container ? { container } : {}),
+      identifiers,
+      ...(state ? { state } : {}),
+    });
+  }
+  return records;
+}
+
 /** /api/demandes/12345 → l'identifiant 12345 (le dernier segment numérique, uuid ou code). */
 export function pathIdentifierOf(path: string, salt: string): ExchangeIdentifier | undefined {
   const segments = path.split('/').filter(Boolean);
   const last = segments.at(-1);
   if (!last || segments.length < 2) return undefined;
   const id =
-    /^\d+$/.test(last) || /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(last) || /^[A-Z]{2,}-[A-Z0-9-]+$/.test(last);
+    /^\d+$/.test(last) ||
+    /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(last) ||
+    /^[A-Z]{2,}-[A-Z0-9-]+$/.test(last) ||
+    ALNUM_CODE.test(last);
   if (!id) return undefined;
   return { field: '(path)', digest: valueDigest(last, salt), value: last, source: 'path' };
 }

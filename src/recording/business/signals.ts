@@ -22,7 +22,7 @@ export const LEAVE_LABEL =
 const TECHNICAL_SEGMENT =
   /^(api|apis|rest|v\d+(\.\d+)?|app|apps|ui|web|public|internal|graphql|gql|services?|#|-|_)$/i;
 const ID_SEGMENT =
-  /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*)$/i;
+  /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*|(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])[A-Za-z0-9]{4,40})$/i;
 
 /**
  * L'identité portée par une URL ou un chemin d'API, par sa STRUCTURE seulement :
@@ -39,6 +39,20 @@ export function identityInPath(path: string): { value: string; resource?: string
     return { value: segment, ...(resource ? { resource } : {}) };
   }
   return undefined;
+}
+
+/**
+ * Le MOTIF d'une route ou d'un chemin : les identifiants remplacés par « :id », trois segments au
+ * plus (/items/ABC123/edit → /items/:id/edit). La forme d'un écran, sans ses valeurs.
+ */
+export function routePattern(path: string, maxSegments = 3): string {
+  const clean = (path.split(/[?#]/)[0] ?? '').replace(/^[a-z]+:\/\/[^/]+/i, '');
+  const segments = clean
+    .split('/')
+    .filter(Boolean)
+    .slice(0, maxSegments)
+    .map((segment) => (ID_SEGMENT.test(decodeSegment(segment)) ? ':id' : segment.toLowerCase()));
+  return `/${segments.join('/')}`;
 }
 
 /** La ressource d'un chemin de COLLECTION (POST /api/items → item), sans identifiant. */
@@ -68,10 +82,20 @@ function decodeSegment(segment: string): string {
 
 /** Les jetons d'un texte qui peuvent être un identifiant : nombres (≥ 3 chiffres), codes, uuid. */
 export function identifierTokens(text: string): string[] {
-  const tokens = text.match(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*|\d{3,}/gi,
+  const tokens = [
+    // Une clé alphanumérique en capitales (ABC123) : avant les nombres qu'elle contient.
+    ...(text.match(/\b[A-Z]{2,}\d{2,}[A-Z0-9]*\b/g) ?? []),
+    ...(text.match(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*|\d{3,}/gi,
+    ) ?? []),
+  ];
+  const kept = [...new Set(tokens)].filter(
+    (token, _, all) =>
+      !all.some(
+        (other) => other !== token && /^\d+$/.test(token) && !/^\d+$/.test(other) && other.includes(token),
+      ),
   );
-  return [...new Set(tokens ?? [])].slice(0, 20);
+  return kept.slice(0, 20);
 }
 
 export function labelOf(action: SemanticRecordedAction): string {

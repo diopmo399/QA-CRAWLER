@@ -1281,7 +1281,15 @@ const recordingSchema = z
      * possibles) peut être soumise à l'IA (ai.mode ≠ OFF), qui ne choisit que parmi les candidats observés.
      */
     business: z
-      .object({ enabled: z.boolean().default(true), ai: z.boolean().default(true) })
+      .object({
+        enabled: z.boolean().default(true),
+        ai: z.boolean().default(true),
+        /**
+         * L'APPLICATION INTERACTION MODEL (application-model.json) : contextes (shell, espace de
+         * travail, micro-frontends), tasks, entités, relations, actions métier — avec leurs preuves.
+         */
+        application: z.boolean().default(true),
+      })
       .strict()
       .default({}),
     playwrightRecording: z.boolean().default(false),

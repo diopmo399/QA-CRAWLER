@@ -139,19 +139,34 @@ export function trackEntities(input: TrackingInput): EntityTracking {
         const b = names(y, namespace);
         return a.length === 0 || b.length === 0 || a.join('+') === b.join('+');
       });
-    for (const members of groups) {
+    /** Les entités de l'AUTRE côté (API ↔ écran) qui portent la même valeur, sans conflit de nom. */
+    const counterparts = (members: readonly number[]): (readonly number[])[] => {
       const api = names(members, 'api').length > 0;
       const ui = names(members, 'ui').length > 0;
-      if (api === ui) continue;
-      const owners = groups.filter(
-        (other) =>
-          other !== members &&
-          names(other, api ? 'ui' : 'api').length > 0 &&
-          compatible(members, other) &&
-          clusterMatch(members, other),
+      if (api === ui) return [];
+      const side = api ? 'api' : 'ui';
+      const other = api ? 'ui' : 'api';
+      const found = groups.filter(
+        (candidate) =>
+          candidate !== members &&
+          names(candidate, other).length > 0 &&
+          compatible(members, candidate) &&
+          clusterMatch(members, candidate),
       );
-      if (owners.length === 1 && owners[0]?.[0] !== undefined && members[0] !== undefined)
-        union(owners[0][0], members[0]);
+      // Le même nom des deux côtés (/api/items/12 et /items/12) départage : un indice, jamais seul.
+      const named = found.filter((candidate) =>
+        names(candidate, other).some((name) => names(members, side).includes(name)),
+      );
+      return named.length === 1 ? named : found;
+    };
+    for (const members of groups) {
+      const owners = counterparts(members);
+      const owner = owners[0];
+      if (owners.length !== 1 || !owner || owner[0] === undefined || members[0] === undefined) continue;
+      // Un lien seulement s'il est UNIQUE des deux côtés.
+      const back = counterparts(owner);
+      if (back.length !== 1 || back[0] !== members) continue;
+      union(owner[0], members[0]);
     }
   }
   // Les valeurs sans portée se rejoignent entre elles, puis rejoignent l'UNIQUE entité qui les porte.

@@ -472,6 +472,10 @@ export interface RecordedState {
   alerts: string[];
   /** Messages de statut (role="status") : la confirmation d'une création, sans être une alerte. */
   statuses?: string[];
+  /** Les conteneurs applicatifs visibles (éléments personnalisés de grande taille) : indices de contexte. */
+  hosts?: string[];
+  /** Les cadres visibles (iframe : origine + chemin) : un micro-frontend peut y vivre. */
+  frames?: string[];
   invalidFields: number;
   dialogs: string[];
   /** Rôle + nom des contrôles visibles (pour savoir ce qui était atteignable). */
@@ -716,6 +720,7 @@ export type RecordingEventType =
   | 'RECORDER_DEBUG'
   | 'RECORDING_SOURCE'
   | 'BUSINESS_FLOW_DETECTED'
+  | 'APPLICATION_MODEL_BUILT'
   /** La timeline en direct (une action ajoutée, validée, annulée, résolue). */
   | 'LIVE_ACTION_UPDATED'
   | 'ACTION_UNDONE'
