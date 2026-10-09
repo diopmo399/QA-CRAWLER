@@ -185,12 +185,25 @@ ${provider ? 'ai: { enabled: true, mode: ASSIST }' : ''}
 
   it('TEST 8 — two entities possible (API « dossiers », screen « demande »): AMBIGUOUS, nothing invented', () => {
     const ambiguous = sessions.ambiguous?.business;
-    expect(ambiguous?.steps).toHaveLength(0);
     expect(ambiguous?.unresolved[0]).toMatchObject({
       type: 'ENTITY_CREATED',
       status: 'AMBIGUOUS',
       candidates: ['dossier', 'demande'],
     });
+    // Aucun nom inventé pour la création, aucune référence $created.
+    expect(ambiguous?.steps.some((step) => step.action === 'create' || step.reference !== undefined)).toBe(
+      false,
+    );
+    // L'écriture (/api/dossiers) et la lecture (/api/demandes/12345) sont deux portées d'API : jamais
+    // fusionnées d'office. La création est prouvée ; l'ouverture est une OBSERVATION (jamais « créée ») ;
+    // la saisie 12345 vise l'une ou l'autre : lien non décidé.
+    const provenance = (key: string): string | undefined =>
+      ambiguous?.entities.find((entity) => entity.key === key)?.provenance?.classification;
+    expect(provenance('entity:dossier:12345')).toBe('CREATED_DURING_RECORDING');
+    expect(provenance('entity:demande:12345')).toBe('DISCOVERED_DURING_RECORDING');
+    const typed = ambiguous?.entities.find((entity) => entity.linkCandidates);
+    expect(typed?.provenance?.classification).toBe('UNKNOWN');
+    expect(typed?.identity?.value).toBeUndefined();
     expect(ambiguous?.memory).toHaveLength(0);
   });
 

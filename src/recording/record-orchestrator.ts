@@ -356,7 +356,14 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     const { model, detection } = result.business;
     await write(
       'business-flow.json',
-      json({ ...model, events: detection.events, memory: detection.memory.all }),
+      // Les entités (provenance expliquée, cycle de vie) sont dans model.entities ; leurs preuves
+      // structurées dans evidence (jamais une valeur saisie : une saisie n'a qu'une empreinte).
+      json({
+        ...model,
+        events: detection.events,
+        memory: detection.memory.all,
+        evidence: detection.evidence,
+      }),
     );
   };
   await writeBusiness();
@@ -592,8 +599,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }
     semanticAudit = (await runSemanticAudit(gateway)) ?? semanticAudit;
     flowAudit = (await runFlowAudit(gateway)) ?? flowAudit;
-    // UNE AMBIGUÏTÉ MÉTIER (plusieurs entités possibles) : l'IA choisit parmi les candidats observés,
-    // le détecteur revalide ; jamais au-delà de PROBABLE.
+    // UNE AMBIGUÏTÉ MÉTIER (plusieurs entités possibles, ou une provenance contradictoire) : l'IA
+    // choisit parmi les candidats observés, le détecteur revalide ; jamais au-delà de PROBABLE.
     if (gateway && config.recording.business.ai && result.business && businessTyped) {
       const analyzer = new LlmBusinessAnalyzer(gatewayEntityChooser(gateway, result.session.id));
       const detection = await analyzer
@@ -602,6 +609,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           states: result.session.states,
           rawEvents: result.session.rawEvents,
           steps: result.flow.steps,
+          ...(result.session.initialStateId ? { initialStateId: result.session.initialStateId } : {}),
           typedValues: businessTyped,
           digest: (value) => recorder.digest(value),
         })

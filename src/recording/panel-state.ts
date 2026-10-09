@@ -68,12 +68,26 @@ export interface PanelAnalysis {
   business?: {
     steps: PanelBusinessStep[];
     unresolved: { type: string; status: string; candidates?: string[]; recorded: string[] }[];
+    /** Les entités observées et leur PROVENANCE (créée, découverte, existante, inconnue, ambiguë). */
+    entities?: PanelBusinessEntity[];
   };
+}
+
+export interface PanelBusinessEntity {
+  key: string;
+  name: string;
+  identity?: string;
+  provenance: string;
+  confidence: number;
+  reason: string;
+  lifecycle: string[];
+  contradictions?: string[];
 }
 
 export interface PanelBusinessStep {
   action: string;
   entity: string;
+  provenance?: string;
   status: 'CONFIRMED' | 'PROBABLE' | 'AMBIGUOUS' | 'UNKNOWN';
   confidence: number;
   output?: string;

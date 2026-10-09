@@ -169,9 +169,14 @@ describe('Business event detector (deterministic)', () => {
     const created = detection.events.find((event) => event.type === 'ENTITY_CREATED');
     expect(created).toMatchObject({ status: 'AMBIGUOUS', candidates: ['dossier', 'demande'] });
     expect(created?.entity).toBeUndefined();
-    // Aucune référence : la recherche et l'ouverture ne s'appuient sur rien d'inventé.
+    // Aucune référence ni aucun nom : la recherche et l'ouverture ne s'appuient sur rien d'inventé.
     expect(detection.memory.all).toHaveLength(0);
-    expect(buildBusinessFlow('x', detection).steps).toHaveLength(0);
+    const steps = buildBusinessFlow('x', detection).steps;
+    expect(steps.every((step) => step.entity === undefined && step.reference === undefined)).toBe(true);
+    // …mais la MÊME identité est suivie (créée, recherchée, ouverte) : ce sont des faits observés.
+    expect(steps.map((step) => step.action)).toEqual(['search', 'open']);
+    expect(new Set(steps.map((step) => step.entityKey)).size).toBe(1);
+    expect(detection.entities[0]?.provenance.classification).toBe('CREATED_DURING_RECORDING');
   });
 });
 

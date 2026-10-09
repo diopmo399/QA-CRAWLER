@@ -1,3 +1,5 @@
+import type { EntityProvenance } from './provenance-resolver.js';
+
 /**
  * LA COUCHE MÉTIER DU RECORDING : ce que le parcours enregistré SIGNIFIE (une demande créée, puis
  * recherchée, puis ouverte), au-dessus des actions Playwright — jamais à leur place.
@@ -7,11 +9,19 @@
  *       → BUSINESS FLOW (BusinessFlowModel, relié aux actions d'origine)
  *         → PLAYWRIGHT EXECUTION (le flow enregistré, inchangé)
  *
+ * Avant l'interprétation, une couche d'OBSERVATION : EvidenceCollector → identités →
+ * ProvenanceResolver (entity-evidence.ts, entity-tracker.ts, provenance-resolver.ts).
+ *
  * Tout est déterministe ; une IA (facultative) ne fait que CHOISIR parmi des candidats observés
  * quand le déterministe hésite, et son choix est validé.
  */
 export type BusinessEventType =
-  'ENTITY_CREATED' | 'ENTITY_SEARCHED' | 'ENTITY_OPENED' | 'ENTITY_UPDATED' | 'ENTITY_DELETED';
+  | 'ENTITY_CREATED'
+  | 'ENTITY_SEARCHED'
+  | 'ENTITY_OPENED'
+  | 'ENTITY_UPDATED'
+  | 'ENTITY_SAVED'
+  | 'ENTITY_DELETED';
 
 /**
  * CONFIRMED  plusieurs indices concordants (≥ 0,85)
@@ -60,6 +70,10 @@ export interface BusinessEvent {
   /** SEARCHED / OPENED / UPDATED / DELETED : la référence de l'entité concernée. */
   reference?: string;
   identifier?: BusinessIdentifier;
+  /** L'entité suivie (entity:<ressource>:<identité>) : la même tout au long du parcours. */
+  entityKey?: string;
+  /** D'où vient l'entité (ProvenanceResolver) : une première observation n'est jamais une création. */
+  provenance?: EntityProvenance;
   status: BusinessStatus;
   confidence: number;
   /** Les actions techniques d'origine (a3…), leurs événements bruts (r12…) et les étapes du flow (s4…). */
@@ -82,8 +96,10 @@ export interface BusinessRelation {
 }
 
 export interface BusinessFlowStep {
-  action: 'create' | 'search' | 'open' | 'update' | 'delete';
+  action: 'create' | 'search' | 'open' | 'update' | 'save' | 'delete';
   entity?: string;
+  entityKey?: string;
+  provenance?: EntityProvenance;
   candidates?: string[];
   reference?: string;
   outputs?: { id: string; source: BusinessIdentifier['source']; field?: string; value?: string };
@@ -98,9 +114,32 @@ export interface BusinessFlowStep {
   analyzer: BusinessEvent['analyzer'];
 }
 
+/** Une entité du parcours : son identité, sa provenance (expliquée) et son cycle de vie. */
+export interface BusinessFlowEntity {
+  name: string;
+  type: 'business_entity';
+  /** Les références runtime ($created.<entité>.id) : seulement pour une création prouvée. */
+  references: string[];
+  key?: string;
+  identity?: { value?: string; source: string; field?: string; confidence: number };
+  provenance?: {
+    classification: EntityProvenance;
+    confidence: number;
+    reason: string;
+    evidence: string[];
+    rules: string[];
+    contradictions?: string[];
+    candidates?: EntityProvenance[];
+    analyzer: 'DETERMINISTIC' | 'AI_PROPOSAL';
+  };
+  firstSeen?: { actionId?: string; evidence: string };
+  lifecycle?: { kind: string; actionIds: string[]; stepIds: string[]; confidence: number }[];
+  linkCandidates?: string[];
+}
+
 export interface BusinessFlowModel {
   name: string;
-  entities: { name: string; type: 'business_entity'; references: string[] }[];
+  entities: BusinessFlowEntity[];
   /** Les étapes métier retenues (CONFIRMED, PROBABLE) dans l'ordre du parcours. */
   steps: BusinessFlowStep[];
   relations: BusinessRelation[];

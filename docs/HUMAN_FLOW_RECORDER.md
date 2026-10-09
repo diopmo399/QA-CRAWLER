@@ -1137,6 +1137,89 @@ recording:
     ai: true # une ambiguïté peut être soumise à l'IA (ai.mode ≠ OFF)
 ```
 
+### Provenance des entités (créée, découverte, existante)
+
+**Principe** : une entité vue pour la première fois n'est **jamais** une entité créée. Le Recorder
+dit « j'ai observé cette entité » sans prétendre « je sais qu'elle a été créée » tant qu'aucune
+preuve de création ne le montre. Rien n'est propre à un domaine : « item », « commande »,
+« ticket », « facture » passent par les mêmes règles (aucun nom d'entité, d'URL ou de bouton codé).
+
+```
+Recorder existant (actions, états, réseau, navigation — inchangés)
+  → EvidenceCollector        entity-evidence.ts     preuves structurées (EntityEvidence)
+  → Entity Identity Resolver entity-tracker.ts      identités regroupées par valeur ET portée
+  → EntityMemory             entity-memory.ts       entités observées ≠ entités créées
+  → ProvenanceResolver       provenance-resolver.ts règles R1–R9, poids fixes, raison
+  → BusinessEventDetector    business-event-detector.ts  événements métier (avec entityKey, provenance)
+  → BusinessFlow             business-flow.ts       étapes métier reliées aux actions Playwright
+```
+
+**Preuves** (`EntityEvidence`) : `INITIAL_STATE`, `USER_INPUT`, `SEARCH_ACTION`, `CREATE_ACTION`,
+`WRITE_REQUEST`, `SUCCESS_RESPONSE`, `NEW_ENTITY_ID`, `READ_RESPONSE`, `RESULT_SELECTED`,
+`DETAIL_VIEW`, `DIRECT_NAVIGATION`, `UPDATE_REQUEST`, `DELETE_REQUEST`, `EDIT_INPUT`, `SAVE_ACTION`,
+`DELETE_ACTION`. Chacune porte l'action d'origine (`actionId`, `rawEventIds`), une identité
+éventuelle et sa portée structurelle. Le réseau est **une source parmi d'autres** : URL, liens,
+textes affichés (titres, messages `role="status"`), libellés et gestes suffisent (SPA, GraphQL,
+WebSocket, réponses opaques).
+
+**Identité** (`EntityIdentity`) : jamais supposée être un champ `id` — nombre, uuid, référence
+(`CMD-2026-00125`), segment d'URL après une collection, champ d'une réponse (`id`, `reference`,
+`code`…), en-tête `Location`, texte affiché. Sa source donne sa fiabilité (réponse 0,95, chemin
+d'API / URL 0,9, lien 0,85, texte affiché 0,75, saisie 0,6). Une **saisie** n'est connue que par
+son empreinte salée : sa valeur n'est jamais écrite.
+
+**Clé d'entité** : `entity:<ressource>:<identité>` (ex. `entity:item:123`). La même valeur dans
+deux ressources (`/orders/123`, `/customers/123`) fait **deux** entités. Deux preuves se rejoignent
+si elles ont la même valeur et la même ressource (dans le même espace : API ou écran), ou si elles
+sont observées dans la même action (la route et la requête d'un même clic). Une entité vue d'un
+seul côté (API ou écran) rejoint l'**unique** entité de l'autre côté qui porte la même valeur ; une
+saisie sans portée rejoint l'unique entité qui la porte — si plusieurs la portent, le lien n'est
+pas décidé (`linkCandidates`).
+
+**Provenances** : `CREATED_DURING_RECORDING`, `CONFIRMED_EXISTING`, `DISCOVERED_DURING_RECORDING`,
+`UNKNOWN`, `AMBIGUOUS`. `CONFIRMED_EXISTING` n'est jamais déduit d'une recherche : seul l'**écran
+de départ** (l'URL au démarrage de l'enregistrement) prouve qu'une entité existait avant.
+
+| Règle | Quand                                                                                          | Résultat                            |
+| ----- | ---------------------------------------------------------------------------------------------- | ----------------------------------- |
+| R1    | une action de création **produit** l'identité (réponse, `Location`, message, page de l'entité) | `CREATED_DURING_RECORDING`          |
+| R2    | plusieurs preuves de création convergent (POST + 201 + libellé + message)                      | confiance plus haute                |
+| R3    | recherche → lecture → résultat → ouverture, sans preuve de création                            | `DISCOVERED_DURING_RECORDING`       |
+| R4    | URL tapée / lecture `GET …/<id>` → 200                                                         | `DISCOVERED_DURING_RECORDING`       |
+| R5    | ouverture depuis une liste                                                                     | `DISCOVERED_DURING_RECORDING`       |
+| R6    | identifiant seulement saisi                                                                    | `UNKNOWN` (enrichi par la suite)    |
+| R7    | première apparition                                                                            | jamais une création                 |
+| R8    | création ET existence antérieure observée (ou deux créations)                                  | `AMBIGUOUS`, contradictions gardées |
+| R9    | preuves insuffisantes                                                                          | `UNKNOWN`                           |
+
+**Confiance** (`PROVENANCE_WEIGHTS`, recalculable à la main) : création = base selon la source de
+l'identité produite (réponse 0,55, message 0,45, route 0,4) + POST sur une collection 0,2 + libellé
+de création 0,1 + 201 / message de réussite 0,1 + page de l'entité 0,05 ; sous 0,6 la création
+reste `UNKNOWN`. Découverte = 0,6 + 0,1 par type d'observation en plus + 0,05 après une recherche
+(≤ 0,95). Existante = 0,9 (+ 0,05 si relue). Ambiguë = 0,5.
+
+**Cycle de vie** : chaque entité porte ses gestes, dans l'ordre, reliés aux actions et aux étapes
+du flow : `CREATE`, `SEARCH`, `OPEN`, `VIEW`, `INPUT`, `UPDATE`, `SAVE`, `DELETE`. Exemple :
+recherche → ouverture → modification → enregistrement d'un item existant donne
+`entity:item:123`, `DISCOVERED_DURING_RECORDING`, `SEARCH → OPEN → UPDATE → SAVE` ; création →
+recherche → ouverture donne `CREATED_DURING_RECORDING`, `CREATE → SEARCH → OPEN`, avec la même
+clé tout au long. « Enregistrer » sur une entité affichée est un `SAVE`, jamais une création.
+
+**Événements** : les gestes d'une entité non créée pendant l'enregistrement deviennent aussi des
+événements métier (`ENTITY_SEARCHED`, `ENTITY_OPENED`, `ENTITY_UPDATED`, `ENTITY_SAVED`,
+`ENTITY_DELETED`) avec `entityKey` et `provenance` ; seule une création **prouvée** reçoit une
+référence `$created.<entité>.id`.
+
+**IA facultative** : pour une provenance `AMBIGUOUS` seulement, elle choisit parmi les
+`candidates` (jamais une provenance absente des candidats) ; le ProvenanceResolver revalide,
+plafonne la confiance à 0,7, marque `AI_PROPOSAL` et garde les contradictions.
+
+`business-flow.json` : `entities` (clé, identité, provenance avec `reason` / `evidence` / `rules`,
+`firstSeen`, `lifecycle`), `evidence` (les preuves structurées), et les étapes avec `entityKey` et
+`provenance`. L'onglet **Analyse** montre la provenance de chaque étape et la liste des entités
+observées. `trackEntities()` est une fonction pure (actions, états, événements bruts) : le rejeu et
+le crawler autonome peuvent l'appeler sur leurs propres observations.
+
 ## Progression après l'arrêt
 
 Après **Stop**, le système continue de travailler avant de rendre la main. Sans retour, ce temps ressemblait à un blocage. Il est maintenant **montré** à deux endroits.

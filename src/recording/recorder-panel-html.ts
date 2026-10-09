@@ -294,6 +294,9 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .bbadge{font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--idle-soft);color:var(--muted)}
 .bbadge.CONFIRMED{background:var(--ok-soft);color:var(--ok)} .bbadge.PROBABLE{background:var(--run-soft);color:var(--run)} .bbadge.AMBIGUOUS{background:var(--warn-soft);color:var(--warn)}
 .barrow{text-align:center;color:var(--muted)}
+.bprov{font-size:11px;font-weight:600;border-radius:6px;padding:1px 8px;margin-left:6px;background:var(--idle-soft);color:var(--muted)}
+.bprov.CREATED_DURING_RECORDING{background:var(--ok-soft);color:var(--ok)} .bprov.DISCOVERED_DURING_RECORDING,.bprov.CONFIRMED_EXISTING{background:var(--run-soft);color:var(--run)} .bprov.AMBIGUOUS{background:var(--warn-soft);color:var(--warn)}
+.bent{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px} .bent li{border:1px solid var(--line);border-radius:10px;padding:8px 12px}
 .bstep details{margin-top:4px} .bstep summary{cursor:pointer;color:var(--muted);font-size:12px}
 .bunres{padding-left:18px}
 .sub{color:var(--muted);font-size:12px}
@@ -369,7 +372,7 @@ const SCRIPT = `
       saved: '✓ Flow sauvegardé', remove: '✕ Retirer cette étape', removeLabel: function (d) { return "Retirer l'étape « " + d + ' » du flow'; },
       checks: function (n) { return 'Vérifications ajoutées au flow (' + n + ')'; }, checksNote: 'Déduites des résultats observés : ce ne sont pas des actions enregistrées.',
       analysisTitle: 'Analyse', analysisNote: "L'analyse ne modifie jamais le recording. Elle est disponible après l'arrêt.", analysisWaiting: "L'analyse sera disponible après l'arrêt de l'enregistrement.",
-      business: 'Interprétation métier', businessNote: "Déduite du parcours enregistré : jamais une étape ajoutée au flow.", noBusiness: 'Aucune interprétation métier sûre.', recordedActions: 'Actions enregistrées', observed: 'Observé', deduced: 'Déduit', uncertain: 'Incertain (jamais une vérité métier)', candidatesL: 'Possibles', bstatus: { CONFIRMED: 'Confirmé', PROBABLE: 'Probable', AMBIGUOUS: 'Ambigu', UNKNOWN: 'Inconnu' }, aiChoice: 'choix de l’IA parmi les candidats observés', referenceL: 'référence', baction: { create: 'CRÉER', search: 'RECHERCHER', open: 'OUVRIR', update: 'MODIFIER', delete: 'SUPPRIMER' },
+      business: 'Interprétation métier', businessNote: "Déduite du parcours enregistré : jamais une étape ajoutée au flow.", noBusiness: 'Aucune interprétation métier sûre.', recordedActions: 'Actions enregistrées', observed: 'Observé', deduced: 'Déduit', uncertain: 'Incertain (jamais une vérité métier)', candidatesL: 'Possibles', bstatus: { CONFIRMED: 'Confirmé', PROBABLE: 'Probable', AMBIGUOUS: 'Ambigu', UNKNOWN: 'Inconnu' }, aiChoice: 'choix de l’IA parmi les candidats observés', referenceL: 'référence', baction: { create: 'CRÉER', search: 'RECHERCHER', open: 'OUVRIR', update: 'MODIFIER', save: 'ENREGISTRER', delete: 'SUPPRIMER' }, entitiesL: 'Entités observées', provenanceL: { CREATED_DURING_RECORDING: 'créée pendant l’enregistrement', CONFIRMED_EXISTING: 'existait déjà (écran de départ)', DISCOVERED_DURING_RECORDING: 'découverte (origine inconnue)', UNKNOWN: 'provenance inconnue', AMBIGUOUS: 'provenance ambiguë' },
       intents: 'Intents détectés', noIntent: 'Aucun intent détecté.', confidence: 'Confiance', why: 'Voir pourquoi', findings: 'Constats et suggestions', noFinding: 'Aucun constat.', ai: function (n) { return n + ' suggestion(s) de connaissance proposée(s) par l’IA (à revoir).'; },
       origin: { DETERMINISTIC: 'Analyse déterministe', AI_PROPOSAL: 'Proposition IA' },
       announceAdded: 'Action ajoutée : ', announceUndo: 'Dernière action retirée.', toReview: 'à vérifier'
@@ -411,7 +414,7 @@ const SCRIPT = `
       saved: '✓ Flow saved', remove: '✕ Remove this step', removeLabel: function (d) { return 'Remove the step "' + d + '" from the flow'; },
       checks: function (n) { return 'Checks added to the flow (' + n + ')'; }, checksNote: 'Inferred from the observed results: these are not recorded actions.',
       analysisTitle: 'Analysis', analysisNote: 'The analysis never changes the recording. It is available after Stop.', analysisWaiting: 'The analysis will be available once the recording is stopped.',
-      business: 'Business interpretation', businessNote: 'Deduced from the recorded journey: never a step added to the flow.', noBusiness: 'No reliable business interpretation.', recordedActions: 'Recorded actions', observed: 'Observed', deduced: 'Deduced', uncertain: 'Uncertain (never a business fact)', candidatesL: 'Possible', bstatus: { CONFIRMED: 'Confirmed', PROBABLE: 'Probable', AMBIGUOUS: 'Ambiguous', UNKNOWN: 'Unknown' }, aiChoice: 'AI choice among the observed candidates', referenceL: 'reference', baction: { create: 'CREATE', search: 'SEARCH', open: 'OPEN', update: 'UPDATE', delete: 'DELETE' },
+      business: 'Business interpretation', businessNote: 'Deduced from the recorded journey: never a step added to the flow.', noBusiness: 'No reliable business interpretation.', recordedActions: 'Recorded actions', observed: 'Observed', deduced: 'Deduced', uncertain: 'Uncertain (never a business fact)', candidatesL: 'Possible', bstatus: { CONFIRMED: 'Confirmed', PROBABLE: 'Probable', AMBIGUOUS: 'Ambiguous', UNKNOWN: 'Unknown' }, aiChoice: 'AI choice among the observed candidates', referenceL: 'reference', baction: { create: 'CREATE', search: 'SEARCH', open: 'OPEN', update: 'UPDATE', save: 'SAVE', delete: 'DELETE' }, entitiesL: 'Observed entities', provenanceL: { CREATED_DURING_RECORDING: 'created during the recording', CONFIRMED_EXISTING: 'already existed (starting screen)', DISCOVERED_DURING_RECORDING: 'discovered (origin unknown)', UNKNOWN: 'unknown provenance', AMBIGUOUS: 'ambiguous provenance' },
       intents: 'Detected intents', noIntent: 'No intent detected.', confidence: 'Confidence', why: 'See why', findings: 'Findings and suggestions', noFinding: 'No finding.', ai: function (n) { return n + ' knowledge suggestion(s) proposed by the AI (to review).'; },
       origin: { DETERMINISTIC: 'Deterministic analysis', AI_PROPOSAL: 'AI proposal' },
       announceAdded: 'Action added: ', announceUndo: 'Last action removed.', toReview: 'to review'
@@ -709,7 +712,7 @@ const SCRIPT = `
       h += '</div><div class="card card-plain business"><h2>' + esc(T.business) + '</h2><p class="sub">' + esc(T.businessNote) + '</p>';
       h += b.steps.length ? '<ol class="bflow">' + b.steps.map(function (st) {
         var line = st.output ? st.output + (st.outputValue !== undefined ? ' = ' + st.outputValue : '') : st.reference ? T.referenceL + ' = ' + st.reference : '';
-        var x = '<li class="bstep ' + st.status + '"><div class="bhead"><b>' + esc((T.baction[st.action] || st.action) + ' ' + st.entity.toUpperCase()) + '</b><span class="bbadge ' + st.status + '">' + esc(T.bstatus[st.status]) + ' · ' + Math.round(st.confidence * 100) + ' %</span></div>';
+        var x = '<li class="bstep ' + st.status + '"><div class="bhead"><b>' + esc((T.baction[st.action] || st.action) + ' ' + st.entity.toUpperCase()) + '</b><span class="bbadge ' + st.status + '">' + esc(T.bstatus[st.status]) + ' · ' + Math.round(st.confidence * 100) + ' %</span>' + (st.provenance ? '<span class="bprov ' + st.provenance + '">' + esc(T.provenanceL[st.provenance] || st.provenance) + '</span>' : '') + '</div>';
         if (line) x += '<div class="bref">↳ ' + esc(line) + '</div>';
         if (st.ai) x += '<div class="meta">' + esc(T.aiChoice) + '</div>';
         x += '<details><summary>' + esc(T.recordedActions) + ' (' + st.recorded.length + ')</summary><ul>' + st.recorded.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul></details>';
@@ -717,6 +720,9 @@ const SCRIPT = `
         if (st.deduced.length) x += '<details><summary>' + esc(T.deduced) + '</summary><ul>' + st.deduced.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul></details>';
         return x + '</li>';
       }).join('<li class="barrow" aria-hidden="true">↓</li>') + '</ol>' : '<p class="empty">' + esc(T.noBusiness) + '</p>';
+      if (b.entities && b.entities.length) h += '<h3>' + esc(T.entitiesL) + '</h3><ul class="bent">' + b.entities.map(function (e) {
+        return '<li><b>' + esc(e.name + (e.identity !== undefined ? ' ' + e.identity : '')) + '</b><span class="bprov ' + e.provenance + '">' + esc(T.provenanceL[e.provenance] || e.provenance) + ' · ' + Math.round(e.confidence * 100) + ' %</span>' + (e.lifecycle.length ? '<div class="meta">' + esc(e.lifecycle.join(' → ')) + '</div>' : '') + '<div class="meta">' + esc(e.reason) + '</div>' + (e.contradictions ? '<ul>' + e.contradictions.map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('') + '</ul>' : '') + '</li>';
+      }).join('') + '</ul>';
       if (b.unresolved.length) h += '<h3>' + esc(T.uncertain) + '</h3><ul class="bunres">' + b.unresolved.map(function (u) {
         return '<li><span class="bbadge ' + u.status + '">' + esc(T.bstatus[u.status] || u.status) + '</span> ' + esc(u.type) + (u.candidates ? ' — ' + esc(T.candidatesL) + ' : ' + esc(u.candidates.join(', ')) : '') + (u.recorded.length ? '<div class="meta">' + esc(u.recorded.join(' · ')) + '</div>' : '') + '</li>';
       }).join('') + '</ul>';
