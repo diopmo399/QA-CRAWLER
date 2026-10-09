@@ -92,6 +92,12 @@ export function buildBusinessFlow(name: string, detection: BusinessDetection): B
       ...(entity.provenance.candidates ? { candidates: entity.provenance.candidates } : {}),
       analyzer: entity.provenance.analyzer,
     },
+    classification: {
+      classification: entity.classification.classification,
+      confidence: entity.classification.confidence,
+      reason: entity.classification.reason,
+      signals: entity.classification.signals,
+    },
     firstSeen: {
       ...(entity.firstSeen.actionId ? { actionId: entity.firstSeen.actionId } : {}),
       evidence: entity.firstSeen.evidence,

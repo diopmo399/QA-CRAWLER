@@ -1,4 +1,5 @@
 import type { StateCode } from '../../functional/model.js';
+import type { EntityClassification } from '../business/entity-classifier.js';
 import type { EntityProvenance } from '../business/provenance-resolver.js';
 
 /**
@@ -31,6 +32,7 @@ export interface InteractionEvidence {
 /** Une identité possible, typée par sa FORME et le nom de son champ (des indices, jamais des règles). */
 export type IdentityType =
   | 'TASK_ID'
+  | 'ENTITY_ID'
   | 'ID'
   | 'UUID'
   | 'BUSINESS_KEY'
@@ -49,11 +51,18 @@ export interface IdentityCandidate {
   digest?: string;
   source: 'NETWORK_RESPONSE' | 'NETWORK_PATH' | 'DOM' | 'ROUTE' | 'USER_INPUT';
   confidence: number;
+  /** Les preuves qui portent cette identité. */
+  evidenceIds?: string[];
 }
 
 /** Un contexte applicatif : un écran du shell, un espace de travail, un micro-frontend. */
 export interface ApplicationContext {
   key: string;
+  /**
+   * Un contexte de l'application (shell, espace de travail, micro-frontend) — ou TECHNIQUE (écran
+   * d'authentification, de configuration) : jamais une entité métier.
+   */
+  classification: 'APPLICATION_CONTEXT' | 'TECHNICAL_CONTEXT';
   /** D'où vient la signature : un cadre (iframe), un élément personnalisé hôte, une route. */
   kind: 'FRAME' | 'HOST' | 'ROUTE';
   name: string;
@@ -90,6 +99,7 @@ export interface CollectionRecord {
 export interface TaskWorkspace {
   key: string;
   type: 'TASK_WORKSPACE';
+  classification: 'APPLICATION_ENTITY';
   contextKey?: string;
   collectionKey: string;
   source:
@@ -109,6 +119,8 @@ export interface TaskWorkspace {
 
 export interface Task {
   key: string;
+  /** Une task est un objet de l'APPLICATION : elle peut référencer une entité métier, jamais l'être. */
+  classification: 'APPLICATION_ENTITY';
   workspaceKey: string;
   /** taskId ≠ businessKey : chaque identité possible, typée. */
   identityCandidates: IdentityCandidate[];
@@ -184,6 +196,14 @@ export interface BusinessAction {
 export interface ModelEntity {
   key: string;
   type: string;
+  /** BUSINESS_ENTITY ou UNKNOWN (le technique et l'infrastructure vont dans technicalContext). */
+  classification: {
+    classification: EntityClassification;
+    confidence: number;
+    reason: string;
+    signals: string[];
+    analyzer: 'DETERMINISTIC' | 'AI_PROPOSAL';
+  };
   identity: IdentityCandidate;
   identityCandidates: IdentityCandidate[];
   provenance: { classification: EntityProvenance; confidence: number; reason: string };
@@ -195,6 +215,43 @@ export interface ModelEntity {
   relationships: string[];
 }
 
+/** Un élément technique ou d'infrastructure : gardé comme observation, jamais dans le flow métier. */
+export interface TechnicalItem {
+  key: string;
+  classification: 'TECHNICAL_ENTITY' | 'INFRASTRUCTURE_ENTITY';
+  category:
+    | 'AUTHENTICATION'
+    | 'DISCOVERY'
+    | 'HEALTH_TELEMETRY'
+    | 'STATIC_RESOURCE'
+    | 'CONFIGURATION'
+    | 'COMPONENT'
+    | 'OTHER';
+  label: string;
+  /** D'où vient l'observation : une entité suivie reclassée, un appel réseau, une navigation, le DOM. */
+  source: 'ENTITY' | 'NETWORK' | 'NAVIGATION' | 'DOM';
+  confidence: number;
+  reason: string;
+  evidenceIds: string[];
+  actionIds: string[];
+}
+
+/**
+ * Les TROIS niveaux d'une action, indépendants : ENREGISTRÉE (toujours, jamais retirée), VALIDÉE
+ * (la cible Playwright a été vérifiée), INTERPRÉTÉE (une action métier l'explique, sinon UNKNOWN).
+ */
+export interface ActionView {
+  actionId: string;
+  type: string;
+  label?: string;
+  stepIds: string[];
+  recorded: true;
+  validation: 'VALIDATED' | 'AMBIGUOUS' | 'FAILED' | 'UNVERIFIED';
+  /** Le statut détaillé du validateur (VALIDATED_PRE_ACTION, NOT_FOUND…). */
+  validationStatus?: string;
+  interpretation: (BusinessActionKind | 'UNKNOWN')[];
+}
+
 export interface ApplicationInteractionModel {
   version: 1;
   application: { origin?: string; startRoute?: string; shell: string[] };
@@ -202,9 +259,15 @@ export interface ApplicationInteractionModel {
   collections: WorkCollection[];
   workspaces: TaskWorkspace[];
   tasks: Task[];
+  /** Les entités MÉTIER (et celles encore inconnues) : le Business Context. */
   entities: ModelEntity[];
+  businessContext: { entityKeys: string[]; unknownKeys: string[] };
+  /** Ce qui est technique ou d'infrastructure : des observations, séparées du flow métier. */
+  technicalContext: { items: TechnicalItem[] };
   relationships: Relationship[];
   businessActions: BusinessAction[];
+  /** Chaque action enregistrée : enregistrée, validée, interprétée (trois états indépendants). */
+  actions: ActionView[];
   evidence: InteractionEvidence[];
   summary: {
     contexts: number;
@@ -214,6 +277,8 @@ export interface ApplicationInteractionModel {
     entities: number;
     relationships: number;
     uncertain: number;
+    technical: number;
+    actions: { recorded: number; validated: number; interpreted: number; uninterpreted: number };
   };
 }
 

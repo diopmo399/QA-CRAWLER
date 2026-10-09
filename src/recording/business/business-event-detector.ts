@@ -2,6 +2,7 @@ import type { ExchangeIdentifier, FunctionalExchange } from '../../functional/mo
 import type { RawRecordedEvent, RecordedFlowStep, RecordedState, SemanticRecordedAction } from '../model.js';
 import { entityOf } from '../recorded-test-data.js';
 import type { EntityEvidence } from './entity-evidence.js';
+import { isBusinessCandidate, type EntityClassification } from './entity-classifier.js';
 import { EntityMemory } from './entity-memory.js';
 import { trackEntities, type LifecycleKind, type TrackedEntity } from './entity-tracker.js';
 import {
@@ -53,6 +54,11 @@ export interface BusinessDetectionInput {
   initialStateId?: string;
   /** Des provenances AMBIGUËS tranchées (IA facultative) : clé d'entité → provenance candidate. */
   provenanceDecisions?: ReadonlyMap<string, EntityProvenance>;
+  /**
+   * Des classifications proposées (IA facultative) pour des entités INCONNUES seulement : jamais un
+   * élément technique ou d'infrastructure promu en métier (le classifieur revalide).
+   */
+  classificationDecisions?: ReadonlyMap<string, EntityClassification>;
 }
 
 export interface BusinessDetection {
@@ -86,6 +92,7 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
   const tracking = trackEntities({
     ...input,
     ...(input.provenanceDecisions ? { proposals: input.provenanceDecisions } : {}),
+    ...(input.classificationDecisions ? { classificationProposals: input.classificationDecisions } : {}),
   });
   memory.observe(tracking.entities);
   /** L'entité suivie dont un geste (CREATE, SAVE…) est cette action. */
@@ -231,10 +238,17 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
           `provenance: ${tracked.provenance.classification} (${tracked.provenance.reason})`,
           ...(tracked.provenance.contradictions ?? []),
         );
-      const notCreated = provenance !== undefined && provenance !== 'CREATED_DURING_RECORDING';
+      const technicalClass = tracked?.classification;
+      const technical = technicalClass !== undefined && !isBusinessCandidate(technicalClass.classification);
+      if (technical)
+        evidence.context.push(
+          `classification: ${technicalClass.classification} (${technicalClass.reason}) — not a business creation`,
+        );
+      const notCreated = technical || (provenance !== undefined && provenance !== 'CREATED_DURING_RECORDING');
       const existing = provenance === 'DISCOVERED_DURING_RECORDING' || provenance === 'CONFIRMED_EXISTING';
-      const finalStatus =
-        provenance === 'AMBIGUOUS'
+      const finalStatus = technical
+        ? 'UNKNOWN'
+        : provenance === 'AMBIGUOUS'
           ? 'AMBIGUOUS'
           : provenance === 'UNKNOWN'
             ? 'UNKNOWN'
@@ -506,6 +520,9 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
   };
   for (const entity of tracking.entities) {
     if (entity.provenance.classification === 'UNKNOWN') continue;
+    // Un élément technique ou d'infrastructure (OIDC, configuration, ressource statique) n'est
+    // jamais un geste métier : il reste une observation (business-flow.json : entities, evidence).
+    if (!isBusinessCandidate(entity.classification.classification)) continue;
     const record = memory.all.find((entry) => trackedWith(entry.identifier)?.key === entity.key);
     for (const step of entity.lifecycle) {
       const type = TYPE_OF[step.kind];

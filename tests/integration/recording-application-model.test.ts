@@ -204,6 +204,40 @@ safety:
     expect(subsequence(kinds(sessions.plain), ['SELECT_TASK', 'SWITCH_CONTEXT', 'OPEN'])).toBe(true);
   });
 
+  it('TEST E — OIDC discovery / userinfo are INFRASTRUCTURE in the Technical Context, never business entities', () => {
+    for (const session of Object.values(sessions)) {
+      expect(
+        session.model.entities.some((entity) =>
+          /openid|oidc|client-app-shell|userinfo/i.test(`${entity.key} ${entity.identity.value ?? ''}`),
+        ),
+      ).toBe(false);
+      expect(session.model.businessActions.some((action) => /openid|oidc/i.test(action.subject ?? ''))).toBe(
+        false,
+      );
+    }
+    const items = sessions.created?.model.technicalContext.items ?? [];
+    expect(items.map((item) => `${item.classification}:${item.category}`)).toEqual(
+      expect.arrayContaining(['INFRASTRUCTURE_ENTITY:DISCOVERY', 'INFRASTRUCTURE_ENTITY:AUTHENTICATION']),
+    );
+    // Les tasks et les contextes sont de l'APPLICATION ; l'item créé est MÉTIER.
+    expect([...new Set(sessions.created?.model.tasks.map((task) => task.classification))]).toEqual([
+      'APPLICATION_ENTITY',
+    ]);
+    expect(
+      sessions.created?.model.entities.find((entity) => entity.identity.value === 'ABC123')?.classification
+        .classification,
+    ).toBe('BUSINESS_ENTITY');
+  });
+
+  it('recorded / validated / interpreted: every recorded action is kept, uninterpreted ones stay UNKNOWN', () => {
+    const model = sessions.created?.model;
+    expect(model?.actions.length).toBe(model?.summary.actions.recorded);
+    expect([...new Set(model?.actions.map((view) => view.recorded))]).toEqual([true]);
+    expect((model?.summary.actions.interpreted ?? 0) + (model?.summary.actions.uninterpreted ?? 0)).toBe(
+      model?.summary.actions.recorded,
+    );
+  });
+
   it('the Playwright flow stays complete, and every business action points to recorded actions', () => {
     for (const session of Object.values(sessions)) {
       expect(session.steps.length).toBeGreaterThan(0);

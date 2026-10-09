@@ -41,6 +41,8 @@ const page = (
     if (toast.dataset.keep !== path) toast.textContent = '';
     if (path === '/tasks') {
       mount('task-list', '<h1>Tasks</h1><table><tbody id="rows"></tbody></table><div id="frame"></div>');
+      // Bruit technique d'une vraie application : découverte OpenID et profil OIDC (jamais du métier).
+      fetch('/.well-known/openid-configuration').then((r) => r.json()).then(() => fetch('/oidc/client-app-shell/userinfo'));
       fetch('/bff/tasks').then((r) => r.json()).then((tasks) => {
         document.getElementById('rows').innerHTML = tasks.map((t) =>
           '<tr><td><button type="button" class="task" data-id="' + t.taskId + '" data-type="' + t.type + '" data-key="' + (t.businessKey || '') + '">Task ' + t.taskId + '</button></td><td>' + t.type + '</td><td>' + (t.businessKey || '') + '</td></tr>').join('');
@@ -122,6 +124,18 @@ export async function startWorkspaceRecordingApp(): Promise<WorkspaceRecordingAp
       response.setHeader('content-type', 'application/json');
       response.end(JSON.stringify(body));
     };
+    if (url.pathname === '/.well-known/openid-configuration') {
+      json(200, {
+        issuer: 'http://idp.test',
+        authorization_endpoint: 'http://idp.test/authorize',
+        jwks_uri: 'http://idp.test/jwks',
+      });
+      return;
+    }
+    if (url.pathname === '/oidc/client-app-shell/userinfo') {
+      json(200, { sub: 'user-1', name: 'Alex' });
+      return;
+    }
     if (url.pathname === '/bff/tasks') {
       json(200, state.tasks);
       return;

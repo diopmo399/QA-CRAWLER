@@ -7,6 +7,11 @@ import {
   type EvidenceInput,
 } from './entity-evidence.js';
 import {
+  classifyEntity,
+  type ClassificationDecision,
+  type EntityClassification,
+} from './entity-classifier.js';
+import {
   DeterministicProvenanceResolver,
   type EntityProvenance,
   type ProvenanceDecision,
@@ -50,6 +55,8 @@ export interface TrackedEntity {
   /** La première observation : JAMAIS confondue avec une création. */
   firstSeen: { actionId?: string; actionIndex: number; evidence: EntityEvidenceType };
   provenance: ProvenanceDecision;
+  /** OBSERVER n'est pas une entité métier : la classification (métier, technique, infrastructure, inconnue). */
+  classification: ClassificationDecision;
   lifecycle: LifecycleStep[];
   evidenceIds: string[];
   actionIds: string[];
@@ -66,6 +73,8 @@ export interface TrackingInput extends EvidenceInput {
   steps?: readonly RecordedFlowStep[];
   /** Une provenance proposée (IA facultative) par clé d'entité : seulement pour une AMBIGUÏTÉ. */
   proposals?: ReadonlyMap<string, EntityProvenance>;
+  /** Une classification proposée (IA facultative) par clé d'entité : seulement pour un UNKNOWN. */
+  classificationProposals?: ReadonlyMap<string, EntityClassification>;
   resolver?: ProvenanceResolver;
 }
 
@@ -236,6 +245,18 @@ export function trackEntities(input: TrackingInput): EntityTracking {
     );
     const resources = [...new Set(own.flatMap((entry) => (entry.resource ? [entry.resource] : [])))].sort();
     const first = own[0];
+    const lifecycle = lifecycleOf(all, input, stepOf);
+    const classificationProposal = input.classificationProposals?.get(key);
+    const classification = classifyEntity(
+      {
+        identity: display,
+        resources,
+        provenance: provenance.classification,
+        lifecycle: lifecycle.map((step) => step.kind),
+      },
+      all,
+      classificationProposal,
+    );
     entities.push({
       key,
       type: resources.length === 1 && resources[0] ? resources[0] : 'unknown',
@@ -248,7 +269,8 @@ export function trackEntities(input: TrackingInput): EntityTracking {
         evidence: first?.type ?? 'USER_INPUT',
       },
       provenance,
-      lifecycle: lifecycleOf(all, input, stepOf),
+      classification,
+      lifecycle,
       evidenceIds: all.map((entry) => entry.id),
       actionIds: [...new Set(all.flatMap((entry) => (entry.actionId ? [entry.actionId] : [])))],
       ...(linkCandidates?.length ? { linkCandidates } : {}),

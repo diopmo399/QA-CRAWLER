@@ -21,8 +21,20 @@ export const LEAVE_LABEL =
 /** Les segments d'URL qui ne nomment pas une ressource (préfixes techniques). */
 const TECHNICAL_SEGMENT =
   /^(api|apis|rest|v\d+(\.\d+)?|app|apps|ui|web|public|internal|graphql|gql|services?|#|-|_)$/i;
-const ID_SEGMENT =
-  /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*|(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])[A-Za-z0-9]{4,40})$/i;
+/**
+ * Un SEGMENT qui est un identifiant : un nombre, un uuid, ou un code qui contient au moins un CHIFFRE
+ * (DEM-2026-001, ABC123, dem-2026-001). Un mot avec des tirets sans chiffre (openid-configuration,
+ * auth-redirect, un nom de client OIDC ou de composant) est un NOM, jamais l'identité d'une entité.
+ */
+export function isIdSegment(segment: string): boolean {
+  if (/^\d+$/.test(segment)) return true;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)) return true;
+  if (!/\d/.test(segment)) return false;
+  return (
+    /^[A-Za-z]{2,}[-_][A-Za-z0-9][A-Za-z0-9_-]*$/.test(segment) ||
+    /^(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])[A-Za-z0-9]{4,40}$/.test(segment)
+  );
+}
 
 /**
  * L'identité portée par une URL ou un chemin d'API, par sa STRUCTURE seulement :
@@ -34,7 +46,7 @@ export function identityInPath(path: string): { value: string; resource?: string
   const segments = clean.split('/').filter(Boolean);
   for (let index = segments.length - 1; index >= 0; index -= 1) {
     const segment = decodeSegment(segments[index] ?? '');
-    if (!ID_SEGMENT.test(segment)) continue;
+    if (!isIdSegment(segment)) continue;
     const resource = resourceBefore(segments, index);
     return { value: segment, ...(resource ? { resource } : {}) };
   }
@@ -51,7 +63,7 @@ export function routePattern(path: string, maxSegments = 3): string {
     .split('/')
     .filter(Boolean)
     .slice(0, maxSegments)
-    .map((segment) => (ID_SEGMENT.test(decodeSegment(segment)) ? ':id' : segment.toLowerCase()));
+    .map((segment) => (isIdSegment(decodeSegment(segment)) ? ':id' : segment.toLowerCase()));
   return `/${segments.join('/')}`;
 }
 
@@ -80,7 +92,7 @@ function decodeSegment(segment: string): string {
   }
 }
 
-/** Les jetons d'un texte qui peuvent être un identifiant : nombres (≥ 3 chiffres), codes, uuid. */
+/** Les jetons d'un texte qui peuvent être un identifiant : nombres (≥ 3 chiffres), codes avec chiffres, uuid. */
 export function identifierTokens(text: string): string[] {
   const tokens = [
     // Une clé alphanumérique en capitales (ABC123) : avant les nombres qu'elle contient.
@@ -89,12 +101,15 @@ export function identifierTokens(text: string): string[] {
       /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*|\d{3,}/gi,
     ) ?? []),
   ];
-  const kept = [...new Set(tokens)].filter(
-    (token, _, all) =>
-      !all.some(
-        (other) => other !== token && /^\d+$/.test(token) && !/^\d+$/.test(other) && other.includes(token),
-      ),
-  );
+  // Un jeton sans chiffre (un mot avec des tirets) n'est jamais un identifiant.
+  const kept = [...new Set(tokens)]
+    .filter((token) => /\d/.test(token))
+    .filter(
+      (token, _, all) =>
+        !all.some(
+          (other) => other !== token && /^\d+$/.test(token) && !/^\d+$/.test(other) && other.includes(token),
+        ),
+    );
   return kept.slice(0, 20);
 }
 

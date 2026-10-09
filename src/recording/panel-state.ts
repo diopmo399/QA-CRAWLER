@@ -66,7 +66,11 @@ export interface PanelAnalysis {
    * qu'elle regroupe, ce qui a été OBSERVÉ (réseau, écran, navigation) et ce qui est DÉDUIT.
    */
   /** LE MODÈLE DE L'APPLICATION, en arbre (les actions techniques restent dans le parcours). */
-  application?: { tree: PanelTreeNode[] };
+  application?: {
+    tree: PanelTreeNode[];
+    /** Les trois niveaux des actions : enregistrées, validées, interprétées (le reste : UNKNOWN). */
+    counts?: { recorded: number; validated: number; interpreted: number; uninterpreted: number };
+  };
   business?: {
     steps: PanelBusinessStep[];
     unresolved: { type: string; status: string; candidates?: string[]; recorded: string[] }[];

@@ -212,6 +212,43 @@ micro-frontends) :
 - H : MFE sans iframe (éléments personnalisés) · I : MFE dans une iframe · J : SPA, route sans
   rechargement.
 
+## Classification : observer n'est pas une entité métier
+
+**Principe** : OBSERVE → CLASSIFY → CORRELATE → INTERPRET. Un élément vu dans le DOM, une URL, le
+réseau, un script ou une configuration n'est pas une entité métier : il est d'abord observé, puis
+**classé** (`business/entity-classifier.ts`), puis éventuellement corrélé.
+
+| Classification                           | Exemples                                                                        | Où                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------- |
+| `BUSINESS_ENTITY`                        | un item créé, recherché, ouvert, modifié                                        | `entities`, `businessContext`             |
+| `APPLICATION_ENTITY`                     | une task, un espace de travail                                                  | `tasks`, `workspaces`                     |
+| `APPLICATION_CONTEXT`                    | un micro-frontend, le shell                                                     | `contexts`                                |
+| `TECHNICAL_ENTITY` / `TECHNICAL_CONTEXT` | ressource statique, configuration, nom de composant                             | `technicalContext`                        |
+| `INFRASTRUCTURE_ENTITY`                  | découverte OpenID (`.well-known`), OIDC/OAuth, auth redirect, santé, télémétrie | `technicalContext`                        |
+| `UNKNOWN`                                | preuves insuffisantes : un résultat normal                                      | `entities`, `businessContext.unknownKeys` |
+
+- **Identifiants stricts** : un identifiant est un nombre, un uuid ou un code qui contient au moins
+  un chiffre (`DEM-2026-001`, `ABC123`). `openid-configuration`, `auth-redirect`, un nom de client
+  OIDC ou de composant sont des **noms**, jamais des identités.
+- **Signaux** (conventions de protocole et de forme, jamais un nom métier) : chemins standards
+  (`/.well-known/*`, OpenID configuration, JWKS, `authorize` / `token` / `callback` / `logout`,
+  santé, métriques, télémétrie), fichiers statiques et configuration, noms techniques.
+- **Métier** seulement si des indices convergent (poids fixes `CLASSIFICATION_WEIGHTS`) : base 0,2 +
+  geste de l'utilisateur 0,35 + écriture 0,3 + ressource structurelle 0,15 + création 0,1 ; sous 0,6 :
+  `UNKNOWN`. Chaque décision porte `classification`, `confidence`, `reason`, `signals`, preuves.
+- Une entité technique ou d'infrastructure ne produit **aucun** événement ni étape métier, aucune
+  relation métier ; elle reste une observation dans `technicalContext` (avec ses preuves), tout
+  comme les appels réseau et les navigations techniques. Un écran d'authentification est un
+  `TECHNICAL_CONTEXT` : jamais un `SWITCH_CONTEXT` du parcours.
+- **IA facultative** : elle peut seulement choisir parmi les candidats d'un `UNKNOWN` (plafond 0,7) ;
+  jamais promouvoir en métier un élément classé technique ou infrastructure.
+- **Trois niveaux par action** (`actions[]`) : `recorded` (toujours), `validation` (`VALIDATED`,
+  `AMBIGUOUS`, `FAILED`, `UNVERIFIED`), `interpretation` (actions métier, sinon `UNKNOWN`). Une
+  action n'est jamais retirée parce que sa validation ou son interprétation échoue ; la fenêtre
+  affiche « N enregistrées · V validées · I interprétées · U non interprétées ».
+- **Identités multiples** : chaque entité garde ses candidats (`ENTITY_ID`, `BUSINESS_KEY`,
+  `REFERENCE`, `UUID`, `CODE`…) avec source, confiance et preuves.
+
 ## Limites connues
 
 - Les **actions à l'intérieur d'une iframe** ne sont pas encore enregistrées (le script de capture

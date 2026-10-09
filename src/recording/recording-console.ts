@@ -202,7 +202,9 @@ export class RecordingConsole {
       aiCandidates: intelligence?.candidates.length ?? 0,
       ...(running ? { running: true } : {}),
       ...(result.business ? { business: businessOf(result) } : {}),
-      ...(result.application ? { application: { tree: applicationTreeOf(result) } } : {}),
+      ...(result.application
+        ? { application: { tree: applicationTreeOf(result), counts: result.application.summary.actions } }
+        : {}),
     };
     this.render();
   }
@@ -534,6 +536,7 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
     return {
       label: `${entity?.type ?? 'entity'} ${identity?.value ?? key.split(':').at(-1) ?? ''}`,
       detail: [
+        entity ? entity.classification.classification : '',
         identity ? `${identity.type}${identity.field ? ` (${identity.field})` : ''}` : '',
         entity ? `provenance ${entity.provenance.classification}` : '',
         via ? `${via.type}: ${via.reason}` : '',
@@ -616,6 +619,41 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
       ];
     }),
   }));
-  for (const entity of model.entities) if (!placed.has(entity.key)) tree.push(entityNode(entity.key));
+  // BUSINESS CONTEXT : les entités métier (ou encore inconnues) qu'aucune task ne porte.
+  const loose = model.entities.filter((entity) => !placed.has(entity.key));
+  if (loose.length)
+    tree.push({
+      label: 'BUSINESS CONTEXT',
+      evidence: [],
+      recorded: [],
+      children: loose.map((entity) => entityNode(entity.key)),
+    });
+  // TECHNICAL CONTEXT : des observations, jamais des étapes métier (OIDC, configuration, statique…).
+  const items = model.technicalContext.items;
+  if (items.length) {
+    const categories = [...new Set(items.map((item) => item.category))];
+    tree.push({
+      label: 'TECHNICAL CONTEXT',
+      detail: `${String(items.length)} technical / infrastructure observation(s), kept as evidence, outside the business flow`,
+      evidence: [],
+      recorded: [],
+      children: categories.map((category) => ({
+        label: category,
+        evidence: [],
+        recorded: [],
+        children: items
+          .filter((item) => item.category === category)
+          .map((item) => ({
+            label: item.label,
+            detail: `${item.classification} · ${item.reason}`,
+            status: item.confidence >= 0.85 ? ('CONFIRMED' as const) : ('DEDUCED' as const),
+            confidence: item.confidence,
+            evidence: evidenceText(item.evidenceIds),
+            recorded: recorded(item.actionIds),
+            children: [],
+          })),
+      })),
+    });
+  }
   return tree;
 }

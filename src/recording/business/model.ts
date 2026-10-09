@@ -132,6 +132,8 @@ export interface BusinessFlowEntity {
     candidates?: EntityProvenance[];
     analyzer: 'DETERMINISTIC' | 'AI_PROPOSAL';
   };
+  /** Métier, technique, infrastructure ou inconnu : seule une entité métier (ou inconnue) porte des étapes. */
+  classification?: { classification: string; confidence: number; reason: string; signals: string[] };
   firstSeen?: { actionId?: string; evidence: string };
   lifecycle?: { kind: string; actionIds: string[]; stepIds: string[]; confidence: number }[];
   linkCandidates?: string[];

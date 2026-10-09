@@ -1,6 +1,7 @@
+import { isBusinessCandidate, technicalCategoryOf } from '../business/entity-classifier.js';
 import type { EntityEvidence } from '../business/entity-evidence.js';
 import type { LifecycleKind, TrackedEntity } from '../business/entity-tracker.js';
-import { collectionOf, identityInPath, round, sameValue } from '../business/signals.js';
+import { collectionOf, identityInPath, round, routePattern, sameValue } from '../business/signals.js';
 import type { RawRecordedEvent, RecordedFlowStep, RecordedState, SemanticRecordedAction } from '../model.js';
 import { identityTypeOf, observeCollections, selectedRecord, shownValuesOf } from './collection-observer.js';
 import {
@@ -12,6 +13,7 @@ import {
 } from './context-detector.js';
 import {
   statusOf,
+  type ActionView,
   type ApplicationContext,
   type ApplicationInteractionModel,
   type BusinessAction,
@@ -22,6 +24,7 @@ import {
   type ModelEntity,
   type Task,
   type TaskWorkspace,
+  type TechnicalItem,
   type WorkCollection,
 } from './model.js';
 import { RelationshipEngine } from './relationship-engine.js';
@@ -97,6 +100,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
   const touch = (signature: ContextSignature, stateId: string, actionId?: string): ApplicationContext => {
     const context = contexts.get(signature.key) ?? {
       key: signature.key,
+      classification: 'APPLICATION_CONTEXT' as ApplicationContext['classification'],
       kind: signature.kind,
       name: signature.name,
       routes: [],
@@ -157,6 +161,14 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       to.kind === 'FRAME' ? 'FRAME' : 'NAVIGATION',
     );
     contexts.get(to.key)?.evidenceIds.push(evidenceId);
+    // Un écran d'authentification, de configuration… est un contexte TECHNIQUE : observé, jamais une
+    // étape du parcours applicatif (il reste dans le Technical Context).
+    const technicalRoute = technicalCategoryOf(to.frame ?? to.route);
+    if (technicalRoute) {
+      const context = contexts.get(to.key);
+      if (context) context.classification = 'TECHNICAL_CONTEXT';
+      continue;
+    }
     switchAt.set(index, { from, to, evidenceId });
     businessActions.push({
       kind: 'SWITCH_CONTEXT',
@@ -282,6 +294,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     const workspace: TaskWorkspace = {
       key,
       type: 'TASK_WORKSPACE',
+      classification: 'APPLICATION_ENTITY',
       ...(collection.contextKey ? { contextKey: collection.contextKey } : {}),
       collectionKey: collection.key,
       source:
@@ -326,6 +339,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     }
     const task: Task = {
       key,
+      classification: 'APPLICATION_ENTITY',
       workspaceKey: workspace.key,
       identityCandidates: candidates,
       primary,
@@ -487,7 +501,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     const confidence = network ? 0.85 : 0.6;
     const workspace = workspaceFor(
       collection,
-      `a list of selectable work items: selecting one opens another application context${network ? ' (records served by the network)' : ' (rows of the screen only)'}`,
+      `a list of selectable work items: selecting one opens another application context${network ? ' (records served by the network)' : ' (rows of the screen only: no list read on the network matched it — read before the recording, host not allowed, or unreadable response)'}`,
       evidenceIds,
       confidence,
     );
@@ -535,7 +549,11 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
   }
 
   // ---------------------------------------------------------------- 4. entités : contextes, création, retour à la liste
-  const keptEntities = entities.filter((entity) => !isTaskShadow(entity));
+  // OBSERVE, CLASSIFY, puis CORRELATE : seules les entités métier (ou encore inconnues) entrent dans
+  // le Business Context ; le technique et l'infrastructure vont dans le Technical Context.
+  const keptEntities = entities.filter(
+    (entity) => !isTaskShadow(entity) && isBusinessCandidate(entity.classification.classification),
+  );
   for (const entity of keptEntities) {
     const created = creationIndex(entity);
     for (const step of entity.lifecycle) {
@@ -721,7 +739,18 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       (relation) => relation.source === entity.key || relation.target === entity.key,
     );
     const identityOf = (identity: TrackedEntity['identity']): IdentityCandidate => ({
-      type: identityTypeOf(identity.field, identity.value, false),
+      type: entityIdentityType(identity),
+      evidenceIds: entity.evidenceIds
+        .filter((id) => {
+          const carried = entityEvidence.get(id)?.identity;
+          return (
+            carried !== undefined &&
+            ((carried.digest !== undefined && carried.digest === identity.digest) ||
+              (carried.value !== undefined && carried.value === identity.value))
+          );
+        })
+        .slice(0, 6)
+        .map(entityRef),
       ...(identity.field ? { field: identity.field } : {}),
       ...(identity.value !== undefined ? { value: identity.value } : {}),
       ...(identity.digest ? { digest: identity.digest } : {}),
@@ -749,6 +778,13 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       type: entity.type,
       identity: identityOf(entity.identity),
       identityCandidates: [entity.identity, ...entity.aliases].map(identityOf),
+      classification: {
+        classification: entity.classification.classification,
+        confidence: entity.classification.confidence,
+        reason: entity.classification.reason,
+        signals: entity.classification.signals,
+        analyzer: entity.classification.analyzer,
+      },
       provenance: {
         classification: entity.provenance.classification,
         confidence: entity.provenance.confidence,
@@ -796,6 +832,112 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     .sort((a, b) => firstOf(a) - firstOf(b) || ORDER[a.kind] - ORDER[b.kind])
     .map((entry, index) => ({ id: `ba${String(index + 1)}`, ...entry, confidence: round(entry.confidence) }));
 
+  // ---------------------------------------------------------------- 7. le Technical Context
+  const technical = new Map<string, TechnicalItem>();
+  const addTechnical = (
+    item: Omit<TechnicalItem, 'evidenceIds' | 'actionIds'>,
+    evidenceId: string,
+    actionId?: string,
+  ): void => {
+    const known = technical.get(item.key);
+    if (known) {
+      if (!known.evidenceIds.includes(evidenceId) && known.evidenceIds.length < 8)
+        known.evidenceIds.push(evidenceId);
+      if (actionId && !known.actionIds.includes(actionId)) known.actionIds.push(actionId);
+      return;
+    }
+    technical.set(item.key, { ...item, evidenceIds: [evidenceId], actionIds: actionId ? [actionId] : [] });
+  };
+  for (const entity of entities)
+    if (!isBusinessCandidate(entity.classification.classification)) {
+      const kind =
+        entity.classification.classification === 'INFRASTRUCTURE_ENTITY'
+          ? 'INFRASTRUCTURE_ENTITY'
+          : 'TECHNICAL_ENTITY';
+      const location = entity.evidenceIds
+        .map((id) => entityEvidence.get(id))
+        .flatMap((entry) => [entry?.details.url, entry?.details.route])
+        .find((value): value is string => !!value);
+      const category = location ? technicalCategoryOf(location)?.category : undefined;
+      addTechnical(
+        {
+          key: `tech:${entity.key}`,
+          classification: kind,
+          category: category ?? (kind === 'TECHNICAL_ENTITY' ? 'COMPONENT' : 'OTHER'),
+          label: entity.identity.value ?? entity.key,
+          source: 'ENTITY',
+          confidence: entity.classification.confidence,
+          reason: `classified ${entity.classification.classification}: ${entity.classification.reason}`,
+        },
+        entityRef(entity.evidenceIds[0] ?? ''),
+        entity.actionIds[0],
+      );
+    }
+  for (const action of actions) {
+    const places = [
+      ...action.network.map((exchange) => ({
+        path: exchange.path,
+        source: 'NETWORK' as const,
+        what: `${exchange.method} ${exchange.path}`,
+      })),
+      ...(action.navigation?.routes ?? []).map((route) => ({
+        path: route,
+        source: 'NAVIGATION' as const,
+        what: `navigation ${route}`,
+      })),
+      ...(action.type === 'NAVIGATE' && action.route
+        ? [{ path: action.route, source: 'NAVIGATION' as const, what: `navigation ${action.route}` }]
+        : []),
+    ];
+    for (const place of places) {
+      const role = technicalCategoryOf(place.path);
+      if (!role) continue;
+      addTechnical(
+        {
+          key: `tech:${role.category}:${routePattern(place.path, 6)}`,
+          classification: role.classification,
+          category: role.category,
+          label: routePattern(place.path, 6),
+          source: place.source,
+          confidence: role.confidence,
+          reason: role.reason,
+        },
+        actionEvidence(
+          `${place.what}: ${role.reason}`,
+          action,
+          place.source === 'NETWORK' ? 'NETWORK' : 'NAVIGATION',
+        ),
+        action.id,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------- 8. les trois niveaux de chaque action
+  const actionViews: ActionView[] = actions.map((action) => {
+    const raw = rawById.get(action.rawEventIds.at(-1) ?? '');
+    const status = raw?.targetValidation?.status;
+    const kinds = [
+      ...new Set(ordered.filter((entry) => entry.actionIds.includes(action.id)).map((entry) => entry.kind)),
+    ];
+    return {
+      actionId: action.id,
+      type: action.type,
+      ...(action.target?.label ? { label: action.target.label } : {}),
+      stepIds: stepOf([action.id]),
+      recorded: true,
+      validation:
+        status === undefined
+          ? 'UNVERIFIED'
+          : status.startsWith('VALIDATED')
+            ? 'VALIDATED'
+            : status === 'AMBIGUOUS'
+              ? 'AMBIGUOUS'
+              : 'FAILED',
+      ...(status ? { validationStatus: status } : {}),
+      interpretation: kinds.length ? kinds : ['UNKNOWN'],
+    };
+  });
+
   const startState = input.initialStateId
     ? states.find((state) => state.id === input.initialStateId)
     : states[0];
@@ -813,8 +955,18 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     ),
     tasks: [...tasks.values()],
     entities: modelEntities,
+    businessContext: {
+      entityKeys: modelEntities
+        .filter((entity) => entity.classification.classification === 'BUSINESS_ENTITY')
+        .map((entity) => entity.key),
+      unknownKeys: modelEntities
+        .filter((entity) => entity.classification.classification !== 'BUSINESS_ENTITY')
+        .map((entity) => entity.key),
+    },
+    technicalContext: { items: [...technical.values()] },
     relationships: [...allRelations],
     businessActions: ordered,
+    actions: actionViews,
     evidence,
     summary: {
       contexts: contexts.size,
@@ -824,6 +976,13 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       entities: modelEntities.length,
       relationships: allRelations.length,
       uncertain: allRelations.filter((relation) => relation.status === 'UNCERTAIN').length,
+      technical: technical.size,
+      actions: {
+        recorded: actionViews.length,
+        validated: actionViews.filter((view) => view.validation === 'VALIDATED').length,
+        interpreted: actionViews.filter((view) => !view.interpretation.includes('UNKNOWN')).length,
+        uninterpreted: actionViews.filter((view) => view.interpretation.includes('UNKNOWN')).length,
+      },
     },
   };
   return model;
@@ -875,6 +1034,21 @@ function withBff(
       bffCandidate: { confidence: round(Math.min(0.9, 0.3 + 0.2 * reasons.length)), reasons },
     },
   };
+}
+
+/** Le type d'une identité d'entité : un id technique (ENTITY_ID), une clé métier, une référence… */
+function entityIdentityType(identity: TrackedEntity['identity']): IdentityCandidate['type'] {
+  const type = identityTypeOf(identity.field, identity.value, false);
+  if (type === 'ID' || (identity.field !== undefined && /^(data\.)?(id|uuid)$/i.test(identity.field)))
+    return 'ENTITY_ID';
+  if (
+    type === 'CODE' &&
+    identity.value !== undefined &&
+    /[A-Za-z]/.test(identity.value) &&
+    /\d/.test(identity.value)
+  )
+    return identity.field ? 'BUSINESS_KEY' : 'CODE';
+  return type;
 }
 
 function originOf(url: string): string | undefined {

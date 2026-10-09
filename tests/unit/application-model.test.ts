@@ -5,7 +5,9 @@ import type { FunctionalExchange } from '../../src/functional/model.js';
 import { buildApplicationModel } from '../../src/recording/application/application-model.js';
 import type { ApplicationInteractionModel } from '../../src/recording/application/model.js';
 import { detectBusinessEvents } from '../../src/recording/business/business-event-detector.js';
-import { identityInPath } from '../../src/recording/business/signals.js';
+import type { EntityEvidence } from '../../src/recording/business/entity-evidence.js';
+import { classifyEntity, CLASSIFICATION_WEIGHTS } from '../../src/recording/business/entity-classifier.js';
+import { identifierTokens, identityInPath, isIdSegment } from '../../src/recording/business/signals.js';
 import type { RawRecordedEvent, RecordedState, SemanticRecordedAction } from '../../src/recording/model.js';
 
 /**
@@ -231,6 +233,7 @@ describe('Application Interaction Model (generic: shell, task list, BFF, micro-f
       provenance: { classification: 'CREATED_DURING_RECORDING' },
     });
     expect(item?.identity).toMatchObject({ type: 'BUSINESS_KEY', field: 'businessKey' });
+    expect(item?.classification.classification).toBe('BUSINESS_ENTITY');
     // La task n'est pas une entité : son identifiant n'en fait pas une « entité 456 ».
     expect(model.entities.some((entity) => entity.identity.value === '456')).toBe(false);
     expect(model.relationships).toEqual(
@@ -469,5 +472,169 @@ describe('Application Interaction Model (generic: shell, task list, BFF, micro-f
     expect(model.workspaces).toHaveLength(0);
     expect(model.tasks).toHaveLength(0);
     expect(model.entities[0]?.lifecycle).toEqual(['OPEN']);
+  });
+});
+
+describe('Observe first, classify second: technical noise never becomes a business entity', () => {
+  const evidence = (url: string, type: EntityEvidence['type'] = 'READ_RESPONSE'): EntityEvidence => ({
+    id: 'e1',
+    type,
+    actionIndex: 0,
+    actionId: 'a1',
+    rawEventIds: ['r1'],
+    identity: { value: 'X', source: 'NETWORK_PATH', confidence: 0.9 },
+    details: { url },
+    description: url,
+  });
+  const subject = (value: string, resources: string[] = []) => ({
+    identity: { value, source: 'NETWORK_PATH' as const, confidence: 0.9 },
+    resources,
+    provenance: 'DISCOVERED_DURING_RECORDING' as const,
+    lifecycle: ['OPEN'],
+  });
+
+  it('identities need a digit: OIDC names, auth routes and component names are names, not identities', () => {
+    for (const name of ['openid-configuration', 'auth-redirect', 'oidc-client-app-shell', 'app-task-list'])
+      expect(isIdSegment(name)).toBe(false);
+    for (const id of [
+      '123',
+      'ABC123',
+      'DEM-2026-001',
+      'dem-2026-001',
+      '0f8fad5b-d9cb-469f-a165-70867728950e',
+    ])
+      expect(isIdSegment(id)).toBe(true);
+    expect(identityInPath('/.well-known/openid-configuration')).toBeUndefined();
+    expect(identityInPath('/auth-redirect')).toBeUndefined();
+    expect(identifierTokens('oidc-client-app-shell openid-configuration')).toEqual([]);
+    expect(identifierTokens('Item ABC123 and DEM-2026-001')).toEqual(['ABC123', 'DEM-2026-001']);
+  });
+
+  it('TEST E — OpenID configuration / auth resources are INFRASTRUCTURE_ENTITY, never BUSINESS_ENTITY', () => {
+    const discovery = classifyEntity(subject('X'), [evidence('/.well-known/openid-configuration')]);
+    expect(discovery).toMatchObject({
+      classification: 'INFRASTRUCTURE_ENTITY',
+      confidence: CLASSIFICATION_WEIGHTS.infrastructure,
+    });
+    expect(classifyEntity(subject('C123'), [evidence('/oauth2/clients/C123')]).classification).toBe(
+      'INFRASTRUCTURE_ENTITY',
+    );
+    // Même proposé par l'IA, jamais promu en métier.
+    expect(
+      classifyEntity(subject('X'), [evidence('/.well-known/openid-configuration')], 'BUSINESS_ENTITY')
+        .classification,
+    ).toBe('INFRASTRUCTURE_ENTITY');
+  });
+
+  it('TEST E (recording) — sign-in noise lands in the Technical Context, outside the business flow', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.click('Sign in', {
+      to: { url: '/auth-redirect', hosts: [SHELL] },
+      network: [
+        read('/.well-known/openid-configuration', {
+          issuer: 'https://idp.test',
+          jwks_uri: 'https://idp.test/jwks',
+        }),
+        read('/oidc/client-app-shell/userinfo', { sub: 'abc' }),
+        read('/assets/i18n/fr.json', {}),
+      ],
+    });
+    run.click('Tasks', { to: TASKS, network: [read('/bff/tasks', [{ taskId: 456 }])] });
+    const model = run.build();
+    expect(model.entities).toHaveLength(0);
+    const categories = model.technicalContext.items.map((item) => `${item.classification}:${item.category}`);
+    expect(categories).toEqual(
+      expect.arrayContaining([
+        'INFRASTRUCTURE_ENTITY:DISCOVERY',
+        'INFRASTRUCTURE_ENTITY:AUTHENTICATION',
+        'TECHNICAL_ENTITY:STATIC_RESOURCE',
+      ]),
+    );
+    expect(model.technicalContext.items.every((item) => item.evidenceIds.length > 0)).toBe(true);
+    expect(
+      model.businessActions.some((action) => /openid|auth-redirect|oidc/.test(action.subject ?? '')),
+    ).toBe(false);
+  });
+
+  it('TEST F — a component / technical name and configuration-only resources are TECHNICAL_ENTITY', () => {
+    expect(classifyEntity(subject('app-task-list'), []).classification).toBe('TECHNICAL_ENTITY');
+    expect(classifyEntity(subject('V2'), [evidence('/assets/config/v2-123.json')]).classification).toBe(
+      'TECHNICAL_ENTITY',
+    );
+  });
+
+  it('TEST G — a task is an APPLICATION_ENTITY, linked to (never merged with) the business entity it references', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.click('Tasks', {
+      to: TASKS,
+      network: [read('/bff/tasks', [{ taskId: 457, businessKey: 'ABC123' }])],
+    });
+    run.click('Task 457 — ABC123', {
+      to: { url: '/items/ABC123', hosts: [SHELL, 'items-detail'] },
+      network: [read('/bff/items/ABC123', { businessKey: 'ABC123' })],
+    });
+    const model = run.build();
+    expect(model.tasks[0]?.classification).toBe('APPLICATION_ENTITY');
+    expect(model.workspaces[0]?.classification).toBe('APPLICATION_ENTITY');
+    expect(model.contexts.every((context) => context.classification === 'APPLICATION_CONTEXT')).toBe(true);
+    const item = model.entities.find((entity) => entity.key === 'entity:item:ABC123');
+    expect(item?.classification.classification).toBe('BUSINESS_ENTITY');
+    expect(model.businessContext.entityKeys).toEqual(['entity:item:ABC123']);
+    expect(model.entities.some((entity) => entity.identity.value === '457')).toBe(false);
+  });
+
+  it('TEST H — insufficient evidence (read on load, no gesture, no write): UNKNOWN, kept, never forced', () => {
+    const run = app({ url: '/' });
+    run.click('Refresh', { network: [read('/api/items/123', { id: 123 })] });
+    const model = run.build();
+    const item = model.entities[0];
+    expect(item?.classification).toMatchObject({ classification: 'UNKNOWN' });
+    expect(item?.classification.confidence).toBeLessThan(CLASSIFICATION_WEIGHTS.threshold);
+    expect(model.businessContext.unknownKeys).toEqual([item?.key]);
+  });
+
+  it('TESTS I + J — create ABC123 (CREATED_DURING_RECORDING, BUSINESS), then search ABC123 and open: the same business entity', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.click('New item', { to: { url: '/items/new', hosts: [SHELL, 'items-create'] } });
+    run.fill('Name', 'Alex');
+    run.click('Create', {
+      network: [create('/bff/items', 'businessKey', 'ABC123')],
+      to: { url: '/items/new', hosts: [SHELL, 'items-create'], statuses: ['Item ABC123 created'] },
+    });
+    run.click('Search items', { to: { url: '/items/search', hosts: [SHELL, 'items-search'] } });
+    run.fill('Business key', 'ABC123', 'code');
+    run.click('Search', { network: [read('/bff/items', { items: [{ id: 99, businessKey: 'ABC123' }] })] });
+    run.click('Item ABC123', {
+      href: '/items/ABC123',
+      to: { url: '/items/ABC123', hosts: [SHELL, 'items-detail'] },
+      network: [read('/bff/items/ABC123', { businessKey: 'ABC123' })],
+    });
+    const model = run.build();
+    const items = model.entities.filter((entity) =>
+      entity.identityCandidates.some((candidate) => candidate.value === 'ABC123'),
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      classification: { classification: 'BUSINESS_ENTITY' },
+      provenance: { classification: 'CREATED_DURING_RECORDING' },
+      lifecycle: ['CREATE', 'SEARCH', 'OPEN'],
+    });
+    expect(items[0]?.identity).toMatchObject({ type: 'BUSINESS_KEY', field: 'businessKey' });
+    expect(items[0]?.identity.evidenceIds?.length).toBeGreaterThan(0);
+  });
+
+  it('recorded, validated and interpreted are three independent states: nothing is dropped', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.click('Help');
+    run.click('Tasks', { to: TASKS, network: [read('/bff/tasks', [{ taskId: 456 }])] });
+    const model = run.build();
+    expect(model.actions).toHaveLength(2);
+    expect(model.actions[0]).toMatchObject({
+      recorded: true,
+      validation: 'UNVERIFIED',
+      interpretation: ['UNKNOWN'],
+    });
+    expect(model.actions[1]?.interpretation).toEqual(['SWITCH_CONTEXT']);
+    expect(model.summary.actions).toEqual({ recorded: 2, validated: 0, interpreted: 1, uninterpreted: 1 });
   });
 });
