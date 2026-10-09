@@ -1,4 +1,8 @@
+import type { TrackedEntity } from './entity-tracker.js';
 import type { BusinessIdentifier, BusinessStatus } from './model.js';
+import { identifierTokens, sameValue } from './signals.js';
+
+export { identifierTokens } from './signals.js';
 
 /**
  * LA MÉMOIRE DES ENTITÉS d'un enregistrement : les entités créées (ou ouvertes) pendant le parcours,
@@ -7,6 +11,10 @@ import type { BusinessIdentifier, BusinessStatus } from './model.js';
  *
  * Seules les interprétations CONFIRMED et PROBABLE y entrent : une hypothèse faible ne devient
  * jamais une référence.
+ *
+ * Elle garde AUSSI toutes les entités OBSERVÉES (observe) : créées, découvertes, existantes ou
+ * inconnues, avec leur provenance. Observer une entité pour la première fois (firstSeen) n'est
+ * jamais la créer : seules les créations prouvées reçoivent une référence $created.
  */
 export interface EntityRecord {
   entity: string;
@@ -21,6 +29,29 @@ export interface EntityRecord {
 
 export class EntityMemory {
   private readonly records: EntityRecord[] = [];
+  private tracked: readonly TrackedEntity[] = [];
+
+  /** Les entités observées pendant l'enregistrement, avec leur provenance (ProvenanceResolver). */
+  observe(entities: readonly TrackedEntity[]): void {
+    this.tracked = [...entities];
+  }
+
+  get observed(): readonly TrackedEntity[] {
+    return this.tracked;
+  }
+
+  /** Les entités observées qui portent cette identité (empreinte ou valeur, alias compris). */
+  observedWith(value: { digest?: string; value?: string }): TrackedEntity[] {
+    return this.tracked.filter((entity) =>
+      [entity.identity, ...entity.aliases].some(
+        (identity) =>
+          (value.digest !== undefined && identity.digest === value.digest) ||
+          (value.value !== undefined &&
+            identity.value !== undefined &&
+            sameValue(identity.value, value.value)),
+      ),
+    );
+  }
 
   /** L'entité créée : sa référence runtime ($created.<entité>.id, puis .id2… si plusieurs). */
   remember(input: Omit<EntityRecord, 'reference'>): EntityRecord {
@@ -43,7 +74,7 @@ export class EntityMemory {
       else if (
         value.value !== undefined &&
         record.identifier.value !== undefined &&
-        same(value.value, record.identifier.value)
+        sameValue(value.value, record.identifier.value)
       )
         found.push({ record, match: 'same value' });
     }
@@ -56,7 +87,7 @@ export class EntityMemory {
     const found: { record: EntityRecord; match: string }[] = [];
     for (const record of this.records) {
       const { value, digest: recorded } = record.identifier;
-      if (value !== undefined && tokens.some((token) => same(token, value)))
+      if (value !== undefined && tokens.some((token) => sameValue(token, value)))
         found.push({ record, match: `"${value}" in "${text.slice(0, 60)}"` });
       else if (recorded && digest && tokens.some((token) => digest(token) === recorded))
         found.push({ record, match: `an identifier of "${text.slice(0, 60)}" has the same salted digest` });
@@ -67,16 +98,4 @@ export class EntityMemory {
   get all(): readonly EntityRecord[] {
     return this.records;
   }
-}
-
-/** Les jetons qui peuvent être un identifiant : nombres (≥ 3 chiffres), codes (DEM-2026-001), uuid. */
-export function identifierTokens(text: string): string[] {
-  const tokens = text.match(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*|\d{3,}/gi,
-  );
-  return [...new Set(tokens ?? [])].slice(0, 20);
-}
-
-function same(a: string, b: string): boolean {
-  return a.trim().replace(/^#/, '').toLowerCase() === b.trim().replace(/^#/, '').toLowerCase();
 }

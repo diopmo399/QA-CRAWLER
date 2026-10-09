@@ -454,7 +454,8 @@ function businessOf(result: RecordingResult): NonNullable<PanelAnalysis['busines
   return {
     steps: (model?.steps ?? []).map((step) => ({
       action: step.action,
-      entity: step.entity ?? '?',
+      entity: step.entity ?? step.entityKey?.split(':').at(-1) ?? '?',
+      ...(step.provenance ? { provenance: step.provenance } : {}),
       status: step.status,
       confidence: step.confidence,
       ...(step.outputs ? { output: step.outputs.id } : {}),
@@ -471,5 +472,23 @@ function businessOf(result: RecordingResult): NonNullable<PanelAnalysis['busines
       ...(event.candidates ? { candidates: event.candidates } : {}),
       recorded: recorded(event.stepIds),
     })),
+    entities: (model?.entities ?? []).flatMap((entity) =>
+      entity.key && entity.provenance
+        ? [
+            {
+              key: entity.key,
+              name: entity.name,
+              ...(entity.identity?.value !== undefined ? { identity: entity.identity.value } : {}),
+              provenance: entity.provenance.classification,
+              confidence: entity.provenance.confidence,
+              reason: entity.provenance.reason,
+              lifecycle: (entity.lifecycle ?? []).map((step) => step.kind),
+              ...(entity.provenance.contradictions
+                ? { contradictions: entity.provenance.contradictions }
+                : {}),
+            },
+          ]
+        : [],
+    ),
   };
 }

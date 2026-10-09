@@ -1,7 +1,9 @@
 import type { ExchangeIdentifier, FunctionalExchange } from '../../functional/model.js';
 import type { RawRecordedEvent, RecordedFlowStep, RecordedState, SemanticRecordedAction } from '../model.js';
 import { entityOf } from '../recorded-test-data.js';
-import { EntityMemory, identifierTokens } from './entity-memory.js';
+import type { EntityEvidence } from './entity-evidence.js';
+import { EntityMemory } from './entity-memory.js';
+import { trackEntities, type LifecycleKind, type TrackedEntity } from './entity-tracker.js';
 import {
   statusOf,
   type BusinessEvent,
@@ -10,6 +12,19 @@ import {
   type BusinessIdentifier,
   type BusinessRelation,
 } from './model.js';
+import type { EntityProvenance } from './provenance-resolver.js';
+import {
+  CREATE_LABEL,
+  SEARCH_LABEL,
+  SUCCESS,
+  WRITE,
+  fold,
+  hasPathId,
+  identifierTokens,
+  labelOf,
+  round,
+  singular,
+} from './signals.js';
 
 /**
  * BUSINESS EVENT DETECTOR (déterministe) : des actions techniques enregistrées aux événements métier,
@@ -34,20 +49,22 @@ export interface BusinessDetectionInput {
    * observés est ignoré.
    */
   decisions?: ReadonlyMap<string, string>;
+  /** L'écran observé au démarrage (la seule preuve qu'une entité existait AVANT l'enregistrement). */
+  initialStateId?: string;
+  /** Des provenances AMBIGUËS tranchées (IA facultative) : clé d'entité → provenance candidate. */
+  provenanceDecisions?: ReadonlyMap<string, EntityProvenance>;
 }
 
 export interface BusinessDetection {
   events: BusinessEvent[];
   relations: BusinessRelation[];
   memory: EntityMemory;
+  /** Les entités observées, leur provenance et leur cycle de vie (ProvenanceResolver). */
+  entities: TrackedEntity[];
+  /** Les preuves structurées d'où elles viennent (EvidenceCollector). */
+  evidence: EntityEvidence[];
 }
 
-const WRITE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-const CREATE_LABEL =
-  /\b(cr[ée]er|ajouter|enregistrer|soumettre|valider|confirmer|envoyer|create|add|save|submit|confirm|send)\b/iu;
-const SEARCH_LABEL = /\b(recherch\w*|chercher|trouver|search\w*|find|lookup|query)\b/iu;
-const SUCCESS =
-  /\b(cr[ée]{2}e?s?|enregistr[ée]e?s?|ajout[ée]e?s?|cr[ée]ation|created|saved|added|succ[eè]s|success\w*)\b/iu;
 const ENTITY_VERB =
   /(?:nouvel(?:le)?|nouveau|cr[ée]er|ajouter|rechercher|chercher|modifier|supprimer|ouvrir|consulter|new|create|add|search|find|edit|update|delete|open|view)\s+(?:(?:un|une|le|la|les|l'|des|du|de|d'|a|an|the)\s+)?([\p{L}][\p{L}-]{2,})/giu;
 /** Des noms de ressource qui ne disent pas QUELLE entité (items, resources…). */
@@ -65,6 +82,24 @@ const GENERIC = new Set([
 
 export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDetection {
   const memory = new EntityMemory();
+  // OBSERVATION D'ABORD : preuves → identités → provenance, avant toute interprétation métier.
+  const tracking = trackEntities({
+    ...input,
+    ...(input.provenanceDecisions ? { proposals: input.provenanceDecisions } : {}),
+  });
+  memory.observe(tracking.entities);
+  /** L'entité suivie dont un geste (CREATE, SAVE…) est cette action. */
+  const trackedAt = (actionId: string, kinds: readonly LifecycleKind[]): TrackedEntity | undefined =>
+    tracking.entities.find((entity) =>
+      entity.lifecycle.some((step) => kinds.includes(step.kind) && step.actionIds.includes(actionId)),
+    );
+  const trackedWith = (identifier: BusinessIdentifier | undefined): TrackedEntity | undefined =>
+    identifier
+      ? memory.observedWith({
+          ...(identifier.digest ? { digest: identifier.digest } : {}),
+          ...(identifier.value !== undefined ? { value: identifier.value } : {}),
+        })[0]
+      : undefined;
   const events: BusinessEvent[] = [];
   const relations: BusinessRelation[] = [];
   const stateById = new Map(input.states.map((state) => [state.id, state]));
@@ -167,20 +202,66 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
         .filter((entry) => !consumed.has(entry.id));
       for (const entry of group) consumed.add(entry.id);
       boundary = index;
+      // LA PROVENANCE tranche : une identité déjà observée avant (AMBIGUOUS), ou un « Enregistrer » sur
+      // une entité affichée (SAVE), n'est jamais une création.
+      const tracked = trackedAt(action.id, ['CREATE']) ?? trackedWith(identifier);
+      const saved = trackedAt(action.id, ['SAVE']);
+      const provenance = tracked?.provenance.classification;
+      if (!tracked && saved) {
+        evidence.context.push(
+          `provenance: ${saved.provenance.classification} — "${label}" saves ${saved.key}, it does not create it`,
+        );
+        boundary = index;
+        for (const entry of group) consumed.add(entry.id);
+        push({
+          type: 'ENTITY_UPDATED',
+          ...(decision.entity ? { entity: decision.entity } : {}),
+          entityKey: saved.key,
+          provenance: saved.provenance.classification,
+          status: statusOf(confidence),
+          confidence,
+          actionIds: [action.id],
+          rawEventIds: action.rawEventIds,
+          evidence,
+        });
+        continue;
+      }
+      if (tracked)
+        evidence.context.push(
+          `provenance: ${tracked.provenance.classification} (${tracked.provenance.reason})`,
+          ...(tracked.provenance.contradictions ?? []),
+        );
+      const notCreated = provenance !== undefined && provenance !== 'CREATED_DURING_RECORDING';
+      const existing = provenance === 'DISCOVERED_DURING_RECORDING' || provenance === 'CONFIRMED_EXISTING';
+      const finalStatus =
+        provenance === 'AMBIGUOUS'
+          ? 'AMBIGUOUS'
+          : provenance === 'UNKNOWN'
+            ? 'UNKNOWN'
+            : decision.ai && status === 'CONFIRMED'
+              ? 'PROBABLE'
+              : status;
       const event = push({
-        type: 'ENTITY_CREATED',
+        type: existing ? 'ENTITY_UPDATED' : 'ENTITY_CREATED',
         ...(decision.entity ? { entity: decision.entity } : {}),
         ...(decision.candidates.length > 1 ? { candidates: decision.candidates } : {}),
         ...(identifier ? { identifier } : {}),
-        status: decision.ai && status === 'CONFIRMED' ? 'PROBABLE' : status,
+        ...(tracked ? { entityKey: tracked.key, provenance: tracked.provenance.classification } : {}),
+        status: finalStatus,
         confidence: decision.ai ? Math.min(confidence, 0.84) : confidence,
         actionIds: group.map((entry) => entry.id),
         rawEventIds: group.flatMap((entry) => entry.rawEventIds),
         evidence,
         ...(decision.ai ? { analyzer: 'AI_PROPOSAL' as const } : {}),
       });
-      // UNE VÉRITÉ MÉTIER seulement si confirmée ou probable, avec une entité et un identifiant.
-      if (decision.entity && identifier && (event.status === 'CONFIRMED' || event.status === 'PROBABLE')) {
+      // UNE VÉRITÉ MÉTIER seulement si confirmée ou probable, avec une entité, un identifiant et
+      // une création PROUVÉE (jamais une première observation).
+      if (
+        !notCreated &&
+        decision.entity &&
+        identifier &&
+        (event.status === 'CONFIRMED' || event.status === 'PROBABLE')
+      ) {
         const record = memory.remember({
           entity: decision.entity,
           identifier,
@@ -401,7 +482,77 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
         });
     }
   }
-  return { events, relations, memory };
+  // Les références $created portent la clé de l'entité suivie et sa provenance.
+  for (const event of events) {
+    if (event.entityKey || !event.reference) continue;
+    const record = memory.all.find((entry) => entry.reference === event.reference);
+    const tracked = trackedWith(record?.identifier);
+    if (tracked) {
+      event.entityKey = tracked.key;
+      event.provenance = tracked.provenance.classification;
+    }
+  }
+
+  // ---------------------------------------------------------------- les gestes des entités NON créées ici
+  // Une entité recherchée, ouverte, modifiée sans avoir été créée pendant l'enregistrement : ses gestes
+  // deviennent des événements métier (jamais une création), reliés à la même clé d'entité.
+  const covered = new Set(events.flatMap((event) => event.actionIds));
+  const TYPE_OF: Partial<Record<LifecycleKind, BusinessEventType>> = {
+    SEARCH: 'ENTITY_SEARCHED',
+    OPEN: 'ENTITY_OPENED',
+    UPDATE: 'ENTITY_UPDATED',
+    SAVE: 'ENTITY_SAVED',
+    DELETE: 'ENTITY_DELETED',
+  };
+  for (const entity of tracking.entities) {
+    if (entity.provenance.classification === 'UNKNOWN') continue;
+    const record = memory.all.find((entry) => trackedWith(entry.identifier)?.key === entity.key);
+    for (const step of entity.lifecycle) {
+      const type = TYPE_OF[step.kind];
+      if (!type || step.actionIds.some((id) => covered.has(id))) continue;
+      for (const id of step.actionIds) covered.add(id);
+      const evidence = emptyEvidence();
+      for (const entry of tracking.evidence.filter((candidate) => step.evidenceIds.includes(candidate.id)))
+        (entry.type === 'READ_RESPONSE' || entry.type === 'UPDATE_REQUEST' || entry.type === 'DELETE_REQUEST'
+          ? evidence.network
+          : entry.type === 'DETAIL_VIEW' || entry.type === 'DIRECT_NAVIGATION'
+            ? evidence.navigation
+            : entry.type === 'RESULT_SELECTED'
+              ? evidence.dom
+              : evidence.context
+        ).push(entry.description);
+      evidence.context.push(`provenance: ${entity.provenance.classification} (${entity.provenance.reason})`);
+      const name = entity.type !== 'unknown' ? entity.type : undefined;
+      push({
+        type,
+        ...(name ? { entity: name } : {}),
+        entityKey: entity.key,
+        provenance: entity.provenance.classification,
+        ...(record ? { reference: record.reference } : {}),
+        status: statusOf(step.confidence),
+        confidence: step.confidence,
+        actionIds: step.actionIds,
+        rawEventIds: step.actionIds.flatMap(
+          (id) => actions.find((entry) => entry.id === id)?.rawEventIds ?? [],
+        ),
+        evidence,
+      });
+    }
+  }
+
+  // L'ordre du parcours (les événements ajoutés après coup reprennent leur place), ids renumérotés.
+  const position = new Map(actions.map((entry, index) => [entry.id, index]));
+  const firstOf = (event: BusinessEvent): number =>
+    Math.min(...event.actionIds.map((id) => position.get(id) ?? Number.MAX_SAFE_INTEGER));
+  events.sort((a, b) => firstOf(a) - firstOf(b));
+  const renamed = new Map(events.map((event, index) => [event.id, `b${String(index + 1)}`]));
+  for (const event of events) event.id = renamed.get(event.id) ?? event.id;
+  for (const relation of relations) {
+    relation.from = renamed.get(relation.from) ?? relation.from;
+    relation.to = renamed.get(relation.to) ?? relation.to;
+  }
+  for (const record of memory.all) record.eventId = renamed.get(record.eventId) ?? record.eventId;
+  return { events, relations, memory, entities: tracking.entities, evidence: tracking.evidence };
 }
 
 /** L'entité : celle de l'API, confirmée par l'écran ; deux indices qui se contredisent → AMBIGUOUS. */
@@ -513,34 +664,10 @@ function fromExchange(id: ExchangeIdentifier): BusinessIdentifier {
   };
 }
 
-function labelOf(action: SemanticRecordedAction): string {
-  return action.target?.label ?? action.route ?? '';
-}
-
-function hasPathId(path: string): boolean {
-  const last = path.split('/').filter(Boolean).at(-1) ?? '';
-  return /^\d+$/.test(last) || /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(last);
-}
-
 function emptyEvidence(): BusinessEvidence {
   return { network: [], dom: [], navigation: [], context: [] };
 }
 
-function singular(word: string): string {
-  const lower = word.toLowerCase();
-  if (/(ss|us)$/.test(lower)) return lower;
-  if (/[^s]s$/.test(lower) || (/x$/.test(lower) && lower.length > 4)) return lower.slice(0, -1);
-  return lower;
-}
-
-function fold(word: string): string {
-  return word.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-}
-
 function sameWord(a: string, b: string): boolean {
   return fold(singular(a)) === fold(singular(b));
-}
-
-function round(value: number): number {
-  return Math.round(value * 100) / 100;
 }

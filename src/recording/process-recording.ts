@@ -408,6 +408,7 @@ export function processRecording(
       states: session.states,
       rawEvents: session.rawEvents,
       steps: built.flow.steps,
+      ...(session.initialStateId ? { initialStateId: session.initialStateId } : {}),
       ...(options.typedValues ? { typedValues: options.typedValues } : {}),
       ...(options.digest ? { digest: options.digest } : {}),
     });
