@@ -1159,11 +1159,28 @@ async function validateReplay(
       ...(report ? { report } : {}),
     };
   } catch (error) {
+    // Une erreur de programme (pas un échec du parcours) : l'endroit exact du code dans la raison, et
+    // la pile complète dans replay-error.txt (des chemins et des lignes, jamais une valeur saisie).
+    const where = error instanceof Error ? codeLocationOf(error.stack) : undefined;
+    if (error instanceof Error && error.stack)
+      await writeFile(path.join(directory, 'replay-error.txt'), `${error.stack}\n`, 'utf8').catch(
+        () => undefined,
+      );
     return {
       status: 'REPLAY_FAILED',
-      reason: `the replay could not run: ${error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error)}`,
+      reason: `the replay could not run: ${error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error)}${where ? ` (at ${where}; stack in replay-error.txt)` : ''}`,
     };
   }
+}
+
+/** Le premier cadre de la pile dans le code du projet (src/… ou dist/…), hors dépendances : « src/x.ts:12 ». */
+export function codeLocationOf(stack: string | undefined): string | undefined {
+  for (const line of (stack ?? '').split('\n').slice(1)) {
+    if (/node_modules|node:internal/.test(line)) continue;
+    const match = /((?:src|dist)[\\/][^\s():]+):(\d+)(?::\d+)?\)?\s*$/.exec(line);
+    if (match?.[1] && match[2]) return `${match[1].replace(/\\/g, '/')}:${match[2]}`;
+  }
+  return undefined;
 }
 
 /**
