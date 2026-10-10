@@ -44,15 +44,69 @@ export interface ActionNetworkCorrelation {
   secondary?: string[];
 }
 
+/**
+ * UN CRITÈRE DE RECHERCHE MÉTIER, reconnu à la STRUCTURE de la requête (jamais à un nom de champ
+ * connu) puis, si possible, rattaché à la saisie de l'humain qui l'a produit. La valeur n'est jamais
+ * en clair : une empreinte, le champ d'interface qui l'a fournie et la donnée de test qui la remplace.
+ */
+export interface SearchCriterion {
+  id: string;
+  /** Le chemin du nom de propriété (…[0].field) ou de la clé (?q, filters.name). */
+  propertyPath: string;
+  propertyName: string;
+  operator?: string;
+  /** La valeur comparée : masquée (empreintes), sauf un jeton de structure, un petit nombre, un booléen. */
+  value: StructuredValue;
+  valueType: StructuredValue['type'];
+  /** Le groupe logique qui combine ce critère (AND, OR…) et son chemin. */
+  logicalGroup?: { path: string; operator: string };
+  sourceRequest: string;
+  sourceJsonPath: string;
+  form: Criterion['form'];
+  /** Le champ d'interface dont la saisie est envoyée comme valeur : une CORRÉLATION observée. */
+  ui?: {
+    label: string;
+    actionId: string;
+    screen: string;
+    match: 'EXACT' | 'NORMALIZED';
+  };
+  /** La donnée de test qui rend la valeur dynamique (${testdata.key}) au lieu de la figer. */
+  testData?: { key: string; reference: string };
+  /** La valeur vient d'une création du même enregistrement (CREATE → SEARCH). */
+  fromCreation?: { businessId: string; match: 'EXACT' | 'NORMALIZED' };
+  confidence: number;
+  state: KnowledgeState;
+  evidence: string[];
+}
+
+/** Un paramètre envoyé avec une recherche qui n'est PAS un critère : son rôle observé. */
+export interface RequestParameter {
+  path: string;
+  role: 'PAGINATION' | 'SORT' | 'OPTION' | 'CRITERION_FLAG' | 'CONTEXT';
+  reason: string;
+}
+
 export interface BusinessObservation {
   id: string;
   networkId: string;
   /** Les actions corrélées (vide : une requête indépendante). */
   actionIds: string[];
   api: string;
+  /** L'INTERPRÉTATION MÉTIER (recherche, création…) : une dimension distincte de la classification technique. */
   operation: BusinessOperation;
   /** TECHNICAL : l'opération de protocole (TOKEN_ACQUISITION…). */
   technicalOperation?: string;
+  /**
+   * LA CLASSIFICATION TECHNIQUE (chemin de protocole, de configuration…), gardée même quand la requête
+   * porte une recherche : elle ne remplace jamais l'interprétation métier.
+   */
+  technical?: { category: string; operation: string; reason: string };
+  /** Les critères de recherche métier (vide si aucune structure de critères). */
+  searchCriteria: SearchCriterion[];
+  /** Les paramètres qui ne sont pas des critères : pagination, tri, options, contexte. */
+  parameters: RequestParameter[];
+  /** Une phrase qui dit la recherche, sans valeur en clair. */
+  interpretation?: string;
   criteria: {
     property: string;
     operator?: string;
@@ -162,6 +216,8 @@ export interface AnalysisInput {
   meaningProposals?: ReadonlyMap<string, string>;
   /** Des opérations proposées (IA facultative) pour une opération UNKNOWN, par requête : des hypothèses. */
   operationProposals?: ReadonlyMap<string, BusinessOperation>;
+  /** CONSOLIDATED : la donnée de test de chaque saisie (événement brut → clé du jeu de données). */
+  testDataKeys?: ReadonlyMap<string, string>;
 }
 
 /** Les opérations qu'une proposition (IA) peut choisir : jamais TECHNICAL ni UNKNOWN. */
@@ -392,7 +448,10 @@ function analyze(input: AnalysisInput): RecordingAnalysis {
     const link = assigned.get(entry.id);
     const technical = technicalCategoryOf(entry.path);
     const structure = entry.request;
-    const criteria = (structure?.criteria ?? []).map((criterion) => ({
+    // Propriété et valeur ont toutes deux la forme d'un nom : si le « nom » est en fait une SAISIE de
+    // l'humain, les rôles s'inversent (la saisie est la valeur, l'autre le nom de la propriété).
+    const resolved = (structure?.criteria ?? []).map((criterion) => resolveRoles(criterion, typed));
+    const criteria = resolved.map((criterion) => ({
       property: criterion.property,
       ...(criterion.operator ? { operator: criterion.operator } : {}),
       valuePath: criterion.valuePath,
@@ -406,7 +465,35 @@ function analyze(input: AnalysisInput): RecordingAnalysis {
     const answered = entry.endedAt !== undefined;
     const list = entry.response?.listSize !== undefined;
     const write = !['GET', 'HEAD', 'OPTIONS'].includes(entry.method);
-    if (technical) {
+    // LES PREUVES DE RECHERCHE viennent de la STRUCTURE (critères propriété/opérateur/valeur, groupes
+    // logiques, tri) : elles comptent quelle que soit la méthode, le chemin ou la forme de la réponse.
+    const structured = criteria.filter((criterion) => criterion.form === 'STRUCTURE');
+    const searchShape = structured.length > 0 || (structure?.groups.length ?? 0) > 0;
+    if (write && entry.response?.newIdentity) {
+      operation = 'CREATE';
+      confidence = 0.85;
+      evidence.push(`${entry.method} accepted and serves a new identity`);
+    } else if (searchShape) {
+      operation = 'SEARCH';
+      confidence = list ? 0.85 : answered ? 0.75 : 0.5;
+      evidence.push(
+        `the request carries a filter structure: ${String(structured.length)} criterion / criteria (property · operator · value)`,
+        ...(structure?.groups.length
+          ? [`logical groups: ${structure.groups.map((group) => group.operator).join(', ')}`]
+          : []),
+        ...(structure?.sort.length ? ['a sort, kept apart from the criteria'] : []),
+        ...(structure?.pagination ? [`pagination (${structure.pagination.evidence.join('; ')})`] : []),
+        list
+          ? `the response is a collection (${String(entry.response?.listSize ?? 0)} item(s))`
+          : answered
+            ? 'the response is not read as a collection: the structure alone says search'
+            : 'the response is still pending: a provisional search',
+        ...(write ? [`sent by ${entry.method}: the method is not the intent`] : []),
+        ...(technical
+          ? [`technical classification kept apart (${technical.category}): it does not replace the search`]
+          : []),
+      );
+    } else if (technical) {
       operation = 'TECHNICAL';
       confidence = technical.confidence;
       evidence.push(technical.reason);
@@ -431,10 +518,6 @@ function analyze(input: AnalysisInput): RecordingAnalysis {
       operation = 'SEARCH';
       confidence = 0.5;
       evidence.push('criteria / pagination sent; the response is still pending: a provisional search');
-    } else if (write && entry.response?.newIdentity) {
-      operation = 'CREATE';
-      confidence = 0.85;
-      evidence.push(`${entry.method} accepted and serves a new identity`);
     } else if (write && entry.method === 'DELETE') {
       operation = 'DELETE';
       confidence = 0.7;
@@ -479,8 +562,20 @@ function analyze(input: AnalysisInput): RecordingAnalysis {
       actionIds: link ? [link.action.id] : [],
       api: `${entry.method} ${routePattern(entry.path, 6)}`,
       operation,
-      ...(technical ? { technicalOperation: technical.operation } : {}),
+      ...(technical
+        ? {
+            technicalOperation: technical.operation,
+            technical: {
+              category: technical.category,
+              operation: technical.operation,
+              reason: technical.reason,
+            },
+          }
+        : {}),
       criteria,
+      searchCriteria:
+        operation === 'SEARCH' ? searchCriteriaOf(entry, resolved, typed, structure?.groups ?? []) : [],
+      parameters: operation === 'SEARCH' ? parametersOf(structure, resolved) : [],
       groups: structure?.groups ?? [],
       sort: structure?.sort ?? [],
       ...(structure?.pagination ? { pagination: structure.pagination } : {}),
@@ -606,21 +701,31 @@ function analyze(input: AnalysisInput): RecordingAnalysis {
   const fills = actions.filter(
     (event) => (event.type === 'input' || event.type === 'change') && event.value?.digest,
   );
-  const mappings = new Map<string, FieldMapping>();
-  const conflicts = new Map<string, Set<string>>();
-  for (const business of analysis.business) {
-    if (business.operation === 'TECHNICAL' || business.actionIds.length === 0) continue;
+  /**
+   * Les saisies qui PRÉCÈDENT une requête : depuis le déclencheur de la requête métier précédente
+   * jusqu'au geste qui déclenche celle-ci (ou son départ, si elle n'est liée à aucun geste).
+   */
+  const windowFills = (business: BusinessObservation): typeof fills => {
     const entry = network.find((candidate) => candidate.id === business.networkId);
     const actionAt =
       actions.find((action) => action.id === business.actionIds[0])?.at ?? entry?.startedAt ?? 0;
     const previousTrigger = Math.max(
       -Infinity,
       ...analysis.business
-        .filter((other) => other !== business && other.actionIds.length > 0)
+        .filter(
+          (other) => other !== business && other.actionIds.length > 0 && other.operation !== 'TECHNICAL',
+        )
         .map((other) => actions.find((action) => action.id === other.actionIds[0])?.at ?? -Infinity)
         .filter((at) => at < actionAt),
     );
-    const group = fills.filter((fill) => fill.at <= actionAt && fill.at > previousTrigger);
+    return fills.filter((fill) => fill.at <= actionAt && fill.at > previousTrigger);
+  };
+  const mappings = new Map<string, FieldMapping>();
+  const conflicts = new Map<string, Set<string>>();
+  for (const business of analysis.business) {
+    if (business.operation === 'TECHNICAL' || business.actionIds.length === 0) continue;
+    const entry = network.find((candidate) => candidate.id === business.networkId);
+    const group = windowFills(business);
     const leaves = (entry?.request?.leaves ?? []).filter((leaf) => leaf.value.digest);
     for (const fill of group) {
       const exact = leaves.filter((leaf) => leaf.value.digest === fill.value?.digest);
@@ -632,7 +737,9 @@ function analyze(input: AnalysisInput): RecordingAnalysis {
       const label = fill.element?.label ?? fill.element?.name ?? fill.element?.text ?? '(unlabelled field)';
       const screen = routePattern(pathOf(fill.url), 6);
       const propertyOf = (path: string): string =>
-        entry?.request?.criteria.find((criterion) => criterion.valuePath === path)?.property ??
+        (entry?.request?.criteria ?? [])
+          .map((criterion) => resolveRoles(criterion, typed))
+          .find((criterion) => criterion.valuePath === path)?.property ??
         path
           .split('.')
           .at(-1)
@@ -695,6 +802,73 @@ function analyze(input: AnalysisInput): RecordingAnalysis {
       mapping.meaning = { text: proposal.slice(0, 120), source: 'AI', state: 'PROVISIONAL', confidence: 0.6 };
   }
   analysis.fieldMappings = [...mappings.values()];
+
+  // ------------------------------------------------------------ 5b. critères de recherche ↔ saisies (UI → HTTP)
+  for (const business of analysis.business.filter((entry) => entry.operation === 'SEARCH')) {
+    const group = windowFills(business);
+    const create = business.relations.find((relation) => relation.type === 'SEARCH_AFTER_CREATE');
+    const kept: SearchCriterion[] = [];
+    for (const criterion of business.searchCriteria) {
+      const exact = group.filter(
+        (fill) => criterion.value.digest && fill.value?.digest === criterion.value.digest,
+      );
+      const normalized = exact.length
+        ? []
+        : group.filter(
+            (fill) => criterion.value.folded && fill.value?.foldedDigest === criterion.value.folded,
+          );
+      // La saisie la plus récente avant la requête : celle qui a produit la valeur envoyée.
+      const fill = (exact.length ? exact : normalized).at(-1);
+      if (fill) {
+        const label = fill.element?.label ?? fill.element?.name ?? fill.element?.text ?? '(unlabelled field)';
+        const match = exact.length ? 'EXACT' : 'NORMALIZED';
+        criterion.ui = { label, actionId: fill.id, screen: routePattern(pathOf(fill.url), 6), match };
+        criterion.evidence.push(
+          `the value typed in "${label}" (${fill.id}) is sent as ${criterion.sourceJsonPath} (${match === 'EXACT' ? 'same salted digest' : 'same value up to case / spacing / accents'}): the label and the property are different names for one datum`,
+        );
+        const key = input.testDataKeys?.get(fill.id);
+        if (key) {
+          criterion.testData = { key, reference: `\${testData.${key}}` };
+          criterion.evidence.push(
+            `the value is the test datum testData.${key}: dynamic, not a frozen literal`,
+          );
+        }
+        criterion.confidence = round(Math.min(0.95, criterion.confidence + (match === 'EXACT' ? 0.1 : 0.05)));
+      } else if (criterion.form === 'IMPLICIT') {
+        // Une valeur libre sous une clé, qu'aucune saisie n'explique : un paramètre de contexte, pas un critère.
+        business.parameters.push({
+          path: criterion.sourceJsonPath,
+          role: 'CONTEXT',
+          reason: 'a free value no typed input explains (user, tenant, session context…)',
+        });
+        continue;
+      }
+      if (create && create.properties?.includes(criterion.propertyName)) {
+        criterion.fromCreation = { businessId: create.target, match: create.match ?? 'EXACT' };
+        criterion.evidence.push(`the same value was sent by the creation ${create.target} of this recording`);
+      }
+      const answered = business.result?.status !== undefined || business.result?.failure !== undefined;
+      criterion.state = !answered
+        ? 'PROVISIONAL'
+        : criterion.ui && criterion.form === 'STRUCTURE'
+          ? 'VALIDATED'
+          : criterion.ui || criterion.confidence >= 0.6
+            ? 'INFERRED'
+            : 'PROVISIONAL';
+      kept.push(criterion);
+    }
+    business.searchCriteria = kept;
+    if (kept.some((criterion) => criterion.ui)) {
+      business.confidence = round(Math.min(0.95, business.confidence + 0.05));
+      business.evidence.push(
+        `criteria tied to typed input: ${kept
+          .filter((criterion) => criterion.ui)
+          .map((criterion) => `"${criterion.ui?.label ?? ''}" → ${criterion.propertyName}`)
+          .join(', ')}`,
+      );
+    }
+    business.interpretation = interpretationOf(business);
+  }
 
   // ------------------------------------------------------------ 6. révisions (consolidation)
   if (input.previous) {
@@ -774,6 +948,133 @@ function analyze(input: AnalysisInput): RecordingAnalysis {
 }
 
 /**
+ * Les rôles d'un critère dont propriété et valeur ont toutes deux la forme d'un nom : si le « nom »
+ * est une SAISIE de l'humain (même empreinte), c'est lui la valeur — les rôles s'inversent.
+ */
+function resolveRoles(criterion: Criterion, typed: ReadonlySet<string>): Criterion {
+  const property = criterion.propertyValue;
+  const isTyped = (value: StructuredValue | undefined): boolean =>
+    !!value && ((!!value.digest && typed.has(value.digest)) || (!!value.folded && typed.has(value.folded)));
+  if (
+    !criterion.swappable ||
+    !property ||
+    !criterion.propertyPath ||
+    !isTyped(property) ||
+    isTyped(criterion.value)
+  )
+    return criterion;
+  const name = typeof criterion.value.clear === 'string' ? criterion.value.clear : undefined;
+  if (!name) return criterion;
+  return {
+    ...criterion,
+    property: name,
+    propertyPath: criterion.valuePath,
+    propertyValue: criterion.value,
+    valuePath: criterion.propertyPath,
+    value: property,
+    swappable: false,
+    evidence: [
+      ...criterion.evidence,
+      `${criterion.propertyPath} carries a typed value: it is the compared value, ${criterion.valuePath} names the property`,
+    ],
+  };
+}
+
+/** Les critères de recherche d'une requête (avant leur rattachement aux saisies). */
+function searchCriteriaOf(
+  entry: NetworkObservation,
+  criteria: readonly Criterion[],
+  typed: ReadonlySet<string>,
+  groups: HttpStructure['groups'],
+): SearchCriterion[] {
+  return criteria.map((criterion, index) => {
+    const group = groups.find((candidate) => candidate.path === criterion.group);
+    const value = remask(criterion.value, typed);
+    return {
+      id: `sc:${entry.id}:${String(index + 1)}`,
+      propertyPath: criterion.propertyPath ?? criterion.path,
+      propertyName: criterion.property,
+      ...(criterion.operator ? { operator: criterion.operator } : {}),
+      value,
+      valueType: value.type,
+      ...(group ? { logicalGroup: { path: group.path, operator: group.operator } } : {}),
+      sourceRequest: entry.id,
+      sourceJsonPath: criterion.valuePath,
+      form: criterion.form,
+      confidence: criterion.confidence,
+      state: 'PROVISIONAL',
+      evidence: [...criterion.evidence],
+    };
+  });
+}
+
+/** Ce qui n'est PAS un critère : pagination, tri, options, drapeaux de critère, contexte. */
+function parametersOf(
+  structure: HttpStructure | undefined,
+  criteria: readonly Criterion[],
+): RequestParameter[] {
+  if (!structure) return [];
+  const parameters: RequestParameter[] = [];
+  const pagination = structure.pagination;
+  for (const part of [pagination?.index, pagination?.size])
+    if (part)
+      parameters.push({
+        path: part.path,
+        role: 'PAGINATION',
+        reason: (pagination?.evidence ?? []).join('; '),
+      });
+  for (const sort of structure.sort)
+    parameters.push({
+      path: sort.propertyPath ?? sort.path,
+      role: 'SORT',
+      reason: `a name and a direction (${sort.direction}) without a comparison operator: ordering, never a criterion`,
+    });
+  for (const criterion of criteria)
+    for (const flag of criterion.flags ?? [])
+      parameters.push({
+        path: flag,
+        role: 'CRITERION_FLAG',
+        reason: `a flag of the criterion ${criterion.path}`,
+      });
+  for (const option of structure.options)
+    parameters.push({
+      path: option.path,
+      role: 'OPTION',
+      reason: 'a boolean beside the criteria: an inclusion option or indicator',
+    });
+  for (const leaf of structure.context)
+    parameters.push({
+      path: leaf.path,
+      role: 'CONTEXT',
+      reason: 'a structural or technical value (not typed by the user)',
+    });
+  return parameters;
+}
+
+/** La recherche en une phrase, sans valeur en clair : « "Search companies" → companyName CONTAINS ‹saisie› ». */
+function interpretationOf(business: BusinessObservation): string {
+  const operator = business.searchCriteria.find((criterion) => criterion.logicalGroup)?.logicalGroup
+    ?.operator;
+  const criteria = business.searchCriteria.map((criterion) => {
+    const value = criterion.ui
+      ? `the value typed in "${criterion.ui.label}"${criterion.testData ? ` (${criterion.testData.reference})` : ''}`
+      : typeof criterion.value.clear === 'string' ||
+          typeof criterion.value.clear === 'number' ||
+          typeof criterion.value.clear === 'boolean'
+        ? String(criterion.value.clear)
+        : 'a value';
+    return `${criterion.propertyName} ${criterion.operator ?? '='} ${value}`;
+  });
+  const sort = business.sort.map(
+    (entry) => `${entry.property ?? entry.path} ${entry.direction.toUpperCase()}`,
+  );
+  return [
+    `search ${criteria.length ? `where ${criteria.join(` ${operator ?? 'AND'} `)}` : '(no criterion)'}`,
+    ...(sort.length ? [`sorted by ${sort.join(', ')}`] : []),
+  ].join(', ');
+}
+
+/**
  * LE JOURNAL À ÉCRIRE : une copie où toute valeur gardée « lisible » (un jeton de structure) qui est
  * en fait une SAISIE de l'humain (un nom en capitales…) est re-masquée. Le journal en mémoire n'est
  * jamais modifié.
@@ -795,10 +1096,13 @@ export function redactJournal(
       request: {
         ...request,
         leaves: request.leaves.map((leaf) => ({ ...leaf, value: remask(leaf.value, typed) })),
-        criteria: request.criteria.map((criterion) => ({
-          ...criterion,
-          value: remask(criterion.value, typed),
-        })),
+        criteria: request.criteria
+          .map((criterion) => resolveRoles(criterion, typed))
+          .map((criterion) => ({
+            ...criterion,
+            value: remask(criterion.value, typed),
+            ...(criterion.propertyValue ? { propertyValue: remask(criterion.propertyValue, typed) } : {}),
+          })),
         options: request.options.map((leaf) => ({ ...leaf, value: remask(leaf.value, typed) })),
         context: request.context.map((leaf) => ({ ...leaf, value: remask(leaf.value, typed) })),
       },

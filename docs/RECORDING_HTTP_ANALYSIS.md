@@ -87,14 +87,99 @@ Score par requête (`ANALYSIS_WEIGHTS`) : écart de démarrage (≤ 300 ms 0.55,
 
 ## Opérations métier (preuves, jamais la méthode seule)
 
-| Opération                    | Preuves                                                                                                                                 |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `SEARCH`                     | Réponse en liste + critères, pagination ou tri (0.85) ; sans réponse mais avec critères (0.5). Un `POST` de critères est une recherche. |
-| `LIST`                       | Réponse en liste sans critère, pagination ni tri (0.75).                                                                                |
-| `CREATE`                     | Identité nouvelle dans la réponse (0.85) ; `POST` 2xx sur une collection sans autre preuve (0.55, à confirmer).                         |
-| `UPDATE` / `DELETE` / `READ` | `PUT`/`PATCH` sur un chemin d'identité, `DELETE`, `GET` d'une ressource.                                                                |
-| `TECHNICAL`                  | Jeton, découverte OIDC, clés, télémétrie, santé, configuration, statique : jamais une opération métier.                                 |
-| `UNKNOWN`                    | Pas assez de preuves ; l'IA peut proposer (hypothèse `PROVISIONAL`).                                                                    |
+| Opération                    | Preuves                                                                                                                                                                                                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEARCH`                     | Une **structure de critères** (propriété · opérateur · valeur, groupe logique) : 0.85 avec une réponse en liste, 0.75 avec une autre réponse, 0.5 en attente. Un `POST` de critères est une recherche ; un chemin « technique » ne l'empêche pas. |
+| `LIST`                       | Réponse en liste sans critère, pagination ni tri (0.75).                                                                                                                                                                                          |
+| `CREATE`                     | Identité nouvelle dans la réponse (0.85) ; `POST` 2xx sur une collection sans autre preuve (0.55, à confirmer).                                                                                                                                   |
+| `UPDATE` / `DELETE` / `READ` | `PUT`/`PATCH` sur un chemin d'identité, `DELETE`, `GET` d'une ressource.                                                                                                                                                                          |
+| `TECHNICAL`                  | Jeton, découverte OIDC, clés, télémétrie, santé, configuration, statique, **sans structure de critères** : jamais une opération métier.                                                                                                           |
+| `UNKNOWN`                    | Pas assez de preuves ; l'IA peut proposer (hypothèse `PROVISIONAL`).                                                                                                                                                                              |
+
+## Critères de recherche métier (`SearchCriterion`)
+
+Classification technique et interprétation métier sont **deux dimensions** : une requête garde sa
+classification technique (`technical`, par exemple un chemin de configuration) **et** peut être
+une `SEARCH` avec ses critères (`searchCriteria`). L'une ne remplace jamais l'autre.
+
+### Où le critère se perdait (diagnostic)
+
+1. **Classification** : `technicalCategoryOf(path)` passait avant toute preuve. Un chemin de
+   protocole ou de configuration rendait `TECHNICAL` et la structure de la requête était ignorée.
+   Une recherche dont la réponse n'est pas lue comme une liste devenait même `CREATE` (« `POST` 2xx
+   sans identité »).
+2. **Analyseur structurel** : la valeur comparée était la _première_ autre clé du critère. Un
+   drapeau booléen voisin était pris pour la valeur, et la vraie valeur partait en critère implicite.
+3. **Tri** : un nom de propriété en kebab-case (`item-title`) n'était pas reconnu comme nom. Le tri
+   était perdu et sa propriété devenait un « critère implicite ».
+4. **Propriété d'un seul mot** (`name`, `status`) : non reconnue comme nom, donc pas de critère.
+5. **Paramètres d'URL** : un identifiant de contexte (utilisateur, tenant) devenait un critère
+   implicite.
+6. **Fenêtre** : « Intents métier » ne lisait que l'intention d'écriture
+   (`flow.intent.workflow`), jamais l'analyse HTTP.
+
+### Reconnaissance (structure, jamais un nom connu)
+
+- **Critère** : un objet avec un opérateur de comparaison (vocabulaire de protocole, ou code en
+  capitales à côté d'un nom composé) ou placé dans un groupe logique, une chaîne qui a la **forme
+  d'un nom** (la propriété) et une valeur comparée.
+  - Les booléens voisins sont des **drapeaux du critère** (`CRITERION_FLAG`), jamais sa valeur.
+  - Quand propriété et valeur ont toutes deux la forme d'un nom (`swappable`), la **saisie** de
+    l'humain départage : la chaîne saisie est la valeur.
+  - Des indices anglais génériques de protocole (`field`, `property`, `value`, `input`…) ne servent
+    qu'à départager deux lectures, jamais à décider seuls.
+- **Tri** : un nom et une direction (`asc`, `DESC`…) **sans** opérateur, ou `{ nom: "DESC" }`.
+  Jamais un critère.
+- **Paramètres** (`parameters`) :
+  - `PAGINATION` : deux petits entiers dont une taille usuelle ;
+  - `SORT` ;
+  - `OPTION` : un booléen hors critère ;
+  - `CRITERION_FLAG` ;
+  - `CONTEXT` : une valeur libre qu'**aucune saisie n'explique**, par exemple un identifiant
+    d'utilisateur.
+
+### Le modèle
+
+`SearchCriterion` porte :
+
+- `propertyPath`, `propertyName`, `operator`, `value` (masquée), `valueType` ;
+- `logicalGroup` (`AND`/`OR` et son chemin), `sourceRequest`, `sourceJsonPath` ;
+- `ui` : le **champ d'interface** dont la saisie est envoyée (libellé, action, écran, `EXACT` ou
+  `NORMALIZED`) ;
+- `testData` : `${testData.<clé>}`, ce qui rend la valeur dynamique ;
+- `fromCreation` : la valeur vient d'une création du même enregistrement ;
+- `confidence`, `state`, `evidence`.
+
+La phrase `interpretation` dit la recherche sans valeur en clair, par exemple :
+`search where companyName CONTAINS the value typed in "Search companies" (${testData.…}), sorted by companyName ASC`.
+
+### Corrélation UI → HTTP
+
+Les saisies prises en compte sont celles qui précèdent le geste déclencheur, depuis la requête
+métier précédente. Une saisie dont l'empreinte salée (exacte ou repliée) égale celle de la valeur
+envoyée relie le **libellé** à la **propriété**. C'est une observation datée, avec sa preuve : le
+libellé et le nom technique ne sont jamais supposés identiques, et aucune règle globale
+« libellé = propriété » n'est créée. La correspondance n'entre dans la mémoire de l'application que
+si elle est `VALIDATED` (vue au moins 2 fois).
+
+### États
+
+- Requête en attente (direct) : `PROVISIONAL`.
+- Critère structuré rattaché à une saisie, réponse reçue : `VALIDATED`.
+- Rattaché à une saisie ou confiance ≥ 0.6 : `INFERRED`.
+- Sinon : `PROVISIONAL`.
+
+La consolidation révise le direct, et la révision est tracée.
+
+### Affichage
+
+- **Fenêtre, onglet Analyse**, section « Intents métier » : Recherche, puis pour chaque critère le
+  libellé, l'API, l'opérateur et la valeur (la donnée de test déjà écrite dans `test-data.yaml`,
+  sinon « (typed) »). Puis la logique, le tri, les paramètres techniques, la classification
+  technique à part, la confiance et les preuves.
+- **Section « Analyse HTTP »** : les recherches reconnues, une phrase chacune.
+- **En direct** : la dernière recherche reconnue s'affiche dans l'en-tête, en provisoire.
+- **Rapport HTML** : section « Search », sans aucune valeur.
 
 ## Correspondances champ ↔ propriété (FieldMapping)
 
@@ -172,6 +257,13 @@ réponse est validée (doit appartenir à la liste) et devient une hypothèse `P
 - Le polling irrégulier (backoff, ticks manqués d'un onglet en arrière-plan) n'est pas reconnu comme
   périodique : il reste « indépendant » ou candidat faible selon sa distance aux gestes.
 - L'état `REJECTED` n'a pas encore de geste dans la fenêtre pour le poser.
+- Critères : un critère encodé dans une seule chaîne (`?q=name:acme`, `$filter=name eq 'x'`,
+  RSQL…) n'est pas décomposé ; seul le JSON structuré et les paires clé → valeur le sont.
+- Un critère dont propriété et valeur ont toutes deux la forme d'un nom garde le nom comparé lisible
+  dans le journal tant qu'aucune saisie ne le désigne comme valeur. S'il s'agit d'une saisie, il est
+  re-masqué avant l'écriture.
+- Une valeur transformée par l'application (date reformatée, libellé → code) ne se relie pas à la
+  saisie : le critère reste reconnu, sans champ d'interface.
 - Un seul identifiant de libellé par saisie : deux champs portant le même libellé sur un même écran
   partagent une clé de correspondance.
 

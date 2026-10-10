@@ -456,6 +456,7 @@ export function processRecording(
         network: options.http.journal,
         ...(options.http.live ? { previous: options.http.live } : {}),
         entityCorrelations: detection.correlations,
+        ...(testData ? { testDataKeys: testDataKeysOf(testData) } : {}),
       });
       http = {
         journal: [...options.http.journal],
@@ -705,4 +706,12 @@ function withoutUndone(session: RecordingSession): RecordingSession {
       },
     ],
   };
+}
+
+/** La donnée de test de chaque saisie : événement brut → clé du jeu (rien de sensible n'y est lu). */
+export function testDataKeysOf(testData: RecordedTestDataResult): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const item of testData.items)
+    if (item.key && !item.sensitive) for (const id of item.rawEventIds) keys.set(id, item.key);
+  return keys;
 }

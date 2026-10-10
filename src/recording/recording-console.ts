@@ -14,6 +14,7 @@ import {
   liveStep,
   type PanelAnalysis,
   type PanelReplay,
+  type PanelSearch,
   type PanelState,
   type PanelTreeNode,
 } from './panel-state.js';
@@ -126,6 +127,7 @@ export class RecordingConsole {
       inconsistencies: summary.inconsistencies,
       pending: summary.pending,
       failed: analysis.status === 'FAILED',
+      ...(liveSearchOf(analysis) ? { search: liveSearchOf(analysis) } : {}),
     };
     this.render();
   }
@@ -210,7 +212,10 @@ export class RecordingConsole {
             },
           ]
         : [],
-      ...(result.http ? { http: httpPanelOf(result.http.consolidated) } : {}),
+      ...(result.http ? { http: httpPanelOf(result.http.consolidated, result) } : {}),
+      ...(result.http && searchesOf(result.http.consolidated, result).length
+        ? { searchIntents: searchesOf(result.http.consolidated, result) }
+        : {}),
       technicalIntents: (intent.technical ?? []).map((entry) => ({
         label: `${entry.intent} · ${entry.api}`,
         detail: `${entry.classification} · ${entry.category} · ${entry.operation}`,
@@ -754,7 +759,78 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
 }
 
 /** L'analyse HTTP consolidée, pour la fenêtre : ce qui est validé n'est jamais mélangé aux hypothèses. */
-function httpPanelOf(analysis: RecordingAnalysis): NonNullable<PanelAnalysis['http']> {
+/** La dernière recherche reconnue en direct, en une ligne (jamais une valeur saisie). */
+function liveSearchOf(analysis: RecordingAnalysis): string | undefined {
+  const search = analysis.business.filter((entry) => entry.operation === 'SEARCH').at(-1);
+  if (!search) return undefined;
+  const criteria = search.searchCriteria.map(
+    (criterion) =>
+      `${criterion.ui ? `"${criterion.ui.label}" → ` : ''}${criterion.propertyName}${criterion.operator ? ` ${criterion.operator}` : ''}`,
+  );
+  return `SEARCH ${search.api}${criteria.length ? ` · ${criteria.join(' · ')}` : ''}`;
+}
+
+/**
+ * Les recherches reconnues, pour la fenêtre. La valeur montrée est celle de la DONNÉE DE TEST (déjà
+ * écrite dans test-data.yaml, jamais une donnée sensible), un jeton de structure, ou « saisie » :
+ * l'analyse elle-même ne garde que des empreintes.
+ */
+function searchesOf(analysis: RecordingAnalysis, result: RecordingResult): PanelSearch[] {
+  const values = result.testData?.set.values ?? {};
+  return analysis.business
+    .filter((entry) => entry.operation === 'SEARCH' && entry.searchCriteria.length > 0)
+    .slice(0, 6)
+    .map((entry) => {
+      const roles = new Map<string, string[]>();
+      for (const parameter of entry.parameters)
+        if (parameter.role !== 'SORT')
+          roles.set(parameter.role, [...(roles.get(parameter.role) ?? []), parameter.path]);
+      return {
+        api: entry.api,
+        ...(entry.technical
+          ? { technical: `${entry.technical.category} · ${entry.technical.operation}` }
+          : {}),
+        ...(entry.searchCriteria.find((criterion) => criterion.logicalGroup)
+          ? {
+              logic:
+                entry.searchCriteria.find((criterion) => criterion.logicalGroup)?.logicalGroup?.operator ??
+                '',
+            }
+          : {}),
+        criteria: entry.searchCriteria.map((criterion) => {
+          const datum = criterion.testData ? values[criterion.testData.key]?.value : undefined;
+          const clear = criterion.value.clear;
+          return {
+            ...(criterion.ui ? { label: criterion.ui.label } : {}),
+            property: criterion.propertyName,
+            ...(criterion.operator ? { operator: criterion.operator } : {}),
+            value:
+              datum ??
+              (clear !== undefined && clear !== null ? String(clear) : criterion.ui ? '(typed)' : '(masked)'),
+            ...(criterion.testData ? { testData: criterion.testData.reference } : {}),
+            ...(criterion.fromCreation ? { fromCreation: true } : {}),
+            state: criterion.state,
+            confidence: criterion.confidence,
+          };
+        }),
+        sort: entry.sort.map((sort) => `${sort.property ?? sort.path} ${sort.direction.toUpperCase()}`),
+        parameters: [...roles.entries()].map(([role, paths]) => ({ role, paths })),
+        ...(entry.interpretation ? { interpretation: entry.interpretation } : {}),
+        evidence: [
+          ...entry.evidence,
+          ...entry.searchCriteria.flatMap((criterion) => criterion.evidence),
+          ...entry.relations.flatMap((relation) => relation.evidence),
+        ],
+        confidence: entry.confidence,
+        state: entry.state,
+      };
+    });
+}
+
+function httpPanelOf(
+  analysis: RecordingAnalysis,
+  result?: RecordingResult,
+): NonNullable<PanelAnalysis['http']> {
   const { summary } = analysis;
   return {
     status: analysis.status,
@@ -783,5 +859,6 @@ function httpPanelOf(analysis: RecordingAnalysis): NonNullable<PanelAnalysis['ht
     revisions: analysis.revisions
       .slice(0, 8)
       .map((entry) => `${entry.ref}: ${entry.from} → ${entry.to} (${entry.reason})`),
+    ...(result ? { searches: searchesOf(analysis, result) } : {}),
   };
 }

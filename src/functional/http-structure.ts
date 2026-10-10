@@ -49,6 +49,16 @@ export interface Criterion {
   /** STRUCTURE : forme propriété/opérateur/valeur ; IMPLICIT : une clé → une valeur masquée. */
   form: 'STRUCTURE' | 'IMPLICIT';
   confidence: number;
+  /** Le chemin du nom de propriété (…field), quand il est porté en valeur. */
+  propertyPath?: string;
+  /** Le nom de propriété avec ses empreintes : s'il s'avère être une SAISIE, l'analyse inverse les rôles. */
+  propertyValue?: StructuredValue;
+  /** Les autres scalaires du critère qui ne sont ni la propriété ni la valeur (drapeaux, options). */
+  flags?: string[];
+  /** Propriété et valeur ont toutes deux la forme d'un nom : l'autre lecture, à départager par les saisies. */
+  swappable?: boolean;
+  /** Pourquoi ce rôle (la forme observée) : jamais un nom de champ connu. */
+  evidence: string[];
 }
 
 export interface LogicalGroup {
@@ -62,6 +72,8 @@ export interface LogicalGroup {
 export interface SortSpec {
   path: string;
   property?: string;
+  /** Le chemin du nom de propriété triée (…field) ou de la clé (ordering.companyName). */
+  propertyPath?: string;
   direction: string;
 }
 
@@ -96,7 +108,16 @@ const DIRECTION = /^(asc|desc|ascending|descending|croissant|decroissant)$/i;
 const UPPER_TOKEN = /^[A-Z][A-Z_]{1,40}$/;
 /** Un nom de propriété porté en valeur (companyName, legal_name, address.city). */
 const PROPERTY_REF =
-  /^[a-z][a-zA-Z0-9]*([A-Z][a-zA-Z0-9]*)+$|^[a-z][a-z0-9]*(_[a-z0-9]+)+$|^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)+$/;
+  /^[a-z][a-zA-Z0-9]*([A-Z][a-zA-Z0-9]*)+$|^[a-z][a-z0-9]*([_-][a-z0-9]+)+$|^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)+$/;
+/** Une chaîne qui a la FORME d'un nom (sans espace) : peut désigner une propriété dans un critère ou un tri. */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_.-]{0,79}$/;
+/**
+ * Indices FAIBLES de protocole (anglais générique, jamais des noms propres à une application) : ils
+ * départagent deux lectures possibles, sans jamais décider seuls.
+ */
+const PROPERTY_KEY_HINT =
+  /^(field|property|prop|attribute|attr|column|col|key|path|dimension|target)$|(field|property|attribute|column)$/i;
+const VALUE_KEY_HINT = /value|input|term|search|query|text|operand|^arg|^q$/i;
 const SENSITIVE_KEY =
   /(token|secret|password|pass|pwd|session|auth|otp|cookie|signature|(api|private|access|public|signing|encryption|crypto|client|master)[-_]?key$)/i;
 /** Des fragments de noms qui suggèrent une pagination (indices seulement, jamais une règle). */
@@ -243,61 +264,111 @@ export function analyzeHttpRequest(input: {
       claimed.add(at(logical[0]));
     }
 
-    // Un CRITÈRE : une propriété (un nom porté en valeur), un opérateur, une valeur comparée.
-    const property = scalars.find(
-      ([, field]) =>
-        text(field) !== undefined &&
-        PROPERTY_REF.test(text(field) ?? '') &&
-        !OPERATOR.test(text(field) ?? '') &&
-        !LOGICAL.test(text(field) ?? ''),
-    );
-    // Un opérateur du vocabulaire d'abord ; sinon un code en capitales (la valeur comparée peut en être un).
+    // UN OPÉRATEUR de comparaison : du vocabulaire d'abord ; sinon un code en capitales (ni logique ni direction).
     const operator =
-      scalars.find(([key, field]) => key !== property?.[0] && OPERATOR.test(text(field) ?? '')) ??
+      scalars.find(([, field]) => OPERATOR.test(text(field) ?? '')) ??
       scalars.find(
         ([key, field]) =>
-          key !== property?.[0] &&
+          !(logical && key === logical[0]) &&
           UPPER_TOKEN.test(text(field) ?? '') &&
           !LOGICAL.test(text(field) ?? '') &&
           !DIRECTION.test(text(field) ?? ''),
       );
-    const direction = scalars.find(
-      ([, field]) => text(field) !== undefined && DIRECTION.test(text(field) ?? ''),
+    const direction = scalars.find(([, field]) => DIRECTION.test(text(field) ?? ''));
+    const rest = entries.filter(
+      ([key]) => key !== operator?.[0] && key !== direction?.[0] && !(logical && key === logical[0]),
     );
-    if (property && direction && !operator) {
+    // Les candidats « propriété » : une chaîne qui a la forme d'un nom ; les candidats « valeur » : le reste
+    // (texte, nombre, tableau…) ; les booléens restent des drapeaux du critère, jamais sa valeur.
+    const names = rest.filter(([, field]) => IDENTIFIER.test(text(field) ?? ''));
+    const rank = ([key, field]: [string, unknown]): number =>
+      (PROPERTY_REF.test(text(field) ?? '') ? 2 : 1) +
+      (PROPERTY_KEY_HINT.test(key) ? 2 : 0) -
+      (VALUE_KEY_HINT.test(key) ? 3 : 0);
+    if (direction && !operator && names.length >= 1) {
+      // UN TRI : un nom et une direction, sans opérateur — jamais un critère.
+      const [property] = [...names].sort((a, b) => rank(b) - rank(a));
+      if (property) {
+        structure.sort.push({
+          path: path || '(root)',
+          property: String(property[1]),
+          propertyPath: at(property[0]),
+          direction: String(direction[1]),
+        });
+        claimed.add(at(property[0]));
+        claimed.add(at(direction[0]));
+      }
+    } else if (direction && !operator && rest.length === 0) {
+      // { companyName: "ASC" } : la propriété est la clé.
       structure.sort.push({
         path: path || '(root)',
-        property: String(property[1]),
+        property: direction[0],
+        propertyPath: at(direction[0]),
         direction: String(direction[1]),
       });
-      claimed.add(at(property[0]));
       claimed.add(at(direction[0]));
-    } else if (property && (operator || group !== undefined)) {
-      const compared = entries.find(
-        ([key]) => key !== property[0] && key !== operator?.[0] && !(logical && key === logical[0]),
+    } else if ((operator || group !== undefined) && names.length >= 1) {
+      // UN CRITÈRE : une propriété (un nom porté en valeur), un opérateur, une valeur comparée.
+      const ranked = [...names].sort((a, b) => rank(b) - rank(a));
+      // Un simple code en capitales (ACTIVE) n'est un opérateur qu'à côté d'un nom composé ou désigné
+      // comme tel : { type: "COMPANY", name: "acme" } reste une donnée, pas un critère.
+      const vocabulary = operator !== undefined && OPERATOR.test(text(operator[1]) ?? '');
+      const property = ranked[0] && (vocabulary || !operator || rank(ranked[0]) >= 2) ? ranked[0] : undefined;
+      const valueCandidates = rest.filter(
+        ([key, field]) => key !== property?.[0] && typeof field !== 'boolean',
       );
-      if (compared) {
+      const compared =
+        [...valueCandidates].sort(
+          ([a], [b]) => (VALUE_KEY_HINT.test(b) ? 1 : 0) - (VALUE_KEY_HINT.test(a) ? 1 : 0),
+        )[0] ?? rest.find(([key]) => key !== property?.[0]);
+      if (property && compared) {
         const valuePath = at(compared[0]);
         const first = Array.isArray(compared[1]) ? (compared[1] as unknown[])[0] : compared[1];
+        const swappable = IDENTIFIER.test(text(compared[1]) ?? '') && rank(property) - rank(compared) < 2;
+        const flags = rest
+          .filter(([key]) => key !== property[0] && key !== compared[0])
+          .map(([key]) => at(key));
+        const propertyText = String(property[1]);
         structure.criteria.push({
           path: path || '(root)',
           source: 'BODY',
-          property: String(property[1]),
+          property: propertyText,
           propertyFrom: 'VALUE',
+          propertyPath: at(property[0]),
+          propertyValue: { type: 'string', clear: propertyText, ...digests(propertyText, input.salt) },
           ...(operator ? { operator: String(operator[1]) } : {}),
           valuePath,
-          value: structuredValue(
-            first !== null && typeof first === 'object' ? JSON.stringify(first) : first,
-            input.salt,
-            SENSITIVE_KEY.test(compared[0]),
-          ),
+          // Deux lectures possibles : le nom comparé reste lisible (avec ses empreintes) pour que l'analyse
+          // puisse inverser les rôles ; s'il s'agit d'une saisie, il est re-masqué avant toute écriture.
+          value:
+            swappable && typeof first === 'string' && !SENSITIVE_KEY.test(compared[0])
+              ? { type: 'string', clear: first, ...digests(first, input.salt) }
+              : structuredValue(
+                  first !== null && typeof first === 'object' ? JSON.stringify(first) : first,
+                  input.salt,
+                  SENSITIVE_KEY.test(compared[0]),
+                ),
           ...(groupPath ? { group: groupPath } : {}),
           form: 'STRUCTURE',
-          confidence: operator ? 0.85 : 0.65,
+          confidence: operator ? (swappable ? 0.7 : 0.85) : 0.6,
+          ...(flags.length ? { flags } : {}),
+          ...(swappable ? { swappable: true } : {}),
+          evidence: [
+            operator
+              ? `an object with a comparison operator (${at(operator[0])} = ${String(operator[1])}), a name (${at(property[0])}) and a compared value (${valuePath})`
+              : `an object inside the logical group ${groupPath ?? ''} with a name (${at(property[0])}) and a value (${valuePath})`,
+            ...(swappable
+              ? [
+                  `${valuePath} also has the shape of a name: the typed values decide which one is the property`,
+                ]
+              : []),
+            ...(flags.length ? [`flags of the criterion: ${flags.join(', ')}`] : []),
+          ],
         });
         claimed.add(at(property[0]));
         if (operator) claimed.add(at(operator[0]));
         claimed.add(valuePath);
+        for (const flag of flags) claimed.add(flag);
       }
     }
     for (const [key, field] of entries) visit(field, at(key), depth + 1, groupPath);
@@ -370,6 +441,7 @@ export function analyzeHttpRequest(input: {
         value: entry.value,
         form: 'IMPLICIT',
         confidence: 0.4,
+        evidence: [`a free value under the key ${entry.path}: a criterion only if a typed value confirms it`],
       });
     } else structure.context.push(entry);
   }

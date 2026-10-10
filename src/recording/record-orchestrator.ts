@@ -33,6 +33,7 @@ import {
   describeFieldIdentity,
   processRecording,
   TEST_DATA_FILE,
+  testDataKeysOf,
   type RecordingResult,
 } from './process-recording.js';
 import { fieldIdentityKey, fieldIdentityOfEvent } from './field-identity.js';
@@ -723,6 +724,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
             network: result.http.journal,
             ...(result.http.live ? { previous: result.http.live } : {}),
             ...(result.business ? { entityCorrelations: result.business.detection.correlations } : {}),
+            ...(result.testData ? { testDataKeys: testDataKeysOf(result.testData) } : {}),
             operationProposals: proposals,
           });
           await writeHttp();

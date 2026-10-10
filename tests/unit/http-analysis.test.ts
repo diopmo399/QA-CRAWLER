@@ -197,7 +197,9 @@ describe('HTTP structure analyzer (generic: no field name, endpoint or format is
       operator: 'like',
       form: 'STRUCTURE',
     });
-    expect(structure.sort).toEqual([{ path: 'order_by[0]', property: 'created_at', direction: 'desc' }]);
+    expect(structure.sort).toEqual([
+      { path: 'order_by[0]', property: 'created_at', propertyPath: 'order_by[0].column', direction: 'desc' },
+    ]);
     expect(structure.pagination).toMatchObject({ index: { value: 40 }, size: { value: 20 } });
   });
 
