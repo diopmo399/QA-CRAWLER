@@ -7,8 +7,10 @@ import {
   type FieldShape,
   type FunctionalExchange,
   type StateCode,
+  type NetworkObservation,
   type ValueDigest,
 } from '../../functional/model.js';
+import { analyzeHttpRequest, foldValue, type HttpStructure } from '../../functional/http-structure.js';
 import type { NetworkExchange } from '../../model/network.js';
 import type { PageObserver } from '../../observers/observer.js';
 import { redactUrl } from '../../security/redactor.js';
@@ -31,6 +33,11 @@ export class FormKnowledgeObserver implements PageObserver {
   private readonly functional = new Map<string, FunctionalExchange[]>();
   private readonly pending = new Map<Request, FunctionalExchange>();
   private readonly reading = new Set<Promise<void>>();
+  /** LE JOURNAL RÉSEAU (Recording) : tous les appels autorisés, dans l'ordre, borné. */
+  private readonly journal: NetworkObservation[] = [];
+  private readonly journaled = new Map<Request, NetworkObservation>();
+  private journaling: { now: () => number; max: number } | undefined;
+  private journalSeq = 0;
 
   private readonly onRequest = (request: Request): void => {
     const type = request.resourceType();
@@ -49,8 +56,13 @@ export class FormKnowledgeObserver implements PageObserver {
     };
     if (this.apisSeen.size < 500) this.apisSeen.add(apiOfExchange(exchange));
     for (const window of this.windows.values()) if (window.length < 50) window.push(exchange);
-    if (this.functional.size > 0 && this.salt !== undefined) {
-      const entry: FunctionalExchange = { method: request.method(), path: pathOf(request.url()) };
+    const observation = this.journalRequest(request, type);
+    if ((this.functional.size > 0 || observation) && this.salt !== undefined) {
+      const entry: FunctionalExchange = {
+        method: request.method(),
+        path: pathOf(request.url()),
+        ...(observation ? { observationId: observation.id } : {}),
+      };
       const pathId = pathIdentifierOf(entry.path, this.salt);
       if (pathId) entry.identifiers = [pathId];
       // Les critères de l'URL (?q=…) : en empreintes seulement.
@@ -72,7 +84,69 @@ export class FormKnowledgeObserver implements PageObserver {
     }
   };
 
+  private readonly onRequestFailed = (request: Request): void => {
+    this.pending.delete(request);
+    const observation = this.journaled.get(request);
+    if (!observation) return;
+    this.journaled.delete(request);
+    observation.endedAt = this.journaling?.now() ?? Date.now();
+    observation.durationMs = observation.endedAt - observation.startedAt;
+    observation.failure = request.failure()?.errorText ?? 'failed';
+  };
+
+  /** Ouvre une entrée du journal (structure de la requête : jamais une valeur saisie en clair). */
+  private journalRequest(request: Request, resourceType: string): NetworkObservation | undefined {
+    if (!this.journaling || this.journal.length >= this.journaling.max) return undefined;
+    this.journalSeq += 1;
+    const method = request.method();
+    let structure: HttpStructure | undefined;
+    try {
+      const contentType = request.headers()['content-type'];
+      structure = analyzeHttpRequest({
+        url: request.url(),
+        ...(method !== 'GET' && method !== 'HEAD' ? { body: parseJson(safePostData(request)) } : {}),
+        ...(contentType ? { contentType } : {}),
+        ...(this.salt !== undefined ? { salt: this.salt } : {}),
+      });
+    } catch {
+      structure = undefined;
+    }
+    const observation: NetworkObservation = {
+      id: `n${String(this.journalSeq)}`,
+      method,
+      path: pathOf(request.url()),
+      resourceType,
+      startedAt: this.journaling.now(),
+      ...(structure ? { request: structure } : {}),
+      openWindows: [...this.functional.keys()],
+    };
+    this.journal.push(observation);
+    this.journaled.set(request, observation);
+    return observation;
+  }
+
+  /** Le journal réseau de la session (une copie : l'analyse ne le modifie jamais). */
+  journalSnapshot(): NetworkObservation[] {
+    return this.journal.map((entry) => ({ ...entry }));
+  }
+
+  /** Démarre le journal chronologique (Recording) : `now` est l'horloge de la session. */
+  startJournal(now: () => number = Date.now, max = 2000): void {
+    this.journaling = { now, max };
+  }
+
   private readonly onResponse = (response: Response): void => {
+    const observation = this.journaled.get(response.request());
+    if (observation) {
+      this.journaled.delete(response.request());
+      observation.endedAt = this.journaling?.now() ?? Date.now();
+      observation.durationMs = observation.endedAt - observation.startedAt;
+      observation.status = response.status();
+      const contentType = response.headers()['content-type'];
+      observation.response = {
+        ...(contentType ? { contentType: contentType.split(';')[0]?.trim() ?? contentType } : {}),
+      };
+    }
     const entry = this.pending.get(response.request());
     if (!entry) return;
     this.pending.delete(response.request());
@@ -89,7 +163,10 @@ export class FormKnowledgeObserver implements PageObserver {
         ];
     }
     // Le corps n'est lu que pour sa forme (jamais gardé) ; d'une lecture (GET), seulement le code d'état.
-    if (!/json/i.test(response.headers()['content-type'] ?? '')) return;
+    if (!/json/i.test(response.headers()['content-type'] ?? '')) {
+      if (observation) summarize(observation, entry);
+      return;
+    }
     const read = response
       .text()
       .then((text) => {
@@ -130,6 +207,7 @@ export class FormKnowledgeObserver implements PageObserver {
       .catch(() => undefined)
       .finally(() => {
         this.reading.delete(read);
+        if (observation) summarize(observation, entry);
       });
     this.reading.add(read);
   };
@@ -143,12 +221,14 @@ export class FormKnowledgeObserver implements PageObserver {
 
   attach(page: Page): void {
     page.on('request', this.onRequest);
+    page.on('requestfailed', this.onRequestFailed);
     if (this.salt !== undefined) page.on('response', this.onResponse);
     this.responses?.attach(page, this.isAllowedUrl);
   }
 
   detach(page: Page): void {
     page.off('request', this.onRequest);
+    page.off('requestfailed', this.onRequestFailed);
     page.off('response', this.onResponse);
   }
 
@@ -366,7 +446,12 @@ export function valueDigestsOf(body: unknown, salt: string | undefined, max: num
         // Pas de bruit de corrélation : un code d'état (status), un caractère, un petit nombre
         // (une page, une taille) ne désignent rien.
         if (isStateKey(key) || text.length < 2 || (typeof field === 'number' && text.length <= 3)) continue;
-        if (text.length <= 200) found.push({ field: path, digest: valueDigest(text, salt) });
+        if (text.length <= 200)
+          found.push({
+            field: path,
+            digest: valueDigest(text, salt),
+            folded: valueDigest(foldValue(text), salt),
+          });
       } else visit(field, path, depth + 1);
     }
   };
@@ -445,4 +530,17 @@ export function pathIdentifierOf(path: string, salt: string): ExchangeIdentifier
     ALNUM_CODE.test(last);
   if (!id) return undefined;
   return { field: '(path)', digest: valueDigest(last, salt), value: last, source: 'path' };
+}
+
+/** Le résumé de la réponse dans le journal (liste, enregistrements en empreintes, nouvelle identité). */
+function summarize(observation: NetworkObservation, entry: FunctionalExchange): void {
+  observation.response = {
+    ...observation.response,
+    ...(entry.listSize !== undefined ? { listSize: entry.listSize } : {}),
+    ...(entry.records?.length ? { records: entry.records } : {}),
+    ...((entry.identifiers ?? []).some((id) => id.source === 'response' || id.source === 'location')
+      ? { newIdentity: true }
+      : {}),
+    ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+  };
 }

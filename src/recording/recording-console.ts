@@ -1,3 +1,4 @@
+import type { RecordingAnalysis } from './analysis/recording-analysis.js';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ApplicationInteractionModel } from './application/model.js';
@@ -113,6 +114,22 @@ export class RecordingConsole {
     await this.panel.page.bringToFront().catch(() => undefined);
   }
 
+  private httpLive: PanelState['http'];
+
+  /** Une passe d'analyse HTTP en direct (provisoire) : seulement des compteurs dans l'en-tête. */
+  httpChanged(analysis: RecordingAnalysis): void {
+    const { summary } = analysis;
+    this.httpLive = {
+      network: summary.network,
+      correlated: summary.correlated,
+      hypotheses: summary.hypotheses,
+      inconsistencies: summary.inconsistencies,
+      pending: summary.pending,
+      failed: analysis.status === 'FAILED',
+    };
+    this.render();
+  }
+
   /** La timeline a changé (une action, une validation) : la fenêtre, puis un nouvel aperçu de la page. */
   timelineChanged(): void {
     this.render();
@@ -193,6 +210,7 @@ export class RecordingConsole {
             },
           ]
         : [],
+      ...(result.http ? { http: httpPanelOf(result.http.consolidated) } : {}),
       technicalIntents: (intent.technical ?? []).map((entry) => ({
         label: `${entry.intent} · ${entry.api}`,
         detail: `${entry.classification} · ${entry.category} · ${entry.operation}`,
@@ -377,6 +395,7 @@ export class RecordingConsole {
       ...(this.preview ? { preview: this.preview } : {}),
       ...(this.detached ? { previewDetached: true } : {}),
       analysis: this.analysis,
+      ...(this.httpLive ? { http: this.httpLive } : {}),
       ...(this.directory ? { directory: this.directory } : {}),
     };
   }
@@ -732,4 +751,37 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
     });
   }
   return tree;
+}
+
+/** L'analyse HTTP consolidée, pour la fenêtre : ce qui est validé n'est jamais mélangé aux hypothèses. */
+function httpPanelOf(analysis: RecordingAnalysis): NonNullable<PanelAnalysis['http']> {
+  const { summary } = analysis;
+  return {
+    status: analysis.status,
+    errors: analysis.errors,
+    counts: {
+      events: summary.events,
+      network: summary.network,
+      correlated: summary.correlated,
+      independent: summary.independent,
+      hypotheses: summary.hypotheses,
+      inconsistencies: summary.inconsistencies,
+      revisions: summary.revisions,
+    },
+    operations: Object.entries(summary.operations).map(
+      ([operation, count]) => `${operation} ${String(count)}`,
+    ),
+    mappings: analysis.fieldMappings.slice(0, 12).map((mapping) => ({
+      label: mapping.uiLabel,
+      property: mapping.candidates
+        ? mapping.candidates.join(' | ')
+        : `${mapping.property} (${mapping.jsonPath})`,
+      state: mapping.state,
+      transformation: mapping.transformation,
+    })),
+    inconsistencies: analysis.inconsistencies.slice(0, 8).map((entry) => entry.message),
+    revisions: analysis.revisions
+      .slice(0, 8)
+      .map((entry) => `${entry.ref}: ${entry.from} → ${entry.to} (${entry.reason})`),
+  };
 }

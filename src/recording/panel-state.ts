@@ -60,6 +60,27 @@ export interface PanelAnalysis {
   intents: { label: string; detail?: string; confidence?: number; evidence: string[] }[];
   /** Les intents TECHNIQUES (ACQUIRE_TOKEN, DISCOVER_PROVIDER…) : séparés, jamais métier. */
   technicalIntents?: { label: string; detail?: string; evidence: string[] }[];
+  /**
+   * L'ANALYSE HTTP CONSOLIDÉE (après l'arrêt) : son état, ses compteurs, les opérations, les
+   * correspondances champ ↔ propriété (avec leur état), les incohérences et les révisions du direct.
+   */
+  http?: {
+    status: 'COMPLETE' | 'FAILED';
+    errors: string[];
+    counts: {
+      events: number;
+      network: number;
+      correlated: number;
+      independent: number;
+      hypotheses: number;
+      inconsistencies: number;
+      revisions: number;
+    };
+    operations: string[];
+    mappings: { label: string; property: string; state: string; transformation: string }[];
+    inconsistencies: string[];
+    revisions: string[];
+  };
   findings: { severity: string; message: string; suggestion?: string; origin: string }[];
   aiCandidates: number;
   /** L'analyse du conseiller tourne encore en arrière-plan (la revue n'attend pas). */
@@ -150,6 +171,15 @@ export interface PanelState {
     highlight?: { actionId: string; x: number; y: number; width: number; height: number; label?: string };
   };
   analysis: PanelAnalysis;
+  /** L'ANALYSE HTTP EN DIRECT (provisoire) : des compteurs, jamais une vérité. */
+  http?: {
+    network: number;
+    correlated: number;
+    hypotheses: number;
+    inconsistencies: number;
+    pending: number;
+    failed: boolean;
+  };
   directory?: string;
   /** L'aperçu est ouvert dans sa propre fenêtre (la fenêtre principale garde le parcours et les détails). */
   previewDetached?: boolean;

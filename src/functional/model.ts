@@ -1,4 +1,5 @@
 import { valueDigest } from '../forms/state/value-digest.js';
+import type { HttpStructure } from './http-structure.js';
 import type { SemanticEvidence, SourceLocation } from '../static-analysis/model.js';
 import type { RuleCondition, RuleEffect } from '../static-analysis/rules/rule-model.js';
 
@@ -398,12 +399,48 @@ export interface FunctionalExchange {
   requestCriteria?: ValueDigest[];
   /** Des indices de STRUCTURE de la requête (pagination, tri, conteneur de critères) : des indices, pas des règles. */
   requestHints?: { pagination?: boolean; sorting?: boolean; criteria?: boolean };
+  /** L'entrée du journal réseau (NetworkObservation.id) de cet échange. */
+  observationId?: string;
 }
 
 /** Une valeur réduite à son empreinte salée, avec le chemin du champ qui la portait (filters.name…). */
 export interface ValueDigest {
   field: string;
   digest: string;
+  /** L'empreinte de la valeur PLIÉE (casse, espaces, accents) : une transformation UI ↔ API reconnue. */
+  folded?: string;
+}
+
+/**
+ * LE JOURNAL RÉSEAU CHRONOLOGIQUE du Recording : chaque appel XHR / fetch autorisé, dans l'ordre,
+ * qu'une action l'ait déclenché ou non (chargement, appel asynchrone, interrogation périodique). La
+ * STRUCTURE de la requête seulement (jamais un en-tête, jamais une valeur saisie en clair), sa durée,
+ * et un résumé de la réponse. La corrélation avec les actions se fait APRÈS, avec une confiance.
+ */
+export interface NetworkObservation {
+  /** n1, n2… dans l'ordre d'émission. */
+  id: string;
+  method: string;
+  path: string;
+  resourceType: string;
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  status?: number;
+  /** L'échec du transport (abandon, coupure) : la requête n'a pas de réponse. */
+  failure?: string;
+  request?: HttpStructure;
+  response?: {
+    contentType?: string;
+    listSize?: number;
+    /** Les enregistrements servis (identifiants et attributs en empreintes, 50 au plus). */
+    records?: ExchangeRecord[];
+    /** Une nouvelle identité est servie (identifiant de réponse ou en-tête Location). */
+    newIdentity?: boolean;
+    errorCode?: string;
+  };
+  /** Les fenêtres d'action ouvertes quand la requête est partie : une PREUVE de corrélation, pas un lien. */
+  openWindows: string[];
 }
 
 export interface ExchangeRecord {

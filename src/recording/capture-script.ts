@@ -1056,6 +1056,19 @@ export function installRecorder(
       // Contient-elle des chiffres ? (une clé ABC123 en contient, un nom saisi en capitales jamais)
       ...(!sensitive && /\d/.test(value) ? { hasDigit: true } : {}),
       ...(digest ? { digest } : {}),
+      // La valeur pliée (casse, espaces, accents) : le même pliage que foldValue (http-structure.ts).
+      ...(digest
+        ? {
+            foldedDigest: digestOf(
+              value
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .replace(/\s+/g, ' ')
+                .trim(),
+            ),
+          }
+        : {}),
       ...(!sensitive && start ? { initialDigest: start } : {}),
       ...(sensitive ? { sensitive: true } : {}),
       ...(!sensitive &&

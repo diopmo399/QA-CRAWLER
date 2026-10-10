@@ -1,3 +1,5 @@
+import { analyzeRecording, type RecordingAnalysis } from './analysis/recording-analysis.js';
+import type { NetworkObservation } from '../functional/model.js';
 import { ignoredDebugLine, rawEventDebugLine } from './recorder-trace.js';
 import type { RecordingSourceSet } from './sources/recording-sources.js';
 import { LiveTimeline, type LiveAction } from './live-timeline.js';
@@ -68,6 +70,11 @@ export interface HumanFlowRecorderOptions {
   language?: 'fr' | 'en';
   /** La timeline en direct a changé (une action ajoutée, validée, annulée, résolue) : le panneau se redessine. */
   onTimeline?: (change: TimelineChange) => void;
+  /**
+   * L'ANALYSE HTTP EN DIRECT (provisoire) : appelée après chaque passe, hors du chemin de capture
+   * (jamais bloquante pour Playwright).
+   */
+  onLiveAnalysis?: (analysis: RecordingAnalysis) => void;
   /**
    * LES SOURCES DE CAPTURE (recording.mode) : absentes ou CURRENT, le recorder fonctionne exactement
    * comme avant. PLAYWRIGHT / HYBRID : le localisateur de Playwright est lu sur l'élément touché, et
@@ -161,6 +168,10 @@ export class HumanFlowRecorder {
       undefined,
       this.salt,
     );
+    // LE JOURNAL RÉSEAU chronologique (analyse HTTP) : tous les appels, dans l'ordre, avec leur structure.
+    const http = config.recording.business.http;
+    if (config.recording.business.enabled && http.enabled)
+      this.network.startJournal(this.now, http.maxJournal);
     this.session = {
       id: `rec-${new Date(this.now())
         .toISOString()
@@ -529,6 +540,8 @@ export class HumanFlowRecorder {
     await this.showStatus('⏳ FINALIZING…');
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    if (this.liveTimer) clearTimeout(this.liveTimer);
+    this.liveTimer = undefined;
     // Plus aucun appel IA pour les validations encore en file : un Stop ne les attend pas.
     const validator = this.options.targetValidator;
     validator?.drain();
@@ -849,6 +862,7 @@ export class HumanFlowRecorder {
     };
     events.push(event);
     this.options.sources?.observeRaw(event);
+    this.scheduleLiveAnalysis();
     this.emit(
       'RAW_EVENT_CAPTURED',
       `${event.type}${event.element ? ` ${event.element.role || event.element.tag} "${event.element.name}"` : ''}`,
@@ -985,6 +999,59 @@ export class HumanFlowRecorder {
     }
     // L'écran est stable : la fenêtre réseau de la dernière action se ferme.
     if (this.window && waiting.includes(this.window)) await this.closeWindow();
+  }
+
+  // ------------------------------------------------------------------ analyse HTTP en direct
+
+  private liveTimer: ReturnType<typeof setTimeout> | undefined;
+  private liveAnalysis: RecordingAnalysis | undefined;
+  private liveReruns = 0;
+
+  /**
+   * Une passe d'analyse HTTP (le MÊME moteur que la consolidation), après un court délai sans
+   * nouvel événement : hors du chemin de capture, jamais bloquante ; une erreur n'arrête rien.
+   */
+  private scheduleLiveAnalysis(delay?: number, rerun = false): void {
+    const { business } = this.options.config.recording;
+    if (!business.enabled || !business.http.enabled || !business.http.live || this.closed) return;
+    if (!rerun) this.liveReruns = 0;
+    if (this.liveTimer) clearTimeout(this.liveTimer);
+    this.liveTimer = setTimeout(() => {
+      this.liveTimer = undefined;
+      this.runLiveAnalysis();
+    }, delay ?? business.http.liveDebounceMs);
+  }
+
+  private runLiveAnalysis(): void {
+    if (this.closed) return;
+    const analysis = analyzeRecording({
+      mode: 'LIVE',
+      events: this.session.rawEvents,
+      network: this.network.journalSnapshot(),
+    });
+    this.liveAnalysis = analysis;
+    const { summary } = analysis;
+    this.emit(
+      'HTTP_ANALYSIS_UPDATED',
+      `live: ${String(summary.network)} request(s), ${String(summary.correlated)} linked to actions, ${String(summary.hypotheses)} hypothesis(es), ${String(summary.inconsistencies)} inconsistency(ies)${analysis.status === 'FAILED' ? ` — analysis error: ${analysis.errors.join('; ')}` : ''}`,
+      { summary },
+    );
+    this.options.onLiveAnalysis?.(analysis);
+    // Des réponses encore attendues : une passe de plus, plus tard (bornée).
+    if (summary.pending > 0 && this.liveReruns < 5) {
+      this.liveReruns += 1;
+      this.scheduleLiveAnalysis(this.options.config.recording.business.http.liveDebounceMs * 2, true);
+    }
+  }
+
+  /** La dernière analyse en direct (provisoire). */
+  lastLiveAnalysis(): RecordingAnalysis | undefined {
+    return this.liveAnalysis;
+  }
+
+  /** Le journal réseau chronologique de la session (une copie). */
+  networkJournal(): NetworkObservation[] {
+    return this.network.journalSnapshot();
   }
 
   private emit(type: RecordingEventType, message: string, data?: Record<string, unknown>): void {

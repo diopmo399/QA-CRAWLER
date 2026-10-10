@@ -1289,6 +1289,25 @@ const recordingSchema = z
          * travail, micro-frontends), tasks, entités, relations, actions métier — avec leurs preuves.
          */
         application: z.boolean().default(true),
+        /**
+         * L'ANALYSE MÉTIER DES REQUÊTES HTTP (http-analysis.json, network-journal.json) : un journal
+         * réseau chronologique, la structure des requêtes (critères, groupes logiques, tri,
+         * pagination), la corrélation actions / requêtes, les correspondances champ ↔ propriété.
+         * live : la même analyse pendant l'enregistrement (provisoire, jamais bloquante) ; ai : une
+         * opération inconnue peut être soumise à l'IA (ai.mode ≠ OFF), qui ne choisit que parmi les
+         * opérations possibles (une hypothèse, jamais validée par elle).
+         */
+        http: z
+          .object({
+            enabled: z.boolean().default(true),
+            live: z.boolean().default(true),
+            liveDebounceMs: z.number().int().min(100).max(10_000).default(700),
+            maxJournal: z.number().int().min(10).max(20_000).default(2000),
+            ai: z.boolean().default(true),
+            maxAiCalls: z.number().int().min(0).max(20).default(3),
+          })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),

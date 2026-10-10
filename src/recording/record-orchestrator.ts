@@ -1,3 +1,9 @@
+import {
+  PROPOSABLE_OPERATIONS,
+  analyzeRecording,
+  redactJournal,
+  type BusinessOperation,
+} from './analysis/recording-analysis.js';
 import { buildApplicationModel } from './application/application-model.js';
 import { buildBusinessFlow } from './business/business-flow.js';
 import { LlmBusinessAnalyzer, gatewayEntityChooser } from './business/business-semantic-analyzer.js';
@@ -218,6 +224,10 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     onTimeline: () => {
       consoleUi?.timelineChanged();
     },
+    // L'analyse HTTP en direct : des compteurs provisoires dans l'en-tête de la fenêtre.
+    onLiveAnalysis: (analysis) => {
+      consoleUi?.httpChanged(analysis);
+    },
   });
   const browser = new BrowserManager(config.browser);
   let consoleUi: RecordingConsole | undefined;
@@ -319,6 +329,11 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       onEvent,
       typedValues: recorder.typedValues,
       digest: (value) => recorder.digest(value),
+      // L'analyse HTTP : le journal de la session et la dernière passe en direct (provisoire).
+      http: {
+        journal: recorder.networkJournal(),
+        ...(recorder.lastLiveAnalysis() ? { live: recorder.lastLiveAnalysis() } : {}),
+      },
     }),
   );
   // Une ambiguïté métier peut encore être soumise à l'IA (analyse en arrière-plan) : les saisies
@@ -373,6 +388,25 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     if (result.application) await write('application-model.json', json(result.application));
   };
   await writeApplication();
+  // L'ANALYSE HTTP : le journal réseau (la source, jamais réécrite) et l'analyse (direct + consolidation).
+  const writeHttp = async (): Promise<void> => {
+    if (!result.http) return;
+    // Une saisie de l'humain restée « lisible » (un nom en capitales) est re-masquée avant d'être écrite.
+    await write(
+      'network-journal.json',
+      json({ requests: redactJournal(result.http.journal, result.session.rawEvents) }),
+    );
+    await write(
+      'http-analysis.json',
+      json({
+        // Les références vers le journal (n1…) remplacent toute copie des corps.
+        journal: 'network-journal.json',
+        consolidated: result.http.consolidated,
+        ...(result.http.live ? { live: { mode: 'LIVE', summary: result.http.live.summary } } : {}),
+      }),
+    );
+  };
+  await writeHttp();
   // Les sources et leurs corrélations (PLAYWRIGHT, HYBRID) : ce que chaque source a vu, une action par geste.
   if (sources) await write('recording-sources.json', json(sources.report()));
   await write(
@@ -491,7 +525,11 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   if (format !== 'yaml') await write('generated.feature', result.files.feature);
 
   stopClock.mark('writing artifacts');
-  if (config.recording.knowledge) await rememberRecording(config, result, env).catch(() => undefined);
+  if (config.recording.knowledge) {
+    await rememberRecording(config, result, env).catch(() => undefined);
+    // Les correspondances champ ↔ propriété VALIDÉES seulement (jamais une hypothèse), par application.
+    await rememberFieldMappings(config, result, env).catch(() => undefined);
+  }
   stopClock.mark('knowledge');
 
   progress.start(RECORDING_PHASES.audit, mode !== 'OFF' ? 'with the intelligence advisor' : undefined);
@@ -650,6 +688,45 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
               .join(', ') || 'none'
           }`,
         });
+      }
+    }
+    // UNE OPÉRATION INCONNUE (analyse HTTP) : l'IA ne fait que CHOISIR parmi les opérations possibles,
+    // pour quelques requêtes seulement (jamais une par événement) ; le choix reste une hypothèse.
+    if (gateway && result.http && config.recording.business.http.ai) {
+      const unknown = result.http.consolidated.business
+        .filter((entry) => entry.operation === 'UNKNOWN' && entry.actionIds.length > 0)
+        .slice(0, config.recording.business.http.maxAiCalls);
+      if (unknown.length > 0) {
+        const choose = gatewayEntityChooser(gateway, result.session.id);
+        const proposals = new Map<string, BusinessOperation>();
+        for (const entry of unknown) {
+          const answer = await choose({
+            candidates: PROPOSABLE_OPERATIONS,
+            topic: 'operation',
+            subject: entry.api,
+            evidence: [
+              `${entry.api} → ${String(entry.result?.status ?? 'no response')}`,
+              ...entry.evidence,
+              ...entry.criteria.map(
+                (criterion) =>
+                  `criterion ${criterion.property}${criterion.operator ? ` ${criterion.operator}` : ''}`,
+              ),
+            ],
+          }).catch(() => undefined);
+          const proposed = PROPOSABLE_OPERATIONS.find((operation) => operation === answer);
+          if (proposed) proposals.set(entry.networkId, proposed);
+        }
+        if (proposals.size > 0) {
+          result.http.consolidated = analyzeRecording({
+            mode: 'CONSOLIDATED',
+            events: result.session.rawEvents,
+            network: result.http.journal,
+            ...(result.http.live ? { previous: result.http.live } : {}),
+            ...(result.business ? { entityCorrelations: result.business.detection.correlations } : {}),
+            operationProposals: proposals,
+          });
+          await writeHttp();
+        }
       }
     }
     const stoppedBecause = gateway?.stoppedBecause;
@@ -981,6 +1058,42 @@ async function rememberRecording(
       api: intent.api ?? '',
     })),
   });
+  await store.save([]);
+}
+
+/** Les correspondances champ d'interface ↔ propriété technique VALIDÉES, dans la connaissance de l'application. */
+async function rememberFieldMappings(
+  config: ScenarioConfig,
+  result: RecordingResult,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const validated = (result.http?.consolidated.fieldMappings ?? []).filter(
+    (mapping) => mapping.state === 'VALIDATED',
+  );
+  if (validated.length === 0) return;
+  const store = new FunctionalKnowledgeStore(
+    path.join(path.dirname(path.resolve(config.output.reportsDir)), 'knowledge', 'functional'),
+    {
+      application: config.mission.name,
+      ...((config.baseline.environment ?? env.QA_ENVIRONMENT)
+        ? { environment: config.baseline.environment ?? env.QA_ENVIRONMENT }
+        : {}),
+    },
+  );
+  await store.load();
+  store.rememberFieldMappings(
+    validated.map((mapping) => ({
+      key: mapping.key,
+      uiLabel: mapping.uiLabel,
+      property: mapping.property,
+      jsonPath: mapping.jsonPath,
+      screen: mapping.screen,
+      api: mapping.api,
+      operation: mapping.operation,
+      transformation: mapping.transformation,
+      recordingSessionId: result.session.id,
+    })),
+  );
   await store.save([]);
 }
 
