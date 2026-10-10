@@ -281,6 +281,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           () => browser.newIsolatedPage(windowSize),
         );
         consoleUi.withPreview = config.recording.panelPreview;
+        consoleUi.layout = config.recording.panelLayout;
         consoleUi.timelineChanged();
         await page.bringToFront().catch(() => undefined);
       } catch (error) {
