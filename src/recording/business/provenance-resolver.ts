@@ -145,6 +145,46 @@ export class DeterministicProvenanceResolver implements ProvenanceResolver {
     const observations = evidence.filter((entry) => OBSERVATION.has(entry.type));
     const inputs = evidence.filter((entry) => entry.type === 'USER_INPUT');
 
+    // ------------------------------------------------------------ R10 : créée, puis RETROUVÉE par ses données métier
+    // L'identité n'était peut-être visible nulle part à la création : elle est découverte dans le
+    // résultat d'une recherche faite avec les données saisies à la création (EntityCorrelation).
+    const correlated = evidence.filter((entry) => entry.type === 'CORRELATED_CREATION');
+    if (creations.length === 0 && correlated.length > 0) {
+      const first = Math.min(...correlated.map((entry) => entry.actionIndex));
+      const prior = observations.filter(
+        (entry) => entry.type === 'INITIAL_STATE' || entry.actionIndex < first,
+      );
+      if (prior.length > 0)
+        return make(
+          'AMBIGUOUS',
+          W.ambiguous,
+          'retrieved by the creation data, but observed before the creation: maybe an existing homonym',
+          [...prior, ...correlated],
+          ['R8 contradictory evidence'],
+          {
+            contradictions: prior.map((entry) => `observed before its creation: ${entry.description}`),
+            candidates: ['CREATED_DURING_RECORDING', 'DISCOVERED_DURING_RECORDING'],
+          },
+        );
+      const score = Math.max(...correlated.map((entry) => entry.details.confidence ?? 0));
+      const retrieved = evidence.filter((entry) => entry.type === 'SEARCH_RESULT');
+      return score >= W.threshold
+        ? make(
+            'CREATED_DURING_RECORDING',
+            score,
+            `created by "${correlated[0]?.details.label ?? correlated[0]?.actionId ?? ''}", then retrieved by its business data (${correlated[0]?.details.correlation ?? ''}): its identity was discovered after the creation`,
+            [...correlated, ...retrieved],
+            ['R10 created, then retrieved by its business data'],
+          )
+        : make(
+            'UNKNOWN',
+            score,
+            'a retrieval after a creation is suspected but its evidence is too weak',
+            correlated,
+            ['R9 insufficient evidence'],
+          );
+    }
+
     // ------------------------------------------------------------ R1 / R2 / R8 : une identité produite par une création
     if (creations.length > 0) {
       const creationActions = [...new Set(creations.map((entry) => entry.actionIndex))];
@@ -204,8 +244,12 @@ export class DeterministicProvenanceResolver implements ProvenanceResolver {
           'CREATED_DURING_RECORDING',
           score,
           `the action "${best.details.label ?? best.actionId ?? ''}" produced this identity (${[...new Set(used.map((entry) => entry.type))].join(' + ')})`,
-          used,
-          ['R1 explicit creation', ...(kinds >= 3 ? ['R2 converging creation evidence'] : [])],
+          [...used, ...correlated],
+          [
+            'R1 explicit creation',
+            ...(kinds >= 3 ? ['R2 converging creation evidence'] : []),
+            ...(correlated.length ? ['R10 retrieved by its business data'] : []),
+          ],
         );
       return make(
         'UNKNOWN',

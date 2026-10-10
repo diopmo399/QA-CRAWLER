@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { recordsOf } from '../../src/forms/state/form-knowledge-observer.js';
+import { listSizeOf, recordsOf } from '../../src/forms/state/form-knowledge-observer.js';
 import { valueDigest } from '../../src/forms/state/value-digest.js';
 import type { FunctionalExchange } from '../../src/functional/model.js';
 import { buildApplicationModel } from '../../src/recording/application/application-model.js';
@@ -19,6 +19,7 @@ import {
   identityInPath,
   isIdSegment,
   isListRead,
+  queryEvidenceOf,
 } from '../../src/recording/business/signals.js';
 import type { RawRecordedEvent, RecordedState, SemanticRecordedAction } from '../../src/recording/model.js';
 
@@ -163,6 +164,7 @@ function app(start: StateSpec) {
         rawEvents,
         entities: detection.entities,
         entityEvidence: detection.evidence,
+        correlations: detection.correlations,
         initialStateId,
         digest,
         ...(decisions ? { relationshipDecisions: decisions } : {}),
@@ -189,6 +191,7 @@ const read = (path: string, body: unknown): FunctionalExchange => {
         }
       : {}),
     records: recordsOf(body, SALT),
+    ...(listSizeOf(body) !== undefined ? { listSize: listSizeOf(body) } : {}),
   };
 };
 const create = (path: string, field: string, value: string): FunctionalExchange => ({
@@ -252,7 +255,13 @@ describe('Application Interaction Model (generic: shell, task list, BFF, micro-f
       key: 'entity:item:ABC123',
       provenance: { classification: 'CREATED_DURING_RECORDING' },
     });
-    expect(item?.identity).toMatchObject({ type: 'BUSINESS_KEY', field: 'businessKey' });
+    // Le RÔLE vient des preuves (montrée à l'utilisateur), jamais du nom « businessKey ».
+    expect(item?.identity).toMatchObject({
+      type: 'ENTITY_ID',
+      field: 'businessKey',
+      semanticRole: 'BUSINESS_KEY',
+    });
+    expect(item?.identity.roleEvidence?.join(' ')).toMatch(/shown to the user/);
     expect(item?.classification.classification).toBe('BUSINESS_ENTITY');
     // La task n'est pas une entité : son identifiant n'en fait pas une « entité 456 ».
     expect(model.entities.some((entity) => entity.identity.value === '456')).toBe(false);
@@ -312,7 +321,12 @@ describe('Application Interaction Model (generic: shell, task list, BFF, micro-f
     const model = run.build();
     expect(subsequence(kinds(model), ['SELECT_TASK', 'OPEN', 'UPDATE', 'SAVE'])).toBe(true);
     const task = model.tasks[0];
-    expect(task?.identityCandidates.map((candidate) => candidate.type)).toEqual(['TASK_ID', 'BUSINESS_KEY']);
+    // La place vient des preuves : ABC123 est l'identité d'une autre entité → REFERENCE (et montrée).
+    expect(task?.identityCandidates.map((candidate) => candidate.type)).toEqual(['TASK_ID', 'REFERENCE']);
+    expect(task?.identityCandidates.map((candidate) => candidate.semanticRole)).toEqual([
+      'BUSINESS_KEY',
+      'REFERENCE',
+    ]);
     const reference = model.relationships.find((relation) => relation.type === 'REFERENCES');
     expect(reference).toMatchObject({ source: task?.key, target: 'entity:item:ABC123', status: 'CONFIRMED' });
     expect(reference?.reason).toMatch(/businessKey = ABC123/);
@@ -646,7 +660,14 @@ describe('Observe first, classify second: technical noise never becomes a busine
       provenance: { classification: 'CREATED_DURING_RECORDING' },
       lifecycle: ['CREATE', 'SEARCH', 'OPEN'],
     });
-    expect(items[0]?.identity).toMatchObject({ type: 'BUSINESS_KEY', field: 'businessKey' });
+    // Saisie par l'utilisateur : une clé qu'il connaît (le rôle a évolué : réseau → montrée → saisie).
+    expect(items[0]?.identity).toMatchObject({
+      type: 'ENTITY_ID',
+      field: 'businessKey',
+      semanticRole: 'BUSINESS_KEY',
+      roleConfidence: 0.75,
+    });
+    expect(items[0]?.identity.roleEvidence?.[0]).toMatch(/^network/);
     expect(items[0]?.identity.evidenceIds?.length).toBeGreaterThan(0);
   });
 
@@ -748,9 +769,12 @@ describe('Criteria in the work list: a FILTER, never an entity', () => {
     expect(technicalCategoryOf('/auth/oidc/realm-1/protocol/openid-connect/token')?.category).toBe(
       'AUTHENTICATION',
     );
-    expect(isListRead({ records: [{ index: 0, identifiers: [] }] })).toBe(true);
+    expect(isListRead({ listSize: 1, records: [{ index: 0, identifiers: [] }] })).toBe(true);
+    // Un seul objet servi (un détail) n'est pas une collection.
+    expect(isListRead({ records: [{ index: 0, identifiers: [] }] })).toBe(false);
     expect(
       isListRead({
+        listSize: 1,
         records: [{ index: 0, identifiers: [] }],
         identifiers: [{ source: 'response' }],
       }),
@@ -940,5 +964,210 @@ describe('Observed ≠ business; technical authentication is never a business cr
     const detection = run.detect();
     expect(detection.events.filter((event) => /CREATE/.test(event.type))).toEqual([]);
     expect(buildBusinessFlow('t', detection).steps).toEqual([]);
+  });
+});
+
+describe('Create → search by business data (POST + filters) → result → open: one functional journey', () => {
+  /** Une création : le corps envoyé (en empreintes), un identifiant servi seulement si donné. */
+  const createCompany = (data: Record<string, string>, id?: string): FunctionalExchange => ({
+    method: 'POST',
+    path: '/api/companies',
+    status: id ? 201 : 204,
+    requestCriteria: Object.entries(data).map(([field, value]) => ({ field, digest: digest(value) })),
+    ...(id
+      ? { identifiers: [{ field: 'id', digest: digest(id), value: id, source: 'response' as const }] }
+      : {}),
+  });
+  /** Une RECHERCHE par POST : des critères, une pagination, une liste en réponse. */
+  const searchCompanies = (
+    filters: Record<string, string>,
+    results: Record<string, string>[],
+  ): FunctionalExchange => ({
+    method: 'POST',
+    path: '/api/companies/search',
+    status: 200,
+    requestCriteria: Object.entries(filters).map(([field, value]) => ({
+      field: `filters.${field}`,
+      digest: digest(value),
+    })),
+    requestHints: { criteria: true, pagination: true },
+    records: recordsOf({ items: results, total: results.length }, SALT),
+    listSize: results.length,
+  });
+  const journey = (options: {
+    createdId?: string;
+    results: Record<string, string>[];
+    before?: Record<string, string>[];
+    address?: boolean;
+  }) => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    if (options.before)
+      run.click('Companies', {
+        to: { url: '/companies', hosts: [SHELL, 'company-list'] },
+        network: [searchCompanies({}, options.before)],
+      });
+    run.click('New company', { to: { url: '/companies/new', hosts: [SHELL, 'company-create'] } });
+    run.fill('Company name', 'Company Test QA');
+    if (options.address) run.fill('Address', '123 Main Street');
+    run.click('Save', {
+      to: TASKS,
+      network: [
+        createCompany(
+          { name: 'Company Test QA', ...(options.address ? { address: '123 Main Street' } : {}) },
+          options.createdId,
+        ),
+      ],
+    });
+    run.fill('Search', 'Company Test QA');
+    const search = run.click('Search', {
+      network: [searchCompanies({ name: 'Company Test QA' }, options.results)],
+    });
+    const open = run.click('Company Test QA', {
+      to: { url: '/companies/123456', hosts: [SHELL, 'company-detail'] },
+      network: [read('/api/companies/123456', { id: '123456', name: 'Company Test QA' })],
+    });
+    return { run, search, open };
+  };
+
+  it('POST with filters + a list in response is a SEARCH (query evidence), never a creation', () => {
+    const exchange = searchCompanies({ name: 'Company Test QA' }, [{ id: '1', name: 'Company Test QA' }]);
+    expect(queryEvidenceOf(exchange)).toMatchObject({ query: true });
+    expect(queryEvidenceOf(exchange).reasons.join(' ')).toMatch(
+      /collection.*criterion.*criteria container.*pagination/,
+    );
+    expect(intentOf('POST', '/api/companies/search', 'Search')).toBeDefined(); // a NAME is no proof…
+    // …the evidence is: a list served, no new identity → a read, so no business write is inferred.
+    expect(isListRead(exchange)).toBe(true);
+    // A POST that serves a new identity is not a query, whatever its URL.
+    expect(isListRead(createCompany({ name: 'X' }, '9'))).toBe(false);
+  });
+
+  it('the id is unknown at creation and discovered in the search result: CREATED → RETRIEVED → CORRELATED → OPENED, one entity', () => {
+    const { run, search, open } = journey({ results: [{ id: '123456', name: 'Company Test QA' }] });
+    const detection = run.detect();
+    const correlation = detection.correlations[0];
+    expect(correlation).toMatchObject({
+      status: 'PROBABLE',
+      sameEntityCandidate: true,
+      query: { actionId: search.id, method: 'POST' },
+      result: { identifiers: [{ field: 'id', value: '123456' }], sameIdAsCreation: false },
+      open: { actionId: open.id },
+    });
+    expect(correlation?.matched).toEqual([
+      { label: 'Company name', seenIn: ['CREATE_INPUT', 'SEARCH_CRITERION', 'RESULT_RECORD'] },
+    ]);
+    const entity = detection.entities.find((candidate) => candidate.key === 'entity:company:123456');
+    expect(entity?.provenance.classification).toBe('CREATED_DURING_RECORDING');
+    expect(entity?.provenance.rules).toContain('R10 created, then retrieved by its business data');
+    expect(entity?.lifecycle.map((step) => step.kind)).toEqual(['CREATE', 'RETRIEVE', 'OPEN']);
+    expect(entity?.classification.classification).toBe('BUSINESS_ENTITY');
+    const types = detection.events
+      .filter((event) => event.entityKey === 'entity:company:123456')
+      .map((event) => event.type);
+    expect(types).toEqual(['ENTITY_CREATED', 'ENTITY_RETRIEVED', 'ENTITY_CORRELATED', 'ENTITY_OPENED']);
+    const flow = buildBusinessFlow('t', detection);
+    expect(flow.steps.map((step) => step.action)).toEqual(['create', 'retrieve', 'correlate', 'open']);
+    // Le nom saisi n'est jamais écrit, ni dans la détection ni dans le flow.
+    expect(JSON.stringify(flow)).not.toContain('Company Test QA');
+    const model = run.build();
+    expect(model.relationships).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'SEARCH_MATCH',
+          source: 'entity:company:123456',
+          target: `action:${search.id}`,
+        }),
+      ]),
+    );
+    expect(model.businessContext.entityKeys).toEqual(['entity:company:123456']);
+    expect(kinds(model)).toEqual(expect.arrayContaining(['CREATE', 'RETRIEVE', 'OPEN']));
+  });
+
+  it('several converging data (name + address) raise the confidence; the same id as the creation confirms it', () => {
+    const one = journey({ results: [{ id: '123456', name: 'Company Test QA' }] }).run.detect()
+      .correlations[0];
+    const two = journey({
+      address: true,
+      results: [{ id: '123456', name: 'Company Test QA', address: '123 Main Street' }],
+    }).run.detect().correlations[0];
+    const same = journey({
+      createdId: '123456',
+      results: [{ id: '123456', name: 'Company Test QA' }],
+    }).run.detect().correlations[0];
+    expect(one?.confidence).toBeLessThan(two?.confidence ?? 0);
+    expect(two?.status).toBe('CONFIRMED');
+    expect(same).toMatchObject({ status: 'CONFIRMED', result: { sameIdAsCreation: true } });
+  });
+
+  it('homonyms: two results carry the same name → AMBIGUOUS, none chosen, no provenance invented', () => {
+    const { run } = journey({
+      results: [
+        { id: '123456', name: 'Company Test QA' },
+        { id: '777777', name: 'Company Test QA' },
+      ],
+    });
+    const detection = run.detect();
+    expect(detection.correlations[0]).toMatchObject({
+      status: 'AMBIGUOUS',
+      sameEntityCandidate: false,
+      candidates: [0, 1],
+    });
+    expect(detection.events.some((event) => event.type === 'ENTITY_CREATED')).toBe(false);
+    expect(
+      detection.entities.find((entity) => entity.key === 'entity:company:123456')?.provenance.classification,
+    ).not.toBe('CREATED_DURING_RECORDING');
+  });
+
+  it('a homonym that existed before the creation: AMBIGUOUS, never CREATED_DURING_RECORDING', () => {
+    const { run } = journey({
+      before: [{ id: '123456', name: 'Company Test QA' }],
+      results: [{ id: '123456', name: 'Company Test QA' }],
+    });
+    const detection = run.detect();
+    expect(detection.correlations[0]?.status).toBe('AMBIGUOUS');
+    expect(detection.correlations[0]?.evidence.join(' ')).toMatch(/observed BEFORE the creation/);
+    expect(detection.events.some((event) => event.type === 'ENTITY_CREATED')).toBe(false);
+  });
+
+  it('no creation in the recording: search → result → open is DISCOVERED_DURING_RECORDING (then update keeps it)', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.fill('Search', 'Company Test QA');
+    run.click('Search', {
+      network: [searchCompanies({ name: 'Company Test QA' }, [{ id: '123456', name: 'Company Test QA' }])],
+    });
+    run.click('Company Test QA', {
+      to: { url: '/companies/123456', hosts: [SHELL, 'company-detail'] },
+      network: [read('/api/companies/123456', { id: '123456' })],
+    });
+    run.fill('Address', '9 Other Street');
+    run.click('Save', { network: [put('/api/companies/123456')] });
+    const detection = run.detect();
+    expect(detection.correlations).toEqual([]);
+    const entity = detection.entities.find((candidate) => candidate.key === 'entity:company:123456');
+    expect(entity?.provenance.classification).toBe('DISCOVERED_DURING_RECORDING');
+    expect(detection.events.some((event) => /CREATE|RETRIEVED|CORRELATED/.test(event.type))).toBe(false);
+  });
+
+  it('"id" is not a role: an "id" shown to the user is a BUSINESS_KEY, an "id" only on the network stays technical', () => {
+    const { run } = journey({ results: [{ id: '123456', name: 'Company Test QA' }] });
+    const entity = run.build().entities.find((candidate) => candidate.key === 'entity:company:123456');
+    // Field "id", value never shown nor typed: only network and the screen URL → not a business key.
+    expect(entity?.identity).toMatchObject({ field: 'id', value: '123456' });
+    expect(entity?.identity.semanticRole).not.toBe('BUSINESS_KEY');
+    // The same "id" field, shown to the user (the clicked result shows it) → BUSINESS_KEY.
+    const shown = app({ url: '/', hosts: [SHELL] });
+    shown.fill('Search', 'Company Test QA');
+    shown.click('Search', {
+      network: [searchCompanies({ name: 'Company Test QA' }, [{ id: 'ABC123', name: 'Company Test QA' }])],
+    });
+    shown.click('Company ABC123', {
+      to: { url: '/companies/ABC123', hosts: [SHELL, 'company-detail'] },
+      network: [read('/api/companies/ABC123', { id: 'ABC123' })],
+    });
+    const key = shown
+      .build()
+      .entities.find((candidate) => candidate.key === 'entity:company:ABC123')?.identity;
+    expect(key).toMatchObject({ value: 'ABC123', semanticRole: 'BUSINESS_KEY' });
+    expect(key?.roleEvidence?.join(' ')).toMatch(/shown to the user/);
   });
 });

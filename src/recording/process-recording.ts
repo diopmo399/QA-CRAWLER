@@ -429,6 +429,7 @@ export function processRecording(
         steps: built.flow.steps,
         entities: detection.entities,
         entityEvidence: detection.evidence,
+        correlations: detection.correlations,
         ...(session.initialStateId ? { initialStateId: session.initialStateId } : {}),
         ...(options.digest ? { digest: options.digest } : {}),
       });

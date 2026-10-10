@@ -1,3 +1,5 @@
+import type { EntityCorrelation } from '../business/entity-correlation.js';
+import type { IdentityRole } from '../business/identity-role.js';
 import type { TechnicalIntent, TechnicalOperation } from '../business/entity-classifier.js';
 import type { StateCode } from '../../functional/model.js';
 import type { EntityClassification } from '../business/entity-classifier.js';
@@ -31,22 +33,26 @@ export interface InteractionEvidence {
 }
 
 /** Une identité possible, typée par sa FORME et le nom de son champ (des indices, jamais des règles). */
+/**
+ * La place STRUCTURELLE d'une identité (jamais déduite du nom de son champ) : l'identifiant de la
+ * task, celui de l'entité, une RÉFÉRENCE (la valeur est l'identité d'une autre entité observée), ou
+ * sa seule forme (UUID, ID numérique, CODE). Son SENS est dans semanticRole.
+ */
 export type IdentityType =
-  | 'TASK_ID'
-  | 'ENTITY_ID'
-  | 'ID'
-  | 'UUID'
-  | 'BUSINESS_KEY'
-  | 'REFERENCE'
-  | 'CODE'
-  | 'FOREIGN_ID'
-  | 'ROUTE_SEGMENT'
-  | 'DISPLAYED_VALUE';
+  'TASK_ID' | 'ENTITY_ID' | 'ID' | 'UUID' | 'REFERENCE' | 'CODE' | 'ROUTE_SEGMENT' | 'DISPLAYED_VALUE';
 
 export interface IdentityCandidate {
   type: IdentityType;
-  /** Le champ qui la portait (taskId, businessKey, (path)…) : un indice, jamais une règle. */
+  /** Le nom du champ qui la portait (id, taskId, (path)…) : gardé pour lecture, JAMAIS une règle. */
   field?: string;
+  /**
+   * Le RÔLE SÉMANTIQUE, déduit des preuves (montrée, saisie, réseau seul, identité d'une autre
+   * entité) et jamais du nom du champ : un « id » peut être une clé métier. Il évolue avec les preuves.
+   */
+  semanticRole?: IdentityRole;
+  roleConfidence?: number;
+  /** Les preuves du rôle, dans l'ordre du parcours. */
+  roleEvidence?: string[];
   /** Seulement si l'application l'a montrée et qu'elle a la forme d'un identifiant. */
   value?: string;
   digest?: string;
@@ -147,7 +153,9 @@ export type RelationshipType =
   | 'CORRELATES_WITH'
   | 'RESULTS_IN'
   | 'DERIVED_FROM'
-  | 'CREATE_RESULT';
+  | 'CREATE_RESULT'
+  /** Le résultat d'une recherche faite avec les données d'une création est la même entité. */
+  | 'SEARCH_MATCH';
 
 export interface Relationship {
   id: string;
@@ -271,6 +279,8 @@ export interface ApplicationInteractionModel {
   /** Ce qui est technique ou d'infrastructure : des observations, séparées du flow métier. */
   technicalContext: { items: TechnicalItem[] };
   relationships: Relationship[];
+  /** Les corrélations par données métier (CREATE → SEARCH → RESULT → OPEN), avec leurs preuves. */
+  correlations: EntityCorrelation[];
   businessActions: BusinessAction[];
   /** Chaque action enregistrée : enregistrée, validée, interprétée (trois états indépendants). */
   actions: ActionView[];

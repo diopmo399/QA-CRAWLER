@@ -326,6 +326,93 @@ inventée ; une authentification n'est jamais une création métier.
   TECHNICAL CONTEXT            (AUTHENTICATION / DISCOVERY / … → opération · intent technique)
   ```
 
+## Méthode HTTP ≠ intention, nom de champ ≠ rôle, identité découverte après coup
+
+**Principe** : le sens métier ne se déduit jamais d'un nom de champ, d'une méthode HTTP, d'une URL,
+d'un nom d'endpoint ni de la présence d'un « id ». Il se déduit de l'ensemble des observations :
+action de l'utilisateur, DOM, réseau, corps envoyés, réponses, contexte, valeurs (en empreintes),
+ordre dans le temps et navigation.
+
+### Une recherche par POST est une recherche (`queryEvidenceOf`)
+
+Un échange est une **requête** (recherche, liste par critères) quand les preuves convergent, quelle que
+soit sa méthode :
+
+- la réponse est une **collection**, même sans identifiant reconnaissable (`listSize`) ;
+- aucune **nouvelle identité** n'est servie (ni identifiant de réponse hors liste, ni `Location`) ;
+- des indices s'ajoutent : critères envoyés, conteneur de critères, pagination, tri, GET.
+
+Chaque décision garde ses raisons. « POST ⇒ CREATE » n'est jamais une règle.
+
+### Ce qui est capturé, toujours en empreintes salées (jamais la valeur)
+
+- `requestCriteria` : les valeurs envoyées (corps JSON d'une écriture, paramètres d'URL), avec le
+  chemin du champ (`filters.companyName`).
+- `ExchangeRecord.attributes` : toutes les valeurs simples de chaque enregistrement d'une réponse.
+
+Ne sont pas capturés : les clés sensibles, les codes d'état, les valeurs d'un caractère, les petits
+nombres (pagination). Le sel est le même que celui des saisies, ce qui permet de comparer une
+saisie, un corps envoyé et une réponse.
+
+### Le rôle d'une identité (`identity-role.ts`)
+
+Chaque candidat d'identité porte `value`, `field` (le nom du champ, gardé pour lecture),
+`semanticRole`, `roleConfidence` et `roleEvidence` (dans l'ordre du parcours : le rôle évolue).
+
+| Rôle           | Preuve                                                                | Confiance |
+| -------------- | --------------------------------------------------------------------- | --------- |
+| `REFERENCE`    | la valeur est l'identité d'une autre entité observée                  | 0,8       |
+| `BUSINESS_KEY` | l'utilisateur l'a saisie (0,75), ou l'application l'a affichée (0,65) |           |
+| `TECHNICAL_ID` | seulement dans le réseau (réponse, chemin d'API), jamais affichée     | 0,6       |
+| `EXTERNAL_ID`  | jamais supposé : aucune preuve automatique                            | —         |
+| `UNKNOWN`      | une URL d'écran seule, un nom de champ seul                           | 0,55      |
+
+Un champ `id` peut donc être une clé métier, et un `businessKey` un identifiant technique. La place
+(`type`) ne vient plus du nom non plus :
+
+- `TASK_ID` est la valeur affichée par l'élément cliqué ;
+- `REFERENCE` est l'identité d'une autre entité ;
+- sinon le type vient de la forme : `UUID`, `ID`, `CODE`.
+
+### EntityCorrelation : CREATE → SEARCH → RESULT → OPEN (`entity-correlation.ts`)
+
+Une entité créée peut être retrouvée par ses **données métier**, sans qu'aucun identifiant n'ait été
+visible ni renvoyé à la création :
+
+- la **création** porte des données : les saisies du formulaire et le corps envoyé ;
+- la **recherche** suivante envoie des critères ;
+- le **résultat** est l'enregistrement dont les attributs portent ces mêmes empreintes ;
+- l'**ouverture** est une lecture ou une route qui porte son identité.
+
+Poids fixes (`CORRELATION_WEIGHTS`) :
+
+- une donnée commune : 0,5 ; deux : 0,65 ; trois ou plus : 0,78 ;
+- recherche faite avec les données de la création : +0,1 ; résultat unique : +0,05 ; résultat
+  ouvert : +0,05 ;
+- même identifiant que celui servi à la création : 0,95.
+
+Statuts : `CONFIRMED` ≥ 0,85, `PROBABLE` ≥ 0,6, sinon `UNCERTAIN`.
+
+- **Homonymes** : quand plusieurs résultats portent autant de données, la corrélation est
+  `AMBIGUOUS` et aucun n'est choisi. Quand une donnée de plus (l'adresse) départage, le résultat qui
+  porte le plus de données est retenu et les autres sont nommés homonymes dans les preuves.
+- **Déjà vu avant la création** : un homonyme existant possible, donc `AMBIGUOUS`.
+- **Identité découverte après coup** : l'identité du résultat (`id = 123456`) est rattachée à la
+  création par les preuves `CORRELATED_CREATION` et `SEARCH_RESULT`.
+- **Provenance R10** : « créée, puis retrouvée par ses données métier » donne
+  `CREATED_DURING_RECORDING`, même sans identifiant à la création. Sans création dans
+  l'enregistrement, une recherche suivie d'une ouverture reste `DISCOVERED_DURING_RECORDING`.
+- **Cycle de vie** `CREATE → RETRIEVE → OPEN`. Événements : `ENTITY_CREATED` →
+  `ENTITY_RETRIEVED` → `ENTITY_CORRELATED` → `ENTITY_OPENED`. Relation `SEARCH_MATCH`. Le tout est
+  écrit dans `correlations` (`application-model.json`, `business-flow.json`).
+
+**Limites** :
+
+- la comparaison est exacte, valeur rognée et sensible à la casse ;
+- un terme partiel (« ABC » pour « Société ABC ») ne se corrèle pas à la création : la recherche
+  reste une recherche et l'ouverture du résultat garde sa provenance `DISCOVERED` ;
+- un corps envoyé qui n'est pas du JSON (formulaire encodé) n'est pas lu.
+
 ## Limites connues
 
 - Les **actions à l'intérieur d'une iframe** ne sont pas encore enregistrées (le script de capture

@@ -14,6 +14,8 @@ const ACTION_OF: Record<BusinessEvent['type'], BusinessFlowStep['action']> = {
   // Jamais une étape : une création possible reste dans les incertains (son statut est UNKNOWN).
   POSSIBLE_CREATE: 'create',
   ENTITY_SEARCHED: 'search',
+  ENTITY_RETRIEVED: 'retrieve',
+  ENTITY_CORRELATED: 'correlate',
   ENTITY_OPENED: 'open',
   ENTITY_UPDATED: 'update',
   ENTITY_SAVED: 'save',
@@ -134,6 +136,7 @@ export function buildBusinessFlow(name: string, detection: BusinessDetection): B
     entities,
     steps,
     relations: detection.relations,
+    correlations: detection.correlations,
     unresolved,
     summary: {
       events: detection.events.length,

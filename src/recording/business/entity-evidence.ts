@@ -96,7 +96,14 @@ export type EntityEvidenceType =
   | 'EDIT_INPUT'
   /** « Enregistrer » pendant que l'entité est affichée (sans réseau, c'est la seule preuve). */
   | 'SAVE_ACTION'
-  | 'DELETE_ACTION';
+  | 'DELETE_ACTION'
+  /**
+   * EntityCorrelation : l'entité créée par cette action est RETROUVÉE plus loin par ses données
+   * métier ; son identité (découverte dans le résultat) lui est rattachée après coup.
+   */
+  | 'CORRELATED_CREATION'
+  /** EntityCorrelation : la recherche (critères + geste) qui retrouve l'entité par ses données métier. */
+  | 'SEARCH_RESULT';
 
 export interface EntityEvidence {
   id: string;
@@ -120,6 +127,9 @@ export interface EntityEvidence {
     route?: string;
     /** USER_INPUT : la saisie se fait dans un contexte de recherche. */
     search?: boolean;
+    /** CORRELATED_CREATION / SEARCH_RESULT : la corrélation (c1…) et sa confiance. */
+    correlation?: string;
+    confidence?: number;
   };
   description: string;
 }

@@ -9,6 +9,7 @@ import {
   routePattern,
   sameValue,
 } from '../business/signals.js';
+import { ROLE_WEIGHTS } from '../business/identity-role.js';
 import type { CollectionRecord, IdentityCandidate, IdentityType, WorkCollection } from './model.js';
 
 /**
@@ -20,43 +21,34 @@ import type { CollectionRecord, IdentityCandidate, IdentityType, WorkCollection 
  */
 
 /** Le type d'une identité, d'après son champ (indice) et sa forme. */
-export function identityTypeOf(
-  field: string | undefined,
-  value: string | undefined,
-  primary: boolean,
-): IdentityType {
-  const name = (field ?? '').split('.').at(-1) ?? '';
+/**
+ * La FORME d'une identité (uuid, nombre, code) et sa place (principale) : jamais le nom du champ —
+ * « id », « …Key » ou « …Ref » ne disent rien de son rôle (voir identity-role.ts).
+ */
+export function identityTypeOf(value: string | undefined, primary: boolean): IdentityType {
   if (value !== undefined && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
     return 'UUID';
   if (primary) return 'ID';
-  if (/(key|code)$/i.test(name)) return 'BUSINESS_KEY';
-  if (/(ref|reference|number|numero|no)$/i.test(name)) return 'REFERENCE';
-  if (/[a-z](Id|ID|_id)$/.test(name)) return 'FOREIGN_ID';
   if (value !== undefined && /^\d+$/.test(value)) return 'ID';
   return 'CODE';
 }
 
-/** L'identifiant principal d'un enregistrement : un champ « id » d'abord, sinon le premier. */
-function primaryIndex(identifiers: readonly ExchangeIdentifier[]): number {
-  const own = identifiers.findIndex((id) => /^(id|uuid|guid)$/i.test(id.field.split('.').at(-1) ?? ''));
-  if (own >= 0) return own;
-  const suffixed = identifiers.findIndex((id) => /[a-z](Id|ID|Uuid)$/.test(id.field.split('.').at(-1) ?? ''));
-  return suffixed >= 0 ? suffixed : 0;
-}
-
+/**
+ * Les identités d'un enregistrement, dans l'ordre de la réponse. Le rôle de chacune est INCONNU
+ * tant que le parcours ne dit rien d'elle (montrée, saisie, identité d'une autre entité…).
+ */
 export function candidatesOf(identifiers: readonly ExchangeIdentifier[]): IdentityCandidate[] {
-  const primary = primaryIndex(identifiers);
-  const candidates = identifiers.map((id, index) => ({
-    type: identityTypeOf(id.field, id.value, index === primary),
+  return identifiers.map((id, index) => ({
+    type: identityTypeOf(id.value, index === 0),
     field: id.field,
     ...(id.value !== undefined ? { value: id.value } : {}),
     digest: id.digest,
     source: id.source === 'path' ? ('NETWORK_PATH' as const) : ('NETWORK_RESPONSE' as const),
     confidence: id.value !== undefined ? 0.9 : 0.8,
+    semanticRole: 'UNKNOWN' as const,
+    roleConfidence: ROLE_WEIGHTS.unknown,
+    roleEvidence: [`field "${id.field}" in a response: a field name is never a role`],
   }));
-  // Le principal d'abord.
-  const [head] = candidates.splice(primary, 1);
-  return head ? [head, ...candidates] : candidates;
 }
 
 /** Les collections lues pendant le parcours (lectures réussies qui servent des enregistrements identifiables). */
@@ -71,11 +63,14 @@ export function observeCollections(
       if (!exchange.records?.length || (exchange.method !== 'GET' && !isListRead(exchange))) continue;
       if (exchange.status === undefined || exchange.status >= 400) continue;
       const key = `collection:${exchange.method} ${routePattern(exchange.path, 6)}`;
-      const records: CollectionRecord[] = exchange.records.map((record) => ({
-        index: record.index,
-        identityCandidates: candidatesOf(record.identifiers),
-        ...(record.state ? { state: record.state } : {}),
-      }));
+      // Un enregistrement sans identifiant (seulement des attributs) ne se sélectionne pas comme une task.
+      const records: CollectionRecord[] = exchange.records
+        .filter((record) => record.identifiers.length > 0)
+        .map((record) => ({
+          index: record.index,
+          identityCandidates: candidatesOf(record.identifiers),
+          ...(record.state ? { state: record.state } : {}),
+        }));
       const previous = actions[index - 1];
       const search =
         SEARCH_LABEL.test(labelOf(action)) ||

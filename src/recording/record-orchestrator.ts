@@ -632,6 +632,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
             steps: result.flow.steps,
             entities: detection.entities,
             entityEvidence: detection.evidence,
+            correlations: detection.correlations,
             ...(result.session.initialStateId ? { initialStateId: result.session.initialStateId } : {}),
             digest: (value) => recorder.digest(value),
           });

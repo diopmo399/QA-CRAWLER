@@ -1119,6 +1119,13 @@ clic, une nouvelle URL, un élément inconnu, une première observation ou une r
 suffisent pas. Seule une entité classée `BUSINESS_ENTITY` porte des événements métier ; une
 observation `UNKNOWN` reste une observation.
 
+**Retrouvée par ses données métier** : une création dont aucun identifiant n'a été visible ni
+renvoyé est prouvée quand une recherche faite avec les données saisies à la création rend un
+résultat qui les porte (EntityCorrelation, règle R10). L'identité du résultat est alors découverte
+après coup, et l'on obtient `ENTITY_CREATED` → `ENTITY_RETRIEVED` → `ENTITY_CORRELATED` →
+`ENTITY_OPENED` sur la même entité. Des homonymes non départagés donnent `AMBIGUOUS`. Voir
+`docs/APPLICATION_INTERACTION_MODEL.md`.
+
 **Mémoire des entités** : une création retenue produit une référence runtime
 (`$created.demande.id`, puis `.id2`…). Une saisie plus loin dont l'empreinte salée (ou la valeur)
 est celle de cet identifiant devient une **recherche** de l'entité (`SEARCH_REFERENCE`) ; le clic

@@ -1,6 +1,8 @@
 import { isBusinessCandidate, technicalCategoryOf } from '../business/entity-classifier.js';
+import type { EntityCorrelation } from '../business/entity-correlation.js';
 import type { EntityEvidence } from '../business/entity-evidence.js';
 import type { LifecycleKind, TrackedEntity } from '../business/entity-tracker.js';
+import { assessRole, roleSignalsOf, type RoleAssessment } from '../business/identity-role.js';
 import { collectionOf, identityInPath, round, routePattern, sameValue } from '../business/signals.js';
 import type { RawRecordedEvent, RecordedFlowStep, RecordedState, SemanticRecordedAction } from '../model.js';
 import { identityTypeOf, observeCollections, selectedRecord, shownValuesOf } from './collection-observer.js';
@@ -52,11 +54,14 @@ export interface ApplicationModelInput {
   digest?: (value: string) => string;
   /** Des relations incertaines tranchées (IA facultative) : `${source}|${type}` → cible candidate. */
   relationshipDecisions?: ReadonlyMap<string, string>;
+  /** Les corrélations par données métier (business/entity-correlation.ts). */
+  correlations?: readonly EntityCorrelation[];
 }
 
 const LIFECYCLE_ACTION: Partial<Record<LifecycleKind, BusinessActionKind>> = {
   CREATE: 'CREATE',
   SEARCH: 'SEARCH',
+  RETRIEVE: 'RETRIEVE',
   OPEN: 'OPEN',
   UPDATE: 'UPDATE',
   SAVE: 'SAVE',
@@ -324,8 +329,10 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     confidence: number,
     reason: string,
     evidenceIds: string[],
+    shown: readonly string[] = [],
+    actionId?: string,
   ): Task => {
-    const candidates = record.identityCandidates.map((candidate, index) =>
+    const candidates = withRoles(record.identityCandidates, shown, actionId).map((candidate, index) =>
       index === 0 ? { ...candidate, type: 'TASK_ID' as const } : candidate,
     );
     const primary = candidates[0] ?? { type: 'TASK_ID' as const, source: 'DOM' as const, confidence: 0 };
@@ -381,9 +388,65 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       });
     return task;
   };
+  /**
+   * LE RÔLE des identités d'un enregistrement, par preuves (jamais par le nom du champ) : la valeur
+   * est l'identité d'une autre entité observée → REFERENCE ; montrée dans l'élément cliqué → une clé
+   * que l'humain connaît ; sinon réseau seul. Le principal est la valeur montrée qui n'est pas une
+   * référence (sinon la première qui n'en est pas une).
+   */
+  const withRoles = (
+    candidates: readonly IdentityCandidate[],
+    shown: readonly string[],
+    actionId?: string,
+  ): IdentityCandidate[] => {
+    const assessed = candidates.map((candidate) => {
+      const references = entitiesMatching(candidate).filter(substantial);
+      const visible = shown.some(
+        (value) =>
+          (candidate.value !== undefined && sameValue(candidate.value, value)) ||
+          (input.digest !== undefined &&
+            candidate.digest !== undefined &&
+            input.digest(value) === candidate.digest),
+      );
+      const at = actionId ? { actionId } : {};
+      const role = assessRole({
+        network: [{ ...at, where: `field "${candidate.field ?? '?'}" of a record read on the network` }],
+        ...(visible ? { shown: [{ ...at, where: 'shown by the clicked element' }] } : {}),
+        ...(references.length
+          ? {
+              references: [
+                { ...at, where: `the identity of ${references.map((entity) => entity.key).join(', ')}` },
+              ],
+            }
+          : {}),
+      });
+      return {
+        candidate: {
+          ...candidate,
+          ...(references.length ? { type: 'REFERENCE' as const } : {}),
+          ...roleFields(role),
+        },
+        visible,
+        reference: references.length > 0,
+      };
+    });
+    const primary =
+      assessed.findIndex((entry) => entry.visible && !entry.reference) >= 0
+        ? assessed.findIndex((entry) => entry.visible && !entry.reference)
+        : Math.max(
+            0,
+            assessed.findIndex((entry) => !entry.reference),
+          );
+    const [head] = assessed.splice(primary, 1);
+    return [...(head ? [head] : []), ...assessed].map((entry, index) =>
+      index === 0 && entry.candidate.type === 'REFERENCE'
+        ? { ...entry.candidate, type: identityTypeOf(entry.candidate.value, true) }
+        : entry.candidate,
+    );
+  };
   /** La task RÉFÉRENCE une entité par la valeur d'un de ses champs (le nom du champ n'importe pas). */
-  const referencesOf = (task: Task, record: CollectionRecord, evidenceIds: string[]): void => {
-    for (const candidate of record.identityCandidates.slice(1)) {
+  const referencesOf = (task: Task, evidenceIds: string[]): void => {
+    for (const candidate of task.identityCandidates.slice(1)) {
       const matches = entitiesMatching(candidate).filter((entity) => !isTaskShadow(entity));
       if (matches.length === 0) continue;
       const numeric = candidate.value !== undefined && /^\d+$/.test(candidate.value);
@@ -478,11 +541,13 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       const record: CollectionRecord = {
         index: collection.records.length,
         identityCandidates: shown.map((value, position) => ({
-          type: position === 0 ? 'ID' : identityTypeOf(undefined, value, false),
+          type: position === 0 ? 'ID' : identityTypeOf(value, false),
           value,
           ...(input.digest ? { digest: input.digest(value) } : {}),
           source: 'DOM' as const,
           confidence: 0.6,
+          // Montrée à l'utilisateur dans la ligne cliquée : une clé qu'il connaît.
+          ...roleFields(assessRole({ shown: [{ actionId: action.id, where: 'the clicked row shows it' }] })),
         })),
       };
       collection.records.push(record);
@@ -519,6 +584,8 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       confidence,
       `selected by the user in ${workspace.key.replace(/^workspace:/, '')}; it opened ${switched.to.name}`,
       evidenceIds,
+      shown,
+      action.id,
     );
     task.selectedBy.push(action.id);
     selections.push({ index, task, to: switched.to });
@@ -553,7 +620,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       reason: task.reason,
       evidenceIds,
     });
-    referencesOf(task, record, evidenceIds);
+    referencesOf(task, evidenceIds);
   }
 
   // FILTER : des critères saisis DANS l'espace de travail, puis la même liste relue (quelle que soit
@@ -669,11 +736,14 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
             ? 'OPENED_BY'
             : kind === 'SEARCH'
               ? 'SEARCHED_BY'
-              : 'UPDATED_BY';
+              : kind === 'RETRIEVE'
+                ? 'RETRIEVED_BY'
+                : 'UPDATED_BY';
+      const byAction = kind === 'SEARCH' || kind === 'RETRIEVE';
       relations.add({
         type: relationType,
         source: entity.key,
-        target: kind === 'SEARCH' ? `action:${step.actionIds[0] ?? ''}` : context.key,
+        target: byAction ? `action:${step.actionIds.at(-1) ?? ''}` : context.key,
         confidence: 0.85,
         reason: `${kind.toLowerCase()} happened in ${context.name}`,
         evidenceIds,
@@ -762,7 +832,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
           evidenceIds,
           actionIds: [observation.actionId],
         });
-        referencesOf(task, record, [observation.evidenceId]);
+        referencesOf(task, [observation.evidenceId]);
         const action = actions[observation.actionIndex];
         businessActions.push({
           kind: 'RETRIEVE',
@@ -778,6 +848,39 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       }
     }
   }
+  // SEARCH_MATCH : le résultat d'une recherche faite avec les données d'une création est la même
+  // entité (EntityCorrelation) — ou des homonymes, laissés incertains avec leurs candidats.
+  for (const correlation of input.correlations ?? []) {
+    const evidenceId = addEvidence({
+      source: 'NETWORK',
+      description: `${correlation.id} ${correlation.status} ${String(correlation.confidence)}: ${correlation.evidence.join(' · ')}`,
+      actionIds: [
+        correlation.creation.actionId,
+        ...correlation.query.actionIds,
+        ...(correlation.open ? [correlation.open.actionId] : []),
+      ],
+      rawEventIds: [],
+      stateIds: [],
+    });
+    const entity = keptEntities.find((candidate) =>
+      (input.entityEvidence ?? []).some(
+        (entry) => entry.details.correlation === correlation.id && candidate.evidenceIds.includes(entry.id),
+      ),
+    );
+    relations.add({
+      type: 'SEARCH_MATCH',
+      source: entity?.key ?? `creation:${correlation.creation.actionId}`,
+      target: `action:${correlation.query.actionId}`,
+      confidence: correlation.confidence,
+      reason: `the search ${correlation.query.api} was made with the creation data (${correlation.matched.map((entry) => `"${entry.label}"`).join(', ') || 'a single result'}): ${correlation.status === 'AMBIGUOUS' ? 'several results (homonyms) or a result seen before the creation — none chosen' : `result #${String(correlation.result?.index ?? '?')}${correlation.result?.identifiers[0]?.value ? ` (identity ${correlation.result.identifiers[0].value}, discovered here)` : ''}`}`,
+      evidenceIds: [evidenceId],
+      actionIds: [correlation.query.actionId],
+      ...(correlation.candidates
+        ? { candidates: correlation.candidates.map((index) => `result #${String(index)}`) }
+        : {}),
+    });
+  }
+
   // Une même valeur dans deux entités distinctes (deux portées) : une corrélation, jamais une fusion.
   for (const [position, a] of keptEntities.entries())
     for (const b of keptEntities.slice(position + 1)) {
@@ -818,8 +921,15 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     const own = allRelations.filter(
       (relation) => relation.source === entity.key || relation.target === entity.key,
     );
-    const identityOf = (identity: TrackedEntity['identity']): IdentityCandidate => ({
-      type: entityIdentityType(identity),
+    const identityOf = (identity: TrackedEntity['identity'], main: boolean): IdentityCandidate => ({
+      type:
+        identity.value !== undefined && /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(identity.value)
+          ? 'UUID'
+          : main
+            ? 'ENTITY_ID'
+            : identityTypeOf(identity.value, false),
+      // Le RÔLE vient des preuves (montrée, saisie, réseau seul), jamais du nom du champ.
+      ...roleFields(assessRole(roleSignalsOf(identity, [...entityEvidence.values()]))),
       evidenceIds: entity.evidenceIds
         .filter((id) => {
           const carried = entityEvidence.get(id)?.identity;
@@ -856,8 +966,10 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     return {
       key: entity.key,
       type: entity.type,
-      identity: identityOf(entity.identity),
-      identityCandidates: [entity.identity, ...entity.aliases].map(identityOf),
+      identity: identityOf(entity.identity, true),
+      identityCandidates: [entity.identity, ...entity.aliases].map((identity, index) =>
+        identityOf(identity, index === 0),
+      ),
       classification: {
         classification: entity.classification.classification,
         confidence: entity.classification.confidence,
@@ -1051,6 +1163,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     },
     technicalContext: { items: [...technical.values()] },
     relationships: [...allRelations],
+    correlations: [...(input.correlations ?? [])],
     businessActions: ordered,
     actions: actionViews,
     evidence,
@@ -1123,18 +1236,15 @@ function withBff(
 }
 
 /** Le type d'une identité d'entité : un id technique (ENTITY_ID), une clé métier, une référence… */
-function entityIdentityType(identity: TrackedEntity['identity']): IdentityCandidate['type'] {
-  const type = identityTypeOf(identity.field, identity.value, false);
-  if (type === 'ID' || (identity.field !== undefined && /^(data\.)?(id|uuid)$/i.test(identity.field)))
-    return 'ENTITY_ID';
-  if (
-    type === 'CODE' &&
-    identity.value !== undefined &&
-    /[A-Za-z]/.test(identity.value) &&
-    /\d/.test(identity.value)
-  )
-    return identity.field ? 'BUSINESS_KEY' : 'CODE';
-  return type;
+/** Les champs de rôle d'une identité (voir identity-role.ts). */
+function roleFields(
+  role: RoleAssessment,
+): Pick<IdentityCandidate, 'semanticRole' | 'roleConfidence' | 'roleEvidence'> {
+  return {
+    semanticRole: role.semanticRole,
+    roleConfidence: role.confidence,
+    roleEvidence: role.evidence.slice(0, 8),
+  };
 }
 
 function originOf(url: string): string | undefined {

@@ -46,18 +46,67 @@ function isCodeLike(value: string): boolean {
 }
 
 /**
- * Une LECTURE faite par une écriture HTTP (POST de recherche, liste servie par un BFF) : la réponse
- * est une liste d'enregistrements et ne désigne aucun objet créé. GET = lecture, POST = création ne
- * sont que des indices : c'est la réponse qui tranche.
+ * L'INTENTION SÉMANTIQUE d'un échange, indépendante de la méthode HTTP : une REQUÊTE (recherche,
+ * liste par critères) se reconnaît à des preuves qui convergent — jamais à « POST ⇒ création » ni à un
+ * nom d'URL :
+ *   - la réponse est une COLLECTION (une liste, même sans identifiant reconnaissable) ;
+ *   - aucune NOUVELLE identité n'est servie (ni identifiant de réponse hors liste, ni Location) ;
+ *   - des critères envoyés, une pagination, un tri (indices) ; un GET (indice).
  */
-export function isListRead(exchange: {
+export interface QueryAssessment {
+  query: boolean;
+  confidence: number;
+  reasons: string[];
+}
+
+export function queryEvidenceOf(exchange: {
+  method?: string;
+  status?: number;
   records?: readonly unknown[];
   identifiers?: readonly { source: string }[];
-}): boolean {
-  return (
-    (exchange.records?.length ?? 0) > 0 &&
-    !(exchange.identifiers ?? []).some((id) => id.source === 'response' || id.source === 'location')
+  listSize?: number;
+  requestCriteria?: readonly unknown[];
+  requestHints?: { pagination?: boolean; sorting?: boolean; criteria?: boolean };
+}): QueryAssessment {
+  const reasons: string[] = [];
+  const created = (exchange.identifiers ?? []).some(
+    (id) => id.source === 'response' || id.source === 'location',
   );
+  const collection = exchange.listSize !== undefined || (exchange.records?.length ?? 0) > 1;
+  if (created) reasons.push('a new identity is served (response identifier or Location): not a query');
+  if (!collection) reasons.push('the response is not a collection');
+  if (created || !collection || (exchange.status !== undefined && exchange.status >= 400))
+    return { query: false, confidence: 0, reasons };
+  let confidence = 0.5;
+  reasons.push(
+    `the response is a collection (${String(exchange.listSize ?? exchange.records?.length ?? 0)} item(s)), no new identity`,
+  );
+  if ((exchange.requestCriteria?.length ?? 0) > 0) {
+    confidence += 0.1;
+    reasons.push(`${String(exchange.requestCriteria?.length ?? 0)} criterion value(s) sent`);
+  }
+  if (exchange.requestHints?.criteria) {
+    confidence += 0.1;
+    reasons.push('a criteria container in the request');
+  }
+  if (exchange.requestHints?.pagination) {
+    confidence += 0.1;
+    reasons.push('pagination in the request');
+  }
+  if (exchange.requestHints?.sorting) {
+    confidence += 0.05;
+    reasons.push('sorting in the request');
+  }
+  if (exchange.method === 'GET') {
+    confidence += 0.2;
+    reasons.push('a GET (a hint only)');
+  }
+  return { query: true, confidence: round(Math.min(0.99, confidence)), reasons };
+}
+
+/** Une LECTURE (recherche, liste), quelle que soit la méthode : voir queryEvidenceOf. */
+export function isListRead(exchange: Parameters<typeof queryEvidenceOf>[0]): boolean {
+  return queryEvidenceOf(exchange).query;
 }
 
 /**
@@ -155,6 +204,8 @@ export function hasPathId(path: string): boolean {
 export function singular(word: string): string {
   const lower = word.toLowerCase();
   if (/(ss|us)$/.test(lower)) return lower;
+  // companies → company, entities → entity (jamais series, species…).
+  if (/[^aeiou]ies$/.test(lower) && lower.length > 4) return `${lower.slice(0, -3)}y`;
   if (/[^s]s$/.test(lower) || (/x$/.test(lower) && lower.length > 4)) return lower.slice(0, -1);
   return lower;
 }

@@ -73,9 +73,13 @@ const GESTURES: ReadonlySet<EntityEvidenceType> = new Set([
   'DELETE_ACTION',
   'CREATE_ACTION',
   'SEARCH_ACTION',
+  // La recherche par données métier qui retrouve l'entité : un geste de l'utilisateur.
+  'SEARCH_RESULT',
 ]);
 const WRITES: ReadonlySet<EntityEvidenceType> = new Set([
   'NEW_ENTITY_ID',
+  // Créée (écriture acceptée), puis retrouvée par ses données : une écriture métier.
+  'CORRELATED_CREATION',
   'WRITE_REQUEST',
   'UPDATE_REQUEST',
   'DELETE_REQUEST',

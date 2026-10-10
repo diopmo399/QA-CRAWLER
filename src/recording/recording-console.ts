@@ -566,9 +566,23 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
       ...(via ? { status: via.status, confidence: via.confidence } : {}),
       evidence: evidenceText(via?.evidenceIds ?? []),
       recorded: [],
-      children: model.businessActions
-        .filter((action) => action.subject === key && action.kind !== 'SWITCH_CONTEXT')
-        .map(actionNode),
+      children: [
+        ...model.businessActions
+          .filter((action) => action.subject === key && action.kind !== 'SWITCH_CONTEXT')
+          .map(actionNode),
+        // Retrouvée par ses données métier (EntityCorrelation) : la preuve, et l'identité découverte.
+        ...model.relationships
+          .filter((relation) => relation.type === 'SEARCH_MATCH' && relation.source === key)
+          .map((relation) => ({
+            label: 'SEARCH_MATCH',
+            detail: relation.reason,
+            status: relation.status,
+            confidence: relation.confidence,
+            evidence: evidenceText(relation.evidenceIds),
+            recorded: recorded(relation.actionIds),
+            children: [],
+          })),
+      ],
     };
   };
   const placed = new Set<string>();

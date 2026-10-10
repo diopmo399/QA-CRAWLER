@@ -189,7 +189,12 @@ safety:
     const model = sessions.updated?.model;
     expect(subsequence(kinds(sessions.updated), ['SELECT_TASK', 'OPEN', 'UPDATE', 'SAVE'])).toBe(true);
     const task = model?.tasks.find((entry) => entry.primary.value === '457');
-    expect(task?.identityCandidates.map((candidate) => candidate.type)).toEqual(['TASK_ID', 'BUSINESS_KEY']);
+    // Place et rôle par PREUVES, jamais par le nom du champ : ABC777 est l'identité d'une autre entité.
+    expect(task?.identityCandidates.map((candidate) => candidate.type)).toEqual(['TASK_ID', 'REFERENCE']);
+    expect(task?.identityCandidates.map((candidate) => candidate.semanticRole)).toEqual([
+      'BUSINESS_KEY',
+      'REFERENCE',
+    ]);
     expect(model?.relationships).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: 'REFERENCES', source: task?.key, target: 'entity:item:ABC777' }),

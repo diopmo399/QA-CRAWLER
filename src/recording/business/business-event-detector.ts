@@ -1,6 +1,7 @@
 import type { ExchangeIdentifier, FunctionalExchange } from '../../functional/model.js';
 import type { RawRecordedEvent, RecordedFlowStep, RecordedState, SemanticRecordedAction } from '../model.js';
 import { entityOf } from '../recorded-test-data.js';
+import type { EntityCorrelation } from './entity-correlation.js';
 import type { EntityEvidence } from './entity-evidence.js';
 import { isBusinessCandidate, technicalCategoryOf, type EntityClassification } from './entity-classifier.js';
 import { EntityMemory } from './entity-memory.js';
@@ -36,6 +37,9 @@ import {
  * contexte des actions précédentes sont pesés ensemble. Rien n'est inventé : une entité qu'aucun
  * indice ne départage reste AMBIGUOUS, une hypothèse faible reste UNKNOWN.
  */
+
+/** Le poids d'une création RETROUVÉE par ses données métier (EntityCorrelation, R10). */
+const RETRIEVED_BY_DATA = 0.25;
 
 /** Les gestes qui soumettent (une création exige un geste de l'utilisateur, jamais une saisie seule). */
 const SUBMITTING: ReadonlySet<SemanticRecordedAction['type']> = new Set(['CLICK', 'SUBMIT', 'CONFIRM']);
@@ -74,6 +78,8 @@ export interface BusinessDetection {
   entities: TrackedEntity[];
   /** Les preuves structurées d'où elles viennent (EvidenceCollector). */
   evidence: EntityEvidence[];
+  /** Les corrélations par données métier (CREATE → SEARCH → RESULT → OPEN). */
+  correlations: EntityCorrelation[];
 }
 
 const ENTITY_VERB =
@@ -210,11 +216,9 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
       }
       evidence.context.push(...decision.evidence);
       confidence = Math.min(0.99, round(confidence));
-      const status = decision.entity
-        ? statusOf(confidence)
-        : decision.candidates.length > 1
-          ? 'AMBIGUOUS'
-          : 'UNKNOWN';
+      const statusFor = (value: number): BusinessEvent['status'] =>
+        decision.entity ? statusOf(value) : decision.candidates.length > 1 ? 'AMBIGUOUS' : 'UNKNOWN';
+      let status = statusFor(confidence);
       // L'ACTION MÉTIER regroupe le formulaire : depuis le dernier événement métier jusqu'au clic.
       const group = actions
         .slice(Math.max(boundary + 1, index - 14), index + 1)
@@ -250,6 +254,13 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
           `provenance: ${tracked.provenance.classification} (${tracked.provenance.reason})`,
           ...(tracked.provenance.contradictions ?? []),
         );
+      // RETROUVÉE PAR SES DONNÉES MÉTIER après la création (EntityCorrelation, règle R10) : une preuve
+      // qui converge, même quand aucun identifiant n'était visible ni servi à la création.
+      if (tracked?.provenance.rules.some((rule) => rule.startsWith('R10'))) {
+        confidence = Math.min(0.99, round(confidence + RETRIEVED_BY_DATA));
+        status = statusFor(confidence);
+        evidence.context.push('retrieved by its business data after the creation (EntityCorrelation, R10)');
+      }
       const technicalClass = tracked?.classification;
       const technical = technicalClass !== undefined && !isBusinessCandidate(technicalClass.classification);
       if (technical)
@@ -564,6 +575,7 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
   const covered = new Set(events.flatMap((event) => event.actionIds));
   const TYPE_OF: Partial<Record<LifecycleKind, BusinessEventType>> = {
     SEARCH: 'ENTITY_SEARCHED',
+    RETRIEVE: 'ENTITY_RETRIEVED',
     OPEN: 'ENTITY_OPENED',
     UPDATE: 'ENTITY_UPDATED',
     SAVE: 'ENTITY_SAVED',
@@ -609,6 +621,38 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
     }
   }
 
+  // ---------------------------------------------------------------- les corrélations par données métier
+  // Le résultat d'une recherche faite avec les données d'une création : la même entité (ou des
+  // homonymes, AMBIGUOUS). Placé à la recherche, entre RETRIEVE et OPEN ; jamais sans preuves.
+  for (const correlation of tracking.correlations) {
+    const entity = tracking.entities.find((candidate) =>
+      tracking.evidence.some(
+        (entry) => entry.details.correlation === correlation.id && candidate.evidenceIds.includes(entry.id),
+      ),
+    );
+    if (entity && entity.classification.classification !== 'BUSINESS_ENTITY') continue;
+    const evidence = emptyEvidence();
+    evidence.network.push(correlation.creation.api, correlation.query.api);
+    evidence.context.push(...correlation.evidence);
+    const name = entity && entity.type !== 'unknown' ? entity.type : undefined;
+    push({
+      type: 'ENTITY_CORRELATED',
+      ...(name ? { entity: name } : {}),
+      ...(entity ? { entityKey: entity.key, provenance: entity.provenance.classification } : {}),
+      correlation: correlation.id,
+      status:
+        correlation.status === 'CONFIRMED' ||
+        correlation.status === 'PROBABLE' ||
+        correlation.status === 'AMBIGUOUS'
+          ? correlation.status
+          : 'UNKNOWN',
+      confidence: correlation.confidence,
+      actionIds: [correlation.query.actionId],
+      rawEventIds: actions.find((entry) => entry.id === correlation.query.actionId)?.rawEventIds ?? [],
+      evidence,
+    });
+  }
+
   // L'ordre du parcours (les événements ajoutés après coup reprennent leur place), ids renumérotés.
   const position = new Map(actions.map((entry, index) => [entry.id, index]));
   const firstOf = (event: BusinessEvent): number =>
@@ -621,7 +665,14 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
     relation.to = renamed.get(relation.to) ?? relation.to;
   }
   for (const record of memory.all) record.eventId = renamed.get(record.eventId) ?? record.eventId;
-  return { events, relations, memory, entities: tracking.entities, evidence: tracking.evidence };
+  return {
+    events,
+    relations,
+    memory,
+    entities: tracking.entities,
+    evidence: tracking.evidence,
+    correlations: tracking.correlations,
+  };
 }
 
 /** L'entité : celle de l'API, confirmée par l'écran ; deux indices qui se contredisent → AMBIGUOUS. */

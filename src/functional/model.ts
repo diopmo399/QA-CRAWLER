@@ -386,6 +386,24 @@ export interface FunctionalExchange {
    * leurs identifiants. Jamais un corps, jamais une valeur libre.
    */
   records?: ExchangeRecord[];
+  /**
+   * La réponse est une LISTE (taille) : même quand ses éléments ne portent aucun identifiant
+   * reconnaissable, c'est une collection servie (une recherche, une liste).
+   */
+  listSize?: number;
+  /**
+   * Les CRITÈRES envoyés (corps JSON d'une écriture HTTP, paramètres d'URL) : seulement le chemin du
+   * champ et l'empreinte salée de sa valeur — comparables à une saisie, jamais la valeur.
+   */
+  requestCriteria?: ValueDigest[];
+  /** Des indices de STRUCTURE de la requête (pagination, tri, conteneur de critères) : des indices, pas des règles. */
+  requestHints?: { pagination?: boolean; sorting?: boolean; criteria?: boolean };
+}
+
+/** Une valeur réduite à son empreinte salée, avec le chemin du champ qui la portait (filters.name…). */
+export interface ValueDigest {
+  field: string;
+  digest: string;
 }
 
 export interface ExchangeRecord {
@@ -394,6 +412,11 @@ export interface ExchangeRecord {
   /** La propriété qui portait la liste (items, data…), si elle était enveloppée. */
   container?: string;
   identifiers: ExchangeIdentifier[];
+  /**
+   * Les ATTRIBUTS de l'enregistrement (toutes ses valeurs simples, en empreintes salées) : de quoi
+   * le corréler à des données saisies ailleurs (un nom, une adresse), sans jamais garder la valeur.
+   */
+  attributes?: ValueDigest[];
   state?: StateCode;
 }
 

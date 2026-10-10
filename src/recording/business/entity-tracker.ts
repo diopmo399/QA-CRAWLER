@@ -6,6 +6,7 @@ import {
   type EntityIdentity,
   type EvidenceInput,
 } from './entity-evidence.js';
+import { correlateEntities, correlationEvidence, type EntityCorrelation } from './entity-correlation.js';
 import {
   classifyEntity,
   type ClassificationDecision,
@@ -31,7 +32,17 @@ import { SEARCH_LABEL, labelOf, round, sameValue } from './signals.js';
  * clic). Une valeur sans portée (une saisie, un texte) rejoint l'unique entité qui la porte ; si
  * plusieurs la portent, le lien n'est pas décidé.
  */
-export type LifecycleKind = 'CREATE' | 'SEARCH' | 'OPEN' | 'VIEW' | 'INPUT' | 'UPDATE' | 'SAVE' | 'DELETE';
+export type LifecycleKind =
+  | 'CREATE'
+  | 'SEARCH'
+  /** Une recherche qui RETROUVE une entité créée pendant l'enregistrement (par ses données métier). */
+  | 'RETRIEVE'
+  | 'OPEN'
+  | 'VIEW'
+  | 'INPUT'
+  | 'UPDATE'
+  | 'SAVE'
+  | 'DELETE';
 
 export interface LifecycleStep {
   kind: LifecycleKind;
@@ -67,6 +78,8 @@ export interface TrackedEntity {
 export interface EntityTracking {
   entities: TrackedEntity[];
   evidence: EntityEvidence[];
+  /** Les corrélations CREATE → SEARCH → RESULT → OPEN, par données métier (avec leurs preuves). */
+  correlations: EntityCorrelation[];
 }
 
 export interface TrackingInput extends EvidenceInput {
@@ -80,6 +93,16 @@ export interface TrackingInput extends EvidenceInput {
 
 export function trackEntities(input: TrackingInput): EntityTracking {
   const { evidence, typed } = collectEntityEvidence(input);
+  // La CORRÉLATION par données métier : l'identité d'un résultat retrouvé après une création est
+  // rattachée à cette création (elle n'était peut-être visible nulle part avant).
+  const correlations = correlateEntities(input);
+  let counter = evidence.length;
+  evidence.push(
+    ...correlationEvidence(correlations, input.actions, () => {
+      counter += 1;
+      return `e${String(counter)}`;
+    }),
+  );
   const resolver = input.resolver ?? new DeterministicProvenanceResolver();
   const carriers = evidence.filter((entry) => entry.identity !== undefined);
   const matches = (a: EntityEvidence, b: EntityEvidence): boolean => {
@@ -277,7 +300,7 @@ export function trackEntities(input: TrackingInput): EntityTracking {
     });
   }
   entities.sort((a, b) => a.firstSeen.actionIndex - b.firstSeen.actionIndex);
-  return { entities, evidence };
+  return { entities, evidence, correlations };
 }
 
 /** L'espace d'une ressource : l'API (réseau) ou l'écran (URL, liens). */
@@ -337,7 +360,9 @@ function lifecycleOf(
   const creationAt = evidence.find((entry) => entry.type === 'NEW_ENTITY_ID')?.actionIndex;
   const kindAt = (index: number): LifecycleKind | undefined => {
     const types = new Set((byAction.get(index) ?? []).map((entry) => entry.type));
-    if (types.has('NEW_ENTITY_ID')) return 'CREATE';
+    if (types.has('NEW_ENTITY_ID') || types.has('CORRELATED_CREATION')) return 'CREATE';
+    // Retrouvée par ses données métier après sa création : une RECHERCHE qui la récupère.
+    if (types.has('SEARCH_RESULT')) return 'RETRIEVE';
     if (types.has('DELETE_REQUEST') || types.has('DELETE_ACTION')) return 'DELETE';
     if (types.has('SAVE_ACTION') || types.has('UPDATE_REQUEST')) return 'SAVE';
     if ([...types].some((type) => OPENING.has(type))) return 'OPEN';
@@ -401,6 +426,9 @@ export function lifecycleConfidence(
       break;
     case 'SEARCH':
       score = 0.6 + (types.has('SEARCH_ACTION') ? 0.15 : 0) + (next?.kind === 'OPEN' ? 0.1 : 0);
+      break;
+    case 'RETRIEVE':
+      score = 0.6 + (types.has('SEARCH_RESULT') ? 0.15 : 0) + (next?.kind === 'OPEN' ? 0.1 : 0);
       break;
     case 'OPEN':
       score =
