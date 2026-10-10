@@ -9,12 +9,18 @@ import type { AddressInfo } from 'node:net';
  *
  * Une SPA : aucune navigation ne recharge la page.
  */
-const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Companies</title></head>
+const page = (
+  tree: boolean,
+): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Companies</title></head>
 <body>
 <nav><button type="button" id="tasks">Tasks</button> <button type="button" id="new">New company</button></nav>
 <main id="view"></main>
 <p id="toast" role="status"></p>
 <script>
+  // Variante « arbre » : la recherche envoie un arbre de conditions (et la pagination dans l'URL),
+  // et la page interroge un compteur en arrière-plan (indépendant de toute action).
+  const TREE = ${JSON.stringify(tree)};
+  if (TREE) setInterval(() => { fetch('/api/notifications/count'); }, 1200);
   const view = document.getElementById('view');
   const toast = document.getElementById('toast');
   const go = (path) => { history.pushState({}, '', path); render(); };
@@ -31,7 +37,10 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
     } else if (path === '/tasks') {
       view.innerHTML = '<h1>Tasks</h1><label>Search companies <input id="q" autocomplete="off"></label> <button type="button" id="run">Search</button><ul id="results"></ul>';
       document.getElementById('run').addEventListener('click', async () => {
-        const found = await fetch('/api/companies/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filters: { companyName: document.getElementById('q').value }, page: 0, size: 20 }) }).then((r) => r.json());
+        const q = document.getElementById('q').value;
+        const found = TREE
+          ? await fetch('/api/companies/query?batch=0&batchSize=25&includeAssigned=true', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ condition: { logic: 'AND', conditions: [{ prop: 'companyName', op: 'CONTAINS', val: q }] }, ordering: { prop: 'companyName', dir: 'ASC' } }) }).then((r) => r.json())
+          : await fetch('/api/companies/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filters: { companyName: q }, page: 0, size: 20 }) }).then((r) => r.json());
         document.getElementById('results').innerHTML = found.items.map((c) => '<li><button type="button" class="result" data-id="' + c.id + '">' + c.companyName + '</button></li>').join('');
         for (const button of document.querySelectorAll('button.result'))
           button.addEventListener('click', () => go('/companies/' + button.dataset.id));
@@ -55,6 +64,8 @@ export interface CompanyRecordingApp {
   url: string;
   /** Une société homonyme qui existait déjà avant l'enregistrement. */
   seedHomonym: boolean;
+  /** La recherche envoie un arbre de conditions + pagination d'URL ; un compteur est interrogé en fond. */
+  tree: boolean;
   reset: () => void;
   close: () => Promise<void>;
 }
@@ -66,7 +77,7 @@ interface Company {
 }
 
 export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
-  const state = { companies: [] as Company[], next: 123456, seedHomonym: false };
+  const state = { companies: [] as Company[], next: 123456, seedHomonym: false, tree: false };
   const reset = (): void => {
     state.companies = state.seedHomonym
       ? [{ id: '777001', companyName: 'Company Test QA', address: '9 Old Road' }]
@@ -115,6 +126,19 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
       });
       return;
     }
+    if (url.pathname === '/api/companies/query' && request.method === 'POST') {
+      void body(request).then((data) => {
+        const tree = data.condition as unknown as { conditions?: { val?: string }[] } | undefined;
+        const wanted = tree?.conditions?.[0]?.val;
+        const items = state.companies.filter((company) => company.companyName === wanted);
+        json(200, { items, total: items.length });
+      });
+      return;
+    }
+    if (url.pathname === '/api/notifications/count') {
+      json(200, { count: 0 });
+      return;
+    }
     const detail = /^\/api\/companies\/(\d+)$/.exec(url.pathname);
     if (detail) {
       const found = state.companies.find((company) => company.id === detail[1]);
@@ -122,7 +146,7 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
       return;
     }
     response.setHeader('content-type', 'text/html; charset=utf-8');
-    response.end(PAGE);
+    response.end(page(state.tree));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -133,6 +157,12 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
     },
     set seedHomonym(value: boolean) {
       state.seedHomonym = value;
+    },
+    get tree() {
+      return state.tree;
+    },
+    set tree(value: boolean) {
+      state.tree = value;
     },
     reset,
     close: () =>

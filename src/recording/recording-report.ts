@@ -121,6 +121,7 @@ export function recordingHtml(input: {
     <p>${intent.workflow ? `<b>${esc(intent.workflow)}</b>${intent.api ? ` · ${esc(intent.api)}` : ''}` : 'No business write observed.'}${flow.negative ? ' · <b>negative validation flow</b>' : ''}</p>
     ${intent.transitions.length > 0 ? `<ul class="plain">${intent.transitions.map((transition) => `<li>${esc(transition.entity)}: ${esc(transition.from)} → ${esc(transition.to)}</li>`).join('')}</ul>` : ''}
     ${intent.evidence.length > 0 ? `<p class="muted">${esc(intent.evidence.join(' · '))}</p>` : ''}
+    ${searchesHtml(result)}
   </section>
   <section><h2>Quality</h2>
     <div class="cols"><div><h3>Locators</h3><ul class="plain">${locators || '<li class="muted">none</li>'}</ul></div>
@@ -552,4 +553,34 @@ function describeTargetText(target: {
       ? `${target.role ?? ''} "${target.name ?? ''}"`
       : `${target.strategy} "${target.value ?? ''}"`;
   return `${base}${target.section ? ` in "${target.section}"` : ''}${target.nth !== undefined ? ` [${String(target.nth)}]` : ''}`;
+}
+
+/**
+ * Les RECHERCHES reconnues dans les requêtes (http-analysis.json) : critères (libellé → propriété,
+ * opérateur, donnée de test), logique, tri, paramètres techniques. Aucune valeur n'y figure.
+ */
+function searchesHtml(result: RecordingResult): string {
+  const searches = (result.http?.consolidated.business ?? []).filter(
+    (entry) => entry.operation === 'SEARCH' && entry.searchCriteria.length > 0,
+  );
+  if (searches.length === 0) return '';
+  return `<h3>Search (business interpretation of requests)</h3><ul class="plain">${searches
+    .map((entry) => {
+      const logic = entry.searchCriteria.find((criterion) => criterion.logicalGroup)?.logicalGroup?.operator;
+      const criteria = entry.searchCriteria
+        .map(
+          (criterion) =>
+            `<li>${criterion.ui ? `<b>${esc(criterion.ui.label)}</b> → ` : ''}<code>${esc(criterion.propertyName)}</code> ${esc(criterion.operator ?? '=')} ${criterion.testData ? `<code>${esc(criterion.testData.reference)}</code>` : criterion.ui ? 'typed value' : 'value'} <span class="muted">${esc(criterion.state)} · ${String(Math.round(criterion.confidence * 100))} %${criterion.fromCreation ? ' · from the creation' : ''}</span></li>`,
+        )
+        .join('');
+      const parameters = [
+        ...new Set(
+          entry.parameters
+            .filter((parameter) => parameter.role !== 'SORT')
+            .map((parameter) => `${parameter.role.toLowerCase()} ${parameter.path}`),
+        ),
+      ];
+      return `<li><b>${esc(entry.api)}</b> <span class="muted">${esc(entry.state)} · ${String(Math.round(entry.confidence * 100))} %${entry.technical ? ` · technical classification ${esc(entry.technical.category)} (separate)` : ''}</span><ul>${criteria}</ul>${logic ? `<p class="muted">Logic: ${esc(logic)}</p>` : ''}${entry.sort.length ? `<p class="muted">Sort: ${esc(entry.sort.map((sort) => `${sort.property ?? sort.path} ${sort.direction.toUpperCase()}`).join(', '))}</p>` : ''}${parameters.length ? `<p class="muted">Technical parameters: ${esc(parameters.join(' · '))}</p>` : ''}</li>`;
+    })
+    .join('')}</ul>`;
 }

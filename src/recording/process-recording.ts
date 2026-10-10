@@ -1,3 +1,5 @@
+import { analyzeRecording, type RecordingAnalysis } from './analysis/recording-analysis.js';
+import type { NetworkObservation } from '../functional/model.js';
 import { buildApplicationModel } from './application/application-model.js';
 import type { ApplicationInteractionModel } from './application/model.js';
 import { detectBusinessEvents, type BusinessDetection } from './business/business-event-detector.js';
@@ -73,6 +75,11 @@ export interface RecordingResult {
    * tasks, entités, relations, actions métier, chacune reliée aux actions enregistrées.
    */
   application?: ApplicationInteractionModel;
+  /**
+   * L'ANALYSE HTTP (absente si recording.business.http.enabled vaut false) : le journal réseau, la
+   * dernière passe en direct (provisoire) et la consolidation (le même moteur, sur tout le journal).
+   */
+  http?: { journal: NetworkObservation[]; live?: RecordingAnalysis; consolidated: RecordingAnalysis };
   /** RECORDED TEST DATA (absent si recording.testData.enabled vaut false) : le jeu de données du flow. */
   testData?: RecordedTestDataResult;
   session: RecordingSession;
@@ -98,6 +105,8 @@ export function processRecording(
     typedValues?: ReadonlyMap<string, string>;
     /** L'empreinte salée de la session (la même que celle des saisies et des réponses). */
     digest?: (value: string) => string;
+    /** L'analyse HTTP : le journal réseau de la session et la dernière passe en direct (provisoire). */
+    http?: { journal: readonly NetworkObservation[]; live?: RecordingAnalysis };
   },
 ): RecordingResult {
   const emit = (type: RecordingEventType, message: string): void => {
@@ -410,6 +419,7 @@ export function processRecording(
   // BUSINESS INTERPRETATION (déterministe, au-dessus du flow, jamais à sa place).
   let business: RecordingResult['business'];
   let application: RecordingResult['application'];
+  let http: RecordingResult['http'];
   if (config.recording.business.enabled) {
     const detection = detectBusinessEvents({
       actions: normalized.kept,
@@ -438,12 +448,40 @@ export function processRecording(
         `${String(application.summary.contexts)} context(s), ${String(application.summary.contextSwitches)} switch(es), ${String(application.summary.workspaces)} workspace(s), ${String(application.summary.tasks)} task(s), ${String(application.summary.entities)} entity(ies), ${String(application.summary.relationships)} relation(s)`,
       );
     }
+    if (config.recording.business.http.enabled && options.http) {
+      // LA CONSOLIDATION : le même moteur que le direct, sur tout le journal ; elle révise le direct.
+      const consolidated = analyzeRecording({
+        mode: 'CONSOLIDATED',
+        events: session.rawEvents,
+        network: options.http.journal,
+        ...(options.http.live ? { previous: options.http.live } : {}),
+        entityCorrelations: detection.correlations,
+        ...(testData ? { testDataKeys: testDataKeysOf(testData) } : {}),
+      });
+      http = {
+        journal: [...options.http.journal],
+        ...(options.http.live ? { live: options.http.live } : {}),
+        consolidated,
+      };
+      const summary = consolidated.summary;
+      emit(
+        'HTTP_ANALYSIS_CONSOLIDATED',
+        consolidated.status === 'FAILED'
+          ? `the deferred analysis failed (${consolidated.errors.join('; ')}): the ${String(summary.network)} journaled request(s) and the raw events are kept`
+          : `${String(summary.network)} request(s): ${String(summary.correlated)} linked to actions, ${String(summary.independent)} independent; operations ${
+              Object.entries(summary.operations)
+                .map(([operation, count]) => `${operation} ${String(count)}`)
+                .join(', ') || 'none'
+            }; ${String(summary.hypotheses)} hypothesis(es) to confirm, ${String(summary.inconsistencies)} inconsistency(ies), ${String(summary.revisions)} revision(s) of the live analysis`,
+      );
+    }
     emit(
       'BUSINESS_FLOW_DETECTED',
       `${String(business.model.steps.length)} business step(s): ${business.model.steps.map((step) => `${step.action.toUpperCase()} ${step.entity ?? '?'} (${step.status})`).join(' → ') || 'none'}${business.model.unresolved.length ? `; ${String(business.model.unresolved.length)} unresolved` : ''}`,
     );
   }
   return {
+    ...(http ? { http } : {}),
     session,
     normalized,
     flow: built.flow,
@@ -668,4 +706,12 @@ function withoutUndone(session: RecordingSession): RecordingSession {
       },
     ],
   };
+}
+
+/** La donnée de test de chaque saisie : événement brut → clé du jeu (rien de sensible n'y est lu). */
+export function testDataKeysOf(testData: RecordedTestDataResult): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const item of testData.items)
+    if (item.key && !item.sensitive) for (const id of item.rawEventIds) keys.set(id, item.key);
+  return keys;
 }

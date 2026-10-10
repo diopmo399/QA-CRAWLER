@@ -22,6 +22,21 @@ export interface RememberedFunctional {
   environment?: string;
 }
 
+/** Une correspondance champ d'interface ↔ propriété technique validée (voir recording/analysis). */
+export interface RememberedFieldMapping {
+  key: string;
+  uiLabel: string;
+  property: string;
+  jsonPath: string;
+  screen: string;
+  api: string;
+  operation: string;
+  transformation: 'EXACT' | 'NORMALIZED';
+  recordingSessionId: string;
+  confirmations: number;
+  lastSeenAt: string;
+}
+
 /**
  * FUNCTIONAL KNOWLEDGE : transitions métier, workflows, invariants, chemins d'erreur et
  * objectifs, gardés d'un run à l'autre (knowledge/functional/, un JSON par application
@@ -35,6 +50,12 @@ export class FunctionalKnowledgeStore {
   private remembered = new Map<string, RememberedFunctional>();
   /** Workflows, états et transitions appris du réseau lors des runs précédents (cumulés). */
   private learnedKnowledge: LearnedKnowledge = { workflows: [], states: [], transitions: [] };
+  /**
+   * Les correspondances champ d'interface ↔ propriété technique VALIDÉES par un enregistrement, pour
+   * CETTE application (le fichier est propre à l'application et à l'environnement) : jamais une
+   * hypothèse, jamais une valeur saisie. Une connaissance d'une application n'est pas une règle universelle.
+   */
+  private mappings: RememberedFieldMapping[] = [];
 
   constructor(
     private readonly directory: string,
@@ -55,6 +76,7 @@ export class FunctionalKnowledgeStore {
         learned?: Partial<LearnedKnowledge>;
       };
       this.remembered = new Map((parsed.entries ?? []).map((entry) => [entry.id, entry]));
+      this.mappings = (parsed as { fieldMappings?: RememberedFieldMapping[] }).fieldMappings ?? [];
       this.learnedKnowledge = {
         workflows: parsed.learned?.workflows ?? [],
         states: parsed.learned?.states ?? [],
@@ -97,6 +119,26 @@ export class FunctionalKnowledgeStore {
         500,
       ),
     };
+  }
+
+  /** Ajoute des correspondances validées (dédupliquées par clé ; une contradiction remplace l'ancienne). */
+  rememberFieldMappings(
+    mappings: readonly Omit<RememberedFieldMapping, 'confirmations' | 'lastSeenAt'>[],
+  ): void {
+    const now = new Date().toISOString();
+    for (const mapping of mappings) {
+      const previous = this.mappings.find((entry) => entry.key === mapping.key);
+      const same = previous?.property === mapping.property && previous.jsonPath === mapping.jsonPath;
+      this.mappings = [
+        ...this.mappings.filter((entry) => entry.key !== mapping.key),
+        { ...mapping, confirmations: (same ? previous.confirmations : 0) + 1, lastSeenAt: now },
+      ].slice(-500);
+    }
+  }
+
+  /** Les correspondances déjà validées pour cette application. */
+  fieldMappings(): readonly RememberedFieldMapping[] {
+    return this.mappings;
   }
 
   recall(id: string): (RememberedFunctional & { sameVersion: boolean }) | undefined {
@@ -148,7 +190,7 @@ export class FunctionalKnowledgeStore {
     await mkdir(this.directory, { recursive: true });
     await writeFileAtomic(
       this.file(),
-      `${JSON.stringify({ application: this.identity.application, entries: [...this.remembered.values()].slice(-3000), learned: this.learnedKnowledge }, null, 2)}\n`,
+      `${JSON.stringify({ application: this.identity.application, entries: [...this.remembered.values()].slice(-3000), learned: this.learnedKnowledge, fieldMappings: this.mappings }, null, 2)}\n`,
     );
   }
 }

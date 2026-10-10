@@ -331,6 +331,8 @@ export interface RecordedValueFacts {
   shape: 'email' | 'number' | 'date' | 'phone' | 'url' | 'code' | 'text' | 'empty';
   /** Empreinte salée par session (jamais pour un champ sensible). */
   digest?: string;
+  /** Empreinte de la valeur PLIÉE (casse, espaces, accents) : reconnaît une transformation UI → API. */
+  foldedDigest?: string;
   /** La valeur contient au moins un chiffre (jamais pour un champ sensible) : un nom n'est pas un identifiant. */
   hasDigit?: boolean;
   /** Empreinte de la valeur trouvée quand l'humain est entré dans le champ. */
@@ -738,6 +740,9 @@ export type RecordingEventType =
   | 'RAW_EVENT_CAPTURED'
   /** QA_DEBUG : la trace déterministe du recorder ([RECORDER] RAW EVENT / ELEMENT / VALIDATION / RECORDED / EVENT IGNORED). */
   | 'RECORDER_DEBUG'
+  /** L'analyse HTTP : une passe en direct (provisoire), puis la consolidation après l'arrêt. */
+  | 'HTTP_ANALYSIS_UPDATED'
+  | 'HTTP_ANALYSIS_CONSOLIDATED'
   | 'RECORDING_SOURCE'
   | 'BUSINESS_FLOW_DETECTED'
   | 'APPLICATION_MODEL_BUILT'

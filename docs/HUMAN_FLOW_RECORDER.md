@@ -948,6 +948,11 @@ des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en
 note globale —, intention comprise, qualité des cibles et des valeurs, trace
 RAW → SEMANTIC → FINAL avec le pourquoi de chaque étape, vérifications candidates).
 
+Analyse métier des requêtes HTTP : `network-journal.json` (journal réseau chronologique, valeurs
+masquées) et `http-analysis.json` (analyse en direct + consolidée) — voir
+[RECORDING_HTTP_ANALYSIS.md](RECORDING_HTTP_ANALYSIS.md). Événements `HTTP_ANALYSIS_UPDATED` (direct)
+et `HTTP_ANALYSIS_CONSOLIDATED` (après l'arrêt).
+
 Événements : `RECORDING_STARTED`, `RAW_EVENT_CAPTURED`, `SEMANTIC_ACTION_RESOLVED`,
 `CHECKPOINT_ADDED`, `RECORDING_PAUSED`, `RECORDING_RESUMED`, `RECORDING_STOPPED`,
 `RECORDING_NORMALIZED`, `OUTCOME_INFERRED`, `FLOW_GENERATED`, `REPLAY_VALIDATION_STARTED`,

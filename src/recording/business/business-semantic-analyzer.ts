@@ -36,7 +36,7 @@ export class DeterministicBusinessAnalyzer implements BusinessSemanticAnalyzer {
 export type EntityChooser = (question: {
   event?: BusinessEvent;
   candidates: readonly string[];
-  topic?: 'entity' | 'provenance';
+  topic?: 'entity' | 'provenance' | 'operation';
   /** topic provenance : la clé de l'entité et ses preuves (déjà observées, jamais des valeurs saisies). */
   subject?: string;
   evidence?: readonly string[];
@@ -180,11 +180,13 @@ export function gatewayEntityChooser(gateway: IntelligenceGateway, sessionId: st
         nextActionTargets: [],
         functionalCoverage: [],
         question:
-          topic === 'provenance'
-            ? `The recorded evidence about the entity ${subject ?? ''} is contradictory (it looks both created during the recording and observed before). Choose the ONE interpretation among the action IDs (selectedActionId) that the evidence supports, citing evidence IDs; if the evidence does not decide, answer INCONCLUSIVE. Never invent an interpretation.`
-            : `A recorded user action wrote data; the observations do not say which business entity was ${
-                event?.type === 'ENTITY_CREATED' ? 'created' : 'concerned'
-              }. Choose the ONE entity among the action IDs (selectedActionId) that the evidence supports, citing evidence IDs; if the evidence does not decide, answer INCONCLUSIVE. Never invent an entity.`,
+          topic === 'operation'
+            ? `A recorded HTTP request (${subject ?? ''}) has no deterministic business interpretation. Choose the ONE operation among the action IDs (selectedActionId) that the evidence supports (structure of the request, response, user action), citing evidence IDs; if the evidence does not decide, answer INCONCLUSIVE. The HTTP method alone is never a reason.`
+            : topic === 'provenance'
+              ? `The recorded evidence about the entity ${subject ?? ''} is contradictory (it looks both created during the recording and observed before). Choose the ONE interpretation among the action IDs (selectedActionId) that the evidence supports, citing evidence IDs; if the evidence does not decide, answer INCONCLUSIVE. Never invent an interpretation.`
+              : `A recorded user action wrote data; the observations do not say which business entity was ${
+                  event?.type === 'ENTITY_CREATED' ? 'created' : 'concerned'
+                }. Choose the ONE entity among the action IDs (selectedActionId) that the evidence supports, citing evidence IDs; if the evidence does not decide, answer INCONCLUSIVE. Never invent an entity.`,
       },
     });
     const consulted = await gateway.consult({
