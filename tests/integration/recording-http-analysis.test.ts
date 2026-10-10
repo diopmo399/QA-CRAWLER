@@ -26,6 +26,8 @@ interface Session {
   rawJournal: string;
   /** Le texte de l'onglet Analyse de la fenêtre (revue). */
   panel?: string;
+  /** Ce que la fenêtre montre (pistes A–E de la refonte). */
+  ui?: Record<string, string | boolean | number>;
 }
 
 describe('Recording — business analysis of HTTP requests (live + consolidated)', () => {
@@ -40,6 +42,7 @@ describe('Recording — business analysis of HTTP requests (live + consolidated)
   ): Promise<Session> => {
     app.reset();
     let panelText: string | undefined;
+    const ui: Record<string, string | boolean | number> = {};
     const missionFile = path.join(dir, `${name}.mission.yaml`);
     await writeFile(
       missionFile,
@@ -47,7 +50,7 @@ describe('Recording — business analysis of HTTP requests (live + consolidated)
 target: { baseUrl: ${app.url}, startAt: / }
 safety:
   mutations: { enabled: true, maxPerRun: 20 }
-recording: { knowledge: ${String(knowledge)} }
+recording: { knowledge: ${String(knowledge)}${knowledge ? '' : ', panelLayout: compact'} }
 `,
     );
     const outcome = await runRecording({
@@ -56,14 +59,41 @@ recording: { knowledge: ${String(knowledge)} }
       overrides: { headless: true, reportsDir: path.join(dir, name, 'reports') },
       env: {},
       language: 'fr',
-      drive: async ({ page }) => {
+      drive: async ({ page, panel }) => {
         await drive(page);
+        // A · la recherche reconnue en direct ; E · la disposition demandée (mini-dock sombre).
+        if (panel) {
+          await panel
+            .locator('#livesearch:not([hidden])')
+            .waitFor({ timeout: 10_000 })
+            .catch(() => undefined);
+          ui.liveSearch = await panel
+            .locator('#livesearch')
+            .innerText()
+            .catch(() => '');
+          ui.compact = await panel.evaluate(() => document.body.classList.contains('compact'));
+        }
       },
       reviewDriver: async ({ panel }) => {
         await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
         await panel.getByRole('tab', { name: 'Analyse' }).click();
         await panel.getByText('Intents métier').waitFor({ timeout: 60_000 });
         panelText = await panel.locator('#panel-analysis').innerText();
+        // B · les étapes métier en cartes ; C · la requête reliée à l'action ; recherche et « À vérifier seulement ».
+        await panel.getByRole('tab', { name: 'Enregistrement', exact: true }).click({ timeout: 10_000 });
+        ui.story = await panel.locator('#story').innerText();
+        ui.timeline = await panel.locator('#timeline').innerText();
+        await panel
+          .locator('#timeline .item', { hasText: 'Search companies' })
+          .first()
+          .click({ timeout: 10_000 });
+        ui.linked = await panel.locator('#details').innerText();
+        await panel.getByLabel('Chercher une action').fill('Search companies');
+        ui.filtered = await panel.locator('#timeline > li:not(.group)').count();
+        await panel.getByLabel('Chercher une action').fill('');
+        ui.groups = await panel.locator('#timeline > li.group').count();
+        await panel.getByRole('button', { name: 'À vérifier seulement' }).click();
+        ui.attentionOnly = await panel.locator('#timeline').innerText();
       },
     });
     const read = (file: string): Promise<string> => readFile(path.join(outcome.directory, file), 'utf8');
@@ -74,6 +104,7 @@ recording: { knowledge: ${String(knowledge)} }
       analysis: JSON.parse(analysis) as Session['analysis'],
       rawJournal: journal,
       ...(panelText !== undefined ? { panel: panelText } : {}),
+      ui,
     };
   };
   const pause = (page: Page, ms = 500): Promise<void> => page.waitForTimeout(ms);
@@ -214,11 +245,30 @@ recording: { knowledge: ${String(knowledge)} }
   it('the window shows the search as a business intent (criteria, logic, sort, technical parameters)', () => {
     const panel = sessions.remembered?.panel ?? '';
     expect(panel).toContain('Critères détectés');
-    expect(panel).toMatch(/Search companies[\s\S]*API : companyName[\s\S]*Opérateur : CONTAINS/);
+    // D · la recherche en tableau : champ de l'écran, propriété API, opérateur.
+    expect(panel).toContain('Champ de l’écran');
+    expect(panel).toMatch(/Search companies\s+companyName\s+CONTAINS/);
     expect(panel).toContain('Logique : AND');
     expect(panel).toContain('Tri : companyName ASC');
     expect(panel).toMatch(/Paramètres techniques : .*pagination/);
     expect(panel).not.toContain('Aucun intent métier');
+  });
+
+  it('the redesigned window: live search chip, compact dock on demand, business-step cards, linked request, search and filter', () => {
+    const full = sessions.remembered?.ui ?? {};
+    const compact = sessions.forgotten?.ui ?? {};
+    expect(String(full.liveSearch)).toMatch(
+      /recherche détectée : SEARCH POST \/api\/companies\/query · "Search companies" → companyName CONTAINS/,
+    );
+    expect(full.compact).toBe(false);
+    expect(compact.compact).toBe(true);
+    expect(String(full.story)).toContain('Le parcours en étapes métier');
+    expect(String(full.linked)).toMatch(
+      /Requête liée[\s\S]*POST \/api\/companies\/query[\s\S]*"Search companies" → companyName CONTAINS · AND/,
+    );
+    expect(full.filtered).toBeGreaterThanOrEqual(1);
+    expect(full.groups).toBeGreaterThanOrEqual(1);
+    expect(String(full.attentionOnly)).not.toMatch(/Cliquer sur "Save"/);
   });
 
   it('validated mappings go to the application knowledge only when recording.knowledge is on', async () => {

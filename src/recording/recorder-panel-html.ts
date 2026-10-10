@@ -52,6 +52,7 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
   <span class="brand">QA-CRAWLER</span>
   <span class="subtitle" id="subtitle"></span>
   <span class="spacer"></span>
+  <button type="button" class="devtoggle" id="layouttoggle" aria-pressed="false"></button>
   <button type="button" class="devtoggle" id="devtoggle" aria-pressed="false"></button>
 </header>
 <section class="statusbar" id="head" aria-label="">
@@ -60,6 +61,7 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
   <span class="sep" aria-hidden="true"></span>
   <span class="timer" id="timer" aria-label=""></span>
   <span class="count" id="count"></span>
+  <span class="livesearch" id="livesearch" role="status" hidden></span>
   <span class="spacer"></span>
   <div class="controls" id="controls" role="toolbar"></div>
 </section>
@@ -72,12 +74,14 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 <main>
   <section id="panel-recording" role="tabpanel" aria-labelledby="tab-recording">
     <div id="review"></div>
+    <div id="story"></div>
     <div id="detached-note"></div>
     <div class="grid" id="grid">
       <div class="col-left">
         <section class="card journey" aria-labelledby="timeline-title">
           <header class="card-head"><h2 id="timeline-title"></h2><span class="badge" id="journey-count"></span></header>
           <p class="status-line" id="summary" role="status"></p>
+          <div class="tl-tools" id="tltools"><label class="tl-search"><span class="sr-only" id="tlsearch-label"></span><input type="search" id="tlsearch" aria-labelledby="tlsearch-label"></label><button type="button" id="tlattention" aria-pressed="false"></button></div>
           <ol id="timeline" class="timeline"></ol>
           <div id="checks"></div>
         </section>
@@ -332,6 +336,51 @@ body[data-mode=preview]{background:var(--bg)}
 .preview.detached .viewport .frame{position:relative;display:inline-block;max-width:100%}
 .state.small{font-size:13px}
 .actions-top{display:flex;gap:8px}
+/* A · COCKPIT : la recherche reconnue en direct, les groupes (écran, étape métier), la recherche dans le parcours et « À vérifier seulement ». */
+.livesearch{display:inline-flex;align-items:center;gap:6px;max-width:520px;font-size:12px;font-weight:600;border-radius:8px;padding:4px 10px;background:var(--run-soft);color:var(--run);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.livesearch::before{content:"⌕";font-size:14px}
+.timeline>li.group{padding:10px 0 4px 0;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.timeline>li.group::before{display:none}
+.tl-tools{display:flex;gap:8px;align-items:center;margin:0 0 10px}
+.tl-search{flex:1;display:flex}
+.tl-search input{flex:1;min-width:0;font:inherit;border:1px solid var(--line-strong);border-radius:8px;padding:6px 10px;background:var(--surface);color:var(--fg)}
+#tlattention[aria-pressed=true]{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
+/* B · ÉTAPES MÉTIER (revue) : des cartes numérotées au-dessus du détail des actions. */
+.story{display:grid;gap:10px;margin-bottom:12px}
+.story h2{margin:0;font-size:14px}
+.scard{display:grid;grid-template-columns:auto 1fr auto;gap:6px 12px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:12px 14px}
+.scard .n{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--fg);color:var(--surface);font-weight:800}
+.scard b{font-size:14px}
+.scard .chips{grid-column:2/4;display:flex;flex-wrap:wrap;gap:6px}
+.scard .chips span{font-size:12px;border-radius:6px;padding:2px 8px;background:var(--surface-2);border:1px solid var(--line)}
+.scard .obs{grid-column:2/4;color:var(--muted);font-size:12px}
+/* C · INSPECTEUR : la requête reliée à l'action. */
+.netcard{border:1px solid var(--line);border-radius:10px;padding:8px 10px;display:grid;gap:4px;font-size:12px;margin-bottom:6px}
+.netcard code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+.netcard .crit{border-radius:6px;padding:4px 8px;background:var(--accent-soft)}
+/* D · ANALYSE : la recherche en tableau, une jauge de confiance, des jetons. */
+.stable{width:100%;border-collapse:collapse;margin:8px 0;font-size:13px}
+.stable th{text-align:left;font-size:11px;color:var(--muted);font-weight:700;padding:4px 8px}
+.stable td{padding:8px;border-top:1px solid var(--line);vertical-align:top}
+.stable code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+.meter{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:700}
+.meter .track{width:110px;height:7px;border-radius:999px;background:var(--line);overflow:hidden}
+.meter .track span{display:block;height:100%;background:var(--ok)}
+.tokens{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.tokens span{font-size:12px;border-radius:6px;padding:3px 9px;background:var(--surface-2);border:1px solid var(--line)}
+.tokens span.from{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.search{border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:10px}
+.search .shead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.search .shead .meter{margin-left:auto}
+/* E · MINI-DOCK : une fenêtre étroite et sombre pendant l'enregistrement (la revue reste complète). */
+body.compact{--bg:#16181d;--surface:#1d2027;--surface-2:#232733;--fg:#f2f3f5;--muted:#a9afba;--line:#2b2f37;--line-strong:#3a3f4a;--accent:#93b4ff;--accent-soft:#1d2740;--accent-fg:#16181d;--ok:#4ade80;--ok-soft:rgba(74,222,128,.12);--warn:#fbbf24;--warn-soft:#2a2213;--bad:#f87171;--bad-soft:rgba(248,113,113,.14);--run:#93b4ff;--run-soft:#1d2740;--shadow:none}
+body.compact .tabs,body.compact .col-mid,body.compact .col-right,body.compact #quality,body.compact .subtitle,body.compact #devtoggle,body.compact .summarybar,body.compact #tltools,body.compact #checks,body.compact .sep,body.compact #livepill{display:none!important}
+body.compact .grid{grid-template-columns:1fr!important}
+body.compact .statusbar{margin:8px 10px 0}
+body.compact main{padding:8px 10px}
+body.compact .livesearch{max-width:100%;flex-basis:100%;white-space:normal}
+body.compact .timeline>li:not(.group):nth-last-child(n+6),body.compact .timeline>li.group{display:none}
+body.compact .controls{flex-basis:100%}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 `;
 
@@ -362,6 +411,10 @@ const SCRIPT = `
       notTouched: "Ce n'est pas l'élément que vous avez touché : annulez l'action (↶) et refaites-la sur le bon élément.",
       ignored: 'Laissée telle quelle : elle sera vérifiée au rejeu.',
       detailsTitle: "Détails de l'action", close: 'Fermer',
+      compact: '▭ Compact', full: '▣ Complet', layoutLabel: 'Basculer entre la fenêtre complète et le mini-dock',
+      tlSearch: 'Chercher une action', onlyAttention: 'À vérifier seulement', noMatch: 'Aucune action ne correspond.',
+      storyTitle: 'Le parcours en étapes métier', linked: 'Requête liée', linkedNone: 'Aucune requête métier reliée à cette action.',
+      fieldL: 'Champ de l’écran', propL: 'Propriété API', stateL: 'État',
       field: { event: 'Action', kind: 'Action', name: 'Élément', label: 'Libellé', text: 'Texte', role: 'Rôle', tag: 'Type', selector: 'Sélecteur', page: 'Page', section: 'Section', matches: 'Correspondances', validation: 'Validation', frame: 'Cadre', rawEventId: 'Événement', target: 'Cible', provenance: 'Provenance', locator: 'Localisateur', raw: 'Événements bruts', step: 'Étape', decision: 'Décision', resolution: 'Résolution', shadowDom: 'Shadow DOM', field: 'Champ', sensitive: 'Sensible' },
       found: { ORIGINAL: "✓ Élément mis en évidence dans la page", SELECTOR: '✓ Élément retrouvé par son sélecteur et mis en évidence', NOT_FOUND: '⚠ Élément introuvable sur la page actuelle' },
       quality: 'Qualité du recording', checksQ: { confirmed: 'Actions confirmées', stable: 'Sélecteurs stables', unique: 'Cibles uniques', rerender: 'Aucun élément retrouvé après un nouveau rendu', duplicates: 'Aucun doublon', errors: 'Aucune erreur' },
@@ -404,6 +457,10 @@ const SCRIPT = `
       notTouched: 'This is not the element you touched: undo the action (↶) and do it again on the right element.',
       ignored: 'Left as is: it will be checked at replay.',
       detailsTitle: 'Action details', close: 'Close',
+      compact: '▭ Compact', full: '▣ Full', layoutLabel: 'Switch between the full window and the mini dock',
+      tlSearch: 'Find an action', onlyAttention: 'To check only', noMatch: 'No action matches.',
+      storyTitle: 'The journey as business steps', linked: 'Linked request', linkedNone: 'No business request linked to this action.',
+      fieldL: 'Screen field', propL: 'API property', stateL: 'State',
       field: { event: 'Action', kind: 'Action', name: 'Element', label: 'Label', text: 'Text', role: 'Role', tag: 'Type', selector: 'Selector', page: 'Page', section: 'Section', matches: 'Matches', validation: 'Validation', frame: 'Frame', rawEventId: 'Event', target: 'Target', provenance: 'Provenance', locator: 'Locator', raw: 'Raw events', step: 'Step', decision: 'Decision', resolution: 'Resolution', shadowDom: 'Shadow DOM', field: 'Field', sensitive: 'Sensitive' },
       found: { ORIGINAL: '✓ Element highlighted in the page', SELECTOR: '✓ Element found by its selector and highlighted', NOT_FOUND: '⚠ Element not found on the current page' },
       quality: 'Recording quality', checksQ: { confirmed: 'Actions confirmed', stable: 'Stable selectors', unique: 'Unique targets', rerender: 'No element found again after a re-render', duplicates: 'No duplicate', errors: 'No error' },
@@ -472,6 +529,9 @@ const SCRIPT = `
   };
   var KIND_ICON = { open: 'link', navigate: 'link', goto: 'link', click: 'cursor', fill: 'text', check: 'check', uncheck: 'check', choose: 'check', select: 'list', key: 'hash', drag: 'move', dragAndDrop: 'move', upload: 'clip', manual: 'hash', dialog: 'list' };
   var state = null, selected = null, choice = {}, dev = false, editing = false, tab = 'recording';
+  var filterText = '', onlyAttention = false, layout = null;
+  var storedLayout = function () { try { return window.localStorage.getItem('qa-recorder-layout'); } catch (e) { return null; } };
+  var storeLayout = function (v) { try { window.localStorage.setItem('qa-recorder-layout', v); } catch (e) { /* stockage indisponible */ } };
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   var send = function (cmd) { try { window.__qaPanelCommand(cmd); } catch (e) { /* hors QA-CRAWLER */ } };
@@ -500,7 +560,18 @@ const SCRIPT = `
     var pill = $('livepill');
     pill.textContent = p === 'RECORDING' ? T.active : p === 'PAUSED' ? T.inactive : '';
     pill.className = 'live' + (p === 'PAUSED' ? ' off' : '');
-    $('count').textContent = T.actions(state.summary.actions) + (state.http && recordingPhase() ? ' · ' + T.httpLive(state.http) + (state.http.search ? ' · ' + T.liveSearch + ' : ' + state.http.search : '') : '');
+    $('count').textContent = T.actions(state.summary.actions) + (state.http && recordingPhase() ? ' · ' + T.httpLive(state.http) : '');
+    var ls = $('livesearch'), search = state.http && recordingPhase() ? state.http.search : '';
+    ls.hidden = !search;
+    ls.textContent = search ? T.liveSearch + ' : ' + search : '';
+    // E · la disposition : le choix de l'humain (gardé), sinon recording.panelLayout ; la revue est complète.
+    if (layout === null) layout = storedLayout() || state.layout || 'full';
+    var compact = layout === 'compact' && p !== 'REVIEW' && p !== 'FINALIZING';
+    document.body.classList.toggle('compact', compact);
+    var lt = $('layouttoggle');
+    lt.textContent = layout === 'compact' ? T.full : T.compact;
+    lt.setAttribute('aria-pressed', String(layout === 'compact'));
+    lt.hidden = p === 'REVIEW' || p === 'FINALIZING';
     var c = '';
     if (recordingPhase()) {
       c += button(T.pause, { cmd: 'pause', cls: p === 'RECORDING' ? 'outline-accent' : '', aria: T.pauseLabel, disabled: p === 'PAUSED' });
@@ -552,7 +623,30 @@ const SCRIPT = `
 
   function renderTimeline() {
     $('timeline-title').textContent = T.timeline;
-    var html = state.actions.map(function (step) {
+    $('tlsearch-label').textContent = T.tlSearch;
+    $('tlsearch').setAttribute('placeholder', T.tlSearch);
+    var att = $('tlattention');
+    att.textContent = T.onlyAttention; att.setAttribute('aria-pressed', String(onlyAttention));
+    var needle = filterText.trim().toLowerCase();
+    var visible = state.actions.filter(function (step) {
+      if (onlyAttention && step.status !== 'AMBIGUOUS' && step.status !== 'FAILED') return false;
+      return !needle || (step.description + ' ' + (step.detail || '')).toLowerCase().indexOf(needle) >= 0;
+    });
+    var lastGroup = null;
+    var html = visible.map(function (step) {
+      var head = '';
+      if (step.group && step.group !== lastGroup && !needle && !onlyAttention) head = '<li class="group">' + esc(step.group) + '</li>';
+      lastGroup = step.group || lastGroup;
+      return head + stepHtml(step);
+    }).join('');
+    if (!html && state.actions.length) html = '<li class="empty">' + esc(T.noMatch) + '</li>';
+    setHtml($('timeline'), html || '<li class="empty">' + esc(T.empty) + '</li>');
+    var checks = state.checks || [];
+    setHtml($('checks'), checks.length ? '<details class="checks"><summary>' + esc(T.checks(checks.length)) + '</summary><p class="sub">' + esc(T.checksNote) + '</p><ul>' + checks.map(function (c) { return '<li>' + esc(c.description) + '</li>'; }).join('') + '</ul></details>' : '');
+  }
+
+  function stepHtml(step) {
+    {
       var current = selected === step.id;
       var h = '<li data-step="' + esc(step.id) + '">';
       h += '<button type="button" class="item ' + step.status + '" data-cmd="select" data-id="' + esc(step.id) + '" aria-current="' + current + '" aria-label="' + esc(step.index + '. ' + step.description + ' — ' + T.status[step.status]) + '">';
@@ -578,10 +672,20 @@ const SCRIPT = `
       }
       if (editing && step.removable) h += '<div class="remove">' + button(T.remove, { cmd: 'remove', id: step.id, aria: T.removeLabel(step.description) }) + '</div>';
       return h + '</li>';
+    }
+  }
+
+  /** B · les étapes métier de la revue, en cartes numérotées (le détail des actions reste dessous). */
+  function renderStory() {
+    var el = $('story'), b = state.analysis && state.analysis.business;
+    if (state.phase !== 'REVIEW' || !b || !b.steps.length) { setHtml(el, ''); return; }
+    var h = '<section class="story" aria-label="' + esc(T.storyTitle) + '"><h2>' + esc(T.storyTitle) + '</h2>';
+    h += b.steps.map(function (st, i) {
+      return '<article class="scard"><span class="n" aria-hidden="true">' + (i + 1) + '</span><b>' + esc((T.baction[st.action] || st.action) + ' ' + st.entity) + '</b><span class="bbadge ' + st.status + '">' + esc(T.bstatus[st.status]) + ' · ' + Math.round(st.confidence * 100) + ' %</span>'
+        + (st.recorded.length ? '<div class="chips">' + st.recorded.map(function (r) { return '<span>' + esc(short(r, 48)) + '</span>'; }).join('') + '</div>' : '')
+        + (st.observed.length ? '<div class="obs">' + esc(T.observed) + ' : ' + esc(st.observed[0]) + '</div>' : '') + '</article>';
     }).join('');
-    setHtml($('timeline'), html || '<li class="empty">' + esc(T.empty) + '</li>');
-    var checks = state.checks || [];
-    setHtml($('checks'), checks.length ? '<details class="checks"><summary>' + esc(T.checks(checks.length)) + '</summary><p class="sub">' + esc(T.checksNote) + '</p><ul>' + checks.map(function (c) { return '<li>' + esc(c.description) + '</li>'; }).join('') + '</ul></details>' : '');
+    setHtml(el, h + '</section>');
   }
 
   var GENERAL = ['kind', 'event', 'name', 'label', 'text', 'role', 'tag', 'page', 'section', 'field', 'provenance', 'locator', 'decision', 'resolution'];
@@ -614,6 +718,10 @@ const SCRIPT = `
       var r = state.highlight.result;
       h += '<p class="found ' + (r === 'NOT_FOUND' ? 'warn' : 'ok') + '" role="status">' + esc(T.found[r]) + '</p>';
     }
+    h += '<h3>' + esc(T.linked) + '</h3>';
+    h += step.network && step.network.length ? step.network.map(function (n) {
+      return '<div class="netcard"><code>' + esc(n.api) + (n.status !== undefined ? ' · ' + n.status : '') + '</code><span class="sub">' + esc(n.operation + ' · ' + n.link) + '</span>' + n.criteria.map(function (c) { return '<span class="crit">' + esc(c) + '</span>'; }).join('') + (n.extras.length ? '<span class="sub">' + esc(n.extras.join(' · ')) + '</span>' : '') + '</div>';
+    }).join('') : '<p class="sub">' + esc(T.linkedNone) + '</p>';
     h += '<details class="logs"><summary>' + esc(T.logs) + '</summary><span class="tech">' + esc(techLines(step)) + '</span></details>';
     setHtml(box, h);
   }
@@ -706,11 +814,46 @@ const SCRIPT = `
     setHtml($('summarybar'), h);
   }
 
+  /** D · les intents métier (recherches, écritures) EN TÊTE de l'analyse ; le technique reste replié dessous. */
+  function intentsCard(a) {
+    var h = '<div class="card card-plain"><h2>' + esc(T.intents) + '</h2>';
+    var qs = a.searchIntents || [];
+    h += qs.map(function (q) {
+      var badge = function (st) { return '<span class="bbadge ' + (st === 'VALIDATED' ? 'CONFIRMED' : st === 'INFERRED' ? 'PROBABLE' : 'UNKNOWN') + '">' + esc(st) + '</span>'; };
+      var pct = Math.round(q.confidence * 100);
+      // D · la recherche en tableau : champ de l'écran, propriété API, opérateur, valeur, état.
+      var r = '<div class="search"><div class="shead"><b>' + esc(T.searchL) + '</b><code class="sub">' + esc(q.api) + '</code>' + badge(q.state)
+        + '<span class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="' + esc(T.confidence) + '"><span class="track"><span style="width:' + pct + '%"></span></span>' + esc(T.confidence) + ' : ' + pct + ' %</span></div>';
+      if (q.technical) r += '<div class="meta">' + esc(T.techL) + ' : ' + esc(q.technical) + '</div>';
+      r += '<h3>' + esc(T.critL) + '</h3><table class="stable"><thead><tr><th scope="col">' + esc(T.fieldL) + '</th><th scope="col">' + esc(T.propL) + '</th><th scope="col">' + esc(T.opL) + '</th><th scope="col">' + esc(T.valL) + '</th><th scope="col">' + esc(T.stateL) + '</th></tr></thead><tbody>'
+        + q.criteria.map(function (c) {
+          return '<tr><td><b>' + esc(c.label || '—') + '</b></td><td><code>' + esc(c.property) + '</code></td><td><code>' + esc(c.operator || '=') + '</code></td><td>' + esc(c.value) + (c.testData ? ' <code class="sub">' + esc(c.testData) + '</code>' : '') + '</td><td>' + badge(c.state) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+      var tokens = [];
+      if (q.logic) tokens.push('<span>' + esc(T.logicL) + ' : ' + esc(q.logic) + '</span>');
+      if (q.sort.length) tokens.push('<span>' + esc(T.sortL) + ' : ' + esc(q.sort.join(', ')) + '</span>');
+      if (q.parameters.length) tokens.push('<span>' + esc(T.paramsL) + ' : ' + esc(q.parameters.map(function (p) { return (T.roles[p.role] || p.role) + ' (' + p.paths.join(', ') + ')'; }).join(' · ')) + '</span>');
+      if (q.criteria.some(function (c) { return c.fromCreation; })) tokens.push('<span class="from">' + esc(T.fromCreateL) + '</span>');
+      if (tokens.length) r += '<div class="tokens">' + tokens.join('') + '</div>';
+      if (q.evidence.length) r += '<details><summary>' + esc(T.why) + ' (' + q.evidence.length + ')</summary><ol>' + q.evidence.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ol></details>';
+      return r + '</div>';
+    }).join('');
+    h += a.intents.length ? a.intents.map(function (i) {
+      return '<div><b>' + esc(i.label) + '</b>' + (i.detail ? '<div class="meta">' + esc(i.detail) + '</div>' : '') + (i.confidence !== undefined ? '<div class="meta">' + esc(T.confidence) + ' : ' + Math.round(i.confidence * 100) + ' %</div>' : '') + (i.evidence.length ? '<details><summary>' + esc(T.why) + '</summary><ul>' + i.evidence.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul></details>' : '') + '</div>';
+    }).join('') : qs.length ? '' : '<p class="empty">' + esc(T.noIntent) + '</p>';
+    if (a.technicalIntents && a.technicalIntents.length) h += '<h3>' + esc(T.technicalIntents) + '</h3><ul class="bunres">' + a.technicalIntents.map(function (i) {
+      return '<li><b>' + esc(i.label) + '</b>' + (i.detail ? '<div class="meta">' + esc(i.detail) + '</div>' : '') + (i.evidence.length ? '<div class="meta">' + esc(i.evidence.join(' · ')) + '</div>' : '') + '</li>';
+    }).join('') + '</ul>';
+    return h + '</div>';
+  }
+
   function renderAnalysis() {
     var a = state.analysis, el = $('panel-analysis');
     var h = '<div class="card card-plain"><h2>' + esc(T.analysisTitle) + '</h2><p class="notice">' + esc(T.analysisNote) + '</p>';
     if (!a.available) { setHtml(el, h + '<p class="empty">' + esc(T.analysisWaiting) + '</p></div>'); return; }
     if (a.running) h += '<p class="notice running" role="status">' + esc(T.analysisRunning) + '</p>';
+    // La suite (application, interprétation, HTTP) ouvre ses propres cartes : un simple conteneur ici.
+    h += '</div>' + intentsCard(a) + '<div>';
     if (a.application && a.application.tree.length) {
       var treeHtml = function (nodes) {
         return '<ul>' + nodes.map(function (n) {
@@ -755,28 +898,6 @@ const SCRIPT = `
       if (x.inconsistencies.length) h += '<h3>' + esc(T.httpIncons) + '</h3><ul class="bunres">' + x.inconsistencies.map(function (i) { return '<li>' + esc(i) + '</li>'; }).join('') + '</ul>';
       if (x.revisions.length) h += '<details><summary>' + esc(T.httpRevisions) + ' (' + x.revisions.length + ')</summary><ul>' + x.revisions.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul></details>';
     }
-    h += '</div><div class="card card-plain"><h2>' + esc(T.intents) + '</h2>';
-    var qs = a.searchIntents || [];
-    h += qs.map(function (q) {
-      var badge = function (st) { return '<span class="bbadge ' + (st === 'VALIDATED' ? 'CONFIRMED' : st === 'INFERRED' ? 'PROBABLE' : 'UNKNOWN') + '">' + esc(st) + '</span>'; };
-      var r = '<div class="search"><b>' + esc(T.searchL) + '</b> ' + badge(q.state) + '<div class="meta">' + esc(q.api) + '</div>';
-      if (q.technical) r += '<div class="meta">' + esc(T.techL) + ' : ' + esc(q.technical) + '</div>';
-      r += '<h3>' + esc(T.critL) + '</h3><ul class="bent">' + q.criteria.map(function (c) {
-        return '<li><b>' + esc(c.label || c.property) + '</b> ' + badge(c.state) + '<div class="meta">' + esc(T.apiL) + ' : ' + esc(c.property) + '</div>' + (c.operator ? '<div class="meta">' + esc(T.opL) + ' : ' + esc(c.operator) + '</div>' : '') + '<div class="meta">' + esc(T.valL) + ' : ' + esc(c.value) + (c.testData ? ' (' + esc(c.testData) + ')' : '') + (c.fromCreation ? ' · ' + esc(T.fromCreateL) : '') + '</div></li>';
-      }).join('') + '</ul>';
-      if (q.logic) r += '<div class="meta">' + esc(T.logicL) + ' : ' + esc(q.logic) + '</div>';
-      if (q.sort.length) r += '<div class="meta">' + esc(T.sortL) + ' : ' + esc(q.sort.join(', ')) + '</div>';
-      if (q.parameters.length) r += '<div class="meta">' + esc(T.paramsL) + ' : ' + esc(q.parameters.map(function (p) { return (T.roles[p.role] || p.role) + ' (' + p.paths.join(', ') + ')'; }).join(' · ')) + '</div>';
-      r += '<div class="meta">' + esc(T.confidence) + ' : ' + Math.round(q.confidence * 100) + ' %</div>';
-      if (q.evidence.length) r += '<details><summary>' + esc(T.why) + '</summary><ul>' + q.evidence.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul></details>';
-      return r + '</div>';
-    }).join('');
-    h += a.intents.length ? a.intents.map(function (i) {
-      return '<div><b>' + esc(i.label) + '</b>' + (i.detail ? '<div class="meta">' + esc(i.detail) + '</div>' : '') + (i.confidence !== undefined ? '<div class="meta">' + esc(T.confidence) + ' : ' + Math.round(i.confidence * 100) + ' %</div>' : '') + (i.evidence.length ? '<details><summary>' + esc(T.why) + '</summary><ul>' + i.evidence.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul></details>' : '') + '</div>';
-    }).join('') : qs.length ? '' : '<p class="empty">' + esc(T.noIntent) + '</p>';
-    if (a.technicalIntents && a.technicalIntents.length) h += '<h3>' + esc(T.technicalIntents) + '</h3><ul class="bunres">' + a.technicalIntents.map(function (i) {
-      return '<li><b>' + esc(i.label) + '</b>' + (i.detail ? '<div class="meta">' + esc(i.detail) + '</div>' : '') + (i.evidence.length ? '<div class="meta">' + esc(i.evidence.join(' · ')) + '</div>' : '') + '</li>';
-    }).join('') + '</ul>';
     h += '</div><div class="card card-plain"><h2>' + esc(T.findings) + '</h2>';
     h += a.findings.length ? a.findings.map(function (f) {
       return '<p><span class="tag">' + esc(f.severity) + '</span><b>' + esc(f.message) + '</b><br><span class="meta">' + esc(T.origin[f.origin] || f.origin) + '</span>' + (f.suggestion ? '<br>' + esc(f.suggestion) : '') + '</p>';
@@ -788,7 +909,7 @@ const SCRIPT = `
   function render() {
     if (!state) return;
     if (DETACHED) { renderDetached(); return; }
-    renderHead(); renderReview(); renderSummary(); renderTimeline(); renderDetails(); renderQuality(); renderPreview(); renderFooter(); renderAnalysis(); tickTimer();
+    renderHead(); renderReview(); renderStory(); renderSummary(); renderTimeline(); renderDetails(); renderQuality(); renderPreview(); renderFooter(); renderAnalysis(); tickTimer();
   }
 
   var TABS = ['recording', 'analysis', 'preview'];
@@ -814,6 +935,8 @@ const SCRIPT = `
     var target = event.target instanceof Element ? event.target.closest('button') : null;
     if (!target) return;
     if (target.id === 'devtoggle') { dev = !dev; target.setAttribute('aria-pressed', String(dev)); render(); return; }
+    if (target.id === 'layouttoggle') { layout = layout === 'compact' ? 'full' : 'compact'; storeLayout(layout); render(); return; }
+    if (target.id === 'tlattention') { onlyAttention = !onlyAttention; render(); return; }
     if (target.getAttribute('role') === 'tab') { selectTab(target.id.replace('tab-', '')); return; }
     var cmd = target.getAttribute('data-cmd'), id = target.getAttribute('data-id');
     if (!cmd) return;
@@ -832,6 +955,8 @@ const SCRIPT = `
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
     send({ type: cmd, id: id });
   });
+
+  if (!DETACHED) $('tlsearch').addEventListener('input', function (event) { filterText = event.target.value || ''; renderTimeline(); });
 
   // Le choix d'un élément survit aux mises à jour du panneau (chaque action reconstruit la liste).
   document.addEventListener('change', function (event) {
@@ -852,6 +977,7 @@ const SCRIPT = `
   }
   $('subtitle').textContent = T.subtitle;
   $('devtoggle').textContent = '</> ' + T.devMode;
+  $('layouttoggle').setAttribute('aria-label', T.layoutLabel);
   $('tab-recording').textContent = T.tabRecording; $('tab-analysis').textContent = T.tabAnalysis; $('tab-preview').textContent = T.tabPreview;
   document.querySelector('.tabs').setAttribute('aria-label', T.tabs);
   $('head').setAttribute('aria-label', T.recording);

@@ -16,6 +16,7 @@ import {
   type PanelReplay,
   type PanelSearch,
   type PanelState,
+  type PanelStep,
   type PanelTreeNode,
 } from './panel-state.js';
 import { generateFlowFiles } from './recorded-flow.js';
@@ -54,6 +55,9 @@ export class RecordingConsole {
   private capturing = false;
   /** recording.panelPreview : l'aperçu de l'application dans la fenêtre. */
   withPreview = true;
+
+  /** recording.panelLayout : la disposition au démarrage (complète ou mini-dock). */
+  layout: 'full' | 'compact' = 'full';
 
   /** L'aperçu détaché dans sa propre fenêtre (plein écran possible). */
   private detached: RecorderPanel | undefined;
@@ -380,7 +384,18 @@ export class RecordingConsole {
     const inReview = this.phase === 'REVIEW' && this.result !== undefined;
     const review =
       inReview && this.result ? reviewSteps(this.result.flow, live.actions, this.language) : undefined;
-    const actions = review ? review.actions : live.actions.map((action) => liveStep(action, this.language));
+    const actions = enrichSteps(
+      review ? review.actions : live.actions.map((action) => liveStep(action, this.language)),
+      {
+        // Les événements bruts de chaque étape : ceux du flow (revue) ou de l'action en direct.
+        rawIds: (step) =>
+          (review
+            ? this.result?.flow.steps.find((item) => item.id === step.id)?.rawEventIds
+            : live.actions.find((action) => action.id === step.id)?.rawEventIds) ?? [],
+        analysis: review ? this.result?.http?.consolidated : this.recorder.lastLiveAnalysis(),
+        ...(review && this.result ? { business: this.result.business?.model.steps } : {}),
+      },
+    );
     const phase = this.phase === 'RECORDING' && this.recorder.isPaused ? 'PAUSED' : this.phase;
     return {
       language: this.language,
@@ -402,8 +417,91 @@ export class RecordingConsole {
       analysis: this.analysis,
       ...(this.httpLive ? { http: this.httpLive } : {}),
       ...(this.directory ? { directory: this.directory } : {}),
+      layout: this.layout,
     };
   }
+}
+
+/**
+ * Les étapes enrichies pour la fenêtre : leur GROUPE (l'étape métier en revue, l'écran en direct) et
+ * les REQUÊTES reliées (critères, tri, pagination) — lus dans l'analyse, jamais une valeur saisie.
+ */
+function enrichSteps(
+  steps: PanelStep[],
+  context: {
+    rawIds: (step: PanelStep) => readonly string[];
+    analysis: RecordingAnalysis | undefined;
+    business?: readonly {
+      action: string;
+      entity?: string;
+      entityKey?: string;
+      recordedActions: readonly string[];
+    }[];
+  },
+): PanelStep[] {
+  const groupOf = (step: PanelStep): string | undefined => {
+    const owner = context.business?.find((entry) => entry.recordedActions.includes(step.id));
+    if (owner)
+      return `${owner.action.toLowerCase()} ${owner.entity ?? owner.entityKey?.split(':').at(-2) ?? ''}`.trim();
+    if (context.business) return undefined;
+    return step.technical.page;
+  };
+  return steps.map((step) => {
+    const group = groupOf(step);
+    const raw = new Set(context.rawIds(step));
+    const linked: { networkIds: string[]; kind: string; confidence: number }[] = (
+      context.analysis?.correlations ?? []
+    ).filter((correlation) => raw.has(correlation.actionId));
+    // Une SAISIE dont la valeur est envoyée comme critère : la requête de la recherche lui est reliée aussi.
+    for (const business of context.analysis?.business ?? [])
+      for (const criterion of business.searchCriteria)
+        if (
+          criterion.ui &&
+          raw.has(criterion.ui.actionId) &&
+          !linked.some((link) => link.networkIds.includes(business.networkId))
+        )
+          linked.push({
+            networkIds: [business.networkId],
+            kind: 'VALUE_SENT',
+            confidence: criterion.confidence,
+          });
+    const network = linked.flatMap((correlation) =>
+      correlation.networkIds.flatMap((networkId) => {
+        const business = context.analysis?.business.find((entry) => entry.networkId === networkId);
+        if (!business || business.operation === 'TECHNICAL') return [];
+        const logic = business.searchCriteria.find((criterion) => criterion.logicalGroup)?.logicalGroup
+          ?.operator;
+        return [
+          {
+            api: business.api,
+            ...(business.result?.status !== undefined ? { status: business.result.status } : {}),
+            operation: business.operation,
+            link: `${correlation.kind} · ${String(Math.round(correlation.confidence * 100))} %`,
+            criteria: business.searchCriteria.map(
+              (criterion) =>
+                `${criterion.ui ? `"${criterion.ui.label}" → ` : ''}${criterion.propertyName}${criterion.operator ? ` ${criterion.operator}` : ''}${logic ? ` · ${logic}` : ''}`,
+            ),
+            extras: [
+              ...business.sort.map(
+                (sort) => `sort ${sort.property ?? sort.path} ${sort.direction.toUpperCase()}`,
+              ),
+              ...(business.pagination
+                ? [
+                    `page ${String(business.pagination.index?.value ?? 0)} / ${String(business.pagination.size?.value ?? '?')}`,
+                  ]
+                : []),
+              ...business.options.map((option) => `option ${option.replace(/^\?/, '')}`),
+            ],
+          },
+        ];
+      }),
+    );
+    return {
+      ...step,
+      ...(group ? { group } : {}),
+      ...(network.length ? { network } : {}),
+    };
+  });
 }
 
 /**
