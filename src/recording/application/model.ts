@@ -1,3 +1,4 @@
+import type { TechnicalIntent, TechnicalOperation } from '../business/entity-classifier.js';
 import type { StateCode } from '../../functional/model.js';
 import type { EntityClassification } from '../business/entity-classifier.js';
 import type { EntityProvenance } from '../business/provenance-resolver.js';
@@ -228,6 +229,10 @@ export interface TechnicalItem {
     | 'CONFIGURATION'
     | 'COMPONENT'
     | 'OTHER';
+  /** L'opération technique (TOKEN_ACQUISITION, OPENID_DISCOVERY, KEY_SET…), d'après le protocole. */
+  operation?: TechnicalOperation;
+  /** L'INTENT TECHNIQUE (ACQUIRE_TOKEN, AUTHENTICATE…) : jamais un intent métier. */
+  intent?: TechnicalIntent;
   label: string;
   /** D'où vient l'observation : une entité suivie reclassée, un appel réseau, une navigation, le DOM. */
   source: 'ENTITY' | 'NETWORK' | 'NAVIGATION' | 'DOM';

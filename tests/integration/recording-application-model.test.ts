@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ApplicationInteractionModel } from '../../src/recording/application/model.js';
-import type { RecordedFlowStep } from '../../src/recording/model.js';
+import type { RecordedFlowStep, RecordedIntent, TechnicalIntentRecord } from '../../src/recording/model.js';
 import { runRecording } from '../../src/recording/record-orchestrator.js';
 import {
   startWorkspaceRecordingApp,
@@ -20,6 +20,7 @@ import {
 interface Session {
   model: ApplicationInteractionModel;
   steps: RecordedFlowStep[];
+  intents: { intents: RecordedIntent[]; technicalIntents: TechnicalIntentRecord[] };
 }
 
 describe('Application Interaction Model (shell + task list + BFF + micro-frontends)', () => {
@@ -62,6 +63,9 @@ safety:
           steps: RecordedFlowStep[];
         }
       ).steps,
+      intents: JSON.parse(
+        await readFile(path.join(outcome.directory, 'semantic-intents.json'), 'utf8'),
+      ) as Session['intents'],
     };
   };
   const pause = (page: Page, ms = 500): Promise<void> => page.waitForTimeout(ms);
@@ -215,7 +219,12 @@ safety:
     const model = sessions.plain?.model;
     expect(model?.contexts.every((context) => context.kind === 'ROUTE')).toBe(true);
     expect(model?.tasks.map((task) => task.primary.value)).toEqual(['457']);
-    expect(subsequence(kinds(sessions.plain), ['SELECT_TASK', 'SWITCH_CONTEXT', 'OPEN'])).toBe(true);
+    expect(subsequence(kinds(sessions.plain), ['SELECT_TASK', 'SWITCH_CONTEXT'])).toBe(true);
+    // OBSERVED ≠ BUSINESS : l'item ouvert n'est vu que par sa route et sa lecture (aucun geste sur lui,
+    // aucune écriture) : une observation UNKNOWN, gardée, sans action métier ni Business Context.
+    expect(kinds(sessions.plain)).not.toContain('OPEN');
+    expect(model?.businessContext.entityKeys).toEqual([]);
+    expect(model?.businessContext.unknownKeys).toContain('entity:item:ABC777');
   });
 
   it('TEST E — OIDC discovery / userinfo are INFRASTRUCTURE in the Technical Context, never business entities', () => {
@@ -233,6 +242,24 @@ safety:
     expect(items.map((item) => `${item.classification}:${item.category}`)).toEqual(
       expect.arrayContaining(['INFRASTRUCTURE_ENTITY:DISCOVERY', 'INFRASTRUCTURE_ENTITY:AUTHENTICATION']),
     );
+    // POST /token : une ACQUISITION DE JETON (intent technique), jamais une création métier.
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ operation: 'TOKEN_ACQUISITION', intent: 'ACQUIRE_TOKEN' }),
+        expect.objectContaining({ operation: 'OPENID_DISCOVERY' }),
+        expect.objectContaining({ operation: 'USER_INFO' }),
+      ]),
+    );
+    for (const session of Object.values(sessions)) {
+      expect(session.intents.intents.map((entry) => entry.workflow ?? '').join(' ')).not.toMatch(
+        /TOKEN|OIDC|USERINFO/i,
+      );
+      expect(session.intents.technicalIntents.map((entry) => entry.intent)).toEqual(
+        expect.arrayContaining(['ACQUIRE_TOKEN', 'DISCOVER_PROVIDER']),
+      );
+    }
+    // La création prouvée reste une création métier : CREATE:ITEM.
+    expect(sessions.created?.intents.intents.map((entry) => entry.workflow)).toEqual(['CREATE:ITEM']);
     // Les tasks et les contextes sont de l'APPLICATION ; l'item créé est MÉTIER.
     expect([...new Set(sessions.created?.model.tasks.map((task) => task.classification))]).toEqual([
       'APPLICATION_ENTITY',

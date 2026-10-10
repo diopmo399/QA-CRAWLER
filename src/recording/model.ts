@@ -1,3 +1,4 @@
+import type { TechnicalCategory, TechnicalIntent, TechnicalOperation } from './business/entity-classifier.js';
 import type { PlaywrightTargetEvidence } from './sources/playwright-locator.js';
 import type { CausalEffectCandidate } from './effect-causality.js';
 import type {
@@ -631,6 +632,23 @@ export interface RecordedIntent {
   transitions: { entity: string; from: string; to: string }[];
   confidence: number;
   evidence: string[];
+  /**
+   * Les INTENTS TECHNIQUES (authentification, découverte, santé, configuration…) : observés, séparés
+   * de l'intent métier (workflow), et jamais interprétés comme une création métier.
+   */
+  technical?: TechnicalIntentRecord[];
+}
+
+export interface TechnicalIntentRecord {
+  intent: TechnicalIntent;
+  operation: TechnicalOperation;
+  category: TechnicalCategory;
+  classification: 'TECHNICAL_ENTITY' | 'INFRASTRUCTURE_ENTITY';
+  /** Méthode + gabarit d'URL (identifiants remplacés). */
+  api: string;
+  status?: number;
+  actionIds: string[];
+  reason: string;
 }
 
 /** Une étape du flow final : l'étape exécutable + d'où elle vient. */

@@ -274,6 +274,58 @@ corps), et l'humain saisit un nom dans les critères avant de choisir une task.
   actions enregistrées et ne garde que les libellés des champs, jamais les valeurs. Sans relecture ni
   changement de lignes, les critères restent `UNKNOWN`.
 
+## Trois contextes, deux sortes d'intents, une création prouvée
+
+**Principe** : OBSERVE → CLASSIFY → CORRELATE → INTERPRET → CONFIRM. Aucune entité métier n'est
+inventée ; une authentification n'est jamais une création métier.
+
+- **Observé ≠ métier** : seule une entité `BUSINESS_ENTITY` (preuves fonctionnelles convergentes)
+  porte des actions métier (`CREATE`, `OPEN`, `SEARCH`, `UPDATE`, `SAVE`…) et entre dans le Business
+  Context.
+  - Une entité `UNKNOWN` est gardée avec ses preuves (`businessContext.unknownKeys`, nœud
+    « OBSERVED · NOT CLASSIFIED » de la fenêtre), sans action métier.
+  - Un item vu seulement par une route et une lecture, après une task, reste une observation : la
+    task ouvre le MFE, rien de plus.
+- **Règle générale** (`isTechnicalOperation`, appliquée dans `intentOf` pour tous ses appelants) :
+  les opérations suivantes ne sont jamais un intent ni une création métier :
+  - authentification, OIDC / OAuth, jeton ;
+  - JWKS, découverte OpenID ;
+  - télémétrie, santé, configuration ;
+  - ressources statiques.
+- **Opération et intent technique** (`technicalCategoryOf`) :
+
+  | Chemin (convention de protocole) | Opération                                | Intent technique                       |
+  | -------------------------------- | ---------------------------------------- | -------------------------------------- |
+  | `…/token`, `introspect`          | `TOKEN_ACQUISITION`                      | `ACQUIRE_TOKEN`                        |
+  | `authorize`                      | `AUTHORIZATION`                          | `AUTHORIZE`                            |
+  | `userinfo`                       | `USER_INFO`                              | `READ_USER_INFO`                       |
+  | `callback`, `auth-redirect`…     | `AUTH_REDIRECT`                          | `AUTHENTICATE`                         |
+  | `.well-known`, OpenID config     | `OPENID_DISCOVERY`                       | `DISCOVER_PROVIDER`                    |
+  | `jwks`                           | `KEY_SET`                                | `READ_KEYS`                            |
+  | santé / télémétrie               | `HEALTH_CHECK` / `TELEMETRY`             | `CHECK_HEALTH` / `REPORT_TELEMETRY`    |
+  | configuration / statique         | `CONFIGURATION_READ` / `STATIC_RESOURCE` | `LOAD_CONFIGURATION` / `LOAD_RESOURCE` |
+
+  Ces intents techniques sont dans `semantic-intents.json` (`technicalIntents`), séparés des
+  intents métier (`intents`), et dans le Technical Context (`operation`, `intent`).
+
+- **Intent métier corrélé** : un `CREATE:…` déduit d'une écriture acceptée n'est qu'une écriture
+  observée tant que la couche métier n'a pas prouvé la création (la fenêtre l'indique).
+- **`POSSIBLE_CREATE` ≠ `ENTITY_CREATED`** (voir `HUMAN_FLOW_RECORDER.md`) ; dans le modèle, un
+  `CREATE` exige la provenance `CREATED_DURING_RECORDING`. Une première observation n'est jamais une
+  création (`firstSeen ≠ created`). Les provenances sont inchangées : `CREATED_DURING_RECORDING`,
+  `CONFIRMED_EXISTING`, `DISCOVERED_DURING_RECORDING`, `UNKNOWN`, `AMBIGUOUS`.
+- **Fenêtre** :
+
+  ```
+  APPLICATION CONTEXT
+  └── TASK WORKSPACE · POST /…
+      └── Task #…
+          └── MFE …            (entités métier seulement si démontrées)
+  BUSINESS CONTEXT             (seulement si une entité métier est démontrée)
+  OBSERVED · NOT CLASSIFIED    (UNKNOWN : gardées, jamais métier)
+  TECHNICAL CONTEXT            (AUTHENTICATION / DISCOVERY / … → opération · intent technique)
+  ```
+
 ## Limites connues
 
 - Les **actions à l'intérieur d'une iframe** ne sont pas encore enregistrées (le script de capture

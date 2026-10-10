@@ -11,6 +11,8 @@ import {
 
 const ACTION_OF: Record<BusinessEvent['type'], BusinessFlowStep['action']> = {
   ENTITY_CREATED: 'create',
+  // Jamais une étape : une création possible reste dans les incertains (son statut est UNKNOWN).
+  POSSIBLE_CREATE: 'create',
   ENTITY_SEARCHED: 'search',
   ENTITY_OPENED: 'open',
   ENTITY_UPDATED: 'update',
@@ -64,7 +66,10 @@ export function buildBusinessFlow(name: string, detection: BusinessDetection): B
   // puis les entités nommées d'étapes qu'aucune identité ne porte.
   const entities: BusinessFlowEntity[] = detection.entities.map((entity) => ({
     name: entity.type,
-    type: 'business_entity' as const,
+    type:
+      entity.classification.classification === 'BUSINESS_ENTITY'
+        ? ('business_entity' as const)
+        : ('observed_entity' as const),
     references: detection.memory.all
       .filter((record) =>
         detection.memory

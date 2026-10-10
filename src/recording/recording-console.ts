@@ -182,7 +182,7 @@ export class RecordingConsole {
         ? [
             {
               label: intent.workflow,
-              ...(intent.api ? { detail: intent.api } : {}),
+              ...(intent.api ? { detail: `${intent.api}${correlationOf(result)}` } : {}),
               confidence: intent.confidence,
               evidence: [
                 ...intent.evidence,
@@ -193,6 +193,11 @@ export class RecordingConsole {
             },
           ]
         : [],
+      technicalIntents: (intent.technical ?? []).map((entry) => ({
+        label: `${entry.intent} · ${entry.api}`,
+        detail: `${entry.classification} · ${entry.category} · ${entry.operation}`,
+        evidence: [entry.reason, ...(entry.status !== undefined ? [`status ${String(entry.status)}`] : [])],
+      })),
       findings: (flowAudit?.findings ?? []).map((finding) => ({
         severity: finding.severity,
         message: finding.message,
@@ -477,8 +482,10 @@ function businessOf(result: RecordingResult): NonNullable<PanelAnalysis['busines
       ...(event.candidates ? { candidates: event.candidates } : {}),
       recorded: recorded(event.stepIds),
     })),
+    // Seules les entités MÉTIER démontrées : les observations (UNKNOWN, technique) restent dans
+    // l'arbre de l'application, jamais présentées comme métier.
     entities: (model?.entities ?? []).flatMap((entity) =>
-      entity.key && entity.provenance
+      entity.key && entity.provenance && entity.type === 'business_entity'
         ? [
             {
               key: entity.key,
@@ -496,6 +503,19 @@ function businessOf(result: RecordingResult): NonNullable<PanelAnalysis['busines
         : [],
     ),
   };
+}
+
+/**
+ * Un intent métier n'est qu'une ÉCRITURE OBSERVÉE tant que la couche métier ne l'a pas corrélée :
+ * un CREATE:… sans ENTITY_CREATED prouvé reste « création non prouvée ».
+ */
+function correlationOf(result: RecordingResult): string {
+  const workflow = result.flow.intent.workflow;
+  const model = result.business?.model;
+  if (!workflow?.startsWith('CREATE:') || !model) return '';
+  return model.steps.some((step) => step.action === 'create')
+    ? ' · creation proven (ENTITY_CREATED)'
+    : ' · write observed, creation NOT proven (no converging evidence: at most a POSSIBLE_CREATE)';
 }
 
 /**
@@ -552,8 +572,12 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
     };
   };
   const placed = new Set<string>();
-  const tree: PanelTreeNode[] = model.workspaces.map((workspace) => ({
-    label: `TASK WORKSPACE · ${workspace.source.type === 'NETWORK' ? `GET ${workspace.source.path}` : 'DOM'}`,
+  const isBusiness = (key: string): boolean =>
+    model.entities.some(
+      (entity) => entity.key === key && entity.classification.classification === 'BUSINESS_ENTITY',
+    );
+  const workspaces: PanelTreeNode[] = model.workspaces.map((workspace) => ({
+    label: `TASK WORKSPACE · ${workspace.source.type === 'NETWORK' ? workspace.collectionKey.replace(/^collection:/, '') : 'DOM'}`,
     detail: [
       workspace.reason,
       workspace.source.type === 'NETWORK' && workspace.source.bffCandidate
@@ -585,7 +609,9 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
             relation.source.startsWith('entity:') ? relation.source : relation.target,
           ),
         ),
-      ].filter((key) => model.entities.some((entity) => entity.key === key));
+        // OBSERVED ≠ BUSINESS : sous une task, seulement une entité MÉTIER démontrée ; une entité
+        // UNKNOWN qu'elle référence reste dans les observations.
+      ].filter(isBusiness);
       for (const key of entityKeys) placed.add(key);
       const opened = own.filter((relation) => relation.type === 'NAVIGATES_TO');
       const entities = entityKeys.map((key) =>
@@ -619,14 +645,48 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
       ];
     }),
   }));
-  // BUSINESS CONTEXT : les entités métier (ou encore inconnues) qu'aucune task ne porte.
-  const loose = model.entities.filter((entity) => !placed.has(entity.key));
+  // TROIS NIVEAUX : APPLICATION CONTEXT (workspace → task → MFE), BUSINESS CONTEXT (seulement des
+  // entités métier démontrées), TECHNICAL CONTEXT (des preuves, jamais le flow métier). Les
+  // observations non classées (UNKNOWN) sont gardées à part : jamais présentées comme métier.
+  const tree: PanelTreeNode[] = [];
+  if (workspaces.length)
+    tree.push({
+      label: 'APPLICATION CONTEXT',
+      detail: 'task workspaces, tasks and the application contexts (micro-frontends) they open',
+      evidence: [],
+      recorded: [],
+      children: workspaces,
+    });
+  const loose = model.entities.filter(
+    (entity) => !placed.has(entity.key) && entity.classification.classification === 'BUSINESS_ENTITY',
+  );
   if (loose.length)
     tree.push({
       label: 'BUSINESS CONTEXT',
+      detail: 'business entities demonstrated by converging functional evidence',
       evidence: [],
       recorded: [],
       children: loose.map((entity) => entityNode(entity.key)),
+    });
+  const observed = model.entities.filter(
+    (entity) => entity.classification.classification !== 'BUSINESS_ENTITY',
+  );
+  if (observed.length)
+    tree.push({
+      label: 'OBSERVED · NOT CLASSIFIED',
+      detail: `${String(observed.length)} observation(s) kept with their evidence: no business role demonstrated (UNKNOWN), never a business entity`,
+      evidence: [],
+      recorded: [],
+      children: observed.map((entity) =>
+        entityNode(
+          entity.key,
+          model.relationships.find(
+            (relation) =>
+              relation.type === 'REFERENCES' &&
+              (relation.source === entity.key || relation.target === entity.key),
+          ),
+        ),
+      ),
     });
   // TECHNICAL CONTEXT : des observations, jamais des étapes métier (OIDC, configuration, statique…).
   const items = model.technicalContext.items;
@@ -644,8 +704,10 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
         children: items
           .filter((item) => item.category === category)
           .map((item) => ({
-            label: item.label,
-            detail: `${item.classification} · ${item.reason}`,
+            label: `${item.operation ? `${item.operation} · ` : ''}${item.label}`,
+            detail: [item.classification, item.intent ? `TECHNICAL_INTENT ${item.intent}` : '', item.reason]
+              .filter(Boolean)
+              .join(' · '),
             status: item.confidence >= 0.85 ? ('CONFIRMED' as const) : ('DEDUCED' as const),
             confidence: item.confidence,
             evidence: evidenceText(item.evidenceIds),

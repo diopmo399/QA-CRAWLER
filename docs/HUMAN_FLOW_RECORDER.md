@@ -1105,6 +1105,20 @@ OBSERVATION TECHNIQUE (actions, DOM, navigation, réseau)
 bouton (« Créer »), navigation (`/demandes/12345`) et actions précédentes (« Nouvelle demande »)
 sont pesés ensemble.
 
+**`POSSIBLE_CREATE` ≠ `ENTITY_CREATED`** : `ENTITY_CREATED` exige des preuves convergentes :
+
+- un geste de l'utilisateur qui soumet (clic, envoi) ;
+- une écriture métier acceptée (2xx, ni technique ni liste lue) ;
+- une nouvelle identité servie par le serveur (réponse, `Location`) ou une provenance
+  `CREATED_DURING_RECORDING` ;
+- une entité identifiée et une confiance ≥ 0,6.
+
+Sinon l'événement est un `POSSIBLE_CREATE` (statut `UNKNOWN` ou `AMBIGUOUS`) : il liste les preuves
+manquantes, reste dans les incertains et ne produit jamais de référence `$created`. Un POST, un
+clic, une nouvelle URL, un élément inconnu, une première observation ou une réponse seule ne
+suffisent pas. Seule une entité classée `BUSINESS_ENTITY` porte des événements métier ; une
+observation `UNKNOWN` reste une observation.
+
 **Mémoire des entités** : une création retenue produit une référence runtime
 (`$created.demande.id`, puis `.id2`…). Une saisie plus loin dont l'empreinte salée (ou la valeur)
 est celle de cet identifiant devient une **recherche** de l'entité (`SEARCH_REFERENCE`) ; le clic

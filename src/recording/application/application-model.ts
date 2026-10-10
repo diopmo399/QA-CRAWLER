@@ -627,11 +627,19 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
   const keptEntities = entities.filter(
     (entity) => !isTaskShadow(entity) && isBusinessCandidate(entity.classification.classification),
   );
-  for (const entity of keptEntities) {
+  // OBSERVED ≠ BUSINESS : seules les entités MÉTIER démontrées portent des actions métier ; une
+  // entité UNKNOWN reste une observation (gardée, avec ses preuves), jamais une étape du flow métier.
+  const businessEntities = keptEntities.filter(
+    (entity) => entity.classification.classification === 'BUSINESS_ENTITY',
+  );
+  for (const entity of businessEntities) {
     const created = creationIndex(entity);
     for (const step of entity.lifecycle) {
       const kind = LIFECYCLE_ACTION[step.kind];
       if (!kind) continue;
+      // CREATE seulement pour une création PROUVÉE (provenance CREATED_DURING_RECORDING) :
+      // une première observation n'est jamais une création.
+      if (kind === 'CREATE' && entity.provenance.classification !== 'CREATED_DURING_RECORDING') continue;
       const indexes = step.actionIds
         .map((id) => actions.findIndex((action) => action.id === id))
         .filter((value) => value >= 0);
@@ -666,8 +674,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
         type: relationType,
         source: entity.key,
         target: kind === 'SEARCH' ? `action:${step.actionIds[0] ?? ''}` : context.key,
-        confidence:
-          kind === 'CREATE' && entity.provenance.classification !== 'CREATED_DURING_RECORDING' ? 0.5 : 0.85,
+        confidence: 0.85,
         reason: `${kind.toLowerCase()} happened in ${context.name}`,
         evidenceIds,
         actionIds: step.actionIds,
@@ -705,7 +712,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     }
   }
   // CREATE_RESULT / RETRIEVE : une lecture APRÈS la création sert un enregistrement qui porte la nouvelle identité.
-  for (const entity of keptEntities) {
+  for (const entity of businessEntities) {
     const created = creationIndex(entity);
     if (
       created === undefined ||
@@ -932,12 +939,13 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
         .map((id) => entityEvidence.get(id))
         .flatMap((entry) => [entry?.details.url, entry?.details.route])
         .find((value): value is string => !!value);
-      const category = location ? technicalCategoryOf(location)?.category : undefined;
+      const role = location ? technicalCategoryOf(location) : undefined;
       addTechnical(
         {
           key: `tech:${entity.key}`,
           classification: kind,
-          category: category ?? (kind === 'TECHNICAL_ENTITY' ? 'COMPONENT' : 'OTHER'),
+          category: role?.category ?? (kind === 'TECHNICAL_ENTITY' ? 'COMPONENT' : 'OTHER'),
+          ...(role ? { operation: role.operation, intent: role.intent } : {}),
           label: entity.identity.value ?? entity.key,
           source: 'ENTITY',
           confidence: entity.classification.confidence,
@@ -953,6 +961,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
         path: exchange.path,
         source: 'NETWORK' as const,
         what: `${exchange.method} ${exchange.path}`,
+        method: exchange.method,
       })),
       ...(action.navigation?.routes ?? []).map((route) => ({
         path: route,
@@ -966,12 +975,15 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
     for (const place of places) {
       const role = technicalCategoryOf(place.path);
       if (!role) continue;
+      const method = 'method' in place ? `${place.method} ` : '';
       addTechnical(
         {
-          key: `tech:${role.category}:${routePattern(place.path, 6)}`,
+          key: `tech:${role.operation}:${method}${routePattern(place.path, 6)}`,
           classification: role.classification,
           category: role.category,
-          label: routePattern(place.path, 6),
+          operation: role.operation,
+          intent: role.intent,
+          label: `${method}${routePattern(place.path, 6)}`,
           source: place.source,
           confidence: role.confidence,
           reason: role.reason,

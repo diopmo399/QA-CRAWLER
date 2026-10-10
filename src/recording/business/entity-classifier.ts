@@ -197,14 +197,92 @@ export type TechnicalCategory =
  * Le rôle TECHNIQUE d'un chemin (appel réseau, route), par convention de protocole ou de fichier :
  * absent si rien ne le dit (le chemin peut alors être métier, ou inconnu).
  */
-export function technicalCategoryOf(location: string):
-  | {
-      classification: 'TECHNICAL_ENTITY' | 'INFRASTRUCTURE_ENTITY';
-      category: TechnicalCategory;
-      reason: string;
-      confidence: number;
-    }
-  | undefined {
+export function technicalCategoryOf(location: string): TechnicalRole | undefined {
+  const role = categoryOf(location);
+  if (!role) return undefined;
+  const operation = operationOf(pathOf(location), role.category);
+  return { ...role, operation, intent: TECHNICAL_INTENT[operation] };
+}
+
+/**
+ * L'OPÉRATION technique (d'après les conventions de protocole) et l'INTENT TECHNIQUE qui en
+ * découle : un POST /token est une ACQUISITION DE JETON (ACQUIRE_TOKEN), jamais une création.
+ */
+export type TechnicalOperation =
+  | 'TOKEN_ACQUISITION'
+  | 'AUTHORIZATION'
+  | 'USER_INFO'
+  | 'AUTH_REDIRECT'
+  | 'LOGOUT'
+  | 'AUTHENTICATION'
+  | 'OPENID_DISCOVERY'
+  | 'KEY_SET'
+  | 'HEALTH_CHECK'
+  | 'TELEMETRY'
+  | 'CONFIGURATION_READ'
+  | 'STATIC_RESOURCE';
+export type TechnicalIntent =
+  | 'ACQUIRE_TOKEN'
+  | 'AUTHORIZE'
+  | 'READ_USER_INFO'
+  | 'AUTHENTICATE'
+  | 'LOGOUT'
+  | 'DISCOVER_PROVIDER'
+  | 'READ_KEYS'
+  | 'CHECK_HEALTH'
+  | 'REPORT_TELEMETRY'
+  | 'LOAD_CONFIGURATION'
+  | 'LOAD_RESOURCE';
+export interface TechnicalRole {
+  classification: 'TECHNICAL_ENTITY' | 'INFRASTRUCTURE_ENTITY';
+  category: TechnicalCategory;
+  operation: TechnicalOperation;
+  intent: TechnicalIntent;
+  reason: string;
+  confidence: number;
+}
+const TECHNICAL_INTENT: Record<TechnicalOperation, TechnicalIntent> = {
+  TOKEN_ACQUISITION: 'ACQUIRE_TOKEN',
+  AUTHORIZATION: 'AUTHORIZE',
+  USER_INFO: 'READ_USER_INFO',
+  AUTH_REDIRECT: 'AUTHENTICATE',
+  LOGOUT: 'LOGOUT',
+  AUTHENTICATION: 'AUTHENTICATE',
+  OPENID_DISCOVERY: 'DISCOVER_PROVIDER',
+  KEY_SET: 'READ_KEYS',
+  HEALTH_CHECK: 'CHECK_HEALTH',
+  TELEMETRY: 'REPORT_TELEMETRY',
+  CONFIGURATION_READ: 'LOAD_CONFIGURATION',
+  STATIC_RESOURCE: 'LOAD_RESOURCE',
+};
+
+function operationOf(path: string, category: TechnicalCategory): TechnicalOperation {
+  const has = (pattern: string): boolean => new RegExp(`(^|/)(${pattern})(/|$)`, 'i').test(path);
+  switch (category) {
+    case 'DISCOVERY':
+      return /(^|\/)jwks(\.json)?(\/|$)/i.test(path) ? 'KEY_SET' : 'OPENID_DISCOVERY';
+    case 'HEALTH_TELEMETRY':
+      return has('health|healthz|readyz|livez|ready|alive|ping') ? 'HEALTH_CHECK' : 'TELEMETRY';
+    case 'CONFIGURATION':
+      return 'CONFIGURATION_READ';
+    case 'STATIC_RESOURCE':
+      return 'STATIC_RESOURCE';
+    case 'AUTHENTICATION':
+      if (has('token|introspect')) return 'TOKEN_ACQUISITION';
+      if (has('authorize')) return 'AUTHORIZATION';
+      if (has('userinfo')) return 'USER_INFO';
+      if (has('logout')) return 'LOGOUT';
+      if (has('callback|auth-callback|auth-redirect|signin-oidc|silent-renew')) return 'AUTH_REDIRECT';
+      return 'AUTHENTICATION';
+  }
+}
+
+/** Une opération technique (authentification, découverte, santé, configuration, statique) : jamais métier. */
+export function isTechnicalOperation(location: string): boolean {
+  return categoryOf(location) !== undefined;
+}
+
+function categoryOf(location: string): Omit<TechnicalRole, 'operation' | 'intent'> | undefined {
   const path = pathOf(location);
   const W = CLASSIFICATION_WEIGHTS;
   if (/(^|\/)\.well-known(\/|$)|openid-configuration|(^|\/)jwks(\.json)?(\/|$)/i.test(path))

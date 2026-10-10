@@ -3,6 +3,8 @@ import { recordsOf } from '../../src/forms/state/form-knowledge-observer.js';
 import { valueDigest } from '../../src/forms/state/value-digest.js';
 import type { FunctionalExchange } from '../../src/functional/model.js';
 import { buildApplicationModel } from '../../src/recording/application/application-model.js';
+import { intentOf } from '../../src/functional/runtime-learning.js';
+import { buildBusinessFlow } from '../../src/recording/business/business-flow.js';
 import { inferOutcomes } from '../../src/recording/outcomes.js';
 import type { ApplicationInteractionModel } from '../../src/recording/application/model.js';
 import { detectBusinessEvents } from '../../src/recording/business/business-event-detector.js';
@@ -166,6 +168,7 @@ function app(start: StateSpec) {
         ...(decisions ? { relationshipDecisions: decisions } : {}),
       });
     },
+    detect: () => detectBusinessEvents({ actions, states, rawEvents, digest, initialStateId }),
     actions,
     states,
   };
@@ -474,7 +477,14 @@ describe('Application Interaction Model (generic: shell, task list, BFF, micro-f
       expect.arrayContaining([expect.objectContaining({ type: 'REFERENCES', target: 'entity:item:ABC123' })]),
     );
     // Aucun BFF supposé : /api/work ne porte aucun indice de BFF au-delà de ses relations.
-    expect(subsequence(kinds(model), ['SELECT_TASK', 'SWITCH_CONTEXT', 'OPEN'])).toBe(true);
+    expect(subsequence(kinds(model), ['SELECT_TASK', 'SWITCH_CONTEXT'])).toBe(true);
+    // OBSERVED ≠ BUSINESS : l'item n'est vu que par une route et une lecture (aucun geste sur lui,
+    // aucune écriture) : une observation UNKNOWN, gardée, sans action métier.
+    expect(kinds(model)).not.toContain('OPEN');
+    expect(
+      model.entities.find((entity) => entity.key === 'entity:item:ABC123')?.classification.classification,
+    ).toBe('UNKNOWN');
+    expect(model.businessContext).toEqual({ entityKeys: [], unknownKeys: ['entity:item:ABC123'] });
   });
 
   it('no task list in the application: no workspace, no task — the model simply has none', () => {
@@ -771,5 +781,164 @@ describe('Criteria in the work list: a FILTER, never an entity', () => {
     expect(
       outcomes.assertions.filter((assertion) => assertion.kind === 'API_OUTCOME' && assertion.selected),
     ).toEqual([]);
+  });
+});
+
+describe('Observed ≠ business; technical authentication is never a business create', () => {
+  const token: FunctionalExchange = {
+    method: 'POST',
+    path: '/sso/oidc/client-app/token',
+    status: 200,
+    identifiers: [{ field: 'session_state', digest: digest('S123'), value: 'S123', source: 'response' }],
+  };
+
+  it('a technical operation never yields a business intent, whoever asks (general rule)', () => {
+    for (const path of [
+      '/sso/oidc/client-app/token',
+      '/oauth2/token',
+      '/oauth2/authorize',
+      '/.well-known/openid-configuration',
+      '/realms/r1/protocol/openid-connect/certs/jwks.json',
+      '/oidc/userinfo',
+      '/auth-redirect',
+      '/api/telemetry',
+      '/health',
+      '/assets/config.json',
+      '/static/main.js',
+    ])
+      expect(intentOf('POST', path, 'Create')).toBeUndefined();
+    expect(intentOf('POST', '/api/requests', 'Create')).toEqual({ verb: 'CREATE', entity: 'REQUEST' });
+    expect(technicalCategoryOf('/sso/oidc/client-app/token')).toMatchObject({
+      classification: 'INFRASTRUCTURE_ENTITY',
+      category: 'AUTHENTICATION',
+      operation: 'TOKEN_ACQUISITION',
+      intent: 'ACQUIRE_TOKEN',
+    });
+    expect(technicalCategoryOf('/.well-known/openid-configuration')?.operation).toBe('OPENID_DISCOVERY');
+    expect(technicalCategoryOf('/jwks.json')?.intent).toBe('READ_KEYS');
+  });
+
+  it('POST /token after "Sign in": TECHNICAL_INTENT ACQUIRE_TOKEN, no business intent, no creation of any kind', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.click('Sign in', { network: [token] });
+    const outcomes = inferOutcomes(run.actions, run.states, false);
+    expect(outcomes.intent.workflow).toBeUndefined();
+    expect(outcomes.intent.technical).toEqual([
+      expect.objectContaining({
+        intent: 'ACQUIRE_TOKEN',
+        operation: 'TOKEN_ACQUISITION',
+        classification: 'INFRASTRUCTURE_ENTITY',
+        api: 'POST /sso/oidc/client-app/token',
+      }),
+    ]);
+    const detection = run.detect();
+    expect(detection.events.filter((event) => /CREATE/.test(event.type))).toEqual([]);
+    const model = run.build();
+    expect(model.technicalContext.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operation: 'TOKEN_ACQUISITION',
+          intent: 'ACQUIRE_TOKEN',
+          label: 'POST /sso/oidc/client-app/token',
+        }),
+      ]),
+    );
+    expect(model.businessContext.entityKeys).toEqual([]);
+    expect(kinds(model)).not.toContain('CREATE');
+  });
+
+  it('a click + POST without a new business id is a POSSIBLE_CREATE, never ENTITY_CREATED, never a business step', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.fill('Name', 'Alex');
+    run.click('Send', { network: [{ method: 'POST', path: '/api/requests', status: 200 }] });
+    const detection = run.detect();
+    expect(detection.events.some((event) => event.type === 'ENTITY_CREATED')).toBe(false);
+    const possible = detection.events.find((event) => event.type === 'POSSIBLE_CREATE');
+    expect(possible?.status).toBe('UNKNOWN');
+    expect(possible?.evidence.context.join(' ')).toMatch(/missing: .*new business id served by the server/);
+    expect(detection.memory.all).toEqual([]);
+    const flow = buildBusinessFlow('t', detection);
+    expect(flow.steps).toEqual([]);
+    expect(flow.unresolved.map((event) => event.type)).toEqual(['POSSIBLE_CREATE']);
+  });
+
+  it('ENTITY_CREATED needs converging evidence: user create action + business write + 2xx + new business id', () => {
+    const run = app({ url: '/items/new', hosts: [SHELL, 'items-create'] });
+    run.fill('Name', 'Alex');
+    run.click('Create', {
+      to: { url: '/items/ABC123', hosts: [SHELL, 'items-detail'], statuses: ['Item ABC123 created'] },
+      network: [create('/api/items', 'businessKey', 'ABC123')],
+    });
+    const created = run.detect().events.find((event) => event.type === 'ENTITY_CREATED');
+    expect(created).toMatchObject({
+      entityKey: 'entity:item:ABC123',
+      provenance: 'CREATED_DURING_RECORDING',
+    });
+    expect(['CONFIRMED', 'PROBABLE']).toContain(created?.status);
+    const model = run.build();
+    expect(model.businessContext.entityKeys).toEqual(['entity:item:ABC123']);
+    expect(kinds(model)).toContain('CREATE');
+  });
+
+  it('firstSeen ≠ created: an identity first seen in a read is DISCOVERED, never created', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.click('Item ABC123', {
+      to: { url: '/items/ABC123', hosts: [SHELL, 'items-detail'] },
+      network: [read('/api/items/ABC123', { businessKey: 'ABC123' })],
+    });
+    const model = run.build();
+    const item = model.entities.find((entity) => entity.key === 'entity:item:ABC123');
+    expect(item?.provenance.classification).not.toBe('CREATED_DURING_RECORDING');
+    expect(item?.lifecycle).not.toContain('CREATE');
+    expect(kinds(model)).not.toContain('CREATE');
+    expect(run.detect().events.some((event) => /CREATE/.test(event.type))).toBe(false);
+  });
+
+  it('target journey: Task → opens MFE; no business entity demonstrated → empty Business Context, observations kept', () => {
+    const run = app({ url: '/', hosts: [SHELL] });
+    run.click('Sign in', {
+      network: [token, { method: 'GET', path: '/.well-known/openid-configuration', status: 200 }],
+    });
+    run.click('Tasks', {
+      to: TASKS,
+      network: [{ ...read('/bff/tasks', [{ taskId: 4120, ref: 'R-77881' }]), method: 'POST' }],
+    });
+    run.click('ux-icon-v4-4-0');
+    run.fill('Customer', 'Acme Corp', 'code');
+    run.click('Task 4120 — R-77881', {
+      to: { url: '/work/process', hosts: [SHELL, 'process-view'] },
+      network: [read('/api/process/R-77881', { ref: 'R-77881' })],
+    });
+    const model = run.build();
+    // APPLICATION CONTEXT : la task ouvre le MFE (intact).
+    expect(model.tasks.map((task) => task.primary.value)).toEqual(['4120']);
+    expect(model.relationships).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'NAVIGATES_TO',
+          source: model.tasks[0]?.key,
+          target: 'host:process-view',
+        }),
+      ]),
+    );
+    expect(subsequence(kinds(model), ['SELECT_TASK', 'SWITCH_CONTEXT'])).toBe(true);
+    // BUSINESS CONTEXT : rien n'est démontré ; aucune action métier sur une observation.
+    expect(model.businessContext.entityKeys).toEqual([]);
+    expect(
+      kinds(model).filter((kind) => ['CREATE', 'OPEN', 'SEARCH', 'UPDATE', 'SAVE'].includes(kind)),
+    ).toEqual([]);
+    expect(model.entities.every((entity) => entity.classification.classification !== 'BUSINESS_ENTITY')).toBe(
+      true,
+    );
+    expect(
+      model.entities.some((entity) => /icon|Acme|#/.test(`${entity.key} ${entity.identity.value ?? ''}`)),
+    ).toBe(false);
+    // TECHNICAL CONTEXT : jeton et découverte, des preuves hors du flow métier.
+    expect(model.technicalContext.items.map((item) => item.operation)).toEqual(
+      expect.arrayContaining(['TOKEN_ACQUISITION', 'OPENID_DISCOVERY']),
+    );
+    const detection = run.detect();
+    expect(detection.events.filter((event) => /CREATE/.test(event.type))).toEqual([]);
+    expect(buildBusinessFlow('t', detection).steps).toEqual([]);
   });
 });

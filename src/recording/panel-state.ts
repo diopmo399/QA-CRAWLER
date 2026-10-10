@@ -56,7 +56,10 @@ export interface PanelReplay {
 
 export interface PanelAnalysis {
   available: boolean;
+  /** Les intents MÉTIER (après corrélation : une écriture métier acceptée). */
   intents: { label: string; detail?: string; confidence?: number; evidence: string[] }[];
+  /** Les intents TECHNIQUES (ACQUIRE_TOKEN, DISCOVER_PROVIDER…) : séparés, jamais métier. */
+  technicalIntents?: { label: string; detail?: string; evidence: string[] }[];
   findings: { severity: string; message: string; suggestion?: string; origin: string }[];
   aiCandidates: number;
   /** L'analyse du conseiller tourne encore en arrière-plan (la revue n'attend pas). */

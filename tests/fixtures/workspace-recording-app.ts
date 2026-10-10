@@ -45,7 +45,9 @@ const page = (
     if (path === '/tasks') {
       mount('task-list', '<h1>Tasks</h1><section id="criteria"><button type="button" id="toggle"><ui-icon-v4-4-0></ui-icon-v4-4-0></button> <label>Customer <input id="customer" autocomplete="off"></label> <label>Kind <select id="kind"><option value="">Any</option><option>CREATE</option><option>UPDATE</option><option>REVIEW_FRAME</option></select></label> <button type="button" id="narrow">Apply</button></section><table><tbody id="rows"></tbody></table><div id="frame"></div>');
       // Bruit technique d'une vraie application : découverte OpenID et profil OIDC (jamais du métier).
-      fetch('/.well-known/openid-configuration').then((r) => r.json()).then(() => fetch('/oidc/client-app-shell/userinfo'));
+      fetch('/.well-known/openid-configuration').then((r) => r.json())
+        .then(() => fetch('/oidc/client-app-shell/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'grant_type=refresh_token' }))
+        .then(() => fetch('/oidc/client-app-shell/userinfo'));
       // La liste est lue par un POST (des critères dans le corps) : une lecture, pas une écriture.
       const load = (criteria) => fetch('/bff/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(criteria) }).then((r) => r.json()).then((tasks) => {
         document.getElementById('rows').innerHTML = tasks.map((t) =>
@@ -137,6 +139,12 @@ export async function startWorkspaceRecordingApp(): Promise<WorkspaceRecordingAp
         authorization_endpoint: 'http://idp.test/authorize',
         jwks_uri: 'http://idp.test/jwks',
       });
+      return;
+    }
+    if (url.pathname === '/oidc/client-app-shell/token') {
+      // Un échange de jeton factice : aucune valeur de jeton n'est servie (rien à enregistrer).
+      request.resume();
+      json(200, { token_type: 'Bearer', expires_in: 300, session_state: 'S123456' });
       return;
     }
     if (url.pathname === '/oidc/client-app-shell/userinfo') {

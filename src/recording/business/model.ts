@@ -17,6 +17,8 @@ import type { EntityProvenance } from './provenance-resolver.js';
  */
 export type BusinessEventType =
   | 'ENTITY_CREATED'
+  /** Une création SUPPOSÉE (un POST, un clic…) sans preuves convergentes : jamais ENTITY_CREATED. */
+  | 'POSSIBLE_CREATE'
   | 'ENTITY_SEARCHED'
   | 'ENTITY_OPENED'
   | 'ENTITY_UPDATED'
@@ -117,7 +119,12 @@ export interface BusinessFlowStep {
 /** Une entité du parcours : son identité, sa provenance (expliquée) et son cycle de vie. */
 export interface BusinessFlowEntity {
   name: string;
-  type: 'business_entity';
+  /**
+   * business_entity : un rôle métier DÉMONTRÉ (classification BUSINESS_ENTITY, ou l'entité nommée
+   * d'une étape métier) ; observed_entity : une observation gardée (UNKNOWN, technique,
+   * infrastructure), jamais une entité métier.
+   */
+  type: 'business_entity' | 'observed_entity';
   /** Les références runtime ($created.<entité>.id) : seulement pour une création prouvée. */
   references: string[];
   key?: string;

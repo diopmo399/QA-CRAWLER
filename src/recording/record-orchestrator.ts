@@ -21,7 +21,7 @@ import { FunctionalKnowledgeStore } from '../knowledge/functional-knowledge-stor
 import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
-import type { RecordedIntent, RecordingEvent } from './model.js';
+import type { RecordedIntent, RecordingEvent, TechnicalIntentRecord } from './model.js';
 import type { IntelligenceProvider } from '../ai/provider.js';
 import {
   describeFieldIdentity,
@@ -915,13 +915,17 @@ export function semanticIntentsOf(
   layer: 'SEMANTIC_POST_RECORDING';
   recordingSessionId: string;
   modifiesRecording: false;
-  intents: (RecordedIntent & { source: 'NETWORK_OBSERVATION' })[];
+  intents: (Omit<RecordedIntent, 'technical'> & { source: 'NETWORK_OBSERVATION' })[];
+  technicalIntents: TechnicalIntentRecord[];
 } {
+  // Les intents MÉTIER et TECHNIQUES sont séparés : un POST /token est ACQUIRE_TOKEN, jamais CREATE.
+  const { technical, ...business } = intent;
   return {
     layer: 'SEMANTIC_POST_RECORDING',
     recordingSessionId,
     modifiesRecording: false,
-    intents: intent.workflow ? [{ ...intent, source: 'NETWORK_OBSERVATION' }] : [],
+    intents: business.workflow ? [{ ...business, source: 'NETWORK_OBSERVATION' }] : [],
+    technicalIntents: technical ?? [],
   };
 }
 

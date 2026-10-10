@@ -64,9 +64,28 @@ export function inferOutcomes(
     for (const exchange of action.network) {
       const template = apiTemplate(exchange.path);
       const status = exchange.status;
+      // L'INTENT TECHNIQUE (POST /token → ACQUIRE_TOKEN) : gardé à part, jamais un intent métier.
+      const role = technicalCategoryOf(exchange.path);
+      if (role) {
+        const api = `${exchange.method} ${template}`;
+        const known = intent.technical?.find((entry) => entry.intent === role.intent && entry.api === api);
+        if (known) {
+          if (!known.actionIds.includes(action.id)) known.actionIds.push(action.id);
+        } else
+          (intent.technical ??= []).push({
+            intent: role.intent,
+            operation: role.operation,
+            category: role.category,
+            classification: role.classification,
+            api,
+            ...(status !== undefined ? { status } : {}),
+            actionIds: [action.id],
+            reason: role.reason,
+          });
+      }
       if (!isWrite(exchange.method) || status === undefined) continue;
       // Authentification, configuration, liste lue par un POST : jamais une intention métier.
-      const technical = technicalCategoryOf(exchange.path) !== undefined || isListRead(exchange);
+      const technical = role !== undefined || isListRead(exchange);
       const accepted = status >= 200 && status < 300;
       const url = template.replace(/\{param\}/g, '*');
       if (accepted) {
