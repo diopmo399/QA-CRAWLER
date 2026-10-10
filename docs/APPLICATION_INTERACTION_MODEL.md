@@ -413,6 +413,12 @@ Statuts : `CONFIRMED` ≥ 0,85, `PROBABLE` ≥ 0,6, sinon `UNCERTAIN`.
   reste une recherche et l'ouverture du résultat garde sa provenance `DISCOVERED` ;
 - un corps envoyé qui n'est pas du JSON (formulaire encodé) n'est pas lu.
 
+## Revue humaine
+
+L'interprétation d'une action (`ActionView.interpretation`) n'est jamais modifiée par une décision
+humaine : la décision est rangée dans `ActionView.review` et devient une preuve `HUMAN`. Voir
+[HUMAN_INTENT_REVIEW.md](HUMAN_INTENT_REVIEW.md).
+
 ## Limites connues
 
 - Les **actions à l'intérieur d'une iframe** ne sont pas encore enregistrées (le script de capture

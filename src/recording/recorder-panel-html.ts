@@ -372,6 +372,22 @@ body[data-mode=preview]{background:var(--bg)}
 .search{border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:10px}
 .search .shead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .search .shead .meter{margin-left:auto}
+/* REVUE DES INTENTIONS : l'intention finale, sa provenance, l'original, la correction, l'historique. */
+.irow{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px}
+.irow.HUMAN_CORRECTED{border-left:4px solid var(--violet)} .irow.HUMAN_CONFIRMED{border-left:4px solid var(--ok)}
+.irow .ilabel{font-weight:700}
+.irow .iintent{font:700 15px ui-monospace,SFMono-Regular,Menlo,monospace}
+.irow .imeta{color:var(--muted);font-size:12px}
+.irow .iactions{grid-row:1/3;grid-column:2;display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}
+.irow .full{grid-column:1/3}
+.isrc{font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--idle-soft);color:var(--muted)}
+.isrc.HUMAN_CORRECTED{background:var(--violet-soft);color:var(--violet)} .isrc.HUMAN_CONFIRMED{background:var(--ok-soft);color:var(--ok)}
+.iedit{grid-column:1/3;border-radius:8px;background:var(--surface-2);padding:10px;margin-top:4px}
+.iedit fieldset{border:0;padding:0;margin:0 0 8px;display:flex;flex-wrap:wrap;gap:6px}
+.iedit legend{font-weight:700;margin-bottom:6px;width:100%}
+.iedit label.choice{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line-strong);border-radius:8px;padding:4px 10px;background:var(--surface);cursor:pointer;font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace}
+.iedit label.choice:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.iedit textarea{width:100%;min-height:54px;font:inherit;border:1px solid var(--line-strong);border-radius:8px;padding:6px 8px;background:var(--surface);color:var(--fg)}
 /* E · MINI-DOCK : une fenêtre étroite et sombre pendant l'enregistrement (la revue reste complète). */
 body.compact{--bg:#16181d;--surface:#1d2027;--surface-2:#232733;--fg:#f2f3f5;--muted:#a9afba;--line:#2b2f37;--line-strong:#3a3f4a;--accent:#93b4ff;--accent-soft:#1d2740;--accent-fg:#16181d;--ok:#4ade80;--ok-soft:rgba(74,222,128,.12);--warn:#fbbf24;--warn-soft:#2a2213;--bad:#f87171;--bad-soft:rgba(248,113,113,.14);--run:#93b4ff;--run-soft:#1d2740;--shadow:none}
 body.compact .tabs,body.compact .col-mid,body.compact .col-right,body.compact #quality,body.compact .subtitle,body.compact #devtoggle,body.compact .summarybar,body.compact #tltools,body.compact #checks,body.compact .sep,body.compact #livepill{display:none!important}
@@ -415,6 +431,11 @@ const SCRIPT = `
       tlSearch: 'Chercher une action', onlyAttention: 'À vérifier seulement', noMatch: 'Aucune action ne correspond.',
       storyTitle: 'Le parcours en étapes métier', linked: 'Requête liée', linkedNone: 'Aucune requête métier reliée à cette action.',
       fieldL: 'Champ de l’écran', propL: 'Propriété API', stateL: 'État',
+      reviewTitle: 'Actions et intentions', reviewNote: 'L’intention est une interprétation : la corriger ne change ni l’action enregistrée, ni sa cible, ni le flow rejoué.',
+      intentL: 'Intention', sourceL: 'Source', originalL: 'Original', initialConf: 'Confiance initiale', correctionL: 'Correction', proposalL: 'Proposition de l’analyse (non appliquée)',
+      src: { INFERRED: 'SYSTEM', HUMAN_CORRECTED: '👤 HUMAN', HUMAN_CONFIRMED: '👤 HUMAN CONFIRMED' },
+      modifyIntent: 'Modifier l’intention', confirmIntent: 'Confirmer', resetIntent: 'Réinitialiser l’interprétation', applyIntent: 'Confirmer', cancelIntent: 'Annuler',
+      newIntent: 'Nouvelle intention', justification: 'Justification (facultative)', historyL: 'Historique',
       field: { event: 'Action', kind: 'Action', name: 'Élément', label: 'Libellé', text: 'Texte', role: 'Rôle', tag: 'Type', selector: 'Sélecteur', page: 'Page', section: 'Section', matches: 'Correspondances', validation: 'Validation', frame: 'Cadre', rawEventId: 'Événement', target: 'Cible', provenance: 'Provenance', locator: 'Localisateur', raw: 'Événements bruts', step: 'Étape', decision: 'Décision', resolution: 'Résolution', shadowDom: 'Shadow DOM', field: 'Champ', sensitive: 'Sensible' },
       found: { ORIGINAL: "✓ Élément mis en évidence dans la page", SELECTOR: '✓ Élément retrouvé par son sélecteur et mis en évidence', NOT_FOUND: '⚠ Élément introuvable sur la page actuelle' },
       quality: 'Qualité du recording', checksQ: { confirmed: 'Actions confirmées', stable: 'Sélecteurs stables', unique: 'Cibles uniques', rerender: 'Aucun élément retrouvé après un nouveau rendu', duplicates: 'Aucun doublon', errors: 'Aucune erreur' },
@@ -461,6 +482,11 @@ const SCRIPT = `
       tlSearch: 'Find an action', onlyAttention: 'To check only', noMatch: 'No action matches.',
       storyTitle: 'The journey as business steps', linked: 'Linked request', linkedNone: 'No business request linked to this action.',
       fieldL: 'Screen field', propL: 'API property', stateL: 'State',
+      reviewTitle: 'Actions and intents', reviewNote: 'The intent is an interpretation: correcting it changes neither the recorded action, nor its target, nor the replayed flow.',
+      intentL: 'Intent', sourceL: 'Source', originalL: 'Original', initialConf: 'Initial confidence', correctionL: 'Correction', proposalL: 'Analysis proposal (not applied)',
+      src: { INFERRED: 'SYSTEM', HUMAN_CORRECTED: '👤 HUMAN', HUMAN_CONFIRMED: '👤 HUMAN CONFIRMED' },
+      modifyIntent: 'Modify the intent', confirmIntent: 'Confirm', resetIntent: 'Reset the interpretation', applyIntent: 'Confirm', cancelIntent: 'Cancel',
+      newIntent: 'New intent', justification: 'Justification (optional)', historyL: 'History',
       field: { event: 'Action', kind: 'Action', name: 'Element', label: 'Label', text: 'Text', role: 'Role', tag: 'Type', selector: 'Selector', page: 'Page', section: 'Section', matches: 'Matches', validation: 'Validation', frame: 'Frame', rawEventId: 'Event', target: 'Target', provenance: 'Provenance', locator: 'Locator', raw: 'Raw events', step: 'Step', decision: 'Decision', resolution: 'Resolution', shadowDom: 'Shadow DOM', field: 'Field', sensitive: 'Sensitive' },
       found: { ORIGINAL: '✓ Element highlighted in the page', SELECTOR: '✓ Element found by its selector and highlighted', NOT_FOUND: '⚠ Element not found on the current page' },
       quality: 'Recording quality', checksQ: { confirmed: 'Actions confirmed', stable: 'Stable selectors', unique: 'Unique targets', rerender: 'No element found again after a re-render', duplicates: 'No duplicate', errors: 'No error' },
@@ -529,7 +555,7 @@ const SCRIPT = `
   };
   var KIND_ICON = { open: 'link', navigate: 'link', goto: 'link', click: 'cursor', fill: 'text', check: 'check', uncheck: 'check', choose: 'check', select: 'list', key: 'hash', drag: 'move', dragAndDrop: 'move', upload: 'clip', manual: 'hash', dialog: 'list' };
   var state = null, selected = null, choice = {}, dev = false, editing = false, tab = 'recording';
-  var filterText = '', onlyAttention = false, layout = null;
+  var filterText = '', onlyAttention = false, layout = null, editingIntent = null;
   var storedLayout = function () { try { return window.localStorage.getItem('qa-recorder-layout'); } catch (e) { return null; } };
   var storeLayout = function (v) { try { window.localStorage.setItem('qa-recorder-layout', v); } catch (e) { /* stockage indisponible */ } };
   var $ = function (id) { return document.getElementById(id); };
@@ -847,13 +873,41 @@ const SCRIPT = `
     return h + '</div>';
   }
 
+  /** LA REVUE DES INTENTIONS : modifier, confirmer, réinitialiser — l'action enregistrée ne change jamais. */
+  function reviewCard(a) {
+    var r = a.intentReview;
+    if (!r || !r.rows.length) return '';
+    var pct = function (v) { return v === undefined ? '—' : Math.round(v * 100) + ' %'; };
+    var h = '<div class="card card-plain" id="intent-review"><h2>' + esc(T.reviewTitle) + '</h2><p class="sub">' + esc(T.reviewNote) + '</p>';
+    h += r.rows.map(function (row) {
+      var x = '<div class="irow ' + row.status + '" data-intent-row="' + esc(row.actionId) + '">';
+      x += '<div><div class="ilabel">' + esc(row.label) + '</div><div class="imeta">' + esc(T.intentL) + '</div><div class="iintent">' + esc(row.intent) + '</div></div>';
+      x += '<div class="iactions">' + button(T.modifyIntent, { cmd: 'intent-edit', id: row.actionId })
+        + (row.source === 'HUMAN' ? button(T.resetIntent, { cmd: 'intent-reset', id: row.actionId, cls: 'ghost' }) : button(T.confirmIntent, { cmd: 'intent-confirm', id: row.actionId, cls: 'ghost' })) + '</div>';
+      x += '<div class="imeta">' + esc(T.sourceL) + ' : <span class="isrc ' + row.status + '">' + esc(T.src[row.status]) + '</span> · ' + esc(T.confidence) + ' : ' + pct(row.confidence) + '</div>';
+      if (row.original !== undefined) x += '<div class="imeta full">' + esc(T.originalL) + ' : <b>' + esc(row.original) + '</b> · ' + esc(T.initialConf) + ' : ' + pct(row.originalConfidence) + '</div>';
+      if (row.reason) x += '<div class="imeta full">' + esc(T.correctionL) + ' : « ' + esc(row.reason) + ' »</div>';
+      if (row.proposal) x += '<div class="imeta full">' + esc(T.proposalL) + ' : ' + esc(row.proposal) + '</div>';
+      if (state.notice && state.notice.actionId === row.actionId) x += '<p class="error full" role="alert">' + esc(state.notice.message) + '</p>';
+      if (editingIntent === row.actionId) {
+        x += '<div class="iedit"><fieldset><legend>' + esc(T.newIntent) + '</legend>' + r.choices.map(function (c) {
+          return '<label class="choice"><input type="radio" name="intent-' + esc(row.actionId) + '" value="' + esc(c) + '"' + (c === row.intent ? ' checked' : '') + '>' + esc(c) + '</label>';
+        }).join('') + '</fieldset><label class="sub" for="reason-' + esc(row.actionId) + '">' + esc(T.justification) + '</label><textarea id="reason-' + esc(row.actionId) + '"></textarea>'
+          + '<div class="row">' + button(T.applyIntent, { cmd: 'intent-apply', id: row.actionId, cls: 'primary' }) + button(T.cancelIntent, { cmd: 'intent-cancel', id: row.actionId }) + '</div></div>';
+      }
+      if (row.history.length) x += '<details class="full"><summary>' + esc(T.historyL) + ' (' + row.history.length + ')</summary><ul>' + row.history.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul></details>';
+      return x + '</div>';
+    }).join('');
+    return h + '</div>';
+  }
+
   function renderAnalysis() {
     var a = state.analysis, el = $('panel-analysis');
     var h = '<div class="card card-plain"><h2>' + esc(T.analysisTitle) + '</h2><p class="notice">' + esc(T.analysisNote) + '</p>';
     if (!a.available) { setHtml(el, h + '<p class="empty">' + esc(T.analysisWaiting) + '</p></div>'); return; }
     if (a.running) h += '<p class="notice running" role="status">' + esc(T.analysisRunning) + '</p>';
     // La suite (application, interprétation, HTTP) ouvre ses propres cartes : un simple conteneur ici.
-    h += '</div>' + intentsCard(a) + '<div>';
+    h += '</div>' + intentsCard(a) + reviewCard(a) + '<div>';
     if (a.application && a.application.tree.length) {
       var treeHtml = function (nodes) {
         return '<ul>' + nodes.map(function (n) {
@@ -952,6 +1006,16 @@ const SCRIPT = `
       return;
     }
     if (cmd === 'edit') { editing = !editing; render(); return; }
+    if (cmd === 'intent-edit') { editingIntent = editingIntent === id ? null : id; render(); return; }
+    if (cmd === 'intent-cancel') { editingIntent = null; render(); return; }
+    if (cmd === 'intent-apply') {
+      var chosen = document.querySelector('input[name="intent-' + id + '"]:checked');
+      var why = document.getElementById('reason-' + id);
+      editingIntent = null;
+      send({ type: 'intent-correct', id: id, intent: chosen ? chosen.value : '', reason: why ? why.value : '' });
+      render();
+      return;
+    }
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
     send({ type: cmd, id: id });
   });
