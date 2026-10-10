@@ -21,8 +21,93 @@ export const LEAVE_LABEL =
 /** Les segments d'URL qui ne nomment pas une ressource (préfixes techniques). */
 const TECHNICAL_SEGMENT =
   /^(api|apis|rest|v\d+(\.\d+)?|app|apps|ui|web|public|internal|graphql|gql|services?|#|-|_)$/i;
-const ID_SEGMENT =
-  /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*)$/i;
+/**
+ * Un SEGMENT qui est un identifiant : un nombre, un uuid, ou un code qui contient au moins un CHIFFRE
+ * (DEM-2026-001, ABC123, dem-2026-001). Un mot avec des tirets sans chiffre (openid-configuration,
+ * auth-redirect, un nom de client OIDC ou de composant) est un NOM, jamais l'identité d'une entité.
+ */
+export function isIdSegment(segment: string): boolean {
+  if (/^\d+$/.test(segment)) return true;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)) return true;
+  if (!isCodeLike(segment)) return false;
+  return (
+    /^[A-Za-z]{2,}[-_][A-Za-z0-9][A-Za-z0-9_-]*$/.test(segment) ||
+    /^(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])[A-Za-z0-9]{4,40}$/.test(segment)
+  );
+}
+
+/**
+ * Un code d'enregistrement a au moins deux chiffres CONSÉCUTIFS (DEM-2026-001, ABC123) et aucun
+ * marqueur de version : « ux-icon-v4-4-0 », « lib-v2 », « h1 » sont des noms de composants.
+ */
+function isCodeLike(value: string): boolean {
+  if (!/\d{2,}/.test(value)) return false;
+  return !/(^|[-_.])v\d+([-_.]\d+)*$/i.test(value);
+}
+
+/**
+ * L'INTENTION SÉMANTIQUE d'un échange, indépendante de la méthode HTTP : une REQUÊTE (recherche,
+ * liste par critères) se reconnaît à des preuves qui convergent — jamais à « POST ⇒ création » ni à un
+ * nom d'URL :
+ *   - la réponse est une COLLECTION (une liste, même sans identifiant reconnaissable) ;
+ *   - aucune NOUVELLE identité n'est servie (ni identifiant de réponse hors liste, ni Location) ;
+ *   - des critères envoyés, une pagination, un tri (indices) ; un GET (indice).
+ */
+export interface QueryAssessment {
+  query: boolean;
+  confidence: number;
+  reasons: string[];
+}
+
+export function queryEvidenceOf(exchange: {
+  method?: string;
+  status?: number;
+  records?: readonly unknown[];
+  identifiers?: readonly { source: string }[];
+  listSize?: number;
+  requestCriteria?: readonly unknown[];
+  requestHints?: { pagination?: boolean; sorting?: boolean; criteria?: boolean };
+}): QueryAssessment {
+  const reasons: string[] = [];
+  const created = (exchange.identifiers ?? []).some(
+    (id) => id.source === 'response' || id.source === 'location',
+  );
+  const collection = exchange.listSize !== undefined || (exchange.records?.length ?? 0) > 1;
+  if (created) reasons.push('a new identity is served (response identifier or Location): not a query');
+  if (!collection) reasons.push('the response is not a collection');
+  if (created || !collection || (exchange.status !== undefined && exchange.status >= 400))
+    return { query: false, confidence: 0, reasons };
+  let confidence = 0.5;
+  reasons.push(
+    `the response is a collection (${String(exchange.listSize ?? exchange.records?.length ?? 0)} item(s)), no new identity`,
+  );
+  if ((exchange.requestCriteria?.length ?? 0) > 0) {
+    confidence += 0.1;
+    reasons.push(`${String(exchange.requestCriteria?.length ?? 0)} criterion value(s) sent`);
+  }
+  if (exchange.requestHints?.criteria) {
+    confidence += 0.1;
+    reasons.push('a criteria container in the request');
+  }
+  if (exchange.requestHints?.pagination) {
+    confidence += 0.1;
+    reasons.push('pagination in the request');
+  }
+  if (exchange.requestHints?.sorting) {
+    confidence += 0.05;
+    reasons.push('sorting in the request');
+  }
+  if (exchange.method === 'GET') {
+    confidence += 0.2;
+    reasons.push('a GET (a hint only)');
+  }
+  return { query: true, confidence: round(Math.min(0.99, confidence)), reasons };
+}
+
+/** Une LECTURE (recherche, liste), quelle que soit la méthode : voir queryEvidenceOf. */
+export function isListRead(exchange: Parameters<typeof queryEvidenceOf>[0]): boolean {
+  return queryEvidenceOf(exchange).query;
+}
 
 /**
  * L'identité portée par une URL ou un chemin d'API, par sa STRUCTURE seulement :
@@ -34,11 +119,25 @@ export function identityInPath(path: string): { value: string; resource?: string
   const segments = clean.split('/').filter(Boolean);
   for (let index = segments.length - 1; index >= 0; index -= 1) {
     const segment = decodeSegment(segments[index] ?? '');
-    if (!ID_SEGMENT.test(segment)) continue;
+    if (!isIdSegment(segment)) continue;
     const resource = resourceBefore(segments, index);
     return { value: segment, ...(resource ? { resource } : {}) };
   }
   return undefined;
+}
+
+/**
+ * Le MOTIF d'une route ou d'un chemin : les identifiants remplacés par « :id », trois segments au
+ * plus (/items/ABC123/edit → /items/:id/edit). La forme d'un écran, sans ses valeurs.
+ */
+export function routePattern(path: string, maxSegments = 3): string {
+  const clean = (path.split(/[?#]/)[0] ?? '').replace(/^[a-z]+:\/\/[^/]+/i, '');
+  const segments = clean
+    .split('/')
+    .filter(Boolean)
+    .slice(0, maxSegments)
+    .map((segment) => (isIdSegment(decodeSegment(segment)) ? ':id' : segment.toLowerCase()));
+  return `/${segments.join('/')}`;
 }
 
 /** La ressource d'un chemin de COLLECTION (POST /api/items → item), sans identifiant. */
@@ -66,12 +165,26 @@ function decodeSegment(segment: string): string {
   }
 }
 
-/** Les jetons d'un texte qui peuvent être un identifiant : nombres (≥ 3 chiffres), codes, uuid. */
+/** Les jetons d'un texte qui peuvent être un identifiant : nombres (≥ 3 chiffres), codes avec chiffres, uuid. */
 export function identifierTokens(text: string): string[] {
-  const tokens = text.match(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*|\d{3,}/gi,
-  );
-  return [...new Set(tokens ?? [])].slice(0, 20);
+  const tokens = [
+    // Une clé alphanumérique en capitales (ABC123) : avant les nombres qu'elle contient.
+    ...(text.match(/\b[A-Z]{2,}\d{2,}[A-Z0-9]*\b/g) ?? []),
+    ...(text.match(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Z]{2,}[-_][A-Z0-9][A-Z0-9_-]*|\d{3,}/gi,
+    ) ?? []),
+  ];
+  // Un jeton sans chiffre (un mot avec des tirets) ou un nom versionné (icon-v4-4-0) n'est jamais
+  // un identifiant.
+  const kept = [...new Set(tokens)]
+    .filter((token) => /^\d+$/.test(token) || /^[0-9a-f]{8}-/i.test(token) || isCodeLike(token))
+    .filter(
+      (token, _, all) =>
+        !all.some(
+          (other) => other !== token && /^\d+$/.test(token) && !/^\d+$/.test(other) && other.includes(token),
+        ),
+    );
+  return kept.slice(0, 20);
 }
 
 export function labelOf(action: SemanticRecordedAction): string {
@@ -91,6 +204,8 @@ export function hasPathId(path: string): boolean {
 export function singular(word: string): string {
   const lower = word.toLowerCase();
   if (/(ss|us)$/.test(lower)) return lower;
+  // companies → company, entities → entity (jamais series, species…).
+  if (/[^aeiou]ies$/.test(lower) && lower.length > 4) return `${lower.slice(0, -3)}y`;
   if (/[^s]s$/.test(lower) || (/x$/.test(lower) && lower.length > 4)) return lower.slice(0, -1);
   return lower;
 }

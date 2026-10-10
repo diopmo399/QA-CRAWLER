@@ -1,5 +1,6 @@
 import type { FunctionalExchange } from '../../functional/model.js';
 import type { RawRecordedEvent, RecordedState, SemanticRecordedAction } from '../model.js';
+import { technicalCategoryOf } from './entity-classifier.js';
 import {
   CREATE_LABEL,
   DELETE_LABEL,
@@ -11,6 +12,7 @@ import {
   collectionOf,
   identifierTokens,
   identityInPath,
+  isListRead,
   labelOf,
   sameValue,
   screenTexts,
@@ -94,7 +96,14 @@ export type EntityEvidenceType =
   | 'EDIT_INPUT'
   /** « Enregistrer » pendant que l'entité est affichée (sans réseau, c'est la seule preuve). */
   | 'SAVE_ACTION'
-  | 'DELETE_ACTION';
+  | 'DELETE_ACTION'
+  /**
+   * EntityCorrelation : l'entité créée par cette action est RETROUVÉE plus loin par ses données
+   * métier ; son identité (découverte dans le résultat) lui est rattachée après coup.
+   */
+  | 'CORRELATED_CREATION'
+  /** EntityCorrelation : la recherche (critères + geste) qui retrouve l'entité par ses données métier. */
+  | 'SEARCH_RESULT';
 
 export interface EntityEvidence {
   id: string;
@@ -118,6 +127,9 @@ export interface EntityEvidence {
     route?: string;
     /** USER_INPUT : la saisie se fait dans un contexte de recherche. */
     search?: boolean;
+    /** CORRELATED_CREATION / SEARCH_RESULT : la corrélation (c1…) et sa confiance. */
+    correlation?: string;
+    confidence?: number;
   };
   description: string;
 }
@@ -216,7 +228,14 @@ export function collectEntityEvidence(input: EvidenceInput): EvidenceCollection 
     const base = { actionIndex: index, actionId: action.id, rawEventIds: action.rawEventIds };
     const selector = action.target?.target.value;
     const writes = action.network.filter(
-      (exchange) => WRITE.has(exchange.method) && exchange.status !== undefined && exchange.status < 400,
+      (exchange) =>
+        WRITE.has(exchange.method) &&
+        exchange.status !== undefined &&
+        exchange.status < 400 &&
+        // Une liste servie par un POST est une LECTURE ; un appel d'authentification ou de
+        // configuration n'est jamais une écriture métier.
+        !isListRead(exchange) &&
+        technicalCategoryOf(exchange.path) === undefined,
     );
     const routes = [
       ...(action.navigation?.routes ?? []),
@@ -409,7 +428,7 @@ export function collectEntityEvidence(input: EvidenceInput): EvidenceCollection 
           identifierTokens(text).length === 1 &&
           identifierTokens(text)[0] === text.trim()) ||
           (text === undefined &&
-            (facts?.shape === 'number' || facts?.shape === 'code') &&
+            (facts?.shape === 'number' || (facts?.shape === 'code' && facts.hasDigit === true)) &&
             facts.length >= 3));
       const digest = facts?.digest ?? (text !== undefined ? input.digest?.(text) : undefined);
       if (identifierShaped && (digest || text !== undefined)) {

@@ -1053,6 +1053,8 @@ export function installRecorder(
       empty: value.trim() === '',
       length: value.length,
       shape: sensitive ? (value.trim() === '' ? 'empty' : 'text') : shapeOf(value),
+      // Contient-elle des chiffres ? (une clé ABC123 en contient, un nom saisi en capitales jamais)
+      ...(!sensitive && /\d/.test(value) ? { hasDigit: true } : {}),
       ...(digest ? { digest } : {}),
       ...(!sensitive && start ? { initialDigest: start } : {}),
       ...(sensitive ? { sensitive: true } : {}),

@@ -56,7 +56,10 @@ export interface PanelReplay {
 
 export interface PanelAnalysis {
   available: boolean;
+  /** Les intents MÉTIER (après corrélation : une écriture métier acceptée). */
   intents: { label: string; detail?: string; confidence?: number; evidence: string[] }[];
+  /** Les intents TECHNIQUES (ACQUIRE_TOKEN, DISCOVER_PROVIDER…) : séparés, jamais métier. */
+  technicalIntents?: { label: string; detail?: string; evidence: string[] }[];
   findings: { severity: string; message: string; suggestion?: string; origin: string }[];
   aiCandidates: number;
   /** L'analyse du conseiller tourne encore en arrière-plan (la revue n'attend pas). */
@@ -65,12 +68,32 @@ export interface PanelAnalysis {
    * L'INTERPRÉTATION MÉTIER : chaque étape (créer, rechercher, ouvrir…), les actions enregistrées
    * qu'elle regroupe, ce qui a été OBSERVÉ (réseau, écran, navigation) et ce qui est DÉDUIT.
    */
+  /** LE MODÈLE DE L'APPLICATION, en arbre (les actions techniques restent dans le parcours). */
+  application?: {
+    tree: PanelTreeNode[];
+    /** Les trois niveaux des actions : enregistrées, validées, interprétées (le reste : UNKNOWN). */
+    counts?: { recorded: number; validated: number; interpreted: number; uninterpreted: number };
+  };
   business?: {
     steps: PanelBusinessStep[];
     unresolved: { type: string; status: string; candidates?: string[]; recorded: string[] }[];
     /** Les entités observées et leur PROVENANCE (créée, découverte, existante, inconnue, ambiguë). */
     entities?: PanelBusinessEntity[];
   };
+}
+
+/**
+ * Un nœud de l'arbre de l'application (Workspace → Task → MFE → Entity → actions) : son statut
+ * (observé, déduit, confirmé, incertain), sa confiance, ses preuves et les actions enregistrées.
+ */
+export interface PanelTreeNode {
+  label: string;
+  detail?: string;
+  status?: 'OBSERVED' | 'DEDUCED' | 'CONFIRMED' | 'UNCERTAIN';
+  confidence?: number;
+  evidence: string[];
+  recorded: string[];
+  children: PanelTreeNode[];
 }
 
 export interface PanelBusinessEntity {

@@ -1,10 +1,13 @@
 import type { ExchangeIdentifier, FunctionalExchange } from '../../functional/model.js';
 import type { RawRecordedEvent, RecordedFlowStep, RecordedState, SemanticRecordedAction } from '../model.js';
 import { entityOf } from '../recorded-test-data.js';
+import type { EntityCorrelation } from './entity-correlation.js';
 import type { EntityEvidence } from './entity-evidence.js';
+import { isBusinessCandidate, technicalCategoryOf, type EntityClassification } from './entity-classifier.js';
 import { EntityMemory } from './entity-memory.js';
 import { trackEntities, type LifecycleKind, type TrackedEntity } from './entity-tracker.js';
 import {
+  PROBABLE_AT,
   statusOf,
   type BusinessEvent,
   type BusinessEventType,
@@ -21,6 +24,7 @@ import {
   fold,
   hasPathId,
   identifierTokens,
+  isListRead,
   labelOf,
   round,
   singular,
@@ -33,6 +37,12 @@ import {
  * contexte des actions précédentes sont pesés ensemble. Rien n'est inventé : une entité qu'aucun
  * indice ne départage reste AMBIGUOUS, une hypothèse faible reste UNKNOWN.
  */
+
+/** Le poids d'une création RETROUVÉE par ses données métier (EntityCorrelation, R10). */
+const RETRIEVED_BY_DATA = 0.25;
+
+/** Les gestes qui soumettent (une création exige un geste de l'utilisateur, jamais une saisie seule). */
+const SUBMITTING: ReadonlySet<SemanticRecordedAction['type']> = new Set(['CLICK', 'SUBMIT', 'CONFIRM']);
 export interface BusinessDetectionInput {
   /** Les actions gardées par le normaliseur, dans l'ordre. */
   actions: readonly SemanticRecordedAction[];
@@ -53,6 +63,11 @@ export interface BusinessDetectionInput {
   initialStateId?: string;
   /** Des provenances AMBIGUËS tranchées (IA facultative) : clé d'entité → provenance candidate. */
   provenanceDecisions?: ReadonlyMap<string, EntityProvenance>;
+  /**
+   * Des classifications proposées (IA facultative) pour des entités INCONNUES seulement : jamais un
+   * élément technique ou d'infrastructure promu en métier (le classifieur revalide).
+   */
+  classificationDecisions?: ReadonlyMap<string, EntityClassification>;
 }
 
 export interface BusinessDetection {
@@ -63,6 +78,8 @@ export interface BusinessDetection {
   entities: TrackedEntity[];
   /** Les preuves structurées d'où elles viennent (EvidenceCollector). */
   evidence: EntityEvidence[];
+  /** Les corrélations par données métier (CREATE → SEARCH → RESULT → OPEN). */
+  correlations: EntityCorrelation[];
 }
 
 const ENTITY_VERB =
@@ -86,6 +103,7 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
   const tracking = trackEntities({
     ...input,
     ...(input.provenanceDecisions ? { proposals: input.provenanceDecisions } : {}),
+    ...(input.classificationDecisions ? { classificationProposals: input.classificationDecisions } : {}),
   });
   memory.observe(tracking.entities);
   /** L'entité suivie dont un geste (CREATE, SAVE…) est cette action. */
@@ -130,7 +148,14 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
     const after = action.stateAfter ? stateById.get(action.stateAfter) : undefined;
     const before = action.stateBefore ? stateById.get(action.stateBefore) : undefined;
     const writes = action.network.filter(
-      (exchange) => WRITE.has(exchange.method) && exchange.status !== undefined && exchange.status < 400,
+      (exchange) =>
+        WRITE.has(exchange.method) &&
+        exchange.status !== undefined &&
+        exchange.status < 400 &&
+        // Une liste servie par un POST est une LECTURE ; un appel d'authentification ou de
+        // configuration n'est jamais une écriture métier.
+        !isListRead(exchange) &&
+        technicalCategoryOf(exchange.path) === undefined,
     );
 
     // ---------------------------------------------------------------- écritures (création, mise à jour, suppression)
@@ -191,11 +216,9 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
       }
       evidence.context.push(...decision.evidence);
       confidence = Math.min(0.99, round(confidence));
-      const status = decision.entity
-        ? statusOf(confidence)
-        : decision.candidates.length > 1
-          ? 'AMBIGUOUS'
-          : 'UNKNOWN';
+      const statusFor = (value: number): BusinessEvent['status'] =>
+        decision.entity ? statusOf(value) : decision.candidates.length > 1 ? 'AMBIGUOUS' : 'UNKNOWN';
+      let status = statusFor(confidence);
       // L'ACTION MÉTIER regroupe le formulaire : depuis le dernier événement métier jusqu'au clic.
       const group = actions
         .slice(Math.max(boundary + 1, index - 14), index + 1)
@@ -231,23 +254,75 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
           `provenance: ${tracked.provenance.classification} (${tracked.provenance.reason})`,
           ...(tracked.provenance.contradictions ?? []),
         );
-      const notCreated = provenance !== undefined && provenance !== 'CREATED_DURING_RECORDING';
+      // RETROUVÉE PAR SES DONNÉES MÉTIER après la création (EntityCorrelation, règle R10) : une preuve
+      // qui converge, même quand aucun identifiant n'était visible ni servi à la création.
+      if (tracked?.provenance.rules.some((rule) => rule.startsWith('R10'))) {
+        confidence = Math.min(0.99, round(confidence + RETRIEVED_BY_DATA));
+        status = statusFor(confidence);
+        evidence.context.push('retrieved by its business data after the creation (EntityCorrelation, R10)');
+      }
+      const technicalClass = tracked?.classification;
+      const technical = technicalClass !== undefined && !isBusinessCandidate(technicalClass.classification);
+      if (technical)
+        evidence.context.push(
+          `classification: ${technicalClass.classification} (${technicalClass.reason}) — not a business creation`,
+        );
+      const notCreated = technical || (provenance !== undefined && provenance !== 'CREATED_DURING_RECORDING');
       const existing = provenance === 'DISCOVERED_DURING_RECORDING' || provenance === 'CONFIRMED_EXISTING';
-      const finalStatus =
-        provenance === 'AMBIGUOUS'
+      const finalStatus = technical
+        ? 'UNKNOWN'
+        : provenance === 'AMBIGUOUS'
           ? 'AMBIGUOUS'
           : provenance === 'UNKNOWN'
             ? 'UNKNOWN'
             : decision.ai && status === 'CONFIRMED'
               ? 'PROBABLE'
               : status;
+      // ENTITY_CREATED exige des preuves CONVERGENTES : un geste de l'utilisateur qui soumet, une
+      // écriture métier acceptée (2xx), une NOUVELLE identité servie par le serveur (réponse,
+      // Location) ou une provenance CREATED_DURING_RECORDING, et un statut sûr. Un POST, un clic, une
+      // nouvelle URL, une première observation ou une réponse seule ne font qu'un POSSIBLE_CREATE.
+      const missing = [
+        ...(SUBMITTING.has(action.type) ? [] : ['user create action (click / submit)']),
+        ...(write ? [] : ['business write operation']),
+        ...(write?.status !== undefined && write.status >= 200 && write.status < 300
+          ? []
+          : ['success response (2xx)']),
+        ...((identifier && (identifier.source === 'network' || identifier.source === 'location')) ||
+        provenance === 'CREATED_DURING_RECORDING'
+          ? []
+          : ['new business id served by the server']),
+        ...(technical ? ['a business entity (it is classified technical)'] : []),
+        ...(provenance === undefined || provenance === 'CREATED_DURING_RECORDING'
+          ? []
+          : [`provenance CREATED_DURING_RECORDING (it is ${provenance})`]),
+        ...(confidence >= PROBABLE_AT && provenance !== 'AMBIGUOUS'
+          ? []
+          : ['converging evidence (confidence ≥ 0.6)']),
+        // L'entité doit être identifiée : suivie (sa clé), nommée, ou parmi des candidats (l'IA
+        // pourra choisir) ; un nom générique ne bloque pas une création prouvée par ailleurs.
+        ...(tracked || decision.entity || decision.candidates.length > 1 ? [] : ['an identified entity']),
+      ];
+      const proven = !existing && missing.length === 0;
+      if (!existing && !proven)
+        evidence.context.push(`POSSIBLE_CREATE, not ENTITY_CREATED — missing: ${missing.join(', ')}`);
       const event = push({
-        type: existing ? 'ENTITY_UPDATED' : 'ENTITY_CREATED',
+        type: existing ? 'ENTITY_UPDATED' : proven ? 'ENTITY_CREATED' : 'POSSIBLE_CREATE',
         ...(decision.entity ? { entity: decision.entity } : {}),
         ...(decision.candidates.length > 1 ? { candidates: decision.candidates } : {}),
         ...(identifier ? { identifier } : {}),
         ...(tracked ? { entityKey: tracked.key, provenance: tracked.provenance.classification } : {}),
-        status: finalStatus,
+        // Une création possible n'est jamais une vérité métier : elle reste hors du flow métier.
+        status: existing
+          ? finalStatus
+          : proven
+            ? // Prouvée et suivie par sa clé : un nom générique n'en fait pas une inconnue.
+              finalStatus === 'UNKNOWN' && tracked
+              ? statusOf(confidence)
+              : finalStatus
+            : finalStatus === 'AMBIGUOUS'
+              ? 'AMBIGUOUS'
+              : 'UNKNOWN',
         confidence: decision.ai ? Math.min(confidence, 0.84) : confidence,
         actionIds: group.map((entry) => entry.id),
         rawEventIds: group.flatMap((entry) => entry.rawEventIds),
@@ -257,6 +332,7 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
       // UNE VÉRITÉ MÉTIER seulement si confirmée ou probable, avec une entité, un identifiant et
       // une création PROUVÉE (jamais une première observation).
       if (
+        proven &&
         !notCreated &&
         decision.entity &&
         identifier &&
@@ -499,6 +575,7 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
   const covered = new Set(events.flatMap((event) => event.actionIds));
   const TYPE_OF: Partial<Record<LifecycleKind, BusinessEventType>> = {
     SEARCH: 'ENTITY_SEARCHED',
+    RETRIEVE: 'ENTITY_RETRIEVED',
     OPEN: 'ENTITY_OPENED',
     UPDATE: 'ENTITY_UPDATED',
     SAVE: 'ENTITY_SAVED',
@@ -506,6 +583,10 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
   };
   for (const entity of tracking.entities) {
     if (entity.provenance.classification === 'UNKNOWN') continue;
+    // OBSERVED ≠ BUSINESS : seule une entité MÉTIER démontrée (preuves fonctionnelles convergentes)
+    // porte des gestes métier. Technique, infrastructure (OIDC, configuration, statique) ou encore
+    // UNKNOWN : une observation (business-flow.json : entities, evidence), jamais un événement métier.
+    if (entity.classification.classification !== 'BUSINESS_ENTITY') continue;
     const record = memory.all.find((entry) => trackedWith(entry.identifier)?.key === entity.key);
     for (const step of entity.lifecycle) {
       const type = TYPE_OF[step.kind];
@@ -540,6 +621,38 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
     }
   }
 
+  // ---------------------------------------------------------------- les corrélations par données métier
+  // Le résultat d'une recherche faite avec les données d'une création : la même entité (ou des
+  // homonymes, AMBIGUOUS). Placé à la recherche, entre RETRIEVE et OPEN ; jamais sans preuves.
+  for (const correlation of tracking.correlations) {
+    const entity = tracking.entities.find((candidate) =>
+      tracking.evidence.some(
+        (entry) => entry.details.correlation === correlation.id && candidate.evidenceIds.includes(entry.id),
+      ),
+    );
+    if (entity && entity.classification.classification !== 'BUSINESS_ENTITY') continue;
+    const evidence = emptyEvidence();
+    evidence.network.push(correlation.creation.api, correlation.query.api);
+    evidence.context.push(...correlation.evidence);
+    const name = entity && entity.type !== 'unknown' ? entity.type : undefined;
+    push({
+      type: 'ENTITY_CORRELATED',
+      ...(name ? { entity: name } : {}),
+      ...(entity ? { entityKey: entity.key, provenance: entity.provenance.classification } : {}),
+      correlation: correlation.id,
+      status:
+        correlation.status === 'CONFIRMED' ||
+        correlation.status === 'PROBABLE' ||
+        correlation.status === 'AMBIGUOUS'
+          ? correlation.status
+          : 'UNKNOWN',
+      confidence: correlation.confidence,
+      actionIds: [correlation.query.actionId],
+      rawEventIds: actions.find((entry) => entry.id === correlation.query.actionId)?.rawEventIds ?? [],
+      evidence,
+    });
+  }
+
   // L'ordre du parcours (les événements ajoutés après coup reprennent leur place), ids renumérotés.
   const position = new Map(actions.map((entry, index) => [entry.id, index]));
   const firstOf = (event: BusinessEvent): number =>
@@ -552,7 +665,14 @@ export function detectBusinessEvents(input: BusinessDetectionInput): BusinessDet
     relation.to = renamed.get(relation.to) ?? relation.to;
   }
   for (const record of memory.all) record.eventId = renamed.get(record.eventId) ?? record.eventId;
-  return { events, relations, memory, entities: tracking.entities, evidence: tracking.evidence };
+  return {
+    events,
+    relations,
+    memory,
+    entities: tracking.entities,
+    evidence: tracking.evidence,
+    correlations: tracking.correlations,
+  };
 }
 
 /** L'entité : celle de l'API, confirmée par l'écran ; deux indices qui se contredisent → AMBIGUOUS. */

@@ -1,3 +1,4 @@
+import type { EntityCorrelation } from './entity-correlation.js';
 import type { EntityProvenance } from './provenance-resolver.js';
 
 /**
@@ -17,7 +18,13 @@ import type { EntityProvenance } from './provenance-resolver.js';
  */
 export type BusinessEventType =
   | 'ENTITY_CREATED'
+  /** Une création SUPPOSÉE (un POST, un clic…) sans preuves convergentes : jamais ENTITY_CREATED. */
+  | 'POSSIBLE_CREATE'
   | 'ENTITY_SEARCHED'
+  /** Une entité CRÉÉE pendant l'enregistrement, retrouvée par une recherche (ses données métier). */
+  | 'ENTITY_RETRIEVED'
+  /** Le résultat d'une recherche est corrélé à l'entité créée (EntityCorrelation, avec ses preuves). */
+  | 'ENTITY_CORRELATED'
   | 'ENTITY_OPENED'
   | 'ENTITY_UPDATED'
   | 'ENTITY_SAVED'
@@ -72,6 +79,8 @@ export interface BusinessEvent {
   identifier?: BusinessIdentifier;
   /** L'entité suivie (entity:<ressource>:<identité>) : la même tout au long du parcours. */
   entityKey?: string;
+  /** ENTITY_CORRELATED : la corrélation (c1…) qui le fonde, détaillée dans correlations. */
+  correlation?: string;
   /** D'où vient l'entité (ProvenanceResolver) : une première observation n'est jamais une création. */
   provenance?: EntityProvenance;
   status: BusinessStatus;
@@ -96,7 +105,7 @@ export interface BusinessRelation {
 }
 
 export interface BusinessFlowStep {
-  action: 'create' | 'search' | 'open' | 'update' | 'save' | 'delete';
+  action: 'create' | 'search' | 'retrieve' | 'correlate' | 'open' | 'update' | 'save' | 'delete';
   entity?: string;
   entityKey?: string;
   provenance?: EntityProvenance;
@@ -117,7 +126,12 @@ export interface BusinessFlowStep {
 /** Une entité du parcours : son identité, sa provenance (expliquée) et son cycle de vie. */
 export interface BusinessFlowEntity {
   name: string;
-  type: 'business_entity';
+  /**
+   * business_entity : un rôle métier DÉMONTRÉ (classification BUSINESS_ENTITY, ou l'entité nommée
+   * d'une étape métier) ; observed_entity : une observation gardée (UNKNOWN, technique,
+   * infrastructure), jamais une entité métier.
+   */
+  type: 'business_entity' | 'observed_entity';
   /** Les références runtime ($created.<entité>.id) : seulement pour une création prouvée. */
   references: string[];
   key?: string;
@@ -132,6 +146,8 @@ export interface BusinessFlowEntity {
     candidates?: EntityProvenance[];
     analyzer: 'DETERMINISTIC' | 'AI_PROPOSAL';
   };
+  /** Métier, technique, infrastructure ou inconnu : seule une entité métier (ou inconnue) porte des étapes. */
+  classification?: { classification: string; confidence: number; reason: string; signals: string[] };
   firstSeen?: { actionId?: string; evidence: string };
   lifecycle?: { kind: string; actionIds: string[]; stepIds: string[]; confidence: number }[];
   linkCandidates?: string[];
@@ -143,6 +159,8 @@ export interface BusinessFlowModel {
   /** Les étapes métier retenues (CONFIRMED, PROBABLE) dans l'ordre du parcours. */
   steps: BusinessFlowStep[];
   relations: BusinessRelation[];
+  /** Les corrélations par données métier (CREATE → SEARCH → RESULT → OPEN), avec leurs preuves. */
+  correlations?: EntityCorrelation[];
   /** Ce qui n'est PAS une vérité métier : ambiguïtés et hypothèses faibles, pour revue. */
   unresolved: BusinessEvent[];
   summary: Record<BusinessStatus, number> & { events: number };

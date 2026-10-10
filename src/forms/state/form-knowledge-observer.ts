@@ -3,9 +3,11 @@ import {
   isStateCode,
   isStateKey,
   type ExchangeIdentifier,
+  type ExchangeRecord,
   type FieldShape,
   type FunctionalExchange,
   type StateCode,
+  type ValueDigest,
 } from '../../functional/model.js';
 import type { NetworkExchange } from '../../model/network.js';
 import type { PageObserver } from '../../observers/observer.js';
@@ -51,13 +53,20 @@ export class FormKnowledgeObserver implements PageObserver {
       const entry: FunctionalExchange = { method: request.method(), path: pathOf(request.url()) };
       const pathId = pathIdentifierOf(entry.path, this.salt);
       if (pathId) entry.identifiers = [pathId];
+      // Les critères de l'URL (?q=…) : en empreintes seulement.
+      const fromQuery = queryCriteriaOf(request.url(), this.salt);
       if (entry.method !== 'GET' && entry.method !== 'HEAD') {
         const body = parseJson(safePostData(request));
         const fields = shapeOf(body, this.salt);
         if (fields) entry.requestFields = fields;
         const state = stateCodeOf(body);
         if (state) entry.requestState = state;
-      }
+        // Ce qui est ENVOYÉ (critères d'une recherche, données d'une création) : en empreintes.
+        const criteria = [...fromQuery, ...valueDigestsOf(body, this.salt, 30)];
+        if (criteria.length > 0) entry.requestCriteria = criteria;
+        const hints = requestHintsOf(body);
+        if (hints) entry.requestHints = hints;
+      } else if (fromQuery.length > 0) entry.requestCriteria = fromQuery;
       this.pending.set(request, entry);
       for (const window of this.functional.values()) if (window.length < 30) window.push(entry);
     }
@@ -88,7 +97,17 @@ export class FormKnowledgeObserver implements PageObserver {
         const body = parseJson(text);
         const state = stateCodeOf(body);
         if (state) entry.responseState = state;
-        if (entry.method === 'GET' && (entry.status ?? 0) < 400) return;
+        // Une lecture réussie : seulement les IDENTIFIANTS de ses enregistrements (une liste servie
+        // par un BFF, un détail) — empreinte salée, valeur si elle a la forme d'un identifiant.
+        if (entry.method === 'GET' && (entry.status ?? 0) < 400) {
+          const size = listSizeOf(body);
+          if (size !== undefined) entry.listSize = size;
+          if (salt !== undefined && text.length <= 2_000_000) {
+            const records = recordsOf(body, salt);
+            if (records.length > 0) entry.records = records;
+          }
+          return;
+        }
         if (text.length > 200_000) return;
         const fields = shapeOf(body);
         if (fields) entry.responseFields = fields;
@@ -96,6 +115,14 @@ export class FormKnowledgeObserver implements PageObserver {
         if (salt !== undefined && (entry.status ?? 0) < 400) {
           const found = identifiersOf(body, salt);
           if (found.length > 0) entry.identifiers = [...(entry.identifiers ?? []), ...found];
+          // Une LISTE servie par une écriture HTTP (un POST de recherche, une liste d'un BFF) : ses
+          // enregistrements, comme pour une lecture. La méthode n'est qu'un indice.
+          const size = listSizeOf(body);
+          if (size !== undefined) {
+            entry.listSize = size;
+            const records = recordsOf(body, salt);
+            if (records.length > 0) entry.records = records;
+          }
         }
         const code = errorCodeOf(body);
         if (code && entry.status !== undefined && entry.status >= 400) entry.errorCode = code;
@@ -227,9 +254,13 @@ export function stateCodeOf(body: unknown): StateCode | undefined {
 
 /** Les clés qui portent un identifiant (id, uuid, reference, numero, demandeId, requestNumber…). */
 const IDENTIFIER_KEY = /^(id|uuid|guid|ref|reference|numero|number|no|code|key)$/i;
-const IDENTIFIER_SUFFIX = /[a-z](Id|ID|Uuid|Ref|Reference|Number|Numero|No)$/;
-/** Jamais un identifiant : un secret, un jeton, une session. */
-const SENSITIVE_KEY = /(token|secret|password|pass|pwd|session|auth|otp|cookie|signature|key$)/i;
+const IDENTIFIER_SUFFIX = /[a-z](Id|ID|Uuid|Ref|Reference|Number|Numero|No|Key|Code)$/;
+/**
+ * Jamais un identifiant : un secret, un jeton, une session, une clé d'API ou de chiffrement. Une
+ * clé fonctionnelle (« …Key » d'un objet) reste lisible.
+ */
+const SENSITIVE_KEY =
+  /(token|secret|password|pass|pwd|session|auth|otp|cookie|signature|(api|private|access|public|signing|encryption|crypto|client|master)[-_]?key$)/i;
 /** La forme d'un identifiant affichable : nombre, code court (DEM-2026-001), uuid. */
 const IDENTIFIER_VALUE = /^[A-Za-z0-9][A-Za-z0-9_\-./#]{0,39}$/;
 
@@ -262,13 +293,156 @@ export function identifiersOf(body: unknown, salt: string): ExchangeIdentifier[]
   return found;
 }
 
+/** Un code alphanumérique (lettres + au moins deux chiffres : ABC123, X9Y8Z7) : une clé métier possible. */
+const ALNUM_CODE = /^(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])[A-Za-z0-9]{4,40}$/;
+
+/**
+ * La taille de la liste d'objets servie (au premier niveau ou dans une propriété enveloppe), même
+ * vide quand l'enveloppe porte aussi des indices de pagination ; absente si ce n'est pas une liste.
+ */
+export function listSizeOf(body: unknown): number | undefined {
+  const objects = (value: unknown): value is unknown[] =>
+    Array.isArray(value) &&
+    value.some((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+  if (objects(body)) return body.length;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const entries = Object.entries(body as Record<string, unknown>).slice(0, 40);
+  for (const [, value] of entries) if (objects(value)) return value.length;
+  // Une enveloppe de pagination dont la liste est vide ({ items: [], total: 0 }).
+  const paged = entries.some(
+    ([key]) => PAGINATION_KEY.test(key) || /^(total|count|totalElements)$/i.test(key),
+  );
+  const empty = entries.find(([, value]) => Array.isArray(value) && value.length === 0);
+  return paged && empty ? 0 : undefined;
+}
+
+const PAGINATION_KEY =
+  /^(page|pageNumber|pageIndex|pageSize|size|limit|offset|skip|take|first|max|perPage)$/i;
+const SORT_KEY = /^(sort|sortBy|sortOrder|order|orderBy|direction|sortDirection)$/i;
+const CRITERIA_KEY = /^(filter|filters|criteria|criterion|query|q|search|where|conditions?|terms?)$/i;
+
+/**
+ * Les INDICES de structure d'une requête : pagination, tri, conteneur de critères. Des indices à
+ * combiner (avec une réponse en liste, l'absence d'identité créée…), jamais une règle à eux seuls.
+ */
+export function requestHintsOf(
+  body: unknown,
+): { pagination?: boolean; sorting?: boolean; criteria?: boolean } | undefined {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const hints: { pagination?: boolean; sorting?: boolean; criteria?: boolean } = {};
+  const visit = (value: unknown, depth: number): void => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || depth > 2) return;
+    for (const [key, field] of Object.entries(value as Record<string, unknown>).slice(0, 60)) {
+      if (PAGINATION_KEY.test(key)) hints.pagination = true;
+      if (SORT_KEY.test(key)) hints.sorting = true;
+      if (CRITERIA_KEY.test(key)) hints.criteria = true;
+      visit(field, depth + 1);
+    }
+  };
+  visit(body, 0);
+  return Object.keys(hints).length > 0 ? hints : undefined;
+}
+
+/**
+ * Les VALEURS simples d'un corps JSON (chaînes, nombres), en empreintes salées avec le chemin du
+ * champ (filters.name, address.city) — jamais une clé sensible, jamais la valeur.
+ */
+export function valueDigestsOf(body: unknown, salt: string | undefined, max: number): ValueDigest[] {
+  if (salt === undefined) return [];
+  const found: ValueDigest[] = [];
+  const visit = (value: unknown, prefix: string, depth: number): void => {
+    if (found.length >= max || depth > 3) return;
+    if (Array.isArray(value)) {
+      for (const entry of value.slice(0, 10)) visit(entry, prefix, depth + 1);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    for (const [key, field] of Object.entries(value as Record<string, unknown>).slice(0, 60)) {
+      if (found.length >= max) return;
+      if (SENSITIVE_KEY.test(key) && !/^(id|key)$/i.test(key)) continue;
+      const path = prefix ? `${prefix}.${key}` : key;
+      if (typeof field === 'string' || typeof field === 'number') {
+        const text = String(field).trim();
+        // Pas de bruit de corrélation : un code d'état (status), un caractère, un petit nombre
+        // (une page, une taille) ne désignent rien.
+        if (isStateKey(key) || text.length < 2 || (typeof field === 'number' && text.length <= 3)) continue;
+        if (text.length <= 200) found.push({ field: path, digest: valueDigest(text, salt) });
+      } else visit(field, path, depth + 1);
+    }
+  };
+  visit(body, '', 0);
+  return found;
+}
+
+/** Les paramètres d'URL (?name=…&page=2) : en empreintes, jamais en clair. */
+function queryCriteriaOf(url: string, salt: string | undefined): ValueDigest[] {
+  if (salt === undefined) return [];
+  try {
+    const found: ValueDigest[] = [];
+    for (const [key, value] of new URL(url).searchParams) {
+      if (found.length >= 20) break;
+      if (SENSITIVE_KEY.test(key) || value.trim() === '' || value.length > 200) continue;
+      found.push({ field: `?${key}`, digest: valueDigest(value, salt) });
+    }
+    return found;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Les ENREGISTREMENTS d'une réponse de lecture : un tableau d'objets (au premier niveau ou dans une
+ * propriété enveloppe), ou un objet seul. De chacun, seulement ses identifiants (50 au plus).
+ */
+export function recordsOf(body: unknown, salt: string): ExchangeRecord[] {
+  const list = (value: unknown): unknown[] | undefined =>
+    Array.isArray(value) && value.some((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+      ? value
+      : undefined;
+  let items = list(body);
+  let container: string | undefined;
+  if (!items && body && typeof body === 'object' && !Array.isArray(body))
+    for (const [key, value] of Object.entries(body as Record<string, unknown>).slice(0, 40)) {
+      const found = list(value);
+      if (found) {
+        items = found;
+        container = key;
+        break;
+      }
+    }
+  const records: ExchangeRecord[] = [];
+  for (const [index, item] of (
+    items ?? (body && typeof body === 'object' && !Array.isArray(body) ? [body] : [])
+  )
+    .slice(0, 50)
+    .entries()) {
+    const identifiers = identifiersOf(item, salt);
+    // Les attributs de l'enregistrement (un nom, une adresse…) : de quoi le CORRÉLER à des données
+    // saisies ailleurs, même quand aucun champ n'a la forme d'un identifiant.
+    const attributes = valueDigestsOf(item, salt, 24);
+    if (identifiers.length === 0 && attributes.length === 0) continue;
+    const state = stateCodeOf(item);
+    records.push({
+      index,
+      ...(container ? { container } : {}),
+      identifiers,
+      ...(attributes.length > 0 ? { attributes } : {}),
+      ...(state ? { state } : {}),
+    });
+  }
+  return records;
+}
+
 /** /api/demandes/12345 → l'identifiant 12345 (le dernier segment numérique, uuid ou code). */
 export function pathIdentifierOf(path: string, salt: string): ExchangeIdentifier | undefined {
   const segments = path.split('/').filter(Boolean);
   const last = segments.at(-1);
   if (!last || segments.length < 2) return undefined;
   const id =
-    /^\d+$/.test(last) || /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(last) || /^[A-Z]{2,}-[A-Z0-9-]+$/.test(last);
+    /^\d+$/.test(last) ||
+    /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(last) ||
+    /^[A-Z]{2,}-[A-Z0-9-]+$/.test(last) ||
+    ALNUM_CODE.test(last);
   if (!id) return undefined;
   return { field: '(path)', digest: valueDigest(last, salt), value: last, source: 'path' };
 }

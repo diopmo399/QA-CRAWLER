@@ -1105,6 +1105,27 @@ OBSERVATION TECHNIQUE (actions, DOM, navigation, réseau)
 bouton (« Créer »), navigation (`/demandes/12345`) et actions précédentes (« Nouvelle demande »)
 sont pesés ensemble.
 
+**`POSSIBLE_CREATE` ≠ `ENTITY_CREATED`** : `ENTITY_CREATED` exige des preuves convergentes :
+
+- un geste de l'utilisateur qui soumet (clic, envoi) ;
+- une écriture métier acceptée (2xx, ni technique ni liste lue) ;
+- une nouvelle identité servie par le serveur (réponse, `Location`) ou une provenance
+  `CREATED_DURING_RECORDING` ;
+- une entité identifiée et une confiance ≥ 0,6.
+
+Sinon l'événement est un `POSSIBLE_CREATE` (statut `UNKNOWN` ou `AMBIGUOUS`) : il liste les preuves
+manquantes, reste dans les incertains et ne produit jamais de référence `$created`. Un POST, un
+clic, une nouvelle URL, un élément inconnu, une première observation ou une réponse seule ne
+suffisent pas. Seule une entité classée `BUSINESS_ENTITY` porte des événements métier ; une
+observation `UNKNOWN` reste une observation.
+
+**Retrouvée par ses données métier** : une création dont aucun identifiant n'a été visible ni
+renvoyé est prouvée quand une recherche faite avec les données saisies à la création rend un
+résultat qui les porte (EntityCorrelation, règle R10). L'identité du résultat est alors découverte
+après coup, et l'on obtient `ENTITY_CREATED` → `ENTITY_RETRIEVED` → `ENTITY_CORRELATED` →
+`ENTITY_OPENED` sur la même entité. Des homonymes non départagés donnent `AMBIGUOUS`. Voir
+`docs/APPLICATION_INTERACTION_MODEL.md`.
+
 **Mémoire des entités** : une création retenue produit une référence runtime
 (`$created.demande.id`, puis `.id2`…). Une saisie plus loin dont l'empreinte salée (ou la valeur)
 est celle de cet identifiant devient une **recherche** de l'entité (`SEARCH_REFERENCE`) ; le clic
@@ -1219,6 +1240,19 @@ plafonne la confiance à 0,7, marque `AI_PROPOSAL` et garde les contradictions.
 `provenance`. L'onglet **Analyse** montre la provenance de chaque étape et la liste des entités
 observées. `trackEntities()` est une fonction pure (actions, états, événements bruts) : le rejeu et
 le crawler autonome peuvent l'appeler sur leurs propres observations.
+
+### Modèle de l'application (`application-model.json`)
+
+Au-dessus des entités, le Recorder construit un **Application Interaction Model** générique :
+contextes applicatifs (shell, espace de travail, micro-frontends — iframe, élément personnalisé ou
+route de SPA), collections lues (une liste servie par un BFF : seulement les identifiants de ses
+enregistrements), tasks sélectionnées (`taskId ≠ businessKey`), entités, relations
+(`REFERENCES`, `RESULTS_IN`, `CREATE_RESULT`, `NAVIGATES_TO`…) et actions métier (`SELECT_TASK`,
+`SWITCH_CONTEXT`, `CREATE`, `RETRIEVE`, `OPEN`…), chacune avec son statut (observé, déduit,
+confirmé, incertain), sa confiance, ses preuves et les actions Playwright d'origine. L'onglet
+**Analyse** le montre en arbre. Détails, règles de corrélation et limites :
+[APPLICATION_INTERACTION_MODEL.md](APPLICATION_INTERACTION_MODEL.md). Désactivable avec
+`recording.business.application: false`.
 
 ## Progression après l'arrêt
 

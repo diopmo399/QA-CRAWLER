@@ -1,3 +1,4 @@
+import type { TechnicalCategory, TechnicalIntent, TechnicalOperation } from './business/entity-classifier.js';
 import type { PlaywrightTargetEvidence } from './sources/playwright-locator.js';
 import type { CausalEffectCandidate } from './effect-causality.js';
 import type {
@@ -330,6 +331,8 @@ export interface RecordedValueFacts {
   shape: 'email' | 'number' | 'date' | 'phone' | 'url' | 'code' | 'text' | 'empty';
   /** Empreinte salée par session (jamais pour un champ sensible). */
   digest?: string;
+  /** La valeur contient au moins un chiffre (jamais pour un champ sensible) : un nom n'est pas un identifiant. */
+  hasDigit?: boolean;
   /** Empreinte de la valeur trouvée quand l'humain est entré dans le champ. */
   initialDigest?: string;
   /** Le navigateur juge le champ sensible (mot de passe, code à usage unique, carte…). */
@@ -472,6 +475,10 @@ export interface RecordedState {
   alerts: string[];
   /** Messages de statut (role="status") : la confirmation d'une création, sans être une alerte. */
   statuses?: string[];
+  /** Les conteneurs applicatifs visibles (éléments personnalisés de grande taille) : indices de contexte. */
+  hosts?: string[];
+  /** Les cadres visibles (iframe : origine + chemin) : un micro-frontend peut y vivre. */
+  frames?: string[];
   invalidFields: number;
   dialogs: string[];
   /** Rôle + nom des contrôles visibles (pour savoir ce qui était atteignable). */
@@ -625,6 +632,23 @@ export interface RecordedIntent {
   transitions: { entity: string; from: string; to: string }[];
   confidence: number;
   evidence: string[];
+  /**
+   * Les INTENTS TECHNIQUES (authentification, découverte, santé, configuration…) : observés, séparés
+   * de l'intent métier (workflow), et jamais interprétés comme une création métier.
+   */
+  technical?: TechnicalIntentRecord[];
+}
+
+export interface TechnicalIntentRecord {
+  intent: TechnicalIntent;
+  operation: TechnicalOperation;
+  category: TechnicalCategory;
+  classification: 'TECHNICAL_ENTITY' | 'INFRASTRUCTURE_ENTITY';
+  /** Méthode + gabarit d'URL (identifiants remplacés). */
+  api: string;
+  status?: number;
+  actionIds: string[];
+  reason: string;
 }
 
 /** Une étape du flow final : l'étape exécutable + d'où elle vient. */
@@ -716,6 +740,7 @@ export type RecordingEventType =
   | 'RECORDER_DEBUG'
   | 'RECORDING_SOURCE'
   | 'BUSINESS_FLOW_DETECTED'
+  | 'APPLICATION_MODEL_BUILT'
   /** La timeline en direct (une action ajoutée, validée, annulée, résolue). */
   | 'LIVE_ACTION_UPDATED'
   | 'ACTION_UNDONE'

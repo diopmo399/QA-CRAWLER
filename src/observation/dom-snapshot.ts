@@ -931,6 +931,38 @@ export function collectDomSnapshot(options: { maxElements: number; valueSalt?: s
         .map((el) => clean((el as HTMLElement).innerText, 160))
         .filter(Boolean)
         .slice(0, 5),
+      // LES CONTEXTES APPLICATIFS : les éléments personnalisés qui occupent une grande zone (un
+      // micro-frontend, un shell, un espace de travail, quelle que soit la technologie) et les cadres
+      // visibles (iframe : origine + chemin). Des indices de structure, jamais des noms connus.
+      // Seulement les deux niveaux les plus extérieurs (shell, puis contenu) : un composant
+      // d'interface (tableau, carte) imbriqué plus bas n'est pas un contexte.
+      hosts: deepAll('*')
+        .filter((el) => el.tagName.includes('-') && !el.hasAttribute('data-qa-crawler-overlay'))
+        .filter((el) => {
+          const box = el.getBoundingClientRect();
+          return box.width >= 280 && box.height >= 120 && isVisible(el);
+        })
+        .filter((el, _, large) => {
+          let depth = 0;
+          for (let parent = el.parentElement; parent; parent = parent.parentElement)
+            if (large.includes(parent)) depth += 1;
+          return depth <= 1;
+        })
+        .map((el) => el.tagName.toLowerCase())
+        .filter((tag, index, all) => all.indexOf(tag) === index)
+        .slice(0, 8),
+      frames: deepAll('iframe')
+        .filter((el) => isVisible(el))
+        .map((el) => {
+          try {
+            const url = new URL((el as HTMLIFrameElement).src, location.href);
+            return url.origin + url.pathname;
+          } catch {
+            return '';
+          }
+        })
+        .filter(Boolean)
+        .slice(0, 5),
       // Chargement en cours : aria-busy, barres de progression et roues de chargement.
       busy: deepAll(
         '[aria-busy="true"], [role="progressbar"], mat-spinner, mat-progress-spinner, mat-progress-bar, ngx-spinner, .spinner, .loading, .loader, [class*="spinner"], [class*="skeleton"]',

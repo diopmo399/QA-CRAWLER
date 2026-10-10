@@ -113,7 +113,13 @@ function journey(): Built & {
         type: 'input',
         at: action.at,
         url: action.url,
-        value: { empty: false, length: value.length, shape, digest: digest(value) },
+        value: {
+          empty: false,
+          length: value.length,
+          shape,
+          ...(/\d/.test(value) ? { hasDigit: true } : {}),
+          digest: digest(value),
+        },
       });
       built.actions.push(action);
       return action;
@@ -469,15 +475,17 @@ describe('Business events and flow carry the provenance', () => {
     expect(detection.memory.all).toHaveLength(0);
   });
 
-  it('contradictory evidence: the creation event is AMBIGUOUS, never a $created reference', () => {
+  it('contradictory evidence: a POSSIBLE_CREATE (AMBIGUOUS), never ENTITY_CREATED nor a $created reference', () => {
     const app = journey();
     app.click('item 123', { href: '/items/123', routes: ['/items/123'], network: [get('/api/items/123')] });
     app.click('New item', { routes: ['/items/new'] });
     app.click('Create', { network: [post('/api/items', '123')] });
     const detection = detect(app);
-    const created = detection.events.find((event) => event.type === 'ENTITY_CREATED');
+    expect(detection.events.some((event) => event.type === 'ENTITY_CREATED')).toBe(false);
+    const created = detection.events.find((event) => event.type === 'POSSIBLE_CREATE');
     expect(created).toMatchObject({ status: 'AMBIGUOUS', provenance: 'AMBIGUOUS' });
     expect(created?.evidence.context.join(' ')).toMatch(/observed before its creation/);
+    expect(created?.evidence.context.join(' ')).toMatch(/missing: provenance CREATED_DURING_RECORDING/);
     expect(detection.memory.all).toHaveLength(0);
   });
 

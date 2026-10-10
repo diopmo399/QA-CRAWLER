@@ -1,5 +1,6 @@
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ApplicationInteractionModel } from './application/model.js';
 import type { Page } from 'playwright';
 import type { ScenarioConfig } from '../config/config.js';
 import { slug } from '../knowledge/signatures.js';
@@ -13,6 +14,7 @@ import {
   type PanelAnalysis,
   type PanelReplay,
   type PanelState,
+  type PanelTreeNode,
 } from './panel-state.js';
 import { generateFlowFiles } from './recorded-flow.js';
 import { RecorderPanel, type PanelCommand } from './recorder-panel.js';
@@ -180,7 +182,7 @@ export class RecordingConsole {
         ? [
             {
               label: intent.workflow,
-              ...(intent.api ? { detail: intent.api } : {}),
+              ...(intent.api ? { detail: `${intent.api}${correlationOf(result)}` } : {}),
               confidence: intent.confidence,
               evidence: [
                 ...intent.evidence,
@@ -191,6 +193,11 @@ export class RecordingConsole {
             },
           ]
         : [],
+      technicalIntents: (intent.technical ?? []).map((entry) => ({
+        label: `${entry.intent} · ${entry.api}`,
+        detail: `${entry.classification} · ${entry.category} · ${entry.operation}`,
+        evidence: [entry.reason, ...(entry.status !== undefined ? [`status ${String(entry.status)}`] : [])],
+      })),
       findings: (flowAudit?.findings ?? []).map((finding) => ({
         severity: finding.severity,
         message: finding.message,
@@ -200,6 +207,9 @@ export class RecordingConsole {
       aiCandidates: intelligence?.candidates.length ?? 0,
       ...(running ? { running: true } : {}),
       ...(result.business ? { business: businessOf(result) } : {}),
+      ...(result.application
+        ? { application: { tree: applicationTreeOf(result), counts: result.application.summary.actions } }
+        : {}),
     };
     this.render();
   }
@@ -472,8 +482,10 @@ function businessOf(result: RecordingResult): NonNullable<PanelAnalysis['busines
       ...(event.candidates ? { candidates: event.candidates } : {}),
       recorded: recorded(event.stepIds),
     })),
+    // Seules les entités MÉTIER démontrées : les observations (UNKNOWN, technique) restent dans
+    // l'arbre de l'application, jamais présentées comme métier.
     entities: (model?.entities ?? []).flatMap((entity) =>
-      entity.key && entity.provenance
+      entity.key && entity.provenance && entity.type === 'business_entity'
         ? [
             {
               key: entity.key,
@@ -491,4 +503,233 @@ function businessOf(result: RecordingResult): NonNullable<PanelAnalysis['busines
         : [],
     ),
   };
+}
+
+/**
+ * Un intent métier n'est qu'une ÉCRITURE OBSERVÉE tant que la couche métier ne l'a pas corrélée :
+ * un CREATE:… sans ENTITY_CREATED prouvé reste « création non prouvée ».
+ */
+function correlationOf(result: RecordingResult): string {
+  const workflow = result.flow.intent.workflow;
+  const model = result.business?.model;
+  if (!workflow?.startsWith('CREATE:') || !model) return '';
+  return model.steps.some((step) => step.action === 'create')
+    ? ' · creation proven (ENTITY_CREATED)'
+    : ' · write observed, creation NOT proven (no converging evidence: at most a POSSIBLE_CREATE)';
+}
+
+/**
+ * L'arbre de l'application pour la fenêtre : Workspace → Task → contexte ouvert → entité → actions
+ * métier ; les entités sans task à la racine. Chaque nœud garde son statut, ses preuves et les
+ * actions enregistrées (les actions techniques restent accessibles dans le parcours).
+ */
+function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
+  const model = result.application;
+  if (!model) return [];
+  const labels = new Map(
+    result.flow.steps.map((step, index) => [step.id, `${String(index + 1)}. ${step.label}`]),
+  );
+  const stepOfAction = (id: string): string | undefined =>
+    result.flow.steps.find((step) => step.actionIds.includes(id))?.id;
+  const recorded = (actionIds: readonly string[]): string[] => [
+    ...new Set(actionIds.map((id) => labels.get(stepOfAction(id) ?? '') ?? id)),
+  ];
+  const evidenceText = (ids: readonly string[]): string[] =>
+    ids.map((id) => model.evidence.find((entry) => entry.id === id)?.description ?? id).slice(0, 8);
+  const contextName = (key: string): string =>
+    model.contexts.find((context) => context.key === key)?.name ?? key;
+  const actionNode = (action: ApplicationInteractionModel['businessActions'][number]): PanelTreeNode => ({
+    label: action.kind,
+    detail: action.reason,
+    status: action.status,
+    confidence: action.confidence,
+    evidence: evidenceText(action.evidenceIds),
+    recorded: recorded(action.actionIds),
+    children: [],
+  });
+  const entityNode = (
+    key: string,
+    via?: ApplicationInteractionModel['relationships'][number],
+  ): PanelTreeNode => {
+    const entity = model.entities.find((entry) => entry.key === key);
+    const identity = entity?.identity;
+    return {
+      label: `${entity?.type ?? 'entity'} ${identity?.value ?? key.split(':').at(-1) ?? ''}`,
+      detail: [
+        entity ? entity.classification.classification : '',
+        identity ? `${identity.type}${identity.field ? ` (${identity.field})` : ''}` : '',
+        entity ? `provenance ${entity.provenance.classification}` : '',
+        via ? `${via.type}: ${via.reason}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      ...(via ? { status: via.status, confidence: via.confidence } : {}),
+      evidence: evidenceText(via?.evidenceIds ?? []),
+      recorded: [],
+      children: [
+        ...model.businessActions
+          .filter((action) => action.subject === key && action.kind !== 'SWITCH_CONTEXT')
+          .map(actionNode),
+        // Retrouvée par ses données métier (EntityCorrelation) : la preuve, et l'identité découverte.
+        ...model.relationships
+          .filter((relation) => relation.type === 'SEARCH_MATCH' && relation.source === key)
+          .map((relation) => ({
+            label: 'SEARCH_MATCH',
+            detail: relation.reason,
+            status: relation.status,
+            confidence: relation.confidence,
+            evidence: evidenceText(relation.evidenceIds),
+            recorded: recorded(relation.actionIds),
+            children: [],
+          })),
+      ],
+    };
+  };
+  const placed = new Set<string>();
+  const isBusiness = (key: string): boolean =>
+    model.entities.some(
+      (entity) => entity.key === key && entity.classification.classification === 'BUSINESS_ENTITY',
+    );
+  const workspaces: PanelTreeNode[] = model.workspaces.map((workspace) => ({
+    label: `TASK WORKSPACE · ${workspace.source.type === 'NETWORK' ? workspace.collectionKey.replace(/^collection:/, '') : 'DOM'}`,
+    detail: [
+      workspace.reason,
+      workspace.source.type === 'NETWORK' && workspace.source.bffCandidate
+        ? `BFF candidate: ${workspace.source.bffCandidate.reasons.join('; ')}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+    status: workspace.status,
+    confidence: workspace.confidence,
+    evidence: evidenceText(workspace.evidenceIds),
+    recorded: [],
+    children: workspace.taskKeys.flatMap((taskKey) => {
+      const task = model.tasks.find((entry) => entry.key === taskKey);
+      if (!task) return [];
+      const own = model.relationships.filter(
+        (relation) => relation.source === taskKey || relation.target === taskKey,
+      );
+      const entityLinks = own.filter(
+        (relation) =>
+          (relation.type === 'REFERENCES' ||
+            relation.type === 'RESULTS_IN' ||
+            relation.type === 'CREATE_RESULT') &&
+          [relation.source, relation.target].some((key) => key.startsWith('entity:')),
+      );
+      const entityKeys = [
+        ...new Set(
+          entityLinks.map((relation) =>
+            relation.source.startsWith('entity:') ? relation.source : relation.target,
+          ),
+        ),
+        // OBSERVED ≠ BUSINESS : sous une task, seulement une entité MÉTIER démontrée ; une entité
+        // UNKNOWN qu'elle référence reste dans les observations.
+      ].filter(isBusiness);
+      for (const key of entityKeys) placed.add(key);
+      const opened = own.filter((relation) => relation.type === 'NAVIGATES_TO');
+      const entities = entityKeys.map((key) =>
+        entityNode(
+          key,
+          entityLinks.find((relation) => relation.source === key || relation.target === key),
+        ),
+      );
+      return [
+        {
+          label: `Task #${task.primary.value ?? '?'}`,
+          detail: task.identityCandidates
+            .map((candidate) => `${candidate.type} ${candidate.field ?? ''}=${candidate.value ?? '(digest)'}`)
+            .join(' · '),
+          status: task.status,
+          confidence: task.confidence,
+          evidence: evidenceText(task.evidenceIds),
+          recorded: recorded(task.selectedBy),
+          children: opened.length
+            ? opened.map((relation) => ({
+                label: `MFE ${contextName(relation.target)}`,
+                detail: relation.reason,
+                status: relation.status,
+                confidence: relation.confidence,
+                evidence: evidenceText(relation.evidenceIds),
+                recorded: recorded(relation.actionIds),
+                children: entities,
+              }))
+            : entities,
+        },
+      ];
+    }),
+  }));
+  // TROIS NIVEAUX : APPLICATION CONTEXT (workspace → task → MFE), BUSINESS CONTEXT (seulement des
+  // entités métier démontrées), TECHNICAL CONTEXT (des preuves, jamais le flow métier). Les
+  // observations non classées (UNKNOWN) sont gardées à part : jamais présentées comme métier.
+  const tree: PanelTreeNode[] = [];
+  if (workspaces.length)
+    tree.push({
+      label: 'APPLICATION CONTEXT',
+      detail: 'task workspaces, tasks and the application contexts (micro-frontends) they open',
+      evidence: [],
+      recorded: [],
+      children: workspaces,
+    });
+  const loose = model.entities.filter(
+    (entity) => !placed.has(entity.key) && entity.classification.classification === 'BUSINESS_ENTITY',
+  );
+  if (loose.length)
+    tree.push({
+      label: 'BUSINESS CONTEXT',
+      detail: 'business entities demonstrated by converging functional evidence',
+      evidence: [],
+      recorded: [],
+      children: loose.map((entity) => entityNode(entity.key)),
+    });
+  const observed = model.entities.filter(
+    (entity) => entity.classification.classification !== 'BUSINESS_ENTITY',
+  );
+  if (observed.length)
+    tree.push({
+      label: 'OBSERVED · NOT CLASSIFIED',
+      detail: `${String(observed.length)} observation(s) kept with their evidence: no business role demonstrated (UNKNOWN), never a business entity`,
+      evidence: [],
+      recorded: [],
+      children: observed.map((entity) =>
+        entityNode(
+          entity.key,
+          model.relationships.find(
+            (relation) =>
+              relation.type === 'REFERENCES' &&
+              (relation.source === entity.key || relation.target === entity.key),
+          ),
+        ),
+      ),
+    });
+  // TECHNICAL CONTEXT : des observations, jamais des étapes métier (OIDC, configuration, statique…).
+  const items = model.technicalContext.items;
+  if (items.length) {
+    const categories = [...new Set(items.map((item) => item.category))];
+    tree.push({
+      label: 'TECHNICAL CONTEXT',
+      detail: `${String(items.length)} technical / infrastructure observation(s), kept as evidence, outside the business flow`,
+      evidence: [],
+      recorded: [],
+      children: categories.map((category) => ({
+        label: category,
+        evidence: [],
+        recorded: [],
+        children: items
+          .filter((item) => item.category === category)
+          .map((item) => ({
+            label: `${item.operation ? `${item.operation} · ` : ''}${item.label}`,
+            detail: [item.classification, item.intent ? `TECHNICAL_INTENT ${item.intent}` : '', item.reason]
+              .filter(Boolean)
+              .join(' · '),
+            status: item.confidence >= 0.85 ? ('CONFIRMED' as const) : ('DEDUCED' as const),
+            confidence: item.confidence,
+            evidence: evidenceText(item.evidenceIds),
+            recorded: recorded(item.actionIds),
+            children: [],
+          })),
+      })),
+    });
+  }
+  return tree;
 }

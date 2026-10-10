@@ -1,3 +1,5 @@
+import { buildApplicationModel } from './application/application-model.js';
+import type { ApplicationInteractionModel } from './application/model.js';
 import { detectBusinessEvents, type BusinessDetection } from './business/business-event-detector.js';
 import { buildBusinessFlow } from './business/business-flow.js';
 import type { BusinessFlowModel } from './business/model.js';
@@ -66,6 +68,11 @@ export interface RecordingResult {
    * (créer, rechercher, ouvrir une entité), relié aux actions enregistrées — jamais à leur place.
    */
   business?: { detection: BusinessDetection; model: BusinessFlowModel };
+  /**
+   * L'APPLICATION INTERACTION MODEL (absent si recording.business.application vaut false) : contextes,
+   * tasks, entités, relations, actions métier, chacune reliée aux actions enregistrées.
+   */
+  application?: ApplicationInteractionModel;
   /** RECORDED TEST DATA (absent si recording.testData.enabled vaut false) : le jeu de données du flow. */
   testData?: RecordedTestDataResult;
   session: RecordingSession;
@@ -402,6 +409,7 @@ export function processRecording(
   ];
   // BUSINESS INTERPRETATION (déterministe, au-dessus du flow, jamais à sa place).
   let business: RecordingResult['business'];
+  let application: RecordingResult['application'];
   if (config.recording.business.enabled) {
     const detection = detectBusinessEvents({
       actions: normalized.kept,
@@ -413,6 +421,23 @@ export function processRecording(
       ...(options.digest ? { digest: options.digest } : {}),
     });
     business = { detection, model: buildBusinessFlow(session.name, detection) };
+    if (config.recording.business.application) {
+      application = buildApplicationModel({
+        actions: normalized.kept,
+        states: session.states,
+        rawEvents: session.rawEvents,
+        steps: built.flow.steps,
+        entities: detection.entities,
+        entityEvidence: detection.evidence,
+        correlations: detection.correlations,
+        ...(session.initialStateId ? { initialStateId: session.initialStateId } : {}),
+        ...(options.digest ? { digest: options.digest } : {}),
+      });
+      emit(
+        'APPLICATION_MODEL_BUILT',
+        `${String(application.summary.contexts)} context(s), ${String(application.summary.contextSwitches)} switch(es), ${String(application.summary.workspaces)} workspace(s), ${String(application.summary.tasks)} task(s), ${String(application.summary.entities)} entity(ies), ${String(application.summary.relationships)} relation(s)`,
+      );
+    }
     emit(
       'BUSINESS_FLOW_DETECTED',
       `${String(business.model.steps.length)} business step(s): ${business.model.steps.map((step) => `${step.action.toUpperCase()} ${step.entity ?? '?'} (${step.status})`).join(' → ') || 'none'}${business.model.unresolved.length ? `; ${String(business.model.unresolved.length)} unresolved` : ''}`,
@@ -424,6 +449,7 @@ export function processRecording(
     flow: built.flow,
     files,
     ...(business ? { business } : {}),
+    ...(application ? { application } : {}),
     ...(correlation ? { correlation } : {}),
     ...(testData ? { testData } : {}),
     journey,

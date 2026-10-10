@@ -11,7 +11,11 @@ import {
 
 const ACTION_OF: Record<BusinessEvent['type'], BusinessFlowStep['action']> = {
   ENTITY_CREATED: 'create',
+  // Jamais une étape : une création possible reste dans les incertains (son statut est UNKNOWN).
+  POSSIBLE_CREATE: 'create',
   ENTITY_SEARCHED: 'search',
+  ENTITY_RETRIEVED: 'retrieve',
+  ENTITY_CORRELATED: 'correlate',
   ENTITY_OPENED: 'open',
   ENTITY_UPDATED: 'update',
   ENTITY_SAVED: 'save',
@@ -64,7 +68,10 @@ export function buildBusinessFlow(name: string, detection: BusinessDetection): B
   // puis les entités nommées d'étapes qu'aucune identité ne porte.
   const entities: BusinessFlowEntity[] = detection.entities.map((entity) => ({
     name: entity.type,
-    type: 'business_entity' as const,
+    type:
+      entity.classification.classification === 'BUSINESS_ENTITY'
+        ? ('business_entity' as const)
+        : ('observed_entity' as const),
     references: detection.memory.all
       .filter((record) =>
         detection.memory
@@ -91,6 +98,12 @@ export function buildBusinessFlow(name: string, detection: BusinessDetection): B
       ...(entity.provenance.contradictions ? { contradictions: entity.provenance.contradictions } : {}),
       ...(entity.provenance.candidates ? { candidates: entity.provenance.candidates } : {}),
       analyzer: entity.provenance.analyzer,
+    },
+    classification: {
+      classification: entity.classification.classification,
+      confidence: entity.classification.confidence,
+      reason: entity.classification.reason,
+      signals: entity.classification.signals,
     },
     firstSeen: {
       ...(entity.firstSeen.actionId ? { actionId: entity.firstSeen.actionId } : {}),
@@ -123,6 +136,7 @@ export function buildBusinessFlow(name: string, detection: BusinessDetection): B
     entities,
     steps,
     relations: detection.relations,
+    correlations: detection.correlations,
     unresolved,
     summary: {
       events: detection.events.length,

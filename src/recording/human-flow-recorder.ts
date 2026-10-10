@@ -956,6 +956,8 @@ export class HumanFlowRecorder {
       headings: snapshot.headings.map(redactText),
       alerts: (snapshot.signals?.alerts ?? []).map(redactText),
       ...(snapshot.signals?.statuses?.length ? { statuses: snapshot.signals.statuses.map(redactText) } : {}),
+      ...(snapshot.signals?.hosts?.length ? { hosts: snapshot.signals.hosts } : {}),
+      ...(snapshot.signals?.frames?.length ? { frames: snapshot.signals.frames.map(redactUrl) } : {}),
       invalidFields: snapshot.signals?.invalidFields ?? 0,
       dialogs: snapshot.dialogs,
       controls: snapshot.elements
@@ -1006,6 +1008,8 @@ function sameObservation(a: RecordedState, b: RecordedState): boolean {
     a.alerts.join('\n') === b.alerts.join('\n') &&
     a.dialogs.join('\n') === b.dialogs.join('\n') &&
     (a.statuses ?? []).join('\n') === (b.statuses ?? []).join('\n') &&
+    (a.hosts ?? []).join('\n') === (b.hosts ?? []).join('\n') &&
+    (a.frames ?? []).join('\n') === (b.frames ?? []).join('\n') &&
     // L'empreinte de l'écran ne voit pas une section ouverte, un onglet, des champs devenus
     // visibles : les contrôles visibles, si (HUMAN JOURNEY : ce sont les effets d'un clic).
     a.controls.join('\n') === b.controls.join('\n')

@@ -8,6 +8,7 @@ import {
   type FunctionalExchange,
   type FunctionalWorkflow,
 } from './model.js';
+import { isTechnicalOperation } from '../recording/business/entity-classifier.js';
 import type { SemanticEvidence } from '../static-analysis/model.js';
 
 /** Ce qu'un run a appris du réseau, gardé pour les runs suivants (jamais une preuve). */
@@ -62,6 +63,9 @@ export function intentOf(
   template: string,
   label: string,
 ): { verb: string; entity: string } | undefined {
+  // Authentification, OIDC / OAuth, JWKS, découverte OpenID, santé, télémétrie, configuration,
+  // ressources statiques : des opérations techniques, jamais un intent métier (pas de CREATE:TOKEN).
+  if (isTechnicalOperation(template)) return undefined;
   const named = template
     .split('/')
     .filter((segment) => segment && segment !== '{param}' && !TECHNICAL.test(segment));
