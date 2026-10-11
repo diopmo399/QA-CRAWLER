@@ -354,7 +354,9 @@ export class EngineEventLog {
       },
       onTestData: (event) => {
         this.log(
-          event.event === 'TEST_DATA_STRATEGY_CANDIDATE' ? 'WARN' : 'DEBUG',
+          event.event === 'TEST_DATA_STRATEGY_CANDIDATE' || event.event === 'TEST_DATA_REFERENCE_UNRESOLVED'
+            ? 'WARN'
+            : 'DEBUG',
           event.event,
           redactText(event.message),
         );

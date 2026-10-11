@@ -24,6 +24,8 @@ export interface FlowStepReport {
   optional: boolean;
   /** Raison de l'échec ou du blocage. */
   reason?: string;
+  /** Les données du jeu citées par l'étape (${testData:clé}), résolues pour ce run : des clés, jamais des valeurs. */
+  testData?: string[];
   /** Mode automatique : ce que la phrase est devenue à l'écran (« click tab "Profil" → fill "Code" = 42 »). */
   interpretation?: string;
   /** Classement SafetyPolicy de l'élément ciblé. */
