@@ -157,11 +157,13 @@ function stepAnomaly(
   };
   const errors = requestErrors(step);
   if (step.status === 'PASSED') {
-    // Un refus attendu par le parcours : l'application a dit non, l'étape l'a vérifié.
+    // Un refus attendu par le parcours : l'application a dit non, l'étape l'a vérifié — mais seulement si le
+    // parcours a ensuite réussi : un refus suivi d'un échec est une PREUVE de cet échec, pas un refus attendu.
     const refusal = errors.find(
       (entry) => entry.status !== undefined && entry.status >= 400 && entry.status < 500,
     );
     if (!refusal) return undefined;
+    if (flow.steps.some((later) => later.index > step.index && later.status === 'FAILED')) return undefined;
     const business = refusal.status === 409 || refusal.status === 412 || refusal.status === 423;
     return {
       id,
@@ -191,11 +193,31 @@ function stepAnomaly(
   }
   if (step.status !== 'FAILED') return undefined;
   const { category, confidence, why } = categorizeFailedStep(step);
-  const { probable, confirmed } = stepFinding(step);
+  const finding = stepFinding(step);
+  // Les refus et erreurs réseau des étapes PRÉCÉDENTES du flow : le signal antérieur d'un symptôme plus loin.
+  const earlier = flow.steps
+    .filter((previous) => previous.index < step.index)
+    .flatMap((previous) =>
+      requestErrors(previous).map(
+        (request) => `${describeRequest(request)} at step ${String(previous.index)}`,
+      ),
+    );
+  const probable =
+    finding.probable ??
+    (!finding.confirmed && earlier.length > 0
+      ? {
+          conclusion: `an earlier request was refused or failed: ${earlier[0] ?? ''}`,
+          evidence: earlier,
+          confidence: 0.5,
+          source: 'RUNTIME' as const,
+        }
+      : undefined);
+  const confirmed = finding.confirmed;
   const evidence = [
     ...(step.reason ? [step.reason] : []),
     why,
     ...errors.map(describeRequest),
+    ...earlier.map((entry) => `earlier: ${entry}`),
     ...(step.effect
       ? [
           `effect ${step.effect.status}${step.effect.observed.length > 0 ? `: ${step.effect.observed.join(', ')}` : ''}`,

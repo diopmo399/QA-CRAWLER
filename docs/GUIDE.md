@@ -533,6 +533,10 @@ Sous le tableau des étapes de chaque flow imposé, sept analyses (aussi dans `r
 
 La section **Données créées** compte toutes les écritures du run : celles de l'exploration autonome (sous le budget `safety.mutations.maxPerRun`) et celles des flows imposés (permises par `allow`, hors budget), chacune attribuée à son flow et à son étape.
 
+### L'analyse du run de workflow (QA platform)
+
+Au-dessus de l'analyse du run, la section **Analyse du run de workflow** rend un **statut global** (`PASS`, `PASS_WITH_WARNINGS`, `DEGRADED`, `FAIL`, `INCONCLUSIVE`) et écrit `run.json`, `anomalies.json` (anomalies catégorisées, symptôme ↔ cause, régression), `workflow-graph.json`, `functional-coverage.json`, `api-analysis.json`, `performance-analysis.json`, `regression-analysis.json`, `reproductions.json`, et, selon la configuration, `visual-analysis.json`, `actor-analysis.json`, `generated-tests/`, `advisor.json`, `pull-request-comment.md`. Sessions réutilisables et connexion SSO (`auth.type: sso`, `auth.session.reuse`), tests d'API tirés du contrat (`apiTesting`), comparaison visuelle (`visual`), jobs parallèles, manifeste Kubernetes (`qa-crawler k8s-manifest`) : voir [QA_PLATFORM.md](QA_PLATFORM.md).
+
 **Codes de sortie :** `0` OK · `1` anomalies bloquantes, régressions ou Dry Run en écart · `2` usage ou fichier invalide · `3` erreur d'exécution.
 
 ---

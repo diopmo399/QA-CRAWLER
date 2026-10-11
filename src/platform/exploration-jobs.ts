@@ -40,6 +40,12 @@ export interface ParallelRunReport {
   overallStatus: OverallStatus;
 }
 
+/** knowledge.json → knowledge-<job>.json */
+function withSuffix(file: string, suffix: string): string {
+  const extension = path.extname(file);
+  return path.join(path.dirname(file), `${path.basename(file, extension)}-${suffix}${extension}`);
+}
+
 const SEVERITY: OverallStatus[] = ['PASS', 'PASS_WITH_WARNINGS', 'DEGRADED', 'INCONCLUSIVE', 'FAIL'];
 
 /** La configuration d'un job : l'acteur, les flows, des sorties isolées. */
@@ -65,6 +71,18 @@ export function jobConfig(config: ScenarioConfig, job: ExplorationJob): Scenario
       screenshotsDir: path.join(config.output.screenshotsDir, suffix),
     },
     memory: { ...config.memory, file: path.join(config.output.reportsDir, suffix, 'flow-graph.json') },
+    // Rien n'est écrit au même endroit par deux jobs : connaissance, persistance fichier, baselines, par job.
+    ...(config.knowledge.file
+      ? { knowledge: { ...config.knowledge, file: withSuffix(config.knowledge.file, suffix) } }
+      : {}),
+    persistence: {
+      ...config.persistence,
+      file: { ...config.persistence.file, directory: path.join(config.persistence.file.directory, suffix) },
+    },
+    baseline: { ...config.baseline, dir: path.join(config.baseline.dir, suffix) },
+    ...(config.visual.baselineDir
+      ? { visual: { ...config.visual, baselineDir: path.join(config.visual.baselineDir, suffix) } }
+      : {}),
     // Les sessions réutilisables sont déjà par acteur (fichier par nom) : isolées.
   };
 }

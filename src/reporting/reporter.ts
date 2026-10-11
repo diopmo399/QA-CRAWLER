@@ -64,7 +64,7 @@ export async function writeReports(
       await writeFile(target, `${JSON.stringify(file.data, null, 2)}\n`, 'utf8');
       written[key] = target;
     }
-    report.artifacts = written;
+    report.artifacts = { ...report.artifacts, ...written };
     result.artifacts.workflowAnalysis = written;
   }
   if (output.html)
