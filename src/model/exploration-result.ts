@@ -1,3 +1,4 @@
+import type { RunAnalysis } from '../analysis/run-analysis.js';
 import type { FunctionalSummary } from '../functional/functional-intelligence.js';
 import type { FormRulesSummary } from '../rules/form-rule-coordinator.js';
 import type { StaticAnalysisSummary } from '../static-analysis/model.js';
@@ -122,6 +123,8 @@ export interface ExplorationResult {
   authorization?: AuthorizationReport;
   /** Persistance (où ce run est enregistré) et mémoire (l'historique a-t-il servi ?). */
   persistence?: PersistenceReport;
+  /** RUN ANALYSIS : le verdict fonctionnel et la chaîne explicative, construits au-dessus des moteurs. */
+  runAnalysis?: RunAnalysis;
   /** Moteur de décision : stratégie, objectifs, motifs, couverture, décisions expliquées, budget. */
   intelligence?: {
     strategy: string;
@@ -167,6 +170,8 @@ export interface ExplorationResult {
     engineLog?: string;
     /** Flows imposés générés à partir des chemins trouvés (YAML). */
     generatedFlows?: string;
+    /** reports/run-analysis.json : l'analyse du run (verdict, divergence, cause, récupération, dérive, apprentissage). */
+    runAnalysis?: string;
     /** Chaque décision du moteur avec ses candidats (logging.decisionTrace). */
     decisionTrace?: string;
     /** Base de connaissances mise à jour. */

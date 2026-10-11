@@ -200,6 +200,9 @@ export const BASE_CSS = `
   details.flow-analysis { margin-top:12px; padding:8px 12px; border:1px solid var(--line, #e5e7eb); border-radius:8px; }
   details.flow-analysis > summary { cursor:pointer; font-size:14px; }
   details.flow-analysis table { margin-top:6px; }
+  ol.chain { padding-left:22px; }
+  ol.chain > li { margin:6px 0; }
+  ol.chain details { margin:2px 0 0 4px; }
   .timebar { height:4px; margin-top:4px; background:#eef2ff; border-radius:2px; overflow:hidden; }
   .timebar span { display:block; height:100%; background:#6366f1; }
   .suggest pre { margin:4px 0 0; padding:6px 8px; background:#fff7e6; color:#1f2937; border:1px solid #f0c36d; border-radius:6px; white-space:pre-wrap; word-break:break-all; font-size:12px; }
