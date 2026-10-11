@@ -19,6 +19,7 @@ import type { FormReport } from '../forms/form-report.js';
 import type { RecoverySummary } from '../recovery/recovery-model.js';
 import type { CleanupReport, CreatedDataRecord } from '../data/created-data.js';
 import type { AuthorizationReport } from '../actors/authorization-observer.js';
+import type { SessionReport } from '../auth/session-provider.js';
 import type { CoverageMap } from '../coverage/coverage-map.js';
 import type { ScoreBreakdown } from '../decision/score-breakdown.js';
 import type { BudgetKind } from '../exploration/exploration-budget.js';
@@ -122,6 +123,8 @@ export interface ExplorationResult {
   cleanup?: CleanupReport;
   /** actors : ce que chaque utilisateur atteint, les différences, les règles vérifiées. */
   authorization?: AuthorizationReport;
+  /** La connexion de l'acteur principal : type, description et sort de la session réutilisable (jamais un secret). */
+  authentication?: { type: string; description: string; session?: SessionReport };
   /** Persistance (où ce run est enregistré) et mémoire (l'historique a-t-il servi ?). */
   persistence?: PersistenceReport;
   /** RUN ANALYSIS : le verdict fonctionnel et la chaîne explicative, construits au-dessus des moteurs. */

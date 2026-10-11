@@ -288,9 +288,32 @@ const safetySchema = z
   })
   .strict();
 
+const httpOrigin = z
+  .string()
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), 'must use http or https')
+  .transform((value) => new URL(value).origin);
+
+/**
+ * SESSION RÉUTILISABLE : l'état du navigateur (cookies, stockage) après la connexion est gardé dans
+ * un fichier (storageState Playwright, jamais dans le dépôt) et rechargé au run suivant tant qu'il
+ * n'a pas expiré. Une session rechargée dont l'application ne veut plus (renvoi vers la connexion)
+ * est marquée SESSION_EXPIRED et une nouvelle connexion est faite.
+ */
+const authSessionSchema = z
+  .object({
+    reuse: z.boolean().default(false),
+    /** Fichier storageState ; par défaut .qa-crawler/sessions/<acteur>.json. */
+    file: nonEmpty.optional(),
+    maxAgeMinutes: z.number().int().positive().default(480),
+  })
+  .strict()
+  .default({});
+
 const formAuthSchema = z
   .object({
     type: z.literal('form'),
+    session: authSessionSchema,
     /** Page de connexion, absolue ou relative à target.baseUrl. */
     loginUrl: nonEmpty,
     usernameSelector: nonEmpty,
@@ -315,6 +338,7 @@ const formAuthSchema = z
 const httpAuthSchema = z
   .object({
     type: z.literal('http'),
+    session: authSessionSchema,
     /** Noms des variables d'environnement qui contiennent les identifiants — jamais les identifiants eux-mêmes. */
     usernameEnv: nonEmpty.default('QA_USERNAME'),
     passwordEnv: nonEmpty.default('QA_PASSWORD'),
@@ -334,11 +358,52 @@ const httpAuthSchema = z
   })
   .strict();
 
+/**
+ * SSO / OIDC : la page de départ renvoie vers un fournisseur d'identité (autre origine), qui
+ * ramène à l'application après la connexion. Les identifiants viennent de l'environnement ;
+ * un formulaire en deux temps (identifiant → Suivant → mot de passe) est géré par `nextSelector`.
+ */
+const ssoAuthSchema = z
+  .object({
+    type: z.literal('sso'),
+    session: authSessionSchema,
+    /** Origine du fournisseur d'identité (https://login.example.com) : les identifiants ne sont saisis que là. */
+    identityProviderOrigin: httpOrigin,
+    /** Page de l'application qui déclenche le renvoi (par défaut target.startAt). */
+    startUrl: nonEmpty.optional(),
+    usernameSelector: nonEmpty,
+    passwordSelector: nonEmpty,
+    submitSelector: nonEmpty,
+    /** Bouton « Suivant » entre l'identifiant et le mot de passe, quand le fournisseur sépare les deux. */
+    nextSelector: nonEmpty.optional(),
+    usernameEnv: nonEmpty.default('QA_USERNAME'),
+    passwordEnv: nonEmpty.default('QA_PASSWORD'),
+    /** La connexion a réussi quand ce sélecteur apparaît dans l'application… */
+    successSelector: nonEmpty.optional(),
+    /** …ou quand l'URL de retour contient cette chaîne (par défaut : le retour sur l'origine de l'application). */
+    successUrlContains: nonEmpty.optional(),
+    timeoutMs: z.number().int().positive().default(30_000),
+  })
+  .strict();
+
 const authSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('none') }).strict(),
   formAuthSchema,
   httpAuthSchema,
+  ssoAuthSchema,
 ]);
+
+/** Le PROFIL d'un acteur : ce qu'il est censé pouvoir faire (des noms, jamais des secrets). */
+const actorProfileSchema = z
+  .object({
+    roles: z.array(nonEmpty).default([]),
+    permissions: z.array(nonEmpty).default([]),
+    /** Noms des revendications (claims) attendues dans sa session, jamais leurs valeurs. */
+    claims: z.array(nonEmpty).default([]),
+    tenant: nonEmpty.optional(),
+  })
+  .strict()
+  .default({});
 
 /**
  * Autres utilisateurs de l'application (lecteur, gestionnaire…). Après
@@ -351,6 +416,7 @@ const actorSchema = z
     name: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/, 'letters, digits, dashes and underscores (40 max)'),
     description: z.string().optional(),
     auth: authSchema,
+    profile: actorProfileSchema,
   })
   .strict();
 
@@ -386,12 +452,6 @@ export const BROWSER_PERMISSIONS = [
   'clipboard-write',
 ] as const;
 export type BrowserPermission = (typeof BROWSER_PERMISSIONS)[number];
-
-const httpOrigin = z
-  .string()
-  .url()
-  .refine((value) => /^https?:\/\//i.test(value), 'must use http or https')
-  .transform((value) => new URL(value).origin);
 
 /**
  * Profils d'identifiants nommés : seulement les NOMS des variables
@@ -1047,6 +1107,20 @@ const openApiSchema = z
     enabled: z.boolean().default(false),
     /** Fichier OpenAPI 3 (YAML/JSON), ou une URL sur un hôte autorisé. */
     source: nonEmpty.optional(),
+  })
+  .strict();
+
+/**
+ * API TESTING (QA platform) : des tests d'API dérivés du contrat OpenAPI, exécutés dans la session
+ * authentifiée du run, après les flows. Seulement des méthodes sûres : une écriture n'est jamais
+ * générée hors d'un flow. Les paramètres de chemin viennent des requêtes observées pendant le run.
+ */
+const apiTestingSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    methods: z.array(z.enum(['GET', 'HEAD', 'OPTIONS'])).default(['GET']),
+    maxOperations: z.number().int().min(1).max(500).default(50),
+    timeoutMs: z.number().int().positive().default(10_000),
   })
   .strict();
 
@@ -2168,6 +2242,7 @@ export const scenarioSchema = z
     actors: z.array(actorSchema).default([]),
     authorization: authorizationSchema.default({}),
     openapi: openApiSchema.default({}),
+    apiTesting: apiTestingSchema.default({}),
     staticAnalysis: staticAnalysisSchema.default({}),
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),
@@ -2197,6 +2272,9 @@ export type AiConfig = ScenarioConfig['ai'];
 export type MemoryConfig = ScenarioConfig['memory'];
 export type FormAuthConfig = z.output<typeof formAuthSchema>;
 export type HttpAuthConfig = z.output<typeof httpAuthSchema>;
+export type SsoAuthConfig = z.output<typeof ssoAuthSchema>;
+export type AuthSessionConfig = z.output<typeof authSessionSchema>;
+export type ActorProfile = z.output<typeof actorProfileSchema>;
 export type BrowserInteractionsConfig = z.output<typeof browserInteractionsSchema>;
 export type AuthConfig = ScenarioConfig['auth'];
 export type ActorConfig = ScenarioConfig['actors'][number];

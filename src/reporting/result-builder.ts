@@ -101,6 +101,7 @@ export function buildResult(outcome: ExplorationOutcome, config: ScenarioConfig)
     ...(outcome.functional ? { functional: outcome.functional } : {}),
     ...(outcome.cognitive ? { cognitive: outcome.cognitive } : {}),
     ...(outcome.ai ? { ai: outcome.ai } : {}),
+    authentication: outcome.authentication,
     settings: {
       exploration,
       goals,

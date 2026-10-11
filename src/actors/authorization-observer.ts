@@ -2,7 +2,8 @@ import type { BrowserContextOptions, Page } from 'playwright';
 import { IssueCollector } from '../anomaly/issue-collector.js';
 import { AuthError, createAuthenticator } from '../auth/authenticator.js';
 import { BrowserManager } from '../browser/browser-manager.js';
-import type { ActorConfig, ScenarioConfig } from '../config/config.js';
+import type { ActorConfig, ActorProfile, ScenarioConfig } from '../config/config.js';
+import type { SessionReport } from '../auth/session-provider.js';
 import type { Issue } from '../model/issue.js';
 import { KeywordMatcher } from '../policies/keywords.js';
 import { pathPatternToRegex } from '../policies/navigation-policy.js';
@@ -61,6 +62,10 @@ export interface AuthorizationRuleResult {
 export interface AuthorizationReport {
   primaryActor: string;
   actors: string[];
+  /** Le profil déclaré de chaque acteur (rôles, permissions, noms de revendications, locataire). */
+  profiles?: Record<string, ActorProfile>;
+  /** Le sort de la session de chaque acteur (auth.session.reuse). */
+  sessions?: Record<string, SessionReport>;
   observations: AccessObservation[];
   differences: AccessDifference[];
   rules: AuthorizationRuleResult[];
@@ -94,6 +99,7 @@ export class AuthorizationObserver {
   private readonly detector: StateDetector;
   private readonly observer = new UIObserver();
   private readonly denied: KeywordMatcher;
+  private readonly sessions: Record<string, SessionReport> = {};
 
   constructor(
     private readonly config: ScenarioConfig,
@@ -154,6 +160,8 @@ export class AuthorizationObserver {
       report: {
         primaryActor: primary,
         actors: [primary, ...actors.map((actor) => actor.name)],
+        profiles: Object.fromEntries(actors.map((actor) => [actor.name, actor.profile])),
+        ...(Object.keys(this.sessions).length > 0 ? { sessions: { ...this.sessions } } : {}),
         observations,
         differences,
         rules,
@@ -189,11 +197,23 @@ export class AuthorizationObserver {
   ): Promise<AccessObservation[]> {
     const browser = new BrowserManager(this.config.browser);
     const startUrl = new URL(this.config.target.startAt, this.config.target.baseUrl).toString();
-    const authenticator = createAuthenticator(actor.auth, this.config.target.baseUrl, this.env, startUrl);
+    const authenticator = createAuthenticator(
+      actor.auth,
+      this.config.target.baseUrl,
+      this.env,
+      startUrl,
+      actor.name,
+    );
     try {
-      await browser.start(this.contextOptions(actor));
+      await browser.start({
+        ...this.contextOptions(actor),
+        ...authenticator.contextOptions(),
+        ...((await authenticator.sessionOptions?.()) ?? {}),
+      });
       const page = await browser.newPage();
       await authenticator.login(page);
+      const session = authenticator.sessionReport?.();
+      if (session) this.sessions[actor.name] = session;
       const observations: AccessObservation[] = [];
       for (const target of targets) observations.push(await this.open(page, actor, target));
       return observations;

@@ -368,3 +368,15 @@ export function refreshOverallStatus(
   report.anomalySummary = summarize(report.anomalies);
   report.findings = findingsOf(result, report.anomalies, status);
 }
+
+/** Branche une analyse optionnelle : son fichier, ses conclusions. */
+export function attachExtension(
+  report: RunWorkflowAnalysisReport,
+  key: string,
+  fileName: string,
+  data: unknown,
+  findings: readonly Finding[] = [],
+): void {
+  (report.extensionFiles ??= {})[key] = { name: fileName, data };
+  report.findings.push(...findings);
+}

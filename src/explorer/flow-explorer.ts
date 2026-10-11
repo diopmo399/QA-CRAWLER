@@ -22,6 +22,7 @@ import type { AdviceInput, AdvisedRecovery } from '../workflow-healing/workflow-
 import { IssueCollector } from '../anomaly/issue-collector.js';
 import { SeverityRules } from '../anomaly/severity-rules.js';
 import { AuthError, createAuthenticator, type Authenticator } from '../auth/authenticator.js';
+import type { SessionReport } from '../auth/session-provider.js';
 import { BrowserManager } from '../browser/browser-manager.js';
 import { ScreenshotService } from '../browser/screenshot-service.js';
 import type { ScenarioConfig } from '../config/config.js';
@@ -423,6 +424,7 @@ export const EXPLORER_CLOSING_PHASES = {
   browser: 'Closing the browser',
   intelligence: 'Stopping the intelligence client',
   memory: 'Saving the memory',
+  platform: 'Running the API tests',
 } as const;
 
 export interface FlowExplorerOptions {
@@ -475,6 +477,11 @@ export interface FlowExplorerOptions {
    * sur la page de départ) au Dry Run, à travers un DryRunDriver par flow.
    */
   dryRun?: (driverFor: (flow: FlowConfig) => DryRunDriver) => Promise<void>;
+  /**
+   * QA PLATFORM : après les flows et l'exploration, la page connectée est confiée à ce crochet
+   * (tests d'API dans la session du run) avant la fermeture du navigateur.
+   */
+  afterFlows?: (page: Page, flows: readonly FlowRunReport[]) => Promise<void>;
 }
 
 /** Ce que sait l'explorateur après un run ; les reporters en font des fichiers. */
@@ -506,6 +513,8 @@ export interface ExplorationOutcome {
   cognitive?: CognitiveSummary;
   /** AI REASONING ADVISOR : mode, fournisseur, appels, propositions, runtime (absent en OFF). */
   ai?: AiSummary;
+  /** La connexion de l'acteur principal : type, description, sort de la session réutilisable. */
+  authentication: { type: string; description: string; session?: SessionReport };
   /** Tentatives de récupération, branches abandonnées et circuits ouverts. */
   recovery: RecoverySummary;
   /** Actions qui modifient des données : exécutées, et le budget (safety.mutations). */
@@ -735,6 +744,7 @@ export class FlowExplorer {
 
   /** DRY RUN (options.dryRun) et mémoire des runs précédents disponible. */
   private readonly dryRunHook: FlowExplorerOptions['dryRun'];
+  private readonly afterFlowsHook: FlowExplorerOptions['afterFlows'];
   private readonly historyAvailable: boolean;
   private readonly perf: PerformanceTracer;
   /** Profondeur d'exécution d'étapes (> 1 : une étape rejouée à l'intérieur d'une récupération). */
@@ -752,6 +762,7 @@ export class FlowExplorer {
     const { exploration, goals } = config;
     this.progress = options.progress;
     this.dryRunHook = options.dryRun;
+    this.afterFlowsHook = options.afterFlows;
     this.historyAvailable = options.historyAvailable ?? false;
     this.safety = new SafetyPolicy(config.safety);
     this.stateDetector = new StateDetector(exploration.queryParams.mode, exploration.queryParams.ignored);
@@ -1228,6 +1239,8 @@ export class FlowExplorer {
       const context = await browser.start({
         ...(this.browserCredentials?.options ?? {}),
         ...this.authenticator.contextOptions(),
+        // Session d'un run précédent (auth.session.reuse) : rechargée avant l'ouverture de la page.
+        ...((await this.authenticator.sessionOptions?.()) ?? {}),
       });
       if (this.browserCredentials)
         this.listener.onInteractionLog?.(
@@ -1339,6 +1352,10 @@ export class FlowExplorer {
         this.stack = [{ stateId: current.stateId, url: current.url }];
         const loop = await this.explorationLoop(page, browser, observers, current);
         stopReason = loop.stopReason;
+      }
+      if (this.afterFlowsHook && !page.isClosed()) {
+        this.progress?.start(EXPLORER_CLOSING_PHASES.platform);
+        await this.afterFlowsHook(page, this.flowReports);
       }
     } finally {
       // Un nouvel onglet, une fenêtre ou un téléchargement encore en traitement (machine lente) : les attendre,
@@ -7899,6 +7916,16 @@ export class FlowExplorer {
     }
   }
 
+  /** Le sort de la session de l'acteur principal (réutilisée, enregistrée, expirée), quand elle est configurée. */
+  authenticationReport(): { type: string; description: string; session?: SessionReport } {
+    const session = this.authenticator.sessionReport?.();
+    return {
+      type: this.config.auth.type,
+      description: this.authenticator.description,
+      ...(session ? { session } : {}),
+    };
+  }
+
   // ---------------------------------------------------------------- navigation
 
   private pushState(context: PageContext): void {
@@ -8631,6 +8658,7 @@ export class FlowExplorer {
       decisionEngine: this.decisionEngine.name,
       startUrl: redactUrl(this.startUrl),
       runId: this.runId,
+      authentication: this.authenticationReport(),
       forms: this.formReports,
       recovery: {
         events: this.recovery.events(),

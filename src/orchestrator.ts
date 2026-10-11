@@ -25,7 +25,18 @@ import { isAtLeast, type Issue } from './model/issue.js';
 import { buildResult } from './reporting/result-builder.js';
 import { writeReports } from './reporting/reporter.js';
 import { buildRunAnalysis } from './analysis/run-analysis.js';
-import { buildRunWorkflowAnalysis } from './platform/run-workflow-analysis.js';
+import { attachExtension, buildRunWorkflowAnalysis } from './platform/run-workflow-analysis.js';
+import { analyzeActors } from './platform/actor-analysis.js';
+import { correlateUiAndApi } from './platform/ui-api-correlation.js';
+import {
+  buildApiAnalysis,
+  buildApiTestModel,
+  observedRequests,
+  runApiTests,
+  type ApiResponse,
+  type ApiTestModel,
+  type ApiTestResult,
+} from './platform/api-testing.js';
 import { redactText, redactUrl } from './security/redactor.js';
 import { ManualCleanup, type TestDataCleanup } from './data/created-data.js';
 import { combineListeners, EngineEventLog } from './logging/engine-log.js';
@@ -233,6 +244,38 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     ...(options.testData ? { testData: options.testData } : {}),
     ...(options.observer ? { observer: options.observer } : {}),
     ...(options.dryRun ? { dryRun: options.dryRun } : {}),
+    ...(contract && config.apiTesting.enabled
+      ? {
+          afterFlows: async (page, flows) => {
+            const model = buildApiTestModel(contract, observedRequests(flows), config.apiTesting);
+            const results = await runApiTests(
+              model,
+              contract,
+              async (method, requestPath): Promise<ApiResponse> => {
+                const response = await page.request.fetch(
+                  new URL(requestPath, config.target.baseUrl).toString(),
+                  {
+                    method,
+                    timeout: config.apiTesting.timeoutMs,
+                    failOnStatusCode: false,
+                    maxRedirects: 0,
+                  },
+                );
+                const contentType = response.headers()['content-type'];
+                const body = contentType?.includes('json')
+                  ? ((await response.json().catch(() => undefined)) as unknown)
+                  : undefined;
+                return {
+                  status: response.status(),
+                  ...(contentType ? { contentType } : {}),
+                  ...(body !== undefined ? { body } : {}),
+                };
+              },
+            );
+            apiTests = { model, results };
+          },
+        }
+      : {}),
     ...(options.intelligenceProvider ? { intelligenceProvider: options.intelligenceProvider } : {}),
     listener: combineListeners(
       options.listener,
@@ -260,6 +303,8 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       : {}),
   });
   let outcome: Awaited<ReturnType<FlowExplorer['explore']>>;
+  // QA PLATFORM — API TESTING : après les flows, dans la session connectée du run (méthodes sûres seulement).
+  let apiTests: { model: ApiTestModel; results: ApiTestResult[] } | undefined;
   const exploreStartedAt = performance.now();
   try {
     outcome = await explorer.explore();
@@ -330,6 +375,11 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   await persistence.provider?.close().catch(() => undefined);
 
   progress.start(RUN_PHASES.knowledge);
+  // QA PLATFORM — ACTEURS : profils, différences classées, écart de comportement avec le run précédent.
+  const actorAnalysis = authorization
+    ? analyzeActors(authorization, knowledge.actorAccess(), outcome.runId, outcome.finishedAt.toISOString())
+    : undefined;
+  if (actorAnalysis && knowledgeFile) knowledge.rememberActorAccess(actorAnalysis.memory);
   // ÉCART AVEC LE RUN PRÉCÉDENT : le dernier run de chaque flow, gardé dans la base de connaissances.
   if (knowledgeFile)
     for (const flow of outcome.flows) {
@@ -539,7 +589,28 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   // dérive, apprentissage, conseiller) et rend le verdict fonctionnel — jamais une décision recalculée.
   result.runAnalysis = buildRunAnalysis(result);
   // QA PLATFORM : le rapport du run de workflow (statut global, anomalies catégorisées, graphe observé, couverture).
-  result.workflowAnalysis = buildRunWorkflowAnalysis(result);
+  const workflowAnalysis = buildRunWorkflowAnalysis(result);
+  result.workflowAnalysis = workflowAnalysis;
+  const apiAnalysis = buildApiAnalysis(
+    correlateUiAndApi(result.flows, contract),
+    contract && apiTests
+      ? {
+          contract,
+          model: apiTests.model,
+          results: apiTests.results,
+          observed: observedRequests(result.flows),
+        }
+      : undefined,
+  );
+  attachExtension(workflowAnalysis, 'apiAnalysis', 'api-analysis.json', apiAnalysis, apiAnalysis.findings);
+  if (actorAnalysis)
+    attachExtension(
+      workflowAnalysis,
+      'actorAnalysis',
+      'actor-analysis.json',
+      actorAnalysis,
+      actorAnalysis.findings,
+    );
   const written = await writeReports(result, config.output, memory.location, config.report.language);
   progress.done(`${String(written.flows.length)} flow(s), ${String(written.issues.length)} issue(s)`);
   const threshold = config.report.failOnSeverity;
