@@ -617,7 +617,13 @@ export type RecordingWarningCode =
   | 'UNSUPPORTED_EVENT'
   | 'NO_OUTCOME_OBSERVED'
   /** Des actions retirées par l'humain (↶ Annuler) : exclues du flow, gardées dans la trace brute. */
-  | 'USER_UNDONE_ACTIONS';
+  | 'USER_UNDONE_ACTIONS'
+  /**
+   * Un retour d'authentification (URL portant `code` ET `state`, OAuth / OIDC) : un code à usage
+   * unique, jamais rejouable. La navigation n'entre pas dans le flow ; l'authentification se règle
+   * par la configuration de la mission.
+   */
+  | 'NON_REPLAYABLE_AUTH_CALLBACK';
 
 export interface RecordingWarning {
   code: RecordingWarningCode;

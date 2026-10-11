@@ -58,6 +58,14 @@ export function buildRecordedFlow(input: BuildRecordedFlowInput): {
         continue;
       }
       if (!action.route) continue;
+      if (isAuthCallback(action.route)) {
+        warnings.push({
+          code: 'NON_REPLAYABLE_AUTH_CALLBACK',
+          message: `authentication callback (code + state) not replayed: a single-use code; configure the authentication of the mission instead (${action.route.split('?')[0] ?? action.route})`,
+          actionId: action.id,
+        });
+        continue;
+      }
       push({
         id: '',
         step: { kind: 'goto', url: action.route, allow: [], optional: false },
@@ -371,4 +379,19 @@ export function generateFlowFiles(
       header: options.testDataFile ? [`testData: ${options.testDataFile}`, ...header] : header,
     }),
   };
+}
+
+/**
+ * Un retour d'authentification OAuth / OIDC : `code` ET `state` dans la query (ou dans la partie
+ * après `?` d'un hash de SPA). Le code est à usage unique : rejouer cette adresse échoue toujours.
+ */
+export function isAuthCallback(route: string): boolean {
+  return route
+    .split('#')
+    .map((part) => part.split('?')[1])
+    .filter((query): query is string => query !== undefined)
+    .some((query) => {
+      const params = new URLSearchParams(query);
+      return params.has('code') && params.has('state');
+    });
 }
