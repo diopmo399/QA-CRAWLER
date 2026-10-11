@@ -104,14 +104,14 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 const CSS = `
 :root{
   --bg:#f5f7fb;--surface:#ffffff;--surface-2:#f8fafc;--fg:#0f172a;--muted:#64748b;--line:#e6e9ef;--line-strong:#d5dae3;
-  --accent:#2563eb;--accent-soft:#eff4ff;--accent-fg:#ffffff;
+  --accent:#2563eb;--accent-soft:#eff4ff;--accent-fg:#ffffff;--title:#1e3a8a;--ok-fg:#ffffff;
   --ok:#16a34a;--ok-soft:#ecfdf3;--warn:#d97706;--warn-soft:#fff7e6;--bad:#dc2626;--bad-soft:#fef2f2;--run:#2563eb;--run-soft:#eff4ff;--idle:#94a3b8;--idle-soft:#f1f5f9;
   --violet:#7c3aed;--violet-soft:#f3efff;--teal:#0d9488;--teal-soft:#e9fbf8;--orange:#ea580c;--orange-soft:#fff3eb;--pink:#db2777;--pink-soft:#fdf0f7;
   --radius:12px;--shadow:0 1px 2px rgba(15,23,42,.04),0 2px 10px rgba(15,23,42,.05);--focus:#2563eb;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#0b0f17;--surface:#121826;--surface-2:#161e2e;--fg:#e5e9f0;--muted:#94a3b8;--line:#222b3b;--line-strong:#2d384b;
-  --accent:#60a5fa;--accent-soft:rgba(96,165,250,.14);--accent-fg:#0b0f17;
+  --accent:#60a5fa;--accent-soft:rgba(96,165,250,.14);--accent-fg:#0b0f17;--title:#bfdbfe;--ok-fg:#052e16;
   --ok:#4ade80;--ok-soft:rgba(74,222,128,.12);--warn:#fbbf24;--warn-soft:rgba(251,191,36,.12);--bad:#f87171;--bad-soft:rgba(248,113,113,.12);--run:#60a5fa;--run-soft:rgba(96,165,250,.12);--idle:#64748b;--idle-soft:rgba(100,116,139,.14);
   --violet:#a78bfa;--violet-soft:rgba(167,139,250,.14);--teal:#2dd4bf;--teal-soft:rgba(45,212,191,.12);--orange:#fb923c;--orange-soft:rgba(251,146,60,.12);--pink:#f472b6;--pink-soft:rgba(244,114,182,.12);
   --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.25);--focus:#93c5fd;
@@ -124,10 +124,17 @@ button:hover:not(:disabled){border-color:var(--muted)}
 button:disabled{opacity:.45;cursor:not-allowed}
 button:focus-visible,[tabindex]:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
-button.success{background:var(--ok);border-color:var(--ok);color:#fff}
+button.success{background:var(--ok);border-color:var(--ok);color:var(--ok-fg)}
 button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 button.outline-accent{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 button.ghost{border-color:transparent;background:none;color:var(--muted)}
+button svg{width:15px;height:15px;flex:none}
+button.primary,button.success,button.confirm{background-image:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,0));box-shadow:0 1px 2px rgba(15,23,42,.18),inset 0 1px 0 rgba(255,255,255,.18);text-shadow:0 1px 0 rgba(0,0,0,.08)}
+button.confirm{background-color:var(--ok);border-color:var(--ok);color:var(--ok-fg)}
+button.soft{background:var(--accent-soft);border-color:transparent;color:var(--title)}
+button.soft:hover:not(:disabled){border-color:var(--accent)}
+button.neutral{background:var(--idle-soft);border-color:transparent}
+button.primary:hover:not(:disabled),button.success:hover:not(:disabled),button.confirm:hover:not(:disabled){filter:brightness(1.05)}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .spacer{flex:1}
 .topbar{display:flex;align-items:center;gap:10px;padding:10px 18px;background:var(--surface);border-bottom:1px solid var(--line)}
@@ -279,10 +286,10 @@ main{flex:1;padding:12px 18px 18px;min-height:0}
 .summarybar h2{margin:0;font-size:13px;font-weight:700;width:100%}
 .stat{display:flex;align-items:center;gap:8px;padding-right:14px;border-right:1px solid var(--line)}
 .stat:last-of-type{border-right:0}
-.stat .i{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;color:#fff}
+.stat .i{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;color:#fff;box-shadow:0 0 0 3px var(--surface),0 1px 3px rgba(15,23,42,.18)}
 .stat b{display:block;font-size:15px;line-height:1.1;font-variant-numeric:tabular-nums}
 .stat span{font-size:11px;color:var(--muted)}
-.i-actions{background:var(--ok)} .i-ok{background:var(--ok)} .i-amb{background:var(--warn)} .i-bad{background:var(--bad)} .i-time{background:var(--idle)}
+.i-actions{background:var(--ok)} .i-ok{background:var(--ok)} .i-amb{background:var(--warn)} .i-bad{background:var(--bad)} .i-time{background:#64748b}
 .summarybar .buttons{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
 .card-plain{margin-bottom:10px}
 .card .meta{color:var(--muted);font-size:12px;margin-top:2px}
@@ -373,23 +380,28 @@ body[data-mode=preview]{background:var(--bg)}
 .search .shead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .search .shead .meter{margin-left:auto}
 /* REVUE DES INTENTIONS : l'intention finale, sa provenance, l'original, la correction, l'historique. */
-.irow{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px}
+#intent-review>h2{color:var(--title)}
+.irow{border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:10px;display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:4px 14px;background:var(--surface);box-shadow:0 1px 2px rgba(15,23,42,.05),0 2px 8px rgba(15,23,42,.04)}
+.irow>*{grid-column:2}
+.irow .iico{grid-column:1;grid-row:1/3;width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
+.irow .iico svg{width:18px;height:18px}
 .irow.HUMAN_CORRECTED{border-left:4px solid var(--violet)} .irow.HUMAN_CONFIRMED{border-left:4px solid var(--ok)}
 .irow .ilabel{font-weight:700}
 .irow .iintent{font:700 15px ui-monospace,SFMono-Regular,Menlo,monospace}
 .irow .imeta{color:var(--muted);font-size:12px}
-.irow .iactions{grid-row:1/3;grid-column:2;display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}
-.irow .full{grid-column:1/3}
+.irow .iactions{grid-row:1/3;grid-column:3;display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}
+.irow .full{grid-column:2/4}
 .isrc{font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--idle-soft);color:var(--muted)}
 .isrc.HUMAN_CORRECTED{background:var(--violet-soft);color:var(--violet)} .isrc.HUMAN_CONFIRMED{background:var(--ok-soft);color:var(--ok)}
-.iedit{grid-column:1/3;border-radius:8px;background:var(--surface-2);padding:10px;margin-top:4px}
+.iedit{grid-column:2/4;border-radius:8px;background:var(--surface-2);padding:10px;margin-top:4px}
 .iedit fieldset{border:0;padding:0;margin:0 0 8px;display:flex;flex-wrap:wrap;gap:6px}
 .iedit legend{font-weight:700;margin-bottom:6px;width:100%}
 .iedit label.choice{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line-strong);border-radius:8px;padding:4px 10px;background:var(--surface);cursor:pointer;font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace}
 .iedit label.choice:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
 .iedit textarea{width:100%;min-height:54px;font:inherit;border:1px solid var(--line-strong);border-radius:8px;padding:6px 8px;background:var(--surface);color:var(--fg)}
+@media (max-width:640px){.irow{grid-template-columns:32px minmax(0,1fr);padding:12px}.irow .iico{width:32px;height:32px;grid-row:1}.irow .iactions{grid-column:2;grid-row:auto;justify-content:flex-start}.irow .full,.iedit{grid-column:2}}
 /* E · MINI-DOCK : une fenêtre étroite et sombre pendant l'enregistrement (la revue reste complète). */
-body.compact{--bg:#16181d;--surface:#1d2027;--surface-2:#232733;--fg:#f2f3f5;--muted:#a9afba;--line:#2b2f37;--line-strong:#3a3f4a;--accent:#93b4ff;--accent-soft:#1d2740;--accent-fg:#16181d;--ok:#4ade80;--ok-soft:rgba(74,222,128,.12);--warn:#fbbf24;--warn-soft:#2a2213;--bad:#f87171;--bad-soft:rgba(248,113,113,.14);--run:#93b4ff;--run-soft:#1d2740;--shadow:none}
+body.compact{--title:#bfdbfe;--ok-fg:#052e16;--bg:#16181d;--surface:#1d2027;--surface-2:#232733;--fg:#f2f3f5;--muted:#a9afba;--line:#2b2f37;--line-strong:#3a3f4a;--accent:#93b4ff;--accent-soft:#1d2740;--accent-fg:#16181d;--ok:#4ade80;--ok-soft:rgba(74,222,128,.12);--warn:#fbbf24;--warn-soft:#2a2213;--bad:#f87171;--bad-soft:rgba(248,113,113,.14);--run:#93b4ff;--run-soft:#1d2740;--shadow:none}
 body.compact .tabs,body.compact .col-mid,body.compact .col-right,body.compact #quality,body.compact .subtitle,body.compact #devtoggle,body.compact .summarybar,body.compact #tltools,body.compact #checks,body.compact .sep,body.compact #livepill{display:none!important}
 body.compact .grid{grid-template-columns:1fr!important}
 body.compact .statusbar{margin:8px 10px 0}
@@ -442,7 +454,7 @@ const SCRIPT = `
       noQuality: 'La qualité se calcule dès la première action validée.',
       done: 'Enregistrement terminé ✓', recorded: function (n) { return '<b>' + n + '</b> action' + (n > 1 ? 's' : '') + ' enregistrée' + (n > 1 ? 's' : ''); },
       confirmedS: function (n) { return '<b>' + n + '</b> confirmée' + (n > 1 ? 's' : ''); }, ambS: function (n) { return '<b>' + n + '</b> ambiguïté' + (n > 1 ? 's' : ''); },
-      duration: 'Durée', replay: '▶ Rejouer', edit: '✎ Modifier', editing: '✓ Terminer les modifications', save: '💾 Sauvegarder', saveFlow: '💾 Sauvegarder le flow', finish: 'Fermer', restart: '↻ Recommencer',
+      duration: 'Durée', replay: '▶ Rejouer', edit: 'Modifier', editing: 'Terminer les modifications', save: '💾 Sauvegarder', saveFlow: '💾 Sauvegarder le flow', finish: 'Fermer', restart: '↻ Recommencer',
       recommend: 'Conseillé : rejouez le flow avant de le sauvegarder.',
       replaying: function (a, b) { return 'Rejeu en cours… étape ' + a + ' sur ' + b; },
       replayOk: '✓ Replay réussi', executed: function (a, b) { return a + ' / ' + b + ' actions exécutées'; },
@@ -493,7 +505,7 @@ const SCRIPT = `
       noQuality: 'Quality is computed from the first validated action.',
       done: 'Recording finished ✓', recorded: function (n) { return '<b>' + n + '</b> action' + (n === 1 ? '' : 's') + ' recorded'; },
       confirmedS: function (n) { return '<b>' + n + '</b> confirmed'; }, ambS: function (n) { return '<b>' + n + '</b> ambiguit' + (n === 1 ? 'y' : 'ies'); },
-      duration: 'Duration', replay: '▶ Replay', edit: '✎ Edit', editing: '✓ Done editing', save: '💾 Save', saveFlow: '💾 Save the flow', finish: 'Close', restart: '↻ Try again',
+      duration: 'Duration', replay: '▶ Replay', edit: 'Edit', editing: 'Done editing', save: '💾 Save', saveFlow: '💾 Save the flow', finish: 'Close', restart: '↻ Try again',
       recommend: 'Recommended: replay the flow before saving it.',
       replaying: function (a, b) { return 'Replaying… step ' + a + ' of ' + b; },
       replayOk: '✓ Replay passed', executed: function (a, b) { return a + ' / ' + b + ' actions executed'; },
@@ -516,7 +528,7 @@ const SCRIPT = `
       stepOf2: function (a, b) { return 'Étape ' + a + ' sur ' + b; }, general: 'Informations générales', selectors: 'Sélecteurs et attributs', validation: 'Validation', logs: 'Voir les logs techniques', copy: 'Copier', copied: 'Copié',
       pick: 'Sélectionnez une action pour voir ses détails.', hideDetails: 'Masquer les détails',
       summaryTitle: 'Résumé du recording', sActions: 'Actions', sConfirmed: 'Confirmées', sAmbiguous: 'Ambiguës', sFailed: 'Échecs', sDuration: 'Durée',
-      replayFlow: '▶ Rejouer le parcours', saveFlow2: '💾 Sauvegarder le flow', afterStop: "Disponible après l'arrêt de l'enregistrement",
+      replayFlow: 'Rejouer le parcours', saveFlow2: 'Sauvegarder le flow', afterStop: "Disponible après l'arrêt de l'enregistrement",
       pill: { CONFIRMED: 'Confirmée', PENDING: 'En cours', AMBIGUOUS: 'Ambiguë', FAILED: 'Échec', UNVERIFIED: 'Non vérifiable' },
       kindName: { open: 'Navigation', navigate: 'Navigation', click: 'Click', fill: 'Saisie', check: 'Case à cocher', uncheck: 'Case à cocher', choose: 'Choix', select: 'Sélection', key: 'Touche', drag: 'Glisser-déposer', upload: 'Fichier', dialog: 'Dialogue', goto: 'Navigation', dragAndDrop: 'Glisser-déposer', manual: 'Manuel' },
       qualityShort: 'Qualité', seeDetail: 'Voir le détail',
@@ -531,7 +543,7 @@ const SCRIPT = `
       stepOf2: function (a, b) { return 'Step ' + a + ' of ' + b; }, general: 'General information', selectors: 'Selectors and attributes', validation: 'Validation', logs: 'See the technical logs', copy: 'Copy', copied: 'Copied',
       pick: 'Select an action to see its details.', hideDetails: 'Hide the details',
       summaryTitle: 'Recording summary', sActions: 'Actions', sConfirmed: 'Confirmed', sAmbiguous: 'Ambiguous', sFailed: 'Failed', sDuration: 'Duration',
-      replayFlow: '▶ Replay the journey', saveFlow2: '💾 Save the flow', afterStop: 'Available once the recording is stopped',
+      replayFlow: 'Replay the journey', saveFlow2: 'Save the flow', afterStop: 'Available once the recording is stopped',
       pill: { CONFIRMED: 'Confirmed', PENDING: 'In progress', AMBIGUOUS: 'Ambiguous', FAILED: 'Failed', UNVERIFIED: 'Not verifiable' },
       kindName: { open: 'Navigation', navigate: 'Navigation', click: 'Click', fill: 'Typing', check: 'Checkbox', uncheck: 'Checkbox', choose: 'Choice', select: 'Select', key: 'Key', drag: 'Drag and drop', upload: 'File', dialog: 'Dialog', goto: 'Navigation', dragAndDrop: 'Drag and drop', manual: 'Manual' },
       qualityShort: 'Quality', seeDetail: 'See the detail',
@@ -574,9 +586,30 @@ const SCRIPT = `
   var short = function (text, n) { return text.length > n ? text.slice(0, n - 1) + '…' : text; };
   var recordingPhase = function () { return state && (state.phase === 'RECORDING' || state.phase === 'PAUSED'); };
 
+  // Pictogrammes fixes (jamais une donnée de l'application) : décoratifs, le libellé reste le nom du bouton.
+  var SVG = {
+    pencil: '<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M14 6l4 4"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+    undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>',
+    play: '<path d="M7 5l12 7-12 7V5z" fill="currentColor"/>',
+    disk: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M8 20v-6h8v6"/>',
+    close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    arrow: '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>',
+    cursor: '<path d="M6 3l12 9-5.5 1.2L10 19z"/>',
+    keyboard: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',
+    list: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
+    drag: '<path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
+    dot: '<circle cx="12" cy="12" r="4"/>'
+  };
+  function svg(name) { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + (SVG[name] || SVG.dot) + '</svg>'; }
+  function kindIcon(kind) {
+    var k = String(kind || '').toUpperCase();
+    return k.indexOf('NAVIGAT') >= 0 || k === 'GOTO' ? 'arrow' : k.indexOf('DRAG') >= 0 ? 'drag' : k.indexOf('SELECT') >= 0 || k.indexOf('CHECK') >= 0 ? 'list' : k.indexOf('TYPE') >= 0 || k.indexOf('FILL') >= 0 || k.indexOf('PRESS') >= 0 ? 'keyboard' : k.indexOf('CLICK') >= 0 ? 'cursor' : 'dot';
+  }
+
   function button(label, attrs) {
     var a = attrs || {};
-    return '<button type="button"' + (a.cls ? ' class="' + a.cls + '"' : '') + (a.cmd ? ' data-cmd="' + a.cmd + '"' : '') + (a.id ? ' data-id="' + esc(a.id) + '"' : '') + (a.aria ? ' aria-label="' + esc(a.aria) + '"' : '') + (a.title ? ' title="' + esc(a.title) + '"' : '') + (a.disabled ? ' disabled' : '') + '>' + esc(label) + '</button>';
+    return '<button type="button"' + (a.cls ? ' class="' + a.cls + '"' : '') + (a.cmd ? ' data-cmd="' + a.cmd + '"' : '') + (a.id ? ' data-id="' + esc(a.id) + '"' : '') + (a.aria ? ' aria-label="' + esc(a.aria) + '"' : '') + (a.title ? ' title="' + esc(a.title) + '"' : '') + (a.disabled ? ' disabled' : '') + '>' + (a.icon ? svg(a.icon) : '') + esc(label) + '</button>';
   }
 
   function renderHead() {
@@ -832,10 +865,10 @@ const SCRIPT = `
     var h = '<h2>' + esc(T.summaryTitle) + '</h2>';
     h += stat('i-actions', '▶', s.actions, T.sActions) + stat('i-ok', '✓', s.confirmed, T.sConfirmed) + stat('i-amb', '!', s.ambiguous, T.sAmbiguous) + stat('i-bad', '✕', s.failed, T.sFailed) + stat('i-time', '◷', clock((state.endedAt || Date.now()) - state.startedAt), T.sDuration, 'duration');
     h += '<div class="buttons">';
-    h += button(T.replayFlow, { cmd: 'replay', cls: 'primary', disabled: !review || running, title: review ? '' : T.afterStop });
-    if (review) h += button(editing ? T.editing : T.edit, { cmd: 'edit', disabled: running });
-    h += button(T.saveFlow2, { cmd: 'save', cls: 'success', disabled: !review || running, title: review ? '' : T.afterStop });
-    if (review) h += button(T.finish, { cmd: 'finish', disabled: running });
+    h += button(T.replayFlow, { cmd: 'replay', cls: 'primary', icon: 'play', disabled: !review || running, title: review ? '' : T.afterStop });
+    if (review) h += button(editing ? T.editing : T.edit, { cmd: 'edit', cls: 'soft', icon: editing ? 'check' : 'pencil', disabled: running });
+    h += button(T.saveFlow2, { cmd: 'save', cls: 'success', icon: 'disk', disabled: !review || running, title: review ? '' : T.afterStop });
+    if (review) h += button(T.finish, { cmd: 'finish', cls: 'neutral', icon: 'close', disabled: running });
     h += '</div>';
     setHtml($('summarybar'), h);
   }
@@ -881,10 +914,11 @@ const SCRIPT = `
     var h = '<div class="card card-plain" id="intent-review"><h2>' + esc(T.reviewTitle) + '</h2><p class="sub">' + esc(T.reviewNote) + '</p>';
     h += r.rows.map(function (row) {
       var x = '<div class="irow ' + row.status + '" data-intent-row="' + esc(row.actionId) + '">';
+      x += '<span class="iico" aria-hidden="true">' + svg(kindIcon(row.kind)) + '</span>';
       x += '<div><div class="ilabel">' + esc(row.label) + '</div><div class="imeta">' + esc(T.intentL) + '</div><div class="iintent">' + esc(row.intent) + '</div></div>';
-      x += '<div class="iactions">' + button(T.modifyIntent, { cmd: 'intent-edit', id: row.actionId })
-        + (row.source === 'HUMAN' ? button(T.resetIntent, { cmd: 'intent-reset', id: row.actionId, cls: 'ghost' }) : button(T.confirmIntent, { cmd: 'intent-confirm', id: row.actionId, cls: 'ghost' })) + '</div>';
       x += '<div class="imeta">' + esc(T.sourceL) + ' : <span class="isrc ' + row.status + '">' + esc(T.src[row.status]) + '</span> · ' + esc(T.confidence) + ' : ' + pct(row.confidence) + '</div>';
+      x += '<div class="iactions">' + button(T.modifyIntent, { cmd: 'intent-edit', id: row.actionId, cls: 'soft', icon: 'pencil' })
+        + (row.source === 'HUMAN' ? button(T.resetIntent, { cmd: 'intent-reset', id: row.actionId, cls: 'ghost', icon: 'undo' }) : button(T.confirmIntent, { cmd: 'intent-confirm', id: row.actionId, cls: 'confirm', icon: 'check' })) + '</div>';
       if (row.original !== undefined) x += '<div class="imeta full">' + esc(T.originalL) + ' : <b>' + esc(row.original) + '</b> · ' + esc(T.initialConf) + ' : ' + pct(row.originalConfidence) + '</div>';
       if (row.reason) x += '<div class="imeta full">' + esc(T.correctionL) + ' : « ' + esc(row.reason) + ' »</div>';
       if (row.proposal) x += '<div class="imeta full">' + esc(T.proposalL) + ' : ' + esc(row.proposal) + '</div>';
@@ -893,7 +927,7 @@ const SCRIPT = `
         x += '<div class="iedit"><fieldset><legend>' + esc(T.newIntent) + '</legend>' + r.choices.map(function (c) {
           return '<label class="choice"><input type="radio" name="intent-' + esc(row.actionId) + '" value="' + esc(c) + '"' + (c === row.intent ? ' checked' : '') + '>' + esc(c) + '</label>';
         }).join('') + '</fieldset><label class="sub" for="reason-' + esc(row.actionId) + '">' + esc(T.justification) + '</label><textarea id="reason-' + esc(row.actionId) + '"></textarea>'
-          + '<div class="row">' + button(T.applyIntent, { cmd: 'intent-apply', id: row.actionId, cls: 'primary' }) + button(T.cancelIntent, { cmd: 'intent-cancel', id: row.actionId }) + '</div></div>';
+          + '<div class="row">' + button(T.applyIntent, { cmd: 'intent-apply', id: row.actionId, cls: 'primary', icon: 'check' }) + button(T.cancelIntent, { cmd: 'intent-cancel', id: row.actionId }) + '</div></div>';
       }
       if (row.history.length) x += '<details class="full"><summary>' + esc(T.historyL) + ' (' + row.history.length + ')</summary><ul>' + row.history.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul></details>';
       return x + '</div>';

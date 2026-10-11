@@ -132,6 +132,8 @@ export interface PanelAnalysis {
 /** Une action dans la revue des intentions. */
 export interface PanelIntentRow {
   actionId: string;
+  /** Le genre de l'action enregistrée (CLICK, TYPE, NAVIGATE…) : seulement pour son icône. */
+  kind?: string;
   label: string;
   intent: string;
   status: 'INFERRED' | 'HUMAN_CORRECTED' | 'HUMAN_CONFIRMED';

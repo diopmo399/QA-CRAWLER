@@ -920,6 +920,7 @@ function intentReviewOf(
       const human = review?.source === 'HUMAN' ? review : undefined;
       return {
         actionId: view.actionId,
+        kind: view.type,
         label:
           view.stepIds.map((id) => labels.get(id)).find((label) => label !== undefined) ??
           `${view.type}${view.label ? ` "${view.label}"` : ''}`,
