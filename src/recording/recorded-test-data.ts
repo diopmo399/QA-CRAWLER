@@ -846,7 +846,7 @@ const RAW_SELECTOR_FIELDS = new Set(['css', 'selector', 'preferred', 'fallback']
  * en suffixe d'un effet (« button:Company 7f3k », « + button:Company 7f3k »). Casse et espaces de
  * bord ignorés ; un texte qui ne fait que la CONTENIR n'est jamais réécrit (corrélation incertaine).
  */
-function citeIn<T>(value: T, text: string, reference: string): { value: T; changed: boolean } {
+export function citeIn<T>(value: T, text: string, reference: string): { value: T; changed: boolean } {
   const wanted = text.toLowerCase();
   const state = { changed: false };
   const visit = (inner: unknown, field?: string): unknown => {

@@ -6,6 +6,8 @@ import {
   type DecisionContext,
   type HumanDecision,
 } from './application/human-review.js';
+import { generateFlowFiles } from './recorded-flow.js';
+import { applyTestDataBinding } from './test-data-binding.js';
 import {
   PROPOSABLE_OPERATIONS,
   analyzeRecording,
@@ -844,6 +846,34 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           });
           if (config.recording.knowledge)
             await rememberIntentDecision(config, result, env, decision).catch(() => undefined);
+          return { ok: true };
+        },
+        // LA LIAISON DE DONNÉES : la source de la valeur d'une saisie (fixe, générée, réutilisée), choisie
+        // par l'humain ; le flow, le .feature, test-data.yaml et le registre sont réécrits.
+        bindTestData: async (input) => {
+          const outcome = applyTestDataBinding(result, input, () => {
+            result.files = generateFlowFiles(result.flow, {
+              language,
+              recordedAt: result.session.startedAt,
+              testDataFile: TEST_DATA_FILE,
+            });
+          });
+          if ('error' in outcome) return outcome;
+          if (format !== 'gherkin') await write('generated.flow.yaml', result.files.yaml);
+          if (format !== 'yaml') await write('generated.feature', result.files.feature);
+          if (result.testData)
+            await write(TEST_DATA_FILE, stringifyYaml(result.testData.document, { lineWidth: 0 }));
+          const { intent: _intent, ...recordedFlow } = result.flow;
+          await write('recorded-flow.json', json(recordedFlow));
+          if (result.humanReview) await write(HUMAN_REVIEW_FILE, json(result.humanReview));
+          const decision = outcome.decision;
+          onEvent({
+            type: 'RECORDING_TEST_DATA_BOUND',
+            at: decision.at,
+            message: `step ${decision.stepId}: ${decision.source} testData.${decision.variable}${decision.previousKey && decision.previousKey !== decision.variable ? ` (was testData.${decision.previousKey})` : ''} — human decision ${decision.id}`,
+          });
+          replay = { status: 'NOT_VALIDATED' };
+          saved = undefined;
           return { ok: true };
         },
         save: async () => {
