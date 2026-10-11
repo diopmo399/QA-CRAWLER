@@ -105,7 +105,15 @@ export interface ExplorationResult {
   /** Tentatives de récupération, branches abandonnées, circuits ouverts. */
   recovery?: RecoverySummary;
   /** Actions de modification exécutées, et le budget (safety.mutations). */
-  mutations?: { enabled: boolean; executed: number; maxPerRun?: number };
+  mutations?: {
+    enabled: boolean;
+    /** Toutes les écritures du run : exploration autonome + flows imposés. */
+    executed: number;
+    /** Le budget (maxPerRun) ne porte que sur l'exploration autonome. */
+    autonomous?: number;
+    flows?: number;
+    maxPerRun?: number;
+  };
   /** Données que le run a probablement créées, marquées QA-CRAWLER-<runId> (jamais les valeurs). */
   createdData?: CreatedDataRecord[];
   /** Ce qui a été nettoyé, et ce qui reste à supprimer. */

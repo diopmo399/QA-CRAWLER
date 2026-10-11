@@ -105,7 +105,7 @@ output:
   it('sends at most maxPerRun forms, with data tagged by the run', () => {
     expect(posts).toHaveLength(1);
     expect(posts[0]?.body.toLowerCase()).toContain('qa-crawler-acc1');
-    expect(result.mutations).toEqual({ enabled: true, executed: 1, maxPerRun: 1 });
+    expect(result.mutations).toEqual({ enabled: true, executed: 1, autonomous: 1, flows: 0, maxPerRun: 1 });
   });
 
   it('lists what the run created, without deleting it', () => {

@@ -25,6 +25,9 @@ interface QualityTexts {
   dataTitle: string;
   dataHint: string;
   mutations: (executed: number, max: number | undefined, enabled: boolean) => string;
+  /** Le détail : exploration autonome (sous budget) et flows imposés (permis par `allow`). */
+  mutationsDetail: (autonomous: number, flows: number) => string;
+  flowStep: string;
   noData: string;
   recovered: string;
   notRecovered: string;
@@ -86,8 +89,11 @@ const EN: QualityTexts = {
   dataHint: 'Actions that changed data, tagged with the run. Nothing is deleted automatically.',
   mutations: (executed, max, enabled) =>
     enabled
-      ? `${executed} action(s) changing data executed (budget: ${max ?? '∞'}).`
+      ? `${executed} action(s) changing data executed (budget for the autonomous exploration: ${max ?? '∞'}).`
       : 'Actions changing data are disabled (safety.mutations.enabled: false).',
+  mutationsDetail: (autonomous, flows) =>
+    `${String(autonomous)} by the autonomous exploration · ${String(flows)} by the imposed flows (allowed by their steps).`,
+  flowStep: 'Flow · step',
   noData: 'No data created.',
   recovered: 'recovered',
   notRecovered: 'failed',
@@ -151,8 +157,11 @@ const FR: QualityTexts = {
     'Actions ayant modifié des données, marquées avec l’identifiant du run. Rien n’est supprimé automatiquement.',
   mutations: (executed, max, enabled) =>
     enabled
-      ? `${executed} action(s) de modification exécutée(s) (budget : ${max ?? '∞'}).`
+      ? `${executed} action(s) de modification exécutée(s) (budget de l’exploration autonome : ${max ?? '∞'}).`
       : 'Les actions de modification sont désactivées (safety.mutations.enabled: false).',
+  mutationsDetail: (autonomous, flows) =>
+    `${String(autonomous)} par l’exploration autonome · ${String(flows)} par les flows imposés (permises par leurs étapes).`,
+  flowStep: 'Flow · étape',
   noData: 'Aucune donnée créée.',
   recovered: 'récupéré',
   notRecovered: 'échec',
@@ -353,12 +362,16 @@ export function dataSection(
   const c = t.columns;
   const rows = created.map(
     (record) =>
-      `<tr><td>${esc(nameOf(record.stateId))}</td><td>${esc(record.action)}</td><td>${esc(record.tag)}</td><td class="wrap">${record.requests.map((request) => `${esc(request.method)} ${esc(request.url)} → ${request.status}`).join('<br>')}</td></tr>`,
+      `<tr><td>${esc(nameOf(record.stateId))}</td><td>${record.flow ? `${esc(record.flow)}${record.step !== undefined ? ` · ${String(record.step)}` : ''}` : '<span class="muted">—</span>'}</td><td>${esc(record.action)}</td><td>${esc(record.tag)}</td><td class="wrap">${record.requests.map((request) => `${esc(request.method)} ${esc(request.url)} → ${request.status}`).join('<br>')}</td></tr>`,
   );
+  const detail =
+    mutations.autonomous !== undefined && mutations.flows !== undefined
+      ? ` ${t.mutationsDetail(mutations.autonomous, mutations.flows)}`
+      : '';
   return `<section><h2>${esc(t.dataTitle)} (${created.length})</h2>
     <p class="muted">${esc(t.dataHint)}</p>
-    <p>${esc(t.mutations(mutations.executed, mutations.maxPerRun, mutations.enabled))}</p>
-    ${rows.length > 0 ? table([c.state, c.action, c.tag, c.requests], rows) : `<p class="empty">${esc(t.noData)}</p>`}
+    <p>${esc(t.mutations(mutations.executed, mutations.maxPerRun, mutations.enabled))}${esc(detail)}</p>
+    ${rows.length > 0 ? table([c.state, t.flowStep, c.action, c.tag, c.requests], rows) : `<p class="empty">${esc(t.noData)}</p>`}
     ${(result.cleanup?.notes ?? []).map((note) => `<p>${esc(note)}</p>`).join('')}
   </section>`;
 }

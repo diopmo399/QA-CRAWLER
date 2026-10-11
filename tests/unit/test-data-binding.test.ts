@@ -332,4 +332,41 @@ describe('Explicit test data binding between steps', () => {
       ),
     ).toContain('secret');
   });
+
+  it('the HTTP analysis follows a binding: a search criterion cites the CURRENT key of its input, never a dropped one', () => {
+    const result = record();
+    const search = fillOf(result, 'Search accounts');
+    const before = keyOf(result, 'Search accounts') ?? '';
+    const rawId = result.testData?.items.find((item) => item.key === before)?.rawEventIds[0] ?? '';
+    expect(rawId).not.toBe('');
+    const criterion = {
+      ui: { label: 'Search accounts', actionId: rawId, screen: '/accounts', match: 'EXACT' },
+      testData: { key: before, reference: `\${testData.${before}}` },
+      evidence: [`the value is the test datum testData.${before}: dynamic, not a frozen literal`],
+    };
+    result.http = {
+      journal: [],
+      consolidated: { business: [{ searchCriteria: [criterion] }] },
+    } as unknown as NonNullable<typeof result.http>;
+    applyTestDataBinding(
+      result,
+      {
+        stepId: fillOf(result, 'Display label')?.id ?? '',
+        source: 'GENERATED',
+        variable: 'company.name',
+        generator: 'company',
+      },
+      regenerate(result),
+    );
+    applyTestDataBinding(
+      result,
+      { stepId: search?.id ?? '', source: 'REFERENCE', variable: 'company.name' },
+      regenerate(result),
+    );
+    expect(criterion.testData).toEqual({ key: 'company.name', reference: '${testData.company.name}' });
+    expect(criterion.evidence).toEqual([
+      'the value is the test datum testData.company.name: dynamic, not a frozen literal',
+    ]);
+    expect(result.testData?.set.values[before]).toBeUndefined();
+  });
 });

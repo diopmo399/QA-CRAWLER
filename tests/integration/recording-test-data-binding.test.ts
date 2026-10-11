@@ -79,6 +79,11 @@ describe('Recording — explicit test data binding between steps (recorder windo
         await search.getByRole('button', { name: 'Enregistrer la source' }).click();
         await panel.locator('.databind .dnote.manual').waitFor();
         ui.searchAfter = await panel.locator('.databind').innerText();
+        // La carte « Intents métier » suit la liaison : le critère cite la variable choisie, pas la clé abandonnée.
+        await panel.getByRole('tab', { name: 'Analyse' }).click();
+        await panel.locator('.search').first().waitFor({ timeout: 30_000 });
+        ui.searchIntent = await panel.locator('.search').first().innerText();
+        await panel.getByRole('tab', { name: 'Enregistrement' }).click();
         // 3. La première saisie ne peut rien réutiliser (aucune donnée produite avant elle).
         await stepRow(panel, 'Display label').click();
         await panel.locator('.databind').getByLabel('Réutiliser une donnée existante').check();
@@ -103,6 +108,8 @@ describe('Recording — explicit test data binding between steps (recorder windo
     expect(ui.searchOptions).toMatch(/company\.name[\s\S]*Étape \d+/);
     expect(ui.searchAfter).toMatch(/Choix explicite/);
     expect(ui.firstReuse).toContain('Aucune donnée de test disponible.');
+    expect(ui.searchIntent).toContain('${testData.company.name}');
+    expect(ui.searchIntent).not.toContain('search.q');
     expect(ui.lineage).toMatch(
       /company\.name[\s\S]*générée \(company\)[\s\S]*produite à l’étape[\s\S]*utilisée par/,
     );

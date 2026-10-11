@@ -120,7 +120,14 @@ export function sameIntent(a: FlowIntent, b: FlowIntent): boolean {
 
 /** Une intention en une ligne ; une valeur n'est jamais affichée (elle peut être sensible). */
 export function describeFlowIntent(intent: Pick<FlowIntent, 'type' | 'label' | 'value'>): string {
-  const value = intent.value === undefined ? '' : typeof intent.value === 'string' ? ' = "…"' : ' = ${env}';
+  const value =
+    intent.value === undefined
+      ? ''
+      : typeof intent.value === 'string'
+        ? ' = "…"'
+        : 'testData' in intent.value
+          ? ` = \${testData:${intent.value.testData}}`
+          : ' = ${env}';
   return `${intent.type} "${intent.label}"${value}`;
 }
 

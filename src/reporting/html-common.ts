@@ -197,6 +197,11 @@ export const BASE_CSS = `
   .flow-run { margin-bottom:18px; }
   .flow-run h3 { margin:0 0 6px; font-size:15px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .suggest { margin-top:6px; color:var(--text); }
+  details.flow-analysis { margin-top:12px; padding:8px 12px; border:1px solid var(--line, #e5e7eb); border-radius:8px; }
+  details.flow-analysis > summary { cursor:pointer; font-size:14px; }
+  details.flow-analysis table { margin-top:6px; }
+  .timebar { height:4px; margin-top:4px; background:#eef2ff; border-radius:2px; overflow:hidden; }
+  .timebar span { display:block; height:100%; background:#6366f1; }
   .suggest pre { margin:4px 0 0; padding:6px 8px; background:#fff7e6; color:#1f2937; border:1px solid #f0c36d; border-radius:6px; white-space:pre-wrap; word-break:break-all; font-size:12px; }
   pre.diff { margin:4px 0 10px; padding:10px 12px; background:var(--soft); border:1px solid var(--soft-line); border-radius:8px; font-size:12px; white-space:pre-wrap; }
   pre.network { margin:4px 0 0; padding:4px 6px; background:var(--soft); border-radius:4px; font-size:11px; white-space:pre-wrap; word-break:break-all; }

@@ -336,8 +336,37 @@ export function applyTestDataBinding(
     at: input.at ?? new Date().toISOString(),
   };
   (ledger.bindings ??= []).push(decision);
+  refreshHttpTestData(result);
   regenerate();
   return { decision };
+}
+
+/**
+ * Les critères de recherche de l'analyse HTTP citent la donnée de test par la clé de la saisie qui
+ * l'a produite : après une liaison (clé renommée, étape passée en référence), ils suivent la clé
+ * courante de chaque saisie — jamais une clé qui n'existe plus.
+ */
+export function refreshHttpTestData(result: Result): void {
+  const data = result.testData;
+  const http = result.http;
+  if (!data || !http) return;
+  const keys = new Map<string, string>();
+  for (const item of data.items)
+    if (item.key && !item.sensitive) for (const id of item.rawEventIds) keys.set(id, item.key);
+  for (const analysis of [http.consolidated, http.live])
+    for (const business of analysis?.business ?? [])
+      for (const criterion of business.searchCriteria) {
+        const key = criterion.ui ? keys.get(criterion.ui.actionId) : undefined;
+        criterion.evidence = criterion.evidence.filter(
+          (line) => !line.startsWith('the value is the test datum testData.'),
+        );
+        if (key) {
+          criterion.testData = { key, reference: `\${testData.${key}}` };
+          criterion.evidence.push(
+            `the value is the test datum testData.${key}: dynamic, not a frozen literal`,
+          );
+        } else delete criterion.testData;
+      }
 }
 
 /** La LIGNÉE de chaque variable : l'étape qui la produit, les étapes qui la saisissent ou la citent. */
