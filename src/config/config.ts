@@ -1321,6 +1321,12 @@ const recordingSchema = z
     panel: z.boolean().default(true),
     /** L'aperçu de l'application dans la fenêtre (une image de la page, en mémoire seulement, jamais écrite). */
     panelPreview: z.boolean().default(true),
+    /**
+     * La disposition de la fenêtre au démarrage : full (cockpit : parcours, aperçu, détails) ou compact
+     * (mini-dock sombre : dernières actions, recherche détectée, ambiguïté à résoudre). L'humain bascule
+     * à tout moment depuis la fenêtre ; la revue après l'arrêt s'ouvre toujours en disposition complète.
+     */
+    panelLayout: z.enum(['full', 'compact']).default('full'),
     /** Où « Sauvegarder » copie le flow (par défaut : flows/ à côté du dossier des rapports). */
     flowsDirectory: z.string().optional(),
     /**

@@ -34,6 +34,23 @@ export interface PanelStep {
   resolution?: 'RESOLVED' | 'IGNORED';
   /** Revue : l'étape peut être retirée du flow (une action humaine ; jamais une vérification). */
   removable?: boolean;
+  /** Le groupe affiché au-dessus de l'étape : l'étape métier (revue) ou l'écran (en direct). */
+  group?: string;
+  /** Les requêtes reliées à l'action (analyse HTTP) : l'inspecteur les montre à côté de la cible. */
+  network?: PanelNetwork[];
+}
+
+/** Une requête reliée à une action : ce que l'inspecteur en montre (jamais une valeur saisie). */
+export interface PanelNetwork {
+  api: string;
+  status?: number;
+  operation: string;
+  /** TRIGGERED / CANDIDATE / AMBIGUOUS · confiance. */
+  link: string;
+  /** « Search companies » → companyName CONTAINS. */
+  criteria: string[];
+  /** Ce qui n'est pas un critère : tri, pagination, options. */
+  extras: string[];
 }
 
 export interface PanelReplay {
@@ -213,6 +230,8 @@ export interface PanelState {
     search?: string;
   };
   directory?: string;
+  /** La disposition demandée au démarrage (recording.panelLayout) ; la fenêtre garde ensuite le choix de l'humain. */
+  layout?: 'full' | 'compact';
   /** L'aperçu est ouvert dans sa propre fenêtre (la fenêtre principale garde le parcours et les détails). */
   previewDetached?: boolean;
 }

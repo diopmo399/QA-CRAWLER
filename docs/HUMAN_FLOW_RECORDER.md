@@ -51,6 +51,25 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   (et la qualité), **Aperçu de l'application**, **Détails de l'action** — deux puis une sur une
   fenêtre plus étroite (l'aperçu passe dans son onglet) · **Résumé du recording** en bas (actions,
   confirmées, ambiguës, échecs, durée, **Rejouer le parcours**, **Sauvegarder le flow**).
+- **Disposition** (`recording.panelLayout: full | compact`, bascule **▭ Compact / ▣ Complet** dans
+  la fenêtre, choix gardé d'une session à l'autre) :
+  - **Complète** (cockpit) : les actions sont **groupées** par écran pendant l'enregistrement, puis par
+    étape métier dans la revue. La recherche reconnue en direct s'affiche en **puce** dans la barre
+    d'état (« recherche détectée : … → companyName CONTAINS », provisoire).
+  - **Compacte** (mini-dock sombre, étroit) : état et chrono, la recherche détectée, les dernières
+    actions et les ambiguïtés à résoudre tout de suite, Pause / Reprendre / Arrêter / Annuler.
+  - La revue après l'arrêt s'ouvre toujours en disposition complète.
+- **Revue en étapes métier** : au-dessus du détail, des **cartes numérotées** (Créer, Retrouver,
+  Ouvrir…) avec leur statut, leur confiance, les actions enregistrées qu'elles regroupent et ce qui a
+  été observé. Le détail action par action reste dessous.
+- **Inspecteur** : une recherche dans le parcours et un bouton **À vérifier seulement** (ambiguës et
+  échecs). Le détail d'une action montre la **requête liée** : API, statut, opération, lien
+  (`TRIGGERED`, `CANDIDATE`, ou `VALUE_SENT` quand la valeur saisie part dans un critère), les critères
+  « libellé → propriété opérateur · logique », le tri, la pagination et les options.
+- **Analyse** : les **intents métier en tête**. Une recherche s'affiche en tableau (champ de l'écran,
+  propriété API, opérateur, valeur, état) avec une jauge de confiance, des jetons (logique, tri,
+  paramètres techniques, valeur issue de la création) et les preuves. L'arbre de l'application et le
+  technique viennent ensuite.
 - **Aperçu de l'application** (`recording.panelPreview: true`) : une image de la page, prise après
   chaque action (au plus une toutes les 800 ms, sans le bandeau), **en mémoire seulement** — jamais
   écrite ni journalisée. L'élément sélectionné y est encadré à sa position réelle.
@@ -970,6 +989,7 @@ recording:
   overlay: true # le bandeau ● REC (minuteur, Pause, Annuler, Arrêter, notifications)
   panel: true # la fenêtre « QA-CRAWLER Recorder » (timeline, détails, ambiguïtés, revue, analyse)
   panelPreview: true # l'aperçu de l'application dans la fenêtre (image en mémoire, jamais écrite)
+  panelLayout: full # full (cockpit) | compact (mini-dock sombre) au démarrage ; bascule dans la fenêtre
   # flowsDirectory: flows # où « Sauvegarder » copie le flow (défaut : flows/ à côté des rapports)
   recordAfterAuthentication: true
   maxRawEvents: 5000
