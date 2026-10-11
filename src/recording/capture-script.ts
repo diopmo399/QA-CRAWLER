@@ -1884,8 +1884,16 @@ export function installRecorder(
         box.style.display = 'none';
         return 'NOT_FOUND';
       }
-      element.scrollIntoView({ block: 'center', inline: 'nearest' });
-      const rect = element.getBoundingClientRect();
+      // AUCUN SAUT de la page : un élément déjà visible ne fait jamais défiler l'application ; un élément
+      // hors écran défile au plus près (jamais recentré), sans animation.
+      const before = element.getBoundingClientRect();
+      const visible =
+        before.bottom > 0 &&
+        before.right > 0 &&
+        before.top < window.innerHeight &&
+        before.left < window.innerWidth;
+      if (!visible) element.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+      const rect = visible ? before : element.getBoundingClientRect();
       // La position (l'aperçu de la fenêtre du recorder y dessine le même cadre).
       global.__qaCrawlerLastRect = {
         x: rect.left,
@@ -1902,6 +1910,12 @@ export function installRecorder(
       highlightTimer = window.setTimeout(() => {
         box.style.display = 'none';
       }, 3000);
+      // Le cadre est mesuré une fois : si la page défile, il disparaît plutôt que de flotter à côté.
+      window.addEventListener('scroll', () => (box.style.display = 'none'), {
+        once: true,
+        passive: true,
+        capture: true,
+      });
       return how;
     },
   };

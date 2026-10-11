@@ -1,7 +1,7 @@
 import type { FlowTarget, StepEffects, TargetFingerprint } from '../config/flow-schema.js';
 import type { ElementHandle, Locator, Page } from 'playwright';
 import type { UiSnapshot } from '../model/ui-snapshot.js';
-import { sectionPathExpression } from '../recording/semantic-dom.js';
+import { sectionPathOfElementSource } from '../recording/semantic-dom.js';
 
 /**
  * CLICKED != SUCCEEDED. Playwright qui clique sans erreur prouve seulement que le clic a eu
@@ -248,8 +248,6 @@ export function sectionMatch(
   if (wanted.join('>') === found.join('>')) return 'SAME';
   return found.includes(wanted[wanted.length - 1] ?? '') ? 'SAME' : 'OTHER';
 }
-
-let probes = 0;
 
 /**
  * LOCATOR CANDIDATES (healing) : les autres façons de trouver LE MÊME élément, à partir de son
@@ -501,7 +499,7 @@ export function verifyEffects(input: {
 }
 
 /** Ce que l'élément trouvé dit de lui (rôle, nom, texte, test id) — jamais la valeur d'un champ. */
-export async function readTarget(target: Locator | ElementHandle, page?: Page): Promise<ObservedTarget> {
+export async function readTarget(target: Locator | ElementHandle, _page?: Page): Promise<ObservedTarget> {
   // Un localisateur ou un élément déjà tenu (validation pendant l'enregistrement) : la même lecture.
   const locator = target as Locator;
   const observed = await locator
@@ -593,25 +591,20 @@ export async function readTarget(target: Locator | ElementHandle, page?: Page): 
     })
     .catch((): ObservedTarget => ({}));
   if (observed.tag === undefined) return observed;
-  const section = await readSection(locator, page);
+  const section = await readSection(locator);
   return section ? { ...observed, section } : observed;
 }
 
 /** Le chemin de sections de l'élément (même calcul qu'à l'enregistrement) ; undefined s'il est illisible. */
-export async function readSection(target: Locator | ElementHandle, page?: Page): Promise<string | undefined> {
-  const locator = target as Locator;
-  probes += 1;
-  const token = `probe-${String(probes)}`;
-  const marked = await locator
-    .evaluate((el, value) => {
-      el.setAttribute('data-qa-crawler-probe', value);
-      return true;
-    }, token)
-    .catch(() => false);
-  if (!marked) return undefined;
-  const owner = page ?? (typeof locator.page === 'function' ? locator.page() : undefined);
-  if (!owner) return undefined;
-  const path = (await owner.evaluate(sectionPathExpression(token)).catch(() => null)) as string[] | null;
+export async function readSection(target: Locator | ElementHandle): Promise<string | undefined> {
+  // Lu sur l'élément lui-même, en un seul aller-retour : aucun marqueur écrit dans la page.
+  // La source est évaluée dans la page comme Playwright évalue ses propres fonctions (eval global).
+  const path = await (target as Locator)
+    .evaluate(
+      (el, source) => (globalThis.eval(source) as (element: Element) => string[] | null)(el),
+      sectionPathOfElementSource(),
+    )
+    .catch(() => null);
   return path && path.length > 0 ? path.join(' > ') : undefined;
 }
 
