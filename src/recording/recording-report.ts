@@ -1,3 +1,4 @@
+import { dataLineage } from './test-data-binding.js';
 import { BASE_CSS, card, esc } from '../reporting/html-common.js';
 import { describeStep } from '../config/flow-schema.js';
 import type { RawRecordedEvent, SemanticRecordedAction } from './model.js';
@@ -123,6 +124,7 @@ export function recordingHtml(input: {
     ${intent.evidence.length > 0 ? `<p class="muted">${esc(intent.evidence.join(' · '))}</p>` : ''}
     ${searchesHtml(result)}
     ${intentReviewHtml(result)}
+    ${dataLineageHtml(result)}
   </section>
   <section><h2>Quality</h2>
     <div class="cols"><div><h3>Locators</h3><ul class="plain">${locators || '<li class="muted">none</li>'}</ul></div>
@@ -591,6 +593,19 @@ function searchesHtml(result: RecordingResult): string {
  * source (SYSTEM / HUMAN), confiance initiale, correction et historique. L'action enregistrée, elle,
  * ne change jamais.
  */
+/** LA LIGNÉE DES DONNÉES : chaque variable, l'étape qui la produit, celles qui la saisissent ou la citent. */
+function dataLineageHtml(result: RecordingResult): string {
+  const lineage = dataLineage(result);
+  if (lineage.length === 0) return '';
+  const manual = new Set((result.humanReview?.bindings ?? []).map((decision) => decision.stepId));
+  return `<h3>Test data lineage</h3><p class="muted">${String(manual.size)} input(s) bound explicitly by the human · one value per variable and per run at replay (never a value here).</p><table><thead><tr><th>Variable</th><th>Source</th><th>Produced by</th><th>Used by</th></tr></thead><tbody>${lineage
+    .map(
+      (entry) =>
+        `<tr><td><code>${esc(entry.key)}</code></td><td>${esc(entry.strategy)}${entry.generator ? ` (${esc(entry.generator)})` : ''}</td><td>${entry.producedBy ? `step ${String(entry.producedBy.stepIndex)} — ${esc(entry.producedBy.label)}${manual.has(entry.producedBy.stepId) ? ' · <b>explicit</b>' : ''}` : '—'}</td><td>${entry.usedBy.map((use) => `step ${String(use.stepIndex)} ${use.how === 'CITATION' ? '(cited)' : '(input)'}${manual.has(use.stepId) ? ' · <b>explicit</b>' : ''}`).join('<br>')}</td></tr>`,
+    )
+    .join('')}</tbody></table>`;
+}
+
 function intentReviewHtml(result: RecordingResult): string {
   const views = result.application?.actions ?? [];
   const reviewed = views.filter((view) => view.review);

@@ -38,6 +38,24 @@ export interface PanelStep {
   group?: string;
   /** Les requêtes reliées à l'action (analyse HTTP) : l'inspecteur les montre à côté de la cible. */
   network?: PanelNetwork[];
+  /** Revue d'une SAISIE : la source de sa valeur (fixe, générée, réutilisée) et les variables réutilisables. */
+  data?: PanelStepData;
+}
+
+/** La liaison de données d'une saisie, telle que la fenêtre la montre (jamais un secret). */
+export interface PanelStepData {
+  key?: string;
+  source: 'FIXED' | 'GENERATED' | 'REFERENCE' | 'SENSITIVE';
+  generator?: string;
+  reference?: string;
+  recordedValue?: string;
+  /** Les variables produites par une étape ANTÉRIEURE. */
+  options: { key: string; stepIndex: number; label: string }[];
+  /** La liaison trouvée automatiquement (une proposition). */
+  suggestion?: string;
+  /** Un choix explicite de l'humain est en vigueur. */
+  manual: boolean;
+  generators: string[];
 }
 
 /** Une requête reliée à une action : ce que l'inspecteur en montre (jamais une valeur saisie). */
@@ -73,6 +91,14 @@ export interface PanelReplay {
 
 export interface PanelAnalysis {
   available: boolean;
+  /** LA LIGNÉE DES DONNÉES : chaque variable, l'étape qui la produit, celles qui la saisissent ou la citent. */
+  dataLineage?: {
+    key: string;
+    strategy: string;
+    generator?: string;
+    producedBy?: string;
+    uses: string[];
+  }[];
   /** Les intents MÉTIER (après corrélation : une écriture métier acceptée). */
   intents: { label: string; detail?: string; confidence?: number; evidence: string[] }[];
   /** Les intents TECHNIQUES (ACQUIRE_TOKEN, DISCOVER_PROVIDER…) : séparés, jamais métier. */

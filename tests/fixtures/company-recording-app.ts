@@ -11,6 +11,7 @@ import type { AddressInfo } from 'node:net';
  */
 const page = (
   tree: boolean,
+  nameLabel = 'Company name',
 ): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Companies</title></head>
 <body>
 <nav><button type="button" id="tasks">Tasks</button> <button type="button" id="new">New company</button></nav>
@@ -28,7 +29,7 @@ const page = (
     const path = location.pathname;
     if (path === '/companies/new') {
       toast.textContent = '';
-      view.innerHTML = '<h1>New company</h1><label>Company name <input id="name" autocomplete="off"></label> <label>Address <input id="address" autocomplete="off"></label> <button type="button" id="save">Save</button>';
+      view.innerHTML = '<h1>New company</h1><label>${nameLabel} <input id="name" autocomplete="off"></label> <label>Address <input id="address" autocomplete="off"></label> <button type="button" id="save">Save</button>';
       document.getElementById('save').addEventListener('click', async () => {
         await fetch('/api/companies', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ companyName: document.getElementById('name').value, address: document.getElementById('address').value }) });
         go('/tasks');
@@ -72,6 +73,8 @@ export interface CompanyRecordingApp {
   refuseCreate: boolean;
   /** L'application enregistre le nom en MAJUSCULES (et compare sans tenir compte de la casse). */
   uppercaseNames: boolean;
+  /** Le libellé du champ du nom à la création (un libellé neutre n'est pas reconnu comme un nom de société). */
+  nameLabel: string;
   /** Des sociétés présentes avant le rejeu (homonymes imposés). */
   seed: (names: string[]) => void;
   /** Les sociétés enregistrées côté serveur (noms seulement). */
@@ -95,6 +98,7 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
     rejectDuplicates: false,
     refuseCreate: false,
     uppercaseNames: false,
+    nameLabel: 'Company name',
   };
   const same = (a: string, b: string | undefined): boolean =>
     state.uppercaseNames ? a.toUpperCase() === (b ?? '').toUpperCase() : a === b;
@@ -175,7 +179,7 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
       return;
     }
     response.setHeader('content-type', 'text/html; charset=utf-8');
-    response.end(page(state.tree));
+    response.end(page(state.tree, state.nameLabel));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -210,6 +214,12 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
     },
     set uppercaseNames(value: boolean) {
       state.uppercaseNames = value;
+    },
+    get nameLabel() {
+      return state.nameLabel;
+    },
+    set nameLabel(value: string) {
+      state.nameLabel = value;
     },
     seed: (names) => {
       for (const companyName of names) {

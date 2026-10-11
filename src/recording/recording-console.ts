@@ -22,6 +22,7 @@ import {
   type PanelTreeNode,
 } from './panel-state.js';
 import { generateFlowFiles } from './recorded-flow.js';
+import { BINDING_GENERATORS, dataLineage, stepDataBinding } from './test-data-binding.js';
 import { RecorderPanel, type PanelCommand } from './recorder-panel.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { RecordingResult } from './process-recording.js';
@@ -38,6 +39,14 @@ export interface ReviewActions {
     type: 'CORRECT' | 'CONFIRM' | 'RESET';
     intent?: string;
     reason?: string;
+  }) => Promise<{ ok: true } | { error: string }>;
+  /** LA LIAISON DE DONNÉES d'une saisie : sa source (fixe, générée, réutilisée), choisie par l'humain. */
+  bindTestData?: (input: {
+    stepId: string;
+    source: 'FIXED' | 'GENERATED' | 'REFERENCE';
+    variable?: string;
+    generator?: string;
+    value?: string;
   }) => Promise<{ ok: true } | { error: string }>;
 }
 
@@ -309,6 +318,27 @@ export class RecordingConsole {
           } else if (command.type === 'save') {
             this.saved = await input.actions.save();
           } else if (
+            command.type === 'data-bind' &&
+            command.id &&
+            command.source &&
+            input.actions.bindTestData
+          ) {
+            const outcome = await input.actions.bindTestData({
+              stepId: command.id,
+              source: command.source,
+              ...(command.variable ? { variable: command.variable } : {}),
+              ...(command.generator ? { generator: command.generator } : {}),
+              ...(command.value !== undefined ? { value: command.value } : {}),
+            });
+            // Le flow change : un rejeu fait avant ne le valide plus.
+            if ('error' in outcome)
+              this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
+            else {
+              this.notice = undefined;
+              this.replay = undefined;
+              this.saved = undefined;
+            }
+          } else if (
             (command.type === 'intent-correct' ||
               command.type === 'intent-confirm' ||
               command.type === 'intent-reset') &&
@@ -444,6 +474,44 @@ export class RecordingConsole {
         ...(review && this.result ? { business: this.result.business?.model.steps } : {}),
       },
     );
+    // LIAISON DES DONNÉES (revue) : la source de la valeur de chaque saisie et la lignée des variables.
+    const result = review ? this.result : undefined;
+    const steps = result
+      ? actions.map((step) => {
+          const binding = stepDataBinding(result, step.id);
+          return binding
+            ? {
+                ...step,
+                data: {
+                  ...binding,
+                  options: binding.options.map((option) => ({
+                    key: option.key,
+                    stepIndex: option.stepIndex,
+                    label: option.label,
+                  })),
+                  generators: [...BINDING_GENERATORS],
+                },
+              }
+            : step;
+        })
+      : actions;
+    const analysis: PanelAnalysis = result
+      ? {
+          ...this.analysis,
+          dataLineage: dataLineage(result).map((entry) => ({
+            key: entry.key,
+            strategy: entry.strategy,
+            ...(entry.generator ? { generator: entry.generator } : {}),
+            ...(entry.producedBy
+              ? { producedBy: `${String(entry.producedBy.stepIndex)} — ${entry.producedBy.label}` }
+              : {}),
+            uses: entry.usedBy.map(
+              (use) =>
+                `${String(use.stepIndex)} — ${use.label}${use.how === 'CITATION' ? (this.language === 'fr' ? ' (citée)' : ' (cited)') : ''}`,
+            ),
+          })),
+        }
+      : this.analysis;
     const phase = this.phase === 'RECORDING' && this.recorder.isPaused ? 'PAUSED' : this.phase;
     return {
       language: this.language,
@@ -451,9 +519,9 @@ export class RecordingConsole {
       phase,
       startedAt: this.recorder.startedAt,
       ...(this.endedAt !== undefined ? { endedAt: this.endedAt } : {}),
-      actions,
+      actions: steps,
       checks: review?.checks ?? [],
-      summary: review ? summaryOf(actions) : live.summary(),
+      summary: review ? summaryOf(steps) : live.summary(),
       quality: live.quality(),
       ...(this.progress ? { progress: this.progress } : {}),
       ...(this.highlight ? { highlight: this.highlight } : {}),
@@ -462,7 +530,7 @@ export class RecordingConsole {
       ...(this.saved ? { saved: this.saved } : {}),
       ...(this.preview ? { preview: this.preview } : {}),
       ...(this.detached ? { previewDetached: true } : {}),
-      analysis: this.analysis,
+      analysis,
       ...(this.httpLive ? { http: this.httpLive } : {}),
       ...(this.directory ? { directory: this.directory } : {}),
       layout: this.layout,

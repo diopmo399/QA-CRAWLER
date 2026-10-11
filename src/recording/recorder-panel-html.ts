@@ -404,6 +404,17 @@ body[data-mode=preview]{background:var(--bg)}
 .iedit label.choice{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line-strong);border-radius:8px;padding:4px 10px;background:var(--surface);cursor:pointer;font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace}
 .iedit label.choice:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
 .iedit textarea{width:100%;min-height:54px;font:inherit;border:1px solid var(--line-strong);border-radius:8px;padding:6px 8px;background:var(--surface);color:var(--fg)}
+.databind input[type=text],.databind select{width:100%;font:inherit;border:1px solid var(--line-strong);border-radius:8px;padding:6px 8px;background:var(--surface);color:var(--fg);margin:2px 0 8px}
+.databind .dsub{display:block;font-size:12px;color:var(--muted-strong);margin:6px 0 2px}
+.databind .dref{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.databind .dref label.choice{justify-content:flex-start;font-family:inherit;font-weight:600}
+.databind .dref label.choice small{display:block;font-weight:400;color:var(--muted-strong)}
+.databind .dnote{font-size:12px;color:var(--muted-strong);margin:4px 0 8px}
+.databind .dnote.manual{color:var(--violet)}
+.lineage{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+.lineage>li{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--surface)}
+.lineage code{font-weight:700;color:var(--fg)}
+.lineage .uses{list-style:disc;margin:6px 0 0 18px;padding:0;color:var(--muted-strong);font-size:12px}
 @media (max-width:640px){.irow{grid-template-columns:32px minmax(0,1fr);padding:12px}.irow .iico{width:32px;height:32px;grid-row:1}.irow .iactions{grid-column:2;grid-row:auto;justify-content:flex-start}.irow .full,.iedit{grid-column:2}}
 /* E · MINI-DOCK : une fenêtre étroite et sombre pendant l'enregistrement (la revue reste complète). */
 body.compact{--title:#bfdbfe;--ok-fg:#052e16;--muted-strong:#c4c9d2;--chip-bg:rgba(148,163,184,.18);--chip-fg:#cbd5e1;--ok-text:#86efac;--bg:#16181d;--surface:#1d2027;--surface-2:#232733;--fg:#f2f3f5;--muted:#a9afba;--line:#2b2f37;--line-strong:#3a3f4a;--accent:#93b4ff;--accent-soft:#1d2740;--accent-fg:#16181d;--ok:#4ade80;--ok-soft:rgba(74,222,128,.12);--warn:#fbbf24;--warn-soft:#2a2213;--bad:#f87171;--bad-soft:rgba(248,113,113,.14);--run:#93b4ff;--run-soft:#1d2740;--shadow:none}
@@ -448,6 +459,7 @@ const SCRIPT = `
       tlSearch: 'Chercher une action', onlyAttention: 'À vérifier seulement', noMatch: 'Aucune action ne correspond.',
       storyTitle: 'Le parcours en étapes métier', linked: 'Requête liée', linkedNone: 'Aucune requête métier reliée à cette action.',
       fieldL: 'Champ de l’écran', propL: 'Propriété API', stateL: 'État',
+      dataTitle: 'Source de la valeur', srcFixed: 'Valeur enregistrée', srcGenerated: 'Générer une nouvelle valeur', srcReference: 'Réutiliser une donnée existante', variableL: 'Variable', generatorL: 'Générateur', fixedValueL: 'Valeur', reuseFrom: 'Réutiliser depuis', noData: 'Aucune donnée de test disponible.', stepWord: 'Étape', suggestedL: function (k) { return 'Détecté automatiquement : réutilise ' + k + ' (une proposition, modifiable).'; }, manualL: 'Choix explicite : il l’emporte sur la détection automatique.', dataSave: 'Enregistrer la source', sensitiveData: 'Valeur secrète : lue depuis une variable d’environnement, jamais liée à une donnée.', lineageTitle: 'Données de test', lineageNote: 'Chaque variable, l’étape qui la produit et celles qui la réutilisent (au rejeu : une seule valeur par run).', producedL: 'produite à l’étape', usedL: 'utilisée par', strategyL: { GENERATE_AT_REPLAY: 'générée', TEMPLATE: 'modèle', RECORDED_LITERAL: 'valeur enregistrée', BUSINESS_LITERAL: 'valeur fixe', REFERENCE: 'référence', PRESERVE_EXISTING: 'gardée' },
       reviewTitle: 'Actions et intentions', reviewNote: 'L’intention est une interprétation : la corriger ne change ni l’action enregistrée, ni sa cible, ni le flow rejoué.',
       intentL: 'Intention', sourceL: 'Source', originalL: 'Original', initialConf: 'Confiance initiale', correctionL: 'Correction', proposalL: 'Proposition de l’analyse (non appliquée)',
       src: { INFERRED: 'SYSTEM', HUMAN_CORRECTED: '👤 HUMAN', HUMAN_CONFIRMED: '👤 HUMAN CONFIRMED' },
@@ -499,6 +511,7 @@ const SCRIPT = `
       tlSearch: 'Find an action', onlyAttention: 'To check only', noMatch: 'No action matches.',
       storyTitle: 'The journey as business steps', linked: 'Linked request', linkedNone: 'No business request linked to this action.',
       fieldL: 'Screen field', propL: 'API property', stateL: 'State',
+      dataTitle: 'Value source', srcFixed: 'Recorded value', srcGenerated: 'Generate a new value', srcReference: 'Reuse an existing data', variableL: 'Variable', generatorL: 'Generator', fixedValueL: 'Value', reuseFrom: 'Reuse from', noData: 'No test data available.', stepWord: 'Step', suggestedL: function (k) { return 'Detected automatically: reuses ' + k + ' (a suggestion, editable).'; }, manualL: 'Explicit choice: it wins over the automatic detection.', dataSave: 'Save the source', sensitiveData: 'Secret value: read from an environment variable, never bound to test data.', lineageTitle: 'Test data', lineageNote: 'Each variable, the step producing it and the steps reusing it (at replay: one value per run).', producedL: 'produced at step', usedL: 'used by', strategyL: { GENERATE_AT_REPLAY: 'generated', TEMPLATE: 'template', RECORDED_LITERAL: 'recorded value', BUSINESS_LITERAL: 'fixed value', REFERENCE: 'reference', PRESERVE_EXISTING: 'kept' },
       reviewTitle: 'Actions and intents', reviewNote: 'The intent is an interpretation: correcting it changes neither the recorded action, nor its target, nor the replayed flow.',
       intentL: 'Intent', sourceL: 'Source', originalL: 'Original', initialConf: 'Initial confidence', correctionL: 'Correction', proposalL: 'Analysis proposal (not applied)',
       src: { INFERRED: 'SYSTEM', HUMAN_CORRECTED: '👤 HUMAN', HUMAN_CONFIRMED: '👤 HUMAN CONFIRMED' },
@@ -572,6 +585,8 @@ const SCRIPT = `
   };
   var KIND_ICON = { open: 'link', navigate: 'link', goto: 'link', click: 'cursor', fill: 'text', check: 'check', uncheck: 'check', choose: 'check', select: 'list', key: 'hash', drag: 'move', dragAndDrop: 'move', upload: 'clip', manual: 'hash', dialog: 'list' };
   var state = null, selected = null, choice = {}, dev = false, editing = false, tab = 'recording';
+  // Le brouillon de la source de chaque saisie (revue) : gardé entre deux rendus de la fenêtre.
+  var dataDraft = {};
   var filterText = '', onlyAttention = false, layout = null, editingIntent = null;
   var storedLayout = function () { try { return window.localStorage.getItem('qa-recorder-layout'); } catch (e) { return null; } };
   var storeLayout = function (v) { try { window.localStorage.setItem('qa-recorder-layout', v); } catch (e) { /* stockage indisponible */ } };
@@ -782,12 +797,67 @@ const SCRIPT = `
       var r = state.highlight.result;
       h += '<p class="found ' + (r === 'NOT_FOUND' ? 'warn' : 'ok') + '" role="status">' + esc(T.found[r]) + '</p>';
     }
+    h += dataBlock(step);
     h += '<h3>' + esc(T.linked) + '</h3>';
     h += step.network && step.network.length ? step.network.map(function (n) {
       return '<div class="netcard"><code>' + esc(n.api) + (n.status !== undefined ? ' · ' + n.status : '') + '</code><span class="sub">' + esc(n.operation + ' · ' + n.link) + '</span>' + n.criteria.map(function (c) { return '<span class="crit">' + esc(c) + '</span>'; }).join('') + (n.extras.length ? '<span class="sub">' + esc(n.extras.join(' · ')) + '</span>' : '') + '</div>';
     }).join('') : '<p class="sub">' + esc(T.linkedNone) + '</p>';
     h += '<details class="logs"><summary>' + esc(T.logs) + '</summary><span class="tech">' + esc(techLines(step)) + '</span></details>';
     setHtml(box, h);
+  }
+
+  /** LA SOURCE DE LA VALEUR d'une saisie (revue) : valeur enregistrée, générée, ou réutilisée d'une étape antérieure. */
+  function dataBlock(step) {
+    var d = step.data;
+    if (!d || state.phase !== 'REVIEW') return '';
+    var h = '<h3>' + esc(T.dataTitle) + '</h3>';
+    if (d.source === 'SENSITIVE') return h + '<p class="sub">' + esc(T.sensitiveData) + '</p>';
+    var draft = dataDraft[step.id];
+    if (!draft) draft = dataDraft[step.id] = {
+      source: d.source,
+      variable: d.source === 'GENERATED' ? (d.key || '') : '',
+      generator: d.generator || 'text',
+      reference: d.reference || (d.options[0] ? d.options[0].key : ''),
+      value: d.recordedValue || ''
+    };
+    var radio = function (value, label) {
+      return '<label class="choice"><input type="radio" name="dsrc-' + esc(step.id) + '" value="' + value + '" data-bind-field="source" data-step-id="' + esc(step.id) + '"' + (draft.source === value ? ' checked' : '') + '>' + esc(label) + '</label>';
+    };
+    h += '<div class="iedit databind" data-binding="' + esc(step.id) + '"><fieldset><legend class="sr-only">' + esc(T.dataTitle) + '</legend>';
+    h += radio('FIXED', T.srcFixed) + radio('GENERATED', T.srcGenerated) + radio('REFERENCE', T.srcReference) + '</fieldset>';
+    if (draft.source === 'FIXED') {
+      h += '<label class="dsub" for="dval-' + esc(step.id) + '">' + esc(T.fixedValueL) + '</label><input type="text" id="dval-' + esc(step.id) + '" data-bind-field="value" data-step-id="' + esc(step.id) + '" value="' + esc(draft.value) + '">';
+    } else if (draft.source === 'GENERATED') {
+      h += '<label class="dsub" for="dvar-' + esc(step.id) + '">' + esc(T.variableL) + '</label><input type="text" id="dvar-' + esc(step.id) + '" data-bind-field="variable" data-step-id="' + esc(step.id) + '" value="' + esc(draft.variable) + '" placeholder="' + esc(d.key || 'company.name') + '">';
+      h += '<label class="dsub" for="dgen-' + esc(step.id) + '">' + esc(T.generatorL) + '</label><select id="dgen-' + esc(step.id) + '" data-bind-field="generator" data-step-id="' + esc(step.id) + '">' + d.generators.map(function (g) { return '<option' + (g === draft.generator ? ' selected' : '') + '>' + esc(g) + '</option>'; }).join('') + '</select>';
+    } else {
+      h += '<span class="dsub">' + esc(T.reuseFrom) + '</span>';
+      h += d.options.length
+        ? '<div class="dref">' + d.options.map(function (o) {
+            return '<label class="choice"><input type="radio" name="dref-' + esc(step.id) + '" value="' + esc(o.key) + '" data-bind-field="reference" data-step-id="' + esc(step.id) + '"' + (draft.reference === o.key ? ' checked' : '') + '><span><code>' + esc(o.key) + '</code><small>' + esc(T.stepWord + ' ' + o.stepIndex + ' — ' + o.label) + '</small></span></label>';
+          }).join('') + '</div>'
+        : '<p class="dnote">' + esc(T.noData) + '</p>';
+    }
+    if (d.manual) h += '<p class="dnote manual">' + esc(T.manualL) + '</p>';
+    else if (d.suggestion) h += '<p class="dnote">🔗 ' + esc(T.suggestedL(d.suggestion)) + '</p>';
+    if (state.notice && state.notice.actionId === step.id) h += '<p class="error" role="alert">' + esc(state.notice.message) + '</p>';
+    var blocked = draft.source === 'REFERENCE' && !d.options.length;
+    h += '<div class="row">' + button(T.dataSave, { cmd: 'data-save', id: step.id, cls: 'primary', icon: 'check', disabled: blocked }) + '</div></div>';
+    return h;
+  }
+
+  /** LA LIGNÉE DES DONNÉES (revue) : chaque variable, qui la produit, qui la réutilise. */
+  function lineageCard(a) {
+    var lines = a.dataLineage;
+    if (!lines || !lines.length) return '';
+    var h = '<div class="card card-plain" id="data-lineage"><h2>' + esc(T.lineageTitle) + '</h2><p class="sub">' + esc(T.lineageNote) + '</p><ul class="lineage">';
+    lines.forEach(function (l) {
+      h += '<li><code>' + esc(l.key) + '</code> · ' + esc((T.strategyL[l.strategy] || l.strategy) + (l.generator ? ' (' + l.generator + ')' : ''));
+      if (l.producedBy) h += '<div class="sub">' + esc(T.producedL + ' ' + l.producedBy) + '</div>';
+      if (l.uses.length) h += '<ul class="uses">' + l.uses.map(function (u) { return '<li>' + esc(T.usedL + ' ' + T.stepWord.toLowerCase() + ' ' + u) + '</li>'; }).join('') + '</ul>';
+      h += '</li>';
+    });
+    return h + '</ul></div>';
   }
 
   function renderQuality() {
@@ -946,7 +1016,7 @@ const SCRIPT = `
     if (!a.available) { setHtml(el, h + '<p class="empty">' + esc(T.analysisWaiting) + '</p></div>'); return; }
     if (a.running) h += '<p class="notice running" role="status">' + esc(T.analysisRunning) + '</p>';
     // La suite (application, interprétation, HTTP) ouvre ses propres cartes : un simple conteneur ici.
-    h += '</div>' + intentsCard(a) + reviewCard(a) + '<div>';
+    h += '</div>' + intentsCard(a) + reviewCard(a) + lineageCard(a) + '<div>';
     if (a.application && a.application.tree.length) {
       var treeHtml = function (nodes) {
         return '<ul>' + nodes.map(function (n) {
@@ -1047,6 +1117,18 @@ const SCRIPT = `
     if (cmd === 'edit') { editing = !editing; render(); return; }
     if (cmd === 'intent-edit') { editingIntent = editingIntent === id ? null : id; render(); return; }
     if (cmd === 'intent-cancel') { editingIntent = null; render(); return; }
+    if (cmd === 'data-save') {
+      var draft = dataDraft[id];
+      if (!draft) return;
+      delete dataDraft[id];
+      send({
+        type: 'data-bind', id: id, source: draft.source,
+        variable: draft.source === 'REFERENCE' ? draft.reference : draft.variable,
+        generator: draft.generator,
+        value: draft.source === 'FIXED' ? draft.value : undefined
+      });
+      return;
+    }
     if (cmd === 'intent-apply') {
       var chosen = document.querySelector('input[name="intent-' + id + '"]:checked');
       var why = document.getElementById('reason-' + id);
@@ -1065,6 +1147,19 @@ const SCRIPT = `
   document.addEventListener('change', function (event) {
     var input = event.target;
     if (input instanceof HTMLInputElement && input.name.indexOf('cand-') === 0) choice[input.name.slice(5)] = Number(input.value);
+    var field = input && input.getAttribute ? input.getAttribute('data-bind-field') : null;
+    if (field) {
+      var draft = dataDraft[input.getAttribute('data-step-id')];
+      if (draft) { draft[field] = input.value; if (field === 'source') render(); }
+    }
+  });
+  // La saisie d'une variable ou d'une valeur fixe : gardée dans le brouillon (aucun rendu, le curseur reste).
+  document.addEventListener('input', function (event) {
+    var input = event.target;
+    var field = input && input.getAttribute ? input.getAttribute('data-bind-field') : null;
+    if (!field || field === 'source') return;
+    var draft = dataDraft[input.getAttribute('data-step-id')];
+    if (draft) draft[field] = input.value;
   });
 
   if (!DETACHED) document.querySelector('.tabs').addEventListener('keydown', function (event) {

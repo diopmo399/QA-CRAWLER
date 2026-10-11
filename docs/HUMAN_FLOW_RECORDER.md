@@ -543,6 +543,36 @@ qui en contiendrait une en clair (`password: …`) est **refusé** au chargement
 Reprendre un flow enregistré dans une mission : copier `test-data.yaml` avec lui (le chemin
 `testData:` est relatif au fichier qui le cite), ou le citer par `testData.include`.
 
+### Liaison explicite des données entre étapes
+
+La détection automatique (corrélation par valeur) n'est qu'une **proposition**. Dans la revue
+(après Stop), le détail d'une saisie montre le bloc **Source de la valeur**, avec trois choix :
+
+| Source                                          | Effet sur le flow et le jeu de données                                                                                               |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Valeur enregistrée** (FIXED)                  | `RECORDED_LITERAL` (ou `BUSINESS_LITERAL` si la valeur est modifiée)                                                                 |
+| **Générer une nouvelle valeur** (GENERATED)     | une variable nommée par l'humain (`objet.attribut`, ex. `company.name`), avec un générateur (`company`, `email`, `phone`, `unique`…) |
+| **Réutiliser une donnée existante** (REFERENCE) | la saisie cite la variable : `fill … value: { testData: company.name }`                                                              |
+
+- **Causalité** : seules les variables produites par une étape **antérieure** sont proposées
+  (« Étape N — libellé »). Rien avant : « Aucune donnée de test disponible. » Une référence
+  vers une variable inconnue ou postérieure est refusée.
+- **Référence par variable**, jamais par étape : l'étape d'origine n'est qu'une métadonnée
+  (lignée). Plusieurs étapes peuvent réutiliser la même variable ; un flow peut en avoir plusieurs.
+- **Le choix manuel l'emporte** sur la détection automatique (« Choix explicite ») ; l'intention
+  de l'étape n'est pas modifiée. Après une génération, les clics et effets suivants qui portaient
+  exactement la valeur enregistrée la citent (`${testData:company.name}`).
+- **Secrets** : une saisie lue depuis une variable d'environnement n'est jamais liée.
+- **Traçabilité** : chaque choix est une décision `bindings` de `human-review.json` (ajout seul) ;
+  `generated.flow.yaml`, `generated.feature` et `test-data.yaml` sont réécrits, le rejeu repasse
+  à « non validé ». L'onglet Analyse (carte « Données de test ») et le rapport (« Test data
+  lineage ») montrent pour chaque variable l'étape qui la produit et celles qui l'utilisent.
+- **Aucun LLM** : tout est déterministe.
+
+Au rejeu, une variable a **une seule valeur par run** : la valeur générée sert à la création,
+à la recherche et à l'ouverture du résultat ; la valeur de la démonstration ne sert plus qu'au
+diagnostic.
+
 ## Causalité des navigations (action → effet)
 
 **L'action humaine est la cause ; la navigation est d'abord un effet.** Un clic sur

@@ -1,4 +1,5 @@
 import { round } from '../business/signals.js';
+import type { TestDataBindingDecision } from '../test-data-binding.js';
 import {
   BUSINESS_ACTION_KINDS,
   type ActionIntent,
@@ -84,6 +85,8 @@ export interface HumanReviewLedger {
   version: 1;
   recordingSessionId?: string;
   decisions: HumanDecision[];
+  /** Les LIAISONS DE DONNÉES choisies par l'humain (source de la valeur d'une saisie), en ajout seul. */
+  bindings?: TestDataBindingDecision[];
 }
 
 export function emptyLedger(recordingSessionId?: string): HumanReviewLedger {

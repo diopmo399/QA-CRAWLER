@@ -21,12 +21,18 @@ export interface PanelCommand {
     | 'attach'
     | 'intent-correct'
     | 'intent-confirm'
-    | 'intent-reset';
+    | 'intent-reset'
+    | 'data-bind';
   id?: string;
   candidate?: number;
   /** La revue d'une intention : l'intention choisie et sa justification (facultative). */
   intent?: string;
   reason?: string;
+  /** La liaison de données d'une saisie : sa source, sa variable, son générateur, sa valeur fixe. */
+  source?: 'FIXED' | 'GENERATED' | 'REFERENCE';
+  variable?: string;
+  generator?: string;
+  value?: string;
 }
 
 const COMMANDS = new Set<PanelCommand['type']>([
@@ -47,6 +53,7 @@ const COMMANDS = new Set<PanelCommand['type']>([
   'intent-correct',
   'intent-confirm',
   'intent-reset',
+  'data-bind',
 ]);
 
 /**
@@ -128,5 +135,13 @@ function commandOf(payload: unknown): PanelCommand | undefined {
       : {}),
     ...(typeof raw.intent === 'string' && /^[A-Z_]{2,40}$/.test(raw.intent) ? { intent: raw.intent } : {}),
     ...(typeof raw.reason === 'string' ? { reason: raw.reason.slice(0, 500) } : {}),
+    ...(raw.source === 'FIXED' || raw.source === 'GENERATED' || raw.source === 'REFERENCE'
+      ? { source: raw.source }
+      : {}),
+    ...(typeof raw.variable === 'string' && raw.variable.length <= 80 ? { variable: raw.variable } : {}),
+    ...(typeof raw.generator === 'string' && /^[A-Za-z]{1,30}$/.test(raw.generator)
+      ? { generator: raw.generator }
+      : {}),
+    ...(typeof raw.value === 'string' ? { value: raw.value.slice(0, 500) } : {}),
   };
 }
