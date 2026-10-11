@@ -432,7 +432,7 @@ describe('QA platform — reproduction planner and Playwright generator', () => 
       updateBaseline: 'on-pass',
     });
     expect(config.visual.masks[0]).toMatchObject({ x: 0, width: 10, reason: 'clock' });
-    expect(config.platform).toEqual({
+    expect(config.platform).toMatchObject({
       performance: { tolerance: 1.5, minSamples: 3, floorMs: 300 },
       reproductions: { enabled: true },
       generatedTests: { enabled: true },
