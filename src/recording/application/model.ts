@@ -23,7 +23,10 @@ export type InterpretationStatus = 'OBSERVED' | 'DEDUCED' | 'CONFIRMED' | 'UNCER
 
 export interface InteractionEvidence {
   id: string;
-  source: 'DOM' | 'NETWORK' | 'NAVIGATION' | 'USER_ACTION' | 'FRAME' | 'ENTITY_EVIDENCE';
+  /** HUMAN : une décision de la revue (correction, confirmation, réinitialisation d'une intention). */
+  source: 'DOM' | 'NETWORK' | 'NAVIGATION' | 'USER_ACTION' | 'FRAME' | 'ENTITY_EVIDENCE' | 'HUMAN';
+  /** HUMAN : INTENT_CORRECTION, INTENT_CONFIRMATION ou INTENT_RESET. */
+  kind?: string;
   description: string;
   actionIds: string[];
   rawEventIds: string[];
@@ -173,19 +176,24 @@ export interface Relationship {
   analyzer: 'DETERMINISTIC' | 'AI_PROPOSAL';
 }
 
-export type BusinessActionKind =
-  | 'SELECT_TASK'
-  | 'SWITCH_CONTEXT'
-  | 'NAVIGATE'
-  | 'CREATE'
-  | 'SEARCH'
-  | 'FILTER'
-  | 'OPEN'
-  | 'RETRIEVE'
-  | 'UPDATE'
-  | 'SAVE'
-  | 'DELETE'
-  | 'SUBMIT';
+/** LA liste des intentions métier d'une action (la seule : la revue humaine choisit parmi elles). */
+export const BUSINESS_ACTION_KINDS = [
+  'SELECT_TASK',
+  'SWITCH_CONTEXT',
+  'NAVIGATE',
+  'CREATE',
+  'SEARCH',
+  'FILTER',
+  'OPEN',
+  'RETRIEVE',
+  'UPDATE',
+  'SAVE',
+  'DELETE',
+  'SUBMIT',
+] as const;
+export type BusinessActionKind = (typeof BUSINESS_ACTION_KINDS)[number];
+/** Une intention d'action : une intention métier, ou UNKNOWN (aucune interprétation sûre). */
+export type ActionIntent = BusinessActionKind | 'UNKNOWN';
 
 export interface BusinessAction {
   id: string;
@@ -263,7 +271,34 @@ export interface ActionView {
   validation: 'VALIDATED' | 'AMBIGUOUS' | 'FAILED' | 'UNVERIFIED';
   /** Le statut détaillé du validateur (VALIDATED_PRE_ACTION, NOT_FOUND…). */
   validationStatus?: string;
-  interpretation: (BusinessActionKind | 'UNKNOWN')[];
+  /** L'interprétation AUTOMATIQUE (jamais modifiée par la revue humaine). */
+  interpretation: ActionIntent[];
+  /** La confiance de l'interprétation automatique (la plus haute des actions métier qui l'expliquent). */
+  confidence?: number;
+  /**
+   * LA REVUE HUMAINE (human-review.json) appliquée à l'interprétation : l'intention FINALE, sa
+   * provenance et l'historique. Absente tant qu'aucune décision n'existe (statut INFERRED implicite).
+   */
+  review?: ActionReview;
+}
+
+/**
+ * L'interprétation revue : la décision humaine ne remplace jamais l'interprétation automatique, elle
+ * s'y ajoute. La confiance reste celle de l'analyse (la provenance n'est pas une confiance).
+ */
+export interface ActionReview {
+  status: 'INFERRED' | 'HUMAN_CORRECTED' | 'HUMAN_CONFIRMED';
+  source: 'SYSTEM' | 'HUMAN';
+  finalIntent: ActionIntent;
+  /** L'interprétation automatique au moment de la première décision, et sa confiance. */
+  originalIntent: ActionIntent[];
+  originalConfidence?: number;
+  /** La décision en vigueur (CORRECT ou CONFIRM) : intention, justification, moment. */
+  correction?: { decisionId: string; intent: ActionIntent; reason?: string; at: string };
+  /** Une nouvelle analyse (règles ou IA) qui dit autre chose qu'une décision humaine : une PROPOSITION. */
+  proposal?: { intent: ActionIntent[]; source: 'SYSTEM' | 'AI_PROPOSAL' };
+  /** Tout ce qui s'est passé, dans l'ordre : jamais réécrit. */
+  history: { at: string; source: 'SYSTEM' | 'HUMAN' | 'RESET'; intent: ActionIntent[]; reason?: string }[];
 }
 
 export interface ApplicationInteractionModel {
@@ -294,7 +329,15 @@ export interface ApplicationInteractionModel {
     relationships: number;
     uncertain: number;
     technical: number;
-    actions: { recorded: number; validated: number; interpreted: number; uninterpreted: number };
+    actions: {
+      recorded: number;
+      validated: number;
+      interpreted: number;
+      uninterpreted: number;
+      /** Les intentions corrigées / confirmées par la revue humaine. */
+      humanCorrected?: number;
+      humanConfirmed?: number;
+    };
   };
 }
 

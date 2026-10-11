@@ -1,3 +1,4 @@
+import type { HumanReviewLedger } from './application/human-review.js';
 import { analyzeRecording, type RecordingAnalysis } from './analysis/recording-analysis.js';
 import type { NetworkObservation } from '../functional/model.js';
 import { buildApplicationModel } from './application/application-model.js';
@@ -49,6 +50,11 @@ import {
 export const TEST_DATA_FILE = 'test-data.yaml';
 
 export interface RecordingResult {
+  /**
+   * LA REVUE HUMAINE (human-review.json) : les décisions sur les interprétations, en ajout seul ;
+   * appliquées au modèle de l'application à chaque écriture (application/human-review.ts).
+   */
+  humanReview?: HumanReviewLedger;
   /** ACTION CORRELATION (absente si désactivée) et contrôle de préservation. */
   correlation?: CorrelationResult;
   preservation: PreservationReport;

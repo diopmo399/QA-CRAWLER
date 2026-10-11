@@ -38,6 +38,34 @@ export interface RememberedFieldMapping {
 }
 
 /**
+ * UNE DÉCISION HUMAINE SUR L'INTENTION D'UNE ACTION, gardée AVEC SON CONTEXTE (écran, élément,
+ * sélecteur, étape métier) : une preuve réutilisable, jamais une règle globale (« tous les boutons
+ * Rechercher = SEARCH » n'existe pas : la clé est l'écran ET l'élément).
+ */
+export interface RememberedIntentDecision {
+  /** écran | rôle | nom accessible | sélecteur. */
+  key: string;
+  context: {
+    page?: string;
+    element?: string;
+    role?: string;
+    label?: string;
+    selector?: string;
+    businessStep?: string;
+  };
+  intent: string;
+  status: 'HUMAN_CORRECTED' | 'HUMAN_CONFIRMED';
+  /** L'interprétation automatique qu'elle a corrigée ou confirmée. */
+  systemIntent: string[];
+  reason?: string;
+  source: 'HUMAN';
+  scope: 'CONTEXTUAL';
+  recordingSessionId: string;
+  confirmations: number;
+  lastSeenAt: string;
+}
+
+/**
  * FUNCTIONAL KNOWLEDGE : transitions métier, workflows, invariants, chemins d'erreur et
  * objectifs, gardés d'un run à l'autre (knowledge/functional/, un JSON par application
  * et environnement), à côté de la connaissance des règles.
@@ -56,6 +84,7 @@ export class FunctionalKnowledgeStore {
    * hypothèse, jamais une valeur saisie. Une connaissance d'une application n'est pas une règle universelle.
    */
   private mappings: RememberedFieldMapping[] = [];
+  private decisions: RememberedIntentDecision[] = [];
 
   constructor(
     private readonly directory: string,
@@ -77,6 +106,7 @@ export class FunctionalKnowledgeStore {
       };
       this.remembered = new Map((parsed.entries ?? []).map((entry) => [entry.id, entry]));
       this.mappings = (parsed as { fieldMappings?: RememberedFieldMapping[] }).fieldMappings ?? [];
+      this.decisions = (parsed as { intentDecisions?: RememberedIntentDecision[] }).intentDecisions ?? [];
       this.learnedKnowledge = {
         workflows: parsed.learned?.workflows ?? [],
         states: parsed.learned?.states ?? [],
@@ -136,6 +166,36 @@ export class FunctionalKnowledgeStore {
     }
   }
 
+  /**
+   * Les décisions humaines sur les intentions, PAR CONTEXTE : une décision remplace la précédente du
+   * même contexte (même écran, même élément) ; une réinitialisation la retire.
+   */
+  rememberIntentDecisions(
+    decisions: readonly (Omit<RememberedIntentDecision, 'confirmations' | 'lastSeenAt'> & {
+      reset?: boolean;
+    })[],
+  ): void {
+    const now = new Date().toISOString();
+    for (const { reset, ...decision } of decisions) {
+      const previous = this.decisions.find((entry) => entry.key === decision.key);
+      const others = this.decisions.filter((entry) => entry.key !== decision.key);
+      if (reset) {
+        this.decisions = others;
+        continue;
+      }
+      const same = previous?.intent === decision.intent;
+      this.decisions = [
+        ...others,
+        { ...decision, confirmations: (same ? previous.confirmations : 0) + 1, lastSeenAt: now },
+      ].slice(-500);
+    }
+  }
+
+  /** Les décisions humaines gardées pour cette application (avec leur contexte). */
+  intentDecisions(): readonly RememberedIntentDecision[] {
+    return this.decisions;
+  }
+
   /** Les correspondances déjà validées pour cette application. */
   fieldMappings(): readonly RememberedFieldMapping[] {
     return this.mappings;
@@ -190,7 +250,7 @@ export class FunctionalKnowledgeStore {
     await mkdir(this.directory, { recursive: true });
     await writeFileAtomic(
       this.file(),
-      `${JSON.stringify({ application: this.identity.application, entries: [...this.remembered.values()].slice(-3000), learned: this.learnedKnowledge, fieldMappings: this.mappings }, null, 2)}\n`,
+      `${JSON.stringify({ application: this.identity.application, entries: [...this.remembered.values()].slice(-3000), learned: this.learnedKnowledge, fieldMappings: this.mappings, intentDecisions: this.decisions }, null, 2)}\n`,
     );
   }
 }

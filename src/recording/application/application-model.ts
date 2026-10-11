@@ -1114,9 +1114,8 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
   const actionViews: ActionView[] = actions.map((action) => {
     const raw = rawById.get(action.rawEventIds.at(-1) ?? '');
     const status = raw?.targetValidation?.status;
-    const kinds = [
-      ...new Set(ordered.filter((entry) => entry.actionIds.includes(action.id)).map((entry) => entry.kind)),
-    ];
+    const explaining = ordered.filter((entry) => entry.actionIds.includes(action.id));
+    const kinds = [...new Set(explaining.map((entry) => entry.kind))];
     return {
       actionId: action.id,
       type: action.type,
@@ -1133,6 +1132,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
               : 'FAILED',
       ...(status ? { validationStatus: status } : {}),
       interpretation: kinds.length ? kinds : ['UNKNOWN'],
+      ...(explaining.length ? { confidence: Math.max(...explaining.map((entry) => entry.confidence)) } : {}),
     };
   });
 

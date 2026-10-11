@@ -1279,6 +1279,10 @@ confirmé, incertain), sa confiance, ses preuves et les actions Playwright d'ori
 [APPLICATION_INTERACTION_MODEL.md](APPLICATION_INTERACTION_MODEL.md). Désactivable avec
 `recording.business.application: false`.
 
+Chaque intention d'action peut être **corrigée, confirmée ou réinitialisée** par l'humain depuis
+l'onglet Analyse (registre `human-review.json`, jamais le flow rejoué) :
+[HUMAN_INTENT_REVIEW.md](HUMAN_INTENT_REVIEW.md).
+
 ## Progression après l'arrêt
 
 Après **Stop**, le système continue de travailler avant de rendre la main. Sans retour, ce temps ressemblait à un blocage. Il est maintenant **montré** à deux endroits.

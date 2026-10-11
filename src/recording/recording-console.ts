@@ -1,3 +1,4 @@
+import { REVIEWABLE_INTENTS } from './application/human-review.js';
 import type { RecordingAnalysis } from './analysis/recording-analysis.js';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,6 +10,7 @@ import type { ProgressUpdate } from '../progress/progress.js';
 import type { FlowAuditReport } from './flow-audit.js';
 import type { HumanFlowRecorder } from './human-flow-recorder.js';
 import {
+  describeFlowStep,
   summaryOf,
   reviewSteps,
   liveStep,
@@ -30,6 +32,13 @@ export interface ReviewActions {
   replay: (onStep: (executed: number, total: number) => void) => Promise<PanelReplay>;
   remove: (stepId: string) => Promise<boolean>;
   save: () => Promise<{ directory: string; files: string[] }>;
+  /** La revue humaine d'une intention : corriger, confirmer, réinitialiser (jamais l'action elle-même). */
+  reviewIntent?: (input: {
+    actionId: string;
+    type: 'CORRECT' | 'CONFIRM' | 'RESET';
+    intent?: string;
+    reason?: string;
+  }) => Promise<{ ok: true } | { error: string }>;
 }
 
 /**
@@ -45,6 +54,9 @@ export class RecordingConsole {
   private replay: PanelReplay | undefined;
   private saved: PanelState['saved'];
   private analysis: PanelAnalysis = { available: false, intents: [], findings: [], aiCandidates: 0 };
+  /** Les entrées de la dernière analyse affichée : la revue d'une intention la redessine. */
+  private analysisInputs:
+    { flowAudit?: FlowAuditReport; intelligence?: RecordingIntelligence; running: boolean } | undefined;
   private endedAt: number | undefined;
   private result: RecordingResult | undefined;
   private directory: string | undefined;
@@ -198,6 +210,11 @@ export class RecordingConsole {
     intelligence?: RecordingIntelligence,
     running = false,
   ): void {
+    this.analysisInputs = {
+      ...(flowAudit ? { flowAudit } : {}),
+      ...(intelligence ? { intelligence } : {}),
+      running,
+    };
     const intent = result.flow.intent;
     this.analysis = {
       available: true,
@@ -217,6 +234,7 @@ export class RecordingConsole {
           ]
         : [],
       ...(result.http ? { http: httpPanelOf(result.http.consolidated, result) } : {}),
+      ...(result.application ? { intentReview: intentReviewOf(result, this.language) } : {}),
       ...(result.http && searchesOf(result.http.consolidated, result).length
         ? { searchIntents: searchesOf(result.http.consolidated, result) }
         : {}),
@@ -290,6 +308,36 @@ export class RecordingConsole {
             }
           } else if (command.type === 'save') {
             this.saved = await input.actions.save();
+          } else if (
+            (command.type === 'intent-correct' ||
+              command.type === 'intent-confirm' ||
+              command.type === 'intent-reset') &&
+            command.id &&
+            input.actions.reviewIntent
+          ) {
+            const outcome = await input.actions.reviewIntent({
+              actionId: command.id,
+              type:
+                command.type === 'intent-correct'
+                  ? 'CORRECT'
+                  : command.type === 'intent-confirm'
+                    ? 'CONFIRM'
+                    : 'RESET',
+              ...(command.intent ? { intent: command.intent } : {}),
+              ...(command.reason ? { reason: command.reason } : {}),
+            });
+            this.notice =
+              'error' in outcome
+                ? { actionId: command.id, kind: 'error', message: outcome.error }
+                : undefined;
+            // L'analyse se relit dans le modèle revu (l'intention finale, sa provenance, l'historique).
+            if (this.result && this.analysisInputs)
+              this.setAnalysis(
+                this.result,
+                this.analysisInputs.flowAudit,
+                this.analysisInputs.intelligence,
+                this.analysisInputs.running,
+              );
           }
         } finally {
           this.busy = false;
@@ -857,6 +905,44 @@ function applicationTreeOf(result: RecordingResult): PanelTreeNode[] {
 }
 
 /** L'analyse HTTP consolidée, pour la fenêtre : ce qui est validé n'est jamais mélangé aux hypothèses. */
+/** La revue des intentions : chaque action du modèle, son intention finale et sa provenance. */
+function intentReviewOf(
+  result: RecordingResult,
+  language: 'fr' | 'en',
+): NonNullable<PanelAnalysis['intentReview']> {
+  // L'action telle qu'un humain la dit (« Cliquer sur "Search" »), décrite depuis l'étape du flow.
+  const labels = new Map(result.flow.steps.map((step) => [step.id, describeFlowStep(step.step, language)]));
+  const time = (at: string): string => (at ? new Date(at).toISOString().slice(11, 16) : '—');
+  return {
+    choices: [...REVIEWABLE_INTENTS],
+    rows: (result.application?.actions ?? []).map((view) => {
+      const review = view.review;
+      const human = review?.source === 'HUMAN' ? review : undefined;
+      return {
+        actionId: view.actionId,
+        kind: view.type,
+        label:
+          view.stepIds.map((id) => labels.get(id)).find((label) => label !== undefined) ??
+          `${view.type}${view.label ? ` "${view.label}"` : ''}`,
+        intent: human ? human.finalIntent : view.interpretation.join(' + '),
+        status: review?.status ?? 'INFERRED',
+        source: human ? 'HUMAN' : 'SYSTEM',
+        ...(view.confidence !== undefined ? { confidence: view.confidence } : {}),
+        ...(human ? { original: human.originalIntent.join(' + ') } : {}),
+        ...(human?.originalConfidence !== undefined ? { originalConfidence: human.originalConfidence } : {}),
+        ...(human?.correction?.reason ? { reason: human.correction.reason } : {}),
+        ...(review?.proposal
+          ? { proposal: `${review.proposal.intent.join(' + ')} (${review.proposal.source})` }
+          : {}),
+        history: (review?.history ?? []).map(
+          (entry) =>
+            `${time(entry.at)} — ${entry.source} → ${entry.intent.join(' + ')}${entry.reason ? ` « ${entry.reason} »` : ''}`,
+        ),
+      };
+    }),
+  };
+}
+
 /** La dernière recherche reconnue en direct, en une ligne (jamais une valeur saisie). */
 function liveSearchOf(analysis: RecordingAnalysis): string | undefined {
   const search = analysis.business.filter((entry) => entry.operation === 'SEARCH').at(-1);
