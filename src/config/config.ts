@@ -1180,6 +1180,42 @@ const platformSchema = z
       .object({ enabled: z.boolean().default(false) })
       .strict()
       .default({}),
+    /**
+     * Le conseiller d'ambiguïté (ai.enabled, mode ASSIST/HYBRID) : consulté seulement pour les anomalies
+     * qu'aucune règle n'explique ; un avis attaché à l'anomalie, jamais une décision.
+     */
+    advisor: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxCalls: z.number().int().min(0).max(50).default(5),
+        minConfidence: z.number().min(0).max(1).default(0.5),
+        timeoutMs: z.number().int().positive().default(60_000),
+      })
+      .strict()
+      .default({}),
+    /** La mémoire des flows (persistence.enabled) : une ligne par élément du run, par sorte. */
+    flowMemory: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
+    /**
+     * Le commentaire de pull request (GitHub) : le résultat structuré, régénéré à chaque run. Le jeton
+     * vient de tokenEnv ; owner/repo/number peuvent venir de GITHUB_REPOSITORY et QA_PR_NUMBER.
+     */
+    pullRequest: z
+      .object({
+        enabled: z.boolean().default(false),
+        provider: z.enum(['github']).default('github'),
+        owner: nonEmpty.optional(),
+        repo: nonEmpty.optional(),
+        number: z.number().int().positive().optional(),
+        tokenEnv: nonEmpty.default('GITHUB_TOKEN'),
+        apiBaseUrl: z.string().url().optional(),
+        /** Lien vers le rapport publié (artefact de CI), ajouté au commentaire. */
+        reportUrl: z.string().url().optional(),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 

@@ -168,6 +168,42 @@ export const MIGRATIONS: readonly Migration[] = [
       ),
     ],
   },
+  {
+    // QA PLATFORM — FLOW MEMORY : une ligne par (application, sorte, clé) — états, transitions,
+    // actions, anomalies, récupérations, baselines, acteurs, runs, reproductions, visuel, performance.
+    id: '005_add_flow_memory',
+    statements: (d) => [
+      d.createTableIfMissing(
+        'flow_memory',
+        `id ${d.types.id} NOT NULL PRIMARY KEY,
+        application_id ${d.types.signature} NOT NULL,
+        kind ${d.types.name} NOT NULL,
+        record_key ${d.types.signature} NOT NULL,
+        status ${d.types.name} NOT NULL,
+        first_seen_at ${d.types.timestamp} NOT NULL,
+        last_seen_at ${d.types.timestamp} NOT NULL,
+        record_json ${d.types.json} NOT NULL`,
+      ),
+      d.createIndexIfMissing(
+        'ux_flow_memory_key',
+        'flow_memory',
+        ['application_id', 'kind', 'record_key'],
+        true,
+      ),
+      d.createIndexIfMissing(
+        'ix_flow_memory_recent',
+        'flow_memory',
+        ['application_id', 'kind', 'last_seen_at'],
+        false,
+      ),
+      d.createIndexIfMissing(
+        'ix_flow_memory_status',
+        'flow_memory',
+        ['application_id', 'kind', 'status'],
+        false,
+      ),
+    ],
+  },
 ];
 
 export interface MigrationResult {

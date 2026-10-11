@@ -1,0 +1,130 @@
+import { stringify } from 'yaml';
+
+/**
+ * QA JOB MANIFEST (Kubernetes / OpenShift) : un Job (ou un CronJob) qui lance une mission à partir
+ * de l'image du crawler, la mission dans une ConfigMap, les identifiants par RÉFÉRENCE à des
+ * Secrets (secretKeyRef : aucune valeur n'apparaît dans le manifeste), les rapports sur un volume.
+ * Les acteurs en parallèle : un Job indexé (completions = parallelism = nombre d'acteurs), chaque
+ * pod recevant son index dans QA_JOB_INDEX.
+ */
+export interface SecretReference {
+  /** Nom de la variable d'environnement vue par le crawler (QA_PASSWORD). */
+  env: string;
+  secretName: string;
+  key: string;
+}
+
+export interface QaJobManifestOptions {
+  name: string;
+  namespace?: string;
+  image: string;
+  /** ConfigMap qui contient le fichier de mission, et le nom de ce fichier. */
+  mission: { configMap: string; file: string };
+  command?: 'learn' | 'verify' | 'explore';
+  baseUrl?: string;
+  secrets: SecretReference[];
+  /** Variables non secrètes (QA_ENVIRONMENT…). */
+  env?: Record<string, string>;
+  resources?: { requests?: { cpu: string; memory: string }; limits?: { cpu: string; memory: string } };
+  /** Où écrire reports/ et screenshots/ : une PVC, sinon un emptyDir. */
+  reports?: { claimName?: string };
+  /** CronJob au lieu d'un Job. */
+  schedule?: string;
+  /** Pods en parallèle (un par acteur, par exemple). */
+  parallelism?: number;
+  serviceAccount?: string;
+  extraArgs?: string[];
+  backoffLimit?: number;
+  activeDeadlineSeconds?: number;
+}
+
+const FORBIDDEN_VALUE = /password|secret|token|bearer/i;
+
+/** Le manifeste YAML. Lève si une variable ressemble à un secret en clair. */
+export function renderQaJobManifest(options: QaJobManifestOptions): string {
+  for (const [name, value] of Object.entries(options.env ?? {}))
+    if (FORBIDDEN_VALUE.test(name) || FORBIDDEN_VALUE.test(value))
+      throw new Error(
+        `env.${name} looks like a secret: reference a Secret (secrets[]) instead of a plain value`,
+      );
+  const reportsVolume = options.reports?.claimName
+    ? { name: 'reports', persistentVolumeClaim: { claimName: options.reports.claimName } }
+    : { name: 'reports', emptyDir: {} };
+  const container = {
+    name: 'qa-crawler',
+    image: options.image,
+    args: [
+      options.command ?? 'explore',
+      `/missions/${options.mission.file}`,
+      '--reports-dir',
+      '/data/reports',
+      '--screenshots-dir',
+      '/data/screenshots',
+      ...(options.extraArgs ?? []),
+    ],
+    env: [
+      ...(options.baseUrl ? [{ name: 'QA_BASE_URL', value: options.baseUrl }] : []),
+      ...Object.entries(options.env ?? {}).map(([name, value]) => ({ name, value })),
+      ...options.secrets.map((secret) => ({
+        name: secret.env,
+        valueFrom: { secretKeyRef: { name: secret.secretName, key: secret.key } },
+      })),
+      ...((options.parallelism ?? 1) > 1
+        ? [
+            {
+              name: 'QA_JOB_INDEX',
+              valueFrom: {
+                fieldRef: { fieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']" },
+              },
+            },
+          ]
+        : []),
+    ],
+    resources: options.resources ?? {
+      requests: { cpu: '500m', memory: '1Gi' },
+      limits: { cpu: '2', memory: '2Gi' },
+    },
+    volumeMounts: [
+      { name: 'missions', mountPath: '/missions', readOnly: true },
+      { name: 'reports', mountPath: '/data' },
+      { name: 'shm', mountPath: '/dev/shm' },
+    ],
+    securityContext: { allowPrivilegeEscalation: false, runAsNonRoot: true, capabilities: { drop: ['ALL'] } },
+  };
+  const podTemplate = {
+    spec: {
+      restartPolicy: 'Never',
+      ...(options.serviceAccount ? { serviceAccountName: options.serviceAccount } : {}),
+      containers: [container],
+      volumes: [
+        { name: 'missions', configMap: { name: options.mission.configMap } },
+        reportsVolume,
+        { name: 'shm', emptyDir: { medium: 'Memory' } },
+      ],
+    },
+  };
+  const jobSpec = {
+    backoffLimit: options.backoffLimit ?? 0,
+    ...(options.activeDeadlineSeconds !== undefined
+      ? { activeDeadlineSeconds: options.activeDeadlineSeconds }
+      : {}),
+    ...((options.parallelism ?? 1) > 1
+      ? { parallelism: options.parallelism, completions: options.parallelism, completionMode: 'Indexed' }
+      : {}),
+    template: podTemplate,
+  };
+  const metadata = {
+    name: options.name,
+    ...(options.namespace ? { namespace: options.namespace } : {}),
+    labels: { 'app.kubernetes.io/name': 'qa-crawler', 'app.kubernetes.io/component': 'qa-job' },
+  };
+  const manifest = options.schedule
+    ? {
+        apiVersion: 'batch/v1',
+        kind: 'CronJob',
+        metadata,
+        spec: { schedule: options.schedule, concurrencyPolicy: 'Forbid', jobTemplate: { spec: jobSpec } },
+      }
+    : { apiVersion: 'batch/v1', kind: 'Job', metadata, spec: jobSpec };
+  return `# Generated by QA-CRAWLER. Secrets are referenced (secretKeyRef), never inlined.\n${stringify(manifest, { lineWidth: 0 })}`;
+}

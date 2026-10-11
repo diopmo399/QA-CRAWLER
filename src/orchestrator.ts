@@ -33,10 +33,17 @@ import {
 } from './platform/run-workflow-analysis.js';
 import { analyzePerformance, currentMetrics } from './platform/performance-analysis.js';
 import { analyzeRegression } from './platform/regression-analysis.js';
-import { analyzeVisual } from './platform/visual-analysis.js';
-import { planReproductions } from './platform/reproduction-planner.js';
+import { analyzeVisual, type VisualAnalysis } from './platform/visual-analysis.js';
+import { planReproductions, type ReproductionAnalysis } from './platform/reproduction-planner.js';
 import { generatePlaywrightTests } from './platform/playwright-test-generator.js';
 import { PixelVisualComparator } from './visual/pixel-visual-comparator.js';
+import { rememberRun } from './platform/flow-memory.js';
+import { adviseOnAmbiguities } from './platform/ambiguity-advisor.js';
+import { GitHubPullRequestReporter, renderPullRequestComment } from './platform/pull-request-reporter.js';
+import { createCopilotProvider, secretValuesOf } from './ai/factory.js';
+import { DeterministicIntelligenceProvider } from './ai/providers/deterministic-provider.js';
+import { IntelligenceContextSanitizer } from './ai/sanitizer.js';
+import type { IntelligenceProvider } from './ai/provider.js';
 import { analyzeActors } from './platform/actor-analysis.js';
 import { correlateUiAndApi } from './platform/ui-api-correlation.js';
 import {
@@ -383,7 +390,6 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     },
     log: engineLog,
   });
-  await persistence.provider?.close().catch(() => undefined);
 
   progress.start(RUN_PHASES.knowledge);
   // QA PLATFORM — ACTEURS : profils, différences classées, écart de comportement avec le run précédent.
@@ -746,7 +752,95 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     performanceRegressions: performanceAnalysis.summary.PERFORMANCE_REGRESSION,
     ...regressionAnalysis.signals,
   });
+  // QA PLATFORM — CONSEILLER D'AMBIGUÏTÉ : le LLM consulté seulement pour ce qu'aucune règle n'explique ; un avis, jamais une décision.
+  const advisorEnabled = config.platform.advisor.enabled && effectiveMode(config.ai) !== 'OFF';
+  const advisorProvider: IntelligenceProvider | undefined = advisorEnabled
+    ? (options.intelligenceProvider ??
+      (config.ai.provider === 'deterministic'
+        ? new DeterministicIntelligenceProvider()
+        : createCopilotProvider(config.ai, {
+            env,
+            sanitize: (value) =>
+              new IntelligenceContextSanitizer({ secretValues: secretValuesOf(env) }).sanitizeValue(value),
+          })))
+    : undefined;
+  const advisor = await adviseOnAmbiguities(workflowAnalysis.anomalies, advisorProvider, {
+    enabled: advisorEnabled,
+    maxCalls: config.platform.advisor.maxCalls,
+    minConfidence: config.platform.advisor.minConfidence,
+    timeoutMs: config.platform.advisor.timeoutMs,
+    secretValues: secretValuesOf(env),
+  });
+  if (advisorProvider && advisorProvider !== options.intelligenceProvider)
+    await advisorProvider.close?.().catch(() => undefined);
+  attachExtension(workflowAnalysis, 'advisor', 'advisor.json', advisor);
+  // QA PLATFORM — FLOW MEMORY : ce que la plateforme retient du run, par sorte, dans la persistance.
+  if (persistence.provider && config.platform.flowMemory.enabled) {
+    const visualAnalysis = workflowAnalysis.extensionFiles?.visualAnalysis?.data as
+      VisualAnalysis | undefined;
+    const reproductions = workflowAnalysis.extensionFiles?.reproductions?.data as
+      ReproductionAnalysis | undefined;
+    const remembered = await rememberRun(persistence.provider.memory, {
+      applicationId,
+      result,
+      report: workflowAnalysis,
+      ...(actorAnalysis ? { actors: actorAnalysis } : {}),
+      ...(reproductions ? { reproductions } : {}),
+      ...(visualAnalysis ? { visual: visualAnalysis } : {}),
+    }).catch((error: unknown) => {
+      engineLog.log(
+        'WARN',
+        'FLOW_EVOLVED',
+        `flow memory not updated: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return 0;
+    });
+    workflowAnalysis.artifacts.flowMemory = `${String(remembered)} record(s) in ${persistence.provider.description}`;
+  }
+  await persistence.provider?.close().catch(() => undefined);
   const written = await writeReports(result, config.output, memory.location, config.report.language);
+  // QA PLATFORM — PULL REQUEST : le résultat structuré publié en commentaire (jeton par variable d'environnement, jamais journalisé).
+  if (config.platform.pullRequest.enabled && written.workflowAnalysis) {
+    const settings = config.platform.pullRequest;
+    const [envOwner, envRepo] = (env.GITHUB_REPOSITORY ?? '').split('/');
+    const owner = settings.owner ?? envOwner;
+    const repo = settings.repo ?? envRepo;
+    const number = settings.number ?? Number(env.QA_PR_NUMBER);
+    const comment = renderPullRequestComment({
+      result: written,
+      report: written.workflowAnalysis,
+      regression: regressionAnalysis,
+      performance: performanceAnalysis,
+      ...(actorAnalysis ? { actors: actorAnalysis } : {}),
+      ...(settings.reportUrl ? { reportUrl: settings.reportUrl } : {}),
+    });
+    const publication =
+      owner && repo && Number.isInteger(number) && number > 0
+        ? await new GitHubPullRequestReporter({
+            owner,
+            repo,
+            pullNumber: number,
+            tokenEnv: settings.tokenEnv,
+            env,
+            ...(settings.apiBaseUrl ? { apiBaseUrl: settings.apiBaseUrl } : {}),
+          }).publish(comment)
+        : {
+            posted: false,
+            action: 'skipped' as const,
+            reason:
+              'platform.pullRequest needs owner, repo and number (or GITHUB_REPOSITORY and QA_PR_NUMBER)',
+          };
+    const file = path.join(config.output.reportsDir, 'pull-request-comment.md');
+    await writeFile(file, `${comment}\n`, 'utf8');
+    written.workflowAnalysis.artifacts.pullRequestComment = file;
+    written.workflowAnalysis.artifacts.pullRequest = publication.posted
+      ? (publication.url ?? 'posted')
+      : `not posted: ${publication.reason ?? ''}`;
+    if (!publication.posted)
+      (options.onWarning ?? ((message: string) => process.stderr.write(`WARNING: ${message}\n`)))(
+        `pull request comment not posted: ${publication.reason ?? ''}`,
+      );
+  }
   progress.done(`${String(written.flows.length)} flow(s), ${String(written.issues.length)} issue(s)`);
   const threshold = config.report.failOnSeverity;
   const failingIssues =

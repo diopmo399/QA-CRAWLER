@@ -1,5 +1,7 @@
 import {
+  validateFlowMemoryRecord,
   validateKeyedRecord,
+  type FlowMemoryRecord,
   type KeyedRecord,
   combineObservations,
   knowledgeKey,
@@ -14,6 +16,7 @@ import {
   validateObservation,
 } from '../model.js';
 import type {
+  FlowMemoryRepository,
   KeyedRepository,
   KnowledgeRepository,
   PersistenceKind,
@@ -31,10 +34,11 @@ export interface MemoryTables {
   knowledge: TransitionKnowledgeRecord[];
   evolution: KeyedRecord[];
   anomalies: KeyedRecord[];
+  memory: FlowMemoryRecord[];
 }
 
 export function emptyTables(): MemoryTables {
-  return { runs: [], states: [], transitions: [], knowledge: [], evolution: [], anomalies: [] };
+  return { runs: [], states: [], transitions: [], knowledge: [], evolution: [], anomalies: [], memory: [] };
 }
 
 /**
@@ -141,6 +145,37 @@ export class InMemoryPersistenceProvider implements PersistenceProvider {
 
   readonly evolution: KeyedRepository = this.keyed('evolution');
   readonly anomalies: KeyedRepository = this.keyed('anomalies');
+
+  /** Une ligne par (applicationId, kind, key), remplacée sur place ; recherche filtrée en mémoire. */
+  readonly memory: FlowMemoryRepository = {
+    save: (records) =>
+      this.write('memory', () => {
+        records.forEach(validateFlowMemoryRecord);
+        const byKey = new Map(
+          this.tables.memory.map((record) => [
+            `${record.applicationId}|${record.kind}|${record.key}`,
+            record,
+          ]),
+        );
+        for (const record of records)
+          byKey.set(`${record.applicationId}|${record.kind}|${record.key}`, structuredClone(record));
+        this.tables.memory = [...byKey.values()];
+      }),
+    search: (query) =>
+      Promise.resolve(
+        this.tables.memory
+          .filter(
+            (record) =>
+              record.applicationId === query.applicationId &&
+              (query.kind === undefined || record.kind === query.kind) &&
+              (query.status === undefined || record.status === query.status) &&
+              (query.keyPrefix === undefined || record.key.startsWith(query.keyPrefix)),
+          )
+          .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt) || a.key.localeCompare(b.key))
+          .slice(0, query.limit)
+          .map((record) => structuredClone(record)),
+      ),
+  };
 
   /** Une ligne par (applicationId, key), remplacée sur place ; tout ou rien. */
   private keyed(table: 'evolution' | 'anomalies'): KeyedRepository {

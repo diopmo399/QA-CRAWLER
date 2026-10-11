@@ -7,7 +7,7 @@ import type { ObservedKnowledgeContext } from '../knowledge/knowledge-model.js';
  */
 
 /** Version du schéma de données (le nombre de migrations de la base). */
-export const PERSISTENCE_SCHEMA_VERSION = 4;
+export const PERSISTENCE_SCHEMA_VERSION = 5;
 
 /** Cible d'une transition sans nouvel état (bloquée, échouée) : la clé de connaissance reste non nulle. */
 export const NO_TARGET = '(none)';
@@ -268,4 +268,43 @@ function newestContext(
   return observation.lastSeenAt >= existing.lastSeenAt
     ? (observation.lastContext ?? existing.lastContext)
     : (existing.lastContext ?? observation.lastContext);
+}
+
+/**
+ * FLOW MEMORY (QA platform) : une ligne par élément et par SORTE — états, transitions, actions,
+ * anomalies, récupérations, baselines, acteurs, runs, reproductions, captures visuelles,
+ * performance — interrogeable sans SQL dans le code métier (le provider traduit).
+ */
+export const FLOW_MEMORY_KINDS = [
+  'state',
+  'transition',
+  'action',
+  'anomaly',
+  'recovery',
+  'baseline',
+  'actor',
+  'run',
+  'reproduction',
+  'visual',
+  'performance',
+] as const;
+export type FlowMemoryKind = (typeof FLOW_MEMORY_KINDS)[number];
+
+export interface FlowMemoryRecord extends KeyedRecord {
+  kind: FlowMemoryKind;
+}
+
+export interface FlowMemoryQuery {
+  applicationId: string;
+  kind?: FlowMemoryKind;
+  status?: string;
+  /** Préfixe de la clé (un flow, un acteur…). */
+  keyPrefix?: string;
+  limit: number;
+}
+
+export function validateFlowMemoryRecord(record: FlowMemoryRecord): void {
+  validateKeyedRecord(record);
+  if (!FLOW_MEMORY_KINDS.includes(record.kind))
+    throw new Error(`invalid record: unknown flow memory kind "${record.kind}"`);
 }
