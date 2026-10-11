@@ -24,8 +24,20 @@ function targetYaml(target: FlowTarget): Record<string, unknown> {
   };
 }
 
-/** Une étape exécutable rendue dans la forme YAML d'une mission. */
-export function stepYaml(step: FlowStep): Record<string, unknown> {
+/**
+ * Une valeur de saisie LITTÉRALE (écrite dans la mission) n'est jamais recopiée dans un artefact :
+ * elle devient une variable d'environnement nommée d'après le flow et l'étape, à fournir au rejeu.
+ */
+export function literalEnvName(flow: string, index: number): string {
+  return `QA_REPRO_${flow.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_STEP_${String(index)}`;
+}
+
+function safeValue(value: FlowValue, placeholder: string | undefined): FlowValue {
+  return typeof value === 'string' && placeholder !== undefined ? { env: placeholder } : value;
+}
+
+/** Une étape exécutable rendue dans la forme YAML d'une mission (`literalEnv` : la variable qui remplace une valeur littérale). */
+export function stepYaml(step: FlowStep, literalEnv?: string): Record<string, unknown> {
   const common = {
     ...(step.name !== undefined ? { name: step.name } : {}),
     ...(step.allow.length > 0 ? { allow: step.allow.length === 1 ? step.allow[0] : step.allow } : {}),
@@ -40,7 +52,7 @@ export function stepYaml(step: FlowStep): Record<string, unknown> {
     case 'uncheck':
       return { [step.kind]: targetYaml(step.target), ...common };
     case 'fill':
-      return { fill: { ...targetYaml(step.target), value: step.value }, ...common };
+      return { fill: { ...targetYaml(step.target), value: safeValue(step.value, literalEnv) }, ...common };
     case 'select':
       return { select: { ...targetYaml(step.target), option: step.option }, ...common };
     case 'expect': {
@@ -101,9 +113,9 @@ export function playwrightLocator(target: FlowTarget, scope = 'page'): string {
   return target.nth !== undefined ? `${locator}.nth(${String(target.nth)})` : locator;
 }
 
-/** L'expression Playwright d'une valeur : littéral, variable d'environnement, donnée de test. */
-export function playwrightValue(value: FlowValue): string {
-  if (typeof value === 'string') return quote(value);
+/** L'expression Playwright d'une valeur : variable d'environnement (une valeur littérale n'est jamais recopiée), donnée de test. */
+export function playwrightValue(value: FlowValue, literalEnv?: string): string {
+  if (typeof value === 'string') return `process.env[${quote(literalEnv ?? 'QA_VALUE')}] ?? ''`;
   if ('env' in value) return `process.env[${quote(value.env)}] ?? ''`;
   return `testData[${quote(value.testData)}]`;
 }

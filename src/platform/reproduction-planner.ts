@@ -1,7 +1,7 @@
 import { stringify } from 'yaml';
 import type { FlowStep } from '../config/flow-schema.js';
 import type { FlowRunReport, FlowStepReport } from '../model/flow-run.js';
-import { stepYaml, testDataKeysOf, type FlowDefinition } from './flow-steps.js';
+import { literalEnvName, stepYaml, testDataKeysOf, type FlowDefinition } from './flow-steps.js';
 import type { Finding, RunAnomaly } from './model.js';
 
 /**
@@ -173,7 +173,10 @@ export function reproductionFlowYaml(
     name: `repro-${anomalyId.toLowerCase()}`,
     description: `Minimal reproduction of ${anomalyId} from flow "${definition.name}" (step ${String(path.failingStep)})`,
     ...(definition.startAt ? { startAt: definition.startAt } : {}),
-    steps: steps.map(stepYaml),
+    // Les valeurs littérales de la mission ne sont jamais recopiées : une variable d'environnement par étape.
+    steps: steps.map((step, position) =>
+      stepYaml(step, literalEnvName(definition.name, path.steps[position] ?? position + 1)),
+    ),
   };
   return stringify({ flows: [flow] }, { lineWidth: 0 });
 }
