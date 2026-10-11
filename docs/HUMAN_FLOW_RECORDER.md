@@ -71,8 +71,12 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   paramètres techniques, valeur issue de la création) et les preuves. L'arbre de l'application et le
   technique viennent ensuite.
 - **Aperçu de l'application** (`recording.panelPreview: true`) : une image de la page, prise après
-  chaque action (au plus une toutes les 800 ms, sans le bandeau), **en mémoire seulement** — jamais
+  chaque action (au plus une toutes les 800 ms), **en mémoire seulement** — jamais
   écrite ni journalisée. L'élément sélectionné y est encadré à sa position réelle.
+  **La page enregistrée ne bouge jamais** : l'image est la dernière image affichée (aucune émulation
+  d'écran, aucun style injecté) ; choisir une étape dont l'élément est visible ne fait pas défiler
+  l'application, un élément hors écran défile au plus près (jamais recentré) ; la validation des
+  cibles lit les éléments sans y écrire le moindre attribut.
   **⧉ Détacher** ouvre l'aperçu dans sa propre fenêtre (**⛶ Plein écran** possible, par exemple
   sur un second écran) : la fenêtre principale garde le parcours, les détails, la qualité et les
   commandes, sur deux colonnes plus larges. **↩ Rattacher** (ou fermer la fenêtre de l'aperçu) le

@@ -444,16 +444,9 @@ export class HumanFlowRecorder {
     if (!page || page.isClosed()) return undefined;
     try {
       // AUCUN EFFET VISIBLE dans l'application : ni feuille de style injectée (le bandeau masqué puis
-      // réaffiché faisait « flasher » l'écran), ni changement d'échelle émulé (scale 'css' sur un écran
-      // mis à l'échelle), ni animation figée, ni curseur masqué.
-      const buffer = await page.screenshot({
-        type: 'jpeg',
-        quality: 70,
-        scale: 'device',
-        animations: 'allow',
-        caret: 'initial',
-        timeout: 3000,
-      });
+      // réaffiché faisait « flasher » l'écran), ni émulation d'écran (le `clip` de page.screenshot),
+      // ni animation figée, ni curseur masqué.
+      const buffer = await surfaceShot(page);
       const size =
         page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
       return {
@@ -1705,4 +1698,37 @@ function text(value: string, max: number): string {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * L'image de la page TELLE QU'ELLE EST À L'ÉCRAN : la dernière image du compositeur, sans `clip`.
+ * page.screenshot passe toujours un `clip`, que Chromium applique par une émulation d'écran
+ * temporaire (décalage, échelle) : à l'écran, la page « flashe » ou semble se redimensionner un
+ * instant, à chaque aperçu. Sans clip ni capture au-delà de l'écran, rien n'est émulé. Repli sur
+ * page.screenshot (sans style injecté) si le protocole n'est pas disponible.
+ */
+async function surfaceShot(page: Page): Promise<Buffer> {
+  try {
+    const session = await page.context().newCDPSession(page);
+    try {
+      const shot = await session.send('Page.captureScreenshot', {
+        format: 'jpeg',
+        quality: 70,
+        fromSurface: true,
+        captureBeyondViewport: false,
+      });
+      return Buffer.from(shot.data, 'base64');
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+  } catch {
+    return page.screenshot({
+      type: 'jpeg',
+      quality: 70,
+      scale: 'device',
+      animations: 'allow',
+      caret: 'initial',
+      timeout: 3000,
+    });
+  }
 }

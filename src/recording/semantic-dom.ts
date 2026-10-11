@@ -278,13 +278,14 @@ export function semanticScanExpression(spec: SemanticTargetSpec): string {
   ].join('\n');
 }
 
-/** Le chemin de sections de l'élément marqué data-qa-crawler-probe="<jeton>" (vérification d'empreinte). */
-export function sectionPathExpression(token: string): string {
+/**
+ * Le chemin de sections d'UN élément, en fonction (texte) à évaluer sur l'élément lui-même : rien
+ * n'est écrit dans le DOM de l'application (aucun attribut posé puis retiré).
+ */
+export function sectionPathOfElementSource(): string {
   return [
-    '(() => { if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
-    `const el = document.querySelector('[data-qa-crawler-probe="${token.replace(/[^\w-]/g, '')}"]');`,
-    `if (!el) return null; el.removeAttribute('data-qa-crawler-probe');`,
-    `return (${sectionPathOf.toString()})(el); })()`,
+    '(el) => { if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
+    `return (${sectionPathOf.toString()})(el); }`,
   ].join('\n');
 }
 
