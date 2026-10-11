@@ -1124,6 +1124,65 @@ const apiTestingSchema = z
   })
   .strict();
 
+/**
+ * VISUAL (QA platform) : une capture par étape de flow réussie, comparée pixel à pixel à la
+ * baseline visuelle (<baseline.dir>/visual/<flow>/<étape>.png). Un changement d'image n'est
+ * jamais une régression à lui seul : seul le recoupement avec une anomalie fonctionnelle de la
+ * même étape en fait une (VISUAL_REGRESSION) ; sinon MINOR_CHANGE ou MAJOR_CHANGE.
+ */
+const visualSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    /** Par défaut : baseline.dir. */
+    baselineDir: nonEmpty.optional(),
+    /** Somme des écarts des 4 canaux (0..1020) au-delà de laquelle un pixel compte comme différent. */
+    colorThreshold: z.number().min(0).max(1020).default(48),
+    /** Part de l'image changée (0..1) sous laquelle le changement est mineur, et au-delà de laquelle il est majeur. */
+    minorChangeRatio: z.number().min(0).max(1).default(0.02),
+    majorChangeRatio: z.number().min(0).max(1).default(0.2),
+    /** Zones jamais comparées (pixels) : horloge, bandeau, publicité. */
+    masks: z
+      .array(
+        z
+          .object({
+            x: z.number().int().min(0),
+            y: z.number().int().min(0),
+            width: z.number().int().positive(),
+            height: z.number().int().positive(),
+            reason: nonEmpty.optional(),
+          })
+          .strict(),
+      )
+      .default([]),
+    updateBaseline: z.enum(['on-pass', 'always', 'never']).default('on-pass'),
+  })
+  .strict();
+
+/** QA PLATFORM : les analyses optionnelles du run de workflow. */
+const platformSchema = z
+  .object({
+    /** Tendances de durée par flow et par étape (base de connaissances) : une variation isolée n'est jamais une régression. */
+    performance: z
+      .object({
+        tolerance: z.number().min(1).max(10).default(1.3),
+        minSamples: z.number().int().min(2).max(50).default(3),
+        floorMs: z.number().int().min(0).default(300),
+      })
+      .strict()
+      .default({}),
+    /** Chemins de reproduction minimaux (reproductions.json) pour les anomalies rattachées à une étape. */
+    reproductions: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
+    /** Tests Playwright générés (reports/generated-tests/<flow>.spec.ts). */
+    generatedTests: z
+      .object({ enabled: z.boolean().default(false) })
+      .strict()
+      .default({}),
+  })
+  .strict();
+
 const networkSchema = z
   .object({
     /** Attacher à chaque transition les échanges HTTP causés par son action (méthode, URL, statut, durée). */
@@ -2243,6 +2302,8 @@ export const scenarioSchema = z
     authorization: authorizationSchema.default({}),
     openapi: openApiSchema.default({}),
     apiTesting: apiTestingSchema.default({}),
+    visual: visualSchema.default({}),
+    platform: platformSchema.default({}),
     staticAnalysis: staticAnalysisSchema.default({}),
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),

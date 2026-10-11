@@ -25,7 +25,18 @@ import { isAtLeast, type Issue } from './model/issue.js';
 import { buildResult } from './reporting/result-builder.js';
 import { writeReports } from './reporting/reporter.js';
 import { buildRunAnalysis } from './analysis/run-analysis.js';
-import { attachExtension, buildRunWorkflowAnalysis } from './platform/run-workflow-analysis.js';
+import {
+  addAnomaly,
+  attachExtension,
+  buildRunWorkflowAnalysis,
+  refreshOverallStatus,
+} from './platform/run-workflow-analysis.js';
+import { analyzePerformance, currentMetrics } from './platform/performance-analysis.js';
+import { analyzeRegression } from './platform/regression-analysis.js';
+import { analyzeVisual } from './platform/visual-analysis.js';
+import { planReproductions } from './platform/reproduction-planner.js';
+import { generatePlaywrightTests } from './platform/playwright-test-generator.js';
+import { PixelVisualComparator } from './visual/pixel-visual-comparator.js';
 import { analyzeActors } from './platform/actor-analysis.js';
 import { correlateUiAndApi } from './platform/ui-api-correlation.js';
 import {
@@ -387,6 +398,19 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       if (previous) flow.comparison = compareFlowRuns(previous, flow);
       knowledge.rememberFlowRun(flow.name, flowRunMemoryOf(flow, outcome.runId));
     }
+  // QA PLATFORM — PERFORMANCE : les durées du run jugées contre leur historique, puis enregistrées.
+  const performanceAnalysis = analyzePerformance(
+    outcome.flows,
+    { history: (metric) => knowledge.performanceHistory(metric) },
+    config.platform.performance,
+  );
+  if (knowledgeFile)
+    for (const metric of currentMetrics(outcome.flows))
+      knowledge.recordPerformance(metric.metric, {
+        runId: outcome.runId,
+        at: outcome.startedAt.toISOString(),
+        value: metric.value,
+      });
   if (knowledgeFile) await knowledge.save();
 
   const result = buildResult(outcome, config);
@@ -611,6 +635,117 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       actorAnalysis,
       actorAnalysis.findings,
     );
+  // QA PLATFORM — RÉGRESSION, PERFORMANCE, VISUEL, REPRODUCTIONS, TESTS GÉNÉRÉS (chaque module est pur ; la composition est ici).
+  const regressionAnalysis = analyzeRegression(result, workflowAnalysis.anomalies);
+  attachExtension(
+    workflowAnalysis,
+    'regressionAnalysis',
+    'regression-analysis.json',
+    regressionAnalysis,
+    regressionAnalysis.findings,
+  );
+  for (const metric of performanceAnalysis.metrics)
+    if (metric.status === 'PERFORMANCE_REGRESSION')
+      addAnomaly(workflowAnalysis, {
+        category: 'PERFORMANCE_REGRESSION',
+        severity: 'WARNING',
+        symptom: `${metric.label}: ${String(metric.currentValue)} ms vs baseline ${String(metric.baselineValue ?? 0)} ms`,
+        evidence: [
+          `${String(metric.samples)} sample(s)`,
+          `trend ${metric.trend}`,
+          ...(metric.firstDetectedRun ? [`since run ${metric.firstDetectedRun}`] : []),
+        ],
+        confidence: metric.confidence,
+        source: 'HISTORICAL',
+        location: metric.metric.includes('#')
+          ? {
+              flow: metric.metric.slice(5, metric.metric.indexOf('#')),
+              step: Number(metric.metric.slice(metric.metric.indexOf('#') + 1)),
+            }
+          : { flow: metric.metric.slice(5) },
+        issueIds: [],
+        regression: 'NEW_REGRESSION',
+      });
+  attachExtension(
+    workflowAnalysis,
+    'performanceAnalysis',
+    'performance-analysis.json',
+    performanceAnalysis,
+    performanceAnalysis.findings,
+  );
+  let visualRegressions = 0;
+  if (config.visual.enabled) {
+    const visualDir = config.visual.baselineDir ?? store.directory;
+    const visualAnalysis = await analyzeVisual(result, workflowAnalysis.anomalies, {
+      comparator: new PixelVisualComparator({
+        colorThreshold: config.visual.colorThreshold,
+        masks: config.visual.masks,
+        diffImage: (_baseline, current) => current.replace(/\.png$/, '-diff.png'),
+      }),
+      baselineDir: visualDir,
+      minorChangeRatio: config.visual.minorChangeRatio,
+      majorChangeRatio: config.visual.majorChangeRatio,
+      updateBaseline: config.visual.updateBaseline,
+    });
+    for (const checkpoint of visualAnalysis.checkpoints)
+      if (checkpoint.verdict === 'VISUAL_REGRESSION') {
+        visualRegressions += 1;
+        addAnomaly(workflowAnalysis, {
+          category: 'VISUAL_REGRESSION',
+          severity: 'WARNING',
+          symptom: `${checkpoint.flow} step ${String(checkpoint.step)}: the screen changed where the step failed`,
+          evidence: [
+            `${String(Math.round((checkpoint.difference ?? 0) * 10_000) / 100)} % of the image changed`,
+            ...(checkpoint.diffImage ? [`diff ${checkpoint.diffImage}`] : []),
+            ...checkpoint.anomalies.map((id) => `anomaly ${id}`),
+          ],
+          confidence: 0.8,
+          source: 'RUNTIME',
+          location: { flow: checkpoint.flow, step: checkpoint.step },
+          issueIds: [],
+        });
+      }
+    attachExtension(
+      workflowAnalysis,
+      'visualAnalysis',
+      'visual-analysis.json',
+      visualAnalysis,
+      visualAnalysis.findings,
+    );
+  }
+  if (config.platform.reproductions.enabled) {
+    const reproductions = planReproductions(workflowAnalysis.anomalies, config.flows, result.flows);
+    attachExtension(
+      workflowAnalysis,
+      'reproductions',
+      'reproductions.json',
+      reproductions,
+      reproductions.findings,
+    );
+  }
+  if (config.platform.generatedTests.enabled && config.flows.length > 0) {
+    const tests = generatePlaywrightTests(config.flows, result.flows, {
+      baseUrl: config.target.baseUrl,
+      ...(result.cognitive ? { checkpoints: result.cognitive.checkpoints } : {}),
+    });
+    const directory = path.join(config.output.reportsDir, 'generated-tests');
+    await mkdir(directory, { recursive: true });
+    for (const test of tests) await writeFile(path.join(directory, test.fileName), test.content, 'utf8');
+    attachExtension(workflowAnalysis, 'generatedTests', 'generated-tests.json', {
+      directory,
+      tests: tests.map((test) => ({
+        flow: test.flow,
+        file: path.join(directory, test.fileName),
+        steps: test.steps,
+        assertions: test.assertions,
+      })),
+    });
+  }
+  refreshOverallStatus(workflowAnalysis, result, {
+    visualRegressions,
+    performanceRegressions: performanceAnalysis.summary.PERFORMANCE_REGRESSION,
+    ...regressionAnalysis.signals,
+  });
   const written = await writeReports(result, config.output, memory.location, config.report.language);
   progress.done(`${String(written.flows.length)} flow(s), ${String(written.issues.length)} issue(s)`);
   const threshold = config.report.failOnSeverity;

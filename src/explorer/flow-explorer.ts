@@ -2897,6 +2897,19 @@ export class FlowExplorer {
       this.lastActionMs = undefined;
       const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
       this.enrichStepReport(step, index, outcome.report, this.flowNetwork.slice(networkMark));
+      // QA PLATFORM — VISUEL : une capture par étape exécutée (les étapes en erreur ont déjà la leur).
+      if (
+        this.config.visual.enabled &&
+        !outcome.report.screenshot &&
+        !outcome.page.isClosed() &&
+        (outcome.report.status === 'PASSED' || outcome.report.status === 'FAILED')
+      )
+        outcome.report.screenshot = await this.screenshots.captureState(
+          outcome.page,
+          this.graph.nodeCount,
+          `${flow.name}-step-${String(index)}`,
+          'visual',
+        );
       this.stepContexts.push({
         index,
         description: outcome.report.description,

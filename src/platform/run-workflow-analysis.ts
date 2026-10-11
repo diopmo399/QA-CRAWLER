@@ -380,3 +380,11 @@ export function attachExtension(
   (report.extensionFiles ??= {})[key] = { name: fileName, data };
   report.findings.push(...findings);
 }
+
+/** Ajoute une anomalie produite par une analyse optionnelle (régression visuelle ou de performance). */
+export function addAnomaly(report: RunWorkflowAnalysisReport, anomaly: Omit<RunAnomaly, 'id'>): RunAnomaly {
+  const id = `ANOMALY-${String(report.anomalies.length + 1).padStart(3, '0')}`;
+  const complete = { id, ...anomaly };
+  report.anomalies.push(complete);
+  return complete;
+}
