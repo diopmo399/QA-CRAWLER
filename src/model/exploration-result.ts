@@ -1,4 +1,5 @@
 import type { RunAnalysis } from '../analysis/run-analysis.js';
+import type { RunWorkflowAnalysisReport } from '../platform/run-workflow-analysis.js';
 import type { FunctionalSummary } from '../functional/functional-intelligence.js';
 import type { FormRulesSummary } from '../rules/form-rule-coordinator.js';
 import type { StaticAnalysisSummary } from '../static-analysis/model.js';
@@ -125,6 +126,8 @@ export interface ExplorationResult {
   persistence?: PersistenceReport;
   /** RUN ANALYSIS : le verdict fonctionnel et la chaîne explicative, construits au-dessus des moteurs. */
   runAnalysis?: RunAnalysis;
+  /** QA PLATFORM : le rapport d'analyse du run de workflow (statut global, anomalies, graphe, couverture, API, visuel, performance, acteurs, régression, reproductions). */
+  workflowAnalysis?: RunWorkflowAnalysisReport;
   /** Moteur de décision : stratégie, objectifs, motifs, couverture, décisions expliquées, budget. */
   intelligence?: {
     strategy: string;
@@ -172,6 +175,8 @@ export interface ExplorationResult {
     generatedFlows?: string;
     /** reports/run-analysis.json : l'analyse du run (verdict, divergence, cause, récupération, dérive, apprentissage). */
     runAnalysis?: string;
+    /** reports/run.json, anomalies.json, workflow-graph.json, functional-coverage.json… (QA platform). */
+    workflowAnalysis?: Record<string, string>;
     /** Chaque décision du moteur avec ses candidats (logging.decisionTrace). */
     decisionTrace?: string;
     /** Base de connaissances mise à jour. */

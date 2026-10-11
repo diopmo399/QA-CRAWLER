@@ -38,6 +38,35 @@ export async function writeReports(
     result.artifacts.runAnalysis = path.join(output.reportsDir, 'run-analysis.json');
     await writeFile(result.artifacts.runAnalysis, `${JSON.stringify(result.runAnalysis, null, 2)}\n`, 'utf8');
   }
+  if (result.workflowAnalysis) {
+    const report = result.workflowAnalysis;
+    const files: Record<string, { name: string; data: unknown }> = {
+      run: {
+        name: 'run.json',
+        data: { ...report, workflowGraph: undefined, functionalCoverage: undefined, anomalies: undefined },
+      },
+      anomalies: {
+        name: 'anomalies.json',
+        data: { summary: report.anomalySummary, anomalies: report.anomalies },
+      },
+      workflowGraph: { name: 'workflow-graph.json', data: report.workflowGraph },
+      functionalCoverage: { name: 'functional-coverage.json', data: report.functionalCoverage },
+      ...Object.fromEntries(
+        Object.entries(report.extensionFiles ?? {}).map(([key, entry]) => [
+          key,
+          { name: entry.name, data: entry.data },
+        ]),
+      ),
+    };
+    const written: Record<string, string> = {};
+    for (const [key, file] of Object.entries(files)) {
+      const target = path.join(output.reportsDir, file.name);
+      await writeFile(target, `${JSON.stringify(file.data, null, 2)}\n`, 'utf8');
+      written[key] = target;
+    }
+    report.artifacts = written;
+    result.artifacts.workflowAnalysis = written;
+  }
   if (output.html)
     result.artifacts.html = await new HtmlReporter(output.reportsDir, 'index.html', language).write(result);
   if (output.flowGraphHtml)
