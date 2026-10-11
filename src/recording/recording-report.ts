@@ -122,6 +122,7 @@ export function recordingHtml(input: {
     ${intent.transitions.length > 0 ? `<ul class="plain">${intent.transitions.map((transition) => `<li>${esc(transition.entity)}: ${esc(transition.from)} → ${esc(transition.to)}</li>`).join('')}</ul>` : ''}
     ${intent.evidence.length > 0 ? `<p class="muted">${esc(intent.evidence.join(' · '))}</p>` : ''}
     ${searchesHtml(result)}
+    ${intentReviewHtml(result)}
   </section>
   <section><h2>Quality</h2>
     <div class="cols"><div><h3>Locators</h3><ul class="plain">${locators || '<li class="muted">none</li>'}</ul></div>
@@ -583,4 +584,24 @@ function searchesHtml(result: RecordingResult): string {
       return `<li><b>${esc(entry.api)}</b> <span class="muted">${esc(entry.state)} · ${String(Math.round(entry.confidence * 100))} %${entry.technical ? ` · technical classification ${esc(entry.technical.category)} (separate)` : ''}</span><ul>${criteria}</ul>${logic ? `<p class="muted">Logic: ${esc(logic)}</p>` : ''}${entry.sort.length ? `<p class="muted">Sort: ${esc(entry.sort.map((sort) => `${sort.property ?? sort.path} ${sort.direction.toUpperCase()}`).join(', '))}</p>` : ''}${parameters.length ? `<p class="muted">Technical parameters: ${esc(parameters.join(' · '))}</p>` : ''}</li>`;
     })
     .join('')}</ul>`;
+}
+
+/**
+ * L'INTERPRÉTATION DES ACTIONS ET SA REVUE : intention finale, intention originale (automatique),
+ * source (SYSTEM / HUMAN), confiance initiale, correction et historique. L'action enregistrée, elle,
+ * ne change jamais.
+ */
+function intentReviewHtml(result: RecordingResult): string {
+  const views = result.application?.actions ?? [];
+  const reviewed = views.filter((view) => view.review);
+  if (reviewed.length === 0) return '';
+  const pct = (value: number | undefined): string =>
+    value === undefined ? '—' : `${String(Math.round(value * 100))} %`;
+  return `<h3>Interpretation review (human)</h3><p class="muted">${String(result.application?.summary.actions.humanCorrected ?? 0)} corrected · ${String(result.application?.summary.actions.humanConfirmed ?? 0)} confirmed · the recorded actions, their targets and the replayed flow are unchanged.</p><table><thead><tr><th>Action</th><th>Final intent</th><th>Original intent</th><th>Source / status</th><th>Initial confidence</th><th>Correction</th><th>History</th></tr></thead><tbody>${reviewed
+    .map((view) => {
+      const review = view.review;
+      if (!review) return '';
+      return `<tr><td><code>${esc(view.actionId)}</code> ${esc(view.type)}${view.label ? ` "${esc(view.label)}"` : ''}</td><td><b>${esc(review.source === 'HUMAN' ? review.finalIntent : view.interpretation.join(' + '))}</b></td><td>${esc(review.originalIntent.join(' + '))}</td><td>${esc(review.source)} · ${esc(review.status)}</td><td>${pct(review.originalConfidence)}</td><td>${review.correction?.reason ? esc(review.correction.reason) : '—'}${review.proposal ? `<br><span class="muted">proposal ${esc(review.proposal.intent.join(' + '))} (${esc(review.proposal.source)}, not applied)</span>` : ''}</td><td class="muted">${esc(review.history.map((entry) => `${entry.source} → ${entry.intent.join(' + ')}`).join(' · '))}</td></tr>`;
+    })
+    .join('')}</tbody></table>`;
 }

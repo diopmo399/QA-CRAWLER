@@ -100,6 +100,11 @@ export interface PanelAnalysis {
     /** Les recherches reconnues : critères, logique, tri, paramètres, preuves. */
     searches?: PanelSearch[];
   };
+  /**
+   * LA REVUE DES INTENTIONS : chaque action, son intention finale, sa confiance, sa provenance
+   * (SYSTEM, HUMAN), l'original et l'historique — l'humain corrige, confirme ou réinitialise.
+   */
+  intentReview?: { choices: string[]; rows: PanelIntentRow[] };
   /** Les intents de RECHERCHE (interprétation métier d'une requête, distincte de sa classification technique). */
   searchIntents?: PanelSearch[];
   findings: { severity: string; message: string; suggestion?: string; origin: string }[];
@@ -122,6 +127,23 @@ export interface PanelAnalysis {
     /** Les entités observées et leur PROVENANCE (créée, découverte, existante, inconnue, ambiguë). */
     entities?: PanelBusinessEntity[];
   };
+}
+
+/** Une action dans la revue des intentions. */
+export interface PanelIntentRow {
+  actionId: string;
+  /** Le genre de l'action enregistrée (CLICK, TYPE, NAVIGATE…) : seulement pour son icône. */
+  kind?: string;
+  label: string;
+  intent: string;
+  status: 'INFERRED' | 'HUMAN_CORRECTED' | 'HUMAN_CONFIRMED';
+  source: 'SYSTEM' | 'HUMAN';
+  confidence?: number;
+  original?: string;
+  originalConfidence?: number;
+  reason?: string;
+  proposal?: string;
+  history: string[];
 }
 
 /** Une recherche reconnue dans une requête : ce que la fenêtre en montre. */

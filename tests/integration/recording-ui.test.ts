@@ -129,7 +129,7 @@ describe('Recording UI (recorder window)', () => {
         seen.panelOpenAtReview = !panel.isClosed();
         seen.reviewText = await panel.locator('body').innerText();
         // MODIFIER : retirer une étape la retire du flow (fichiers régénérés).
-        await panel.getByRole('button', { name: '✎ Modifier' }).click();
+        await panel.getByRole('button', { name: 'Modifier', exact: true }).click();
         await panel.getByRole('button', { name: /Retirer l'étape « Cliquer sur "Action 7" »/ }).click();
         await row(panel, /Cliquer sur "Action 7"/).waitFor({ state: 'detached' });
         // Un mot de passe ne se rejoue qu'avec sa variable d'environnement (et si la SafetyPolicy le permet).
@@ -137,9 +137,9 @@ describe('Recording UI (recorder window)', () => {
           .getByRole('button', { name: /Retirer l'étape « Saisir "••••" dans "Password" »/ })
           .click();
         await row(panel, /Password/).waitFor({ state: 'detached' });
-        await panel.getByRole('button', { name: '✓ Terminer les modifications' }).click();
+        await panel.getByRole('button', { name: 'Terminer les modifications' }).click();
         // REJOUER → progression puis résultat.
-        await panel.getByRole('button', { name: '▶ Rejouer' }).click();
+        await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
         await panel
           .locator('#progress')
           .getByText(/Rejeu en cours/)
@@ -261,7 +261,7 @@ describe('Recording UI — a replay that fails', () => {
         await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
         // L'application change entre l'enregistrement et le rejeu : « Action 7 » n'existe plus.
         app.broken = true;
-        await panel.getByRole('button', { name: '▶ Rejouer' }).click();
+        await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
         await panel.getByText('✕ Replay interrompu').waitFor({ timeout: 180_000 });
         seen.failure = await panel.locator('#review').innerText();
         await panel.getByRole('button', { name: "Modifier l'étape" }).waitFor();

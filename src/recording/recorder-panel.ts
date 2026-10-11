@@ -18,9 +18,15 @@ export interface PanelCommand {
     | 'finish'
     | 'refresh'
     | 'detach'
-    | 'attach';
+    | 'attach'
+    | 'intent-correct'
+    | 'intent-confirm'
+    | 'intent-reset';
   id?: string;
   candidate?: number;
+  /** La revue d'une intention : l'intention choisie et sa justification (facultative). */
+  intent?: string;
+  reason?: string;
 }
 
 const COMMANDS = new Set<PanelCommand['type']>([
@@ -38,6 +44,9 @@ const COMMANDS = new Set<PanelCommand['type']>([
   'refresh',
   'detach',
   'attach',
+  'intent-correct',
+  'intent-confirm',
+  'intent-reset',
 ]);
 
 /**
@@ -117,5 +126,7 @@ function commandOf(payload: unknown): PanelCommand | undefined {
     ...(typeof raw.candidate === 'number' && Number.isInteger(raw.candidate)
       ? { candidate: raw.candidate }
       : {}),
+    ...(typeof raw.intent === 'string' && /^[A-Z_]{2,40}$/.test(raw.intent) ? { intent: raw.intent } : {}),
+    ...(typeof raw.reason === 'string' ? { reason: raw.reason.slice(0, 500) } : {}),
   };
 }

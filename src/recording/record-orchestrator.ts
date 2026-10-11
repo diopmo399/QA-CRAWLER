@@ -1,4 +1,12 @@
 import {
+  HUMAN_REVIEW_FILE,
+  applyHumanReview,
+  emptyLedger,
+  recordIntentDecision,
+  type DecisionContext,
+  type HumanDecision,
+} from './application/human-review.js';
+import {
   PROPOSABLE_OPERATIONS,
   analyzeRecording,
   redactJournal,
@@ -385,9 +393,17 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     );
   };
   await writeBusiness();
+  // LA REVUE HUMAINE : un registre en ajout seul, appliqué au modèle à chaque écriture (même après une
+  // nouvelle analyse, règles ou IA : une décision humaine en vigueur n'est jamais écrasée).
+  result.humanReview ??= emptyLedger(result.session.id);
+  let applicationFromAi = false;
   // LE MODÈLE DE L'APPLICATION : contextes, tasks, entités, relations, actions métier (avec preuves).
   const writeApplication = async (): Promise<void> => {
-    if (result.application) await write('application-model.json', json(result.application));
+    if (!result.application) return;
+    applyHumanReview(result.application, result.humanReview, { aiAnalysis: applicationFromAi });
+    await write('application-model.json', json(result.application));
+    if (result.humanReview && result.humanReview.decisions.length > 0)
+      await write(HUMAN_REVIEW_FILE, json(result.humanReview));
   };
   await writeApplication();
   // L'ANALYSE HTTP : le journal réseau (la source, jamais réécrite) et l'analyse (direct + consolidation).
@@ -676,6 +692,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
             ...(result.session.initialStateId ? { initialStateId: result.session.initialStateId } : {}),
             digest: (value) => recorder.digest(value),
           });
+          applicationFromAi = true;
           await writeApplication();
         }
         onEvent({
@@ -808,6 +825,26 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           replay = { status: 'NOT_VALIDATED' };
           saved = undefined;
           return true;
+        },
+        // LA REVUE D'UNE INTENTION : une décision de plus au registre ; ni l'action, ni le flow, ni le
+        // rejeu ne changent (generated.flow.yaml n'est pas réécrit).
+        reviewIntent: async (input) => {
+          if (!result.application || !result.humanReview) return { error: 'no application model to review' };
+          const outcome = recordIntentDecision(result.humanReview, result.application, {
+            ...input,
+            context: decisionContextOf(result, input.actionId),
+          });
+          if ('error' in outcome) return outcome;
+          await writeApplication();
+          const decision = outcome.decision;
+          onEvent({
+            type: 'RECORDING_INTENT_REVIEWED',
+            at: decision.at,
+            message: `${decision.type} ${decision.subject.actionId}: ${decision.previousIntent.join('+')} → ${decision.newIntent.join('+')} (human decision ${decision.id})`,
+          });
+          if (config.recording.knowledge)
+            await rememberIntentDecision(config, result, env, decision).catch(() => undefined);
+          return { ok: true };
         },
         save: async () => {
           saved = await saveRecordedFlow({
@@ -1061,6 +1098,71 @@ async function rememberRecording(
       api: intent.api ?? '',
     })),
   });
+  await store.save([]);
+}
+
+/** Le contexte d'une décision humaine : l'écran, l'élément, le sélecteur, l'étape métier (jamais une valeur). */
+function decisionContextOf(result: RecordingResult, actionId: string): DecisionContext {
+  const action = result.normalized.kept.find((candidate) => candidate.id === actionId);
+  const raw = result.session.rawEvents.find((event) => event.id === action?.rawEventIds.at(-1));
+  const element = raw?.element;
+  const view = result.application?.actions.find((candidate) => candidate.actionId === actionId);
+  const step = result.business?.model.steps.find((candidate) =>
+    candidate.recordedActions.some((id) => view?.stepIds.includes(id)),
+  );
+  let page: string | undefined;
+  try {
+    page = raw ? new URL(raw.url).pathname : undefined;
+  } catch {
+    page = undefined;
+  }
+  return {
+    ...(page ? { page } : {}),
+    ...(element
+      ? { element: `${element.role || element.tag} "${element.name || element.label || element.text || ''}"` }
+      : {}),
+    ...(element?.role ? { role: element.role } : {}),
+    ...(element?.label ? { label: element.label } : {}),
+    ...(element?.css ? { selector: element.css } : {}),
+    ...(step ? { businessStep: `${step.action} ${step.entity ?? ''}`.trim() } : {}),
+  };
+}
+
+/**
+ * Une décision humaine dans la connaissance de l'application, AVEC SON CONTEXTE (écran + élément) :
+ * une preuve réutilisable, jamais une règle globale ; une réinitialisation la retire.
+ */
+async function rememberIntentDecision(
+  config: ScenarioConfig,
+  result: RecordingResult,
+  env: NodeJS.ProcessEnv,
+  decision: HumanDecision,
+): Promise<void> {
+  const store = new FunctionalKnowledgeStore(
+    path.join(path.dirname(path.resolve(config.output.reportsDir)), 'knowledge', 'functional'),
+    {
+      application: config.mission.name,
+      ...((config.baseline.environment ?? env.QA_ENVIRONMENT)
+        ? { environment: config.baseline.environment ?? env.QA_ENVIRONMENT }
+        : {}),
+    },
+  );
+  await store.load();
+  const context = decision.context;
+  store.rememberIntentDecisions([
+    {
+      key: [context.page ?? '', context.role ?? '', context.element ?? '', context.selector ?? ''].join('|'),
+      context,
+      intent: decision.newIntent[0] ?? 'UNKNOWN',
+      status: decision.type === 'CONFIRM' ? 'HUMAN_CONFIRMED' : 'HUMAN_CORRECTED',
+      systemIntent: decision.systemIntent,
+      ...(decision.reason ? { reason: decision.reason } : {}),
+      source: 'HUMAN',
+      scope: 'CONTEXTUAL',
+      recordingSessionId: result.session.id,
+      ...(decision.type === 'RESET' ? { reset: true } : {}),
+    },
+  ]);
   await store.save([]);
 }
 
