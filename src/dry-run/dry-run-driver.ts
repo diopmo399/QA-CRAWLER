@@ -56,6 +56,11 @@ export interface StaticPathHint {
 
 export interface ProbeResult {
   status: 'RESOLVED' | 'AMBIGUOUS' | 'NOT_FOUND' | 'BLOCKED';
+  /**
+   * NOT_FOUND définitif : chercher ailleurs ne changerait rien (une donnée citée qui n'existe pas) ;
+   * aucune exploration guidée, la raison reste celle de la sonde.
+   */
+  final?: boolean;
   /** Ce qui a été trouvé à l'écran (libellé), le cas échéant. */
   target?: string;
   reason: string;

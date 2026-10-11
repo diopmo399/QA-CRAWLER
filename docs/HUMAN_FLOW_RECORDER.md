@@ -490,6 +490,44 @@ jeu : la valeur du TestDataProvider, comme avant. `testData.fields` de la missio
 prioritaire sur tout. Le jeu d'un flow (`testData:` du flow ou `# testData:` du `.feature`)
 l'emporte sur celui de la mission (`testData.include: [chemin]`, `testData.values: {…}`).
 
+**Corrélation CREATE → SEARCH → OPEN : citer une donnée.** Une donnée qui change au rejeu
+(`generated`, `template`, ou `reference` vers l'une d'elles) peut réapparaître **ailleurs que dans
+une saisie** : le résultat de la recherche qu'on ouvre porte le nom de la société créée. Le
+Recorder le voit (le texte cliqué, ou l'effet attendu `button:…`, **est** la valeur saisie plus
+haut — casse et espaces de bord ignorés) et l'étape **cite** la donnée au lieu du texte de la
+démonstration :
+
+```yaml
+- fill: { label: Company name, value: { testData: company.companyName } } # CREATE
+- click: { role: button, name: Save }
+- fill: { label: Search companies, value: { testData: search.q } } # SEARCH (référence)
+- click: { role: button, name: Search }
+  effects: { appears: ['button:${testData:company.companyName}'] }
+- click: { role: button, name: '${testData:company.companyName}' } # OPEN (corrélé)
+```
+
+Au rejeu, `${testData:clé}` est résolu **au même endroit pour toutes les étapes** (le
+FlowExplorer, avant d'exécuter l'étape, et la sonde du dry run) par le contexte du run : la même
+valeur qu'à la création et qu'à la recherche, même si les écrans et les sélecteurs diffèrent, et
+même après une navigation. Règles :
+
+- une citation vise une clé **connue** (dans le jeu, configurée, ou déjà saisie dans ce run) ;
+  une clé inconnue fait échouer l'étape avec la clé en cause — jamais une chaîne vide, jamais une
+  valeur inventée (événement `TEST_DATA_REFERENCE_UNRESOLVED`) ;
+- une cible corrélée qui désigne **plusieurs** éléments (deux résultats du même nom) n'est jamais
+  « la première » : `AMBIGUOUS_CORRELATION`, rien n'est exécuté ;
+- la création n'est jamais supposée : l'attente `response POST … 2xx` du flow (et l'effet
+  vérifié) dit si elle a abouti ; un refus (`409`, `422`) arrête la corrélation ;
+- un texte qui ne fait que **contenir** la valeur (« Ouvrir Company 7f3k ») reste tel quel
+  (corrélation incertaine) ; une valeur `recorded` / `literal` ne change rien ;
+- un sélecteur CSS ne cite jamais une donnée (refusé) ;
+- le rapport du flow liste, par étape, les clés citées (`test data: testData.company.companyName`),
+  jamais leurs valeurs ; la valeur générée se retrouve par le `runId` du run
+  (`Test Company QA-CRAWLER-<runId>`), qui porte aussi une part aléatoire : deux rejeux lancés en
+  parallèle n'ont jamais le même.
+
+Un flow sans citation (historique, statique) se rejoue exactement comme avant.
+
 **Apprentissage.** Une donnée `recorded` réutilisée telle quelle et une réponse `409` pendant
 le flow : une suggestion `TEST_DATA_STRATEGY_CANDIDATE`
 (`request.contactEmail: RECORDED_LITERAL → GENERATE_AT_REPLAY`) dans le rapport du flow —

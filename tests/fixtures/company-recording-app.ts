@@ -66,6 +66,16 @@ export interface CompanyRecordingApp {
   seedHomonym: boolean;
   /** La recherche envoie un arbre de conditions + pagination d'URL ; un compteur est interrogé en fond. */
   tree: boolean;
+  /** Une société du même nom existe déjà : 409 (l'application refuse le doublon). */
+  rejectDuplicates: boolean;
+  /** L'application refuse toute création (422) : rien n'est créé. */
+  refuseCreate: boolean;
+  /** L'application enregistre le nom en MAJUSCULES (et compare sans tenir compte de la casse). */
+  uppercaseNames: boolean;
+  /** Des sociétés présentes avant le rejeu (homonymes imposés). */
+  seed: (names: string[]) => void;
+  /** Les sociétés enregistrées côté serveur (noms seulement). */
+  names: () => string[];
   reset: () => void;
   close: () => Promise<void>;
 }
@@ -77,7 +87,17 @@ interface Company {
 }
 
 export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
-  const state = { companies: [] as Company[], next: 123456, seedHomonym: false, tree: false };
+  const state = {
+    companies: [] as Company[],
+    next: 123456,
+    seedHomonym: false,
+    tree: false,
+    rejectDuplicates: false,
+    refuseCreate: false,
+    uppercaseNames: false,
+  };
+  const same = (a: string, b: string | undefined): boolean =>
+    state.uppercaseNames ? a.toUpperCase() === (b ?? '').toUpperCase() : a === b;
   const reset = (): void => {
     state.companies = state.seedHomonym
       ? [{ id: '777001', companyName: 'Company Test QA', address: '9 Old Road' }]
@@ -106,10 +126,19 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
     };
     if (url.pathname === '/api/companies' && request.method === 'POST') {
       void body(request).then((data) => {
+        const name = data.companyName ?? '';
+        if (state.refuseCreate) {
+          json(422, { error: 'creation refused' });
+          return;
+        }
+        if (state.rejectDuplicates && state.companies.some((company) => same(company.companyName, name))) {
+          json(409, { error: 'a company with this name already exists' });
+          return;
+        }
         // L'identifiant est généré côté serveur, mais JAMAIS renvoyé : 204, aucun corps.
         state.companies.push({
           id: String(state.next),
-          companyName: data.companyName ?? '',
+          companyName: state.uppercaseNames ? name.toUpperCase() : name,
           address: data.address ?? '',
         });
         state.next += 1;
@@ -121,7 +150,7 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
     if (url.pathname === '/api/companies/search' && request.method === 'POST') {
       void body(request).then((data) => {
         const filters = (data.filters ?? {}) as unknown as { companyName?: string };
-        const items = state.companies.filter((company) => company.companyName === filters.companyName);
+        const items = state.companies.filter((company) => same(company.companyName, filters.companyName));
         json(200, { items, total: items.length, page: 0 });
       });
       return;
@@ -130,7 +159,7 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
       void body(request).then((data) => {
         const tree = data.condition as unknown as { conditions?: { val?: string }[] } | undefined;
         const wanted = tree?.conditions?.[0]?.val;
-        const items = state.companies.filter((company) => company.companyName === wanted);
+        const items = state.companies.filter((company) => same(company.companyName, wanted));
         json(200, { items, total: items.length });
       });
       return;
@@ -164,6 +193,31 @@ export async function startCompanyRecordingApp(): Promise<CompanyRecordingApp> {
     set tree(value: boolean) {
       state.tree = value;
     },
+    get rejectDuplicates() {
+      return state.rejectDuplicates;
+    },
+    set rejectDuplicates(value: boolean) {
+      state.rejectDuplicates = value;
+    },
+    get refuseCreate() {
+      return state.refuseCreate;
+    },
+    set refuseCreate(value: boolean) {
+      state.refuseCreate = value;
+    },
+    get uppercaseNames() {
+      return state.uppercaseNames;
+    },
+    set uppercaseNames(value: boolean) {
+      state.uppercaseNames = value;
+    },
+    seed: (names) => {
+      for (const companyName of names) {
+        state.companies.push({ id: String(state.next), companyName, address: '1 Seed Street' });
+        state.next += 1;
+      }
+    },
+    names: () => state.companies.map((company) => company.companyName),
     reset,
     close: () =>
       new Promise<void>((resolve) => {

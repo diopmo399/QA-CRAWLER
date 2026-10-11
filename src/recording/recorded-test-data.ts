@@ -1,4 +1,5 @@
 import { semanticKeyOf } from '../data/test-data-provider.js';
+import { testDataReference } from '../data/test-data-references.js';
 import {
   buildFieldIdentity,
   fieldIdentityDigest,
@@ -484,6 +485,33 @@ export function extractRecordedTestData(input: RecordedTestDataInput): RecordedT
     setStepKey(candidate.action, entry.key, settings, entry);
   }
 
+  // 6. Corrélation de LECTURE : une donnée générée au rejeu (le nom de la société créée) que l'humain a
+  //    ensuite CLIQUÉE (le résultat de la recherche, à ouvrir) ou vue apparaître (effet attendu). Au
+  //    rejeu, la valeur change : la cible et l'effet citent la donnée (${testData:clé}), jamais le texte
+  //    de la démonstration. Une valeur gardée telle quelle (RECORDED_LITERAL) ne change rien.
+  for (const candidate of candidates) {
+    const owner = candidate.referenceTo ?? candidate.sameAs ?? candidate;
+    const entry = values[owner.key];
+    if (candidate !== owner || !entry || !dynamicAtReplay(entry, values)) continue;
+    const text = owner.typed?.trim();
+    if (!text || !meaningful(owner)) continue;
+    const start = kept.indexOf(owner.action);
+    const reference = testDataReference(owner.key);
+    for (const later of kept.slice(start + 1)) {
+      const effects = later.expectedEffects ? citeIn(later.expectedEffects, text, reference) : undefined;
+      if (effects?.changed) later.expectedEffects = effects.value;
+      if (later.type !== 'CLICK' || !later.target) continue;
+      const target = citeIn(later.target, text, reference);
+      if (!target.changed) continue;
+      later.target = target.value;
+      later.evidence = [...later.evidence, `target cites testData.${owner.key} (the value entered earlier)`];
+      events.push({
+        type: 'TEST_DATA_TARGET_CORRELATED',
+        message: `the element clicked after "${owner.action.target?.label ?? owner.key}" carries its value: the step cites testData.${owner.key}`,
+      });
+    }
+  }
+
   const set: TestDataSet = {
     id: `${input.recordingSessionId}:test-data`,
     name: `${input.name}-recorded-data`,
@@ -801,6 +829,57 @@ export function entityOf(apiPath: string): string | undefined {
   if (/(ss|x|ch|sh)es$/.test(word)) return word.replace(/es$/, '');
   if (/[^s]s$/.test(word)) return word.slice(0, -1);
   return word;
+}
+
+/** La valeur change-t-elle au rejeu (générée, modèle, ou référence vers une telle donnée) ? */
+function dynamicAtReplay(entry: TestDataEntry, values: Readonly<Record<string, TestDataEntry>>): boolean {
+  if (entry.strategy === 'GENERATE_AT_REPLAY' || entry.strategy === 'TEMPLATE') return true;
+  const target = entry.strategy === 'REFERENCE' && entry.reference ? values[entry.reference] : undefined;
+  return target !== undefined && target !== entry && dynamicAtReplay(target, values);
+}
+
+/** Champs de sélecteurs bruts : jamais réécrits (une donnée n'y est pas échappée). */
+const RAW_SELECTOR_FIELDS = new Set(['css', 'selector', 'preferred', 'fallback']);
+
+/**
+ * La valeur saisie, citée ailleurs : un texte qui EST la valeur (« Company 7f3k ») ou qui la porte
+ * en suffixe d'un effet (« button:Company 7f3k », « + button:Company 7f3k »). Casse et espaces de
+ * bord ignorés ; un texte qui ne fait que la CONTENIR n'est jamais réécrit (corrélation incertaine).
+ */
+function citeIn<T>(value: T, text: string, reference: string): { value: T; changed: boolean } {
+  const wanted = text.toLowerCase();
+  const state = { changed: false };
+  const visit = (inner: unknown, field?: string): unknown => {
+    if (typeof inner === 'string') {
+      const trimmed = inner.trim();
+      if (trimmed.toLowerCase() === wanted) {
+        state.changed = true;
+        return reference;
+      }
+      const colon = trimmed.lastIndexOf(':');
+      if (
+        colon >= 0 &&
+        trimmed
+          .slice(colon + 1)
+          .trim()
+          .toLowerCase() === wanted
+      ) {
+        state.changed = true;
+        return `${trimmed.slice(0, colon + 1)}${reference}`;
+      }
+      return inner;
+    }
+    if (Array.isArray(inner)) return inner.map((item) => visit(item, field));
+    if (inner !== null && typeof inner === 'object') {
+      const copy: Record<string, unknown> = {};
+      for (const [name, item] of Object.entries(inner))
+        copy[name] = RAW_SELECTOR_FIELDS.has(name) ? item : visit(item, name);
+      return copy;
+    }
+    return inner;
+  };
+  const result = visit(value) as T;
+  return { value: state.changed ? result : value, changed: state.changed };
 }
 
 function sameValue(a: Candidate, b: Candidate): boolean {

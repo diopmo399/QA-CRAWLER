@@ -1,7 +1,7 @@
 import { hostMatches } from '../config/config-loader.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Locator, Page } from 'playwright';
 import type { AiSummary } from '../ai/audit-trail.js';
 import {
@@ -40,6 +40,11 @@ import {
 import { findByName, planAutoStep } from '../flows/gherkin/auto-step.js';
 import { normalizeText } from '../policies/keywords.js';
 import { DefaultTestDataProvider, type TestDataProvider } from '../data/test-data-provider.js';
+import {
+  referencedTestDataKeys,
+  resolveTestDataReferences,
+  type ResolvedReferences,
+} from '../data/test-data-references.js';
 import { TestDataRunContext, type ResolvedTestData } from '../data/test-data-run-context.js';
 import {
   controlsOf,
@@ -395,7 +400,11 @@ export interface ExplorationListener {
   /** TEST_DATA_GENERATED_FOR_RUN, TEST_DATA_STRATEGY_CANDIDATE (des clés, jamais des valeurs). */
   onTestData?(event: {
     at: string;
-    event: 'TEST_DATA_GENERATED_FOR_RUN' | 'TEST_DATA_STRATEGY_CANDIDATE';
+    event:
+      | 'TEST_DATA_GENERATED_FOR_RUN'
+      | 'TEST_DATA_STRATEGY_CANDIDATE'
+      | 'TEST_DATA_REFERENCE_RESOLVED'
+      | 'TEST_DATA_REFERENCE_UNRESOLVED';
     message: string;
   }): void;
   /** WORKFLOW SELF-HEALING : divergence analysée, objectif, plan, récupération, dérive. */
@@ -2464,7 +2473,14 @@ export class FlowExplorer {
       },
       current: () => stateOf(context()),
       probe: async (intent) => {
-        const step = intent.step;
+        // La cible peut citer une donnée du run (le résultat créé plus haut) : lue avec SA valeur.
+        let step = intent.step;
+        const correlated = 'target' in intent.step && referencedTestDataKeys(intent.step.target).length > 0;
+        if (referencedTestDataKeys(step).length > 0) {
+          const cited = this.citeTestData(step, flow);
+          if (!cited.ok) return { status: 'NOT_FOUND', reason: cited.reason, confidence: 0, final: true };
+          step = cited.value;
+        }
         const where = context();
         switch (step.kind) {
           case 'goto': {
@@ -2480,6 +2496,10 @@ export class FlowExplorer {
           case 'fill':
           case 'select': {
             const located = await this.flowSteps.locate(holder.page, step.target, probeTimeout);
+            if (typeof located !== 'string' && correlated) {
+              const ambiguity = await this.correlationAmbiguity(holder.page, step.target, intent.step);
+              if (ambiguity) return { status: 'AMBIGUOUS', reason: ambiguity, confidence: 0.5 };
+            }
             return typeof located === 'string'
               ? { status: 'NOT_FOUND', reason: located, confidence: 0 }
               : {
@@ -3026,13 +3046,54 @@ export class FlowExplorer {
     // La position de l'étape : l'étape suivante est la précondition à vérifier après celle-ci.
     this.stepPosition = { flow, index };
     const timeout = step.timeoutMs ?? this.config.exploration.actionTimeoutMs;
+    // La description garde les références (${testData:clé}) : jamais la valeur du run dans le rapport.
     const base = { index, kind: step.kind, description: describeStep(step), optional: step.optional };
+    let citedTestData: string[] | undefined;
     const done = (status: FlowStatus, extra: Partial<FlowStepReport> = {}): FlowStepReport => ({
       ...base,
       status,
       durationMs: Date.now() - started,
+      ...(citedTestData ? { testData: citedTestData } : {}),
       ...extra,
     });
+    // TEST DATA REFERENCES : une donnée citée par la cible, l'empreinte, un effet ou une attente (le
+    // résultat créé plus haut, à ouvrir) — résolue ICI, une fois par étape, par le contexte du run.
+    const original = step;
+    if (referencedTestDataKeys(step).length > 0) {
+      const references = this.citeTestData(step, flow);
+      if (!references.ok) {
+        this.listener.onTestData?.({
+          at: new Date().toISOString(),
+          event: 'TEST_DATA_REFERENCE_UNRESOLVED',
+          message: `step ${String(index)}: ${references.reason}`,
+        });
+        return {
+          page,
+          report: done('FAILED', {
+            reason: references.reason,
+            stateId: context.stateId,
+            url: context.url,
+          }),
+        };
+      }
+      citedTestData = references.keys.map((key) => `testData.${key}`);
+      for (const key of references.keys)
+        this.listener.onTestData?.({
+          at: new Date().toISOString(),
+          event: 'TEST_DATA_REFERENCE_RESOLVED',
+          message: `step ${String(index)} cites testData.${key}: the value of this run`,
+        });
+      const cited = references.value;
+      if ('target' in cited && 'target' in original && referencedTestDataKeys(original.target).length > 0) {
+        const ambiguity = await this.correlationAmbiguity(page, cited.target, original);
+        if (ambiguity)
+          return {
+            page,
+            report: done('FAILED', { reason: ambiguity, stateId: context.stateId, url: context.url }),
+          };
+      }
+      step = references.value;
+    }
 
     switch (step.kind) {
       case 'expect': {
@@ -7572,7 +7633,26 @@ export class FlowExplorer {
    * TestDataProvider à l'exécution ; testData.fields[clé] si la mission la donne. Jamais pour
    * un champ sensible (le TestDataProvider ne les remplit pas).
    */
-  private testDataValue(action: DiscoveredAction, key: string, flow: FlowConfig): ResolvedTestData {
+  private testDataValue(
+    target: DiscoveredAction | undefined,
+    key: string,
+    flow: FlowConfig,
+  ): ResolvedTestData {
+    // Une référence (${testData:clé}) n'a pas de champ : une saisie de texte nommée par la clé.
+    const action: DiscoveredAction = target ?? {
+      id: `test-data:${key}`,
+      stateId: '',
+      type: 'fill',
+      category: 'other',
+      elementType: 'input',
+      label: key.split('.').at(-1) ?? key,
+      disabled: false,
+      visible: true,
+      classification: 'SAFE',
+      reason: 'test data reference',
+      risks: [],
+      locator: { strategy: 'label', value: key },
+    };
     // testData.fields de la mission : « Branch-Code » vaut pour la clé branchCode (casse et ponctuation ignorées).
     // Une configuration explicite l'emporte sur toute inférence (et sur le jeu enregistré).
     const compact = (text: string): string =>
@@ -7615,6 +7695,38 @@ export class FlowExplorer {
     });
     if (resolved.kind === 'value' && resolved.strategy === 'RECORDED_LITERAL') this.flowRecordedKeys.add(key);
     return resolved;
+  }
+
+  /**
+   * Une cible CORRÉLÉE (le résultat qui porte la donnée créée plus haut) désigne-t-elle plusieurs
+   * éléments ? Alors l'identité métier n'est pas établie : jamais le premier, rien n'est exécuté.
+   */
+  private async correlationAmbiguity(
+    page: Page,
+    target: FlowTarget,
+    original: FlowStep,
+  ): Promise<string | undefined> {
+    const count = await this.flowSteps.visibleMatches(page, target);
+    if (count <= 1) return undefined;
+    const keys = 'target' in original ? referencedTestDataKeys(original.target) : [];
+    return `AMBIGUOUS_CORRELATION: ${String(count)} elements carry ${keys.map((key) => `testData.${key}`).join(', ')} — the correlated result is never picked arbitrarily (nothing executed)`;
+  }
+
+  /** Les références ${testData:clé} d'une étape, résolues par le contexte du run (même valeur pour tout le run). */
+  private citeTestData(step: FlowStep, flow: FlowConfig): ResolvedReferences<FlowStep> {
+    return resolveTestDataReferences(step, (key) => {
+      // Une CITATION vise une donnée connue : jamais une valeur inventée pour une clé que rien ne définit.
+      const defined =
+        this.testDataRun.has(key) ||
+        [flow.testData, this.config.testData.set].some((set) => set?.values[key] !== undefined) ||
+        this.config.testData.fields[key] !== undefined;
+      if (!defined)
+        return { error: `unknown test data key "${key}" (not in the data set, never entered in this run)` };
+      const data = this.testDataValue(undefined, key, flow);
+      return data.kind === 'value'
+        ? { value: data.value }
+        : { error: data.kind === 'missing' ? data.reason : 'PRESERVE_EXISTING: no value to cite' };
+    });
   }
 
   private syntheticAction(
@@ -8761,8 +8873,12 @@ export class FlowExplorer {
 }
 
 /** Court, lisible, assez unique : le temps en base 36 (par exemple "mg3k2x1a"). */
+/**
+ * L'identifiant du run : l'heure (lisible, triable) et une part aléatoire. Deux rejeux lancés dans la
+ * même milliseconde (en parallèle) n'ont jamais le même identifiant, donc jamais les mêmes données générées.
+ */
 function newRunId(): string {
-  return Date.now().toString(36);
+  return `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
 }
 
 function skippedStep(step: FlowStep, index: number, reason: string): FlowStepReport {

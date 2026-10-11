@@ -41,6 +41,11 @@ export class TestDataRunContext {
 
   constructor(private readonly options: TestDataRunContextOptions) {}
 
+  /** La clé a-t-elle déjà reçu sa valeur pendant ce run (saisie, génération) ? */
+  has(key: string): boolean {
+    return this.cache.has(key);
+  }
+
   /** Valeur d'une clé : jeux de données dans l'ordre de priorité (celui du flow, puis celui de la mission). */
   resolve(key: string, sets: readonly (TestDataSet | undefined)[], sources: Sources): ResolvedTestData {
     return this.resolveKey(key, sets, sources, new Set());

@@ -174,6 +174,11 @@ export class DryRunEngine {
         this.emit('FLOW_STEP_AMBIGUOUS', `${describeFlowIntent(intent)}: ${probe.reason}`, intent.id);
         return 0;
       }
+      if (probe.status === 'NOT_FOUND' && probe.final) {
+        this.find(intent, 'NOT_FOUND', 0, [probe.reason]);
+        pending.push(intent);
+        return 0;
+      }
       if (probe.status === 'BLOCKED') {
         this.find(
           intent,

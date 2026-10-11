@@ -148,6 +148,29 @@ export class FlowStepExecutor {
     }
   }
 
+  /**
+   * Combien d'éléments VISIBLES la cible désigne (rôle + nom, libellé, texte…) sur la page affichée.
+   * Une cible corrélée (le résultat qui porte le nom créé plus haut) doit en désigner un seul.
+   */
+  async visibleMatches(page: Page, target: FlowTarget): Promise<number> {
+    const base = toLocator(page, {
+      strategy: target.strategy,
+      ...(target.role !== undefined ? { role: target.role } : {}),
+      ...(target.name !== undefined ? { name: target.name } : {}),
+      ...(target.value !== undefined ? { value: target.value } : {}),
+      ...(target.exact !== undefined ? { exact: target.exact } : {}),
+    });
+    return base
+      .evaluateAll(
+        (elements) =>
+          elements.filter((el) => {
+            const rect = el.getBoundingClientRect();
+            return (rect.width > 0 || rect.height > 0) && getComputedStyle(el).visibility !== 'hidden';
+          }).length,
+      )
+      .catch(() => 0);
+  }
+
   /** Le nombre maximal de pages d'un tableau parcourues pour trouver une ligne. */
   static readonly MAX_TABLE_PAGES = 20;
 
