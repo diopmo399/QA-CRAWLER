@@ -1,4 +1,5 @@
 import { isBusinessCandidate, technicalCategoryOf } from '../business/entity-classifier.js';
+import { annotationOf, type FunctionalIntent } from '../../intent/model.js';
 import type { EntityCorrelation } from '../business/entity-correlation.js';
 import type { EntityEvidence } from '../business/entity-evidence.js';
 import type { LifecycleKind, TrackedEntity } from '../business/entity-tracker.js';
@@ -56,6 +57,8 @@ export interface ApplicationModelInput {
   relationshipDecisions?: ReadonlyMap<string, string>;
   /** Les corrélations par données métier (business/entity-correlation.ts). */
   correlations?: readonly EntityCorrelation[];
+  /** Les intentions fonctionnelles (intent/), pour compléter chaque vue d'action. */
+  intents?: readonly FunctionalIntent[];
 }
 
 const LIFECYCLE_ACTION: Partial<Record<LifecycleKind, BusinessActionKind>> = {
@@ -1111,7 +1114,9 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
   }
 
   // ---------------------------------------------------------------- 8. les trois niveaux de chaque action
+  const intentOf = new Map((input.intents ?? []).map((intent) => [intent.actionId, intent]));
   const actionViews: ActionView[] = actions.map((action) => {
+    const functionalIntent = intentOf.get(action.id);
     const raw = rawById.get(action.rawEventIds.at(-1) ?? '');
     const status = raw?.targetValidation?.status;
     const explaining = ordered.filter((entry) => entry.actionIds.includes(action.id));
@@ -1133,6 +1138,7 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
       ...(status ? { validationStatus: status } : {}),
       interpretation: kinds.length ? kinds : ['UNKNOWN'],
       ...(explaining.length ? { confidence: Math.max(...explaining.map((entry) => entry.confidence)) } : {}),
+      ...(functionalIntent ? { functionalIntent: annotationOf(functionalIntent) } : {}),
     };
   });
 
@@ -1181,6 +1187,21 @@ export function buildApplicationModel(input: ApplicationModelInput): Application
         validated: actionViews.filter((view) => view.validation === 'VALIDATED').length,
         interpreted: actionViews.filter((view) => !view.interpretation.includes('UNKNOWN')).length,
         uninterpreted: actionViews.filter((view) => view.interpretation.includes('UNKNOWN')).length,
+        ...(input.intents
+          ? {
+              intentResolved: actionViews.filter(
+                (view) =>
+                  view.functionalIntent?.status === 'CONFIRMED' ||
+                  view.functionalIntent?.status === 'PROBABLE',
+              ).length,
+              intentOnly: actionViews.filter(
+                (view) =>
+                  view.interpretation.includes('UNKNOWN') &&
+                  (view.functionalIntent?.status === 'CONFIRMED' ||
+                    view.functionalIntent?.status === 'PROBABLE'),
+              ).length,
+            }
+          : {}),
       },
     },
   };

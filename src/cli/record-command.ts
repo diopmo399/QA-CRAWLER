@@ -273,6 +273,13 @@ function printSummary(outcome: RecordOutcome): void {
   line('Semantic actions', normalized.actions.length);
   line('Final steps', flow.steps.length);
   line('Semantic intent', `${flow.intent.workflow ?? '-'} (post-recording, semantic-intents.json)`);
+  if (outcome.result.intents) {
+    const by = outcome.result.intents.summary.byStatus;
+    line(
+      'Functional intents',
+      `${String(by.CONFIRMED)} confirmed, ${String(by.PROBABLE)} probable, ${String(by.AMBIGUOUS)} ambiguous, ${String(by.UNKNOWN)} unknown (functional-intents.json)`,
+    );
+  }
   line('Assertions selected', q.assertions.selected);
   line('Ambiguous targets', q.ambiguousTargets);
   line('Fragile locators', q.fragileLocators);

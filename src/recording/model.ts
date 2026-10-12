@@ -9,6 +9,7 @@ import type {
   TargetFingerprint,
 } from '../config/flow-schema.js';
 import type { FunctionalExchange } from '../functional/model.js';
+import type { StepIntentAnnotation } from '../intent/model.js';
 import type { RecordingTargetValidation } from './target-validator.js';
 
 /**
@@ -681,6 +682,8 @@ export interface RecordedFlowStep {
   explanation: string;
   /** Une ambiguïté tranchée par l'humain (élément touché confirmé) ou laissée par lui (à vérifier au rejeu). */
   userDecision?: 'AMBIGUITY_CONFIRMED_BY_USER' | 'AMBIGUITY_LEFT_BY_USER';
+  /** L'INTENTION FONCTIONNELLE (niveaux UI et métier) à côté de l'action brute, jamais à sa place. */
+  intent?: StepIntentAnnotation;
 }
 
 /** LA représentation intermédiaire : la seule source du YAML et du Gherkin. */
@@ -772,6 +775,8 @@ export type RecordingEventType =
   | 'RECORDING_STOP_TIMING'
   | 'RECORDING_NORMALIZED'
   | 'OUTCOME_INFERRED'
+  | 'FUNCTIONAL_INTENTS_RESOLVED'
+  | 'FUNCTIONAL_INTENT_ARBITRATED'
   | 'FLOW_GENERATED'
   | 'REPLAY_VALIDATION_STARTED'
   | 'REPLAY_CONFIRMED'

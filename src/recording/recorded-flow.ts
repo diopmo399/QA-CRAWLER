@@ -346,6 +346,10 @@ export function toSuggestedFlow(flow: RecordedFlow): SuggestedFlowGraph {
             ]
           : []),
         ...(item.userDecision ? [item.userDecision] : []),
+        // L'intention fonctionnelle (niveau 3), à côté de l'action : SEARCH_ITEM CONFIRMED 0.91.
+        ...(item.intent
+          ? [`intent ${item.intent.name} ${item.intent.status} ${String(item.intent.confidence)}`]
+          : []),
         `raw ${item.rawEventIds.join(',')}`,
       ].join(' · '),
     })),

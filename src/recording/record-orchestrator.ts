@@ -33,7 +33,14 @@ import { browserHttpCredentials } from '../interactions/browser-credentials.js';
 import { ConfigError, loadConfigFile, parseConfig, type ConfigOverrides } from '../config/config-loader.js';
 import type { ScenarioConfig } from '../config/config.js';
 import { runDryRun } from '../dry-run/dry-run-orchestrator.js';
-import { FunctionalKnowledgeStore } from '../knowledge/functional-knowledge-store.js';
+import {
+  FunctionalKnowledgeStore,
+  type RememberedIntentDecision,
+} from '../knowledge/functional-knowledge-store.js';
+import { arbitrateIntents } from '../intent/ai-arbiter.js';
+import { historyKeyOf, type IntentHistoryHint } from '../intent/evidence.js';
+import { genericOf } from '../intent/model.js';
+import { annotateFlowSteps, summarize as summarizeIntents } from '../intent/resolve-recording.js';
 import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
@@ -334,6 +341,11 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     stopClock.mark('browser close');
   }
   stopClock.mark('(pre-processing)');
+  // Ce que la connaissance de l'application sait déjà des intentions (décisions humaines, bibliothèque) :
+  // des preuves de plus pour le résolveur, jamais des règles.
+  const intentKnowledge = config.recording.knowledge
+    ? await loadIntentKnowledge(config, env).catch(() => undefined)
+    : undefined;
   const result = await progress.run(RECORDING_PHASES.flow, () =>
     processRecording(recorder.session, config, {
       language,
@@ -341,6 +353,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       onEvent,
       typedValues: recorder.typedValues,
       digest: (value) => recorder.digest(value),
+      ...(intentKnowledge ? { intentKnowledge } : {}),
       // L'analyse HTTP : le journal de la session et la dernière passe en direct (provisoire).
       http: {
         journal: recorder.networkJournal(),
@@ -446,6 +459,15 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     'semantic-intents.json',
     json(semanticIntentsOf(result.flow.recordingSessionId, semanticIntent)),
   );
+  // FUNCTIONAL INTENTS (niveau 3, trois niveaux par action) : preuves, candidats, statut — jamais le flow.
+  const writeIntents = async (): Promise<void> => {
+    if (result.intents)
+      await write(
+        'functional-intents.json',
+        json({ recordingSessionId: result.session.id, ...result.intents }),
+      );
+  };
+  await writeIntents();
   await write('flow-graph.json', json(result.graph));
   // Le jeu de données du flow (aucune valeur sensible : références à des variables d'environnement).
   if (result.testData && Object.keys(result.testData.set.values).length > 0)
@@ -549,6 +571,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     await rememberRecording(config, result, env).catch(() => undefined);
     // Les correspondances champ ↔ propriété VALIDÉES seulement (jamais une hypothèse), par application.
     await rememberFieldMappings(config, result, env).catch(() => undefined);
+    // La bibliothèque d'intentions : les intentions CONFIRMED / PROBABLE de ce parcours, généralisées.
+    await rememberIntentPatterns(config, result, env).catch(() => undefined);
   }
   stopClock.mark('knowledge');
 
@@ -649,6 +673,50 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         message: `${String(intelligence.candidates.length)} knowledge candidate(s) (${String(intelligence.aiCalls)} AI call(s)); ${String(intelligence.preserved)}/${String(intelligence.humanActions)} human action(s) preserved${intelligence.preservationVerified ? '' : ' — PRESERVATION CHECK FAILED'}`,
       });
       await write('recording-intelligence.json', json(intelligence));
+      // L'ARBITRE D'INTENTION : pour chaque intention AMBIGUOUS, le conseiller choisit parmi les candidats.
+      if (result.intents && gateway && config.recording.intent.ai) {
+        const arbitrated = await arbitrateIntents({
+          intents: result.intents.intents,
+          gateway,
+          mode,
+          recordingId: result.session.id,
+          maxCalls: 4,
+        });
+        if (arbitrated.arbitrated.length > 0) {
+          result.intents = {
+            ...result.intents,
+            intents: arbitrated.intents,
+            summary: summarizeIntents(arbitrated.intents),
+          };
+          annotateFlowSteps(result.flow.steps, arbitrated.intents);
+          result.files = generateFlowFiles(result.flow, {
+            language,
+            recordedAt: result.session.startedAt,
+            ...(result.testData && Object.keys(result.testData.set.values).length > 0
+              ? { testDataFile: TEST_DATA_FILE }
+              : {}),
+          });
+          if (format !== 'gherkin') await write('generated.flow.yaml', result.files.yaml);
+          if (format !== 'yaml') await write('generated.feature', result.files.feature);
+          await writeIntents();
+          for (const entry of arbitrated.arbitrated)
+            onEvent({
+              type: 'FUNCTIONAL_INTENT_ARBITRATED',
+              at: new Date().toISOString(),
+              message: `${entry.actionId}: ${entry.previous} → ${entry.chosen} (AI arbiter, among the deterministic candidates)`,
+            });
+        }
+        if (arbitrated.decisions.length > 0)
+          await write(
+            'functional-intent-decisions.json',
+            json({
+              recordingSessionId: result.session.id,
+              decisions: arbitrated.decisions,
+              arbitrated: arbitrated.arbitrated,
+              aiCalls: arbitrated.aiCalls,
+            }),
+          );
+      }
       if (mode === 'HYBRID')
         await rememberRecordingCandidates(
           recordingCandidatesFile(config.output.reportsDir),
@@ -1156,6 +1224,66 @@ function decisionContextOf(result: RecordingResult, actionId: string): DecisionC
     ...(element?.css ? { selector: element.css } : {}),
     ...(step ? { businessStep: `${step.action} ${step.entity ?? ''}`.trim() } : {}),
   };
+}
+
+function knowledgeStoreOf(config: ScenarioConfig, env: NodeJS.ProcessEnv): FunctionalKnowledgeStore {
+  return new FunctionalKnowledgeStore(
+    path.join(path.dirname(path.resolve(config.output.reportsDir)), 'knowledge', 'functional'),
+    {
+      application: config.mission.name,
+      ...((config.baseline.environment ?? env.QA_ENVIRONMENT)
+        ? { environment: config.baseline.environment ?? env.QA_ENVIRONMENT }
+        : {}),
+    },
+  );
+}
+
+/** Les décisions humaines et la bibliothèque d'intentions de cette application, pour le résolveur. */
+async function loadIntentKnowledge(
+  config: ScenarioConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<{ decisions: readonly RememberedIntentDecision[]; history: IntentHistoryHint[] }> {
+  const store = knowledgeStoreOf(config, env);
+  await store.load();
+  return {
+    decisions: store.intentDecisions(),
+    history: store.intentPatterns().map((pattern) => ({
+      key: pattern.key,
+      intent: pattern.intent,
+      confirmations: pattern.confirmations,
+    })),
+  };
+}
+
+/** Les intentions CONFIRMED / PROBABLE de ce parcours entrent dans la bibliothèque (généralisées). */
+async function rememberIntentPatterns(
+  config: ScenarioConfig,
+  result: RecordingResult,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const intents = result.intents?.intents.filter(
+    (intent) =>
+      (intent.status === 'CONFIRMED' || intent.status === 'PROBABLE') && intent.source !== 'AI_ARBITER',
+  );
+  if (!intents || intents.length === 0) return;
+  const byAction = new Map(result.normalized.kept.map((action) => [action.id, action]));
+  const store = knowledgeStoreOf(config, env);
+  await store.load();
+  store.rememberIntentPatterns(
+    intents.flatMap((intent) => {
+      const action = byAction.get(intent.actionId);
+      if (!action || !action.target?.named) return [];
+      return [
+        {
+          key: historyKeyOf(action),
+          intent: intent.name,
+          generic: genericOf(intent),
+          recordingSessionId: result.session.id,
+        },
+      ];
+    }),
+  );
+  await store.save([]);
 }
 
 /**
