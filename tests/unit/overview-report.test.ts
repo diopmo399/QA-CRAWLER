@@ -54,10 +54,10 @@ const flow: FlowRunReport = {
   issueIds: [],
   explored: false,
   steps: [
-    step(1, { kind: 'goto', description: 'goto /processusdoce', replay: intent('CONFIRMED') }),
+    step(1, { kind: 'goto', description: 'goto /companies', replay: intent('CONFIRMED') }),
     step(2, {
       kind: 'fill',
-      description: 'fill label "Nom légal" = ${testData:company.legalName}',
+      description: 'fill label "Company name" = ${testData:company.name}',
       replay: intent('PROBABLE'),
     }),
     step(3, {
@@ -71,11 +71,11 @@ const flow: FlowRunReport = {
     }),
     step(4, {
       kind: 'fill',
-      description: 'fill label "Recherche" = ${testData:company.legalName}',
+      description: 'fill label "Recherche" = ${testData:company.name}',
       replay: intent('CONFIRMED', 'SEARCH'),
     }),
     step(5, {
-      description: 'click button "${testData:company.legalName}"',
+      description: 'click button "${testData:company.name}"',
       effect: {
         execution: 'EXECUTED',
         status: 'AMBIGUOUS',
@@ -95,7 +95,7 @@ const flow: FlowRunReport = {
   testDataReport: {
     entries: [
       {
-        key: 'company.legalName',
+        key: 'company.name',
         strategy: 'GENERATE_AT_REPLAY',
         generator: 'company',
         sensitive: false,
@@ -113,9 +113,9 @@ const flow: FlowRunReport = {
 };
 
 const result = {
-  mission: 'processusdoce',
+  mission: 'company-demo',
   mode: 'verify',
-  runId: 'run2996',
+  runId: 'run1',
   target: { baseUrl: 'https://qa.example.com', startUrl: 'https://qa.example.com/' },
   startedAt: '2026-10-10T14:32:00.000Z',
   finishedAt: '2026-10-10T14:33:54.000Z',
@@ -157,10 +157,10 @@ describe('Overview — model', () => {
   });
 
   it('links the step that produces a value to every step that reuses it', () => {
-    expect(model.steps[1]?.generates).toEqual(['company.legalName']);
+    expect(model.steps[1]?.generates).toEqual(['company.name']);
     expect(model.links).toEqual([
-      { key: 'company.legalName', from: 2, to: 4, how: 'INPUT' },
-      { key: 'company.legalName', from: 2, to: 5, how: 'CITATION' },
+      { key: 'company.name', from: 2, to: 4, how: 'INPUT' },
+      { key: 'company.name', from: 2, to: 5, how: 'CITATION' },
     ]);
     expect(model.data[0]?.uses.map((use) => use.role)).toEqual(['SOURCE', 'REUSE', 'CITATION']);
   });
@@ -185,7 +185,7 @@ describe('Overview — model', () => {
 
   it('summarises the run', () => {
     const overview = buildOverviewModel(result);
-    expect(overview).toMatchObject({ mission: 'processusdoce', runId: 'run2996', issues: 1 });
+    expect(overview).toMatchObject({ mission: 'company-demo', runId: 'run1', issues: 1 });
     expect(overview.flows).toHaveLength(1);
   });
 });
