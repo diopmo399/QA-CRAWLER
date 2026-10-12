@@ -31,7 +31,7 @@ const FLOW = `      - click: { role: button, name: Tasks }
  * suivant (HISTORICAL, confirmée par l'effet), la divergence localisée sur un vrai bogue, et une
  * précondition non satisfaite expliquée avant d'agir.
  */
-describe('Intent-driven replay (real browser)', () => {
+describe.concurrent('Intent-driven replay (real browser)', () => {
   let app: WorkflowApp;
   let dir: string;
 
@@ -52,7 +52,7 @@ describe('Intent-driven replay (real browser)', () => {
   ): Promise<{ report: FlowRunReport; log: string; html: string }> => {
     const base = path.join(dir, name);
     await mkdir(base, { recursive: true });
-    const reportsDir = path.join(base, `reports-${String(Date.now())}`);
+    const reportsDir = await mkdtemp(path.join(base, 'reports-'));
     const missionFile = path.join(base, 'mission.yaml');
     await writeFile(
       missionFile,

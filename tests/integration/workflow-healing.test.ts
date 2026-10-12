@@ -28,7 +28,7 @@ const FLOW = `      - click: { role: button, name: Tasks }
  * parcours, la vraie régression et l'ambiguïté — sans jamais masquer un bogue ni contourner
  * une autorisation, et sans jamais réécrire le flow d'origine.
  */
-describe('Workflow self-healing (intent-aware recovery)', () => {
+describe.concurrent('Workflow self-healing (intent-aware recovery)', () => {
   let app: WorkflowApp;
   let dir: string;
 
@@ -49,7 +49,7 @@ describe('Workflow self-healing (intent-aware recovery)', () => {
   ): Promise<{ report: FlowRunReport; missionFile: string; reportsDir: string }> => {
     const base = path.join(dir, name);
     await mkdir(base, { recursive: true });
-    const reportsDir = path.join(base, `reports-${String(Date.now())}`);
+    const reportsDir = await mkdtemp(path.join(base, 'reports-'));
     const missionFile = path.join(base, 'mission.yaml');
     await writeFile(
       missionFile,
@@ -243,20 +243,24 @@ ${flow}
     });
   }, 120_000);
 
-  it('§80: the original action exists but its write fails (500): a possible regression, never bypassed, never resent', async () => {
-    const before = app.counts.submit;
-    const { report } = await replay('bug', '?v=1&fail=1');
-    expect(report.status).toBe('FAILED');
-    const submit = report.steps[6];
-    expect(submit?.recovery?.divergence.category, show(report)).toBe('APPLICATION_BEHAVIOR_CHANGED');
-    expect(submit?.recovery?.outcome.experiments).toBe(0);
-    expect(submit?.reason).toMatch(/MUTATION_EFFECT_AMBIGUOUS/);
-    expect(report.drift).toMatchObject({
-      result: 'FAIL_BUSINESS_DIVERGENCE',
-      classification: 'POSSIBLE_REGRESSION',
-    });
-    expect(app.counts.submit).toBe(before + 1);
-  }, 90_000);
+  it.sequential(
+    '§80: the original action exists but its write fails (500): a possible regression, never bypassed, never resent',
+    async () => {
+      const before = app.counts.submit;
+      const { report } = await replay('bug', '?v=1&fail=1');
+      expect(report.status).toBe('FAILED');
+      const submit = report.steps[6];
+      expect(submit?.recovery?.divergence.category, show(report)).toBe('APPLICATION_BEHAVIOR_CHANGED');
+      expect(submit?.recovery?.outcome.experiments).toBe(0);
+      expect(submit?.reason).toMatch(/MUTATION_EFFECT_AMBIGUOUS/);
+      expect(report.drift).toMatchObject({
+        result: 'FAIL_BUSINESS_DIVERGENCE',
+        classification: 'POSSIBLE_REGRESSION',
+      });
+      expect(app.counts.submit).toBe(before + 1);
+    },
+    90_000,
+  );
 
   it('§83: when the budget is reached the result is RECOVERY_BUDGET_EXHAUSTED (inconclusive), never "unreachable"', async () => {
     const { report } = await replay('budget', '?v=4', 'budgets: { maxSafeExperiments: 1 }');

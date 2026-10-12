@@ -2,13 +2,12 @@ import { cpus } from 'node:os';
 import { defineConfig } from 'vitest/config';
 
 /**
- * Chaque fichier d'intégration lance un Chromium et une mission complète : trop de fichiers
- * en parallèle affament une machine modeste (portable, antivirus sous Windows) et font
- * expirer les préparations. Au plus la moitié des cœurs (4 au plus), réglable avec
- * QA_TEST_WORKERS.
+ * Chaque fichier d'intégration lance un Chromium et des missions complètes qui n'occupent qu'une
+ * fraction d'un cœur (attentes d'écran, réseau local) : un worker par cœur (8 au plus) garde la
+ * machine occupée sans l'affamer. Une machine modeste (portable, antivirus sous Windows) :
+ * QA_TEST_WORKERS=2.
  */
-const workers =
-  Number(process.env.QA_TEST_WORKERS) || Math.max(1, Math.min(4, Math.floor(cpus().length / 2)));
+const workers = Number(process.env.QA_TEST_WORKERS) || Math.max(1, Math.min(8, cpus().length));
 
 export default defineConfig({
   test: {
