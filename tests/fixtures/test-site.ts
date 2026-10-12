@@ -73,7 +73,14 @@ const pages: Record<string, (url: URL) => string> = {
     );
   },
   '/js-error': () =>
-    layout('Erreur JS', '<p>Cette page lance une exception.</p>', 'window.undefinedFunction();'),
+    layout(
+      'Erreur JS',
+      '<p>Cette page lance une exception.</p>',
+      // Une pile réaliste : le rapport doit montrer chaque cadre, pas seulement la ligne fautive.
+      'function renderWidget() { window.undefinedFunction(); }\n' +
+        'function initPage() { renderWidget(); }\n' +
+        'initPage();',
+    ),
   '/console-error': () =>
     layout(
       'Erreur console',

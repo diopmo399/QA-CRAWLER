@@ -39,6 +39,20 @@ export const ISSUE_TYPES = [
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 
+/** Détails structurés d'une anomalie, quand la source en fournit : affichés sous le message, dépliables. */
+export interface IssueDetails {
+  /** Nom de l'erreur (TypeError…) ou niveau console (console.error). */
+  name?: string;
+  /** Fichier, ligne et colonne d'où vient l'erreur, quand connus. */
+  source?: { url: string; line?: number; column?: number };
+  /** Pile d'appels, une ligne par cadre (sans la ligne « Name: message »). */
+  stack?: string[];
+  /** Texte complet, sur plusieurs lignes, quand le message n'en garde que la première. */
+  text?: string;
+  /** Autres informations clé → valeur (type de contenu, taille, en-têtes…). */
+  extra?: Record<string, string>;
+}
+
 /**
  * Une anomalie observée pendant l'exploration. Les anomalies identiques (même type,
  * message, requête, statut) sont fusionnées : `occurrences` les compte et `pages`
@@ -71,6 +85,8 @@ export interface Issue {
   occurrences: number;
   /** Chemin de la capture, relatif au dossier de travail, quand une capture a été prise. */
   screenshot?: string;
+  /** Détails (pile, source, texte complet…) de la première occurrence ; masqués comme le message. */
+  details?: IssueDetails;
   /** Cycle de vie (regression.anomalyLifecycle) : l'anomalie suivie de run en run. */
   lifecycle?: { anomalyId: string; status: 'NEW' | 'KNOWN' | 'RESOLVED' | 'REOPENED' | 'FLAKY' };
 }

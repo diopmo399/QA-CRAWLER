@@ -27,6 +27,21 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   `functional-intents.json`, rapport d'enregistrement, modèle de l'application ; le self-healing la lit
   avant l'heuristique du libellé. Arbitre IA sur AMBIGUOUS seulement (choix parmi les candidats),
   bibliothèque d'intentions dans la connaissance fonctionnelle. Configuration `recording.intent`.
+- `Issue.details` : nom de l'erreur, source (`fichier:ligne:colonne`), pile d'appels complète
+  (`PAGE_ERROR`), texte complet d'un message console sur plusieurs lignes (`CONSOLE`), type de
+  ressource et en-têtes de diagnostic d'une réponse en échec (`HTTP`, `BROKEN_LINK`,
+  `REQUEST_FAILED`). Masqués et bornés par le collecteur comme le message.
+- Rapport HTML : bloc « Détails » dépliable sous le message de chaque anomalie (source,
+  informations clé → valeur, pile d'appels, texte complet).
+
+### Corrigé
+
+- Windows, Git Bash et WSL : les scripts npm `build`, `clean` et `pack` passent par Node
+  (`scripts/clean.mjs`, `scripts/pack.mjs`) au lieu de `rm -rf` / `mkdir -p` ; le test
+  d'installation (`test:packaging`) lance `npm.cmd` et `qa-crawler.cmd` sous Windows ;
+  `.gitattributes` force les fins de ligne LF ; job CI `packaging-windows` (build, tarballs,
+  installation des tarballs, tests unitaires sur `windows-latest`) ; section README
+  « Windows, Git Bash et WSL » et lignes de dépannage.
 
 ## 0.2.0 — 2026-10-12
 

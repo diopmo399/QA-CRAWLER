@@ -1,0 +1,6 @@
+# Fins de ligne : LF partout (le shim `bin/qa-crawler.js` doit rester LF pour Git Bash et WSL).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.tgz binary
+*.ico binary
