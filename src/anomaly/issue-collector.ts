@@ -1,4 +1,4 @@
-import { SEVERITIES, type Issue, type IssueInput, type Severity } from '../model/issue.js';
+import { SEVERITIES, type Issue, type IssueDetails, type IssueInput, type Severity } from '../model/issue.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 
 /**
@@ -23,6 +23,7 @@ export class IssueCollector {
       pageUrl: redactUrl(input.pageUrl),
       ...(input.requestUrl !== undefined ? { requestUrl: redactUrl(input.requestUrl) } : {}),
       ...(input.referrerUrl !== undefined ? { referrerUrl: redactUrl(input.referrerUrl) } : {}),
+      ...(input.details !== undefined ? { details: redactDetails(input.details) } : {}),
     };
     const key = dedupeKey(clean);
     const existing = this.byKey.get(key);
@@ -97,6 +98,25 @@ export class IssueCollector {
 export function dedupeKey(issue: IssueInput): string {
   const message = issue.message.replace(/\d+/g, '#').slice(0, 300);
   return [issue.type, issue.method ?? '', issue.requestUrl ?? '', issue.status ?? '', message].join('|');
+}
+
+const MAX_STACK_FRAMES = 30;
+
+/** Les détails suivent les mêmes règles que le message : masqués, bornés, jamais une valeur saisie. */
+function redactDetails(details: IssueDetails): IssueDetails {
+  const clean: IssueDetails = {};
+  if (details.name !== undefined) clean.name = truncate(redactText(details.name), 200);
+  if (details.source !== undefined) clean.source = { ...details.source, url: redactUrl(details.source.url) };
+  if (details.stack !== undefined && details.stack.length > 0)
+    clean.stack = details.stack.slice(0, MAX_STACK_FRAMES).map((frame) => truncate(redactText(frame), 500));
+  if (details.text !== undefined) clean.text = truncate(redactText(details.text), 4000);
+  if (details.extra !== undefined) {
+    const extra = Object.entries(details.extra)
+      .filter(([, value]) => value !== '')
+      .map(([key, value]) => [key, truncate(redactText(value), 500)] as const);
+    if (extra.length > 0) clean.extra = Object.fromEntries(extra);
+  }
+  return clean;
 }
 
 function truncate(text: string, max: number): string {

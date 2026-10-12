@@ -1,12 +1,14 @@
 import type { Page, Request, Response } from 'playwright';
 import { SeverityRules } from '../anomaly/severity-rules.js';
+import type { IssueDetails } from '../model/issue.js';
 import { attributionOf, type ObservationContext, type PageObserver } from './observer.js';
 
 /**
  * Signale les réponses HTTP de statut >= http.failOnStatus, les requêtes en échec,
  * les pages cassées (document principal >= failOnStatus) et les navigations en échec
- * (boucles de redirection, DNS…). Seuls l'URL, la méthode et le statut sont gardés —
- * jamais les en-têtes, cookies ou corps.
+ * (boucles de redirection, DNS…). Seuls l'URL, la méthode, le statut et quelques en-têtes
+ * de diagnostic (type de contenu, identifiant de requête…) sont gardés — jamais les cookies,
+ * les en-têtes d'authentification ni le corps.
  */
 export class NetworkObserver implements PageObserver {
   private readonly onResponse = (response: Response): void => {
@@ -51,6 +53,7 @@ export class NetworkObserver implements PageObserver {
       requestUrl: request.url(),
       method: request.method(),
       status,
+      details: responseDetails(response),
     });
   }
 
@@ -70,6 +73,7 @@ export class NetworkObserver implements PageObserver {
       status,
       ...(referrer !== response.url() ? { referrerUrl: referrer } : {}),
       ...attributionOf(this.context),
+      details: responseDetails(response),
     });
   }
 
@@ -102,6 +106,7 @@ export class NetworkObserver implements PageObserver {
       ...attributionOf(this.context),
       requestUrl: request.url(),
       method: request.method(),
+      details: { name: failure, extra: { resourceType: request.resourceType() } },
     });
   }
 
@@ -122,4 +127,27 @@ function isMainFrameNavigation(request: Request): boolean {
 function stripQuery(url: string): string {
   const index = url.search(/[?#]/);
   return index >= 0 ? url.slice(0, index) : url;
+}
+
+/** En-têtes de réponse utiles au diagnostic (jamais de cookie ni d'autorisation) et type de ressource. */
+const DIAGNOSTIC_HEADERS = [
+  'content-type',
+  'content-length',
+  'server',
+  'x-request-id',
+  'x-correlation-id',
+  'x-trace-id',
+  'retry-after',
+  'www-authenticate',
+  'location',
+];
+
+function responseDetails(response: Response): IssueDetails {
+  const headers = response.headers();
+  const extra: Record<string, string> = { resourceType: response.request().resourceType() };
+  for (const name of DIAGNOSTIC_HEADERS) {
+    const value = headers[name];
+    if (value !== undefined && value !== '') extra[name] = value;
+  }
+  return { name: `${String(response.status())} ${response.statusText()}`.trim(), extra };
 }

@@ -118,7 +118,7 @@ export function renderHtml(
         (issue) => `<tr>
         <td>${severityBadge(issue.severity, language)}<br><span class="muted">${esc(label(issue.type))}</span></td>
         ${withRequest ? `<td>${issue.status ?? ''}</td><td class="wrap">${esc([issue.method, issue.requestUrl].filter(Boolean).join(' '))}</td>` : ''}
-        <td class="wrap">${esc(issue.type === 'FLOW' || issue.type === 'FORM_VALIDATION' ? reason(issue.message) : issue.message)}</td>
+        <td class="wrap">${esc(issue.type === 'FLOW' || issue.type === 'FORM_VALIDATION' ? reason(issue.message) : issue.message)}${issueDetailsHtml(issue, t)}</td>
         <td class="wrap">${issue.stateId ? `<b>${esc(nameOf(issue.stateId))}</b>` : ''}${issue.actionId ? `<br><span class="muted">${esc(t.after)} ${esc(actionText(issue.actionId))}</span>` : ''}
           ${issue.flow && issue.flow.length > 1 ? `<div class="flow">${issue.flow.map((id) => esc(nameOf(id))).join(' → ')}</div>` : ''}</td>
         <td>${issue.occurrences}</td>
@@ -722,4 +722,37 @@ function overallStatus(counts: Record<Severity, number>, t: ReportTexts): { labe
   if (counts.ERROR > 0) return { label: t.status.errors, color: SEVERITY_COLORS.ERROR };
   if (counts.WARNING > 0) return { label: t.status.warnings, color: SEVERITY_COLORS.WARNING };
   return { label: t.status.none, color: '#15803d' };
+}
+
+/**
+ * Le bloc « Détails » sous le message d'une anomalie : nom, source (fichier:ligne:colonne),
+ * informations clé → valeur, pile d'appels et texte complet. Rien quand la source n'a rien fourni.
+ */
+export function issueDetailsHtml(issue: Issue, t: ReportTexts): string {
+  const d = issue.details;
+  if (!d) return '';
+  const rows: [string, string][] = [];
+  if (d.name && !issue.message.includes(d.name)) rows.push([t.issueDetails.name, d.name]);
+  if (d.source) {
+    const position = [d.source.line, d.source.column]
+      .filter((n) => n !== undefined)
+      .map(String)
+      .join(':');
+    rows.push([t.issueDetails.source, position ? `${d.source.url}:${position}` : d.source.url]);
+  }
+  for (const [key, value] of Object.entries(d.extra ?? {})) rows.push([key, value]);
+  const stack = d.stack?.length
+    ? `<div class="label">${esc(t.issueDetails.stack)}</div><pre class="stack">${esc(d.stack.join('\n'))}</pre>`
+    : '';
+  const text =
+    d.text && d.text !== issue.message
+      ? `<div class="label">${esc(t.issueDetails.text)}</div><pre class="stack">${esc(d.text)}</pre>`
+      : '';
+  if (rows.length === 0 && !stack && !text) return '';
+  const count = rows.length + (stack ? 1 : 0) + (text ? 1 : 0);
+  const list =
+    rows.length > 0
+      ? `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`
+      : '';
+  return `<details class="issue-details"><summary>${esc(t.issueDetails.summary)} (${String(count)})</summary>${list}${stack}${text}</details>`;
 }

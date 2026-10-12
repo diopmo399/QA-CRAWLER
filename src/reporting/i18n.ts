@@ -52,6 +52,8 @@ export interface ReportTexts {
   discoveredFlowHint: string;
   issueSections: { flow: string; forms: string; http: string; js: string; navigation: string };
   noneDetected: string;
+  /** Bloc dépliable sous le message d'une anomalie. */
+  issueDetails: { summary: string; name: string; source: string; stack: string; text: string };
   columns: {
     severity: string;
     status: string;
@@ -186,6 +188,13 @@ const EN: ReportTexts = {
     navigation: 'Navigation problems',
   },
   noneDetected: 'None detected.',
+  issueDetails: {
+    summary: 'Details',
+    name: 'Error',
+    source: 'Source',
+    stack: 'Stack trace',
+    text: 'Full text',
+  },
   columns: {
     severity: 'Severity',
     status: 'Status',
@@ -327,6 +336,13 @@ const FR: ReportTexts = {
     navigation: 'Problèmes de navigation',
   },
   noneDetected: 'Aucune détectée.',
+  issueDetails: {
+    summary: 'Détails',
+    name: 'Erreur',
+    source: 'Source',
+    stack: "Pile d'appels",
+    text: 'Texte complet',
+  },
   columns: {
     severity: 'Gravité',
     status: 'Statut',
