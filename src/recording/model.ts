@@ -683,7 +683,7 @@ export interface RecordedFlowStep {
   /** Une ambiguïté tranchée par l'humain (élément touché confirmé) ou laissée par lui (à vérifier au rejeu). */
   userDecision?: 'AMBIGUITY_CONFIRMED_BY_USER' | 'AMBIGUITY_LEFT_BY_USER';
   /** L'INTENTION FONCTIONNELLE (niveaux UI et métier) à côté de l'action brute, jamais à sa place. */
-  intent?: StepIntentAnnotation;
+  functionalIntent?: StepIntentAnnotation;
 }
 
 /** LA représentation intermédiaire : la seule source du YAML et du Gherkin. */

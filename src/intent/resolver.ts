@@ -289,9 +289,9 @@ function expectedEffectsOf(
     )
       push('NETWORK_REQUEST', item.summary);
     if (item.type === 'NETWORK_STATE' && item.summary.includes('moved the state'))
-      push('ENTITY_STATE_CHANGED', item.summary);
+      push('RECORD_STATE_CHANGED', item.summary);
     if (item.type === 'NETWORK_WRITE' && item.summary.includes('created'))
-      push('ENTITY_CREATED', item.summary);
+      push('RECORD_CREATED', item.summary);
   }
   if (operation === 'SEARCH' || ui === 'SEARCH' || ui === 'FILTER') push('RESULTS_UPDATED');
   if (ui === 'OPEN_DIALOG') push('DIALOG_OPENED');

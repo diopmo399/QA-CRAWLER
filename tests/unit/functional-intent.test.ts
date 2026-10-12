@@ -358,7 +358,7 @@ describe('the functional intent resolver (candidates, scoring, contradictions, s
       functional: { operation: 'SUBMIT', entity: 'item', name: 'SUBMIT_ITEM' },
     });
     expect(byAction(intents, 'a7').expectedEffects.map((effect) => effect.kind)).toContain(
-      'ENTITY_STATE_CHANGED',
+      'RECORD_STATE_CHANGED',
     );
     // Rien ne dit ce que fait « Mystery » : UNKNOWN, jamais une intention inventée.
     expect(byAction(intents, 'a8')).toMatchObject({
@@ -545,7 +545,7 @@ describe('the intent next to the raw action (steps, YAML, consumers)', () => {
       },
     ];
     annotateFlowSteps(steps, intents);
-    expect(steps[0]?.intent).toMatchObject({
+    expect(steps[0]?.functionalIntent).toMatchObject({
       name: 'SEARCH_ITEM',
       status: 'CONFIRMED',
       operation: 'SEARCH',
@@ -557,7 +557,7 @@ describe('the intent next to the raw action (steps, YAML, consumers)', () => {
       context: { form: 'item-search' },
     });
     expect(steps[0]?.step.kind).toBe('click');
-    expect(steps[1]?.intent).toBeUndefined();
+    expect(steps[1]?.functionalIntent).toBeUndefined();
     const raw = rawStepOf(steps[0]?.step as FlowStep);
     expect(raw).toMatchObject({
       click: { role: 'button', name: 'Search' },
@@ -915,11 +915,11 @@ describe('end to end: a recording of search → pick in the list → open (proce
     // L'étape garde sa cible ; l'intention est à côté, dans le modèle et dans le YAML.
     const searchStep = result.flow.steps.find((step) => step.label.includes('Search'));
     expect(searchStep?.step.kind).toBe('click');
-    expect(searchStep?.intent?.name).toBe('SEARCH_ITEM');
+    expect(searchStep?.functionalIntent?.name).toBe('SEARCH_ITEM');
     expect(searchStep?.step.functionalIntent?.name).toBe('SEARCH_ITEM');
     expect(result.files.yaml).toContain('functionalIntent:');
     expect(result.files.yaml).toContain('name: SEARCH_ITEM');
-    expect(result.files.yaml).toMatch(/# .*intent SEARCH_ITEM (CONFIRMED|PROBABLE)/);
+    expect(result.files.yaml).toMatch(/# .*functionalIntent SEARCH_ITEM (CONFIRMED|PROBABLE)/);
     expect(result.files.yaml).not.toContain('name=x');
     // Le YAML généré reste un flow valide, et sa relecture garde l'annotation.
     const { testData: _file, ...flowDocument } = parseYaml(result.files.yaml) as Record<string, unknown>;

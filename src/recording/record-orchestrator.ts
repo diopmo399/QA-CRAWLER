@@ -40,7 +40,7 @@ import {
 import { arbitrateIntents } from '../intent/ai-arbiter.js';
 import { historyKeyOf, type IntentHistoryHint } from '../intent/evidence.js';
 import { genericOf } from '../intent/model.js';
-import { annotateFlowSteps, summarize as summarizeIntents } from '../intent/resolve-recording.js';
+import { summarize as summarizeIntents } from '../intent/resolve-recording.js';
 import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
@@ -682,28 +682,20 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           recordingId: result.session.id,
           maxCalls: 4,
         });
+        // L'arbitrage change functional-intents.json et le rapport ; jamais le flow enregistré ni ses fichiers
+        // (le YAML garde l'intention DÉTERMINISTE : un enregistrement reste identique avec ou sans IA).
         if (arbitrated.arbitrated.length > 0) {
           result.intents = {
             ...result.intents,
             intents: arbitrated.intents,
             summary: summarizeIntents(arbitrated.intents),
           };
-          annotateFlowSteps(result.flow.steps, arbitrated.intents);
-          result.files = generateFlowFiles(result.flow, {
-            language,
-            recordedAt: result.session.startedAt,
-            ...(result.testData && Object.keys(result.testData.set.values).length > 0
-              ? { testDataFile: TEST_DATA_FILE }
-              : {}),
-          });
-          if (format !== 'gherkin') await write('generated.flow.yaml', result.files.yaml);
-          if (format !== 'yaml') await write('generated.feature', result.files.feature);
           await writeIntents();
           for (const entry of arbitrated.arbitrated)
             onEvent({
               type: 'FUNCTIONAL_INTENT_ARBITRATED',
               at: new Date().toISOString(),
-              message: `${entry.actionId}: ${entry.previous} → ${entry.chosen} (AI arbiter, among the deterministic candidates)`,
+              message: `${entry.actionId}: ${entry.previous} → ${entry.chosen} (AI arbiter, among the deterministic candidates; the recorded flow is unchanged)`,
             });
         }
         if (arbitrated.decisions.length > 0)

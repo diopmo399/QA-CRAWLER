@@ -172,6 +172,7 @@ describe('Human flow recorder (E2E)', () => {
           name: _name,
           effects: _effects,
           fingerprint: _fp,
+          functionalIntent: _intent,
           ...rest
         } = step;
         return rest;

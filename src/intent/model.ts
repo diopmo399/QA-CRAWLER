@@ -182,8 +182,8 @@ export interface ExpectedIntentEffect {
     | 'CONTROLS_APPEARED'
     | 'CONTROLS_DISAPPEARED'
     | 'SELECTION_CHANGED'
-    | 'ENTITY_CREATED'
-    | 'ENTITY_STATE_CHANGED';
+    | 'RECORD_CREATED'
+    | 'RECORD_STATE_CHANGED';
   detail?: string;
 }
 

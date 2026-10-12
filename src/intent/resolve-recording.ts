@@ -135,7 +135,7 @@ export function annotateFlowSteps(
     if (step.step.kind === 'expect' || step.step.kind === 'goto') continue;
     const intent = step.actionIds.map((id) => byAction.get(id)).find((candidate) => candidate !== undefined);
     if (!intent) continue;
-    step.intent = annotationOf(intent);
+    step.functionalIntent = annotationOf(intent);
     step.step.functionalIntent = toStepFunctionalIntent(intent);
   }
 }

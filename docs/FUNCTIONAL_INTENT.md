@@ -73,10 +73,10 @@ Déterministe : les mêmes preuves donnent toujours la même intention. Seuils :
 
 ## À côté de l'action brute, jamais à sa place
 
-- `recorded-flow.json` : chaque étape porte `intent` (nom, statut, confiance, niveaux, alternatives,
+- `recorded-flow.json` : chaque étape porte `functionalIntent` (nom, statut, confiance, niveaux, alternatives,
   contexte, effets attendus).
 - `generated.flow.yaml` : l'étape garde sa cible et sa valeur ; elle porte en plus `functionalIntent:`
-  (informatif, jamais exécuté, jamais une raison d'échec) et un commentaire `intent SEARCH_ITEM CONFIRMED 0.85`.
+  (informatif, jamais exécuté, jamais une raison d'échec) et un commentaire `functionalIntent SEARCH_ITEM CONFIRMED 0.85`.
   Le `.feature` garde le même commentaire ; les deux fichiers rejouent les mêmes étapes.
 - `functional-intents.json` : toutes les intentions avec leurs preuves, candidats et contradictions.
 - `application-model.json` : chaque vue d'action porte `functionalIntent` ; `summary.actions.intentOnly`
@@ -106,7 +106,9 @@ Déterministe : les mêmes preuves donnent toujours la même intention. Seuils :
 - **Arbitre IA** (`recording.intent.ai`, `ai.mode ≠ OFF`) : pour une intention **AMBIGUOUS** seulement, le
   conseiller reçoit les candidats et toutes les preuves (`A1..An` sont des candidats, pas des actions) et
   en choisit **un** ; la réponse passe par la validation existante (schéma, identifiants, preuves citées).
-  Il ne crée jamais d'intention. Audit : `functional-intent-decisions.json`, événement
+  Il ne crée jamais d'intention et ne touche ni au flow enregistré ni au YAML (qui gardent l'intention
+  déterministe : un enregistrement est identique avec ou sans IA) : l'arbitrage vit dans
+  `functional-intents.json` et le rapport. Audit : `functional-intent-decisions.json`, événement
   `FUNCTIONAL_INTENT_ARBITRATED`. Sans réponse valable, l'intention reste AMBIGUOUS.
 - **Bibliothèque** (`recording.knowledge`) : les intentions CONFIRMED / PROBABLE entrent dans la connaissance
   fonctionnelle (`intentPatterns`, clé « geste | libellé | forme des requêtes », forme générale

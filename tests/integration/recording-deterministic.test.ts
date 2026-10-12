@@ -161,7 +161,13 @@ describe('Deterministic recorder (tests 1-10)', () => {
   });
 
   /** Les rapports d'avis APRÈS l'enregistrement (couche IA) : ils peuvent citer l'IA, jamais modifier le flow. */
-  const ADVISORY = new Set(['flow-audit.json', 'semantic-audit.json', 'recording-intelligence.json']);
+  // Les avis du conseiller (jamais l'enregistrement) : audits, enrichissement, arbitrage des intentions ambiguës.
+  const ADVISORY = new Set([
+    'flow-audit.json',
+    'semantic-audit.json',
+    'recording-intelligence.json',
+    'functional-intent-decisions.json',
+  ]);
 
   it('TEST 2 — an intent present in a flow (mission, older recording) never appears in a new recording', () => {
     // Sans IA : aucun fichier produit ne contient l'intent de l'existant.
