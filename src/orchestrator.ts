@@ -35,6 +35,7 @@ import {
   type PerformanceBaseline,
 } from './performance/performance-tracer.js';
 import { flowsYaml, generateFlows } from './flows/flow-generator.js';
+import { compareFlowRuns, flowRunMemoryOf } from './flows/flow-run-comparison.js';
 import { DefaultTestDataProvider } from './data/test-data-provider.js';
 import { AuthorizationObserver, type AuthorizationReport } from './actors/authorization-observer.js';
 import { JsonKnowledgeBase, knowledgeFileOf, knowledgeIdentityOf } from './knowledge/json-knowledge-base.js';
@@ -327,6 +328,13 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   await persistence.provider?.close().catch(() => undefined);
 
   progress.start(RUN_PHASES.knowledge);
+  // ÉCART AVEC LE RUN PRÉCÉDENT : le dernier run de chaque flow, gardé dans la base de connaissances.
+  if (knowledgeFile)
+    for (const flow of outcome.flows) {
+      const previous = knowledge.flowRunMemory(flow.name);
+      if (previous) flow.comparison = compareFlowRuns(previous, flow);
+      knowledge.rememberFlowRun(flow.name, flowRunMemoryOf(flow, outcome.runId));
+    }
   if (knowledgeFile) await knowledge.save();
 
   const result = buildResult(outcome, config);

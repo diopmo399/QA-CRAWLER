@@ -1,3 +1,5 @@
+import type { BusinessProofReport } from '../flows/business-proof.js';
+import type { FlowRunComparison } from '../flows/flow-run-comparison.js';
 import type { TargetResolutionTrace } from '../flows/functional-target.js';
 import type { TransitionWaitStatus } from '../observation/transition-waiter.js';
 import type { FlowDriftReport, StepRecoveryReport } from '../workflow-healing/model.js';
@@ -66,6 +68,60 @@ export interface FlowStepReport {
     suspectEffects: string[];
     reasons: string[];
   };
+  /** Les requêtes déclenchées par CETTE étape (URL masquée, jamais un corps ni un en-tête). */
+  network?: StepNetworkReport;
+  /** Où le temps de l'étape est passé : action, transition, stabilité, vérification. */
+  timing?: StepTimingReport;
+}
+
+export interface StepRequestReport {
+  method: string;
+  /** Chemin sans hôte ni requête (/api/items/12), déjà masqué. */
+  path: string;
+  status?: number;
+  durationMs?: number;
+  /** Erreur réseau (ERR_CONNECTION_REFUSED…). */
+  failure?: string;
+  resourceType: string;
+}
+
+export interface StepNetworkReport {
+  requests: StepRequestReport[];
+  /** POST / PUT / PATCH / DELETE. */
+  writes: number;
+  /** Statut ≥ 400 ou échec réseau. */
+  errors: number;
+}
+
+export interface StepTimingReport {
+  totalMs: number;
+  /** Le geste Playwright lui-même (clic, saisie), jusqu'à son retour. */
+  actionMs?: number;
+  /** L'attente de la transition (synchronisation), incluse dans l'action quand la sonde est posée. */
+  transitionMs?: number;
+  stabilityMs?: number;
+  /** Observation de l'écran, vérification de l'effet, captures : le reste. */
+  verificationMs?: number;
+}
+
+/** Une donnée de test de ce run : sa source, où elle est produite, où elle est réutilisée. */
+export interface FlowTestDataEntry {
+  key: string;
+  strategy: string;
+  generator?: string;
+  sensitive: boolean;
+  /**
+   * La valeur de CE run — seulement pour une valeur GÉNÉRÉE par le crawler (synthétique, marquée du
+   * run) : jamais une valeur enregistrée, saisie dans la mission, ni un secret.
+   */
+  value?: string;
+  /** L'étape qui la saisit en premier (sa production dans l'application). */
+  producedAt?: number;
+  usedBy: { step: number; how: 'INPUT' | 'CITATION' }[];
+}
+
+export interface FlowTestDataReport {
+  entries: FlowTestDataEntry[];
 }
 
 export interface StepSynchronizationReport {
@@ -159,6 +215,12 @@ export interface FlowRunReport {
   divergence?: FlowDivergence;
   /** FLOW DRIFT : le flow marche-t-il encore tel quel, ou seulement grâce aux récupérations ? */
   drift?: FlowDriftReport;
+  /** Les données de test de ce run : une valeur par clé, où elle est produite et réutilisée. */
+  testDataReport?: FlowTestDataReport;
+  /** PREUVE MÉTIER : la donnée créée a-t-elle été retrouvée puis ouverte dans ce run ? */
+  businessProof?: BusinessProofReport;
+  /** L'écart avec le run précédent du même flow (base de connaissances). */
+  comparison?: FlowRunComparison;
 }
 
 export interface CssResolutionReport {

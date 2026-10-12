@@ -1,3 +1,4 @@
+import type { FlowRunMemory } from '../flows/flow-run-comparison.js';
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { KnowledgeConfig } from '../config/config.js';
@@ -110,6 +111,15 @@ export class JsonKnowledgeBase implements KnowledgeBase {
     this.file.schemaVersion = KNOWLEDGE_SCHEMA_VERSION;
     await mkdir(path.dirname(this.location), { recursive: true });
     await writeFileAtomic(this.location, `${JSON.stringify(this.file, null, 2)}\n`);
+  }
+
+  /** Le dernier run connu d'un flow imposé (pour l'écart avec ce run). */
+  flowRunMemory(name: string): FlowRunMemory | undefined {
+    return this.data.flowRuns?.[name];
+  }
+
+  rememberFlowRun(name: string, memory: FlowRunMemory): void {
+    (this.data.flowRuns ??= {})[name] = memory;
   }
 
   /** Un run de plus. */

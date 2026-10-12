@@ -94,6 +94,8 @@ export class SafetyPolicy {
   /** Budget des actions qui modifient des données, quand safety.mutations est activé. */
   private readonly maxMutations: number | undefined;
   private mutations = 0;
+  /** Écritures des flows imposés (permises par `allow`), comptées à part : elles n'entament pas le budget autonome. */
+  private flowMutations = 0;
 
   constructor(safety: ScenarioConfig['safety']) {
     this.risks = Object.entries(RISK_KEYWORDS).map(([kind, words]) => [
@@ -250,9 +252,18 @@ export class SafetyPolicy {
     if (this.changesData(action)) this.mutations += 1;
   }
 
-  /** Actions de modification exécutées jusqu'ici. */
+  /** Actions de modification exécutées jusqu'ici (exploration autonome, budget). */
   get mutationCount(): number {
     return this.mutations;
+  }
+
+  /** Une étape de flow imposé qui modifie des données : comptée, jamais retenue sur le budget autonome. */
+  recordFlowExecuted(action: DiscoveredAction): void {
+    if (this.changesData(action)) this.flowMutations += 1;
+  }
+
+  get flowMutationCount(): number {
+    return this.flowMutations;
   }
 
   /** Un clic qui peut créer, modifier ou envoyer des données. */

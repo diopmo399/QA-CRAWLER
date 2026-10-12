@@ -178,6 +178,7 @@ import {
 } from '../model/verification.js';
 import type {
   FlowRunReport,
+  FlowTestDataEntry,
   FlowStatus,
   CssResolutionReport,
   FlowStepReport,
@@ -288,6 +289,7 @@ import type { FailureKind, RecoveryEvent, RecoverySummary, StuckEvent } from '..
 import { StuckDetector } from '../recovery/stuck-detector.js';
 import { AccessibilityChecker } from '../accessibility/accessibility-checker.js';
 import { CreatedDataRegistry, type CreatedDataRecord } from '../data/created-data.js';
+import { businessProofOf } from '../flows/business-proof.js';
 import { routeKey } from '../crawler/route-normalizer.js';
 import { RuleBasedActionScorer, optionKey } from '../decision/action-scorer.js';
 import { AdvancedActionScorer } from '../decision/advanced-action-scorer.js';
@@ -507,7 +509,7 @@ export interface ExplorationOutcome {
   /** Tentatives de récupération, branches abandonnées et circuits ouverts. */
   recovery: RecoverySummary;
   /** Actions qui modifient des données : exécutées, et le budget (safety.mutations). */
-  mutations: { enabled: boolean; executed: number; maxPerRun?: number };
+  mutations: { enabled: boolean; executed: number; autonomous: number; flows: number; maxPerRun?: number };
   /** Données que le run a probablement créées (à nettoyer), jamais les valeurs envoyées. */
   createdData: CreatedDataRecord[];
   /** Mode verify : chaque transition connue de la baseline, rejouée. */
@@ -566,6 +568,11 @@ export class FlowExplorer {
   private readonly flowRecordedKeys = new Set<string>();
   /** L'étape en cours d'un flow (pour la précondition de l'étape suivante). */
   private stepPosition: { flow: FlowConfig; index: number } | undefined;
+  /** TEST DATA OF THIS RUN : chaque clé résolue pendant le flow (jamais une valeur enregistrée ni un secret). */
+  private flowDataUsed = new Map<string, Omit<FlowTestDataEntry, 'usedBy' | 'producedAt'>>();
+  private flowDataUsage: { key: string; step: number; how: 'INPUT' | 'CITATION' }[] = [];
+  /** Le temps du geste Playwright de la dernière étape (pour la décomposition du temps). */
+  private lastActionMs: number | undefined;
   /** Les étapes dont la récupération a déjà consulté le fournisseur d'intelligence (une fois par divergence). */
   private readonly aiConsultedSteps = new Set<string>();
   private stepKey(index: number): string {
@@ -2822,6 +2829,8 @@ export class FlowExplorer {
     this.previousStepStatus = undefined;
     this.filledOnScreen = [];
     this.flowRecordedKeys.clear();
+    this.flowDataUsed = new Map();
+    this.flowDataUsage = [];
     this.scenario = { values: [] };
     this.listener.onFlowStart?.(flow);
     this.cognitive?.learnFlow(flow);
@@ -2868,7 +2877,9 @@ export class FlowExplorer {
 
       const networkMark = this.flowNetwork.length;
       const contextBefore = functionalContextOf(this.lastSnapshot);
+      this.lastActionMs = undefined;
       const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
+      this.enrichStepReport(step, index, outcome.report, this.flowNetwork.slice(networkMark));
       this.stepContexts.push({
         index,
         description: outcome.report.description,
@@ -2977,6 +2988,9 @@ export class FlowExplorer {
           message: suggestion,
         });
     }
+    // TEST DATA OF THIS RUN + PREUVE MÉTIER : d'après les étapes, leurs données et leurs requêtes.
+    report.testDataReport = this.flowTestDataReport();
+    report.businessProof = businessProofOf(report);
     // Fin du parcours sans étape suivante : l'objectif atteint suffit pour apprendre.
     const unconfirmed = this.pendingRecovery();
     if (unconfirmed) {
@@ -3033,6 +3047,58 @@ export class FlowExplorer {
   }
 
   /** Une étape : trouver → classer → SafetyPolicy → exécuter → observer → enregistrer. */
+  /**
+   * NETWORK / TIMING / TEST DATA par étape : les requêtes de la fenêtre de l'étape (chemin masqué),
+   * où son temps est passé, et les données de test qu'elle saisit (INPUT) ou cite (CITATION).
+   */
+  private enrichStepReport(
+    step: FlowStep,
+    index: number,
+    report: FlowStepReport,
+    exchanges: readonly NetworkExchange[],
+  ): void {
+    if (exchanges.length > 0)
+      report.network = {
+        requests: exchanges.map((exchange) => ({
+          method: exchange.method.toUpperCase(),
+          path: pathOf(exchange.url),
+          ...(exchange.status !== undefined ? { status: exchange.status } : {}),
+          ...(exchange.durationMs !== undefined ? { durationMs: exchange.durationMs } : {}),
+          ...(exchange.failure ? { failure: exchange.failure } : {}),
+          resourceType: exchange.resourceType,
+        })),
+        writes: exchanges.filter(
+          (exchange) => !['GET', 'HEAD', 'OPTIONS'].includes(exchange.method.toUpperCase()),
+        ).length,
+        errors: exchanges.filter(
+          (exchange) => (exchange.status ?? 0) >= 400 || exchange.failure !== undefined,
+        ).length,
+      };
+    const sync = report.synchronization;
+    report.timing = {
+      totalMs: report.durationMs,
+      ...(this.lastActionMs !== undefined ? { actionMs: this.lastActionMs } : {}),
+      ...(sync ? { transitionMs: sync.durationMs, stabilityMs: sync.stability.durationMs } : {}),
+      verificationMs: Math.max(0, report.durationMs - (this.lastActionMs ?? 0)),
+    };
+    if (step.kind === 'fill' && typeof step.value !== 'string' && 'testData' in step.value)
+      this.flowDataUsage.push({ key: step.value.testData, step: index, how: 'INPUT' });
+    for (const cited of report.testData ?? [])
+      this.flowDataUsage.push({ key: cited.replace(/^testData\./, ''), step: index, how: 'CITATION' });
+  }
+
+  private flowTestDataReport(): FlowRunReport['testDataReport'] {
+    const entries: FlowTestDataEntry[] = [];
+    for (const [key, entry] of this.flowDataUsed) {
+      const usedBy = this.flowDataUsage
+        .filter((use) => use.key === key)
+        .map((use) => ({ step: use.step, how: use.how }));
+      const produced = usedBy.find((use) => use.how === 'INPUT')?.step;
+      entries.push({ ...entry, ...(produced !== undefined ? { producedAt: produced } : {}), usedBy });
+    }
+    return { entries };
+  }
+
   private async runFlowStep(
     page: Page,
     browser: BrowserManager,
@@ -3267,19 +3333,32 @@ export class FlowExplorer {
     const effectTimeout = Math.max(this.config.replay.effectTimeoutMs, 500);
     const perform = (): Promise<DragOutcome> =>
       this.flowSteps.dragAndDrop(page, step, timeout, effectTimeout);
+    this.safety.recordFlowExecuted(action);
+    const dragStartedAt = Date.now();
     const outcome = mayWrite ? await this.writeGuard.permit(`flow ${flow.name}`, perform) : await perform();
+    this.lastActionMs = Date.now() - dragStartedAt;
     this.actionsExecuted += 1;
     this.currentAction = undefined;
     const blocking = this.interactions.since(interactionMark).filter((interaction) => interaction.blocking);
     const after = await this.observeState(page, context.metadata.depth + 1).catch(() => context);
     const moved = outcome.status === 'MOVED';
     const executed = moved || outcome.status === 'NOT_MOVED';
+    const tracedDrag = this.networkOf(action.id);
+    if (this.safety.changesData(action) && tracedDrag.network)
+      this.createdData.record({
+        stateId: context.stateId,
+        actionId: action.id,
+        action: label,
+        flow: flow.name,
+        ...(this.stepPosition ? { step: this.stepPosition.index } : {}),
+        requests: tracedDrag.network,
+      });
     this.graph.addEdge({
       from: context.stateId,
       to: after.stateId,
       actionId: action.id,
       action: summaryOf(action),
-      ...this.networkOf(action.id),
+      ...tracedDrag,
       result: blocking.length > 0 ? 'BLOCKED' : moved ? 'SUCCESS' : 'FAILED',
       ...(moved ? {} : { reason: outcome.reason }),
       flow: flow.name,
@@ -4847,7 +4926,11 @@ export class FlowExplorer {
       });
       return undefined;
     };
+    // Comptée avant l'exécution (une action qui échoue à mi-chemin a peut-être déjà écrit) ; hors budget autonome.
+    this.safety.recordFlowExecuted(action);
+    const actionStartedAt = Date.now();
     const error = mayWrite ? await this.writeGuard.permit(`flow ${flow.name}`, perform) : await perform();
+    this.lastActionMs = Date.now() - actionStartedAt;
     this.actionsExecuted += 1;
     const raised = this.interactions.since(interactionMark);
     const blocking = raised.filter((interaction) => interaction.blocking);
@@ -5093,6 +5176,17 @@ export class FlowExplorer {
     }
     const ids = newIssues();
     const traced = this.networkOf(action.id);
+    // DATA CREATED : une étape classée MUTATION (la même règle qu'en exploration autonome : un POST de
+    // recherche permis par `allow` n'est pas une donnée créée), suivie d'une écriture acceptée.
+    if (this.safety.changesData(action) && traced.network)
+      this.createdData.record({
+        stateId: before.stateId,
+        actionId: action.id,
+        action: actionLabel(action),
+        flow: flow.name,
+        ...(this.stepPosition ? { step: this.stepPosition.index } : {}),
+        requests: traced.network,
+      });
     const edge = this.graph.addEdge({
       from: before.stateId,
       to: after.stateId,
@@ -7694,6 +7788,18 @@ export class FlowExplorer {
           : provide(generator, GENERATOR_TYPES[generator] ?? 'text'),
     });
     if (resolved.kind === 'value' && resolved.strategy === 'RECORDED_LITERAL') this.flowRecordedKeys.add(key);
+    if (resolved.kind === 'value' && !this.flowDataUsed.has(key)) {
+      const entry = [flow.testData, this.config.testData.set].map((set) => set?.values[key]).find(Boolean);
+      const sensitive = entry?.sensitive === true || resolved.strategy === 'CREDENTIAL_REFERENCE';
+      this.flowDataUsed.set(key, {
+        key,
+        strategy: resolved.strategy,
+        ...(entry?.generator ? { generator: entry.generator } : {}),
+        sensitive,
+        // Seule une valeur GÉNÉRÉE par le crawler est montrée : synthétique, marquée du run.
+        ...(resolved.generated && !sensitive ? { value: resolved.value } : {}),
+      });
+    }
     return resolved;
   }
 
@@ -8535,7 +8641,9 @@ export class FlowExplorer {
       },
       mutations: {
         enabled: this.config.safety.mutations.enabled,
-        executed: this.safety.mutationCount,
+        executed: this.safety.mutationCount + this.safety.flowMutationCount,
+        autonomous: this.safety.mutationCount,
+        flows: this.safety.flowMutationCount,
         ...(this.config.safety.mutations.enabled
           ? { maxPerRun: this.config.safety.mutations.maxPerRun }
           : {}),

@@ -30,6 +30,7 @@ import {
   recoverySection,
 } from './quality-sections.js';
 import { renderFlowMap, renderFlowSteps } from './flow-diagram.js';
+import { flowAnalysisBlocks } from './flow-analysis-section.js';
 import { intelligenceSection } from './intelligence-section.js';
 import { persistenceSection } from './persistence-section.js';
 import { staticAnalysisSection } from './static-section.js';
@@ -368,7 +369,8 @@ function flowsSection(
           : ''
       }
       ${renderFlowSteps(flow)}
-      <table><thead><tr><th>#</th><th>${c.step}</th><th>${c.class}</th><th>${c.result}</th><th>${c.reason}</th><th>${c.state}</th><th>${c.duration}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      <table><thead><tr><th>#</th><th>${c.step}</th><th>${c.class}</th><th>${c.result}</th><th>${c.reason}</th><th>${c.state}</th><th>${c.duration}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table>
+      ${flowAnalysisBlocks(flow, t.lang)}</div>`;
     })
     .join('');
   const metrics = healingMetrics(result.flows);

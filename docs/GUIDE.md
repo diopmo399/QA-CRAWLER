@@ -500,6 +500,22 @@ Les identifiants de base de données viennent **toujours** de l'environnement (`
 
 Rapports en français : `report: { language: fr }`. Faire échouer la CI à partir d'une gravité : `report.failOnSeverity`.
 
+### L'analyse d'un flow exécuté
+
+Sous le tableau des étapes de chaque flow imposé, sept analyses (aussi dans `result.json`, sous `flows[]`) :
+
+| Analyse                         | Ce qu'elle montre                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Données de test de ce run**   | une valeur par clé pour tout le run, l'étape qui la produit, celles qui la réutilisent (saisie ou citation). La valeur n'est montrée que si le crawler l'a générée (synthétique, marquée du run) : jamais une valeur enregistrée, de la mission ou un secret                                                                                                     |
+| **Preuve métier**               | `PROVEN` quand la donnée créée (CREATE : saisie puis écriture acceptée) est renvoyée comme critère (SEARCH : la même donnée saisie et envoyée) et que le résultat qui la porte est ouvert (OPEN : une cible qui cite `${testData:clé}`, puis sa lecture). Sinon `PARTIAL` / `NOT_PROVEN` avec ce qui manque ; `NOT_APPLICABLE` si aucune donnée n'est réutilisée |
+| **Écart avec le run précédent** | le dernier run du même flow (base de connaissances `knowledge.*`) : statut, durée, étapes plus lentes ou plus rapides, cible changée ou réparée, étape ajoutée ou retirée. L'historique suggère, ce n'est jamais une anomalie à lui seul                                                                                                                         |
+| **Réseau par étape**            | les requêtes déclenchées par chaque étape : méthode, chemin masqué, statut, durée, type — jamais un corps ni un en-tête                                                                                                                                                                                                                                          |
+| **Résolution des cibles**       | la cible demandée, le localisateur utilisé, comment il a été trouvé (`RECORDED`, `HEALED`, `FUNCTIONAL`, `CONTEXTUAL`, `REACQUIRED`, `SEMANTIC`…) et le verdict                                                                                                                                                                                                  |
+| **Effets attendus / observés**  | ce que l'étape enregistrée attendait après l'action, ce qui a été observé, ce qui n'est jamais venu                                                                                                                                                                                                                                                              |
+| **Temps par étape**             | où le temps est passé (geste, transition, stabilité, vérification) et les étapes les plus lentes                                                                                                                                                                                                                                                                 |
+
+La section **Données créées** compte toutes les écritures du run : celles de l'exploration autonome (sous le budget `safety.mutations.maxPerRun`) et celles des flows imposés (permises par `allow`, hors budget), chacune attribuée à son flow et à son étape.
+
 **Codes de sortie :** `0` OK · `1` anomalies bloquantes, régressions ou Dry Run en écart · `2` usage ou fichier invalide · `3` erreur d'exécution.
 
 ---

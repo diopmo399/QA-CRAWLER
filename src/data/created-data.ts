@@ -14,6 +14,9 @@ export interface CreatedDataRecord {
   /** Libellé visible de l'action (« Enregistrer »). */
   action: string;
   form?: string;
+  /** L'étape d'un flow imposé qui a écrit (sinon : l'exploration autonome). */
+  flow?: string;
+  step?: number;
   /** Appels qui ont créé ou modifié quelque chose (URL masquée, sans corps). */
   requests: { method: string; url: string; status: number }[];
   at: string;
@@ -32,6 +35,8 @@ export class CreatedDataRegistry {
     actionId: string;
     action: string;
     form?: string;
+    flow?: string;
+    step?: number;
     requests: readonly { method: string; url: string; status?: number }[];
   }): CreatedDataRecord | undefined {
     const writes = entry.requests
@@ -51,6 +56,8 @@ export class CreatedDataRegistry {
       actionId: entry.actionId,
       action: entry.action,
       ...(entry.form ? { form: entry.form } : {}),
+      ...(entry.flow ? { flow: entry.flow } : {}),
+      ...(entry.step !== undefined ? { step: entry.step } : {}),
       requests: writes,
       at: new Date().toISOString(),
     };

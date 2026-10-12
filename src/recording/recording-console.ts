@@ -337,6 +337,14 @@ export class RecordingConsole {
               this.notice = undefined;
               this.replay = undefined;
               this.saved = undefined;
+              // L'analyse se relit : les intents métier citent la variable choisie, pas une clé abandonnée.
+              if (this.result && this.analysisInputs)
+                this.setAnalysis(
+                  this.result,
+                  this.analysisInputs.flowAudit,
+                  this.analysisInputs.intelligence,
+                  this.analysisInputs.running,
+                );
             }
           } else if (
             (command.type === 'intent-correct' ||

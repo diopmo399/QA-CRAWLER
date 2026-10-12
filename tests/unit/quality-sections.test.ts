@@ -111,7 +111,7 @@ describe('HTML quality sections', () => {
     expect(authorization).toContain('<td>DENIED</td>');
     const data = dataSection(result, nameOf, 'en');
     expect(data).toContain('QA-CRAWLER-r1');
-    expect(data).toContain('budget: 5');
+    expect(data).toContain('budget for the autonomous exploration: 5');
     expect(data).toContain('Nothing was deleted automatically.');
   });
 

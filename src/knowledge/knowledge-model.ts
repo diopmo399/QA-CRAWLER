@@ -1,3 +1,4 @@
+import type { FlowRunMemory } from '../flows/flow-run-comparison.js';
 /**
  * Ce que le crawler APPREND au fil des runs, statistiquement — distinct du FlowGraph,
  * qui décrit ce qui a été OBSERVÉ. Aucune donnée sensible : ni corps de requête, ni
@@ -111,6 +112,8 @@ export interface KnowledgeData {
   recoveries?: Record<string, RecoveryKnowledge>;
   /** QA COGNITIVE ENGINE : hypothèses (causales, règles…) et les preuves qui les portent. */
   cognitive?: CognitiveKnowledge;
+  /** Le dernier run de chaque flow imposé (statut, durées, localisateurs : jamais une valeur), pour l'écart. */
+  flowRuns?: Record<string, FlowRunMemory>;
 }
 
 /** Une action de récupération (jamais une saisie) : rôle + nom accessible. */
