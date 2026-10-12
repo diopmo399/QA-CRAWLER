@@ -126,6 +126,7 @@ export function recordingHtml(input: {
     ${intentReviewHtml(result)}
     ${dataLineageHtml(result)}
   </section>
+  ${functionalIntentsHtml(result)}
   <section><h2>Quality</h2>
     <div class="cols"><div><h3>Locators</h3><ul class="plain">${locators || '<li class="muted">none</li>'}</ul></div>
     <div><h3>Values</h3><ul class="plain">${values || '<li class="muted">none</li>'}</ul></div></div>
@@ -556,6 +557,45 @@ function describeTargetText(target: {
       ? `${target.role ?? ''} "${target.name ?? ''}"`
       : `${target.strategy} "${target.value ?? ''}"`;
   return `${base}${target.section ? ` in "${target.section}"` : ''}${target.nth !== undefined ? ` [${String(target.nth)}]` : ''}`;
+}
+
+/**
+ * FUNCTIONAL INTENTS : pour chaque action, les trois niveaux (geste, interface, opération × entité), le
+ * statut, la confiance, les candidats concurrents et les preuves principales. L'action brute, elle,
+ * ne change jamais ; une intention AMBIGUOUS reste affichée comme telle, avec ses candidats.
+ */
+function functionalIntentsHtml(result: RecordingResult): string {
+  const intents = result.intents;
+  if (!intents) return '';
+  const by = intents.summary.byStatus;
+  const color: Record<string, string> = {
+    CONFIRMED: '#15803d',
+    PROBABLE: '#2563eb',
+    AMBIGUOUS: '#b45309',
+    UNKNOWN: '#6b7280',
+  };
+  const rows = intents.intents
+    .map((intent) => {
+      const alternatives = intent.alternatives
+        .slice(1, 4)
+        .map((candidate) => `${esc(candidate.name)} ${String(Math.round(candidate.confidence * 100))} %`)
+        .join(' · ');
+      const evidence = intent.evidence
+        .filter((item) => intent.alternatives[0]?.evidenceIds.includes(item.id))
+        .slice(0, 4)
+        .map((item) => `${esc(item.type)}: ${esc(item.summary)}`)
+        .join('<br>');
+      const context = Object.entries(intent.context)
+        .map(([key, value]) => `${esc(key)} ${esc(String(value))}`)
+        .join(' · ');
+      return `<tr><td><code>${esc(intent.actionId)}</code>${intent.stepId ? ` <code>${esc(intent.stepId)}</code>` : ''}<br><span class="muted">${esc(intent.physical)}${intent.target?.label ? ` "${esc(intent.target.label)}"` : ''}</span></td><td><b style="color:${color[intent.status] ?? '#6b7280'}">${esc(intent.name)}</b><br><span class="muted">${esc(intent.status)} · ${String(Math.round(intent.confidence * 100))} % · ${esc(intent.source)}</span></td><td>${intent.ui ? esc(intent.ui) : '—'}</td><td>${intent.functional ? `${esc(intent.functional.operation)} × ${esc(intent.functional.entity)}` : '—'}</td><td class="muted">${alternatives || '—'}</td><td class="muted">${evidence || '—'}${context ? `<br><i>${context}</i>` : ''}${intent.contradictions.length ? `<br><b>contradiction:</b> ${esc(intent.contradictions.map((entry) => entry.summary).join(' / '))}` : ''}</td></tr>`;
+    })
+    .join('');
+  return `<section><h2>Functional intents (element + context + action + state)</h2>
+    <p class="muted">Three levels for every recorded action — gesture, UI intent, operation × entity — resolved from the label, the role, the structural context, the neighbouring actions, the observed effects, the network and the entity lifecycle. ${String(by.CONFIRMED)} confirmed · ${String(by.PROBABLE)} probable · ${String(by.AMBIGUOUS)} ambiguous · ${String(by.UNKNOWN)} unknown. Written next to each step (functionalIntent) and in functional-intents.json; the recorded action is never replaced by its intent.</p>
+    ${intents.summary.functional.length ? `<p>${intents.summary.functional.map((entry) => `<b>${esc(entry.name)}</b> ×${String(entry.count)} <span class="muted">(${esc(entry.generic)})</span>`).join(' · ')}</p>` : ''}
+    <table><thead><tr><th>Action</th><th>Intent</th><th>UI</th><th>Operation × entity</th><th>Other candidates</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table>
+  </section>`;
 }
 
 /**

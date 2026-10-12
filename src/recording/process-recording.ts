@@ -37,6 +37,14 @@ import { extractRecordedTestData, type RecordedTestDataResult } from './recorded
 import { inferOutcomes } from './outcomes.js';
 import { buildRecordedFlow, generateFlowFiles, type GeneratedFiles } from './recorded-flow.js';
 import { resolveSemanticActions, routeOf } from './semantic-recording.js';
+import {
+  annotateFlowSteps,
+  resolveRecordingIntents,
+  type RecordingIntents,
+} from '../intent/resolve-recording.js';
+import type { IntentHistoryHint } from '../intent/evidence.js';
+import type { RememberedIntentDecision } from '../knowledge/functional-knowledge-store.js';
+import type { TrackedEntity } from './business/entity-tracker.js';
 import { optimizeRecordedActions } from './flow-optimizer.js';
 import {
   accountHumanJourney,
@@ -88,6 +96,12 @@ export interface RecordingResult {
   http?: { journal: NetworkObservation[]; live?: RecordingAnalysis; consolidated: RecordingAnalysis };
   /** RECORDED TEST DATA (absent si recording.testData.enabled vaut false) : le jeu de données du flow. */
   testData?: RecordedTestDataResult;
+  /**
+   * FUNCTIONAL INTENTS (absent si recording.intent.enabled vaut false) : l'intention de chaque action
+   * (geste, interface, opération × entité) avec ses preuves, ses candidats et son statut — à côté du
+   * flow, jamais à sa place.
+   */
+  intents?: RecordingIntents;
   session: RecordingSession;
   normalized: NormalizedRecording;
   flow: RecordedFlow;
@@ -113,6 +127,11 @@ export function processRecording(
     digest?: (value: string) => string;
     /** L'analyse HTTP : le journal réseau de la session et la dernière passe en direct (provisoire). */
     http?: { journal: readonly NetworkObservation[]; live?: RecordingAnalysis };
+    /** Ce que la connaissance de l'application sait déjà des intentions (décisions humaines, bibliothèque). */
+    intentKnowledge?: {
+      decisions?: readonly RememberedIntentDecision[];
+      history?: readonly IntentHistoryHint[];
+    };
   },
 ): RecordingResult {
   const emit = (type: RecordingEventType, message: string): void => {
@@ -370,7 +389,7 @@ export function processRecording(
       ? 'every human interaction is accounted for, in the human order'
       : `${String(summary.unaccounted)} interaction(s) lost without a reason${journey.ordered ? '' : '; steps reordered'}`,
   );
-  const files = generateFlowFiles(built.flow, {
+  let files = generateFlowFiles(built.flow, {
     language: options.language,
     recordedAt: session.startedAt,
     ...(testData && Object.keys(testData.set.values).length > 0 ? { testDataFile: TEST_DATA_FILE } : {}),
@@ -422,6 +441,27 @@ export function processRecording(
       actionId: issue.actionId,
     })),
   ];
+  // FUNCTIONAL INTENT (déterministe, à côté de chaque action, jamais à sa place) : résolu une fois que la
+  // couche métier connaît les entités, ou sans elle quand elle est désactivée.
+  let intents: RecordingIntents | undefined;
+  const resolveIntents = (entities?: readonly TrackedEntity[]): RecordingIntents | undefined => {
+    if (!config.recording.intent.enabled) return undefined;
+    const resolved = resolveRecordingIntents({
+      kept: normalized.kept,
+      states: session.states,
+      steps: built.flow.steps,
+      ...(entities ? { entities } : {}),
+      ...(options.intentKnowledge?.decisions ? { decisions: options.intentKnowledge.decisions } : {}),
+      ...(options.intentKnowledge?.history ? { history: options.intentKnowledge.history } : {}),
+      thresholds: config.recording.intent.thresholds,
+    });
+    const by = resolved.summary.byStatus;
+    emit(
+      'FUNCTIONAL_INTENTS_RESOLVED',
+      `${String(resolved.summary.actions)} action(s): ${String(by.CONFIRMED)} confirmed, ${String(by.PROBABLE)} probable, ${String(by.AMBIGUOUS)} ambiguous, ${String(by.UNKNOWN)} unknown; ${resolved.summary.functional.map((entry) => `${entry.name} ×${String(entry.count)}`).join(', ') || 'no functional intent'}`,
+    );
+    return resolved;
+  };
   // BUSINESS INTERPRETATION (déterministe, au-dessus du flow, jamais à sa place).
   let business: RecordingResult['business'];
   let application: RecordingResult['application'];
@@ -437,8 +477,10 @@ export function processRecording(
       ...(options.digest ? { digest: options.digest } : {}),
     });
     business = { detection, model: buildBusinessFlow(session.name, detection) };
+    intents = resolveIntents(detection.entities);
     if (config.recording.business.application) {
       application = buildApplicationModel({
+        ...(intents ? { intents: intents.intents } : {}),
         actions: normalized.kept,
         states: session.states,
         rawEvents: session.rawEvents,
@@ -486,8 +528,19 @@ export function processRecording(
       `${String(business.model.steps.length)} business step(s): ${business.model.steps.map((step) => `${step.action.toUpperCase()} ${step.entity ?? '?'} (${step.status})`).join(' → ') || 'none'}${business.model.unresolved.length ? `; ${String(business.model.unresolved.length)} unresolved` : ''}`,
     );
   }
+  intents ??= resolveIntents(undefined);
+  if (intents) {
+    // L'intention entre dans l'étape (modèle + YAML informatif) ; les fichiers sont régénérés depuis le même modèle.
+    annotateFlowSteps(built.flow.steps, intents.intents);
+    files = generateFlowFiles(built.flow, {
+      language: options.language,
+      recordedAt: session.startedAt,
+      ...(testData && Object.keys(testData.set.values).length > 0 ? { testDataFile: TEST_DATA_FILE } : {}),
+    });
+  }
   return {
     ...(http ? { http } : {}),
+    ...(intents ? { intents } : {}),
     session,
     normalized,
     flow: built.flow,

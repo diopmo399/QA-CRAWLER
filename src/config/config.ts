@@ -1527,6 +1527,28 @@ const recordingSchema = z
       .default({}),
     /** Ajouter ce qui a été appris (workflow, états) à la connaissance fonctionnelle, provenance HUMAN_RECORDED. */
     knowledge: z.boolean().default(true),
+    /**
+     * FUNCTIONAL INTENT : element + contexte + action + état → intention fonctionnelle (3 niveaux :
+     * geste, interface, opération × entité) à côté de chaque action enregistrée, jamais à sa place.
+     * ai : une intention AMBIGUOUS peut être soumise au conseiller (ai.mode ≠ OFF), qui choisit parmi
+     * les candidats déterministes seulement. thresholds : CONFIRMED ≥ confirmed, PROBABLE ≥ probable,
+     * deux rivaux à moins de `margin` → AMBIGUOUS.
+     */
+    intent: z
+      .object({
+        enabled: z.boolean().default(true),
+        ai: z.boolean().default(true),
+        thresholds: z
+          .object({
+            confirmed: z.number().min(0).max(1).default(0.85),
+            probable: z.number().min(0).max(1).default(0.6),
+            margin: z.number().min(0).max(1).default(0.12),
+          })
+          .strict()
+          .default({}),
+      })
+      .strict()
+      .default({}),
     /** Rejouer le flow généré (dry run) juste après : REPLAY_CONFIRMED / REPLAY_FAILED. */
     validate: z.boolean().default(false),
     /**

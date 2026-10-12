@@ -109,7 +109,7 @@ export function resolveWorkflowContext(steps: readonly FlowStep[], position: num
     currentAction,
     nextActions,
     expectedEffects: effectsText(effects),
-    businessIntent: intentOf(currentAction, requiredFutureFields, effects),
+    businessIntent: recordedIntentOf(current) ?? intentOf(currentAction, requiredFutureFields, effects),
     requiredFutureControls,
     requiredFutureFields,
   };
@@ -125,6 +125,30 @@ const VERB: Record<SemanticAction['kind'], string> = {
   expect: 'VERIFY',
   other: 'DO',
 };
+
+/**
+ * L'INTENTION FONCTIONNELLE ENREGISTRÉE (step.functionalIntent, écrite par le recorder avec ses
+ * preuves) l'emporte sur l'heuristique du libellé : elle vient du réseau, des effets, du contexte et
+ * des actions voisines, pas d'un mot.
+ */
+function recordedIntentOf(step: FlowStep): BusinessIntent | undefined {
+  const recorded = step.functionalIntent;
+  if (!recorded || recorded.status === 'UNKNOWN') return undefined;
+  const confidence: IntentConfidence =
+    recorded.status === 'CONFIRMED' ? 'CONFIRMED' : recorded.status === 'PROBABLE' ? 'HIGH' : 'LOW';
+  return {
+    name: recorded.name,
+    confidence,
+    sources: [
+      'recorded functional intent',
+      ...(recorded.operation
+        ? [`operation ${recorded.operation}${recorded.entity ? ` on ${recorded.entity}` : ''}`]
+        : []),
+      ...(recorded.ui ? [`ui ${recorded.ui}`] : []),
+      ...(recorded.alternatives?.length ? [`alternatives ${recorded.alternatives.join(', ')}`] : []),
+    ],
+  };
+}
 
 /** OPEN_COMPANY_INFORMATION, avec ses sources et une confiance qui n'invente rien. */
 function intentOf(

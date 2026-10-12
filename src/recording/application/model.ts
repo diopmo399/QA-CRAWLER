@@ -4,6 +4,7 @@ import type { TechnicalIntent, TechnicalOperation } from '../business/entity-cla
 import type { StateCode } from '../../functional/model.js';
 import type { EntityClassification } from '../business/entity-classifier.js';
 import type { EntityProvenance } from '../business/provenance-resolver.js';
+import type { StepIntentAnnotation } from '../../intent/model.js';
 
 /**
  * APPLICATION INTERACTION MODEL : ce que le Recorder a compris de l'APPLICATION (pas seulement des
@@ -280,6 +281,11 @@ export interface ActionView {
    * provenance et l'historique. Absente tant qu'aucune décision n'existe (statut INFERRED implicite).
    */
   review?: ActionReview;
+  /**
+   * L'INTENTION FONCTIONNELLE (intent/) : trois niveaux, candidats et statut. Elle complète
+   * l'interprétation métier (une action UNKNOWN ici peut avoir une intention CONFIRMED là) sans la remplacer.
+   */
+  functionalIntent?: StepIntentAnnotation;
 }
 
 /**
@@ -334,6 +340,10 @@ export interface ApplicationInteractionModel {
       validated: number;
       interpreted: number;
       uninterpreted: number;
+      /** Actions dont l'intention fonctionnelle est CONFIRMED ou PROBABLE. */
+      intentResolved?: number;
+      /** Actions UNKNOWN pour l'interprétation métier mais dont l'intention fonctionnelle est résolue. */
+      intentOnly?: number;
       /** Les intentions corrigées / confirmées par la revue humaine. */
       humanCorrected?: number;
       humanConfirmed?: number;

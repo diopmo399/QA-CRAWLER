@@ -6,6 +6,14 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Intention fonctionnelle** (`src/intent/`) : element + contexte + action humaine + état → intention à
+  trois niveaux (geste, interface, opération × entité) pour chaque action enregistrée, avec preuves typées
+  (libellé, rôle, contexte structurel, actions voisines, effets, réseau, cycle de vie des entités, décision
+  humaine, bibliothèque, contrat), candidats classés, contradictions et statut CONFIRMED / PROBABLE /
+  AMBIGUOUS / UNKNOWN. Écrite à côté de l'action, jamais à sa place : `functionalIntent:` dans le YAML,
+  `functional-intents.json`, rapport d'enregistrement, modèle de l'application ; le self-healing la lit
+  avant l'heuristique du libellé. Arbitre IA sur AMBIGUOUS seulement (choix parmi les candidats),
+  bibliothèque d'intentions dans la connaissance fonctionnelle. Configuration `recording.intent`.
 - `Issue.details` : nom de l'erreur, source (`fichier:ligne:colonne`), pile d'appels complète
   (`PAGE_ERROR`), texte complet d'un message console sur plusieurs lignes (`CONSOLE`), type de
   ressource et en-têtes de diagnostic d'une réponse en échec (`HTTP`, `BROKEN_LINK`,

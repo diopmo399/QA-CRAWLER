@@ -1027,12 +1027,19 @@ Avec `recording.knowledge: true` (défaut), le workflow montré (`CREATE:USER`, 
 libellé du bouton) rejoint la connaissance fonctionnelle de la mission
 (`knowledge/functional/`, la même que les runs), provenance `HUMAN_RECORDED`, avec l'id de
 la session, la version et l'environnement. Les runs suivants la reprennent comme historique
-(jamais une preuve tant que le run ne l'a pas revue).
+(jamais une preuve tant que le run ne l'a pas revue). Les intentions fonctionnelles CONFIRMED / PROBABLE
+entrent dans la **bibliothèque d'intentions** (`intentPatterns` : geste + libellé + forme des requêtes →
+intention, forme générale `SEARCH_ENTITY`) et reviennent comme indices HISTORY aux enregistrements
+suivants ; les décisions de la revue sur une intention sont des preuves pour le même écran et le même
+élément. Voir [FUNCTIONAL_INTENT.md](FUNCTIONAL_INTENT.md).
 
 ## Fichiers
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,
-`recorded-flow.json`, `semantic-intents.json` (l'intention, couche séparée), `recording-status.json` (`DRAFT` / `SAVED`), `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
+`recorded-flow.json`, `semantic-intents.json` (l'intention métier du parcours, couche séparée),
+`functional-intents.json` (l'intention FONCTIONNELLE de chaque action : trois niveaux, preuves, candidats,
+statut — voir [FUNCTIONAL_INTENT.md](FUNCTIONAL_INTENT.md)), `functional-intent-decisions.json` (les
+arbitrages du conseiller sur les intentions ambiguës), `recording-status.json` (`DRAFT` / `SAVED`), `generated.flow.yaml`, `generated.feature`, `test-data.yaml` (le jeu de
 données du flow), `human-journey.json`, `action-preservation.json`, `semantic-audit.json`, `target-validation.json`, `ai-context-summary.json`, `optimized.flow.yaml`
 (seulement avec l'optimiseur), `flow-graph.json` (la carte
 des écrans et des actions), `recording-events.jsonl`, `index.html` (résumé en nombres — sans
@@ -1046,7 +1053,7 @@ et `HTTP_ANALYSIS_CONSOLIDATED` (après l'arrêt).
 
 Événements : `RECORDING_STARTED`, `RAW_EVENT_CAPTURED`, `SEMANTIC_ACTION_RESOLVED`,
 `CHECKPOINT_ADDED`, `RECORDING_PAUSED`, `RECORDING_RESUMED`, `RECORDING_STOPPED`,
-`RECORDING_NORMALIZED`, `OUTCOME_INFERRED`, `FLOW_GENERATED`, `REPLAY_VALIDATION_STARTED`,
+`RECORDING_NORMALIZED`, `OUTCOME_INFERRED`, `FUNCTIONAL_INTENTS_RESOLVED`, `FUNCTIONAL_INTENT_ARBITRATED`, `FLOW_GENERATED`, `REPLAY_VALIDATION_STARTED`,
 `REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`, et pour les données : `RECORDED_TEST_DATA_DISCOVERED`, `TEST_DATA_KEY_RESOLVED`, `TEST_DATA_CLASSIFIED`, `TEST_DATA_GENERALIZED`, `TEST_DATA_LITERAL_PRESERVED`, `TEST_DATA_REFERENCE_CREATED`, `SENSITIVE_RECORDED_VALUE_REDACTED`, `TEST_DATA_COLLISION_DETECTED` (enregistrement), `TEST_DATA_GENERATED_FOR_RUN`, `TEST_DATA_STRATEGY_CANDIDATE` (rejeu), et pour le parcours humain : `HUMAN_INTERACTION_CAPTURED`, `HUMAN_INTERACTION_PRESERVED`, `HUMAN_INTERACTION_MERGED`, `HUMAN_INTERACTION_EXCLUDED`, `HUMAN_INTERACTION_UNRESOLVED`, `HUMAN_ACTION_DEPENDENCY_DISCOVERED`, `HUMAN_JOURNEY_BUILT`, `HUMAN_JOURNEY_VALIDATION_STARTED`, `HUMAN_JOURNEY_VALIDATED`, `HUMAN_JOURNEY_VALIDATION_FAILED`, `HUMAN_ACTION_LOST`, `FLOW_OPTIMIZATION_STARTED`, `FLOW_OPTIMIZATION_COMPLETED`, et pour l'audit : `RECORDING_SEMANTIC_AUDITED`, `TARGET_VALIDATION`. Jamais une valeur dans un événement.
 
 ## Configuration
