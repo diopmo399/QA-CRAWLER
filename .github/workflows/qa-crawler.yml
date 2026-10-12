@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# Two vitest workers per runner (4 vCPU): the timed unit test and the recorder's typing tests are
+# timing-sensitive on a loaded runner. The integration shards keep the parallelism.
+env:
+  QA_TEST_WORKERS: 2
+
 jobs:
   build:
     runs-on: ubuntu-latest
