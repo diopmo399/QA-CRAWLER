@@ -1577,6 +1577,8 @@ flows:
 | `ACCESSIBILITY`       | vérifications d'accessibilité de base, parcours clavier            | INFO / WARNING              |
 | `AUTHORIZATION`       | règle d'autorisation en échec, acteur impossible à connecter       | ERROR / WARNING             |
 
+**Détails d'une anomalie.** Quand la source en fournit, chaque anomalie porte un bloc `details` (dans `result.json`) que le rapport affiche sous le message, replié par défaut : le nom de l'erreur, la source (`fichier:ligne:colonne`), la **pile d'appels complète** d'une exception JavaScript, le texte complet d'un `console.error` sur plusieurs lignes, et pour une réponse HTTP le type de ressource et quelques en-têtes de diagnostic (`content-type`, `content-length`, `server`, `x-request-id`, `x-correlation-id`, `x-trace-id`, `retry-after`, `www-authenticate`, `location`). Jamais de cookie, d'en-tête d'authentification ni de corps ; les détails sont masqués et bornés comme le message (30 cadres, 4000 caractères).
+
 Chaque anomalie est rattachée à son contexte pour pouvoir la reproduire :
 
 ```json

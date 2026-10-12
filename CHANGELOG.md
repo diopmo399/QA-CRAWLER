@@ -4,6 +4,15 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Ajouté
+
+- `Issue.details` : nom de l'erreur, source (`fichier:ligne:colonne`), pile d'appels complète
+  (`PAGE_ERROR`), texte complet d'un message console sur plusieurs lignes (`CONSOLE`), type de
+  ressource et en-têtes de diagnostic d'une réponse en échec (`HTTP`, `BROKEN_LINK`,
+  `REQUEST_FAILED`). Masqués et bornés par le collecteur comme le message.
+- Rapport HTML : bloc « Détails » dépliable sous le message de chaque anomalie (source,
+  informations clé → valeur, pile d'appels, texte complet).
+
 ## 0.2.0 — 2026-10-12
 
 ### Ajouté

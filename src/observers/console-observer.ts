@@ -1,5 +1,6 @@
 import type { ConsoleMessage, Page } from 'playwright';
 import { SeverityRules } from '../anomaly/severity-rules.js';
+import type { IssueDetails } from '../model/issue.js';
 import { attributionOf, type ObservationContext, type PageObserver } from './observer.js';
 
 /** L'écho par Chrome d'une réponse HTTP en échec — déjà signalée par le NetworkObserver. */
@@ -35,12 +36,25 @@ export class ConsoleObserver implements PageObserver {
 
     const location = message.location();
     const where = location.url ? ` (${location.url}:${location.lineNumber})` : '';
+    const lines = text.split('\n').map((line) => line.trim());
+    const head = lines[0] ?? text;
+    const frames = lines.filter((line) => line.startsWith('at '));
+    const details: IssueDetails = {
+      name: `console.${type}`,
+      ...(location.url
+        ? { source: { url: location.url, line: location.lineNumber, column: location.columnNumber } }
+        : {}),
+      ...(frames.length > 0 ? { stack: frames } : {}),
+      ...(lines.length > 1 ? { text } : {}),
+      ...(message.args().length > 1 ? { extra: { arguments: String(message.args().length) } } : {}),
+    };
     this.context.collector.add({
       type: 'CONSOLE',
       severity: isError ? SeverityRules.consoleError() : SeverityRules.consoleWarning(),
-      message: `console.${type}: ${text}${where}`,
+      message: `console.${type}: ${head}${where}`,
       pageUrl: this.context.currentPageUrl(),
       ...attributionOf(this.context),
+      details,
     });
   }
 }
