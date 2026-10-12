@@ -6,6 +6,16 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Vue d'ensemble** (`reports/overview.html`, `src/reporting/overview-*.ts`) : une page autonome par run —
+  indicateurs (actions validées, intentions CONFIRMED / PROBABLE contre UNKNOWN, durée et durées par étape),
+  parcours détecté (une carte par étape, ton validé / avertissement / échec / inconnu, étape d'arrêt, écritures
+  HTTP, liens « réutilise la même valeur » tirés de `testDataReport`), détails du run (preuve métier, confiance,
+  dérive), timeline filtrable et dépliable, lignée des données de test (source, réutilisations, citations ; seule
+  une valeur générée est affichée). Thème clair / sombre, recherche, choix du flow, lien depuis `index.html`.
+  Configuration `output.overviewHtml` (par défaut `true`).
+- **Thème QA-CRAWLER partagé** (`src/reporting/theme.ts`) : la vue d'ensemble, `index.html`, `flow-graph.html`,
+  le rapport d'enregistrement, le rapport de dry-run et la fenêtre du recorder utilisent les mêmes jetons de
+  couleur, le même logo et un bouton clair / sombre (clair par défaut, choix gardé pour toutes les pages).
 - **Rejeu piloté par intention et état** (`src/replay/`) : `ReplayStateMachine` (position fonctionnelle,
   checkpoints confirmés, dernière action commise, divergence localisée entre le dernier checkpoint
   confirmé et le premier manquant), checkpoints fonctionnels dérivés des effets enregistrés, de

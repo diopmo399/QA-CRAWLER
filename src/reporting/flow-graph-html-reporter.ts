@@ -2,7 +2,16 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ExplorationResult } from '../model/exploration-result.js';
 import { buildFlowTree, displayName, renderTextTree } from './flow-tree.js';
-import { BASE_CSS, card, classPill, esc, renderTreeHtml } from './html-common.js';
+import {
+  BASE_CSS,
+  card,
+  classPill,
+  esc,
+  REPORT_THEME_HEAD,
+  REPORT_THEME_SCRIPT,
+  renderTreeHtml,
+  reportBrandBar,
+} from './html-common.js';
 import { reportTexts, translateReason, valueLabel, type ReportLanguage } from './i18n.js';
 import type { Reporter } from './reporter.js';
 import { renderFlowMap } from './flow-diagram.js';
@@ -43,12 +52,13 @@ export function renderFlowGraphHtml(result: ExplorationResult, language: ReportL
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(t.flowGraphTitle)} — ${esc(result.mission)}</title>
-<style>${BASE_CSS} pre.tree-text { background:#0f172a; color:#e2e8f0; padding:14px; border-radius:8px; overflow-x:auto; font-size:12px; }</style>
+${REPORT_THEME_HEAD}
+<style>${BASE_CSS} pre.tree-text { background:var(--code-bg); color:var(--code-text); padding:14px; border-radius:8px; overflow-x:auto; font-size:12px; }</style>
 </head>
 <body>
 <header>
   <div class="hero">
-    <div class="eyebrow">${esc(t.flowGraphTitle)}</div>
+    ${reportBrandBar(esc(t.flowGraphTitle), language)}
     <div class="hero-title"><h1>${esc(result.mission)}</h1></div>
     <div class="chips"><span class="chip url">${esc(result.target.startUrl)}</span></div>
     <nav class="links"><a class="primary" href="index.html">${esc(t.backToReport)}</a><a href="flow-graph.json">flow-graph.json</a></nav>
@@ -72,6 +82,7 @@ export function renderFlowGraphHtml(result: ExplorationResult, language: ReportL
     <table>${head}<tbody>${others.map(edgeRow).join('')}</tbody></table>
   </section>
 </main>
+${REPORT_THEME_SCRIPT}
 </body>
 </html>
 `;

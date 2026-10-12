@@ -1,4 +1,12 @@
-import { BASE_CSS, card, esc, formatDuration } from '../reporting/html-common.js';
+import {
+  BASE_CSS,
+  card,
+  esc,
+  formatDuration,
+  REPORT_THEME_HEAD,
+  REPORT_THEME_SCRIPT,
+  reportBrandBar,
+} from '../reporting/html-common.js';
 import { describeFlowIntent, type FlowIntentGraph } from './flow-intent-graph.js';
 import type {
   ObservedFlowGraph,
@@ -97,10 +105,12 @@ export function dryRunHtml(input: DryRunReportInput): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(graph.name)} — dry run</title>
+${REPORT_THEME_HEAD}
 <style>${BASE_CSS}${CSS}</style></head>
 <body>
 <header class="dr-head"><div class="wrap">
-  <div class="kicker">QA-CRAWLER · DRY RUN · ${esc(graph.source.type)}${graph.source.file ? ` · ${esc(graph.source.file)}` : ''}</div>
+  ${reportBrandBar('Dry run', 'en')}
+  <div class="kicker">${esc(graph.source.type)}${graph.source.file ? ` · ${esc(graph.source.file)}` : ''}</div>
   <h1>${esc(graph.name)}</h1>
   <div class="status" style="--c:${GLOBAL_COLORS[reconciliation.status]}">${esc(reconciliation.status)}</div>
   <p class="sub">Expected (the scenario) + observed (the application) → one reconciliation → one suggested flow. The scenario file is never modified.</p>
@@ -135,7 +145,7 @@ export function dryRunHtml(input: DryRunReportInput): string {
     .join('')}</ol></section>
   <section><h2>Files</h2><ul class="plain">${files}</ul></section>
   <p class="muted">Generated ${esc(input.generatedAt)}</p>
-</main></body></html>
+</main>${REPORT_THEME_SCRIPT}</body></html>
 `;
 }
 
@@ -176,11 +186,11 @@ function pairingHtml(pairing: NonNullable<ReconciliationEntry['pairing']>): stri
 
 const CSS = `
   .wrap { max-width:1180px; margin:0 auto; padding:0 20px; }
-  .dr-head { background:linear-gradient(135deg,var(--head-from),var(--head-to)); color:#fff; padding:28px 0 22px; margin-bottom:22px; }
+  .dr-head { background:var(--chrome); color:var(--text); border-bottom:1px solid var(--border); padding:18px 0 22px; margin-bottom:22px; }
   .dr-head h1 { margin:6px 0 10px; font-size:26px; }
-  .dr-head .kicker { font-size:12px; letter-spacing:.08em; opacity:.8; }
-  .dr-head .sub { opacity:.85; margin:10px 0 0; }
-  .status { display:inline-block; background:var(--c); color:#fff; font-weight:700; padding:4px 12px; border-radius:999px; }
+  .dr-head .kicker { font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--purple-ink); }
+  .dr-head .sub { color:var(--muted); margin:10px 0 0; }
+  .dr-head .status { background:var(--c); padding:4px 12px; border-radius:999px; }
   section { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px 18px; margin-bottom:18px; }
   section h2 { margin:0 0 12px; font-size:17px; }
   .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px; }

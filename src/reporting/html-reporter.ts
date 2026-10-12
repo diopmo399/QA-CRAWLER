@@ -8,6 +8,9 @@ import type { Reporter } from './reporter.js';
 import { buildFlowTree, displayName } from './flow-tree.js';
 import {
   BASE_CSS,
+  REPORT_THEME_HEAD,
+  REPORT_THEME_SCRIPT,
+  reportBrandBar,
   card,
   classPill,
   esc,
@@ -250,12 +253,13 @@ export function renderHtml(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(t.reportTitle)} — ${esc(result.mission)}</title>
+${REPORT_THEME_HEAD}
 <style>${BASE_CSS}</style>
 </head>
 <body>
 <header>
   <div class="hero">
-    <div class="eyebrow">${esc(t.reportTitle)}</div>
+    ${reportBrandBar(esc(t.reportTitle), language)}
     <div class="hero-title"><h1>${esc(result.mission)}</h1><span class="status" style="--status:${status.color}">${esc(status.label)}</span></div>
     ${result.description ? `<p class="hero-desc">${esc(result.description)}</p>` : ''}
     <div class="chips">
@@ -268,7 +272,7 @@ export function renderHtml(
       ${result.baseline ? `<span class="chip"><span>${esc(t.baselineTexts.baseline)}</span> ${esc(baselineName(result.baseline))}</span>` : ''}
       ${result.learnedBaseline ? `<span class="chip"><span>${esc(t.baselineTexts.learned)}</span> ${esc(baselineName(result.learnedBaseline))}</span>` : ''}
     </div>
-    <nav class="links">${result.artifacts.flowGraphHtml ? `<a class="primary" href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
+    <nav class="links">${result.artifacts.overviewHtml ? `<a class="primary" href="${esc(href(result.artifacts.overviewHtml))}">${esc(t.overviewLink)}</a>` : ''}${result.artifacts.flowGraphHtml ? `<a class="primary" href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
   </div>
 </header>
 <div class="layout">
@@ -300,6 +304,7 @@ ${layout.toc}
   <p class="muted report-footer">${esc(t.generatedBy)} · ${esc(formatDate(result.finishedAt))}</p>
 </main>
 </div>
+${REPORT_THEME_SCRIPT}
 </body>
 </html>
 `;

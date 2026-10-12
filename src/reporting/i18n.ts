@@ -33,6 +33,7 @@ export interface ReportTexts {
   stopped: string;
   engine: string;
   flowGraphLink: string;
+  overviewLink: string;
   backToReport: string;
   status: { critical: string; errors: string; warnings: string; none: string };
   cards: {
@@ -157,6 +158,7 @@ const EN: ReportTexts = {
   stopped: 'stopped',
   engine: 'engine',
   flowGraphLink: 'Flow graph →',
+  overviewLink: 'Overview →',
   backToReport: '← Report',
   status: {
     critical: 'CRITICAL issues found',
@@ -305,6 +307,7 @@ const FR: ReportTexts = {
   stopped: 'arrêt',
   engine: 'moteur',
   flowGraphLink: 'Graphe des flows →',
+  overviewLink: "Vue d'ensemble →",
   backToReport: '← Rapport',
   status: {
     critical: 'Anomalies CRITIQUES',

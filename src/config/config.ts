@@ -552,6 +552,8 @@ const outputSchema = z
     html: z.boolean().default(true),
     /** reports/flow-graph.html */
     flowGraphHtml: z.boolean().default(true),
+    /** reports/overview.html : la vue d'ensemble (indicateurs, parcours, timeline, lignée des données). */
+    overviewHtml: z.boolean().default(true),
   })
   .strict();
 

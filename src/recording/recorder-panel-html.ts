@@ -1,3 +1,11 @@
+import {
+  brandLogo,
+  THEME_BASE_CSS,
+  THEME_BOOT_SCRIPT,
+  THEME_TOGGLE_SCRIPT,
+  themeToggle,
+} from '../reporting/theme.js';
+
 /**
  * LA FENÊTRE « QA-CRAWLER Recorder » : une page autonome (aucune dépendance, aucun réseau), rendue
  * dans un contexte de navigateur SÉPARÉ de l'application enregistrée (jamais capturée, jamais
@@ -22,20 +30,23 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QA-CRAWLER Recorder — ${language === 'fr' ? 'Aperçu' : 'Preview'}</title>
+${THEME_BOOT_SCRIPT}
 <style>${CSS}</style>
 </head>
 <body data-mode="preview">
 <header class="topbar">
-  <span class="logo" aria-hidden="true"><svg viewBox="0 0 36 36" width="30" height="30"><circle cx="17" cy="17" r="11" fill="none" stroke="#4F46E5" stroke-width="6"/><path d="M24 24l7 7" stroke="#7C3AED" stroke-width="6" stroke-linecap="round"/></svg></span>
+  ${brandLogo(30)}
   <span class="brand">QA-CRAWLER</span>
   <span class="subtitle" id="subtitle"></span>
   <span class="state small" id="state" aria-live="polite"></span>
   <span class="spacer"></span>
   <span class="actions-top" id="detached-actions"></span>
+  ${themeToggle(language)}
 </header>
 <main class="detached-main"><section class="card preview detached" id="preview-detached" aria-live="polite"></section></main>
 <div id="live" class="sr-only" aria-live="polite"></div>
 <script>${SCRIPT}</script>
+${THEME_TOGGLE_SCRIPT}
 </body>
 </html>`;
   return `<!doctype html>
@@ -44,16 +55,18 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QA-CRAWLER Recorder</title>
+${THEME_BOOT_SCRIPT}
 <style>${CSS}</style>
 </head>
 <body data-mode="main">
 <header class="topbar">
-  <span class="logo" aria-hidden="true"><svg viewBox="0 0 36 36" width="30" height="30"><circle cx="17" cy="17" r="11" fill="none" stroke="#4F46E5" stroke-width="6"/><path d="M24 24l7 7" stroke="#7C3AED" stroke-width="6" stroke-linecap="round"/></svg></span>
+  ${brandLogo(30)}
   <span class="brand">QA-CRAWLER</span>
   <span class="subtitle" id="subtitle"></span>
   <span class="spacer"></span>
   <button type="button" class="devtoggle" id="layouttoggle" aria-pressed="false"></button>
   <button type="button" class="devtoggle" id="devtoggle" aria-pressed="false"></button>
+  ${themeToggle(language)}
 </header>
 <section class="statusbar" id="head" aria-label="">
   <h1 id="state" class="state" aria-live="polite"></h1>
@@ -97,25 +110,29 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 <footer class="summarybar" id="summarybar"></footer>
 <div id="live" class="sr-only" aria-live="polite"></div>
 <script>${SCRIPT}</script>
+${THEME_TOGGLE_SCRIPT}
 </body>
 </html>`;
 }
 
 const CSS = `
-:root{
+:root{color-scheme:light;
   --bg:#F3F4F8;--surface:#FFFFFF;--surface-2:#F7F7FB;--fg:#111827;--muted:#5B6478;--line:#E4E7EF;--line-strong:#D6DAE4;
   --accent:#4F46E5;--accent-soft:#EEF2FF;--accent-fg:#FFFFFF;--title:#4338CA;--ok-fg:#FFFFFF;--muted-strong:#374151;--chip-bg:#F1F2F8;--chip-fg:#374151;--ok-text:#15803D;
   --ok:#15803D;--ok-soft:#F0FDF4;--warn:#B45309;--warn-soft:#FFFBEB;--bad:#B91C1C;--bad-soft:#FEF2F2;--run:#4F46E5;--run-soft:#EEF2FF;--idle:#C7CCD8;--idle-soft:#F1F2F8;
   --violet:#6D28D9;--violet-soft:#F3EEFF;--teal:#0F766E;--teal-soft:#E6FAF7;--orange:#4338CA;--orange-soft:#EEF2FF;--pink:#1D4ED8;--pink-soft:#E8F0FE;
   --radius:14px;--shadow:0 1px 2px rgba(16,24,40,.05);--focus:#4F46E5;--ring:#E0E7FF;
+  --accent-2:#7C3AED;--text:var(--fg);--text-2:var(--muted-strong);--nav-hover:#F1F2F8;
 }
-@media (prefers-color-scheme:dark){:root{
+:root[data-theme="dark"]{color-scheme:dark;
   --bg:#0B0E17;--surface:#111726;--surface-2:#161C2D;--fg:#E6E9F2;--muted:#9AA3B8;--line:#1F2638;--line-strong:#2A3248;
   --accent:#6366F1;--accent-soft:#1C1A4A;--accent-fg:#FFFFFF;--title:#C7D2FE;--ok-fg:#052E16;--muted-strong:#C9CFDD;--chip-bg:#1A2133;--chip-fg:#C9CFDD;--ok-text:#4ADE80;
   --ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#2A1F0C;--bad:#EF4444;--bad-soft:#2A1215;--run:#818CF8;--run-soft:#1C1A4A;--idle:#64748B;--idle-soft:#1A2133;
   --violet:#A78BFA;--violet-soft:#2E1F6B;--teal:#5EEAD4;--teal-soft:#0E3B33;--orange:#A5B4FC;--orange-soft:#1C1A4A;--pink:#93C5FD;--pink-soft:#0F1B3A;
   --shadow:none;--focus:#A5B4FC;--ring:#2E2A7A;
-}}
+  --accent-2:#8B5CF6;--nav-hover:#161C2D;
+}
+${THEME_BASE_CSS}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;font:13px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI","Helvetica Neue",sans-serif;background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;min-height:100vh}
@@ -139,8 +156,9 @@ button.primary:hover:not(:disabled),button.success:hover:not(:disabled),button.c
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .spacer{flex:1}
 .topbar{display:flex;align-items:center;gap:14px;padding:10px 24px;background:var(--surface);border-bottom:1px solid var(--line)}
-.logo{display:grid;place-items:center;width:30px;height:30px}
+.logo{display:block;flex:none}
 .brand{font-weight:700;font-size:17px;letter-spacing:.02em}
+.topbar .qa-theme-toggle{width:38px;height:38px;min-height:0}
 .subtitle{color:var(--muted);padding-left:10px;border-left:1px solid var(--line)}
 .devtoggle{border-radius:8px;font-size:12px;color:var(--muted)}
 .devtoggle[aria-pressed=true]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
@@ -420,7 +438,7 @@ body[data-mode=preview]{background:var(--bg)}
 .lineage .uses{list-style:disc;margin:6px 0 0 18px;padding:0;color:var(--muted-strong);font-size:12px}
 @media (max-width:640px){.irow{grid-template-columns:32px minmax(0,1fr);padding:12px}.irow .iico{width:32px;height:32px;grid-row:1}.irow .iactions{grid-column:2;grid-row:auto;justify-content:flex-start}.irow .full,.iedit{grid-column:2}}
 /* E · MINI-DOCK : une fenêtre étroite et sombre pendant l'enregistrement (la revue reste complète). */
-body.compact{--title:#C7D2FE;--ok-fg:#052E16;--muted-strong:#C9CFDD;--chip-bg:#1A2133;--chip-fg:#C9CFDD;--ok-text:#4ADE80;--bg:#0B0E17;--surface:#111726;--surface-2:#161C2D;--fg:#E6E9F2;--muted:#9AA3B8;--line:#1F2638;--line-strong:#2A3248;--accent:#6366F1;--accent-soft:#1C1A4A;--accent-fg:#FFFFFF;--ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#2A1F0C;--bad:#EF4444;--bad-soft:#2A1215;--run:#818CF8;--run-soft:#1C1A4A;--teal:#5EEAD4;--teal-soft:#0E3B33;--violet:#DDD6FE;--violet-soft:#2E1F6B;--orange:#A5B4FC;--orange-soft:#1C1A4A;--shadow:none;--ring:#2E2A7A}
+body.compact{--title:#C7D2FE;--ok-fg:#052E16;--muted-strong:#C9CFDD;--chip-bg:#1A2133;--chip-fg:#C9CFDD;--ok-text:#4ADE80;--bg:#0B0E17;--surface:#111726;--surface-2:#161C2D;--fg:#E6E9F2;--muted:#9AA3B8;--line:#1F2638;--line-strong:#2A3248;--accent:#6366F1;--accent-soft:#1C1A4A;--accent-fg:#FFFFFF;--ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#2A1F0C;--bad:#EF4444;--bad-soft:#2A1215;--run:#818CF8;--run-soft:#1C1A4A;--teal:#5EEAD4;--teal-soft:#0E3B33;--violet:#DDD6FE;--violet-soft:#2E1F6B;--orange:#A5B4FC;--orange-soft:#1C1A4A;--shadow:none;--ring:#2E2A7A;--text:var(--fg);--text-2:var(--muted-strong);--nav-hover:#161C2D}
 body.compact .tabs,body.compact .col-mid,body.compact .col-right,body.compact #quality,body.compact .subtitle,body.compact #devtoggle,body.compact .summarybar,body.compact #tltools,body.compact #checks,body.compact .sep,body.compact #livepill{display:none!important}
 body.compact .grid{grid-template-columns:1fr!important}
 body.compact .statusbar{margin:8px 10px 0}

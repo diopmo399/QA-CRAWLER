@@ -170,7 +170,7 @@ export function runAnalysisSection(result: ExplorationResult, language: ReportLa
   if (!analysis) return '';
   const t = TEXTS[language];
   const s = analysis.summary;
-  const verdict = `<div class="verdict" style="border-left:6px solid ${VERDICT_COLORS[analysis.status]};padding:10px 14px;margin:8px 0 12px;background:#f8fafc;border-radius:6px">
+  const verdict = `<div class="verdict" style="border-left:6px solid ${VERDICT_COLORS[analysis.status]};padding:10px 14px;margin:8px 0 12px;background:var(--surface-2, #f8fafc);border-radius:8px">
     <div><span class="pill ${esc(analysis.status)}" style="background:${VERDICT_COLORS[analysis.status]};color:#fff">${esc(analysis.status)}</span> <b>${esc(t.verdicts[analysis.status])}</b> · <span class="muted">${esc(formatDuration(s.durationMs))} · run ${esc(analysis.runId)}</span></div>
     <p style="margin:6px 0 0">${esc(s.headline)}</p>
     ${analysis.explainability.verdictReasons.length > 0 ? `<p class="muted"><b>${esc(t.why)}</b></p>${list(analysis.explainability.verdictReasons)}` : ''}
