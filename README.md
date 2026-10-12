@@ -33,6 +33,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Scénarios Gherkin](#scénarios-gherkin)
 - [Dry Run : confronter un scénario à l'application](#dry-run--confronter-un-scénario-à-lapplication)
 - [Enregistrer un flow montré par un humain (record)](#enregistrer-un-flow-montré-par-un-humain-record)
+- [Intention fonctionnelle des actions](#intention-fonctionnelle-des-actions)
 - [Analyse statique : le code comme source de preuves](#analyse-statique--le-code-comme-source-de-preuves)
 - [Authentification](#authentification)
 - [Interactions navigateur](#interactions-navigateur)
@@ -981,6 +982,22 @@ npm run qa -- record -c mission.yaml --name "Create user" --url /users --validat
 Un bandeau **● RECORDING** (Checkpoint, Pause, Stop) s'affiche dans la page ; le terminal pilote aussi (Entrée pour arrêter, `c <libellé>` pour un point de contrôle, `p` pour la pause). La capture est passive (rien n'est empêché ni intercepté) et **aucune saisie en clair** ne quitte la page. Le nettoyage retire le bruit, fusionne les saisies, garde la valeur finale d'un champ corrigé, retire les détours ; un envoi refusé puis corrigé est un scénario de validation négatif s'il porte un point de contrôle. `--validate` rejoue le flow généré par le Dry Run (`REPLAY_CONFIRMED` / `REPLAY_FAILED`) sans jamais le modifier ; la SafetyPolicy reste absolue. Fichiers sous `<reportsDir>/recordings/<nom>/`, avec un rapport RAW → SEMANTIC → FINAL qui explique chaque étape. Détails : [docs/HUMAN_FLOW_RECORDER.md](docs/HUMAN_FLOW_RECORDER.md).
 
 **Progression** : après Stop (et après le dernier flow d'un run), une barre animée dit ce que le système fait : finalisation, flow, audits, rejeu, rapports ; le bandeau du navigateur affiche « ⏳ FINALIZING » pendant la finalisation de la capture. Détails : [docs/HUMAN_FLOW_RECORDER.md](docs/HUMAN_FLOW_RECORDER.md#progression-après-larrêt).
+
+## Intention fonctionnelle des actions
+
+Chaque action enregistrée reçoit une **intention à trois niveaux** — le geste (`CLICK`), l'intention
+d'interface (`SEARCH`, `OPEN_DIALOG`, `SELECT_ITEM`…) et l'intention fonctionnelle **opération × entité**
+(`SEARCH_ITEM`, `SUBMIT_REQUEST`) — résolue non pas d'après le seul élément mais d'après son contexte
+(formulaire, section, dialogue, ligne), les actions voisines (les champs posés avant, ce que la suite
+rend disponible), les effets observés (lignes qui changent, dialogue ouvert, route), le réseau (lecture
+d'une collection, écriture, changement d'état métier), le cycle de vie des entités, les décisions humaines
+et la bibliothèque d'intentions apprise. Chaque intention porte ses **preuves**, ses **candidats classés**
+et un statut : `CONFIRMED`, `PROBABLE`, `AMBIGUOUS` (deux rivaux trop proches, jamais le premier passé le
+poteau) ou `UNKNOWN` (aucune preuve, jamais une intention inventée). L'action brute n'est jamais remplacée :
+l'intention est écrite à côté (`functionalIntent:` dans le YAML, `functional-intents.json`, rapport,
+modèle de l'application) et sert au self-healing, aux rapports et au raisonnement. Une intention
+`AMBIGUOUS` peut être soumise au conseiller IA, qui choisit **parmi** les candidats déterministes.
+Détails : [docs/FUNCTIONAL_INTENT.md](docs/FUNCTIONAL_INTENT.md).
 
 ## Analyse statique : le code comme source de preuves
 

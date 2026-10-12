@@ -66,6 +66,21 @@ export interface RememberedIntentDecision {
 }
 
 /**
+ * LA BIBLIOTHÈQUE D'INTENTIONS : une association « geste + libellé + forme des requêtes → intention »
+ * confirmée par un enregistrement (CONFIRMED ou PROBABLE), avec sa forme générale (SEARCH_ENTITY). Un
+ * indice HISTORIQUE pour les enregistrements suivants, jamais une règle : le résolveur la pèse avec
+ * les autres preuves. Aucune valeur saisie.
+ */
+export interface RememberedIntentPattern {
+  key: string;
+  intent: string;
+  generic: string;
+  confirmations: number;
+  lastSeenAt: string;
+  recordingSessionId?: string;
+}
+
+/**
  * FUNCTIONAL KNOWLEDGE : transitions métier, workflows, invariants, chemins d'erreur et
  * objectifs, gardés d'un run à l'autre (knowledge/functional/, un JSON par application
  * et environnement), à côté de la connaissance des règles.
@@ -85,6 +100,7 @@ export class FunctionalKnowledgeStore {
    */
   private mappings: RememberedFieldMapping[] = [];
   private decisions: RememberedIntentDecision[] = [];
+  private patterns: RememberedIntentPattern[] = [];
 
   constructor(
     private readonly directory: string,
@@ -107,6 +123,7 @@ export class FunctionalKnowledgeStore {
       this.remembered = new Map((parsed.entries ?? []).map((entry) => [entry.id, entry]));
       this.mappings = (parsed as { fieldMappings?: RememberedFieldMapping[] }).fieldMappings ?? [];
       this.decisions = (parsed as { intentDecisions?: RememberedIntentDecision[] }).intentDecisions ?? [];
+      this.patterns = (parsed as { intentPatterns?: RememberedIntentPattern[] }).intentPatterns ?? [];
       this.learnedKnowledge = {
         workflows: parsed.learned?.workflows ?? [],
         states: parsed.learned?.states ?? [],
@@ -196,6 +213,26 @@ export class FunctionalKnowledgeStore {
     return this.decisions;
   }
 
+  /** Une intention confirmée de plus pour cette clé ; une autre intention pour la même clé repart de 1. */
+  rememberIntentPatterns(
+    patterns: readonly Omit<RememberedIntentPattern, 'confirmations' | 'lastSeenAt'>[],
+  ): void {
+    const now = new Date().toISOString();
+    for (const pattern of patterns) {
+      const previous = this.patterns.find((entry) => entry.key === pattern.key);
+      const same = previous?.intent === pattern.intent;
+      this.patterns = [
+        ...this.patterns.filter((entry) => entry.key !== pattern.key),
+        { ...pattern, confirmations: (same ? previous.confirmations : 0) + 1, lastSeenAt: now },
+      ].slice(-1000);
+    }
+  }
+
+  /** La bibliothèque d'intentions de cette application. */
+  intentPatterns(): readonly RememberedIntentPattern[] {
+    return this.patterns;
+  }
+
   /** Les correspondances déjà validées pour cette application. */
   fieldMappings(): readonly RememberedFieldMapping[] {
     return this.mappings;
@@ -250,7 +287,7 @@ export class FunctionalKnowledgeStore {
     await mkdir(this.directory, { recursive: true });
     await writeFileAtomic(
       this.file(),
-      `${JSON.stringify({ application: this.identity.application, entries: [...this.remembered.values()].slice(-3000), learned: this.learnedKnowledge, fieldMappings: this.mappings, intentDecisions: this.decisions }, null, 2)}\n`,
+      `${JSON.stringify({ application: this.identity.application, entries: [...this.remembered.values()].slice(-3000), learned: this.learnedKnowledge, fieldMappings: this.mappings, intentDecisions: this.decisions, intentPatterns: this.patterns }, null, 2)}\n`,
     );
   }
 }

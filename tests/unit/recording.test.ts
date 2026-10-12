@@ -478,8 +478,19 @@ describe('one model → flow.yaml and .feature', () => {
         );
       const parsed = flowSchema.parse({ name: 'x', steps: fromFeature });
       const shape = (steps: typeof yaml.steps): unknown[] =>
-        // Les effets appris et l'empreinte de la cible sont dans le YAML seulement (le .feature se vérifie à l'exécution).
-        steps.map(({ allow: _a, optional: _o, name: _n, effects: _e, fingerprint: _f, ...rest }) => rest);
+        // Les effets appris, l'empreinte de la cible et l'intention fonctionnelle sont dans le YAML seulement
+        // (le .feature se vérifie à l'exécution ; l'intention y est un commentaire).
+        steps.map(
+          ({
+            allow: _a,
+            optional: _o,
+            name: _n,
+            effects: _e,
+            fingerprint: _f,
+            functionalIntent: _i,
+            ...rest
+          }) => rest,
+        );
       expect(shape(parsed.steps), language).toEqual(shape(yaml.steps));
       expect(yaml.steps).toContainEqual(
         expect.objectContaining({ kind: 'check', target: { strategy: 'label', value: 'Monthly' } }),
@@ -494,7 +505,9 @@ describe('one model → flow.yaml and .feature', () => {
       }),
     ];
     const result = processRecording(session(events, [state('o1', '/users')]), config, { language: 'en' });
-    expect(result.files.yaml).not.toMatch(/intent/);
+    // Jamais une étape `intent:` (Gherkin sémantique) ; l'intention FONCTIONNELLE, informative, est à côté de l'étape.
+    expect(result.files.yaml).not.toMatch(/^\s*- intent:/m);
+    expect(result.files.yaml).not.toMatch(/intent: \{ kind/);
     expect(result.files.yaml).toContain('- click:');
     expect(result.files.yaml).toContain('dark-mode');
     // Le .feature ne sait pas la dire : un commentaire, jamais une phrase d'intention inventée.
@@ -521,7 +534,7 @@ describe('one model → flow.yaml and .feature', () => {
       }),
     ];
     const result = processRecording(session(events, [state('o1', '/users')]), config, { language: 'en' });
-    expect(result.files.yaml).not.toMatch(/intent|field: Branch code/);
+    expect(result.files.yaml).not.toMatch(/^\s*- intent:|intent: \{ kind|field: Branch code/m);
     expect(result.files.yaml).toContain('- fill:');
     expect(result.files.yaml).toContain('div > input');
   });
