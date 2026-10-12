@@ -36,6 +36,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Corrigé
 
+- Fenêtre d'enregistrement : le pictogramme du geste de chaque étape (clic, saisie, case…) affichait
+  « undefined » pour une saisie et rien pour un clic — deux tables `SVG` du même script se
+  masquaient. Table des gestes à part (`KIND_SVG`), test unitaire et assertion E2E.
 - Windows, Git Bash et WSL : les scripts npm `build`, `clean` et `pack` passent par Node
   (`scripts/clean.mjs`, `scripts/pack.mjs`) au lieu de `rm -rf` / `mkdir -p` ; le test
   d'installation (`test:packaging`) lance `npm.cmd` et `qa-crawler.cmd` sous Windows ;
