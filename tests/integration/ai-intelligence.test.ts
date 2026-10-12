@@ -28,7 +28,7 @@ const FLOW = `      - click: { role: button, name: Tasks }
  * est simulé (aucun appel réel à Copilot) ; tout le reste est réel : navigateur, SafetyPolicy,
  * exécuteur, vérification de l'objectif au runtime, rapport.
  */
-describe('AI reasoning advisor end to end (fake provider, real browser)', () => {
+describe.concurrent('AI reasoning advisor end to end (fake provider, real browser)', () => {
   let app: WorkflowApp;
   let dir: string;
 
@@ -251,21 +251,25 @@ ${FLOW}
     });
   }, 180_000);
 
-  it('§88 HYBRID, unsafe proposal: the SafetyPolicy refuses it — the writing button is never clicked', async () => {
-    const before = app.counts.removed;
-    const { result, audit } = await run(
-      'unsafe',
-      '?v=ai',
-      HYBRID,
-      new FakeIntelligenceProvider(proposeByName('Remove company information', 0.99)),
-      LIMITED,
-    );
-    expect(app.counts.removed).toBe(before);
-    expect(openingStep(result)?.status).toBe('FAILED');
-    const summary = await audit();
-    expect(summary.accepted).toBe(0);
-    expect(summary.decisions[0]?.reasons.join(' ')).toMatch(/SafetyPolicy refuses/);
-  }, 180_000);
+  it.sequential(
+    '§88 HYBRID, unsafe proposal: the SafetyPolicy refuses it — the writing button is never clicked',
+    async () => {
+      const before = app.counts.removed;
+      const { result, audit } = await run(
+        'unsafe',
+        '?v=ai',
+        HYBRID,
+        new FakeIntelligenceProvider(proposeByName('Remove company information', 0.99)),
+        LIMITED,
+      );
+      expect(app.counts.removed).toBe(before);
+      expect(openingStep(result)?.status).toBe('FAILED');
+      const summary = await audit();
+      expect(summary.accepted).toBe(0);
+      expect(summary.decisions[0]?.reasons.join(' ')).toMatch(/SafetyPolicy refuses/);
+    },
+    180_000,
+  );
 
   it('§87 HYBRID, invented action: rejected before anything reaches the browser', async () => {
     const provider = new FakeIntelligenceProvider(() => ({

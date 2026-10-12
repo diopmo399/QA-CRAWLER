@@ -16,7 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -43,11 +43,26 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Integration tests (real browser, local fixture apps) split into shards that run in parallel:
+  # each shard installs Chromium and runs a third of the files (vitest distributes them by name).
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-
-      - name: Integration tests (local test site)
-        run: npm run test:integration
+      - name: Integration tests (shard ${{ matrix.shard }}/3)
+        run: npx vitest run --project integration --shard=${{ matrix.shard }}/3
 
   # The installable packages: build, `npm pack` of @qa-crawler/core and @qa-crawler/cli, content
   # check of the tarballs, then installation of the tarballs into the consumer fixtures

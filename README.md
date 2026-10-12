@@ -281,6 +281,20 @@ importables par chemin (`@qa-crawler/core/dist/...`) mais seule la surface de `i
 | WSL : `error while loading shared libraries` au lancement        | bibliothèques système de Chromium absentes : `npx playwright install --with-deps chromium`                  |
 | PowerShell : `npx : … l'exécution de scripts est désactivée`     | politique d'exécution : `npx.cmd qa-crawler …`, ou `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`    |
 
+### Tests d'intégration : durée
+
+Chaque fichier d'intégration lance un Chromium et des missions complètes ; la suite est limitée par le
+**parallélisme**, pas par la vitesse d'une étape (~0,6 s). Par défaut vitest utilise autant de workers
+que de cœurs (8 au plus) et partage les modules entre fichiers ; les fichiers les plus longs exécutent
+leurs tests en concurrence. `QA_TEST_WORKERS=n` force le nombre de workers (une machine modeste ou un
+antivirus actif : 2 ou 3). En CI, la suite tourne en trois shards parallèles
+(`vitest run --project integration --shard=1/3`).
+
+```bash
+QA_TEST_WORKERS=8 npm run test:integration          # portable 8 cœurs et plus
+npx vitest run --project integration tests/integration/workflow-healing.test.ts   # un seul fichier
+```
+
 ### Développement du paquet et publication
 
 ```bash

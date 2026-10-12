@@ -14,7 +14,7 @@ import { startSettingsApp, type SettingsApp } from '../fixtures/settings-app.js'
  * et un champ sans libellé relié (Priority, section General). L'enregistrement garde la SECTION ;
  * le rejeu ne prend jamais le champ d'une autre section, et ne choisit jamais au hasard.
  */
-describe('Semantic target identity (real browser)', () => {
+describe.concurrent('Semantic target identity (real browser)', () => {
   let app: SettingsApp;
   let dir: string;
   beforeAll(async () => {

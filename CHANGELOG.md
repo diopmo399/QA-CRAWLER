@@ -34,6 +34,13 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 - Rapport HTML : bloc « Détails » dépliable sous le message de chaque anomalie (source,
   informations clé → valeur, pile d'appels, texte complet).
 
+### Modifié
+
+- Tests d'intégration plus rapides : un worker vitest par cœur (8 au plus, `QA_TEST_WORKERS` pour
+  régler), tests concurrents à l'intérieur des fichiers longs (chacun dans son propre dossier de
+  rapports), et job CI `integration` découpé en trois shards parallèles (le job `build` ne lance
+  plus l'intégration). Sur une machine à 4 cœurs : de 1 250 s à environ 600 s.
+
 ### Corrigé
 
 - Windows, Git Bash et WSL : les scripts npm `build`, `clean` et `pack` passent par Node

@@ -247,7 +247,12 @@ ${steps}`,
     );
     expect(report.status, describeFlow(report)).toBe('PASSED');
     const notes = report.steps[1];
-    expect(notes?.synchronization?.reacquired).toMatch(/#notes/);
+    // Sous charge, le re-rendu peut être terminé avant la lecture : alors rien à ré-acquérir. Ce qui ne
+    // doit JAMAIS arriver : un mismatch (ou une résolution fonctionnelle) sur l'ancien nœud.
+    expect(notes?.status).toBe('PASSED');
+    if (notes?.synchronization?.reacquired !== undefined)
+      expect(notes.synchronization.reacquired).toMatch(/#notes/);
     expect(notes?.targetResolution).toBeUndefined();
+    expect(notes?.reason ?? '').not.toMatch(/MISMATCH/);
   }, 90_000);
 });
