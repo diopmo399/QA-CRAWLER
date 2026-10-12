@@ -593,6 +593,8 @@ describe('performance', () => {
     const started = performance.now();
     const result = run(recording);
     expect(Object.keys(result.testData?.set.values ?? {}).length).toBeGreaterThan(0);
-    expect(performance.now() - started).toBeLessThan(3000);
+    // Un runner CI partagé (Windows surtout) est bien plus lent qu'un poste : la borne y reste large
+    // mais garde son sens (une régression algorithmique se compte en dizaines de secondes).
+    expect(performance.now() - started).toBeLessThan(process.env.CI ? 10_000 : 3000);
   });
 });
