@@ -204,6 +204,25 @@ des fichiers `storageState` ignorés par Git : rien de sensible dans la configur
 Chaque `result.json` / `run.json` porte `tool: { coreVersion, cliVersion, projectVersion, node }`
 et le `runId`, pour comparer deux rapports produits par des versions différentes.
 
+#### CI sans base de données : garder la mémoire entre les runs
+
+Avec le provider `file` (défaut), tout ce que l'outil apprend vit dans `qa-crawler/knowledge/`,
+`qa-crawler/memory/` et `qa-crawler/baselines/`. Un runner CI jetable les perdrait à chaque run : il
+faut les restaurer avant et les sauvegarder après. Trois façons, de la plus simple à la plus robuste :
+
+1. **Les versionner** : retirez ces dossiers du `.gitignore` et laissez le job commettre le résultat
+   (`[skip ci]`), idéalement sur une branche dédiée. Ils ne contiennent ni identifiant ni valeur
+   saisie, seulement la structure observée de l'application.
+2. **Le cache de la plateforme** (`actions/cache`, GitLab `cache:`) : simple, mais purgeable.
+3. **Un dépôt générique Artifactory** : `latest.tgz` restauré avant le run, réécrit après, plus une
+   copie par run dans `history/`. Exemples complets prêts à copier dans
+   [examples/ci/github-actions-consumer.yml](examples/ci/github-actions-consumer.yml) et
+   [examples/ci/gitlab-ci-consumer.yml](examples/ci/gitlab-ci-consumer.yml).
+
+Dans tous les cas : un seul run à la fois par application (`concurrency` / `resource_group`), la
+mémoire n'est sauvegardée qu'après un code 0 ou 1 (après un 2 ou un 3, rien n'a été appris), et
+`qa-reports/` est publié en artefact de job, distinct de la mémoire.
+
 ### Artefacts
 
 Tout est écrit **dans le projet utilisateur** : `qa-reports/` (`index.html`, `result.json`,

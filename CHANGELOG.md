@@ -22,7 +22,8 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   (`baseURL`, `headless`, `viewport`, `storageState`).
 - Métadonnées d'outil dans chaque résultat : `tool: { coreVersion, cliVersion, projectVersion, node }`.
 - Fixtures de packaging (Angular, React, générique, OpenAPI), job CI `packaging`, Dockerfile basé sur
-  le bin du paquet, `docs/MIGRATION_TO_PACKAGE.md`.
+  le bin du paquet, `docs/MIGRATION_TO_PACKAGE.md`, exemples de pipelines consommateurs sans base de
+  données (`examples/ci/`, mémoire restaurée et sauvegardée dans un dépôt générique Artifactory).
 
 ### Inchangé
 

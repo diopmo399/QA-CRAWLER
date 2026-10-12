@@ -1,0 +1,30 @@
+# QA-Crawler in a GitLab CI pipeline without a database: the memory of the tool is restored from
+# a generic Artifactory repository before the run and saved back after it. Variables to define in
+# the project (Settings > CI/CD > Variables): APP_URL, ARTIFACTORY_URL, QA_MEMORY_REPO,
+# ARTIFACTORY_TOKEN (masked), QA_USERNAME, QA_PASSWORD (masked).
+qa-crawler:
+  stage: test
+  image: mcr.microsoft.com/playwright:v1.56.1-noble # Chromium and its libraries included
+  resource_group: qa-crawler # one run at a time per application
+  variables:
+    MEMORY_URL: $ARTIFACTORY_URL/$QA_MEMORY_REPO/$CI_PROJECT_NAME
+  script:
+    - npm ci
+    - |
+      if curl -fsS -H "Authorization: Bearer $ARTIFACTORY_TOKEN" -o qa-memory.tgz "$MEMORY_URL/latest.tgz"; then
+        tar -xzf qa-memory.tgz && echo "QA memory restored"
+      else
+        echo "No QA memory yet"
+      fi
+    - set +e; npx qa-crawler analyze --base-url "$APP_URL" --quiet; QA_CODE=$?; set -e
+    - |
+      if [ "$QA_CODE" = "0" ] || [ "$QA_CODE" = "1" ]; then
+        tar -czf qa-memory.tgz qa-crawler/knowledge qa-crawler/memory qa-crawler/baselines
+        curl -fsS -H "Authorization: Bearer $ARTIFACTORY_TOKEN" -T qa-memory.tgz "$MEMORY_URL/latest.tgz"
+        curl -fsS -H "Authorization: Bearer $ARTIFACTORY_TOKEN" -T qa-memory.tgz "$MEMORY_URL/history/$CI_PIPELINE_IID.tgz"
+      fi
+    - exit $QA_CODE
+  artifacts:
+    when: always
+    paths: [qa-reports/]
+    expire_in: 30 days

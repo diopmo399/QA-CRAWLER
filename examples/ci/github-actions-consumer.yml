@@ -1,0 +1,99 @@
+# QA-Crawler in a consumer project's CI, WITHOUT a database: the memory of the tool
+# (qa-crawler/knowledge, qa-crawler/memory, qa-crawler/baselines) is restored from a generic
+# Artifactory repository before the run and saved back after it, so the knowledge learned over the
+# runs is never lost when the runner is thrown away. Reports are published as a job artifact.
+#
+# Copy this file to .github/workflows/qa-crawler.yml in your project and set:
+#   vars.APP_URL                 the URL of the environment to test
+#   vars.ARTIFACTORY_URL         https://<artifactory>/artifactory
+#   vars.QA_MEMORY_REPO          a generic repository, e.g. qa-memory
+#   secrets.ARTIFACTORY_TOKEN    an identity token with read/write on that repository
+#   secrets.QA_USERNAME / QA_PASSWORD   the test account (auth.type form or http)
+name: qa-crawler
+
+on:
+  schedule:
+    - cron: '17 2 * * 1-5' # weeknights
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+# One run at a time per application: the file provider merges its JSON files on one disk.
+concurrency:
+  group: qa-crawler-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  MEMORY_URL: ${{ vars.ARTIFACTORY_URL }}/${{ vars.QA_MEMORY_REPO }}/${{ github.event.repository.name }}
+  MEMORY_PATHS: qa-crawler/knowledge qa-crawler/memory qa-crawler/baselines
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install the project (and @qa-crawler/cli from your registry)
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Restore the QA memory
+        env:
+          ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+        run: |
+          if curl -fsS -H "Authorization: Bearer $ARTIFACTORY_TOKEN" -o qa-memory.tgz "$MEMORY_URL/latest.tgz"; then
+            tar -xzf qa-memory.tgz && echo "QA memory restored from $MEMORY_URL/latest.tgz"
+          else
+            echo "No QA memory yet: this run starts from scratch"
+          fi
+
+      - name: QA analysis
+        id: qa
+        continue-on-error: true
+        env:
+          QA_USERNAME: ${{ secrets.QA_USERNAME }}
+          QA_PASSWORD: ${{ secrets.QA_PASSWORD }}
+        run: |
+          set +e
+          npx qa-crawler analyze --base-url "${{ vars.APP_URL }}" --quiet
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Save the QA memory
+        # Always, even after a QA failure: a failed run teaches as much as a passed one.
+        # Not after a configuration error (2) or an infrastructure error (3): nothing was learned.
+        if: steps.qa.outputs.code == '0' || steps.qa.outputs.code == '1'
+        env:
+          ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+        run: |
+          tar -czf qa-memory.tgz $MEMORY_PATHS
+          curl -fsS -H "Authorization: Bearer $ARTIFACTORY_TOKEN" -T qa-memory.tgz "$MEMORY_URL/latest.tgz"
+          curl -fsS -H "Authorization: Bearer $ARTIFACTORY_TOKEN" -T qa-memory.tgz "$MEMORY_URL/history/${{ github.run_number }}.tgz"
+          echo "QA memory saved to $MEMORY_URL/latest.tgz (copy: history/${{ github.run_number }}.tgz)"
+
+      - name: Publish the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-reports-${{ github.run_number }}
+          path: qa-reports/
+          retention-days: 30
+
+      - name: Fail the job on a QA failure
+        run: |
+          code="${{ steps.qa.outputs.code }}"
+          case "$code" in
+            0) echo "QA passed" ;;
+            1) echo "QA failed: see the qa-reports artifact (run.json, index.html)"; exit 1 ;;
+            2) echo "Configuration error: run npx qa-crawler init, check qa-crawler.config.yaml"; exit 2 ;;
+            *) echo "Infrastructure error (browser, network)"; exit 3 ;;
+          esac
