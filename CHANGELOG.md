@@ -46,6 +46,10 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Modifié
 
+- Fenêtre d'enregistrement : nouvelle apparence, alignée sur la maquette QA-CRAWLER — palette indigo
+  (clair et sombre), cartes arrondies, étapes plus aérées avec la sélection cerclée, statuts en texte
+  coloré, carte « Replay interrompu » blanche à bord rouge avec ses détails en bloc, barre de résumé et
+  boutons plus grands. Aucune ressource réseau : police système.
 - Tests d'intégration plus rapides : un worker vitest par cœur (8 au plus, `QA_TEST_WORKERS` pour
   régler), tests concurrents à l'intérieur des fichiers longs (chacun dans son propre dossier de
   rapports), et job CI `integration` découpé en trois shards parallèles (le job `build` ne lance
