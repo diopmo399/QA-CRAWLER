@@ -106,6 +106,10 @@ export function sanitizingProvider(provider: PersistenceProvider): PersistencePr
       save: (records) => provider.anomalies.save(records.map((record) => sanitizeRecord(record))),
       load: (applicationId, limit) => provider.anomalies.load(sanitizeText(applicationId), limit),
     },
+    memory: {
+      save: (records) => provider.memory.save(records.map((record) => sanitizeRecord(record))),
+      search: (query) => provider.memory.search(sanitizeRecord(query)),
+    },
     knowledge: {
       record: (observations) =>
         provider.knowledge.record(observations.map((observation) => sanitizeRecord(observation))),

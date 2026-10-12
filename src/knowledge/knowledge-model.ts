@@ -114,6 +114,23 @@ export interface KnowledgeData {
   cognitive?: CognitiveKnowledge;
   /** Le dernier run de chaque flow imposé (statut, durées, localisateurs : jamais une valeur), pour l'écart. */
   flowRuns?: Record<string, FlowRunMemory>;
+  /** QA PLATFORM : l'accès de chaque acteur à chaque écran (route) au dernier run, pour l'écart de comportement. */
+  actorAccess?: Record<string, Record<string, ActorAccessMemory>>;
+  /** QA PLATFORM : l'historique borné des durées par métrique (flow, étape), pour les tendances. */
+  performanceHistory?: Record<string, PerformanceSample[]>;
+}
+
+export interface ActorAccessMemory {
+  access: string;
+  label: string;
+  runId: string;
+  at: string;
+}
+
+export interface PerformanceSample {
+  runId: string;
+  at: string;
+  value: number;
 }
 
 /** Une action de récupération (jamais une saisie) : rôle + nom accessible. */

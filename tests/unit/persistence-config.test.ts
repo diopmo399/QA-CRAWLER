@@ -218,7 +218,7 @@ persistence:
     expect(session.status).toMatchObject({
       status: 'CONNECTED',
       actual: { provider: 'database', database: 'SQLite', location: file },
-      schemaVersion: 4,
+      schemaVersion: 5,
     });
     await session.provider?.close();
   });

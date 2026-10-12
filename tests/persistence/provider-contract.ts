@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
   CrawlRunRecord,
+  FlowMemoryRecord,
   RunStateRecord,
   RunTransitionRecord,
   TransitionObservation,
@@ -328,6 +329,65 @@ export function persistenceProviderContract(name: string, target: ContractTarget
         ).rejects.toThrow();
         expect((await repository.load(app, 10)).length).toBe(2);
       }
+    });
+
+    it('flow memory: one row per (application, kind, key), replaced in place, searched by kind / status / prefix', async () => {
+      const entry = (
+        kind: FlowMemoryRecord['kind'],
+        key: string,
+        status: string,
+        lastSeenAt: string,
+        applicationId = app,
+      ): FlowMemoryRecord => ({
+        applicationId,
+        kind,
+        key,
+        status,
+        firstSeenAt: '2026-01-01T00:00:00.000Z',
+        lastSeenAt,
+        data: { detail: `${kind} ${key}` },
+      });
+      await provider.memory.save([
+        entry('anomaly', 'flow-a/step-3', 'NEW_REGRESSION', '2026-02-01T00:00:00.000Z'),
+        entry('anomaly', 'flow-b/step-1', 'KNOWN_FAILURE', '2026-03-01T00:00:00.000Z'),
+        entry('actor', 'reader|/admin', 'DENIED', '2026-03-02T00:00:00.000Z'),
+        entry('anomaly', 'flow-a/step-3', 'NEW_REGRESSION', '2026-02-01T00:00:00.000Z', other),
+      ]);
+      // La même clé : remplacée, pas dupliquée.
+      await provider.memory.save([
+        entry('anomaly', 'flow-a/step-3', 'REGRESSION_FIXED', '2026-04-01T00:00:00.000Z'),
+      ]);
+      const anomalies = await provider.memory.search({ applicationId: app, kind: 'anomaly', limit: 10 });
+      expect(anomalies.map((row) => [row.key, row.status])).toEqual([
+        ['flow-a/step-3', 'REGRESSION_FIXED'],
+        ['flow-b/step-1', 'KNOWN_FAILURE'],
+      ]);
+      expect(anomalies[0]?.data).toEqual({ detail: 'anomaly flow-a/step-3' });
+      expect(
+        (await provider.memory.search({ applicationId: app, limit: 10 })).map((row) => row.kind),
+      ).toEqual(['anomaly', 'actor', 'anomaly']);
+      expect(
+        (await provider.memory.search({ applicationId: app, status: 'KNOWN_FAILURE', limit: 10 })).length,
+      ).toBe(1);
+      expect(
+        (
+          await provider.memory.search({
+            applicationId: app,
+            kind: 'anomaly',
+            keyPrefix: 'flow-b/',
+            limit: 10,
+          })
+        ).length,
+      ).toBe(1);
+      expect((await provider.memory.search({ applicationId: app, kind: 'actor', limit: 1 })).length).toBe(1);
+      await expect(
+        provider.memory.save([
+          {
+            ...entry('anomaly', 'x', 'NEW', '2026-01-01T00:00:00.000Z'),
+            kind: 'nope' as FlowMemoryRecord['kind'],
+          },
+        ]),
+      ).rejects.toThrow(/unknown flow memory kind/);
     });
 
     if (target.durable)

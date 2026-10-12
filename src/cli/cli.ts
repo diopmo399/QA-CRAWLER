@@ -15,6 +15,7 @@ import { HELP_TEXT, parseCliArgs, UsageError } from './args.js';
 import { runDryRunCli } from './dry-run-command.js';
 import { runRecordCli } from './record-command.js';
 import { runSourcesCli } from './sources-command.js';
+import { runManifestCli } from './manifest-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
 import { terminalProgress } from './progress-renderer.js';
@@ -55,6 +56,8 @@ export async function runCli(input: string[]): Promise<number> {
   if (argv[0] === 'record') return runRecordCli(argv.slice(1));
   // SOURCES : le code de l'application récupéré (git) et analysé une fois, hors des runs.
   if (argv[0] === 'sources') return runSourcesCli(argv.slice(1));
+  // K8S-MANIFEST : un Job / CronJob Kubernetes pour une mission (secrets par référence).
+  if (argv[0] === 'k8s-manifest') return runManifestCli(argv.slice(1));
   let args;
   try {
     args = parseCliArgs(argv);

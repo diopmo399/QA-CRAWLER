@@ -11,8 +11,10 @@ import {
   type ActionResultInput,
   type ApiKnowledge,
   type HistoricalExpectation,
+  type ActorAccessMemory,
   type KnowledgeBase,
   type KnowledgeData,
+  type PerformanceSample,
   type KnowledgeIdentity,
   type LearnedHint,
   type ObservedKnowledgeContext,
@@ -120,6 +122,30 @@ export class JsonKnowledgeBase implements KnowledgeBase {
 
   rememberFlowRun(name: string, memory: FlowRunMemory): void {
     (this.data.flowRuns ??= {})[name] = memory;
+  }
+
+  /** L'accès de chaque acteur par écran au dernier run (QA platform : écart de comportement des acteurs). */
+  actorAccess(): Record<string, Record<string, ActorAccessMemory>> {
+    return this.data.actorAccess ?? {};
+  }
+
+  rememberActorAccess(access: Record<string, Record<string, ActorAccessMemory>>): void {
+    this.data.actorAccess = access;
+  }
+
+  /** L'historique des durées d'une métrique (les plus anciennes d'abord). */
+  performanceHistory(metric: string): PerformanceSample[] {
+    return this.data.performanceHistory?.[metric] ?? [];
+  }
+
+  /** Ajoute une mesure, en gardant au plus `limit` échantillons. */
+  recordPerformance(metric: string, sample: PerformanceSample, limit = 30): void {
+    const history = (this.data.performanceHistory ??= {});
+    history[metric] = [...(history[metric] ?? []), sample].slice(-limit);
+  }
+
+  performanceMetrics(): string[] {
+    return Object.keys(this.data.performanceHistory ?? {});
   }
 
   /** Un run de plus. */

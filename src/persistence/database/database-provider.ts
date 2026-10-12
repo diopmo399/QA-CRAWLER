@@ -12,6 +12,8 @@ import {
   type RunTransitionRecord,
   type TransitionKnowledgeRecord,
   type TransitionObservation,
+  validateFlowMemoryRecord,
+  type FlowMemoryRecord,
 } from '../model.js';
 import type {
   KeyedRepository,
@@ -21,6 +23,7 @@ import type {
   RunRepository,
   StateRepository,
   TransitionRepository,
+  FlowMemoryRepository,
 } from '../persistence-provider.js';
 import type { DatabaseAdapter, SqlExecutor, SqlRow, SqlValue } from './database-adapter.js';
 import { appliedMigrations, migrate } from './migrations.js';
@@ -260,6 +263,76 @@ export class DatabasePersistenceProvider implements PersistenceProvider {
 
   readonly evolution: KeyedRepository = this.keyed('flow_evolution');
   readonly anomalies: KeyedRepository = this.keyed('anomaly_lifecycle');
+
+  /** QA PLATFORM — FLOW MEMORY : (application, sorte, clé) remplacée sur place ; recherche indexée. */
+  readonly memory: FlowMemoryRepository = {
+    save: async (records) => {
+      records.forEach(validateFlowMemoryRecord);
+      if (records.length === 0) return;
+      const { dialect } = this.adapter;
+      await this.transactionWithRetry(async (tx) => {
+        for (const record of records) {
+          const [row] = await tx.query(
+            `SELECT id FROM ${dialect.lockedTable('flow_memory')} WHERE application_id = ${this.p(1)} AND kind = ${this.p(2)} AND record_key = ${this.p(3)}${dialect.lockSuffix}`,
+            [record.applicationId, record.kind, record.key],
+          );
+          const values = {
+            status: record.status,
+            first_seen_at: record.firstSeenAt,
+            last_seen_at: record.lastSeenAt,
+            record_json: JSON.stringify(record.data),
+          };
+          if (row)
+            await tx.query(
+              `UPDATE flow_memory SET status = ${this.p(1)}, first_seen_at = ${this.p(2)}, last_seen_at = ${this.p(3)}, record_json = ${this.p(4)} WHERE id = ${this.p(5)}`,
+              [values.status, values.first_seen_at, values.last_seen_at, values.record_json, textOf(row.id)],
+            );
+          else {
+            const { sql, params } = this.insert('flow_memory', {
+              id: randomUUID(),
+              application_id: record.applicationId,
+              kind: record.kind,
+              record_key: record.key,
+              ...values,
+            });
+            await tx.query(sql, params);
+          }
+        }
+      });
+    },
+    search: async (query) => {
+      const where = [`application_id = ${this.p(1)}`];
+      const params: SqlValue[] = [query.applicationId];
+      if (query.kind !== undefined) {
+        params.push(query.kind);
+        where.push(`kind = ${this.p(params.length)}`);
+      }
+      if (query.status !== undefined) {
+        params.push(query.status);
+        where.push(`status = ${this.p(params.length)}`);
+      }
+      if (query.keyPrefix !== undefined) {
+        params.push(`${query.keyPrefix.replace(/[%_\\]/g, '\\$&')}%`);
+        where.push(`record_key LIKE ${this.p(params.length)}`);
+      }
+      const rows = await this.adapter.query(
+        this.adapter.dialect.limit(
+          `SELECT * FROM flow_memory WHERE ${where.join(' AND ')} ORDER BY last_seen_at DESC, record_key`,
+          query.limit,
+        ),
+        params,
+      );
+      return rows.map((row): FlowMemoryRecord => ({
+        applicationId: textOf(row.application_id),
+        kind: textOf(row.kind) as FlowMemoryRecord['kind'],
+        key: textOf(row.record_key),
+        status: textOf(row.status),
+        firstSeenAt: this.adapter.dialect.fromTimestamp(row.first_seen_at),
+        lastSeenAt: this.adapter.dialect.fromTimestamp(row.last_seen_at),
+        data: this.adapter.dialect.fromJson(row.record_json),
+      }));
+    },
+  };
 
   /**
    * Une ligne par (application, clé) : lue en la bloquant, remplacée ou insérée, dans une

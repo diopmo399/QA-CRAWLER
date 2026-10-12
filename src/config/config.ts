@@ -288,9 +288,32 @@ const safetySchema = z
   })
   .strict();
 
+const httpOrigin = z
+  .string()
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), 'must use http or https')
+  .transform((value) => new URL(value).origin);
+
+/**
+ * SESSION RÉUTILISABLE : l'état du navigateur (cookies, stockage) après la connexion est gardé dans
+ * un fichier (storageState Playwright, jamais dans le dépôt) et rechargé au run suivant tant qu'il
+ * n'a pas expiré. Une session rechargée dont l'application ne veut plus (renvoi vers la connexion)
+ * est marquée SESSION_EXPIRED et une nouvelle connexion est faite.
+ */
+const authSessionSchema = z
+  .object({
+    reuse: z.boolean().default(false),
+    /** Fichier storageState ; par défaut .qa-crawler/sessions/<acteur>.json. */
+    file: nonEmpty.optional(),
+    maxAgeMinutes: z.number().int().positive().default(480),
+  })
+  .strict()
+  .default({});
+
 const formAuthSchema = z
   .object({
     type: z.literal('form'),
+    session: authSessionSchema,
     /** Page de connexion, absolue ou relative à target.baseUrl. */
     loginUrl: nonEmpty,
     usernameSelector: nonEmpty,
@@ -315,6 +338,7 @@ const formAuthSchema = z
 const httpAuthSchema = z
   .object({
     type: z.literal('http'),
+    session: authSessionSchema,
     /** Noms des variables d'environnement qui contiennent les identifiants — jamais les identifiants eux-mêmes. */
     usernameEnv: nonEmpty.default('QA_USERNAME'),
     passwordEnv: nonEmpty.default('QA_PASSWORD'),
@@ -334,11 +358,52 @@ const httpAuthSchema = z
   })
   .strict();
 
+/**
+ * SSO / OIDC : la page de départ renvoie vers un fournisseur d'identité (autre origine), qui
+ * ramène à l'application après la connexion. Les identifiants viennent de l'environnement ;
+ * un formulaire en deux temps (identifiant → Suivant → mot de passe) est géré par `nextSelector`.
+ */
+const ssoAuthSchema = z
+  .object({
+    type: z.literal('sso'),
+    session: authSessionSchema,
+    /** Origine du fournisseur d'identité (https://login.example.com) : les identifiants ne sont saisis que là. */
+    identityProviderOrigin: httpOrigin,
+    /** Page de l'application qui déclenche le renvoi (par défaut target.startAt). */
+    startUrl: nonEmpty.optional(),
+    usernameSelector: nonEmpty,
+    passwordSelector: nonEmpty,
+    submitSelector: nonEmpty,
+    /** Bouton « Suivant » entre l'identifiant et le mot de passe, quand le fournisseur sépare les deux. */
+    nextSelector: nonEmpty.optional(),
+    usernameEnv: nonEmpty.default('QA_USERNAME'),
+    passwordEnv: nonEmpty.default('QA_PASSWORD'),
+    /** La connexion a réussi quand ce sélecteur apparaît dans l'application… */
+    successSelector: nonEmpty.optional(),
+    /** …ou quand l'URL de retour contient cette chaîne (par défaut : le retour sur l'origine de l'application). */
+    successUrlContains: nonEmpty.optional(),
+    timeoutMs: z.number().int().positive().default(30_000),
+  })
+  .strict();
+
 const authSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('none') }).strict(),
   formAuthSchema,
   httpAuthSchema,
+  ssoAuthSchema,
 ]);
+
+/** Le PROFIL d'un acteur : ce qu'il est censé pouvoir faire (des noms, jamais des secrets). */
+const actorProfileSchema = z
+  .object({
+    roles: z.array(nonEmpty).default([]),
+    permissions: z.array(nonEmpty).default([]),
+    /** Noms des revendications (claims) attendues dans sa session, jamais leurs valeurs. */
+    claims: z.array(nonEmpty).default([]),
+    tenant: nonEmpty.optional(),
+  })
+  .strict()
+  .default({});
 
 /**
  * Autres utilisateurs de l'application (lecteur, gestionnaire…). Après
@@ -351,6 +416,7 @@ const actorSchema = z
     name: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/, 'letters, digits, dashes and underscores (40 max)'),
     description: z.string().optional(),
     auth: authSchema,
+    profile: actorProfileSchema,
   })
   .strict();
 
@@ -386,12 +452,6 @@ export const BROWSER_PERMISSIONS = [
   'clipboard-write',
 ] as const;
 export type BrowserPermission = (typeof BROWSER_PERMISSIONS)[number];
-
-const httpOrigin = z
-  .string()
-  .url()
-  .refine((value) => /^https?:\/\//i.test(value), 'must use http or https')
-  .transform((value) => new URL(value).origin);
 
 /**
  * Profils d'identifiants nommés : seulement les NOMS des variables
@@ -1047,6 +1107,115 @@ const openApiSchema = z
     enabled: z.boolean().default(false),
     /** Fichier OpenAPI 3 (YAML/JSON), ou une URL sur un hôte autorisé. */
     source: nonEmpty.optional(),
+  })
+  .strict();
+
+/**
+ * API TESTING (QA platform) : des tests d'API dérivés du contrat OpenAPI, exécutés dans la session
+ * authentifiée du run, après les flows. Seulement des méthodes sûres : une écriture n'est jamais
+ * générée hors d'un flow. Les paramètres de chemin viennent des requêtes observées pendant le run.
+ */
+const apiTestingSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    methods: z.array(z.enum(['GET', 'HEAD', 'OPTIONS'])).default(['GET']),
+    maxOperations: z.number().int().min(1).max(500).default(50),
+    timeoutMs: z.number().int().positive().default(10_000),
+  })
+  .strict();
+
+/**
+ * VISUAL (QA platform) : une capture par étape de flow réussie, comparée pixel à pixel à la
+ * baseline visuelle (<baseline.dir>/visual/<flow>/<étape>.png). Un changement d'image n'est
+ * jamais une régression à lui seul : seul le recoupement avec une anomalie fonctionnelle de la
+ * même étape en fait une (VISUAL_REGRESSION) ; sinon MINOR_CHANGE ou MAJOR_CHANGE.
+ */
+const visualSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    /** Par défaut : baseline.dir. */
+    baselineDir: nonEmpty.optional(),
+    /** Somme des écarts des 4 canaux (0..1020) au-delà de laquelle un pixel compte comme différent. */
+    colorThreshold: z.number().min(0).max(1020).default(48),
+    /** Part de l'image changée (0..1) sous laquelle le changement est mineur, et au-delà de laquelle il est majeur. */
+    minorChangeRatio: z.number().min(0).max(1).default(0.02),
+    majorChangeRatio: z.number().min(0).max(1).default(0.2),
+    /** Zones jamais comparées (pixels) : horloge, bandeau, publicité. */
+    masks: z
+      .array(
+        z
+          .object({
+            x: z.number().int().min(0),
+            y: z.number().int().min(0),
+            width: z.number().int().positive(),
+            height: z.number().int().positive(),
+            reason: nonEmpty.optional(),
+          })
+          .strict(),
+      )
+      .default([]),
+    updateBaseline: z.enum(['on-pass', 'always', 'never']).default('on-pass'),
+  })
+  .strict();
+
+/** QA PLATFORM : les analyses optionnelles du run de workflow. */
+const platformSchema = z
+  .object({
+    /** Tendances de durée par flow et par étape (base de connaissances) : une variation isolée n'est jamais une régression. */
+    performance: z
+      .object({
+        tolerance: z.number().min(1).max(10).default(1.3),
+        minSamples: z.number().int().min(2).max(50).default(3),
+        floorMs: z.number().int().min(0).default(300),
+      })
+      .strict()
+      .default({}),
+    /** Chemins de reproduction minimaux (reproductions.json) pour les anomalies rattachées à une étape. */
+    reproductions: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
+    /** Tests Playwright générés (reports/generated-tests/<flow>.spec.ts). */
+    generatedTests: z
+      .object({ enabled: z.boolean().default(false) })
+      .strict()
+      .default({}),
+    /**
+     * Le conseiller d'ambiguïté (ai.enabled, mode ASSIST/HYBRID) : consulté seulement pour les anomalies
+     * qu'aucune règle n'explique ; un avis attaché à l'anomalie, jamais une décision.
+     */
+    advisor: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxCalls: z.number().int().min(0).max(50).default(5),
+        minConfidence: z.number().min(0).max(1).default(0.5),
+        timeoutMs: z.number().int().positive().default(60_000),
+      })
+      .strict()
+      .default({}),
+    /** La mémoire des flows (persistence.enabled) : une ligne par élément du run, par sorte. */
+    flowMemory: z
+      .object({ enabled: z.boolean().default(true) })
+      .strict()
+      .default({}),
+    /**
+     * Le commentaire de pull request (GitHub) : le résultat structuré, régénéré à chaque run. Le jeton
+     * vient de tokenEnv ; owner/repo/number peuvent venir de GITHUB_REPOSITORY et QA_PR_NUMBER.
+     */
+    pullRequest: z
+      .object({
+        enabled: z.boolean().default(false),
+        provider: z.enum(['github']).default('github'),
+        owner: nonEmpty.optional(),
+        repo: nonEmpty.optional(),
+        number: z.number().int().positive().optional(),
+        tokenEnv: nonEmpty.default('GITHUB_TOKEN'),
+        apiBaseUrl: z.string().url().optional(),
+        /** Lien vers le rapport publié (artefact de CI), ajouté au commentaire. */
+        reportUrl: z.string().url().optional(),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 
@@ -2168,6 +2337,9 @@ export const scenarioSchema = z
     actors: z.array(actorSchema).default([]),
     authorization: authorizationSchema.default({}),
     openapi: openApiSchema.default({}),
+    apiTesting: apiTestingSchema.default({}),
+    visual: visualSchema.default({}),
+    platform: platformSchema.default({}),
     staticAnalysis: staticAnalysisSchema.default({}),
     baseline: baselineSchema.default({}),
     verify: verifySchema.default({}),
@@ -2197,6 +2369,9 @@ export type AiConfig = ScenarioConfig['ai'];
 export type MemoryConfig = ScenarioConfig['memory'];
 export type FormAuthConfig = z.output<typeof formAuthSchema>;
 export type HttpAuthConfig = z.output<typeof httpAuthSchema>;
+export type SsoAuthConfig = z.output<typeof ssoAuthSchema>;
+export type AuthSessionConfig = z.output<typeof authSessionSchema>;
+export type ActorProfile = z.output<typeof actorProfileSchema>;
 export type BrowserInteractionsConfig = z.output<typeof browserInteractionsSchema>;
 export type AuthConfig = ScenarioConfig['auth'];
 export type ActorConfig = ScenarioConfig['actors'][number];

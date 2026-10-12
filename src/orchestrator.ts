@@ -25,6 +25,36 @@ import { isAtLeast, type Issue } from './model/issue.js';
 import { buildResult } from './reporting/result-builder.js';
 import { writeReports } from './reporting/reporter.js';
 import { buildRunAnalysis } from './analysis/run-analysis.js';
+import {
+  addAnomaly,
+  attachExtension,
+  buildRunWorkflowAnalysis,
+  refreshOverallStatus,
+} from './platform/run-workflow-analysis.js';
+import { analyzePerformance, currentMetrics } from './platform/performance-analysis.js';
+import { analyzeRegression } from './platform/regression-analysis.js';
+import { analyzeVisual, type VisualAnalysis } from './platform/visual-analysis.js';
+import { planReproductions, type ReproductionAnalysis } from './platform/reproduction-planner.js';
+import { generatePlaywrightTests } from './platform/playwright-test-generator.js';
+import { PixelVisualComparator } from './visual/pixel-visual-comparator.js';
+import { rememberRun } from './platform/flow-memory.js';
+import { adviseOnAmbiguities } from './platform/ambiguity-advisor.js';
+import { GitHubPullRequestReporter, renderPullRequestComment } from './platform/pull-request-reporter.js';
+import { createCopilotProvider, secretValuesOf } from './ai/factory.js';
+import { DeterministicIntelligenceProvider } from './ai/providers/deterministic-provider.js';
+import { IntelligenceContextSanitizer } from './ai/sanitizer.js';
+import type { IntelligenceProvider } from './ai/provider.js';
+import { analyzeActors } from './platform/actor-analysis.js';
+import { correlateUiAndApi } from './platform/ui-api-correlation.js';
+import {
+  buildApiAnalysis,
+  buildApiTestModel,
+  observedRequests,
+  runApiTests,
+  type ApiResponse,
+  type ApiTestModel,
+  type ApiTestResult,
+} from './platform/api-testing.js';
 import { redactText, redactUrl } from './security/redactor.js';
 import { ManualCleanup, type TestDataCleanup } from './data/created-data.js';
 import { combineListeners, EngineEventLog } from './logging/engine-log.js';
@@ -232,6 +262,38 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     ...(options.testData ? { testData: options.testData } : {}),
     ...(options.observer ? { observer: options.observer } : {}),
     ...(options.dryRun ? { dryRun: options.dryRun } : {}),
+    ...(contract && config.apiTesting.enabled
+      ? {
+          afterFlows: async (page, flows) => {
+            const model = buildApiTestModel(contract, observedRequests(flows), config.apiTesting);
+            const results = await runApiTests(
+              model,
+              contract,
+              async (method, requestPath): Promise<ApiResponse> => {
+                const response = await page.request.fetch(
+                  new URL(requestPath, config.target.baseUrl).toString(),
+                  {
+                    method,
+                    timeout: config.apiTesting.timeoutMs,
+                    failOnStatusCode: false,
+                    maxRedirects: 0,
+                  },
+                );
+                const contentType = response.headers()['content-type'];
+                const body = contentType?.includes('json')
+                  ? ((await response.json().catch(() => undefined)) as unknown)
+                  : undefined;
+                return {
+                  status: response.status(),
+                  ...(contentType ? { contentType } : {}),
+                  ...(body !== undefined ? { body } : {}),
+                };
+              },
+            );
+            apiTests = { model, results };
+          },
+        }
+      : {}),
     ...(options.intelligenceProvider ? { intelligenceProvider: options.intelligenceProvider } : {}),
     listener: combineListeners(
       options.listener,
@@ -259,6 +321,8 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       : {}),
   });
   let outcome: Awaited<ReturnType<FlowExplorer['explore']>>;
+  // QA PLATFORM — API TESTING : après les flows, dans la session connectée du run (méthodes sûres seulement).
+  let apiTests: { model: ApiTestModel; results: ApiTestResult[] } | undefined;
   const exploreStartedAt = performance.now();
   try {
     outcome = await explorer.explore();
@@ -326,9 +390,13 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     },
     log: engineLog,
   });
-  await persistence.provider?.close().catch(() => undefined);
 
   progress.start(RUN_PHASES.knowledge);
+  // QA PLATFORM — ACTEURS : profils, différences classées, écart de comportement avec le run précédent.
+  const actorAnalysis = authorization
+    ? analyzeActors(authorization, knowledge.actorAccess(), outcome.runId, outcome.finishedAt.toISOString())
+    : undefined;
+  if (actorAnalysis && knowledgeFile) knowledge.rememberActorAccess(actorAnalysis.memory);
   // ÉCART AVEC LE RUN PRÉCÉDENT : le dernier run de chaque flow, gardé dans la base de connaissances.
   if (knowledgeFile)
     for (const flow of outcome.flows) {
@@ -336,6 +404,19 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       if (previous) flow.comparison = compareFlowRuns(previous, flow);
       knowledge.rememberFlowRun(flow.name, flowRunMemoryOf(flow, outcome.runId));
     }
+  // QA PLATFORM — PERFORMANCE : les durées du run jugées contre leur historique, puis enregistrées.
+  const performanceAnalysis = analyzePerformance(
+    outcome.flows,
+    { history: (metric) => knowledge.performanceHistory(metric) },
+    config.platform.performance,
+  );
+  if (knowledgeFile)
+    for (const metric of currentMetrics(outcome.flows))
+      knowledge.recordPerformance(metric.metric, {
+        runId: outcome.runId,
+        at: outcome.startedAt.toISOString(),
+        value: metric.value,
+      });
   if (knowledgeFile) await knowledge.save();
 
   const result = buildResult(outcome, config);
@@ -537,7 +618,229 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   // RUN ANALYSIS : relie ce que les moteurs ont produit (flows, divergences, récupérations, hypothèses,
   // dérive, apprentissage, conseiller) et rend le verdict fonctionnel — jamais une décision recalculée.
   result.runAnalysis = buildRunAnalysis(result);
+  // QA PLATFORM : le rapport du run de workflow (statut global, anomalies catégorisées, graphe observé, couverture).
+  const workflowAnalysis = buildRunWorkflowAnalysis(result);
+  result.workflowAnalysis = workflowAnalysis;
+  const apiAnalysis = buildApiAnalysis(
+    correlateUiAndApi(result.flows, contract),
+    contract && apiTests
+      ? {
+          contract,
+          model: apiTests.model,
+          results: apiTests.results,
+          observed: observedRequests(result.flows),
+        }
+      : undefined,
+  );
+  attachExtension(workflowAnalysis, 'apiAnalysis', 'api-analysis.json', apiAnalysis, apiAnalysis.findings);
+  if (actorAnalysis)
+    attachExtension(
+      workflowAnalysis,
+      'actorAnalysis',
+      'actor-analysis.json',
+      actorAnalysis,
+      actorAnalysis.findings,
+    );
+  // QA PLATFORM — RÉGRESSION, PERFORMANCE, VISUEL, REPRODUCTIONS, TESTS GÉNÉRÉS (chaque module est pur ; la composition est ici).
+  const regressionAnalysis = analyzeRegression(result, workflowAnalysis.anomalies);
+  attachExtension(
+    workflowAnalysis,
+    'regressionAnalysis',
+    'regression-analysis.json',
+    regressionAnalysis,
+    regressionAnalysis.findings,
+  );
+  for (const metric of performanceAnalysis.metrics)
+    if (metric.status === 'PERFORMANCE_REGRESSION')
+      addAnomaly(workflowAnalysis, {
+        category: 'PERFORMANCE_REGRESSION',
+        severity: 'WARNING',
+        symptom: `${metric.label}: ${String(metric.currentValue)} ms vs baseline ${String(metric.baselineValue ?? 0)} ms`,
+        evidence: [
+          `${String(metric.samples)} sample(s)`,
+          `trend ${metric.trend}`,
+          ...(metric.firstDetectedRun ? [`since run ${metric.firstDetectedRun}`] : []),
+        ],
+        confidence: metric.confidence,
+        source: 'HISTORICAL',
+        location: metric.metric.includes('#')
+          ? {
+              flow: metric.metric.slice(5, metric.metric.indexOf('#')),
+              step: Number(metric.metric.slice(metric.metric.indexOf('#') + 1)),
+            }
+          : { flow: metric.metric.slice(5) },
+        issueIds: [],
+        regression: 'NEW_REGRESSION',
+      });
+  attachExtension(
+    workflowAnalysis,
+    'performanceAnalysis',
+    'performance-analysis.json',
+    performanceAnalysis,
+    performanceAnalysis.findings,
+  );
+  let visualRegressions = 0;
+  if (config.visual.enabled) {
+    const visualDir = config.visual.baselineDir ?? store.directory;
+    const visualAnalysis = await analyzeVisual(result, workflowAnalysis.anomalies, {
+      comparator: new PixelVisualComparator({
+        colorThreshold: config.visual.colorThreshold,
+        masks: config.visual.masks,
+        diffImage: (_baseline, current) => current.replace(/\.png$/, '-diff.png'),
+      }),
+      baselineDir: visualDir,
+      minorChangeRatio: config.visual.minorChangeRatio,
+      majorChangeRatio: config.visual.majorChangeRatio,
+      updateBaseline: config.visual.updateBaseline,
+    });
+    for (const checkpoint of visualAnalysis.checkpoints)
+      if (checkpoint.verdict === 'VISUAL_REGRESSION') {
+        visualRegressions += 1;
+        addAnomaly(workflowAnalysis, {
+          category: 'VISUAL_REGRESSION',
+          severity: 'WARNING',
+          symptom: `${checkpoint.flow} step ${String(checkpoint.step)}: the screen changed where the step failed`,
+          evidence: [
+            `${String(Math.round((checkpoint.difference ?? 0) * 10_000) / 100)} % of the image changed`,
+            ...(checkpoint.diffImage ? [`diff ${checkpoint.diffImage}`] : []),
+            ...checkpoint.anomalies.map((id) => `anomaly ${id}`),
+          ],
+          confidence: 0.8,
+          source: 'RUNTIME',
+          location: { flow: checkpoint.flow, step: checkpoint.step },
+          issueIds: [],
+        });
+      }
+    attachExtension(
+      workflowAnalysis,
+      'visualAnalysis',
+      'visual-analysis.json',
+      visualAnalysis,
+      visualAnalysis.findings,
+    );
+  }
+  if (config.platform.reproductions.enabled) {
+    const reproductions = planReproductions(workflowAnalysis.anomalies, config.flows, result.flows);
+    attachExtension(
+      workflowAnalysis,
+      'reproductions',
+      'reproductions.json',
+      reproductions,
+      reproductions.findings,
+    );
+  }
+  if (config.platform.generatedTests.enabled && config.flows.length > 0) {
+    const tests = generatePlaywrightTests(config.flows, result.flows, {
+      baseUrl: config.target.baseUrl,
+      ...(result.cognitive ? { checkpoints: result.cognitive.checkpoints } : {}),
+    });
+    const directory = path.join(config.output.reportsDir, 'generated-tests');
+    await mkdir(directory, { recursive: true });
+    for (const test of tests) await writeFile(path.join(directory, test.fileName), test.content, 'utf8');
+    attachExtension(workflowAnalysis, 'generatedTests', 'generated-tests.json', {
+      directory,
+      tests: tests.map((test) => ({
+        flow: test.flow,
+        file: path.join(directory, test.fileName),
+        steps: test.steps,
+        assertions: test.assertions,
+      })),
+    });
+  }
+  refreshOverallStatus(workflowAnalysis, result, {
+    visualRegressions,
+    performanceRegressions: performanceAnalysis.summary.PERFORMANCE_REGRESSION,
+    ...regressionAnalysis.signals,
+  });
+  // QA PLATFORM — CONSEILLER D'AMBIGUÏTÉ : le LLM consulté seulement pour ce qu'aucune règle n'explique ; un avis, jamais une décision.
+  const advisorEnabled = config.platform.advisor.enabled && effectiveMode(config.ai) !== 'OFF';
+  const advisorProvider: IntelligenceProvider | undefined = advisorEnabled
+    ? (options.intelligenceProvider ??
+      (config.ai.provider === 'deterministic'
+        ? new DeterministicIntelligenceProvider()
+        : createCopilotProvider(config.ai, {
+            env,
+            sanitize: (value) =>
+              new IntelligenceContextSanitizer({ secretValues: secretValuesOf(env) }).sanitizeValue(value),
+          })))
+    : undefined;
+  const advisor = await adviseOnAmbiguities(workflowAnalysis.anomalies, advisorProvider, {
+    enabled: advisorEnabled,
+    maxCalls: config.platform.advisor.maxCalls,
+    minConfidence: config.platform.advisor.minConfidence,
+    timeoutMs: config.platform.advisor.timeoutMs,
+    secretValues: secretValuesOf(env),
+  });
+  if (advisorProvider && advisorProvider !== options.intelligenceProvider)
+    await advisorProvider.close?.().catch(() => undefined);
+  attachExtension(workflowAnalysis, 'advisor', 'advisor.json', advisor);
+  // QA PLATFORM — FLOW MEMORY : ce que la plateforme retient du run, par sorte, dans la persistance.
+  if (persistence.provider && config.platform.flowMemory.enabled) {
+    const visualAnalysis = workflowAnalysis.extensionFiles?.visualAnalysis?.data as
+      VisualAnalysis | undefined;
+    const reproductions = workflowAnalysis.extensionFiles?.reproductions?.data as
+      ReproductionAnalysis | undefined;
+    const remembered = await rememberRun(persistence.provider.memory, {
+      applicationId,
+      result,
+      report: workflowAnalysis,
+      ...(actorAnalysis ? { actors: actorAnalysis } : {}),
+      ...(reproductions ? { reproductions } : {}),
+      ...(visualAnalysis ? { visual: visualAnalysis } : {}),
+    }).catch((error: unknown) => {
+      engineLog.log(
+        'WARN',
+        'FLOW_EVOLVED',
+        `flow memory not updated: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return 0;
+    });
+    workflowAnalysis.artifacts.flowMemory = `${String(remembered)} record(s) in ${persistence.provider.description}`;
+  }
+  await persistence.provider?.close().catch(() => undefined);
   const written = await writeReports(result, config.output, memory.location, config.report.language);
+  // QA PLATFORM — PULL REQUEST : le résultat structuré publié en commentaire (jeton par variable d'environnement, jamais journalisé).
+  if (config.platform.pullRequest.enabled && written.workflowAnalysis) {
+    const settings = config.platform.pullRequest;
+    const [envOwner, envRepo] = (env.GITHUB_REPOSITORY ?? '').split('/');
+    const owner = settings.owner ?? envOwner;
+    const repo = settings.repo ?? envRepo;
+    const number = settings.number ?? Number(env.QA_PR_NUMBER);
+    const comment = renderPullRequestComment({
+      result: written,
+      report: written.workflowAnalysis,
+      regression: regressionAnalysis,
+      performance: performanceAnalysis,
+      ...(actorAnalysis ? { actors: actorAnalysis } : {}),
+      ...(settings.reportUrl ? { reportUrl: settings.reportUrl } : {}),
+    });
+    const publication =
+      owner && repo && Number.isInteger(number) && number > 0
+        ? await new GitHubPullRequestReporter({
+            owner,
+            repo,
+            pullNumber: number,
+            tokenEnv: settings.tokenEnv,
+            env,
+            ...(settings.apiBaseUrl ? { apiBaseUrl: settings.apiBaseUrl } : {}),
+          }).publish(comment)
+        : {
+            posted: false,
+            action: 'skipped' as const,
+            reason:
+              'platform.pullRequest needs owner, repo and number (or GITHUB_REPOSITORY and QA_PR_NUMBER)',
+          };
+    const file = path.join(config.output.reportsDir, 'pull-request-comment.md');
+    await writeFile(file, `${comment}\n`, 'utf8');
+    written.workflowAnalysis.artifacts.pullRequestComment = file;
+    written.workflowAnalysis.artifacts.pullRequest = publication.posted
+      ? (publication.url ?? 'posted')
+      : `not posted: ${publication.reason ?? ''}`;
+    if (!publication.posted)
+      (options.onWarning ?? ((message: string) => process.stderr.write(`WARNING: ${message}\n`)))(
+        `pull request comment not posted: ${publication.reason ?? ''}`,
+      );
+  }
   progress.done(`${String(written.flows.length)} flow(s), ${String(written.issues.length)} issue(s)`);
   const threshold = config.report.failOnSeverity;
   const failingIssues =

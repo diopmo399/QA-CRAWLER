@@ -1,4 +1,6 @@
 import type {
+  FlowMemoryQuery,
+  FlowMemoryRecord,
   KeyedRecord,
   CrawlRunRecord,
   CrawlRunUpdate,
@@ -59,6 +61,17 @@ export interface KeyedRepository {
   load(applicationId: string, limit: number): Promise<KeyedRecord[]>;
 }
 
+/**
+ * FLOW MEMORY (QA platform) : une ligne par (application, sorte, clé), remplacée sur place, et
+ * une recherche par sorte / statut / préfixe de clé. Les index sont ceux du provider : aucun
+ * SQL n'apparaît dans le code métier.
+ */
+export interface FlowMemoryRepository {
+  save(records: readonly FlowMemoryRecord[]): Promise<void>;
+  /** Les enregistrements qui répondent à la requête, les plus récemment vus d'abord. */
+  search(query: FlowMemoryQuery): Promise<FlowMemoryRecord[]>;
+}
+
 export type PersistenceKind = 'memory' | 'file' | 'database';
 
 export interface PersistenceProvider {
@@ -77,4 +90,6 @@ export interface PersistenceProvider {
   readonly evolution: KeyedRepository;
   /** Cycle de vie des anomalies : NEW, KNOWN, RESOLVED, REOPENED, FLAKY (une ligne par anomalie). */
   readonly anomalies: KeyedRepository;
+  /** QA PLATFORM : la mémoire des flows (états, transitions, anomalies, récupérations, acteurs, runs, reproductions…). */
+  readonly memory: FlowMemoryRepository;
 }

@@ -60,6 +60,8 @@ Commands (default: mission.mode, else explore):
            (qa-crawler record --help for its options)
   sources  Fetch the application code from git and analyse it once, outside the runs
            (staticAnalysis.source.git): qa-crawler sources <mission>
+  k8s-manifest  Write a Kubernetes Job / CronJob manifest for a mission (secrets by reference):
+           qa-crawler k8s-manifest --name <job> --image <image> --config-map <cm> --mission <file>
 
 Options:
   -c, --config <file>         Mission YAML file (or pass it as the first argument)
