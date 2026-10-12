@@ -2,7 +2,7 @@ import { redactText } from '../security/redactor.js';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ExplorationResult, StateReport } from '../model/exploration-result.js';
-import type { FlowStepReport } from '../model/flow-run.js';
+import type { FlowRunReport, FlowStepReport } from '../model/flow-run.js';
 import { SEVERITIES, type Issue, type Severity } from '../model/issue.js';
 import type { Reporter } from './reporter.js';
 import { buildFlowTree, displayName } from './flow-tree.js';
@@ -357,7 +357,7 @@ function flowsSection(
       const rows = flow.steps
         .map(
           (step) =>
-            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.testData?.length ? `<div class="muted">test data: ${esc(step.testData.join(', '))} (value of this run)</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}${synchronizationBlock(step)}${effectBlock(step)}${recoveryBlock(step)}${targetResolutionBlock(step)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
+            `<tr><td>${step.index}</td><td class="wrap"><code>${esc(step.description)}</code>${step.interpretation ? `<div class="muted">↳ ${esc(step.interpretation)}</div>` : ''}${step.testData?.length ? `<div class="muted">test data: ${esc(step.testData.join(', '))} (value of this run)</div>` : ''}${step.optional ? ` <span class="muted">${esc(t.optional)}</span>` : ''}</td><td>${step.classification ? classPill(step.classification, t.lang) : ''}</td><td>${classPill(step.status, t.lang)}</td><td class="wrap muted">${esc(translateReason(t.lang, step.reason ?? ''))}${suggestionBlock(step, t)}${synchronizationBlock(step)}${effectBlock(step)}${recoveryBlock(step)}${targetResolutionBlock(step)}${replayStepBlock(step)}</td><td class="wrap">${step.stateId ? esc(nameOf(step.stateId)) : ''}</td><td>${step.durationMs} ms</td><td>${step.screenshot ? `<a href="${esc(href(step.screenshot))}">${esc(t.view)}</a>` : ''}</td></tr>`,
         )
         .join('');
       return `<div class="flow-run"><h3>${esc(flow.name)} ${classPill(flow.status, t.lang)} <span class="muted">${esc(formatDuration(flow.durationMs))}${flow.explored ? ` · ${esc(t.lastScreenExplored)}` : ''}</span></h3>
@@ -372,6 +372,7 @@ function flowsSection(
           ? `<div class="suggest"><b>Flow drift</b><pre>${esc(driftLines(flow.drift).join('\n'))}</pre></div>`
           : ''
       }
+      ${replayFlowBlock(flow)}
       ${renderFlowSteps(flow)}
       <table><thead><tr><th>#</th><th>${c.step}</th><th>${c.class}</th><th>${c.result}</th><th>${c.reason}</th><th>${c.state}</th><th>${c.duration}</th><th>${c.shot}</th></tr></thead><tbody>${rows}</tbody></table>
       ${flowAnalysisBlocks(flow, t.lang)}</div>`;
@@ -440,6 +441,75 @@ function recoveryBlock(step: FlowStepReport): string {
  * TARGET RESOLUTION : cible enregistrée / runtime, empreinte, identité fonctionnelle, re-rendu,
  * avant / courante / après, préconditions, candidats et scores, conseiller, décision, effet, statut.
  */
+/**
+ * INTENT-DRIVEN REPLAY (flow) : les checkpoints fonctionnels et leur statut, la position finale, la fenêtre
+ * de divergence (entre le dernier checkpoint confirmé et le premier manquant), les étapes peu sûres.
+ */
+function replayFlowBlock(flow: FlowRunReport): string {
+  const replay = flow.replay;
+  if (
+    !replay ||
+    (replay.checkpoints.length === 0 && !replay.divergence && replay.lowConfidenceSteps.length === 0)
+  )
+    return '';
+  const mark = (status: string | undefined): string =>
+    status === 'CONFIRMED' ? '✔' : status === 'FAILED' ? '✘' : status === 'SKIPPED' ? '–' : '?';
+  const checkpoints = replay.checkpoints
+    .map(
+      (checkpoint) =>
+        `${mark(checkpoint.result?.status)} ${checkpoint.id} (after step ${String(checkpoint.afterStep)}, ${checkpoint.strength.toLowerCase()}): ${checkpoint.label}${checkpoint.result ? ` → ${checkpoint.result.status} ${String(checkpoint.result.progress)}${checkpoint.result.missing.length > 0 ? ` — missing ${checkpoint.result.missing.join(', ')}` : ''}` : ''}`,
+    )
+    .join('\n');
+  const position = replay.finalPosition;
+  const lines = [
+    `position: step ${String(position.stepIndex)} · confirmed ${String(position.confirmedCheckpoints.length)}/${String(replay.checkpoints.length)} checkpoint(s)${position.lastConfirmedCheckpoint ? ` · last ${position.lastConfirmedCheckpoint}` : ''}${position.lastConfirmedAction !== undefined ? ` · last committed action ${String(position.lastConfirmedAction)}` : ''} · confidence ${String(replay.overallConfidence)}`,
+    ...(replay.divergence
+      ? [
+          `divergence: step ${String(replay.divergence.stepIndex)}${replay.divergence.rootStep !== undefined && replay.divergence.rootStep !== replay.divergence.stepIndex ? ` (root step ${String(replay.divergence.rootStep)})` : ''} — between ${replay.divergence.window.from ?? 'the start'} and ${replay.divergence.window.to ?? 'the end'}: ${replay.divergence.symptom}`,
+          ...replay.divergence.reasons.map((reason) => `  ${reason}`),
+        ]
+      : []),
+    ...(replay.lowConfidenceSteps.length > 0
+      ? [`low confidence: step(s) ${replay.lowConfidenceSteps.map(String).join(', ')}`]
+      : []),
+    ...(replay.learned.length > 0 ? [`learned: ${replay.learned.join(' · ')}`] : []),
+  ];
+  return `<details class="suggest"><summary><b>Intent-driven replay</b> · ${String(position.confirmedCheckpoints.length)}/${String(replay.checkpoints.length)} checkpoints${replay.divergence ? ' · divergence' : ''}</summary><pre>${esc(lines.join('\n'))}${checkpoints ? `\n\n${esc(checkpoints)}` : ''}</pre></details>`;
+}
+
+/** INTENT-DRIVEN REPLAY (étape) : verdict transactionnel, confiance, préconditions, plan, checkpoints. */
+function replayStepBlock(step: FlowStepReport): string {
+  const replay = step.replay;
+  if (!replay) return '';
+  const verdict = replay.verdict;
+  const confidence = replay.confidence;
+  const unmet = replay.preconditions.filter((check) => check.satisfied === false);
+  const lines = [
+    `replay: execution ${verdict.execution} · target ${verdict.target} · effect ${verdict.effect} · state ${verdict.functionalState} → <b>${esc(verdict.outcome)}</b> · confidence ${String(confidence.overall)}${confidence.continueSilently ? '' : ' (LOW)'}`,
+    ...(unmet.length > 0
+      ? [
+          `preconditions not met: ${unmet.map((check) => esc(`${check.precondition.kind} "${check.precondition.value}" (${check.precondition.severity}) — ${check.detail}`)).join('; ')}`,
+        ]
+      : []),
+    ...(replay.explanation && replay.explanation.rootStep !== replay.position.stepIndex
+      ? [
+          `root step ${String(replay.explanation.rootStep)}: ${esc(replay.explanation.chain.map((link) => `${String(link.step)} ${link.label}`).join(' ← '))}`,
+        ]
+      : []),
+    ...(replay.plan
+      ? [
+          `plan: ${esc(replay.plan.choice)}${replay.plan.selected ? ` ${esc(`${replay.plan.selected.role}:${replay.plan.selected.name}`)} (${String(replay.plan.selected.score)})` : ''}${replay.plan.ambiguous ? ' AMBIGUOUS' : ''}`,
+        ]
+      : []),
+    ...replay.checkpoints.map(
+      (result) =>
+        `checkpoint ${esc(result.id)}: ${esc(result.status)} ${String(result.progress)}${result.missing.length > 0 ? ` — missing ${result.missing.map(esc).join(', ')}` : ''}`,
+    ),
+    ...(confidence.continueSilently ? [] : [`confidence: ${confidence.reasons.map(esc).join('; ')}`]),
+  ];
+  return `<div class="muted">${lines.join('<br>')}</div>`;
+}
+
 function targetResolutionBlock(step: FlowStepReport): string {
   const trace = step.targetResolution;
   if (!trace) return '';

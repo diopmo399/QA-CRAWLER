@@ -6,6 +6,19 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Rejeu piloté par intention et état** (`src/replay/`) : `ReplayStateMachine` (position fonctionnelle,
+  checkpoints confirmés, dernière action commise, divergence localisée entre le dernier checkpoint
+  confirmé et le premier manquant), checkpoints fonctionnels dérivés des effets enregistrés, de
+  l'intention, des `expect` et de l'étape suivante ; préconditions (`TARGET_PRESENT`, `FIELD_FILLED`,
+  `ROUTE`, `DIALOG_OPEN`, `NO_OVERLAY`, `CHECKPOINT`, `TEST_DATA`) et dépendances entre étapes
+  (`FILLS_FIELD`, `REVEALS_TARGET`, `OPENS_DIALOG`, `REACHES_ROUTE`, `PRODUCES_DATA`) avec l'explication
+  jusqu'à l'étape racine ; `ReplayPlanner` (RECORDED / HISTORICAL / SEMANTIC / AMBIGUOUS, jamais un
+  champ, SafetyPolicy puis effet) ; verdict transactionnel par étape (execution ≠ target ≠ effect ≠
+  functional state) et confiance combinée (`REPLAY_LOW_CONFIDENCE` sous le seuil) ; mémoire des
+  résolutions (`KnowledgeBase.recordTargetResolution`, apprises d'une récupération confirmée ou d'un
+  plan confirmé, proposées d'abord ensuite). `FlowStepReport.replay`, `FlowRunReport.replay`, bloc
+  « Intent-driven replay » du rapport HTML, configuration `replay.intentDriven`, événements
+  `REPLAY_*`, `CHECKPOINT_*`, `PRECONDITION_*`, `RESOLUTION_*`.
 - **Intention fonctionnelle** (`src/intent/`) : element + contexte + action humaine + état → intention à
   trois niveaux (geste, interface, opération × entité) pour chaque action enregistrée, avec preuves typées
   (libellé, rôle, contexte structurel, actions voisines, effets, réseau, cycle de vie des entités, décision

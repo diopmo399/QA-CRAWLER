@@ -87,6 +87,28 @@ import type {
 } from '../workflow-healing/model.js';
 import type { SafetyJudgement } from '../workflow-healing/recovery-planner.js';
 import { screenControlsOf } from '../workflow-healing/screen.js';
+import { deriveCheckpoints } from '../replay/checkpoints.js';
+import { replayConfidence } from '../replay/confidence.js';
+import type {
+  FlowReplayReport,
+  ObservedFunctionalState,
+  PreconditionCheck,
+  PreconditionExplanation,
+  ReplayPlan,
+  ReplayStepReport,
+  ReplayStepVerdict,
+  StepDependency,
+} from '../replay/model.js';
+import { planReplayAction } from '../replay/planner.js';
+import {
+  checkPreconditions,
+  derivePreconditions,
+  deriveDependencies,
+  explainUnmetPrecondition,
+} from '../replay/preconditions.js';
+import { historicalResolutions, resolutionKeyOf } from '../replay/resolution-memory.js';
+import { ReplayStateMachine } from '../replay/state-machine.js';
+import type { TargetResolutionInput } from '../knowledge/knowledge-model.js';
 import { dependencyLinkEvidence, staticLinkEvidence } from '../workflow-healing/static-hints.js';
 import { goalProgressOf, predicateText } from '../workflow-healing/workflow-context.js';
 import { healWorkflow, type HealingPorts } from '../workflow-healing/workflow-healer.js';
@@ -309,7 +331,7 @@ import { GoalTracker } from '../goals/goal-tracker.js';
 import { firstFunctionalDivergence } from '../cognitive/functional-reasoning.js';
 import { loadRecordingCandidates, recordingCandidatesFile } from '../recording/recording-intelligence.js';
 import type { KnownRevealer, TargetProbe } from '../workflow-healing/expected-target.js';
-import { isTechnicalTarget } from '../workflow-healing/workflow-context.js';
+import { isTechnicalTarget, targetLabel } from '../workflow-healing/workflow-context.js';
 import { toLocator } from '../execution/locator-resolver.js';
 import { JsonKnowledgeBase } from '../knowledge/json-knowledge-base.js';
 import type { KnowledgeBase, TransitionKnowledge } from '../knowledge/knowledge-model.js';
@@ -660,6 +682,23 @@ export class FlowExplorer {
   private lastSnapshot: UiSnapshot | undefined;
   /** Le contexte fonctionnel avant / après chaque étape du flow en cours (FIRST FUNCTIONAL DIVERGENCE). */
   private stepContexts: ReplayedStepView[] = [];
+  /** INTENT-DRIVEN REPLAY : la machine à états du flow en cours (position, checkpoints, divergence). */
+  private replayMachine: ReplayStateMachine | undefined;
+  private replayDependencies: StepDependency[] = [];
+  /** Ce que l'étape en cours a vérifié / planifié avant d'agir (versé au rapport après l'étape). */
+  private currentStepReplay:
+    | {
+        preconditions: PreconditionCheck[];
+        explanation?: PreconditionExplanation;
+        plan?: ReplayPlan;
+        planned?: boolean;
+      }
+    | undefined;
+  /** Une cible choisie par le planificateur : apprise quand l'effet de l'étape l'aura confirmée (ou contredite). */
+  private pendingResolution: { index: number; input: Omit<TargetResolutionInput, 'result'> } | undefined;
+  private replayLearned: string[] = [];
+  private replayLowConfidence: number[] = [];
+  private replayConfidences: number[] = [];
   private readonly forms: FormExerciser;
   /** Fenêtre réseau de chaque action (FlowEdge.network). */
   private readonly networkTrace: NetworkTraceRecorder;
@@ -2849,6 +2888,22 @@ export class FlowExplorer {
     this.flowDataUsed = new Map();
     this.flowDataUsage = [];
     this.scenario = { values: [] };
+    // INTENT-DRIVEN REPLAY : checkpoints et dépendances dérivés du flow (purs), machine à états par flow.
+    const intentDriven = this.config.replay.intentDriven;
+    this.replayDependencies = intentDriven.enabled ? deriveDependencies(flow.steps) : [];
+    this.replayMachine = intentDriven.enabled
+      ? new ReplayStateMachine(
+          flow.name,
+          flow.steps,
+          intentDriven.checkpoints ? deriveCheckpoints(flow.steps) : [],
+          this.replayDependencies,
+        )
+      : undefined;
+    this.replayLearned = [];
+    this.replayLowConfidence = [];
+    this.replayConfidences = [];
+    this.pendingResolution = undefined;
+    this.currentStepReplay = undefined;
     this.listener.onFlowStart?.(flow);
     this.cognitive?.learnFlow(flow);
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
@@ -2895,8 +2950,18 @@ export class FlowExplorer {
       const networkMark = this.flowNetwork.length;
       const contextBefore = functionalContextOf(this.lastSnapshot);
       this.lastActionMs = undefined;
+      if (this.replayMachine) {
+        const position = this.replayMachine.beginStep(index);
+        this.emitHealing(
+          'REPLAY_POSITION',
+          `flow "${flow.name}" step ${String(index)}/${String(flow.steps.length)}${position.currentIntent ? ` · intent ${position.currentIntent.name} (${position.currentIntent.status})` : ''} · confirmed ${String(position.confirmedCheckpoints.length)} checkpoint(s)${position.lastConfirmedCheckpoint ? ` · last ${position.lastConfirmedCheckpoint}` : ''}${position.nextCheckpoint ? ` · next ${position.nextCheckpoint}` : ''}`,
+        );
+      }
+      this.currentStepReplay = undefined;
       const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
       this.enrichStepReport(step, index, outcome.report, this.flowNetwork.slice(networkMark));
+      if (this.replayMachine)
+        this.commitReplayStep(flow, step, index, outcome.report, this.flowNetwork.slice(networkMark));
       // QA PLATFORM — VISUEL : une capture par étape exécutée (les étapes en erreur ont déjà la leur).
       if (
         this.config.visual.enabled &&
@@ -2941,6 +3006,7 @@ export class FlowExplorer {
         const continued = outcome.report.status === 'PASSED';
         pending.report.nextActionVerified = continued;
         this.learnRecovery({ ...pending.input, result: continued ? 'SUCCESS' : 'FAILURE' });
+        this.learnResolutionFromRecovery(pending.input, continued);
       }
       this.listener.onFlowStep?.(flow, outcome.report);
       if (outcome.report.stateId && report.states[report.states.length - 1] !== outcome.report.stateId) {
@@ -3025,6 +3091,7 @@ export class FlowExplorer {
     const unconfirmed = this.pendingRecovery();
     if (unconfirmed) {
       this.learnRecovery({ ...unconfirmed.input, result: 'SUCCESS' });
+      this.learnResolutionFromRecovery(unconfirmed.input, true);
       this.pendingLearning = undefined;
     }
     // PLANS : enregistré (connu), courant (depuis l'état atteint), réparé (récupérations confirmées).
@@ -3066,6 +3133,23 @@ export class FlowExplorer {
         }
       }
     }
+    if (this.replayMachine) {
+      const finalPosition = this.replayMachine.snapshot();
+      const executed = this.replayConfidences;
+      report.replay = {
+        checkpoints: this.replayMachine.checkpointReport(),
+        dependencies: this.replayDependencies,
+        finalPosition,
+        ...(finalPosition.divergence ? { divergence: finalPosition.divergence } : {}),
+        lowConfidenceSteps: [...this.replayLowConfidence],
+        overallConfidence:
+          executed.length === 0
+            ? 0
+            : Math.round((executed.reduce((sum, value) => sum + value, 0) / executed.length) * 100) / 100,
+        learned: [...this.replayLearned],
+      } satisfies FlowReplayReport;
+      this.replayMachine = undefined;
+    }
     this.currentFlowReport = undefined;
     report.durationMs = Date.now() - started;
     report.issueIds = this.collector
@@ -3081,6 +3165,199 @@ export class FlowExplorer {
    * NETWORK / TIMING / TEST DATA par étape : les requêtes de la fenêtre de l'étape (chemin masqué),
    * où son temps est passé, et les données de test qu'elle saisit (INPUT) ou cite (CITATION).
    */
+  /**
+   * INTENT-DRIVEN REPLAY — après l'étape : l'état observé, les checkpoints de l'étape, le verdict
+   * TRANSACTIONNEL (execution ≠ target ≠ effect ≠ functional state), la confiance, la position ; une
+   * résolution planifiée est apprise selon l'effet. Rien ici ne change le statut de l'étape (les
+   * vérificateurs existants ont décidé) : c'est ce que le rejeu SAIT, écrit dans le rapport.
+   */
+  private commitReplayStep(
+    flow: FlowConfig,
+    step: FlowStep,
+    index: number,
+    report: FlowStepReport,
+    exchanges: readonly NetworkExchange[],
+  ): void {
+    const machine = this.replayMachine;
+    if (!machine) return;
+    const intentDriven = this.config.replay.intentDriven;
+    const skipped = report.status === 'SKIPPED' || report.status === 'MANUAL';
+    const observed = skipped ? undefined : this.observedFunctionalState(exchanges);
+    const checkpoints = skipped
+      ? machine.skip(index, report.reason ?? report.status.toLowerCase())
+      : machine.observe(index, observed);
+    for (const result of checkpoints)
+      this.emitHealing(
+        result.status === 'CONFIRMED'
+          ? 'CHECKPOINT_CONFIRMED'
+          : result.status === 'FAILED'
+            ? 'CHECKPOINT_FAILED'
+            : 'CHECKPOINT_INCONCLUSIVE',
+        `${result.id} after step ${String(index)}: ${result.status} (${String(result.progress)})${result.missing.length > 0 ? ` — missing ${result.missing.join(', ')}` : ''}${result.reasons.length > 0 ? ` — ${result.reasons.join('; ')}` : ''}`,
+      );
+    const stepReplay = this.currentStepReplay;
+    const effect = report.effect;
+    const executed = report.status === 'PASSED' || effect?.execution === 'EXECUTED';
+    const targetVerdict: ReplayStepVerdict['target'] = stepReplay?.planned
+      ? 'PLANNED'
+      : effect?.status === 'TARGET_MISMATCH' || effect?.targetMatch?.verdict === 'MISMATCH'
+        ? 'MISMATCH'
+        : effect?.healed ||
+            effect?.targetMatch?.verdict === 'CONTEXTUAL_MATCH' ||
+            effect?.targetMatch?.verdict === 'HEALED'
+          ? 'HEALED'
+          : report.status === 'FAILED' && !executed
+            ? 'NOT_FOUND'
+            : executed && 'target' in step
+              ? 'CORRECT'
+              : 'NOT_VERIFIED';
+    // Une saisie PASSED est prouvée par la valeur relue (verifyFillValue) : son effet est confirmé sans rapport d'effet.
+    const fillProven =
+      (step.kind === 'fill' || step.kind === 'select') &&
+      report.status === 'PASSED' &&
+      this.config.replay.functionalTargetResolution.verifyFillValue &&
+      (!effect || effect.status === 'NOT_VERIFIED');
+    const effectVerdict: ReplayStepVerdict['effect'] =
+      step.kind === 'expect'
+        ? report.status === 'PASSED'
+          ? 'SUCCESS'
+          : 'FAILED'
+        : fillProven
+          ? 'SUCCESS'
+          : !effect || effect.status === 'NOT_VERIFIED'
+            ? executed
+              ? 'NOT_VERIFIED'
+              : 'SKIPPED'
+            : effect.status === 'CONFIRMED'
+              ? 'SUCCESS'
+              : effect.status === 'NOT_REQUIRED'
+                ? 'NOT_REQUIRED'
+                : effect.status === 'EXPECTATION_SUSPECT'
+                  ? 'NOT_VERIFIED'
+                  : 'FAILED';
+    const functionalState: ReplayStepVerdict['functionalState'] =
+      checkpoints.length === 0
+        ? effectVerdict === 'FAILED'
+          ? 'UNCHANGED'
+          : 'NOT_REQUIRED'
+        : checkpoints.some((result) => result.status === 'FAILED')
+          ? 'DIVERGED'
+          : checkpoints.every((result) => result.status === 'CONFIRMED')
+            ? 'SUCCESS'
+            : 'NOT_VERIFIED';
+    const preconditionsVerdict: ReplayStepVerdict['preconditions'] = !stepReplay
+      ? 'NOT_CHECKED'
+      : stepReplay.preconditions.some((check) => check.satisfied === false)
+        ? 'UNMET'
+        : 'SATISFIED';
+    const verdict: ReplayStepVerdict = {
+      preconditions: preconditionsVerdict,
+      execution: skipped
+        ? 'SKIPPED'
+        : report.status === 'BLOCKED'
+          ? 'SKIPPED'
+          : executed
+            ? 'SUCCESS'
+            : 'FAILED',
+      target: targetVerdict,
+      effect: effectVerdict,
+      functionalState,
+      outcome:
+        report.status !== 'PASSED'
+          ? 'ROLLED_BACK'
+          : (effectVerdict === 'SUCCESS' || effectVerdict === 'NOT_REQUIRED') &&
+              functionalState !== 'DIVERGED' &&
+              preconditionsVerdict !== 'UNMET'
+            ? 'COMMITTED'
+            : 'COMMITTED_WITH_DOUBT',
+    };
+    const confidence = replayConfidence({
+      ...(effect?.targetMatch ? { targetScore: effect.targetMatch.score } : {}),
+      targetVerdict,
+      ...(step.functionalIntent
+        ? { intent: { confidence: step.functionalIntent.confidence, status: step.functionalIntent.status } }
+        : {}),
+      preconditions: stepReplay?.preconditions ?? [],
+      effect: effect
+        ? { status: effect.status, ...(effect.deferred !== undefined ? { deferred: effect.deferred } : {}) }
+        : undefined,
+      checkpoints: checkpoints.map((result) => ({ status: result.status, progress: result.progress })),
+      minConfidence: intentDriven.minConfidence,
+    });
+    if (!skipped) {
+      this.replayConfidences.push(confidence.overall);
+      if (!confidence.continueSilently) {
+        this.replayLowConfidence.push(index);
+        this.emitHealing(
+          'REPLAY_LOW_CONFIDENCE',
+          `step ${String(index)} ${report.description}: overall ${String(confidence.overall)} (target ${String(confidence.target)}, intent ${String(confidence.intent)}, preconditions ${String(confidence.preconditions)}, effect ${String(confidence.effect)}, state ${String(confidence.state)}) — ${confidence.reasons.join('; ')}`,
+        );
+      }
+    }
+    machine.commit(index, verdict);
+    if (!skipped)
+      this.emitHealing(
+        verdict.outcome === 'ROLLED_BACK' ? 'REPLAY_STEP_ROLLED_BACK' : 'REPLAY_STEP_COMMITTED',
+        `step ${String(index)}: execution ${verdict.execution} · target ${verdict.target} · effect ${verdict.effect} · functional state ${verdict.functionalState} → ${verdict.outcome} (confidence ${String(confidence.overall)})`,
+      );
+    if (report.status === 'FAILED' && !step.optional)
+      machine.diverge(index, report.reason ?? 'step failed', stepReplay?.explanation?.rootStep);
+    // RESOLUTION LEARNED : une cible planifiée n'est apprise que par l'effet (jamais par son score).
+    const pending = this.pendingResolution;
+    if (pending && pending.index === index) {
+      this.pendingResolution = undefined;
+      const result =
+        effectVerdict === 'SUCCESS' || (report.status === 'PASSED' && effectVerdict === 'NOT_REQUIRED')
+          ? 'SUCCESS'
+          : 'FAILURE';
+      if (intentDriven.learnResolutions) {
+        this.knowledge.recordTargetResolution({ ...pending.input, result });
+        const line = `${result}: "${pending.input.original}" → ${pending.input.resolved.role}:${pending.input.resolved.name} (${pending.input.how}${pending.input.route ? `, ${pending.input.route}` : ''})`;
+        this.replayLearned.push(line);
+        this.emitHealing('RESOLUTION_LEARNED', line);
+      }
+    }
+    report.replay = {
+      position: machine.snapshot(),
+      preconditions: stepReplay?.preconditions ?? [],
+      dependencies: this.replayDependencies.filter((dependency) => dependency.step === index),
+      ...(stepReplay?.explanation ? { explanation: stepReplay.explanation } : {}),
+      ...(stepReplay?.plan ? { plan: stepReplay.plan } : {}),
+      verdict,
+      confidence,
+      checkpoints,
+    } satisfies ReplayStepReport;
+    this.currentStepReplay = undefined;
+  }
+
+  /** L'état fonctionnel observé (dernière observation), pour les checkpoints et les préconditions : jamais une valeur saisie. */
+  private observedFunctionalState(
+    exchanges: readonly NetworkExchange[],
+    filled?: { held: string[]; lost: string[] },
+  ): ObservedFunctionalState | undefined {
+    const snapshot = this.lastSnapshot;
+    if (!snapshot) return undefined;
+    const controls = screenControlsOf(snapshot).filter((control) => control.visible);
+    const dialog = snapshot.dialogs[0];
+    return {
+      route: pathOf(snapshot.url),
+      controls: controls.map((control) => `${control.role}:${control.name}`),
+      enabledControls: controls
+        .filter((control) => !control.disabled)
+        .map((control) => `${control.role}:${control.name}`),
+      fields: controls.filter((control) => control.field).map((control) => control.name),
+      selectedTabs: snapshot.selectedTabs,
+      requests: exchanges.map(
+        (exchange) =>
+          `${exchange.method.toUpperCase()} ${pathOf(exchange.url)}${exchange.status !== undefined ? ` ${String(exchange.status)}` : ''}`,
+      ),
+      text: snapshot.textExcerpt,
+      ...(dialog ? { dialog } : {}),
+      ...(snapshot.overlay ? { overlay: snapshot.overlay } : {}),
+      ...(filled ? { filledHeld: filled.held, filledLost: filled.lost } : {}),
+    };
+  }
+
   private enrichStepReport(
     step: FlowStep,
     index: number,
@@ -4406,6 +4683,22 @@ export class FlowExplorer {
         finish: (status, extra) => done(status, extra),
       });
     };
+    // INTENT-DRIVEN REPLAY — PRECONDITIONS : « Can I execute this action? » (cible, champs soumis encore
+    // remplis, route, dialogue, overlay, checkpoint précédent). Une précondition HARD non satisfaite n'est
+    // pas exécutée (enforce) : une saisie perdue est d'abord RÉTABLIE (la valeur de ce run, relue ensuite),
+    // sinon l'étape échoue en nommant l'étape RACINE d'après les dépendances, jamais le symptôme seul.
+    const gate = await this.replayPreconditions(page, flow, step);
+    if (gate.blocked) {
+      return {
+        page,
+        report: done('FAILED', {
+          reason: gate.blocked,
+          stateId: context.stateId,
+          url: context.url,
+          effect: { ...effect, status: 'NOT_VERIFIED', reasons: [gate.blocked] },
+        }),
+      };
+    }
     // AVANT de localiser la cible courante (une résolution par section remplace les marques posées) :
     // la cible de l'étape suivante est-elle déjà là, et déjà prête ?
     const next = verifying && replay.verifyNextActionPrecondition ? this.nextStepTarget() : undefined;
@@ -4733,6 +5026,28 @@ export class FlowExplorer {
               }),
             });
         }
+      }
+    }
+    // INTENT-DRIVEN REPLAY — PLANNER : la cible enregistrée manque encore. Quelle action À L'ÉCRAN permet
+    // l'objectif ? Une résolution apprise (HISTORICAL) d'abord, puis un candidat sémantique du même genre
+    // qui dit la même intention — jugé par la SafetyPolicy, confirmé par l'effet seulement (puis appris).
+    if (
+      typeof located === 'string' &&
+      (step.kind === 'click' || step.kind === 'check' || step.kind === 'uncheck')
+    ) {
+      const planned = await this.planMissingTarget(page, flow, step, timeout);
+      if (planned) {
+        located = planned.locator;
+        effect.healed = {
+          from: describeTarget(step.target),
+          to: `${planned.choice} ${planned.role}:${planned.name}`,
+        };
+        effect.locator = `${planned.role}:${planned.name}`;
+        effect.targetMatch = { verdict: 'PLANNED', score: planned.score };
+        effect.reasons = [
+          ...effect.reasons,
+          `PLANNED by the replay planner (${planned.choice}): confirmed by the effect only`,
+        ];
       }
     }
     if (typeof located === 'string') {
@@ -5478,6 +5793,225 @@ export class FlowExplorer {
         classification: action.classification,
         ...(verifying ? { effect } : {}),
       }),
+    };
+  }
+
+  /**
+   * PRECONDITIONS d'une étape (INTENT-DRIVEN REPLAY) : dérivées du flow et des dépendances, confrontées à
+   * l'écran AVANT d'agir ; les champs que l'action soumet sont relus (jamais journalisés). Une saisie
+   * perdue est rétablie une fois (la valeur de ce run) ; une précondition HARD toujours insatisfaite
+   * bloque l'exécution en mode enforce, avec l'étape racine. Le résultat est versé au rapport de l'étape.
+   */
+  private async replayPreconditions(
+    page: Page,
+    flow: FlowConfig,
+    step: Extract<FlowStep, { target: unknown }>,
+  ): Promise<{ blocked?: string }> {
+    const settings = this.config.replay.intentDriven;
+    const machine = this.replayMachine;
+    const position = this.stepPosition;
+    if (
+      !settings.enabled ||
+      settings.preconditions === 'off' ||
+      !machine ||
+      !position ||
+      position.flow !== flow ||
+      this.healingDepth > 0
+    )
+      return {};
+    const index = position.index;
+    const preconditions = derivePreconditions(
+      flow.steps,
+      index,
+      this.replayDependencies,
+      machine.checkpointsList(),
+    );
+    if (preconditions.length === 0) return {};
+    const needsFields = preconditions.some((precondition) => precondition.kind === 'FIELD_FILLED');
+    const route = pathOf(page.url());
+    const readFilled = async (): Promise<{ held: string[]; lost: string[] }> => {
+      const lost = (await this.filledValuesLost(page)).map((entry) => entry.label);
+      const held = this.filledOnScreen
+        .filter((entry) => entry.route === route && !lost.includes(entry.label))
+        .map((entry) => entry.label);
+      return { held, lost };
+    };
+    let filled = needsFields ? await readFilled() : undefined;
+    const observe = (): PreconditionCheck[] =>
+      checkPreconditions(
+        preconditions,
+        this.observedFunctionalState([], filled),
+        machine.snapshot().confirmedCheckpoints,
+        [...this.flowDataUsed.keys()],
+      );
+    let checks = observe();
+    const unmetHard = (): PreconditionCheck[] =>
+      checks.filter((check) => check.satisfied === false && check.precondition.severity === 'HARD');
+    // RECOVERY d'une précondition : une saisie de ce run que l'application a retirée est refaite UNE fois.
+    const lostFields = unmetHard().filter((check) => check.precondition.kind === 'FIELD_FILLED');
+    if (lostFields.length > 0 && settings.preconditions === 'enforce') {
+      for (const check of lostFields) {
+        const entry = this.filledOnScreen.find(
+          (candidate) =>
+            candidate.route === route &&
+            normalizeControl(candidate.label) === normalizeControl(check.precondition.value),
+        );
+        if (!entry) continue;
+        const again = await this.flowSteps.locate(page, entry.target, 1500, { strict: true });
+        if (typeof again === 'string') continue;
+        const failure = await this.flowSteps.perform(page, again, { kind: 'fill', value: entry.value }, 3000);
+        const held = failure ? undefined : await again.inputValue({ timeout: 500 }).catch(() => undefined);
+        this.emitHealing(
+          held !== undefined && sameFilledValue(held, entry.value)
+            ? 'VALUE_RESTORED_AFTER_APPLICATION_RESET'
+            : 'VALUE_RESTORE_FAILED',
+          `precondition FIELD_FILLED "${entry.label}" (step ${String(index)}): the value entered earlier was gone — ${held !== undefined && sameFilledValue(held, entry.value) ? 'filled again once, the field holds it' : 'filled again once, still not held'}`,
+        );
+      }
+      filled = await readFilled();
+      checks = observe();
+    }
+    const unmet = checks.filter((check) => check.satisfied === false);
+    let explanation: PreconditionExplanation | undefined;
+    if (unmet.length > 0) {
+      const held = (at: number): boolean | undefined => {
+        const checkpoint = machine.checkpointsList().find((candidate) => candidate.afterStep === at);
+        const result = checkpoint ? machine.resultOf(checkpoint.id) : undefined;
+        if (result)
+          return result.status === 'CONFIRMED' ? true : result.status === 'FAILED' ? false : undefined;
+        return machine.isCommitted(at) ? true : at < index ? false : undefined;
+      };
+      const worst = unmetHard()[0] ?? unmet[0];
+      if (worst) {
+        explanation = explainUnmetPrecondition(worst, index, flow.steps, this.replayDependencies, held);
+        this.emitHealing(
+          'PRECONDITION_NOT_MET',
+          `step ${String(index)} ${step.kind} "${targetLabel(step.target)}": ${unmet.map((check) => `${check.precondition.kind} "${check.precondition.value}" (${check.precondition.severity}) — ${check.detail}`).join('; ')}`,
+        );
+        if (explanation.rootStep !== index)
+          this.emitHealing(
+            'PRECONDITION_ROOT_LOCATED',
+            `step ${String(index)}: root step ${String(explanation.rootStep)} — ${explanation.chain.map((link) => `${String(link.step)} ${link.label} (${link.held === undefined ? 'unknown' : link.held ? 'held' : 'not held'})`).join(' ← ')}`,
+          );
+      }
+    }
+    this.currentStepReplay = {
+      ...(this.currentStepReplay ?? {}),
+      preconditions: checks,
+      ...(explanation ? { explanation } : {}),
+    };
+    const [first] = unmetHard().filter((check) => check.precondition.kind !== 'TARGET_PRESENT');
+    if (settings.preconditions === 'enforce' && first && explanation) {
+      return {
+        blocked: `PRECONDITION_NOT_MET: ${first.precondition.kind} "${first.precondition.value}" — ${first.detail}${explanation.rootStep !== index ? ` (root step ${String(explanation.rootStep)}: ${explanation.chain.at(-1)?.label ?? ''})` : ''} — not executed`,
+      };
+    }
+    return {};
+  }
+
+  /**
+   * REPLAY PLANNER (INTENT-DRIVEN REPLAY) : la cible enregistrée manque ; une résolution apprise ou un
+   * candidat sémantique à l'écran, jugé par la SafetyPolicy, est localisé pour l'étape. Jamais un
+   * champ ; jamais sans confirmation par l'effet (apprise ensuite par commitReplayStep).
+   */
+  private async planMissingTarget(
+    page: Page,
+    flow: FlowConfig,
+    step: Extract<FlowStep, { kind: 'click' | 'check' | 'uncheck' }>,
+    timeout: number,
+  ): Promise<
+    { locator: Locator; role: string; name: string; choice: ReplayPlan['choice']; score: number } | undefined
+  > {
+    const settings = this.config.replay.intentDriven;
+    const position = this.stepPosition;
+    if (
+      !settings.enabled ||
+      !settings.planner ||
+      !this.replayMachine ||
+      !position ||
+      position.flow !== flow ||
+      this.healingDepth > 0
+    )
+      return undefined;
+    const snapshot = this.lastSnapshot;
+    if (!snapshot) return undefined;
+    const label = targetLabel(step.target);
+    if (!label || isTechnicalTarget(step.target)) return undefined;
+    const role = step.fingerprint?.role ?? step.target.role;
+    const route = pathOf(page.url());
+    const original = { kind: step.kind, ...(role ? { role } : {}), label };
+    const key = resolutionKeyOf(original, route);
+    const now = new Date().toISOString();
+    const version = this.knowledge.identity.commit ?? this.knowledge.identity.appVersion;
+    const historical = settings.learnResolutions
+      ? historicalResolutions(this.knowledge.targetResolutions(key), { now, ...(version ? { version } : {}) })
+      : { candidates: [], avoid: [] };
+    const plan = planReplayAction({
+      original,
+      ...(step.functionalIntent ? { intent: step.functionalIntent } : {}),
+      goal: step.functionalIntent?.name ?? `${step.kind.toUpperCase()}_${label}`,
+      controls: screenControlsOf(snapshot),
+      historical,
+      synonyms: (term) => this.semantics.dictionary.expand(term),
+      thresholds: { semantic: settings.semanticThreshold, margin: settings.ambiguityMargin },
+    });
+    this.currentStepReplay = { ...(this.currentStepReplay ?? { preconditions: [] }), plan };
+    this.emitHealing(
+      plan.ambiguous ? 'REPLAY_PLAN_AMBIGUOUS' : 'REPLAY_PLAN',
+      `step ${String(position.index)} ${step.kind} "${label}": ${plan.choice}${plan.selected ? ` ${plan.selected.role}:${plan.selected.name} (${String(plan.selected.score)})` : ''} — ${plan.reasons.join('; ')}`,
+    );
+    const selected = plan.selected;
+    if (!selected || plan.choice === 'NONE' || plan.choice === 'RECORDED') return undefined;
+    // Un candidat SÉMANTIQUE n'est exécuté par le planificateur que sur demande : la récupération par
+    // objectif (bornée, vérifiée par la progression de l'objectif) reste la voie par défaut.
+    if (plan.choice === 'SEMANTIC' && !settings.semanticCandidates) return undefined;
+    const judged = this.judgeRecovery(
+      { role: selected.role, name: selected.name, visible: true, disabled: false },
+      step.kind === 'click' ? 'click' : 'check',
+    );
+    if (!judged.allowed) {
+      this.emitHealing(
+        'REPLAY_PLAN',
+        `step ${String(position.index)}: ${selected.role}:${selected.name} rejected by the SafetyPolicy — ${judged.reason}`,
+      );
+      return undefined;
+    }
+    const located = await this.flowSteps.locate(
+      page,
+      { strategy: 'role', role: selected.role, name: selected.name, exact: true },
+      Math.min(timeout, 2000),
+      { strict: true },
+    );
+    if (typeof located === 'string') return undefined;
+    if (plan.choice === 'HISTORICAL')
+      this.emitHealing(
+        'RESOLUTION_PROPOSED',
+        `step ${String(position.index)}: "${label}" → ${selected.role}:${selected.name} (learned; the effect must confirm)`,
+      );
+    this.currentStepReplay = {
+      ...this.currentStepReplay,
+      preconditions: this.currentStepReplay.preconditions,
+      planned: true,
+    };
+    this.pendingResolution = {
+      index: position.index,
+      input: {
+        key,
+        original: label,
+        ...(role ? { originalRole: role } : {}),
+        kind: step.kind,
+        route,
+        resolved: { role: selected.role, name: selected.name },
+        how: plan.choice,
+        ...(version ? { version } : {}),
+      },
+    };
+    return {
+      locator: located,
+      role: selected.role,
+      name: selected.name,
+      choice: plan.choice,
+      score: selected.score,
     };
   }
 
@@ -7703,6 +8237,36 @@ export class FlowExplorer {
           };
         }),
     );
+  }
+
+  /**
+   * RESOLUTION MEMORY : une récupération par objectif qui a REMPLACÉ la cible par UNE action (renommage,
+   * bouton devenu onglet) et que la suite du parcours a confirmée devient une résolution apprise
+   * (original → résolu, par écran), proposée d'abord au prochain rejeu — jamais une vérité.
+   */
+  private learnResolutionFromRecovery(input: RecoveryInput, continued: boolean): void {
+    const settings = this.config.replay.intentDriven;
+    if (!settings.enabled || !settings.learnResolutions) return;
+    if (input.actions.length !== 1) return;
+    const [action] = input.actions;
+    if (!action) return;
+    const [kind, role, label] = input.actionSignature.split('|');
+    if (!kind || !label) return;
+    const original = { kind, ...(role ? { role } : {}), label };
+    const line = `${continued ? 'SUCCESS' : 'FAILURE'}: "${input.originalTarget}" → ${action.role}:${action.name} (GOAL_RECOVERY${input.route ? `, ${input.route}` : ''})`;
+    this.knowledge.recordTargetResolution({
+      key: resolutionKeyOf(original, input.route),
+      original: input.originalTarget,
+      ...(role ? { originalRole: role } : {}),
+      kind,
+      ...(input.route ? { route: input.route } : {}),
+      resolved: { role: action.role, name: action.name },
+      how: 'GOAL_RECOVERY',
+      result: continued ? 'SUCCESS' : 'FAILURE',
+      ...(input.version ? { version: input.version } : {}),
+    });
+    this.replayLearned.push(line);
+    this.emitHealing('RESOLUTION_LEARNED', line);
   }
 
   private learnRecovery(input: RecoveryInput): void {
