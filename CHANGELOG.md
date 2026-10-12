@@ -34,8 +34,18 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 - Rapport HTML : bloc « Détails » dépliable sous le message de chaque anomalie (source,
   informations clé → valeur, pile d'appels, texte complet).
 
+### Modifié
+
+- Tests d'intégration plus rapides : un worker vitest par cœur (8 au plus, `QA_TEST_WORKERS` pour
+  régler), tests concurrents à l'intérieur des fichiers longs (chacun dans son propre dossier de
+  rapports), et job CI `integration` découpé en trois shards parallèles (le job `build` ne lance
+  plus l'intégration). Sur une machine à 4 cœurs : de 1 250 s à environ 600 s.
+
 ### Corrigé
 
+- Écriture atomique (`writeFileAtomic`) : deux écritures du même fichier en vol dans le même processus
+  (par exemple la base de connaissances de deux missions concurrentes) n'ont plus le même fichier
+  temporaire ; le renommage de la seconde n'échoue plus en `ENOENT`.
 - Windows, Git Bash et WSL : les scripts npm `build`, `clean` et `pack` passent par Node
   (`scripts/clean.mjs`, `scripts/pack.mjs`) au lieu de `rm -rf` / `mkdir -p` ; le test
   d'installation (`test:packaging`) lance `npm.cmd` et `qa-crawler.cmd` sous Windows ;

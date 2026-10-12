@@ -37,7 +37,7 @@ const FLOW = (fingerprint: string): string => `flows:
 const RECORDED =
   '{ role: textbox, tag: input, name: Search term, context: Filter, section: "Requests > Filter", semanticId: filter.value }';
 
-describe('Functional target resolution on replay (real browser)', () => {
+describe.concurrent('Functional target resolution on replay (real browser)', () => {
   let app: FilterApp;
   let dir: string;
   let lastReportsDir = '';
@@ -53,7 +53,7 @@ describe('Functional target resolution on replay (real browser)', () => {
     variant: string,
     options: { fingerprint?: string; ai?: string; provider?: FakeIntelligenceProvider; extra?: string } = {},
   ): Promise<FlowRunReport> => {
-    const reportsDir = await mkdtemp(path.join(dir, `${variant}-`));
+    const reportsDir = path.join(await mkdtemp(path.join(dir, `${variant}-`)), 'reports');
     lastReportsDir = reportsDir;
     const { config } = parseConfig(
       `mission: { name: functional-${variant} }
@@ -240,7 +240,7 @@ ${FLOW(options.fingerprint ?? RECORDED)}`,
   }, 90_000);
 
   it('the HTML report shows the Target resolution section', async () => {
-    const reportsDir = await mkdtemp(path.join(dir, 'html-'));
+    const reportsDir = path.join(await mkdtemp(path.join(dir, 'html-')), 'reports');
     const { config } = parseConfig(
       `mission: { name: functional-html }
 target: { baseUrl: ${app.url}, startAt: "/?variant=relabel" }
@@ -295,59 +295,63 @@ ${FLOW(RECORDED)}`,
     expect(fill?.effect?.execution).not.toBe('EXECUTED');
   }, 90_000);
 
-  it('REAL BUG, HYBRID: the advisor is triggered by the contradictory evidence (not only by an ambiguity), receives evidence ids, contradictions, known facts and constraints, picks the recorded-locator candidate — validated, re-resolved at runtime, VALUE_CHANGED confirmed, the flow passes; DEBUG writes the sanitized resolution artifact', async () => {
-    const provider = advisor(recordedCandidate);
-    const report = await replay('shadowLoose', {
-      ai: HYBRID,
-      provider,
-      extra: 'logging: { level: DEBUG }',
-    });
-    expect(report.status, describeFlow(report)).toBe('PASSED');
-    const trace = fillOf(report)?.targetResolution;
-    expect(trace?.ai).toMatchObject({
-      requested: true,
-      trigger: 'CONTRADICTORY_TARGET_EVIDENCE',
-      outcome: 'VALIDATED',
-    });
-    expect(trace?.status).toBe('TARGET_AI_ASSISTED');
-    expect(trace?.runtimeVerification?.status).toBe('CONFIRMED');
-    expect(trace?.final).toBe('TARGET_RECOVERED_AND_CONFIRMED');
-    const request = resolutionRequest(provider);
-    expect(request).toMatchObject({
-      mission: { type: 'TARGET_RESOLUTION', context: 'REPLAY_RECORDED_HUMAN_JOURNEY' },
-      resolutionFailure: { trigger: 'CONTRADICTORY_TARGET_EVIDENCE' },
-      constraints: { mustChooseExistingCandidate: true, mustNotExecuteAction: true },
-    });
-    expect(request?.knownFacts).toContain('The recorded locator resolves to a runtime element');
-    const sent = (request?.runtimeCandidates as { evidence: string[]; contradictions: string[] }[])[0];
-    expect(sent?.evidence.some((id) => id.endsWith('_RECORDED_LOCATOR_MATCH'))).toBe(true);
-    expect(sent?.contradictions.join(' ')).toMatch(/FINGERPRINT_MISMATCH/);
-    expect(JSON.stringify(provider.requests)).not.toContain('alpha');
-    expect(JSON.stringify(provider.requests)).not.toContain('<value-field');
-    // Les journaux et l'artefact de débogage.
-    const reportsDir = lastReportsDir;
-    const log = await readFile(path.join(reportsDir, 'engine-log.jsonl'), 'utf8');
-    for (const event of [
-      'TARGET_CONTEXT',
-      'TARGET_CANDIDATE_DISCOVERED',
-      'TARGET_EVIDENCE',
-      'TARGET_CONTRADICTION',
-      'AI_TARGET_TRIGGER',
-      'AI_TARGET_CONTEXT_BUILT',
-      'AI_TARGET_PROPOSAL',
-      'AI_TARGET_RUNTIME_CONFIRMED',
-    ])
-      expect(log, event).toContain(`"${event}"`);
-    const folder = path.join(reportsDir, 'intelligence', 'target-resolution');
-    const [file] = await readdir(folder);
-    if (!file) throw new Error('no target-resolution artifact');
-    const artifact = await readFile(path.join(folder, file), 'utf8');
-    expect(JSON.parse(artifact)).toMatchObject({
-      status: 'TARGET_AI_ASSISTED',
-      evidenceStatus: 'CONTRADICTORY_EVIDENCE',
-    });
-    expect(artifact).not.toContain('alpha');
-  }, 90_000);
+  it.sequential(
+    'REAL BUG, HYBRID: the advisor is triggered by the contradictory evidence (not only by an ambiguity), receives evidence ids, contradictions, known facts and constraints, picks the recorded-locator candidate — validated, re-resolved at runtime, VALUE_CHANGED confirmed, the flow passes; DEBUG writes the sanitized resolution artifact',
+    async () => {
+      const provider = advisor(recordedCandidate);
+      const report = await replay('shadowLoose', {
+        ai: HYBRID,
+        provider,
+        extra: 'logging: { level: DEBUG }',
+      });
+      expect(report.status, describeFlow(report)).toBe('PASSED');
+      const trace = fillOf(report)?.targetResolution;
+      expect(trace?.ai).toMatchObject({
+        requested: true,
+        trigger: 'CONTRADICTORY_TARGET_EVIDENCE',
+        outcome: 'VALIDATED',
+      });
+      expect(trace?.status).toBe('TARGET_AI_ASSISTED');
+      expect(trace?.runtimeVerification?.status).toBe('CONFIRMED');
+      expect(trace?.final).toBe('TARGET_RECOVERED_AND_CONFIRMED');
+      const request = resolutionRequest(provider);
+      expect(request).toMatchObject({
+        mission: { type: 'TARGET_RESOLUTION', context: 'REPLAY_RECORDED_HUMAN_JOURNEY' },
+        resolutionFailure: { trigger: 'CONTRADICTORY_TARGET_EVIDENCE' },
+        constraints: { mustChooseExistingCandidate: true, mustNotExecuteAction: true },
+      });
+      expect(request?.knownFacts).toContain('The recorded locator resolves to a runtime element');
+      const sent = (request?.runtimeCandidates as { evidence: string[]; contradictions: string[] }[])[0];
+      expect(sent?.evidence.some((id) => id.endsWith('_RECORDED_LOCATOR_MATCH'))).toBe(true);
+      expect(sent?.contradictions.join(' ')).toMatch(/FINGERPRINT_MISMATCH/);
+      expect(JSON.stringify(provider.requests)).not.toContain('alpha');
+      expect(JSON.stringify(provider.requests)).not.toContain('<value-field');
+      // Les journaux et l'artefact de débogage.
+      const reportsDir = lastReportsDir;
+      const log = await readFile(path.join(reportsDir, 'engine-log.jsonl'), 'utf8');
+      for (const event of [
+        'TARGET_CONTEXT',
+        'TARGET_CANDIDATE_DISCOVERED',
+        'TARGET_EVIDENCE',
+        'TARGET_CONTRADICTION',
+        'AI_TARGET_TRIGGER',
+        'AI_TARGET_CONTEXT_BUILT',
+        'AI_TARGET_PROPOSAL',
+        'AI_TARGET_RUNTIME_CONFIRMED',
+      ])
+        expect(log, event).toContain(`"${event}"`);
+      const folder = path.join(reportsDir, 'intelligence', 'target-resolution');
+      const [file] = await readdir(folder);
+      if (!file) throw new Error('no target-resolution artifact');
+      const artifact = await readFile(path.join(folder, file), 'utf8');
+      expect(JSON.parse(artifact)).toMatchObject({
+        status: 'TARGET_AI_ASSISTED',
+        evidenceStatus: 'CONTRADICTORY_EVIDENCE',
+      });
+      expect(artifact).not.toContain('alpha');
+    },
+    90_000,
+  );
 
   it('REAL BUG, HYBRID: an invented candidate (T99) — AI_PROPOSAL_INVALID_CANDIDATE, nothing is executed', async () => {
     const provider = advisor(() => 'T99');
