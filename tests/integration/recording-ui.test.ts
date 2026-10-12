@@ -72,6 +72,16 @@ describe('Recording UI (recorder window)', () => {
         await row(panel, /Saisir "Alex" dans "First name"/).waitFor();
         await row(panel, /Saisir "••••" dans "Password"/).waitFor();
         seen.panelText = await panel.locator('body').innerText();
+        // Le pictogramme du geste de chaque étape : un SVG, jamais le texte « undefined ».
+        seen.kindIcons = await timeline(panel)
+          .locator('.item .kind')
+          .evaluateAll((spans) =>
+            spans.map((span) => ({
+              kind: span.getAttribute('class') ?? '',
+              svg: span.querySelector('svg') !== null,
+              text: span.textContent.trim(),
+            })),
+          );
         // CHECK → « Cocher … ».
         await page.getByLabel('Accept terms').check();
         await row(panel, /Cocher "Accept terms"/).waitFor();
@@ -170,6 +180,16 @@ describe('Recording UI (recorder window)', () => {
   const file = (name: string): Promise<string> => readFile(path.join(outcome.directory, name), 'utf8');
   const steps = async (): Promise<RecordedFlowStep[]> =>
     (JSON.parse(await file('recorded-flow.json')) as { steps: RecordedFlowStep[] }).steps;
+
+  it('every step shows the pictogram of its gesture (click, fill, check): an SVG, never "undefined"', () => {
+    const icons = seen.kindIcons as { kind: string; svg: boolean; text: string }[];
+    expect(icons.length).toBeGreaterThan(2);
+    expect(icons.map((icon) => icon.kind)).toEqual(expect.arrayContaining(['kind k-click', 'kind k-fill']));
+    for (const icon of icons) {
+      expect(icon.svg, icon.kind).toBe(true);
+      expect(icon.text, icon.kind).toBe('');
+    }
+  });
 
   it('click / fill / check appear in plain words; a password is never shown', () => {
     expect(seen.panelText).toContain('Cliquer sur "Action 7"');

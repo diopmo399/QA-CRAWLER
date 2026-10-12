@@ -573,7 +573,8 @@ const SCRIPT = `
   Object.keys(X).forEach(function (k) { T[k] = X[k]; });
 
   var ICON = { CONFIRMED: '✓', PENDING: '●', AMBIGUOUS: '!', FAILED: '✕', UNVERIFIED: '' };
-  var SVG = {
+  // Pictogrammes des gestes (SVG complets) : une table à part, jamais la même que celle des boutons (SVG).
+  var KIND_SVG = {
     link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>',
     text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 6h14M12 6v13"/></svg>',
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg>',
@@ -622,6 +623,7 @@ const SCRIPT = `
     dot: '<circle cx="12" cy="12" r="4"/>'
   };
   function svg(name) { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + (SVG[name] || SVG.dot) + '</svg>'; }
+  function kindSvg(kind) { return KIND_SVG[KIND_ICON[kind]] || KIND_SVG.hash; }
   function kindIcon(kind) {
     var k = String(kind || '').toUpperCase();
     return k.indexOf('NAVIGAT') >= 0 || k === 'GOTO' ? 'arrow' : k.indexOf('DRAG') >= 0 ? 'drag' : k.indexOf('SELECT') >= 0 || k.indexOf('CHECK') >= 0 ? 'list' : k.indexOf('TYPE') >= 0 || k.indexOf('FILL') >= 0 || k.indexOf('PRESS') >= 0 ? 'keyboard' : k.indexOf('CLICK') >= 0 ? 'cursor' : 'dot';
@@ -730,7 +732,7 @@ const SCRIPT = `
       var h = '<li data-step="' + esc(step.id) + '">';
       h += '<button type="button" class="item ' + step.status + '" data-cmd="select" data-id="' + esc(step.id) + '" aria-current="' + current + '" aria-label="' + esc(step.index + '. ' + step.description + ' — ' + T.status[step.status]) + '">';
       h += '<span class="dot" aria-hidden="true">' + ICON[step.status] + '</span><span class="num">' + step.index + '</span>';
-      h += '<span class="kind k-' + esc(step.kind) + '" aria-hidden="true">' + (SVG[KIND_ICON[step.kind] || 'hash']) + '</span><span class="desc">';
+      h += '<span class="kind k-' + esc(step.kind) + '" aria-hidden="true">' + kindSvg(step.kind) + '</span><span class="desc">';
       if (dev) h += esc(step.technical.event || step.technical.kind || step.kind) + '<span class="tech">' + esc(techLines(step)) + '</span>';
       else {
         h += esc(step.description);
@@ -777,7 +779,7 @@ const SCRIPT = `
     var t = step.technical;
     var h = '<header class="card-head"><h2>' + esc(T.detailsTitle) + '</h2><span class="actions">' + button('✕', { cmd: 'deselect', cls: 'ghost', aria: T.hideDetails }) + '</span></header>';
     h += '<span class="step">' + esc(T.stepOf2(step.index, state.actions.length)) + '</span>';
-    h += '<div class="hero"><span class="kind k-' + esc(step.kind) + '" aria-hidden="true">' + (SVG[KIND_ICON[step.kind] || 'hash']) + '</span><div><b>' + esc(step.description) + '</b><span>' + esc(step.detail || step.statusText) + '</span></div></div>';
+    h += '<div class="hero"><span class="kind k-' + esc(step.kind) + '" aria-hidden="true">' + kindSvg(step.kind) + '</span><div><b>' + esc(step.description) + '</b><span>' + esc(step.detail || step.statusText) + '</span></div></div>';
     h += '<h3>' + esc(T.general) + '</h3><dl>';
     h += '<dt>' + esc(T.field.kind) + '</dt><dd><span class="chip">' + esc(T.kindName[step.kind] || step.kind) + '</span></dd>';
     GENERAL.forEach(function (k) { if (t[k] !== undefined && k !== 'kind' && k !== 'event') h += '<dt>' + esc(T.field[k] || k) + '</dt><dd>' + (k === 'role' ? '<span class="chip">' + esc(t[k]) + '</span>' : esc(t[k])) + '</dd>'; });

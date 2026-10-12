@@ -53,6 +53,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Corrigé
 
+- Fenêtre d'enregistrement : le pictogramme du geste de chaque étape (clic, saisie, case…) affichait
+  « undefined » pour une saisie et rien pour un clic — deux tables `SVG` du même script se
+  masquaient. Table des gestes à part (`KIND_SVG`), test unitaire et assertion E2E.
 - Écriture atomique (`writeFileAtomic`) : deux écritures du même fichier en vol dans le même processus
   (par exemple la base de connaissances de deux missions concurrentes) n'ont plus le même fichier
   temporaire ; le renommage de la seconde n'échoue plus en `ENOENT`.
