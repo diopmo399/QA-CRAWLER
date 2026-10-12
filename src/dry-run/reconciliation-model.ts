@@ -21,8 +21,46 @@ export const RECONCILIATION_STATUSES = [
   'ASSERTION_MISMATCH',
   'BLOCKED_BY_POLICY',
   'NOT_VERIFIED',
+  // SEMANTIC RECONCILIATION : une étape attendue « manquante » et une étape observée « insérée »
+  // qui désignent le même événement fonctionnel forment UNE paire, jamais MISSING + INSERTED.
+  'MATCHED_SEMANTICALLY',
+  'MATCHED_WITH_TARGET_CHANGE',
+  'MATCHED_WITH_CONTEXT_CHANGE',
+  'MATCHED_AFTER_INSERTION',
+  'DUPLICATE_CANDIDATE',
 ] as const;
 export type ReconciliationStatus = (typeof RECONCILIATION_STATUSES)[number];
+
+/** Les statuts d'une paire sémantique : l'étape attendue est retrouvée, sous une autre forme technique. */
+export const PAIRED_STATUSES: readonly ReconciliationStatus[] = [
+  'MATCHED_SEMANTICALLY',
+  'MATCHED_WITH_TARGET_CHANGE',
+  'MATCHED_WITH_CONTEXT_CHANGE',
+  'MATCHED_AFTER_INSERTION',
+];
+
+/**
+ * Le score d'appariement d'une étape attendue et d'une étape observée, par dimension (0..1) :
+ * cible (libellé), intention (type et mots d'interface), entité (opération × entité de l'intention
+ * fonctionnelle), contexte (écran de départ, route), séquence (action précédente et suivante),
+ * effet (écran ou route atteints). `total` : moyenne pondérée. 0.5 : rien ne permet de juger.
+ */
+export interface PairingBreakdown {
+  target: number;
+  intent: number;
+  entity: number;
+  context: number;
+  sequence: number;
+  effect: number;
+  total: number;
+}
+
+/** Un candidat observé pour une étape attendue, avec son score (toutes les dimensions). */
+export interface PairingCandidate {
+  stepId: string;
+  label: string;
+  score: PairingBreakdown;
+}
 
 export const DRY_RUN_STATUSES = [
   'FULLY_MATCHED',
@@ -145,6 +183,8 @@ export interface ReconciliationEntry {
   confidence: number;
   reasons: string[];
   evidence: string[];
+  /** Appariement sémantique : le score retenu et les autres candidats (DUPLICATE_CANDIDATE : tous). */
+  pairing?: { score: PairingBreakdown; candidates: PairingCandidate[] };
 }
 
 export interface ReconciliationSummary {
@@ -160,6 +200,9 @@ export interface ReconciliationSummary {
   assertionMismatch: number;
   blocked: number;
   notVerified: number;
+  /** Paires sémantiques (MATCHED_SEMANTICALLY, _WITH_TARGET_CHANGE, _WITH_CONTEXT_CHANGE, _AFTER_INSERTION). */
+  matchedWithVariation: number;
+  duplicateCandidate: number;
 }
 
 export interface Reconciliation {

@@ -60,6 +60,15 @@ export function buildSuggestedFlow(
         provenance: observedStep.provenance,
         status: entry.status,
         step: observedStep.step,
+        // Une paire sémantique : l'étape observée remplace l'étape du scénario, dont le texte est gardé.
+        ...(intent && entry.pairing
+          ? {
+              originalText: intent.sourceReference.text,
+              ...(intent.sourceReference.line !== undefined
+                ? { sourceLine: intent.sourceReference.line }
+                : {}),
+            }
+          : {}),
         label: observedStep.label,
         ...(observedStep.formFields && observedStep.formFields.length > 0 ? { fillFormBefore: true } : {}),
       });

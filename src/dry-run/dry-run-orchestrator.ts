@@ -136,7 +136,22 @@ export async function runDryRun(request: DryRunRequest): Promise<DryRunResult> {
         evidence: [],
       })),
     };
-    const reconciliation = reconcile(graph, outcome.observed, outcome.findings);
+    const reconciliation = reconcile(graph, outcome.observed, outcome.findings, {
+      semanticPairing: {
+        ...config.dryRun.semanticPairing,
+        synonyms: (term) => semantics.dictionary.expand(term),
+      },
+    });
+    for (const entry of reconciliation.entries) {
+      if (!entry.pairing || !entry.expectedIntent) continue;
+      onEvent({
+        type: 'FLOW_STEP_PAIRED',
+        at: new Date().toISOString(),
+        flow: graph.name,
+        intentId: entry.expectedIntent.id,
+        message: `${entry.status}: "${entry.expectedIntent.label}"${entry.observedTarget ? ` ↔ "${entry.observedTarget.label}"` : ''} (${entry.confidence.toFixed(2)})`,
+      });
+    }
     onEvent({
       type: 'FLOW_RECONCILIATION_COMPLETED',
       at: new Date().toISOString(),
@@ -265,7 +280,7 @@ function suggestedJson(suggested: SuggestedFlowGraph): unknown {
 
 function summaryLine(reconciliation: Reconciliation): string {
   const s = reconciliation.summary;
-  return `${String(s.matched)}/${String(s.originalIntents)} matched, ${String(s.inserted)} inserted, ${String(s.possiblyObsolete)} possibly obsolete, ${String(s.reordered)} reordered, ${String(s.unreachable)} unreachable, ${String(s.blocked)} blocked, ${String(s.notVerified)} not verified`;
+  return `${String(s.matched)}/${String(s.originalIntents)} matched, ${String(s.matchedWithVariation)} with variation, ${String(s.inserted)} inserted, ${String(s.possiblyObsolete)} possibly obsolete, ${String(s.reordered)} reordered, ${String(s.unreachable)} unreachable, ${String(s.blocked)} blocked, ${String(s.notVerified)} not verified`;
 }
 
 function json(value: unknown): string {
