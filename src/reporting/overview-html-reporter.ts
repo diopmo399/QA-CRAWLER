@@ -27,7 +27,7 @@ import type { Reporter } from './reporter.js';
 /**
  * reports/overview.html — la VUE D'ENSEMBLE d'un run : indicateurs, parcours détecté (étapes et
  * réutilisations de données), détails du run, timeline des actions et lignée des données de test.
- * Une page autonome : aucune ressource externe, un peu de JavaScript seulement pour les filtres,
+ * Une page autonome : aucune ressource externe, un peu de JavaScript seulement pour la recherche et les sections,
  * le choix du flow, le thème clair / sombre et les liens du parcours (tout reste lisible sans).
  */
 export class OverviewHtmlReporter implements Reporter {
