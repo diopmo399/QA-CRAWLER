@@ -34,6 +34,10 @@ export async function writeReports(
     result.artifacts.flowDiff = path.join(output.reportsDir, 'flow-diff.json');
     await writeFile(result.artifacts.flowDiff, `${JSON.stringify(result.flowDiff, null, 2)}\n`, 'utf8');
   }
+  if (result.runAnalysis) {
+    result.artifacts.runAnalysis = path.join(output.reportsDir, 'run-analysis.json');
+    await writeFile(result.artifacts.runAnalysis, `${JSON.stringify(result.runAnalysis, null, 2)}\n`, 'utf8');
+  }
   if (output.html)
     result.artifacts.html = await new HtmlReporter(output.reportsDir, 'index.html', language).write(result);
   if (output.flowGraphHtml)

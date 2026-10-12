@@ -500,6 +500,23 @@ Les identifiants de base de données viennent **toujours** de l'environnement (`
 
 Rapports en français : `report: { language: fr }`. Faire échouer la CI à partir d'une gravité : `report.failOnSeverity`.
 
+### L'analyse du run (verdict fonctionnel)
+
+En tête de l'analyse détaillée, la section **Analyse du run** (et `reports/run-analysis.json`, `result.json` → `runAnalysis`) relie ce que les moteurs ont produit et rend un **verdict fonctionnel** :
+
+| Verdict                | Sens                                                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- |
+| `PROVEN`               | tous les flows ont réussi tels quels et la preuve métier est faite (donnée créée, retrouvée, ouverte)    |
+| `PASSED`               | tous les flows ont réussi ; aucune preuve métier n'était à faire                                         |
+| `PASSED_WITH_RECOVERY` | réussi grâce à une récupération (ou un localisateur réparé) confirmée par la suite du parcours           |
+| `PASSED_UNVERIFIED`    | réussi techniquement, mais un effet attendu n'a pas été vérifié, ou une attente enregistrée est douteuse |
+| `DIVERGED`             | le parcours a divergé et aucune récupération sûre ne l'a ramené à son objectif                           |
+| `BLOCKED`              | arrêté par la politique de sécurité, les droits ou la session : jamais contourné                         |
+| `INCONCLUSIVE`         | rien ne permet de conclure (preuve métier partielle, échec sans divergence identifiée)                   |
+| `EXPLORED`             | exploration autonome seulement : le verdict est celui des anomalies                                      |
+
+La **chaîne causale** suit le modèle : intention → observé → première divergence → cause racine → hypothèses → récupération → vérification de l'effet → suite du parcours → dérive → couverture → apprentissage → conseiller d'intelligence → verdict. Chaque maillon cite ses preuves (effets attendus / observés, requêtes, candidats de récupération et raisons du choix, hypothèses pour / contre). Rien n'est redécidé : la divergence vient du moteur cognitif ou du flow, la cause du `DivergenceAnalyzer`, la récupération du `WorkflowHealer`, la dérive de `FlowDrift`, les hypothèses et la couverture du moteur cognitif, l'apport du conseiller de son audit. Les **recommandations** agrègent ce que chaque moteur propose (flow à revoir, donnée de test à régénérer, lacune de couverture, étape à corriger, investigation, connaissance apprise), avec leur origine.
+
 ### L'analyse d'un flow exécuté
 
 Sous le tableau des étapes de chaque flow imposé, sept analyses (aussi dans `result.json`, sous `flows[]`) :

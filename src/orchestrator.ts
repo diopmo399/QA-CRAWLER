@@ -24,6 +24,7 @@ import type { VerificationReport } from './model/verification.js';
 import { isAtLeast, type Issue } from './model/issue.js';
 import { buildResult } from './reporting/result-builder.js';
 import { writeReports } from './reporting/reporter.js';
+import { buildRunAnalysis } from './analysis/run-analysis.js';
 import { redactText, redactUrl } from './security/redactor.js';
 import { ManualCleanup, type TestDataCleanup } from './data/created-data.js';
 import { combineListeners, EngineEventLog } from './logging/engine-log.js';
@@ -533,6 +534,9 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   }
 
   progress.start(RUN_PHASES.reports);
+  // RUN ANALYSIS : relie ce que les moteurs ont produit (flows, divergences, récupérations, hypothèses,
+  // dérive, apprentissage, conseiller) et rend le verdict fonctionnel — jamais une décision recalculée.
+  result.runAnalysis = buildRunAnalysis(result);
   const written = await writeReports(result, config.output, memory.location, config.report.language);
   progress.done(`${String(written.flows.length)} flow(s), ${String(written.issues.length)} issue(s)`);
   const threshold = config.report.failOnSeverity;
