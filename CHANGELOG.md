@@ -43,6 +43,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Corrigé
 
+- Écriture atomique (`writeFileAtomic`) : deux écritures du même fichier en vol dans le même processus
+  (par exemple la base de connaissances de deux missions concurrentes) n'ont plus le même fichier
+  temporaire ; le renommage de la seconde n'échoue plus en `ENOENT`.
 - Windows, Git Bash et WSL : les scripts npm `build`, `clean` et `pack` passent par Node
   (`scripts/clean.mjs`, `scripts/pack.mjs`) au lieu de `rm -rf` / `mkdir -p` ; le test
   d'installation (`test:packaging`) lance `npm.cmd` et `qa-crawler.cmd` sous Windows ;

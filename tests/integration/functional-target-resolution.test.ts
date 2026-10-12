@@ -53,7 +53,7 @@ describe.concurrent('Functional target resolution on replay (real browser)', () 
     variant: string,
     options: { fingerprint?: string; ai?: string; provider?: FakeIntelligenceProvider; extra?: string } = {},
   ): Promise<FlowRunReport> => {
-    const reportsDir = await mkdtemp(path.join(dir, `${variant}-`));
+    const reportsDir = path.join(await mkdtemp(path.join(dir, `${variant}-`)), 'reports');
     lastReportsDir = reportsDir;
     const { config } = parseConfig(
       `mission: { name: functional-${variant} }
@@ -240,7 +240,7 @@ ${FLOW(options.fingerprint ?? RECORDED)}`,
   }, 90_000);
 
   it('the HTML report shows the Target resolution section', async () => {
-    const reportsDir = await mkdtemp(path.join(dir, 'html-'));
+    const reportsDir = path.join(await mkdtemp(path.join(dir, 'html-')), 'reports');
     const { config } = parseConfig(
       `mission: { name: functional-html }
 target: { baseUrl: ${app.url}, startAt: "/?variant=relabel" }

@@ -285,10 +285,11 @@ importables par chemin (`@qa-crawler/core/dist/...`) mais seule la surface de `i
 
 Chaque fichier d'intégration lance un Chromium et des missions complètes ; la suite est limitée par le
 **parallélisme**, pas par la vitesse d'une étape (~0,6 s). Par défaut vitest utilise autant de workers
-que de cœurs (8 au plus) et partage les modules entre fichiers ; les fichiers les plus longs exécutent
-leurs tests en concurrence. `QA_TEST_WORKERS=n` force le nombre de workers (une machine modeste ou un
-antivirus actif : 2 ou 3). En CI, la suite tourne en trois shards parallèles
-(`vitest run --project integration --shard=1/3`).
+que de cœurs (8 au plus) ; les fichiers les plus longs exécutent leurs tests en concurrence, chaque run
+dans son propre dossier (rapports et connaissance). `QA_TEST_WORKERS=n` force le nombre de workers (une
+machine modeste ou un antivirus actif : 2 ou 3). En CI, la suite tourne en trois shards parallèles
+(`vitest run --project integration --shard=1/3`) à deux workers chacun : les tests chronométrés et les
+saisies du recorder sont sensibles à la charge d'un runner à 4 vCPU.
 
 ```bash
 QA_TEST_WORKERS=8 npm run test:integration          # portable 8 cœurs et plus

@@ -33,7 +33,7 @@ describe.concurrent('Table row identity (real browser)', () => {
     expectText?: string,
     progress?: ProgressUpdate[],
   ): Promise<FlowRunReport> => {
-    const reportsDir = await mkdtemp(path.join(dir, 'run-'));
+    const reportsDir = path.join(await mkdtemp(path.join(dir, 'run-')), 'reports');
     const steps = [{ click }, ...(expectText ? [{ expect: { text: expectText } }] : [])];
     const { config } = parseConfig(
       `mission: { name: table-row }

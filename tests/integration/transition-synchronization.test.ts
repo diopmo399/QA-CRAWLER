@@ -29,7 +29,7 @@ describe('Replay transition synchronization (real browser)', () => {
     steps: string,
     options: { sync?: string; logging?: string } = {},
   ): Promise<FlowRunReport> => {
-    const reportsDir = await mkdtemp(path.join(dir, `${variant}-`));
+    const reportsDir = path.join(await mkdtemp(path.join(dir, `${variant}-`)), 'reports');
     lastReportsDir = reportsDir;
     const { config } = parseConfig(
       `mission: { name: transition-${variant} }

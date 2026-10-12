@@ -11,6 +11,8 @@ export interface AtomicWriteFs {
 }
 
 const nodeFs: AtomicWriteFs = { writeFile, rename, rm };
+/** Deux écritures du même fichier en vol dans le même processus n'ont jamais le même fichier temporaire. */
+let sequence = 0;
 
 /**
  * Écrit un fichier sans jamais le laisser à moitié écrit : fichier temporaire puis renommage.
@@ -23,7 +25,8 @@ export async function writeFileAtomic(
   content: string,
   fs: AtomicWriteFs = nodeFs,
 ): Promise<void> {
-  const temporary = `${file}.${process.pid}.tmp`;
+  sequence += 1;
+  const temporary = `${file}.${String(process.pid)}.${String(sequence)}.tmp`;
   await fs.writeFile(temporary, content, 'utf8');
   for (let attempt = 0; ; attempt += 1) {
     try {

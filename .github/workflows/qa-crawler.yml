@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# Two vitest workers per runner (4 vCPU): the timed unit test and the recorder's typing tests are
+# timing-sensitive on a loaded runner. The integration shards keep the parallelism.
+env:
+  QA_TEST_WORKERS: 2
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -61,11 +66,8 @@ jobs:
       - run: npm ci
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-      # Two workers per runner: the recorder's typing tests are timing-sensitive on a loaded runner.
       - name: Integration tests (shard ${{ matrix.shard }}/3)
         run: npx vitest run --project integration --shard=${{ matrix.shard }}/3
-        env:
-          QA_TEST_WORKERS: 2
 
   # The installable packages: build, `npm pack` of @qa-crawler/core and @qa-crawler/cli, content
   # check of the tarballs, then installation of the tarballs into the consumer fixtures

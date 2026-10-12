@@ -26,7 +26,7 @@ describe.concurrent('Semantic target identity (real browser)', () => {
   });
 
   const replay = async (layout: string, steps: string, dnd = 'pointer'): Promise<FlowRunReport> => {
-    const reportsDir = await mkdtemp(path.join(dir, 'replay-'));
+    const reportsDir = path.join(await mkdtemp(path.join(dir, 'replay-')), 'reports');
     const { config } = parseConfig(
       `mission: { name: semantic-identity }
 target: { baseUrl: ${app.url}, startAt: "/?layout=${layout}&dnd=${dnd}" }
