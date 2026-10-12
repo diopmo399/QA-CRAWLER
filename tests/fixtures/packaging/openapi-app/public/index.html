@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Inventory</title></head>
+  <body>
+    <h1>Inventory</h1>
+    <button type="button" id="load">Load items</button>
+    <ul id="items"></ul>
+    <script>
+      document.getElementById('load').addEventListener('click', async () => {
+        const response = await fetch('/api/items');
+        const items = await response.json();
+        const list = document.getElementById('items');
+        list.textContent = '';
+        for (const item of items) {
+          const li = document.createElement('li');
+          li.textContent = item.label;
+          list.appendChild(li);
+        }
+      });
+    </script>
+  </body>
+</html>

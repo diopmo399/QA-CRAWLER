@@ -31,6 +31,17 @@ export default defineConfig({
           hookTimeout: 240_000,
         },
       },
+      {
+        test: {
+          name: 'packaging',
+          include: ['tests/packaging/**/*.test.ts'],
+          environment: 'node',
+          // Build + npm pack + installation du tarball dans chaque fixture : des minutes, en série.
+          testTimeout: 300_000,
+          hookTimeout: 600_000,
+          sequence: { concurrent: false },
+        },
+      },
     ],
   },
 });

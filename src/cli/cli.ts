@@ -1,5 +1,4 @@
 import { navigationLogLines } from '../navigation/navigation-guard.js';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AuthError } from '../auth/authenticator.js';
 import { ConfigError, loadConfigFile } from '../config/config-loader.js';
@@ -16,8 +15,10 @@ import { runDryRunCli } from './dry-run-command.js';
 import { runRecordCli } from './record-command.js';
 import { runSourcesCli } from './sources-command.js';
 import { runManifestCli } from './manifest-command.js';
+import { PROJECT_COMMANDS, PROJECT_HELP, runProjectCli, type ProjectCommand } from './project-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
+import { readCoreVersion, setToolIdentity } from '../tool-identity.js';
 import { terminalProgress } from './progress-renderer.js';
 import { intelligenceActivity } from './intelligence-activity.js';
 import { driftLines, recoveryLines } from '../workflow-healing/explain.js';
@@ -31,7 +32,12 @@ const SEVERITY_COLOR: Record<Severity, (text: string) => string> = {
   CRITICAL: (text) => color.bold(color.red(text)),
 };
 
-export async function runCli(input: string[]): Promise<number> {
+export interface CliOptions {
+  /** La version du package CLI (@qa-crawler/cli), montrée par --version à côté de celle du cœur. */
+  cliVersion?: string;
+}
+
+export async function runCli(input: string[], options: CliOptions = {}): Promise<number> {
   // .env (ou --dotenv) : chargé avant tout, pour toutes les commandes ; le terminal reste prioritaire.
   let argv: string[];
   try {
@@ -50,6 +56,31 @@ export async function runCli(input: string[]): Promise<number> {
     }
     throw error;
   }
+  // COMMANDES DE PROJET (package installé) : la configuration du projet dérive une mission pour les moteurs existants.
+  if (options.cliVersion) setToolIdentity({ cliVersion: options.cliVersion });
+  const runtime = { runMissionCli: (rest: string[]) => runCli(rest, options), runRecordCli };
+  // `explore <mission.yaml>` reste l'usage historique : un fichier de mission désigne la CLI de mission.
+  const legacyMission =
+    argv.some((argument) => /\.ya?ml$/i.test(argument)) || argv.includes('-c') || argv.includes('--config');
+  if (
+    (PROJECT_COMMANDS as readonly string[]).includes(argv[0] ?? '') &&
+    !(argv[0] === 'explore' && legacyMission)
+  )
+    return runProjectCli(argv[0] as ProjectCommand, argv.slice(1), runtime);
+  // RECORD sans mission explicite dans un projet configuré : la mission dérivée du projet.
+  if (
+    argv[0] === 'record' &&
+    !argv.includes('-c') &&
+    !argv.includes('--config') &&
+    !argv.includes('-h') &&
+    !argv.includes('--help')
+  )
+    return runProjectCli('record', argv.slice(1), runtime);
+  if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
+    logger.info(PROJECT_HELP);
+    logger.info(HELP_TEXT);
+    return EXIT.OK;
+  }
   // DRY RUN : une commande à part, ses propres options ; les autres commandes ne changent pas.
   if (argv[0] === 'dry-run') return runDryRunCli(argv.slice(1));
   // RECORD : un humain montre le flow, le crawler en fait un flow imposé.
@@ -58,6 +89,10 @@ export async function runCli(input: string[]): Promise<number> {
   if (argv[0] === 'sources') return runSourcesCli(argv.slice(1));
   // K8S-MANIFEST : un Job / CronJob Kubernetes pour une mission (secrets par référence).
   if (argv[0] === 'k8s-manifest') return runManifestCli(argv.slice(1));
+  if (argv[0] === '--version' || argv[0] === '-v') {
+    logger.info(await versionText(options.cliVersion));
+    return EXIT.OK;
+  }
   let args;
   try {
     args = parseCliArgs(argv);
@@ -75,7 +110,7 @@ export async function runCli(input: string[]): Promise<number> {
     return EXIT.OK;
   }
   if (args.version) {
-    logger.info(await readVersion());
+    logger.info(await versionText(options.cliVersion));
     return EXIT.OK;
   }
   if (!args.configPath) {
@@ -527,15 +562,10 @@ function progressListener(quiet: boolean, debug = false): ExplorationListener {
   };
 }
 
-async function readVersion(): Promise<string> {
-  try {
-    const pkg = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as {
-      version?: string;
-    };
-    return pkg.version ?? 'unknown';
-  } catch {
-    return 'unknown';
-  }
+/** « qa-crawler 0.2.0 (core 0.2.0, node v22.x) » : la version du CLI, celle du cœur et celle de Node. */
+async function versionText(cliVersion: string | undefined): Promise<string> {
+  const core = await readCoreVersion();
+  return `qa-crawler ${cliVersion ?? core} (core ${core}, node ${process.version})`;
 }
 
 /** « PROPOSAL 6, INCONCLUSIVE 2 » (les compteurs nuls sont omis). */

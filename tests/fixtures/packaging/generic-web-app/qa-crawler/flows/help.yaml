@@ -1,0 +1,7 @@
+name: help-page
+startAt: /
+steps:
+  - click:
+      text: Help
+  - expect:
+      url: /help.html

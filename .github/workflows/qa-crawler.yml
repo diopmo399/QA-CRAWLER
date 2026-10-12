@@ -49,6 +49,37 @@ jobs:
       - name: Integration tests (local test site)
         run: npm run test:integration
 
+  # The installable packages: build, `npm pack` of @qa-crawler/core and @qa-crawler/cli, content
+  # check of the tarballs, then installation of the tarballs into the consumer fixtures
+  # (Angular, React, generic, OpenAPI) and `npx qa-crawler init | replay | analyze | test-api`.
+  packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build the packages
+        run: npm run build
+      - name: Check the tarball contents
+        run: npm run pack:check
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install from the tarballs and run the CLI in the fixtures
+        run: npm run test:packaging
+      - name: Pack the tarballs
+        run: mkdir -p dist-packages && npm pack --workspace packages/core --workspace packages/cli --pack-destination ./dist-packages
+      - name: Upload the tarballs
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-crawler-packages
+          path: dist-packages/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # Persistence against real databases: the same contract tests and an end-to-end
   # crawl for PostgreSQL and SQL Server (throwaway service containers, CI-only passwords).
   persistence:

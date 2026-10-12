@@ -6,11 +6,16 @@ export default tseslint.config(
   {
     ignores: [
       'dist/',
+      'dist-packages/',
+      'packages/*/dist/',
+      'packages/*/node_modules/',
+      'packages/core/domain-packs/',
       'node_modules/',
       'reports/',
       'screenshots/',
       'coverage/',
       'tests/fixtures/static-apps/',
+      'tests/fixtures/packaging/*-app/',
     ],
   },
   js.configs.recommended,
@@ -19,7 +24,7 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: {
-          allowDefaultProject: ['eslint.config.js'],
+          allowDefaultProject: ['eslint.config.js', 'scripts/*.mjs', 'packages/cli/bin/*.js'],
         },
         tsconfigRootDir: import.meta.dirname,
       },
@@ -37,8 +42,11 @@ export default tseslint.config(
     },
   },
   {
-    files: ['eslint.config.js'],
+    files: ['eslint.config.js', 'scripts/*.mjs', 'packages/cli/bin/*.js'],
     ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      globals: { process: 'readonly', console: 'readonly', setTimeout: 'readonly', URL: 'readonly' },
+    },
   },
   prettier,
 );

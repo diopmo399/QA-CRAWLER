@@ -1,0 +1,8 @@
+name: broken-link
+description: Deliberately follows a dead link so the run fails (exit code 1).
+startAt: /
+steps:
+  - click:
+      text: Broken link
+  - expect:
+      text: This page exists
