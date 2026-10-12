@@ -20,6 +20,11 @@ const STATUS_COLORS: Record<ReconciliationStatus, string> = {
   ASSERTION_MISMATCH: '#dc2626',
   BLOCKED_BY_POLICY: '#7f1d1d',
   NOT_VERIFIED: '#64748b',
+  MATCHED_SEMANTICALLY: '#0f766e',
+  MATCHED_WITH_TARGET_CHANGE: '#0f766e',
+  MATCHED_WITH_CONTEXT_CHANGE: '#0f766e',
+  MATCHED_AFTER_INSERTION: '#0f766e',
+  DUPLICATE_CANDIDATE: '#b45309',
 };
 
 const SYMBOLS: Record<ReconciliationStatus, string> = {
@@ -34,6 +39,11 @@ const SYMBOLS: Record<ReconciliationStatus, string> = {
   ASSERTION_MISMATCH: '≠',
   BLOCKED_BY_POLICY: '⛔',
   NOT_VERIFIED: '…',
+  MATCHED_SEMANTICALLY: '≃',
+  MATCHED_WITH_TARGET_CHANGE: '≃',
+  MATCHED_WITH_CONTEXT_CHANGE: '≃',
+  MATCHED_AFTER_INSERTION: '≃',
+  DUPLICATE_CANDIDATE: '≈',
 };
 
 const GLOBAL_COLORS: Record<Reconciliation['status'], string> = {
@@ -65,12 +75,14 @@ export function dryRunHtml(input: DryRunReportInput): string {
   const cards = [
     card('Original intents', s.originalIntents),
     card('Matched', s.matched, '#15803d'),
+    card('Matched with variation', s.matchedWithVariation, '#0f766e'),
     card('Inserted', s.inserted, '#2563eb'),
     card('Reordered', s.reordered, '#7c3aed'),
     card('Alternative', s.alternative, '#0891b2'),
     card('Possibly obsolete', s.possiblyObsolete, '#b45309'),
     card('Missing', s.missing, '#b45309'),
     card('Ambiguous', s.ambiguous, '#b45309'),
+    card('Duplicate candidate', s.duplicateCandidate, '#b45309'),
     card('Unreachable', s.unreachable, '#dc2626'),
     card('Assertion mismatch', s.assertionMismatch, '#dc2626'),
     card('Blocked', s.blocked, '#7f1d1d'),
@@ -144,9 +156,22 @@ function row(entry: ReconciliationEntry, index: number): string {
   const explanation = [
     ...entry.reasons.map((reason) => `<li>${esc(reason)}</li>`),
     ...entry.evidence.map((evidence) => `<li class="evidence">${esc(evidence)}</li>`),
+    ...(entry.pairing ? [pairingHtml(entry.pairing)] : []),
   ].join('');
   return `<tr class="dr-row" style="--c:${color}"><td>${String(index + 1)}</td><td>${original}</td><td class="sym">${esc(SYMBOLS[entry.status])}</td><td>${suggested}</td><td><span class="dr-pill">${esc(entry.status)}</span></td><td>${entry.confidence.toFixed(2)}</td></tr>
 <tr class="dr-why"><td></td><td colspan="5"><details><summary>Why</summary><ul>${explanation}</ul></details></td></tr>`;
+}
+
+/** Le score d'appariement sémantique, dimension par dimension, et les autres candidats. */
+function pairingHtml(pairing: NonNullable<ReconciliationEntry['pairing']>): string {
+  const dims = (['target', 'intent', 'entity', 'context', 'sequence', 'effect'] as const)
+    .map((key) => `<span class="dim">${key} <b>${pairing.score[key].toFixed(2)}</b></span>`)
+    .join('');
+  const others = pairing.candidates
+    .slice(1)
+    .map((candidate) => `<li>${esc(candidate.label)} — ${candidate.score.total.toFixed(2)}</li>`)
+    .join('');
+  return `<li class="pairing">pairing score <b>${pairing.score.total.toFixed(2)}</b> ${dims}${others ? `<ul>other candidates: ${others}</ul>` : ''}</li>`;
 }
 
 const CSS = `
@@ -173,4 +198,6 @@ const CSS = `
   ol.plain, ul.plain { margin:0; padding-left:22px; }
   ol.plain li { margin:3px 0; }
   li.review { opacity:.75; }
+  li.pairing .dim { display:inline-block; margin-left:8px; color:var(--muted); }
+  li.pairing ul { margin:4px 0 0; }
 `;

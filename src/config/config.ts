@@ -2374,6 +2374,21 @@ export const scenarioSchema = z
           })
           .strict()
           .default({}),
+        /**
+         * SEMANTIC RECONCILIATION : une étape attendue manquante et une étape observée insérée qui
+         * désignent le même événement fonctionnel (cible, intention, entité, contexte, séquence, effet)
+         * forment une seule entrée (MATCHED_SEMANTICALLY…), jamais MISSING + INSERTED.
+         */
+        semanticPairing: z
+          .object({
+            enabled: z.boolean().default(true),
+            /** Score d'appariement minimal (0..1). */
+            minScore: z.number().min(0).max(1).default(0.7),
+            /** Deux candidats dont les scores diffèrent de moins : DUPLICATE_CANDIDATE, rien n'est choisi. */
+            ambiguityMargin: z.number().min(0).max(1).default(0.1),
+          })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),

@@ -37,6 +37,18 @@ const UI_WORDS: Record<string, RegExp> = {
   NAVIGATE: /\b(go|aller|open|ouvrir|view|voir)\b/i,
 };
 
+/** Les intentions d'interface qu'un libellé exprime (SEARCH, SUBMIT, OPEN_DIALOG…), par ses mots. */
+export function uiIntentsOfLabel(label: string): string[] {
+  return Object.entries(UI_WORDS)
+    .filter(([, words]) => words.test(label))
+    .map(([kind]) => kind);
+}
+
+/** Un libellé qui dit l'abandon (cancel, close, back…). */
+export function saysCancel(label: string): boolean {
+  return CANCEL_WORDS.test(label);
+}
+
 /**
  * REPLAY PLANNER : à une étape, « quelle action à l'écran permet le mieux d'atteindre l'objectif ? »
  *
