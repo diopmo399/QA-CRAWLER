@@ -1,3 +1,11 @@
+import {
+  brandLogo,
+  THEME_BASE_CSS,
+  THEME_BOOT_SCRIPT,
+  THEME_TOGGLE_SCRIPT,
+  themeToggle,
+} from '../reporting/theme.js';
+
 /**
  * LA FENÊTRE « QA-CRAWLER Recorder » : une page autonome (aucune dépendance, aucun réseau), rendue
  * dans un contexte de navigateur SÉPARÉ de l'application enregistrée (jamais capturée, jamais
@@ -22,20 +30,23 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QA-CRAWLER Recorder — ${language === 'fr' ? 'Aperçu' : 'Preview'}</title>
+${THEME_BOOT_SCRIPT}
 <style>${CSS}</style>
 </head>
 <body data-mode="preview">
 <header class="topbar">
-  <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 3.5v17l16-8.5z" fill="currentColor"/></svg></span>
+  ${brandLogo(28)}
   <span class="brand">QA-CRAWLER</span>
   <span class="subtitle" id="subtitle"></span>
   <span class="state small" id="state" aria-live="polite"></span>
   <span class="spacer"></span>
   <span class="actions-top" id="detached-actions"></span>
+  ${themeToggle(language)}
 </header>
 <main class="detached-main"><section class="card preview detached" id="preview-detached" aria-live="polite"></section></main>
 <div id="live" class="sr-only" aria-live="polite"></div>
 <script>${SCRIPT}</script>
+${THEME_TOGGLE_SCRIPT}
 </body>
 </html>`;
   return `<!doctype html>
@@ -44,16 +55,18 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QA-CRAWLER Recorder</title>
+${THEME_BOOT_SCRIPT}
 <style>${CSS}</style>
 </head>
 <body data-mode="main">
 <header class="topbar">
-  <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 3.5v17l16-8.5z" fill="currentColor"/></svg></span>
+  ${brandLogo(28)}
   <span class="brand">QA-CRAWLER</span>
   <span class="subtitle" id="subtitle"></span>
   <span class="spacer"></span>
   <button type="button" class="devtoggle" id="layouttoggle" aria-pressed="false"></button>
   <button type="button" class="devtoggle" id="devtoggle" aria-pressed="false"></button>
+  ${themeToggle(language)}
 </header>
 <section class="statusbar" id="head" aria-label="">
   <h1 id="state" class="state" aria-live="polite"></h1>
@@ -97,28 +110,32 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 <footer class="summarybar" id="summarybar"></footer>
 <div id="live" class="sr-only" aria-live="polite"></div>
 <script>${SCRIPT}</script>
+${THEME_TOGGLE_SCRIPT}
 </body>
 </html>`;
 }
 
 const CSS = `
-:root{
-  --bg:#f5f7fb;--surface:#ffffff;--surface-2:#f8fafc;--fg:#0f172a;--muted:#64748b;--line:#e6e9ef;--line-strong:#d5dae3;
-  --accent:#2563eb;--accent-soft:#eff4ff;--accent-fg:#ffffff;--title:#1e3a8a;--ok-fg:#ffffff;--muted-strong:#475569;--chip-bg:#e2e8f0;--chip-fg:#334155;--ok-text:#15803d;
-  --ok:#16a34a;--ok-soft:#ecfdf3;--warn:#d97706;--warn-soft:#fff7e6;--bad:#dc2626;--bad-soft:#fef2f2;--run:#2563eb;--run-soft:#eff4ff;--idle:#94a3b8;--idle-soft:#f1f5f9;
-  --violet:#7c3aed;--violet-soft:#f3efff;--teal:#0d9488;--teal-soft:#e9fbf8;--orange:#ea580c;--orange-soft:#fff3eb;--pink:#db2777;--pink-soft:#fdf0f7;
-  --radius:12px;--shadow:0 1px 2px rgba(15,23,42,.04),0 2px 10px rgba(15,23,42,.05);--focus:#2563eb;
+:root{color-scheme:light;
+  --bg:#F5F6FA;--surface:#FFFFFF;--surface-2:#F8FAFC;--fg:#111827;--muted:#5B6478;--line:#E4E7EF;--line-strong:#D6DAE4;
+  --accent:#4F46E5;--accent-2:#7C3AED;--accent-soft:#EEF2FF;--accent-fg:#ffffff;--title:#3730A3;--ok-fg:#ffffff;--muted-strong:#374151;--chip-bg:#F1F2F8;--chip-fg:#374151;--ok-text:#15803D;
+  --ok:#16A34A;--ok-soft:#F0FDF4;--warn:#D97706;--warn-soft:#FFFBEB;--bad:#DC2626;--bad-soft:#FEF2F2;--run:#4F46E5;--run-soft:#EEF2FF;--idle:#94A3B8;--idle-soft:#F1F2F8;
+  --violet:#7C3AED;--violet-soft:#F5F3FF;--teal:#0d9488;--teal-soft:#e9fbf8;--orange:#ea580c;--orange-soft:#fff3eb;--pink:#db2777;--pink-soft:#fdf0f7;
+  --radius:14px;--shadow:0 1px 2px rgba(16,24,40,.05);--focus:#4F46E5;
+  /* Le thème partagé (bouton clair / sombre). */
+  --text:var(--fg);--text-2:var(--muted-strong);--nav-hover:#F1F2F8;
 }
-@media (prefers-color-scheme:dark){:root{
-  --bg:#0b0f17;--surface:#121826;--surface-2:#161e2e;--fg:#e5e9f0;--muted:#94a3b8;--line:#222b3b;--line-strong:#2d384b;
-  --accent:#60a5fa;--accent-soft:rgba(96,165,250,.14);--accent-fg:#0b0f17;--title:#bfdbfe;--ok-fg:#052e16;--muted-strong:#cbd5e1;--chip-bg:rgba(148,163,184,.18);--chip-fg:#cbd5e1;--ok-text:#86efac;
-  --ok:#4ade80;--ok-soft:rgba(74,222,128,.12);--warn:#fbbf24;--warn-soft:rgba(251,191,36,.12);--bad:#f87171;--bad-soft:rgba(248,113,113,.12);--run:#60a5fa;--run-soft:rgba(96,165,250,.12);--idle:#64748b;--idle-soft:rgba(100,116,139,.14);
-  --violet:#a78bfa;--violet-soft:rgba(167,139,250,.14);--teal:#2dd4bf;--teal-soft:rgba(45,212,191,.12);--orange:#fb923c;--orange-soft:rgba(251,146,60,.12);--pink:#f472b6;--pink-soft:rgba(244,114,182,.12);
-  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.25);--focus:#93c5fd;
-}}
+:root[data-theme="dark"]{color-scheme:dark;
+  --bg:#080B14;--surface:#111726;--surface-2:#0D1220;--fg:#E6E9F2;--muted:#9AA3B8;--line:#1F2638;--line-strong:#2A3248;
+  --accent:#5B4BD8;--accent-2:#8B5CF6;--accent-soft:#1C1A4A;--accent-fg:#ffffff;--title:#C7D2FE;--ok-fg:#052e16;--muted-strong:#C9CFDD;--chip-bg:#1A2133;--chip-fg:#C9CFDD;--ok-text:#4ADE80;
+  --ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#451A03;--bad:#EF4444;--bad-soft:#450A0A;--run:#8B7CF6;--run-soft:#1C1A4A;--idle:#64748B;--idle-soft:#1A2133;
+  --violet:#A78BFA;--violet-soft:#2E1F6B;--teal:#2dd4bf;--teal-soft:rgba(45,212,191,.12);--orange:#fb923c;--orange-soft:rgba(251,146,60,.12);--pink:#f472b6;--pink-soft:rgba(244,114,182,.12);
+  --shadow:none;--focus:#A5B4FC;--nav-hover:#161C2D;
+}
+${THEME_BASE_CSS}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-body{margin:0;font:13px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;min-height:100vh}
+body{margin:0;font:13px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;min-height:100vh}
 button{font:inherit;cursor:pointer;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);border-radius:8px;padding:6px 12px;min-height:32px;font-weight:600;display:inline-flex;align-items:center;gap:6px;transition:background .15s,border-color .15s,box-shadow .15s}
 button:hover:not(:disabled){border-color:var(--muted)}
 button:disabled{opacity:.45;cursor:not-allowed}
@@ -138,9 +155,10 @@ button.subtle{background:var(--surface-2);border-color:var(--line-strong);color:
 button.primary:hover:not(:disabled),button.success:hover:not(:disabled),button.confirm:hover:not(:disabled){filter:brightness(1.05)}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .spacer{flex:1}
-.topbar{display:flex;align-items:center;gap:10px;padding:10px 18px;background:var(--surface);border-bottom:1px solid var(--line)}
-.logo{color:var(--accent);display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--accent-soft)}
-.brand{font-weight:800;font-size:16px;letter-spacing:.02em}
+.topbar{display:flex;align-items:center;gap:10px;padding:8px 18px;background:var(--surface);border-bottom:1px solid var(--line)}
+.logo{display:block;flex:none}
+.brand{font-weight:800;font-size:17px;letter-spacing:.02em}
+.topbar .qa-theme-toggle{width:38px;height:38px;min-height:0}
 .subtitle{color:var(--muted);padding-left:10px;border-left:1px solid var(--line)}
 .devtoggle{border-radius:8px;font-size:12px;color:var(--muted)}
 .devtoggle[aria-pressed=true]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
@@ -417,7 +435,7 @@ body[data-mode=preview]{background:var(--bg)}
 .lineage .uses{list-style:disc;margin:6px 0 0 18px;padding:0;color:var(--muted-strong);font-size:12px}
 @media (max-width:640px){.irow{grid-template-columns:32px minmax(0,1fr);padding:12px}.irow .iico{width:32px;height:32px;grid-row:1}.irow .iactions{grid-column:2;grid-row:auto;justify-content:flex-start}.irow .full,.iedit{grid-column:2}}
 /* E · MINI-DOCK : une fenêtre étroite et sombre pendant l'enregistrement (la revue reste complète). */
-body.compact{--title:#bfdbfe;--ok-fg:#052e16;--muted-strong:#c4c9d2;--chip-bg:rgba(148,163,184,.18);--chip-fg:#cbd5e1;--ok-text:#86efac;--bg:#16181d;--surface:#1d2027;--surface-2:#232733;--fg:#f2f3f5;--muted:#a9afba;--line:#2b2f37;--line-strong:#3a3f4a;--accent:#93b4ff;--accent-soft:#1d2740;--accent-fg:#16181d;--ok:#4ade80;--ok-soft:rgba(74,222,128,.12);--warn:#fbbf24;--warn-soft:#2a2213;--bad:#f87171;--bad-soft:rgba(248,113,113,.14);--run:#93b4ff;--run-soft:#1d2740;--shadow:none}
+body.compact{--title:#C7D2FE;--ok-fg:#052e16;--muted-strong:#C9CFDD;--chip-bg:#1A2133;--chip-fg:#C9CFDD;--ok-text:#4ADE80;--bg:#080B14;--surface:#111726;--surface-2:#0D1220;--fg:#E6E9F2;--muted:#9AA3B8;--line:#1F2638;--line-strong:#2A3248;--accent:#5B4BD8;--accent-soft:#1C1A4A;--accent-fg:#ffffff;--ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#451A03;--bad:#EF4444;--bad-soft:#450A0A;--run:#8B7CF6;--run-soft:#1C1A4A;--shadow:none;--text:var(--fg);--text-2:var(--muted-strong);--nav-hover:#161C2D}
 body.compact .tabs,body.compact .col-mid,body.compact .col-right,body.compact #quality,body.compact .subtitle,body.compact #devtoggle,body.compact .summarybar,body.compact #tltools,body.compact #checks,body.compact .sep,body.compact #livepill{display:none!important}
 body.compact .grid{grid-template-columns:1fr!important}
 body.compact .statusbar{margin:8px 10px 0}

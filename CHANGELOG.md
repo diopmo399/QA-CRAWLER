@@ -13,6 +13,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   dérive), timeline filtrable et dépliable, lignée des données de test (source, réutilisations, citations ; seule
   une valeur générée est affichée). Thème clair / sombre, recherche, choix du flow, lien depuis `index.html`.
   Configuration `output.overviewHtml` (par défaut `true`).
+- **Thème QA-CRAWLER partagé** (`src/reporting/theme.ts`) : la vue d'ensemble, `index.html`, `flow-graph.html`,
+  le rapport d'enregistrement, le rapport de dry-run et la fenêtre du recorder utilisent les mêmes jetons de
+  couleur, le même logo et un bouton clair / sombre (clair par défaut, choix gardé pour toutes les pages).
 - **Rejeu piloté par intention et état** (`src/replay/`) : `ReplayStateMachine` (position fonctionnelle,
   checkpoints confirmés, dernière action commise, divergence localisée entre le dernier checkpoint
   confirmé et le premier manquant), checkpoints fonctionnels dérivés des effets enregistrés, de

@@ -3,6 +3,15 @@ import path from 'node:path';
 import type { ExplorationResult } from '../model/exploration-result.js';
 import type { FlowStatus } from '../model/flow-run.js';
 import { esc } from './html-common.js';
+import {
+  brandBlock,
+  brandLogo,
+  THEME_BASE_CSS,
+  THEME_BOOT_SCRIPT,
+  THEME_TOGGLE_SCRIPT,
+  THEME_TOKENS_CSS,
+  themeToggle,
+} from './theme.js';
 import { relativeTo } from './html-reporter.js';
 import type { ReportLanguage } from './i18n.js';
 import {
@@ -61,8 +70,6 @@ interface OverviewTexts {
   aiOff: string;
   flow: string;
   issues: string;
-  themeDark: string;
-  themeLight: string;
   kpi: {
     validated: string;
     of: string;
@@ -150,8 +157,6 @@ const FR: OverviewTexts = {
   aiOff: 'LLM (optionnel)',
   flow: 'Flow',
   issues: 'Anomalies',
-  themeDark: 'Thème sombre',
-  themeLight: 'Thème clair',
   kpi: {
     validated: 'Actions validées',
     of: 'sur',
@@ -247,8 +252,6 @@ const EN: OverviewTexts = {
   explorer: 'Intelligent web journey explorer',
   aiOff: 'LLM (optional)',
   issues: 'Issues',
-  themeDark: 'Dark theme',
-  themeLight: 'Light theme',
   kpi: {
     validated: 'Validated actions',
     of: 'of',
@@ -360,12 +363,12 @@ export function renderOverviewHtml(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QA-CRAWLER — ${esc(t.title)} — ${esc(model.mission)}</title>
-<script>try{var s=localStorage.getItem('qa-crawler-theme');if(s==='dark'||s==='light')document.documentElement.dataset.theme=s;}catch(e){}</script>
+${THEME_BOOT_SCRIPT}
 <style>${CSS}</style>
 </head>
 <body>
 <div class="app" id="top">
-${header(model, t, links.html)}
+${header(model, t, links.html, language)}
 <div class="shell">
 ${sidebar(model, t, links)}
 <main class="main">
@@ -395,16 +398,22 @@ ${views}
 </main>
 </div>
 </div>
+${THEME_TOGGLE_SCRIPT}
 <script>${SCRIPT}</script>
 </body>
 </html>
 `;
 }
 
-function header(model: OverviewModel, t: OverviewTexts, fullReport: string | undefined): string {
+function header(
+  model: OverviewModel,
+  t: OverviewTexts,
+  fullReport: string | undefined,
+  language: ReportLanguage,
+): string {
   const issues = `${icon('bell')}${model.issues > 0 ? `<span class="badge-count">${model.issues > 99 ? '99+' : model.issues}</span>` : ''}`;
   return `<header class="topbar">
-  <div class="brand">${logo()}<div><div class="brand-name">QA-CRAWLER</div><div class="brand-tag">${esc(t.tagline)}</div></div></div>
+  ${brandBlock(esc(t.tagline))}
   <label class="search">${icon('search')}<span class="sr">${esc(t.search)}</span><input id="search" type="search" placeholder="${esc(t.search)}" autocomplete="off"><kbd>/</kbd></label>
   <div class="top-actions">
     <span class="mode-chip"><span class="dot"></span>${esc(capitalize(model.mode))}</span>
@@ -413,7 +422,7 @@ function header(model: OverviewModel, t: OverviewTexts, fullReport: string | und
         ? `<a class="icon-button" href="${esc(fullReport)}" aria-label="${esc(t.issues)} (${model.issues})" title="${esc(t.issues)}">${issues}</a>`
         : `<span class="icon-button" role="img" aria-label="${esc(t.issues)} (${model.issues})">${issues}</span>`
     }
-    <button class="icon-button" id="theme-toggle" type="button" aria-label="${esc(t.themeDark)}" data-dark="${esc(t.themeDark)}" data-light="${esc(t.themeLight)}">${icon('moon', 'only-light')}${icon('sun', 'only-dark')}</button>
+    ${themeToggle(language)}
     <span class="mission"><span class="avatar" aria-hidden="true">${esc(initials(model.mission))}</span><span><span class="mission-name">${esc(model.mission)}</span><span class="mission-host">${esc(host(model.baseUrl))}</span></span></span>
   </div>
 </header>`;
@@ -460,7 +469,7 @@ function sidebar(
   ${item(links.flowGraphHtml, 'graph', t.flowGraph)}
   ${files ? `<div class="nav-group">${esc(t.files)}</div>${files}` : ''}
   <div class="side-foot"><div class="side-card">
-    <div class="side-card-head">${logo(22)}<div><strong>QA-CRAWLER</strong><div class="muted small">${model.version ? `v${esc(model.version)}` : ''}</div></div></div>
+    <div class="side-card-head">${brandLogo(22)}<div><strong>QA-CRAWLER</strong><div class="muted small">${model.version ? `v${esc(model.version)}` : ''}</div></div></div>
     <p class="muted small">${esc(t.explorer)}</p>
     <svg class="wave" viewBox="0 0 200 50" aria-hidden="true"><path d="M0 38 C40 30 60 46 100 36 S160 10 200 6" fill="none" stroke="var(--purple)" stroke-width="2"/><path d="M0 44 C50 38 80 48 120 40 S170 26 200 24" fill="none" stroke="var(--blue)" stroke-width="1.5" opacity=".7"/></svg>
     <ul class="stack">${stack.map((entry) => `<li>${esc(entry)}</li>`).join('')}</ul>
@@ -871,16 +880,10 @@ function initials(value: string): string {
   return ((words[0]?.[0] ?? 'Q') + (words[1]?.[0] ?? words[0]?.[1] ?? 'A')).toUpperCase();
 }
 
-function logo(size = 36): string {
-  return `<svg class="logo" width="${size}" height="${size}" viewBox="0 0 36 36" aria-hidden="true"><defs><linearGradient id="qa-logo-${size}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3B82F6"/><stop offset="1" stop-color="#8B5CF6"/></linearGradient></defs><circle cx="17" cy="17" r="11" fill="none" stroke="url(#qa-logo-${size})" stroke-width="6"/><path d="M24 24l7 7" stroke="#8B5CF6" stroke-width="6" stroke-linecap="round"/></svg>`;
-}
-
 const ICONS: Record<string, string> = {
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   'search-big': '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
   bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
-  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
-  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   chevron: '<path d="M6 9l6 6 6-6"/>',
   home: '<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   flows:
@@ -931,24 +934,8 @@ function icon(name: string, className = ''): string {
 }
 
 const CSS = `
-:root{color-scheme:light;
---bg:#F5F6FA;--chrome:#FFFFFF;--surface:#FFFFFF;--surface-2:#F8FAFC;--border:#E4E7EF;--border-strong:#D6DAE4;--text:#111827;--text-2:#374151;--muted:#5B6478;
---accent:#4F46E5;--accent-2:#7C3AED;--accent-ink:#4338CA;--nav-hover:#F1F2F8;--shadow:0 1px 2px rgba(16,24,40,.05);
---ok:#16A34A;--ok-bg:#F0FDF4;--ok-border:#BBF7D0;--ok-soft:#DCFCE7;--ok-ink:#15803D;
---warn:#F59E0B;--warn-bg:#FFFBEB;--warn-border:#F59E0B;--warn-soft:#FEF3C7;--warn-ink:#92400E;
---purple:#8B5CF6;--purple-bg:#F5F3FF;--purple-border:#C4B5FD;--purple-soft:#EDE9FE;--purple-ink:#5B21B6;
---blue:#3B82F6;--blue-bg:#EFF6FF;--blue-border:#93C5FD;--blue-soft:#DBEAFE;--blue-ink:#1D4ED8;
---red:#DC2626;--red-bg:#FEF2F2;--red-border:#FECACA;--red-soft:#FEE2E2;--red-ink:#B91C1C;
---grey-soft:#F1F2F8;--grey-ink:#4B5563;--link:#94A3B8}
-:root[data-theme="dark"]{color-scheme:dark;
---bg:#080B14;--chrome:#0A0E19;--surface:#111726;--surface-2:#0D1220;--border:#1F2638;--border-strong:#2A3248;--text:#E6E9F2;--text-2:#C9CFDD;--muted:#9AA3B8;
---accent:#5B4BD8;--accent-2:#8B5CF6;--accent-ink:#A5B4FC;--nav-hover:#161C2D;--shadow:none;
---ok:#22C55E;--ok-bg:#0F1A1B;--ok-border:#1E4B33;--ok-soft:#0E3B22;--ok-ink:#4ADE80;
---warn:#F59E0B;--warn-bg:#1E1610;--warn-border:#B45309;--warn-soft:#451A03;--warn-ink:#FCD34D;
---purple:#8B5CF6;--purple-bg:#17163A;--purple-border:#6D5BD0;--purple-soft:#2E1F6B;--purple-ink:#DDD6FE;
---blue:#3B82F6;--blue-bg:#0F1B3A;--blue-border:#1D4ED8;--blue-soft:#1E3A8A;--blue-ink:#BFDBFE;
---red:#EF4444;--red-bg:#2A1215;--red-border:#7F1D1D;--red-soft:#450A0A;--red-ink:#FCA5A5;
---grey-soft:#1A2133;--grey-ink:#A9B1C4;--link:#64748B}
+${THEME_TOKENS_CSS}
+${THEME_BASE_CSS}
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
@@ -960,13 +947,10 @@ code,.value code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,mono
 .muted{color:var(--muted)}.small{font-size:12px}
 [hidden]{display:none!important}
 .icon{width:18px;height:18px;flex:none}
-.only-dark{display:none}:root[data-theme="dark"] .only-dark{display:block}:root[data-theme="dark"] .only-light{display:none}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 /* top bar */
 .topbar{display:flex;flex-wrap:wrap;align-items:center;gap:14px 24px;padding:12px 24px;background:var(--chrome);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
-.brand{display:flex;align-items:center;gap:12px;min-width:210px}
-.brand-name{font-weight:800;font-size:20px;letter-spacing:.02em}
-.brand-tag{font-size:12px;color:var(--muted)}
+.topbar .qa-brand{min-width:210px}
 .search{flex:1 1 260px;max-width:440px;margin:0 auto;display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--muted)}
 .search input{flex:1;min-width:0;border:0;background:transparent;outline:none;color:var(--text);font-size:13px}
 .search:focus-within{border-color:var(--accent)}
@@ -1185,10 +1169,6 @@ h1{margin:0;font-size:26px;font-weight:800}
 const SCRIPT = `
 (function(){
   var root=document.documentElement;
-  var toggle=document.getElementById('theme-toggle');
-  function syncToggle(){if(!toggle)return;var dark=root.dataset.theme==='dark';toggle.setAttribute('aria-label',dark?toggle.dataset.light:toggle.dataset.dark);toggle.setAttribute('aria-pressed',String(dark));}
-  syncToggle();
-  if(toggle)toggle.addEventListener('click',function(){root.dataset.theme=root.dataset.theme==='dark'?'light':'dark';try{localStorage.setItem('qa-crawler-theme',root.dataset.theme);}catch(e){}syncToggle();});
   var pad=function(n){return String(n).padStart(2,'0');};
   document.querySelectorAll('[data-time]').forEach(function(el){var d=new Date(el.dataset.time);if(!isNaN(d))el.textContent=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());});
   var lang=root.lang||'en';

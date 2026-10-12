@@ -228,3 +228,46 @@ describe('Overview — HTML', () => {
     expect(formatDuration(114_000)).toBe('01:54');
   });
 });
+
+describe('Shared QA-CRAWLER theme', () => {
+  it('gives every page the brand and the light / dark toggle', async () => {
+    const { renderHtml } = await import('../../src/reporting/html-reporter.js');
+    const { renderFlowGraphHtml } = await import('../../src/reporting/flow-graph-html-reporter.js');
+    const { recorderPanelHtml } = await import('../../src/recording/recorder-panel-html.js');
+    const full = {
+      ...result,
+      states: [],
+      transitions: [],
+      browserInteractions: [],
+      issues: [],
+      stopReason: 'flows-only',
+      decisionEngine: 'rules',
+      settings: {},
+      stats: {
+        ...result.stats,
+        transitions: 0,
+        backtracks: 0,
+        maxDepth: 0,
+        flowsPassed: 0,
+        flowsFailed: 1,
+        issuesBySeverity: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0 },
+        issuesByType: {},
+        actionsByClassification: {},
+        formsFound: 0,
+        interactionsByType: {},
+        interactionsByStatus: {},
+      },
+    } as unknown as ExplorationResult;
+    for (const page of [
+      renderOverviewHtml(full, (file) => file, 'fr'),
+      renderHtml(full, (file) => file, 'fr'),
+      renderFlowGraphHtml(full, 'fr'),
+      recorderPanelHtml('fr'),
+      recorderPanelHtml('en', 'preview'),
+    ]) {
+      expect(page).toContain('class="qa-theme-toggle"');
+      expect(page).toContain('qa-crawler-theme');
+      expect(page).toContain(':root[data-theme="dark"]');
+    }
+  });
+});

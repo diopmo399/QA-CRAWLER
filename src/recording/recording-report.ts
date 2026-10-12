@@ -1,5 +1,12 @@
 import { dataLineage } from './test-data-binding.js';
-import { BASE_CSS, card, esc } from '../reporting/html-common.js';
+import {
+  BASE_CSS,
+  card,
+  esc,
+  REPORT_THEME_HEAD,
+  REPORT_THEME_SCRIPT,
+  reportBrandBar,
+} from '../reporting/html-common.js';
 import { describeStep } from '../config/flow-schema.js';
 import type { RawRecordedEvent, SemanticRecordedAction } from './model.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
@@ -104,10 +111,12 @@ export function recordingHtml(input: {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(flow.name)} — recording</title>
+${REPORT_THEME_HEAD}
 <style>${BASE_CSS}${CSS}</style></head>
 <body>
 <header class="rec-head"><div class="wrap">
-  <div class="kicker">QA-CRAWLER · HUMAN FLOW RECORDER · ${esc(session.id)}</div>
+  ${reportBrandBar('Human flow recorder', 'en')}
+  <div class="kicker">${esc(session.id)}</div>
   <h1>${esc(flow.name)}</h1>
   <div class="status" style="--c:${REPLAY_COLORS[replay.status]}">${esc(replay.status)}</div>
   <p class="sub">A human demonstration turned into an imposed flow: raw events → semantic actions → clean flow (flow.yaml and .feature from the same model). Typed values are never recorded.</p>
@@ -152,7 +161,7 @@ export function recordingHtml(input: {
   ${input.audit ? recordingAuditHtml(input.audit) : ''}
   <section><h2>Files</h2><ul class="plain">${files}</ul></section>
   <p class="muted">Generated ${esc(input.generatedAt)}</p>
-</main></body></html>
+</main>${REPORT_THEME_SCRIPT}</body></html>
 `;
 }
 
@@ -194,11 +203,11 @@ function traceRow(
 
 const CSS = `
   .wrap { max-width:1180px; margin:0 auto; padding:0 20px; }
-  .rec-head { background:linear-gradient(135deg,var(--head-from),var(--head-to)); color:#fff; padding:28px 0 22px; margin-bottom:22px; }
+  .rec-head { background:var(--chrome); color:var(--text); border-bottom:1px solid var(--border); padding:18px 0 22px; margin-bottom:22px; }
   .rec-head h1 { margin:6px 0 10px; font-size:26px; }
-  .rec-head .kicker { font-size:12px; letter-spacing:.08em; opacity:.8; }
-  .rec-head .sub { opacity:.85; margin:10px 0 0; }
-  .status { display:inline-block; background:var(--c); color:#fff; font-weight:700; padding:4px 12px; border-radius:999px; }
+  .rec-head .kicker { font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--purple-ink); }
+  .rec-head .sub { color:var(--muted); margin:10px 0 0; }
+  .rec-head .status { background:var(--c); padding:4px 12px; border-radius:999px; }
   section { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px 18px; margin-bottom:18px; }
   section h2 { margin:0 0 12px; font-size:17px; }
   section h3 { margin:0 0 6px; font-size:14px; }
