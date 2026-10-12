@@ -268,7 +268,7 @@ export function renderHtml(
       ${result.baseline ? `<span class="chip"><span>${esc(t.baselineTexts.baseline)}</span> ${esc(baselineName(result.baseline))}</span>` : ''}
       ${result.learnedBaseline ? `<span class="chip"><span>${esc(t.baselineTexts.learned)}</span> ${esc(baselineName(result.learnedBaseline))}</span>` : ''}
     </div>
-    <nav class="links">${result.artifacts.flowGraphHtml ? `<a class="primary" href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
+    <nav class="links">${result.artifacts.overviewHtml ? `<a class="primary" href="${esc(href(result.artifacts.overviewHtml))}">${esc(t.overviewLink)}</a>` : ''}${result.artifacts.flowGraphHtml ? `<a class="primary" href="${esc(href(result.artifacts.flowGraphHtml))}">${esc(t.flowGraphLink)}</a>` : ''}${result.artifacts.json ? `<a href="${esc(href(result.artifacts.json))}">result.json</a>` : ''}${result.artifacts.flowGraph ? `<a href="${esc(href(result.artifacts.flowGraph))}">flow-graph.json</a>` : ''}${result.artifacts.engineLog ? `<a href="${esc(href(result.artifacts.engineLog))}">${esc(q.engineLog)}</a>` : ''}</nav>
   </div>
 </header>
 <div class="layout">

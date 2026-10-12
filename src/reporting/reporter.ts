@@ -6,6 +6,7 @@ import { FlowGraphHtmlReporter } from './flow-graph-html-reporter.js';
 import { HtmlReporter } from './html-reporter.js';
 import type { ReportLanguage } from './i18n.js';
 import { JsonReporter } from './json-reporter.js';
+import { OverviewHtmlReporter } from './overview-html-reporter.js';
 
 /** Écrit un résultat d'exploration quelque part ; renvoie le chemin du fichier produit. */
 export interface Reporter {
@@ -30,6 +31,7 @@ export async function writeReports(
     result.artifacts.flowGraphHtml = path.join(output.reportsDir, 'flow-graph.html');
   }
   if (output.json) result.artifacts.json = path.join(output.reportsDir, 'result.json');
+  if (output.overviewHtml) result.artifacts.overviewHtml = path.join(output.reportsDir, 'overview.html');
   if (result.flowDiff) {
     result.artifacts.flowDiff = path.join(output.reportsDir, 'flow-diff.json');
     await writeFile(result.artifacts.flowDiff, `${JSON.stringify(result.flowDiff, null, 2)}\n`, 'utf8');
@@ -71,6 +73,8 @@ export async function writeReports(
     result.artifacts.html = await new HtmlReporter(output.reportsDir, 'index.html', language).write(result);
   if (output.flowGraphHtml)
     await new FlowGraphHtmlReporter(output.reportsDir, 'flow-graph.html', language).write(result);
+  if (output.overviewHtml)
+    await new OverviewHtmlReporter(output.reportsDir, 'overview.html', language).write(result);
   if (output.json) await new JsonReporter(output.reportsDir).write(result);
   return result;
 }

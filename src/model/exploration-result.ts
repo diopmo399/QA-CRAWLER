@@ -172,6 +172,8 @@ export interface ExplorationResult {
     html?: string;
     flowGraph?: string;
     flowGraphHtml?: string;
+    /** reports/overview.html : la vue d'ensemble du run. */
+    overviewHtml?: string;
     screenshotsDir?: string;
     flowDiff?: string;
     baseline?: string;
