@@ -15,7 +15,7 @@ import { startTaskListApp, type TaskListApp } from '../fixtures/task-list-app.js
  * valeurs (row: colonne → valeur), jamais par sa position : tri inverse, nouveaux éléments en tête,
  * pagination, grille ARIA / Material — toujours la même tâche ; une ligne ambiguë n'est jamais choisie.
  */
-describe('Table row identity (real browser)', () => {
+describe.concurrent('Table row identity (real browser)', () => {
   let app: TaskListApp;
   let dir: string;
 
@@ -31,8 +31,9 @@ describe('Table row identity (real browser)', () => {
     query: string,
     click: Record<string, unknown>,
     expectText?: string,
+    progress?: ProgressUpdate[],
   ): Promise<FlowRunReport> => {
-    const reportsDir = await mkdtemp(path.join(dir, 'run-'));
+    const reportsDir = path.join(await mkdtemp(path.join(dir, 'run-')), 'reports');
     const steps = [{ click }, ...(expectText ? [{ expect: { text: expectText } }] : [])];
     const { config } = parseConfig(
       `mission: { name: table-row }
@@ -48,11 +49,10 @@ flows:
     );
     const { result } = await runMission(config, {
       env: {},
-      onProgress: (update) => runProgress.push(update),
+      onProgress: (update) => progress?.push(update),
     });
     return result.flows[0] as FlowRunReport;
   };
-  const runProgress: ProgressUpdate[] = [];
   const describeRun = (report: FlowRunReport): string =>
     JSON.stringify(report.steps.map((step) => [step.description, step.status, step.reason]));
   const KEY = { text: 'Process request', row: { 'Business key': '2935' } };
@@ -67,11 +67,12 @@ flows:
   ])(
     'the row of business key 2935 is always the one processed — %s',
     async (_label, query) => {
-      const report = await run(query, KEY, 'Task 2935');
+      const runProgress: ProgressUpdate[] = [];
+      const report = await run(query, KEY, 'Task 2935', runProgress);
       expect(report.status, describeRun(report)).toBe('PASSED');
       expect(report.steps[0]?.description).toContain('in row {Business key=2935}');
       // Après le dernier flow, le run dit ce qu'il fait jusqu'aux rapports.
-      const finishing = runProgress.splice(0);
+      const finishing = runProgress.filter((update) => update.task === 'Finishing the run');
       expect(finishing.map((update) => update.label)).toEqual([
         'Closing the browser',
         'Saving the memory',
