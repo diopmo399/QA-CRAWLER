@@ -576,7 +576,7 @@ export interface RecordedCss {
   confidence?: number;
 }
 
-interface StepCommon {
+export interface StepCommon {
   name?: string;
   effects?: StepEffects;
   fingerprint?: TargetFingerprint;

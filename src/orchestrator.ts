@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ProgressTracker, type ProgressSink } from './progress/progress.js';
+import { readCoreVersion, toolIdentity } from './tool-identity.js';
 import { EXPLORER_CLOSING_PHASES } from './explorer/flow-explorer.js';
 import { effectiveMode } from './ai/factory.js';
 import { BaselineStore, runIdOf, type Baseline, type BaselineMetadata } from './baseline/baseline-store.js';
@@ -618,6 +619,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   // RUN ANALYSIS : relie ce que les moteurs ont produit (flows, divergences, récupérations, hypothèses,
   // dérive, apprentissage, conseiller) et rend le verdict fonctionnel — jamais une décision recalculée.
   result.runAnalysis = buildRunAnalysis(result);
+  result.tool = await toolIdentity();
   // QA PLATFORM : le rapport du run de workflow (statut global, anomalies catégorisées, graphe observé, couverture).
   const workflowAnalysis = buildRunWorkflowAnalysis(result);
   result.workflowAnalysis = workflowAnalysis;
@@ -957,14 +959,8 @@ function knownActionsOf(baseline: Baseline): Set<string> {
 }
 
 async function crawlerVersion(): Promise<{ crawlerVersion?: string }> {
-  try {
-    const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
-      version?: string;
-    };
-    return pkg.version ? { crawlerVersion: pkg.version } : {};
-  } catch {
-    return {};
-  }
+  const version = await readCoreVersion();
+  return version === 'unknown' ? {} : { crawlerVersion: version };
 }
 
 /**

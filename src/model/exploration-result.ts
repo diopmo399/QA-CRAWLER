@@ -30,6 +30,7 @@ import type { DetectedPattern } from '../patterns/ui-pattern.js';
 import type { BlockedWrite } from '../policies/write-guard.js';
 import type { CognitiveSummary } from '../cognitive/cognitive-engine.js';
 import type { AiSummary } from '../ai/audit-trail.js';
+import type { ToolIdentity } from '../tool-identity.js';
 
 /** Pourquoi l'exploration s'est terminée. */
 export type StopReason =
@@ -103,6 +104,8 @@ export interface ExplorationResult {
   verification?: VerificationReport;
   /** Id du run, porté par les données qu'il a créées (QA-CRAWLER-<runId>). */
   runId?: string;
+  /** Versions de l'outil qui a produit ce run (cœur, CLI, projet analysé, Node). */
+  tool?: ToolIdentity;
   /** Formulaires trouvés et remplis, avec leurs cas de validation (jamais une valeur sensible). */
   formReports?: FormReport[];
   /** Tentatives de récupération, branches abandonnées, circuits ouverts. */

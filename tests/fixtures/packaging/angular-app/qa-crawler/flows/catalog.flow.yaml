@@ -1,0 +1,10 @@
+name: open-catalog
+description: The catalog page lists the products.
+startAt: /
+steps:
+  - click:
+      text: Products
+  - expect:
+      url: /catalog.html
+  - expect:
+      text: Lamp

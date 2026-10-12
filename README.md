@@ -25,6 +25,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 
 > **Nouveau ?** Le [guide d'utilisation](docs/GUIDE.md) présente chaque fonctionnalité par besoin, avec les différentes manières de l'utiliser et des exemples prêts à copier.
 
+- [Installation dans votre projet (paquet npm)](#installation-dans-votre-projet-paquet-npm)
 - [Démarrage rapide](#démarrage-rapide)
 - [Fonctionnement](#fonctionnement)
 - [Mission (YAML)](#mission-yaml)
@@ -61,6 +62,201 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Feuille de route](#feuille-de-route)
 
 ---
+
+## Installation dans votre projet (paquet npm)
+
+QA-Crawler s'installe comme une dépendance de développement de l'application à tester : aucun clone
+du dépôt, aucune installation globale, aucun Chromium embarqué. Deux paquets, publiés ensemble avec
+la même version (SemVer) :
+
+| Paquet             | Rôle                                                                                                                          |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `@qa-crawler/core` | les moteurs (enregistrement, rejeu, exploration, raisonnement, récupération, OpenAPI, visuel, persistance, analyses) et l'API |
+| `@qa-crawler/cli`  | la façade `qa-crawler` : elle ne contient aucune logique métier, elle appelle `@qa-crawler/core/cli`                          |
+
+### Installation
+
+```bash
+npm install -D @qa-crawler/cli          # entraîne @qa-crawler/core
+npx playwright install chromium         # une fois, si le projet n'a pas déjà Playwright + Chromium
+npx qa-crawler --version                # qa-crawler 0.2.0 (core 0.2.0, node v22.x)
+```
+
+Node.js **20 ou plus récent** (le provider de persistance SQLite utilise `node:sqlite`, livré avec
+Node 22.5+ ; sans lui, les providers `memory`, `file`, PostgreSQL et SQL Server restent disponibles).
+Le registre n'est pas codé en dur : publiez et installez depuis le registre de votre choix
+(`npm publish --registry <url>` ou `.npmrc`). `npm exec qa-crawler -- --help` fonctionne aussi bien
+que `npx qa-crawler`.
+
+**Dépendances optionnelles, réellement optionnelles** : `pg`, `mssql` et `@github/copilot-sdk` sont
+déclarées `optionalDependencies` et chargées à la demande (`await import`). Avec
+`npm install --omit=optional`, tout fonctionne ; seule l'activation du provider concerné signale son
+absence (`PERSISTENCE_UNAVAILABLE`, `AI_UNAVAILABLE`) et replie sur le déterministe.
+
+### Démarrage rapide (Quick Start)
+
+```bash
+npx qa-crawler init                       # détecte le projet, écrit qa-crawler.config.yaml et qa-crawler/
+npx qa-crawler replay                     # rejoue les flows de qa-crawler/flows/ (YAML et .feature)
+npx qa-crawler analyze                    # flows + analyses QA complètes → qa-reports/run.json (PASS/FAIL)
+npx qa-crawler explore --max-states 20    # exploration autonome
+npx qa-crawler record --url http://localhost:4200/users --name "Create user"
+npx qa-crawler test-api                   # tests dérivés du contrat OpenAPI
+npx qa-crawler reproduce                  # rejoue le chemin minimal de l'anomalie la plus grave
+npx qa-crawler generate-tests             # specs Playwright dans qa-crawler/generated-tests/
+```
+
+Toutes les commandes acceptent `--base-url`, `--headless` / `--headed`, `--reports-dir`,
+`--flow <nom>` (répétable), `--playwright-config`, `--cwd`, `-c <config>` ainsi que les options de
+mission (`--intelligence`, `--ai-provider`, `--max-states`, `--max-actions`, `--no-persistence`,
+`--memory`, `--quiet`). `npx qa-crawler <commande> --help` les détaille.
+
+### Init
+
+`qa-crawler init` inspecte le projet : cadre (Angular, React, Vue, autre) et port de développement
+habituel, TypeScript, Playwright (dépendance, version, `playwright.config.*`), contrat OpenAPI
+(`openapi.yaml|json`, `swagger.*`, `api/`, `docs/`), source maps (`dist/`, `build/`), Git, GitHub,
+CI (GitHub Actions, GitLab, Azure, Jenkins), Docker, Kubernetes, gestionnaire de paquets. Il écrit :
+
+```
+qa-crawler.config.yaml          la configuration du projet (clé racine qaCrawler:)
+qa-crawler/
+  flows/                        flows YAML et scénarios .feature (un exemple est fourni)
+  actors/                       sessions réutilisables des acteurs (storageState — jamais commis)
+  test-data/  baselines/  recordings/  knowledge/  memory/
+qa-reports/                     rapports et artefacts de chaque run
+```
+
+et complète `.gitignore` (`qa-reports/`, `qa-crawler/actors/*.json`, `memory/`, `knowledge/`,
+`baselines/`, `recordings/`, `.derived/`). Un fichier existant n'est **jamais** écrasé en silence :
+`init` le garde et le dit ; `--force` régénère la configuration seulement ; `--no-example` omet
+le flow d'exemple ; `--base-url` fixe l'URL.
+
+### Configuration (`qa-crawler.config.yaml`)
+
+```yaml
+qaCrawler:
+  application: { baseUrl: http://localhost:4200, startAt: /, name: my-app, framework: angular }
+  browser: { headless: true }
+  playwright: { config: ./playwright.config.ts } # baseURL, headless, viewport repris
+  recording: { enabled: true }
+  replay: { enabled: true }
+  exploration: { enabled: true }
+  analysis: { enabled: true }
+  api: { openapi: ./openapi.yaml, testing: true }
+  visual: { enabled: false }
+  staticAnalysis: { enabled: false, source: . }
+  actors:
+    - name: primary
+      primary: true
+      auth: { type: none } # none | form | http | sso (alias oidc) + storageState / reuseSession
+  intelligence: { enabled: false, mode: OFF, provider: copilot }
+  persistence: { enabled: true, provider: file } # memory | file | database (+ clés du provider)
+  reporting: { format: [html, json], language: en, failOnSeverity: ERROR, dir: qa-reports }
+  paths:
+    {
+      flows: qa-crawler/flows,
+      actors: qa-crawler/actors,
+      knowledge: qa-crawler/knowledge,
+      memory: qa-crawler/memory,
+    }
+  mission: {} # toute clé d'une mission (safety, goals, oracles, gherkin, …) : fusionnée en dernier
+```
+
+**Priorité** : ligne de commande > variables d'environnement (`QA_BASE_URL`, `QA_INTELLIGENCE_MODE`,
+`QA_PERSISTENCE_*`, …) > `qa-crawler.config.yaml` > valeurs par défaut. La configuration de projet
+est traduite en mission (le format YAML historique, inchangé) dans `qa-crawler/.derived/<commande>.mission.yaml`,
+puis validée et exécutée par le chargeur et l'orchestrateur existants : aucune option de mission
+n'est perdue, et `qaCrawler.mission` permet d'en régler n'importe laquelle. Les chemins relatifs
+sont résolus depuis le dossier du fichier de configuration, jamais depuis le répertoire courant.
+Les identifiants restent dans l'environnement (`usernameEnv` / `passwordEnv`) et les sessions dans
+des fichiers `storageState` ignorés par Git : rien de sensible dans la configuration ni dans les rapports.
+
+### Playwright : géré ou réutilisé
+
+- **Mode géré** (défaut) : `@qa-crawler/core` dépend de `playwright` ; les navigateurs sont ceux de
+  `npx playwright install chromium` (ou `PLAYWRIGHT_BROWSERS_PATH`). Rien n'est embarqué dans le paquet.
+- **Réutilisation du projet** : avec `playwright.config` (détecté par `init`, ou `--playwright-config`),
+  `baseURL`, `headless`, `viewport` et `storageState` du bloc `use` sont repris dans la mission dérivée,
+  pour que les tests Playwright du projet et QA-Crawler regardent la même application. Un fichier
+  `.ts` est lu textuellement (sans l'exécuter) sauf si Node sait importer le TypeScript ; un `.js|.mjs|.cjs`
+  est importé.
+
+### Codes de sortie (CI/CD)
+
+| Code | Signification                                                                                       |
+| ---- | --------------------------------------------------------------------------------------------------- |
+| 0    | succès (`analyze` : statut global `PASS` ; `reproduce` : anomalie reproduite, ou rien à reproduire) |
+| 1    | échec QA (anomalies au niveau `failOnSeverity`, statut global `FAIL`, reproduction non concluante)  |
+| 2    | configuration : pas de `qa-crawler.config.yaml`, flow inconnu, option invalide, anomalie inconnue   |
+| 3    | infrastructure : navigateur, réseau, exception                                                      |
+
+```yaml
+# GitHub Actions, dans le projet consommateur
+- run: npm ci
+- run: npx playwright install --with-deps chromium
+- run: npx qa-crawler analyze --base-url ${{ vars.APP_URL }}
+- uses: actions/upload-artifact@v4
+  if: always()
+  with: { name: qa-reports, path: qa-reports/ }
+```
+
+Chaque `result.json` / `run.json` porte `tool: { coreVersion, cliVersion, projectVersion, node }`
+et le `runId`, pour comparer deux rapports produits par des versions différentes.
+
+### Artefacts
+
+Tout est écrit **dans le projet utilisateur** : `qa-reports/` (`index.html`, `result.json`,
+`run.json`, `run-analysis.json`, `anomalies.json`, `workflow-graph.json`, `functional-coverage.json`,
+`api-analysis.json`, `reproductions.json`, captures…), `qa-crawler/knowledge/knowledge-base.json`,
+`qa-crawler/memory/` (provider `file`), `qa-crawler/baselines/`, `qa-crawler/recordings/`,
+`qa-crawler/generated-tests/`, `qa-reports/reproductions/<id>/`.
+
+### API programmatique et extension
+
+```ts
+import { runMission, loadConfigFile, detectProject, initProject, loadProjectConfig } from '@qa-crawler/core';
+import type {
+  IntelligenceProvider,
+  PersistenceProvider,
+  VisualComparator,
+  Authenticator,
+} from '@qa-crawler/core';
+```
+
+`@qa-crawler/core` expose la mission (chargeur, orchestrateur), l'enregistrement, le dry run, la
+génération de flows, toutes les analyses de la plateforme et les interfaces d'extension :
+`IntelligenceProvider` (IA), `PersistenceProvider` (stockage), `VisualComparator`, `Authenticator`,
+`DecisionEngine`, `TestDataProvider`, `PullRequestReporter`. Les modules internes restent
+importables par chemin (`@qa-crawler/core/dist/...`) mais seule la surface de `index.ts` est stable.
+
+### Dépannage (Troubleshooting)
+
+| Symptôme                                                         | Cause et remède                                                                                             |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `No qa-crawler.config.yaml found` (code 2)                       | lancer `npx qa-crawler init`, ou passer `--config <fichier>` / `--cwd <dossier>`                            |
+| `browserType.launch: Executable doesn't exist`                   | `npx playwright install chromium`, ou `PLAYWRIGHT_BROWSERS_PATH` vers des navigateurs existants             |
+| `Unknown flow "x"`                                               | le nom vient de `name:` dans `qa-crawler/flows/` ; `.feature` : `Feature: Scenario`                         |
+| `PERSISTENCE_UNAVAILABLE` / `AI_UNAVAILABLE`                     | provider optionnel absent (`--omit=optional`) : installer `pg` / `mssql` / `@github/copilot-sdk`            |
+| `MODULE_TYPELESS_PACKAGE_JSON` à la lecture du playwright.config | avertissement de Node sur le projet consommateur, sans effet ; ajoutez `"type": "module"` si souhaité       |
+| rapports au mauvais endroit                                      | `reporting.dir` est relatif au fichier de configuration ; `--reports-dir` est relatif au répertoire courant |
+
+### Développement du paquet et publication
+
+```bash
+npm run build          # tsc → packages/core/dist (+ domain-packs, README copiés)
+npm run pack:check     # le tarball ne contient que le runtime (ni src, ni tests, ni scénarios)
+npm run test:packaging # npm pack + installation des tarballs dans tests/fixtures/packaging/* + commandes
+npm run release -- patch|minor|major|x.y.z [--dry-run]   # bump des 3 package.json, CHANGELOG, build, pack:check
+npm run pack           # tarballs dans dist-packages/
+npm publish --workspace packages/core --registry <url>   # puis packages/cli
+```
+
+Le dépôt reste **ESM** (`"type": "module"`, `NodeNext`) : les deux paquets sont ESM, consommables
+par `import` et par `npx`. Les sources restent dans `src/` ; `packages/core` reçoit la sortie
+compilée et `packages/cli` ne contient que `bin/qa-crawler.js`. Voir
+[docs/MIGRATION_TO_PACKAGE.md](docs/MIGRATION_TO_PACKAGE.md) pour le passage d'une utilisation par
+clone (`npm run qa -- scenarios/x.yaml`) au paquet, et [CHANGELOG.md](CHANGELOG.md).
 
 ## Démarrage rapide
 
@@ -2009,6 +2205,11 @@ L'image est prête pour un `Job` ou un `CronJob` :
 6. build
 7. installation de Chromium et tests d'intégration sur les applications de test fournies
 
+Un job `packaging` construit les deux paquets, vérifie le contenu des tarballs (`pack:check`),
+les installe dans les projets d'exemple de `tests/fixtures/packaging/` et y exécute
+`npx qa-crawler init | replay | analyze | test-api | generate-tests` (voir
+[Installation dans votre projet](#installation-dans-votre-projet-paquet-npm)).
+
 Un job optionnel explore un vrai environnement et publie les rapports. Il s'exécute quand la variable de dépôt `TARGET_URL` est définie, ou lors d'un lancement manuel.
 
 ## Architecture
@@ -2126,7 +2327,10 @@ npm run lint             # ESLint, typescript-eslint strict type-checked
 npm run format:check     # Prettier
 npm test                 # tests unitaires (Vitest), sans navigateur
 npm run test:integration # vrai Chromium sur les applications de test fournies
-npm run build            # dist/
+npm run build            # packages/core/dist (+ domain-packs, README) — le cœur publiable
+npm run pack:check       # contenu des tarballs @qa-crawler/core et @qa-crawler/cli
+npm run test:packaging   # npm pack + installation des tarballs dans les fixtures + commandes du CLI
+npm start -- --help      # le bin du paquet, depuis le dépôt (node packages/cli/bin/qa-crawler.js)
 ```
 
 **Les tests unitaires** couvrent :

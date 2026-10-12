@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Board</title></head>
+  <body>
+    <div id="root">
+      <h1>Board</h1>
+      <form id="note-form">
+        <label for="title">Title</label><input id="title" name="title" />
+        <button type="submit">Add</button>
+      </form>
+      <ul id="notes"></ul>
+      <a href="/history.html">History</a>
+    </div>
+    <script>
+      document.getElementById('note-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const value = document.getElementById('title').value.trim();
+        if (!value) return;
+        const item = document.createElement('li');
+        item.textContent = value;
+        document.getElementById('notes').appendChild(item);
+        document.getElementById('title').value = '';
+      });
+    </script>
+  </body>
+</html>

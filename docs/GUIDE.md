@@ -38,11 +38,11 @@ npx playwright install chromium
 
 **Trois manières de lancer :**
 
-| Manière            | Commande                                                           | Quand                       |
-| ------------------ | ------------------------------------------------------------------ | --------------------------- |
-| Depuis les sources | `npm run qa -- scenarios/ma-mission.yaml`                          | sur ton poste, au quotidien |
-| Version compilée   | `npm run build` puis `node dist/main.js scenarios/ma-mission.yaml` | serveur, script, sans `tsx` |
-| Image Docker       | `docker run --rm qa-crawler --config scenarios/ma-mission.yaml`    | CI, Kubernetes / OpenShift  |
+| Manière            | Commande                                                                                                                                                           | Quand                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- |
+| Depuis les sources | `npm run qa -- scenarios/ma-mission.yaml`                                                                                                                          | sur ton poste, au quotidien |
+| Version compilée   | `npm run build` puis `npm start -- scenarios/ma-mission.yaml` (ou, installé dans un projet, `npx qa-crawler …`, voir le README « Installation dans votre projet ») | serveur, script, sans `tsx` |
+| Image Docker       | `docker run --rm qa-crawler --config scenarios/ma-mission.yaml`                                                                                                    | CI, Kubernetes / OpenShift  |
 
 **Essayer sans ton application** (applications de démo fournies) :
 

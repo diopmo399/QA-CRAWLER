@@ -1,0 +1,19 @@
+flows:
+  - name: add-note
+    startAt: /
+    steps:
+      - fill:
+          label: Title
+          value: Weekly groceries
+      - click:
+          text: Add
+        allow: MUTATION
+      - expect:
+          text: Weekly groceries
+  - name: history
+    startAt: /
+    steps:
+      - click:
+          text: History
+      - expect:
+          url: /history.html

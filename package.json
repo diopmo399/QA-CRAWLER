@@ -1,21 +1,17 @@
 {
-  "name": "qa-crawler",
-  "version": "0.1.0",
-  "description": "Deterministic, container-ready QA crawler for web applications (Playwright + Chromium headless, YAML scenarios).",
+  "name": "qa-crawler-monorepo",
+  "version": "0.2.0",
+  "description": "QA-Crawler monorepo: @qa-crawler/core (engines) and @qa-crawler/cli (npx qa-crawler). Development runs from the root; packages are built into packages/.",
   "license": "UNLICENSED",
   "private": true,
   "type": "module",
-  "main": "dist/main.js",
-  "bin": {
-    "qa-crawler": "dist/main.js"
-  },
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "qa": "tsx src/main.ts",
-    "start": "node dist/main.js",
-    "build": "tsc -p tsconfig.build.json",
+    "start": "node packages/cli/bin/qa-crawler.js",
+    "build": "rm -rf packages/core/dist && tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
@@ -24,7 +20,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "demo:server": "tsx tests/fixtures/serve-demo.ts",
-    "clean": "rm -rf dist reports/*.json reports/*.html screenshots/*.png"
+    "clean": "rm -rf packages/core/dist dist-packages reports/*.json reports/*.html screenshots/*.png",
+    "pack:check": "node scripts/pack-check.mjs",
+    "pack": "npm run build && mkdir -p dist-packages && npm pack --workspace packages/core --workspace packages/cli --pack-destination ./dist-packages",
+    "release": "node scripts/release.mjs",
+    "test:packaging": "vitest run --project packaging"
   },
   "dependencies": {
     "@cucumber/gherkin": "42.0.1",
@@ -50,5 +50,9 @@
     "@github/copilot-sdk": "1.0.16",
     "mssql": "12.0.0",
     "pg": "8.16.3"
-  }
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/cli"
+  ]
 }

@@ -1,0 +1,7 @@
+{
+  "name": "inventory-api-ui",
+  "version": "1.3.2",
+  "private": true,
+  "dependencies": { "vue": "^3.5.0" },
+  "devDependencies": { "vite": "^5.4.0" }
+}

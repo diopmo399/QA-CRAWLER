@@ -1,0 +1,46 @@
+openapi: 3.0.3
+info:
+  title: Inventory API
+  version: 1.0.0
+servers:
+  - url: /api
+paths:
+  /items:
+    get:
+      operationId: listItems
+      summary: List the items
+      responses:
+        '200':
+          description: The items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Item'
+  /items/{id}:
+    get:
+      operationId: getItem
+      summary: One item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The item
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        '404':
+          description: Unknown item
+components:
+  schemas:
+    Item:
+      type: object
+      required: [id, label]
+      properties:
+        id: { type: integer }
+        label: { type: string }

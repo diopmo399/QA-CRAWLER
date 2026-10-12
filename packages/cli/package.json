@@ -1,0 +1,27 @@
+{
+  "name": "@qa-crawler/cli",
+  "version": "0.2.0",
+  "description": "QA-Crawler command line: npx qa-crawler init | record | replay | explore | analyze | test-api | reproduce | generate-tests.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "qa-crawler": "./bin/qa-crawler.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@qa-crawler/core": "0.2.0"
+  },
+  "keywords": [
+    "qa",
+    "playwright",
+    "cli",
+    "testing",
+    "e2e"
+  ]
+}

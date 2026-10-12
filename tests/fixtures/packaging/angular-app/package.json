@@ -1,0 +1,8 @@
+{
+  "name": "angular-shop",
+  "version": "2.4.0",
+  "private": true,
+  "scripts": { "start": "ng serve" },
+  "dependencies": { "@angular/core": "^18.2.0", "@angular/router": "^18.2.0" },
+  "devDependencies": { "@playwright/test": "^1.56.0", "typescript": "^5.6.0" }
+}

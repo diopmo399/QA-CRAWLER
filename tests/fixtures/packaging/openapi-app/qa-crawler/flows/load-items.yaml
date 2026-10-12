@@ -1,0 +1,7 @@
+name: load-items
+startAt: /
+steps:
+  - click:
+      text: Load items
+  - expect:
+      text: Bolt
