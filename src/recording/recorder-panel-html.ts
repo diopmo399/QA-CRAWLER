@@ -26,7 +26,7 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 </head>
 <body data-mode="preview">
 <header class="topbar">
-  <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 3.5v17l16-8.5z" fill="currentColor"/></svg></span>
+  <span class="logo" aria-hidden="true"><svg viewBox="0 0 36 36" width="30" height="30"><circle cx="17" cy="17" r="11" fill="none" stroke="#4F46E5" stroke-width="6"/><path d="M24 24l7 7" stroke="#7C3AED" stroke-width="6" stroke-linecap="round"/></svg></span>
   <span class="brand">QA-CRAWLER</span>
   <span class="subtitle" id="subtitle"></span>
   <span class="state small" id="state" aria-live="polite"></span>
@@ -48,7 +48,7 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
 </head>
 <body data-mode="main">
 <header class="topbar">
-  <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 3.5v17l16-8.5z" fill="currentColor"/></svg></span>
+  <span class="logo" aria-hidden="true"><svg viewBox="0 0 36 36" width="30" height="30"><circle cx="17" cy="17" r="11" fill="none" stroke="#4F46E5" stroke-width="6"/><path d="M24 24l7 7" stroke="#7C3AED" stroke-width="6" stroke-linecap="round"/></svg></span>
   <span class="brand">QA-CRAWLER</span>
   <span class="subtitle" id="subtitle"></span>
   <span class="spacer"></span>
@@ -63,6 +63,7 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
   <span class="count" id="count"></span>
   <span class="livesearch" id="livesearch" role="status" hidden></span>
   <span class="spacer"></span>
+  <span class="alert" id="headalert" role="status" hidden></span>
   <div class="controls" id="controls" role="toolbar"></div>
 </section>
 <div class="progress" id="progress" hidden><div class="bar"><span></span></div><p></p></div>
@@ -79,9 +80,8 @@ export function recorderPanelHtml(language: 'fr' | 'en', mode: 'main' | 'preview
     <div class="grid" id="grid">
       <div class="col-left">
         <section class="card journey" aria-labelledby="timeline-title">
-          <header class="card-head"><h2 id="timeline-title"></h2><span class="badge" id="journey-count"></span></header>
+          <header class="card-head"><h2 id="timeline-title"></h2><span class="badge" id="journey-count"></span><div class="tl-tools" id="tltools"><label class="tl-search"><span class="sr-only" id="tlsearch-label"></span><input type="search" id="tlsearch" aria-labelledby="tlsearch-label"></label><button type="button" id="tlattention" aria-pressed="false"></button></div></header>
           <p class="status-line" id="summary" role="status"></p>
-          <div class="tl-tools" id="tltools"><label class="tl-search"><span class="sr-only" id="tlsearch-label"></span><input type="search" id="tlsearch" aria-labelledby="tlsearch-label"></label><button type="button" id="tlattention" aria-pressed="false"></button></div>
           <ol id="timeline" class="timeline"></ol>
           <div id="checks"></div>
         </section>
@@ -139,7 +139,7 @@ button.primary:hover:not(:disabled),button.success:hover:not(:disabled),button.c
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .spacer{flex:1}
 .topbar{display:flex;align-items:center;gap:14px;padding:10px 24px;background:var(--surface);border-bottom:1px solid var(--line)}
-.logo{color:var(--accent);display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--accent-soft)}
+.logo{display:grid;place-items:center;width:30px;height:30px}
 .brand{font-weight:700;font-size:17px;letter-spacing:.02em}
 .subtitle{color:var(--muted);padding-left:10px;border-left:1px solid var(--line)}
 .devtoggle{border-radius:8px;font-size:12px;color:var(--muted)}
@@ -156,6 +156,7 @@ button.primary:hover:not(:disabled),button.success:hover:not(:disabled),button.c
 .live.off{color:var(--muted)}
 .live:empty{display:none}
 .sep{width:1px;height:22px;background:var(--line)}
+.alert{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;background:var(--warn-soft);border:1px solid var(--warn);color:var(--warn);font-size:13px;font-weight:600}
 .timer{font:500 20px/1 ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
 .count{font-size:13px;color:var(--muted)}
 .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -183,28 +184,29 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
   body[data-mode=main] main{overflow:auto}
 }
 @media (min-width:780px){
-  .grid{grid-template-columns:minmax(340px,1.1fr) minmax(0,1fr)}
-  .grid>.col-mid,.grid>.col-right{position:sticky;top:0}
+  .grid{grid-template-columns:minmax(0,1fr) minmax(320px,400px)}
+  .grid>.col-left{grid-column:1;grid-row:1/3}
+  .grid>.col-right{grid-column:2;grid-row:1}
+  .grid>.col-mid{grid-column:2;grid-row:2;display:block}
 }
-@media (min-width:1180px){.grid{grid-template-columns:minmax(340px,420px) minmax(0,1fr) minmax(300px,380px)}.col-mid{display:block}}
 .col-left{display:grid;gap:12px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
-.card-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
 .card-head h2,.card h2{margin:0;font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px}
 .card-head .actions{margin-left:auto;display:flex;gap:6px}
-.badge{margin-left:auto;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;background:var(--ok-soft);color:var(--ok)}
-.status-line{margin:0 0 10px;font-size:12px;font-weight:600;border-radius:8px;padding:6px 10px;background:var(--surface-2);color:var(--muted)}
+.badge{font-size:12px;font-weight:700;border-radius:6px;padding:2px 8px;background:var(--accent-soft);color:var(--title);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.status-line{margin:0 0 12px;font-size:12px;font-weight:600;border-radius:8px;padding:6px 10px;background:var(--surface-2);color:var(--muted)}
 .status-line.ok{background:var(--ok-soft);color:var(--ok)} .status-line.warn{background:var(--warn-soft);color:var(--warn)} .status-line.run{background:var(--run-soft);color:var(--run)}
 .timeline{list-style:none;margin:0;padding:0}
-.timeline>li{position:relative;padding:0 0 8px 30px}
-.timeline>li::before{content:"";position:absolute;left:10px;top:24px;bottom:-4px;width:2px;background:var(--line)}
+.timeline>li{position:relative;padding:0 0 8px 0}
+.timeline>li::before{display:none}
 .timeline>li:last-child::before{display:none}
-.item{position:relative;display:flex;align-items:flex-start;gap:12px;width:100%;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-weight:400}
+.item{position:relative;display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-weight:400}
 .item:hover:not(:disabled){border-color:var(--line-strong);background:var(--surface-2)}
 .item[aria-current=true]{border-color:var(--accent);box-shadow:0 0 0 3px var(--ring)}
-.dot{position:absolute;left:-30px;top:12px;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;color:#fff;background:var(--idle);box-shadow:0 0 0 3px var(--bg)}
+.dot{flex:none;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;background:var(--idle)}
 .CONFIRMED .dot{background:var(--ok)} .PENDING .dot{background:var(--run)} .AMBIGUOUS .dot{background:var(--warn)} .FAILED .dot{background:var(--bad)} .UNVERIFIED .dot{background:var(--surface);color:transparent;border:2px solid var(--idle)}
-.num{color:var(--muted);font:600 11px/1.9 ui-monospace,SFMono-Regular,Menlo,monospace;min-width:14px}
+.num{color:var(--muted);font:500 12px/1.9 ui-monospace,SFMono-Regular,Menlo,monospace;min-width:22px}
 .kind{flex:none;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
 .kind svg{width:18px;height:18px}
 .kind.k-fill{background:var(--teal-soft);color:var(--teal)} .kind.k-check,.kind.k-uncheck,.kind.k-choose{background:var(--violet-soft);color:var(--violet)}
@@ -214,7 +216,7 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .pill{display:flex;width:max-content;align-items:center;gap:4px;margin-top:4px;font-size:12px;font-weight:600;border-radius:6px;padding:0;background:transparent;color:var(--muted)}
 .CONFIRMED .pill{color:var(--ok)} .PENDING .pill{color:var(--run)} .AMBIGUOUS .pill{color:var(--warn)} .FAILED .pill{color:var(--bad)}
 .PENDING .pill::after{content:"";width:9px;height:9px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite}
-.chev{color:var(--muted);align-self:center;font-size:16px}
+.chev{color:var(--idle);align-self:center;font-size:18px}
 .tech{display:block;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);white-space:pre-wrap;margin-top:6px;background:var(--surface-2);border-radius:6px;padding:6px 8px;font-weight:400}
 .attention{margin:8px 0 0;padding:10px 12px;border-radius:10px;background:var(--warn-soft)}
 .attention p{margin:0 0 8px}
@@ -253,12 +255,12 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .selnote .i{width:26px;height:26px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;font-weight:800;flex:none}
 .selnote b{display:block;color:var(--ok)}
 .selnote.warn{background:var(--warn-soft)} .selnote.warn .i{background:var(--warn)} .selnote.warn b{color:var(--warn)}
-.details .step{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;background:var(--accent-soft);color:var(--accent);margin-bottom:8px}
+.details .step{display:inline-block;font:500 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);margin-bottom:10px}
 .details .hero{display:flex;gap:12px;align-items:center;padding:12px;border:0;border-radius:10px;background:var(--surface-2);margin-bottom:14px}
 .details .hero b{display:block;font-size:14px}
 .details .hero span{color:var(--muted);font-size:12px}
-.details h3{margin:12px 0 6px;font-size:12px;font-weight:700}
-.details dl{display:grid;grid-template-columns:max-content 1fr;gap:5px 14px;margin:0;font-size:12px;border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.details h3{margin:14px 0 8px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.details dl{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px 12px;margin:0;font-size:13px;border:0;padding:0}
 .details dt{color:var(--muted)} .details dd{margin:0;word-break:break-word;display:flex;align-items:center;gap:6px}
 .details dd code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg)}
 .details dd .chip{font-size:11px;font-weight:700;border-radius:6px;padding:1px 8px;background:var(--accent-soft);color:var(--accent)}
@@ -319,7 +321,8 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .sub{color:var(--muted);font-size:12px}
 @media (max-width:640px){
   .subtitle{display:none}.topbar{padding:8px 12px}
-  .statusbar,.tabs,.progress{margin-left:12px;margin-right:12px}.statusbar{padding:12px 14px}.state{font-size:16px}
+  .statusbar,.tabs,.progress{margin-left:12px;margin-right:12px}.statusbar{padding:12px 14px}.state{font-size:16px}.alert{flex-basis:100%}
+  .tl-tools{margin-left:0;flex-basis:100%}.tl-search input{width:auto}
   .statusbar{gap:8px}.statusbar .sep{display:none}.controls{flex-basis:100%}
   .tabs{overflow-x:auto}.tabs [role=tab]{padding:8px 10px;white-space:nowrap}
   main{padding:12px}
@@ -350,9 +353,9 @@ body[data-mode=preview]{background:var(--bg)}
 .livesearch::before{content:"⌕";font-size:14px}
 .timeline>li.group{padding:10px 0 4px 0;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .timeline>li.group::before{display:none}
-.tl-tools{display:flex;gap:8px;align-items:center;margin:0 0 10px}
+.tl-tools{display:flex;gap:8px;align-items:center;margin-left:auto}
 .tl-search{flex:1;display:flex}
-.tl-search input{flex:1;min-width:0;font:inherit;border:1px solid var(--line-strong);border-radius:8px;padding:6px 10px;background:var(--surface);color:var(--fg)}
+.tl-search input{flex:1;min-width:0;width:200px;min-height:36px;font:inherit;font-size:13px;border:1px solid var(--line-strong);border-radius:8px;padding:6px 12px;background:var(--surface);color:var(--fg)}
 #tlattention[aria-pressed=true]{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
 /* B · ÉTAPES MÉTIER (revue) : des cartes numérotées au-dessus du détail des actions. */
 .story{display:grid;gap:10px;margin-bottom:12px}
@@ -447,6 +450,7 @@ const SCRIPT = `
       failedN: function (n) { return n + ' cible' + (n > 1 ? 's' : '') + ' non retrouvée' + (n > 1 ? 's' : ''); },
       pendingN: function (n) { return n + ' en cours de validation'; },
       attention: function (n) { return n + ' nécessite' + (n > 1 ? 'nt' : '') + ' votre attention'; },
+      toCheck: function (n) { return n + ' action' + (n > 1 ? 's' : '') + ' à vérifier avant le rejeu'; },
       ambiguousTitle: '⚠ Action ambiguë', matches: function (n) { return n + ' éléments correspondent.'; },
       resolve: 'Résoudre', ignore: 'Ignorer', confirm: 'Confirmer', cancel: 'Annuler',
       validate: '✓ Valider cet élément', show: '👁 Montrer dans la page', touchedTag: 'touché',
@@ -499,6 +503,7 @@ const SCRIPT = `
       failedN: function (n) { return n + ' target' + (n === 1 ? '' : 's') + ' not found again'; },
       pendingN: function (n) { return n + ' being validated'; },
       attention: function (n) { return n + ' need' + (n === 1 ? 's' : '') + ' your attention'; },
+      toCheck: function (n) { return n + ' action' + (n === 1 ? '' : 's') + ' to check before the replay'; },
       ambiguousTitle: '⚠ Ambiguous action', matches: function (n) { return n + ' elements match.'; },
       resolve: 'Resolve', ignore: 'Ignore', confirm: 'Confirm', cancel: 'Cancel',
       validate: '✓ Validate this element', show: '👁 Show in the page', touchedTag: 'touched',
@@ -689,6 +694,9 @@ const SCRIPT = `
   function renderSummary() {
     var s = state.summary, el = $('summary');
     $('journey-count').textContent = s.confirmed + ' / ' + s.actions;
+    var alert = $('headalert');
+    alert.hidden = !(s.attention > 0 && state.phase === 'REVIEW');
+    alert.textContent = s.attention > 0 ? '⚠ ' + T.toCheck(s.attention) : '';
     if (s.actions === 0) { el.className = 'status-line'; el.textContent = T.empty; return; }
     var problems = s.attention > 0;
     el.className = 'status-line ' + (problems ? 'warn' : s.pending > 0 ? 'run' : 'ok');
