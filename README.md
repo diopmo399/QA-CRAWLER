@@ -33,6 +33,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Scénarios Gherkin](#scénarios-gherkin)
 - [Dry Run : confronter un scénario à l'application](#dry-run--confronter-un-scénario-à-lapplication)
 - [Enregistrer un flow montré par un humain (record)](#enregistrer-un-flow-montré-par-un-humain-record)
+- [Intention fonctionnelle des actions](#intention-fonctionnelle-des-actions)
 - [Analyse statique : le code comme source de preuves](#analyse-statique--le-code-comme-source-de-preuves)
 - [Authentification](#authentification)
 - [Interactions navigateur](#interactions-navigateur)
@@ -1001,6 +1002,22 @@ Un bandeau **● RECORDING** (Checkpoint, Pause, Stop) s'affiche dans la page ; 
 
 **Progression** : après Stop (et après le dernier flow d'un run), une barre animée dit ce que le système fait : finalisation, flow, audits, rejeu, rapports ; le bandeau du navigateur affiche « ⏳ FINALIZING » pendant la finalisation de la capture. Détails : [docs/HUMAN_FLOW_RECORDER.md](docs/HUMAN_FLOW_RECORDER.md#progression-après-larrêt).
 
+## Intention fonctionnelle des actions
+
+Chaque action enregistrée reçoit une **intention à trois niveaux** — le geste (`CLICK`), l'intention
+d'interface (`SEARCH`, `OPEN_DIALOG`, `SELECT_ITEM`…) et l'intention fonctionnelle **opération × entité**
+(`SEARCH_ITEM`, `SUBMIT_REQUEST`) — résolue non pas d'après le seul élément mais d'après son contexte
+(formulaire, section, dialogue, ligne), les actions voisines (les champs posés avant, ce que la suite
+rend disponible), les effets observés (lignes qui changent, dialogue ouvert, route), le réseau (lecture
+d'une collection, écriture, changement d'état métier), le cycle de vie des entités, les décisions humaines
+et la bibliothèque d'intentions apprise. Chaque intention porte ses **preuves**, ses **candidats classés**
+et un statut : `CONFIRMED`, `PROBABLE`, `AMBIGUOUS` (deux rivaux trop proches, jamais le premier passé le
+poteau) ou `UNKNOWN` (aucune preuve, jamais une intention inventée). L'action brute n'est jamais remplacée :
+l'intention est écrite à côté (`functionalIntent:` dans le YAML, `functional-intents.json`, rapport,
+modèle de l'application) et sert au self-healing, aux rapports et au raisonnement. Une intention
+`AMBIGUOUS` peut être soumise au conseiller IA, qui choisit **parmi** les candidats déterministes.
+Détails : [docs/FUNCTIONAL_INTENT.md](docs/FUNCTIONAL_INTENT.md).
+
 ## Analyse statique : le code comme source de preuves
 
 Un champ **pauvre** du DOM — `<input type="text" formControlName="contact">`, sans libellé, sans `aria-label`, sans `placeholder`, sans `name` utile — ne dit pas ce qu'il attend. Le code, lui, le dit :
@@ -1595,6 +1612,8 @@ flows:
 | `CONTRACT`            | oracle contrat : statut HTTP non déclaré par l'OpenAPI             | WARNING                     |
 | `ACCESSIBILITY`       | vérifications d'accessibilité de base, parcours clavier            | INFO / WARNING              |
 | `AUTHORIZATION`       | règle d'autorisation en échec, acteur impossible à connecter       | ERROR / WARNING             |
+
+**Détails d'une anomalie.** Quand la source en fournit, chaque anomalie porte un bloc `details` (dans `result.json`) que le rapport affiche sous le message, replié par défaut : le nom de l'erreur, la source (`fichier:ligne:colonne`), la **pile d'appels complète** d'une exception JavaScript, le texte complet d'un `console.error` sur plusieurs lignes, et pour une réponse HTTP le type de ressource et quelques en-têtes de diagnostic (`content-type`, `content-length`, `server`, `x-request-id`, `x-correlation-id`, `x-trace-id`, `retry-after`, `www-authenticate`, `location`). Jamais de cookie, d'en-tête d'authentification ni de corps ; les détails sont masqués et bornés comme le message (30 cadres, 4000 caractères).
 
 Chaque anomalie est rattachée à son contexte pour pouvoir la reproduire :
 

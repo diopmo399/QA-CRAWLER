@@ -122,3 +122,39 @@ export {
 
 // La CLI, par programme.
 export { runCli, EXIT, type CliOptions } from './cli/cli.js';
+
+// Functional intent : element + contexte + action + état → intention fonctionnelle (3 niveaux, preuves, candidats).
+export {
+  PHYSICAL_ACTIONS,
+  UI_INTENTS,
+  FUNCTIONAL_OPERATIONS,
+  DEFAULT_INTENT_THRESHOLDS,
+  functionalName,
+  generalize,
+  genericOf,
+  annotationOf,
+  type FunctionalIntent,
+  type IntentCandidate,
+  type IntentEvidence,
+  type IntentEvidenceType,
+  type IntentStatus,
+  type IntentThresholds,
+  type StepIntentAnnotation,
+  type PhysicalAction,
+  type UiIntent,
+  type FunctionalOperation,
+} from './intent/model.js';
+export {
+  collectIntentEvidence,
+  historyKeyOf,
+  type IntentEvidenceInput,
+  type IntentHistoryHint,
+} from './intent/evidence.js';
+export { resolveFunctionalIntent, adoptCandidate } from './intent/resolver.js';
+export {
+  resolveRecordingIntents,
+  annotateFlowSteps,
+  type RecordingIntents,
+  type RecordingIntentSummary,
+} from './intent/resolve-recording.js';
+export { arbitrateIntents, type ArbitratedIntents } from './intent/ai-arbiter.js';

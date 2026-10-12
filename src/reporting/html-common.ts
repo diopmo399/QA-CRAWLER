@@ -181,6 +181,16 @@ export const BASE_CSS = `
   tbody tr:last-child > td { border-bottom:none; }
   tbody tr:hover > td { background:var(--soft); }
   td.wrap { word-break:break-word; }
+  .issue-details { margin-top:4px; }
+  .issue-details > summary { cursor:pointer; color:var(--muted); font-size:12px; list-style:none; display:inline-flex; align-items:center; gap:6px; }
+  .issue-details > summary::-webkit-details-marker { display:none; }
+  .issue-details > summary::before { content:''; width:5px; height:5px; border-right:1.5px solid var(--muted); border-bottom:1.5px solid var(--muted); transform:rotate(-45deg); transition:transform .15s; flex:none; }
+  .issue-details[open] > summary::before { transform:rotate(45deg); }
+  .issue-details dl { display:grid; grid-template-columns:max-content 1fr; gap:2px 12px; margin:6px 0 0; font-size:12px; }
+  .issue-details dt { color:var(--muted); white-space:nowrap; }
+  .issue-details dd { margin:0; word-break:break-all; }
+  .issue-details .label { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; margin:8px 0 2px; }
+  .issue-details pre.stack { margin:0; padding:8px 10px; background:var(--soft); border-radius:6px; font-size:11px; line-height:1.45; white-space:pre-wrap; word-break:break-all; max-height:260px; overflow:auto; }
 
   .sev { display:inline-block; padding:1px 9px; border-radius:999px; color:#fff; font-size:11px; font-weight:700; letter-spacing:.02em; }
   .pill { display:inline-block; padding:1px 8px; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:11px; font-weight:600; margin:1px; letter-spacing:.02em; }

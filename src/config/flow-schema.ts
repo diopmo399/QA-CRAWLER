@@ -326,10 +326,26 @@ const fingerprintSchema = z
   })
   .strict();
 
+const functionalIntentSchema = z
+  .object({
+    name: nonEmpty,
+    status: z.enum(['CONFIRMED', 'PROBABLE', 'AMBIGUOUS', 'UNKNOWN']),
+    confidence: z.number().min(0).max(1),
+    ui: nonEmpty.optional(),
+    operation: nonEmpty.optional(),
+    entity: nonEmpty.optional(),
+    alternatives: z.array(nonEmpty).optional(),
+    context: z.record(nonEmpty).optional(),
+    expectedEffects: z.array(nonEmpty).optional(),
+  })
+  .strict();
+
 const stepSchema = z
   .object({
     /** Courte description affichée dans les rapports (par défaut : générée à partir de l'étape). */
     name: nonEmpty.optional(),
+    /** L'intention fonctionnelle enregistrée (informative : jamais exécutée, jamais une raison d'échec). */
+    functionalIntent: functionalIntentSchema.optional(),
     /** Effets attendus de l'action (ACTION EFFECT VERIFIER). */
     effects: effectsSchema.optional(),
     /** Empreinte de la cible (TARGET FINGERPRINT MATCHER, LOCATOR HEALING). */
@@ -386,6 +402,7 @@ const stepSchema = z
       ...(step.name !== undefined ? { name: step.name } : {}),
       ...(step.effects !== undefined ? { effects: step.effects } : {}),
       ...(step.fingerprint !== undefined ? { fingerprint: step.fingerprint } : {}),
+      ...(step.functionalIntent !== undefined ? { functionalIntent: step.functionalIntent } : {}),
       allow: step.allow,
       optional: step.optional,
       ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
@@ -576,10 +593,28 @@ export interface RecordedCss {
   confidence?: number;
 }
 
+/**
+ * L'INTENTION FONCTIONNELLE d'une étape enregistrée (couche informative : nom, statut, confiance,
+ * alternatives, contexte, effets attendus). Jamais exécutée, jamais une raison d'échec : l'étape brute
+ * reste la vérité ; l'intention explique, documente et sert au self-healing et aux rapports.
+ */
+export interface StepFunctionalIntent {
+  name: string;
+  status: 'CONFIRMED' | 'PROBABLE' | 'AMBIGUOUS' | 'UNKNOWN';
+  confidence: number;
+  ui?: string;
+  operation?: string;
+  entity?: string;
+  alternatives?: string[];
+  context?: Record<string, string>;
+  expectedEffects?: string[];
+}
+
 export interface StepCommon {
   name?: string;
   effects?: StepEffects;
   fingerprint?: TargetFingerprint;
+  functionalIntent?: StepFunctionalIntent;
   allow: FlowAllowance[];
   optional: boolean;
   timeoutMs?: number;
