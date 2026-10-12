@@ -33,7 +33,6 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   `REQUEST_FAILED`). Masqués et bornés par le collecteur comme le message.
 - Rapport HTML : bloc « Détails » dépliable sous le message de chaque anomalie (source,
   informations clé → valeur, pile d'appels, texte complet).
-
 - **Réconciliation sémantique du Dry Run** (`src/dry-run/semantic-reconciliation.ts`) : après
   l'alignement brut, une étape attendue restée `MISSING` / `POSSIBLY_OBSOLETE` / `UNREACHABLE` et une
   étape observée restée `INSERTED` qui désignent le même événement fonctionnel forment une seule
