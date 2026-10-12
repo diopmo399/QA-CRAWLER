@@ -21,6 +21,15 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 - Rapport HTML : bloc « Détails » dépliable sous le message de chaque anomalie (source,
   informations clé → valeur, pile d'appels, texte complet).
 
+### Corrigé
+
+- Windows, Git Bash et WSL : les scripts npm `build`, `clean` et `pack` passent par Node
+  (`scripts/clean.mjs`, `scripts/pack.mjs`) au lieu de `rm -rf` / `mkdir -p` ; le test
+  d'installation (`test:packaging`) lance `npm.cmd` et `qa-crawler.cmd` sous Windows ;
+  `.gitattributes` force les fins de ligne LF ; job CI `packaging-windows` (build, tarballs,
+  installation des tarballs, tests unitaires sur `windows-latest`) ; section README
+  « Windows, Git Bash et WSL » et lignes de dépannage.
+
 ## 0.2.0 — 2026-10-12
 
 ### Ajouté

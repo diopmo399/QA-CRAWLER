@@ -94,6 +94,22 @@ déclarées `optionalDependencies` et chargées à la demande (`await import`). 
 `npm install --omit=optional`, tout fonctionne ; seule l'activation du provider concerné signale son
 absence (`PERSISTENCE_UNAVAILABLE`, `AI_UNAVAILABLE`) et replie sur le déterministe.
 
+### Windows, Git Bash et WSL
+
+Les deux paquets sont du JavaScript pur (ESM, aucun module natif, aucun script `postinstall`) :
+l'installation et les commandes fonctionnent à l'identique sous **Windows (PowerShell, cmd)**,
+**Git Bash** et **WSL**. Ce qui change d'un environnement à l'autre :
+
+| Environnement    | Ce qu'il faut savoir                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PowerShell / cmd | `npm install -D @qa-crawler/cli`, `npx qa-crawler …` : npm crée `qa-crawler.cmd` et `qa-crawler.ps1` dans `node_modules\.bin`. Les chemins de la configuration acceptent `/` et `\`. Chromium va dans `%LOCALAPPDATA%\ms-playwright` (`npx playwright install chromium`). Si PowerShell refuse `npx` (`ExecutionPolicy`), `npx.cmd qa-crawler …` ou `npm exec qa-crawler -- …`.                                                                     |
+| Git Bash (MSYS2) | mêmes binaires que PowerShell. Git Bash convertit un argument qui commence par `/` en chemin Windows (`/items` → `C:/Program Files/Git/items`) : pour une valeur d'URL, écrivez `//items` ou lancez avec `MSYS_NO_PATHCONV=1 npx qa-crawler …`. Les chemins relatifs (`--reports-dir reports`) ne sont pas concernés. Le dépôt force les fins de ligne LF (`.gitattributes`) : `core.autocrlf` n'a aucun effet sur le shim.                         |
+| WSL (Ubuntu…)    | c'est Linux : installez Node dans WSL (pas le Node de Windows), puis `npx playwright install --with-deps chromium` (bibliothèques système, `sudo`). `--headed` demande WSLg (Windows 11) ou un serveur X. Travaillez dans le système de fichiers Linux (`~/projet`), pas dans `/mnt/c/…`, nettement plus lent pour `node_modules` et Chromium. L'application testée peut tourner côté Windows : `http://localhost:4200` est joignable depuis WSL 2. |
+
+Le dépôt lui-même se développe aussi sous Windows : les scripts npm (`build`, `clean`, `pack`)
+passent par Node, jamais par `rm`/`mkdir`, et la CI exécute `build`, `pack:check`,
+`test:packaging` et les tests unitaires sur `windows-latest` en plus d'Ubuntu.
+
 ### Démarrage rapide (Quick Start)
 
 ```bash
@@ -260,6 +276,9 @@ importables par chemin (`@qa-crawler/core/dist/...`) mais seule la surface de `i
 | `PERSISTENCE_UNAVAILABLE` / `AI_UNAVAILABLE`                     | provider optionnel absent (`--omit=optional`) : installer `pg` / `mssql` / `@github/copilot-sdk`            |
 | `MODULE_TYPELESS_PACKAGE_JSON` à la lecture du playwright.config | avertissement de Node sur le projet consommateur, sans effet ; ajoutez `"type": "module"` si souhaité       |
 | rapports au mauvais endroit                                      | `reporting.dir` est relatif au fichier de configuration ; `--reports-dir` est relatif au répertoire courant |
+| Git Bash : `Unknown route C:/Program Files/Git/…`                | conversion de chemin MSYS d'un argument commençant par `/` : `//route` ou `MSYS_NO_PATHCONV=1`              |
+| WSL : `error while loading shared libraries` au lancement        | bibliothèques système de Chromium absentes : `npx playwright install --with-deps chromium`                  |
+| PowerShell : `npx : … l'exécution de scripts est désactivée`     | politique d'exécution : `npx.cmd qa-crawler …`, ou `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`    |
 
 ### Développement du paquet et publication
 

@@ -80,6 +80,32 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Windows: the same build, tarball check and consumer installation as `packaging`, run from
+  # PowerShell (what `npx qa-crawler` meets on a developer's machine). Git Bash and WSL run the
+  # same Node and npm binaries as PowerShell and Linux respectively, so these two jobs cover them.
+  packaging-windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build the packages
+        run: npm run build
+      - name: Check the tarball contents
+        run: npm run pack:check
+      - name: Install Chromium
+        run: npx playwright install chromium
+      - name: Install from the tarballs and run the CLI in the fixtures
+        run: npm run test:packaging
+      - name: Unit tests
+        run: npm test
+
   # Persistence against real databases: the same contract tests and an end-to-end
   # crawl for PostgreSQL and SQL Server (throwaway service containers, CI-only passwords).
   persistence:

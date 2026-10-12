@@ -12,7 +12,17 @@ import { serveStaticApp, type StaticApp } from '../fixtures/packaging/static-ser
  * `npx qa-crawler` est exécuté comme le ferait un projet consommateur. Aucun chemin du dépôt
  * n'est visible du projet installé : seul le tarball compte.
  */
-const run = promisify(execFile);
+const execFileAsync = promisify(execFile);
+const WINDOWS = process.platform === 'win32';
+/** Sous Windows, `npm` et les shims de node_modules/.bin sont des `.cmd` : ils exigent un shell (et des arguments cités). */
+const NPM = WINDOWS ? 'npm.cmd' : 'npm';
+const quote = (arg: string): string => (WINDOWS && /[\s"]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg);
+const run = (
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; maxBuffer?: number },
+): Promise<{ stdout: string; stderr: string }> =>
+  execFileAsync(WINDOWS ? quote(command) : command, args.map(quote), { ...options, shell: WINDOWS });
 const REPO = path.resolve(import.meta.dirname, '..', '..');
 const FIXTURES = path.join(REPO, 'tests', 'fixtures', 'packaging');
 const ENV = {
@@ -38,10 +48,10 @@ let tarballs: { core: string; cli: string };
 const consumers: Consumer[] = [];
 
 async function build(): Promise<{ core: string; cli: string }> {
-  await run('npm', ['run', '-s', 'build'], { cwd: REPO, env: ENV, maxBuffer: 64 * 1024 * 1024 });
+  await run(NPM, ['run', '-s', 'build'], { cwd: REPO, env: ENV, maxBuffer: 64 * 1024 * 1024 });
   const destination = await mkdtemp(path.join(tmpdir(), 'qa-pack-'));
   await run(
-    'npm',
+    NPM,
     [
       'pack',
       '--workspace',
@@ -70,7 +80,7 @@ async function consumer(fixture: string): Promise<Consumer> {
       'utf8',
     );
   await run(
-    'npm',
+    NPM,
     ['install', '--no-audit', '--no-fund', '--omit=optional', '-D', tarballs.core, tarballs.cli],
     {
       cwd: root,
@@ -79,7 +89,7 @@ async function consumer(fixture: string): Promise<Consumer> {
     },
   );
   const app = await serveStaticApp(root);
-  const bin = path.join(root, 'node_modules', '.bin', 'qa-crawler');
+  const bin = path.join(root, 'node_modules', '.bin', WINDOWS ? 'qa-crawler.cmd' : 'qa-crawler');
   const qa: Consumer['qa'] = async (args, options = {}) => {
     try {
       const { stdout, stderr } = await run(bin, args, {
@@ -115,7 +125,7 @@ afterAll(async () => {
 
 describe('the packages', () => {
   it('ship only what a consumer needs (no sources, tests or scenarios) and declare their entry points', async () => {
-    const { stdout } = await run('npm', ['run', '-s', 'pack:check'], { cwd: REPO, env: ENV });
+    const { stdout } = await run(NPM, ['run', '-s', 'pack:check'], { cwd: REPO, env: ENV });
     expect(stdout).toMatch(/@qa-crawler\/core@\d+\.\d+\.\d+: \d+ file\(s\)/);
     expect(stdout).toMatch(/@qa-crawler\/cli@\d+\.\d+\.\d+: \d+ file\(s\)/);
     const corePkg = JSON.parse(
@@ -170,7 +180,7 @@ describe('an Angular project (TypeScript, playwright.config, YAML + Gherkin flow
     expect(help.code).toBe(0);
     expect(help.out).toContain('qa-crawler init');
     // npm exec works as well as the bin link.
-    const { stdout } = await run('npm', ['exec', '--no', '--', 'qa-crawler', '--version'], {
+    const { stdout } = await run(NPM, ['exec', '--no', '--', 'qa-crawler', '--version'], {
       cwd: project.root,
       env: ENV,
     });
