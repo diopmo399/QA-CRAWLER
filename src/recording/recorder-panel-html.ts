@@ -277,7 +277,7 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .details .hero{display:flex;gap:12px;align-items:center;padding:12px;border:0;border-radius:10px;background:var(--surface-2);margin-bottom:14px}
 .details .hero b{display:block;font-size:14px}
 .details .hero span{color:var(--muted);font-size:12px}
-.details h3{margin:14px 0 8px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.details h3{margin:14px 0 8px;font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.02em}
 .details dl{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px 12px;margin:0;font-size:13px;border:0;padding:0}
 .details dt{color:var(--muted)} .details dd{margin:0;word-break:break-word;display:flex;align-items:center;gap:6px}
 .details dd code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg)}
