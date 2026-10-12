@@ -23,6 +23,8 @@ import {
   type RecoveryKnowledge,
   type TransitionInput,
   type TransitionKnowledge,
+  type TargetResolutionInput,
+  type TargetResolutionKnowledge,
 } from './knowledge-model.js';
 import { decayFactor } from './statistics.js';
 
@@ -356,6 +358,39 @@ export class JsonKnowledgeBase implements KnowledgeBase {
 
   recoveryKnowledge(key: string): RecoveryKnowledge | undefined {
     return this.data.recoveries?.[key];
+  }
+
+  recordTargetResolution(input: TargetResolutionInput): void {
+    const at = input.at ?? this.stamp();
+    const all = (this.data.targetResolutions ??= {});
+    const entry = (all[input.key] ??= {
+      key: input.key,
+      original: input.original,
+      ...(input.originalRole ? { originalRole: input.originalRole } : {}),
+      kind: input.kind,
+      ...(input.route ? { route: input.route } : {}),
+      resolutions: {},
+    });
+    const signature = `${input.resolved.role}:${input.resolved.name}`;
+    const resolution = (entry.resolutions[signature] ??= {
+      role: input.resolved.role,
+      name: input.resolved.name,
+      how: input.how,
+      successes: 0,
+      failures: 0,
+      firstSeenAt: at,
+      lastSeenAt: at,
+    });
+    if (input.result === 'SUCCESS') {
+      resolution.successes += 1;
+      resolution.lastSuccessAt = at;
+    } else resolution.failures += 1;
+    resolution.lastSeenAt = at;
+    if (input.version) resolution.version = input.version;
+  }
+
+  targetResolutions(key: string): TargetResolutionKnowledge | undefined {
+    return this.data.targetResolutions?.[key];
   }
 
   cognitiveKnowledge(): CognitiveKnowledge | undefined {

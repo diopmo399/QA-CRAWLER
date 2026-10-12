@@ -158,3 +158,32 @@ export {
   type RecordingIntentSummary,
 } from './intent/resolve-recording.js';
 export { arbitrateIntents, type ArbitratedIntents } from './intent/ai-arbiter.js';
+// INTENT-DRIVEN REPLAY : machine à états, checkpoints, préconditions / dépendances, planificateur, confiance.
+export {
+  REPLAY_EVENTS,
+  type ReplayEvent,
+  type ReplayPosition,
+  type FunctionalCheckpoint,
+  type CheckpointResult,
+  type StepPrecondition,
+  type PreconditionCheck,
+  type StepDependency,
+  type PreconditionExplanation,
+  type ReplayStepVerdict,
+  type ReplayConfidence,
+  type ReplayPlan,
+  type ReplayStepReport,
+  type FlowReplayReport,
+  type ObservedFunctionalState,
+} from './replay/model.js';
+export { deriveCheckpoints, evaluateCheckpoint, checkpointsAfter } from './replay/checkpoints.js';
+export { ReplayStateMachine } from './replay/state-machine.js';
+export {
+  deriveDependencies,
+  derivePreconditions,
+  checkPreconditions,
+  explainUnmetPrecondition,
+} from './replay/preconditions.js';
+export { planReplayAction, type PlannerInput } from './replay/planner.js';
+export { replayConfidence, type ConfidenceInput } from './replay/confidence.js';
+export { resolutionKeyOf, historicalResolutions } from './replay/resolution-memory.js';

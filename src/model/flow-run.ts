@@ -3,6 +3,7 @@ import type { FlowRunComparison } from '../flows/flow-run-comparison.js';
 import type { TargetResolutionTrace } from '../flows/functional-target.js';
 import type { TransitionWaitStatus } from '../observation/transition-waiter.js';
 import type { FlowDriftReport, StepRecoveryReport } from '../workflow-healing/model.js';
+import type { FlowReplayReport, ReplayStepReport } from '../replay/model.js';
 import type { ActionClassification } from './discovered-action.js';
 
 /**
@@ -72,6 +73,11 @@ export interface FlowStepReport {
   network?: StepNetworkReport;
   /** Où le temps de l'étape est passé : action, transition, stabilité, vérification. */
   timing?: StepTimingReport;
+  /**
+   * INTENT-DRIVEN REPLAY : position fonctionnelle, préconditions / dépendances, plan, verdict
+   * transactionnel (execution ≠ target ≠ effect ≠ functional state), confiance, checkpoints.
+   */
+  replay?: ReplayStepReport;
 }
 
 export interface StepRequestReport {
@@ -221,6 +227,8 @@ export interface FlowRunReport {
   businessProof?: BusinessProofReport;
   /** L'écart avec le run précédent du même flow (base de connaissances). */
   comparison?: FlowRunComparison;
+  /** INTENT-DRIVEN REPLAY : checkpoints, dépendances, position finale, fenêtre de divergence, confiance. */
+  replay?: FlowReplayReport;
 }
 
 export interface CssResolutionReport {

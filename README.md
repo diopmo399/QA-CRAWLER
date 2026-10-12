@@ -34,6 +34,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Dry Run : confronter un scénario à l'application](#dry-run--confronter-un-scénario-à-lapplication)
 - [Enregistrer un flow montré par un humain (record)](#enregistrer-un-flow-montré-par-un-humain-record)
 - [Intention fonctionnelle des actions](#intention-fonctionnelle-des-actions)
+- [Rejeu piloté par intention et état](#rejeu-piloté-par-intention-et-état)
 - [Analyse statique : le code comme source de preuves](#analyse-statique--le-code-comme-source-de-preuves)
 - [Authentification](#authentification)
 - [Interactions navigateur](#interactions-navigateur)
@@ -418,6 +419,7 @@ safety:
 | `performance.*`                                                                | `fastPath.enabled: true`       | FAST PATH / DEEP PATH : une étape enregistrée, résolue directement, après une étape réussie, conclut son attente dès la preuve positive puis un calme court (`confirmationQuietMs`) ; sinon fenêtre complète. Traces : `performance.json`. Voir docs/PERFORMANCE.md                                                                                                                                                                     |
 | recording (CSS)                                                                | toujours actif                 | Sélecteurs discriminants : inventaire d'écran à l'enregistrement, CSS préféré (identité de l'hôte, contexte) + repli structurel, jamais le premier d'un CSS ambigu au rejeu. Voir docs/DISCRIMINATING_SELECTORS.md                                                                                                                                                                                                                      |
 | `replay.intelligentRecovery.*`                                                 | `enabled: true`                | Workflow self-healing : quand une étape diverge, la cause est analysée (symptôme ≠ cause), l'objectif fonctionnel est déduit des effets appris et des étapes suivantes, puis atteint par un chemin SÛR vérifié au runtime (recherche bornée, SafetyPolicy, ambiguïté visible) ; récupérations apprises, dérive du flow classée, `suggested-flows/` proposé (le flow d'origine n'est jamais modifié). Voir docs/WORKFLOW_SELF_HEALING.md |
+| `replay.intentDriven.*`                                                        | `enabled: true`                | Rejeu piloté par intention et état : machine à états et checkpoints, préconditions et dépendances entre étapes (`preconditions: advise` par défaut ; `enforce` : une saisie soumise perdue est rétablie, sinon l'action n'est pas exécutée), planificateur orienté objectif (résolution apprise d'abord), verdict transactionnel et confiance par étape, mémoire des résolutions. Voir docs/INTENT_DRIVEN_REPLAY.md                     |
 | `cognitive.*`                                                                  | `enabled: true`                | QA Cognitive Engine : preuves typées avec provenance (EvidenceGraph), modèle fonctionnel et état métier de chaque écran, hypothèses causales (une observation n'est jamais une vérité : HYPOTHESIS → SUPPORTED → RUNTIME_CONFIRMED), gardées et réévaluées d'un run à l'autre ; `reports/cognitive/*.json`. Voir docs/COGNITIVE_ENGINE.md                                                                                               |
 | `ai.*`                                                                         | `mode: OFF`                    | AI Reasoning Advisor (GitHub Copilot SDK, optionnel) : OFF par défaut (aucun client, aucun appel) ; ASSIST mesure sans influencer ; HYBRID peut retenir une proposition validée (schéma, actions découvertes, preuves existantes), autorisée par la SafetyPolicy, exécutée par l'exécuteur existant et vérifiée au runtime. Copilot ne clique jamais. `--intelligence off\|assist\|hybrid`. Voir docs/AI_INTELLIGENCE.md                |
 | `exploration.queryParams.mode`                                                 | `pattern`                      | `?page=1..N` comptent comme une seule route (`ignore` / `keep`)                                                                                                                                                                                                                                                                                                                                                                         |
@@ -1017,6 +1019,23 @@ l'intention est écrite à côté (`functionalIntent:` dans le YAML, `functional
 modèle de l'application) et sert au self-healing, aux rapports et au raisonnement. Une intention
 `AMBIGUOUS` peut être soumise au conseiller IA, qui choisit **parmi** les candidats déterministes.
 Détails : [docs/FUNCTIONAL_INTENT.md](docs/FUNCTIONAL_INTENT.md).
+
+## Rejeu piloté par intention et état
+
+Le rejeu d'un flow ne rejoue plus une liste de clics mais un **objectif** : à chaque étape, l'intention
+enregistrée, les **préconditions** (« puis-je exécuter cette action ? » : champs soumis encore remplis,
+cible activée, route, dialogue, overlay), le **planificateur** quand la cible enregistrée manque (une
+résolution apprise d'abord, puis un candidat sémantique du même genre — jugé par la SafetyPolicy,
+confirmé par l'effet seulement), l'effet, puis l'**état fonctionnel** (checkpoints : « résultats
+affichés », « demande créée »). Une **machine à états** tient la position fonctionnelle du parcours
+(checkpoints confirmés, dernière action commise, intention courante) : quand une étape échoue, la
+divergence est localisée entre le dernier checkpoint confirmé et le premier qui manque, et l'étape
+racine est trouvée en remontant les **dépendances** (`fill Name` → `click Search` → `click Item 42`) au
+lieu de réparer le symptôme. Chaque étape porte un verdict transactionnel (`execution` ≠ `target` ≠
+`effect` ≠ `functionalState` : un clic réussi sans effet est un échec) et une **confiance** combinée ;
+sous le seuil, rien ne continue en silence. Les résolutions confirmées (« Search » → « Run search »,
+par écran) sont **apprises** et proposées d'abord au rejeu suivant, jamais tenues pour vraies.
+Détails : [docs/INTENT_DRIVEN_REPLAY.md](docs/INTENT_DRIVEN_REPLAY.md).
 
 ## Analyse statique : le code comme source de preuves
 

@@ -1746,6 +1746,42 @@ const replaySchema = z
     verifyActionEffects: z.boolean().default(true),
     /** S'arrêter à la PREMIÈRE action dont l'effet manque (pas 10 étapes plus loin). */
     detectFirstDivergence: z.boolean().default(true),
+    /**
+     * INTENT-DRIVEN REPLAY : le rejeu d'un OBJECTIF, pas d'une liste de clics. Une machine à états
+     * (position fonctionnelle, checkpoints confirmés), des préconditions et dépendances entre
+     * étapes (pourquoi l'étape suivante ne peut pas marcher), un planificateur orienté objectif
+     * quand la cible enregistrée manque (résolution apprise, puis candidat sémantique, jamais
+     * exécuté sans la SafetyPolicy ni confirmé sans l'effet), une confiance par étape, et la mémoire
+     * des résolutions confirmées. `enabled: false` : le rejeu d'avant, à l'identique.
+     */
+    intentDriven: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Les checkpoints fonctionnels (effets enregistrés, intention, expect, étape suivante) évalués après chaque étape. */
+        checkpoints: z.boolean().default(true),
+        /**
+         * off : rien ; advise : vérifiées et signalées (jamais bloquantes) ; enforce : une précondition HARD
+         * non satisfaite (saisie perdue avant une soumission, donnée de test absente) n'est pas exécutée.
+         */
+        preconditions: z.enum(['off', 'advise', 'enforce']).default('advise'),
+        /** Le planificateur quand la cible enregistrée manque (HISTORICAL puis SEMANTIC, confirmés par l'effet). */
+        planner: z.boolean().default(true),
+        /**
+         * Exécuter aussi un candidat SÉMANTIQUE du planificateur (même genre, libellé proche ou même intention UI).
+         * false : seules les résolutions apprises sont exécutées par le planificateur ; le candidat sémantique est
+         * calculé et rapporté, et la récupération par objectif (bornée, vérifiée) reste la voie des renommages.
+         */
+        semanticCandidates: z.boolean().default(false),
+        /** Apprendre les résolutions confirmées (original → résolu, par écran) et les proposer d'abord ensuite. */
+        learnResolutions: z.boolean().default(true),
+        /** Sous ce seuil, une étape (même PASSED) est signalée REPLAY_LOW_CONFIDENCE. */
+        minConfidence: z.number().min(0).max(1).default(0.6),
+        /** Seuil d'un candidat sémantique du planificateur et marge d'ambiguïté. */
+        semanticThreshold: z.number().min(0).max(1).default(0.6),
+        ambiguityMargin: z.number().min(0).max(1).default(0.12),
+      })
+      .strict()
+      .default({}),
     /** La cible de l'étape suivante, absente avant l'action, doit apparaître après. */
     verifyNextActionPrecondition: z.boolean().default(true),
     /** Vérifier, avant de cliquer, que l'élément trouvé est celui enregistré (empreinte). */

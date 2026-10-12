@@ -118,6 +118,44 @@ export interface KnowledgeData {
   actorAccess?: Record<string, Record<string, ActorAccessMemory>>;
   /** QA PLATFORM : l'historique borné des durées par métrique (flow, étape), pour les tendances. */
   performanceHistory?: Record<string, PerformanceSample[]>;
+  /** INTENT-DRIVEN REPLAY : les cibles résolues autrement qu'enregistrées (« Search » → « Run search »), par contexte. */
+  targetResolutions?: Record<string, TargetResolutionKnowledge>;
+}
+
+/** Une résolution de cible apprise : l'original enregistré, ce qui l'a remplacé, où, et avec quel résultat. */
+export interface TargetResolutionKnowledge {
+  key: string;
+  original: string;
+  originalRole?: string;
+  kind: string;
+  route?: string;
+  resolutions: Record<string, LearnedTargetResolution>;
+}
+
+export interface LearnedTargetResolution {
+  role: string;
+  name: string;
+  /** Comment la résolution a été trouvée la première fois (HEALED, PLANNED, GOAL_RECOVERY…). */
+  how: string;
+  successes: number;
+  failures: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastSuccessAt?: string;
+  version?: string;
+}
+
+export interface TargetResolutionInput {
+  key: string;
+  original: string;
+  originalRole?: string;
+  kind: string;
+  route?: string;
+  resolved: { role: string; name: string };
+  how: string;
+  result: 'SUCCESS' | 'FAILURE';
+  version?: string;
+  at?: string;
 }
 
 export interface ActorAccessMemory {
@@ -221,6 +259,9 @@ export interface KnowledgeBase {
   /** Une récupération essayée (réussie et confirmée par la suite du parcours, ou échouée). */
   recordRecovery(input: RecoveryInput): void;
   recoveryKnowledge(key: string): RecoveryKnowledge | undefined;
+  /** Une cible résolue autrement qu'enregistrée, confirmée (ou contredite) par l'effet au runtime. */
+  recordTargetResolution(input: TargetResolutionInput): void;
+  targetResolutions(key: string): TargetResolutionKnowledge | undefined;
   /** Les hypothèses d'un run précédent (jamais des vérités : elles sont réévaluées). */
   cognitiveKnowledge(): CognitiveKnowledge | undefined;
   saveCognitiveKnowledge(knowledge: CognitiveKnowledge): void;
