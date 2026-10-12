@@ -160,6 +160,11 @@ const SYMBOL: Record<ReconciliationStatus, string> = {
   ASSERTION_MISMATCH: '≠',
   BLOCKED_BY_POLICY: '⛔',
   NOT_VERIFIED: '…',
+  MATCHED_SEMANTICALLY: '≃',
+  MATCHED_WITH_TARGET_CHANGE: '≃',
+  MATCHED_WITH_CONTEXT_CHANGE: '≃',
+  MATCHED_AFTER_INSERTION: '≃',
+  DUPLICATE_CANDIDATE: '≈',
 };
 
 export async function runDryRunCli(argv: string[]): Promise<number> {
@@ -237,6 +242,7 @@ function printEvent(event: DryRunEvent): void {
     FLOW_STEP_REORDERED: color.magenta,
     FLOW_STEP_POSSIBLY_OBSOLETE: color.yellow,
     FLOW_STEP_AMBIGUOUS: color.yellow,
+    FLOW_STEP_PAIRED: color.cyan,
   };
   const paint = shown[event.type];
   if (paint) logger.info(`  ${paint(`[${event.type}]`)} ${event.message}`);
@@ -273,12 +279,14 @@ function printSummary(
   line('Scenario status', reconciliation.status);
   line('Original intents', s.originalIntents);
   line('Matched', s.matched);
+  line('With variation', s.matchedWithVariation);
   line('Inserted', s.inserted);
   line('Reordered', s.reordered);
   line('Alternative', s.alternative);
   line('Possibly obsolete', s.possiblyObsolete);
   line('Missing', s.missing);
   line('Ambiguous', s.ambiguous);
+  line('Duplicate cand.', s.duplicateCandidate);
   line('Unreachable', s.unreachable);
   line('Assertion mismatch', s.assertionMismatch);
   line('Blocked', s.blocked);

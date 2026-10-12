@@ -958,23 +958,36 @@ Le test de bout en bout `tests/integration/dry-run.test.ts` le vérifie dans Chr
 
 **Sécurité, toujours :** une étape du scénario passe par la SafetyPolicy des flows (`allow`, tags `@mutation`…). Une étape **insérée**, que le développeur n'a pas écrite, passe par la SafetyPolicy **de la mission** ET les permissions du scénario. Une action refusée pour une étape attendue n'est jamais exécutée par l'exploration guidée non plus. Une piste qui exige une action refusée donne `BLOCKED_BY_POLICY`, jamais `UNREACHABLE`.
 
-| Statut               | Signification                                                                                                          |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `MATCHED`            | l'étape du scénario, retrouvée et exécutée                                                                             |
-| `INSERTED`           | une étape de l'application absente du scénario (observée)                                                              |
-| `REORDERED`          | l'étape existe, ailleurs dans l'ordre                                                                                  |
-| `ALTERNATIVE`        | une étape d'un autre chemin valide, **vu dans ce run** ; celui qui a été utilisé est proposé, l'autre est cité         |
-| `POSSIBLY_OBSOLETE`  | introuvable, les étapes suivantes ont été trouvées sans elle ; **jamais supprimée** : gardée en commentaire pour revue |
-| `MISSING`            | la cible existe dans l'application (vue ailleurs pendant le run), mais pas à cet endroit du flow                       |
-| `UNREACHABLE`        | tout l'espace accessible (profondeur et politique permises) a été parcouru sans la trouver                             |
-| `AMBIGUOUS`          | plusieurs cibles possibles : jamais choisie au hasard                                                                  |
-| `ASSERTION_MISMATCH` | la vérification ne se vérifie pas (le résultat attendu n'est pas observé)                                              |
-| `BLOCKED_BY_POLICY`  | la cible, ou le seul chemin trouvé, exige une action refusée : jamais exécutée                                         |
-| `NOT_VERIFIED`       | budget épuisé, vérification manuelle, ou page de départ inaccessible                                                   |
+| Statut                        | Signification                                                                                                          |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `MATCHED`                     | l'étape du scénario, retrouvée et exécutée                                                                             |
+| `INSERTED`                    | une étape de l'application absente du scénario (observée)                                                              |
+| `REORDERED`                   | l'étape existe, ailleurs dans l'ordre                                                                                  |
+| `ALTERNATIVE`                 | une étape d'un autre chemin valide, **vu dans ce run** ; celui qui a été utilisé est proposé, l'autre est cité         |
+| `POSSIBLY_OBSOLETE`           | introuvable, les étapes suivantes ont été trouvées sans elle ; **jamais supprimée** : gardée en commentaire pour revue |
+| `MISSING`                     | la cible existe dans l'application (vue ailleurs pendant le run), mais pas à cet endroit du flow                       |
+| `UNREACHABLE`                 | tout l'espace accessible (profondeur et politique permises) a été parcouru sans la trouver                             |
+| `AMBIGUOUS`                   | plusieurs cibles possibles : jamais choisie au hasard                                                                  |
+| `ASSERTION_MISMATCH`          | la vérification ne se vérifie pas (le résultat attendu n'est pas observé)                                              |
+| `BLOCKED_BY_POLICY`           | la cible, ou le seul chemin trouvé, exige une action refusée : jamais exécutée                                         |
+| `NOT_VERIFIED`                | budget épuisé, vérification manuelle, ou page de départ inaccessible                                                   |
+| `MATCHED_WITH_TARGET_CHANGE`  | le même libellé, une autre forme technique (un sélecteur qui a changé) : une seule entrée, jamais MISSING + INSERTED   |
+| `MATCHED_SEMANTICALLY`        | un libellé reformulé qui dit la même intention, encadré par les mêmes actions voisines                                 |
+| `MATCHED_WITH_CONTEXT_CHANGE` | le même événement, sur un autre écran ou une autre route que celle déclarée                                            |
+| `MATCHED_AFTER_INSERTION`     | le même événement, atteint après une ou plusieurs étapes insérées                                                      |
+| `DUPLICATE_CANDIDATE`         | deux étapes observées aussi plausibles pour la même étape attendue : rien n'est choisi, le scénario est à trancher     |
 
 Chaque ligne donne sa **confiance**, ses **raisons** et ses **preuves** (écran, action, provenance, champs remplis). Pour `POSSIBLY_OBSOLETE`, l'historique change la confiance : une étape vue lors de runs précédents a peut-être seulement bougé (0,4) ; jamais vue (0,7) ; sans mémoire (0,6). Une fréquence historique (« 97 % des runs ») est une fréquence observée, jamais une probabilité d'être correcte.
 
-**Statut global** (jamais un booléen) : `FULLY_MATCHED` (le scénario tel quel), `PARTIALLY_MATCHED` (tout est retrouvé, avec des étapes en plus, ailleurs ou alternatives), `DIVERGED` (une étape introuvable, obsolète ou un résultat différent), `BLOCKED`, `INCONCLUSIVE` (budget, ambiguïté).
+**Réconciliation sémantique.** L'alignement brut compare les identités (`target == target`) ; il laisse parfois une étape attendue `MISSING` (0,60) juste avant une étape observée `INSERTED` (0,90) qui est, fonctionnellement, la même : un sélecteur qui a changé, un libellé reformulé, le même bouton sur un autre écran. Une seconde phase relit ces couples :
+
+```
+alignement brut → appariement des candidats → réconciliation sémantique → statut final
+```
+
+Chaque couple (attendue restée `MISSING` / `POSSIBLY_OBSOLETE` / `UNREACHABLE`, observée restée `INSERTED`) reçoit un score par dimension — **cible** (similarité des libellés, synonymes du dictionnaire ; le `name` de l'étape quand la cible est un sélecteur), **intention** (même geste, mêmes mots d'interface : créer, enregistrer, rechercher…, ou `functionalIntent.ui`), **entité** (opération × entité de l'intention fonctionnelle dites par le libellé observé), **contexte** (même écran de départ, route déclarée), **séquence** (action précédente et action suivante retrouvées de part et d'autre), **effet** (route ou écran atteints) — puis un total pondéré (0,35 / 0,15 / 0,10 / 0,10 / 0,20 / 0,10). Au-dessus de `minScore` (0,7), le couple devient **une** entrée, avec le détail du score et les statuts d'avant ; deux candidats à moins de `ambiguityMargin` (0,1) l'un de l'autre donnent `DUPLICATE_CANDIDATE`, jamais un choix arbitraire. Un libellé qui dit l'abandon (cancel, close, back) quand l'attendue ne le dit pas n'est jamais apparié ; un champ, une vérification ou une adresse non plus : seul un geste (clic, envoi, navigation par libellé) peut avoir changé de forme. Dans le flow suggéré, la paire donne une seule étape : l'étape observée (rôle + nom), avec le texte du scénario.
+
+**Statut global** (jamais un booléen) : `FULLY_MATCHED` (le scénario tel quel), `PARTIALLY_MATCHED` (tout est retrouvé, avec des étapes en plus, ailleurs, alternatives ou sous une autre forme), `DIVERGED` (une étape introuvable, obsolète ou un résultat différent), `BLOCKED`, `INCONCLUSIVE` (budget, ambiguïté, deux candidats).
 
 **Flow suggéré.** Chaque étape a sa **provenance** : `ORIGINAL` (l'étape du scénario), `OBSERVED` (vue pendant ce run) ou `HISTORICAL_CONFIRMED` (proposée par la mémoire et confirmée sur l'application). Une étape seulement historique n'est jamais présentée comme observée. Un clic qui a rempli un formulaire avec des données de test est précédé de « je remplis le formulaire » (intention `FILL_FORM`, qui exige `gherkin.semanticResolution.enabled: true`). Les deux formats viennent du même `SuggestedFlowGraph`, quelle que soit l'entrée :
 
@@ -983,7 +996,7 @@ Chaque ligne donne sa **confiance**, ses **raisons** et ses **preuves** (écran,
 
 **Fichiers** (`<reportsDir>/dry-run/<scénario>/`) : `expected-flow.json` (sans les valeurs saisies), `observed-flow.json`, `suggested-flow.json`, `reconciliation.json`, `suggested.feature`, `suggested.flow.yaml`, `dry-run-events.jsonl`, `index.html` (original et suggéré côte à côte, explication de chaque différence), et `exploration/` (le rapport du run sous-jacent : graphe, journal, captures). Un fichier avec plusieurs scénarios, ou un Plan du scénario, donne un sous-dossier par flow.
 
-**Événements** (journal du moteur, masqués comme les autres) : `DRY_RUN_STARTED`, `FLOW_INTENT_PARSED`, `INTENT_MATCHED`, `INTENT_MISMATCH`, `GUIDED_EXPLORATION_STARTED`, `PATH_DISCOVERED`, `FLOW_STEP_INSERTED`, `FLOW_STEP_POSSIBLY_OBSOLETE`, `FLOW_STEP_REORDERED`, `FLOW_STEP_AMBIGUOUS`, `FLOW_RECONCILIATION_COMPLETED`, `SUGGESTED_FLOW_GENERATED`, `DRY_RUN_COMPLETED`.
+**Événements** (journal du moteur, masqués comme les autres) : `DRY_RUN_STARTED`, `FLOW_INTENT_PARSED`, `INTENT_MATCHED`, `INTENT_MISMATCH`, `GUIDED_EXPLORATION_STARTED`, `PATH_DISCOVERED`, `FLOW_STEP_INSERTED`, `FLOW_STEP_POSSIBLY_OBSOLETE`, `FLOW_STEP_REORDERED`, `FLOW_STEP_AMBIGUOUS`, `FLOW_STEP_PAIRED`, `FLOW_RECONCILIATION_COMPLETED`, `SUGGESTED_FLOW_GENERATED`, `DRY_RUN_COMPLETED`.
 
 ```yaml
 dryRun:
@@ -994,6 +1007,7 @@ dryRun:
   maxDurationMs: 120000
   maxAlternativePaths: 5 # actions essayées au plus par écran, chemins connus rejoués au plus
   suggestion: { generateGherkin: true, generateYaml: true } # --output-format gherkin | yaml | both
+  semanticPairing: { enabled: true, minScore: 0.7, ambiguityMargin: 0.1 } # couples MISSING + INSERTED relus
 ```
 
 La mission donne la cible, la connexion, la sécurité, `gherkin.steps` et les flows `reusable` ; ses autres flows sont ignorés. Une mission donnée comme scénario (`dry-run scenarios/ma-mission.yaml`) vérifie ses propres flows, avec sa cible et sa connexion. Sans mission : `--base-url` (ou `QA_BASE_URL`). En Dry Run, le **mode automatique** et la **résolution sémantique** sont actifs par défaut : une phrase métier inconnue n'arrête pas le chargement, elle devient une intention à vérifier sur l'écran (`gherkin.auto: false` dans la mission les coupe). Sans mémoire ni persistance, le Dry Run n'utilise que l'exploration courante : aucune base de données n'est nécessaire.

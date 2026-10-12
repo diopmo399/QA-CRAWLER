@@ -1,15 +1,29 @@
 import { alignSequences } from './flow-alignment.js';
 import type { FlowIntent, FlowIntentGraph } from './flow-intent-graph.js';
-import type {
-  DryRunStatus,
-  IntentFinding,
-  ObservedFlowGraph,
-  ObservedStep,
-  Reconciliation,
-  ReconciliationEntry,
-  ReconciliationStatus,
-  ReconciliationSummary,
+import {
+  PAIRED_STATUSES,
+  type DryRunStatus,
+  type IntentFinding,
+  type ObservedFlowGraph,
+  type ObservedStep,
+  type Reconciliation,
+  type ReconciliationEntry,
+  type ReconciliationStatus,
+  type ReconciliationSummary,
 } from './reconciliation-model.js';
+import {
+  describePairing,
+  reconcileSemantically,
+  type SemanticPairingOptions,
+} from './semantic-reconciliation.js';
+
+export interface ReconcileOptions {
+  /** Réconciliation sémantique des couples MISSING + INSERTED (activée par défaut ; `false` : jamais). */
+  semanticPairing?: (SemanticPairingOptions & { enabled?: boolean }) | false;
+}
+
+/** Les statuts d'une attendue sans correspondance que l'appariement sémantique peut encore résoudre. */
+const PAIRABLE = new Set<ReconciliationStatus>(['MISSING', 'POSSIBLY_OBSOLETE', 'UNREACHABLE']);
 
 /**
  * FLOW RECONCILIATION : EXPECTED + OBSERVED → un statut par étape, avec sa confiance,
@@ -18,12 +32,15 @@ import type {
  *
  * L'alignement (FlowAlignment) donne la structure — appariements, insertions,
  * suppressions probables, réordonnancements ; les constats du moteur donnent la nature
- * de chaque écart (bloqué par la politique, ambigu, non vérifié faute de budget…).
+ * de chaque écart (bloqué par la politique, ambigu, non vérifié faute de budget…). Puis la
+ * réconciliation sémantique (SemanticReconciliation) relit les couples « manquante + insérée »
+ * qui désignent le même événement fonctionnel : une seule entrée, jamais MISSING + INSERTED.
  */
 export function reconcile(
   graph: FlowIntentGraph,
   observed: ObservedFlowGraph,
   findings: readonly IntentFinding[],
+  options: ReconcileOptions = {},
 ): Reconciliation {
   const findingOf = new Map(findings.map((finding) => [finding.intentId, finding]));
   const stateLabel = new Map(observed.states.map((state) => [state.id, state.label]));
@@ -32,7 +49,7 @@ export function reconcile(
     .map((intent) => intent.index);
 
   const ops = alignSequences(graph.intents, observed.steps, (intent, step) => step.intentId === intent.id);
-  const entries: ReconciliationEntry[] = ops.map((op) => {
+  const aligned: ReconciliationEntry[] = ops.map((op) => {
     switch (op.kind) {
       case 'MATCH':
       case 'REORDER': {
@@ -56,6 +73,7 @@ export function reconcile(
     }
   });
 
+  const entries = pairSemantically(aligned, graph, observed, findings, options.semanticPairing);
   const summary = summarize(graph.intents.length, entries);
   return {
     flow: graph.name,
@@ -64,6 +82,87 @@ export function reconcile(
     summary,
     stopReason: observed.stopReason,
   };
+}
+
+/**
+ * SEMANTIC RECONCILIATION : une attendue restée MISSING / POSSIBLY_OBSOLETE / UNREACHABLE et une
+ * observée restée INSERTED qui ont un fort score d'appariement forment une seule entrée, placée
+ * là où l'observée a été vue ; deux candidats aussi plausibles laissent l'attendue en
+ * DUPLICATE_CANDIDATE (les observées restent INSERTED).
+ */
+function pairSemantically(
+  entries: readonly ReconciliationEntry[],
+  graph: FlowIntentGraph,
+  observed: ObservedFlowGraph,
+  findings: readonly IntentFinding[],
+  options: ReconcileOptions['semanticPairing'],
+): ReconciliationEntry[] {
+  if (options === false || options?.enabled === false) return [...entries];
+  const intentOf = new Map(graph.intents.map((intent) => [intent.id, intent]));
+  const stepOf = new Map(observed.steps.map((step) => [step.id, step]));
+  const unmatched = entries.flatMap((entry) => {
+    const intent = entry.expectedIntent ? intentOf.get(entry.expectedIntent.id) : undefined;
+    return intent && PAIRABLE.has(entry.status) && !entry.observedTarget ? [intent] : [];
+  });
+  const inserted = entries.flatMap((entry) => {
+    const step = entry.observedTarget ? stepOf.get(entry.observedTarget.stepId) : undefined;
+    return step && entry.status === 'INSERTED' && !entry.expectedIntent ? [step] : [];
+  });
+  if (unmatched.length === 0 || inserted.length === 0) return [...entries];
+  const { pairs, duplicates } = reconcileSemantically(
+    unmatched,
+    inserted,
+    graph.intents,
+    observed,
+    findings,
+    options ?? {},
+  );
+  if (pairs.length === 0 && duplicates.length === 0) return [...entries];
+
+  const pairOfIntent = new Map(pairs.map((pair) => [pair.intent.id, pair]));
+  const pairOfStep = new Map(pairs.map((pair) => [pair.observed.id, pair]));
+  const duplicateOf = new Map(duplicates.map((duplicate) => [duplicate.intent.id, duplicate]));
+  const stateLabel = new Map(observed.states.map((state) => [state.id, state.label]));
+  const result: ReconciliationEntry[] = [];
+  for (const entry of entries) {
+    const intentId = entry.expectedIntent?.id;
+    const stepId = entry.observedTarget?.stepId;
+    // L'attendue appariée disparaît de sa place : elle est portée par l'entrée de l'observée.
+    if (intentId && !stepId && pairOfIntent.has(intentId)) continue;
+    const pair = stepId && !intentId ? pairOfStep.get(stepId) : undefined;
+    if (pair) {
+      const missing = entries.find((candidate) => candidate.expectedIntent?.id === pair.intent.id);
+      result.push({
+        status: pair.status,
+        expectedIntent: expectedOf(pair.intent),
+        observedTarget: targetOf(pair.observed, stateLabel),
+        confidence: pair.score.total,
+        reasons: [
+          ...pair.reasons,
+          describePairing(pair.score),
+          ...(missing ? [`before pairing: ${missing.status} — ${missing.reasons[0] ?? ''}`] : []),
+          `before pairing: INSERTED — ${entry.reasons[0] ?? ''}`,
+        ],
+        evidence: [...(missing?.evidence ?? []), ...entry.evidence],
+        pairing: { score: pair.score, candidates: pair.candidates },
+      });
+      continue;
+    }
+    const duplicate = intentId && !stepId ? duplicateOf.get(intentId) : undefined;
+    if (duplicate) {
+      const best = duplicate.candidates[0];
+      result.push({
+        ...entry,
+        status: 'DUPLICATE_CANDIDATE',
+        confidence: best?.score.total ?? entry.confidence,
+        reasons: [...duplicate.reasons, `before pairing: ${entry.status} — ${entry.reasons[0] ?? ''}`],
+        ...(best ? { pairing: { score: best.score, candidates: duplicate.candidates } } : {}),
+      });
+      continue;
+    }
+    result.push(entry);
+  }
+  return result;
 }
 
 function insertedEntry(step: ObservedStep, stateLabel: Map<string, string>): ReconciliationEntry {
@@ -200,15 +299,17 @@ function summarize(originalIntents: number, entries: readonly ReconciliationEntr
     assertionMismatch: count('ASSERTION_MISMATCH'),
     blocked: count('BLOCKED_BY_POLICY'),
     notVerified: count('NOT_VERIFIED'),
+    matchedWithVariation: entries.filter((entry) => PAIRED_STATUSES.includes(entry.status)).length,
+    duplicateCandidate: count('DUPLICATE_CANDIDATE'),
   };
 }
 
 /**
  * Statut global, jamais un booléen :
  * - BLOCKED : une intention requise n'est atteignable qu'au prix d'une action refusée ;
- * - INCONCLUSIVE : une intention requise n'a pas pu être vérifiée (budget, ambiguïté) ;
+ * - INCONCLUSIVE : une intention requise n'a pas pu être vérifiée (budget, ambiguïté, deux candidats) ;
  * - DIVERGED : une intention requise est introuvable, obsolète ou son résultat diffère ;
- * - PARTIALLY_MATCHED : tout est retrouvé, avec des étapes en plus, ailleurs ou alternatives ;
+ * - PARTIALLY_MATCHED : tout est retrouvé, avec des étapes en plus, ailleurs, alternatives ou sous une autre forme ;
  * - FULLY_MATCHED : le scénario correspond tel quel.
  */
 function globalStatus(entries: readonly ReconciliationEntry[], intents: readonly FlowIntent[]): DryRunStatus {
@@ -221,7 +322,7 @@ function globalStatus(entries: readonly ReconciliationEntry[], intents: readonly
         required.has(entry.expectedIntent.id),
     );
   if (onRequired(['BLOCKED_BY_POLICY'])) return 'BLOCKED';
-  if (onRequired(['NOT_VERIFIED', 'AMBIGUOUS'])) return 'INCONCLUSIVE';
+  if (onRequired(['NOT_VERIFIED', 'AMBIGUOUS', 'DUPLICATE_CANDIDATE'])) return 'INCONCLUSIVE';
   if (onRequired(['UNREACHABLE', 'POSSIBLY_OBSOLETE', 'MISSING', 'ASSERTION_MISMATCH'])) return 'DIVERGED';
   if (entries.some((entry) => entry.status !== 'MATCHED' && entry.status !== 'NOT_VERIFIED'))
     return 'PARTIALLY_MATCHED';

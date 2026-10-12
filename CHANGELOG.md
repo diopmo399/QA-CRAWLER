@@ -33,6 +33,16 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   `REQUEST_FAILED`). Masqués et bornés par le collecteur comme le message.
 - Rapport HTML : bloc « Détails » dépliable sous le message de chaque anomalie (source,
   informations clé → valeur, pile d'appels, texte complet).
+- **Réconciliation sémantique du Dry Run** (`src/dry-run/semantic-reconciliation.ts`) : après
+  l'alignement brut, une étape attendue restée `MISSING` / `POSSIBLY_OBSOLETE` / `UNREACHABLE` et une
+  étape observée restée `INSERTED` qui désignent le même événement fonctionnel forment une seule
+  entrée, jamais `MISSING` + `INSERTED`. Score par dimension (cible, intention, entité, contexte,
+  séquence, effet) et total pondéré ; statuts `MATCHED_WITH_TARGET_CHANGE`, `MATCHED_SEMANTICALLY`,
+  `MATCHED_WITH_CONTEXT_CHANGE`, `MATCHED_AFTER_INSERTION`, `DUPLICATE_CANDIDATE` (deux candidats
+  aussi plausibles : rien n'est choisi, scénario `INCONCLUSIVE`). Un libellé d'abandon, un champ, une
+  vérification ou une adresse ne sont jamais appariés. `ReconciliationEntry.pairing` (détail du score,
+  autres candidats), résumé `matchedWithVariation` / `duplicateCandidate`, événement `FLOW_STEP_PAIRED`,
+  rapport HTML et CLI, configuration `dryRun.semanticPairing` (`minScore` 0.7, `ambiguityMargin` 0.1).
 
 ### Modifié
 

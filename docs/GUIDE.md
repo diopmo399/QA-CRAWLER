@@ -305,7 +305,7 @@ npm run qa -- dry-run features/dossiers.feature --base-url https://qa.example.co
 
 **Ce que tu obtiens** (dans `reports/dry-run/<scénario>/`) : `index.html` (original et suggéré côte à côte, avec l'explication de chaque différence), `suggested.feature`, `suggested.flow.yaml`, `reconciliation.json`.
 
-**Statuts d'une étape :** `MATCHED` (trouvée), `INSERTED` (étape de l'application absente du scénario), `REORDERED` (ailleurs dans l'ordre), `ALTERNATIVE`, `POSSIBLY_OBSOLETE` (introuvable, jamais supprimée), `MISSING`, `UNREACHABLE`, `AMBIGUOUS`, `ASSERTION_MISMATCH`, `BLOCKED_BY_POLICY`, `NOT_VERIFIED`.
+**Statuts d'une étape :** `MATCHED` (trouvée), `INSERTED` (étape de l'application absente du scénario), `REORDERED` (ailleurs dans l'ordre), `ALTERNATIVE`, `POSSIBLY_OBSOLETE` (introuvable, jamais supprimée), `MISSING`, `UNREACHABLE`, `AMBIGUOUS`, `ASSERTION_MISMATCH`, `BLOCKED_BY_POLICY`, `NOT_VERIFIED` ; et, quand une étape « manquante » et une étape « insérée » désignent le même événement (réconciliation sémantique : cible, intention, entité, contexte, séquence, effet), `MATCHED_WITH_TARGET_CHANGE` (le sélecteur a changé), `MATCHED_SEMANTICALLY` (libellé reformulé), `MATCHED_WITH_CONTEXT_CHANGE`, `MATCHED_AFTER_INSERTION`, ou `DUPLICATE_CANDIDATE` (deux candidats aussi plausibles : rien n'est choisi).
 
 **Statut global :** `FULLY_MATCHED`, `PARTIALLY_MATCHED`, `DIVERGED`, `BLOCKED`, `INCONCLUSIVE`.
 

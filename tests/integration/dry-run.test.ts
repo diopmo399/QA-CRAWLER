@@ -31,6 +31,12 @@ steps:
   - expect: { text: Utilisateur créé }
 `;
 
+/** Le même scénario, dont le localisateur de « Utilisateurs » a changé : un sélecteur qui n'existe plus. */
+const FLOW_CHANGED = FLOW.replace(
+  '  - click: { role: link, name: Utilisateurs }',
+  '  - click: { css: "#legacy-users-link" }\n    name: Utilisateurs',
+);
+
 const mission = (url: string, reportsDir: string): string => `mission: { name: dry-run-e2e }
 target: { baseUrl: ${url}, startAt: /login }
 exploration: { actionTimeoutMs: 3000, settleTimeMs: 50 }
@@ -68,7 +74,9 @@ describe('dry run, end to end', () => {
   let gherkin: DryRunResult;
   let yaml: DryRunResult;
   let remembered: DryRunResult;
+  let changed: DryRunResult;
   const events: DryRunEvent[] = [];
+  const changedEvents: DryRunEvent[] = [];
   let createdByGherkin = 0;
 
   beforeAll(async () => {
@@ -76,6 +84,11 @@ describe('dry run, end to end', () => {
     dir = await mkdtemp(path.join(tmpdir(), 'qa-dry-run-e2e-'));
     await writeFile(path.join(dir, 'create-user.feature'), FEATURE);
     await writeFile(path.join(dir, 'create-user.flow.yaml'), FLOW);
+    await writeFile(path.join(dir, 'create-user-changed.flow.yaml'), FLOW_CHANGED);
+    await writeFile(
+      path.join(dir, 'mission-changed.yaml'),
+      mission(app.url, path.join(dir, 'reports-changed')),
+    );
     // Deux dossiers de rapports : le Gherkin et le YAML ne partagent pas de mémoire.
     await writeFile(path.join(dir, 'mission.yaml'), mission(app.url, path.join(dir, 'reports')));
     await writeFile(path.join(dir, 'mission-yaml.yaml'), mission(app.url, path.join(dir, 'reports-yaml')));
@@ -101,7 +114,16 @@ describe('dry run, end to end', () => {
       missionFile: path.join(dir, 'mission.yaml'),
       run: { env },
     });
-  }, 360_000);
+    // Un localisateur qui a changé : l'étape est retrouvée sous une autre forme, jamais MISSING + INSERTED.
+    changed = await runDryRun({
+      scenarioFile: path.join(dir, 'create-user-changed.flow.yaml'),
+      missionFile: path.join(dir, 'mission-changed.yaml'),
+      outputFormat: 'both',
+      isolatedMemory: true,
+      onEvent: (event) => changedEvents.push(event),
+      run: { env },
+    });
+  }, 480_000);
 
   afterAll(async () => {
     await app.close();
@@ -132,6 +154,40 @@ describe('dry run, end to end', () => {
       matched: 7,
       inserted: 4,
     });
+  });
+
+  it('SEMANTIC RECONCILIATION: a locator that changed is paired with the observed step of the same name, never MISSING + INSERTED', () => {
+    expect(rows(changed)).toEqual([
+      '/login MATCHED',
+      'Identifiant MATCHED',
+      'Mot de passe MATCHED',
+      'Se connecter MATCHED',
+      'Administration INSERTED',
+      '#legacy-users-link MATCHED_AFTER_INSERTION',
+      'Créer un utilisateur MATCHED',
+      'Suivant INSERTED',
+      'Suivant INSERTED',
+      'Confirmer la création INSERTED',
+      'Utilisateur créé MATCHED',
+    ]);
+    const paired = changed.flows[0]?.reconciliation.entries[5];
+    expect(paired?.observedTarget?.label).toBe('Utilisateurs');
+    expect(paired?.pairing?.score).toMatchObject({ target: 1 });
+    expect(paired?.confidence).toBeGreaterThanOrEqual(0.7);
+    expect(paired?.reasons.join('\n')).toContain('same functional event');
+    expect(changed.status).toBe('PARTIALLY_MATCHED');
+    expect(changed.flows[0]?.reconciliation.summary).toMatchObject({
+      matched: 6,
+      matchedWithVariation: 1,
+      inserted: 4,
+      possiblyObsolete: 0,
+      missing: 0,
+    });
+    expect(changedEvents.some((event) => event.type === 'FLOW_STEP_PAIRED')).toBe(true);
+    // Le flow suggéré : l'étape observée (rôle + nom), le sélecteur disparu n'est plus proposé.
+    const suggested = changed.flows[0]?.suggested.steps.map((step) => `${step.label} ${step.status}`) ?? [];
+    expect(suggested).toContain('Utilisateurs MATCHED_AFTER_INSERTION');
+    expect(JSON.stringify(changed.flows[0]?.suggested)).not.toContain('legacy-users-link');
   });
 
   it('the application was really used: one user created, the logout never followed', () => {
