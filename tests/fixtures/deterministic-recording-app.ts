@@ -76,6 +76,10 @@ export interface DeterministicRecordingApp {
   renamed: number | undefined;
   /** true : la variante « liste » (création → ligne de tableau numérotée → lien « Open »). */
   table: boolean;
+  /** Le nombre de créations reçues par le serveur (une reprise ne doit jamais en répéter une). */
+  readonly created: number;
+  /** Le dernier élément créé (numéro, nom saisi). */
+  readonly lastItem: { id: number; name: string } | undefined;
   close: () => Promise<void>;
 }
 
@@ -134,6 +138,12 @@ export async function startDeterministicRecordingApp(): Promise<DeterministicRec
     },
     get table() {
       return state.table;
+    },
+    get created() {
+      return state.nextId - 3024;
+    },
+    get lastItem() {
+      return state.item;
     },
     set table(value: boolean) {
       state.table = value;

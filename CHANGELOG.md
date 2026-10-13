@@ -6,6 +6,17 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Restauration du contexte à la reprise d'un rejeu corrigé** (`src/replay/context-checkpoint.ts`,
+  `src/replay/context-capture.ts`, session de correction, fenêtre du recorder ; `docs/CONTEXT_RECOVERY.md`).
+  Un checkpoint de contexte est pris devant chaque étape de la session (URL complète, route, cadres, onglets,
+  dialogue, champs, défilement, contrôles, données du run, étapes à effet métier, préconditions). Après une
+  correction validée, **Reprendre ici** compare la page tenue au checkpoint et décide : REVALIDATE (préconditions
+  dures vérifiées), RESTORE (les étapes qui remplissent les champs perdus), REBUILD (les étapes précédentes avec
+  les mêmes données du run) ou MANUAL_RECOVERY (session expirée, création qui serait répétée, précondition non
+  satisfaite). L'étape corrigée et la suite sont rejouées dans la même session ; un échec suivant garde la page
+  devant l'étape en échec. `TestDataRunContext.seed()`, `replay.contextRecovery`, `replay-checkpoints.json`
+  (empreintes), événements `REPLAY_CONTEXT_RECOVERY`, `REPLAY_RESUMED`, `REPLAY_RESUME_BLOCKED`. Tests unitaires
+  (17) et d'intégration `recording-context-recovery`.
 - **Correction manager** (`src/recording/target-correction.ts`, fenêtre du recorder, script de capture) :
   corriger la cible d'une action **dans le navigateur**. Mode sélection dans la page (bandeau, élément
   survolé encadré avec rôle · nom · test id, clic jamais transmis à l'application, Échap annule) ; dans la

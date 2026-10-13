@@ -313,6 +313,8 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .result .rhead{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}
 .result .rmeta{flex:1 1 260px;margin:0!important}
 .result .rhead .actions{margin-left:auto}
+.result.resume{background:var(--accent-soft);border-color:var(--accent)} .result.resume .sub{margin:4px 0 0}
+.result .recov{margin:4px 0 0;font-weight:600}
 .result details{margin-bottom:0}
 .result.ok{background:var(--ok-soft);border-color:var(--ok-soft)} .result.bad{background:var(--surface);border-color:var(--bad-line);border-left:4px solid var(--bad)}
 /* CORRECTION MANAGER : ancienne cible → nouvelle cible, ordre de résolution, mode sélection. */
@@ -581,6 +583,10 @@ const SCRIPT = `
       replaying: function (a, b) { return 'Rejeu en cours… étape ' + a + ' sur ' + b; },
       replayOk: '✓ Replay réussi', executed: function (a, b) { return a + ' / ' + b + ' actions exécutées'; },
       replayBad: '✕ Replay interrompu', stepOf: function (a, b) { return 'Étape ' + a + ' sur ' + b; }, cause: 'Cause', seeDetails: 'Voir les détails', editStep: "Modifier l'étape",
+      resumeTitle: function (n, d) { return 'Contexte gardé devant l’étape ' + n + ' · ' + d; }, resumeHelp: "La page de l'application est restée dans l'état de cette étape (même run, mêmes données). Reprendre vérifie le contexte, puis rejoue l'étape corrigée et la suite.",
+      resumeHere: 'Reprendre ici', restartFromStart: 'Rejouer depuis le début', resumedAt: function (n, s) { return 'Repris à l’étape ' + n + ' · ' + s; }, resumeBlocked: function (n, s) { return 'Reprise bloquée à l’étape ' + n + ' · ' + s; },
+      strategy: { REVALIDATE: 'contexte vérifié', RESTORE: 'champs restaurés', REBUILD: 'contexte reconstruit', MANUAL_RECOVERY: 'reprise manuelle requise' },
+      recoveredSteps: function (l) { return 'Étapes rejouées pour le contexte : ' + l; },
       saved: '✓ Flow sauvegardé', remove: '✕ Retirer cette étape', removeLabel: function (d) { return "Retirer l'étape « " + d + ' » du flow'; },
       checks: function (n) { return 'Vérifications ajoutées au flow (' + n + ')'; }, checksNote: 'Déduites des résultats observés : ce ne sont pas des actions enregistrées.',
       analysisTitle: 'Analyse', analysisNote: "L'analyse ne modifie jamais le recording. Elle est disponible après l'arrêt.", analysisWaiting: "L'analyse sera disponible après l'arrêt de l'enregistrement.",
@@ -634,6 +640,10 @@ const SCRIPT = `
       replaying: function (a, b) { return 'Replaying… step ' + a + ' of ' + b; },
       replayOk: '✓ Replay passed', executed: function (a, b) { return a + ' / ' + b + ' actions executed'; },
       replayBad: '✕ Replay stopped', stepOf: function (a, b) { return 'Step ' + a + ' of ' + b; }, cause: 'Cause', seeDetails: 'See the details', editStep: 'Edit the step',
+      resumeTitle: function (n, d) { return 'Context kept before step ' + n + ' · ' + d; }, resumeHelp: 'The application page stayed in the state of this step (same run, same data). Resuming checks the context, then replays the corrected step and the rest.',
+      resumeHere: 'Resume here', restartFromStart: 'Replay from the start', resumedAt: function (n, s) { return 'Resumed at step ' + n + ' · ' + s; }, resumeBlocked: function (n, s) { return 'Resume blocked at step ' + n + ' · ' + s; },
+      strategy: { REVALIDATE: 'context verified', RESTORE: 'fields restored', REBUILD: 'context rebuilt', MANUAL_RECOVERY: 'manual resume required' },
+      recoveredSteps: function (l) { return 'Steps replayed for the context: ' + l; },
       saved: '✓ Flow saved', remove: '✕ Remove this step', removeLabel: function (d) { return 'Remove the step "' + d + '" from the flow'; },
       checks: function (n) { return 'Checks added to the flow (' + n + ')'; }, checksNote: 'Inferred from the observed results: these are not recorded actions.',
       analysisTitle: 'Analysis', analysisNote: 'The analysis never changes the recording. It is available after Stop.', analysisWaiting: 'The analysis will be available once the recording is stopped.',
@@ -1136,14 +1146,20 @@ const SCRIPT = `
     if (state.phase !== 'REVIEW') { setHtml(el, ''); return; }
     var r = state.replay;
     var h = '<div class="review" role="region" aria-label="' + esc(T.done) + '"><h2>' + esc(T.done) + '</h2>';
-    if (!r && !state.saved) h += '<p class="hint">' + esc(T.recommend) + '</p>';
-    if (r && r.status === 'PASSED') h += '<div class="result ok" role="status"><b>' + esc(T.replayOk) + '</b><ul><li>✓ ' + esc(T.executed(r.executed, r.total)) + '</li>' + (r.checks || []).map(function (c) { return '<li>' + (c.ok ? '✓ ' : '⚠ ') + esc(c.text) + '</li>'; }).join('') + '</ul></div>';
+    // LA REPRISE : la page tenue devant l'étape corrigée (contexte gardé).
+    var rs = state.resume;
+    if (rs) {
+      h += '<div class="result resume" role="status"><div class="rhead"><b>' + esc(T.resumeTitle(rs.index, rs.description)) + '</b><div class="actions">' + button(T.resumeHere, { cmd: 'resume-replay', id: rs.stepId, cls: 'primary', icon: 'check', disabled: rs.running }) + button(T.restartFromStart, { cmd: 'replay', disabled: rs.running }) + '</div></div><p class="sub">' + esc(T.resumeHelp) + '</p></div>';
+    }
+    if (!r && !state.saved && !rs) h += '<p class="hint">' + esc(T.recommend) + '</p>';
+    var rec = r && r.recovery ? '<p class="sub recov">' + esc((r.recovery.strategy === 'MANUAL_RECOVERY' ? T.resumeBlocked : T.resumedAt)(r.recovery.from, T.strategy[r.recovery.strategy] || r.recovery.strategy)) + (r.recovery.recovered && r.recovery.recovered.length ? ' · ' + esc(T.recoveredSteps(r.recovery.recovered.join(', '))) : '') + '</p>' : '';
+    if (r && r.status === 'PASSED') h += '<div class="result ok" role="status"><b>' + esc(T.replayOk) + '</b>' + rec + '<ul><li>✓ ' + esc(T.executed(r.executed, r.total)) + '</li>' + (r.checks || []).map(function (c) { return '<li>' + (c.ok ? '✓ ' : '⚠ ') + esc(c.text) + '</li>'; }).join('') + '</ul></div>';
     if (r && r.status === 'FAILED' && r.failure) {
       var f = r.failure;
       // Une ligne : le verdict, l'étape et la cause, puis les actions ; les détails techniques repliés.
       h += '<div class="result bad" role="alert"><div class="rhead"><b>' + esc(T.replayBad) + '</b><p class="rmeta">' + esc(T.stepOf(f.index, r.total)) + ' · <b>' + esc(f.description) + '</b> · ' + esc(T.cause) + ' : ' + esc(f.cause) + '</p>';
       h += '<div class="actions">' + (f.stepId ? button(T.cInBrowser, { cmd: 'correct-pick', id: f.stepId, cls: 'soft', icon: 'cursor' }) : '') + button(T.editStep, { cmd: 'edit-step', id: f.stepId || '' }) + button(T.restart, { cmd: 'replay' }) + '</div></div>';
-      h += '<details><summary>' + esc(T.seeDetails) + '</summary><ul>' + f.details.map(function (d) { return '<li class="tech">' + esc(d) + '</li>'; }).join('') + '</ul></details></div>';
+      h += rec + '<details><summary>' + esc(T.seeDetails) + '</summary><ul>' + f.details.map(function (d) { return '<li class="tech">' + esc(d) + '</li>'; }).join('') + '</ul></details></div>';
     }
     if (state.saved) h += '<div class="result ok" role="status"><b>' + esc(T.saved) + '</b><p class="sub">' + esc(state.saved.directory) + '</p></div>';
     setHtml(el, h + '</div>');

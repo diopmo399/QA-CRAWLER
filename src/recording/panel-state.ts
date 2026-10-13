@@ -144,6 +144,17 @@ export interface PanelReplay {
     details: string[];
   };
   report?: string;
+  /**
+   * LA REPRISE après une correction (contexte gardé) : la stratégie décidée, l'étape où le rejeu a repris,
+   * pourquoi, les étapes rejouées pour restaurer ou reconstruire, et ce qui bloque une reprise manuelle.
+   */
+  recovery?: {
+    strategy: 'RESTORE' | 'REBUILD' | 'REVALIDATE' | 'MANUAL_RECOVERY';
+    from: number;
+    reasons: string[];
+    recovered: number[];
+    blockedBy?: { step?: number; reason: string }[];
+  };
 }
 
 export interface PanelAnalysis {
@@ -341,6 +352,8 @@ export interface PanelState {
   layout?: 'full' | 'compact';
   /** L'étape à montrer (sélectionnée, défilée) à l'ouverture de la fenêtre depuis le dock (« Résoudre »). */
   focus?: string;
+  /** Une correction validée dans une page tenue : le rejeu peut REPRENDRE à cette étape (contexte gardé). */
+  resume?: { stepId: string; index: number; description: string; running?: boolean };
   /** L'aperçu est ouvert dans sa propre fenêtre (la fenêtre principale garde le parcours et les détails). */
   previewDetached?: boolean;
 }

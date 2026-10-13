@@ -27,7 +27,8 @@ export interface PanelCommand {
     | 'correct-cancel'
     | 'correct-apply'
     | 'correct-test'
-    | 'correct-restore';
+    | 'correct-restore'
+    | 'resume-replay';
   id?: string;
   candidate?: number;
   /** La revue d'une intention : l'intention choisie et sa justification (facultative). */
@@ -66,6 +67,7 @@ const COMMANDS = new Set<PanelCommand['type']>([
   'correct-apply',
   'correct-test',
   'correct-restore',
+  'resume-replay',
 ]);
 
 /**

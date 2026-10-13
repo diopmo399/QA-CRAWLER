@@ -181,6 +181,10 @@ jamais deux applications ouvertes en même temps.
   corrigé. Annuler ferme la session aussi ; la revue la ferme en partant. Les données de test
   produites par le rejeu de la session (clé → valeur, en mémoire seulement) sont les **valeurs
   connues** qui servent à lier une ligne de tableau à la donnée du run (voir ci-dessus).
+- **Reprendre ici** (après « Valider la correction » dans la page tenue) : le rejeu **reprend à l'étape
+  corrigée**, dans la même session et avec les mêmes données du run. La page est comparée au checkpoint
+  de contexte pris devant l'étape, puis vérifiée, restaurée ou reconstruite ; une création déjà faite
+  n'est jamais répétée sans décision. Voir [CONTEXT_RECOVERY.md](CONTEXT_RECOVERY.md).
 - **💾 Sauvegarder** : l'enregistrement est un **brouillon** (`recording-status.json` :
   `DRAFT`) ; sauvegarder copie le flow dans `recording.flowsDirectory` (défaut : `flows/<nom>/` à
   côté du dossier des rapports) avec son jeu de données, et le marque `SAVED`.
