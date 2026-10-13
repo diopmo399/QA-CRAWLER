@@ -100,8 +100,10 @@ ${THEME_BOOT_SCRIPT}
         </section>
         <section class="card quality" id="quality"></section>
       </div>
-      <section class="card preview col-mid" id="preview-card"></section>
-      <aside class="card details col-right" id="details" aria-live="polite"></aside>
+      <div class="col-side">
+        <aside class="card details col-right" id="details" aria-live="polite"></aside>
+        <section class="card preview col-mid" id="preview-card"></section>
+      </div>
     </div>
   </section>
   <section id="panel-analysis" role="tabpanel" aria-labelledby="tab-analysis" hidden></section>
@@ -199,13 +201,24 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
    l'aperçu restent visibles pendant qu'on fait défiler un long parcours. */
 @media (min-width:780px) and (min-height:560px){
   body[data-mode=main]{height:100vh;overflow:hidden}
-  body[data-mode=main] main{overflow:auto}
+  /* Chaque colonne défile pour elle-même : un long détail (correction) ne pousse plus le parcours,
+     et le parcours se parcourt sans perdre le détail de vue. */
+  body[data-mode=main] main{overflow:hidden;display:flex;flex-direction:column}
+  body[data-mode=main] main>[role=tabpanel]{flex:1;min-height:0;overflow:auto}
+  body[data-mode=main] #panel-recording{display:flex;flex-direction:column;overflow:hidden}
+  body[data-mode=main] #review{flex:none;max-height:45%;overflow:auto}
+  body[data-mode=main] .grid{flex:1;min-height:0;grid-template-rows:minmax(0,1fr)}
+  body[data-mode=main] .grid>.col-left{min-height:0;max-height:100%;overflow:auto;overscroll-behavior:contain;align-content:start}
+  body[data-mode=main] .grid>.col-side{max-height:100%}
+  /* Le détail passe en premier (il garde sa hauteur, défile s'il est très long) ; l'aperçu prend le reste. */
+  body[data-mode=main] .col-side>.col-right{flex:0 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
+  body[data-mode=main] .col-side>.col-mid{flex:1 1 0;min-height:52px;overflow:auto}
 }
 @media (min-width:780px){
   .grid{grid-template-columns:minmax(0,1fr) minmax(320px,400px)}
-  .grid>.col-left{grid-column:1;grid-row:1/3}
-  .grid>.col-right{grid-column:2;grid-row:1}
-  .grid>.col-mid{grid-column:2;grid-row:2;display:block}
+  .grid>.col-left{grid-column:1}
+  .grid>.col-side{grid-column:2;display:flex;flex-direction:column;gap:12px;min-height:0}
+  .col-mid{display:block}
 }
 .col-left{display:grid;gap:12px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
@@ -293,10 +306,14 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .details .logs{margin-top:10px}
 .details .logs summary{cursor:pointer;color:var(--muted);font-weight:600}
 .details .empty-details{color:var(--muted);text-align:center;padding:30px 10px}
-.review{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow)}
-.review h2{margin:0 0 4px;font-size:16px;color:var(--ok)}
+.review{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:12px 16px;margin-bottom:12px;box-shadow:var(--shadow)}
+.review h2{margin:0;font-size:16px;color:var(--ok)}
 .review .hint{margin:0;color:var(--muted)}
-.result{border-radius:12px;padding:14px 16px;margin-top:12px;border:1px solid var(--line)}
+.result{flex:1 1 420px;border-radius:12px;padding:10px 14px;margin:0;border:1px solid var(--line)}
+.result .rhead{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}
+.result .rmeta{flex:1 1 260px;margin:0!important}
+.result .rhead .actions{margin-left:auto}
+.result details{margin-bottom:0}
 .result.ok{background:var(--ok-soft);border-color:var(--ok-soft)} .result.bad{background:var(--surface);border-color:var(--bad-line);border-left:4px solid var(--bad)}
 /* CORRECTION MANAGER : ancienne cible → nouvelle cible, ordre de résolution, mode sélection. */
 .correction{margin-top:14px;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--surface)}
@@ -319,6 +336,8 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .correction .order ol{margin:0;padding-left:18px;display:grid;gap:2px;color:var(--muted-strong)}
 .correction .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .correction .row .grow{flex:1;justify-content:center}
+/* Tester / Annuler / Valider restent visibles pendant que le détail de la correction défile. */
+.correction .row.cta{position:sticky;bottom:-18px;margin:10px -2px 0;padding:8px 2px;background:var(--surface);border-top:1px solid var(--line)}
 .correction .warnnote{margin:6px 0 0;font-size:12px;color:var(--warn);font-weight:600}
 .rowopts{border:1px solid var(--line);border-radius:10px;padding:8px 12px 10px;margin:10px 0 0;display:grid;gap:6px;background:var(--surface-2)}
 .rowopts legend{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--muted-strong);padding:0 4px}
@@ -470,7 +489,7 @@ body[data-mode=preview]{background:var(--bg)}
 @media (max-width:640px){.irow{grid-template-columns:32px minmax(0,1fr);padding:12px}.irow .iico{width:32px;height:32px;grid-row:1}.irow .iactions{grid-column:2;grid-row:auto;justify-content:flex-start}.irow .full,.iedit{grid-column:2}}
 /* E · MINI-DOCK : une fenêtre étroite et sombre pendant l'enregistrement (la revue reste complète). */
 body.compact{--title:#C7D2FE;--ok-fg:#052E16;--muted-strong:#C9CFDD;--chip-bg:#1A2133;--chip-fg:#C9CFDD;--ok-text:#4ADE80;--bg:#0B0E17;--surface:#111726;--surface-2:#161C2D;--fg:#E6E9F2;--muted:#9AA3B8;--line:#1F2638;--line-strong:#2A3248;--accent:#6366F1;--accent-soft:#1C1A4A;--accent-fg:#FFFFFF;--ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#2A1F0C;--bad:#EF4444;--bad-soft:#2A1215;--run:#818CF8;--run-soft:#1C1A4A;--teal:#5EEAD4;--teal-soft:#0E3B33;--violet:#DDD6FE;--violet-soft:#2E1F6B;--orange:#A5B4FC;--orange-soft:#1C1A4A;--shadow:none;--ring:#2E2A7A;--text:var(--fg);--text-2:var(--muted-strong);--nav-hover:#161C2D}
-body.compact .tabs,body.compact .col-mid,body.compact .col-right,body.compact #quality,body.compact .subtitle,body.compact #devtoggle,body.compact .summarybar,body.compact #tltools,body.compact #checks,body.compact .sep,body.compact #livepill{display:none!important}
+body.compact .tabs,body.compact .col-side,body.compact .col-mid,body.compact .col-right,body.compact #quality,body.compact .subtitle,body.compact #devtoggle,body.compact .summarybar,body.compact #tltools,body.compact #checks,body.compact .sep,body.compact #livepill{display:none!important}
 body.compact .grid{grid-template-columns:1fr!important}
 body.compact .statusbar{margin:8px 10px 0}
 body.compact main{padding:8px 10px}
@@ -480,16 +499,35 @@ body.compact .controls{flex-basis:100%}
 /* ÉCRAN DE PORTABLE (étroit ou peu haut, mise à l'échelle Windows 125–150 %) : la même fenêtre, plus
    dense — en-tête, barre d'état, onglets, cartes et résumé prennent moins de hauteur ; le parcours garde la place. */
 @media (max-width:1400px),(max-height:820px){
-  .topbar{padding:6px 16px;gap:10px}.brand{font-size:15px}.topbar .logo{width:24px;height:24px}.devtoggle{min-height:30px;padding:4px 10px}.topbar .qa-theme-toggle{width:32px;height:32px}
-  .statusbar{margin:8px 16px 0;padding:6px 14px;gap:12px}.state{font-size:15px}.state::before{width:10px;height:10px}.timer{font-size:16px}.alert{padding:3px 10px;font-size:12px}
-  .controls button{min-height:32px;padding:4px 12px}
-  .tabs{margin:6px 16px 0}.tabs [role=tab]{padding:5px 12px;min-height:32px;font-size:13px}
-  main{padding:8px 16px 12px}.grid{gap:12px}.col-left{gap:8px}.card{padding:12px}.card-head{margin-bottom:8px}
-  .status-line{margin-bottom:8px;padding:4px 10px}.timeline>li{padding-bottom:6px}.item{padding:7px 12px;gap:10px;border-radius:10px}
-  .review{padding:8px 12px;margin-bottom:8px}.review h2{font-size:14px}.result{padding:8px 12px;margin-top:6px}.result.bad>b{font-size:14px}.result p{margin:4px 0}.result details{margin:6px 0 8px;padding:6px 10px}.result .actions button{min-height:32px;padding:4px 12px}
-  .details h3{margin:10px 0 6px}.details .hero{padding:8px 10px;margin-bottom:10px}.correction{padding:10px 12px;margin-top:10px}
-  .summarybar{padding:6px 16px;gap:12px}.summarybar h2{display:none}.stat{gap:6px;padding-right:10px}.stat .i{width:22px;height:22px;font-size:10px;box-shadow:0 0 0 2px var(--surface)}.stat b{font-size:13px}.stat span{font-size:11px}
-  .summarybar .buttons{gap:8px}.summarybar .buttons button{min-height:34px;padding:5px 12px;font-size:13px}
+  /* ÉCRAN DE PORTABLE (échelle Windows 125–150 %) : tout est plus serré, le parcours tient sur une
+     ligne par action, le détail reste lisible sans défiler. */
+  .topbar{padding:4px 14px;gap:8px}.brand{font-size:14px}.topbar .logo{width:22px;height:22px}.subtitle{font-size:12px}.devtoggle{min-height:28px;padding:3px 9px;font-size:11px}.topbar .qa-theme-toggle{width:30px;height:30px}
+  .statusbar{margin:6px 14px 0;padding:4px 12px;gap:10px;flex-wrap:nowrap}.state{font-size:14px}.state::before{width:9px;height:9px}.timer{font-size:15px}.alert{padding:2px 8px;font-size:11px}
+  .statusbar .count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.statusbar .spacer{display:none}
+  .controls{flex:none;gap:6px}.controls button{min-height:28px;padding:2px 10px;font-size:13px}.controls .note{flex-basis:auto}
+  .progress{margin:6px 14px 0}
+  .tabs{margin:4px 14px 0}.tabs [role=tab]{padding:3px 10px;min-height:28px;font-size:13px}
+  main{padding:6px 14px 6px}.grid{gap:10px}.col-left{gap:8px}.grid>.col-side{gap:10px}.card{padding:9px 11px;border-radius:10px}.card-head{margin-bottom:6px;gap:8px}.card-head h2,.card h2{font-size:14px}
+  .tl-search input{min-height:28px;width:150px;padding:3px 10px;font-size:12px}#tlattention{min-height:28px;padding:3px 10px;font-size:12px}
+  .status-line{margin-bottom:6px;padding:3px 8px;font-size:11px}.timeline>li{padding-bottom:4px}
+  .item{padding:4px 9px;gap:7px;border-radius:9px}.dot{width:20px;height:20px;font-size:10px}.num{min-width:14px;font-size:11px}.kind{width:26px;height:26px;border-radius:7px}.kind svg{width:14px;height:14px}
+  .desc{font-size:13px;display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;row-gap:0}.desc .sub{display:inline;font-size:11px}.desc .tech{flex-basis:100%}
+  .pill{margin:0 0 0 auto;font-size:11px}.chev{font-size:15px}
+  .attention{margin-top:6px;padding:8px 10px}.attention label{padding:5px 8px;margin-bottom:4px}.checks{margin-top:2px}
+  .quality .qbody{gap:10px}.ring{width:64px;height:64px}.ring>div{width:50px;height:50px}.ring b{font-size:15px}.ring span{font-size:10px}.quality ul{gap:2px;font-size:11px}
+  .review{padding:6px 12px;margin-bottom:6px;gap:6px 12px}.review h2{font-size:14px}.review:has(.result)>h2,.review:has(.result)>.hint{display:none}.result{padding:5px 10px}.result.bad .rhead>b{font-size:13px}.result p{margin:3px 0}.result ul{margin-top:3px}.result details{margin:3px 0 0;padding:3px 9px}.result .actions{gap:6px}.result .actions button{min-height:26px;padding:2px 9px;font-size:12px}
+  .preview .card-head{flex-wrap:nowrap}.preview .card-head .actions button{min-height:26px;padding:2px 8px;font-size:12px}
+  .correction .chead h3,.correction .chead button{white-space:nowrap}.correction .chead button{flex:none;min-height:24px;padding:2px 7px;font-size:11px}.correction .chead button svg{display:none}.correction .row.cta{bottom:-9px;margin-top:6px;padding:6px 2px;gap:5px}.correction .row.cta button{white-space:nowrap;padding:3px 8px;font-size:12px}
+  .details .step{display:none}.details .hero{padding:6px 9px;margin-bottom:8px;gap:8px}.details .hero b{font-size:13px}.details .hero span{font-size:11px}
+  .details h3{margin:8px 0 4px;font-size:11px}.details dl{gap:3px 10px;font-size:12px;grid-template-columns:96px minmax(0,1fr)}.vlist{padding:6px 8px;gap:3px;font-size:11px}.details .found{margin-top:6px;padding:5px 8px}.details .logs{margin-top:6px}
+  .correction{padding:7px 10px;margin-top:8px;border-radius:10px}.correction .chead{margin-bottom:5px;gap:8px}.correction .chead h3{font-size:12px}.correction .chead button{min-height:26px;padding:2px 9px;font-size:12px}
+  .pair{gap:6px;margin:6px 0}.tbox{padding:6px 8px;border-radius:8px}.tbox code{font-size:11px}.tbox span{font-size:11px;margin-top:2px}
+  .correction .order{padding:6px 9px;margin:6px 0;font-size:11px}.correction .order ol{gap:0}.correction .row{margin-top:6px;gap:6px}.correction .row button{min-height:28px;padding:3px 10px;font-size:12px}
+  .correction .warnnote,.correction .sub{font-size:11px;margin-top:4px}.rowopts{padding:5px 9px 7px;margin-top:6px;gap:3px}.rowopts label.choice{font-size:11px}.rowopts label.choice small{font-size:10px}.chist{gap:2px 8px;font-size:11px;margin:5px 0}
+  .pickbadge{padding:3px 9px;font-size:11px}.cbadge{font-size:10px}
+  .summarybar{padding:4px 14px;gap:10px}.summarybar h2{display:none}.stat{gap:5px;padding-right:9px}.stat .i{width:20px;height:20px;font-size:10px;box-shadow:0 0 0 2px var(--surface)}.stat b{font-size:12px}.stat span{font-size:10px}
+  .summarybar .buttons{gap:6px}.summarybar .buttons button{min-height:30px;padding:3px 10px;font-size:12px}
+  .selnote{margin-top:6px;padding:6px 9px}.preview .url{padding:3px 8px;margin-bottom:6px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 `;
@@ -913,9 +951,12 @@ const SCRIPT = `
     var running = state.replay && state.replay.status === 'RUNNING';
     var corr = step.correction;
     var corrected = corr && corr.corrected;
+    var busy = pk && (pk.status === 'PREPARING' || pk.status === 'PICKING' || pk.status === 'PICKED');
     var h = '<section class="correction" aria-label="' + esc(T.cTitle(step.index)) + '"><div class="chead"><h3>' + esc(T.cTitle(step.index)) + '</h3>';
     if (pk && pk.status === 'PICKED') h += '<span class="cbadge">' + esc(T.cProposed) + '</span>';
     else if (corrected) h += '<span class="cbadge done">' + esc(T.cCorrected) + '</span>';
+    // Au repos, le bouton tient sur la ligne du titre (pas une rangée de plus).
+    if (!busy) h += '<span class="spacer"></span>' + button(T.cInBrowser, { cmd: 'correct-pick', id: step.id, cls: 'soft', icon: 'cursor', disabled: running });
     h += '</div>';
     if (pk && pk.status === 'PREPARING') {
       var pg = pk.progress || { executed: 0, total: 0 };
@@ -957,7 +998,7 @@ const SCRIPT = `
       h += '</dl>';
       if (pr.order.length) h += '<div class="order"><b>' + esc(T.cOrder) + '</b><ol>' + pr.order.map(function (o) { return '<li>' + esc(o) + '</li>'; }).join('') + '</ol></div>';
       if (pr.ambiguous) h += '<p class="warnnote">' + esc(T.cAmbiguous) + '</p>';
-      h += '<div class="row">' + button(T.cTest, { cmd: 'correct-test', id: step.id }) + button(T.cCancel, { cmd: 'correct-cancel', id: step.id }) + button(T.cApply, { cmd: 'correct-apply', id: step.id, cls: 'primary grow', icon: 'check' }) + '</div>';
+      h += '<div class="row cta">' + button(T.cTest, { cmd: 'correct-test', id: step.id }) + button(T.cCancel, { cmd: 'correct-cancel', id: step.id }) + button(T.cApply, { cmd: 'correct-apply', id: step.id, cls: 'primary grow', icon: 'check' }) + '</div>';
       if (state.notice && state.notice.actionId === step.id) h += '<p class="error" role="alert">' + esc(state.notice.message) + '</p>';
       return h + '</section>';
     }
@@ -965,7 +1006,6 @@ const SCRIPT = `
     if (pk && pk.status === 'UNAVAILABLE') h += '<p class="sub">' + esc(T.cUnavailable) + (pk.reason ? ' (' + esc(pk.reason) + ')' : '') + '</p>';
     if (pk && pk.status === 'UNREACHABLE' && pk.stoppedAt) h += '<p class="warnnote">' + esc(T.cUnreachable(pk.stoppedAt.index, pk.stoppedAt.label)) + '</p><p class="sub">' + esc(pk.stoppedAt.reason) + '<br>' + esc(T.cUnreachableHelp) + '</p>';
     if (corr && corr.current && !corrected) h += '<dl><dt>' + esc(T.cCurrent) + '</dt><dd><code>' + esc(corr.current) + '</code></dd></dl>';
-    h += '<div class="row">' + button(T.cInBrowser, { cmd: 'correct-pick', id: step.id, cls: 'soft', icon: 'cursor', disabled: running }) + '</div>';
     if (corrected && corr) {
       var last = corr.history.length ? corr.history[corr.history.length - 1] : null;
       h += '<h3>' + esc(T.cHistory) + '</h3><div class="chist">';
@@ -1099,9 +1139,10 @@ const SCRIPT = `
     if (r && r.status === 'PASSED') h += '<div class="result ok" role="status"><b>' + esc(T.replayOk) + '</b><ul><li>✓ ' + esc(T.executed(r.executed, r.total)) + '</li>' + (r.checks || []).map(function (c) { return '<li>' + (c.ok ? '✓ ' : '⚠ ') + esc(c.text) + '</li>'; }).join('') + '</ul></div>';
     if (r && r.status === 'FAILED' && r.failure) {
       var f = r.failure;
-      h += '<div class="result bad" role="alert"><b>' + esc(T.replayBad) + '</b><p>' + esc(T.stepOf(f.index, r.total)) + '<br><b>' + esc(f.description) + '</b><br>' + esc(T.cause) + ' : ' + esc(f.cause) + '</p>';
-      h += '<details><summary>' + esc(T.seeDetails) + '</summary><ul>' + f.details.map(function (d) { return '<li class="tech">' + esc(d) + '</li>'; }).join('') + '</ul></details>';
+      // Une ligne : le verdict, l'étape et la cause, puis les actions ; les détails techniques repliés.
+      h += '<div class="result bad" role="alert"><div class="rhead"><b>' + esc(T.replayBad) + '</b><p class="rmeta">' + esc(T.stepOf(f.index, r.total)) + ' · <b>' + esc(f.description) + '</b> · ' + esc(T.cause) + ' : ' + esc(f.cause) + '</p>';
       h += '<div class="actions">' + (f.stepId ? button(T.cInBrowser, { cmd: 'correct-pick', id: f.stepId, cls: 'soft', icon: 'cursor' }) : '') + button(T.editStep, { cmd: 'edit-step', id: f.stepId || '' }) + button(T.restart, { cmd: 'replay' }) + '</div></div>';
+      h += '<details><summary>' + esc(T.seeDetails) + '</summary><ul>' + f.details.map(function (d) { return '<li class="tech">' + esc(d) + '</li>'; }).join('') + '</ul></details></div>';
     }
     if (state.saved) h += '<div class="result ok" role="status"><b>' + esc(T.saved) + '</b><p class="sub">' + esc(state.saved.directory) + '</p></div>';
     setHtml(el, h + '</div>');

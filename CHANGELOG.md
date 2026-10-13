@@ -24,6 +24,11 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   par : la donnée du run » (`row: { colonne: ${testData:clé} }`, par défaut) ou « la clé lue dans le tableau »,
   marquée « propre à ce run » quand l'ancienne cible visait la même colonne avec une autre valeur
   (`CorrectionProposal.rowOptions`, `PickedElement.rowCells`, commande `correct-apply` avec `option`).
+  **Fenêtre sur écran de portable** (largeur ≤ 1400 px ou hauteur ≤ 820 px) : moins d'espace et moins de
+  défilement — barre d'état sur une ligne, une ligne par action (statut à droite), détail et parcours qui
+  défilent chacun pour soi (le détail passe avant l'aperçu), carte « Replay interrompu » sur une ligne avec ses
+  actions, bouton « Corriger dans le navigateur » sur la ligne du titre, Tester / Annuler / Valider collés en
+  bas du détail pendant que la correction défile.
 - **Vue d'ensemble** (`reports/overview.html`, `src/reporting/overview-*.ts`) : une page autonome par run —
   indicateurs (actions validées, intentions CONFIRMED / PROBABLE contre UNKNOWN, durée et durées par étape),
   parcours détecté (une carte par étape, ton validé / avertissement / échec / inconnu, étape d'arrêt, écritures
