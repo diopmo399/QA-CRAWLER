@@ -26,11 +26,15 @@ import { BINDING_GENERATORS, dataLineage, stepDataBinding } from './test-data-bi
 import { RecorderPanel, type PanelCommand } from './recorder-panel.js';
 import {
   describeTarget,
+  proposalTarget,
   proposeCorrection,
   useOfStep,
+  type CorrectionContext,
   type CorrectionProposal,
+  type KnownValue,
   type PickedElement,
 } from './target-correction.js';
+import { availableVariables } from './test-data-binding.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { RecordingResult } from './process-recording.js';
 import { TEST_DATA_FILE } from './process-recording.js';
@@ -67,6 +71,9 @@ export interface ReviewActions {
   correctTarget?: (input: {
     stepId: string;
     picked: PickedElement;
+    /** Les valeurs connues du run (lier une ligne de tableau à une donnée) et l'option de ligne choisie. */
+    known?: readonly KnownValue[];
+    option?: string;
   }) => Promise<{ ok: true } | { error: string }>;
   restoreTarget?: (stepId: string) => Promise<{ ok: true } | { error: string }>;
   /** La session de correction (la page gardée ouverte) se ferme : après Valider, Annuler ou la revue. */
@@ -83,7 +90,7 @@ export interface PickProgress {
 
 /** Ce que donne une sélection : l'élément désigné, une annulation, une page indisponible, ou un chemin arrêté avant l'étape. */
 export type PickOutcome =
-  | { picked: PickedElement }
+  | { picked: PickedElement; runData?: KnownValue[] }
   | { cancelled: true }
   | { unavailable: string }
   | { unreachable: { index: number; label: string; reason: string } };
@@ -102,6 +109,8 @@ export class RecordingConsole {
   /** CORRECTION MANAGER : le mode sélection en cours, puis la proposition (l'élément désigné, en mémoire). */
   private pick: PanelState['pick'];
   private picked: PickedElement | undefined;
+  /** Les valeurs connues du run au moment de la sélection (mémoire seule) : la proposition de ligne s'en sert. */
+  private pickKnown: KnownValue[] = [];
   /** Les actions de la revue en cours (la session de correction se libère hors de la file des commandes). */
   private reviewActions: ReviewActions | undefined;
   private saved: PanelState['saved'];
@@ -401,7 +410,12 @@ export class RecordingConsole {
           } else if (command.type === 'correct-apply' && command.id && input.actions.correctTarget) {
             const picked = this.picked;
             if (picked && this.pick?.stepId === command.id && this.pick.status === 'PICKED') {
-              const outcome = await input.actions.correctTarget({ stepId: command.id, picked });
+              const outcome = await input.actions.correctTarget({
+                stepId: command.id,
+                picked,
+                known: this.pickKnown,
+                ...(command.option ? { option: command.option } : {}),
+              });
               if ('error' in outcome)
                 this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
               else {
@@ -557,7 +571,12 @@ export class RecordingConsole {
         }
         const picked = this.picked;
         if (!picked || this.pick?.stepId !== command.id || this.pick.status !== 'PICKED') break;
-        const outcome = this.recorder.correctTarget(command.id, picked);
+        const outcome = this.recorder.correctTarget(
+          command.id,
+          picked,
+          { known: this.pickKnown },
+          command.option,
+        );
         this.notice =
           'error' in outcome ? { actionId: command.id, kind: 'error', message: outcome.error } : undefined;
         if (!('error' in outcome)) {
@@ -635,7 +654,17 @@ export class RecordingConsole {
       return;
     }
     const picked = outcome.picked;
-    const proposal = proposeCorrection(picked.element, useOfStep(step.kind), this.language);
+    // Les valeurs connues du run : produites par la session de correction (revue), saisies (enregistrement),
+    // et celles du jeu de données des étapes précédentes — pour lier une ligne de tableau à une donnée.
+    this.pickKnown = [...(outcome.runData ?? []), ...this.knownValues(stepId, review)];
+    const context: CorrectionContext = { known: this.pickKnown, ...this.previousTargetOf(stepId, review) };
+    const proposal = proposeCorrection(
+      picked.element,
+      useOfStep(step.kind),
+      this.language,
+      context,
+      picked.rowCells ?? [],
+    );
     this.picked = picked;
     this.pick = {
       stepId,
@@ -648,6 +677,28 @@ export class RecordingConsole {
     await this.refreshPreview(
       picked.rect ? { actionId: stepId, ...picked.rect, label: proposal.label } : undefined,
     );
+  }
+
+  /** Les valeurs connues hors session : le jeu de données (revue, clés non sensibles) ou les saisies (enregistrement). */
+  private knownValues(stepId: string, review: boolean): KnownValue[] {
+    if (!review) return this.recorder.knownValues();
+    const result = this.result;
+    if (!result?.testData) return [];
+    const set = result.testData.set;
+    return availableVariables(result, stepId)
+      .map((variable) => ({ key: variable.key, value: set.values[variable.key]?.value ?? '' }))
+      .filter((entry) => entry.value.trim() !== '');
+  }
+
+  /** L'ancienne cible de l'étape (structurée) : une clé de ligne propre au run se reconnaît par elle. */
+  private previousTargetOf(stepId: string, review: boolean): Pick<CorrectionContext, 'previous'> {
+    const previous = review ? this.result?.flow.steps.find((item) => item.id === stepId)?.step : undefined;
+    const target = review
+      ? previous && 'target' in previous
+        ? previous.target
+        : undefined
+      : this.recorder.currentTarget(stepId);
+    return target ? { previous: target } : {};
   }
 
   /** Le mode sélection attend encore pour cette étape (une autre commande peut l'avoir quitté entre-temps). */
@@ -842,6 +893,19 @@ function enrichSteps(
 function panelProposalOf(proposal: CorrectionProposal): NonNullable<PanelState['pick']>['proposal'] {
   return {
     target: describeTarget(proposal.target),
+    ...(proposal.rowOptions && proposal.rowOptions.length > 0
+      ? {
+          rowOptions: proposal.rowOptions.map((option) => ({
+            id: option.id,
+            target: describeTarget(proposalTarget(proposal, option.id)),
+            row: Object.entries(option.row)
+              .map(([column, value]) => `${column} = ${value}`)
+              .join(', '),
+            ...(option.via ? { via: option.via } : {}),
+            ...(option.fixed ? { fixed: true } : {}),
+          })),
+        }
+      : {}),
     quality: proposal.quality,
     label: proposal.label,
     order: proposal.order,

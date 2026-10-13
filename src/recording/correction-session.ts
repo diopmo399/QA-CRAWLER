@@ -37,6 +37,8 @@ export interface CorrectionSessionState {
   total: number;
   /** Le chemin s'est arrêté là : l'étape, son libellé et la raison (jamais une valeur saisie). */
   stoppedAt?: { index: number; label: string; reason: string };
+  /** Les données de test produites par le rejeu (clé → valeur, mémoire seule) : ce que la page montre maintenant. */
+  runData: { key: string; value: string }[];
 }
 
 export async function runCorrectionSession(
@@ -100,6 +102,7 @@ export async function runCorrectionSession(
           executed,
           total,
           ...(stoppedAt ? { stoppedAt } : {}),
+          runData: driver.testDataValues?.() ?? [],
         };
         await request.hold(state);
       },

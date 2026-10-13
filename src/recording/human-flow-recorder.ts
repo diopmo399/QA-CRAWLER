@@ -21,9 +21,13 @@ import {
   describeTarget,
   restoreRawEvents,
   useOfStep,
+  type CorrectionContext,
   type CorrectionProposal,
+  type KnownValue,
   type PickedElement,
 } from './target-correction.js';
+import type { FlowTarget } from '../config/flow-schema.js';
+import { resolveRecordedTarget } from './recorded-target.js';
 import { NON_INTERACTIVE_NOISE } from './human-journey.js';
 import type { RecordingTargetValidator } from './target-validator.js';
 import type {
@@ -537,6 +541,7 @@ export class HumanFlowRecorder {
       ...(typeof payload.ref === 'string' ? { ref: payload.ref.slice(0, 40) } : {}),
       ...(rect ? { rect } : {}),
       ...(typeof payload.url === 'string' ? { url: redactUrl(payload.url) } : {}),
+      ...rowCellsOf(payload.rowCells),
     };
     this.pickWaiter = undefined;
     this.emit(
@@ -554,6 +559,8 @@ export class HumanFlowRecorder {
   correctTarget(
     actionId: string,
     picked: PickedElement,
+    context: CorrectionContext = {},
+    option?: string,
   ): { action: LiveAction; proposal: CorrectionProposal } | { error: string } {
     const action = this.timeline.actions.find((entry) => entry.id === actionId);
     if (!action) return { error: 'NOT_FOUND' };
@@ -573,6 +580,8 @@ export class HumanFlowRecorder {
       useOfStep(action.kind),
       this.now(),
       this.timeline.language,
+      context,
+      option,
     );
     if ('error' in outcome) return outcome;
     const said = describeTarget(outcome.proposal.target);
@@ -588,6 +597,24 @@ export class HumanFlowRecorder {
     );
     this.changed({ reason: 'UPDATED', action });
     return { action, proposal: outcome.proposal };
+  }
+
+  /** La cible actuelle d'une action (celle que le flow généré viserait) : l'ancienne cible d'une correction. */
+  currentTarget(actionId: string): FlowTarget | undefined {
+    const action = this.timeline.actions.find((entry) => entry.id === actionId);
+    const first = action
+      ? this.session.rawEvents.find((event) => action.rawEventIds.includes(event.id) && event.element)
+      : undefined;
+    return action && first?.element
+      ? resolveRecordedTarget(first.element, useOfStep(action.kind)).target
+      : undefined;
+  }
+
+  /** Les textes saisis pendant l'enregistrement (champs non sensibles) : les valeurs connues du run. */
+  knownValues(): KnownValue[] {
+    return [...new Set(this.typedValues.values())]
+      .filter((value) => value.trim())
+      .map((value) => ({ value }));
   }
 
   /** « Restaurer l'original » pendant l'enregistrement : l'élément enregistré revient sur l'action. */
@@ -1425,6 +1452,22 @@ function rowKeyOf(raw: unknown): { rowKey?: { column: string; value: string }[] 
     })
     .filter((entry): entry is { column: string; value: string } => entry !== undefined);
   return entries.length > 0 ? { rowKey: entries } : {};
+}
+
+/** Les cellules de la ligne de l'élément désigné (colonne → texte), bornées et expurgées. */
+function rowCellsOf(raw: unknown): { rowCells?: { column: string; value: string }[] } {
+  if (!Array.isArray(raw)) return {};
+  const entries = raw
+    .slice(0, 12)
+    .map((entry: unknown) => {
+      if (!isObject(entry) || typeof entry.column !== 'string' || typeof entry.value !== 'string')
+        return undefined;
+      const column = redactText(entry.column.trim().slice(0, 40));
+      const value = redactText(entry.value.trim().slice(0, 60));
+      return column && value ? { column, value } : undefined;
+    })
+    .filter((entry): entry is { column: string; value: string } => entry !== undefined);
+  return entries.length > 0 ? { rowCells: entries } : {};
 }
 
 function preOf(raw: Record<string, unknown>): PreActionContext {

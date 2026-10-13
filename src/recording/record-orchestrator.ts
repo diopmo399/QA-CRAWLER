@@ -75,7 +75,13 @@ import {
   removeFlowStep,
   saveRecordedFlow,
 } from './recording-console.js';
-import { correctFlowTarget, describeTarget, restoreFlowTarget } from './target-correction.js';
+import {
+  correctFlowTarget,
+  describeTarget,
+  restoreFlowTarget,
+  type KnownValue,
+} from './target-correction.js';
+import { isSensitiveKey } from '../data/test-data-set.js';
 import { runCorrectionSession, type CorrectionSessionState } from './correction-session.js';
 import { describeFlowStep, reviewSteps, type PanelReplay } from './panel-state.js';
 
@@ -876,7 +882,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     const ui = consoleUi;
     // LA SESSION DE CORRECTION : le moteur de rejeu suit le même chemin (étapes 1 à N-1) puis garde la
     // page ouverte le temps de la correction ; une seule à la fois, fermée avec la revue.
-    let correction: { stepId: string; release: () => void; done: Promise<unknown> } | undefined;
+    let correction:
+      { stepId: string; release: () => void; done: Promise<unknown>; runData: KnownValue[] } | undefined;
     const endCorrection = async (): Promise<void> => {
       const current = correction;
       if (!current) return;
@@ -1007,7 +1014,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
                 ready({ error: error instanceof Error ? error.message : String(error) });
               },
             );
-            const session = { stepId, release, done };
+            const session = { stepId, release, done, runData: [] as KnownValue[] };
             correction = session;
             const state = await readiness;
             // Annulée pendant le rejeu des étapes précédentes : rien à désigner.
@@ -1031,16 +1038,25 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
                 },
               };
             }
+            session.runData = state.runData.filter((entry) => !isSensitiveKey(entry.key));
             await recorder.attachCorrectionPage(state.page);
             await state.page.bringToFront().catch(() => undefined);
           }
           onProgress({ executed: 0, total: 0, picking: true });
           const picked = await recorder.pickTarget(label);
-          return picked ? { picked } : { cancelled: true };
+          return picked ? { picked, runData: correction.runData } : { cancelled: true };
         },
         releaseCorrection: endCorrection,
-        correctTarget: async ({ stepId, picked }) => {
-          const outcome = correctFlowTarget(result.flow, stepId, picked, Date.now(), language);
+        correctTarget: async ({ stepId, picked, known, option }) => {
+          const outcome = correctFlowTarget(
+            result.flow,
+            stepId,
+            picked,
+            Date.now(),
+            language,
+            { known: known ?? [] },
+            option,
+          );
           if ('error' in outcome) return outcome;
           await rewriteFlow();
           onEvent({

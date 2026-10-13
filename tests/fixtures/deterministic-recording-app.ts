@@ -43,6 +43,28 @@ const form = (
 </script>
 </body></html>`;
 
+/**
+ * LA VARIANTE « LISTE » (correction manager, ligne de tableau) : la création renvoie un numéro propre au
+ * run (il augmente à chaque création) ; la ligne créée est la seule montrée, avec le nom saisi et un lien
+ * « Open ». Au rejeu, le numéro enregistré n'existe plus : seule la ligne liée à la donnée du run se retrouve.
+ */
+const list = (
+  item: { id: number; name: string } | undefined,
+): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Requests</title></head>
+<body>
+<h1>Requests</h1>
+<form onsubmit="return false"><label>First name <input name="firstName" autocomplete="off"></label></form>
+<button type="button" id="create" onclick="fetch('/api/items', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: document.querySelector('[name=firstName]').value }) }).then(() => { location.href = '/form'; })">Create item</button>
+<table id="items" aria-label="Requests"><thead><tr><th>N°</th><th>Name</th><th>Created</th><th>Actions</th></tr></thead><tbody>
+${item ? `<tr><td>${String(item.id)}</td><td>${item.name}</td><td>2026-01-02</td><td><a href="/item">Open</a></td></tr>` : ''}
+</tbody></table>
+</body></html>`;
+
+const ITEM = (
+  item: { id: number; name: string } | undefined,
+): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Item</title></head>
+<body><h1>Item</h1><p id="name">${item?.name ?? ''}</p></body></html>`;
+
 const DONE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Done</title></head>
 <body><h1>Done</h1><p>All set.</p></body></html>`;
 
@@ -52,22 +74,47 @@ export interface DeterministicRecordingApp {
   broken: boolean;
   /** N : « Action N » devient « Renamed N » (une cible à corriger dans le navigateur). */
   renamed: number | undefined;
+  /** true : la variante « liste » (création → ligne de tableau numérotée → lien « Open »). */
+  table: boolean;
   close: () => Promise<void>;
 }
 
 export async function startDeterministicRecordingApp(): Promise<DeterministicRecordingApp> {
-  const state: { broken: boolean; renamed: number | undefined } = { broken: false, renamed: undefined };
+  const state: {
+    broken: boolean;
+    renamed: number | undefined;
+    table: boolean;
+    nextId: number;
+    item: { id: number; name: string } | undefined;
+  } = { broken: false, renamed: undefined, table: false, nextId: 3024, item: undefined };
   const server: Server = createServer((request, response) => {
     const route = (request.url ?? '/').split('?')[0];
     if (route === '/api/items' && request.method === 'POST') {
-      request.resume();
-      response.statusCode = 201;
-      response.setHeader('content-type', 'application/json');
-      response.end('{"id":1,"status":"CREATED"}');
+      let body = '';
+      request.on('data', (chunk: Buffer) => {
+        body += chunk.toString('utf8');
+      });
+      request.on('end', () => {
+        let name = '';
+        try {
+          const parsed = JSON.parse(body || '{}') as { name?: unknown };
+          name = typeof parsed.name === 'string' ? parsed.name.replace(/[<>&]/g, '') : '';
+        } catch {
+          name = '';
+        }
+        const id = state.nextId;
+        state.nextId += 1;
+        state.item = { id, name };
+        response.statusCode = 201;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ id, status: 'CREATED' }));
+      });
       return;
     }
     response.setHeader('content-type', 'text/html; charset=utf-8');
-    response.end(route === '/done' ? DONE : form(state.broken, state.renamed));
+    if (route === '/done') response.end(DONE);
+    else if (state.table) response.end(route === '/item' ? ITEM(state.item) : list(state.item));
+    else response.end(form(state.broken, state.renamed));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -84,6 +131,12 @@ export async function startDeterministicRecordingApp(): Promise<DeterministicRec
     },
     set renamed(value: number | undefined) {
       state.renamed = value;
+    },
+    get table() {
+      return state.table;
+    },
+    set table(value: boolean) {
+      state.table = value;
     },
     close: () =>
       new Promise((resolve) => {

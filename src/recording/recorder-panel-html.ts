@@ -320,6 +320,12 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .correction .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .correction .row .grow{flex:1;justify-content:center}
 .correction .warnnote{margin:6px 0 0;font-size:12px;color:var(--warn);font-weight:600}
+.rowopts{border:1px solid var(--line);border-radius:10px;padding:8px 12px 10px;margin:10px 0 0;display:grid;gap:6px;background:var(--surface-2)}
+.rowopts legend{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--muted-strong);padding:0 4px}
+.rowopts label.choice{display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:12px}
+.rowopts label.choice input{margin-top:2px}
+.rowopts label.choice span{display:grid;gap:1px} .rowopts label.choice small{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere}
+.rowopts label.fixed small{color:var(--warn)}
 .chist{display:grid;grid-template-columns:90px minmax(0,1fr);gap:5px 10px;font-size:12px;margin:8px 0}
 .chist .k{color:var(--muted)} .chist code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 .correction dl{margin:0}
@@ -622,6 +628,8 @@ const SCRIPT = `
       cUnreachable: function (i, l) { return "Le chemin s'arrête avant cette étape : l'étape " + i + ' « ' + l + " » n'a pas pu être rejouée."; }, cUnreachableHelp: "Corrigez d'abord cette étape-là, puis revenez à celle-ci.",
       cOld: 'ANCIENNE CIBLE', cNew: 'NOUVELLE CIBLE', cProposed: 'PROPOSÉE', cCorrected: 'CORRIGÉE', cRole: 'Rôle', cName: 'Nom accessible', cText: 'Texte', cTestId: 'testId', cCss: 'CSS de repli', cContext: 'Contexte',
       cOrder: 'Ordre de résolution au rejeu', cTest: "Tester l'étape", cCancel: 'Annuler', cApply: 'Valider la correction', cAmbiguous: 'Plusieurs éléments correspondent encore : la section ou le contexte départagera au rejeu.',
+      cRowTitle: 'Identifier la ligne par', cRowBound: function (v) { return 'La donnée du run « ' + v + ' »'; }, cRowBoundHelp: 'La ligne créée pendant le run est retrouvée à chaque rejeu, quelle que soit sa clé.',
+      cRowKey: 'La clé lue dans le tableau', cRowFixed: 'Clé propre à ce run : le prochain rejeu crée une autre ligne et ne la retrouvera pas.',
       cHistory: 'Historique des corrections', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrigé par', cUser: 'Utilisateur', cDate: 'Date', cRestore: "Restaurer l'original", cUnknown: 'non retrouvée', cCurrent: 'Cible actuelle'
     },
     en: {
@@ -645,6 +653,8 @@ const SCRIPT = `
       cUnreachable: function (i, l) { return 'The path stops before this step: step ' + i + ' "' + l + '" could not be replayed.'; }, cUnreachableHelp: 'Correct that step first, then come back to this one.',
       cOld: 'OLD TARGET', cNew: 'NEW TARGET', cProposed: 'PROPOSED', cCorrected: 'CORRECTED', cRole: 'Role', cName: 'Accessible name', cText: 'Text', cTestId: 'testId', cCss: 'Fallback CSS', cContext: 'Context',
       cOrder: 'Resolution order at replay', cTest: 'Test the step', cCancel: 'Cancel', cApply: 'Confirm the correction', cAmbiguous: 'Several elements still match: the section or the context decides at replay.',
+      cRowTitle: 'Identify the row by', cRowBound: function (v) { return 'The run value "' + v + '"'; }, cRowBoundHelp: 'The row created during the run is found at every replay, whatever its key.',
+      cRowKey: 'The key read in the table', cRowFixed: 'Key specific to this run: the next replay creates another row and will not find it.',
       cHistory: 'Correction history', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrected by', cUser: 'User', cDate: 'Date', cRestore: 'Restore the original', cUnknown: 'not found', cCurrent: 'Current target'
     }
   }[lang];
@@ -664,6 +674,8 @@ const SCRIPT = `
   };
   var KIND_ICON = { open: 'link', navigate: 'link', goto: 'link', click: 'cursor', fill: 'text', check: 'check', uncheck: 'check', choose: 'check', select: 'list', key: 'hash', drag: 'move', dragAndDrop: 'move', upload: 'clip', manual: 'hash', dialog: 'list' };
   var state = null, selected = null, choice = {}, dev = false, editing = false, tab = 'recording';
+  // L'option de ligne choisie pour une correction (bound, key), par étape : gardée entre deux rendus.
+  var rowChoice = {};
   // Le brouillon de la source de chaque saisie (revue) : gardé entre deux rendus de la fenêtre.
   var dataDraft = {};
   var filterText = '', onlyAttention = false, layout = null, editingIntent = null;
@@ -918,9 +930,22 @@ const SCRIPT = `
     }
     if (pk && pk.status === 'PICKED' && pk.proposal) {
       var pr = pk.proposal, tr = pr.traits;
+      var ropts = pr.rowOptions || [], ropt = null;
+      for (var ri = 0; ri < ropts.length; ri += 1) if (ropts[ri].id === rowChoice[step.id]) ropt = ropts[ri];
+      if (!ropt && ropts.length) ropt = ropts[0];
       h += '<div class="pair"><div class="tbox old"><b>' + esc(T.cOld) + '</b><code>' + esc(pk.previous || corr && corr.current || '—') + '</code><span>' + esc(step.status === 'FAILED' ? T.cUnknown : step.statusText) + '</span></div>';
       h += '<span class="arrow" aria-hidden="true">→</span>';
-      h += '<div class="tbox new"><b>' + esc(T.cNew) + '</b><code>' + esc(pr.target) + '</code><span>' + esc(pr.quality) + '</span></div></div>';
+      h += '<div class="tbox new"><b>' + esc(T.cNew) + '</b><code>' + esc(ropt ? ropt.target : pr.target) + '</code><span>' + esc(pr.quality) + '</span></div></div>';
+      if (ropts.length) {
+        h += '<fieldset class="rowopts"><legend>' + esc(T.cRowTitle) + '</legend>';
+        for (var rj = 0; rj < ropts.length; rj += 1) {
+          var o = ropts[rj];
+          h += '<label class="choice' + (o.fixed ? ' fixed' : '') + '"><input type="radio" name="rowopt-' + esc(step.id) + '" value="' + esc(o.id) + '"' + (ropt && ropt.id === o.id ? ' checked' : '') + '><span>' + esc(o.id === 'bound' ? T.cRowBound(o.via || '') : T.cRowKey) + '<small>' + esc(o.row) + '</small></span></label>';
+        }
+        h += '</fieldset>';
+        if (ropt && ropt.id === 'bound') h += '<p class="sub">' + esc(T.cRowBoundHelp) + '</p>';
+        if (ropt && ropt.fixed) h += '<p class="warnnote">' + esc(T.cRowFixed) + '</p>';
+      }
       h += '<dl>';
       h += '<dt>' + esc(T.cRole) + '</dt><dd><span class="chip">' + esc(tr.role || tr.tag) + '</span></dd>';
       if (tr.name) h += '<dt>' + esc(T.cName) + '</dt><dd>' + esc(tr.name) + '</dd>';
@@ -1286,6 +1311,11 @@ const SCRIPT = `
       return;
     }
     if (cmd === 'correct-pick') { selected = id || selected; send({ type: cmd, id: id }); render(); return; }
+    if (cmd === 'correct-apply') {
+      var ropt = document.querySelector('input[name="rowopt-' + id + '"]:checked');
+      send(ropt ? { type: cmd, id: id, option: ropt.value } : { type: cmd, id: id });
+      return;
+    }
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
     send({ type: cmd, id: id });
   });
@@ -1296,6 +1326,7 @@ const SCRIPT = `
   document.addEventListener('change', function (event) {
     var input = event.target;
     if (input instanceof HTMLInputElement && input.name.indexOf('cand-') === 0) choice[input.name.slice(5)] = Number(input.value);
+    if (input instanceof HTMLInputElement && input.name.indexOf('rowopt-') === 0) { rowChoice[input.name.slice(7)] = input.value; render(); return; }
     var field = input && input.getAttribute ? input.getAttribute('data-bind-field') : null;
     if (field) {
       var draft = dataDraft[input.getAttribute('data-step-id')];

@@ -120,6 +120,16 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   flow généré à l'arrêt vise le nouvel élément (`userDecision: TARGET_CORRECTED_BY_USER`, historique
   `corrections` avec l'original). **Restaurer l'original** revient en arrière. Aucun second moteur :
   la nouvelle cible est résolue comme à l'enregistrement, jamais devinée.
+- **Une cible dans une ligne de tableau : lier la ligne à la donnée du run.** La clé lue dans le
+  tableau (un numéro renvoyé par le serveur : « N° 3027 ») n'identifie la ligne que dans le run qui
+  l'a créée ; la figer dans la correction referait l'erreur qu'on corrige. Quand une cellule de la
+  ligne porte une **valeur connue du run** (un texte saisi pendant l'enregistrement ; en revue, une
+  donnée du jeu ou une donnée produite par le rejeu), la fenêtre propose **Identifier la ligne par :
+  la donnée du run « clé »** (choisie par défaut : la ligne se retrouve à chaque rejeu, cité
+  `${testData:clé}` ; pendant l'enregistrement la valeur saisie est citée à l'arrêt comme toute donnée
+  de test) ou **la clé lue dans le tableau**, marquée **« Clé propre à ce run »** quand l'ancienne
+  cible visait la même colonne avec une autre valeur. Les cellules de la ligne (colonne → texte,
+  bornées, expurgées) ne sont lues qu'au moment du clic de désignation et ne sont jamais écrites.
 - **Résumé et qualité** : « ✓ Recording valide » ou « ⚠ nécessite une vérification » ; la qualité
   est calculée sur des faits (actions confirmées, sélecteurs stables, cibles uniques, aucun
   élément retrouvé seulement après un nouveau rendu, aucun doublon, aucune erreur) — jamais estimée.
@@ -158,7 +168,9 @@ jamais deux applications ouvertes en même temps.
   s'arrête avant cette étape : l'étape k … ») : c'est elle qu'il faut corriger d'abord. La correction
   réécrit la cible de l'étape (`corrections` garde l'original, **Restaurer l'original** le remet),
   régénère les fichiers, ferme la session et invalide le rejeu précédent : **▶ Rejouer** le flow
-  corrigé. Annuler ferme la session aussi ; la revue la ferme en partant.
+  corrigé. Annuler ferme la session aussi ; la revue la ferme en partant. Les données de test
+  produites par le rejeu de la session (clé → valeur, en mémoire seulement) sont les **valeurs
+  connues** qui servent à lier une ligne de tableau à la donnée du run (voir ci-dessus).
 - **💾 Sauvegarder** : l'enregistrement est un **brouillon** (`recording-status.json` :
   `DRAFT`) ; sauvegarder copie le flow dans `recording.flowsDirectory` (défaut : `flows/<nom>/` à
   côté du dossier des rapports) avec son jeu de données, et le marque `SAVED`.

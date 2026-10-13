@@ -46,6 +46,14 @@ export class TestDataRunContext {
     return this.cache.has(key);
   }
 
+  /**
+   * Les valeurs produites pendant ce run, par clé (générées, modèles, fournisseur) : en mémoire seulement,
+   * pour le correction manager (lier une ligne de tableau à la donnée du run). Jamais un identifiant.
+   */
+  values(): { key: string; value: string }[] {
+    return [...this.cache.entries()].map(([key, value]) => ({ key, value }));
+  }
+
   /** Valeur d'une clé : jeux de données dans l'ordre de priorité (celui du flow, puis celui de la mission). */
   resolve(key: string, sets: readonly (TestDataSet | undefined)[], sources: Sources): ResolvedTestData {
     return this.resolveKey(key, sets, sources, new Set());

@@ -73,6 +73,12 @@ export interface PanelPick {
   reason?: string;
   proposal?: {
     target: string;
+    /**
+     * La cible est dans une ligne de tableau : comment identifier la ligne. `bound` : par une donnée du
+     * run (`via` : sa clé ou la valeur saisie) ; `key` : par la clé lue dans le tableau, `fixed` quand
+     * elle est propre à ce run (le prochain rejeu ne la retrouvera pas).
+     */
+    rowOptions?: { id: 'bound' | 'key'; target: string; row: string; via?: string; fixed?: boolean }[];
     quality: string;
     label: string;
     order: string[];

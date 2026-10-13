@@ -461,6 +461,38 @@ export function installRecorder(
     return undefined;
   };
 
+  /**
+   * LES CELLULES DE LA LIGNE de l'élément désigné (mode sélection) : colonne → texte, sans la cellule de
+   * l'élément. Le correction manager y reconnaît une donnée du run (un nom saisi) pour lier la ligne à
+   * cette donnée plutôt qu'à une clé renvoyée par le serveur, propre au run.
+   */
+  const rowCellsOf = (el: Element): { column: string; value: string }[] => {
+    const row = el.closest('tr, [role="row"], mat-row');
+    const container = row?.closest('table, [role="grid"], [role="table"], [role="treegrid"], mat-table');
+    if (!row || !container) return [];
+    const headerRow =
+      container.querySelector('thead tr, mat-header-row') ??
+      Array.from(container.querySelectorAll('[role="row"], tr')).find(
+        (candidate) => candidate.querySelector('th, [role="columnheader"], mat-header-cell') !== null,
+      );
+    if (!headerRow || headerRow === row) return [];
+    const headers = Array.from(headerRow.querySelectorAll('th, [role="columnheader"], mat-header-cell')).map(
+      (cell) => clean(cell.textContent.replace(/[↑↓▲▼⇅]/g, ''), 40),
+    );
+    const cells = Array.from(
+      row.querySelectorAll('td, th, [role="cell"], [role="gridcell"], [role="rowheader"], mat-cell'),
+    ).filter((cell) => cell.closest('tr, [role="row"], mat-row') === row);
+    return cells
+      .map((cell, index) => ({
+        column: headers[index] ?? '',
+        value: clean(cell.textContent, 60),
+        own: cell.contains(el),
+      }))
+      .filter((cell) => cell.column && cell.value && !cell.own)
+      .slice(0, 12)
+      .map(({ column, value }) => ({ column, value }));
+  };
+
   const roleOf = (el: Element): string => {
     const explicit = el.getAttribute('role');
     if (explicit) return explicit.split(' ')[0] ?? '';
@@ -1906,6 +1938,7 @@ export function installRecorder(
       {
         type: 'pick',
         element: describe(el),
+        rowCells: rowCellsOf(el),
         rect: {
           x: rect.left,
           y: rect.top,

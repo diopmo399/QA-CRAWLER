@@ -43,6 +43,8 @@ export interface DryRunDriver {
   now(): number;
   /** La page pilotée (correction manager : l'humain y désigne un élément après le rejeu des étapes précédentes). */
   page?(): Page;
+  /** Les données de test produites pendant ce run (clé → valeur, mémoire seule) : lier une ligne à la donnée du run. */
+  testDataValues?(): { key: string; value: string }[];
 }
 
 /** Un chemin suggéré par le code : jamais une vérité avant d'avoir été joué (runtimeConfirmed). */

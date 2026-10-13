@@ -9,6 +9,7 @@ import {
   correctFlowTarget,
   correctRawEvents,
   describeTarget,
+  proposalTarget,
   proposeCorrection,
   restoreFlowTarget,
   restoreRawEvents,
@@ -185,6 +186,107 @@ describe('target correction: review (generated flow)', () => {
       corrected: true,
       history: [{ at: 1, from: 'css "#oldButton"', to: 'button "Rechercher"' }],
     });
+  });
+});
+
+describe('target correction: table rows (dynamic row key)', () => {
+  // Un lien « Open » dans la ligne d'un tableau : la clé lue (N° 3027) est renvoyée par le serveur, elle
+  // change à chaque run ; la colonne « Name » porte la valeur saisie à l'étape de création.
+  const link = element({
+    tag: 'a',
+    role: 'link',
+    name: 'Open',
+    css: 'table a',
+    inForm: false,
+    sameRoleName: 3,
+    roleNameIndex: 1,
+    rowKey: [{ column: 'N°', value: '3027' }],
+  });
+  const cells = [
+    { column: 'N°', value: '3027' },
+    { column: 'Name', value: 'Northwind' },
+    { column: 'Created', value: '2026-01-02' },
+  ];
+  const previousRow = { strategy: 'role', role: 'link', name: 'Open', row: { 'N°': '3024' } } as const;
+
+  it('review: the row is bound to the run data (cited by its key) first; the table key stays offered, marked run-specific', () => {
+    const proposal = proposeCorrection(
+      link,
+      'click',
+      'fr',
+      { known: [{ key: 'request.name', value: 'Northwind' }], previous: previousRow },
+      cells,
+    );
+    expect(proposal.target).toEqual({
+      strategy: 'role',
+      role: 'link',
+      name: 'Open',
+      row: { Name: '${testData:request.name}' },
+    });
+    expect(proposal.rowOptions).toEqual([
+      { id: 'bound', row: { Name: '${testData:request.name}' }, via: 'request.name' },
+      { id: 'key', row: { 'N°': '3027' }, fixed: true },
+    ]);
+    expect(proposalTarget(proposal, 'key')).toEqual({ ...previousRow, row: { 'N°': '3027' } });
+    expect(describeTarget(proposal.target)).toBe('link "Open" (row ${testData:request.name})');
+  });
+
+  it('recording: the typed value has no key yet — the row cites the literal (the stop cites it as test data)', () => {
+    const proposal = proposeCorrection(link, 'click', 'fr', { known: [{ value: 'northwind' }] }, cells);
+    expect(proposal.rowOptions?.[0]).toEqual({ id: 'bound', row: { Name: 'Northwind' }, via: 'Northwind' });
+    // Sans ancienne cible sur la même colonne, la clé n'est pas dite propre au run.
+    expect(proposal.rowOptions?.[1]).toEqual({ id: 'key', row: { 'N°': '3027' } });
+  });
+
+  it('no known value in the row: only the table key, the target is the resolver one', () => {
+    const proposal = proposeCorrection(link, 'click', 'fr', { known: [{ key: 'x', value: 'Other' }] }, cells);
+    expect(proposal.target.row).toEqual({ 'N°': '3027' });
+    expect(proposal.rowOptions).toEqual([{ id: 'key', row: { 'N°': '3027' } }]);
+    // Hors d'un tableau : aucune option de ligne.
+    expect(
+      proposeCorrection(element({}), 'click', 'fr', { known: [{ value: 'Search' }] }).rowOptions,
+    ).toBeUndefined();
+  });
+
+  it('review: the chosen option is written on the step; the default is the bound row', () => {
+    const open = (): RecordedFlowStep => ({
+      ...clickStep('s1', 'Open'),
+      step: { kind: 'click', target: previousRow, allow: [], optional: false },
+    });
+    const picked = { element: link, rowCells: cells };
+    const known = [{ key: 'request.name', value: 'Northwind' }];
+    const bound = flowOf([open()]);
+    correctFlowTarget(bound, 's1', picked, 1, 'fr', { known });
+    expect(bound.steps[0]?.step.kind === 'click' && bound.steps[0].step.target.row).toEqual({
+      Name: '${testData:request.name}',
+    });
+    const key = flowOf([open()]);
+    const outcome = correctFlowTarget(key, 's1', picked, 1, 'fr', { known }, 'key');
+    expect(key.steps[0]?.step.kind === 'click' && key.steps[0].step.target.row).toEqual({ 'N°': '3027' });
+    expect(!('error' in outcome) && outcome.proposal.rowOptions?.[1]?.fixed).toBe(true);
+  });
+
+  it('recording: the raw element carries the chosen row key (bound: the typed literal)', () => {
+    const events: RawRecordedEvent[] = [
+      { id: 'r1', sequence: 1, type: 'click', at: 1, url: 'http://app/', element: element({ name: 'Open' }) },
+    ];
+    const outcome = correctRawEvents(events, ['r1'], { element: link, rowCells: cells }, 'click', 2, 'fr', {
+      known: [{ value: 'Northwind' }],
+    });
+    expect(!('error' in outcome) && outcome.correction.next.row).toEqual({ Name: 'Northwind' });
+    expect(events[0]?.element?.rowKey).toEqual([{ column: 'Name', value: 'Northwind' }]);
+    const asKey = correctRawEvents(
+      events,
+      ['r1'],
+      { element: link, rowCells: cells },
+      'click',
+      3,
+      'fr',
+      {},
+      'key',
+    );
+    expect(!('error' in asKey) && asKey.correction.next.row).toEqual({ 'N°': '3027' });
+    expect(events[0]?.element?.rowKey).toEqual([{ column: 'N°', value: '3027' }]);
   });
 });
 
