@@ -17,6 +17,11 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   devant l'étape en échec. `TestDataRunContext.seed()`, `replay.contextRecovery`, `replay-checkpoints.json`
   (empreintes), événements `REPLAY_CONTEXT_RECOVERY`, `REPLAY_RESUMED`, `REPLAY_RESUME_BLOCKED`. Tests unitaires
   (17) et d'intégration `recording-context-recovery`.
+- **Ligne de tableau : liaison plus robuste et liaison manuelle.** Une cellule qui contient la donnée du run (accents, casse,
+  espaces, suffixe ignorés) est liée avec un critère « contient » ; sinon la fenêtre le dit et propose **Lier une colonne à
+  une donnée du run** (colonnes de la ligne et données du run avec leur valeur ; `RowBinding`, commande `correct-apply`
+  avec `column` et `variable`). La colonne des détails ne déborde plus (titre de la correction qui passe à la ligne, cible
+  JSON et CSS longs coupés, « Copier » entier).
 - **Correction manager** (`src/recording/target-correction.ts`, fenêtre du recorder, script de capture) :
   corriger la cible d'une action **dans le navigateur**. Mode sélection dans la page (bandeau, élément
   survolé encadré avec rôle · nom · test id, clic jamais transmis à l'application, Échap annule) ; dans la

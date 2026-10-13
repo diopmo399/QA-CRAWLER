@@ -39,8 +39,10 @@ export interface PanelCommand {
   variable?: string;
   generator?: string;
   value?: string;
-  /** La correction d'une cible dans une ligne de tableau : l'option de ligne choisie (bound, key). */
+  /** La correction d'une cible dans une ligne de tableau : l'option de ligne choisie (bound, key, manual). */
   option?: string;
+  /** manual : la colonne liée (la donnée du run est `variable`). */
+  column?: string;
 }
 
 const COMMANDS = new Set<PanelCommand['type']>([
@@ -158,5 +160,6 @@ function commandOf(payload: unknown): PanelCommand | undefined {
       : {}),
     ...(typeof raw.value === 'string' ? { value: raw.value.slice(0, 500) } : {}),
     ...(typeof raw.option === 'string' && /^[a-z]{1,20}$/.test(raw.option) ? { option: raw.option } : {}),
+    ...(typeof raw.column === 'string' && raw.column.length <= 60 ? { column: raw.column } : {}),
   };
 }

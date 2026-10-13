@@ -78,7 +78,19 @@ export interface PanelPick {
      * run (`via` : sa clé ou la valeur saisie) ; `key` : par la clé lue dans le tableau, `fixed` quand
      * elle est propre à ce run (le prochain rejeu ne la retrouvera pas).
      */
-    rowOptions?: { id: 'bound' | 'key'; target: string; row: string; via?: string; fixed?: boolean }[];
+    rowOptions?: {
+      id: 'bound' | 'key' | 'manual';
+      target: string;
+      row: string;
+      via?: string;
+      match?: 'exact' | 'contains';
+      fixed?: boolean;
+    }[];
+    /** La cible sans sa ligne (la liaison manuelle y ajoute la sienne). */
+    baseTarget?: string;
+    /** LIAISON MANUELLE : les cellules de la ligne et les données du run (clé → valeur actuelle, non sensibles). */
+    rowCells?: { column: string; value: string }[];
+    variables?: { key: string; value: string }[];
     quality: string;
     label: string;
     order: string[];

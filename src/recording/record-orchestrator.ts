@@ -1100,7 +1100,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           return picked ? { picked, runData: correction.runData } : { cancelled: true };
         },
         releaseCorrection: endCorrection,
-        correctTarget: async ({ stepId, picked, known, option }) => {
+        correctTarget: async ({ stepId, picked, known, option, binding }) => {
           const outcome = correctFlowTarget(
             result.flow,
             stepId,
@@ -1109,6 +1109,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
             language,
             { known: known ?? [] },
             option,
+            binding,
           );
           if ('error' in outcome) return outcome;
           await rewriteFlow();

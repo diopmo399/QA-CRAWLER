@@ -347,6 +347,17 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .rowopts label.choice input{margin-top:2px}
 .rowopts label.choice span{display:grid;gap:1px} .rowopts label.choice small{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere}
 .rowopts label.fixed small{color:var(--warn)}
+.rowbind{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;margin:2px 0 4px 24px}
+.rowbind label{display:grid;gap:2px;font-size:11px;font-weight:600;color:var(--muted-strong);min-width:0}
+.rowbind select{width:100%;min-width:0;font:inherit;font-weight:400;font-size:12px;padding:3px 6px;border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);color:var(--fg)}
+/* AUCUN débordement horizontal dans les détails : les codes longs (cible JSON, CSS) se coupent, les titres passent à la ligne. */
+.details,.col-side,.grid>.col-right{min-width:0}
+.grid>.col-side,.grid>.col-right{overflow-x:hidden}
+.details dd{min-width:0;overflow-wrap:anywhere}
+.details dd code{min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.details .copy{flex:none}
+.correction .chead{flex-wrap:wrap}
+.correction .chead button{max-width:100%;white-space:normal}
 .chist{display:grid;grid-template-columns:90px minmax(0,1fr);gap:5px 10px;font-size:12px;margin:8px 0}
 .chist .k{color:var(--muted)} .chist code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 .correction dl{margin:0}
@@ -519,7 +530,7 @@ body.compact .controls{flex-basis:100%}
   .quality .qbody{gap:10px}.ring{width:64px;height:64px}.ring>div{width:50px;height:50px}.ring b{font-size:15px}.ring span{font-size:10px}.quality ul{gap:2px;font-size:11px}
   .review{padding:6px 12px;margin-bottom:6px;gap:6px 12px}.review h2{font-size:14px}.review:has(.result)>h2,.review:has(.result)>.hint{display:none}.result{padding:5px 10px}.result.bad .rhead>b{font-size:13px}.result p{margin:3px 0}.result ul{margin-top:3px}.result details{margin:3px 0 0;padding:3px 9px}.result .actions{gap:6px}.result .actions button{min-height:26px;padding:2px 9px;font-size:12px}
   .preview .card-head{flex-wrap:nowrap}.preview .card-head .actions button{min-height:26px;padding:2px 8px;font-size:12px}
-  .correction .chead h3,.correction .chead button{white-space:nowrap}.correction .chead button{flex:none;min-height:24px;padding:2px 7px;font-size:11px}.correction .chead button svg{display:none}.correction .row.cta{bottom:-9px;margin-top:6px;padding:6px 2px;gap:5px}.correction .row.cta button{white-space:nowrap;padding:3px 8px;font-size:12px}
+  .correction .chead button{min-height:24px;padding:2px 7px;font-size:11px}.correction .chead button svg{display:none}.correction .row.cta{bottom:-9px;margin-top:6px;padding:6px 2px;gap:5px}.correction .row.cta button{white-space:nowrap;padding:3px 8px;font-size:12px}
   .details .step{display:none}.details .hero{padding:6px 9px;margin-bottom:8px;gap:8px}.details .hero b{font-size:13px}.details .hero span{font-size:11px}
   .details h3{margin:8px 0 4px;font-size:11px}.details dl{gap:3px 10px;font-size:12px;grid-template-columns:96px minmax(0,1fr)}.vlist{padding:6px 8px;gap:3px;font-size:11px}.details .found{margin-top:6px;padding:5px 8px}.details .logs{margin-top:6px}
   .correction{padding:7px 10px;margin-top:8px;border-radius:10px}.correction .chead{margin-bottom:5px;gap:8px}.correction .chead h3{font-size:12px}.correction .chead button{min-height:26px;padding:2px 9px;font-size:12px}
@@ -678,6 +689,9 @@ const SCRIPT = `
       cOrder: 'Ordre de résolution au rejeu', cTest: "Tester l'étape", cCancel: 'Annuler', cApply: 'Valider la correction', cAmbiguous: 'Plusieurs éléments correspondent encore : la section ou le contexte départagera au rejeu.',
       cRowTitle: 'Identifier la ligne par', cRowBound: function (v) { return 'La donnée du run « ' + v + ' »'; }, cRowBoundHelp: 'La ligne créée pendant le run est retrouvée à chaque rejeu, quelle que soit sa clé.',
       cRowKey: 'La clé lue dans le tableau', cRowFixed: 'Clé propre à ce run : le prochain rejeu crée une autre ligne et ne la retrouvera pas.',
+      cRowContains: 'la cellule contient la donnée', cRowManual: 'Lier une colonne à une donnée du run', cRowColumn: 'Colonne', cRowVariable: 'Donnée du run',
+      cRowManualHelp: 'Au rejeu, la ligne est celle dont cette colonne contient la valeur de cette donnée dans ce run.',
+      cRowNoMatch: "Aucune cellule de cette ligne n'est égale à une donnée du run : liez une colonne vous-même.", cRowNoData: "Aucune donnée du run n'est connue avant cette étape : seule la clé du tableau peut identifier la ligne.",
       cHistory: 'Historique des corrections', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrigé par', cUser: 'Utilisateur', cDate: 'Date', cRestore: "Restaurer l'original", cUnknown: 'non retrouvée', cCurrent: 'Cible actuelle'
     },
     en: {
@@ -703,6 +717,9 @@ const SCRIPT = `
       cOrder: 'Resolution order at replay', cTest: 'Test the step', cCancel: 'Cancel', cApply: 'Confirm the correction', cAmbiguous: 'Several elements still match: the section or the context decides at replay.',
       cRowTitle: 'Identify the row by', cRowBound: function (v) { return 'The run value "' + v + '"'; }, cRowBoundHelp: 'The row created during the run is found at every replay, whatever its key.',
       cRowKey: 'The key read in the table', cRowFixed: 'Key specific to this run: the next replay creates another row and will not find it.',
+      cRowContains: 'the cell contains the value', cRowManual: 'Bind a column to a run value', cRowColumn: 'Column', cRowVariable: 'Run value',
+      cRowManualHelp: 'At replay, the row is the one whose column contains the value of this data in that run.',
+      cRowNoMatch: 'No cell of this row equals a run value: bind a column yourself.', cRowNoData: 'No run value is known before this step: only the table key can identify the row.',
       cHistory: 'Correction history', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrected by', cUser: 'User', cDate: 'Date', cRestore: 'Restore the original', cUnknown: 'not found', cCurrent: 'Current target'
     }
   }[lang];
@@ -725,6 +742,8 @@ const SCRIPT = `
   var focused = null, scrolledTo = null;
   // L'option de ligne choisie pour une correction (bound, key), par étape : gardée entre deux rendus.
   var rowChoice = {};
+  // La liaison manuelle d'une colonne à une donnée du run, par étape : { column, key }.
+  var rowBind = {};
   // Le brouillon de la source de chaque saisie (revue) : gardé entre deux rendus de la fenêtre.
   var dataDraft = {};
   var filterText = '', onlyAttention = false, layout = null, editingIntent = null;
@@ -982,7 +1001,17 @@ const SCRIPT = `
     }
     if (pk && pk.status === 'PICKED' && pk.proposal) {
       var pr = pk.proposal, tr = pr.traits;
-      var ropts = pr.rowOptions || [], ropt = null;
+      var ropts = (pr.rowOptions || []).slice(), ropt = null;
+      var cells = pr.rowCells || [], vars = pr.variables || [];
+      // La liaison manuelle : offerte dès que la ligne et des données du run sont connues.
+      if (cells.length && vars.length) {
+        var bind = rowBind[step.id] || {};
+        var keyColumn = (ropts.filter(function (o) { return o.id === 'key'; })[0] || {}).row || '';
+        var col = cells.filter(function (c) { return c.column === bind.column; })[0] || cells.filter(function (c) { return keyColumn.indexOf(c.column + ' =') !== 0; })[0] || cells[0];
+        var vr = vars.filter(function (v) { return v.key === bind.key; })[0] || vars[0];
+        rowBind[step.id] = { column: col.column, key: vr.key };
+        ropts.push({ id: 'manual', target: (pr.baseTarget || pr.target) + ' (row ~\${testData:' + vr.key + '})', row: col.column + ' ∋ \${testData:' + vr.key + '}' });
+      }
       for (var ri = 0; ri < ropts.length; ri += 1) if (ropts[ri].id === rowChoice[step.id]) ropt = ropts[ri];
       if (!ropt && ropts.length) ropt = ropts[0];
       h += '<div class="pair"><div class="tbox old"><b>' + esc(T.cOld) + '</b><code>' + esc(pk.previous || corr && corr.current || '—') + '</code><span>' + esc(step.status === 'FAILED' ? T.cUnknown : step.statusText) + '</span></div>';
@@ -992,9 +1021,17 @@ const SCRIPT = `
         h += '<fieldset class="rowopts"><legend>' + esc(T.cRowTitle) + '</legend>';
         for (var rj = 0; rj < ropts.length; rj += 1) {
           var o = ropts[rj];
-          h += '<label class="choice' + (o.fixed ? ' fixed' : '') + '"><input type="radio" name="rowopt-' + esc(step.id) + '" value="' + esc(o.id) + '"' + (ropt && ropt.id === o.id ? ' checked' : '') + '><span>' + esc(o.id === 'bound' ? T.cRowBound(o.via || '') : T.cRowKey) + '<small>' + esc(o.row) + '</small></span></label>';
+          var said = o.id === 'bound' ? T.cRowBound(o.via || '') + (o.match === 'contains' ? ' · ' + T.cRowContains : '') : o.id === 'manual' ? T.cRowManual : T.cRowKey;
+          h += '<label class="choice' + (o.fixed ? ' fixed' : '') + '"><input type="radio" name="rowopt-' + esc(step.id) + '" value="' + esc(o.id) + '"' + (ropt && ropt.id === o.id ? ' checked' : '') + '><span>' + esc(said) + '<small>' + esc(o.row) + '</small></span></label>';
+          if (o.id === 'manual' && ropt && ropt.id === 'manual') {
+            var bd = rowBind[step.id];
+            h += '<div class="rowbind"><label>' + esc(T.cRowColumn) + '<select data-rowbind="column" data-step-id="' + esc(step.id) + '">' + cells.map(function (c) { return '<option value="' + esc(c.column) + '"' + (c.column === bd.column ? ' selected' : '') + '>' + esc(c.column + ' — ' + c.value) + '</option>'; }).join('') + '</select></label>';
+            h += '<label>' + esc(T.cRowVariable) + '<select data-rowbind="key" data-step-id="' + esc(step.id) + '">' + vars.map(function (v) { return '<option value="' + esc(v.key) + '"' + (v.key === bd.key ? ' selected' : '') + '>' + esc(v.key + ' — ' + v.value) + '</option>'; }).join('') + '</select></label></div>';
+          }
         }
         h += '</fieldset>';
+        if (!ropts.some(function (o) { return o.id === 'bound'; })) h += '<p class="sub">' + esc(vars.length ? T.cRowNoMatch : T.cRowNoData) + '</p>';
+        if (ropt && ropt.id === 'manual') h += '<p class="sub">' + esc(T.cRowManualHelp) + '</p>';
         if (ropt && ropt.id === 'bound') h += '<p class="sub">' + esc(T.cRowBoundHelp) + '</p>';
         if (ropt && ropt.fixed) h += '<p class="warnnote">' + esc(T.cRowFixed) + '</p>';
       }
@@ -1374,7 +1411,8 @@ const SCRIPT = `
     if (cmd === 'correct-pick') { selected = id || selected; send({ type: cmd, id: id }); render(); return; }
     if (cmd === 'correct-apply') {
       var ropt = document.querySelector('input[name="rowopt-' + id + '"]:checked');
-      send(ropt ? { type: cmd, id: id, option: ropt.value } : { type: cmd, id: id });
+      var bind = rowBind[id];
+      send(ropt ? (ropt.value === 'manual' && bind ? { type: cmd, id: id, option: 'manual', column: bind.column, variable: bind.key } : { type: cmd, id: id, option: ropt.value }) : { type: cmd, id: id });
       return;
     }
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
@@ -1388,6 +1426,8 @@ const SCRIPT = `
     var input = event.target;
     if (input instanceof HTMLInputElement && input.name.indexOf('cand-') === 0) choice[input.name.slice(5)] = Number(input.value);
     if (input instanceof HTMLInputElement && input.name.indexOf('rowopt-') === 0) { rowChoice[input.name.slice(7)] = input.value; render(); return; }
+    var rb = input && input.getAttribute ? input.getAttribute('data-rowbind') : null;
+    if (rb && input instanceof HTMLSelectElement) { var sid = input.getAttribute('data-step-id'); rowBind[sid] = rowBind[sid] || {}; rowBind[sid][rb] = input.value; render(); return; }
     var field = input && input.getAttribute ? input.getAttribute('data-bind-field') : null;
     if (field) {
       var draft = dataDraft[input.getAttribute('data-step-id')];

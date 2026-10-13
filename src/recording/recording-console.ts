@@ -33,6 +33,7 @@ import {
   type CorrectionProposal,
   type KnownValue,
   type PickedElement,
+  type RowBinding,
 } from './target-correction.js';
 import { availableVariables } from './test-data-binding.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
@@ -74,6 +75,7 @@ export interface ReviewActions {
     /** Les valeurs connues du run (lier une ligne de tableau à une donnée) et l'option de ligne choisie. */
     known?: readonly KnownValue[];
     option?: string;
+    binding?: RowBinding;
   }) => Promise<{ ok: true; resumable?: number } | { error: string }>;
   /** REPRENDRE le rejeu à l'étape corrigée, dans la page tenue (contexte restauré ou reconstruit, puis vérifié). */
   resumeReplay?: (
@@ -502,6 +504,9 @@ export class RecordingConsole {
                 picked,
                 known: this.pickKnown,
                 ...(command.option ? { option: command.option } : {}),
+                ...(command.column && command.variable
+                  ? { binding: { column: command.column, key: command.variable } }
+                  : {}),
               });
               if ('error' in outcome)
                 this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
@@ -674,6 +679,7 @@ export class RecordingConsole {
           picked,
           { known: this.pickKnown },
           command.option,
+          command.column && command.variable ? { column: command.column, key: command.variable } : undefined,
         );
         this.notice =
           'error' in outcome ? { actionId: command.id, kind: 'error', message: outcome.error } : undefined;
@@ -1024,10 +1030,14 @@ function panelProposalOf(proposal: CorrectionProposal): NonNullable<PanelState['
               .map(([column, value]) => `${column} = ${value}`)
               .join(', '),
             ...(option.via ? { via: option.via } : {}),
+            ...(option.match ? { match: option.match } : {}),
             ...(option.fixed ? { fixed: true } : {}),
           })),
         }
       : {}),
+    ...(proposal.rowCells ? { rowCells: proposal.rowCells } : {}),
+    ...(proposal.rowCells ? { baseTarget: describeTarget(withoutRow(proposal.target)) } : {}),
+    ...(proposal.variables ? { variables: proposal.variables } : {}),
     quality: proposal.quality,
     label: proposal.label,
     order: proposal.order,
@@ -1035,6 +1045,12 @@ function panelProposalOf(proposal: CorrectionProposal): NonNullable<PanelState['
     ambiguous: proposal.ambiguous,
     traits: proposal.traits,
   };
+}
+
+/** Une cible sans sa ligne de tableau (la liaison manuelle de la fenêtre y ajoute la sienne). */
+function withoutRow(target: CorrectionProposal['target']): CorrectionProposal['target'] {
+  const { row: _row, ...rest } = target;
+  return rest;
 }
 
 /** Les fichiers du flow (YAML, .feature) régénérés après un changement du flow en revue. */
