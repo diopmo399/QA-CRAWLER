@@ -2778,6 +2778,7 @@ export class FlowExplorer {
       },
       seenDuringRun: (target) => [...seen.values()].some((of) => targetsIn(of, target)),
       now: () => Date.now(),
+      page: () => holder.page,
     };
     // ANALYSE STATIQUE : les routes du code comme indices ; jamais un goto vers une route cachée.
     const knowledge = this.staticKnowledge;

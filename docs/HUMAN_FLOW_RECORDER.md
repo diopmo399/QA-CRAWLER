@@ -148,12 +148,17 @@ jamais deux applications ouvertes en même temps.
 - **✎ Modifier** : retirer une étape d'action (et les vérifications qui en dépendent) ;
   `generated.flow.yaml`, `.feature` et `recorded-flow.json` sont régénérés.
 - **Corriger dans le navigateur** (depuis la carte « Replay interrompu » ou les détails d'une
-  étape) : l'application est **rouverte** dans une fenêtre du même navigateur, avec la session de
-  l'enregistrement (cookies et stockage gardés en mémoire seulement, jamais écrits), sur la page de
-  l'étape, en **mode sélection seul** : rien n'y est enregistré, seule la désignation d'un élément
-  remonte. La correction réécrit la cible de l'étape (`corrections` garde l'original, **Restaurer
-  l'original** le remet), régénère les fichiers et invalide le rejeu précédent : **▶ Rejouer** le
-  flow corrigé. La fenêtre se ferme avec la revue.
+  étape) : **le même chemin est suivi** — l'URL d'une étape ne suffit pas, son écran dépend des
+  étapes précédentes (dossier ouvert, fenêtre, assistant, donnée créée par le run). Une **session de
+  correction** (`src/recording/correction-session.ts`) rejoue les étapes 1 à N-1 avec le moteur de
+  rejeu de la mission (connexion, SafetyPolicy, données de test du run ; mémoire isolée sous
+  `correction/`), la fenêtre affiche « Rejeu des étapes précédentes… k sur n », puis la page **reste
+  ouverte dans cet état réel** en **mode sélection seul** : rien n'y est enregistré, seule la
+  désignation d'un élément remonte. Si une étape précédente échoue, la fenêtre le dit (« Le chemin
+  s'arrête avant cette étape : l'étape k … ») : c'est elle qu'il faut corriger d'abord. La correction
+  réécrit la cible de l'étape (`corrections` garde l'original, **Restaurer l'original** le remet),
+  régénère les fichiers, ferme la session et invalide le rejeu précédent : **▶ Rejouer** le flow
+  corrigé. Annuler ferme la session aussi ; la revue la ferme en partant.
 - **💾 Sauvegarder** : l'enregistrement est un **brouillon** (`recording-status.json` :
   `DRAFT`) ; sauvegarder copie le flow dans `recording.flowsDirectory` (défaut : `flows/<nom>/` à
   côté du dossier des rapports) avec son jeu de données, et le marque `SAVED`.

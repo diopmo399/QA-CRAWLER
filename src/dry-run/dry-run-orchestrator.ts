@@ -224,7 +224,11 @@ export async function runDryRun(request: DryRunRequest): Promise<DryRunResult> {
 }
 
 /** La configuration du run sous-jacent : jamais une baseline, ses rapports sous exploration/. */
-function dryRunConfig(config: ScenarioConfig, request: DryRunRequest, directory: string): ScenarioConfig {
+export function dryRunConfig(
+  config: ScenarioConfig,
+  request: DryRunRequest,
+  directory: string,
+): ScenarioConfig {
   return {
     ...config,
     mission: { ...config.mission, mode: 'explore' },

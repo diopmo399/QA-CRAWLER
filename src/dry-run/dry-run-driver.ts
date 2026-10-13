@@ -1,3 +1,4 @@
+import type { Page } from 'playwright';
 import type { FlowIntent } from './flow-intent-graph.js';
 import type { ObservedActionRef, ObservedState } from './reconciliation-model.js';
 
@@ -40,6 +41,8 @@ export interface DryRunDriver {
   /** Le chemin suggéré par le code a été confirmé (ou non) par l'exécution. */
   staticPathOutcome?(hint: StaticPathHint, confirmed: boolean, path: readonly string[]): void;
   now(): number;
+  /** La page pilotée (correction manager : l'humain y désigne un élément après le rejeu des étapes précédentes). */
+  page?(): Page;
 }
 
 /** Un chemin suggéré par le code : jamais une vérité avant d'avoir été joué (runtimeConfirmed). */

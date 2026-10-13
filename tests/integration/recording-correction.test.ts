@@ -45,7 +45,7 @@ async function pickWithMouse(page: Page, name: string): Promise<void> {
 
 /** La page rouverte pour la revue : attendue tant que l'orchestrateur ne l'a pas ouverte. */
 async function correctionPageOf(recorder: HumanFlowRecorder): Promise<Page> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
     const page = recorder.correctionPage;
     if (page) return page;
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -74,7 +74,11 @@ describe('Correction manager — the target of an action is corrected in the bro
       language: 'fr',
       drive: async ({ page, panel }) => {
         if (!panel) throw new Error('the recorder window did not open');
-        // Une action enregistrée : « Cliquer sur "Action 7" ».
+        // Une saisie, puis un clic : la correction en revue devra SUIVRE LE MÊME CHEMIN (la saisie d'abord).
+        await page.getByLabel('First name').click();
+        await page.getByLabel('First name').pressSequentially('Alex', { delay: 20 });
+        await row(panel, /Saisir "Alex" dans "First name"/).waitFor({ timeout: 5000 });
+        await page.waitForTimeout(600);
         await page.getByRole('button', { name: 'Action 7', exact: true }).click();
         await row(panel, /Cliquer sur "Action 7"/).waitFor({ timeout: 5000 });
         await page.waitForTimeout(400);
@@ -127,12 +131,20 @@ describe('Correction manager — the target of an action is corrected in the bro
         seen.failureText = await panel.locator('#review').innerText();
         // Depuis la carte d'échec : corriger dans le navigateur → l'application est rouverte en mode sélection.
         await panel.locator('#review').getByRole('button', { name: 'Corriger dans le navigateur' }).click();
+        // La session de correction rejoue d'abord la saisie (étape 1) : la fenêtre le dit, puis la page
+        // rouverte est dans le même état (le champ déjà rempli) quand le mode sélection s'ouvre.
+        seen.preparingShown = await panel
+          .getByText(/Rejeu des étapes précédentes/)
+          .waitFor({ timeout: 60_000 })
+          .then(() => true)
+          .catch(() => false);
         const page = await correctionPageOf(recorder);
         await pickingIn(page, true);
         seen.reviewPageUrl = page.url();
         seen.reviewPageHasBar = await page.evaluate(
           () => document.querySelector('qa-crawler-recorder') !== null,
         );
+        seen.pathFollowed = await page.getByLabel('First name').inputValue();
         await pickWithMouse(page, 'Renamed 8');
         await pickingIn(page, false);
         await panel.getByText('NOUVELLE CIBLE').waitFor();
@@ -199,11 +211,15 @@ describe('Correction manager — the target of an action is corrected in the bro
     expect(outcome.result.files.yaml).not.toContain('Action 7');
   });
 
-  it('in the review, the failed step is corrected in a reopened page, then the replay passes', () => {
+  it('in the review, the previous steps are replayed first (same path), the failed step is corrected in that page, then the replay passes', () => {
     expect(String(seen.reviewRow)).toContain("Cible corrigée par l'utilisateur");
     expect(String(seen.failureText)).toContain('✕ Replay interrompu');
+    expect(seen.preparingShown).toBe(true);
     expect(String(seen.reviewPageUrl)).toContain('/form');
     expect(seen.reviewPageHasBar).toBe(true);
+    // La preuve que le chemin a été suivi : la saisie de l'étape 1 (une donnée de test générée au rejeu,
+    // comme dans un vrai run) est déjà dans la page rouverte.
+    expect(String(seen.pathFollowed)).toMatch(/^\S{2,}/);
     expect(String(seen.reviewProposal)).toContain('button "Renamed 8"');
     expect(String(seen.reviewHistory)).toContain('Historique des corrections');
     expect(String(seen.secondReplay)).toContain('✓ Replay réussi');

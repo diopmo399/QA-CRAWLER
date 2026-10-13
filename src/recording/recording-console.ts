@@ -59,13 +59,34 @@ export interface ReviewActions {
    * CORRECTION MANAGER (revue) : ouvrir la page de l'application en mode sélection et attendre l'élément
    * désigné ; remplacer la cible de l'étape par cet élément ; restaurer l'original.
    */
-  pickTarget?: (stepId: string, label: string) => Promise<PickedElement | undefined>;
+  pickTarget?: (
+    stepId: string,
+    label: string,
+    onProgress: (progress: PickProgress) => void,
+  ) => Promise<PickOutcome>;
   correctTarget?: (input: {
     stepId: string;
     picked: PickedElement;
   }) => Promise<{ ok: true } | { error: string }>;
   restoreTarget?: (stepId: string) => Promise<{ ok: true } | { error: string }>;
+  /** La session de correction (la page gardée ouverte) se ferme : après Valider, Annuler ou la revue. */
+  releaseCorrection?: () => Promise<void>;
 }
+
+/** La session de correction avance : étapes précédentes rejouées, puis le mode sélection ouvert dans la page. */
+export interface PickProgress {
+  executed: number;
+  total: number;
+  /** true : les étapes précédentes sont faites, l'humain peut désigner l'élément. */
+  picking?: boolean;
+}
+
+/** Ce que donne une sélection : l'élément désigné, une annulation, une page indisponible, ou un chemin arrêté avant l'étape. */
+export type PickOutcome =
+  | { picked: PickedElement }
+  | { cancelled: true }
+  | { unavailable: string }
+  | { unreachable: { index: number; label: string; reason: string } };
 
 /**
  * LA CONSOLE DU RECORDER : relie la fenêtre « QA-CRAWLER Recorder » au recorder (pendant
@@ -81,6 +102,8 @@ export class RecordingConsole {
   /** CORRECTION MANAGER : le mode sélection en cours, puis la proposition (l'élément désigné, en mémoire). */
   private pick: PanelState['pick'];
   private picked: PickedElement | undefined;
+  /** Les actions de la revue en cours (la session de correction se libère hors de la file des commandes). */
+  private reviewActions: ReviewActions | undefined;
   private saved: PanelState['saved'];
   private analysis: PanelAnalysis = { available: false, intents: [], findings: [], aiCandidates: 0 };
   /** Les entrées de la dernière analyse affichée : la revue d'une intention la redessine. */
@@ -301,6 +324,7 @@ export class RecordingConsole {
   }): Promise<unknown> {
     this.result = input.result;
     this.directory = input.directory;
+    this.reviewActions = input.actions;
     this.phase = 'REVIEW';
     this.progress = undefined;
     this.endedAt ??= Date.now();
@@ -368,7 +392,12 @@ export class RecordingConsole {
             }
           } else if (command.type === 'correct-pick' && command.id && input.actions.pickTarget) {
             const pickTarget = input.actions.pickTarget;
-            await this.startPick(command.id, (label) => pickTarget(command.id ?? '', label));
+            const stepId = command.id;
+            await this.startPick(stepId, (label) =>
+              pickTarget(stepId, label, (progress) => {
+                this.preparing(stepId, progress);
+              }),
+            );
           } else if (command.type === 'correct-apply' && command.id && input.actions.correctTarget) {
             const picked = this.picked;
             if (picked && this.pick?.stepId === command.id && this.pick.status === 'PICKED') {
@@ -382,6 +411,7 @@ export class RecordingConsole {
                 // Le flow change : un rejeu fait avant ne le valide plus.
                 this.replay = undefined;
                 this.saved = undefined;
+                await input.actions.releaseCorrection?.();
               }
             }
           } else if (command.type === 'correct-restore' && command.id && input.actions.restoreTarget) {
@@ -494,6 +524,7 @@ export class RecordingConsole {
         this.recorder.cancelPick();
         this.pick = undefined;
         this.picked = undefined;
+        if (!recording) await this.reviewActions?.releaseCorrection?.();
         break;
       case 'correct-test': {
         const picked = this.picked;
@@ -512,7 +543,11 @@ export class RecordingConsole {
           await this.review?.(command);
           return;
         }
-        await this.startPick(command.id, (label) => this.recorder.pickTarget(label));
+        await this.startPick(command.id, async (label) => {
+          if (!this.recorder.correctionPage) return { unavailable: 'no page' };
+          const picked = await this.recorder.pickTarget(label);
+          return picked ? { picked } : { cancelled: true };
+        });
         break;
       case 'correct-apply': {
         if (!command.id) break;
@@ -556,30 +591,50 @@ export class RecordingConsole {
    * MODE SÉLECTION : la fenêtre dit « Mode sélection actif », la page encadre l'élément survolé ; au clic,
    * la proposition (nouvelle cible, replis, ordre de résolution) s'affiche à côté de l'ancienne cible.
    */
-  private async startPick(
-    stepId: string,
-    picker: (label: string) => Promise<PickedElement | undefined>,
-  ): Promise<void> {
+  /** Les étapes précédentes se rejouent (session de correction) : la fenêtre montre la progression. */
+  private preparing(stepId: string, progress: PickProgress): void {
+    const current = this.pick;
+    if (!current || current.stepId !== stepId) return;
+    if (current.status !== 'PICKING' && current.status !== 'PREPARING') return;
+    this.pick = progress.picking
+      ? { ...current, status: 'PICKING' }
+      : { ...current, status: 'PREPARING', progress: { executed: progress.executed, total: progress.total } };
+    this.render();
+  }
+
+  private async startPick(stepId: string, picker: (label: string) => Promise<PickOutcome>): Promise<void> {
     const step = this.state().actions.find((entry) => entry.id === stepId);
     if (!step) return;
     const label = step.technical.name ?? step.technical.label ?? step.technical.text ?? step.description;
     const previous = step.correction?.current ?? step.technical.target;
-    this.pick = { stepId, status: 'PICKING', label, ...(previous ? { previous } : {}) };
+    // En revue, la session de correction rejoue d'abord les étapes précédentes (le navigateur s'ouvre).
+    const review = this.phase === 'REVIEW';
+    this.pick = {
+      stepId,
+      status: review ? 'PREPARING' : 'PICKING',
+      label,
+      ...(previous ? { previous } : {}),
+      ...(review ? { progress: { executed: 0, total: 0 } } : {}),
+    };
     this.picked = undefined;
     this.render();
-    const picked = await picker(label);
+    const outcome = await picker(label);
     // Une autre commande a quitté le mode sélection pendant l'attente : rien à proposer.
     if (!this.isPicking(stepId)) return;
-    if (!picked) {
+    if (!('picked' in outcome)) {
       this.pick = {
         stepId,
-        status: this.recorder.correctionPage ? 'CANCELLED' : 'UNAVAILABLE',
+        status:
+          'cancelled' in outcome ? 'CANCELLED' : 'unreachable' in outcome ? 'UNREACHABLE' : 'UNAVAILABLE',
         label,
         ...(previous ? { previous } : {}),
+        ...('unreachable' in outcome ? { stoppedAt: outcome.unreachable } : {}),
+        ...('unavailable' in outcome ? { reason: outcome.unavailable } : {}),
       };
       this.render();
       return;
     }
+    const picked = outcome.picked;
     const proposal = proposeCorrection(picked.element, useOfStep(step.kind), this.language);
     this.picked = picked;
     this.pick = {
@@ -598,7 +653,11 @@ export class RecordingConsole {
   /** Le mode sélection attend encore pour cette étape (une autre commande peut l'avoir quitté entre-temps). */
   private isPicking(stepId: string): boolean {
     const current: PanelState['pick'] = this.pick;
-    return current !== undefined && current.stepId === stepId && current.status === 'PICKING';
+    return (
+      current !== undefined &&
+      current.stepId === stepId &&
+      (current.status === 'PICKING' || current.status === 'PREPARING')
+    );
   }
 
   /** Une étape de la revue → l'action en direct qui vient des mêmes événements bruts (mise en évidence). */

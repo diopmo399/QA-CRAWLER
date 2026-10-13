@@ -61,9 +61,16 @@ export interface PanelCorrection {
  */
 export interface PanelPick {
   stepId: string;
-  status: 'PICKING' | 'PICKED' | 'CANCELLED' | 'UNAVAILABLE';
+  /** PREPARING : la session de correction rejoue les étapes précédentes (revue) ; UNREACHABLE : le chemin s'est arrêté avant l'étape. */
+  status: 'PREPARING' | 'PICKING' | 'PICKED' | 'CANCELLED' | 'UNAVAILABLE' | 'UNREACHABLE';
   /** Ce que l'humain est en train de remplacer (le libellé de l'étape). */
   label: string;
+  /** PREPARING : étapes précédentes rejouées / à rejouer. */
+  progress?: { executed: number; total: number };
+  /** UNREACHABLE : l'étape précédente qui a arrêté le chemin et pourquoi. */
+  stoppedAt?: { index: number; label: string; reason: string };
+  /** UNAVAILABLE : pourquoi la page n'est pas disponible. */
+  reason?: string;
   proposal?: {
     target: string;
     quality: string;

@@ -13,9 +13,11 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   de l'enregistrement, jamais un second moteur), Tester / Annuler / Valider, historique et « Restaurer
   l'original ». Pendant l'enregistrement : la correction est posée sur les événements bruts
   (`userCorrection`) et le flow généré la porte (`userDecision: TARGET_CORRECTED_BY_USER`,
-  `corrections`). En revue (carte « Replay interrompu », détails d'une étape) : l'application est rouverte
-  avec la session de l'enregistrement en mode sélection seul, l'étape du flow est réécrite et les fichiers
-  régénérés. Événements `TARGET_CORRECTED`, `RECORDING_TARGET_CORRECTED` ; commandes `correct-*` de la fenêtre.
+  `corrections`). En revue (carte « Replay interrompu », détails d'une étape) : une **session de correction**
+  (`src/recording/correction-session.ts`) suit le même chemin — les étapes précédentes sont rejouées par le
+  moteur de la mission (connexion, SafetyPolicy, données du run), puis la page reste ouverte dans cet état en
+  mode sélection seul ; un chemin arrêté avant l'étape est signalé. L'étape du flow est réécrite et les fichiers
+  régénérés. `DryRunDriver.page()`. Événements `TARGET_CORRECTED`, `RECORDING_TARGET_CORRECTED` ; commandes `correct-*` de la fenêtre.
 - **Vue d'ensemble** (`reports/overview.html`, `src/reporting/overview-*.ts`) : une page autonome par run —
   indicateurs (actions validées, intentions CONFIRMED / PROBABLE contre UNKNOWN, durée et durées par étape),
   parcours détecté (une carte par étape, ton validé / avertissement / échec / inconnu, étape d'arrêt, écritures

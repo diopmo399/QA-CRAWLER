@@ -24,7 +24,7 @@ import { screenInventorySummary, screenInventoryText } from './screen-inventory.
 import { timelineLines } from './recording-consistency.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { BrowserContext, BrowserContextOptions, Page } from 'playwright';
+import type { Page } from 'playwright';
 import { ProgressTracker, type ProgressSink } from '../progress/progress.js';
 import { stringify as stringifyYaml } from 'yaml';
 import { createAuthenticator } from '../auth/authenticator.js';
@@ -76,6 +76,7 @@ import {
   saveRecordedFlow,
 } from './recording-console.js';
 import { correctFlowTarget, describeTarget, restoreFlowTarget } from './target-correction.js';
+import { runCorrectionSession, type CorrectionSessionState } from './correction-session.js';
 import { describeFlowStep, reviewSteps, type PanelReplay } from './panel-state.js';
 
 export type RecordOutputFormat = 'yaml' | 'gherkin' | 'both';
@@ -268,10 +269,6 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   let stopReason: StopReason = 'api';
   let detach: (() => void) | undefined;
   let reviewing = request.review === true || request.reviewDriver !== undefined;
-  // CORRECTION MANAGER (revue) : la session du navigateur (cookies, stockage), en mémoire seulement,
-  // pour rouvrir l'application telle que l'humain l'a laissée quand il corrige une cible dans la page.
-  let applicationSession: BrowserContextOptions['storageState'] | undefined;
-  let applicationContext: BrowserContext | undefined;
   try {
     const authenticator = createAuthenticator(config.auth, config.target.baseUrl, env, startUrl);
     // La fenêtre de connexion d'une popup SSO : remplie par le navigateur (httpAuth.origins + profil).
@@ -280,7 +277,6 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       ...(preauthorized?.options ?? {}),
       ...authenticator.contextOptions(),
     });
-    applicationContext = context;
     const page = await browser.newPage();
     page.setDefaultTimeout(config.exploration.actionTimeoutMs);
     // La connexion n'est pas enregistrée : le flow rejoué se connecte avec la mission (CredentialProvider).
@@ -347,10 +343,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     // La revue garde la fenêtre du recorder jusqu'à « Fermer » ; la fenêtre de l'APPLICATION se ferme
     // dès l'arrêt (le rejeu ouvre sa propre fenêtre, propre : jamais deux applications ouvertes).
     progress.start(RECORDING_PHASES.browser);
-    if (reviewing) {
-      applicationSession = await applicationContext?.storageState().catch(() => undefined);
-      await browser.closeApplication();
-    } else await browser.close();
+    if (reviewing) await browser.closeApplication();
+    else await browser.close();
     stopClock.mark('browser close');
   }
   stopClock.mark('(pre-processing)');
@@ -880,8 +874,16 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   // LA REVUE : Rejouer → Valider → Sauvegarder, dans la fenêtre du recorder (l'application est fermée).
   if (reviewing && consoleUi) {
     const ui = consoleUi;
-    // La page rouverte pour corriger une cible (mode sélection seul), fermée avec la revue.
-    let correctionPage: Page | undefined;
+    // LA SESSION DE CORRECTION : le moteur de rejeu suit le même chemin (étapes 1 à N-1) puis garde la
+    // page ouverte le temps de la correction ; une seule à la fois, fermée avec la revue.
+    let correction: { stepId: string; release: () => void; done: Promise<unknown> } | undefined;
+    const endCorrection = async (): Promise<void> => {
+      const current = correction;
+      if (!current) return;
+      correction = undefined;
+      current.release();
+      await current.done.catch(() => undefined);
+    };
     const rewriteFlow = async (): Promise<void> => {
       regenerateFlowFiles(result, language);
       if (format !== 'gherkin') await write('generated.flow.yaml', result.files.yaml);
@@ -960,28 +962,83 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           saved = undefined;
           return { ok: true };
         },
-        // CORRECTION MANAGER : l'application est rouverte (même session, page de l'étape) en mode sélection
-        // seul ; l'élément désigné remplace la cible de l'étape ; l'original se restaure.
-        pickTarget: async (stepId, label) => {
-          if (!correctionPage || correctionPage.isClosed()) {
-            correctionPage = await browser.newIsolatedPage({
-              ...(applicationSession ? { storageState: applicationSession } : {}),
-              viewport: config.browser.viewport,
-              ignoreHTTPSErrors: config.browser.ignoreHttpsErrors,
+        // CORRECTION MANAGER : « suivre le même chemin » — les étapes 1 à N-1 sont rejouées par le moteur
+        // de la mission dans une session qui reste ouverte, puis l'humain désigne l'élément dans cet état
+        // réel ; l'élément remplace la cible de l'étape ; l'original se restaure. Jamais une URL seule.
+        pickTarget: async (stepId, label, onProgress) => {
+          const position = result.flow.steps.findIndex((item) => item.id === stepId) + 1;
+          if (position <= 0) return { unavailable: `step ${stepId} not found` };
+          if (correction && correction.stepId !== stepId) await endCorrection();
+          if (!correction) {
+            const scenarioFile = path.join(directory, 'replay.flow.yaml');
+            await writeFile(scenarioFile, result.files.yaml, 'utf8');
+            let release: () => void = () => undefined;
+            const released = new Promise<void>((resolve) => {
+              release = resolve;
             });
-            correctionPage.setDefaultTimeout(config.exploration.actionTimeoutMs);
-            await recorder.attachCorrectionPage(correctionPage);
-            const step = result.flow.steps.find((item) => item.id === stepId);
-            const url =
-              recorder.session.rawEvents.find((event) => step?.rawEventIds.includes(event.id) && event.url)
-                ?.url ?? result.session.startUrl;
-            await correctionPage
-              .goto(url, { waitUntil: 'domcontentloaded', timeout: config.exploration.navigationTimeoutMs })
-              .catch(() => undefined);
+            let ready: (state: CorrectionSessionState | { error: string }) => void = () => undefined;
+            const readiness = new Promise<CorrectionSessionState | { error: string }>((resolve) => {
+              ready = resolve;
+            });
+            const done = runCorrectionSession({
+              scenarioFile,
+              ...(request.missionFile ? { missionFile: request.missionFile } : {}),
+              overrides: {
+                ...request.overrides,
+                ...(request.missionFile ? {} : { baseUrl: new URL(result.session.startUrl).origin }),
+              },
+              env,
+              directory,
+              stepIndex: position,
+              headless: config.browser.headless,
+              onStep: (executed, total) => {
+                onProgress({ executed, total });
+              },
+              hold: async (state) => {
+                ready(state);
+                await released;
+              },
+            }).then(
+              (outcome) => {
+                if ('error' in outcome) ready(outcome);
+                return outcome;
+              },
+              (error: unknown) => {
+                ready({ error: error instanceof Error ? error.message : String(error) });
+              },
+            );
+            const session = { stepId, release, done };
+            correction = session;
+            const state = await readiness;
+            // Annulée pendant le rejeu des étapes précédentes : rien à désigner.
+            if (correction !== session) return { cancelled: true };
+            if ('error' in state) {
+              await endCorrection();
+              return { unavailable: state.error };
+            }
+            if (!state.reached) {
+              onEvent({
+                type: 'RECORDING_TARGET_CORRECTED',
+                at: new Date().toISOString(),
+                message: `step ${stepId}: the path could not be followed, stopped at step ${String(state.stoppedAt?.index ?? 0)} (${state.stoppedAt?.reason ?? 'unknown'})`,
+              });
+              await endCorrection();
+              return {
+                unreachable: state.stoppedAt ?? {
+                  index: 0,
+                  label: '',
+                  reason: 'the path could not be followed',
+                },
+              };
+            }
+            await recorder.attachCorrectionPage(state.page);
+            await state.page.bringToFront().catch(() => undefined);
           }
-          await correctionPage.bringToFront().catch(() => undefined);
-          return recorder.pickTarget(label);
+          onProgress({ executed: 0, total: 0, picking: true });
+          const picked = await recorder.pickTarget(label);
+          return picked ? { picked } : { cancelled: true };
         },
+        releaseCorrection: endCorrection,
         correctTarget: async ({ stepId, picked }) => {
           const outcome = correctFlowTarget(result.flow, stepId, picked, Date.now(), language);
           if ('error' in outcome) return outcome;
@@ -1032,10 +1089,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         message: `AI analysis ran in the background during the review (${(aiAnalysisMs / 1000).toFixed(1)} s)`,
       });
     }
-    await correctionPage
-      ?.context()
-      .close()
-      .catch(() => undefined);
+    await endCorrection();
     await ui.close();
     await browser.close();
     stopClock.mark('review');

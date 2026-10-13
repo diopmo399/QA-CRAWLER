@@ -618,6 +618,8 @@ const SCRIPT = `
       cTitle: function (n) { return "Correction de l'étape " + n; }, cInBrowser: 'Corriger dans le navigateur', cPickActive: 'Mode sélection actif · Échap pour quitter',
       cPickHelp: "Dans la fenêtre de l'application : survolez pour encadrer, cliquez pour choisir. Le clic n'est pas transmis à l'application.",
       cCancelled: 'Sélection annulée : la cible ne change pas.', cUnavailable: "La page de l'application n'est pas disponible pour la sélection.",
+      cPreparing: function (a, b) { return 'Rejeu des étapes précédentes… ' + a + ' sur ' + b; }, cPreparingHelp: "Le même chemin est suivi par le moteur de rejeu (connexion, données du run) jusqu'à l'étape à corriger ; la page reste ouverte ensuite.",
+      cUnreachable: function (i, l) { return "Le chemin s'arrête avant cette étape : l'étape " + i + ' « ' + l + " » n'a pas pu être rejouée."; }, cUnreachableHelp: "Corrigez d'abord cette étape-là, puis revenez à celle-ci.",
       cOld: 'ANCIENNE CIBLE', cNew: 'NOUVELLE CIBLE', cProposed: 'PROPOSÉE', cCorrected: 'CORRIGÉE', cRole: 'Rôle', cName: 'Nom accessible', cText: 'Texte', cTestId: 'testId', cCss: 'CSS de repli', cContext: 'Contexte',
       cOrder: 'Ordre de résolution au rejeu', cTest: "Tester l'étape", cCancel: 'Annuler', cApply: 'Valider la correction', cAmbiguous: 'Plusieurs éléments correspondent encore : la section ou le contexte départagera au rejeu.',
       cHistory: 'Historique des corrections', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrigé par', cUser: 'Utilisateur', cDate: 'Date', cRestore: "Restaurer l'original", cUnknown: 'non retrouvée', cCurrent: 'Cible actuelle'
@@ -639,6 +641,8 @@ const SCRIPT = `
       cTitle: function (n) { return 'Correction of step ' + n; }, cInBrowser: 'Correct in the browser', cPickActive: 'Selection mode on · Esc to quit',
       cPickHelp: 'In the application window: hover to frame, click to choose. The click is not passed to the application.',
       cCancelled: 'Selection cancelled: the target does not change.', cUnavailable: 'The application page is not available for the selection.',
+      cPreparing: function (a, b) { return 'Replaying the previous steps… ' + a + ' of ' + b; }, cPreparingHelp: 'The same path is followed by the replay engine (login, run data) up to the step to correct; the page then stays open.',
+      cUnreachable: function (i, l) { return 'The path stops before this step: step ' + i + ' "' + l + '" could not be replayed.'; }, cUnreachableHelp: 'Correct that step first, then come back to this one.',
       cOld: 'OLD TARGET', cNew: 'NEW TARGET', cProposed: 'PROPOSED', cCorrected: 'CORRECTED', cRole: 'Role', cName: 'Accessible name', cText: 'Text', cTestId: 'testId', cCss: 'Fallback CSS', cContext: 'Context',
       cOrder: 'Resolution order at replay', cTest: 'Test the step', cCancel: 'Cancel', cApply: 'Confirm the correction', cAmbiguous: 'Several elements still match: the section or the context decides at replay.',
       cHistory: 'Correction history', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrected by', cUser: 'User', cDate: 'Date', cRestore: 'Restore the original', cUnknown: 'not found', cCurrent: 'Current target'
@@ -901,6 +905,12 @@ const SCRIPT = `
     if (pk && pk.status === 'PICKED') h += '<span class="cbadge">' + esc(T.cProposed) + '</span>';
     else if (corrected) h += '<span class="cbadge done">' + esc(T.cCorrected) + '</span>';
     h += '</div>';
+    if (pk && pk.status === 'PREPARING') {
+      var pg = pk.progress || { executed: 0, total: 0 };
+      h += '<div class="pickbadge" role="status">' + esc(T.cPreparing(pg.executed, pg.total)) + '</div><p class="sub">' + esc(T.cPreparingHelp) + '</p>';
+      h += '<div class="row">' + button(T.cCancel, { cmd: 'correct-cancel', id: step.id }) + '</div>';
+      return h + '</section>';
+    }
     if (pk && pk.status === 'PICKING') {
       h += '<div class="pickbadge" role="status">' + esc(T.cPickActive) + '</div><p class="sub">' + esc(T.cPickHelp) + '</p>';
       h += '<div class="row">' + button(T.cCancel, { cmd: 'correct-cancel', id: step.id }) + '</div>';
@@ -927,7 +937,8 @@ const SCRIPT = `
       return h + '</section>';
     }
     if (pk && pk.status === 'CANCELLED') h += '<p class="sub">' + esc(T.cCancelled) + '</p>';
-    if (pk && pk.status === 'UNAVAILABLE') h += '<p class="sub">' + esc(T.cUnavailable) + '</p>';
+    if (pk && pk.status === 'UNAVAILABLE') h += '<p class="sub">' + esc(T.cUnavailable) + (pk.reason ? ' (' + esc(pk.reason) + ')' : '') + '</p>';
+    if (pk && pk.status === 'UNREACHABLE' && pk.stoppedAt) h += '<p class="warnnote">' + esc(T.cUnreachable(pk.stoppedAt.index, pk.stoppedAt.label)) + '</p><p class="sub">' + esc(pk.stoppedAt.reason) + '<br>' + esc(T.cUnreachableHelp) + '</p>';
     if (corr && corr.current && !corrected) h += '<dl><dt>' + esc(T.cCurrent) + '</dt><dd><code>' + esc(corr.current) + '</code></dd></dl>';
     h += '<div class="row">' + button(T.cInBrowser, { cmd: 'correct-pick', id: step.id, cls: 'soft', icon: 'cursor', disabled: running }) + '</div>';
     if (corrected && corr) {
@@ -1007,7 +1018,7 @@ const SCRIPT = `
 
   function previewHtml() {
     var pv = state.preview;
-    var picking = state.pick && state.pick.status === 'PICKING';
+    var picking = state.pick && (state.pick.status === 'PICKING' || state.pick.status === 'PREPARING');
     var h = '<header class="card-head"><h2>' + esc(T.previewTitle) + '</h2>' + (picking ? '<span class="pickbadge" role="status">' + esc(T.cPickActive) + '</span>' : '') + '<span class="actions">' + button('↻', { cmd: 'refresh-preview', cls: 'ghost', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('⛶', { cmd: 'fullscreen', cls: 'ghost', aria: T.fullscreen, title: T.fullscreen }) + button('⧉ ' + T.detach, { cmd: 'detach', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
     h += '<div class="url"><span class="nav" aria-hidden="true">← →</span><span aria-hidden="true">🔒</span>' + esc(pv ? pv.url : '') + '</div>';
     h += '<div class="viewport">' + (DETACHED ? '<div class="frame">' : '');
