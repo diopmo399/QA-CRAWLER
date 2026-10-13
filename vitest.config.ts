@@ -18,6 +18,9 @@ export default defineConfig({
           name: 'unit',
           include: ['tests/unit/**/*.test.ts'],
           environment: 'node',
+          // Le runner Windows est lent (clones git, SQLite) : le délai par défaut de 5 s y fait échouer
+          // des tests qui passent partout ailleurs ; Linux et macOS gardent le délai par défaut.
+          testTimeout: process.platform === 'win32' ? 30_000 : 5_000,
         },
       },
       {
