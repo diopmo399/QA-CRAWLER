@@ -329,7 +329,7 @@ npm run demo:server                        # terminal 1 : back-office sur :4174,
 npm run qa -- scenarios/demo.yaml          # terminal 2 : découvre les flows du back-office
 npm run qa -- scenarios/demo-traps.yaml    #              pièges (404, 500, erreurs JS, boucles…)
 QA_DEMO_PASSWORD=demo npm run qa -- scenarios/demo-flows.yaml   # flows imposés
-open reports/index.html reports/flow-graph.html
+open reports/overview.html reports/index.html reports/flow-graph.html
 ```
 
 Exemple de résultat sur le back-office de démo. L'explorateur a trouvé seul la structure, y compris les trois étapes d'un assistant qui ne change jamais d'URL :
@@ -1681,15 +1681,16 @@ Les anomalies identiques sont regroupées en une seule, qui compte ses occurrenc
 
 ## Rapports
 
-| Fichier                               | Contenu                                                                                                                                                                                                                                                            |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `reports/result.json`                 | Résumé et statistiques de la mission. États avec leurs actions complètes (localisateurs, classe) et formulaires, transitions, flows, interactions navigateur, anomalies, paramètres effectifs                                                                      |
-| `reports/index.html`                  | Rapport statique : cartes de synthèse, flows imposés, interactions navigateur, arbre des flows découverts, anomalies (état · action · flow), états, actions exécutées et bloquées, captures                                                                        |
-| `reports/flow-graph.json`             | Le graphe des flows, qui sert de mémoire à l'explorateur (reprise possible avec `memory.resume`)                                                                                                                                                                   |
-| `reports/flow-graph.html`             | Carte de l'application : arbre dépliable, arbre texte, transitions entre états, autres tentatives                                                                                                                                                                  |
-| `reports/generated-flows.yaml`        | Flows imposés générés à partir des chemins trouvés (voir [Générer des flows YAML](#générer-des-flows-yaml-à-partir-de-lexploration))                                                                                                                               |
-| `reports/engine-log.jsonl`            | Journal structuré du moteur, une ligne JSON par événement (`FLOW_STATE_DISCOVERED`, `ACTION_SELECTED`, `ACTION_BLOCKED`, `ACTION_EXECUTED`, `ORACLE_VERDICT`, `RECOVERY_ATTEMPT`, `STUCK_DETECTED`…), niveaux `ERROR` à `TRACE` (`logging.level`), secrets masqués |
-| `screenshots/NNN-<état>[-error…].png` | Une par état découvert, plus une par anomalie ERROR/CRITICAL et par étape `screenshot`                                                                                                                                                                             |
+| Fichier                               | Contenu                                                                                                                                                                                                                                                                                        |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reports/result.json`                 | Résumé et statistiques de la mission. États avec leurs actions complètes (localisateurs, classe) et formulaires, transitions, flows, interactions navigateur, anomalies, paramètres effectifs                                                                                                  |
+| `reports/index.html`                  | Rapport statique : cartes de synthèse, flows imposés, interactions navigateur, arbre des flows découverts, anomalies (état · action · flow), états, actions exécutées et bloquées, captures                                                                                                    |
+| `reports/flow-graph.json`             | Le graphe des flows, qui sert de mémoire à l'explorateur (reprise possible avec `memory.resume`)                                                                                                                                                                                               |
+| `reports/flow-graph.html`             | Carte de l'application : arbre dépliable, arbre texte, transitions entre états, autres tentatives                                                                                                                                                                                              |
+| `reports/overview.html`               | Vue d'ensemble du run : indicateurs (actions validées, intentions interprétées / UNKNOWN, durée), parcours détecté avec les réutilisations de données, détails du run, timeline avec recherche et lignée des données de test ; thème clair / sombre (`output.overviewHtml`, par défaut `true`) |
+| `reports/generated-flows.yaml`        | Flows imposés générés à partir des chemins trouvés (voir [Générer des flows YAML](#générer-des-flows-yaml-à-partir-de-lexploration))                                                                                                                                                           |
+| `reports/engine-log.jsonl`            | Journal structuré du moteur, une ligne JSON par événement (`FLOW_STATE_DISCOVERED`, `ACTION_SELECTED`, `ACTION_BLOCKED`, `ACTION_EXECUTED`, `ORACLE_VERDICT`, `RECOVERY_ATTEMPT`, `STUCK_DETECTED`…), niveaux `ERROR` à `TRACE` (`logging.level`), secrets masqués                             |
+| `screenshots/NNN-<état>[-error…].png` | Une par état découvert, plus une par anomalie ERROR/CRITICAL et par étape `screenshot`                                                                                                                                                                                                         |
 
 `index.html` montre aussi, quand il y a lieu : les verdicts des oracles (FAIL d'abord, décompte PASS / FAIL / WARNING / UNKNOWN, assertions observées), les formulaires découverts (champs, saisie, source, cas de validation), les événements de récupération, les branches abandonnées, les différences d'accès et les règles d'autorisation, les données créées et le budget de modifications, les anomalies d'accessibilité. Chaque anomalie garde son chemin de reproduction (états → action) et sa capture.
 
@@ -1697,7 +1698,7 @@ Les anomalies identiques sont regroupées en une seule, qui compte ses occurrenc
 
 Les rapports n'utilisent ni JavaScript, ni framework, ni ressource externe.
 
-**Rapports en français.** Avec `report.language: fr`, `index.html` et `flow-graph.html` sont en français : titres, colonnes, statuts (`RÉUSSI`, `ÉCHOUÉ`, `BLOQUÉ`, `IGNORÉ`), classes, gravités et raisons de la politique de sécurité. `result.json` et `flow-graph.json` restent toujours en anglais, pour que les outils et la CI lisent les mêmes clés et valeurs.
+**Rapports en français.** Avec `report.language: fr`, `overview.html`, `index.html` et `flow-graph.html` sont en français : titres, colonnes, statuts (`RÉUSSI`, `ÉCHOUÉ`, `BLOQUÉ`, `IGNORÉ`), classes, gravités et raisons de la politique de sécurité. `result.json` et `flow-graph.json` restent toujours en anglais, pour que les outils et la CI lisent les mêmes clés et valeurs.
 
 ```yaml
 report:

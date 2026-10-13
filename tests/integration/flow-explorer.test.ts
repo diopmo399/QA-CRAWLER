@@ -157,12 +157,18 @@ output:
     expect(graph.edges.length).toBe(result.transitions.length);
     const html = await readFile(path.join(reports, 'flow-graph.html'), 'utf8');
     expect(html).toContain('Nouveau dossier');
-    // Rapport principal : sommaire avec ancres, résultats avant l'analyse détaillée (repliée), sans script.
+    // Rapport principal : sommaire avec ancres, résultats avant l'analyse détaillée (repliée). Les seuls
+    // scripts sont ceux du thème clair / sombre (choix gardé en local, aucun réseau, aucune donnée du run).
     const index = await readFile(path.join(reports, 'index.html'), 'utf8');
     expect(index).toContain('<nav class="toc"');
     for (const [, id] of index.matchAll(/<a href="#(section-\d+)">/g)) expect(index).toContain(`id="${id}"`);
     expect(index.indexOf('HTTP')).toBeLessThan(index.indexOf('<details><summary><h2>'));
-    expect(index).not.toMatch(/<script/i);
+    const scripts = [...index.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1] ?? '');
+    expect(scripts).toHaveLength(2);
+    for (const script of scripts) {
+      expect(script).toContain('qa-crawler-theme');
+      expect(script).not.toMatch(/fetch\(|XMLHttpRequest|https?:/);
+    }
     const shots = await readdir(path.join(outputDir, 'screenshots'));
     expect(shots.length).toBeGreaterThanOrEqual(result.stats.states);
     for (const file of shots) expect(file).toMatch(/^\d{3}-[a-z0-9-]+\.png$/);

@@ -42,6 +42,7 @@ describe('parseConfig', () => {
       reportsDir: 'reports',
       screenshotsDir: 'screenshots',
       flowGraphHtml: true,
+      overviewHtml: true,
     });
     expect(config.memory.resume).toBe(false);
     expect(config.report.failOnSeverity).toBe('ERROR');

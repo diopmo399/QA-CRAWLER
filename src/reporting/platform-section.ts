@@ -114,7 +114,7 @@ export function platformSection(result: ExplorationResult, language: ReportLangu
   const generated = ext('generatedTests') as
     { tests: { flow: string; file: string; assertions: number }[] } | undefined;
 
-  const banner = `<div style="border-left:6px solid ${STATUS_COLORS[report.overallStatus]};padding:10px 14px;margin:8px 0 12px;background:#f8fafc;border-radius:6px">
+  const banner = `<div style="border-left:6px solid ${STATUS_COLORS[report.overallStatus]};padding:10px 14px;margin:8px 0 12px;background:var(--surface-2, #f8fafc);border-radius:8px">
     <div><span class="pill" style="background:${STATUS_COLORS[report.overallStatus]};color:#fff">${esc(report.overallStatus)}</span> <b>${esc(t.statuses[report.overallStatus])}</b>${report.verdict ? ` · ${classPill(report.verdict)}` : ''} · <span class="muted">${esc(t.path[report.path])}</span></div>
     ${list(report.statusReasons)}
   </div>`;

@@ -25,10 +25,10 @@ const COLORS = {
   FAIL: '#c62828',
   WARNING: '#ef6c00',
   UNKNOWN: '#78909c',
-  node: '#f8fafc',
-  border: '#94a3b8',
-  text: '#1f2937',
-  muted: '#64748b',
+  node: 'var(--surface-2, #f8fafc)',
+  border: 'var(--border-strong, #94a3b8)',
+  text: 'var(--text, #1f2937)',
+  muted: 'var(--muted, #64748b)',
 };
 
 const cut = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -126,7 +126,7 @@ export function renderFlowMap(result: ExplorationResult, language: 'en' | 'fr' =
           const lx = (from.x + NODE_WIDTH + to.x) / 2;
           const ly = (from.y + to.y) / 2 + NODE_HEIGHT / 2 - 6;
           labels.push(
-            `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="11" fill="${COLORS.text}" paint-order="stroke" stroke="#ffffff" stroke-width="4">${esc(text)}</text>`,
+            `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="11" fill="${COLORS.text}" paint-order="stroke" stroke="var(--surface, #ffffff)" stroke-width="4">${esc(text)}</text>`,
           );
         }
       }
@@ -190,7 +190,7 @@ export function renderFlowMap(result: ExplorationResult, language: 'en' | 'fr' =
     )
     .join('');
   const hidden = result.states.length - placed.size;
-  return `<div class="flow-diagram" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:8px;background:#fff;padding:6px">
+  return `<div class="flow-diagram" style="overflow-x:auto;border:1px solid var(--border, #e2e8f0);border-radius:10px;background:var(--surface, #fff);padding:6px">
     <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${language === 'fr' ? 'Carte des flows' : 'Flow map'}" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
       <defs>${markers}</defs>${links.join('')}${treeEdges.join('')}${nodes.join('')}${labels.join('')}
     </svg></div>

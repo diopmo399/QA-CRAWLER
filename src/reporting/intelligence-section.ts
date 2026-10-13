@@ -211,7 +211,7 @@ export function intelligenceSection(
       `<table><tr><th>${esc(t.area)}</th><th>${esc(t.ratio)}</th></tr>${coverage.areas
         .map(
           (area) =>
-            `<tr><td>/${esc(area.area === '/' ? '' : area.area)}</td><td><div style="background:#e2e8f0;border-radius:4px;width:160px;display:inline-block;vertical-align:middle"><div style="background:#2e7d32;height:8px;border-radius:4px;width:${Math.round(area.ratio * 160)}px"></div></div> ${Math.round(area.ratio * 100)} %</td></tr>`,
+            `<tr><td>/${esc(area.area === '/' ? '' : area.area)}</td><td><div style="background:var(--grey-soft, #e2e8f0);border-radius:4px;width:160px;display:inline-block;vertical-align:middle"><div style="background:#2e7d32;height:8px;border-radius:4px;width:${Math.round(area.ratio * 160)}px"></div></div> ${Math.round(area.ratio * 100)} %</td></tr>`,
         )
         .join('')}</table>`,
     );
