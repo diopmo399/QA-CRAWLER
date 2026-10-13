@@ -425,7 +425,9 @@ export class RecordingConsole {
                 // Le flow change : un rejeu fait avant ne le valide plus.
                 this.replay = undefined;
                 this.saved = undefined;
-                await input.actions.releaseCorrection?.();
+                // La fenêtre montre la correction tout de suite ; la session (navigateur, fin de mission)
+                // se ferme en arrière-plan, sans bloquer la revue (un « Rejouer » juste après est accepté).
+                void input.actions.releaseCorrection?.();
               }
             }
           } else if (command.type === 'correct-restore' && command.id && input.actions.restoreTarget) {

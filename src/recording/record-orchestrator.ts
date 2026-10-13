@@ -884,12 +884,22 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     // page ouverte le temps de la correction ; une seule à la fois, fermée avec la revue.
     let correction:
       { stepId: string; release: () => void; done: Promise<unknown>; runData: KnownValue[] } | undefined;
+    // La fermeture (navigateur, fin de la mission de correction) peut prendre quelques secondes : la
+    // fenêtre n'attend pas, mais une nouvelle session et la fin de la revue attendent la précédente.
+    let closing: Promise<void> = Promise.resolve();
     const endCorrection = async (): Promise<void> => {
       const current = correction;
-      if (!current) return;
-      correction = undefined;
-      current.release();
-      await current.done.catch(() => undefined);
+      if (current) {
+        correction = undefined;
+        current.release();
+        closing = closing.then(() =>
+          current.done.then(
+            () => undefined,
+            () => undefined,
+          ),
+        );
+      }
+      await closing;
     };
     const rewriteFlow = async (): Promise<void> => {
       regenerateFlowFiles(result, language);
