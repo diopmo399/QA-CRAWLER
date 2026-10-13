@@ -164,7 +164,9 @@ describe('Correction manager — a table row is bound to the run data, never to 
     const target = open?.step.kind === 'click' ? open.step.target : undefined;
     expect(target?.row).toBeDefined();
     expect(Object.values(target?.row ?? {})[0]).toMatch(/^\$\{testData:.+\}$/);
-    expect(String(seen.history)).toContain('${testData:');
+    // L'historique montre la correction lisible : la ligne cite la donnée du run, plus la clé lue.
+    expect(String(seen.history)).toMatch(/Correction\s[\s\S]*Ligne\s+(contient\s+)?[\w.-]+/);
+    expect(String(seen.history).split('Correction').pop()).not.toContain('3024');
     expect(outcome.result.files.yaml).toContain('${testData:');
     expect(outcome.result.files.yaml).not.toContain('3024');
     expect(String(seen.secondReplay)).toContain('✓ Replay réussi');

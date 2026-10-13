@@ -17,6 +17,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   devant l'étape en échec. `TestDataRunContext.seed()`, `replay.contextRecovery`, `replay-checkpoints.json`
   (empreintes), événements `REPLAY_CONTEXT_RECOVERY`, `REPLAY_RESUMED`, `REPLAY_RESUME_BLOCKED`. Tests unitaires
   (17) et d'intégration `recording-context-recovery`.
+- **Bloc de correction redessiné** (fenêtre du recorder). Cartes Avant / Après lisibles (rôle, nom de l'élément,
+  ligne du tableau sur sa propre ligne, donnée du run en pastille ; la cible brute reste en infobulle), façons
+  d'identifier la ligne en cartes à choisir (« Recommandé », « Propre à ce run »), avertissements en encarts,
+  ordre de résolution sur une ligne, traits techniques repliés dans « Détails techniques », Tester / Annuler /
+  Valider sur une seule ligne, en-tête de l'action masqué pendant la correction. L'historique d'une correction
+  utilise les mêmes cartes.
 - **Ligne de tableau : liaison plus robuste et liaison manuelle.** Une cellule qui contient la donnée du run (accents, casse,
   espaces, suffixe ignorés) est liée avec un critère « contient » ; sinon la fenêtre le dit et propose **Lier une colonne à
   une donnée du run** (colonnes de la ligne et données du run avec leur valeur ; `RowBinding`, commande `correct-apply`
