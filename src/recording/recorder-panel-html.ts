@@ -100,8 +100,10 @@ ${THEME_BOOT_SCRIPT}
         </section>
         <section class="card quality" id="quality"></section>
       </div>
-      <section class="card preview col-mid" id="preview-card"></section>
-      <aside class="card details col-right" id="details" aria-live="polite"></aside>
+      <div class="col-side">
+        <aside class="card details col-right" id="details" aria-live="polite"></aside>
+        <section class="card preview col-mid" id="preview-card"></section>
+      </div>
     </div>
   </section>
   <section id="panel-analysis" role="tabpanel" aria-labelledby="tab-analysis" hidden></section>
@@ -121,7 +123,7 @@ const CSS = `
   --accent:#4F46E5;--accent-soft:#EEF2FF;--accent-fg:#FFFFFF;--title:#4338CA;--ok-fg:#FFFFFF;--muted-strong:#374151;--chip-bg:#F1F2F8;--chip-fg:#374151;--ok-text:#15803D;
   --ok:#15803D;--ok-soft:#F0FDF4;--warn:#B45309;--warn-soft:#FFFBEB;--bad:#B91C1C;--bad-soft:#FEF2F2;--run:#4F46E5;--run-soft:#EEF2FF;--idle:#C7CCD8;--idle-soft:#F1F2F8;
   --violet:#6D28D9;--violet-soft:#F3EEFF;--teal:#0F766E;--teal-soft:#E6FAF7;--orange:#4338CA;--orange-soft:#EEF2FF;--pink:#1D4ED8;--pink-soft:#E8F0FE;
-  --radius:14px;--shadow:0 1px 2px rgba(16,24,40,.05);--focus:#4F46E5;--ring:#E0E7FF;
+  --radius:14px;--shadow:0 1px 2px rgba(16,24,40,.05);--focus:#4F46E5;--ring:#E0E7FF;--bad-line:#FECACA;--ok-line:#BBF7D0;
   --accent-2:#7C3AED;--text:var(--fg);--text-2:var(--muted-strong);--nav-hover:#F1F2F8;
 }
 :root[data-theme="dark"]{color-scheme:dark;
@@ -129,7 +131,7 @@ const CSS = `
   --accent:#6366F1;--accent-soft:#1C1A4A;--accent-fg:#FFFFFF;--title:#C7D2FE;--ok-fg:#052E16;--muted-strong:#C9CFDD;--chip-bg:#1A2133;--chip-fg:#C9CFDD;--ok-text:#4ADE80;
   --ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#2A1F0C;--bad:#EF4444;--bad-soft:#2A1215;--run:#818CF8;--run-soft:#1C1A4A;--idle:#64748B;--idle-soft:#1A2133;
   --violet:#A78BFA;--violet-soft:#2E1F6B;--teal:#5EEAD4;--teal-soft:#0E3B33;--orange:#A5B4FC;--orange-soft:#1C1A4A;--pink:#93C5FD;--pink-soft:#0F1B3A;
-  --shadow:none;--focus:#A5B4FC;--ring:#2E2A7A;
+  --shadow:none;--focus:#A5B4FC;--ring:#2E2A7A;--bad-line:#7F1D1D;--ok-line:#14532D;
   --accent-2:#8B5CF6;--nav-hover:#161C2D;
 }
 ${THEME_BASE_CSS}
@@ -199,13 +201,24 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
    l'aperçu restent visibles pendant qu'on fait défiler un long parcours. */
 @media (min-width:780px) and (min-height:560px){
   body[data-mode=main]{height:100vh;overflow:hidden}
-  body[data-mode=main] main{overflow:auto}
+  /* Chaque colonne défile pour elle-même : un long détail (correction) ne pousse plus le parcours,
+     et le parcours se parcourt sans perdre le détail de vue. */
+  body[data-mode=main] main{overflow:hidden;display:flex;flex-direction:column}
+  body[data-mode=main] main>[role=tabpanel]{flex:1;min-height:0;overflow:auto}
+  body[data-mode=main] #panel-recording{display:flex;flex-direction:column;overflow:hidden}
+  body[data-mode=main] #review{flex:none;max-height:45%;overflow:auto}
+  body[data-mode=main] .grid{flex:1;min-height:0;grid-template-rows:minmax(0,1fr)}
+  body[data-mode=main] .grid>.col-left{min-height:0;max-height:100%;overflow:auto;overscroll-behavior:contain;align-content:start}
+  body[data-mode=main] .grid>.col-side{max-height:100%}
+  /* Le détail passe en premier (il garde sa hauteur, défile s'il est très long) ; l'aperçu prend le reste. */
+  body[data-mode=main] .col-side>.col-right{flex:0 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
+  body[data-mode=main] .col-side>.col-mid{flex:1 1 0;min-height:52px;overflow:auto}
 }
 @media (min-width:780px){
   .grid{grid-template-columns:minmax(0,1fr) minmax(320px,400px)}
-  .grid>.col-left{grid-column:1;grid-row:1/3}
-  .grid>.col-right{grid-column:2;grid-row:1}
-  .grid>.col-mid{grid-column:2;grid-row:2;display:block}
+  .grid>.col-left{grid-column:1}
+  .grid>.col-side{grid-column:2;display:flex;flex-direction:column;gap:12px;min-height:0}
+  .col-mid{display:block}
 }
 .col-left{display:grid;gap:12px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
@@ -293,11 +306,48 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .details .logs{margin-top:10px}
 .details .logs summary{cursor:pointer;color:var(--muted);font-weight:600}
 .details .empty-details{color:var(--muted);text-align:center;padding:30px 10px}
-.review{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow)}
-.review h2{margin:0 0 4px;font-size:16px;color:var(--ok)}
+.review{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:12px 16px;margin-bottom:12px;box-shadow:var(--shadow)}
+.review h2{margin:0;font-size:16px;color:var(--ok)}
 .review .hint{margin:0;color:var(--muted)}
-.result{border-radius:12px;padding:14px 16px;margin-top:12px;border:1px solid var(--line)}
-.result.ok{background:var(--ok-soft);border-color:var(--ok-soft)} .result.bad{background:var(--surface);border-color:#FECACA;border-left:4px solid var(--bad)}
+.result{flex:1 1 420px;border-radius:12px;padding:10px 14px;margin:0;border:1px solid var(--line)}
+.result .rhead{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}
+.result .rmeta{flex:1 1 260px;margin:0!important}
+.result .rhead .actions{margin-left:auto}
+.result details{margin-bottom:0}
+.result.ok{background:var(--ok-soft);border-color:var(--ok-soft)} .result.bad{background:var(--surface);border-color:var(--bad-line);border-left:4px solid var(--bad)}
+/* CORRECTION MANAGER : ancienne cible → nouvelle cible, ordre de résolution, mode sélection. */
+.correction{margin-top:14px;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--surface)}
+.correction .chead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.correction .chead h3{margin:0;font-size:14px;font-weight:700;color:var(--fg);letter-spacing:0}
+.cbadge{font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:var(--warn-soft);color:var(--warn);white-space:nowrap}
+.cbadge.done{background:var(--ok-soft);color:var(--ok)}
+.pickbadge{display:inline-flex;align-items:center;gap:8px;padding:5px 12px;border-radius:8px;background:var(--accent-soft);color:var(--title);font-size:12px;font-weight:700}
+.pickbadge::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;animation:pulse 1.6s infinite}
+.pair{display:grid;grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);gap:10px;align-items:stretch;margin:10px 0}
+.tbox{border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+.tbox b{display:block;font-size:11px;font-weight:700;margin-bottom:4px;letter-spacing:.04em}
+.tbox code{display:block;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;color:var(--fg)}
+.tbox span{display:block;font-size:12px;color:var(--muted);margin-top:4px}
+.tbox.old{border-color:var(--bad-line);background:var(--bad-soft)} .tbox.old b{color:var(--bad)}
+.tbox.new{border-color:var(--ok-line);background:var(--ok-soft)} .tbox.new b{color:var(--ok)}
+.pair .arrow{display:grid;place-items:center;color:var(--muted);font-size:18px}
+.correction .order{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface-2);font-size:12px;margin:10px 0}
+.correction .order b{display:block;margin-bottom:6px}
+.correction .order ol{margin:0;padding-left:18px;display:grid;gap:2px;color:var(--muted-strong)}
+.correction .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.correction .row .grow{flex:1;justify-content:center}
+/* Tester / Annuler / Valider restent visibles pendant que le détail de la correction défile. */
+.correction .row.cta{position:sticky;bottom:-18px;margin:10px -2px 0;padding:8px 2px;background:var(--surface);border-top:1px solid var(--line)}
+.correction .warnnote{margin:6px 0 0;font-size:12px;color:var(--warn);font-weight:600}
+.rowopts{border:1px solid var(--line);border-radius:10px;padding:8px 12px 10px;margin:10px 0 0;display:grid;gap:6px;background:var(--surface-2)}
+.rowopts legend{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--muted-strong);padding:0 4px}
+.rowopts label.choice{display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:12px}
+.rowopts label.choice input{margin-top:2px}
+.rowopts label.choice span{display:grid;gap:1px} .rowopts label.choice small{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere}
+.rowopts label.fixed small{color:var(--warn)}
+.chist{display:grid;grid-template-columns:90px minmax(0,1fr);gap:5px 10px;font-size:12px;margin:8px 0}
+.chist .k{color:var(--muted)} .chist code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.correction dl{margin:0}
 .result.ok>b{color:var(--ok)} .result.bad>b{color:var(--bad);font-size:16px}
 .result ul{list-style:none;padding:0;margin:6px 0 0;display:grid;gap:3px}
 .result p{margin:6px 0}
@@ -439,13 +489,46 @@ body[data-mode=preview]{background:var(--bg)}
 @media (max-width:640px){.irow{grid-template-columns:32px minmax(0,1fr);padding:12px}.irow .iico{width:32px;height:32px;grid-row:1}.irow .iactions{grid-column:2;grid-row:auto;justify-content:flex-start}.irow .full,.iedit{grid-column:2}}
 /* E · MINI-DOCK : une fenêtre étroite et sombre pendant l'enregistrement (la revue reste complète). */
 body.compact{--title:#C7D2FE;--ok-fg:#052E16;--muted-strong:#C9CFDD;--chip-bg:#1A2133;--chip-fg:#C9CFDD;--ok-text:#4ADE80;--bg:#0B0E17;--surface:#111726;--surface-2:#161C2D;--fg:#E6E9F2;--muted:#9AA3B8;--line:#1F2638;--line-strong:#2A3248;--accent:#6366F1;--accent-soft:#1C1A4A;--accent-fg:#FFFFFF;--ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#2A1F0C;--bad:#EF4444;--bad-soft:#2A1215;--run:#818CF8;--run-soft:#1C1A4A;--teal:#5EEAD4;--teal-soft:#0E3B33;--violet:#DDD6FE;--violet-soft:#2E1F6B;--orange:#A5B4FC;--orange-soft:#1C1A4A;--shadow:none;--ring:#2E2A7A;--text:var(--fg);--text-2:var(--muted-strong);--nav-hover:#161C2D}
-body.compact .tabs,body.compact .col-mid,body.compact .col-right,body.compact #quality,body.compact .subtitle,body.compact #devtoggle,body.compact .summarybar,body.compact #tltools,body.compact #checks,body.compact .sep,body.compact #livepill{display:none!important}
+body.compact .tabs,body.compact .col-side,body.compact .col-mid,body.compact .col-right,body.compact #quality,body.compact .subtitle,body.compact #devtoggle,body.compact .summarybar,body.compact #tltools,body.compact #checks,body.compact .sep,body.compact #livepill{display:none!important}
 body.compact .grid{grid-template-columns:1fr!important}
 body.compact .statusbar{margin:8px 10px 0}
 body.compact main{padding:8px 10px}
 body.compact .livesearch{max-width:100%;flex-basis:100%;white-space:normal}
 body.compact .timeline>li:not(.group):nth-last-child(n+6),body.compact .timeline>li.group{display:none}
 body.compact .controls{flex-basis:100%}
+/* ÉCRAN DE PORTABLE (étroit ou peu haut, mise à l'échelle Windows 125–150 %) : la même fenêtre, plus
+   dense — en-tête, barre d'état, onglets, cartes et résumé prennent moins de hauteur ; le parcours garde la place. */
+@media (max-width:1400px),(max-height:820px){
+  /* ÉCRAN DE PORTABLE (échelle Windows 125–150 %) : tout est plus serré, le parcours tient sur une
+     ligne par action, le détail reste lisible sans défiler. */
+  .topbar{padding:4px 14px;gap:8px}.brand{font-size:14px}.topbar .logo{width:22px;height:22px}.subtitle{font-size:12px}.devtoggle{min-height:28px;padding:3px 9px;font-size:11px}.topbar .qa-theme-toggle{width:30px;height:30px}
+  .statusbar{margin:6px 14px 0;padding:4px 12px;gap:10px;flex-wrap:nowrap}.state{font-size:14px}.state::before{width:9px;height:9px}.timer{font-size:15px}.alert{padding:2px 8px;font-size:11px}
+  .statusbar .count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.statusbar .spacer{display:none}
+  .controls{flex:none;gap:6px}.controls button{min-height:28px;padding:2px 10px;font-size:13px}.controls .note{flex-basis:auto}
+  .progress{margin:6px 14px 0}
+  .tabs{margin:4px 14px 0}.tabs [role=tab]{padding:3px 10px;min-height:28px;font-size:13px}
+  main{padding:6px 14px 6px}.grid{gap:10px}.col-left{gap:8px}.grid>.col-side{gap:10px}.card{padding:9px 11px;border-radius:10px}.card-head{margin-bottom:6px;gap:8px}.card-head h2,.card h2{font-size:14px}
+  .tl-search input{min-height:28px;width:150px;padding:3px 10px;font-size:12px}#tlattention{min-height:28px;padding:3px 10px;font-size:12px}
+  .status-line{margin-bottom:6px;padding:3px 8px;font-size:11px}.timeline>li{padding-bottom:4px}
+  .item{padding:4px 9px;gap:7px;border-radius:9px}.dot{width:20px;height:20px;font-size:10px}.num{min-width:14px;font-size:11px}.kind{width:26px;height:26px;border-radius:7px}.kind svg{width:14px;height:14px}
+  .desc{font-size:13px;display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;row-gap:0}.desc .sub{display:inline;font-size:11px}.desc .tech{flex-basis:100%}
+  .pill{margin:0 0 0 auto;font-size:11px}.chev{font-size:15px}
+  .attention{margin-top:6px;padding:8px 10px}.attention label{padding:5px 8px;margin-bottom:4px}.checks{margin-top:2px}
+  .quality .qbody{gap:10px}.ring{width:64px;height:64px}.ring>div{width:50px;height:50px}.ring b{font-size:15px}.ring span{font-size:10px}.quality ul{gap:2px;font-size:11px}
+  .review{padding:6px 12px;margin-bottom:6px;gap:6px 12px}.review h2{font-size:14px}.review:has(.result)>h2,.review:has(.result)>.hint{display:none}.result{padding:5px 10px}.result.bad .rhead>b{font-size:13px}.result p{margin:3px 0}.result ul{margin-top:3px}.result details{margin:3px 0 0;padding:3px 9px}.result .actions{gap:6px}.result .actions button{min-height:26px;padding:2px 9px;font-size:12px}
+  .preview .card-head{flex-wrap:nowrap}.preview .card-head .actions button{min-height:26px;padding:2px 8px;font-size:12px}
+  .correction .chead h3,.correction .chead button{white-space:nowrap}.correction .chead button{flex:none;min-height:24px;padding:2px 7px;font-size:11px}.correction .chead button svg{display:none}.correction .row.cta{bottom:-9px;margin-top:6px;padding:6px 2px;gap:5px}.correction .row.cta button{white-space:nowrap;padding:3px 8px;font-size:12px}
+  .details .step{display:none}.details .hero{padding:6px 9px;margin-bottom:8px;gap:8px}.details .hero b{font-size:13px}.details .hero span{font-size:11px}
+  .details h3{margin:8px 0 4px;font-size:11px}.details dl{gap:3px 10px;font-size:12px;grid-template-columns:96px minmax(0,1fr)}.vlist{padding:6px 8px;gap:3px;font-size:11px}.details .found{margin-top:6px;padding:5px 8px}.details .logs{margin-top:6px}
+  .correction{padding:7px 10px;margin-top:8px;border-radius:10px}.correction .chead{margin-bottom:5px;gap:8px}.correction .chead h3{font-size:12px}.correction .chead button{min-height:26px;padding:2px 9px;font-size:12px}
+  .pair{gap:6px;margin:6px 0}.tbox{padding:6px 8px;border-radius:8px}.tbox code{font-size:11px}.tbox span{font-size:11px;margin-top:2px}
+  .correction .order{padding:6px 9px;margin:6px 0;font-size:11px}.correction .order ol{gap:0}.correction .row{margin-top:6px;gap:6px}.correction .row button{min-height:28px;padding:3px 10px;font-size:12px}
+  .correction .warnnote,.correction .sub{font-size:11px;margin-top:4px}.rowopts{padding:5px 9px 7px;margin-top:6px;gap:3px}.rowopts label.choice{font-size:11px}.rowopts label.choice small{font-size:10px}.chist{gap:2px 8px;font-size:11px;margin:5px 0}
+  .pickbadge{padding:3px 9px;font-size:11px}.cbadge{font-size:10px}
+  .summarybar{padding:4px 14px;gap:10px}.summarybar h2{display:none}.stat{gap:5px;padding-right:9px}.stat .i{width:20px;height:20px;font-size:10px;box-shadow:0 0 0 2px var(--surface)}.stat b{font-size:12px}.stat span{font-size:10px}
+  .summarybar .buttons{gap:6px}.summarybar .buttons button{min-height:30px;padding:3px 10px;font-size:12px}
+  .selnote{margin-top:6px;padding:6px 9px}.preview .url{padding:3px 8px;margin-bottom:6px}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 `;
 
@@ -575,7 +658,17 @@ const SCRIPT = `
       qualityShort: 'Qualité', seeDetail: 'Voir le détail',
       analysisRunning: "Analyse par l'intelligence en cours, en arrière-plan : vous pouvez déjà rejouer et sauvegarder.",
       fullscreen: 'Plein écran', detach: 'Détacher', detachLabel: "Détacher l'aperçu dans sa propre fenêtre", attach: 'Rattacher', attachLabel: "Rattacher l'aperçu à la fenêtre principale",
-      detachedNote: "L'aperçu de l'application est ouvert dans sa propre fenêtre (plein écran possible)."
+      detachedNote: "L'aperçu de l'application est ouvert dans sa propre fenêtre (plein écran possible).",
+      cTitle: function (n) { return "Correction de l'étape " + n; }, cInBrowser: 'Corriger dans le navigateur', cPickActive: 'Mode sélection actif · Échap pour quitter',
+      cPickHelp: "Dans la fenêtre de l'application : survolez pour encadrer, cliquez pour choisir. Le clic n'est pas transmis à l'application.",
+      cCancelled: 'Sélection annulée : la cible ne change pas.', cUnavailable: "La page de l'application n'est pas disponible pour la sélection.",
+      cPreparing: function (a, b) { return 'Rejeu des étapes précédentes… ' + a + ' sur ' + b; }, cPreparingHelp: "Le même chemin est suivi par le moteur de rejeu (connexion, données du run) jusqu'à l'étape à corriger ; la page reste ouverte ensuite.",
+      cUnreachable: function (i, l) { return "Le chemin s'arrête avant cette étape : l'étape " + i + ' « ' + l + " » n'a pas pu être rejouée."; }, cUnreachableHelp: "Corrigez d'abord cette étape-là, puis revenez à celle-ci.",
+      cOld: 'ANCIENNE CIBLE', cNew: 'NOUVELLE CIBLE', cProposed: 'PROPOSÉE', cCorrected: 'CORRIGÉE', cRole: 'Rôle', cName: 'Nom accessible', cText: 'Texte', cTestId: 'testId', cCss: 'CSS de repli', cContext: 'Contexte',
+      cOrder: 'Ordre de résolution au rejeu', cTest: "Tester l'étape", cCancel: 'Annuler', cApply: 'Valider la correction', cAmbiguous: 'Plusieurs éléments correspondent encore : la section ou le contexte départagera au rejeu.',
+      cRowTitle: 'Identifier la ligne par', cRowBound: function (v) { return 'La donnée du run « ' + v + ' »'; }, cRowBoundHelp: 'La ligne créée pendant le run est retrouvée à chaque rejeu, quelle que soit sa clé.',
+      cRowKey: 'La clé lue dans le tableau', cRowFixed: 'Clé propre à ce run : le prochain rejeu crée une autre ligne et ne la retrouvera pas.',
+      cHistory: 'Historique des corrections', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrigé par', cUser: 'Utilisateur', cDate: 'Date', cRestore: "Restaurer l'original", cUnknown: 'non retrouvée', cCurrent: 'Cible actuelle'
     },
     en: {
       subtitle: 'Journey recording', devMode: 'Developer mode', active: 'Active', inactive: 'Paused',
@@ -590,7 +683,17 @@ const SCRIPT = `
       qualityShort: 'Quality', seeDetail: 'See the detail',
       analysisRunning: 'Intelligence analysis running in the background: you can already replay and save.',
       fullscreen: 'Full screen', detach: 'Detach', detachLabel: 'Detach the preview into its own window', attach: 'Reattach', attachLabel: 'Reattach the preview to the main window',
-      detachedNote: 'The application preview is open in its own window (full screen available).'
+      detachedNote: 'The application preview is open in its own window (full screen available).',
+      cTitle: function (n) { return 'Correction of step ' + n; }, cInBrowser: 'Correct in the browser', cPickActive: 'Selection mode on · Esc to quit',
+      cPickHelp: 'In the application window: hover to frame, click to choose. The click is not passed to the application.',
+      cCancelled: 'Selection cancelled: the target does not change.', cUnavailable: 'The application page is not available for the selection.',
+      cPreparing: function (a, b) { return 'Replaying the previous steps… ' + a + ' of ' + b; }, cPreparingHelp: 'The same path is followed by the replay engine (login, run data) up to the step to correct; the page then stays open.',
+      cUnreachable: function (i, l) { return 'The path stops before this step: step ' + i + ' "' + l + '" could not be replayed.'; }, cUnreachableHelp: 'Correct that step first, then come back to this one.',
+      cOld: 'OLD TARGET', cNew: 'NEW TARGET', cProposed: 'PROPOSED', cCorrected: 'CORRECTED', cRole: 'Role', cName: 'Accessible name', cText: 'Text', cTestId: 'testId', cCss: 'Fallback CSS', cContext: 'Context',
+      cOrder: 'Resolution order at replay', cTest: 'Test the step', cCancel: 'Cancel', cApply: 'Confirm the correction', cAmbiguous: 'Several elements still match: the section or the context decides at replay.',
+      cRowTitle: 'Identify the row by', cRowBound: function (v) { return 'The run value "' + v + '"'; }, cRowBoundHelp: 'The row created during the run is found at every replay, whatever its key.',
+      cRowKey: 'The key read in the table', cRowFixed: 'Key specific to this run: the next replay creates another row and will not find it.',
+      cHistory: 'Correction history', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrected by', cUser: 'User', cDate: 'Date', cRestore: 'Restore the original', cUnknown: 'not found', cCurrent: 'Current target'
     }
   }[lang];
   Object.keys(X).forEach(function (k) { T[k] = X[k]; });
@@ -609,6 +712,9 @@ const SCRIPT = `
   };
   var KIND_ICON = { open: 'link', navigate: 'link', goto: 'link', click: 'cursor', fill: 'text', check: 'check', uncheck: 'check', choose: 'check', select: 'list', key: 'hash', drag: 'move', dragAndDrop: 'move', upload: 'clip', manual: 'hash', dialog: 'list' };
   var state = null, selected = null, choice = {}, dev = false, editing = false, tab = 'recording';
+  var focused = null, scrolledTo = null;
+  // L'option de ligne choisie pour une correction (bound, key), par étape : gardée entre deux rendus.
+  var rowChoice = {};
   // Le brouillon de la source de chaque saisie (revue) : gardé entre deux rendus de la fenêtre.
   var dataDraft = {};
   var filterText = '', onlyAttention = false, layout = null, editingIntent = null;
@@ -806,6 +912,7 @@ const SCRIPT = `
     var h = '<header class="card-head"><h2>' + esc(T.detailsTitle) + '</h2><span class="actions">' + button('✕', { cmd: 'deselect', cls: 'ghost', aria: T.hideDetails }) + '</span></header>';
     h += '<span class="step">' + esc(T.stepOf2(step.index, state.actions.length)) + '</span>';
     h += '<div class="hero"><span class="kind k-' + esc(step.kind) + '" aria-hidden="true">' + kindSvg(step.kind) + '</span><div><b>' + esc(step.description) + '</b><span>' + esc(step.detail || step.statusText) + '</span></div></div>';
+    h += correctionBlock(step);
     h += '<h3>' + esc(T.general) + '</h3><dl>';
     h += '<dt>' + esc(T.field.kind) + '</dt><dd><span class="chip">' + esc(T.kindName[step.kind] || step.kind) + '</span></dd>';
     GENERAL.forEach(function (k) { if (t[k] !== undefined && k !== 'kind' && k !== 'event') h += '<dt>' + esc(T.field[k] || k) + '</dt><dd>' + (k === 'role' ? '<span class="chip">' + esc(t[k]) + '</span>' : esc(t[k])) + '</dd>'; });
@@ -832,6 +939,84 @@ const SCRIPT = `
     }).join('') : '<p class="sub">' + esc(T.linkedNone) + '</p>';
     h += '<details class="logs"><summary>' + esc(T.logs) + '</summary><span class="tech">' + esc(techLines(step)) + '</span></details>';
     setHtml(box, h);
+  }
+
+  /**
+   * CORRECTION MANAGER : corriger la cible d'une étape dans le navigateur. Au repos : le bouton et, si la
+   * cible a déjà été corrigée, l'historique (Restaurer l'original). En mode sélection : le badge actif.
+   * Élément désigné : ancienne cible → nouvelle cible, ses traits, l'ordre de résolution, Tester / Annuler / Valider.
+   */
+  function correctionBlock(step) {
+    if (!step.correctable || state.phase === 'FINALIZING') return '';
+    var pk = state.pick && state.pick.stepId === step.id ? state.pick : null;
+    var running = state.replay && state.replay.status === 'RUNNING';
+    var corr = step.correction;
+    var corrected = corr && corr.corrected;
+    var busy = pk && (pk.status === 'PREPARING' || pk.status === 'PICKING' || pk.status === 'PICKED');
+    var h = '<section class="correction" aria-label="' + esc(T.cTitle(step.index)) + '"><div class="chead"><h3>' + esc(T.cTitle(step.index)) + '</h3>';
+    if (pk && pk.status === 'PICKED') h += '<span class="cbadge">' + esc(T.cProposed) + '</span>';
+    else if (corrected) h += '<span class="cbadge done">' + esc(T.cCorrected) + '</span>';
+    // Au repos, le bouton tient sur la ligne du titre (pas une rangée de plus).
+    if (!busy) h += '<span class="spacer"></span>' + button(T.cInBrowser, { cmd: 'correct-pick', id: step.id, cls: 'soft', icon: 'cursor', disabled: running });
+    h += '</div>';
+    if (pk && pk.status === 'PREPARING') {
+      var pg = pk.progress || { executed: 0, total: 0 };
+      h += '<div class="pickbadge" role="status">' + esc(T.cPreparing(pg.executed, pg.total)) + '</div><p class="sub">' + esc(T.cPreparingHelp) + '</p>';
+      h += '<div class="row">' + button(T.cCancel, { cmd: 'correct-cancel', id: step.id }) + '</div>';
+      return h + '</section>';
+    }
+    if (pk && pk.status === 'PICKING') {
+      h += '<div class="pickbadge" role="status">' + esc(T.cPickActive) + '</div><p class="sub">' + esc(T.cPickHelp) + '</p>';
+      h += '<div class="row">' + button(T.cCancel, { cmd: 'correct-cancel', id: step.id }) + '</div>';
+      return h + '</section>';
+    }
+    if (pk && pk.status === 'PICKED' && pk.proposal) {
+      var pr = pk.proposal, tr = pr.traits;
+      var ropts = pr.rowOptions || [], ropt = null;
+      for (var ri = 0; ri < ropts.length; ri += 1) if (ropts[ri].id === rowChoice[step.id]) ropt = ropts[ri];
+      if (!ropt && ropts.length) ropt = ropts[0];
+      h += '<div class="pair"><div class="tbox old"><b>' + esc(T.cOld) + '</b><code>' + esc(pk.previous || corr && corr.current || '—') + '</code><span>' + esc(step.status === 'FAILED' ? T.cUnknown : step.statusText) + '</span></div>';
+      h += '<span class="arrow" aria-hidden="true">→</span>';
+      h += '<div class="tbox new"><b>' + esc(T.cNew) + '</b><code>' + esc(ropt ? ropt.target : pr.target) + '</code><span>' + esc(pr.quality) + '</span></div></div>';
+      if (ropts.length) {
+        h += '<fieldset class="rowopts"><legend>' + esc(T.cRowTitle) + '</legend>';
+        for (var rj = 0; rj < ropts.length; rj += 1) {
+          var o = ropts[rj];
+          h += '<label class="choice' + (o.fixed ? ' fixed' : '') + '"><input type="radio" name="rowopt-' + esc(step.id) + '" value="' + esc(o.id) + '"' + (ropt && ropt.id === o.id ? ' checked' : '') + '><span>' + esc(o.id === 'bound' ? T.cRowBound(o.via || '') : T.cRowKey) + '<small>' + esc(o.row) + '</small></span></label>';
+        }
+        h += '</fieldset>';
+        if (ropt && ropt.id === 'bound') h += '<p class="sub">' + esc(T.cRowBoundHelp) + '</p>';
+        if (ropt && ropt.fixed) h += '<p class="warnnote">' + esc(T.cRowFixed) + '</p>';
+      }
+      h += '<dl>';
+      h += '<dt>' + esc(T.cRole) + '</dt><dd><span class="chip">' + esc(tr.role || tr.tag) + '</span></dd>';
+      if (tr.name) h += '<dt>' + esc(T.cName) + '</dt><dd>' + esc(tr.name) + '</dd>';
+      if (tr.label && tr.label !== tr.name) h += '<dt>' + esc(T.field.label) + '</dt><dd>' + esc(tr.label) + '</dd>';
+      if (tr.text && tr.text !== tr.name) h += '<dt>' + esc(T.cText) + '</dt><dd>' + esc(tr.text) + '</dd>';
+      if (tr.testId) h += '<dt>' + esc(T.cTestId) + '</dt><dd><code>' + esc(tr.testId) + '</code></dd>';
+      h += '<dt>' + esc(T.cCss) + '</dt><dd><code>' + esc(tr.css) + '</code></dd>';
+      if (tr.section) h += '<dt>' + esc(T.cContext) + '</dt><dd>' + esc(tr.section) + '</dd>';
+      h += '</dl>';
+      if (pr.order.length) h += '<div class="order"><b>' + esc(T.cOrder) + '</b><ol>' + pr.order.map(function (o) { return '<li>' + esc(o) + '</li>'; }).join('') + '</ol></div>';
+      if (pr.ambiguous) h += '<p class="warnnote">' + esc(T.cAmbiguous) + '</p>';
+      h += '<div class="row cta">' + button(T.cTest, { cmd: 'correct-test', id: step.id }) + button(T.cCancel, { cmd: 'correct-cancel', id: step.id }) + button(T.cApply, { cmd: 'correct-apply', id: step.id, cls: 'primary grow', icon: 'check' }) + '</div>';
+      if (state.notice && state.notice.actionId === step.id) h += '<p class="error" role="alert">' + esc(state.notice.message) + '</p>';
+      return h + '</section>';
+    }
+    if (pk && pk.status === 'CANCELLED') h += '<p class="sub">' + esc(T.cCancelled) + '</p>';
+    if (pk && pk.status === 'UNAVAILABLE') h += '<p class="sub">' + esc(T.cUnavailable) + (pk.reason ? ' (' + esc(pk.reason) + ')' : '') + '</p>';
+    if (pk && pk.status === 'UNREACHABLE' && pk.stoppedAt) h += '<p class="warnnote">' + esc(T.cUnreachable(pk.stoppedAt.index, pk.stoppedAt.label)) + '</p><p class="sub">' + esc(pk.stoppedAt.reason) + '<br>' + esc(T.cUnreachableHelp) + '</p>';
+    if (corr && corr.current && !corrected) h += '<dl><dt>' + esc(T.cCurrent) + '</dt><dd><code>' + esc(corr.current) + '</code></dd></dl>';
+    if (corrected && corr) {
+      var last = corr.history.length ? corr.history[corr.history.length - 1] : null;
+      h += '<h3>' + esc(T.cHistory) + '</h3><div class="chist">';
+      h += '<span class="k">' + esc(T.cOriginal) + '</span><code>' + esc(corr.original || '—') + '</code>';
+      h += '<span class="k">' + esc(T.cCorrection) + '</span><code>' + esc(corr.current) + '</code>';
+      h += '<span class="k">' + esc(T.cBy) + '</span><span>' + esc(T.cUser) + '</span>';
+      if (last) h += '<span class="k">' + esc(T.cDate) + '</span><span>' + esc(new Date(last.at).toLocaleString()) + '</span>';
+      h += '</div><div class="row">' + button(T.cRestore, { cmd: 'correct-restore', id: step.id, icon: 'undo', disabled: running }) + '</div>';
+    }
+    return h + '</section>';
   }
 
   /** LA SOURCE DE LA VALEUR d'une saisie (revue) : valeur enregistrée, générée, ou réutilisée d'une étape antérieure. */
@@ -899,7 +1084,8 @@ const SCRIPT = `
 
   function previewHtml() {
     var pv = state.preview;
-    var h = '<header class="card-head"><h2>' + esc(T.previewTitle) + '</h2><span class="actions">' + button('↻', { cmd: 'refresh-preview', cls: 'ghost', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('⛶', { cmd: 'fullscreen', cls: 'ghost', aria: T.fullscreen, title: T.fullscreen }) + button('⧉ ' + T.detach, { cmd: 'detach', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
+    var picking = state.pick && (state.pick.status === 'PICKING' || state.pick.status === 'PREPARING');
+    var h = '<header class="card-head"><h2>' + esc(T.previewTitle) + '</h2>' + (picking ? '<span class="pickbadge" role="status">' + esc(T.cPickActive) + '</span>' : '') + '<span class="actions">' + button('↻', { cmd: 'refresh-preview', cls: 'ghost', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('⛶', { cmd: 'fullscreen', cls: 'ghost', aria: T.fullscreen, title: T.fullscreen }) + button('⧉ ' + T.detach, { cmd: 'detach', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
     h += '<div class="url"><span class="nav" aria-hidden="true">← →</span><span aria-hidden="true">🔒</span>' + esc(pv ? pv.url : '') + '</div>';
     h += '<div class="viewport">' + (DETACHED ? '<div class="frame">' : '');
     if (!pv) h += '<p class="placeholder">' + esc(T.noPreview) + '</p>';
@@ -954,9 +1140,10 @@ const SCRIPT = `
     if (r && r.status === 'PASSED') h += '<div class="result ok" role="status"><b>' + esc(T.replayOk) + '</b><ul><li>✓ ' + esc(T.executed(r.executed, r.total)) + '</li>' + (r.checks || []).map(function (c) { return '<li>' + (c.ok ? '✓ ' : '⚠ ') + esc(c.text) + '</li>'; }).join('') + '</ul></div>';
     if (r && r.status === 'FAILED' && r.failure) {
       var f = r.failure;
-      h += '<div class="result bad" role="alert"><b>' + esc(T.replayBad) + '</b><p>' + esc(T.stepOf(f.index, r.total)) + '<br><b>' + esc(f.description) + '</b><br>' + esc(T.cause) + ' : ' + esc(f.cause) + '</p>';
-      h += '<details><summary>' + esc(T.seeDetails) + '</summary><ul>' + f.details.map(function (d) { return '<li class="tech">' + esc(d) + '</li>'; }).join('') + '</ul></details>';
-      h += '<div class="actions">' + button(T.editStep, { cmd: 'edit-step', id: f.stepId || '' }) + button(T.restart, { cmd: 'replay' }) + '</div></div>';
+      // Une ligne : le verdict, l'étape et la cause, puis les actions ; les détails techniques repliés.
+      h += '<div class="result bad" role="alert"><div class="rhead"><b>' + esc(T.replayBad) + '</b><p class="rmeta">' + esc(T.stepOf(f.index, r.total)) + ' · <b>' + esc(f.description) + '</b> · ' + esc(T.cause) + ' : ' + esc(f.cause) + '</p>';
+      h += '<div class="actions">' + (f.stepId ? button(T.cInBrowser, { cmd: 'correct-pick', id: f.stepId, cls: 'soft', icon: 'cursor' }) : '') + button(T.editStep, { cmd: 'edit-step', id: f.stepId || '' }) + button(T.restart, { cmd: 'replay' }) + '</div></div>';
+      h += '<details><summary>' + esc(T.seeDetails) + '</summary><ul>' + f.details.map(function (d) { return '<li class="tech">' + esc(d) + '</li>'; }).join('') + '</ul></details></div>';
     }
     if (state.saved) h += '<div class="result ok" role="status"><b>' + esc(T.saved) + '</b><p class="sub">' + esc(state.saved.directory) + '</p></div>';
     setHtml(el, h + '</div>');
@@ -1117,7 +1304,10 @@ const SCRIPT = `
     var removed = state && next.summary.actions < state.summary.actions && next.phase !== 'REVIEW';
     state = next;
     if (selected && !state.actions.some(function (s) { return s.id === selected; })) selected = null;
+    // Ouverte depuis le dock pour une étape : elle est sélectionnée et amenée à l'écran, une fois.
+    if (state.focus && state.focus !== focused) { focused = state.focus; selected = state.focus; }
     render();
+    if (state.focus === focused && focused && !scrolledTo) { scrolledTo = focused; var row = document.querySelector('[data-step="' + focused + '"]'); if (row) row.scrollIntoView({ block: 'center' }); }
     if (added) { var last = state.actions[state.actions.length - 1]; if (last) announce(T.announceAdded + last.description); }
     if (removed) announce(T.announceUndo);
   };
@@ -1165,6 +1355,12 @@ const SCRIPT = `
       render();
       return;
     }
+    if (cmd === 'correct-pick') { selected = id || selected; send({ type: cmd, id: id }); render(); return; }
+    if (cmd === 'correct-apply') {
+      var ropt = document.querySelector('input[name="rowopt-' + id + '"]:checked');
+      send(ropt ? { type: cmd, id: id, option: ropt.value } : { type: cmd, id: id });
+      return;
+    }
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
     send({ type: cmd, id: id });
   });
@@ -1175,6 +1371,7 @@ const SCRIPT = `
   document.addEventListener('change', function (event) {
     var input = event.target;
     if (input instanceof HTMLInputElement && input.name.indexOf('cand-') === 0) choice[input.name.slice(5)] = Number(input.value);
+    if (input instanceof HTMLInputElement && input.name.indexOf('rowopt-') === 0) { rowChoice[input.name.slice(7)] = input.value; render(); return; }
     var field = input && input.getAttribute ? input.getAttribute('data-bind-field') : null;
     if (field) {
       var draft = dataDraft[input.getAttribute('data-step-id')];

@@ -376,7 +376,9 @@ export interface RawRecordedEvent {
   /** checkpoint : libellé donné par l'humain. */
   label?: string;
   /** control : stop / pause / resume / checkpoint / dock (depuis le bandeau). */
-  control?: 'stop' | 'pause' | 'resume' | 'checkpoint' | 'undo' | 'dock';
+  control?: 'stop' | 'pause' | 'resume' | 'checkpoint' | 'undo' | 'dock' | 'window';
+  /** control window (dock dans la page) : l'étape à montrer dans la fenêtre (« Résoudre »), le cas échéant. */
+  step?: string;
   /** control dock : où l'humain a rangé le bandeau (un coin), réduit ou non. */
   dock?: OverlayDock;
   /** popup / download : URL de la nouvelle page, extension du fichier. */
@@ -398,6 +400,21 @@ export interface RawRecordedEvent {
   userResolution?: { candidateIndex: number; at: number };
   /** L'humain a choisi de laisser l'ambiguïté (elle reste signalée). */
   ambiguityIgnored?: boolean;
+  /**
+   * CORRECTION MANAGER : l'humain a désigné dans la page l'élément que l'action doit viser ; `element`
+   * est alors celui qu'il a choisi, l'ancienne cible reste ici (jamais une déduction).
+   */
+  userCorrection?: TargetCorrection;
+}
+
+/** Une correction de cible décidée par l'humain : d'où l'on vient, où l'on va, quand. */
+export interface TargetCorrection {
+  at: number;
+  previous: FlowTarget;
+  next: FlowTarget;
+  /** Le libellé lisible de la nouvelle cible (« Rechercher »). */
+  label?: string;
+  by: 'USER';
 }
 
 export type SemanticActionType =
@@ -680,8 +697,10 @@ export interface RecordedFlowStep {
   targetValidation?: { status: string; repaired: boolean; requiresReplayValidation: boolean };
   /** Pourquoi cette étape (explicabilité du rapport). */
   explanation: string;
-  /** Une ambiguïté tranchée par l'humain (élément touché confirmé) ou laissée par lui (à vérifier au rejeu). */
-  userDecision?: 'AMBIGUITY_CONFIRMED_BY_USER' | 'AMBIGUITY_LEFT_BY_USER';
+  /** Une ambiguïté tranchée par l'humain (élément touché confirmé) ou laissée par lui (à vérifier au rejeu), ou une cible qu'il a corrigée dans la page. */
+  userDecision?: 'AMBIGUITY_CONFIRMED_BY_USER' | 'AMBIGUITY_LEFT_BY_USER' | 'TARGET_CORRECTED_BY_USER';
+  /** L'HISTORIQUE des corrections de la cible (la première entrée garde l'original : « Restaurer l'original »). */
+  corrections?: TargetCorrection[];
   /** L'INTENTION FONCTIONNELLE (niveaux UI et métier) à côté de l'action brute, jamais à sa place. */
   functionalIntent?: StepIntentAnnotation;
 }
@@ -760,8 +779,11 @@ export type RecordingEventType =
   | 'ACTION_UNDONE'
   | 'AMBIGUITY_RESOLVED'
   | 'AMBIGUITY_IGNORED'
+  /** CORRECTION MANAGER : une cible désignée par l'humain dans la page (ou l'original restauré). */
+  | 'TARGET_CORRECTED'
   | 'RECORDING_SAVED'
   | 'RECORDING_STEP_REMOVED'
+  | 'RECORDING_TARGET_CORRECTED'
   | 'RECORDING_INTENT_REVIEWED'
   | 'RECORDING_TEST_DATA_BOUND'
   | 'SEMANTIC_ACTION_RESOLVED'

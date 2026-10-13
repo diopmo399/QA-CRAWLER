@@ -8,7 +8,7 @@ import type { ScenarioConfig } from '../config/config.js';
 import { slug } from '../knowledge/signatures.js';
 import type { ProgressUpdate } from '../progress/progress.js';
 import type { FlowAuditReport } from './flow-audit.js';
-import type { HumanFlowRecorder } from './human-flow-recorder.js';
+import type { DockView, HumanFlowRecorder } from './human-flow-recorder.js';
 import {
   describeFlowStep,
   summaryOf,
@@ -24,6 +24,17 @@ import {
 import { generateFlowFiles } from './recorded-flow.js';
 import { BINDING_GENERATORS, dataLineage, stepDataBinding } from './test-data-binding.js';
 import { RecorderPanel, type PanelCommand } from './recorder-panel.js';
+import {
+  describeTarget,
+  proposalTarget,
+  proposeCorrection,
+  useOfStep,
+  type CorrectionContext,
+  type CorrectionProposal,
+  type KnownValue,
+  type PickedElement,
+} from './target-correction.js';
+import { availableVariables } from './test-data-binding.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { RecordingResult } from './process-recording.js';
 import { TEST_DATA_FILE } from './process-recording.js';
@@ -48,7 +59,41 @@ export interface ReviewActions {
     generator?: string;
     value?: string;
   }) => Promise<{ ok: true } | { error: string }>;
+  /**
+   * CORRECTION MANAGER (revue) : ouvrir la page de l'application en mode sélection et attendre l'élément
+   * désigné ; remplacer la cible de l'étape par cet élément ; restaurer l'original.
+   */
+  pickTarget?: (
+    stepId: string,
+    label: string,
+    onProgress: (progress: PickProgress) => void,
+  ) => Promise<PickOutcome>;
+  correctTarget?: (input: {
+    stepId: string;
+    picked: PickedElement;
+    /** Les valeurs connues du run (lier une ligne de tableau à une donnée) et l'option de ligne choisie. */
+    known?: readonly KnownValue[];
+    option?: string;
+  }) => Promise<{ ok: true } | { error: string }>;
+  restoreTarget?: (stepId: string) => Promise<{ ok: true } | { error: string }>;
+  /** La session de correction (la page gardée ouverte) se ferme : après Valider, Annuler ou la revue. */
+  releaseCorrection?: () => Promise<void>;
 }
+
+/** La session de correction avance : étapes précédentes rejouées, puis le mode sélection ouvert dans la page. */
+export interface PickProgress {
+  executed: number;
+  total: number;
+  /** true : les étapes précédentes sont faites, l'humain peut désigner l'élément. */
+  picking?: boolean;
+}
+
+/** Ce que donne une sélection : l'élément désigné, une annulation, une page indisponible, ou un chemin arrêté avant l'étape. */
+export type PickOutcome =
+  | { picked: PickedElement; runData?: KnownValue[] }
+  | { cancelled: true }
+  | { unavailable: string }
+  | { unreachable: { index: number; label: string; reason: string } };
 
 /**
  * LA CONSOLE DU RECORDER : relie la fenêtre « QA-CRAWLER Recorder » au recorder (pendant
@@ -61,6 +106,13 @@ export class RecordingConsole {
   private highlight: PanelState['highlight'];
   private notice: PanelState['notice'];
   private replay: PanelReplay | undefined;
+  /** CORRECTION MANAGER : le mode sélection en cours, puis la proposition (l'élément désigné, en mémoire). */
+  private pick: PanelState['pick'];
+  private picked: PickedElement | undefined;
+  /** Les valeurs connues du run au moment de la sélection (mémoire seule) : la proposition de ligne s'en sert. */
+  private pickKnown: KnownValue[] = [];
+  /** Les actions de la revue en cours (la session de correction se libère hors de la file des commandes). */
+  private reviewActions: ReviewActions | undefined;
   private saved: PanelState['saved'];
   private analysis: PanelAnalysis = { available: false, intents: [], findings: [], aiCandidates: 0 };
   /** Les entrées de la dernière analyse affichée : la revue d'une intention la redessine. */
@@ -77,35 +129,90 @@ export class RecordingConsole {
   /** recording.panelPreview : l'aperçu de l'application dans la fenêtre. */
   withPreview = true;
 
-  /** recording.panelLayout : la disposition au démarrage (complète ou mini-dock). */
-  layout: 'full' | 'compact' = 'full';
+  /** recording.panelLayout : la disposition au démarrage (complète, mini-dock dans sa fenêtre, ou dock dans la page). */
+  layout: 'full' | 'compact' | 'docked' = 'full';
+  /** DOCK DANS LA PAGE : la fenêtre n'est pas ouverte pendant l'enregistrement ; ouverte à la demande, puis pour la revue. */
+  private panel: RecorderPanel | undefined;
+  private opening: Promise<RecorderPanel | undefined> | undefined;
+  /** L'étape que la fenêtre montre à son ouverture depuis le dock (« Résoudre »). */
+  private focus: string | undefined;
 
   /** L'aperçu détaché dans sa propre fenêtre (plein écran possible). */
   private detached: RecorderPanel | undefined;
   private detaching = false;
 
   constructor(
-    private readonly panel: RecorderPanel,
+    /** La fenêtre du recorder ; absente : le dock dans la page la remplace (ouverte à la demande, puis pour la revue). */
+    panel: RecorderPanel | undefined,
     private readonly recorder: HumanFlowRecorder,
     private readonly name: string,
     private readonly language: 'fr' | 'en',
-    /** Ouvre une fenêtre isolée (un contexte séparé du navigateur) : pour détacher l'aperçu. */
+    /** Ouvre une fenêtre isolée (un contexte séparé du navigateur) : pour détacher l'aperçu, ou ouvrir la fenêtre à la demande. */
     private readonly openWindow?: () => Promise<Page>,
   ) {
-    panel.onCommand((command) => {
+    this.panel = panel;
+    panel?.onCommand((command) => {
       void this.handle(command);
     });
+    if (!panel) {
+      this.layout = 'docked';
+      recorder.onWindowRequest = (stepId) => {
+        void this.openPanel(stepId);
+      };
+    }
   }
 
-  /** La page de la fenêtre (tests, intégrations). */
-  get page(): Page {
-    return this.panel.page;
+  /** La page de la fenêtre (tests, intégrations) ; absente tant que le dock dans la page la remplace. */
+  get page(): Page | undefined {
+    return this.panel?.page;
+  }
+
+  /** Le dock dans la page remplace la fenêtre pendant l'enregistrement. */
+  get docked(): boolean {
+    return this.layout === 'docked';
   }
 
   render(): void {
     const state = this.state();
-    this.panel.render(state);
+    this.panel?.render(state);
     this.detached?.render(state);
+    if (this.docked && (this.phase === 'RECORDING' || this.phase === 'PAUSED'))
+      this.recorder.showDock(dockViewOf(state));
+  }
+
+  /**
+   * LA FENÊTRE À LA DEMANDE (dock dans la page) : « Fenêtre » ou « Résoudre » l'ouvrent pendant
+   * l'enregistrement (fermée : le dock reste) ; la revue l'ouvre toujours.
+   */
+  async openPanel(focus?: string): Promise<RecorderPanel | undefined> {
+    if (focus) this.focus = focus;
+    if (this.panel) {
+      this.render();
+      await this.panel.page.bringToFront().catch(() => undefined);
+      return this.panel;
+    }
+    const open = this.openWindow;
+    if (!open) return undefined;
+    this.opening ??= (async () => {
+      try {
+        const window = await RecorderPanel.open(await open(), this.language);
+        window.onCommand((command) => {
+          void this.handle(command);
+        });
+        this.panel = window;
+        void window.closed.then(() => {
+          // Fermée pendant l'enregistrement : le dock reste ; en revue, « Fermer » termine (runReview).
+          if (this.panel === window && this.phase !== 'REVIEW') this.panel = undefined;
+        });
+        this.render();
+        return window;
+      } catch {
+        return undefined;
+      } finally {
+        this.opening = undefined;
+      }
+    })();
+    return this.opening;
   }
 
   /** La fenêtre de l'aperçu détaché (tests, intégrations). */
@@ -137,7 +244,7 @@ export class RecordingConsole {
     const window = this.detached;
     this.detached = undefined;
     await window?.close();
-    await this.panel.page.bringToFront().catch(() => undefined);
+    await this.panel?.page.bringToFront().catch(() => undefined);
   }
 
   private httpLive: PanelState['http'];
@@ -189,7 +296,7 @@ export class RecordingConsole {
 
   async close(): Promise<void> {
     await this.detached?.close();
-    await this.panel.close();
+    await this.panel?.close();
   }
 
   /** La progression de la finalisation (après Stop). */
@@ -281,9 +388,13 @@ export class RecordingConsole {
   }): Promise<unknown> {
     this.result = input.result;
     this.directory = input.directory;
+    this.reviewActions = input.actions;
     this.phase = 'REVIEW';
     this.progress = undefined;
     this.endedAt ??= Date.now();
+    // Le dock dans la page a remplacé la fenêtre pendant l'enregistrement : la revue l'ouvre elle-même.
+    const panel = this.panel ?? (await this.openPanel());
+    if (!panel) return new Error('the recorder window could not open for the review');
     this.render();
     let failure: unknown;
     await new Promise<void>((resolve) => {
@@ -346,6 +457,46 @@ export class RecordingConsole {
                   this.analysisInputs.running,
                 );
             }
+          } else if (command.type === 'correct-pick' && command.id && input.actions.pickTarget) {
+            const pickTarget = input.actions.pickTarget;
+            const stepId = command.id;
+            await this.startPick(stepId, (label) =>
+              pickTarget(stepId, label, (progress) => {
+                this.preparing(stepId, progress);
+              }),
+            );
+          } else if (command.type === 'correct-apply' && command.id && input.actions.correctTarget) {
+            const picked = this.picked;
+            if (picked && this.pick?.stepId === command.id && this.pick.status === 'PICKED') {
+              const outcome = await input.actions.correctTarget({
+                stepId: command.id,
+                picked,
+                known: this.pickKnown,
+                ...(command.option ? { option: command.option } : {}),
+              });
+              if ('error' in outcome)
+                this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
+              else {
+                this.notice = undefined;
+                this.pick = undefined;
+                this.picked = undefined;
+                // Le flow change : un rejeu fait avant ne le valide plus.
+                this.replay = undefined;
+                this.saved = undefined;
+                // La fenêtre montre la correction tout de suite ; la session (navigateur, fin de mission)
+                // se ferme en arrière-plan, sans bloquer la revue (un « Rejouer » juste après est accepté).
+                void input.actions.releaseCorrection?.();
+              }
+            }
+          } else if (command.type === 'correct-restore' && command.id && input.actions.restoreTarget) {
+            const outcome = await input.actions.restoreTarget(command.id);
+            if ('error' in outcome)
+              this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
+            else {
+              this.notice = undefined;
+              this.replay = undefined;
+              this.saved = undefined;
+            }
           } else if (
             (command.type === 'intent-correct' ||
               command.type === 'intent-confirm' ||
@@ -382,7 +533,7 @@ export class RecordingConsole {
           this.render();
         }
       };
-      void this.panel.closed.then(finish);
+      void panel.closed.then(finish);
       const driven = input.until?.();
       if (driven)
         void driven.then(finish, (error: unknown) => {
@@ -442,6 +593,66 @@ export class RecordingConsole {
       case 'refresh':
         await this.refreshPreview();
         break;
+      // CORRECTION MANAGER : quitter le mode sélection vaut dans les deux phases (même pendant l'attente de la revue).
+      case 'correct-cancel':
+        this.recorder.cancelPick();
+        this.pick = undefined;
+        this.picked = undefined;
+        if (!recording) await this.reviewActions?.releaseCorrection?.();
+        break;
+      case 'correct-test': {
+        const picked = this.picked;
+        if (!picked) break;
+        const shown = await this.recorder.highlightPicked(picked);
+        await this.refreshPreview(
+          shown.rect && this.pick
+            ? { actionId: this.pick.stepId, ...shown.rect, ...(shown.label ? { label: shown.label } : {}) }
+            : undefined,
+        );
+        break;
+      }
+      case 'correct-pick':
+        if (!command.id) break;
+        if (!recording) {
+          await this.review?.(command);
+          return;
+        }
+        await this.startPick(command.id, async (label) => {
+          if (!this.recorder.correctionPage) return { unavailable: 'no page' };
+          const picked = await this.recorder.pickTarget(label);
+          return picked ? { picked } : { cancelled: true };
+        });
+        break;
+      case 'correct-apply': {
+        if (!command.id) break;
+        if (!recording) {
+          await this.review?.(command);
+          return;
+        }
+        const picked = this.picked;
+        if (!picked || this.pick?.stepId !== command.id || this.pick.status !== 'PICKED') break;
+        const outcome = this.recorder.correctTarget(
+          command.id,
+          picked,
+          { known: this.pickKnown },
+          command.option,
+        );
+        this.notice =
+          'error' in outcome ? { actionId: command.id, kind: 'error', message: outcome.error } : undefined;
+        if (!('error' in outcome)) {
+          this.pick = undefined;
+          this.picked = undefined;
+        }
+        break;
+      }
+      case 'correct-restore':
+        if (!command.id) break;
+        if (!recording) {
+          await this.review?.(command);
+          return;
+        }
+        this.recorder.restoreTarget(command.id);
+        break;
       case 'detach':
         await this.detach();
         break;
@@ -453,6 +664,111 @@ export class RecordingConsole {
         return;
     }
     this.render();
+  }
+
+  /**
+   * MODE SÉLECTION : la fenêtre dit « Mode sélection actif », la page encadre l'élément survolé ; au clic,
+   * la proposition (nouvelle cible, replis, ordre de résolution) s'affiche à côté de l'ancienne cible.
+   */
+  /** Les étapes précédentes se rejouent (session de correction) : la fenêtre montre la progression. */
+  private preparing(stepId: string, progress: PickProgress): void {
+    const current = this.pick;
+    if (!current || current.stepId !== stepId) return;
+    if (current.status !== 'PICKING' && current.status !== 'PREPARING') return;
+    this.pick = progress.picking
+      ? { ...current, status: 'PICKING' }
+      : { ...current, status: 'PREPARING', progress: { executed: progress.executed, total: progress.total } };
+    this.render();
+  }
+
+  private async startPick(stepId: string, picker: (label: string) => Promise<PickOutcome>): Promise<void> {
+    const step = this.state().actions.find((entry) => entry.id === stepId);
+    if (!step) return;
+    const label = step.technical.name ?? step.technical.label ?? step.technical.text ?? step.description;
+    const previous = step.correction?.current ?? step.technical.target;
+    // En revue, la session de correction rejoue d'abord les étapes précédentes (le navigateur s'ouvre).
+    const review = this.phase === 'REVIEW';
+    this.pick = {
+      stepId,
+      status: review ? 'PREPARING' : 'PICKING',
+      label,
+      ...(previous ? { previous } : {}),
+      ...(review ? { progress: { executed: 0, total: 0 } } : {}),
+    };
+    this.picked = undefined;
+    this.render();
+    const outcome = await picker(label);
+    // Une autre commande a quitté le mode sélection pendant l'attente : rien à proposer.
+    if (!this.isPicking(stepId)) return;
+    if (!('picked' in outcome)) {
+      this.pick = {
+        stepId,
+        status:
+          'cancelled' in outcome ? 'CANCELLED' : 'unreachable' in outcome ? 'UNREACHABLE' : 'UNAVAILABLE',
+        label,
+        ...(previous ? { previous } : {}),
+        ...('unreachable' in outcome ? { stoppedAt: outcome.unreachable } : {}),
+        ...('unavailable' in outcome ? { reason: outcome.unavailable } : {}),
+      };
+      this.render();
+      return;
+    }
+    const picked = outcome.picked;
+    // Les valeurs connues du run : produites par la session de correction (revue), saisies (enregistrement),
+    // et celles du jeu de données des étapes précédentes — pour lier une ligne de tableau à une donnée.
+    this.pickKnown = [...(outcome.runData ?? []), ...this.knownValues(stepId, review)];
+    const context: CorrectionContext = { known: this.pickKnown, ...this.previousTargetOf(stepId, review) };
+    const proposal = proposeCorrection(
+      picked.element,
+      useOfStep(step.kind),
+      this.language,
+      context,
+      picked.rowCells ?? [],
+    );
+    this.picked = picked;
+    this.pick = {
+      stepId,
+      status: 'PICKED',
+      label,
+      ...(previous ? { previous } : {}),
+      proposal: panelProposalOf(proposal),
+    };
+    this.render();
+    await this.refreshPreview(
+      picked.rect ? { actionId: stepId, ...picked.rect, label: proposal.label } : undefined,
+    );
+  }
+
+  /** Les valeurs connues hors session : le jeu de données (revue, clés non sensibles) ou les saisies (enregistrement). */
+  private knownValues(stepId: string, review: boolean): KnownValue[] {
+    if (!review) return this.recorder.knownValues();
+    const result = this.result;
+    if (!result?.testData) return [];
+    const set = result.testData.set;
+    return availableVariables(result, stepId)
+      .map((variable) => ({ key: variable.key, value: set.values[variable.key]?.value ?? '' }))
+      .filter((entry) => entry.value.trim() !== '');
+  }
+
+  /** L'ancienne cible de l'étape (structurée) : une clé de ligne propre au run se reconnaît par elle. */
+  private previousTargetOf(stepId: string, review: boolean): Pick<CorrectionContext, 'previous'> {
+    const previous = review ? this.result?.flow.steps.find((item) => item.id === stepId)?.step : undefined;
+    const target = review
+      ? previous && 'target' in previous
+        ? previous.target
+        : undefined
+      : this.recorder.currentTarget(stepId);
+    return target ? { previous: target } : {};
+  }
+
+  /** Le mode sélection attend encore pour cette étape (une autre commande peut l'avoir quitté entre-temps). */
+  private isPicking(stepId: string): boolean {
+    const current: PanelState['pick'] = this.pick;
+    return (
+      current !== undefined &&
+      current.stepId === stepId &&
+      (current.status === 'PICKING' || current.status === 'PREPARING')
+    );
   }
 
   /** Une étape de la revue → l'action en direct qui vient des mêmes événements bruts (mise en évidence). */
@@ -535,15 +851,37 @@ export class RecordingConsole {
       ...(this.highlight ? { highlight: this.highlight } : {}),
       ...(this.notice ? { notice: this.notice } : {}),
       ...(this.replay ? { replay: this.replay } : {}),
+      ...(this.pick ? { pick: this.pick } : {}),
       ...(this.saved ? { saved: this.saved } : {}),
       ...(this.preview ? { preview: this.preview } : {}),
       ...(this.detached ? { previewDetached: true } : {}),
       analysis,
       ...(this.httpLive ? { http: this.httpLive } : {}),
       ...(this.directory ? { directory: this.directory } : {}),
-      layout: this.layout,
+      // Le cockpit s'ouvre complet quand le dock dans la page a demandé la fenêtre.
+      layout: this.layout === 'docked' ? 'full' : this.layout,
+      ...(this.focus ? { focus: this.focus } : {}),
     };
   }
+}
+
+/** Ce que le dock dans la page montre : les trois dernières actions et les compteurs (jamais une valeur saisie). */
+function dockViewOf(state: PanelState): DockView {
+  return {
+    steps: state.actions.slice(-3).map((step) => ({
+      id: step.id,
+      index: step.index,
+      kind: step.kind,
+      description: step.description,
+      status: step.status,
+    })),
+    counts: {
+      actions: state.summary.actions,
+      confirmed: state.summary.confirmed,
+      ambiguous: state.summary.ambiguous,
+      failed: state.summary.failed,
+    },
+  };
 }
 
 /**
@@ -632,6 +970,42 @@ function enrichSteps(
  * ✎ MODIFIER : retire une étape d'ACTION du flow (et les vérifications qui en dépendent), puis
  * régénère flow.yaml et .feature depuis le même modèle. Une vérification seule n'est jamais retirée ici.
  */
+/** La proposition de correction, telle que la fenêtre la montre (des mots, jamais une valeur saisie). */
+function panelProposalOf(proposal: CorrectionProposal): NonNullable<PanelState['pick']>['proposal'] {
+  return {
+    target: describeTarget(proposal.target),
+    ...(proposal.rowOptions && proposal.rowOptions.length > 0
+      ? {
+          rowOptions: proposal.rowOptions.map((option) => ({
+            id: option.id,
+            target: describeTarget(proposalTarget(proposal, option.id)),
+            row: Object.entries(option.row)
+              .map(([column, value]) => `${column} = ${value}`)
+              .join(', '),
+            ...(option.via ? { via: option.via } : {}),
+            ...(option.fixed ? { fixed: true } : {}),
+          })),
+        }
+      : {}),
+    quality: proposal.quality,
+    label: proposal.label,
+    order: proposal.order,
+    alternatives: proposal.alternatives.map((target) => describeTarget(target)),
+    ambiguous: proposal.ambiguous,
+    traits: proposal.traits,
+  };
+}
+
+/** Les fichiers du flow (YAML, .feature) régénérés après un changement du flow en revue. */
+export function regenerateFlowFiles(result: RecordingResult, language: 'fr' | 'en'): void {
+  const hasTestData = result.testData !== undefined && Object.keys(result.testData.set.values).length > 0;
+  result.files = generateFlowFiles(result.flow, {
+    language,
+    recordedAt: result.session.startedAt,
+    ...(hasTestData ? { testDataFile: TEST_DATA_FILE } : {}),
+  });
+}
+
 export function removeFlowStep(result: RecordingResult, stepId: string, language: 'fr' | 'en'): boolean {
   const target = result.flow.steps.find((item) => item.id === stepId);
   if (!target || target.step.kind === 'expect') return false;
@@ -640,12 +1014,7 @@ export function removeFlowStep(result: RecordingResult, stepId: string, language
     (item) =>
       item !== target && !(item.step.kind === 'expect' && item.actionIds.some((id) => actionIds.has(id))),
   );
-  const hasTestData = result.testData !== undefined && Object.keys(result.testData.set.values).length > 0;
-  result.files = generateFlowFiles(result.flow, {
-    language,
-    recordedAt: result.session.startedAt,
-    ...(hasTestData ? { testDataFile: TEST_DATA_FILE } : {}),
-  });
+  regenerateFlowFiles(result, language);
   return true;
 }
 

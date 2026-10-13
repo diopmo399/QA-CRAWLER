@@ -6,6 +6,36 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Correction manager** (`src/recording/target-correction.ts`, fenêtre du recorder, script de capture) :
+  corriger la cible d'une action **dans le navigateur**. Mode sélection dans la page (bandeau, élément
+  survolé encadré avec rôle · nom · test id, clic jamais transmis à l'application, Échap annule) ; dans la
+  fenêtre : ancienne cible → nouvelle cible, traits de l'élément, ordre de résolution au rejeu (le résolveur
+  de l'enregistrement, jamais un second moteur), Tester / Annuler / Valider, historique et « Restaurer
+  l'original ». Pendant l'enregistrement : la correction est posée sur les événements bruts
+  (`userCorrection`) et le flow généré la porte (`userDecision: TARGET_CORRECTED_BY_USER`,
+  `corrections`). En revue (carte « Replay interrompu », détails d'une étape) : une **session de correction**
+  (`src/recording/correction-session.ts`) suit le même chemin — les étapes précédentes sont rejouées par le
+  moteur de la mission (connexion, SafetyPolicy, données du run), puis la page reste ouverte dans cet état en
+  mode sélection seul ; un chemin arrêté avant l'étape est signalé. L'étape du flow est réécrite et les fichiers
+  régénérés. `DryRunDriver.page()`. Événements `TARGET_CORRECTED`, `RECORDING_TARGET_CORRECTED` ; commandes `correct-*` de la fenêtre.
+  **Ligne de tableau liée à la donnée du run** : quand l'élément désigné est dans une ligne dont une cellule
+  porte une valeur connue du run (saisie, donnée du jeu, donnée produite par le rejeu de la session —
+  `DryRunDriver.testDataValues()`, `TestDataRunContext.values()`), la fenêtre propose « Identifier la ligne
+  par : la donnée du run » (`row: { colonne: ${testData:clé} }`, par défaut) ou « la clé lue dans le tableau »,
+  marquée « propre à ce run » quand l'ancienne cible visait la même colonne avec une autre valeur
+  (`CorrectionProposal.rowOptions`, `PickedElement.rowCells`, commande `correct-apply` avec `option`).
+  **Fenêtre sur écran de portable** (largeur ≤ 1400 px ou hauteur ≤ 820 px) : moins d'espace et moins de
+  défilement — barre d'état sur une ligne, une ligne par action (statut à droite), détail et parcours qui
+  défilent chacun pour soi (le détail passe avant l'aperçu), carte « Replay interrompu » sur une ligne avec ses
+  actions, bouton « Corriger dans le navigateur » sur la ligne du titre, Tester / Annuler / Valider collés en
+  bas du détail pendant que la correction défile.
+- **Dock dans la page** (`recording.panelLayout: docked`, script de capture, console) : une seule fenêtre
+  Chromium pendant l'enregistrement. Le bandeau de l'application devient le mini-dock (compteurs ✓ ⚠ ✕, les
+  trois dernières actions et leur statut en direct, Pause / Annuler / Arrêter, repli en pastille, coin au
+  choix) ; « Résoudre » sur une action ambiguë et « ▣ Fenêtre » ouvrent le cockpit à la demande (fermé : le
+  dock reste) ; la revue ouvre la fenêtre d'elle-même. Node pousse l'état (`HumanFlowRecorder.showDock`),
+  le dock envoie les commandes (`control: window`) ; `RecordingConsole` ouvre la fenêtre à la demande ;
+  `PanelState.focus` amène l'étape demandée à l'écran. Test d'intégration `recording-dock`.
 - **Vue d'ensemble** (`reports/overview.html`, `src/reporting/overview-*.ts`) : une page autonome par run —
   indicateurs (actions validées, intentions CONFIRMED / PROBABLE contre UNKNOWN, durée et durées par étape),
   parcours détecté (une carte par étape, ton validé / avertissement / échec / inconnu, étape d'arrêt, écritures

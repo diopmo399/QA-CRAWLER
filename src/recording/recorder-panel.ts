@@ -22,7 +22,12 @@ export interface PanelCommand {
     | 'intent-correct'
     | 'intent-confirm'
     | 'intent-reset'
-    | 'data-bind';
+    | 'data-bind'
+    | 'correct-pick'
+    | 'correct-cancel'
+    | 'correct-apply'
+    | 'correct-test'
+    | 'correct-restore';
   id?: string;
   candidate?: number;
   /** La revue d'une intention : l'intention choisie et sa justification (facultative). */
@@ -33,6 +38,8 @@ export interface PanelCommand {
   variable?: string;
   generator?: string;
   value?: string;
+  /** La correction d'une cible dans une ligne de tableau : l'option de ligne choisie (bound, key). */
+  option?: string;
 }
 
 const COMMANDS = new Set<PanelCommand['type']>([
@@ -54,6 +61,11 @@ const COMMANDS = new Set<PanelCommand['type']>([
   'intent-confirm',
   'intent-reset',
   'data-bind',
+  'correct-pick',
+  'correct-cancel',
+  'correct-apply',
+  'correct-test',
+  'correct-restore',
 ]);
 
 /**
@@ -143,5 +155,6 @@ function commandOf(payload: unknown): PanelCommand | undefined {
       ? { generator: raw.generator }
       : {}),
     ...(typeof raw.value === 'string' ? { value: raw.value.slice(0, 500) } : {}),
+    ...(typeof raw.option === 'string' && /^[a-z]{1,20}$/.test(raw.option) ? { option: raw.option } : {}),
   };
 }

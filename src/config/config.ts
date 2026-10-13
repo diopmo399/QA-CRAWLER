@@ -1493,11 +1493,13 @@ const recordingSchema = z
     /** L'aperçu de l'application dans la fenêtre (une image de la page, en mémoire seulement, jamais écrite). */
     panelPreview: z.boolean().default(true),
     /**
-     * La disposition de la fenêtre au démarrage : full (cockpit : parcours, aperçu, détails) ou compact
-     * (mini-dock sombre : dernières actions, recherche détectée, ambiguïté à résoudre). L'humain bascule
-     * à tout moment depuis la fenêtre ; la revue après l'arrêt s'ouvre toujours en disposition complète.
+     * La disposition au démarrage : full (cockpit : parcours, aperçu, détails), compact (mini-dock sombre
+     * dans sa fenêtre : dernières actions, recherche détectée, ambiguïté à résoudre) ou docked (le mini-dock
+     * DANS LA PAGE de l'application : une seule fenêtre Chromium pendant l'enregistrement ; « Fenêtre » ou
+     * « Résoudre » ouvrent le cockpit à la demande). L'humain bascule à tout moment depuis la fenêtre ; la
+     * revue après l'arrêt s'ouvre toujours en disposition complète.
      */
-    panelLayout: z.enum(['full', 'compact']).default('full'),
+    panelLayout: z.enum(['full', 'compact', 'docked']).default('full'),
     /** Où « Sauvegarder » copie le flow (par défaut : flows/ à côté du dossier des rapports). */
     flowsDirectory: z.string().optional(),
     /**
