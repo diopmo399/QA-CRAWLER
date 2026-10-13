@@ -471,6 +471,20 @@ body.compact main{padding:8px 10px}
 body.compact .livesearch{max-width:100%;flex-basis:100%;white-space:normal}
 body.compact .timeline>li:not(.group):nth-last-child(n+6),body.compact .timeline>li.group{display:none}
 body.compact .controls{flex-basis:100%}
+/* ÉCRAN DE PORTABLE (étroit ou peu haut, mise à l'échelle Windows 125–150 %) : la même fenêtre, plus
+   dense — en-tête, barre d'état, onglets, cartes et résumé prennent moins de hauteur ; le parcours garde la place. */
+@media (max-width:1400px),(max-height:820px){
+  .topbar{padding:6px 16px;gap:10px}.brand{font-size:15px}.topbar .logo{width:24px;height:24px}.devtoggle{min-height:30px;padding:4px 10px}.topbar .qa-theme-toggle{width:32px;height:32px}
+  .statusbar{margin:8px 16px 0;padding:6px 14px;gap:12px}.state{font-size:15px}.state::before{width:10px;height:10px}.timer{font-size:16px}.alert{padding:3px 10px;font-size:12px}
+  .controls button{min-height:32px;padding:4px 12px}
+  .tabs{margin:6px 16px 0}.tabs [role=tab]{padding:5px 12px;min-height:32px;font-size:13px}
+  main{padding:8px 16px 12px}.grid{gap:12px}.col-left{gap:8px}.card{padding:12px}.card-head{margin-bottom:8px}
+  .status-line{margin-bottom:8px;padding:4px 10px}.timeline>li{padding-bottom:6px}.item{padding:7px 12px;gap:10px;border-radius:10px}
+  .review{padding:8px 12px;margin-bottom:8px}.review h2{font-size:14px}.result{padding:8px 12px;margin-top:6px}.result.bad>b{font-size:14px}.result p{margin:4px 0}.result details{margin:6px 0 8px;padding:6px 10px}.result .actions button{min-height:32px;padding:4px 12px}
+  .details h3{margin:10px 0 6px}.details .hero{padding:8px 10px;margin-bottom:10px}.correction{padding:10px 12px;margin-top:10px}
+  .summarybar{padding:6px 16px;gap:12px}.summarybar h2{display:none}.stat{gap:6px;padding-right:10px}.stat .i{width:22px;height:22px;font-size:10px;box-shadow:0 0 0 2px var(--surface)}.stat b{font-size:13px}.stat span{font-size:11px}
+  .summarybar .buttons{gap:8px}.summarybar .buttons button{min-height:34px;padding:5px 12px;font-size:13px}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 `;
 
