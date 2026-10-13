@@ -220,6 +220,14 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
   .grid>.col-side{grid-column:2;display:flex;flex-direction:column;gap:12px;min-height:0}
   .col-mid{display:block}
 }
+/* Grand écran : la colonne du détail grandit avec l'écran (la correction y respire), le parcours garde le reste ;
+   une action tient sur une ligne (description, précision, statut à droite) ; le titre en double disparaît. */
+@media (min-width:1400px){
+  .grid{grid-template-columns:minmax(0,1fr) clamp(440px,34%,760px)}
+  .desc{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;row-gap:0}.desc .sub{display:inline}.desc .tech{flex-basis:100%}
+  .pill{margin:0 0 0 auto}
+  .review:has(.result)>h2,.review:has(.result)>.hint{display:none}
+}
 .col-left{display:grid;gap:12px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
 .card-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
@@ -363,8 +371,9 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .correction .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .correction .row .grow{flex:1;justify-content:center}
 /* Tester / Annuler / Valider restent visibles pendant que le détail de la correction défile. */
-.correction .row.cta{position:sticky;bottom:-18px;margin:10px -2px 0;padding:8px 2px;background:var(--surface);border-top:1px solid var(--line);flex-wrap:nowrap}
-.correction .row.cta button{flex:none;white-space:nowrap} .correction .row.cta .grow{flex:1 1 auto;min-width:0;overflow:hidden}
+.correction .row.cta{position:sticky;bottom:-18px;margin:10px -2px 0;padding:8px 2px;background:var(--surface);border-top:1px solid var(--line)}
+/* Une seule rangée quand elle tient ; sinon Valider passe dessous, jamais coupé. */
+.correction .row.cta button{flex:none;white-space:nowrap} .correction .row.cta .grow{flex:1 1 auto}
 .correction .warnnote{margin:6px 0 0;font-size:12px;color:var(--warn);font-weight:600}
 /* Les façons d'identifier la ligne : des cartes à choisir, la recommandée en tête, l'option choisie encadrée. */
 .rowopts{border:0;padding:0;margin:10px 0 0;display:grid;gap:6px;min-width:0}
@@ -400,6 +409,8 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .correction dl{margin:0}
 .result.ok>b{color:var(--ok)} .result.bad>b{color:var(--bad);font-size:16px}
 .result ul{list-style:none;padding:0;margin:6px 0 0;display:grid;gap:3px}
+/* Un replay réussi : les coches à la suite, sur une ligne si elle tient (pas une colonne de quatre). */
+.result.ok ul{display:flex;flex-wrap:wrap;gap:2px 18px}
 .result p{margin:6px 0}
 .result details{margin:8px 0 12px;border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:var(--surface-2)} .result details summary{cursor:pointer;font-weight:600} .result details ul{list-style:none;margin:6px 0 0;padding:0} .result details .tech{background:transparent;padding:2px 0;margin:0}
 .result .actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -567,7 +578,7 @@ body.compact .controls{flex-basis:100%}
   .quality .qbody{gap:10px}.ring{width:64px;height:64px}.ring>div{width:50px;height:50px}.ring b{font-size:15px}.ring span{font-size:10px}.quality ul{gap:2px;font-size:11px}
   .review{padding:6px 12px;margin-bottom:6px;gap:6px 12px}.review h2{font-size:14px}.review:has(.result)>h2,.review:has(.result)>.hint{display:none}.result{padding:5px 10px}.result.bad .rhead>b{font-size:13px}.result p{margin:3px 0}.result ul{margin-top:3px}.result details{margin:3px 0 0;padding:3px 9px}.result .actions{gap:6px}.result .actions button{min-height:26px;padding:2px 9px;font-size:12px}
   .preview .card-head{flex-wrap:nowrap}.preview .card-head .actions button{min-height:26px;padding:2px 8px;font-size:12px}
-  .correction .chead button{min-height:24px;padding:2px 7px;font-size:11px}.correction .chead button svg{display:none}.correction .row.cta{bottom:-9px;margin-top:6px;padding:6px 2px;gap:5px}.correction .row.cta button{white-space:nowrap;padding:3px 7px;font-size:12px}.correction .row.cta button svg{width:13px;height:13px}
+  .correction .chead button{min-height:24px;padding:2px 7px;font-size:11px}.correction .chead button svg{display:none}.correction .row.cta{bottom:-9px;margin-top:6px;padding:6px 2px;gap:5px;flex-wrap:nowrap}.correction .row.cta .grow{min-width:0;overflow:hidden}.correction .row.cta button{white-space:nowrap;padding:3px 7px;font-size:12px}.correction .row.cta button svg{width:13px;height:13px}
   .details .step{display:none}.details .hero{padding:6px 9px;margin-bottom:8px;gap:8px}.details .hero b{font-size:13px}.details .hero span{font-size:11px}
   .details h3{margin:8px 0 4px;font-size:11px}.details dl{gap:3px 10px;font-size:12px;grid-template-columns:96px minmax(0,1fr)}.vlist{padding:6px 8px;gap:3px;font-size:11px}.details .found{margin-top:6px;padding:5px 8px}.details .logs{margin-top:6px}
   .correction{padding:7px 10px;margin-top:8px;border-radius:10px}.correction .chead{margin-bottom:5px;gap:8px}.correction .chead h3{font-size:12px}.correction .chead button{min-height:26px;padding:2px 9px;font-size:12px}

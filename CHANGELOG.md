@@ -22,7 +22,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   d'identifier la ligne en cartes à choisir (« Recommandé », « Propre à ce run »), avertissements en encarts,
   ordre de résolution sur une ligne, traits techniques repliés dans « Détails techniques », Tester / Annuler /
   Valider sur une seule ligne, en-tête de l'action masqué pendant la correction. L'historique d'une correction
-  utilise les mêmes cartes.
+  utilise les mêmes cartes. Grand écran (≥ 1400 px) : la colonne du détail grandit avec l'écran (34 %, de 440 à
+  760 px), une action du parcours tient sur une ligne, le titre « Enregistrement terminé » en double disparaît ;
+  Valider n'est jamais coupé ; un replay réussi liste ses coches sur une ligne.
 - **Ligne de tableau : liaison plus robuste et liaison manuelle.** Une cellule qui contient la donnée du run (accents, casse,
   espaces, suffixe ignorés) est liée avec un critère « contient » ; sinon la fenêtre le dit et propose **Lier une colonne à
   une donnée du run** (colonnes de la ligne et données du run avec leur valeur ; `RowBinding`, commande `correct-apply`
