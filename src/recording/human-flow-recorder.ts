@@ -16,6 +16,14 @@ import { SafetyPolicy } from '../policies/safety-policy.js';
 import { sensitivityOf } from '../policies/sensitive-fields.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import { captureScript } from './capture-script.js';
+import {
+  correctRawEvents,
+  describeTarget,
+  restoreRawEvents,
+  useOfStep,
+  type CorrectionProposal,
+  type PickedElement,
+} from './target-correction.js';
 import { NON_INTERACTIVE_NOISE } from './human-journey.js';
 import type { RecordingTargetValidator } from './target-validator.js';
 import type {
@@ -141,6 +149,17 @@ export class HumanFlowRecorder {
   private readonly pending = new Set<Promise<unknown>>();
   private readonly snapshots = new Map<string, UiSnapshot>();
   private overflowWarned = false;
+  /**
+   * CORRECTION MANAGER : la page où l'humain désigne un élément (celle de l'enregistrement, ou une
+   * page rouverte pendant la revue), l'attente en cours, et l'élément ORIGINAL de chaque action
+   * corrigée (« Restaurer l'original »).
+   */
+  private pickPage: Page | undefined;
+  private pickWaiter: ((picked: PickedElement | undefined) => void) | undefined;
+  private readonly originalElements = new Map<
+    string,
+    { element: RecordedElement; css?: string; ref?: string }
+  >();
 
   /**
    * LA TIMELINE EN DIRECT : une ligne par action humaine, affichée dès la capture puis validée en
@@ -405,13 +424,220 @@ export class HumanFlowRecorder {
     return action;
   }
 
+  // ------------------------------------------------------------------ correction manager
+
+  /** La page où l'humain désigne un élément : celle de l'enregistrement, ou celle rouverte pour la revue. */
+  get correctionPage(): Page | undefined {
+    const page = this.pickPage ?? this.page;
+    return page && !page.isClosed() ? page : undefined;
+  }
+
+  /**
+   * REVUE : une page rouverte (l'application est fermée dès l'arrêt) reçoit le script de capture en
+   * mode sélection seul : rien n'y est enregistré, seule la désignation d'un élément remonte.
+   */
+  async attachCorrectionPage(page: Page): Promise<void> {
+    if (this.pickPage === page) return;
+    this.pickPage = page;
+    const { recording } = this.options.config;
+    const script = captureScript({
+      binding: BINDING,
+      salt: this.salt,
+      overlay: true,
+      language: this.timeline.language,
+      inputDebounceMs: recording.inputDebounceMs,
+      pickOnly: true,
+    });
+    await page.exposeBinding(BINDING, (source, payload: unknown) => {
+      this.onPayload(source.page, payload);
+    });
+    await page.addInitScript({ content: script });
+    await page.evaluate(script).catch(() => undefined);
+    page.once('close', () => {
+      if (this.pickPage === page) this.pickPage = undefined;
+      this.pickWaiter?.(undefined);
+    });
+  }
+
+  /**
+   * MODE SÉLECTION : la page encadre l'élément survolé, l'humain clique celui que l'action doit viser
+   * (le clic n'atteint jamais l'application), Échap annule. Résout avec l'élément désigné, ou rien.
+   */
+  async pickTarget(label: string, timeoutMs = 180_000): Promise<PickedElement | undefined> {
+    const page = this.correctionPage;
+    if (!page) return undefined;
+    this.cancelPick();
+    const picked = new Promise<PickedElement | undefined>((resolve) => {
+      const timer = setTimeout(() => {
+        if (this.pickWaiter === waiter) {
+          this.pickWaiter = undefined;
+          void this.cancelPickInPage();
+          resolve(undefined);
+        }
+      }, timeoutMs);
+      timer.unref();
+      const waiter = (value: PickedElement | undefined): void => {
+        clearTimeout(timer);
+        if (this.pickWaiter === waiter) this.pickWaiter = undefined;
+        resolve(value);
+      };
+      this.pickWaiter = waiter;
+    });
+    const started = await page
+      .evaluate((text) => {
+        const bar = (window as unknown as { __qaCrawlerRecorder?: { pick(label?: string): void } })
+          .__qaCrawlerRecorder;
+        if (!bar) return false;
+        bar.pick(text);
+        return true;
+      }, label)
+      .catch(() => false);
+    if (!started) {
+      this.pickWaiter?.(undefined);
+      return undefined;
+    }
+    this.emit('RECORDER_DEBUG', `selection mode started in the page for "${label}"`);
+    return picked;
+  }
+
+  get isPicking(): boolean {
+    return this.pickWaiter !== undefined;
+  }
+
+  /** Quitte le mode sélection (la fenêtre du recorder, ou une autre commande) : l'attente se termine sans élément. */
+  cancelPick(): void {
+    const waiter = this.pickWaiter;
+    if (!waiter) return;
+    this.pickWaiter = undefined;
+    void this.cancelPickInPage();
+    waiter(undefined);
+  }
+
+  private async cancelPickInPage(): Promise<void> {
+    await this.correctionPage
+      ?.evaluate(() => {
+        (
+          window as unknown as { __qaCrawlerRecorder?: { cancelPick(): void } }
+        ).__qaCrawlerRecorder?.cancelPick();
+      })
+      .catch(() => undefined);
+  }
+
+  private onPick(payload: Record<string, unknown>): void {
+    const waiter = this.pickWaiter;
+    if (!waiter) return;
+    if (payload.cancelled === true || !isObject(payload.element)) {
+      this.pickWaiter = undefined;
+      waiter(undefined);
+      return;
+    }
+    const rect = isObject(payload.rect) ? rectOf(payload.rect) : undefined;
+    const picked: PickedElement = {
+      element: elementOf(payload.element),
+      ...(typeof payload.ref === 'string' ? { ref: payload.ref.slice(0, 40) } : {}),
+      ...(rect ? { rect } : {}),
+      ...(typeof payload.url === 'string' ? { url: redactUrl(payload.url) } : {}),
+    };
+    this.pickWaiter = undefined;
+    this.emit(
+      'RECORDER_DEBUG',
+      `element picked: ${picked.element.role || picked.element.tag} "${picked.element.name}"`,
+    );
+    waiter(picked);
+  }
+
+  /**
+   * ENREGISTREMENT : la cible d'une action de la timeline devient l'élément désigné. Les événements bruts
+   * de l'action portent le nouvel élément (le flow généré à l'arrêt le vise) et l'ancienne cible ; la
+   * ligne devient ✓ « Cible corrigée par l'utilisateur ».
+   */
+  correctTarget(
+    actionId: string,
+    picked: PickedElement,
+  ): { action: LiveAction; proposal: CorrectionProposal } | { error: string } {
+    const action = this.timeline.actions.find((entry) => entry.id === actionId);
+    if (!action) return { error: 'NOT_FOUND' };
+    const events = this.session.rawEvents.filter((event) => action.rawEventIds.includes(event.id));
+    const first = events.find((event) => event.element);
+    if (!first?.element) return { error: 'NO_TARGET' };
+    if (!this.originalElements.has(actionId))
+      this.originalElements.set(actionId, {
+        element: first.element,
+        ...(action.css ? { css: action.css } : {}),
+        ...(action.ref ? { ref: action.ref } : {}),
+      });
+    const outcome = correctRawEvents(
+      this.session.rawEvents,
+      action.rawEventIds,
+      picked,
+      useOfStep(action.kind),
+      this.now(),
+      this.timeline.language,
+    );
+    if ('error' in outcome) return outcome;
+    const said = describeTarget(outcome.proposal.target);
+    this.timeline.correct(actionId, {
+      said,
+      css: picked.element.css,
+      ...(picked.ref ? { ref: picked.ref } : {}),
+    });
+    this.emit(
+      'TARGET_CORRECTED',
+      `action ${String(action.index)}: target corrected by the user ${describeTarget(outcome.correction.previous)} → ${said} (${String(outcome.touched)} raw event(s))`,
+      { action: actionId, previous: outcome.correction.previous, next: outcome.correction.next },
+    );
+    this.changed({ reason: 'UPDATED', action });
+    return { action, proposal: outcome.proposal };
+  }
+
+  /** « Restaurer l'original » pendant l'enregistrement : l'élément enregistré revient sur l'action. */
+  restoreTarget(actionId: string): LiveAction | undefined {
+    const action = this.timeline.actions.find((entry) => entry.id === actionId);
+    const original = this.originalElements.get(actionId);
+    if (!action || !original) return undefined;
+    restoreRawEvents(this.session.rawEvents, action.rawEventIds, original.element);
+    this.originalElements.delete(actionId);
+    this.timeline.restore(actionId, original);
+    this.emit('TARGET_CORRECTED', `action ${String(action.index)}: original target restored by the user`, {
+      action: actionId,
+    });
+    this.changed({ reason: 'UPDATED', action });
+    return action;
+  }
+
+  /** « Tester » : l'élément désigné est encadré de nouveau dans la page (l'aperçu suit). */
+  async highlightPicked(picked: PickedElement): Promise<HighlightResult> {
+    const page = this.correctionPage;
+    const label =
+      picked.element.label ?? (picked.element.name || (picked.element.text ?? picked.element.tag));
+    if (!page) return { found: 'NOT_FOUND' };
+    return page
+      .evaluate(
+        ({ ref, css, text }) => {
+          const global = window as unknown as {
+            __qaCrawlerRecorder?: { highlight(ref?: string, css?: string, text?: string): string };
+            __qaCrawlerLastRect?: HighlightResult['rect'];
+          };
+          const found = global.__qaCrawlerRecorder?.highlight(ref, css, text) ?? 'NOT_FOUND';
+          return { found, rect: global.__qaCrawlerLastRect };
+        },
+        { ref: picked.ref, css: picked.element.css, text: label },
+      )
+      .then((result): HighlightResult =>
+        result.found === 'ORIGINAL' || result.found === 'SELECTOR'
+          ? { found: result.found, ...(result.rect ? { rect: result.rect, label } : {}) }
+          : { found: 'NOT_FOUND' },
+      )
+      .catch((): HighlightResult => ({ found: 'NOT_FOUND' }));
+  }
+
   /**
    * Met en évidence dans la page l'élément d'une action : l'élément ORIGINAL s'il est encore là,
    * sinon celui que son sélecteur désigne SEUL ; jamais un élément deviné.
    */
   async highlight(actionId: string): Promise<HighlightResult> {
     const action = this.timeline.actions.find((entry) => entry.id === actionId);
-    const page = this.page;
+    const page = this.correctionPage;
     if (!action || !page || page.isClosed() || (!action.ref && !action.css)) return { found: 'NOT_FOUND' };
     // L'élément par son nom (jamais la valeur saisie).
     const label = action.technical.label ?? action.technical.name ?? action.technical.text ?? action.kind;
@@ -440,7 +666,7 @@ export class HumanFlowRecorder {
    * en mémoire seulement — jamais écrite, jamais journalisée.
    */
   async preview(): Promise<{ image: string; url: string; width: number; height: number } | undefined> {
-    const page = this.page;
+    const page = this.correctionPage;
     if (!page || page.isClosed()) return undefined;
     try {
       // AUCUN EFFET VISIBLE dans l'application : ni feuille de style injectée (le bandeau masqué puis
@@ -759,6 +985,12 @@ export class HumanFlowRecorder {
   }
 
   private onPayload(page: Page | undefined, payload: unknown): void {
+    if (page && page !== this.page && page !== this.pickPage) return;
+    // MODE SÉLECTION : la désignation d'un élément n'est jamais un événement de l'enregistrement.
+    if (isObject(payload) && payload.type === 'pick') {
+      this.onPick(payload);
+      return;
+    }
     if (page && page !== this.page) return;
     const event = sanitize(payload);
     if (!event) return;
@@ -1389,6 +1621,28 @@ function dragOf(raw: Record<string, unknown>): { drag: RecordedDrag } | Record<s
         ? { destinationCandidateId: raw.destinationCandidateId }
         : {}),
     },
+  };
+}
+
+/** Le cadre d'un élément désigné : six nombres finis, rien d'autre. */
+function rectOf(raw: Record<string, unknown>): PickedElement['rect'] | undefined {
+  const num = (key: string): number | undefined =>
+    typeof raw[key] === 'number' && Number.isFinite(raw[key]) ? raw[key] : undefined;
+  const x = num('x');
+  const y = num('y');
+  const width = num('width');
+  const height = num('height');
+  const viewportWidth = num('viewportWidth');
+  const viewportHeight = num('viewportHeight');
+  if ([x, y, width, height, viewportWidth, viewportHeight].some((value) => value === undefined))
+    return undefined;
+  return {
+    x: x ?? 0,
+    y: y ?? 0,
+    width: width ?? 0,
+    height: height ?? 0,
+    viewportWidth: viewportWidth ?? 0,
+    viewportHeight: viewportHeight ?? 0,
   };
 }
 

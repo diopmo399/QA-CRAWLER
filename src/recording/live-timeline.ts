@@ -64,8 +64,8 @@ export interface LiveAction {
   technical: Record<string, string>;
   /** AMBIGUOUS : les éléments qui correspondent, et celui que l'humain a touché. */
   candidates?: LiveCandidate[];
-  /** RESOLVED : l'humain a confirmé l'élément ; IGNORED : il a choisi de laisser l'ambiguïté. */
-  resolution?: 'RESOLVED' | 'IGNORED';
+  /** RESOLVED : l'humain a confirmé l'élément ; IGNORED : il a choisi de laisser l'ambiguïté ; CORRECTED : il a désigné une autre cible dans la page. */
+  resolution?: 'RESOLVED' | 'IGNORED' | 'CORRECTED';
   /** Les faits de qualité (vrais, jamais estimés). */
   facts: { stableSelector: boolean; uniqueTarget: boolean; afterRerender: boolean; mergedEvents: number };
   /** Les preuves de la validation (panneau de détails) : nombre de correspondances, effets observés, navigation. */
@@ -124,6 +124,8 @@ const WORDS = {
     ambiguous: (count: number) => `${String(count)} éléments correspondent`,
     resolved: "Ambiguïté résolue : l'élément touché est confirmé",
     ignored: 'Ambiguïté laissée telle quelle (à vérifier au rejeu)',
+    corrected: (target: string) => `Cible corrigée par l'utilisateur : ${target}`,
+    restored: 'Cible originale restaurée (à vérifier au rejeu)',
     failed: 'Élément non retrouvé : à vérifier au rejeu',
     unverified: 'Enregistrée (non vérifiable)',
     opened: 'Page ouverte',
@@ -156,6 +158,8 @@ const WORDS = {
     ambiguous: (count: number) => `${String(count)} elements match`,
     resolved: 'Ambiguity resolved: the touched element is confirmed',
     ignored: 'Ambiguity left as is (to check at replay)',
+    corrected: (target: string) => `Target corrected by the user: ${target}`,
+    restored: 'Original target restored (to check at replay)',
     failed: 'Element not found again: to check at replay',
     unverified: 'Recorded (not verifiable)',
     opened: 'Page opened',
@@ -444,6 +448,39 @@ export class LiveTimeline {
     action.facts.uniqueTarget = true;
     action.technical.resolution = `USER_CONFIRMED candidate ${String(candidateIndex)}`;
     return { action, candidate };
+  }
+
+  /**
+   * CORRECTION MANAGER : l'humain a désigné dans la page l'élément que l'action doit viser. L'action
+   * devient ✓ (cible choisie par un humain), sa référence et son CSS suivent (mise en évidence).
+   */
+  correct(actionId: string, target: { said: string; css: string; ref?: string }): LiveAction | undefined {
+    const action = this.list.find((entry) => entry.id === actionId);
+    if (!action) return undefined;
+    action.resolution = 'CORRECTED';
+    action.status = 'CONFIRMED';
+    action.statusText = this.words.corrected(target.said);
+    action.facts.uniqueTarget = true;
+    action.technical.resolution = 'USER_CORRECTED';
+    action.technical.target = target.said;
+    action.css = target.css;
+    if (target.ref) action.ref = target.ref;
+    delete action.candidates;
+    return action;
+  }
+
+  /** « Restaurer l'original » : la cible enregistrée revient ; elle reste à vérifier au rejeu. */
+  restore(actionId: string, original: { css?: string; ref?: string }): LiveAction | undefined {
+    const action = this.list.find((entry) => entry.id === actionId);
+    if (action?.resolution !== 'CORRECTED') return undefined;
+    delete action.resolution;
+    action.status = 'UNVERIFIED';
+    action.statusText = this.words.restored;
+    action.technical.resolution = 'USER_RESTORED';
+    delete action.technical.target;
+    if (original.css) action.css = original.css;
+    if (original.ref) action.ref = original.ref;
+    return action;
   }
 
   /** L'humain laisse l'ambiguïté : elle reste visible (⚠), jamais résolue en silence. */

@@ -106,6 +106,20 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   annuler et refaire). **Ignorer** la laisse
   signalée (`AMBIGUITY_LEFT_BY_USER`, à vérifier au rejeu). La décision est gardée sur
   l'événement brut et sur l'étape (`AMBIGUITY_CONFIRMED_BY_USER`).
+- **Correction manager — corriger une cible dans le navigateur** : dans les détails d'une action
+  qui vise un élément (clic, saisie, case, sélection), **Corriger dans le navigateur** passe la page
+  de l'application en **mode sélection** : un bandeau le dit (« Mode sélection · cliquez l'élément
+  qui remplace « … » · Échap pour annuler »), l'élément survolé s'encadre avec sa pastille
+  (rôle · nom · test id · occurrences), le clic désigne l'élément **sans être transmis à
+  l'application**, Échap annule. La fenêtre montre alors **Ancienne cible → Nouvelle cible**, les
+  traits de l'élément (rôle, nom accessible, texte, testId, CSS de repli, contexte), **l'ordre de
+  résolution au rejeu** (le même résolveur que l'enregistrement : rôle + nom, libellé, testId,
+  CSS…) puis **Tester l'étape** (l'élément est encadré de nouveau), **Annuler**, **Valider la
+  correction**. Pendant l'enregistrement, la correction est posée sur les événements bruts de
+  l'action (`userCorrection`) et la ligne devient ✓ « Cible corrigée par l'utilisateur : … » ; le
+  flow généré à l'arrêt vise le nouvel élément (`userDecision: TARGET_CORRECTED_BY_USER`, historique
+  `corrections` avec l'original). **Restaurer l'original** revient en arrière. Aucun second moteur :
+  la nouvelle cible est résolue comme à l'enregistrement, jamais devinée.
 - **Résumé et qualité** : « ✓ Recording valide » ou « ⚠ nécessite une vérification » ; la qualité
   est calculée sur des faits (actions confirmées, sélecteurs stables, cibles uniques, aucun
   élément retrouvé seulement après un nouveau rendu, aucun doublon, aucune erreur) — jamais estimée.
@@ -133,6 +147,13 @@ jamais deux applications ouvertes en même temps.
   le détail technique dans **Voir les détails**, puis **Modifier l'étape** / **↻ Recommencer**.
 - **✎ Modifier** : retirer une étape d'action (et les vérifications qui en dépendent) ;
   `generated.flow.yaml`, `.feature` et `recorded-flow.json` sont régénérés.
+- **Corriger dans le navigateur** (depuis la carte « Replay interrompu » ou les détails d'une
+  étape) : l'application est **rouverte** dans une fenêtre du même navigateur, avec la session de
+  l'enregistrement (cookies et stockage gardés en mémoire seulement, jamais écrits), sur la page de
+  l'étape, en **mode sélection seul** : rien n'y est enregistré, seule la désignation d'un élément
+  remonte. La correction réécrit la cible de l'étape (`corrections` garde l'original, **Restaurer
+  l'original** le remet), régénère les fichiers et invalide le rejeu précédent : **▶ Rejouer** le
+  flow corrigé. La fenêtre se ferme avec la revue.
 - **💾 Sauvegarder** : l'enregistrement est un **brouillon** (`recording-status.json` :
   `DRAFT`) ; sauvegarder copie le flow dans `recording.flowsDirectory` (défaut : `flows/<nom>/` à
   côté du dossier des rapports) avec son jeu de données, et le marque `SAVED`.
@@ -1053,6 +1074,8 @@ et `HTTP_ANALYSIS_CONSOLIDATED` (après l'arrêt).
 
 Événements : `RECORDING_STARTED`, `RAW_EVENT_CAPTURED`, `SEMANTIC_ACTION_RESOLVED`,
 `CHECKPOINT_ADDED`, `RECORDING_PAUSED`, `RECORDING_RESUMED`, `RECORDING_STOPPED`,
+`TARGET_CORRECTED` (une cible corrigée dans la page pendant l'enregistrement, ou l'original restauré),
+`RECORDING_TARGET_CORRECTED` (la même décision en revue),
 `RECORDING_NORMALIZED`, `OUTCOME_INFERRED`, `FUNCTIONAL_INTENTS_RESOLVED`, `FUNCTIONAL_INTENT_ARBITRATED`, `FLOW_GENERATED`, `REPLAY_VALIDATION_STARTED`,
 `REPLAY_CONFIRMED`, `REPLAY_FAILED`, `RECORDING_COMPLETED`, `RECORDING_FAILED`, et pour la causalité : `ACTION_CORRELATION_STARTED`, `ACTION_EFFECT_CORRELATED`, `NAVIGATION_CORRELATED_TO_ACTION`, `NAVIGATION_UNCORRELATED`, `GOTO_FALLBACK_GENERATED`, `CAUSALITY_AMBIGUOUS`, `SUSPICIOUS_NAVIGATION_COLLAPSE`, `FLOW_SEMANTIC_PRESERVATION_CHECK`, et pour les données : `RECORDED_TEST_DATA_DISCOVERED`, `TEST_DATA_KEY_RESOLVED`, `TEST_DATA_CLASSIFIED`, `TEST_DATA_GENERALIZED`, `TEST_DATA_LITERAL_PRESERVED`, `TEST_DATA_REFERENCE_CREATED`, `SENSITIVE_RECORDED_VALUE_REDACTED`, `TEST_DATA_COLLISION_DETECTED` (enregistrement), `TEST_DATA_GENERATED_FOR_RUN`, `TEST_DATA_STRATEGY_CANDIDATE` (rejeu), et pour le parcours humain : `HUMAN_INTERACTION_CAPTURED`, `HUMAN_INTERACTION_PRESERVED`, `HUMAN_INTERACTION_MERGED`, `HUMAN_INTERACTION_EXCLUDED`, `HUMAN_INTERACTION_UNRESOLVED`, `HUMAN_ACTION_DEPENDENCY_DISCOVERED`, `HUMAN_JOURNEY_BUILT`, `HUMAN_JOURNEY_VALIDATION_STARTED`, `HUMAN_JOURNEY_VALIDATED`, `HUMAN_JOURNEY_VALIDATION_FAILED`, `HUMAN_ACTION_LOST`, `FLOW_OPTIMIZATION_STARTED`, `FLOW_OPTIMIZATION_COMPLETED`, et pour l'audit : `RECORDING_SEMANTIC_AUDITED`, `TARGET_VALIDATION`. Jamais une valeur dans un événement.
 

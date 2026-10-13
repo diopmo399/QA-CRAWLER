@@ -11,10 +11,12 @@ import type { AddressInfo } from 'node:net';
  */
 const form = (
   broken: boolean,
+  /** Le numéro d'une action renommée « Renamed N » (le correction manager la re-désigne). */
+  renamed?: number,
 ): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Request</title></head>
 <body>
 <h1>Request</h1>
-<nav aria-label="Toolbar">${Array.from({ length: 20 }, (_, index) => `<button type="button" onclick="document.getElementById('last').textContent='Action ${String(index + 1)} done'">${broken && index === 6 ? 'Renamed' : 'Action'} ${String(index + 1)}</button>`).join('')}</nav>
+<nav aria-label="Toolbar">${Array.from({ length: 20 }, (_, index) => `<button type="button" onclick="document.getElementById('last').textContent='Action ${String(index + 1)} done'">${(broken && index === 6) || renamed === index + 1 ? 'Renamed' : 'Action'} ${String(index + 1)}</button>`).join('')}</nav>
 <p id="last" role="status"></p>
 <form onsubmit="return false">
   <label>First name <input name="firstName" autocomplete="off"></label>
@@ -48,11 +50,13 @@ export interface DeterministicRecordingApp {
   url: string;
   /** true : « Action 7 » devient « Renamed 7 » (un rejeu qui ne retrouve plus la cible). */
   broken: boolean;
+  /** N : « Action N » devient « Renamed N » (une cible à corriger dans le navigateur). */
+  renamed: number | undefined;
   close: () => Promise<void>;
 }
 
 export async function startDeterministicRecordingApp(): Promise<DeterministicRecordingApp> {
-  const state = { broken: false };
+  const state: { broken: boolean; renamed: number | undefined } = { broken: false, renamed: undefined };
   const server: Server = createServer((request, response) => {
     const route = (request.url ?? '/').split('?')[0];
     if (route === '/api/items' && request.method === 'POST') {
@@ -63,7 +67,7 @@ export async function startDeterministicRecordingApp(): Promise<DeterministicRec
       return;
     }
     response.setHeader('content-type', 'text/html; charset=utf-8');
-    response.end(route === '/done' ? DONE : form(state.broken));
+    response.end(route === '/done' ? DONE : form(state.broken, state.renamed));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -74,6 +78,12 @@ export async function startDeterministicRecordingApp(): Promise<DeterministicRec
     },
     set broken(value: boolean) {
       state.broken = value;
+    },
+    get renamed() {
+      return state.renamed;
+    },
+    set renamed(value: number | undefined) {
+      state.renamed = value;
     },
     close: () =>
       new Promise((resolve) => {

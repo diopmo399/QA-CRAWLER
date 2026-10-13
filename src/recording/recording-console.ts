@@ -24,6 +24,13 @@ import {
 import { generateFlowFiles } from './recorded-flow.js';
 import { BINDING_GENERATORS, dataLineage, stepDataBinding } from './test-data-binding.js';
 import { RecorderPanel, type PanelCommand } from './recorder-panel.js';
+import {
+  describeTarget,
+  proposeCorrection,
+  useOfStep,
+  type CorrectionProposal,
+  type PickedElement,
+} from './target-correction.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { RecordingResult } from './process-recording.js';
 import { TEST_DATA_FILE } from './process-recording.js';
@@ -48,6 +55,16 @@ export interface ReviewActions {
     generator?: string;
     value?: string;
   }) => Promise<{ ok: true } | { error: string }>;
+  /**
+   * CORRECTION MANAGER (revue) : ouvrir la page de l'application en mode sélection et attendre l'élément
+   * désigné ; remplacer la cible de l'étape par cet élément ; restaurer l'original.
+   */
+  pickTarget?: (stepId: string, label: string) => Promise<PickedElement | undefined>;
+  correctTarget?: (input: {
+    stepId: string;
+    picked: PickedElement;
+  }) => Promise<{ ok: true } | { error: string }>;
+  restoreTarget?: (stepId: string) => Promise<{ ok: true } | { error: string }>;
 }
 
 /**
@@ -61,6 +78,9 @@ export class RecordingConsole {
   private highlight: PanelState['highlight'];
   private notice: PanelState['notice'];
   private replay: PanelReplay | undefined;
+  /** CORRECTION MANAGER : le mode sélection en cours, puis la proposition (l'élément désigné, en mémoire). */
+  private pick: PanelState['pick'];
+  private picked: PickedElement | undefined;
   private saved: PanelState['saved'];
   private analysis: PanelAnalysis = { available: false, intents: [], findings: [], aiCandidates: 0 };
   /** Les entrées de la dernière analyse affichée : la revue d'une intention la redessine. */
@@ -346,6 +366,33 @@ export class RecordingConsole {
                   this.analysisInputs.running,
                 );
             }
+          } else if (command.type === 'correct-pick' && command.id && input.actions.pickTarget) {
+            const pickTarget = input.actions.pickTarget;
+            await this.startPick(command.id, (label) => pickTarget(command.id ?? '', label));
+          } else if (command.type === 'correct-apply' && command.id && input.actions.correctTarget) {
+            const picked = this.picked;
+            if (picked && this.pick?.stepId === command.id && this.pick.status === 'PICKED') {
+              const outcome = await input.actions.correctTarget({ stepId: command.id, picked });
+              if ('error' in outcome)
+                this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
+              else {
+                this.notice = undefined;
+                this.pick = undefined;
+                this.picked = undefined;
+                // Le flow change : un rejeu fait avant ne le valide plus.
+                this.replay = undefined;
+                this.saved = undefined;
+              }
+            }
+          } else if (command.type === 'correct-restore' && command.id && input.actions.restoreTarget) {
+            const outcome = await input.actions.restoreTarget(command.id);
+            if ('error' in outcome)
+              this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
+            else {
+              this.notice = undefined;
+              this.replay = undefined;
+              this.saved = undefined;
+            }
           } else if (
             (command.type === 'intent-correct' ||
               command.type === 'intent-confirm' ||
@@ -442,6 +489,56 @@ export class RecordingConsole {
       case 'refresh':
         await this.refreshPreview();
         break;
+      // CORRECTION MANAGER : quitter le mode sélection vaut dans les deux phases (même pendant l'attente de la revue).
+      case 'correct-cancel':
+        this.recorder.cancelPick();
+        this.pick = undefined;
+        this.picked = undefined;
+        break;
+      case 'correct-test': {
+        const picked = this.picked;
+        if (!picked) break;
+        const shown = await this.recorder.highlightPicked(picked);
+        await this.refreshPreview(
+          shown.rect && this.pick
+            ? { actionId: this.pick.stepId, ...shown.rect, ...(shown.label ? { label: shown.label } : {}) }
+            : undefined,
+        );
+        break;
+      }
+      case 'correct-pick':
+        if (!command.id) break;
+        if (!recording) {
+          await this.review?.(command);
+          return;
+        }
+        await this.startPick(command.id, (label) => this.recorder.pickTarget(label));
+        break;
+      case 'correct-apply': {
+        if (!command.id) break;
+        if (!recording) {
+          await this.review?.(command);
+          return;
+        }
+        const picked = this.picked;
+        if (!picked || this.pick?.stepId !== command.id || this.pick.status !== 'PICKED') break;
+        const outcome = this.recorder.correctTarget(command.id, picked);
+        this.notice =
+          'error' in outcome ? { actionId: command.id, kind: 'error', message: outcome.error } : undefined;
+        if (!('error' in outcome)) {
+          this.pick = undefined;
+          this.picked = undefined;
+        }
+        break;
+      }
+      case 'correct-restore':
+        if (!command.id) break;
+        if (!recording) {
+          await this.review?.(command);
+          return;
+        }
+        this.recorder.restoreTarget(command.id);
+        break;
       case 'detach':
         await this.detach();
         break;
@@ -453,6 +550,55 @@ export class RecordingConsole {
         return;
     }
     this.render();
+  }
+
+  /**
+   * MODE SÉLECTION : la fenêtre dit « Mode sélection actif », la page encadre l'élément survolé ; au clic,
+   * la proposition (nouvelle cible, replis, ordre de résolution) s'affiche à côté de l'ancienne cible.
+   */
+  private async startPick(
+    stepId: string,
+    picker: (label: string) => Promise<PickedElement | undefined>,
+  ): Promise<void> {
+    const step = this.state().actions.find((entry) => entry.id === stepId);
+    if (!step) return;
+    const label = step.technical.name ?? step.technical.label ?? step.technical.text ?? step.description;
+    const previous = step.correction?.current ?? step.technical.target;
+    this.pick = { stepId, status: 'PICKING', label, ...(previous ? { previous } : {}) };
+    this.picked = undefined;
+    this.render();
+    const picked = await picker(label);
+    // Une autre commande a quitté le mode sélection pendant l'attente : rien à proposer.
+    if (!this.isPicking(stepId)) return;
+    if (!picked) {
+      this.pick = {
+        stepId,
+        status: this.recorder.correctionPage ? 'CANCELLED' : 'UNAVAILABLE',
+        label,
+        ...(previous ? { previous } : {}),
+      };
+      this.render();
+      return;
+    }
+    const proposal = proposeCorrection(picked.element, useOfStep(step.kind), this.language);
+    this.picked = picked;
+    this.pick = {
+      stepId,
+      status: 'PICKED',
+      label,
+      ...(previous ? { previous } : {}),
+      proposal: panelProposalOf(proposal),
+    };
+    this.render();
+    await this.refreshPreview(
+      picked.rect ? { actionId: stepId, ...picked.rect, label: proposal.label } : undefined,
+    );
+  }
+
+  /** Le mode sélection attend encore pour cette étape (une autre commande peut l'avoir quitté entre-temps). */
+  private isPicking(stepId: string): boolean {
+    const current: PanelState['pick'] = this.pick;
+    return current !== undefined && current.stepId === stepId && current.status === 'PICKING';
   }
 
   /** Une étape de la revue → l'action en direct qui vient des mêmes événements bruts (mise en évidence). */
@@ -535,6 +681,7 @@ export class RecordingConsole {
       ...(this.highlight ? { highlight: this.highlight } : {}),
       ...(this.notice ? { notice: this.notice } : {}),
       ...(this.replay ? { replay: this.replay } : {}),
+      ...(this.pick ? { pick: this.pick } : {}),
       ...(this.saved ? { saved: this.saved } : {}),
       ...(this.preview ? { preview: this.preview } : {}),
       ...(this.detached ? { previewDetached: true } : {}),
@@ -632,6 +779,29 @@ function enrichSteps(
  * ✎ MODIFIER : retire une étape d'ACTION du flow (et les vérifications qui en dépendent), puis
  * régénère flow.yaml et .feature depuis le même modèle. Une vérification seule n'est jamais retirée ici.
  */
+/** La proposition de correction, telle que la fenêtre la montre (des mots, jamais une valeur saisie). */
+function panelProposalOf(proposal: CorrectionProposal): NonNullable<PanelState['pick']>['proposal'] {
+  return {
+    target: describeTarget(proposal.target),
+    quality: proposal.quality,
+    label: proposal.label,
+    order: proposal.order,
+    alternatives: proposal.alternatives.map((target) => describeTarget(target)),
+    ambiguous: proposal.ambiguous,
+    traits: proposal.traits,
+  };
+}
+
+/** Les fichiers du flow (YAML, .feature) régénérés après un changement du flow en revue. */
+export function regenerateFlowFiles(result: RecordingResult, language: 'fr' | 'en'): void {
+  const hasTestData = result.testData !== undefined && Object.keys(result.testData.set.values).length > 0;
+  result.files = generateFlowFiles(result.flow, {
+    language,
+    recordedAt: result.session.startedAt,
+    ...(hasTestData ? { testDataFile: TEST_DATA_FILE } : {}),
+  });
+}
+
 export function removeFlowStep(result: RecordingResult, stepId: string, language: 'fr' | 'en'): boolean {
   const target = result.flow.steps.find((item) => item.id === stepId);
   if (!target || target.step.kind === 'expect') return false;
@@ -640,12 +810,7 @@ export function removeFlowStep(result: RecordingResult, stepId: string, language
     (item) =>
       item !== target && !(item.step.kind === 'expect' && item.actionIds.some((id) => actionIds.has(id))),
   );
-  const hasTestData = result.testData !== undefined && Object.keys(result.testData.set.values).length > 0;
-  result.files = generateFlowFiles(result.flow, {
-    language,
-    recordedAt: result.session.startedAt,
-    ...(hasTestData ? { testDataFile: TEST_DATA_FILE } : {}),
-  });
+  regenerateFlowFiles(result, language);
   return true;
 }
 

@@ -340,7 +340,14 @@ export function processRecording(
   // Les décisions de l'humain sur une ambiguïté (panneau) : visibles sur l'étape, jamais silencieuses.
   for (const step of built.flow.steps) {
     const events = session.rawEvents.filter((event) => step.rawEventIds.includes(event.id));
-    if (events.some((event) => event.userResolution)) step.userDecision = 'AMBIGUITY_CONFIRMED_BY_USER';
+    // CORRECTION MANAGER : une cible désignée par l'humain dans la page l'emporte ; l'historique la garde.
+    const corrected = events.find((event) => event.userCorrection)?.userCorrection;
+    if (corrected && 'target' in step.step) {
+      step.userDecision = 'TARGET_CORRECTED_BY_USER';
+      step.corrections = [corrected];
+      step.targetValidation = { status: 'USER_CORRECTED', repaired: false, requiresReplayValidation: false };
+    } else if (events.some((event) => event.userResolution))
+      step.userDecision = 'AMBIGUITY_CONFIRMED_BY_USER';
     else if (events.some((event) => event.ambiguityIgnored)) step.userDecision = 'AMBIGUITY_LEFT_BY_USER';
   }
   // FINAL RECORDING AUDIT : à partir des validations immédiates (un écran passé n'est jamais « NOT_FOUND »).

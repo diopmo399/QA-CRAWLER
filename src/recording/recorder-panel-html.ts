@@ -121,7 +121,7 @@ const CSS = `
   --accent:#4F46E5;--accent-soft:#EEF2FF;--accent-fg:#FFFFFF;--title:#4338CA;--ok-fg:#FFFFFF;--muted-strong:#374151;--chip-bg:#F1F2F8;--chip-fg:#374151;--ok-text:#15803D;
   --ok:#15803D;--ok-soft:#F0FDF4;--warn:#B45309;--warn-soft:#FFFBEB;--bad:#B91C1C;--bad-soft:#FEF2F2;--run:#4F46E5;--run-soft:#EEF2FF;--idle:#C7CCD8;--idle-soft:#F1F2F8;
   --violet:#6D28D9;--violet-soft:#F3EEFF;--teal:#0F766E;--teal-soft:#E6FAF7;--orange:#4338CA;--orange-soft:#EEF2FF;--pink:#1D4ED8;--pink-soft:#E8F0FE;
-  --radius:14px;--shadow:0 1px 2px rgba(16,24,40,.05);--focus:#4F46E5;--ring:#E0E7FF;
+  --radius:14px;--shadow:0 1px 2px rgba(16,24,40,.05);--focus:#4F46E5;--ring:#E0E7FF;--bad-line:#FECACA;--ok-line:#BBF7D0;
   --accent-2:#7C3AED;--text:var(--fg);--text-2:var(--muted-strong);--nav-hover:#F1F2F8;
 }
 :root[data-theme="dark"]{color-scheme:dark;
@@ -129,7 +129,7 @@ const CSS = `
   --accent:#6366F1;--accent-soft:#1C1A4A;--accent-fg:#FFFFFF;--title:#C7D2FE;--ok-fg:#052E16;--muted-strong:#C9CFDD;--chip-bg:#1A2133;--chip-fg:#C9CFDD;--ok-text:#4ADE80;
   --ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#2A1F0C;--bad:#EF4444;--bad-soft:#2A1215;--run:#818CF8;--run-soft:#1C1A4A;--idle:#64748B;--idle-soft:#1A2133;
   --violet:#A78BFA;--violet-soft:#2E1F6B;--teal:#5EEAD4;--teal-soft:#0E3B33;--orange:#A5B4FC;--orange-soft:#1C1A4A;--pink:#93C5FD;--pink-soft:#0F1B3A;
-  --shadow:none;--focus:#A5B4FC;--ring:#2E2A7A;
+  --shadow:none;--focus:#A5B4FC;--ring:#2E2A7A;--bad-line:#7F1D1D;--ok-line:#14532D;
   --accent-2:#8B5CF6;--nav-hover:#161C2D;
 }
 ${THEME_BASE_CSS}
@@ -297,7 +297,32 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .review h2{margin:0 0 4px;font-size:16px;color:var(--ok)}
 .review .hint{margin:0;color:var(--muted)}
 .result{border-radius:12px;padding:14px 16px;margin-top:12px;border:1px solid var(--line)}
-.result.ok{background:var(--ok-soft);border-color:var(--ok-soft)} .result.bad{background:var(--surface);border-color:#FECACA;border-left:4px solid var(--bad)}
+.result.ok{background:var(--ok-soft);border-color:var(--ok-soft)} .result.bad{background:var(--surface);border-color:var(--bad-line);border-left:4px solid var(--bad)}
+/* CORRECTION MANAGER : ancienne cible → nouvelle cible, ordre de résolution, mode sélection. */
+.correction{margin-top:14px;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--surface)}
+.correction .chead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.correction .chead h3{margin:0;font-size:14px;font-weight:700;color:var(--fg);letter-spacing:0}
+.cbadge{font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:var(--warn-soft);color:var(--warn);white-space:nowrap}
+.cbadge.done{background:var(--ok-soft);color:var(--ok)}
+.pickbadge{display:inline-flex;align-items:center;gap:8px;padding:5px 12px;border-radius:8px;background:var(--accent-soft);color:var(--title);font-size:12px;font-weight:700}
+.pickbadge::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;animation:pulse 1.6s infinite}
+.pair{display:grid;grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);gap:10px;align-items:stretch;margin:10px 0}
+.tbox{border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+.tbox b{display:block;font-size:11px;font-weight:700;margin-bottom:4px;letter-spacing:.04em}
+.tbox code{display:block;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;color:var(--fg)}
+.tbox span{display:block;font-size:12px;color:var(--muted);margin-top:4px}
+.tbox.old{border-color:var(--bad-line);background:var(--bad-soft)} .tbox.old b{color:var(--bad)}
+.tbox.new{border-color:var(--ok-line);background:var(--ok-soft)} .tbox.new b{color:var(--ok)}
+.pair .arrow{display:grid;place-items:center;color:var(--muted);font-size:18px}
+.correction .order{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface-2);font-size:12px;margin:10px 0}
+.correction .order b{display:block;margin-bottom:6px}
+.correction .order ol{margin:0;padding-left:18px;display:grid;gap:2px;color:var(--muted-strong)}
+.correction .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.correction .row .grow{flex:1;justify-content:center}
+.correction .warnnote{margin:6px 0 0;font-size:12px;color:var(--warn);font-weight:600}
+.chist{display:grid;grid-template-columns:90px minmax(0,1fr);gap:5px 10px;font-size:12px;margin:8px 0}
+.chist .k{color:var(--muted)} .chist code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.correction dl{margin:0}
 .result.ok>b{color:var(--ok)} .result.bad>b{color:var(--bad);font-size:16px}
 .result ul{list-style:none;padding:0;margin:6px 0 0;display:grid;gap:3px}
 .result p{margin:6px 0}
@@ -575,7 +600,13 @@ const SCRIPT = `
       qualityShort: 'Qualité', seeDetail: 'Voir le détail',
       analysisRunning: "Analyse par l'intelligence en cours, en arrière-plan : vous pouvez déjà rejouer et sauvegarder.",
       fullscreen: 'Plein écran', detach: 'Détacher', detachLabel: "Détacher l'aperçu dans sa propre fenêtre", attach: 'Rattacher', attachLabel: "Rattacher l'aperçu à la fenêtre principale",
-      detachedNote: "L'aperçu de l'application est ouvert dans sa propre fenêtre (plein écran possible)."
+      detachedNote: "L'aperçu de l'application est ouvert dans sa propre fenêtre (plein écran possible).",
+      cTitle: function (n) { return "Correction de l'étape " + n; }, cInBrowser: 'Corriger dans le navigateur', cPickActive: 'Mode sélection actif · Échap pour quitter',
+      cPickHelp: "Dans la fenêtre de l'application : survolez pour encadrer, cliquez pour choisir. Le clic n'est pas transmis à l'application.",
+      cCancelled: 'Sélection annulée : la cible ne change pas.', cUnavailable: "La page de l'application n'est pas disponible pour la sélection.",
+      cOld: 'ANCIENNE CIBLE', cNew: 'NOUVELLE CIBLE', cProposed: 'PROPOSÉE', cCorrected: 'CORRIGÉE', cRole: 'Rôle', cName: 'Nom accessible', cText: 'Texte', cTestId: 'testId', cCss: 'CSS de repli', cContext: 'Contexte',
+      cOrder: 'Ordre de résolution au rejeu', cTest: "Tester l'étape", cCancel: 'Annuler', cApply: 'Valider la correction', cAmbiguous: 'Plusieurs éléments correspondent encore : la section ou le contexte départagera au rejeu.',
+      cHistory: 'Historique des corrections', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrigé par', cUser: 'Utilisateur', cDate: 'Date', cRestore: "Restaurer l'original", cUnknown: 'non retrouvée', cCurrent: 'Cible actuelle'
     },
     en: {
       subtitle: 'Journey recording', devMode: 'Developer mode', active: 'Active', inactive: 'Paused',
@@ -590,7 +621,13 @@ const SCRIPT = `
       qualityShort: 'Quality', seeDetail: 'See the detail',
       analysisRunning: 'Intelligence analysis running in the background: you can already replay and save.',
       fullscreen: 'Full screen', detach: 'Detach', detachLabel: 'Detach the preview into its own window', attach: 'Reattach', attachLabel: 'Reattach the preview to the main window',
-      detachedNote: 'The application preview is open in its own window (full screen available).'
+      detachedNote: 'The application preview is open in its own window (full screen available).',
+      cTitle: function (n) { return 'Correction of step ' + n; }, cInBrowser: 'Correct in the browser', cPickActive: 'Selection mode on · Esc to quit',
+      cPickHelp: 'In the application window: hover to frame, click to choose. The click is not passed to the application.',
+      cCancelled: 'Selection cancelled: the target does not change.', cUnavailable: 'The application page is not available for the selection.',
+      cOld: 'OLD TARGET', cNew: 'NEW TARGET', cProposed: 'PROPOSED', cCorrected: 'CORRECTED', cRole: 'Role', cName: 'Accessible name', cText: 'Text', cTestId: 'testId', cCss: 'Fallback CSS', cContext: 'Context',
+      cOrder: 'Resolution order at replay', cTest: 'Test the step', cCancel: 'Cancel', cApply: 'Confirm the correction', cAmbiguous: 'Several elements still match: the section or the context decides at replay.',
+      cHistory: 'Correction history', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrected by', cUser: 'User', cDate: 'Date', cRestore: 'Restore the original', cUnknown: 'not found', cCurrent: 'Current target'
     }
   }[lang];
   Object.keys(X).forEach(function (k) { T[k] = X[k]; });
@@ -806,6 +843,7 @@ const SCRIPT = `
     var h = '<header class="card-head"><h2>' + esc(T.detailsTitle) + '</h2><span class="actions">' + button('✕', { cmd: 'deselect', cls: 'ghost', aria: T.hideDetails }) + '</span></header>';
     h += '<span class="step">' + esc(T.stepOf2(step.index, state.actions.length)) + '</span>';
     h += '<div class="hero"><span class="kind k-' + esc(step.kind) + '" aria-hidden="true">' + kindSvg(step.kind) + '</span><div><b>' + esc(step.description) + '</b><span>' + esc(step.detail || step.statusText) + '</span></div></div>';
+    h += correctionBlock(step);
     h += '<h3>' + esc(T.general) + '</h3><dl>';
     h += '<dt>' + esc(T.field.kind) + '</dt><dd><span class="chip">' + esc(T.kindName[step.kind] || step.kind) + '</span></dd>';
     GENERAL.forEach(function (k) { if (t[k] !== undefined && k !== 'kind' && k !== 'event') h += '<dt>' + esc(T.field[k] || k) + '</dt><dd>' + (k === 'role' ? '<span class="chip">' + esc(t[k]) + '</span>' : esc(t[k])) + '</dd>'; });
@@ -832,6 +870,62 @@ const SCRIPT = `
     }).join('') : '<p class="sub">' + esc(T.linkedNone) + '</p>';
     h += '<details class="logs"><summary>' + esc(T.logs) + '</summary><span class="tech">' + esc(techLines(step)) + '</span></details>';
     setHtml(box, h);
+  }
+
+  /**
+   * CORRECTION MANAGER : corriger la cible d'une étape dans le navigateur. Au repos : le bouton et, si la
+   * cible a déjà été corrigée, l'historique (Restaurer l'original). En mode sélection : le badge actif.
+   * Élément désigné : ancienne cible → nouvelle cible, ses traits, l'ordre de résolution, Tester / Annuler / Valider.
+   */
+  function correctionBlock(step) {
+    if (!step.correctable || state.phase === 'FINALIZING') return '';
+    var pk = state.pick && state.pick.stepId === step.id ? state.pick : null;
+    var running = state.replay && state.replay.status === 'RUNNING';
+    var corr = step.correction;
+    var corrected = corr && corr.corrected;
+    var h = '<section class="correction" aria-label="' + esc(T.cTitle(step.index)) + '"><div class="chead"><h3>' + esc(T.cTitle(step.index)) + '</h3>';
+    if (pk && pk.status === 'PICKED') h += '<span class="cbadge">' + esc(T.cProposed) + '</span>';
+    else if (corrected) h += '<span class="cbadge done">' + esc(T.cCorrected) + '</span>';
+    h += '</div>';
+    if (pk && pk.status === 'PICKING') {
+      h += '<div class="pickbadge" role="status">' + esc(T.cPickActive) + '</div><p class="sub">' + esc(T.cPickHelp) + '</p>';
+      h += '<div class="row">' + button(T.cCancel, { cmd: 'correct-cancel', id: step.id }) + '</div>';
+      return h + '</section>';
+    }
+    if (pk && pk.status === 'PICKED' && pk.proposal) {
+      var pr = pk.proposal, tr = pr.traits;
+      h += '<div class="pair"><div class="tbox old"><b>' + esc(T.cOld) + '</b><code>' + esc(pk.previous || corr && corr.current || '—') + '</code><span>' + esc(step.status === 'FAILED' ? T.cUnknown : step.statusText) + '</span></div>';
+      h += '<span class="arrow" aria-hidden="true">→</span>';
+      h += '<div class="tbox new"><b>' + esc(T.cNew) + '</b><code>' + esc(pr.target) + '</code><span>' + esc(pr.quality) + '</span></div></div>';
+      h += '<dl>';
+      h += '<dt>' + esc(T.cRole) + '</dt><dd><span class="chip">' + esc(tr.role || tr.tag) + '</span></dd>';
+      if (tr.name) h += '<dt>' + esc(T.cName) + '</dt><dd>' + esc(tr.name) + '</dd>';
+      if (tr.label && tr.label !== tr.name) h += '<dt>' + esc(T.field.label) + '</dt><dd>' + esc(tr.label) + '</dd>';
+      if (tr.text && tr.text !== tr.name) h += '<dt>' + esc(T.cText) + '</dt><dd>' + esc(tr.text) + '</dd>';
+      if (tr.testId) h += '<dt>' + esc(T.cTestId) + '</dt><dd><code>' + esc(tr.testId) + '</code></dd>';
+      h += '<dt>' + esc(T.cCss) + '</dt><dd><code>' + esc(tr.css) + '</code></dd>';
+      if (tr.section) h += '<dt>' + esc(T.cContext) + '</dt><dd>' + esc(tr.section) + '</dd>';
+      h += '</dl>';
+      if (pr.order.length) h += '<div class="order"><b>' + esc(T.cOrder) + '</b><ol>' + pr.order.map(function (o) { return '<li>' + esc(o) + '</li>'; }).join('') + '</ol></div>';
+      if (pr.ambiguous) h += '<p class="warnnote">' + esc(T.cAmbiguous) + '</p>';
+      h += '<div class="row">' + button(T.cTest, { cmd: 'correct-test', id: step.id }) + button(T.cCancel, { cmd: 'correct-cancel', id: step.id }) + button(T.cApply, { cmd: 'correct-apply', id: step.id, cls: 'primary grow', icon: 'check' }) + '</div>';
+      if (state.notice && state.notice.actionId === step.id) h += '<p class="error" role="alert">' + esc(state.notice.message) + '</p>';
+      return h + '</section>';
+    }
+    if (pk && pk.status === 'CANCELLED') h += '<p class="sub">' + esc(T.cCancelled) + '</p>';
+    if (pk && pk.status === 'UNAVAILABLE') h += '<p class="sub">' + esc(T.cUnavailable) + '</p>';
+    if (corr && corr.current && !corrected) h += '<dl><dt>' + esc(T.cCurrent) + '</dt><dd><code>' + esc(corr.current) + '</code></dd></dl>';
+    h += '<div class="row">' + button(T.cInBrowser, { cmd: 'correct-pick', id: step.id, cls: 'soft', icon: 'cursor', disabled: running }) + '</div>';
+    if (corrected && corr) {
+      var last = corr.history.length ? corr.history[corr.history.length - 1] : null;
+      h += '<h3>' + esc(T.cHistory) + '</h3><div class="chist">';
+      h += '<span class="k">' + esc(T.cOriginal) + '</span><code>' + esc(corr.original || '—') + '</code>';
+      h += '<span class="k">' + esc(T.cCorrection) + '</span><code>' + esc(corr.current) + '</code>';
+      h += '<span class="k">' + esc(T.cBy) + '</span><span>' + esc(T.cUser) + '</span>';
+      if (last) h += '<span class="k">' + esc(T.cDate) + '</span><span>' + esc(new Date(last.at).toLocaleString()) + '</span>';
+      h += '</div><div class="row">' + button(T.cRestore, { cmd: 'correct-restore', id: step.id, icon: 'undo', disabled: running }) + '</div>';
+    }
+    return h + '</section>';
   }
 
   /** LA SOURCE DE LA VALEUR d'une saisie (revue) : valeur enregistrée, générée, ou réutilisée d'une étape antérieure. */
@@ -899,7 +993,8 @@ const SCRIPT = `
 
   function previewHtml() {
     var pv = state.preview;
-    var h = '<header class="card-head"><h2>' + esc(T.previewTitle) + '</h2><span class="actions">' + button('↻', { cmd: 'refresh-preview', cls: 'ghost', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('⛶', { cmd: 'fullscreen', cls: 'ghost', aria: T.fullscreen, title: T.fullscreen }) + button('⧉ ' + T.detach, { cmd: 'detach', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
+    var picking = state.pick && state.pick.status === 'PICKING';
+    var h = '<header class="card-head"><h2>' + esc(T.previewTitle) + '</h2>' + (picking ? '<span class="pickbadge" role="status">' + esc(T.cPickActive) + '</span>' : '') + '<span class="actions">' + button('↻', { cmd: 'refresh-preview', cls: 'ghost', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('⛶', { cmd: 'fullscreen', cls: 'ghost', aria: T.fullscreen, title: T.fullscreen }) + button('⧉ ' + T.detach, { cmd: 'detach', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
     h += '<div class="url"><span class="nav" aria-hidden="true">← →</span><span aria-hidden="true">🔒</span>' + esc(pv ? pv.url : '') + '</div>';
     h += '<div class="viewport">' + (DETACHED ? '<div class="frame">' : '');
     if (!pv) h += '<p class="placeholder">' + esc(T.noPreview) + '</p>';
@@ -956,7 +1051,7 @@ const SCRIPT = `
       var f = r.failure;
       h += '<div class="result bad" role="alert"><b>' + esc(T.replayBad) + '</b><p>' + esc(T.stepOf(f.index, r.total)) + '<br><b>' + esc(f.description) + '</b><br>' + esc(T.cause) + ' : ' + esc(f.cause) + '</p>';
       h += '<details><summary>' + esc(T.seeDetails) + '</summary><ul>' + f.details.map(function (d) { return '<li class="tech">' + esc(d) + '</li>'; }).join('') + '</ul></details>';
-      h += '<div class="actions">' + button(T.editStep, { cmd: 'edit-step', id: f.stepId || '' }) + button(T.restart, { cmd: 'replay' }) + '</div></div>';
+      h += '<div class="actions">' + (f.stepId ? button(T.cInBrowser, { cmd: 'correct-pick', id: f.stepId, cls: 'soft', icon: 'cursor' }) : '') + button(T.editStep, { cmd: 'edit-step', id: f.stepId || '' }) + button(T.restart, { cmd: 'replay' }) + '</div></div>';
     }
     if (state.saved) h += '<div class="result ok" role="status"><b>' + esc(T.saved) + '</b><p class="sub">' + esc(state.saved.directory) + '</p></div>';
     setHtml(el, h + '</div>');
@@ -1165,6 +1260,7 @@ const SCRIPT = `
       render();
       return;
     }
+    if (cmd === 'correct-pick') { selected = id || selected; send({ type: cmd, id: id }); render(); return; }
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
     send({ type: cmd, id: id });
   });

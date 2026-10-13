@@ -8,6 +8,7 @@ import type {
 } from './live-timeline.js';
 import type { RecordedFlow, RecordedFlowStep } from './model.js';
 import { VALIDATED_STATUSES, type TargetValidationStatus } from './target-validator.js';
+import { describeTarget, hasTarget } from './target-correction.js';
 
 /**
  * L'ÉTAT DU PANNEAU « QA-CRAWLER Recorder » : tout ce que la fenêtre affiche, sérialisable, construit
@@ -31,15 +32,58 @@ export interface PanelStep {
   statusText: string;
   technical: Record<string, string>;
   candidates?: LiveCandidate[];
-  resolution?: 'RESOLVED' | 'IGNORED';
+  resolution?: 'RESOLVED' | 'IGNORED' | 'CORRECTED';
   /** Revue : l'étape peut être retirée du flow (une action humaine ; jamais une vérification). */
   removable?: boolean;
+  /** CORRECTION MANAGER : l'étape vise un élément, l'humain peut le corriger dans le navigateur. */
+  correctable?: boolean;
+  /** La cible courante (lisible), l'original si elle a été corrigée, l'historique. */
+  correction?: PanelCorrection;
   /** Le groupe affiché au-dessus de l'étape : l'étape métier (revue) ou l'écran (en direct). */
   group?: string;
   /** Les requêtes reliées à l'action (analyse HTTP) : l'inspecteur les montre à côté de la cible. */
   network?: PanelNetwork[];
   /** Revue d'une SAISIE : la source de sa valeur (fixe, générée, réutilisée) et les variables réutilisables. */
   data?: PanelStepData;
+}
+
+/** La cible d'une étape telle que la fenêtre la montre : courante, originale (si corrigée), historique. */
+export interface PanelCorrection {
+  current: string;
+  original?: string;
+  corrected: boolean;
+  history: { at: number; from: string; to: string }[];
+}
+
+/**
+ * LE MODE SÉLECTION en cours (correction manager) : l'étape visée, l'état (la page attend un clic, un
+ * élément a été désigné, annulé, impossible), et la proposition construite à partir de l'élément désigné.
+ */
+export interface PanelPick {
+  stepId: string;
+  status: 'PICKING' | 'PICKED' | 'CANCELLED' | 'UNAVAILABLE';
+  /** Ce que l'humain est en train de remplacer (le libellé de l'étape). */
+  label: string;
+  proposal?: {
+    target: string;
+    quality: string;
+    label: string;
+    order: string[];
+    alternatives: string[];
+    ambiguous: boolean;
+    traits: {
+      role: string;
+      name?: string;
+      label?: string;
+      text?: string;
+      testId?: string;
+      css: string;
+      section?: string;
+      tag: string;
+    };
+  };
+  /** L'ancienne cible, lisible. */
+  previous?: string;
 }
 
 /** La liaison de données d'une saisie, telle que la fenêtre la montre (jamais un secret). */
@@ -253,6 +297,8 @@ export interface PanelState {
   highlight?: { actionId: string; result: 'ORIGINAL' | 'SELECTOR' | 'NOT_FOUND' };
   notice?: { actionId?: string; kind: 'error' | 'info'; message: string };
   replay?: PanelReplay;
+  /** CORRECTION MANAGER : le mode sélection en cours ou la proposition à valider. */
+  pick?: PanelPick;
   saved?: { directory: string; files: string[] };
   /**
    * L'APERÇU de l'application (une image de la page, en mémoire seulement) et le cadre de l'élément
@@ -295,6 +341,7 @@ const CHECKS = {
     effect: (effect: string) => `Effet observé : ${effect}`,
     resolved: "Élément touché confirmé par l'utilisateur",
     ignored: "Ambiguïté laissée par l'utilisateur",
+    corrected: "Cible corrigée par l'utilisateur dans la page",
     unverified: 'Cible non vérifiable',
     stable: 'Sélecteur stable',
     fragile: 'Sélecteur fragile',
@@ -309,6 +356,7 @@ const CHECKS = {
     effect: (effect: string) => `Effect observed: ${effect}`,
     resolved: 'Touched element confirmed by the user',
     ignored: 'Ambiguity left by the user',
+    corrected: 'Target corrected by the user in the page',
     unverified: 'Target not verifiable',
     stable: 'Stable selector',
     fragile: 'Fragile selector',
@@ -330,6 +378,7 @@ export function checksOf(action: LiveAction, language: 'fr' | 'en'): { ok: boole
     checks.push({ ok: true, text: text.found(count) });
   if (action.resolution === 'RESOLVED') checks.push({ ok: true, text: text.resolved });
   if (action.resolution === 'IGNORED') checks.push({ ok: false, text: text.ignored });
+  if (action.resolution === 'CORRECTED') checks.push({ ok: true, text: text.corrected });
   if (action.kind !== 'open' && action.kind !== 'navigate')
     checks.push({
       ok: action.facts.stableSelector,
@@ -355,8 +404,15 @@ export function liveStep(action: LiveAction, language: 'fr' | 'en' = 'fr'): Pane
     technical: action.technical,
     ...(action.candidates ? { candidates: action.candidates } : {}),
     ...(action.resolution ? { resolution: action.resolution } : {}),
+    ...(LIVE_CORRECTABLE.has(action.kind) ? { correctable: true } : {}),
+    ...(action.resolution === 'CORRECTED' && action.technical.target
+      ? { correction: { current: action.technical.target, corrected: true, history: [] } }
+      : {}),
   };
 }
+
+/** Les gestes en direct qui visent un élément (une page ouverte, une touche, une boîte de dialogue : non). */
+const LIVE_CORRECTABLE = new Set<string>(['click', 'fill', 'check', 'uncheck', 'choose', 'select', 'upload']);
 
 const TEXT = {
   fr: {
@@ -373,6 +429,7 @@ const TEXT = {
     toCheck: 'À confirmer au rejeu',
     resolved: "Élément confirmé par l'utilisateur",
     left: "Ambiguïté laissée par l'utilisateur",
+    corrected: "Cible corrigée par l'utilisateur",
     recorded: 'Enregistrée',
   },
   en: {
@@ -389,6 +446,7 @@ const TEXT = {
     toCheck: 'To confirm at replay',
     resolved: 'Element confirmed by the user',
     left: 'Ambiguity left by the user',
+    corrected: 'Target corrected by the user',
     recorded: 'Recorded',
   },
 } as const;
@@ -469,6 +527,10 @@ export function reviewSteps(
       ...(twin?.detail ? { detail: twin.detail } : {}),
       status,
       statusText,
+      ...(item.userDecision === 'TARGET_CORRECTED_BY_USER' ? { resolution: 'CORRECTED' as const } : {}),
+      ...(hasTarget(item.step)
+        ? { correctable: true, correction: correctionOf(item, item.step.target) }
+        : {}),
       technical: {
         step: item.id,
         kind: item.step.kind,
@@ -485,10 +547,28 @@ export function reviewSteps(
   return { actions, checks };
 }
 
+/** La cible d'une étape pour la fenêtre : courante, originale si corrigée, et l'historique lisible. */
+function correctionOf(item: RecordedFlowStep, target: FlowTarget): PanelCorrection {
+  const history = (item.corrections ?? []).map((entry) => ({
+    at: entry.at,
+    from: describeTarget(entry.previous),
+    to: describeTarget(entry.next),
+  }));
+  const first = item.corrections?.[0];
+  return {
+    current: describeTarget(target),
+    ...(first ? { original: describeTarget(first.previous) } : {}),
+    corrected: item.userDecision === 'TARGET_CORRECTED_BY_USER',
+    history,
+  };
+}
+
 function reviewStatus(
   item: RecordedFlowStep,
   text: (typeof TEXT)['fr' | 'en'],
 ): { status: LiveActionStatus; statusText: string } {
+  if (item.userDecision === 'TARGET_CORRECTED_BY_USER')
+    return { status: 'CONFIRMED', statusText: text.corrected };
   if (item.userDecision === 'AMBIGUITY_CONFIRMED_BY_USER')
     return { status: 'CONFIRMED', statusText: text.resolved };
   if (item.userDecision === 'AMBIGUITY_LEFT_BY_USER') return { status: 'AMBIGUOUS', statusText: text.left };

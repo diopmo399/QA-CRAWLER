@@ -22,7 +22,12 @@ export interface PanelCommand {
     | 'intent-correct'
     | 'intent-confirm'
     | 'intent-reset'
-    | 'data-bind';
+    | 'data-bind'
+    | 'correct-pick'
+    | 'correct-cancel'
+    | 'correct-apply'
+    | 'correct-test'
+    | 'correct-restore';
   id?: string;
   candidate?: number;
   /** La revue d'une intention : l'intention choisie et sa justification (facultative). */
@@ -54,6 +59,11 @@ const COMMANDS = new Set<PanelCommand['type']>([
   'intent-confirm',
   'intent-reset',
   'data-bind',
+  'correct-pick',
+  'correct-cancel',
+  'correct-apply',
+  'correct-test',
+  'correct-restore',
 ]);
 
 /**
