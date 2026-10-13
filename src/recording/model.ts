@@ -376,7 +376,9 @@ export interface RawRecordedEvent {
   /** checkpoint : libellé donné par l'humain. */
   label?: string;
   /** control : stop / pause / resume / checkpoint / dock (depuis le bandeau). */
-  control?: 'stop' | 'pause' | 'resume' | 'checkpoint' | 'undo' | 'dock';
+  control?: 'stop' | 'pause' | 'resume' | 'checkpoint' | 'undo' | 'dock' | 'window';
+  /** control window (dock dans la page) : l'étape à montrer dans la fenêtre (« Résoudre »), le cas échéant. */
+  step?: string;
   /** control dock : où l'humain a rangé le bandeau (un coin), réduit ou non. */
   dock?: OverlayDock;
   /** popup / download : URL de la nouvelle page, extension du fichier. */

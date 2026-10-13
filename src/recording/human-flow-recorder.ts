@@ -95,6 +95,12 @@ export interface HumanFlowRecorderOptions {
   sources?: RecordingSourceSet;
 }
 
+/** Ce que le dock dans la page montre : les dernières actions (texte, statut) et les compteurs. */
+export interface DockView {
+  steps: { id: string; index: number; kind: string; description: string; status: string }[];
+  counts: { actions: number; confirmed: number; ambiguous: number; failed: number };
+}
+
 /** La mise en évidence d'un élément : comment il a été retrouvé, et où (l'aperçu dessine le même cadre). */
 export interface HighlightResult {
   found: 'ORIGINAL' | 'SELECTOR' | 'NOT_FOUND';
@@ -241,6 +247,7 @@ export class HumanFlowRecorder {
       binding: BINDING,
       salt: this.salt,
       overlay: recording.overlay,
+      dock: recording.panelLayout === 'docked',
       language: this.timeline.language,
       inputDebounceMs: recording.inputDebounceMs,
       recordValues: recording.testData.enabled && recording.testData.extractRecordedValues,
@@ -755,6 +762,29 @@ export class HumanFlowRecorder {
       .catch(() => undefined);
   }
 
+  /** LE DOCK DANS LA PAGE a demandé la fenêtre du recorder (et une étape à montrer, le cas échéant). */
+  onWindowRequest: ((stepId?: string) => void) | undefined;
+
+  /** Ce que le dock montre (les dernières actions, les compteurs) : repoussé à chaque nouvelle page. */
+  private lastDock: DockView | undefined;
+
+  /** LE DOCK DANS LA PAGE : les dernières actions et leurs statuts (texte seulement), jamais une valeur. */
+  showDock(view: DockView): void {
+    this.lastDock = view;
+    this.pushDock(this.page, view);
+  }
+
+  private pushDock(page: Page | undefined, view: DockView): void {
+    if (!page || page.isClosed()) return;
+    void page
+      .evaluate((value) => {
+        (
+          window as unknown as { __qaCrawlerRecorder?: { setDock?(view: unknown): void } }
+        ).__qaCrawlerRecorder?.setDock?.(value);
+      }, view)
+      .catch(() => undefined);
+  }
+
   /** Le temps de chaque phase de l'arrêt (ms) : le bilan dit où passe le temps. */
   readonly stopTimings: { phase: string; ms: number }[] = [];
 
@@ -883,6 +913,7 @@ export class HumanFlowRecorder {
           },
         )
         .catch(() => undefined);
+      if (this.lastDock) this.pushDock(page, this.lastDock);
     });
     page.on('framenavigated', (frame) => {
       if (frame !== page.mainFrame()) return;
@@ -1025,6 +1056,11 @@ export class HumanFlowRecorder {
       // Le bandeau déplacé ou réduit : sa place seulement, jamais une action ni un changement d'état.
       if (event.control === 'dock') {
         if (event.dock) this.dock = event.dock;
+        return;
+      }
+      // Le dock demande la fenêtre (« Fenêtre », « Résoudre ») : la console l'ouvre ; rien ne change ici.
+      if (event.control === 'window') {
+        this.onWindowRequest?.(event.step);
         return;
       }
       if (event.control === 'stop') this.resolveStop('overlay');
@@ -1417,10 +1453,14 @@ export function sanitize(
     control === 'resume' ||
     control === 'checkpoint' ||
     control === 'undo' ||
-    control === 'dock'
+    control === 'dock' ||
+    control === 'window'
       ? { control }
       : {}),
     ...(control === 'dock' && isObject(payload.dock) ? { dock: dockOf(payload.dock) } : {}),
+    ...(control === 'window' && typeof payload.step === 'string' && /^[\w-]{1,40}$/.test(payload.step)
+      ? { step: payload.step }
+      : {}),
     ...(typeof payload.noise === 'string' ? { noise: text(payload.noise, 80) } : {}),
     ...(typeof payload.activeDomInstance === 'string' && /^e\d{1,9}$/.test(payload.activeDomInstance)
       ? { activeDomInstance: payload.activeDomInstance }

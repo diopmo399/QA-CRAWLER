@@ -339,6 +339,8 @@ export interface PanelState {
   directory?: string;
   /** La disposition demandée au démarrage (recording.panelLayout) ; la fenêtre garde ensuite le choix de l'humain. */
   layout?: 'full' | 'compact';
+  /** L'étape à montrer (sélectionnée, défilée) à l'ouverture de la fenêtre depuis le dock (« Résoudre »). */
+  focus?: string;
   /** L'aperçu est ouvert dans sa propre fenêtre (la fenêtre principale garde le parcours et les détails). */
   previewDetached?: boolean;
 }

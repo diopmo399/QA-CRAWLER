@@ -8,7 +8,7 @@ import type { ScenarioConfig } from '../config/config.js';
 import { slug } from '../knowledge/signatures.js';
 import type { ProgressUpdate } from '../progress/progress.js';
 import type { FlowAuditReport } from './flow-audit.js';
-import type { HumanFlowRecorder } from './human-flow-recorder.js';
+import type { DockView, HumanFlowRecorder } from './human-flow-recorder.js';
 import {
   describeFlowStep,
   summaryOf,
@@ -129,35 +129,90 @@ export class RecordingConsole {
   /** recording.panelPreview : l'aperçu de l'application dans la fenêtre. */
   withPreview = true;
 
-  /** recording.panelLayout : la disposition au démarrage (complète ou mini-dock). */
-  layout: 'full' | 'compact' = 'full';
+  /** recording.panelLayout : la disposition au démarrage (complète, mini-dock dans sa fenêtre, ou dock dans la page). */
+  layout: 'full' | 'compact' | 'docked' = 'full';
+  /** DOCK DANS LA PAGE : la fenêtre n'est pas ouverte pendant l'enregistrement ; ouverte à la demande, puis pour la revue. */
+  private panel: RecorderPanel | undefined;
+  private opening: Promise<RecorderPanel | undefined> | undefined;
+  /** L'étape que la fenêtre montre à son ouverture depuis le dock (« Résoudre »). */
+  private focus: string | undefined;
 
   /** L'aperçu détaché dans sa propre fenêtre (plein écran possible). */
   private detached: RecorderPanel | undefined;
   private detaching = false;
 
   constructor(
-    private readonly panel: RecorderPanel,
+    /** La fenêtre du recorder ; absente : le dock dans la page la remplace (ouverte à la demande, puis pour la revue). */
+    panel: RecorderPanel | undefined,
     private readonly recorder: HumanFlowRecorder,
     private readonly name: string,
     private readonly language: 'fr' | 'en',
-    /** Ouvre une fenêtre isolée (un contexte séparé du navigateur) : pour détacher l'aperçu. */
+    /** Ouvre une fenêtre isolée (un contexte séparé du navigateur) : pour détacher l'aperçu, ou ouvrir la fenêtre à la demande. */
     private readonly openWindow?: () => Promise<Page>,
   ) {
-    panel.onCommand((command) => {
+    this.panel = panel;
+    panel?.onCommand((command) => {
       void this.handle(command);
     });
+    if (!panel) {
+      this.layout = 'docked';
+      recorder.onWindowRequest = (stepId) => {
+        void this.openPanel(stepId);
+      };
+    }
   }
 
-  /** La page de la fenêtre (tests, intégrations). */
-  get page(): Page {
-    return this.panel.page;
+  /** La page de la fenêtre (tests, intégrations) ; absente tant que le dock dans la page la remplace. */
+  get page(): Page | undefined {
+    return this.panel?.page;
+  }
+
+  /** Le dock dans la page remplace la fenêtre pendant l'enregistrement. */
+  get docked(): boolean {
+    return this.layout === 'docked';
   }
 
   render(): void {
     const state = this.state();
-    this.panel.render(state);
+    this.panel?.render(state);
     this.detached?.render(state);
+    if (this.docked && (this.phase === 'RECORDING' || this.phase === 'PAUSED'))
+      this.recorder.showDock(dockViewOf(state));
+  }
+
+  /**
+   * LA FENÊTRE À LA DEMANDE (dock dans la page) : « Fenêtre » ou « Résoudre » l'ouvrent pendant
+   * l'enregistrement (fermée : le dock reste) ; la revue l'ouvre toujours.
+   */
+  async openPanel(focus?: string): Promise<RecorderPanel | undefined> {
+    if (focus) this.focus = focus;
+    if (this.panel) {
+      this.render();
+      await this.panel.page.bringToFront().catch(() => undefined);
+      return this.panel;
+    }
+    const open = this.openWindow;
+    if (!open) return undefined;
+    this.opening ??= (async () => {
+      try {
+        const window = await RecorderPanel.open(await open(), this.language);
+        window.onCommand((command) => {
+          void this.handle(command);
+        });
+        this.panel = window;
+        void window.closed.then(() => {
+          // Fermée pendant l'enregistrement : le dock reste ; en revue, « Fermer » termine (runReview).
+          if (this.panel === window && this.phase !== 'REVIEW') this.panel = undefined;
+        });
+        this.render();
+        return window;
+      } catch {
+        return undefined;
+      } finally {
+        this.opening = undefined;
+      }
+    })();
+    return this.opening;
   }
 
   /** La fenêtre de l'aperçu détaché (tests, intégrations). */
@@ -189,7 +244,7 @@ export class RecordingConsole {
     const window = this.detached;
     this.detached = undefined;
     await window?.close();
-    await this.panel.page.bringToFront().catch(() => undefined);
+    await this.panel?.page.bringToFront().catch(() => undefined);
   }
 
   private httpLive: PanelState['http'];
@@ -241,7 +296,7 @@ export class RecordingConsole {
 
   async close(): Promise<void> {
     await this.detached?.close();
-    await this.panel.close();
+    await this.panel?.close();
   }
 
   /** La progression de la finalisation (après Stop). */
@@ -337,6 +392,9 @@ export class RecordingConsole {
     this.phase = 'REVIEW';
     this.progress = undefined;
     this.endedAt ??= Date.now();
+    // Le dock dans la page a remplacé la fenêtre pendant l'enregistrement : la revue l'ouvre elle-même.
+    const panel = this.panel ?? (await this.openPanel());
+    if (!panel) return new Error('the recorder window could not open for the review');
     this.render();
     let failure: unknown;
     await new Promise<void>((resolve) => {
@@ -475,7 +533,7 @@ export class RecordingConsole {
           this.render();
         }
       };
-      void this.panel.closed.then(finish);
+      void panel.closed.then(finish);
       const driven = input.until?.();
       if (driven)
         void driven.then(finish, (error: unknown) => {
@@ -800,9 +858,30 @@ export class RecordingConsole {
       analysis,
       ...(this.httpLive ? { http: this.httpLive } : {}),
       ...(this.directory ? { directory: this.directory } : {}),
-      layout: this.layout,
+      // Le cockpit s'ouvre complet quand le dock dans la page a demandé la fenêtre.
+      layout: this.layout === 'docked' ? 'full' : this.layout,
+      ...(this.focus ? { focus: this.focus } : {}),
     };
   }
+}
+
+/** Ce que le dock dans la page montre : les trois dernières actions et les compteurs (jamais une valeur saisie). */
+function dockViewOf(state: PanelState): DockView {
+  return {
+    steps: state.actions.slice(-3).map((step) => ({
+      id: step.id,
+      index: step.index,
+      kind: step.kind,
+      description: step.description,
+      status: step.status,
+    })),
+    counts: {
+      actions: state.summary.actions,
+      confirmed: state.summary.confirmed,
+      ambiguous: state.summary.ambiguous,
+      failed: state.summary.failed,
+    },
+  };
 }
 
 /**

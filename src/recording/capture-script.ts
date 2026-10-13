@@ -33,6 +33,12 @@ export interface CaptureOptions {
   /** Longueur maximale d'un texte envoyé (au-delà : seulement sa forme). */
   maxValueLength?: number;
   /**
+   * LE DOCK DANS LA PAGE (recording.panelLayout: docked) : le bandeau devient le mini-dock — dernières
+   * actions et leur statut, compteurs, Pause / Annuler / Arrêter, « Fenêtre » pour ouvrir le cockpit à la
+   * demande. Aucune deuxième fenêtre pendant l'enregistrement.
+   */
+  dock?: boolean;
+  /**
    * MODE SÉLECTION SEUL (correction manager après l'arrêt) : aucune action n'est enregistrée, le bandeau
    * n'est pas montré ; seule la désignation d'un élément (`pick`) est envoyée.
    */
@@ -1843,6 +1849,40 @@ export function installRecorder(
         : `${String(count)} occurrence${count === 1 ? '' : 's'}`,
     minimize: french ? 'Réduire le bandeau' : 'Minimize the bar',
     expand: french ? 'Agrandir le bandeau' : 'Expand the bar',
+    window: french ? '▣ Fenêtre' : '▣ Window',
+    windowLabel: french ? 'Ouvrir la fenêtre du recorder' : 'Open the recorder window',
+    resolve: french ? 'Résoudre' : 'Resolve',
+    pill: {
+      CONFIRMED: french ? 'Confirmée' : 'Confirmed',
+      PENDING: french ? 'En cours' : 'Pending',
+      AMBIGUOUS: french ? 'Ambiguë' : 'Ambiguous',
+      FAILED: french ? 'Échec' : 'Failed',
+      UNVERIFIED: french ? 'Non vérifiable' : 'Unverified',
+    } as Record<string, string>,
+    empty: french
+      ? "Aucune action pour l'instant : utilisez l'application."
+      : 'No action yet: use the application.',
+  };
+  /** LE DOCK : les dernières actions et les compteurs, poussés par Node à chaque changement (jamais décidés ici). */
+  type DockStep = { id: string; index: number; kind: string; description: string; status: string };
+  type DockState = {
+    steps: DockStep[];
+    counts: { actions: number; confirmed: number; ambiguous: number; failed: number };
+  };
+  let dockState: DockState = { steps: [], counts: { actions: 0, confirmed: 0, ambiguous: 0, failed: 0 } };
+  const KIND_GLYPH: Record<string, string> = {
+    fill: 'T',
+    select: '☰',
+    check: '☑',
+    uncheck: '☐',
+    choose: '◉',
+    key: '⌨',
+    open: '↗',
+    navigate: '↗',
+    goto: '↗',
+    drag: '⇄',
+    dragAndDrop: '⇄',
+    upload: '⇧',
   };
   let info: { count: number; startedAt?: number } = { count: 0 };
   // OÙ EST LE BANDEAU : un coin de la fenêtre, réduit ou non (jamais sur un bouton de l'application
@@ -2058,6 +2098,34 @@ export function installRecorder(
         }, 2500);
       }
     },
+    /** LE DOCK : les dernières actions et les compteurs (poussés par Node ; redessinés à chaque page). */
+    setDock: (value: DockState): void => {
+      // Poussé par Node (même processus de confiance) : seulement borné, le texte nettoyé.
+      dockState = {
+        steps: value.steps.slice(0, 5).map((step) => ({
+          id: step.id.slice(0, 40),
+          index: step.index,
+          kind: step.kind.slice(0, 20),
+          description: clean(step.description, 90),
+          status: step.status.slice(0, 12),
+        })),
+        counts: value.counts,
+      };
+      renderDock();
+    },
+    /** Ce que le dock montre (lecture seule : tests, diagnostic). */
+    dockState: (): DockState & { minimized: boolean; mounted: boolean } => ({
+      ...dockState,
+      minimized: dock.minimized,
+      mounted: root?.querySelector('.bar.dock') !== null,
+    }),
+    /** Où est un bouton du dock (position dans la fenêtre) : les tests cliquent avec la souris. */
+    dockRect: (act: string): { x: number; y: number; width: number; height: number } | undefined => {
+      const button = root?.querySelector(`.bar [data-act="${act}"]`);
+      if (!button) return undefined;
+      const rect = button.getBoundingClientRect();
+      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    },
     /**
      * MODE SÉLECTION (correction manager) : l'humain survole (l'élément s'encadre, sa pastille dit
      * rôle · nom · test id) puis clique l'élément que l'action doit viser. Le clic n'atteint jamais
@@ -2180,6 +2248,58 @@ export function installRecorder(
     }
     const toggle = root.querySelector('[data-act="pause"]');
     if (toggle) toggle.textContent = paused ? `▶ ${say.resume}` : `⏸ ${say.pause}`;
+    renderDock();
+  };
+  /** Le dock : compteurs ✓ ⚠ ✕ et les dernières actions (texte seulement, jamais une valeur saisie). */
+  const renderDock = (): void => {
+    if (!root || !options.dock) return;
+    const { counts, steps } = dockState;
+    const stat = (name: string, value: number): void => {
+      const cell = root?.querySelector(`.stats .${name}`);
+      if (cell) cell.textContent = `${name === 'ok' ? '✓' : name === 'amb' ? '⚠' : '✕'}${String(value)}`;
+    };
+    stat('ok', counts.confirmed);
+    stat('amb', counts.ambiguous);
+    stat('bad', counts.failed);
+    const list = root.querySelector('.steps');
+    if (!list) return;
+    list.textContent = '';
+    if (steps.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'empty';
+      empty.textContent = say.empty;
+      list.appendChild(empty);
+      return;
+    }
+    for (const step of steps) {
+      const item = document.createElement('li');
+      item.className = `step ${step.status}`;
+      item.dataset.step = step.id;
+      const num = document.createElement('span');
+      num.className = 'n';
+      num.textContent = String(step.index);
+      const icon = document.createElement('span');
+      icon.className = `ic k-${step.kind}`;
+      icon.textContent = KIND_GLYPH[step.kind] ?? '↖';
+      const desc = document.createElement('span');
+      desc.className = 'd';
+      desc.textContent = step.description;
+      desc.title = step.description;
+      const pill = document.createElement('span');
+      pill.className = 's';
+      pill.textContent = say.pill[step.status] ?? step.status;
+      item.append(num, icon, desc, pill);
+      if (step.status === 'AMBIGUOUS') {
+        const fix = document.createElement('button');
+        fix.type = 'button';
+        fix.className = 'fix';
+        fix.dataset.act = 'window';
+        fix.dataset.step = step.id;
+        fix.textContent = say.resolve;
+        item.appendChild(fix);
+      }
+      list.appendChild(item);
+    }
   };
   window.setInterval(() => {
     if (root && status === 'RECORDING' && !paused) {
@@ -2251,7 +2371,39 @@ export function installRecorder(
       @keyframes qa-pulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.6)}70%{box-shadow:0 0 0 7px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
       @keyframes qa-busy{from{background-position:200% 0}to{background-position:0 0}}
       @media (prefers-reduced-motion:reduce){.toast{transition:none}.busy,.state::before{animation:none}}
-    </style><div class="highlight"><span></span></div><div class="pickbar" role="status" hidden><span class="dot" aria-hidden="true">⌖</span><span><b>${say.pickMode}</b> · <span class="hint"></span></span><span class="esc"><kbd>Esc</kbd> ${say.pickCancel}</span></div><div class="toast" role="status"><b></b><span></span></div><div class="bar"><span class="grip" title="${say.move}" aria-label="${say.move}">⠿</span><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><input placeholder="${say.checkpoint}" aria-label="${say.checkpoint}" maxlength="80"><button data-act="checkpoint">${say.checkpoint}</button><button data-act="pause">⏸ ${say.pause}</button><button data-act="undo">${say.undo}</button><button data-act="stop">${say.stop}</button><button data-act="minimize" title="${say.minimize}" aria-label="${say.minimize}">–</button><span class="note"></span></div>`;
+      /* LE DOCK (recording.panelLayout: docked) : un panneau collé au coin, les dernières actions dedans. */
+      .bar.dock{border-radius:14px;padding:0;width:390px;max-width:calc(100vw - 24px);flex-direction:column;align-items:stretch;gap:0}
+      .bar.dock .dhead{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
+      .bar.dock .stats{display:flex;gap:4px;margin-left:auto}
+      .bar.dock .stats span{border-radius:999px;padding:2px 8px;background:rgba(255,255,255,.08);color:#cbd5e1;font-weight:700;white-space:nowrap}
+      .bar.dock .stats .ok{color:#86efac}.bar.dock .stats .amb{color:#fde68a}.bar.dock .stats .bad{color:#fca5a5}
+      .bar.dock .steps{list-style:none;margin:0;padding:3px 0;max-height:150px;overflow:auto}
+      .bar.dock .steps li{display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid rgba(255,255,255,.05)}
+      .bar.dock .steps li:last-child{border-bottom:0}
+      .bar.dock .steps .empty{color:#94a3b8;font-style:italic}
+      .bar.dock .steps .n{color:#94a3b8;font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace;min-width:14px}
+      .bar.dock .steps .ic{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;background:rgba(165,180,252,.18);color:#c7d2fe;font-size:11px;font-weight:700;flex:none}
+      .bar.dock .steps .ic.k-fill{background:rgba(94,234,212,.18);color:#99f6e4}
+      .bar.dock .steps .d{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#f1f5f9}
+      .bar.dock .steps .s{font-weight:700;white-space:nowrap;color:#cbd5e1}
+      .bar.dock .steps .CONFIRMED .s{color:#86efac}.bar.dock .steps .PENDING .s{color:#a5b4fc}.bar.dock .steps .AMBIGUOUS .s{color:#fde68a}.bar.dock .steps .FAILED .s{color:#fca5a5}
+      .bar.dock .steps li.AMBIGUOUS{background:rgba(245,158,11,.12)}
+      .bar.dock .steps .fix{border:1px solid rgba(253,230,138,.5);border-radius:999px;padding:2px 9px;background:rgba(245,158,11,.18);color:#fde68a;font-weight:700}
+      .bar.dock .dacts{display:flex;gap:6px;padding:7px 10px;border-top:1px solid rgba(255,255,255,.08);align-items:center}
+      .bar.dock .dacts button{font-size:11px;padding:4px 9px;white-space:nowrap}
+      .bar.dock .dacts input,.bar.dock .dacts button[data-act="checkpoint"]{display:none}
+      .bar.dock button[data-act="window"]{margin-left:auto;background:transparent;color:#a5b4fc;border-color:rgba(165,180,252,.35)}
+      .bar.dock .note{padding:0 10px 6px}
+      .bar.dock.min{width:auto;border-radius:999px}
+      .bar.dock.min .dhead{border-bottom:0;padding:4px 6px 4px 10px}
+      .bar.dock.min .steps,.bar.dock.min .dacts,.bar.dock.min .grip,.bar.dock.min .count,.bar.dock.min .stats .bad{display:none}
+      .bar.dock.ended .dhead{padding:6px 14px}
+      .bar.dock.ended .steps,.bar.dock.ended .dacts,.bar.dock.ended .stats{display:none}
+    </style><div class="highlight"><span></span></div><div class="pickbar" role="status" hidden><span class="dot" aria-hidden="true">⌖</span><span><b>${say.pickMode}</b> · <span class="hint"></span></span><span class="esc"><kbd>Esc</kbd> ${say.pickCancel}</span></div><div class="toast" role="status"><b></b><span></span></div>${
+      options.dock
+        ? `<div class="bar dock"><div class="dhead"><span class="grip" title="${say.move}" aria-label="${say.move}">⠿</span><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><span class="stats"><span class="ok"></span><span class="amb"></span><span class="bad"></span></span><button data-act="minimize" title="${say.minimize}" aria-label="${say.minimize}">–</button></div><ol class="steps"></ol><div class="dacts"><input placeholder="${say.checkpoint}" aria-label="${say.checkpoint}" maxlength="80"><button data-act="checkpoint">${say.checkpoint}</button><button data-act="pause">⏸ ${say.pause}</button><button data-act="undo">${say.undo}</button><button data-act="stop">${say.stop}</button><button data-act="window" title="${say.windowLabel}" aria-label="${say.windowLabel}">${say.window}</button></div><span class="note"></span></div>`
+        : `<div class="bar"><span class="grip" title="${say.move}" aria-label="${say.move}">⠿</span><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><input placeholder="${say.checkpoint}" aria-label="${say.checkpoint}" maxlength="80"><button data-act="checkpoint">${say.checkpoint}</button><button data-act="pause">⏸ ${say.pause}</button><button data-act="undo">${say.undo}</button><button data-act="stop">${say.stop}</button><button data-act="minimize" title="${say.minimize}" aria-label="${say.minimize}">–</button><span class="note"></span></div>`
+    }`;
     // GLISSER le bandeau : il suit le pointeur, puis se range dans le coin le plus proche.
     const grip = root.querySelector<HTMLElement>('.grip');
     grip?.addEventListener('pointerdown', (down) => {
@@ -2305,6 +2457,10 @@ export function installRecorder(
       } else if (act === 'stop') {
         send({ type: 'control', control: 'stop' });
         recorder.setStatus('STOPPED');
+      } else if (act === 'window') {
+        // « Fenêtre » / « Résoudre » : Node ouvre le cockpit (et y montre l'étape) ; rien n'est décidé ici.
+        const step = button?.getAttribute('data-step');
+        send({ type: 'control', control: 'window', ...(step ? { step } : {}) });
       }
     });
     rootElement.appendChild(host);

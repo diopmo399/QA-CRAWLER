@@ -51,13 +51,23 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   (et la qualité), **Aperçu de l'application**, **Détails de l'action** — deux puis une sur une
   fenêtre plus étroite (l'aperçu passe dans son onglet) · **Résumé du recording** en bas (actions,
   confirmées, ambiguës, échecs, durée, **Rejouer le parcours**, **Sauvegarder le flow**).
-- **Disposition** (`recording.panelLayout: full | compact`, bascule **▭ Compact / ▣ Complet** dans
-  la fenêtre, choix gardé d'une session à l'autre) :
+- **Disposition** (`recording.panelLayout: full | compact | docked`, bascule **▭ Compact / ▣ Complet**
+  dans la fenêtre, choix gardé d'une session à l'autre) :
   - **Complète** (cockpit) : les actions sont **groupées** par écran pendant l'enregistrement, puis par
     étape métier dans la revue. La recherche reconnue en direct s'affiche en **puce** dans la barre
     d'état (« recherche détectée : … → companyName CONTAINS », provisoire).
   - **Compacte** (mini-dock sombre, étroit) : état et chrono, la recherche détectée, les dernières
     actions et les ambiguïtés à résoudre tout de suite, Pause / Reprendre / Arrêter / Annuler.
+  - **Dock dans la page** (`docked`) : **une seule fenêtre Chromium pendant l'enregistrement**. Le
+    bandeau de l'application devient le mini-dock, collé au coin choisi (déplaçable, repliable en
+    pastille) : état et chrono, compteurs ✓ ⚠ ✕, les trois dernières actions avec leur statut en
+    direct, Pause / Annuler / Arrêter. Une action ambiguë y porte **Résoudre**, et **▣ Fenêtre** ouvre
+    le cockpit complet à la demande (le fermer rend le dock seul) ; la revue après l'arrêt ouvre la
+    fenêtre d'elle-même. Le dock vit dans le shadow root fermé du bandeau (jamais capturé, jamais
+    recouvert par l'application, réinjecté à chaque navigation, rien du réseau) ; Node lui pousse les
+    dernières actions et les compteurs, le dock ne décide de rien (ses boutons envoient les mêmes
+    commandes que la fenêtre). Les points de contrôle, les détails d'une action et l'aperçu restent
+    dans la fenêtre.
   - La revue après l'arrêt s'ouvre toujours en disposition complète.
 - **Revue en étapes métier** : au-dessus du détail, des **cartes numérotées** (Créer, Retrouver,
   Ouvrir…) avec leur statut, leur confiance, les actions enregistrées qu'elles regroupent et ce qui a
@@ -1108,7 +1118,7 @@ recording:
   overlay: true # le bandeau ● REC (minuteur, Pause, Annuler, Arrêter, notifications)
   panel: true # la fenêtre « QA-CRAWLER Recorder » (timeline, détails, ambiguïtés, revue, analyse)
   panelPreview: true # l'aperçu de l'application dans la fenêtre (image en mémoire, jamais écrite)
-  panelLayout: full # full (cockpit) | compact (mini-dock sombre) au démarrage ; bascule dans la fenêtre
+  panelLayout: full # full (cockpit) | compact (mini-dock dans sa fenêtre) | docked (mini-dock dans la page, une seule fenêtre)
   # flowsDirectory: flows # où « Sauvegarder » copie le flow (défaut : flows/ à côté des rapports)
   recordAfterAuthentication: true
   maxRawEvents: 5000

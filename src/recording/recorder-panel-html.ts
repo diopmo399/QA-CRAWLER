@@ -712,6 +712,7 @@ const SCRIPT = `
   };
   var KIND_ICON = { open: 'link', navigate: 'link', goto: 'link', click: 'cursor', fill: 'text', check: 'check', uncheck: 'check', choose: 'check', select: 'list', key: 'hash', drag: 'move', dragAndDrop: 'move', upload: 'clip', manual: 'hash', dialog: 'list' };
   var state = null, selected = null, choice = {}, dev = false, editing = false, tab = 'recording';
+  var focused = null, scrolledTo = null;
   // L'option de ligne choisie pour une correction (bound, key), par étape : gardée entre deux rendus.
   var rowChoice = {};
   // Le brouillon de la source de chaque saisie (revue) : gardé entre deux rendus de la fenêtre.
@@ -1303,7 +1304,10 @@ const SCRIPT = `
     var removed = state && next.summary.actions < state.summary.actions && next.phase !== 'REVIEW';
     state = next;
     if (selected && !state.actions.some(function (s) { return s.id === selected; })) selected = null;
+    // Ouverte depuis le dock pour une étape : elle est sélectionnée et amenée à l'écran, une fois.
+    if (state.focus && state.focus !== focused) { focused = state.focus; selected = state.focus; }
     render();
+    if (state.focus === focused && focused && !scrolledTo) { scrolledTo = focused; var row = document.querySelector('[data-step="' + focused + '"]'); if (row) row.scrollIntoView({ block: 'center' }); }
     if (added) { var last = state.actions[state.actions.length - 1]; if (last) announce(T.announceAdded + last.description); }
     if (removed) announce(T.announceUndo);
   };

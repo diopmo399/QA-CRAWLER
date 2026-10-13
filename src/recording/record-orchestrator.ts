@@ -106,7 +106,13 @@ export interface RecordRequest {
    * Ce que fait « l'humain » : par défaut, attendre qu'il arrête (bandeau, terminal,
    * fermeture). Les tests y jouent la démonstration avec Playwright.
    */
-  drive?: (session: { page: Page; recorder: HumanFlowRecorder; panel?: Page }) => Promise<void>;
+  drive?: (session: {
+    page: Page;
+    recorder: HumanFlowRecorder;
+    panel?: Page;
+    /** La fenêtre du recorder, quand elle existe (dock dans la page : ouverte à la demande). */
+    panelOf?: () => Page | undefined;
+  }) => Promise<void>;
   /**
    * LA REVUE après Stop, dans la fenêtre du recorder : rejouer, modifier, sauvegarder ; la fenêtre du
    * recorder reste ouverte jusqu'à « Fermer » (celle de l'application se ferme dès l'arrêt). La commande record l'active en
@@ -301,13 +307,16 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         const windowSize = config.browser.headless
           ? { viewport: { width: 1360, height: 900 } }
           : { viewport: null };
-        const panelPage = await browser.newIsolatedPage(windowSize);
+        // DOCK DANS LA PAGE (panelLayout: docked) : aucune fenêtre pendant l'enregistrement — le bandeau de
+        // la page est le mini-dock ; la fenêtre s'ouvre à la demande (« Fenêtre », « Résoudre ») et pour la revue.
+        const docked = config.recording.panelLayout === 'docked';
+        const panelPage = docked ? undefined : await browser.newIsolatedPage(windowSize);
         consoleUi = new RecordingConsole(
-          await RecorderPanel.open(panelPage, language),
+          panelPage ? await RecorderPanel.open(panelPage, language) : undefined,
           recorder,
           request.name,
           language,
-          // ⧉ Détacher l'aperçu : une autre fenêtre isolée du même navigateur.
+          // ⧉ Détacher l'aperçu, ou ouvrir la fenêtre à la demande : une autre fenêtre isolée du même navigateur.
           () => browser.newIsolatedPage(windowSize),
         );
         consoleUi.withPreview = config.recording.panelPreview;
@@ -322,7 +331,13 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     }
     detach = request.control?.(recorder);
     if (request.drive) {
-      await request.drive({ page, recorder, ...(consoleUi ? { panel: consoleUi.page } : {}) });
+      const ui = consoleUi;
+      await request.drive({
+        page,
+        recorder,
+        ...(ui?.page ? { panel: ui.page } : {}),
+        ...(ui ? { panelOf: () => ui.page } : {}),
+      });
       recorder.requestStop('api');
     }
     stopReason = await recorder.stopped;
@@ -913,7 +928,15 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     const driverFailure = await ui.runReview({
       result,
       directory,
-      ...(request.reviewDriver ? { until: () => request.reviewDriver?.({ panel: ui.page, recorder }) } : {}),
+      ...(request.reviewDriver
+        ? {
+            // La fenêtre existe quand la revue démarre (ouverte pour elle en mode docked).
+            until: () => {
+              const panel = ui.page;
+              return panel ? request.reviewDriver?.({ panel, recorder }) : undefined;
+            },
+          }
+        : {}),
       actions: {
         replay: async (onStep) => panelReplayOf(await runReplay(onStep), result, recorder, language),
         remove: async (stepId) => {
