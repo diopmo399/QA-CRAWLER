@@ -43,7 +43,9 @@ const ISSUE_CATEGORY: Record<IssueType, AnomalyCategory | undefined> = {
   CONTRACT: 'CONTRACT_FAILURE',
   ACCESSIBILITY: 'UI_FAILURE',
   AUTHORIZATION: 'AUTHORIZATION_FAILURE',
-  INVARIANT: 'AUTHORIZATION_FAILURE',
+  // Un invariant d'écran (« aucune erreur serveur », « un total jamais négatif »…) : un défaut fonctionnel.
+  // Les invariants d'ACCÈS (ISSUE-INV-…) sont des autorisations : voir issueCategory.
+  INVARIANT: 'FUNCTIONAL_FAILURE',
   WRITE_BLOCKED: undefined, // une décision de sécurité, pas un défaut de l'application
   UNEXPECTED_BEHAVIOR: 'FUNCTIONAL_FAILURE',
   PERFORMANCE: 'PERFORMANCE_REGRESSION',
@@ -250,6 +252,9 @@ function issueCategory(issue: Issue): { category: AnomalyCategory; confidence: n
     if (status >= 400) return { category: 'EXPECTED_VALIDATION', confidence: 0.55 };
     return { category: 'API_FAILURE', confidence: 0.4 };
   }
+  // Les invariants d'accès (« l'acteur user n'accède pas à /admin/** ») portent le préfixe ISSUE-INV- (orchestrateur).
+  if (issue.type === 'INVARIANT' && issue.id.startsWith('ISSUE-INV-'))
+    return { category: 'AUTHORIZATION_FAILURE', confidence: 0.75 };
   const category = ISSUE_CATEGORY[issue.type];
   return category ? { category, confidence: issue.type === 'UNEXPECTED_BEHAVIOR' ? 0.5 : 0.75 } : undefined;
 }

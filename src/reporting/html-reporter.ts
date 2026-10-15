@@ -763,8 +763,8 @@ function statesTable(states: StateReport[], href: (file: string) => string, t: R
         )
         .join('');
       return `<tr>
-        <td class="wrap"><b>${esc(displayName(state))}</b><br><span class="muted">${esc(state.id)}</span></td>
-        <td class="wrap">${esc(state.url)}<br><code>${esc(state.route)}</code></td>
+        <td class="wrap"><b>${esc(displayName(state))}</b><br><span class="muted brk">${esc(state.id)}</span></td>
+        <td class="wrap"><span class="brk">${esc(state.url)}</span><br><code>${esc(state.route)}</code></td>
         <td>${state.depth}</td>
         <td>${actions}${details ? `<details><summary>${esc(t.actionCount(state.actionsDetail.length))}</summary><table><thead><tr><th>${c.class}</th><th>${c.type}</th><th>${c.category}</th><th>${c.label}</th><th>${c.locator}</th><th>${c.reason}</th></tr></thead><tbody>${details}</tbody></table></details>` : ''}</td>
         <td>${state.forms.filter((form) => form.index >= 0).length}</td>

@@ -29,7 +29,7 @@ const TEXTS = {
     path: { FAST: 'fast path (nothing abnormal: the deep analysis was not needed)', DEEP: 'deep path' },
     anomalies: 'Anomalies',
     none: 'No anomaly.',
-    columns: ['Category', 'Severity', 'Where', 'Symptom', 'Cause', 'Regression', 'Confidence', 'Source'],
+    columns: ['Category', 'Where', 'Symptom', 'Cause', 'Signals'],
     probable: 'probable',
     confirmed: 'confirmed',
     advisory: 'Advisor (never a decision)',
@@ -63,7 +63,7 @@ const TEXTS = {
     },
     anomalies: 'Anomalies',
     none: 'Aucune anomalie.',
-    columns: ['Catégorie', 'Gravité', 'Où', 'Symptôme', 'Cause', 'Régression', 'Confiance', 'Source'],
+    columns: ['Catégorie', 'Où', 'Symptôme', 'Cause', 'Indices'],
     probable: 'probable',
     confirmed: 'confirmée',
     advisory: 'Conseiller (jamais une décision)',
@@ -139,7 +139,16 @@ export function platformSection(result: ExplorationResult, language: ReportLangu
             const advisory = anomaly.advisory
               ? `<details><summary class="muted">${esc(t.advisory)}: ${esc(anomaly.advisory.status)}</summary><p class="muted">${esc(anomaly.advisory.text ?? anomaly.advisory.reason ?? '')}</p></details>`
               : '';
-            return `<tr><td>${classPill(anomaly.category)}<br><span class="muted">${esc(anomaly.id)}</span></td><td>${classPill(anomaly.severity)}</td><td>${esc(where)}</td><td>${esc(anomaly.symptom)}<details><summary class="muted">evidence (${String(anomaly.evidence.length)})</summary>${list(anomaly.evidence)}</details>${advisory}</td><td>${cause}</td><td>${anomaly.regression ? classPill(anomaly.regression) : ''}</td><td>${pct(anomaly.confidence)}</td><td>${classPill(anomaly.source)}</td></tr>`;
+            // Cinq colonnes : la gravité rejoint la catégorie, régression / confiance / source deviennent des
+            // indices ; l'adresse se coupe (span.brk) — le tableau tient dans la carte sans défilement.
+            const signals = [
+              anomaly.regression ? classPill(anomaly.regression) : '',
+              classPill(anomaly.source),
+              pct(anomaly.confidence),
+            ]
+              .filter(Boolean)
+              .join(' ');
+            return `<tr><td>${classPill(anomaly.category)} ${classPill(anomaly.severity)}<br><span class="muted">${esc(anomaly.id)}</span></td><td class="wrap"><span class="brk">${esc(where)}</span></td><td class="wrap">${esc(anomaly.symptom)}<details><summary class="muted">evidence (${String(anomaly.evidence.length)})</summary>${list(anomaly.evidence)}</details>${advisory}</td><td class="wrap">${cause}</td><td>${signals}</td></tr>`;
           })
           .join('')}</tbody></table>`;
 

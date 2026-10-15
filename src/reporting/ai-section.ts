@@ -51,6 +51,15 @@ const TEXTS = {
     knowledge: 'Knowledge impact',
     consistency: 'Counter check',
     withoutCall: 'Decisions without a call',
+    columns: ['Decision', 'Proposal', 'Checks', 'Outcome'],
+    labels: {
+      response: 'response',
+      validation: 'validation',
+      safety: 'safety',
+      shadow: 'shadow',
+      fallback: 'fallback',
+      runtime: 'runtime',
+    },
   },
   fr: {
     title: 'Intelligence IA',
@@ -100,6 +109,15 @@ const TEXTS = {
     knowledge: 'Apport à la connaissance',
     consistency: 'Contrôle des compteurs',
     withoutCall: 'Décisions sans appel',
+    columns: ['Décision', 'Proposition', 'Contrôles', 'Résultat'],
+    labels: {
+      response: 'réponse',
+      validation: 'validation',
+      safety: 'sécurité',
+      shadow: 'shadow',
+      fallback: 'repli',
+      runtime: 'runtime',
+    },
   },
 } as const;
 
@@ -114,15 +132,45 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
   const t = TEXTS[language];
   const row = (label: string, value: string | number | undefined): string =>
     value === undefined ? '' : `<tr><th>${esc(label)}</th><td class="wrap">${esc(String(value))}</td></tr>`;
+  // Quatre colonnes lisibles (décision, proposition, contrôles, résultat) ; le contexte fonctionnel, long,
+  // sur sa propre ligne en pleine largeur : le tableau tient dans la carte, sans défilement horizontal.
+  const line = (label: string, value: string): string =>
+    `<div><span class="muted">${esc(label)}</span> ${value}</div>`;
   const decisions = ai.decisions
-    .map(
-      (decision) =>
-        `<tr><td>${esc(decision.id)}</td><td>${esc(decision.context)}</td><td>${esc(decision.trigger)}</td><td>${esc(modelCell(decision))}</td><td class="wrap">${esc(
-          decision.proposal?.action
-            ? `${decision.proposal.selectedActionId ?? ''} ${decision.proposal.action}`
-            : (decision.proposal?.status ?? '—'),
-        )}${decision.proposal?.hypothesis ? `<br><span class="muted">${esc(`${decision.proposal.hypothesisType ?? 'hypothesis'}: ${decision.proposal.hypothesis}`)}</span>` : ''}${decision.proposal?.missingPrecondition ? `<br><span class="muted">${esc(`missing precondition: ${decision.proposal.missingPrecondition}`)}</span>` : ''}</td><td>${esc(decision.lifecycle.response)}</td><td>${esc(decision.validation.rejection ?? decision.validation.status)}</td><td>${esc(decision.safety ?? '—')}</td><td>${esc(decision.lifecycle.shadowResult ?? '—')}</td><td><b>${esc(decision.lifecycle.terminal)}</b>${decision.lifecycle.notExecutedReason ? `<br><span class="muted">${esc(decision.lifecycle.notExecutedReason)}</span>` : ''}</td><td>${esc(decision.lifecycle.fallbackReason ?? '—')}</td><td>${esc(decision.runtimeResult ?? (decision.lifecycle.runtime === 'NOT_APPLICABLE' ? '—' : decision.lifecycle.runtime))}${decision.lifecycle.goalProgress?.after !== undefined ? `<br><span class="muted">${esc(`${decision.lifecycle.goalProgress.goal} ${String(decision.lifecycle.goalProgress.before)} → ${String(decision.lifecycle.goalProgress.after)} (${decision.lifecycle.goalProgress.impact ?? ''})`)}</span>` : ''}</td><td class="wrap">${esc(functionalCell(decision))}</td></tr>`,
-    )
+    .map((decision) => {
+      const proposal = `${esc(
+        decision.proposal?.action
+          ? `${decision.proposal.selectedActionId ?? ''} ${decision.proposal.action}`
+          : (decision.proposal?.status ?? '—'),
+      )}${decision.proposal?.hypothesis ? `<br><span class="muted">${esc(`${decision.proposal.hypothesisType ?? 'hypothesis'}: ${decision.proposal.hypothesis}`)}</span>` : ''}${decision.proposal?.missingPrecondition ? `<br><span class="muted">${esc(`missing precondition: ${decision.proposal.missingPrecondition}`)}</span>` : ''}`;
+      const checks = [
+        line(t.labels.response, esc(decision.lifecycle.response)),
+        line(t.labels.validation, esc(decision.validation.rejection ?? decision.validation.status)),
+        line(t.labels.safety, esc(decision.safety ?? '—')),
+        ...(decision.lifecycle.shadowResult
+          ? [line(t.labels.shadow, esc(decision.lifecycle.shadowResult))]
+          : []),
+      ].join('');
+      const runtime =
+        decision.runtimeResult ??
+        (decision.lifecycle.runtime === 'NOT_APPLICABLE' ? undefined : decision.lifecycle.runtime);
+      const outcome = [
+        `<b>${esc(decision.lifecycle.terminal)}</b>${decision.lifecycle.notExecutedReason ? ` <span class="muted">${esc(decision.lifecycle.notExecutedReason)}</span>` : ''}`,
+        ...(decision.lifecycle.fallbackReason
+          ? [line(t.labels.fallback, esc(decision.lifecycle.fallbackReason))]
+          : []),
+        ...(runtime ? [line(t.labels.runtime, esc(runtime))] : []),
+        ...(decision.lifecycle.goalProgress?.after !== undefined
+          ? [
+              `<div class="muted">${esc(`${decision.lifecycle.goalProgress.goal} ${String(decision.lifecycle.goalProgress.before)} → ${String(decision.lifecycle.goalProgress.after)} (${decision.lifecycle.goalProgress.impact ?? ''})`)}</div>`,
+            ]
+          : []),
+      ].join('');
+      const context = decision.functionalContext ? functionalCell(decision) : '';
+      return `<tr${context ? ' class="has-ctx"' : ''}><td><b>${esc(decision.id)}</b><div class="muted">${esc(decision.context)} · ${esc(decision.trigger)}</div><div class="muted">${esc(modelCell(decision))}</div></td><td class="wrap">${proposal}</td><td>${checks}</td><td class="wrap">${outcome}</td></tr>${
+        context ? `<tr class="ctx"><td colspan="4" class="wrap muted">↳ ${esc(context)}</td></tr>` : ''
+      }`;
+    })
     .join('');
   return `<section>
     <h2>${esc(t.title)}</h2>
@@ -194,7 +242,7 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
     ${lifecycleHtml(ai, t)}
     <h3>${esc(t.decisions)}</h3>${
       ai.decisions.length > 0
-        ? `<table><thead><tr><th>id</th><th>context</th><th>trigger</th><th>complexity / model / effort</th><th>proposal</th><th>response</th><th>validation</th><th>safety</th><th>shadow</th><th>result</th><th>fallback</th><th>runtime</th><th>functional context</th></tr></thead><tbody>${decisions}</tbody></table>`
+        ? `<table class="ai-decisions"><thead><tr>${t.columns.map((column) => `<th>${esc(column)}</th>`).join('')}</tr></thead><tbody>${decisions}</tbody></table>`
         : `<p class="muted">${t.none}</p>`
     }
   </section>`;
