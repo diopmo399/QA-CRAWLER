@@ -4,6 +4,8 @@ import { IntelligenceGateway, type AiEventRecord } from './gateway.js';
 import type { IntelligenceMode } from './model.js';
 import type { IntelligenceProvider } from './provider.js';
 import type { CopilotSdkModule } from './copilot/sdk.js';
+import type { AnthropicSdkModule } from './anthropic/sdk.js';
+import { AnthropicIntelligenceProvider } from './providers/anthropic-provider.js';
 import { CopilotIntelligenceProvider } from './providers/copilot-provider.js';
 import { DeterministicIntelligenceProvider } from './providers/deterministic-provider.js';
 import { IntelligenceContextSanitizer } from './sanitizer.js';
@@ -53,21 +55,51 @@ export function createIntelligenceGateway(
     providerId,
     createProvider: () =>
       options.provider ??
-      (config.provider === 'deterministic'
-        ? new DeterministicIntelligenceProvider()
-        : createCopilotProvider(config, {
-            env: options.env,
-            sanitize: (value) => sanitizer.sanitizeValue(value),
-            ...(options.cwd ? { cwd: options.cwd } : {}),
-          })),
+      createConfiguredProvider(config, {
+        env: options.env,
+        sanitize: (value) => sanitizer.sanitizeValue(value),
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+      }),
     triggers: config.triggers,
     thresholds: config.thresholds,
     budgets: config.budgets,
-    timeoutMs: config.copilot.timeoutMs,
-    maxRetries: config.copilot.maxRetries,
+    timeoutMs: config.provider === 'anthropic' ? config.anthropic.timeoutMs : config.copilot.timeoutMs,
+    maxRetries: config.provider === 'anthropic' ? config.anthropic.maxRetries : config.copilot.maxRetries,
     failOnUnavailable: config.failOnUnavailable,
     sanitizer,
     ...(options.emit ? { emit: options.emit } : {}),
+  });
+}
+
+/** Le fournisseur de `ai.provider` (copilot, anthropic ou deterministic). */
+export function createConfiguredProvider(
+  config: AiConfig,
+  options: { env: NodeJS.ProcessEnv; sanitize: (value: unknown) => unknown; cwd?: string },
+): IntelligenceProvider {
+  if (config.provider === 'deterministic') return new DeterministicIntelligenceProvider();
+  if (config.provider === 'anthropic') return createAnthropicProvider(config, { env: options.env });
+  return createCopilotProvider(config, options);
+}
+
+/**
+ * Le fournisseur Anthropic depuis la configuration. `loadSdk` remplace le chargement du SDK (tests,
+ * intégrations) — le reste est le chemin de production.
+ */
+export function createAnthropicProvider(
+  config: AiConfig,
+  options: { env: NodeJS.ProcessEnv; loadSdk?: () => Promise<AnthropicSdkModule> },
+): AnthropicIntelligenceProvider {
+  const { anthropic } = config;
+  return new AnthropicIntelligenceProvider({
+    ...(anthropic.model ? { model: anthropic.model } : {}),
+    effort: anthropic.effort,
+    maxTokens: anthropic.maxTokens,
+    timeoutMs: anthropic.timeoutMs,
+    serverSideFallback: anthropic.serverSideFallback,
+    ...(anthropic.apiKeyEnv ? { apiKeyEnv: anthropic.apiKeyEnv } : {}),
+    ...(anthropic.baseUrl ? { baseUrl: anthropic.baseUrl } : {}),
+    env: options.env,
+    ...(options.loadSdk ? { loadSdk: options.loadSdk } : {}),
   });
 }
 

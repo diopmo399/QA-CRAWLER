@@ -41,8 +41,7 @@ import { PixelVisualComparator } from './visual/pixel-visual-comparator.js';
 import { rememberRun } from './platform/flow-memory.js';
 import { adviseOnAmbiguities } from './platform/ambiguity-advisor.js';
 import { GitHubPullRequestReporter, renderPullRequestComment } from './platform/pull-request-reporter.js';
-import { createCopilotProvider, secretValuesOf } from './ai/factory.js';
-import { DeterministicIntelligenceProvider } from './ai/providers/deterministic-provider.js';
+import { createConfiguredProvider, secretValuesOf } from './ai/factory.js';
 import { IntelligenceContextSanitizer } from './ai/sanitizer.js';
 import type { IntelligenceProvider } from './ai/provider.js';
 import { analyzeActors } from './platform/actor-analysis.js';
@@ -758,13 +757,11 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   const advisorEnabled = config.platform.advisor.enabled && effectiveMode(config.ai) !== 'OFF';
   const advisorProvider: IntelligenceProvider | undefined = advisorEnabled
     ? (options.intelligenceProvider ??
-      (config.ai.provider === 'deterministic'
-        ? new DeterministicIntelligenceProvider()
-        : createCopilotProvider(config.ai, {
-            env,
-            sanitize: (value) =>
-              new IntelligenceContextSanitizer({ secretValues: secretValuesOf(env) }).sanitizeValue(value),
-          })))
+      createConfiguredProvider(config.ai, {
+        env,
+        sanitize: (value) =>
+          new IntelligenceContextSanitizer({ secretValues: secretValuesOf(env) }).sanitizeValue(value),
+      }))
     : undefined;
   const advisor = await adviseOnAmbiguities(workflowAnalysis.anomalies, advisorProvider, {
     enabled: advisorEnabled,

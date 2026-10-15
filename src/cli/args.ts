@@ -183,8 +183,8 @@ export function parseCliArgs(argv: string[]): CliArgs {
   if (intelligence !== undefined && !(INTELLIGENCE_CHOICES as readonly string[]).includes(intelligence))
     throw new UsageError(`--intelligence must be one of ${INTELLIGENCE_CHOICES.join(', ')}.`);
   const aiProvider = values['ai-provider']?.toLowerCase();
-  if (aiProvider !== undefined && !['copilot', 'deterministic'].includes(aiProvider))
-    throw new UsageError('--ai-provider must be copilot or deterministic.');
+  if (aiProvider !== undefined && !['copilot', 'anthropic', 'deterministic'].includes(aiProvider))
+    throw new UsageError('--ai-provider must be copilot, anthropic or deterministic.');
   const aiModelSelection = values['ai-model-selection']?.toLowerCase();
   if (aiModelSelection !== undefined && !['auto', 'explicit', 'adaptive'].includes(aiModelSelection))
     throw new UsageError('--ai-model-selection must be auto, explicit or adaptive.');
