@@ -25,6 +25,10 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   utilise les mêmes cartes. Grand écran (≥ 1400 px) : la colonne du détail grandit avec l'écran (34 %, de 440 à
   760 px), une action du parcours tient sur une ligne, le titre « Enregistrement terminé » en double disparaît ;
   Valider n'est jamais coupé ; un replay réussi liste ses coches sur une ligne.
+- **Ligne liée à une donnée du run : le lien répété n'est plus une ambiguïté.** Le contrôle de corrélation compte la cible
+  dans la ligne qui porte la donnée (et non tous les liens identiques de l'écran) : une ligne `~${testData:clé}` trouvée
+  seule passe ; plusieurs lignes qui portent la donnée restent refusées (rien n'est exécuté, quel que soit `rowPick`).
+  Test d'intégration `table-row`.
 - **Ligne de tableau : liaison plus robuste et liaison manuelle.** Une cellule qui contient la donnée du run (accents, casse,
   espaces, suffixe ignorés) est liée avec un critère « contient » ; sinon la fenêtre le dit et propose **Lier une colonne à
   une donnée du run** (colonnes de la ligne et données du run avec leur valeur ; `RowBinding`, commande `correct-apply`

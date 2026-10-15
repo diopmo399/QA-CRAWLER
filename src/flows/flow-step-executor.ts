@@ -153,7 +153,18 @@ export class FlowStepExecutor {
    * Une cible corrélée (le résultat qui porte le nom créé plus haut) doit en désigner un seul.
    */
   async visibleMatches(page: Page, target: FlowTarget): Promise<number> {
-    const base = toLocator(page, {
+    let scope: Page | Locator = page;
+    // Une cible DANS UNE LIGNE se compte dans cette ligne : plusieurs lignes portant la donnée = ambiguë,
+    // quel que soit rowPick (une corrélation ne choisit jamais « la première »).
+    if (target.row !== undefined) {
+      rowTokens += 1;
+      const token = `row-${String(rowTokens)}`;
+      const scan = await scanTableRows(page, target.row, 'unique', token).catch(() => undefined);
+      if (scan?.status === 'AMBIGUOUS') return scan.matches;
+      if (scan?.status !== 'FOUND') return 0;
+      scope = (scan.frame ?? page).locator(`[${ROW_ATTRIBUTE}="${scan.token}"]`);
+    }
+    const base = toLocator(scope, {
       strategy: target.strategy,
       ...(target.role !== undefined ? { role: target.role } : {}),
       ...(target.name !== undefined ? { name: target.name } : {}),
