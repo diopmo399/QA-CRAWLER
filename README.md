@@ -325,12 +325,21 @@ npm run qa -- scenarios/smoke.yaml --base-url http://localhost:4200
 Essai sur les applications de démo fournies :
 
 ```bash
-npm run demo:server                        # terminal 1 : back-office sur :4174, site piège sur :4173
+npm run demo:server                        # terminal 1 : back-office sur :4174, site piège sur :4173, Orbit Desk sur :4180
 npm run qa -- scenarios/demo.yaml          # terminal 2 : découvre les flows du back-office
 npm run qa -- scenarios/demo-traps.yaml    #              pièges (404, 500, erreurs JS, boucles…)
+npm run qa -- scenarios/demo-orbit.yaml    #              Orbit Desk, back-office de demandes (rapport en français)
 QA_DEMO_PASSWORD=demo npm run qa -- scenarios/demo-flows.yaml   # flows imposés
 open reports/overview.html reports/index.html reports/flow-graph.html
 ```
+
+**Orbit Desk** (`tests/fixtures/orbit-desk-app.ts`) est un back-office de demandes moderne et fictif :
+tableau de bord, liste des demandes, création (POST → 201 + `Location`, référence propre à chaque
+création), dossiers avec des actions qui modifient (« M'assigner le dossier ») ou détruisent
+(« Supprimer »), et un écran Rapports en panne (`GET /api/statistiques` → 500). La mission
+`scenarios/demo-orbit.yaml` y fait passer deux flows, détecte la panne, bloque les écritures et produit
+un rapport, un Gherkin et des tests Playwright en français. Avec le conseiller IA :
+`npm run qa -- scenarios/demo-orbit.yaml --intelligence hybrid --ai-provider copilot`.
 
 Exemple de résultat sur le back-office de démo. L'explorateur a trouvé seul la structure, y compris les trois étapes d'un assistant qui ne change jamais d'URL :
 

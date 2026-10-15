@@ -6,6 +6,13 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Démo Orbit Desk** (`tests/fixtures/orbit-desk-app.ts`, `scenarios/demo-orbit.yaml`, `npm run
+demo:server` sur le port 4180) : un back-office de demandes moderne et fictif pour les démonstrations.
+  Création réelle (POST → 201 + `Location`, référence propre à chaque création), liste par session,
+  actions qui modifient ou détruisent, écran Rapports en panne (HTTP 500). La mission livrée produit un
+  rapport, un Gherkin et des tests Playwright en français, avec des données de test générées (`testData.
+defaults`). Test d'intégration : flows passés, panne détectée, écritures bloquées, aucune création.
+
 - **Correction manager** (`src/recording/target-correction.ts`, fenêtre du recorder, script de capture) :
   corriger la cible d'une action **dans le navigateur**. Mode sélection dans la page (bandeau, élément
   survolé encadré avec rôle · nom · test id, clic jamais transmis à l'application, Échap annule) ; dans la

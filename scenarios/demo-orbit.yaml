@@ -1,0 +1,53 @@
+# Mission on Orbit Desk, the bundled requests back-office (fictitious data).
+#   npm run demo:server                     # terminal 1 (Orbit Desk on port 4180)
+#   npm run qa -- scenarios/demo-orbit.yaml # terminal 2
+# With the AI advisor (GitHub Copilot):
+#   npm run qa -- scenarios/demo-orbit.yaml --intelligence hybrid --ai-provider copilot
+# What to expect: two imposed flows pass, the Reports screen fails with an HTTP 500
+# (GET /api/statistiques), "Supprimer" and "M'assigner le dossier" are blocked by the
+# safety policy, and the report, the Gherkin and the Playwright tests are in French.
+mission:
+  name: orbit-desk
+  description: Exploration autonome d'Orbit Desk, back-office de demandes
+
+target:
+  baseUrl: http://localhost:4180
+  startAt: /
+
+browser:
+  viewport: { width: 1366, height: 900 }
+
+exploration:
+  maxStates: 25
+  maxActions: 60
+  maxDurationMinutes: 5
+  actionTimeoutMs: 4000
+  settleTimeMs: 250
+  autonomous: true
+
+flows:
+  - name: consulter-les-rapports
+    description: Depuis le tableau de bord, atteindre les rapports (le chemin n'est pas décrit)
+    startAt: /
+    thenExplore: true
+    steps:
+      - expect: { text: Dernières demandes }
+  - name: ouvrir-un-dossier
+    description: Ouvrir le premier dossier de la liste
+    startAt: /demandes
+    steps:
+      - click: { role: link, name: Ouvrir le dossier →, nth: 0 }
+      - expect: { text: Dossier DEM- }
+
+report:
+  language: fr
+
+testData:
+  defaults: { firstName: Ousmane, lastName: Faye, city: Dakar, country: Sénégal }
+
+platform:
+  generatedTests: { enabled: true }
+
+safety:
+  allow: [navigation, tabs, menus, details, pagination, search, forms, other]
+  block: [delete, payment, send, logout, irreversible, sensitive-data, external-navigation, form-submit]
