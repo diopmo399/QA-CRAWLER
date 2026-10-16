@@ -107,6 +107,11 @@ USER ACTION → RECORDER → ACTION VALIDATION → RECORDED FLOW → REPLAY → 
   nouveau changement), avec le cadre de son élément s'il était encore visible — mesuré sans rien
   afficher dans l'application. Le titre dit « Écran à l'étape _n_ ». Ces images restent **en mémoire
   seulement** (jamais écrites, jamais journalisées), 60 au plus (les plus anciennes s'effacent).
+  Pour un **clic**, l'aperçu montre d'abord l'écran **avant le clic**, le bouton encadré là où il
+  était au moment de l'appui ; **Avant le clic / Après** passe d'une image à l'autre. Cette image est
+  la dernière prise avant l'appui ; le cadre n'est posé que si la page n'avait pas défilé et que la
+  fenêtre avait la même taille (sinon, seule l'image d'après est proposée). Une image de la page est
+  prise dès l'ouverture de l'enregistrement : le premier clic a lui aussi son écran d'avant.
   **Détacher** ouvre l'aperçu dans sa propre fenêtre (**Plein écran** possible, par exemple
   sur un second écran) : la fenêtre principale garde le parcours, l'inspecteur et les commandes.
   **Rattacher** (ou fermer la fenêtre de l'aperçu) le

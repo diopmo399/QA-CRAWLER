@@ -1379,9 +1379,22 @@ export function installRecorder(
     const busy = Array.from(
       document.querySelectorAll('[aria-busy="true"], mat-progress-spinner, mat-spinner, .spinner, .loading'),
     ).some(visible);
+    // OÙ ÉTAIT L'ÉLÉMENT au début du geste (géométrie seulement) : l'image « avant le clic » de la revue.
+    const where = el.getBoundingClientRect();
     return {
       route: location.pathname,
       title: clean(document.title, 80),
+      box: {
+        x: where.left,
+        y: where.top,
+        width: where.width,
+        height: where.height,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        viewWidth: window.innerWidth,
+        viewHeight: window.innerHeight,
+        at: Date.now(),
+      },
       ...(dialogName(ownDialog ?? openDialog) ? { dialog: dialogName(ownDialog ?? openDialog) } : {}),
       headings,
       cssCount,

@@ -705,6 +705,21 @@ export class HumanFlowRecorder {
    * L'IMAGE D'UNE ÉTAPE (revue) : l'écran juste après l'action, et le cadre de son élément s'il est
    * encore visible — mesuré sans rien montrer dans l'application. En mémoire seulement.
    */
+  /**
+   * OÙ ÉTAIT L'ÉLÉMENT D'UN CLIC au moment de l'appui (contexte pré-action de ses événements bruts) et
+   * son nom : la revue l'encadre sur l'image prise avant le clic.
+   */
+  clickBox(actionId: string): { box: NonNullable<PreActionContext['box']>; label: string } | undefined {
+    const action = this.timeline.actions.find((entry) => entry.id === actionId);
+    if (!action) return undefined;
+    const box = this.session.rawEvents.find(
+      (event) => action.rawEventIds.includes(event.id) && event.pre?.box,
+    )?.pre?.box;
+    if (!box) return undefined;
+    const label = action.technical.label ?? action.technical.name ?? action.technical.text ?? action.kind;
+    return { box, label };
+  }
+
   async stepShot(actionId: string): Promise<StepShot | undefined> {
     const action = this.timeline.actions.find((entry) => entry.id === actionId);
     const page = this.correctionPage;
@@ -738,10 +753,14 @@ export class HumanFlowRecorder {
    * L'APERÇU de l'application pour la fenêtre du recorder : une image de la page (sans le bandeau),
    * en mémoire seulement — jamais écrite, jamais journalisée.
    */
-  async preview(): Promise<{ image: string; url: string; width: number; height: number } | undefined> {
+  async preview(): Promise<ScreenShot | undefined> {
     const page = this.correctionPage;
     if (!page || page.isClosed()) return undefined;
     try {
+      // Le défilement au moment de l'image : un cadre mesuré ailleurs ne s'y pose que s'il est le même.
+      const scroll = await page
+        .evaluate(() => ({ x: window.scrollX, y: window.scrollY }))
+        .catch(() => ({ x: 0, y: 0 }));
       // AUCUN EFFET VISIBLE dans l'application : ni feuille de style injectée (le bandeau masqué puis
       // réaffiché faisait « flasher » l'écran), ni émulation d'écran (le `clip` de page.screenshot),
       // ni animation figée, ni curseur masqué.
@@ -753,6 +772,9 @@ export class HumanFlowRecorder {
         url: redactUrl(page.url()),
         width: size.width,
         height: size.height,
+        scrollX: Math.round(scroll.x),
+        scrollY: Math.round(scroll.y),
+        at: Date.now(),
       };
     } catch {
       return undefined;
@@ -1549,6 +1571,21 @@ function rowCellsOf(raw: unknown): { rowCells?: { column: string; value: string 
   return entries.length > 0 ? { rowCells: entries } : {};
 }
 
+/** La position de l'élément au début du geste : des nombres finis, bornés (jamais autre chose). */
+function boxOf(raw: Record<string, unknown>): { box?: PreActionContext['box'] } {
+  const keys = ['x', 'y', 'width', 'height', 'scrollX', 'scrollY', 'viewWidth', 'viewHeight', 'at'] as const;
+  const values = keys.map((key) => raw[key]);
+  if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) return {};
+  const [x, y, width, height, scrollX, scrollY, viewWidth, viewHeight, at] = (values as number[]).map(
+    (value, index) => (index === 8 ? value : Math.max(-100_000, Math.min(100_000, Math.round(value)))),
+  );
+  return {
+    box: { x, y, width, height, scrollX, scrollY, viewWidth, viewHeight, at } as NonNullable<
+      PreActionContext['box']
+    >,
+  };
+}
+
 function preOf(raw: Record<string, unknown>): PreActionContext {
   const str = (value: unknown, max: number): string =>
     typeof value === 'string' ? redactText(text(value, max)) : '';
@@ -1594,6 +1631,7 @@ function preOf(raw: Record<string, unknown>): PreActionContext {
       ? { capturedAt: raw.capturedAt }
       : {}),
     ...(typeof raw.captureId === 'string' ? { captureId: text(raw.captureId, 40) } : {}),
+    ...(isObject(raw.box) ? boxOf(raw.box) : {}),
     ...(isObject(raw.target)
       ? {
           target: {
@@ -2084,12 +2122,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * instant, à chaque aperçu. Sans clip ni capture au-delà de l'écran, rien n'est émulé. Repli sur
  * page.screenshot (sans style injecté) si le protocole n'est pas disponible.
  */
-/** L'image d'une étape : la page juste après l'action et, s'il est visible, le cadre de son élément. */
-export interface StepShot {
+/** Une image de la page de l'application (en mémoire seulement), avec son défilement et son heure. */
+export interface ScreenShot {
   image: string;
   url: string;
   width: number;
   height: number;
+  scrollX: number;
+  scrollY: number;
+  at: number;
+}
+
+/** L'image d'une étape : la page (après l'action, ou avant un clic) et, s'il est visible, le cadre de son élément. */
+export interface StepShot extends ScreenShot {
   rect?: { x: number; y: number; width: number; height: number };
   label?: string;
 }

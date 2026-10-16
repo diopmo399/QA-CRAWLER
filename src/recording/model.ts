@@ -110,8 +110,26 @@ export interface PreActionContext {
   /** Les candidats figés AVANT l'action ; la cible originale y est toujours (T1). */
   candidates?: PreActionCandidate[];
   originalCandidateId?: string;
+  /**
+   * OÙ ÉTAIT L'ÉLÉMENT au début du geste (géométrie seulement, en pixels de la fenêtre) : la revue
+   * encadre le bouton sur l'image prise avant le clic, si la page n'a pas défilé entre-temps.
+   */
+  box?: PreActionBox;
   /** Glisser-déposer : les zones de dépôt visibles au départ (D1 = la zone d'origine). */
   dropZones?: PreActionDropZone[];
+}
+
+export interface PreActionBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scrollX: number;
+  scrollY: number;
+  viewWidth: number;
+  viewHeight: number;
+  /** L'heure de l'appui (horloge de la page). */
+  at: number;
 }
 
 export interface PreActionDropZone {

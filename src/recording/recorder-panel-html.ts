@@ -370,11 +370,16 @@ details>summary:hover{color:var(--fg)}
 .viewport .hl{position:absolute;border:2px solid var(--accent);border-radius:5px;box-shadow:0 0 0 3px rgba(43,80,216,.15);pointer-events:none}
 .viewport .hl span{position:absolute;left:-2px;top:calc(100% + 4px);background:var(--accent);color:#FFFFFF;font:500 11px/1.5 var(--sans);padding:1px 7px;border-radius:5px;white-space:nowrap}
 .viewport .hl span.above{top:auto;bottom:calc(100% + 4px)}
+.viewport .hl span.end{left:auto;right:-2px}
 .viewport .placeholder{padding:48px 20px;text-align:center;color:var(--muted);margin:0;font-size:13px}
 .selnote{display:flex;gap:8px;align-items:center;margin:12px 0 0;font-size:12.5px;color:var(--ok-text)}
 .selnote svg{width:15px;height:15px;flex:none}
 .selnote.warn{color:var(--warn-text)}
 .shotnote{margin:10px 0 0;font-size:12px;color:var(--muted)}
+.shotview{display:inline-flex;gap:2px;padding:2px;margin:0 0 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
+.shotview button{min-height:28px;padding:3px 10px;border:0;border-radius:6px;background:transparent;color:var(--fg-2);font:500 12px/1 var(--sans)}
+.shotview button:hover:not(:disabled){background:var(--chip);color:var(--fg)}
+.shotview button[aria-pressed=true]{background:var(--surface);color:var(--fg);box-shadow:0 0 0 1px var(--line-strong)}
 .shotnote.warn{color:var(--warn-text)}
 .pickbadge{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:500;color:var(--accent-text)}
 .pickbadge::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
@@ -770,7 +775,7 @@ const SCRIPT = `
       rRead: function (v) { return 'Lu : ' + v; }, rCompare: 'Comparaison', rEquals: 'égale', rContainsS: 'contient',
       netTitle: 'Requêtes reliées aux actions', netNone: 'Aucune requête métier reliée pour l’instant.', netLive: 'En direct (provisoire)',
       qualityTitle: 'Qualité du recording',
-      shotTitle: function (n) { return 'Écran à l’étape ' + n; }, shotNote: 'Image prise juste après l’action, pendant l’enregistrement.', shotMissing: 'Aucune image pour cette étape : l’aperçu montre la dernière prise.',
+      shotTitle: function (n) { return 'Écran à l’étape ' + n; }, shotNote: 'Image prise juste après l’action, pendant l’enregistrement.', shotMissing: 'Aucune image pour cette étape : l’aperçu montre la dernière prise.', shotViewLabel: 'Moment de l’image', shotBefore: 'Avant le clic', shotAfter: 'Après', shotBeforeNote: 'Image prise juste avant le clic : l’élément cliqué est encadré là où il était.', shotOnlyBefore: 'Image prise juste avant le clic (aucune image après l’action).',
       subtitle: 'Enregistrement de parcours', devMode: 'Mode développeur', active: 'Actif', inactive: 'En pause',
       tabPreview: 'Aperçu', previewTitle: 'Aperçu en direct', refresh: 'Actualiser', noPreview: "L'aperçu de la page apparaît après la première action.",
       selected: 'Élément sélectionné dans la page', isHighlighted: function (l) { return '« ' + l + ' » est surligné'; }, notFoundShort: 'Introuvable sur la page actuelle',
@@ -819,7 +824,7 @@ const SCRIPT = `
       rRead: function (v) { return 'Read: ' + v; }, rCompare: 'Comparison', rEquals: 'equals', rContainsS: 'contains',
       netTitle: 'Requests linked to the actions', netNone: 'No business request linked yet.', netLive: 'Live (provisional)',
       qualityTitle: 'Recording quality',
-      shotTitle: function (n) { return 'Screen at step ' + n; }, shotNote: 'Image taken right after the action, during the recording.', shotMissing: 'No image for this step: the preview shows the last one taken.',
+      shotTitle: function (n) { return 'Screen at step ' + n; }, shotNote: 'Image taken right after the action, during the recording.', shotMissing: 'No image for this step: the preview shows the last one taken.', shotViewLabel: 'Moment of the image', shotBefore: 'Before the click', shotAfter: 'After', shotBeforeNote: 'Image taken just before the click: the clicked element is framed where it was.', shotOnlyBefore: 'Image taken just before the click (no image after the action).',
       subtitle: 'Journey recording', devMode: 'Developer mode', active: 'Active', inactive: 'Paused',
       tabPreview: 'Preview', previewTitle: 'Live preview', refresh: 'Refresh', noPreview: 'The page preview appears after the first action.',
       selected: 'Element selected in the page', isHighlighted: function (l) { return '"' + l + '" is highlighted'; }, notFoundShort: 'Not found on the current page',
@@ -871,6 +876,8 @@ const SCRIPT = `
   var state = null, selected = null, choice = {}, dev = false, tab = 'recording';
   // L'inspecteur : le sous-onglet ouvert (Détails, Cible, Réseau) et l'étape pour laquelle il l'est.
   var inspTab = 'details', inspFor = null;
+  // Revue, un clic : l'image montrée (avant le clic, par défaut, ou après), revenue à « avant » à chaque étape.
+  var shotView = 'before', shotViewFor = null;
   // L'éditeur de la source de la valeur, ouvert ou non par étape (« Modifier »).
   var dataOpen = {};
   var focused = null, scrolledTo = null;
@@ -1585,23 +1592,29 @@ const SCRIPT = `
     var pv = state.preview;
     var picking = state.pick && (state.pick.status === 'PICKING' || state.pick.status === 'PREPARING');
     var shotOf = pv && pv.step ? state.actions.find(function (a) { return a.id === pv.step; }) : null;
-    var h = '<header class="card-head"><h2>' + esc(shotOf ? T.shotTitle(shotOf.index) : T.previewTitle) + '</h2><span class="purl">' + esc(pv ? routeOf(pv.url) : '') + '</span>' + (picking ? '<span class="pickbadge" role="status">' + esc(T.cPickActive) + '</span>' : '') + '<span class="actions">' + button('', { cmd: 'refresh-preview', cls: 'ghost icon small', icon: 'refresh', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('', { cmd: 'fullscreen', cls: 'ghost icon small', icon: 'expand', aria: T.fullscreen, title: T.fullscreen }) + button('', { cmd: 'detach', cls: 'ghost icon small', icon: 'external', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
-    h += '<div class="stage"><div class="viewport">' + (DETACHED ? '<div class="frame">' : '');
+    if (pv && pv.step !== shotViewFor) { shotViewFor = pv.step; shotView = 'before'; }
+    var both = !!(shotOf && pv.before);
+    // L'image affichée : celle d'avant le clic si elle est choisie, sinon celle d'après l'action.
+    var img = both && shotView === 'before' ? pv.before : pv;
+    var h = '<header class="card-head"><h2>' + esc(shotOf ? T.shotTitle(shotOf.index) : T.previewTitle) + '</h2><span class="purl">' + esc(img ? routeOf(img.url) : '') + '</span>' + (picking ? '<span class="pickbadge" role="status">' + esc(T.cPickActive) + '</span>' : '') + '<span class="actions">' + button('', { cmd: 'refresh-preview', cls: 'ghost icon small', icon: 'refresh', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('', { cmd: 'fullscreen', cls: 'ghost icon small', icon: 'expand', aria: T.fullscreen, title: T.fullscreen }) + button('', { cmd: 'detach', cls: 'ghost icon small', icon: 'external', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
+    h += '<div class="stage">';
+    if (both) h += '<div class="shotview" role="group" aria-label="' + esc(T.shotViewLabel) + '">' + [['before', T.shotBefore], ['after', T.shotAfter]].map(function (d) { return '<button type="button" data-shotview="' + d[0] + '" aria-pressed="' + (shotView === d[0]) + '">' + esc(d[1]) + '</button>'; }).join('') + '</div>';
+    h += '<div class="viewport">' + (DETACHED ? '<div class="frame">' : '');
     if (!pv) h += '<p class="placeholder">' + esc(T.noPreview) + '</p>';
     else {
-      h += '<img alt="' + esc(T.previewTitle) + '" src="' + pv.image + '">';
-      var hl = pv.highlight;
+      h += '<img alt="' + esc(T.previewTitle) + '" src="' + img.image + '">';
+      var hl = img.highlight;
       // Détachée, la fenêtre suit la sélection faite dans la fenêtre principale.
       if (hl && (DETACHED || hl.actionId === selected)) {
-        var sx = 100 / pv.width, sy = 100 / pv.height;
-        h += '<div class="hl" style="left:' + (hl.x * sx) + '%;top:' + (hl.y * sy) + '%;width:' + (hl.width * sx) + '%;height:' + (hl.height * sy) + '%"><span' + (hl.y / pv.height > 0.75 ? ' class="above"' : '') + '>' + esc(short(hl.label || '', 36)) + '</span></div>';
+        var sx = 100 / img.width, sy = 100 / img.height;
+        h += '<div class="hl" style="left:' + (hl.x * sx) + '%;top:' + (hl.y * sy) + '%;width:' + (hl.width * sx) + '%;height:' + (hl.height * sy) + '%"><span class="' + (hl.y / img.height > 0.75 ? 'above' : '') + ((hl.x + hl.width / 2) / img.width > 0.6 ? ' end' : '') + '">' + esc(short(hl.label || '', 36)) + '</span></div>';
       }
     }
     h += (DETACHED ? '</div>' : '') + '</div>';
     var hlState = state.highlight && (DETACHED || state.highlight.actionId === selected) ? state.highlight.result : null;
     if (hlState && hlState !== 'NOT_FOUND' && pv && pv.highlight) h += '<p class="selnote" role="status">' + svg('okCircle') + esc(T.isHighlighted(pv.highlight.label || '')) + '</p>';
     else if (hlState === 'NOT_FOUND') h += '<p class="selnote warn" role="status">' + svg('alert') + esc(T.notFoundShort) + '</p>';
-    if (shotOf) h += '<p class="shotnote' + (pv.missing ? ' warn' : '') + '">' + esc(pv.missing ? T.shotMissing : T.shotNote) + '</p>';
+    if (shotOf) h += '<p class="shotnote' + (pv.missing ? ' warn' : '') + '">' + esc(pv.missing ? T.shotMissing : pv.onlyBefore ? T.shotOnlyBefore : both && shotView === 'before' ? T.shotBeforeNote : T.shotNote) + '</p>';
     return h + '</div>';
   }
 
@@ -1837,6 +1850,7 @@ const SCRIPT = `
     if (target.id === 'devtoggle') { dev = !dev; target.setAttribute('aria-pressed', String(dev)); render(); return; }
     if (target.id === 'layouttoggle') { layout = layout === 'compact' ? 'full' : 'compact'; storeLayout(layout); render(); return; }
     if (target.id === 'tlattention') { onlyAttention = !onlyAttention; render(); return; }
+    if (target.hasAttribute('data-shotview')) { shotView = target.getAttribute('data-shotview'); render(); var back = document.querySelector('[data-shotview="' + shotView + '"]'); if (back) back.focus(); return; }
     if (target.hasAttribute('data-subtab')) { inspTab = target.getAttribute('data-subtab'); renderDetails(); var again = document.querySelector('[data-subtab="' + inspTab + '"]'); if (again) again.focus(); return; }
     if (target.getAttribute('role') === 'tab') { selectTab(target.id.replace('tab-', '')); return; }
     var cmd = target.getAttribute('data-cmd'), id = target.getAttribute('data-id');

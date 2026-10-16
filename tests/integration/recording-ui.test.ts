@@ -151,6 +151,19 @@ describe('Recording UI (recorder window)', () => {
         await row(panel, /Cocher "Accept terms"/).click();
         await preview.getByRole('heading', { name: seen.shotTitle as string }).waitFor({ state: 'detached' });
         seen.shotSecond = await preview.locator('img').getAttribute('src');
+        // Un clic : l'écran AVANT le clic (par défaut), le bouton encadré là où il était, puis celui d'après.
+        await row(panel, /Cliquer sur "Create item"/).click();
+        const moment = preview.getByRole('group', { name: 'Moment de l’image' });
+        await moment.waitFor();
+        seen.beforePressed = await moment
+          .getByRole('button', { name: 'Avant le clic' })
+          .getAttribute('aria-pressed');
+        seen.beforeShot = await preview.locator('img').getAttribute('src');
+        seen.beforeFramed = await preview.locator('.hl').innerText();
+        seen.beforeNote = await preview.locator('.shotnote').innerText();
+        await moment.getByRole('button', { name: 'Après' }).click();
+        await moment.getByRole('button', { name: 'Après', pressed: true }).waitFor();
+        seen.afterShot = await preview.locator('img').getAttribute('src');
         // MODIFIER : retirer une étape la retire du flow (fichiers régénérés).
         await row(panel, /Cliquer sur "Action 7"/).click();
         await panel.getByRole('button', { name: /Retirer l'étape « Cliquer sur "Action 7" »/ }).click();
@@ -252,6 +265,15 @@ describe('Recording UI (recorder window)', () => {
     expect(seen.shotFirstFramed).toBe(1);
     expect(seen.shotSecond).toMatch(/^data:image\/jpeg;base64,/);
     expect(seen.shotSecond).not.toBe(seen.shotFirst);
+  });
+
+  it('in the review, a click also shows the screen before it, the clicked button framed', () => {
+    expect(seen.beforePressed).toBe('true');
+    expect(String(seen.beforeShot)).toMatch(/^data:image\/jpeg;base64,/);
+    expect(seen.beforeFramed).toBe('Create item');
+    expect(seen.beforeNote).toContain('juste avant le clic');
+    expect(String(seen.afterShot)).toMatch(/^data:image\/jpeg;base64,/);
+    expect(seen.afterShot).not.toBe(seen.beforeShot);
   });
 
   it('replay shows its progress then its result', () => {

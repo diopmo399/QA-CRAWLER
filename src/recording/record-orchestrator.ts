@@ -325,6 +325,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         consoleUi.withPreview = config.recording.panelPreview;
         consoleUi.layout = config.recording.panelLayout;
         consoleUi.timelineChanged();
+        await consoleUi.firstPreview();
         await page.bringToFront().catch(() => undefined);
       } catch (error) {
         warnings.push(

@@ -8,7 +8,7 @@ import type { ScenarioConfig } from '../config/config.js';
 import { slug } from '../knowledge/signatures.js';
 import type { ProgressUpdate } from '../progress/progress.js';
 import type { FlowAuditReport } from './flow-audit.js';
-import type { DockView, HumanFlowRecorder, StepShot } from './human-flow-recorder.js';
+import type { DockView, HumanFlowRecorder, ScreenShot, StepShot } from './human-flow-recorder.js';
 import {
   describeFlowStep,
   summaryOf,
@@ -122,6 +122,17 @@ export type PickOutcome =
 /** Les images d'étapes gardées en mémoire (les plus anciennes s'effacent au-delà). */
 const STEP_SHOTS = 60;
 
+/** Garde une image d'étape ; au-delà de STEP_SHOTS, les plus anciennes s'effacent. */
+function keep(shots: Map<string, StepShot>, id: string, shot: StepShot): void {
+  shots.delete(id);
+  shots.set(id, shot);
+  while (shots.size > STEP_SHOTS) {
+    const oldest = shots.keys().next().value;
+    if (oldest === undefined) break;
+    shots.delete(oldest);
+  }
+}
+
 export class RecordingConsole {
   private phase: PanelState['phase'] = 'RECORDING';
   private progress: PanelState['progress'];
@@ -156,6 +167,12 @@ export class RecordingConsole {
    * cadre de son élément. La revue la montre quand on choisit l'étape (l'application est alors fermée).
    */
   private readonly stepShots = new Map<string, StepShot>();
+  /** L'image AVANT un clic : la dernière image prise avant l'appui, le bouton encadré là où il était. */
+  private readonly beforeShots = new Map<string, StepShot>();
+  /** La dernière image de l'application (aperçu ou image d'étape) : l'écran tel qu'il était à ce moment. */
+  private lastScreen: ScreenShot | undefined;
+  /** La dernière action vue : une nouvelle action déclenche son image « avant ». */
+  private lastActionSeen: string | undefined;
   /** L'action dont l'image attend que l'écran se pose (une saisie se termine, une page se charge). */
   private pendingShot: { id: string; timer: NodeJS.Timeout } | undefined;
   private shotChain: Promise<void> = Promise.resolve();
@@ -298,6 +315,11 @@ export class RecordingConsole {
     this.render();
   }
 
+  /** Au départ : l'écran de la page tout de suite (il sert d'image « avant » au premier clic). */
+  async firstPreview(): Promise<void> {
+    await this.refreshPreview();
+  }
+
   /** La timeline a changé (une action, une validation) : la fenêtre, puis un nouvel aperçu de la page. */
   timelineChanged(): void {
     this.render();
@@ -313,6 +335,10 @@ export class RecordingConsole {
     if (!this.withPreview || (this.phase !== 'RECORDING' && this.phase !== 'PAUSED')) return;
     const last = this.recorder.timeline.actions.at(-1);
     if (!last) return;
+    if (last.id !== this.lastActionSeen) {
+      this.lastActionSeen = last.id;
+      if (last.kind === 'click') this.keepBeforeShot(last.id);
+    }
     const pending = this.pendingShot;
     if (pending) {
       clearTimeout(pending.timer);
@@ -331,16 +357,34 @@ export class RecordingConsole {
     this.shotChain = this.shotChain.then(async () => {
       const shot = await this.recorder.stepShot(id).catch(() => undefined);
       if (!shot) return;
-      this.stepShots.delete(id);
-      this.stepShots.set(id, shot);
-      // Bornées : les plus anciennes s'effacent au-delà de STEP_SHOTS images.
-      while (this.stepShots.size > STEP_SHOTS) {
-        const oldest = this.stepShots.keys().next().value;
-        if (oldest === undefined) break;
-        this.stepShots.delete(oldest);
-      }
+      this.lastScreen = shot;
+      keep(this.stepShots, id, shot);
     });
     return this.shotChain;
+  }
+
+  /**
+   * L'IMAGE AVANT UN CLIC : la dernière image prise AVANT l'appui, et le bouton encadré là où il était
+   * à l'appui — seulement si la page n'avait ni défilé ni changé de taille entre les deux (sinon le cadre
+   * serait faux : pas d'image « avant »).
+   */
+  private keepBeforeShot(id: string): void {
+    const screen = this.lastScreen;
+    const click = this.recorder.clickBox(id);
+    if (!screen || !click) return;
+    const { box } = click;
+    const same =
+      screen.at <= box.at &&
+      Math.abs(screen.scrollX - box.scrollX) <= 2 &&
+      Math.abs(screen.scrollY - box.scrollY) <= 2 &&
+      screen.width === box.viewWidth &&
+      screen.height === box.viewHeight;
+    if (!same || box.width <= 0 || box.height <= 0) return;
+    keep(this.beforeShots, id, {
+      ...screen,
+      rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+      label: click.label,
+    });
   }
 
   /** À l'arrêt, avant que l'application se ferme : l'image de la dernière action si elle attendait encore. */
@@ -370,6 +414,7 @@ export class RecordingConsole {
     try {
       const shot = await this.recorder.preview();
       if (!shot) return;
+      if (this.phase === 'RECORDING' || this.phase === 'PAUSED') this.lastScreen = shot;
       // Un cadre ne survit qu'à l'image où il a été mesuré (la page a pu bouger depuis).
       this.preview = { ...shot, ...(highlight ? { highlight } : {}) };
       this.render();
@@ -695,28 +740,36 @@ export class RecordingConsole {
         break;
       case 'select': {
         if (!command.id) break;
+        const stepId = command.id;
         // Après l'arrêt, l'application est fermée : l'aperçu montre l'image de l'étape, prise pendant
         // l'enregistrement (l'écran juste après l'action, son élément encadré s'il était visible).
         if (!recording) {
           this.highlight = undefined;
           const live = this.liveIdOf(command.id);
           const shot = live ? this.stepShots.get(live) : undefined;
-          if (shot)
+          const before = live ? this.beforeShots.get(live) : undefined;
+          const frame = (image: StepShot): NonNullable<PanelState['preview']> => ({
+            image: image.image,
+            url: image.url,
+            width: image.width,
+            height: image.height,
+            ...(image.rect
+              ? {
+                  highlight: {
+                    actionId: stepId,
+                    ...image.rect,
+                    ...(image.label ? { label: image.label } : {}),
+                  },
+                }
+              : {}),
+          });
+          const main = shot ?? before;
+          if (main)
             this.preview = {
-              image: shot.image,
-              url: shot.url,
-              width: shot.width,
-              height: shot.height,
+              ...frame(main),
               step: command.id,
-              ...(shot.rect
-                ? {
-                    highlight: {
-                      actionId: command.id,
-                      ...shot.rect,
-                      ...(shot.label ? { label: shot.label } : {}),
-                    },
-                  }
-                : {}),
+              ...(shot && before ? { before: frame(before) } : {}),
+              ...(!shot && before ? { onlyBefore: true } : {}),
             };
           else if (this.preview) this.preview = { ...this.preview, step: command.id, missing: true };
           break;
