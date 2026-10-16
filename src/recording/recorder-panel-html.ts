@@ -374,6 +374,8 @@ details>summary:hover{color:var(--fg)}
 .selnote{display:flex;gap:8px;align-items:center;margin:12px 0 0;font-size:12.5px;color:var(--ok-text)}
 .selnote svg{width:15px;height:15px;flex:none}
 .selnote.warn{color:var(--warn-text)}
+.shotnote{margin:10px 0 0;font-size:12px;color:var(--muted)}
+.shotnote.warn{color:var(--warn-text)}
 .pickbadge{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:500;color:var(--accent-text)}
 .pickbadge::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
 .detached-note{display:flex;align-items:center;gap:10px;margin-bottom:20px;padding:10px 14px;border-radius:10px;background:var(--accent-wash);border:1px solid var(--accent-line);color:var(--fg);font-size:13px}
@@ -768,6 +770,7 @@ const SCRIPT = `
       rRead: function (v) { return 'Lu : ' + v; }, rCompare: 'Comparaison', rEquals: 'égale', rContainsS: 'contient',
       netTitle: 'Requêtes reliées aux actions', netNone: 'Aucune requête métier reliée pour l’instant.', netLive: 'En direct (provisoire)',
       qualityTitle: 'Qualité du recording',
+      shotTitle: function (n) { return 'Écran à l’étape ' + n; }, shotNote: 'Image prise juste après l’action, pendant l’enregistrement.', shotMissing: 'Aucune image pour cette étape : l’aperçu montre la dernière prise.',
       subtitle: 'Enregistrement de parcours', devMode: 'Mode développeur', active: 'Actif', inactive: 'En pause',
       tabPreview: 'Aperçu', previewTitle: 'Aperçu en direct', refresh: 'Actualiser', noPreview: "L'aperçu de la page apparaît après la première action.",
       selected: 'Élément sélectionné dans la page', isHighlighted: function (l) { return '« ' + l + ' » est surligné'; }, notFoundShort: 'Introuvable sur la page actuelle',
@@ -816,6 +819,7 @@ const SCRIPT = `
       rRead: function (v) { return 'Read: ' + v; }, rCompare: 'Comparison', rEquals: 'equals', rContainsS: 'contains',
       netTitle: 'Requests linked to the actions', netNone: 'No business request linked yet.', netLive: 'Live (provisional)',
       qualityTitle: 'Recording quality',
+      shotTitle: function (n) { return 'Screen at step ' + n; }, shotNote: 'Image taken right after the action, during the recording.', shotMissing: 'No image for this step: the preview shows the last one taken.',
       subtitle: 'Journey recording', devMode: 'Developer mode', active: 'Active', inactive: 'Paused',
       tabPreview: 'Preview', previewTitle: 'Live preview', refresh: 'Refresh', noPreview: 'The page preview appears after the first action.',
       selected: 'Element selected in the page', isHighlighted: function (l) { return '"' + l + '" is highlighted'; }, notFoundShort: 'Not found on the current page',
@@ -1580,7 +1584,8 @@ const SCRIPT = `
   function previewHtml() {
     var pv = state.preview;
     var picking = state.pick && (state.pick.status === 'PICKING' || state.pick.status === 'PREPARING');
-    var h = '<header class="card-head"><h2>' + esc(T.previewTitle) + '</h2><span class="purl">' + esc(pv ? routeOf(pv.url) : '') + '</span>' + (picking ? '<span class="pickbadge" role="status">' + esc(T.cPickActive) + '</span>' : '') + '<span class="actions">' + button('', { cmd: 'refresh-preview', cls: 'ghost icon small', icon: 'refresh', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('', { cmd: 'fullscreen', cls: 'ghost icon small', icon: 'expand', aria: T.fullscreen, title: T.fullscreen }) + button('', { cmd: 'detach', cls: 'ghost icon small', icon: 'external', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
+    var shotOf = pv && pv.step ? state.actions.find(function (a) { return a.id === pv.step; }) : null;
+    var h = '<header class="card-head"><h2>' + esc(shotOf ? T.shotTitle(shotOf.index) : T.previewTitle) + '</h2><span class="purl">' + esc(pv ? routeOf(pv.url) : '') + '</span>' + (picking ? '<span class="pickbadge" role="status">' + esc(T.cPickActive) + '</span>' : '') + '<span class="actions">' + button('', { cmd: 'refresh-preview', cls: 'ghost icon small', icon: 'refresh', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('', { cmd: 'fullscreen', cls: 'ghost icon small', icon: 'expand', aria: T.fullscreen, title: T.fullscreen }) + button('', { cmd: 'detach', cls: 'ghost icon small', icon: 'external', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
     h += '<div class="stage"><div class="viewport">' + (DETACHED ? '<div class="frame">' : '');
     if (!pv) h += '<p class="placeholder">' + esc(T.noPreview) + '</p>';
     else {
@@ -1596,6 +1601,7 @@ const SCRIPT = `
     var hlState = state.highlight && (DETACHED || state.highlight.actionId === selected) ? state.highlight.result : null;
     if (hlState && hlState !== 'NOT_FOUND' && pv && pv.highlight) h += '<p class="selnote" role="status">' + svg('okCircle') + esc(T.isHighlighted(pv.highlight.label || '')) + '</p>';
     else if (hlState === 'NOT_FOUND') h += '<p class="selnote warn" role="status">' + svg('alert') + esc(T.notFoundShort) + '</p>';
+    if (shotOf) h += '<p class="shotnote' + (pv.missing ? ' warn' : '') + '">' + esc(pv.missing ? T.shotMissing : T.shotNote) + '</p>';
     return h + '</div>';
   }
 

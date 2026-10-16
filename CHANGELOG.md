@@ -22,7 +22,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   et Comparaison, aperçu, détails techniques repliés). Barre dans la page : sombre, point rouge et chrono,
   Ajouter une vérification, icônes Annuler / Pause, Arrêter, notification blanche, version réduite en
   pastille ; ses polices sont ajoutées sous un nom propre à QA-CRAWLER, aucune feuille de style de
-  l'application n'est touchée. Thème clair et sombre.
+  l'application n'est touchée. Thème clair et sombre. En revue, l'aperçu montre l'écran de l'étape
+  choisie : une image prise juste après chaque action pendant l'enregistrement, son élément encadré
+  (mesuré sans rien afficher dans l'application), en mémoire seulement, 60 au plus.
 - **Fournisseur IA Anthropic** (`ai.provider: anthropic`, `--ai-provider anthropic`) : un modèle de
   l'API Anthropic comme conseiller de raisonnement, par le SDK officiel `@anthropic-ai/sdk`
   (dépendance optionnelle, chargée dynamiquement). Même circuit que Copilot : requête nettoyée,

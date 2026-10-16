@@ -344,6 +344,8 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       recorder.requestStop('api');
     }
     stopReason = await recorder.stopped;
+    // L'image de la dernière action, avant que l'application se ferme (la revue la montre).
+    await consoleUi?.flushStepShots();
     stopClock.start = Date.now();
     progress.start(RECORDING_PHASES.capture);
     await recorder.stop((detail) => {

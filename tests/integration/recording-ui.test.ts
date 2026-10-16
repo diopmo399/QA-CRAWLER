@@ -141,6 +141,16 @@ describe('Recording UI (recorder window)', () => {
         seen.appClosedAtReview = appPage?.isClosed() ?? false;
         seen.panelOpenAtReview = !panel.isClosed();
         seen.reviewText = await panel.locator('body').innerText();
+        // L'APERÇU EN REVUE : l'image de l'étape choisie, prise pendant l'enregistrement, son élément encadré.
+        const preview = panel.locator('#preview-card');
+        await row(panel, /Saisir "Alex" dans "First name"/).click();
+        await preview.getByRole('heading', { name: /^Écran à l’étape \d+$/ }).waitFor();
+        seen.shotFirst = await preview.locator('img').getAttribute('src');
+        seen.shotFirstFramed = await preview.locator('.hl').count();
+        seen.shotTitle = await preview.locator('h2').innerText();
+        await row(panel, /Cocher "Accept terms"/).click();
+        await preview.getByRole('heading', { name: seen.shotTitle as string }).waitFor({ state: 'detached' });
+        seen.shotSecond = await preview.locator('img').getAttribute('src');
         // MODIFIER : retirer une étape la retire du flow (fichiers régénérés).
         await row(panel, /Cliquer sur "Action 7"/).click();
         await panel.getByRole('button', { name: /Retirer l'étape « Cliquer sur "Action 7" »/ }).click();
@@ -234,6 +244,14 @@ describe('Recording UI (recorder window)', () => {
     expect(seen.reviewText).toContain('Sauvegarder');
     expect((await steps()).some((item) => item.label === 'Action 7')).toBe(false);
     expect(await file('generated.flow.yaml')).not.toContain('Action 7');
+  });
+
+  it('in the review, the preview shows the screen recorded for the chosen step, its element framed', () => {
+    expect(String(seen.shotTitle)).toMatch(/^Écran à l’étape \d+$/);
+    expect(String(seen.shotFirst)).toMatch(/^data:image\/jpeg;base64,/);
+    expect(seen.shotFirstFramed).toBe(1);
+    expect(seen.shotSecond).toMatch(/^data:image\/jpeg;base64,/);
+    expect(seen.shotSecond).not.toBe(seen.shotFirst);
   });
 
   it('replay shows its progress then its result', () => {

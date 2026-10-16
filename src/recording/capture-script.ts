@@ -2194,6 +2194,32 @@ export function installRecorder(
      * Met en évidence l'élément d'une action : l'ORIGINAL s'il est encore dans la page, sinon le
      * seul élément que son sélecteur désigne ; jamais un élément deviné.
      */
+    /**
+     * MESURER sans rien montrer : la position de l'élément d'une action (l'original s'il existe encore,
+     * sinon le seul élément que son sélecteur désigne), s'il est visible à l'écran. Ni cadre, ni
+     * défilement : l'application ne voit rien (l'image de l'étape, prise juste après, s'en sert).
+     */
+    measure: (
+      ref?: string,
+      css?: string,
+    ): { x: number; y: number; width: number; height: number } | undefined => {
+      let element: Element | null = null;
+      const original = ref ? originals.get(ref) : undefined;
+      if (original?.isConnected) element = original;
+      else if (css) {
+        try {
+          const matches = document.querySelectorAll(css);
+          if (matches.length === 1) element = matches[0] ?? null;
+        } catch {
+          element = null;
+        }
+      }
+      if (!element || !isVisible(element)) return undefined;
+      const rect = element.getBoundingClientRect();
+      const onScreen =
+        rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
+      return onScreen ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : undefined;
+    },
     highlight: (ref?: string, css?: string, label?: string): string => {
       if (!root) return 'NOT_FOUND';
       let element: Element | null = null;

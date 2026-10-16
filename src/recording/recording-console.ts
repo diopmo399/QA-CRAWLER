@@ -8,7 +8,7 @@ import type { ScenarioConfig } from '../config/config.js';
 import { slug } from '../knowledge/signatures.js';
 import type { ProgressUpdate } from '../progress/progress.js';
 import type { FlowAuditReport } from './flow-audit.js';
-import type { DockView, HumanFlowRecorder } from './human-flow-recorder.js';
+import type { DockView, HumanFlowRecorder, StepShot } from './human-flow-recorder.js';
 import {
   describeFlowStep,
   summaryOf,
@@ -119,6 +119,9 @@ export type PickOutcome =
  * l'enregistrement) puis à la revue (après Stop). Elle construit l'état affiché ; elle ne décide
  * de rien : chaque commande passe par le recorder ou par l'orchestrateur.
  */
+/** Les images d'étapes gardées en mémoire (les plus anciennes s'effacent au-delà). */
+const STEP_SHOTS = 60;
+
 export class RecordingConsole {
   private phase: PanelState['phase'] = 'RECORDING';
   private progress: PanelState['progress'];
@@ -148,6 +151,14 @@ export class RecordingConsole {
   private busy = false;
   private preview: PanelState['preview'];
   private previewTimer: NodeJS.Timeout | undefined;
+  /**
+   * L'IMAGE DE CHAQUE ÉTAPE (en mémoire seulement, jamais écrite) : l'écran juste après l'action et le
+   * cadre de son élément. La revue la montre quand on choisit l'étape (l'application est alors fermée).
+   */
+  private readonly stepShots = new Map<string, StepShot>();
+  /** L'action dont l'image attend que l'écran se pose (une saisie se termine, une page se charge). */
+  private pendingShot: { id: string; timer: NodeJS.Timeout } | undefined;
+  private shotChain: Promise<void> = Promise.resolve();
   private capturing = false;
   /** recording.panelPreview : l'aperçu de l'application dans la fenêtre. */
   withPreview = true;
@@ -291,6 +302,56 @@ export class RecordingConsole {
   timelineChanged(): void {
     this.render();
     this.schedulePreview();
+    this.scheduleStepShot();
+  }
+
+  /**
+   * L'image de la dernière action, prise quand l'écran s'est posé (600 ms sans nouveau changement) ;
+   * une nouvelle action prend aussitôt celle de la précédente si elle attendait encore.
+   */
+  private scheduleStepShot(): void {
+    if (!this.withPreview || (this.phase !== 'RECORDING' && this.phase !== 'PAUSED')) return;
+    const last = this.recorder.timeline.actions.at(-1);
+    if (!last) return;
+    const pending = this.pendingShot;
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingShot = undefined;
+      if (pending.id !== last.id) void this.queueStepShot(pending.id);
+    }
+    const timer = setTimeout(() => {
+      this.pendingShot = undefined;
+      void this.queueStepShot(last.id);
+    }, 600);
+    timer.unref();
+    this.pendingShot = { id: last.id, timer };
+  }
+
+  private queueStepShot(id: string): Promise<void> {
+    this.shotChain = this.shotChain.then(async () => {
+      const shot = await this.recorder.stepShot(id).catch(() => undefined);
+      if (!shot) return;
+      this.stepShots.delete(id);
+      this.stepShots.set(id, shot);
+      // Bornées : les plus anciennes s'effacent au-delà de STEP_SHOTS images.
+      while (this.stepShots.size > STEP_SHOTS) {
+        const oldest = this.stepShots.keys().next().value;
+        if (oldest === undefined) break;
+        this.stepShots.delete(oldest);
+      }
+    });
+    return this.shotChain;
+  }
+
+  /** À l'arrêt, avant que l'application se ferme : l'image de la dernière action si elle attendait encore. */
+  async flushStepShots(): Promise<void> {
+    const pending = this.pendingShot;
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingShot = undefined;
+      void this.queueStepShot(pending.id);
+    }
+    await Promise.race([this.shotChain, new Promise((resolve) => setTimeout(resolve, 2000).unref())]);
   }
 
   /** L'aperçu se rafraîchit après les changements (au plus une image toutes les 800 ms), jamais pendant un rejeu. */
@@ -634,9 +695,30 @@ export class RecordingConsole {
         break;
       case 'select': {
         if (!command.id) break;
-        // Après l'arrêt, l'application est fermée : les détails s'affichent, sans mise en évidence.
+        // Après l'arrêt, l'application est fermée : l'aperçu montre l'image de l'étape, prise pendant
+        // l'enregistrement (l'écran juste après l'action, son élément encadré s'il était visible).
         if (!recording) {
           this.highlight = undefined;
+          const live = this.liveIdOf(command.id);
+          const shot = live ? this.stepShots.get(live) : undefined;
+          if (shot)
+            this.preview = {
+              image: shot.image,
+              url: shot.url,
+              width: shot.width,
+              height: shot.height,
+              step: command.id,
+              ...(shot.rect
+                ? {
+                    highlight: {
+                      actionId: command.id,
+                      ...shot.rect,
+                      ...(shot.label ? { label: shot.label } : {}),
+                    },
+                  }
+                : {}),
+            };
+          else if (this.preview) this.preview = { ...this.preview, step: command.id, missing: true };
           break;
         }
         const live = this.liveIdOf(command.id);

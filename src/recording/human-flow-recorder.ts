@@ -702,6 +702,39 @@ export class HumanFlowRecorder {
   }
 
   /**
+   * L'IMAGE D'UNE ÉTAPE (revue) : l'écran juste après l'action, et le cadre de son élément s'il est
+   * encore visible — mesuré sans rien montrer dans l'application. En mémoire seulement.
+   */
+  async stepShot(actionId: string): Promise<StepShot | undefined> {
+    const action = this.timeline.actions.find((entry) => entry.id === actionId);
+    const page = this.correctionPage;
+    if (!action || !page || page.isClosed()) return undefined;
+    const rect =
+      action.ref || action.css
+        ? await page
+            .evaluate(
+              ({ ref, css }) =>
+                (
+                  window as unknown as {
+                    __qaCrawlerRecorder?: {
+                      measure?(
+                        ref?: string,
+                        css?: string,
+                      ): { x: number; y: number; width: number; height: number } | undefined;
+                    };
+                  }
+                ).__qaCrawlerRecorder?.measure?.(ref, css),
+              { ref: action.ref, css: action.css },
+            )
+            .catch(() => undefined)
+        : undefined;
+    const shot = await this.preview();
+    if (!shot) return undefined;
+    const label = action.technical.label ?? action.technical.name ?? action.technical.text ?? action.kind;
+    return { ...shot, ...(rect ? { rect, label } : {}) };
+  }
+
+  /**
    * L'APERÇU de l'application pour la fenêtre du recorder : une image de la page (sans le bandeau),
    * en mémoire seulement — jamais écrite, jamais journalisée.
    */
@@ -2051,6 +2084,16 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * instant, à chaque aperçu. Sans clip ni capture au-delà de l'écran, rien n'est émulé. Repli sur
  * page.screenshot (sans style injecté) si le protocole n'est pas disponible.
  */
+/** L'image d'une étape : la page juste après l'action et, s'il est visible, le cadre de son élément. */
+export interface StepShot {
+  image: string;
+  url: string;
+  width: number;
+  height: number;
+  rect?: { x: number; y: number; width: number; height: number };
+  label?: string;
+}
+
 async function surfaceShot(page: Page): Promise<Buffer> {
   try {
     const session = await page.context().newCDPSession(page);

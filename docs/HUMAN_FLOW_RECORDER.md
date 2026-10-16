@@ -102,6 +102,11 @@ USER ACTION → RECORDER → ACTION VALIDATION → RECORDED FLOW → REPLAY → 
   d'écran, aucun style injecté) ; choisir une étape dont l'élément est visible ne fait pas défiler
   l'application, un élément hors écran défile au plus près (jamais recentré) ; la validation des
   cibles lit les éléments sans y écrire le moindre attribut.
+  **En revue** (l'application est fermée), l'aperçu montre **l'écran de l'étape choisie** : une image
+  prise pendant l'enregistrement, juste après chaque action (quand l'écran s'est posé : 600 ms sans
+  nouveau changement), avec le cadre de son élément s'il était encore visible — mesuré sans rien
+  afficher dans l'application. Le titre dit « Écran à l'étape _n_ ». Ces images restent **en mémoire
+  seulement** (jamais écrites, jamais journalisées), 60 au plus (les plus anciennes s'effacent).
   **Détacher** ouvre l'aperçu dans sa propre fenêtre (**Plein écran** possible, par exemple
   sur un second écran) : la fenêtre principale garde le parcours, l'inspecteur et les commandes.
   **Rattacher** (ou fermer la fenêtre de l'aperçu) le

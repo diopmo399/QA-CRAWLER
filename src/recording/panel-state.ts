@@ -372,6 +372,10 @@ export interface PanelState {
     width: number;
     height: number;
     highlight?: { actionId: string; x: number; y: number; width: number; height: number; label?: string };
+    /** Revue : l'image a été prise pendant l'enregistrement, juste après cette étape. */
+    step?: string;
+    /** Revue : aucune image n'a été prise pour l'étape choisie (l'aperçu garde la précédente). */
+    missing?: boolean;
   };
   analysis: PanelAnalysis;
   /** L'ANALYSE HTTP EN DIRECT (provisoire) : des compteurs, jamais une vérité. */
