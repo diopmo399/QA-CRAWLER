@@ -109,6 +109,11 @@ describe('Correction manager — a table row is bound to the run data, never to 
         await panel.getByLabel(/La clé lue dans le tableau/).check();
         await panel.getByText(/Clé propre à ce run/).waitFor();
         seen.keyOption = await panel.locator('#details .correction').innerText();
+        // Les colonnes de la ligne : la ligne proposée (le nom du run) se cherche dans la page tenue.
+        await panel.getByLabel(/Choisir les colonnes de la ligne/).check();
+        await panel.locator('#details').getByRole('button', { name: 'Aperçu dans la page' }).click();
+        await panel.locator('#details .rpreview').waitFor();
+        seen.columnsPreview = await panel.locator('#details .correction').innerText();
         await panel.getByLabel(/La donnée du run/).check();
         await panel.getByText(/Clé propre à ce run/).waitFor({ state: 'hidden' });
         await panel.getByRole('button', { name: 'Valider la correction' }).click();
@@ -155,6 +160,13 @@ describe('Correction manager — a table row is bound to the run data, never to 
     expect(text).toContain('${testData:');
     expect(text).not.toContain('Clé propre à ce run');
     expect(String(seen.keyOption)).toContain('Clé propre à ce run');
+  });
+
+  it('the columns of the row are offered too, and the preview counts the matching rows in the held page', () => {
+    const text = String(seen.columnsPreview);
+    expect(text).toContain('N°');
+    expect(text).toContain('Created');
+    expect(text).toContain('1 ligne correspond dans la page ouverte.');
   });
 
   it('the corrected step cites the run data in its row; the next replay passes with a new number', async () => {

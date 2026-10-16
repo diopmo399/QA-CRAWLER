@@ -26,6 +26,7 @@ import {
   type KnownValue,
   type PickedElement,
   type RowBinding,
+  type RowColumnChoice,
 } from './target-correction.js';
 import type { FlowTarget } from '../config/flow-schema.js';
 import { resolveRecordedTarget } from './recorded-target.js';
@@ -570,6 +571,7 @@ export class HumanFlowRecorder {
     context: CorrectionContext = {},
     option?: string,
     binding?: RowBinding,
+    columns?: readonly RowColumnChoice[],
   ): { action: LiveAction; proposal: CorrectionProposal } | { error: string } {
     const action = this.timeline.actions.find((entry) => entry.id === actionId);
     if (!action) return { error: 'NOT_FOUND' };
@@ -592,6 +594,7 @@ export class HumanFlowRecorder {
       context,
       option,
       binding,
+      columns,
     );
     if ('error' in outcome) return outcome;
     const said = describeTarget(outcome.proposal.target);
@@ -1842,6 +1845,7 @@ function elementOf(raw: Record<string, unknown>): RecordedElement {
     ...optional('form', str('form', 60) ? redactText(str('form', 60) ?? '') : undefined),
     ...optional('row', str('row', 40) ? redactText(str('row', 40) ?? '') : undefined),
     ...rowKeyOf(raw.rowKey),
+    ...rowCellsOf(raw.rowCells),
     ...optional(
       'listboxOwner',
       str('listboxOwner', 60) ? redactText(str('listboxOwner', 60) ?? '') : undefined,

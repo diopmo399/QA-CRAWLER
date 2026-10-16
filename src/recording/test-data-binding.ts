@@ -432,3 +432,40 @@ function dropIfUnused(result: Result, key: string): void {
   if (!cited && !referenced)
     set.values = Object.fromEntries(Object.entries(set.values).filter(([name]) => name !== key));
 }
+
+/**
+ * LES DONNÉES CRÉÉES PAR UNE LIGNE DE TABLEAU : une colonne liée à une nouvelle donnée (« Workflow » →
+ * `row.workflow`) l'ajoute au jeu de test avec la valeur de la cellule. test-data.yaml la porte : on la
+ * modifie là sans toucher au flow. Jamais une clé existante écrasée, jamais une clé sensible.
+ */
+export function addRowVariables(
+  result: Result,
+  created: readonly { key: string; value: string; column: string }[],
+  stepId: string,
+): { error: string } | { added: string[] } {
+  if (created.length === 0) return { added: [] };
+  const data = result.testData;
+  if (!data) return { error: 'no test data set to add the variable to' };
+  const set = data.set;
+  for (const entry of created) {
+    if (!KEY.test(entry.key))
+      return { error: `"${entry.key}" is not a valid variable name (object.attribute)` };
+    if (isSensitiveKey(entry.key)) return { error: `"${entry.key}" names a secret: never kept in clear` };
+    if (set.values[entry.key] !== undefined) return { error: `the variable "${entry.key}" already exists` };
+  }
+  for (const entry of created)
+    set.values[entry.key] = {
+      key: entry.key,
+      strategy: 'BUSINESS_LITERAL',
+      value: entry.value,
+      sensitive: false,
+      provenance: {
+        recordingSessionId: result.session.id,
+        semanticField: entry.key.split('.').at(-1) ?? entry.key,
+        classification: 'HUMAN_BINDING',
+        reasons: [`explicit choice: table row column "${entry.column}" at step ${stepId}`],
+      },
+    };
+  data.document = testDataSetDocument(set);
+  return { added: created.map((entry) => entry.key) };
+}
