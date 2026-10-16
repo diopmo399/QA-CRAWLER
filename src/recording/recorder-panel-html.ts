@@ -457,6 +457,7 @@ body[data-mode=preview]{background:var(--bg)}
 .cpanel .cbody{padding:16px;display:grid;gap:16px;min-width:0}
 .cpanel .cbody>*{margin:0}
 .cfoot{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;border-top:1px solid var(--line-soft);padding-top:14px}
+.cpanel .cfoot{position:sticky;bottom:0;z-index:1;margin:0 -16px -16px;padding:12px 16px;background:var(--surface)}
 .cfoot .lead{margin-right:auto}
 .pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
 .tcard{border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:6px;min-width:0;align-content:start}
@@ -598,6 +599,19 @@ body.compact .controls{flex-basis:100%}
   .attention{margin-left:14px}
   .kv{grid-template-columns:1fr}.kv dt{font-weight:500}
   .irow{grid-template-columns:32px minmax(0,1fr);padding:12px}.irow .iactions{grid-column:2;grid-row:auto;justify-content:flex-start}.irow .full,.irow .iedit{grid-column:2}
+}
+/* FENÊTRE DE PORTABLE (1366 px, ou 1920 px à 150 % sous Windows) : l'en-tête tient sur une ligne —
+   « Annuler la dernière » en icône, le deuxième chiffre (aussi dans les onglets) masqué, marges resserrées. */
+@media (max-width:1440px) and (min-width:641px){
+  .topbar{gap:12px;padding:8px 16px;flex-wrap:nowrap}
+  .crumb{flex:0 1 auto}.subtitle{max-width:180px}
+  .statepill{margin-left:4px}
+  .stats{gap:14px;margin-left:0;flex-wrap:nowrap}.stats span:nth-child(2){display:none}
+  .controls{flex-wrap:nowrap;flex:none}
+  .controls button[data-cmd=undo]{font-size:0;gap:0;width:36px;padding:0}
+  .tools{padding-left:6px;flex:none}
+  .tabs{padding:0 16px}
+  main{padding:16px}
 }
 /* ÉCRAN DE PORTABLE (peu haut, mise à l'échelle Windows 125–150 %) : la même fenêtre, un peu plus dense. */
 @media (max-height:820px){
@@ -1175,7 +1189,7 @@ const SCRIPT = `
     var how = tg.strategy ? (T.strategyName[tg.strategy] || tg.strategy) : t.selector ? T.strategyName.css : '';
     if (how || stable || fragile) rows.push([T.kLocate, esc(how || '—') + (stable || fragile ? ' <span class="label">· ' + esc(stable ? T.kStable : T.kFragile) + '</span>' : '')]);
     var d = step.data;
-    if (d) {
+    if (d && state.phase !== 'REVIEW') {
       var dv = d.source === 'SENSITIVE' ? esc(T.dataSecret) : d.source === 'GENERATED' ? '<span class="var">' + esc(d.key || '') + '</span> <span class="label">' + esc(T.dataGenerated) + '</span>' : d.source === 'REFERENCE' ? '<span class="var">' + esc(d.reference || '') + '</span> <span class="label">' + esc(T.dataReused) + '</span>' : esc(T.dataFixed) + (d.recordedValue ? ' <span class="val">' + esc(d.recordedValue) + '</span>' : '');
       rows.push([T.kData, dv]);
     }
