@@ -1969,8 +1969,8 @@ const aiSchema = z
   .object({
     enabled: z.boolean().default(false),
     mode: z.enum(['OFF', 'ASSIST', 'HYBRID']).default('OFF'),
-    /** `copilot` : GitHub Copilot SDK ; `deterministic` : la même chaîne, sans réseau. */
-    provider: z.enum(['copilot', 'deterministic']).default('copilot'),
+    /** `copilot` : GitHub Copilot SDK ; `anthropic` : API Anthropic ; `deterministic` : la même chaîne, sans réseau. */
+    provider: z.enum(['copilot', 'anthropic', 'deterministic']).default('copilot'),
     /** Un fournisseur indisponible arrête le run (par défaut : repli déterministe et AI_UNAVAILABLE). */
     failOnUnavailable: z.boolean().default(false),
     copilot: z
@@ -2035,6 +2035,25 @@ const aiSchema = z
         baseDirectory: nonEmpty.default('.qa-crawler/copilot'),
         /** Nom de la variable d'environnement d'un jeton ; absent : l'utilisateur connecté (mécanisme officiel du SDK). */
         tokenEnv: nonEmpty.optional(),
+      })
+      .strict()
+      .default({}),
+    /** Le fournisseur `anthropic` : API Anthropic par le SDK officiel (`@anthropic-ai/sdk`, optionnel). */
+    anthropic: z
+      .object({
+        /** L'identifiant du modèle (obligatoire avec ce fournisseur : aucun modèle n'est fixé dans le code). */
+        model: nonEmpty.optional(),
+        /** Profondeur du raisonnement (output_config.effort). */
+        effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
+        maxTokens: z.number().int().min(1024).max(64_000).default(16_000),
+        timeoutMs: z.number().int().min(1000).max(600_000).default(120_000),
+        maxRetries: z.number().int().min(0).max(3).default(1),
+        /** Un refus est rejoué côté serveur (`fallbacks: "default"`) : seulement pour un modèle qui l'accepte. */
+        serverSideFallback: z.boolean().default(false),
+        /** Nom de la variable d'environnement de la clé ; absent : ANTHROPIC_API_KEY (résolution standard du SDK). */
+        apiKeyEnv: nonEmpty.optional(),
+        /** Point d'accès de l'API ; absent : celui du SDK (ou ANTHROPIC_BASE_URL). */
+        baseUrl: nonEmpty.optional(),
       })
       .strict()
       .default({}),

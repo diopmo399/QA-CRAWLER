@@ -34,6 +34,7 @@ session, aucun appel réseau, aucun changement de décision.
 15. [Docker et dépendance optionnelle](#15-docker-et-dépendance-optionnelle)
 16. [Limites et évolutions](#16-limites-et-évolutions)
 17. [Gestion des modèles Copilot](#17-gestion-des-modèles-copilot)
+18. [Fournisseur Anthropic (API Messages)](#18-fournisseur-anthropic-api-messages)
 
 ## 1. Audit de l'existant et points d'insertion
 
@@ -140,7 +141,7 @@ s'ajoute en implémentant `IntelligenceProvider`, sans toucher au cœur.
 ai:
   enabled: true
   mode: HYBRID # OFF | ASSIST | HYBRID
-  provider: copilot # copilot | deterministic (même chaîne, sans réseau)
+  provider: copilot # copilot | anthropic (API Anthropic, §18) | deterministic (même chaîne, sans réseau)
   failOnUnavailable: false # true : un fournisseur indisponible arrête le run
   copilot:
     modelSelection: # voir « Gestion des modèles » (§17)
@@ -202,14 +203,14 @@ ai:
 
 Priorité : CLI, puis environnement, puis YAML.
 
-| CLI                                                | Environnement                 | Effet                                            |
-| -------------------------------------------------- | ----------------------------- | ------------------------------------------------ |
-| `--intelligence off\|assist\|hybrid`               | `QA_INTELLIGENCE_MODE`        | Mode (assist / hybrid active, off coupe)         |
-| —                                                  | `QA_INTELLIGENCE_ENABLED`     | `ai.enabled`                                     |
-| `--ai-provider copilot\|deterministic`             | `QA_INTELLIGENCE_PROVIDER`    | Fournisseur                                      |
-| `--ai-model <id>`                                  | `QA_COPILOT_MODEL`            | Modèle Copilot (implique EXPLICIT)               |
-| `--ai-model-selection auto\|explicit\|adaptive`    | `QA_COPILOT_MODEL_SELECTION`  | Mode de sélection du modèle                      |
-| `--ai-reasoning auto\|adaptive\|low\|medium\|high` | `QA_COPILOT_REASONING_EFFORT` | Effort de raisonnement (low/medium/high : FIXED) |
+| CLI                                                | Environnement                 | Effet                                                               |
+| -------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------- |
+| `--intelligence off\|assist\|hybrid`               | `QA_INTELLIGENCE_MODE`        | Mode (assist / hybrid active, off coupe)                            |
+| —                                                  | `QA_INTELLIGENCE_ENABLED`     | `ai.enabled`                                                        |
+| `--ai-provider copilot\|anthropic\|deterministic`  | `QA_INTELLIGENCE_PROVIDER`    | Fournisseur                                                         |
+| `--ai-model <id>`                                  | `QA_COPILOT_MODEL`            | Modèle Copilot (EXPLICIT) ; avec `anthropic` : `ai.anthropic.model` |
+| `--ai-model-selection auto\|explicit\|adaptive`    | `QA_COPILOT_MODEL_SELECTION`  | Mode de sélection du modèle                                         |
+| `--ai-reasoning auto\|adaptive\|low\|medium\|high` | `QA_COPILOT_REASONING_EFFORT` | Effort de raisonnement (low/medium/high : FIXED)                    |
 
 ```bash
 npm run qa -- scenarios/mission.yaml --intelligence assist        # mesurer, sans influencer
@@ -1006,3 +1007,53 @@ AI_RECOVERY_EFFECT_CONFIRMED  AI-00001: goal COMPANY_INFORMATION_AVAILABLE reach
 
 - **La dérive est enregistrée** (`STRUCTURAL_UI_DRIFT` / `WORKFLOW_DRIFT`), et le flow d'origine n'est jamais modifié.
 - **La récupération devient un candidat de connaissance** seulement après la confirmation au runtime et la réussite de l'étape suivante.
+
+## 18. Fournisseur Anthropic (API Messages)
+
+`provider: anthropic` consulte un modèle de l'**API Anthropic** par le SDK officiel
+`@anthropic-ai/sdk` (dépendance optionnelle, chargée dynamiquement dans `src/ai/anthropic/sdk.ts`
+seulement). Le circuit est le même qu'avec Copilot : la requête nettoyée part, une proposition
+structurée revient, QA-Crawler la valide, la SafetyPolicy l'autorise, l'exécuteur l'exécute, le
+runtime la confirme.
+
+Aucun modèle n'est fixé dans le code : `ai.anthropic.model` (ou `--ai-model`) est obligatoire avec
+ce fournisseur ; absent, le fournisseur est indisponible (`AI_UNAVAILABLE`, raison `no model`).
+
+```yaml
+ai:
+  enabled: true
+  mode: HYBRID
+  provider: anthropic
+  anthropic:
+    model: <model-id> # obligatoire ; --ai-model <model-id> le remplace
+    effort: high # low | medium | high | xhigh | max (output_config.effort)
+    maxTokens: 16000
+    timeoutMs: 120000
+    maxRetries: 1 # tentatives de la passerelle (le SDK n'en fait aucune lui-même)
+    serverSideFallback: false # true : un refus est rejoué côté serveur (fallbacks: "default"), si le modèle l'accepte
+    # apiKeyEnv: QA_ANTHROPIC_KEY # nom de la variable ; absent : ANTHROPIC_API_KEY
+    # baseUrl: https://api.anthropic.com # absent : celui du SDK (ou ANTHROPIC_BASE_URL)
+```
+
+```bash
+export ANTHROPIC_API_KEY=…   # jamais dans un fichier du dépôt
+npm run qa -- scenarios/mission.yaml --intelligence hybrid --ai-provider anthropic --ai-model <model-id>
+```
+
+- **Requête** : les instructions du conseiller (`QA_ADVISOR_SYSTEM_PROMPT`, mises en cache) puis
+  la requête structurée ; raisonnement adaptatif ; **sorties structurées** au schéma de la
+  proposition. Les contraintes que l'API refuse (`maxLength`, `pattern`, bornes, tailles de
+  tableaux) sont retirées du schéma envoyé : le validateur de QA-Crawler les revérifie toutes.
+- **Réponse** : un refus (`stop_reason: refusal`) devient une abstention `INCONCLUSIVE` qui nomme
+  la catégorie, jamais une proposition ; une réponse coupée (`max_tokens`) est invalide. Un repli
+  côté serveur qui a servi (autre modèle) est signalé (`AI_MODEL_FALLBACK`) et le modèle
+  réellement utilisé est rapporté.
+- **Disponibilité** : SDK installé, modèle et clé configurés, vérifiés sans aucun appel ; sinon
+  `AI_UNAVAILABLE` et repli déterministe (ou arrêt avec `failOnUnavailable`). La clé n'apparaît
+  ni dans la configuration, ni dans un rapport, ni dans une raison d'indisponibilité.
+- **Limites** : pas d'outils de lecture pour l'instant (la requête porte déjà le contexte) ; le
+  modèle choisi doit accepter le raisonnement adaptatif et les sorties structurées. Chaque appel
+  est facturé par Anthropic : le budget d'appels (`ai.budgets`) s'applique comme pour Copilot.
+- **Tests** : `tests/unit/ai-anthropic-provider.test.ts` (faux SDK : requête, schéma, refus,
+  disponibilité, configuration) et `tests/integration/ai-anthropic-sdk.test.ts` (le vrai SDK contre
+  un point d'accès Messages local : chemin, en-têtes, corps, réponse).

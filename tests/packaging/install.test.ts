@@ -150,7 +150,7 @@ describe('the packages', () => {
     expect(cliPkg.bin['qa-crawler']).toBe('./bin/qa-crawler.js');
     expect(Object.keys(corePkg.exports)).toEqual(expect.arrayContaining(['.', './cli', './package.json']));
     expect(Object.keys(corePkg.optionalDependencies)).toEqual(
-      expect.arrayContaining(['pg', 'mssql', '@github/copilot-sdk']),
+      expect.arrayContaining(['pg', 'mssql', '@github/copilot-sdk', '@anthropic-ai/sdk']),
     );
     expect(corePkg.engines.node).toBe('>=20');
   });
@@ -173,6 +173,7 @@ describe('an Angular project (TypeScript, playwright.config, YAML + Gherkin flow
     ).toBe(true);
     expect(await exists(path.join(project.root, 'node_modules', 'pg'))).toBe(false);
     expect(await exists(path.join(project.root, 'node_modules', '@github', 'copilot-sdk'))).toBe(false);
+    expect(await exists(path.join(project.root, 'node_modules', '@anthropic-ai', 'sdk'))).toBe(false);
     const version = await project.qa(['--version']);
     expect(version.code).toBe(0);
     expect(version.out).toMatch(/^qa-crawler \d+\.\d+\.\d+ \(core \d+\.\d+\.\d+, node v\d+/);

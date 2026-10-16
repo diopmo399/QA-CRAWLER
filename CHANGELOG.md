@@ -6,6 +6,17 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Fournisseur IA Anthropic** (`ai.provider: anthropic`, `--ai-provider anthropic`) : un modèle de
+  l'API Anthropic comme conseiller de raisonnement, par le SDK officiel `@anthropic-ai/sdk`
+  (dépendance optionnelle, chargée dynamiquement). Même circuit que Copilot : requête nettoyée,
+  proposition au schéma (sorties structurées, contraintes non prises en charge retirées puis
+  revérifiées par le validateur), validation, SafetyPolicy, exécution, vérification au runtime.
+  Aucun modèle fixé dans le code : `ai.anthropic.model` ou `--ai-model` est obligatoire.
+  Raisonnement adaptatif, effort configurable (`ai.anthropic.effort`), instructions mises en
+  cache, repli côté serveur sur refus en option (`serverSideFallback`), signalé quand il sert ; un
+  refus devient une abstention `INCONCLUSIVE`, une réponse coupée est invalide. Clé lue dans
+  `ANTHROPIC_API_KEY` (ou `ai.anthropic.apiKeyEnv`), jamais écrite. Tests : faux SDK (unitaires)
+  et vrai SDK contre un point d'accès Messages local (intégration).
 - **Démo Orbit Desk** (`tests/fixtures/orbit-desk-app.ts`, `scenarios/demo-orbit.yaml`, `npm run
 demo:server` sur le port 4180) : un back-office de demandes moderne et fictif pour les démonstrations.
   Création réelle (POST → 201 + `Location`, référence propre à chaque création), liste par session,

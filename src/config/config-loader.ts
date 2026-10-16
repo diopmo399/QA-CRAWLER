@@ -32,9 +32,9 @@ export interface ConfigOverrides {
   memory?: boolean;
   /** --intelligence <off|assist|hybrid> (QA_INTELLIGENCE_MODE). */
   intelligence?: IntelligenceChoice;
-  /** --ai-provider <copilot|deterministic> (QA_INTELLIGENCE_PROVIDER). */
+  /** --ai-provider <copilot|anthropic|deterministic> (QA_INTELLIGENCE_PROVIDER). */
   aiProvider?: string;
-  /** --ai-model <model> (QA_COPILOT_MODEL) : implique EXPLICIT, sauf choix contraire. */
+  /** --ai-model <model> (QA_COPILOT_MODEL) : implique EXPLICIT, sauf choix contraire ; avec `anthropic`, son modèle. */
   aiModel?: string;
   /** --ai-model-selection auto|explicit|adaptive (QA_COPILOT_MODEL_SELECTION). */
   aiModelSelection?: string;
@@ -398,7 +398,12 @@ function applyIntelligenceOverrides(
     throw new ConfigError(
       `model selection must be one of ${MODEL_SELECTION_CHOICES.join(', ').toLowerCase()} (got "${selection.toLowerCase()}")`,
     );
-  if (model !== undefined || selection !== undefined) {
+  // Le fournisseur Anthropic n'a pas de sélection de modèle : --ai-model nomme directement son modèle.
+  const configuredProvider = section('ai').provider;
+  const anthropicProvider =
+    typeof configuredProvider === 'string' && configuredProvider.toLowerCase() === 'anthropic';
+  if (anthropicProvider && model !== undefined) nested(section('ai'), 'anthropic').model = model;
+  else if (model !== undefined || selection !== undefined) {
     const modelSelection = nested(copilot(section('ai')), 'modelSelection');
     if (model !== undefined) modelSelection.model = model;
     // Un modèle nommé sur la ligne de commande ou dans l'environnement : EXPLICIT, sauf choix contraire.

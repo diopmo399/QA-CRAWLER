@@ -119,7 +119,7 @@ export const projectConfigSchema = z
       .object({
         enabled: z.boolean().default(false),
         mode: z.enum(['OFF', 'ASSIST', 'HYBRID']).default('OFF'),
-        provider: z.enum(['copilot', 'deterministic']).default('copilot'),
+        provider: z.enum(['copilot', 'anthropic', 'deterministic']).default('copilot'),
       })
       .passthrough()
       .default({}),
