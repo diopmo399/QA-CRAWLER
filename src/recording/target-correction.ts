@@ -65,11 +65,19 @@ export interface CorrectionContext {
  * (`fixed` quand elle est propre à ce run : l'ancienne cible avait la même colonne, une autre valeur).
  */
 export interface RowOption {
-  id: 'bound' | 'key';
+  id: 'bound' | 'key' | 'manual';
   row: Record<string, string>;
   /** bound : la donnée citée (sa clé, ou sa valeur littérale pendant l'enregistrement). */
   via?: string;
+  /** bound : la cellule est égale à la donnée, ou la contient (« Northwind inc. » contient « Northwind »). */
+  match?: 'exact' | 'contains';
   fixed?: boolean;
+}
+
+/** LIAISON MANUELLE : l'humain lie une colonne de la ligne à une donnée du run (la cellule la contient au rejeu). */
+export interface RowBinding {
+  column: string;
+  key: string;
 }
 
 /** La proposition de correction : la nouvelle cible, ses replis et l'ordre de résolution au rejeu. */
@@ -77,6 +85,9 @@ export interface CorrectionProposal {
   target: FlowTarget;
   /** La cible est dans une ligne de tableau : les façons d'identifier la ligne (la première est celle de `target`). */
   rowOptions?: RowOption[];
+  /** Les cellules de la ligne et les données du run (avec une clé) : la liaison manuelle d'une colonne à une donnée. */
+  rowCells?: { column: string; value: string }[];
+  variables?: { key: string; value: string }[];
   quality: LocatorQuality;
   label: string;
   alternatives: FlowTarget[];
@@ -146,9 +157,17 @@ export function proposeCorrection(
   }
   const section =
     element.sectionPath && element.sectionPath.length > 0 ? element.sectionPath.join(' > ') : undefined;
+  const variables = (context.known ?? [])
+    .filter(
+      (entry): entry is { key: string; value: string } =>
+        entry.key !== undefined && entry.value.trim() !== '',
+    )
+    .filter((entry, index, all) => all.findIndex((other) => other.key === entry.key) === index);
   return {
     target,
     ...(rowOptions.length > 0 ? { rowOptions } : {}),
+    ...(rowCells.length > 0 ? { rowCells: [...rowCells] } : {}),
+    ...(rowCells.length > 0 && variables.length > 0 ? { variables } : {}),
     quality: resolved.quality,
     label: resolved.label,
     alternatives: resolved.alternatives.map((entry) => entry.target),
@@ -167,7 +186,14 @@ export function proposeCorrection(
   };
 }
 
-const same = (a: string, b: string): boolean => a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+/** Le texte comparable : sans accents, espaces réduits, minuscules (comme le rejeu compare les cellules). */
+const comparable = (text: string): string =>
+  text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 
 /**
  * LES FAÇONS D'IDENTIFIER LA LIGNE. Une clé renvoyée par le serveur (« 3024 ») n'identifie la ligne que
@@ -183,19 +209,38 @@ function rowOptionsOf(
   context: CorrectionContext,
 ): RowOption[] {
   const options: RowOption[] = [];
-  const known = context.known ?? [];
-  const bound = rowCells
+  const known = (context.known ?? []).filter((entry) => comparable(entry.value).length >= 2);
+  // Une cellule ÉGALE à une donnée du run d'abord ; sinon une cellule qui la CONTIENT (le nom suivi d'un
+  // suffixe, d'un statut) — seulement pour une donnée qui a une clé (elle se cite au rejeu : `~${testData:clé}`).
+  const exact = rowCells
     .map((cell) => {
-      const match = known.find((entry) => entry.value.trim() && same(entry.value, cell.value));
-      return match ? { cell, match } : undefined;
+      const match = known.find((entry) => comparable(entry.value) === comparable(cell.value));
+      return match ? { cell, match, how: 'exact' as const } : undefined;
     })
-    .find((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  if (bound)
+    .find((entry) => entry !== undefined);
+  const contained = exact
+    ? undefined
+    : rowCells
+        .map((cell) => {
+          const match = known.find(
+            (entry) =>
+              entry.key !== undefined &&
+              comparable(entry.value).length >= 4 &&
+              comparable(cell.value).includes(comparable(entry.value)),
+          );
+          return match ? { cell, match, how: 'contains' as const } : undefined;
+        })
+        .find((entry) => entry !== undefined);
+  const bound = exact ?? contained;
+  if (bound) {
+    const reference = bound.match.key ? `\${testData:${bound.match.key}}` : bound.cell.value;
     options.push({
       id: 'bound',
-      row: { [bound.cell.column]: bound.match.key ? `\${testData:${bound.match.key}}` : bound.cell.value },
+      row: { [bound.cell.column]: bound.how === 'contains' ? `~${reference}` : reference },
       via: bound.match.key ?? bound.cell.value,
+      match: bound.how,
     });
+  }
   if (resolved.row) {
     const previous = context.previous?.row;
     const fixed =
@@ -213,8 +258,21 @@ function withRow(target: FlowTarget, row: Record<string, string>): FlowTarget {
   return { ...rest, row };
 }
 
-/** La cible de la proposition pour l'option de ligne choisie (la première par défaut). */
-export function proposalTarget(proposal: CorrectionProposal, option?: string): FlowTarget {
+/**
+ * La cible de la proposition pour l'option de ligne choisie (la première par défaut). `manual` : la colonne
+ * et la donnée choisies par l'humain, seulement parmi les cellules de la ligne et les données du run proposées.
+ */
+export function proposalTarget(
+  proposal: CorrectionProposal,
+  option?: string,
+  binding?: RowBinding,
+): FlowTarget {
+  if (option === 'manual' && binding) {
+    const column = proposal.rowCells?.find((cell) => cell.column === binding.column);
+    const variable = proposal.variables?.find((entry) => entry.key === binding.key);
+    if (column && variable)
+      return withRow(proposal.target, { [column.column]: `~\${testData:${variable.key}}` });
+  }
   const chosen = option ? proposal.rowOptions?.find((entry) => entry.id === option) : undefined;
   return chosen ? withRow(proposal.target, chosen.row) : proposal.target;
 }
@@ -236,6 +294,7 @@ export function correctFlowTarget(
   language: 'fr' | 'en' = 'fr',
   context: CorrectionContext = {},
   option?: string,
+  binding?: RowBinding,
 ):
   { step: RecordedFlowStep; correction: TargetCorrection; proposal: CorrectionProposal } | { error: string } {
   const item = flow.steps.find((entry) => entry.id === stepId);
@@ -248,7 +307,7 @@ export function correctFlowTarget(
     { ...context, previous: item.step.target },
     picked.rowCells ?? [],
   );
-  const next = proposalTarget(proposal, option);
+  const next = proposalTarget(proposal, option, binding);
   const correction: TargetCorrection = {
     at,
     previous: item.step.target,
@@ -300,6 +359,7 @@ export function correctRawEvents(
   language: 'fr' | 'en' = 'fr',
   context: CorrectionContext = {},
   option?: string,
+  binding?: RowBinding,
 ): { correction: TargetCorrection; proposal: CorrectionProposal; touched: number } | { error: string } {
   const targets = events.filter((event) => rawEventIds.includes(event.id) && event.element !== undefined);
   if (targets.length === 0) return { error: 'the action has no element to correct' };
@@ -313,7 +373,7 @@ export function correctRawEvents(
     { ...context, previous },
     picked.rowCells ?? [],
   );
-  const next = proposalTarget(proposal, option);
+  const next = proposalTarget(proposal, option, binding);
   const correction: TargetCorrection = {
     at,
     previous,

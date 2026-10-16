@@ -54,6 +54,18 @@ export class TestDataRunContext {
     return [...this.cache.entries()].map(([key, value]) => ({ key, value }));
   }
 
+  /**
+   * LA REPRISE : les valeurs produites par un run précédent (le rejeu interrompu) sont reprises telles
+   * quelles — la même donnée créée, le même critère saisi — jamais régénérées ni remplacées par la
+   * valeur statique de l'enregistrement.
+   */
+  seed(values: readonly { key: string; value: string }[]): void {
+    for (const entry of values) {
+      this.cache.set(entry.key, entry.value);
+      this.produced.set(entry.value, entry.key);
+    }
+  }
+
   /** Valeur d'une clé : jeux de données dans l'ordre de priorité (celui du flow, puis celui de la mission). */
   resolve(key: string, sets: readonly (TestDataSet | undefined)[], sources: Sources): ResolvedTestData {
     return this.resolveKey(key, sets, sources, new Set());

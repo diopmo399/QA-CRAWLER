@@ -138,8 +138,14 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   la donnée du run « clé »** (choisie par défaut : la ligne se retrouve à chaque rejeu, cité
   `${testData:clé}` ; pendant l'enregistrement la valeur saisie est citée à l'arrêt comme toute donnée
   de test) ou **la clé lue dans le tableau**, marquée **« Clé propre à ce run »** quand l'ancienne
-  cible visait la même colonne avec une autre valeur. Les cellules de la ligne (colonne → texte,
-  bornées, expurgées) ne sont lues qu'au moment du clic de désignation et ne sont jamais écrites.
+  cible visait la même colonne avec une autre valeur. La comparaison ignore les accents, la casse et
+  les espaces ; une cellule qui **contient** la donnée (« NORTHWIND — Nouvelle » contient « Northwind »)
+  est liée avec un critère « contient » (`row: { colonne: ~${testData:clé} }`), en revue seulement (une
+  donnée qui a une clé). Quand aucune cellule ne correspond, la fenêtre le dit et propose **Lier une
+  colonne à une donnée du run** : une liste des colonnes de la ligne (avec leur valeur) et une liste des
+  données du run (avec leur valeur actuelle) ; seules ces colonnes et ces données sont acceptées. Les
+  cellules de la ligne (colonne → texte, bornées, expurgées) ne sont lues qu'au moment du clic de
+  désignation et ne sont jamais écrites.
 - **Résumé et qualité** : « ✓ Recording valide » ou « ⚠ nécessite une vérification » ; la qualité
   est calculée sur des faits (actions confirmées, sélecteurs stables, cibles uniques, aucun
   élément retrouvé seulement après un nouveau rendu, aucun doublon, aucune erreur) — jamais estimée.
@@ -181,6 +187,10 @@ jamais deux applications ouvertes en même temps.
   corrigé. Annuler ferme la session aussi ; la revue la ferme en partant. Les données de test
   produites par le rejeu de la session (clé → valeur, en mémoire seulement) sont les **valeurs
   connues** qui servent à lier une ligne de tableau à la donnée du run (voir ci-dessus).
+- **Reprendre ici** (après « Valider la correction » dans la page tenue) : le rejeu **reprend à l'étape
+  corrigée**, dans la même session et avec les mêmes données du run. La page est comparée au checkpoint
+  de contexte pris devant l'étape, puis vérifiée, restaurée ou reconstruite ; une création déjà faite
+  n'est jamais répétée sans décision. Voir [CONTEXT_RECOVERY.md](CONTEXT_RECOVERY.md).
 - **💾 Sauvegarder** : l'enregistrement est un **brouillon** (`recording-status.json` :
   `DRAFT`) ; sauvegarder copie le flow dans `recording.flowsDirectory` (défaut : `flows/<nom>/` à
   côté du dossier des rapports) avec son jeu de données, et le marque `SAVED`.

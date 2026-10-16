@@ -33,6 +33,7 @@ import {
   type CorrectionProposal,
   type KnownValue,
   type PickedElement,
+  type RowBinding,
 } from './target-correction.js';
 import { availableVariables } from './test-data-binding.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
@@ -74,7 +75,12 @@ export interface ReviewActions {
     /** Les valeurs connues du run (lier une ligne de tableau à une donnée) et l'option de ligne choisie. */
     known?: readonly KnownValue[];
     option?: string;
-  }) => Promise<{ ok: true } | { error: string }>;
+    binding?: RowBinding;
+  }) => Promise<{ ok: true; resumable?: number } | { error: string }>;
+  /** REPRENDRE le rejeu à l'étape corrigée, dans la page tenue (contexte restauré ou reconstruit, puis vérifié). */
+  resumeReplay?: (
+    onStep?: (executed: number, total: number) => void,
+  ) => Promise<PanelReplay | { error: string }>;
   restoreTarget?: (stepId: string) => Promise<{ ok: true } | { error: string }>;
   /** La session de correction (la page gardée ouverte) se ferme : après Valider, Annuler ou la revue. */
   releaseCorrection?: () => Promise<void>;
@@ -111,6 +117,8 @@ export class RecordingConsole {
   private picked: PickedElement | undefined;
   /** Les valeurs connues du run au moment de la sélection (mémoire seule) : la proposition de ligne s'en sert. */
   private pickKnown: KnownValue[] = [];
+  /** La reprise possible après une correction validée dans une page tenue. */
+  private resume: PanelState['resume'];
   /** Les actions de la revue en cours (la session de correction se libère hors de la file des commandes). */
   private reviewActions: ReviewActions | undefined;
   private saved: PanelState['saved'];
@@ -413,7 +421,30 @@ export class RecordingConsole {
         if (this.busy) return;
         this.busy = true;
         try {
-          if (command.type === 'replay') {
+          if (command.type === 'resume-replay' && this.resume && input.actions.resumeReplay) {
+            const resume = this.resume;
+            this.resume = { ...resume, running: true };
+            this.replay = { status: 'RUNNING', executed: 0, total: 0 };
+            this.render();
+            const outcome = await input.actions.resumeReplay((executed, total) => {
+              this.replay = { status: 'RUNNING', executed, total };
+              this.render();
+            });
+            // Une reprise manuelle laisse la page tenue au même endroit : « Reprendre ici » reste offert.
+            this.resume =
+              !('error' in outcome) && outcome.recovery?.strategy === 'MANUAL_RECOVERY'
+                ? { ...resume, running: false }
+                : undefined;
+            if ('error' in outcome) {
+              this.replay = undefined;
+              this.notice = { actionId: resume.stepId, kind: 'error', message: outcome.error };
+            } else this.replay = outcome;
+          } else if (command.type === 'replay') {
+            // Rejouer depuis le début : la page tenue n'est plus utile.
+            if (this.resume) {
+              this.resume = undefined;
+              await input.actions.releaseCorrection?.();
+            }
             this.replay = { status: 'RUNNING', executed: 0, total: 0 };
             this.render();
             this.replay = await input.actions.replay((executed, total) => {
@@ -473,6 +504,9 @@ export class RecordingConsole {
                 picked,
                 known: this.pickKnown,
                 ...(command.option ? { option: command.option } : {}),
+                ...(command.column && command.variable
+                  ? { binding: { column: command.column, key: command.variable } }
+                  : {}),
               });
               if ('error' in outcome)
                 this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
@@ -483,9 +517,17 @@ export class RecordingConsole {
                 // Le flow change : un rejeu fait avant ne le valide plus.
                 this.replay = undefined;
                 this.saved = undefined;
-                // La fenêtre montre la correction tout de suite ; la session (navigateur, fin de mission)
-                // se ferme en arrière-plan, sans bloquer la revue (un « Rejouer » juste après est accepté).
-                void input.actions.releaseCorrection?.();
+                const step = this.state().actions.find((entry) => entry.id === command.id);
+                if (outcome.resumable !== undefined && input.actions.resumeReplay)
+                  // La page tenue est devant l'étape corrigée : « Reprendre ici » garde le contexte.
+                  this.resume = {
+                    stepId: command.id,
+                    // Le numéro que montre le parcours (la position du flow compte les vérifications ajoutées).
+                    index: step?.index ?? outcome.resumable,
+                    description: step?.description ?? `#${String(outcome.resumable)}`,
+                  };
+                // Sinon la session (navigateur, fin de mission) se ferme en arrière-plan, sans bloquer la revue.
+                else void input.actions.releaseCorrection?.();
               }
             }
           } else if (command.type === 'correct-restore' && command.id && input.actions.restoreTarget) {
@@ -598,6 +640,7 @@ export class RecordingConsole {
         this.recorder.cancelPick();
         this.pick = undefined;
         this.picked = undefined;
+        this.resume = undefined;
         if (!recording) await this.reviewActions?.releaseCorrection?.();
         break;
       case 'correct-test': {
@@ -636,6 +679,7 @@ export class RecordingConsole {
           picked,
           { known: this.pickKnown },
           command.option,
+          command.column && command.variable ? { column: command.column, key: command.variable } : undefined,
         );
         this.notice =
           'error' in outcome ? { actionId: command.id, kind: 'error', message: outcome.error } : undefined;
@@ -734,7 +778,9 @@ export class RecordingConsole {
       proposal: panelProposalOf(proposal),
     };
     this.render();
-    await this.refreshPreview(
+    // L'aperçu se rafraîchit SANS retenir la revue : « Valider » cliqué aussitôt la proposition affichée
+    // est accepté (une commande reçue pendant que la revue est occupée serait abandonnée).
+    void this.refreshPreview(
       picked.rect ? { actionId: stepId, ...picked.rect, label: proposal.label } : undefined,
     );
   }
@@ -861,6 +907,7 @@ export class RecordingConsole {
       // Le cockpit s'ouvre complet quand le dock dans la page a demandé la fenêtre.
       layout: this.layout === 'docked' ? 'full' : this.layout,
       ...(this.focus ? { focus: this.focus } : {}),
+      ...(this.resume ? { resume: this.resume } : {}),
     };
   }
 }
@@ -983,10 +1030,14 @@ function panelProposalOf(proposal: CorrectionProposal): NonNullable<PanelState['
               .map(([column, value]) => `${column} = ${value}`)
               .join(', '),
             ...(option.via ? { via: option.via } : {}),
+            ...(option.match ? { match: option.match } : {}),
             ...(option.fixed ? { fixed: true } : {}),
           })),
         }
       : {}),
+    ...(proposal.rowCells ? { rowCells: proposal.rowCells } : {}),
+    ...(proposal.rowCells ? { baseTarget: describeTarget(withoutRow(proposal.target)) } : {}),
+    ...(proposal.variables ? { variables: proposal.variables } : {}),
     quality: proposal.quality,
     label: proposal.label,
     order: proposal.order,
@@ -994,6 +1045,12 @@ function panelProposalOf(proposal: CorrectionProposal): NonNullable<PanelState['
     ambiguous: proposal.ambiguous,
     traits: proposal.traits,
   };
+}
+
+/** Une cible sans sa ligne de tableau (la liaison manuelle de la fenêtre y ajoute la sienne). */
+function withoutRow(target: CorrectionProposal['target']): CorrectionProposal['target'] {
+  const { row: _row, ...rest } = target;
+  return rest;
 }
 
 /** Les fichiers du flow (YAML, .feature) régénérés après un changement du flow en revue. */
