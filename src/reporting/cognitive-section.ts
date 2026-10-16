@@ -92,10 +92,11 @@ export function cognitiveSection(result: ExplorationResult, language: ReportLang
     <h3>${esc(t.hypotheses)}</h3><p class="muted">${esc(statuses)}</p>${list(summary.hypotheses.top.map((hypothesis) => `${hypothesis.id} ${hypothesis.proposition} — ${hypothesis.status} (${String(hypothesis.confidence)})`))}
     ${
       summary.hypothesisDetails.length > 0
-        ? `<h3>${esc(t.hypothesisDetail)}</h3><table><thead><tr><th>id</th><th>type</th><th>origin</th><th>description</th><th>for</th><th>against</th><th>confidence</th><th>status</th><th>created</th><th>last evaluated</th></tr></thead><tbody>${summary.hypothesisDetails
+        ? `<h3>${esc(t.hypothesisDetail)}</h3><table><thead><tr><th>hypothesis</th><th>origin</th><th>description</th><th>evidence</th><th>status</th><th>timeline</th></tr></thead><tbody>${summary.hypothesisDetails
             .map(
               (detail) =>
-                `<tr><td>${esc(detail.id)}</td><td>${esc(detail.type)}</td><td>${esc(detail.origin)}${detail.aiDecisionId ? ` (${esc(detail.aiDecisionId)})` : ''}${detail.sourceRecording ? `<br><span class="muted">recording ${esc(detail.sourceRecording)}</span>` : ''}</td><td class="wrap">${esc(detail.description)}</td><td>${esc(detail.supportingEvidence.join(', '))}</td><td>${esc(detail.contradictingEvidence.join(', '))}</td><td>${String(detail.confidence)}</td><td>${esc(detail.status)}</td><td>${esc(detail.createdAt)}</td><td>${esc(detail.lastEvaluatedAt)}</td></tr>`,
+                // Six colonnes : preuves pour / contre et horodatages regroupés, coupables — le tableau tient dans la carte.
+                `<tr><td><b>${esc(detail.id)}</b><div class="muted">${esc(detail.type)}</div></td><td>${esc(detail.origin)}${detail.aiDecisionId ? ` (${esc(detail.aiDecisionId)})` : ''}${detail.sourceRecording ? `<br><span class="muted">recording ${esc(detail.sourceRecording)}</span>` : ''}</td><td class="wrap">${esc(detail.description)}</td><td class="wrap"><div><span class="muted">for</span> <span class="brk">${esc(detail.supportingEvidence.join(', ') || '—')}</span></div><div><span class="muted">against</span> <span class="brk">${esc(detail.contradictingEvidence.join(', ') || '—')}</span></div></td><td><b>${esc(detail.status)}</b><div class="muted">${String(detail.confidence)}</div></td><td class="muted"><div class="brk">${esc(detail.createdAt)}</div><div class="brk">${esc(detail.lastEvaluatedAt)}</div></td></tr>`,
             )
             .join('')}</tbody></table>`
         : ''

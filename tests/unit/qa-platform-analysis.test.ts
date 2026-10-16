@@ -133,6 +133,16 @@ describe('QA platform — anomalies: symptom, probable cause, category', () => {
             issue({ id: 'ISSUE-0004', type: 'AUTHORIZATION', message: 'reader reached /admin' }),
             issue({ id: 'ISSUE-0005', type: 'WRITE_BLOCKED', message: 'blocked' }),
             issue({ id: 'ISSUE-0006', type: 'CONTRACT', message: 'undeclared 201' }),
+            issue({
+              id: 'ISSUE-0007',
+              type: 'INVARIANT',
+              message: 'invariant NO-SERVER-ERROR: observed GET /api/stats → 500',
+            }),
+            issue({
+              id: 'ISSUE-INV-0001',
+              type: 'INVARIANT',
+              message: 'invariant ADMIN-ONLY (reader): expected DENIED, observed ALLOWED',
+            }),
           ],
         },
       ),
@@ -143,6 +153,9 @@ describe('QA platform — anomalies: symptom, probable cause, category', () => {
       'NETWORK_FAILURE',
       'AUTHORIZATION_FAILURE',
       'CONTRACT_FAILURE',
+      // Un invariant d'écran est un défaut fonctionnel ; seul un invariant d'accès est une autorisation.
+      'FUNCTIONAL_FAILURE',
+      'AUTHORIZATION_FAILURE',
     ]);
     expect(anomalies[0]?.issueIds).toEqual(['ISSUE-0003']);
     expect(anomalies[4]?.source).toBe('CONTRACT');
@@ -152,6 +165,8 @@ describe('QA platform — anomalies: symptom, probable cause, category', () => {
       'ANOMALY-003',
       'ANOMALY-004',
       'ANOMALY-005',
+      'ANOMALY-006',
+      'ANOMALY-007',
     ]);
   });
 });

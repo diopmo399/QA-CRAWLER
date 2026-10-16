@@ -125,6 +125,16 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Corrigé
 
+- **Rapport HTML : des tableaux qui tiennent dans leur carte.** Décisions IA en quatre colonnes (décision,
+  proposition, contrôles, résultat) au lieu de treize, le contexte fonctionnel sur sa propre ligne ; anomalies
+  du run en cinq colonnes (la gravité rejoint la catégorie, régression · source · confiance deviennent des
+  indices) ; hypothèses du moteur cognitif en six colonnes (preuves pour / contre et horodatages regroupés).
+  Les mots restent entiers (plus de « Paramètre|s ») ; seuls les longs jetons (URL, identifiants,
+  localisateurs) se coupent ; les tableaux imbriqués sont plus compacts. Vérifié en navigateur : une fois
+  tout déplié, aucun tableau ne dépasse sa carte à 1366 et 1920 px (`ai-blocked-goal`).
+- **Une violation d'invariant n'est plus classée « autorisation ».** « Aucune erreur serveur » et les autres
+  invariants d'écran sont des `FUNCTIONAL_FAILURE` ; seuls les invariants d'accès (`ISSUE-INV-…`, « l'acteur
+  X n'accède pas à… ») restent des `AUTHORIZATION_FAILURE`.
 - Fenêtre d'enregistrement : le pictogramme du geste de chaque étape (clic, saisie, case…) affichait
   « undefined » pour une saisie et rien pour un clic — deux tables `SVG` du même script se
   masquaient. Table des gestes à part (`KIND_SVG`), test unitaire et assertion E2E.
