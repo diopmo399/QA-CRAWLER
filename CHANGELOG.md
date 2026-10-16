@@ -6,6 +6,34 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Restauration du contexte à la reprise d'un rejeu corrigé** (`src/replay/context-checkpoint.ts`,
+  `src/replay/context-capture.ts`, session de correction, fenêtre du recorder ; `docs/CONTEXT_RECOVERY.md`).
+  Un checkpoint de contexte est pris devant chaque étape de la session (URL complète, route, cadres, onglets,
+  dialogue, champs, défilement, contrôles, données du run, étapes à effet métier, préconditions). Après une
+  correction validée, **Reprendre ici** compare la page tenue au checkpoint et décide : REVALIDATE (préconditions
+  dures vérifiées), RESTORE (les étapes qui remplissent les champs perdus), REBUILD (les étapes précédentes avec
+  les mêmes données du run) ou MANUAL_RECOVERY (session expirée, création qui serait répétée, précondition non
+  satisfaite). L'étape corrigée et la suite sont rejouées dans la même session ; un échec suivant garde la page
+  devant l'étape en échec. `TestDataRunContext.seed()`, `replay.contextRecovery`, `replay-checkpoints.json`
+  (empreintes), événements `REPLAY_CONTEXT_RECOVERY`, `REPLAY_RESUMED`, `REPLAY_RESUME_BLOCKED`. Tests unitaires
+  (17) et d'intégration `recording-context-recovery`.
+- **Bloc de correction redessiné** (fenêtre du recorder). Cartes Avant / Après lisibles (rôle, nom de l'élément,
+  ligne du tableau sur sa propre ligne, donnée du run en pastille ; la cible brute reste en infobulle), façons
+  d'identifier la ligne en cartes à choisir (« Recommandé », « Propre à ce run »), avertissements en encarts,
+  ordre de résolution sur une ligne, traits techniques repliés dans « Détails techniques », Tester / Annuler /
+  Valider sur une seule ligne, en-tête de l'action masqué pendant la correction. L'historique d'une correction
+  utilise les mêmes cartes. Grand écran (≥ 1400 px) : la colonne du détail grandit avec l'écran (34 %, de 440 à
+  760 px), une action du parcours tient sur une ligne, le titre « Enregistrement terminé » en double disparaît ;
+  Valider n'est jamais coupé ; un replay réussi liste ses coches sur une ligne.
+- **Ligne liée à une donnée du run : le lien répété n'est plus une ambiguïté.** Le contrôle de corrélation compte la cible
+  dans la ligne qui porte la donnée (et non tous les liens identiques de l'écran) : une ligne `~${testData:clé}` trouvée
+  seule passe ; plusieurs lignes qui portent la donnée restent refusées (rien n'est exécuté, quel que soit `rowPick`).
+  Test d'intégration `table-row`.
+- **Ligne de tableau : liaison plus robuste et liaison manuelle.** Une cellule qui contient la donnée du run (accents, casse,
+  espaces, suffixe ignorés) est liée avec un critère « contient » ; sinon la fenêtre le dit et propose **Lier une colonne à
+  une donnée du run** (colonnes de la ligne et données du run avec leur valeur ; `RowBinding`, commande `correct-apply`
+  avec `column` et `variable`). La colonne des détails ne déborde plus (titre de la correction qui passe à la ligne, cible
+  JSON et CSS longs coupés, « Copier » entier).
 - **Correction manager** (`src/recording/target-correction.ts`, fenêtre du recorder, script de capture) :
   corriger la cible d'une action **dans le navigateur**. Mode sélection dans la page (bandeau, élément
   survolé encadré avec rôle · nom · test id, clic jamais transmis à l'application, Échap annule) ; dans la

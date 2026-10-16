@@ -784,6 +784,13 @@ export type RecordingEventType =
   | 'RECORDING_SAVED'
   | 'RECORDING_STEP_REMOVED'
   | 'RECORDING_TARGET_CORRECTED'
+  /**
+   * RESTAURATION DU CONTEXTE (revue) : la stratégie décidée à la reprise d'un rejeu corrigé (REVALIDATE,
+   * RESTORE, REBUILD, MANUAL_RECOVERY), la reprise elle-même, et une reprise bloquée (pourquoi).
+   */
+  | 'REPLAY_CONTEXT_RECOVERY'
+  | 'REPLAY_RESUMED'
+  | 'REPLAY_RESUME_BLOCKED'
   | 'RECORDING_INTENT_REVIEWED'
   | 'RECORDING_TEST_DATA_BOUND'
   | 'SEMANTIC_ACTION_RESOLVED'

@@ -50,14 +50,22 @@ const form = (
  */
 const list = (
   item: { id: number; name: string } | undefined,
+  /** Comme une vraie liste de travail : clé de gestion, nom décoré, lien dans des composants imbriqués. */
+  decorated = false,
 ): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Requests</title></head>
 <body>
 <h1>Requests</h1>
 <form onsubmit="return false"><label>First name <input name="firstName" autocomplete="off"></label></form>
 <button type="button" id="create" onclick="fetch('/api/items', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: document.querySelector('[name=firstName]').value }) }).then(() => { location.href = '/form'; })">Create item</button>
-<table id="items" aria-label="Requests"><thead><tr><th>N°</th><th>Name</th><th>Created</th><th>Actions</th></tr></thead><tbody>
+${
+  decorated
+    ? `<main><div></div><div></div><div><request-grid-panel><table id="items" aria-label="Requests"><thead><tr><th>Business key</th><th>Company</th><th>Created</th><th>Actions</th></tr></thead><tbody>
+${item ? `<tr><td>${String(item.id)}</td><td>${item.name.toUpperCase()} — Nouvelle</td><td>2026-01-02</td><td><ui-link><a href="/item"><span>Open request for processing</span></a></ui-link></td></tr>` : ''}
+</tbody></table></request-grid-panel></div></main>`
+    : `<table id="items" aria-label="Requests"><thead><tr><th>N°</th><th>Name</th><th>Created</th><th>Actions</th></tr></thead><tbody>
 ${item ? `<tr><td>${String(item.id)}</td><td>${item.name}</td><td>2026-01-02</td><td><a href="/item">Open</a></td></tr>` : ''}
-</tbody></table>
+</tbody></table>`
+}
 </body></html>`;
 
 const ITEM = (
@@ -76,6 +84,12 @@ export interface DeterministicRecordingApp {
   renamed: number | undefined;
   /** true : la variante « liste » (création → ligne de tableau numérotée → lien « Open »). */
   table: boolean;
+  /** true : la liste comme une vraie liste de travail (clé de gestion, nom en majuscules suivi d'un statut, lien imbriqué). */
+  decorated: boolean;
+  /** Le nombre de créations reçues par le serveur (une reprise ne doit jamais en répéter une). */
+  readonly created: number;
+  /** Le dernier élément créé (numéro, nom saisi). */
+  readonly lastItem: { id: number; name: string } | undefined;
   close: () => Promise<void>;
 }
 
@@ -84,9 +98,10 @@ export async function startDeterministicRecordingApp(): Promise<DeterministicRec
     broken: boolean;
     renamed: number | undefined;
     table: boolean;
+    decorated: boolean;
     nextId: number;
     item: { id: number; name: string } | undefined;
-  } = { broken: false, renamed: undefined, table: false, nextId: 3024, item: undefined };
+  } = { broken: false, renamed: undefined, table: false, decorated: false, nextId: 3024, item: undefined };
   const server: Server = createServer((request, response) => {
     const route = (request.url ?? '/').split('?')[0];
     if (route === '/api/items' && request.method === 'POST') {
@@ -113,7 +128,8 @@ export async function startDeterministicRecordingApp(): Promise<DeterministicRec
     }
     response.setHeader('content-type', 'text/html; charset=utf-8');
     if (route === '/done') response.end(DONE);
-    else if (state.table) response.end(route === '/item' ? ITEM(state.item) : list(state.item));
+    else if (state.table)
+      response.end(route === '/item' ? ITEM(state.item) : list(state.item, state.decorated));
     else response.end(form(state.broken, state.renamed));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -134,6 +150,18 @@ export async function startDeterministicRecordingApp(): Promise<DeterministicRec
     },
     get table() {
       return state.table;
+    },
+    get decorated() {
+      return state.decorated;
+    },
+    set decorated(value: boolean) {
+      state.decorated = value;
+    },
+    get created() {
+      return state.nextId - 3024;
+    },
+    get lastItem() {
+      return state.item;
     },
     set table(value: boolean) {
       state.table = value;

@@ -25,6 +25,7 @@ import {
   type CorrectionProposal,
   type KnownValue,
   type PickedElement,
+  type RowBinding,
 } from './target-correction.js';
 import type { FlowTarget } from '../config/flow-schema.js';
 import { resolveRecordedTarget } from './recorded-target.js';
@@ -568,6 +569,7 @@ export class HumanFlowRecorder {
     picked: PickedElement,
     context: CorrectionContext = {},
     option?: string,
+    binding?: RowBinding,
   ): { action: LiveAction; proposal: CorrectionProposal } | { error: string } {
     const action = this.timeline.actions.find((entry) => entry.id === actionId);
     if (!action) return { error: 'NOT_FOUND' };
@@ -589,6 +591,7 @@ export class HumanFlowRecorder {
       this.timeline.language,
       context,
       option,
+      binding,
     );
     if ('error' in outcome) return outcome;
     const said = describeTarget(outcome.proposal.target);

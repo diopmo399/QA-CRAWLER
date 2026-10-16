@@ -78,7 +78,19 @@ export interface PanelPick {
      * run (`via` : sa clé ou la valeur saisie) ; `key` : par la clé lue dans le tableau, `fixed` quand
      * elle est propre à ce run (le prochain rejeu ne la retrouvera pas).
      */
-    rowOptions?: { id: 'bound' | 'key'; target: string; row: string; via?: string; fixed?: boolean }[];
+    rowOptions?: {
+      id: 'bound' | 'key' | 'manual';
+      target: string;
+      row: string;
+      via?: string;
+      match?: 'exact' | 'contains';
+      fixed?: boolean;
+    }[];
+    /** La cible sans sa ligne (la liaison manuelle y ajoute la sienne). */
+    baseTarget?: string;
+    /** LIAISON MANUELLE : les cellules de la ligne et les données du run (clé → valeur actuelle, non sensibles). */
+    rowCells?: { column: string; value: string }[];
+    variables?: { key: string; value: string }[];
     quality: string;
     label: string;
     order: string[];
@@ -144,6 +156,17 @@ export interface PanelReplay {
     details: string[];
   };
   report?: string;
+  /**
+   * LA REPRISE après une correction (contexte gardé) : la stratégie décidée, l'étape où le rejeu a repris,
+   * pourquoi, les étapes rejouées pour restaurer ou reconstruire, et ce qui bloque une reprise manuelle.
+   */
+  recovery?: {
+    strategy: 'RESTORE' | 'REBUILD' | 'REVALIDATE' | 'MANUAL_RECOVERY';
+    from: number;
+    reasons: string[];
+    recovered: number[];
+    blockedBy?: { step?: number; reason: string }[];
+  };
 }
 
 export interface PanelAnalysis {
@@ -341,6 +364,8 @@ export interface PanelState {
   layout?: 'full' | 'compact';
   /** L'étape à montrer (sélectionnée, défilée) à l'ouverture de la fenêtre depuis le dock (« Résoudre »). */
   focus?: string;
+  /** Une correction validée dans une page tenue : le rejeu peut REPRENDRE à cette étape (contexte gardé). */
+  resume?: { stepId: string; index: number; description: string; running?: boolean };
   /** L'aperçu est ouvert dans sa propre fenêtre (la fenêtre principale garde le parcours et les détails). */
   previewDetached?: boolean;
 }

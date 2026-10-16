@@ -224,7 +224,7 @@ describe('target correction: table rows (dynamic row key)', () => {
       row: { Name: '${testData:request.name}' },
     });
     expect(proposal.rowOptions).toEqual([
-      { id: 'bound', row: { Name: '${testData:request.name}' }, via: 'request.name' },
+      { id: 'bound', row: { Name: '${testData:request.name}' }, via: 'request.name', match: 'exact' },
       { id: 'key', row: { 'N°': '3027' }, fixed: true },
     ]);
     expect(proposalTarget(proposal, 'key')).toEqual({ ...previousRow, row: { 'N°': '3027' } });
@@ -233,9 +233,67 @@ describe('target correction: table rows (dynamic row key)', () => {
 
   it('recording: the typed value has no key yet — the row cites the literal (the stop cites it as test data)', () => {
     const proposal = proposeCorrection(link, 'click', 'fr', { known: [{ value: 'northwind' }] }, cells);
-    expect(proposal.rowOptions?.[0]).toEqual({ id: 'bound', row: { Name: 'Northwind' }, via: 'Northwind' });
+    expect(proposal.rowOptions?.[0]).toEqual({
+      id: 'bound',
+      row: { Name: 'Northwind' },
+      via: 'Northwind',
+      match: 'exact',
+    });
     // Sans ancienne cible sur la même colonne, la clé n'est pas dite propre au run.
     expect(proposal.rowOptions?.[1]).toEqual({ id: 'key', row: { 'N°': '3027' } });
+  });
+
+  it('a cell that CONTAINS the run value (a suffix, accents, spaces): bound with a contains criterion', () => {
+    const decorated = [
+      { column: 'N°', value: '3027' },
+      { column: 'Raison', value: '  NORTHWÏND  inc. — Nouvelle ' },
+    ];
+    const proposal = proposeCorrection(
+      link,
+      'click',
+      'fr',
+      { known: [{ key: 'company.name', value: 'Northwind' }] },
+      decorated,
+    );
+    expect(proposal.rowOptions?.[0]).toEqual({
+      id: 'bound',
+      row: { Raison: '~${testData:company.name}' },
+      via: 'company.name',
+      match: 'contains',
+    });
+    // Pendant l'enregistrement (aucune clé) : jamais « contient » — la valeur littérale ne serait pas citée à l'arrêt.
+    const literal = proposeCorrection(link, 'click', 'fr', { known: [{ value: 'Northwind' }] }, decorated);
+    expect(literal.rowOptions?.map((option) => option.id)).toEqual(['key']);
+  });
+
+  it('MANUAL binding: a row column bound to a run value, only among the cells and values proposed', () => {
+    const proposal = proposeCorrection(
+      link,
+      'click',
+      'fr',
+      {
+        known: [
+          { key: 'company.name', value: 'Acme' },
+          { key: 'company.city', value: 'Laval' },
+        ],
+      },
+      cells,
+    );
+    expect(proposal.rowCells).toEqual(cells);
+    expect(proposal.variables).toEqual([
+      { key: 'company.name', value: 'Acme' },
+      { key: 'company.city', value: 'Laval' },
+    ]);
+    expect(proposalTarget(proposal, 'manual', { column: 'Name', key: 'company.name' }).row).toEqual({
+      Name: '~${testData:company.name}',
+    });
+    // Une colonne ou une donnée inconnue : la liaison est refusée, la cible proposée reste.
+    expect(proposalTarget(proposal, 'manual', { column: 'Secret', key: 'company.name' })).toEqual(
+      proposal.target,
+    );
+    expect(proposalTarget(proposal, 'manual', { column: 'Name', key: 'user.password' })).toEqual(
+      proposal.target,
+    );
   });
 
   it('no known value in the row: only the table key, the target is the resolver one', () => {
@@ -275,6 +333,18 @@ describe('target correction: table rows (dynamic row key)', () => {
     });
     expect(!('error' in outcome) && outcome.correction.next.row).toEqual({ Name: 'Northwind' });
     expect(events[0]?.element?.rowKey).toEqual([{ column: 'Name', value: 'Northwind' }]);
+    const manual = correctRawEvents(
+      events,
+      ['r1'],
+      { element: link, rowCells: cells },
+      'click',
+      3,
+      'fr',
+      { known: [{ key: 'item.title', value: 'Q3 report' }] },
+      'manual',
+      { column: 'Name', key: 'item.title' },
+    );
+    expect(!('error' in manual) && manual.correction.next.row).toEqual({ Name: '~${testData:item.title}' });
     const asKey = correctRawEvents(
       events,
       ['r1'],
