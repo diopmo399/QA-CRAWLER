@@ -63,7 +63,7 @@ describe('Recording — human correction of action intents (analysis window)', (
         await pause(900);
       },
       reviewDriver: async ({ panel }) => {
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         // Le flow physique AVANT toute revue : il doit rester identique.
         const recordings = path.join(reportsDir, 'recordings');
         const [folder] = await readdir(recordings);

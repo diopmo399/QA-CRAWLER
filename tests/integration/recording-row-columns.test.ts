@@ -57,7 +57,7 @@ describe('Row columns — the row is redefined column by column in the review, w
         await page.waitForTimeout(600);
       },
       reviewDriver: async ({ panel }) => {
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         await row(panel, /Cliquer sur "Open"/).click();
         await panel.locator('#details').getByRole('button', { name: 'Modifier la ligne' }).click();
         await column(panel, 'Name', 'on').waitFor();
@@ -77,7 +77,10 @@ describe('Row columns — the row is redefined column by column in the review, w
         await panel.locator('#details').getByRole('button', { name: 'Modifier la ligne' }).waitFor();
         seen.after = await panel.locator('#details .correction').innerText();
         await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
-        await panel.getByText(/✓ Replay réussi|✕ Replay interrompu/).waitFor({ timeout: 180_000 });
+        await panel
+          .locator('#review')
+          .getByText(/Rejeu réussi|Rejeu interrompu/)
+          .waitFor({ timeout: 180_000 });
         seen.replay = await panel.locator('#review').innerText();
         await panel.getByRole('button', { name: 'Fermer' }).click();
       },
@@ -118,6 +121,6 @@ describe('Row columns — the row is redefined column by column in the review, w
   });
 
   it('the next replay creates another row and finds it by these columns', () => {
-    expect(seen.replay).toContain('✓ Replay réussi');
+    expect(seen.replay).toContain('Rejeu réussi');
   });
 });

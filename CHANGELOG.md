@@ -6,6 +6,23 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Nouveau design de la fenêtre du recorder et de la barre d'enregistrement**
+  (`src/recording/recorder-panel-html.ts`, `src/recording/capture-script.ts` ; `docs/HUMAN_FLOW_RECORDER.md`).
+  Polices IBM Plex Sans et Mono intégrées (`assets/fonts`, SIL OFL 1.1, copiées dans le paquet ; rien du
+  réseau). Un en-tête unique : « QA-CRAWLER / flow », pastille d'état et chrono, chiffres clés (actions,
+  requêtes reliées ou à vérifier, qualité) et les actions de la phase (Annuler la dernière / Pause /
+  Arrêter, puis Fermer / Rejouer / Sauvegarder le flow) ; la barre de résumé du bas et la carte qualité
+  disparaissent. Onglets soulignés Parcours, Réseau, Données de test (revue), Analyse. Le parcours : une
+  ligne par action (numéro, pictogramme, phrase avec la valeur en puce et le champ en gras, statut en
+  point et en mot ; Rejouée / Échec / Non rejouée après un rejeu), groupes par écran, étapes métier en
+  tête de groupe en revue. L'inspecteur suit la dernière action pendant l'enregistrement ; en revue,
+  sous-onglets Détails / Cible / Réseau, clés-valeurs en mots (élément, emplacement, repérage, donnée),
+  source de la valeur résumée (Modifier ouvre l'éditeur), Retirer l'étape. La correction devient la
+  carte « Corriger la cible » (Avant / Après, « Identifier la ligne par » colonne par colonne avec Source
+  et Comparaison, aperçu, détails techniques repliés). Barre dans la page : sombre, point rouge et chrono,
+  Ajouter une vérification, icônes Annuler / Pause, Arrêter, notification blanche, version réduite en
+  pastille ; ses polices sont ajoutées sous un nom propre à QA-CRAWLER, aucune feuille de style de
+  l'application n'est touchée. Thème clair et sombre.
 - **Fournisseur IA Anthropic** (`ai.provider: anthropic`, `--ai-provider anthropic`) : un modèle de
   l'API Anthropic comme conseiller de raisonnement, par le SDK officiel `@anthropic-ai/sdk`
   (dépendance optionnelle, chargée dynamiquement). Même circuit que Copilot : requête nettoyée,
