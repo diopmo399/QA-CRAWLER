@@ -1,4 +1,5 @@
 import type { FlowStep, FlowTarget } from '../config/flow-schema.js';
+import { isSensitiveKey } from '../data/test-data-set.js';
 import type {
   RawRecordedEvent,
   RecordedElement,
@@ -57,6 +58,11 @@ export interface KnownValue {
 export interface CorrectionContext {
   known?: readonly KnownValue[];
   previous?: FlowTarget;
+  /**
+   * REVUE : une colonne peut créer une nouvelle donnée du jeu de test ; `taken` : les clés déjà prises
+   * (aucune donnée existante n'est écrasée). Absent pendant l'enregistrement (le jeu n'existe pas encore).
+   */
+  newVariables?: { taken: readonly string[] };
 }
 
 /**
@@ -78,6 +84,34 @@ export interface RowOption {
 export interface RowBinding {
   column: string;
   key: string;
+}
+
+/**
+ * UNE COLONNE DE LA LIGNE choisie par l'humain, et la source de sa valeur au rejeu :
+ *
+ *   recorded       la valeur lue dans la ligne (fixe) ;
+ *   value          une valeur saisie dans la fenêtre (fixe) ;
+ *   variable       une donnée du run (`${testData:clé}`) ;
+ *   new-variable   une NOUVELLE donnée du jeu de test, créée à partir de la valeur (revue seulement) :
+ *                  test-data.yaml la porte, on la modifie là sans toucher au flow.
+ *
+ * Plusieurs colonnes se combinent (toutes doivent correspondre) ; `contains` : la cellule contient la valeur.
+ */
+export interface RowColumnChoice {
+  column: string;
+  source: 'recorded' | 'value' | 'variable' | 'new-variable';
+  /** value : la valeur saisie ; new-variable : sa valeur initiale (la cellule par défaut). */
+  value?: string;
+  /** variable : la donnée citée ; new-variable : le nom de la nouvelle donnée. */
+  key?: string;
+  match?: 'exact' | 'contains';
+}
+
+/** Une donnée créée par une liaison de colonne : à ajouter au jeu de test (revue). */
+export interface CreatedRowVariable {
+  key: string;
+  value: string;
+  column: string;
 }
 
 /** La proposition de correction : la nouvelle cible, ses replis et l'ordre de résolution au rejeu. */
@@ -261,20 +295,102 @@ function withRow(target: FlowTarget, row: Record<string, string>): FlowTarget {
 /**
  * La cible de la proposition pour l'option de ligne choisie (la première par défaut). `manual` : la colonne
  * et la donnée choisies par l'humain, seulement parmi les cellules de la ligne et les données du run proposées.
+ * `columns` : les colonnes choisies une à une (`rowOfColumns`) ; un choix invalide garde la cible proposée.
  */
 export function proposalTarget(
   proposal: CorrectionProposal,
   option?: string,
   binding?: RowBinding,
+  columns?: readonly RowColumnChoice[],
 ): FlowTarget {
+  const chosen = chosenTarget(proposal, option, binding, columns, {});
+  return 'target' in chosen ? chosen.target : proposal.target;
+}
+
+const COLUMN_VALUE = 60;
+const KEY = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$/;
+
+/**
+ * LA LIGNE PAR SES COLONNES : chaque colonne choisie doit exister dans la ligne ; une donnée citée doit
+ * être une donnée du run proposée ; une nouvelle donnée a un nom valide, libre, jamais sensible. Une valeur
+ * saisie ne peut pas citer une autre source (`${…}`) : elle reste un texte.
+ */
+export function rowOfColumns(
+  cells: readonly { column: string; value: string }[],
+  variables: readonly { key: string; value: string }[],
+  choices: readonly RowColumnChoice[],
+  newVariables?: { taken: readonly string[] },
+): { row: Record<string, string>; created: CreatedRowVariable[] } | { error: string } {
+  if (choices.length === 0) return { error: 'choose at least one column of the row' };
+  if (choices.length > 6) return { error: 'at most 6 columns identify a row' };
+  const row: Record<string, string> = {};
+  const created: CreatedRowVariable[] = [];
+  for (const choice of choices) {
+    const cell = cells.find((entry) => entry.column === choice.column);
+    if (!cell) return { error: `column "${choice.column}" is not in the row` };
+    if (row[cell.column] !== undefined) return { error: `column "${cell.column}" is chosen twice` };
+    let value: string;
+    if (choice.source === 'recorded') value = cell.value;
+    else if (choice.source === 'value') {
+      const typed = (choice.value ?? '').trim().replace(/^~/, '').trim();
+      if (!typed) return { error: `column "${cell.column}": the value is empty` };
+      if (typed.length > COLUMN_VALUE) return { error: `column "${cell.column}": the value is too long` };
+      if (typed.includes('${'))
+        return { error: `column "${cell.column}": a typed value cannot cite a variable` };
+      value = typed;
+    } else if (choice.source === 'variable') {
+      const variable = variables.find((entry) => entry.key === choice.key);
+      if (!variable)
+        return { error: `column "${cell.column}": "${choice.key ?? ''}" is not a variable of the run` };
+      value = `\${testData:${variable.key}}`;
+    } else {
+      if (!newVariables) return { error: 'a new variable is created during the review only' };
+      const key = (choice.key ?? '').trim();
+      if (!KEY.test(key)) return { error: `"${key}" is not a valid variable name (object.attribute)` };
+      if (isSensitiveKey(key))
+        return { error: `"${key}" names a sensitive value: never written to the test data` };
+      if (
+        newVariables.taken.includes(key) ||
+        variables.some((entry) => entry.key === key) ||
+        created.some((entry) => entry.key === key)
+      )
+        return { error: `the variable "${key}" already exists` };
+      const initial = (choice.value ?? cell.value).trim();
+      if (!initial) return { error: `variable "${key}": the value is empty` };
+      if (initial.length > COLUMN_VALUE) return { error: `variable "${key}": the value is too long` };
+      created.push({ key, value: initial, column: cell.column });
+      value = `\${testData:${key}}`;
+    }
+    row[cell.column] = choice.match === 'contains' ? `~${value}` : value;
+  }
+  return { row, created };
+}
+
+/** La cible choisie (option, liaison manuelle ou colonnes) et les données qu'elle crée. */
+function chosenTarget(
+  proposal: CorrectionProposal,
+  option: string | undefined,
+  binding: RowBinding | undefined,
+  columns: readonly RowColumnChoice[] | undefined,
+  context: CorrectionContext,
+): { target: FlowTarget; created: CreatedRowVariable[] } | { error: string } {
+  if (option === 'columns') {
+    if (!proposal.rowCells || !columns) return { error: 'the element is not in a table row' };
+    const outcome = rowOfColumns(proposal.rowCells, proposal.variables ?? [], columns, context.newVariables);
+    if ('error' in outcome) return outcome;
+    return { target: withRow(proposal.target, outcome.row), created: outcome.created };
+  }
   if (option === 'manual' && binding) {
     const column = proposal.rowCells?.find((cell) => cell.column === binding.column);
     const variable = proposal.variables?.find((entry) => entry.key === binding.key);
     if (column && variable)
-      return withRow(proposal.target, { [column.column]: `~\${testData:${variable.key}}` });
+      return {
+        target: withRow(proposal.target, { [column.column]: `~\${testData:${variable.key}}` }),
+        created: [],
+      };
   }
   const chosen = option ? proposal.rowOptions?.find((entry) => entry.id === option) : undefined;
-  return chosen ? withRow(proposal.target, chosen.row) : proposal.target;
+  return { target: chosen ? withRow(proposal.target, chosen.row) : proposal.target, created: [] };
 }
 
 /** L'étape porte-t-elle une cible corrigeable (clic, saisie, sélection, case) ? */
@@ -295,8 +411,15 @@ export function correctFlowTarget(
   context: CorrectionContext = {},
   option?: string,
   binding?: RowBinding,
+  columns?: readonly RowColumnChoice[],
 ):
-  { step: RecordedFlowStep; correction: TargetCorrection; proposal: CorrectionProposal } | { error: string } {
+  | {
+      step: RecordedFlowStep;
+      correction: TargetCorrection;
+      proposal: CorrectionProposal;
+      created: CreatedRowVariable[];
+    }
+  | { error: string } {
   const item = flow.steps.find((entry) => entry.id === stepId);
   if (!item) return { error: `step ${stepId} not found` };
   if (!hasTarget(item.step)) return { error: `step ${stepId} (${item.step.kind}) has no target to correct` };
@@ -307,7 +430,9 @@ export function correctFlowTarget(
     { ...context, previous: item.step.target },
     picked.rowCells ?? [],
   );
-  const next = proposalTarget(proposal, option, binding);
+  const chosen = chosenTarget(proposal, option, binding, columns, context);
+  if ('error' in chosen) return chosen;
+  const next = chosen.target;
   const correction: TargetCorrection = {
     at,
     previous: item.step.target,
@@ -321,7 +446,54 @@ export function correctFlowTarget(
   item.targetValidation = { status: 'USER_CORRECTED', repaired: false, requiresReplayValidation: false };
   item.corrections = [...(item.corrections ?? []), correction];
   item.explanation = `${item.explanation} — target corrected by the user in the browser: ${describeTarget(correction.previous)} → ${describeTarget(correction.next)}`;
-  return { step: item, correction, proposal };
+  return { step: item, correction, proposal, created: chosen.created };
+}
+
+/**
+ * Les cellules de la ligne ENREGISTRÉES avec l'action (colonne → texte, sans la cellule de l'élément) :
+ * la ligne se modifie en revue sans rouvrir le navigateur.
+ */
+export function recordedRowCells(
+  events: readonly RawRecordedEvent[],
+  rawEventIds: readonly string[],
+): { column: string; value: string }[] {
+  const event = events.find(
+    (entry) => rawEventIds.includes(entry.id) && (entry.element?.rowCells?.length ?? 0) > 0,
+  );
+  return event?.element?.rowCells ? [...event.element.rowCells] : [];
+}
+
+/**
+ * REVUE, SANS NAVIGATEUR : la ligne visée par l'étape est redéfinie colonne par colonne à partir des
+ * cellules enregistrées. Seule la ligne change (l'élément visé dans la ligne reste) ; l'historique garde
+ * l'original (« Restaurer l'original »).
+ */
+export function editFlowRow(
+  flow: RecordedFlow,
+  stepId: string,
+  cells: readonly { column: string; value: string }[],
+  variables: readonly { key: string; value: string }[],
+  columns: readonly RowColumnChoice[],
+  at: number,
+  newVariables?: { taken: readonly string[] },
+):
+  | { step: RecordedFlowStep; correction: TargetCorrection; created: CreatedRowVariable[] }
+  | { error: string } {
+  const item = flow.steps.find((entry) => entry.id === stepId);
+  if (!item) return { error: `step ${stepId} not found` };
+  if (!hasTarget(item.step)) return { error: `step ${stepId} (${item.step.kind}) has no target to correct` };
+  if (!item.step.target.row) return { error: `step ${stepId} does not target a table row` };
+  if (cells.length === 0) return { error: `step ${stepId}: the cells of the row were not recorded` };
+  const outcome = rowOfColumns(cells, variables, columns, newVariables);
+  if ('error' in outcome) return outcome;
+  const next = withRow(item.step.target, outcome.row);
+  const correction: TargetCorrection = { at, previous: item.step.target, next, by: 'USER' };
+  item.step = { ...item.step, target: next } as FlowStep;
+  item.userDecision = 'TARGET_CORRECTED_BY_USER';
+  item.targetValidation = { status: 'USER_CORRECTED', repaired: false, requiresReplayValidation: false };
+  item.corrections = [...(item.corrections ?? []), correction];
+  item.explanation = `${item.explanation} — row edited by the user: ${describeTarget(correction.previous)} → ${describeTarget(correction.next)}`;
+  return { step: item, correction, created: outcome.created };
 }
 
 /** REVUE : « Restaurer l'original » — la cible redevient celle de l'enregistrement ; l'historique reste. */
@@ -360,6 +532,7 @@ export function correctRawEvents(
   context: CorrectionContext = {},
   option?: string,
   binding?: RowBinding,
+  columns?: readonly RowColumnChoice[],
 ): { correction: TargetCorrection; proposal: CorrectionProposal; touched: number } | { error: string } {
   const targets = events.filter((event) => rawEventIds.includes(event.id) && event.element !== undefined);
   if (targets.length === 0) return { error: 'the action has no element to correct' };
@@ -373,7 +546,11 @@ export function correctRawEvents(
     { ...context, previous },
     picked.rowCells ?? [],
   );
-  const next = proposalTarget(proposal, option, binding);
+  // Pendant l'enregistrement le jeu de test n'existe pas encore : aucune nouvelle donnée.
+  const { newVariables: _none, ...live } = context;
+  const chosen = chosenTarget(proposal, option, binding, columns, live);
+  if ('error' in chosen) return chosen;
+  const next = chosen.target;
   const correction: TargetCorrection = {
     at,
     previous,

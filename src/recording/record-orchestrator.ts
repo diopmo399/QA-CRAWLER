@@ -7,7 +7,7 @@ import {
   type HumanDecision,
 } from './application/human-review.js';
 import { generateFlowFiles } from './recorded-flow.js';
-import { applyTestDataBinding } from './test-data-binding.js';
+import { addRowVariables, applyTestDataBinding } from './test-data-binding.js';
 import {
   PROPOSABLE_OPERATIONS,
   analyzeRecording,
@@ -72,11 +72,14 @@ import { RecorderPanel } from './recorder-panel.js';
 import {
   RecordingConsole,
   regenerateFlowFiles,
+  rowVariables,
   removeFlowStep,
   saveRecordedFlow,
 } from './recording-console.js';
 import {
   correctFlowTarget,
+  editFlowRow,
+  recordedRowCells,
   describeTarget,
   restoreFlowTarget,
   type KnownValue,
@@ -932,6 +935,16 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       replay = { status: 'NOT_VALIDATED' };
       saved = undefined;
     };
+    // Une colonne liée à une nouvelle donnée : test-data.yaml la porte (on la modifie là, pas dans le flow).
+    const writeRowVariables = async (added: readonly string[]): Promise<void> => {
+      if (added.length === 0 || !result.testData) return;
+      await write(TEST_DATA_FILE, stringifyYaml(result.testData.document, { lineWidth: 0 }));
+      onEvent({
+        type: 'RECORDING_TEST_DATA_BOUND',
+        at: new Date().toISOString(),
+        message: `table row bound to new test data: ${added.map((key) => `testData.${key}`).join(', ')}`,
+      });
+    };
     const driverFailure = await ui.runReview({
       result,
       directory,
@@ -1100,19 +1113,28 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           return picked ? { picked, runData: correction.runData } : { cancelled: true };
         },
         releaseCorrection: endCorrection,
-        correctTarget: async ({ stepId, picked, known, option, binding }) => {
+        correctTarget: async ({ stepId, picked, known, option, binding, columns }) => {
+          // Avant de toucher au flow : une nouvelle donnée doit pouvoir rejoindre le jeu de test.
+          const set = result.testData?.set;
           const outcome = correctFlowTarget(
             result.flow,
             stepId,
             picked,
             Date.now(),
             language,
-            { known: known ?? [] },
+            {
+              known: known ?? [],
+              ...(set ? { newVariables: { taken: Object.keys(set.values) } } : {}),
+            },
             option,
             binding,
+            columns,
           );
           if ('error' in outcome) return outcome;
+          const added = addRowVariables(result, outcome.created, stepId);
+          if ('error' in added) return added;
           await rewriteFlow();
+          await writeRowVariables(added.added);
           onEvent({
             type: 'RECORDING_TARGET_CORRECTED',
             at: new Date(outcome.correction.at).toISOString(),
@@ -1213,6 +1235,32 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
             };
           }
           return { ...panel, recovery };
+        },
+        // LA LIGNE, SANS NAVIGATEUR : les colonnes choisies sur les cellules enregistrées avec l'action.
+        editRow: async ({ stepId, columns }) => {
+          const item = result.flow.steps.find((entry) => entry.id === stepId);
+          if (!item) return { error: `step ${stepId} not found` };
+          const set = result.testData?.set;
+          const outcome = editFlowRow(
+            result.flow,
+            stepId,
+            recordedRowCells(result.session.rawEvents, item.rawEventIds),
+            rowVariables(result, stepId),
+            columns,
+            Date.now(),
+            set ? { taken: Object.keys(set.values) } : undefined,
+          );
+          if ('error' in outcome) return outcome;
+          const added = addRowVariables(result, outcome.created, stepId);
+          if ('error' in added) return added;
+          await rewriteFlow();
+          await writeRowVariables(added.added);
+          onEvent({
+            type: 'RECORDING_TARGET_CORRECTED',
+            at: new Date(outcome.correction.at).toISOString(),
+            message: `step ${stepId}: row edited by the user ${describeTarget(outcome.correction.previous)} → ${describeTarget(outcome.correction.next)}${added.added.length ? ` (new test data: ${added.added.join(', ')})` : ''}`,
+          });
+          return { ok: true };
         },
         restoreTarget: async (stepId) => {
           const outcome = restoreFlowTarget(result.flow, stepId, Date.now());

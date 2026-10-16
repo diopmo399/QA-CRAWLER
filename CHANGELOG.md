@@ -6,6 +6,17 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Ligne de tableau : toutes les colonnes, valeurs modifiables** (`src/recording/target-correction.ts`,
+  fenêtre du recorder ; `docs/HUMAN_FLOW_RECORDER.md`). Les cellules de la ligne cliquée sont gardées dès
+  l'enregistrement (`RecordedElement.rowCells`), plus seulement la clé de ligne. **Choisir les colonnes de la
+  ligne** (correction dans le navigateur) et **Modifier la ligne** (revue, sans navigateur) montrent toutes les
+  colonnes : on en combine plusieurs et chacune prend sa valeur d'une source — valeur lue, valeur modifiée dans
+  la fenêtre, donnée du run, ou nouvelle donnée de test ajoutée à `test-data.yaml` — avec un critère « égale » ou
+  « contient ». **Aperçu dans la page** compte les lignes qui correspondent (`scanTableRows`, rien n'est
+  cliqué). `rowOfColumns`, `editFlowRow`, `recordedRowCells`, `addRowVariables`, commandes `row-preview` et
+  `row-edit`, option `columns` de `correct-apply`. Remplace « Lier une colonne à une donnée du run » (l'option
+  `manual` reste acceptée). Tests unitaires `row-columns`, intégration `recording-row-columns` et aperçu dans
+  `recording-row-correction`.
 - **Restauration du contexte à la reprise d'un rejeu corrigé** (`src/replay/context-checkpoint.ts`,
   `src/replay/context-capture.ts`, session de correction, fenêtre du recorder ; `docs/CONTEXT_RECOVERY.md`).
   Un checkpoint de contexte est pris devant chaque étape de la session (URL complète, route, cadres, onglets,

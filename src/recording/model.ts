@@ -270,6 +270,11 @@ export interface RecordedElement {
    * tableau (« Business key = 2935 ») — ce qui désigne la même ligne quel que soit l'ordre du tableau.
    */
   rowKey?: { column: string; value: string }[];
+  /**
+   * LES CELLULES DE LA LIGNE (colonne → texte, sans la cellule de l'élément), lues à l'enregistrement :
+   * la ligne se redéfinit en revue colonne par colonne, sans rouvrir le navigateur.
+   */
+  rowCells?: { column: string; value: string }[];
   /** Le contrôle qui ouvre la liste d'une option (« Operator »). */
   listboxOwner?: string;
   /** Le menu (nom ou déclencheur). */
