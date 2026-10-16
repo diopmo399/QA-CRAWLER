@@ -17,7 +17,51 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   refus devient une abstention `INCONCLUSIVE`, une réponse coupée est invalide. Clé lue dans
   `ANTHROPIC_API_KEY` (ou `ai.anthropic.apiKeyEnv`), jamais écrite. Tests : faux SDK (unitaires)
   et vrai SDK contre un point d'accès Messages local (intégration).
-
+- **Démo Orbit Desk** (`tests/fixtures/orbit-desk-app.ts`, `scenarios/demo-orbit.yaml`, `npm run
+demo:server` sur le port 4180) : un back-office de demandes moderne et fictif pour les démonstrations.
+  Création réelle (POST → 201 + `Location`, référence propre à chaque création), liste par session,
+  actions qui modifient ou détruisent, écran Rapports en panne (HTTP 500). La mission livrée produit un
+  rapport, un Gherkin et des tests Playwright en français, avec des données de test générées (`testData.
+defaults`). Test d'intégration : flows passés, panne détectée, écritures bloquées, aucune création.
+- **Ligne de tableau : toutes les colonnes, valeurs modifiables** (`src/recording/target-correction.ts`,
+  fenêtre du recorder ; `docs/HUMAN_FLOW_RECORDER.md`). Les cellules de la ligne cliquée sont gardées dès
+  l'enregistrement (`RecordedElement.rowCells`), plus seulement la clé de ligne. **Choisir les colonnes de la
+  ligne** (correction dans le navigateur) et **Modifier la ligne** (revue, sans navigateur) montrent toutes les
+  colonnes : on en combine plusieurs et chacune prend sa valeur d'une source — valeur lue, valeur modifiée dans
+  la fenêtre, donnée du run, ou nouvelle donnée de test ajoutée à `test-data.yaml` — avec un critère « égale » ou
+  « contient ». **Aperçu dans la page** compte les lignes qui correspondent (`scanTableRows`, rien n'est
+  cliqué). `rowOfColumns`, `editFlowRow`, `recordedRowCells`, `addRowVariables`, commandes `row-preview` et
+  `row-edit`, option `columns` de `correct-apply`. Remplace « Lier une colonne à une donnée du run » (l'option
+  `manual` reste acceptée). Tests unitaires `row-columns`, intégration `recording-row-columns` et aperçu dans
+  `recording-row-correction`.
+- **Restauration du contexte à la reprise d'un rejeu corrigé** (`src/replay/context-checkpoint.ts`,
+  `src/replay/context-capture.ts`, session de correction, fenêtre du recorder ; `docs/CONTEXT_RECOVERY.md`).
+  Un checkpoint de contexte est pris devant chaque étape de la session (URL complète, route, cadres, onglets,
+  dialogue, champs, défilement, contrôles, données du run, étapes à effet métier, préconditions). Après une
+  correction validée, **Reprendre ici** compare la page tenue au checkpoint et décide : REVALIDATE (préconditions
+  dures vérifiées), RESTORE (les étapes qui remplissent les champs perdus), REBUILD (les étapes précédentes avec
+  les mêmes données du run) ou MANUAL_RECOVERY (session expirée, création qui serait répétée, précondition non
+  satisfaite). L'étape corrigée et la suite sont rejouées dans la même session ; un échec suivant garde la page
+  devant l'étape en échec. `TestDataRunContext.seed()`, `replay.contextRecovery`, `replay-checkpoints.json`
+  (empreintes), événements `REPLAY_CONTEXT_RECOVERY`, `REPLAY_RESUMED`, `REPLAY_RESUME_BLOCKED`. Tests unitaires
+  (17) et d'intégration `recording-context-recovery`.
+- **Bloc de correction redessiné** (fenêtre du recorder). Cartes Avant / Après lisibles (rôle, nom de l'élément,
+  ligne du tableau sur sa propre ligne, donnée du run en pastille ; la cible brute reste en infobulle), façons
+  d'identifier la ligne en cartes à choisir (« Recommandé », « Propre à ce run »), avertissements en encarts,
+  ordre de résolution sur une ligne, traits techniques repliés dans « Détails techniques », Tester / Annuler /
+  Valider sur une seule ligne, en-tête de l'action masqué pendant la correction. L'historique d'une correction
+  utilise les mêmes cartes. Grand écran (≥ 1400 px) : la colonne du détail grandit avec l'écran (34 %, de 440 à
+  760 px), une action du parcours tient sur une ligne, le titre « Enregistrement terminé » en double disparaît ;
+  Valider n'est jamais coupé ; un replay réussi liste ses coches sur une ligne.
+- **Ligne liée à une donnée du run : le lien répété n'est plus une ambiguïté.** Le contrôle de corrélation compte la cible
+  dans la ligne qui porte la donnée (et non tous les liens identiques de l'écran) : une ligne `~${testData:clé}` trouvée
+  seule passe ; plusieurs lignes qui portent la donnée restent refusées (rien n'est exécuté, quel que soit `rowPick`).
+  Test d'intégration `table-row`.
+- **Ligne de tableau : liaison plus robuste et liaison manuelle.** Une cellule qui contient la donnée du run (accents, casse,
+  espaces, suffixe ignorés) est liée avec un critère « contient » ; sinon la fenêtre le dit et propose **Lier une colonne à
+  une donnée du run** (colonnes de la ligne et données du run avec leur valeur ; `RowBinding`, commande `correct-apply`
+  avec `column` et `variable`). La colonne des détails ne déborde plus (titre de la correction qui passe à la ligne, cible
+  JSON et CSS longs coupés, « Copier » entier).
 - **Correction manager** (`src/recording/target-correction.ts`, fenêtre du recorder, script de capture) :
   corriger la cible d'une action **dans le navigateur**. Mode sélection dans la page (bandeau, élément
   survolé encadré avec rôle · nom · test id, clic jamais transmis à l'application, Échap annule) ; dans la
@@ -109,6 +153,21 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Corrigé
 
+- **Rapport HTML en français : la section « Intelligence IA » entièrement traduite.** Précondition
+  manquante, contexte fonctionnel (objectif, progression, manquant, bloqué), sélection et découverte des
+  modèles, en-têtes des tableaux de modèles et d'efficacité, validation, runtime, apport à la
+  connaissance et contrôle des compteurs suivent `report.language` ; seuls les codes (statuts,
+  déclencheurs) restent tels quels.
+- **Rapport HTML : des tableaux qui tiennent dans leur carte.** Décisions IA en quatre colonnes (décision,
+  proposition, contrôles, résultat) au lieu de treize, le contexte fonctionnel sur sa propre ligne ; anomalies
+  du run en cinq colonnes (la gravité rejoint la catégorie, régression · source · confiance deviennent des
+  indices) ; hypothèses du moteur cognitif en six colonnes (preuves pour / contre et horodatages regroupés).
+  Les mots restent entiers (plus de « Paramètre|s ») ; seuls les longs jetons (URL, identifiants,
+  localisateurs) se coupent ; les tableaux imbriqués sont plus compacts. Vérifié en navigateur : une fois
+  tout déplié, aucun tableau ne dépasse sa carte à 1366 et 1920 px (`ai-blocked-goal`).
+- **Une violation d'invariant n'est plus classée « autorisation ».** « Aucune erreur serveur » et les autres
+  invariants d'écran sont des `FUNCTIONAL_FAILURE` ; seuls les invariants d'accès (`ISSUE-INV-…`, « l'acteur
+  X n'accède pas à… ») restent des `AUTHORIZATION_FAILURE`.
 - Fenêtre d'enregistrement : le pictogramme du geste de chaque étape (clic, saisie, case…) affichait
   « undefined » pour une saisie et rien pour un clic — deux tables `SVG` du même script se
   masquaient. Table des gestes à part (`KIND_SVG`), test unitaire et assertion E2E.

@@ -1788,6 +1788,28 @@ const replaySchema = z
       .default({}),
     /** La cible de l'étape suivante, absente avant l'action, doit apparaître après. */
     verifyNextActionPrecondition: z.boolean().default(true),
+    /**
+     * RESTAURATION DU CONTEXTE à la reprise d'un rejeu corrigé (revue) : un checkpoint de contexte
+     * (URL, route, cadres, onglet, dialogue, champs, données du run, préconditions) est pris avant chaque
+     * étape ; à la reprise, la page tenue est revérifiée (REVALIDATE), ses champs perdus reposés (RESTORE),
+     * ou les étapes précédentes rejouées avec les mêmes données du run (REBUILD) ; sinon reprise manuelle.
+     */
+    contextRecovery: z
+      .object({
+        /** Prendre un checkpoint de contexte avant chaque étape du rejeu (revue). */
+        checkpoints: z.boolean().default(true),
+        /**
+         * REBUILD répète-t-il une étape à effet métier (création, modification) déjà exécutée pendant le
+         * run interrompu ? false : la reprise est manuelle tant que l'humain n'a pas décidé.
+         */
+        repeatMutations: z.boolean().default(false),
+        /** Au-delà, un checkpoint est périmé : la page est revérifiée, jamais prise pour acquise. */
+        maxCheckpointAgeMinutes: z.number().int().positive().default(30),
+        /** Les routes de connexion de l'application (en plus des motifs usuels) : une session expirée n'est jamais restaurée. */
+        loginRoutes: z.array(z.string()).default([]),
+      })
+      .strict()
+      .default({}),
     /** Vérifier, avant de cliquer, que l'élément trouvé est celui enregistré (empreinte). */
     targetFingerprintMatching: z.boolean().default(true),
     /** Retrouver le même élément par son empreinte (rôle + nom, test id, texte) si le localisateur échoue. */

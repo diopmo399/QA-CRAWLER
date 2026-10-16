@@ -1,4 +1,5 @@
 import { startFlowApp } from './flow-app.js';
+import { startOrbitApp } from './orbit-desk-app.js';
 import { startTestSite } from './test-site.js';
 
 /**
@@ -6,11 +7,14 @@ import { startTestSite } from './test-site.js';
  *   npm run demo:server
  *   npm run qa -- scenarios/demo.yaml        (flows du back-office, port 4174)
  *   npm run qa -- scenarios/demo-traps.yaml  (pièges à bugs, port 4173)
+ *   npm run qa -- scenarios/demo-orbit.yaml  (Orbit Desk, back-office de demandes, port 4180)
  */
 const traps = await startTestSite(Number(process.env.TRAPS_PORT ?? 4173));
 const app = await startFlowApp(Number(process.env.APP_PORT ?? 4174));
+const orbit = await startOrbitApp(Number(process.env.ORBIT_PORT ?? 4180));
 console.log(`Trap site   : ${traps.url}`);
 console.log(`Back-office : ${app.url}`);
+console.log(`Orbit Desk  : ${orbit.url}`);
 console.log('(Ctrl+C to stop)');
 
 process.on('SIGINT', () => {
@@ -20,5 +24,5 @@ process.on('SIGINT', () => {
       ? `Dangerous endpoints reached: ${hits.join(', ')}`
       : 'No dangerous endpoint was reached.',
   );
-  void Promise.all([traps.close(), app.close()]).then(() => process.exit(0));
+  void Promise.all([traps.close(), app.close(), orbit.close()]).then(() => process.exit(0));
 });

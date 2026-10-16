@@ -32,6 +32,7 @@ describe.concurrent('Table row identity (real browser)', () => {
     click: Record<string, unknown>,
     expectText?: string,
     progress?: ProgressUpdate[],
+    extra = '',
   ): Promise<FlowRunReport> => {
     const reportsDir = path.join(await mkdtemp(path.join(dir, 'run-')), 'reports');
     const steps = [{ click }, ...(expectText ? [{ expect: { text: expectText } }] : [])];
@@ -41,6 +42,7 @@ target: { baseUrl: ${app.url}, startAt: "/${query}" }
 exploration: { autonomous: false, actionTimeoutMs: 4000 }
 report: { failOnSeverity: NONE }
 output: { reportsDir: ${reportsDir} }
+${extra}
 flows:
   - ${JSON.stringify({ name: 'process a task', steps })}
 `,
@@ -124,6 +126,27 @@ flows:
       'Task 3001',
     );
     expect(first.status, describeRun(first)).toBe('PASSED');
+  }, 120_000);
+
+  it('a row bound to the run data: the link repeated on every row is not an ambiguity; two rows carrying the data are', async () => {
+    const data = 'testData: { fields: { task.key: "2935", task.status: NEW } }';
+    const bound = await run(
+      '?order=desc',
+      { text: 'Process request', row: { 'Business key': '~${testData:task.key}' } },
+      'Task 2935',
+      undefined,
+      data,
+    );
+    expect(bound.status, describeRun(bound)).toBe('PASSED');
+    const shared = await run(
+      '',
+      { text: 'Process request', row: { Status: '${testData:task.status}' } },
+      undefined,
+      undefined,
+      data,
+    );
+    expect(shared.steps[0]?.status).not.toBe('PASSED');
+    expect(shared.steps[0]?.reason).toMatch(/AMBIGUOUS_ROW — 3 rows match \{Status=NEW\}.*nothing executed/);
   }, 120_000);
 
   it('an unknown column or a row that does not exist: ROW_NOT_FOUND, explained (never another row)', async () => {

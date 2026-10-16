@@ -197,7 +197,15 @@ ${THEME_BASE_CSS}
   thead th:first-child { border-top-left-radius:8px; } thead th:last-child { border-top-right-radius:8px; }
   tbody tr:last-child > td { border-bottom:none; }
   tbody tr:hover > td { background:var(--surface-2); }
-  td.wrap { word-break:break-word; }
+  /* Les mots restent entiers (jamais « Paramètre|s ») ; les longs jetons (URL, identifiants, localisateurs)
+     sont marqués coupables : <code> ou .brk. */
+  td.wrap { overflow-wrap:break-word; }
+  td code, td .brk { overflow-wrap:anywhere; }
+  /* Un tableau imbriqué (actions d'un état…) : plus compact, il tient dans sa colonne. */
+  td table { font-size:12px; }
+  td table th, td table td { padding:7px 8px; }
+  table.ai-decisions tr.has-ctx > td { border-bottom:none; padding-bottom:4px; }
+  table.ai-decisions tr.ctx > td { padding-top:0; font-size:12px; }
   .issue-details { margin-top:4px; }
   .issue-details > summary { cursor:pointer; color:var(--muted); font-size:12px; list-style:none; display:inline-flex; align-items:center; gap:6px; }
   .issue-details > summary::-webkit-details-marker { display:none; }

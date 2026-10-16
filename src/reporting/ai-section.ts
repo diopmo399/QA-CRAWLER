@@ -51,6 +51,60 @@ const TEXTS = {
     knowledge: 'Knowledge impact',
     consistency: 'Counter check',
     withoutCall: 'Decisions without a call',
+    columns: ['Decision', 'Proposal', 'Checks', 'Outcome'],
+    labels: {
+      response: 'response',
+      validation: 'validation',
+      safety: 'safety',
+      shadow: 'shadow',
+      fallback: 'fallback',
+      runtime: 'runtime',
+    },
+    modelColumns: [
+      'model',
+      'calls',
+      'accepted',
+      'rejected',
+      'inconclusive',
+      'runtime confirmed',
+      'runtime contradicted',
+      'timeouts',
+      'fallbacks',
+      'avg latency',
+      'recoveries solved',
+    ],
+    effectivenessColumns: ['model', 'trigger', 'complexity', 'samples', 'confirmed', 'contradicted', 'rate'],
+    words: {
+      hypothesis: 'hypothesis',
+      missingPrecondition: 'missing precondition',
+      requested: 'requested',
+      available: 'available',
+      listed: 'listed',
+      agree: 'agree',
+      disagree: 'disagree',
+      yes: 'yes',
+      tooFewSamples: 'too few samples',
+      valid: 'valid',
+      invalid: 'invalid',
+      confirmed: 'confirmed',
+      contradicted: 'contradicted',
+      pending: 'pending',
+      hypothesesProposed: 'hypothesis(es) proposed',
+      runtimeSupported: 'runtime supported',
+      runtimeContradicted: 'runtime contradicted',
+      inconsistent: 'INCONSISTENT',
+      consistency: (calls: number, notCalled: number) =>
+        `${String(calls)} call(s) = ${String(calls)} classified response(s); ${String(notCalled)} decision(s) without a call`,
+      goal: 'goal',
+      progress: 'progress',
+      checkpoint: 'checkpoint',
+      missing: 'missing',
+      unknown: 'unknown',
+      blocked: 'blocked',
+      firstDivergence: 'first divergence',
+      effortNotSent: 'effort not sent',
+      fallback: 'fallback',
+    },
   },
   fr: {
     title: 'Intelligence IA',
@@ -100,8 +154,72 @@ const TEXTS = {
     knowledge: 'Apport à la connaissance',
     consistency: 'Contrôle des compteurs',
     withoutCall: 'Décisions sans appel',
+    columns: ['Décision', 'Proposition', 'Contrôles', 'Résultat'],
+    labels: {
+      response: 'réponse',
+      validation: 'validation',
+      safety: 'sécurité',
+      shadow: 'shadow',
+      fallback: 'repli',
+      runtime: 'runtime',
+    },
+    modelColumns: [
+      'modèle',
+      'appels',
+      'acceptées',
+      'rejetées',
+      'sans conclusion',
+      'confirmées au runtime',
+      'contredites au runtime',
+      'délais dépassés',
+      'replis',
+      'latence moyenne',
+      'récupérations réussies',
+    ],
+    effectivenessColumns: [
+      'modèle',
+      'déclencheur',
+      'complexité',
+      'échantillons',
+      'confirmées',
+      'contredites',
+      'taux',
+    ],
+    words: {
+      hypothesis: 'hypothèse',
+      missingPrecondition: 'précondition manquante',
+      requested: 'demandé',
+      available: 'disponible(s)',
+      listed: 'listé(s)',
+      agree: 'accord(s)',
+      disagree: 'désaccord(s)',
+      yes: 'raison non précisée',
+      tooFewSamples: 'trop peu d’échantillons',
+      valid: 'valides',
+      invalid: 'invalides',
+      confirmed: 'confirmées',
+      contradicted: 'contredites',
+      pending: 'en attente',
+      hypothesesProposed: 'hypothèse(s) proposée(s)',
+      runtimeSupported: 'appuyée(s) par le runtime',
+      runtimeContradicted: 'contredite(s) par le runtime',
+      inconsistent: 'INCOHÉRENT',
+      consistency: (calls: number, notCalled: number) =>
+        `${String(calls)} appel(s) = ${String(calls)} réponse(s) classée(s) ; ${String(notCalled)} décision(s) sans appel`,
+      goal: 'objectif',
+      progress: 'progression',
+      checkpoint: 'checkpoint',
+      missing: 'manquant',
+      unknown: 'inconnu',
+      blocked: 'bloqué',
+      firstDivergence: 'première divergence',
+      effortNotSent: 'effort non envoyé',
+      fallback: 'repli',
+    },
   },
 } as const;
+
+type Texts = (typeof TEXTS)[ReportLanguage];
 
 /**
  * Section « AI Intelligence » : ce que le conseiller a proposé, ce qui a été validé, retenu,
@@ -114,15 +232,45 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
   const t = TEXTS[language];
   const row = (label: string, value: string | number | undefined): string =>
     value === undefined ? '' : `<tr><th>${esc(label)}</th><td class="wrap">${esc(String(value))}</td></tr>`;
+  // Quatre colonnes lisibles (décision, proposition, contrôles, résultat) ; le contexte fonctionnel, long,
+  // sur sa propre ligne en pleine largeur : le tableau tient dans la carte, sans défilement horizontal.
+  const line = (label: string, value: string): string =>
+    `<div><span class="muted">${esc(label)}</span> ${value}</div>`;
   const decisions = ai.decisions
-    .map(
-      (decision) =>
-        `<tr><td>${esc(decision.id)}</td><td>${esc(decision.context)}</td><td>${esc(decision.trigger)}</td><td>${esc(modelCell(decision))}</td><td class="wrap">${esc(
-          decision.proposal?.action
-            ? `${decision.proposal.selectedActionId ?? ''} ${decision.proposal.action}`
-            : (decision.proposal?.status ?? '—'),
-        )}${decision.proposal?.hypothesis ? `<br><span class="muted">${esc(`${decision.proposal.hypothesisType ?? 'hypothesis'}: ${decision.proposal.hypothesis}`)}</span>` : ''}${decision.proposal?.missingPrecondition ? `<br><span class="muted">${esc(`missing precondition: ${decision.proposal.missingPrecondition}`)}</span>` : ''}</td><td>${esc(decision.lifecycle.response)}</td><td>${esc(decision.validation.rejection ?? decision.validation.status)}</td><td>${esc(decision.safety ?? '—')}</td><td>${esc(decision.lifecycle.shadowResult ?? '—')}</td><td><b>${esc(decision.lifecycle.terminal)}</b>${decision.lifecycle.notExecutedReason ? `<br><span class="muted">${esc(decision.lifecycle.notExecutedReason)}</span>` : ''}</td><td>${esc(decision.lifecycle.fallbackReason ?? '—')}</td><td>${esc(decision.runtimeResult ?? (decision.lifecycle.runtime === 'NOT_APPLICABLE' ? '—' : decision.lifecycle.runtime))}${decision.lifecycle.goalProgress?.after !== undefined ? `<br><span class="muted">${esc(`${decision.lifecycle.goalProgress.goal} ${String(decision.lifecycle.goalProgress.before)} → ${String(decision.lifecycle.goalProgress.after)} (${decision.lifecycle.goalProgress.impact ?? ''})`)}</span>` : ''}</td><td class="wrap">${esc(functionalCell(decision))}</td></tr>`,
-    )
+    .map((decision) => {
+      const proposal = `${esc(
+        decision.proposal?.action
+          ? `${decision.proposal.selectedActionId ?? ''} ${decision.proposal.action}`
+          : (decision.proposal?.status ?? '—'),
+      )}${decision.proposal?.hypothesis ? `<br><span class="muted">${esc(`${decision.proposal.hypothesisType ?? t.words.hypothesis}: ${decision.proposal.hypothesis}`)}</span>` : ''}${decision.proposal?.missingPrecondition ? `<br><span class="muted">${esc(`${t.words.missingPrecondition} : ${decision.proposal.missingPrecondition}`)}</span>` : ''}`;
+      const checks = [
+        line(t.labels.response, esc(decision.lifecycle.response)),
+        line(t.labels.validation, esc(decision.validation.rejection ?? decision.validation.status)),
+        line(t.labels.safety, esc(decision.safety ?? '—')),
+        ...(decision.lifecycle.shadowResult
+          ? [line(t.labels.shadow, esc(decision.lifecycle.shadowResult))]
+          : []),
+      ].join('');
+      const runtime =
+        decision.runtimeResult ??
+        (decision.lifecycle.runtime === 'NOT_APPLICABLE' ? undefined : decision.lifecycle.runtime);
+      const outcome = [
+        `<b>${esc(decision.lifecycle.terminal)}</b>${decision.lifecycle.notExecutedReason ? ` <span class="muted">${esc(decision.lifecycle.notExecutedReason)}</span>` : ''}`,
+        ...(decision.lifecycle.fallbackReason
+          ? [line(t.labels.fallback, esc(decision.lifecycle.fallbackReason))]
+          : []),
+        ...(runtime ? [line(t.labels.runtime, esc(runtime))] : []),
+        ...(decision.lifecycle.goalProgress?.after !== undefined
+          ? [
+              `<div class="muted">${esc(`${decision.lifecycle.goalProgress.goal} ${String(decision.lifecycle.goalProgress.before)} → ${String(decision.lifecycle.goalProgress.after)} (${decision.lifecycle.goalProgress.impact ?? ''})`)}</div>`,
+            ]
+          : []),
+      ].join('');
+      const context = decision.functionalContext ? functionalCell(decision, t) : '';
+      return `<tr${context ? ' class="has-ctx"' : ''}><td><b>${esc(decision.id)}</b><div class="muted">${esc(decision.context)} · ${esc(decision.trigger)}</div><div class="muted">${esc(modelCell(decision, t))}</div></td><td class="wrap">${proposal}</td><td>${checks}</td><td class="wrap">${outcome}</td></tr>${
+        context ? `<tr class="ctx"><td colspan="4" class="wrap muted">↳ ${esc(context)}</td></tr>` : ''
+      }`;
+    })
     .join('');
   return `<section>
     <h2>${esc(t.title)}</h2>
@@ -131,7 +279,7 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
       ${row(t.mode, ai.mode)}
       ${row(t.provider, ai.provider)}
       ${row(t.model, ai.model)}
-      ${ai.available === false ? row(t.unavailable, ai.unavailableReason ?? 'yes') : ''}
+      ${ai.available === false ? row(t.unavailable, ai.unavailableReason ?? t.words.yes) : ''}
       ${row(t.fastPath, ai.fastPath)}
       ${row(t.calls, ai.calls)}
       ${row(t.proposals, ai.proposals)}
@@ -141,15 +289,15 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
       ${row(t.confirmed, ai.runtimeConfirmed)}
       ${row(t.contradicted, ai.runtimeContradicted)}
       ${row(t.recoveries, ai.aiAssistedRecoveries)}
-      ${ai.shadow.compared > 0 ? row(t.shadow, `${String(ai.shadow.agreements)} agree / ${String(ai.shadow.disagreements)} disagree`) : ''}
+      ${ai.shadow.compared > 0 ? row(t.shadow, `${String(ai.shadow.agreements)} ${t.words.agree} / ${String(ai.shadow.disagreements)} ${t.words.disagree}`) : ''}
       ${row(t.timeouts, ai.timeouts)}
       ${row(t.budget, ai.budgetExhausted)}
       ${row(t.fallbacks, ai.fallbacks)}
       ${row(t.latency, `${String(ai.averageLatencyMs)} ms`)}
-      ${ai.modelSelection ? row(t.selection, `${ai.modelSelection.selectionMode}${ai.modelSelection.requestedModel ? ` (requested ${ai.modelSelection.requestedModel})` : ''}`) : ''}
+      ${ai.modelSelection ? row(t.selection, `${ai.modelSelection.selectionMode}${ai.modelSelection.requestedModel ? ` (${t.words.requested} ${ai.modelSelection.requestedModel})` : ''}`) : ''}
       ${ai.modelSelection ? row(t.defaultProfile, ai.modelSelection.defaultProfile) : ''}
       ${ai.modelSelection ? row(t.reasoningMode, ai.modelSelection.reasoningMode) : ''}
-      ${ai.modelSelection?.discovery ? row(t.discovery, `${ai.modelSelection.discovery.status}: ${String(ai.modelSelection.discovery.available)} available / ${String(ai.modelSelection.discovery.listed)} listed${ai.modelSelection.discovery.error ? ` — ${ai.modelSelection.discovery.error}` : ''}`) : ''}
+      ${ai.modelSelection?.discovery ? row(t.discovery, `${ai.modelSelection.discovery.status}: ${String(ai.modelSelection.discovery.available)} ${t.words.available} / ${String(ai.modelSelection.discovery.listed)} ${t.words.listed}${ai.modelSelection.discovery.error ? ` — ${ai.modelSelection.discovery.error}` : ''}`) : ''}
       ${row(t.noLlm, ai.noLlmRequired)}
       ${row(t.modelFallbacks, ai.modelFallbacks)}
       ${
@@ -174,7 +322,7 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
       }
     </tbody></table>${
       ai.models.length > 0
-        ? `<h3>${esc(t.models)}</h3><table><thead><tr><th>model</th><th>calls</th><th>accepted</th><th>rejected</th><th>inconclusive</th><th>runtime confirmed</th><th>runtime contradicted</th><th>timeouts</th><th>fallbacks</th><th>avg latency</th><th>recoveries solved</th></tr></thead><tbody>${ai.models
+        ? `<h3>${esc(t.models)}</h3><table><thead><tr>${t.modelColumns.map((column) => `<th>${esc(column)}</th>`).join('')}</tr></thead><tbody>${ai.models
             .map(
               (model) =>
                 `<tr><td>${esc(model.model)}</td><td>${String(model.calls)}</td><td>${String(model.accepted)}</td><td>${String(model.rejected)}</td><td>${String(model.inconclusive)}</td><td>${String(model.runtimeConfirmed)}</td><td>${String(model.runtimeContradicted)}</td><td>${String(model.timeouts)}</td><td>${String(model.fallbacks)}</td><td>${String(model.averageLatencyMs)} ms</td><td>${String(model.recoverySolved)}</td></tr>`,
@@ -183,10 +331,10 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
         : ''
     }${
       ai.effectiveness.length > 0
-        ? `<h3>${esc(t.effectiveness)}</h3><table><thead><tr><th>model</th><th>trigger</th><th>complexity</th><th>samples</th><th>confirmed</th><th>contradicted</th><th>rate</th></tr></thead><tbody>${ai.effectiveness
+        ? `<h3>${esc(t.effectiveness)}</h3><table><thead><tr>${t.effectivenessColumns.map((column) => `<th>${esc(column)}</th>`).join('')}</tr></thead><tbody>${ai.effectiveness
             .map(
               (entry) =>
-                `<tr><td>${esc(entry.model)}</td><td>${esc(entry.trigger)}</td><td>${esc(entry.complexity)}</td><td>${String(entry.samples)}</td><td>${String(entry.runtimeConfirmed)}</td><td>${String(entry.runtimeContradicted)}</td><td>${entry.confirmationRate === null ? 'too few samples' : `${String(Math.round(entry.confirmationRate * 100))}%`}</td></tr>`,
+                `<tr><td>${esc(entry.model)}</td><td>${esc(entry.trigger)}</td><td>${esc(entry.complexity)}</td><td>${String(entry.samples)}</td><td>${String(entry.runtimeConfirmed)}</td><td>${String(entry.runtimeContradicted)}</td><td>${entry.confirmationRate === null ? t.words.tooFewSamples : `${String(Math.round(entry.confirmationRate * 100))}%`}</td></tr>`,
             )
             .join('')}</tbody></table>`
         : ''
@@ -194,7 +342,7 @@ export function aiSection(result: ExplorationResult, language: ReportLanguage): 
     ${lifecycleHtml(ai, t)}
     <h3>${esc(t.decisions)}</h3>${
       ai.decisions.length > 0
-        ? `<table><thead><tr><th>id</th><th>context</th><th>trigger</th><th>complexity / model / effort</th><th>proposal</th><th>response</th><th>validation</th><th>safety</th><th>shadow</th><th>result</th><th>fallback</th><th>runtime</th><th>functional context</th></tr></thead><tbody>${decisions}</tbody></table>`
+        ? `<table class="ai-decisions"><thead><tr>${t.columns.map((column) => `<th>${esc(column)}</th>`).join('')}</tr></thead><tbody>${decisions}</tbody></table>`
         : `<p class="muted">${t.none}</p>`
     }
   </section>`;
@@ -206,7 +354,7 @@ type AiSummaryView = NonNullable<ExplorationResult['ai']>;
  * AI DECISIONS (§43-44) : les appels par déclencheur, puis chaque dimension SÉPARÉE — réponses,
  * validation, shadow, exécution, runtime, replis (avec les décisions qui les ont produits).
  */
-function lifecycleHtml(ai: AiSummaryView, t: (typeof TEXTS)[ReportLanguage]): string {
+function lifecycleHtml(ai: AiSummaryView, t: Texts): string {
   const lifecycle = ai.lifecycle;
   const tally = (values: Partial<Record<string, number>>): string =>
     Object.entries(values)
@@ -224,7 +372,7 @@ function lifecycleHtml(ai: AiSummaryView, t: (typeof TEXTS)[ReportLanguage]): st
   const runtime =
     ai.mode === 'ASSIST' && lifecycle.execution.executedFromAi === 0
       ? t.runtimeNa
-      : `confirmed ${String(lifecycle.runtime.confirmed)} · contradicted ${String(lifecycle.runtime.contradicted)}${lifecycle.runtime.pending > 0 ? ` · pending ${String(lifecycle.runtime.pending)}` : ''}`;
+      : `${t.words.confirmed} ${String(lifecycle.runtime.confirmed)} · ${t.words.contradicted} ${String(lifecycle.runtime.contradicted)}${lifecycle.runtime.pending > 0 ? ` · ${t.words.pending} ${String(lifecycle.runtime.pending)}` : ''}`;
   const fallbacks = Object.entries(lifecycle.fallbacks.byReason)
     .map(
       ([reason, count]) =>
@@ -238,7 +386,7 @@ function lifecycleHtml(ai: AiSummaryView, t: (typeof TEXTS)[ReportLanguage]): st
     [t.withoutCall, `${String(lifecycle.notCalled)}${lifecycle.notCalled > 0 ? ` — ${tally(without)}` : ''}`],
     [
       t.validation,
-      `valid ${String(lifecycle.validation.valid)} · invalid ${String(lifecycle.validation.invalid)}`,
+      `${t.words.valid} ${String(lifecycle.validation.valid)} · ${t.words.invalid} ${String(lifecycle.validation.invalid)}`,
     ],
     [t.shadowResults, tally(lifecycle.shadow)],
     [t.executed, String(lifecycle.execution.executedFromAi)],
@@ -247,9 +395,14 @@ function lifecycleHtml(ai: AiSummaryView, t: (typeof TEXTS)[ReportLanguage]): st
     [t.fallbackReasons, `${String(lifecycle.fallbacks.total)}${fallbacks ? ` — ${fallbacks}` : ''}`],
     [
       t.knowledge,
-      `${String(lifecycle.knowledge.hypothesesProposed)} hypothesis(es) proposed · ${String(lifecycle.knowledge.runtimeSupported)} runtime supported · ${String(lifecycle.knowledge.runtimeContradicted)} runtime contradicted`,
+      `${String(lifecycle.knowledge.hypothesesProposed)} ${t.words.hypothesesProposed} · ${String(lifecycle.knowledge.runtimeSupported)} ${t.words.runtimeSupported} · ${String(lifecycle.knowledge.runtimeContradicted)} ${t.words.runtimeContradicted}`,
     ],
-    [t.consistency, `${lifecycle.consistent ? 'OK' : 'INCONSISTENT'} — ${lifecycle.consistency}`],
+    [
+      t.consistency,
+      lifecycle.consistent
+        ? `OK — ${t.words.consistency(lifecycle.calls, lifecycle.notCalled)}`
+        : `${t.words.inconsistent} — ${lifecycle.consistency}`,
+    ],
   ];
   return `<h3>${esc(t.lifecycle)}</h3><p class="muted">${esc(t.lifecycleHint)}</p><table><tbody>${rows
     .map(([label, value]) => `<tr><th>${esc(label)}</th><td class="wrap">${esc(value)}</td></tr>`)
@@ -257,25 +410,25 @@ function lifecycleHtml(ai: AiSummaryView, t: (typeof TEXTS)[ReportLanguage]): st
 }
 
 /** Ce que la décision savait du parcours : objectif, checkpoint, précondition manquante, divergence. */
-function functionalCell(decision: AiSummaryView['decisions'][number]): string {
+function functionalCell(decision: AiSummaryView['decisions'][number], t: Texts): string {
   const functional = decision.functionalContext;
   if (!functional) return '—';
   return [
-    functional.goal ? `goal ${functional.goal}` : '',
-    functional.goalProgress !== undefined ? `progress ${String(functional.goalProgress)}` : '',
-    functional.lastConfirmedCheckpoint ? `checkpoint ${functional.lastConfirmedCheckpoint}` : '',
+    functional.goal ? `${t.words.goal} ${functional.goal}` : '',
+    functional.goalProgress !== undefined ? `${t.words.progress} ${String(functional.goalProgress)}` : '',
+    functional.lastConfirmedCheckpoint ? `${t.words.checkpoint} ${functional.lastConfirmedCheckpoint}` : '',
     functional.missingPreconditions.length > 0
-      ? `missing ${functional.missingPreconditions.join(', ')}${functional.unknownPrecondition ? ' (unknown)' : ''}`
+      ? `${t.words.missing} ${functional.missingPreconditions.join(', ')}${functional.unknownPrecondition ? ` (${t.words.unknown})` : ''}`
       : '',
-    functional.blockingReason ? `blocked: ${functional.blockingReason}` : '',
-    functional.firstDivergence ? `first divergence: ${functional.firstDivergence}` : '',
+    functional.blockingReason ? `${t.words.blocked} : ${functional.blockingReason}` : '',
+    functional.firstDivergence ? `${t.words.firstDivergence} : ${functional.firstDivergence}` : '',
   ]
     .filter(Boolean)
     .join(' · ');
 }
 
 /** Complexité, modèle demandé → choisi (→ réellement utilisé), effort, repli : jamais masqué. */
-function modelCell(decision: NonNullable<ExplorationResult['ai']>['decisions'][number]): string {
+function modelCell(decision: NonNullable<ExplorationResult['ai']>['decisions'][number], t: Texts): string {
   const context = decision.modelContext;
   const complexity = decision.complexity?.level ?? context?.complexity;
   if (!context) return complexity ?? '—';
@@ -292,8 +445,8 @@ function modelCell(decision: NonNullable<ExplorationResult['ai']>['decisions'][n
     complexity,
     context.profile,
     route,
-    context.sentReasoningEffort ?? 'effort not sent',
-    context.fallbackApplied ? `fallback ${context.fallbackReason ?? ''}` : '',
+    context.sentReasoningEffort ?? t.words.effortNotSent,
+    context.fallbackApplied ? `${t.words.fallback} ${context.fallbackReason ?? ''}` : '',
   ]
     .filter(Boolean)
     .join(' · ');

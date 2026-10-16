@@ -138,8 +138,32 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   la donnée du run « clé »** (choisie par défaut : la ligne se retrouve à chaque rejeu, cité
   `${testData:clé}` ; pendant l'enregistrement la valeur saisie est citée à l'arrêt comme toute donnée
   de test) ou **la clé lue dans le tableau**, marquée **« Clé propre à ce run »** quand l'ancienne
-  cible visait la même colonne avec une autre valeur. Les cellules de la ligne (colonne → texte,
-  bornées, expurgées) ne sont lues qu'au moment du clic de désignation et ne sont jamais écrites.
+  cible visait la même colonne avec une autre valeur. La comparaison ignore les accents, la casse et
+  les espaces ; une cellule qui **contient** la donnée (« NORTHWIND — Nouvelle » contient « Northwind »)
+  est liée avec un critère « contient » (`row: { colonne: ~${testData:clé} }`), en revue seulement (une
+  donnée qui a une clé). Quand aucune cellule ne correspond, la fenêtre le dit.
+- **Choisir les colonnes de la ligne.** Toutes les cellules de la ligne cliquée (colonne → texte, 12 au
+  plus, bornées, expurgées, sans la cellule de l'élément) sont gardées **dès l'enregistrement** avec
+  l'élément (`RecordedElement.rowCells`, donc dans `raw-recording.json`, comme la clé de ligne). La
+  fenêtre les montre toutes ; on coche une ou plusieurs colonnes (au rejeu, **toutes** doivent
+  correspondre) et, pour chacune, la source de sa valeur :
+  - **Valeur lue (fixe)** : le texte de la cellule ;
+  - **Valeur modifiée (fixe)** : un texte saisi dans la fenêtre (jamais une citation `${…}`) ;
+  - **Donnée du run** : une donnée du jeu de test produite avant l'étape (`${testData:clé}`) ;
+  - **Nouvelle donnée de test** (revue) : une donnée créée à partir de la cellule (nom `objet.attribut`,
+    libre, jamais sensible), ajoutée à `test-data.yaml` — on y change la valeur sans toucher au flow ;
+  - **La cellule contient la valeur** : critère « contient » (`~`) au lieu de « égale ».
+
+  **Aperçu dans la page** cherche la ligne ainsi définie dans la page ouverte (session de correction ou
+  page de l'enregistrement) et dit combien de lignes correspondent (1, plusieurs : ajoutez une colonne,
+  aucune) — rien n'est cliqué ; sans page ouverte, ou pour une donnée générée seulement au rejeu, la
+  fenêtre dit que l'aperçu est impossible. Le choix des colonnes est offert dans la correction dans le
+  navigateur (**Choisir les colonnes de la ligne**) et, en revue, **sans navigateur** : **Modifier la
+  ligne** sur une étape qui vise une ligne redéfinit sa ligne à partir des cellules enregistrées (l'élément
+  visé dans la ligne ne change pas ; l'historique garde l'original, « Restaurer l'original » le remet).
+  Node vérifie chaque choix (colonne de la ligne, donnée proposée, nom libre et non sensible) ; un choix
+  refusé ne touche ni au flow ni au jeu de test.
+
 - **Résumé et qualité** : « ✓ Recording valide » ou « ⚠ nécessite une vérification » ; la qualité
   est calculée sur des faits (actions confirmées, sélecteurs stables, cibles uniques, aucun
   élément retrouvé seulement après un nouveau rendu, aucun doublon, aucune erreur) — jamais estimée.
@@ -181,6 +205,10 @@ jamais deux applications ouvertes en même temps.
   corrigé. Annuler ferme la session aussi ; la revue la ferme en partant. Les données de test
   produites par le rejeu de la session (clé → valeur, en mémoire seulement) sont les **valeurs
   connues** qui servent à lier une ligne de tableau à la donnée du run (voir ci-dessus).
+- **Reprendre ici** (après « Valider la correction » dans la page tenue) : le rejeu **reprend à l'étape
+  corrigée**, dans la même session et avec les mêmes données du run. La page est comparée au checkpoint
+  de contexte pris devant l'étape, puis vérifiée, restaurée ou reconstruite ; une création déjà faite
+  n'est jamais répétée sans décision. Voir [CONTEXT_RECOVERY.md](CONTEXT_RECOVERY.md).
 - **💾 Sauvegarder** : l'enregistrement est un **brouillon** (`recording-status.json` :
   `DRAFT`) ; sauvegarder copie le flow dans `recording.flowsDirectory` (défaut : `flows/<nom>/` à
   côté du dossier des rapports) avec son jeu de données, et le marque `SAVED`.

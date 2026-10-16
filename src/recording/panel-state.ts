@@ -45,6 +45,27 @@ export interface PanelStep {
   network?: PanelNetwork[];
   /** Revue d'une SAISIE : la source de sa valeur (fixe, générée, réutilisée) et les variables réutilisables. */
   data?: PanelStepData;
+  /** Revue d'une cible DANS UNE LIGNE de tableau : la ligne se redéfinit colonne par colonne, sans navigateur. */
+  rowEdit?: PanelRowEdit;
+}
+
+/** LA LIGNE D'UN TABLEAU, modifiable colonne par colonne (les cellules lues à l'enregistrement). */
+export interface PanelRowEdit {
+  cells: { column: string; value: string }[];
+  /** Les données du run citables (clé → valeur actuelle, jamais une donnée sensible). */
+  variables: { key: string; value: string }[];
+  /** La ligne visée aujourd'hui : colonne → valeur (`~` : contient ; `${testData:clé}` : une donnée). */
+  current: Record<string, string>;
+  /** Une nouvelle donnée du jeu de test peut être créée à partir d'une cellule (revue). */
+  canCreate: boolean;
+}
+
+/** L'APERÇU d'une ligne : combien de lignes du tableau affiché correspondent aux colonnes choisies. */
+export interface PanelRowPreview {
+  stepId: string;
+  status: 'FOUND' | 'AMBIGUOUS' | 'NONE' | 'UNAVAILABLE' | 'INVALID';
+  matches?: number;
+  message?: string;
 }
 
 /** La cible d'une étape telle que la fenêtre la montre : courante, originale (si corrigée), historique. */
@@ -78,7 +99,23 @@ export interface PanelPick {
      * run (`via` : sa clé ou la valeur saisie) ; `key` : par la clé lue dans le tableau, `fixed` quand
      * elle est propre à ce run (le prochain rejeu ne la retrouvera pas).
      */
-    rowOptions?: { id: 'bound' | 'key'; target: string; row: string; via?: string; fixed?: boolean }[];
+    rowOptions?: {
+      id: 'bound' | 'key' | 'manual';
+      target: string;
+      row: string;
+      via?: string;
+      match?: 'exact' | 'contains';
+      fixed?: boolean;
+    }[];
+    /** La cible sans sa ligne (la liaison manuelle y ajoute la sienne). */
+    baseTarget?: string;
+    /** LIAISON MANUELLE : les cellules de la ligne et les données du run (clé → valeur actuelle, non sensibles). */
+    rowCells?: { column: string; value: string }[];
+    variables?: { key: string; value: string }[];
+    /** Revue : une colonne peut créer une nouvelle donnée du jeu de test. */
+    canCreate?: boolean;
+    /** La ligne proposée (colonne → valeur), point de départ du choix des colonnes. */
+    row?: Record<string, string>;
     quality: string;
     label: string;
     order: string[];
@@ -144,6 +181,17 @@ export interface PanelReplay {
     details: string[];
   };
   report?: string;
+  /**
+   * LA REPRISE après une correction (contexte gardé) : la stratégie décidée, l'étape où le rejeu a repris,
+   * pourquoi, les étapes rejouées pour restaurer ou reconstruire, et ce qui bloque une reprise manuelle.
+   */
+  recovery?: {
+    strategy: 'RESTORE' | 'REBUILD' | 'REVALIDATE' | 'MANUAL_RECOVERY';
+    from: number;
+    reasons: string[];
+    recovered: number[];
+    blockedBy?: { step?: number; reason: string }[];
+  };
 }
 
 export interface PanelAnalysis {
@@ -312,6 +360,7 @@ export interface PanelState {
   replay?: PanelReplay;
   /** CORRECTION MANAGER : le mode sélection en cours ou la proposition à valider. */
   pick?: PanelPick;
+  rowPreview?: PanelRowPreview;
   saved?: { directory: string; files: string[] };
   /**
    * L'APERÇU de l'application (une image de la page, en mémoire seulement) et le cadre de l'élément
@@ -341,6 +390,8 @@ export interface PanelState {
   layout?: 'full' | 'compact';
   /** L'étape à montrer (sélectionnée, défilée) à l'ouverture de la fenêtre depuis le dock (« Résoudre »). */
   focus?: string;
+  /** Une correction validée dans une page tenue : le rejeu peut REPRENDRE à cette étape (contexte gardé). */
+  resume?: { stepId: string; index: number; description: string; running?: boolean };
   /** L'aperçu est ouvert dans sa propre fenêtre (la fenêtre principale garde le parcours et les détails). */
   previewDetached?: boolean;
 }

@@ -3,12 +3,14 @@ import type { AddressInfo } from 'node:net';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { chromium } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { IntelligenceDecisionEntry } from '../../src/ai/decision-report.js';
 import type { AiLifecycleSummary } from '../../src/ai/audit-trail.js';
 import type { IntelligenceRequest } from '../../src/ai/model.js';
 import { parseConfig } from '../../src/config/config-loader.js';
 import { runMission } from '../../src/orchestrator.js';
+import { aiSection } from '../../src/reporting/ai-section.js';
 import { FakeIntelligenceProvider } from '../fixtures/fake-intelligence-provider.js';
 
 /**
@@ -193,5 +195,55 @@ flows:
       /\[AI AI-\d{5}\] trigger=UNKNOWN_BLOCKING_PRECONDITION context=BLOCKED_GOAL mission=CREATE_REQUEST/,
     );
     expect(log).toContain('BLOCKED_GOAL_ANALYZED');
+
+    // RAPPORT EN FRANÇAIS : la section IA ne garde en anglais que les codes (statuts, déclencheurs).
+    const french = aiSection(result, 'fr');
+    for (const english of [
+      'missing precondition',
+      'too few samples',
+      'hypothesis(es) proposed',
+      'classified response',
+      'effort not sent',
+      '>model<',
+      'goal ',
+      'progress ',
+      'blocked:',
+      'valid 0',
+    ])
+      expect(french, english).not.toContain(english);
+    expect(french).toContain('précondition manquante');
+    expect(french).toContain('objectif CREATE_REQUEST_DONE');
+    expect(french).toMatch(/\d+ appel\(s\) = \d+ réponse\(s\) classée\(s\)/);
+    expect(aiSection(result, 'en')).toContain('missing precondition');
+
+    // LISIBILITÉ : les décisions en quatre colonnes, le contexte fonctionnel sur sa propre ligne ; une fois
+    // tout déplié, aucun tableau du rapport ne dépasse sa carte (écran portable et grand écran).
+    const browser = await chromium.launch();
+    try {
+      for (const width of [1366, 1920]) {
+        const page = await browser.newPage({ viewport: { width, height: 900 } });
+        await page.goto(`file://${path.join(reportsDir, 'index.html')}`);
+        await page.evaluate(() => {
+          for (const details of document.querySelectorAll('details')) details.open = true;
+        });
+        const decisions = page.locator('table.ai-decisions');
+        expect(await decisions.locator('thead th').allTextContents()).toEqual([
+          'Decision',
+          'Proposal',
+          'Checks',
+          'Outcome',
+        ]);
+        expect(await decisions.locator('tr.ctx').count()).toBeGreaterThan(0);
+        const overflowing = await page.evaluate(() =>
+          [...document.querySelectorAll('section table')]
+            .filter((table) => table.scrollWidth > (table.closest('section')?.clientWidth ?? Infinity) + 2)
+            .map((table) => table.closest('section')?.querySelector('h2')?.textContent.trim()),
+        );
+        expect(overflowing, `width ${String(width)}`).toEqual([]);
+        await page.close();
+      }
+    } finally {
+      await browser.close();
+    }
   }, 120_000);
 });

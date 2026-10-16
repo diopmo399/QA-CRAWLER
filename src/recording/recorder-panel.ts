@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { PanelState } from './panel-state.js';
+import type { RowColumnChoice } from './target-correction.js';
 import { recorderPanelHtml } from './recorder-panel-html.js';
 
 /** Une commande de la fenêtre du recorder (un bouton) : Node décide, la fenêtre n'agit jamais seule. */
@@ -27,7 +28,10 @@ export interface PanelCommand {
     | 'correct-cancel'
     | 'correct-apply'
     | 'correct-test'
-    | 'correct-restore';
+    | 'correct-restore'
+    | 'resume-replay'
+    | 'row-preview'
+    | 'row-edit';
   id?: string;
   candidate?: number;
   /** La revue d'une intention : l'intention choisie et sa justification (facultative). */
@@ -38,8 +42,12 @@ export interface PanelCommand {
   variable?: string;
   generator?: string;
   value?: string;
-  /** La correction d'une cible dans une ligne de tableau : l'option de ligne choisie (bound, key). */
+  /** La correction d'une cible dans une ligne de tableau : l'option de ligne choisie (bound, key, manual). */
   option?: string;
+  /** manual : la colonne liée (la donnée du run est `variable`). */
+  column?: string;
+  /** columns, row-preview, row-edit : la ligne par ses colonnes, chacune avec la source de sa valeur. */
+  columns?: RowColumnChoice[];
 }
 
 const COMMANDS = new Set<PanelCommand['type']>([
@@ -66,6 +74,9 @@ const COMMANDS = new Set<PanelCommand['type']>([
   'correct-apply',
   'correct-test',
   'correct-restore',
+  'resume-replay',
+  'row-preview',
+  'row-edit',
 ]);
 
 /**
@@ -156,5 +167,33 @@ function commandOf(payload: unknown): PanelCommand | undefined {
       : {}),
     ...(typeof raw.value === 'string' ? { value: raw.value.slice(0, 500) } : {}),
     ...(typeof raw.option === 'string' && /^[a-z]{1,20}$/.test(raw.option) ? { option: raw.option } : {}),
+    ...(typeof raw.column === 'string' && raw.column.length <= 60 ? { column: raw.column } : {}),
+    ...columnsOf(raw.columns),
   };
+}
+
+const SOURCES = new Set<RowColumnChoice['source']>(['recorded', 'value', 'variable', 'new-variable']);
+
+/** Les colonnes d'une ligne : 6 au plus, chaque champ borné ; une entrée mal formée invalide la liste. */
+function columnsOf(raw: unknown): { columns?: RowColumnChoice[] } {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 6) return {};
+  const columns: RowColumnChoice[] = [];
+  for (const entry of raw as unknown[]) {
+    if (typeof entry !== 'object' || entry === null) return {};
+    const item = entry as Record<string, unknown>;
+    const { column, source, value, key, match } = item;
+    if (typeof column !== 'string' || column.length === 0 || column.length > 60) return {};
+    if (typeof source !== 'string' || !SOURCES.has(source as RowColumnChoice['source'])) return {};
+    if (value !== undefined && (typeof value !== 'string' || value.length > 200)) return {};
+    if (key !== undefined && (typeof key !== 'string' || key.length > 80)) return {};
+    if (match !== undefined && match !== 'exact' && match !== 'contains') return {};
+    columns.push({
+      column,
+      source: source as RowColumnChoice['source'],
+      ...(typeof value === 'string' ? { value } : {}),
+      ...(typeof key === 'string' ? { key } : {}),
+      ...(match ? { match } : {}),
+    });
+  }
+  return { columns };
 }

@@ -171,6 +171,7 @@ describe('loadConfigFile', () => {
       'scenarios/example.yaml',
       'scenarios/demo.yaml',
       'scenarios/demo-traps.yaml',
+      'scenarios/demo-orbit.yaml',
     ]) {
       const loaded = await loadConfigFile(file, {}, {});
       expect(loaded.warnings, file).toEqual([]);

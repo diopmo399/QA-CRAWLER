@@ -270,6 +270,11 @@ export interface RecordedElement {
    * tableau (« Business key = 2935 ») — ce qui désigne la même ligne quel que soit l'ordre du tableau.
    */
   rowKey?: { column: string; value: string }[];
+  /**
+   * LES CELLULES DE LA LIGNE (colonne → texte, sans la cellule de l'élément), lues à l'enregistrement :
+   * la ligne se redéfinit en revue colonne par colonne, sans rouvrir le navigateur.
+   */
+  rowCells?: { column: string; value: string }[];
   /** Le contrôle qui ouvre la liste d'une option (« Operator »). */
   listboxOwner?: string;
   /** Le menu (nom ou déclencheur). */
@@ -784,6 +789,13 @@ export type RecordingEventType =
   | 'RECORDING_SAVED'
   | 'RECORDING_STEP_REMOVED'
   | 'RECORDING_TARGET_CORRECTED'
+  /**
+   * RESTAURATION DU CONTEXTE (revue) : la stratégie décidée à la reprise d'un rejeu corrigé (REVALIDATE,
+   * RESTORE, REBUILD, MANUAL_RECOVERY), la reprise elle-même, et une reprise bloquée (pourquoi).
+   */
+  | 'REPLAY_CONTEXT_RECOVERY'
+  | 'REPLAY_RESUMED'
+  | 'REPLAY_RESUME_BLOCKED'
   | 'RECORDING_INTENT_REVIEWED'
   | 'RECORDING_TEST_DATA_BOUND'
   | 'SEMANTIC_ACTION_RESOLVED'

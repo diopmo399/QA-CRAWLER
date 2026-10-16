@@ -325,12 +325,21 @@ npm run qa -- scenarios/smoke.yaml --base-url http://localhost:4200
 Essai sur les applications de démo fournies :
 
 ```bash
-npm run demo:server                        # terminal 1 : back-office sur :4174, site piège sur :4173
+npm run demo:server                        # terminal 1 : back-office sur :4174, site piège sur :4173, Orbit Desk sur :4180
 npm run qa -- scenarios/demo.yaml          # terminal 2 : découvre les flows du back-office
 npm run qa -- scenarios/demo-traps.yaml    #              pièges (404, 500, erreurs JS, boucles…)
+npm run qa -- scenarios/demo-orbit.yaml    #              Orbit Desk, back-office de demandes (rapport en français)
 QA_DEMO_PASSWORD=demo npm run qa -- scenarios/demo-flows.yaml   # flows imposés
 open reports/overview.html reports/index.html reports/flow-graph.html
 ```
+
+**Orbit Desk** (`tests/fixtures/orbit-desk-app.ts`) est un back-office de demandes moderne et fictif :
+tableau de bord, liste des demandes, création (POST → 201 + `Location`, référence propre à chaque
+création), dossiers avec des actions qui modifient (« M'assigner le dossier ») ou détruisent
+(« Supprimer »), et un écran Rapports en panne (`GET /api/statistiques` → 500). La mission
+`scenarios/demo-orbit.yaml` y fait passer deux flows, détecte la panne, bloque les écritures et produit
+un rapport, un Gherkin et des tests Playwright en français. Avec le conseiller IA :
+`npm run qa -- scenarios/demo-orbit.yaml --intelligence hybrid --ai-provider copilot`.
 
 Exemple de résultat sur le back-office de démo. L'explorateur a trouvé seul la structure, y compris les trois étapes d'un assistant qui ne change jamais d'URL :
 
@@ -1022,7 +1031,7 @@ La mission donne la cible, la connexion, la sécurité, `gherkin.steps` et les f
 
 `qa-crawler record` ouvre Chromium sur l'application : vous vous en servez normalement, QA-CRAWLER observe, puis écrit **un** flow imposé propre, en `generated.flow.yaml` **et** `generated.feature` (la même représentation), utilisable tel quel par un run ou un Dry Run. Ce n'est pas un enregistreur de macros : des cibles stables (libellé, rôle + nom ; jamais `#mat-input-23` ni `nth-child`), une étape par intention (pas une par touche), des **données de test** à la place de ce que vous avez tapé (`value: { testData: request.title }`, dans un `test-data.yaml` cité par le flow et le `.feature` : textes gardés, e-mails et noms régénérés à chaque rejeu, codes métier gardés tels quels), les secrets en `{ env: … }`, les choix métier gardés (« Business »), et les résultats observés (requête `POST /api/users` 2xx, page atteinte).
 
-Pendant l'enregistrement, une fenêtre **« QA-CRAWLER Recorder »** (jamais enregistrée) montre chaque action réellement faite en mots simples (« Cliquer sur "Continuer" », ✓ confirmée, ⚠ ambiguë à résoudre, ✕ non retrouvée), ses détails (l'élément est mis en évidence dans la page), la qualité de l'enregistrement, Pause et ↶ Annuler. **Corriger dans le navigateur** (correction manager) : la page passe en mode sélection, l'élément survolé s'encadre, le clic désigne la nouvelle cible sans toucher l'application, la fenêtre montre ancienne → nouvelle cible et l'ordre de résolution avant de valider (pendant l'enregistrement, ou en revue après un rejeu interrompu) ; une cible dans une ligne de tableau est liée à la donnée du run plutôt qu'à une clé propre à ce run. Avec `recording.panelLayout: docked`, le mini-dock vit **dans la page** de l'application (une seule fenêtre Chromium ; le cockpit s'ouvre à la demande). Après l'arrêt : **la revue** — ▶ Rejouer (conseillé), ✎ Modifier, 💾 Sauvegarder (le brouillon devient `flows/<nom>/`) — et l'onglet **Analyse** (intents, constats), toujours séparé des actions enregistrées. Voir [docs/HUMAN_FLOW_RECORDER.md](docs/HUMAN_FLOW_RECORDER.md#pendant-lenregistrement).
+Pendant l'enregistrement, une fenêtre **« QA-CRAWLER Recorder »** (jamais enregistrée) montre chaque action réellement faite en mots simples (« Cliquer sur "Continuer" », ✓ confirmée, ⚠ ambiguë à résoudre, ✕ non retrouvée), ses détails (l'élément est mis en évidence dans la page), la qualité de l'enregistrement, Pause et ↶ Annuler. **Corriger dans le navigateur** (correction manager) : la page passe en mode sélection, l'élément survolé s'encadre, le clic désigne la nouvelle cible sans toucher l'application, la fenêtre montre ancienne → nouvelle cible et l'ordre de résolution avant de valider (pendant l'enregistrement, ou en revue après un rejeu interrompu) ; une cible dans une ligne de tableau est liée à la donnée du run plutôt qu'à une clé propre à ce run. Après une correction, **Reprendre ici** reprend le rejeu à l'étape corrigée dans la même session : le contexte est comparé à un checkpoint, puis vérifié, restauré ou reconstruit (voir [docs/CONTEXT_RECOVERY.md](docs/CONTEXT_RECOVERY.md)). Avec `recording.panelLayout: docked`, le mini-dock vit **dans la page** de l'application (une seule fenêtre Chromium ; le cockpit s'ouvre à la demande). Après l'arrêt : **la revue** — ▶ Rejouer (conseillé), ✎ Modifier, 💾 Sauvegarder (le brouillon devient `flows/<nom>/`) — et l'onglet **Analyse** (intents, constats), toujours séparé des actions enregistrées. Voir [docs/HUMAN_FLOW_RECORDER.md](docs/HUMAN_FLOW_RECORDER.md#pendant-lenregistrement).
 
 ```bash
 npm run qa -- record --url https://qa.example.com/users --name "Create business user"

@@ -7,7 +7,7 @@ import {
   type HumanDecision,
 } from './application/human-review.js';
 import { generateFlowFiles } from './recorded-flow.js';
-import { applyTestDataBinding } from './test-data-binding.js';
+import { addRowVariables, applyTestDataBinding } from './test-data-binding.js';
 import {
   PROPOSABLE_OPERATIONS,
   analyzeRecording,
@@ -72,11 +72,14 @@ import { RecorderPanel } from './recorder-panel.js';
 import {
   RecordingConsole,
   regenerateFlowFiles,
+  rowVariables,
   removeFlowStep,
   saveRecordedFlow,
 } from './recording-console.js';
 import {
   correctFlowTarget,
+  editFlowRow,
+  recordedRowCells,
   describeTarget,
   restoreFlowTarget,
   type KnownValue,
@@ -897,8 +900,15 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     const ui = consoleUi;
     // LA SESSION DE CORRECTION : le moteur de rejeu suit le même chemin (étapes 1 à N-1) puis garde la
     // page ouverte le temps de la correction ; une seule à la fois, fermée avec la revue.
-    let correction:
-      { stepId: string; release: () => void; done: Promise<unknown>; runData: KnownValue[] } | undefined;
+    interface CorrectionHandle {
+      stepId: string;
+      release: () => void;
+      done: Promise<unknown>;
+      runData: KnownValue[];
+      /** La page tenue (atteinte) : sa position, son checkpoint, la reprise. */
+      state?: CorrectionSessionState;
+    }
+    let correction: CorrectionHandle | undefined;
     // La fermeture (navigateur, fin de la mission de correction) peut prendre quelques secondes : la
     // fenêtre n'attend pas, mais une nouvelle session et la fin de la revue attendent la précédente.
     let closing: Promise<void> = Promise.resolve();
@@ -924,6 +934,16 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       await write('recorded-flow.json', json(recordedFlow));
       replay = { status: 'NOT_VALIDATED' };
       saved = undefined;
+    };
+    // Une colonne liée à une nouvelle donnée : test-data.yaml la porte (on la modifie là, pas dans le flow).
+    const writeRowVariables = async (added: readonly string[]): Promise<void> => {
+      if (added.length === 0 || !result.testData) return;
+      await write(TEST_DATA_FILE, stringifyYaml(result.testData.document, { lineWidth: 0 }));
+      onEvent({
+        type: 'RECORDING_TEST_DATA_BOUND',
+        at: new Date().toISOString(),
+        message: `table row bound to new test data: ${added.map((key) => `testData.${key}`).join(', ')}`,
+      });
     };
     const driverFailure = await ui.runReview({
       result,
@@ -1008,7 +1028,14 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         pickTarget: async (stepId, label, onProgress) => {
           const position = result.flow.steps.findIndex((item) => item.id === stepId) + 1;
           if (position <= 0) return { unavailable: `step ${stepId} not found` };
-          if (correction && correction.stepId !== stepId) await endCorrection();
+          // La session tenue DEVANT cette étape (après une reprise interrompue, ou la même correction) : réutilisée,
+          // le contexte est gardé ; une autre étape : la session est fermée, une nouvelle suit le même chemin.
+          const heldAt = correction?.state?.reached ? correction.state.position() : undefined;
+          const reusable =
+            correction !== undefined &&
+            (heldAt === position || (heldAt === undefined && correction.stepId === stepId));
+          if (correction && !reusable) await endCorrection();
+          if (correction) correction.stepId = stepId;
           if (!correction) {
             const scenarioFile = path.join(directory, 'replay.flow.yaml');
             await writeFile(scenarioFile, result.files.yaml, 'utf8');
@@ -1031,6 +1058,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
               directory,
               stepIndex: position,
               headless: config.browser.headless,
+              recovery: config.replay.contextRecovery,
               onStep: (executed, total) => {
                 onProgress({ executed, total });
               },
@@ -1047,7 +1075,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
                 ready({ error: error instanceof Error ? error.message : String(error) });
               },
             );
-            const session = { stepId, release, done, runData: [] as KnownValue[] };
+            const session: CorrectionHandle = { stepId, release, done, runData: [] };
             correction = session;
             const state = await readiness;
             // Annulée pendant le rejeu des étapes précédentes : rien à désigner.
@@ -1072,30 +1100,165 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
               };
             }
             session.runData = state.runData.filter((entry) => !isSensitiveKey(entry.key));
+            session.state = state;
             await recorder.attachCorrectionPage(state.page);
             await state.page.bringToFront().catch(() => undefined);
+          } else if (correction.state) {
+            // La page tenue : ses données du run ont pu changer pendant une reprise.
+            correction.runData = correction.state.runData.filter((entry) => !isSensitiveKey(entry.key));
+            await correction.state.page.bringToFront().catch(() => undefined);
           }
           onProgress({ executed: 0, total: 0, picking: true });
           const picked = await recorder.pickTarget(label);
           return picked ? { picked, runData: correction.runData } : { cancelled: true };
         },
         releaseCorrection: endCorrection,
-        correctTarget: async ({ stepId, picked, known, option }) => {
+        correctTarget: async ({ stepId, picked, known, option, binding, columns }) => {
+          // Avant de toucher au flow : une nouvelle donnée doit pouvoir rejoindre le jeu de test.
+          const set = result.testData?.set;
           const outcome = correctFlowTarget(
             result.flow,
             stepId,
             picked,
             Date.now(),
             language,
-            { known: known ?? [] },
+            {
+              known: known ?? [],
+              ...(set ? { newVariables: { taken: Object.keys(set.values) } } : {}),
+            },
             option,
+            binding,
+            columns,
           );
           if ('error' in outcome) return outcome;
+          const added = addRowVariables(result, outcome.created, stepId);
+          if ('error' in added) return added;
           await rewriteFlow();
+          await writeRowVariables(added.added);
           onEvent({
             type: 'RECORDING_TARGET_CORRECTED',
             at: new Date(outcome.correction.at).toISOString(),
             message: `step ${stepId}: target corrected by the user in the browser ${describeTarget(outcome.correction.previous)} → ${describeTarget(outcome.correction.next)}`,
+          });
+          // La page tenue devant l'étape corrigée : le rejeu peut REPRENDRE ici (contexte gardé).
+          const position = result.flow.steps.findIndex((item) => item.id === stepId) + 1;
+          const held = correction?.state;
+          return held?.reached && held.position() === position
+            ? { ok: true, resumable: position }
+            : { ok: true };
+        },
+        // REPRENDRE le rejeu à l'étape corrigée, dans la session tenue (même run, mêmes données) : le contexte
+        // est comparé au checkpoint (REVALIDATE / RESTORE / REBUILD / MANUAL_RECOVERY), les préconditions de
+        // l'étape vérifiées, puis l'étape corrigée et la suite sont rejouées.
+        resumeReplay: async (onStep) => {
+          const session = correction;
+          const held = session?.state;
+          if (!session || !held?.reached) return { error: 'no held session to resume' };
+          const from = held.position();
+          const scenarioFile = path.join(directory, 'replay.flow.yaml');
+          await writeFile(scenarioFile, result.files.yaml, 'utf8');
+          const outcome = await held.resume({ scenarioFile, ...(onStep ? { onStep } : {}) });
+          onEvent({
+            type: 'REPLAY_CONTEXT_RECOVERY',
+            at: new Date().toISOString(),
+            message: `resume at step ${String(from)}: ${outcome.decision.strategy} — ${outcome.decision.reasons.join('; ')}`,
+            data: {
+              strategy: outcome.decision.strategy,
+              from,
+              recovered: outcome.recovered,
+              differences: outcome.decision.differences.map((difference) => difference.kind),
+            },
+          });
+          onEvent({
+            type: outcome.status === 'MANUAL_RECOVERY' ? 'REPLAY_RESUME_BLOCKED' : 'REPLAY_RESUMED',
+            at: new Date().toISOString(),
+            message:
+              outcome.status === 'MANUAL_RECOVERY'
+                ? `resume at step ${String(from)} needs the user: ${(outcome.decision.blockedBy ?? []).map((entry) => (entry.step ? `step ${String(entry.step)}: ` : '') + entry.reason).join('; ')}`
+                : `resumed at step ${String(from)}: ${outcome.status}${outcome.failure ? ` at step ${String(outcome.failure.index)} (${outcome.failure.reason})` : ''}`,
+          });
+          const steps: NonNullable<ReplayOutcome['steps']> = result.flow.steps.map((item, offset) => {
+            const index = offset + 1;
+            const passed =
+              index < from ||
+              (index >= from &&
+                (outcome.failure ? index < outcome.failure.index : outcome.status === 'PASSED'));
+            const failed = outcome.failure?.index === index;
+            return {
+              index,
+              label: item.label,
+              outcome: passed ? 'MATCHED' : failed ? 'NOT_FOUND' : 'NOT_VERIFIED',
+              reasons: failed && outcome.failure ? [outcome.failure.reason] : [],
+              evidence: [],
+            };
+          });
+          if (outcome.status === 'PASSED') {
+            replay = {
+              status: 'REPLAY_CONFIRMED',
+              steps,
+              reason: `replayed in one session with the same run data, resumed at step ${String(from)} after a correction (${outcome.decision.strategy})`,
+            };
+            saved = undefined;
+            await endCorrection();
+          } else
+            replay = {
+              status: 'REPLAY_FAILED',
+              steps,
+              reason: outcome.failure?.reason ?? outcome.decision.reasons.join('; '),
+            };
+          const panel = panelReplayOf(replay, result, recorder, language);
+          const recovery: NonNullable<PanelReplay['recovery']> = {
+            strategy: outcome.decision.strategy,
+            from: actionNumberOf(result, from),
+            reasons: outcome.decision.reasons,
+            recovered: outcome.recovered,
+            ...(outcome.decision.blockedBy ? { blockedBy: outcome.decision.blockedBy } : {}),
+          };
+          if (outcome.status === 'MANUAL_RECOVERY') {
+            const flowStep = result.flow.steps[from - 1];
+            return {
+              ...panel,
+              status: 'FAILED',
+              recovery,
+              failure: {
+                index: actionNumberOf(result, from),
+                ...(flowStep ? { stepId: flowStep.id } : {}),
+                description: panel.failure?.description ?? flowStep?.label ?? `#${String(from)}`,
+                cause: language === 'fr' ? 'reprise impossible sans vous' : 'cannot resume without you',
+                details: [
+                  ...outcome.decision.reasons,
+                  ...(outcome.decision.blockedBy ?? []).map(
+                    (entry) => (entry.step ? `#${String(entry.step)} ` : '') + entry.reason,
+                  ),
+                ],
+              },
+            };
+          }
+          return { ...panel, recovery };
+        },
+        // LA LIGNE, SANS NAVIGATEUR : les colonnes choisies sur les cellules enregistrées avec l'action.
+        editRow: async ({ stepId, columns }) => {
+          const item = result.flow.steps.find((entry) => entry.id === stepId);
+          if (!item) return { error: `step ${stepId} not found` };
+          const set = result.testData?.set;
+          const outcome = editFlowRow(
+            result.flow,
+            stepId,
+            recordedRowCells(result.session.rawEvents, item.rawEventIds),
+            rowVariables(result, stepId),
+            columns,
+            Date.now(),
+            set ? { taken: Object.keys(set.values) } : undefined,
+          );
+          if ('error' in outcome) return outcome;
+          const added = addRowVariables(result, outcome.created, stepId);
+          if ('error' in added) return added;
+          await rewriteFlow();
+          await writeRowVariables(added.added);
+          onEvent({
+            type: 'RECORDING_TARGET_CORRECTED',
+            at: new Date(outcome.correction.at).toISOString(),
+            message: `step ${stepId}: row edited by the user ${describeTarget(outcome.correction.previous)} → ${describeTarget(outcome.correction.next)}${added.added.length ? ` (new test data: ${added.added.join(', ')})` : ''}`,
           });
           return { ok: true };
         },
@@ -1181,6 +1344,12 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   };
 }
 
+/** Le numéro d'action (1..n, sans les vérifications ajoutées) d'une position du flow : celui que montre le parcours. */
+function actionNumberOf(result: RecordingResult, position: number): number {
+  const number = result.flow.steps.slice(0, position).filter((item) => item.step.kind !== 'expect').length;
+  return number > 0 ? number : position;
+}
+
 /** Le résultat d'un rejeu, dit pour la fenêtre : l'étape qui échoue en mots simples, le détail ensuite. */
 function panelReplayOf(
   outcome: ReplayOutcome,
@@ -1238,7 +1407,8 @@ function panelReplayOf(
     executed,
     total,
     failure: {
-      index,
+      // Le numéro de l'ACTION (celui du parcours), pas la position dans le flow (qui compte les vérifications).
+      index: actionNumberOf(result, index),
       ...(said.stepId ? { stepId: said.stepId } : {}),
       description: said.description,
       cause: reason ? reason[french ? 0 : 1] : (outcome.reason ?? outcome.status),
