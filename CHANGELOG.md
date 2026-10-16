@@ -6,6 +6,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Démo Orbit Desk** (`tests/fixtures/orbit-desk-app.ts`, `scenarios/demo-orbit.yaml`, `npm run
+demo:server` sur le port 4180) : un back-office de demandes moderne et fictif pour les démonstrations.
+  Création réelle (POST → 201 + `Location`, référence propre à chaque création), liste par session,
+  actions qui modifient ou détruisent, écran Rapports en panne (HTTP 500). La mission livrée produit un
+  rapport, un Gherkin et des tests Playwright en français, avec des données de test générées (`testData.
+defaults`). Test d'intégration : flows passés, panne détectée, écritures bloquées, aucune création.
 - **Ligne de tableau : toutes les colonnes, valeurs modifiables** (`src/recording/target-correction.ts`,
   fenêtre du recorder ; `docs/HUMAN_FLOW_RECORDER.md`). Les cellules de la ligne cliquée sont gardées dès
   l'enregistrement (`RecordedElement.rowCells`), plus seulement la clé de ligne. **Choisir les colonnes de la
