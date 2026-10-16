@@ -8,6 +8,7 @@ import type { RawRecordedEvent, RecordedElement, RecordingSession } from '../../
 import { processRecording, TEST_DATA_FILE } from '../../src/recording/process-recording.js';
 import { generateFlowFiles } from '../../src/recording/recorded-flow.js';
 import {
+  addRowVariables,
   applyTestDataBinding,
   availableVariables,
   dataLineage,
@@ -368,5 +369,31 @@ describe('Explicit test data binding between steps', () => {
       'the value is the test datum testData.company.name: dynamic, not a frozen literal',
     ]);
     expect(result.testData?.set.values[before]).toBeUndefined();
+  });
+
+  it('a table row column bound to NEW test data: added to the set and its YAML document, never over an existing key', () => {
+    const result = record();
+    const taken = Object.keys(result.testData?.set.values ?? {})[0] ?? '';
+    expect(
+      addRowVariables(
+        result,
+        [{ key: 'row.workflow', value: 'Ouverture de dossier', column: 'Workflow' }],
+        's9',
+      ),
+    ).toEqual({ added: ['row.workflow'] });
+    expect(result.testData?.set.values['row.workflow']).toMatchObject({
+      strategy: 'BUSINESS_LITERAL',
+      value: 'Ouverture de dossier',
+      sensitive: false,
+    });
+    expect(JSON.stringify(result.testData?.document)).toContain('Ouverture de dossier');
+    expect(addRowVariables(result, [{ key: taken, value: 'x', column: 'Workflow' }], 's9')).toEqual({
+      error: `the variable "${taken}" already exists`,
+    });
+    expect(addRowVariables(result, [{ key: 'user.password', value: 'x', column: 'Workflow' }], 's9')).toEqual(
+      {
+        error: '"user.password" names a secret: never kept in clear',
+      },
+    );
   });
 });

@@ -385,6 +385,21 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .rowopts label.choice input{margin:2px 0 0;accent-color:var(--accent);flex:none}
 .rowopts label.choice>span{display:grid;gap:2px;min-width:0}
 .rowopts .otitle{font-weight:600;color:var(--fg)}
+.roweditor{display:grid;gap:6px;margin-top:8px;min-width:0}
+.roweditor .rcol{border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:var(--surface);min-width:0}
+.roweditor .rcol.on{border-color:var(--accent)}
+.roweditor .rcol>label.choice{display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:12px;min-width:0}
+.roweditor .rcol>label.choice input{margin:2px 0 0;accent-color:var(--accent);flex:none}
+.roweditor .rcol>label.choice>span{display:grid;gap:1px;min-width:0;overflow-wrap:anywhere}
+.roweditor .rcol small{color:var(--muted-strong);font-size:11px}
+.roweditor .ohelp{font-size:11px;color:var(--muted-strong);margin:2px 0}
+.roweditor .rsrc{display:grid;gap:6px;margin-top:6px;min-width:0}
+.roweditor .rsrc label{display:grid;gap:2px;font-size:11px;color:var(--muted-strong);min-width:0}
+.roweditor .rsrc label.choice{display:flex;gap:6px;align-items:center}
+.roweditor input[type=text],.roweditor select{font:inherit;font-size:12px;min-width:0;width:100%;box-sizing:border-box}
+.rpreview{font-size:12px;margin:4px 0 0}
+.rpreview.found{color:var(--ok,#15803d)}
+.rpreview.ambiguous,.rpreview.none,.rpreview.invalid{color:var(--warn,#b45309)}
 .rowopts label.choice small{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere}
 .rowopts .opt.fixed small{color:var(--warn)}
 .rowopts .ohelp{margin:4px 0 0 22px;font-size:11px;color:var(--muted-strong);line-height:1.4}
@@ -738,11 +753,15 @@ const SCRIPT = `
       cOrder: 'Ordre de résolution au rejeu', cTest: "Tester l'étape", cCancel: 'Annuler', cApply: 'Valider la correction', cAmbiguous: 'Plusieurs éléments correspondent encore : la section ou le contexte départagera au rejeu.',
       cRowTitle: 'Identifier la ligne par', cRowBound: function (v) { return 'La donnée du run « ' + v + ' »'; }, cRowBoundHelp: 'La ligne créée pendant le run est retrouvée à chaque rejeu, quelle que soit sa clé.',
       cRowKey: 'La clé lue dans le tableau', cRowFixed: 'Clé propre à ce run : le prochain rejeu crée une autre ligne et ne la retrouvera pas.',
-      cRowContains: 'la cellule contient la donnée', cRowManual: 'Lier une colonne à une donnée du run', cRowColumn: 'Colonne', cRowVariable: 'Donnée du run',
-      cRowManualHelp: 'Au rejeu, la ligne est celle dont cette colonne contient la valeur de cette donnée dans ce run.',
+      cRowContains: 'la cellule contient la donnée', cRowVariable: 'Donnée du run', rContains: 'La cellule contient la valeur (sinon : égale)',
       cRowNoMatch: "Aucune cellule de cette ligne n'est égale à une donnée du run : liez une colonne vous-même.", cRowNoData: "Aucune donnée du run n'est connue avant cette étape : seule la clé du tableau peut identifier la ligne.",
       cHistory: 'Historique des corrections', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrigé par', cUser: 'Utilisateur', cDate: 'Date', cRestore: "Restaurer l'original", cUnknown: 'non retrouvée', cCurrent: 'Cible actuelle',
-      cRowL: 'Ligne', cContainsW: 'contient', cRecommended: 'Recommandé', cRunOnly: 'Propre à ce run', cTech: 'Détails techniques'
+      cRowL: 'Ligne', cContainsW: 'contient', cRecommended: 'Recommandé', cRunOnly: 'Propre à ce run', cTech: 'Détails techniques',
+      cRowColumns: 'Choisir les colonnes de la ligne', rEdit: 'Modifier la ligne', rApply: 'Valider la ligne',
+      rHelp: 'Cochez les colonnes qui identifient la ligne : au rejeu, toutes doivent correspondre.', rRecorded: 'valeur lue',
+      rSource: 'Source de la valeur', rSrcRecorded: 'Valeur lue (fixe)', rSrcValue: 'Valeur modifiée (fixe)', rSrcVariable: 'Donnée du run', rSrcNew: 'Nouvelle donnée de test',
+      rValue: 'Valeur', rNewKey: 'Nom de la donnée', rNewHelp: 'Ajoutée à test-data.yaml : modifiez-y la valeur sans toucher au flow.', rPreviewBtn: 'Aperçu dans la page',
+      rPreview: function (p) { return p.status === 'FOUND' ? '1 ligne correspond dans la page ouverte.' : p.status === 'AMBIGUOUS' ? p.matches + ' lignes correspondent : ajoutez une colonne.' : p.status === 'NONE' ? 'Aucune ligne ne correspond dans la page ouverte.' : p.status === 'UNAVAILABLE' ? "Aperçu indisponible : aucune page de l'application n'est ouverte (« Corriger dans le navigateur » l'ouvre)." : (p.message || ''); }
     },
     en: {
       subtitle: 'Journey recording', devMode: 'Developer mode', active: 'Active', inactive: 'Paused',
@@ -767,11 +786,15 @@ const SCRIPT = `
       cOrder: 'Resolution order at replay', cTest: 'Test the step', cCancel: 'Cancel', cApply: 'Confirm the correction', cAmbiguous: 'Several elements still match: the section or the context decides at replay.',
       cRowTitle: 'Identify the row by', cRowBound: function (v) { return 'The run value "' + v + '"'; }, cRowBoundHelp: 'The row created during the run is found at every replay, whatever its key.',
       cRowKey: 'The key read in the table', cRowFixed: 'Key specific to this run: the next replay creates another row and will not find it.',
-      cRowContains: 'the cell contains the value', cRowManual: 'Bind a column to a run value', cRowColumn: 'Column', cRowVariable: 'Run value',
-      cRowManualHelp: 'At replay, the row is the one whose column contains the value of this data in that run.',
+      cRowContains: 'the cell contains the value', cRowVariable: 'Run value', rContains: 'The cell contains the value (otherwise: equals)',
       cRowNoMatch: 'No cell of this row equals a run value: bind a column yourself.', cRowNoData: 'No run value is known before this step: only the table key can identify the row.',
       cHistory: 'Correction history', cOriginal: 'Original', cCorrection: 'Correction', cBy: 'Corrected by', cUser: 'User', cDate: 'Date', cRestore: 'Restore the original', cUnknown: 'not found', cCurrent: 'Current target',
-      cRowL: 'Row', cContainsW: 'contains', cRecommended: 'Recommended', cRunOnly: 'This run only', cTech: 'Technical details'
+      cRowL: 'Row', cContainsW: 'contains', cRecommended: 'Recommended', cRunOnly: 'This run only', cTech: 'Technical details',
+      cRowColumns: 'Choose the columns of the row', rEdit: 'Edit the row', rApply: 'Confirm the row',
+      rHelp: 'Tick the columns that identify the row: at replay, all of them must match.', rRecorded: 'value read',
+      rSource: 'Value source', rSrcRecorded: 'Value read (fixed)', rSrcValue: 'Edited value (fixed)', rSrcVariable: 'Run value', rSrcNew: 'New test data',
+      rValue: 'Value', rNewKey: 'Data name', rNewHelp: 'Added to test-data.yaml: change the value there without touching the flow.', rPreviewBtn: 'Preview in the page',
+      rPreview: function (p) { return p.status === 'FOUND' ? '1 row matches in the open page.' : p.status === 'AMBIGUOUS' ? p.matches + ' rows match: add a column.' : p.status === 'NONE' ? 'No row matches in the open page.' : p.status === 'UNAVAILABLE' ? 'Preview unavailable: no application page is open ("Correct in the browser" opens one).' : (p.message || ''); }
     }
   }[lang];
   Object.keys(X).forEach(function (k) { T[k] = X[k]; });
@@ -793,8 +816,10 @@ const SCRIPT = `
   var focused = null, scrolledTo = null;
   // L'option de ligne choisie pour une correction (bound, key), par étape : gardée entre deux rendus.
   var rowChoice = {};
-  // La liaison manuelle d'une colonne à une donnée du run, par étape : { column, key }.
-  var rowBind = {};
+  // Le choix des colonnes de la ligne, par étape : { colonne: { on, source, value, key, newKey, match } }.
+  var rowDraft = {};
+  // « Modifier la ligne » (revue, sans navigateur) ouvert, par étape : la cible au moment de l'ouverture.
+  var rowEditOpen = {};
   // « Détails techniques » d'une correction ouverts ou non, par étape : gardé entre deux rendus.
   var techOpen = {};
   // Le brouillon de la source de chaque saisie (revue) : gardé entre deux rendus de la fenêtre.
@@ -1076,6 +1101,81 @@ const SCRIPT = `
     return h + '</div>';
   }
 
+  /** Un nom de donnée proposé pour une colonne : « row. » + ses lettres et chiffres (sans accents). */
+  function keyOfColumn(column) {
+    var plain = String(column).normalize('NFD'), out = '';
+    for (var i = 0; i < plain.length; i += 1) {
+      var ch = plain.charAt(i).toLowerCase();
+      if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) out += ch;
+    }
+    return 'row.' + (out && !(out.charAt(0) >= '0' && out.charAt(0) <= '9') ? out : 'value');
+  }
+
+  /** Le brouillon des colonnes : la ligne actuelle (ou proposée), chaque colonne avec la source de sa valeur. */
+  function rowDraftOf(id, cells, vars, current) {
+    if (rowDraft[id]) return rowDraft[id];
+    var d = {}, cur = current || {}, open = '\${testData:';
+    cells.forEach(function (c) {
+      var v = cur[c.column], e = { on: v !== undefined, source: 'recorded', cell: c.value, value: c.value, key: vars[0] ? vars[0].key : '', newKey: keyOfColumn(c.column), match: 'exact' };
+      if (e.on) {
+        v = String(v);
+        if (v.charAt(0) === '~') { e.match = 'contains'; v = v.slice(1); }
+        var cited = v.indexOf(open) === 0 && v.charAt(v.length - 1) === '}' ? v.slice(open.length, -1) : null;
+        if (cited !== null && vars.some(function (x) { return x.key === cited; })) { e.source = 'variable'; e.key = cited; }
+        else if (cited === null && v !== c.value) { e.source = 'value'; e.value = v; }
+      }
+      d[c.column] = e;
+    });
+    return (rowDraft[id] = d);
+  }
+
+  /** Les colonnes cochées, telles que Node les vérifie (colonne, source, valeur ou donnée, contient). */
+  function rowColumns(id) {
+    var d = rowDraft[id] || {}, out = [];
+    Object.keys(d).forEach(function (col) {
+      var e = d[col];
+      if (!e.on) return;
+      var c = { column: col, source: e.source, match: e.match };
+      if (e.source === 'value') c.value = e.value;
+      if (e.source === 'variable') c.key = e.key;
+      if (e.source === 'new-variable') { c.key = e.newKey; c.value = e.value; }
+      out.push(c);
+    });
+    return out;
+  }
+
+  /** La ligne choisie, lisible : « Colonne = valeur, Colonne ∋ donnée ». */
+  function rowSaid(id) {
+    return rowColumns(id).map(function (c) {
+      var v = c.source === 'variable' || c.source === 'new-variable' ? '\${testData:' + c.key + '}' : c.source === 'value' ? c.value : rowDraft[id][c.column].cell;
+      return c.column + (c.match === 'contains' ? ' ∋ ' : ' = ') + v;
+    }).join(', ');
+  }
+
+  /** L'ÉDITEUR DE LA LIGNE : chaque colonne, cochée ou non, et la source de sa valeur au rejeu ; l'aperçu compte les lignes. */
+  function rowEditor(id, cells, vars, canCreate, current) {
+    var d = rowDraftOf(id, cells, vars, current);
+    var h = '<div class="roweditor" data-rowedit="' + esc(id) + '"><p class="ohelp">' + esc(T.rHelp) + '</p>';
+    cells.forEach(function (c, i) {
+      var e = d[c.column], cid = 'rc-' + id + '-' + i;
+      var at = ' data-step-id="' + esc(id) + '" data-column="' + esc(c.column) + '"';
+      h += '<div class="rcol' + (e.on ? ' on' : '') + '"><label class="choice" for="' + esc(cid) + '"><input type="checkbox" id="' + esc(cid) + '" data-rowcol="on"' + at + (e.on ? ' checked' : '') + '><span><b>' + esc(c.column) + '</b><small>' + esc(T.rRecorded) + ' : ' + esc(c.value) + '</small></span></label>';
+      if (e.on) {
+        var opt = function (v, l) { return '<option value="' + v + '"' + (e.source === v ? ' selected' : '') + '>' + esc(l) + '</option>'; };
+        h += '<div class="rsrc"><label>' + esc(T.rSource) + '<select data-rowcol="source"' + at + '>' + opt('recorded', T.rSrcRecorded) + opt('value', T.rSrcValue) + (vars.length ? opt('variable', T.rSrcVariable) : '') + (canCreate ? opt('new-variable', T.rSrcNew) : '') + '</select></label>';
+        if (e.source === 'value') h += '<label>' + esc(T.rValue) + '<input type="text" data-rowcol="value"' + at + ' value="' + esc(e.value) + '"></label>';
+        if (e.source === 'variable') h += '<label>' + esc(T.cRowVariable) + '<select data-rowcol="key"' + at + '>' + vars.map(function (v) { return '<option value="' + esc(v.key) + '"' + (v.key === e.key ? ' selected' : '') + '>' + esc(v.value ? v.key + ' — ' + v.value : v.key) + '</option>'; }).join('') + '</select></label>';
+        if (e.source === 'new-variable') h += '<label>' + esc(T.rNewKey) + '<input type="text" data-rowcol="newKey"' + at + ' value="' + esc(e.newKey) + '"></label><label>' + esc(T.rValue) + '<input type="text" data-rowcol="value"' + at + ' value="' + esc(e.value) + '"></label><p class="ohelp">' + esc(T.rNewHelp) + '</p>';
+        h += '<label class="choice"><input type="checkbox" data-rowcol="contains"' + at + (e.match === 'contains' ? ' checked' : '') + '>' + esc(T.rContains) + '</label></div>';
+      }
+      h += '</div>';
+    });
+    var pv = state.rowPreview && state.rowPreview.stepId === id ? state.rowPreview : null;
+    h += '<div class="row">' + button(T.rPreviewBtn, { cmd: 'row-preview', id: id, cls: 'soft' }) + '</div>';
+    if (pv) h += '<p class="rpreview ' + esc(pv.status.toLowerCase()) + '" role="status">' + esc(T.rPreview(pv)) + '</p>';
+    return h + '</div>';
+  }
+
   function correctionBlock(step) {
     if (!step.correctable || state.phase === 'FINALIZING') return '';
     var pk = state.pick && state.pick.stepId === step.id ? state.pick : null;
@@ -1104,14 +1204,11 @@ const SCRIPT = `
       var pr = pk.proposal, tr = pr.traits;
       var ropts = (pr.rowOptions || []).slice(), ropt = null;
       var cells = pr.rowCells || [], vars = pr.variables || [];
-      // La liaison manuelle : offerte dès que la ligne et des données du run sont connues.
-      if (cells.length && vars.length) {
-        var bind = rowBind[step.id] || {};
-        var keyColumn = (ropts.filter(function (o) { return o.id === 'key'; })[0] || {}).row || '';
-        var col = cells.filter(function (c) { return c.column === bind.column; })[0] || cells.filter(function (c) { return keyColumn.indexOf(c.column + ' =') !== 0; })[0] || cells[0];
-        var vr = vars.filter(function (v) { return v.key === bind.key; })[0] || vars[0];
-        rowBind[step.id] = { column: col.column, key: vr.key };
-        ropts.push({ id: 'manual', target: (pr.baseTarget || pr.target) + ' (row ~\${testData:' + vr.key + '})', row: col.column + ' ∋ \${testData:' + vr.key + '}' });
+      // Les colonnes de la ligne : offertes dès que ses cellules sont connues (valeur lue, modifiée, donnée du run).
+      if (cells.length) {
+        rowDraftOf(step.id, cells, vars, pr.row);
+        var chosenRow = rowSaid(step.id);
+        ropts.push({ id: 'columns', target: (pr.baseTarget || pr.target) + (chosenRow ? ' (row ' + chosenRow + ')' : ''), row: chosenRow });
       }
       for (var ri = 0; ri < ropts.length; ri += 1) if (ropts[ri].id === rowChoice[step.id]) ropt = ropts[ri];
       if (!ropt && ropts.length) ropt = ropts[0];
@@ -1121,15 +1218,10 @@ const SCRIPT = `
         h += '<fieldset class="rowopts"><legend>' + esc(T.cRowTitle) + '</legend>';
         for (var rj = 0; rj < ropts.length; rj += 1) {
           var o = ropts[rj], on = ropt && ropt.id === o.id;
-          var said = o.id === 'bound' ? T.cRowBound(o.via || '') + (o.match === 'contains' ? ' · ' + T.cRowContains : '') : o.id === 'manual' ? T.cRowManual : T.cRowKey;
+          var said = o.id === 'bound' ? T.cRowBound(o.via || '') + (o.match === 'contains' ? ' · ' + T.cRowContains : '') : o.id === 'columns' ? T.cRowColumns : T.cRowKey;
           var badge = o.id === 'bound' ? '<span class="obadge rec">' + esc(T.cRecommended) + '</span>' : o.fixed ? '<span class="obadge run">' + esc(T.cRunOnly) + '</span>' : '';
           h += '<div class="opt' + (on ? ' on' : '') + (o.fixed ? ' fixed' : '') + '"><label class="choice"><input type="radio" name="rowopt-' + esc(step.id) + '" value="' + esc(o.id) + '"' + (on ? ' checked' : '') + '><span><span class="otitle">' + esc(said) + badge + '</span><small>' + esc(o.row) + '</small></span></label>';
-          if (on && o.id === 'manual') {
-            var bd = rowBind[step.id];
-            h += '<div class="rowbind"><label>' + esc(T.cRowColumn) + '<select data-rowbind="column" data-step-id="' + esc(step.id) + '">' + cells.map(function (c) { return '<option value="' + esc(c.column) + '"' + (c.column === bd.column ? ' selected' : '') + '>' + esc(c.column + ' — ' + c.value) + '</option>'; }).join('') + '</select></label>';
-            h += '<label>' + esc(T.cRowVariable) + '<select data-rowbind="key" data-step-id="' + esc(step.id) + '">' + vars.map(function (v) { return '<option value="' + esc(v.key) + '"' + (v.key === bd.key ? ' selected' : '') + '>' + esc(v.key + ' — ' + v.value) + '</option>'; }).join('') + '</select></label></div>';
-            h += '<p class="ohelp">' + esc(T.cRowManualHelp) + '</p>';
-          }
+          if (on && o.id === 'columns') h += rowEditor(step.id, cells, vars, !!pr.canCreate, pr.row);
           if (on && o.id === 'bound') h += '<p class="ohelp">' + esc(T.cRowBoundHelp) + '</p>';
           if (on && o.fixed) h += '<p class="callout warn">' + esc(T.cRowFixed) + '</p>';
           h += '</div>';
@@ -1156,6 +1248,15 @@ const SCRIPT = `
     if (pk && pk.status === 'UNAVAILABLE') h += '<p class="sub">' + esc(T.cUnavailable) + (pk.reason ? ' (' + esc(pk.reason) + ')' : '') + '</p>';
     if (pk && pk.status === 'UNREACHABLE' && pk.stoppedAt) h += '<p class="warnnote">' + esc(T.cUnreachable(pk.stoppedAt.index, pk.stoppedAt.label)) + '</p><p class="sub">' + esc(pk.stoppedAt.reason) + '<br>' + esc(T.cUnreachableHelp) + '</p>';
     if (corr && corr.current && !corrected) h += '<div class="pair">' + targetCard('cur', T.cCurrent, '', corr.current) + '</div>';
+    // LA LIGNE, SANS NAVIGATEUR (revue) : les colonnes lues à l'enregistrement, chacune avec sa source.
+    var re = state.phase === 'REVIEW' && !busy ? step.rowEdit : null;
+    if (re && rowEditOpen[step.id] !== undefined && rowEditOpen[step.id] !== (corr && corr.current)) { delete rowEditOpen[step.id]; delete rowDraft[step.id]; }
+    if (re && rowEditOpen[step.id] === undefined) h += '<div class="row">' + button(T.rEdit, { cmd: 'row-edit-open', id: step.id, icon: 'pencil', disabled: running }) + '</div>';
+    if (re && rowEditOpen[step.id] !== undefined) {
+      h += '<h3>' + esc(T.rEdit) + '</h3>' + rowEditor(step.id, re.cells, re.variables, re.canCreate, re.current);
+      h += '<div class="row cta">' + button(T.cCancel, { cmd: 'row-edit-close', id: step.id }) + button(T.rApply, { cmd: 'row-edit', id: step.id, cls: 'primary grow', icon: 'check', disabled: running }) + '</div>';
+      if (state.notice && state.notice.actionId === step.id) h += '<p class="error" role="alert">' + esc(state.notice.message) + '</p>';
+    }
     if (corrected && corr) {
       var last = corr.history.length ? corr.history[corr.history.length - 1] : null;
       h += '<h3>' + esc(T.cHistory) + '</h3><div class="pair">' + targetCard('old', T.cOriginal, '', corr.original || '') + targetCard('new', T.cCorrection, '', corr.current) + '</div>';
@@ -1507,13 +1608,21 @@ const SCRIPT = `
       render();
       return;
     }
-    if (cmd === 'correct-pick') { selected = id || selected; send({ type: cmd, id: id }); render(); return; }
+    if (cmd === 'correct-pick') { selected = id || selected; delete rowDraft[id]; delete rowEditOpen[id]; send({ type: cmd, id: id }); render(); return; }
     if (cmd === 'correct-apply') {
       var ropt = document.querySelector('input[name="rowopt-' + id + '"]:checked');
-      var bind = rowBind[id];
-      send(ropt ? (ropt.value === 'manual' && bind ? { type: cmd, id: id, option: 'manual', column: bind.column, variable: bind.key } : { type: cmd, id: id, option: ropt.value }) : { type: cmd, id: id });
+      send(ropt ? (ropt.value === 'columns' ? { type: cmd, id: id, option: 'columns', columns: rowColumns(id) } : { type: cmd, id: id, option: ropt.value }) : { type: cmd, id: id });
       return;
     }
+    if (cmd === 'row-edit-open') {
+      var st = state.actions.filter(function (a) { return a.id === id; })[0];
+      delete rowDraft[id];
+      rowEditOpen[id] = st && st.correction ? st.correction.current : null;
+      render();
+      return;
+    }
+    if (cmd === 'row-edit-close') { delete rowEditOpen[id]; delete rowDraft[id]; render(); return; }
+    if (cmd === 'row-preview' || cmd === 'row-edit') { send({ type: cmd, id: id, columns: rowColumns(id) }); return; }
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
     send({ type: cmd, id: id });
   });
@@ -1530,8 +1639,16 @@ const SCRIPT = `
     var input = event.target;
     if (input instanceof HTMLInputElement && input.name.indexOf('cand-') === 0) choice[input.name.slice(5)] = Number(input.value);
     if (input instanceof HTMLInputElement && input.name.indexOf('rowopt-') === 0) { rowChoice[input.name.slice(7)] = input.value; render(); return; }
-    var rb = input && input.getAttribute ? input.getAttribute('data-rowbind') : null;
-    if (rb && input instanceof HTMLSelectElement) { var sid = input.getAttribute('data-step-id'); rowBind[sid] = rowBind[sid] || {}; rowBind[sid][rb] = input.value; render(); return; }
+    var rc = input && input.getAttribute ? input.getAttribute('data-rowcol') : null;
+    if (rc) {
+      var entry = (rowDraft[input.getAttribute('data-step-id')] || {})[input.getAttribute('data-column')];
+      if (!entry) return;
+      if (rc === 'on') entry.on = input.checked;
+      else if (rc === 'contains') entry.match = input.checked ? 'contains' : 'exact';
+      else entry[rc] = input.value;
+      render();
+      return;
+    }
     var field = input && input.getAttribute ? input.getAttribute('data-bind-field') : null;
     if (field) {
       var draft = dataDraft[input.getAttribute('data-step-id')];
@@ -1541,6 +1658,13 @@ const SCRIPT = `
   // La saisie d'une variable ou d'une valeur fixe : gardée dans le brouillon (aucun rendu, le curseur reste).
   document.addEventListener('input', function (event) {
     var input = event.target;
+    // La valeur d'une colonne ou le nom d'une nouvelle donnée : gardés dans le brouillon (aucun rendu).
+    var rcol = input && input.getAttribute ? input.getAttribute('data-rowcol') : null;
+    if (rcol === 'value' || rcol === 'newKey') {
+      var draftCol = (rowDraft[input.getAttribute('data-step-id')] || {})[input.getAttribute('data-column')];
+      if (draftCol) draftCol[rcol] = input.value;
+      return;
+    }
     var field = input && input.getAttribute ? input.getAttribute('data-bind-field') : null;
     if (!field || field === 'source') return;
     var draft = dataDraft[input.getAttribute('data-step-id')];

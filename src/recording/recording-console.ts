@@ -16,6 +16,7 @@ import {
   liveStep,
   type PanelAnalysis,
   type PanelReplay,
+  type PanelRowEdit,
   type PanelSearch,
   type PanelState,
   type PanelStep,
@@ -28,14 +29,19 @@ import {
   describeTarget,
   proposalTarget,
   proposeCorrection,
+  recordedRowCells,
+  rowOfColumns,
   useOfStep,
   type CorrectionContext,
   type CorrectionProposal,
   type KnownValue,
   type PickedElement,
   type RowBinding,
+  type RowColumnChoice,
 } from './target-correction.js';
+import { scanTableRows } from '../flows/table-row-resolver.js';
 import { availableVariables } from './test-data-binding.js';
+import { isSensitiveKey } from '../data/test-data-set.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { RecordingResult } from './process-recording.js';
 import { TEST_DATA_FILE } from './process-recording.js';
@@ -76,7 +82,14 @@ export interface ReviewActions {
     known?: readonly KnownValue[];
     option?: string;
     binding?: RowBinding;
+    /** columns : la ligne par ses colonnes (une nouvelle donnée s'ajoute au jeu de test). */
+    columns?: RowColumnChoice[];
   }) => Promise<{ ok: true; resumable?: number } | { error: string }>;
+  /** LA LIGNE, SANS NAVIGATEUR : redéfinie colonne par colonne à partir des cellules enregistrées. */
+  editRow?: (input: {
+    stepId: string;
+    columns: RowColumnChoice[];
+  }) => Promise<{ ok: true } | { error: string }>;
   /** REPRENDRE le rejeu à l'étape corrigée, dans la page tenue (contexte restauré ou reconstruit, puis vérifié). */
   resumeReplay?: (
     onStep?: (executed: number, total: number) => void,
@@ -117,6 +130,8 @@ export class RecordingConsole {
   private picked: PickedElement | undefined;
   /** Les valeurs connues du run au moment de la sélection (mémoire seule) : la proposition de ligne s'en sert. */
   private pickKnown: KnownValue[] = [];
+  /** L'aperçu de la ligne choisie : combien de lignes du tableau affiché correspondent. */
+  private rowPreview: PanelState['rowPreview'];
   /** La reprise possible après une correction validée dans une page tenue. */
   private resume: PanelState['resume'];
   /** Les actions de la revue en cours (la session de correction se libère hors de la file des commandes). */
@@ -507,6 +522,7 @@ export class RecordingConsole {
                 ...(command.column && command.variable
                   ? { binding: { column: command.column, key: command.variable } }
                   : {}),
+                ...(command.columns ? { columns: command.columns } : {}),
               });
               if ('error' in outcome)
                 this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
@@ -514,6 +530,7 @@ export class RecordingConsole {
                 this.notice = undefined;
                 this.pick = undefined;
                 this.picked = undefined;
+                this.rowPreview = undefined;
                 // Le flow change : un rejeu fait avant ne le valide plus.
                 this.replay = undefined;
                 this.saved = undefined;
@@ -529,6 +546,17 @@ export class RecordingConsole {
                 // Sinon la session (navigateur, fin de mission) se ferme en arrière-plan, sans bloquer la revue.
                 else void input.actions.releaseCorrection?.();
               }
+            }
+          } else if (command.type === 'row-edit' && command.id && command.columns && input.actions.editRow) {
+            const outcome = await input.actions.editRow({ stepId: command.id, columns: command.columns });
+            if ('error' in outcome)
+              this.notice = { actionId: command.id, kind: 'error', message: outcome.error };
+            else {
+              this.notice = undefined;
+              this.rowPreview = undefined;
+              // Le flow change : un rejeu fait avant ne le valide plus.
+              this.replay = undefined;
+              this.saved = undefined;
             }
           } else if (command.type === 'correct-restore' && command.id && input.actions.restoreTarget) {
             const outcome = await input.actions.restoreTarget(command.id);
@@ -636,10 +664,15 @@ export class RecordingConsole {
         await this.refreshPreview();
         break;
       // CORRECTION MANAGER : quitter le mode sélection vaut dans les deux phases (même pendant l'attente de la revue).
+      case 'row-preview':
+        if (command.id && command.columns)
+          this.rowPreview = await this.previewRow(command.id, command.columns);
+        break;
       case 'correct-cancel':
         this.recorder.cancelPick();
         this.pick = undefined;
         this.picked = undefined;
+        this.rowPreview = undefined;
         this.resume = undefined;
         if (!recording) await this.reviewActions?.releaseCorrection?.();
         break;
@@ -680,6 +713,7 @@ export class RecordingConsole {
           { known: this.pickKnown },
           command.option,
           command.column && command.variable ? { column: command.column, key: command.variable } : undefined,
+          command.columns,
         );
         this.notice =
           'error' in outcome ? { actionId: command.id, kind: 'error', message: outcome.error } : undefined;
@@ -775,7 +809,7 @@ export class RecordingConsole {
       status: 'PICKED',
       label,
       ...(previous ? { previous } : {}),
-      proposal: panelProposalOf(proposal),
+      proposal: panelProposalOf(proposal, review && this.result?.testData !== undefined),
     };
     this.render();
     // L'aperçu se rafraîchit SANS retenir la revue : « Valider » cliqué aussitôt la proposition affichée
@@ -794,6 +828,89 @@ export class RecordingConsole {
     return availableVariables(result, stepId)
       .map((variable) => ({ key: variable.key, value: set.values[variable.key]?.value ?? '' }))
       .filter((entry) => entry.value.trim() !== '');
+  }
+
+  /** REVUE : la ligne d'une étape, modifiable sans navigateur (sa cible vise une ligne, ses cellules sont connues). */
+  private rowEditOf(result: RecordingResult, stepId: string): PanelRowEdit | undefined {
+    const item = result.flow.steps.find((entry) => entry.id === stepId);
+    const row = item && 'target' in item.step ? item.step.target.row : undefined;
+    if (!item || !row) return undefined;
+    const cells = recordedRowCells(result.session.rawEvents, item.rawEventIds);
+    if (cells.length === 0) return undefined;
+    return {
+      cells,
+      variables: rowVariables(result, stepId),
+      current: { ...row },
+      canCreate: result.testData !== undefined,
+    };
+  }
+
+  /**
+   * Les cellules de la ligne et les données du run d'une étape : celles de l'élément désigné (mode
+   * sélection), sinon celles enregistrées avec l'action (revue, sans navigateur).
+   */
+  private rowSource(stepId: string): {
+    cells: { column: string; value: string }[];
+    variables: { key: string; value: string }[];
+  } {
+    const keyed = (known: readonly KnownValue[]): { key: string; value: string }[] =>
+      known
+        .filter((entry): entry is { key: string; value: string } => entry.key !== undefined)
+        .filter((entry, index, all) => all.findIndex((other) => other.key === entry.key) === index);
+    if (this.picked && this.pick?.stepId === stepId)
+      return { cells: this.picked.rowCells ?? [], variables: keyed(this.pickKnown) };
+    const item = this.result?.flow.steps.find((entry) => entry.id === stepId);
+    if (this.phase !== 'REVIEW' || !item || !this.result) return { cells: [], variables: [] };
+    return {
+      cells: recordedRowCells(this.result.session.rawEvents, item.rawEventIds),
+      variables: rowVariables(this.result, stepId),
+    };
+  }
+
+  /**
+   * L'APERÇU DE LA LIGNE : les colonnes choisies (les données du run remplacées par leur valeur actuelle)
+   * sont cherchées dans le tableau de la page ouverte — combien de lignes correspondent. Rien n'est cliqué.
+   */
+  private async previewRow(
+    stepId: string,
+    columns: readonly RowColumnChoice[],
+  ): Promise<NonNullable<PanelState['rowPreview']>> {
+    const { cells, variables } = this.rowSource(stepId);
+    const outcome = rowOfColumns(cells, variables, columns, { taken: [] });
+    if ('error' in outcome) return { stepId, status: 'INVALID', message: outcome.error };
+    const values = new Map([
+      ...variables.map((entry) => [entry.key, entry.value] as const),
+      ...outcome.created.map((entry) => [entry.key, entry.value] as const),
+    ]);
+    const page = this.recorder.correctionPage;
+    if (!page) return { stepId, status: 'UNAVAILABLE' };
+    // Une donnée générée au rejeu n'a pas encore de valeur : rien à chercher dans la page.
+    const unknown = columns.find(
+      (choice) => choice.source === 'variable' && !values.get(choice.key ?? '')?.trim(),
+    );
+    if (unknown)
+      return {
+        stepId,
+        status: 'INVALID',
+        message:
+          this.language === 'fr'
+            ? `« ${unknown.key ?? ''} » n'a pas de valeur avant le rejeu : aperçu impossible.`
+            : `"${unknown.key ?? ''}" has no value before the replay: no preview.`,
+      };
+    const criteria = Object.fromEntries(
+      Object.entries(outcome.row).map(([column, value]) => [
+        column,
+        value.replace(/\$\{testData:([^}]+)\}/g, (_, key: string) => values.get(key) ?? ''),
+      ]),
+    );
+    try {
+      const scan = await scanTableRows(page, criteria, 'unique', `preview-${String(Date.now())}`);
+      return scan.status === 'NONE'
+        ? { stepId, status: 'NONE', matches: 0 }
+        : { stepId, status: scan.status, matches: scan.matches };
+    } catch {
+      return { stepId, status: 'UNAVAILABLE' };
+    }
   }
 
   /** L'ancienne cible de l'étape (structurée) : une clé de ligne propre au run se reconnaît par elle. */
@@ -849,6 +966,8 @@ export class RecordingConsole {
     const steps = result
       ? actions.map((step) => {
           const binding = stepDataBinding(result, step.id);
+          const rowEdit = this.rowEditOf(result, step.id);
+          if (rowEdit) step = { ...step, rowEdit };
           return binding
             ? {
                 ...step,
@@ -898,6 +1017,7 @@ export class RecordingConsole {
       ...(this.notice ? { notice: this.notice } : {}),
       ...(this.replay ? { replay: this.replay } : {}),
       ...(this.pick ? { pick: this.pick } : {}),
+      ...(this.rowPreview ? { rowPreview: this.rowPreview } : {}),
       ...(this.saved ? { saved: this.saved } : {}),
       ...(this.preview ? { preview: this.preview } : {}),
       ...(this.detached ? { previewDetached: true } : {}),
@@ -1018,9 +1138,14 @@ function enrichSteps(
  * régénère flow.yaml et .feature depuis le même modèle. Une vérification seule n'est jamais retirée ici.
  */
 /** La proposition de correction, telle que la fenêtre la montre (des mots, jamais une valeur saisie). */
-function panelProposalOf(proposal: CorrectionProposal): NonNullable<PanelState['pick']>['proposal'] {
+function panelProposalOf(
+  proposal: CorrectionProposal,
+  canCreate = false,
+): NonNullable<PanelState['pick']>['proposal'] {
   return {
     target: describeTarget(proposal.target),
+    ...(proposal.target.row ? { row: proposal.target.row } : {}),
+    ...(canCreate && proposal.rowCells ? { canCreate: true } : {}),
     ...(proposal.rowOptions && proposal.rowOptions.length > 0
       ? {
           rowOptions: proposal.rowOptions.map((option) => ({
@@ -1054,6 +1179,18 @@ function withoutRow(target: CorrectionProposal['target']): CorrectionProposal['t
 }
 
 /** Les fichiers du flow (YAML, .feature) régénérés après un changement du flow en revue. */
+/**
+ * Les données du run qu'une ligne peut citer avant cette étape (jamais une donnée sensible) ; la valeur
+ * est vide pour une donnée générée au rejeu (elle n'existe qu'au rejeu).
+ */
+export function rowVariables(result: RecordingResult, stepId: string): { key: string; value: string }[] {
+  const set = result.testData?.set;
+  if (!set) return [];
+  return availableVariables(result, stepId)
+    .filter((variable) => !isSensitiveKey(variable.key))
+    .map((variable) => ({ key: variable.key, value: set.values[variable.key]?.value ?? '' }));
+}
+
 export function regenerateFlowFiles(result: RecordingResult, language: 'fr' | 'en'): void {
   const hasTestData = result.testData !== undefined && Object.keys(result.testData.set.values).length > 0;
   result.files = generateFlowFiles(result.flow, {

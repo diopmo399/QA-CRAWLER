@@ -310,6 +310,9 @@ export function installRecorder(
       if (cell) out.row = clean(textOf(cell), 40);
       const key = rowKeyOf(el, row);
       if (key) out.rowKey = key;
+      // Toutes les cellules de la ligne : la revue redéfinit la ligne par n'importe quelle colonne.
+      const cells = rowCellsOf(el);
+      if (cells.length > 0) out.rowCells = cells;
     }
     // Une option connaît la liste qui la porte, et la liste le contrôle qui l'ouvre.
     const listbox = el.closest(

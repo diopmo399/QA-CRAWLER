@@ -10,6 +10,7 @@ import type { AiLifecycleSummary } from '../../src/ai/audit-trail.js';
 import type { IntelligenceRequest } from '../../src/ai/model.js';
 import { parseConfig } from '../../src/config/config-loader.js';
 import { runMission } from '../../src/orchestrator.js';
+import { aiSection } from '../../src/reporting/ai-section.js';
 import { FakeIntelligenceProvider } from '../fixtures/fake-intelligence-provider.js';
 
 /**
@@ -194,6 +195,26 @@ flows:
       /\[AI AI-\d{5}\] trigger=UNKNOWN_BLOCKING_PRECONDITION context=BLOCKED_GOAL mission=CREATE_REQUEST/,
     );
     expect(log).toContain('BLOCKED_GOAL_ANALYZED');
+
+    // RAPPORT EN FRANÇAIS : la section IA ne garde en anglais que les codes (statuts, déclencheurs).
+    const french = aiSection(result, 'fr');
+    for (const english of [
+      'missing precondition',
+      'too few samples',
+      'hypothesis(es) proposed',
+      'classified response',
+      'effort not sent',
+      '>model<',
+      'goal ',
+      'progress ',
+      'blocked:',
+      'valid 0',
+    ])
+      expect(french, english).not.toContain(english);
+    expect(french).toContain('précondition manquante');
+    expect(french).toContain('objectif CREATE_REQUEST_DONE');
+    expect(french).toMatch(/\d+ appel\(s\) = \d+ réponse\(s\) classée\(s\)/);
+    expect(aiSection(result, 'en')).toContain('missing precondition');
 
     // LISIBILITÉ : les décisions en quatre colonnes, le contexte fonctionnel sur sa propre ligne ; une fois
     // tout déplié, aucun tableau du rapport ne dépasse sa carte (écran portable et grand écran).
