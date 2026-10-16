@@ -588,7 +588,9 @@ body.compact .topbar{padding:8px 12px;gap:10px}
 body.compact .statepill{margin-left:0}
 body.compact main{padding:10px}
 body.compact .timeline>li:not(.group):not(.waiting):nth-last-child(n+7),body.compact .timeline>li.group{display:none}
-body.compact .controls{flex-basis:100%}
+body.compact .controls{flex:1 1 auto}
+body.compact .controls button[data-cmd=undo]{font-size:0;gap:0;width:36px;padding:0}
+body.compact .tools{border-left:0;padding-left:0;margin-left:auto}
 /* FENÊTRE ÉTROITE : tout passe sur une colonne, les marges se resserrent. */
 @media (max-width:640px){
   .topbar{padding:8px 12px;gap:10px}.subtitle{display:none}.slash{display:none}.statepill{margin-left:0}
