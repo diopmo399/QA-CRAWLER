@@ -136,6 +136,11 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Corrigé
 
+- **Rapport HTML en français : la section « Intelligence IA » entièrement traduite.** Précondition
+  manquante, contexte fonctionnel (objectif, progression, manquant, bloqué), sélection et découverte des
+  modèles, en-têtes des tableaux de modèles et d'efficacité, validation, runtime, apport à la
+  connaissance et contrôle des compteurs suivent `report.language` ; seuls les codes (statuts,
+  déclencheurs) restent tels quels.
 - **Rapport HTML : des tableaux qui tiennent dans leur carte.** Décisions IA en quatre colonnes (décision,
   proposition, contrôles, résultat) au lieu de treize, le contexte fonctionnel sur sa propre ligne ; anomalies
   du run en cinq colonnes (la gravité rejoint la catégorie, régression · source · confiance deviennent des
