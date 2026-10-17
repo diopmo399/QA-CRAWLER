@@ -1177,6 +1177,18 @@ rules: { enabled: true }
 
 Rapport : « Form state », « Application rules » (chaque règle : condition, effets ✓/✗, source fichier:ligne, runtime, effet réseau), « Rule graph », « Field dependencies ». Détails : [docs/RULES.md](docs/RULES.md).
 
+## Vérification métier : assertions, cohérence, traçabilité
+
+Un clic réussi n'est pas un résultat métier. Un flow peut déclarer ses **assertions métier**
+(`flows[].assertions` : requête, valeur, entité, état, cardinalité, relation, transition, effets de
+bord, contrat), jugées sur le trafic observé en empreintes salées, l'écran final et des lectures
+d'API autorisées (GET seulement), avec les valeurs du run. Il peut aussi déclarer la **cohérence des
+données** (`flows[].consistency` : saisie → requête → réponse → écran → recherche, relations, clés
+uniques, effets de bord) et les **exigences** qu'il couvre (`requirements`, `businessRules`, tags
+Gherkin `@REQ-…`, `x-requirements` OpenAPI). BLOCKED, INCONCLUSIVE et UNVERIFIABLE ne comptent
+jamais comme un succès. Rapports : `quality-verification.json` et la section « Vérification
+métier ». Détails : [docs/BUSINESS_ASSERTIONS.md](docs/BUSINESS_ASSERTIONS.md).
+
 ## Intelligence fonctionnelle et objectifs de test
 
 Au-delà des écrans et des règles, QA-CRAWLER comprend **ce que l'application fait** : cycles de vie des entités (DRAFT → PENDING → APPROVED), workflows (`CREATE:USER`, `APPROVE:REGISTRATION`), invariants (`paid + amount <= total`), effets attendus d'une action, chemins d'erreur (409 `EMAIL_ALREADY_EXISTS` → champ email), écarts entre le contrat OpenAPI et les requêtes réelles — puis en tire des **objectifs de test** (« Verify PENDING registration can transition to APPROVED ») planifiés, exécutés sous la SafetyPolicy et conclus VERIFIED, FAILED, BLOCKED ou INCONCLUSIVE, avec preuves.

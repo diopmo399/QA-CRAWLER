@@ -6,6 +6,7 @@ import {
   type TestDataSet,
 } from '../data/test-data-set.js';
 import { ASSERTION_KINDS, describeIntent, type GherkinIntent } from '../semantics/resolution/intent.js';
+import { assertionSchema, consistencySchema } from './quality-schema.js';
 
 /**
  * Flows de test imposés : une liste ordonnée d'étapes exigées par la mission
@@ -491,8 +492,40 @@ export const flowSchema = z
      * même quand exploration.autonomous vaut false.
      */
     thenExplore: z.boolean().default(false),
+    /** TRAÇABILITÉ : les exigences que ce flow CIBLE (COVERS) — jamais une preuve à elles seules. */
+    requirements: z.array(nonEmpty).default([]),
+    /** ASSERTIONS MÉTIER : le résultat attendu, vérifié sur des preuves (réseau, écran, API de lecture). */
+    assertions: z.array(assertionSchema).default([]),
+    /** COHÉRENCE DES DONNÉES : saisie → requête → réponse → écran → recherche, et les règles déclarées. */
+    consistency: consistencySchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((flow, ctx) => {
+    const ids = new Set<string>();
+    for (const [index, assertion] of flow.assertions.entries()) {
+      if (ids.has(assertion.id))
+        ctx.addIssue({
+          code: 'custom',
+          path: ['assertions', index, 'id'],
+          message: `duplicate assertion id ${assertion.id}`,
+        });
+      ids.add(assertion.id);
+      if (assertion.after !== undefined && assertion.after > flow.steps.length)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['assertions', index, 'after'],
+          message: `after: ${String(assertion.after)} is beyond the last step (${String(flow.steps.length)})`,
+        });
+    }
+    for (const [index, assertion] of flow.assertions.entries())
+      for (const required of assertion.requires)
+        if (!ids.has(required))
+          ctx.addIssue({
+            code: 'custom',
+            path: ['assertions', index, 'requires'],
+            message: `unknown assertion ${required}`,
+          });
+  });
 
 export const flowsSchema = z
   .array(flowSchema)
