@@ -85,6 +85,22 @@ describe('Recording UI (recorder window)', () => {
         // CHECK → « Cocher … ».
         await page.getByLabel('Accept terms').check();
         await row(panel, /Cocher "Accept terms"/).waitFor();
+        // L'APERÇU TENU À JOUR : la page change sans action humaine (un contenu qui arrive) ; une fois
+        // posée, une nouvelle image est prise (l'image « avant » du prochain clic sera la bonne).
+        const live = panel.locator('#preview-card img');
+        await page.waitForTimeout(1500);
+        const settled = await live.getAttribute('src');
+        await page.evaluate(() => {
+          const late = document.createElement('p');
+          late.textContent = 'Late content';
+          document.body.append(late);
+        });
+        await panel.waitForFunction(
+          (before) => document.querySelector('#preview-card img')?.getAttribute('src') !== before,
+          settled,
+          { timeout: 5000 },
+        );
+        seen.liveRefreshed = true;
         // AMBIGUÏTÉ : signalée, résolue par l'humain (seul l'élément touché peut être confirmé).
         const second = page.locator('section[aria-label="Secondary"] #valueInput');
         await second.click();
@@ -161,6 +177,23 @@ describe('Recording UI (recorder window)', () => {
         seen.beforeShot = await preview.locator('img').getAttribute('src');
         seen.beforeFramed = await preview.locator('.hl').innerText();
         seen.beforeNote = await preview.locator('.shotnote').innerText();
+        // PLEIN ÉCRAN : l'image est réduite et centrée ; le cadre reste sur le bouton (même position
+        // relative à l'image qu'en vue normale).
+        const framePosition = () =>
+          panel.evaluate(() => {
+            const card = document.querySelector('#preview-card');
+            const image = card?.querySelector('.viewport img')?.getBoundingClientRect();
+            const frame = card?.querySelector('.viewport .hl')?.getBoundingClientRect();
+            return image && frame
+              ? [(frame.left - image.left) / image.width, (frame.top - image.top) / image.height]
+              : undefined;
+          });
+        seen.frameNormal = await framePosition();
+        await preview.getByRole('button', { name: 'Plein écran' }).click();
+        await panel.waitForFunction(() => document.fullscreenElement?.id === 'preview-card');
+        seen.frameFullscreen = await framePosition();
+        await panel.evaluate(() => document.exitFullscreen());
+        await panel.waitForFunction(() => document.fullscreenElement === null);
         await moment.getByRole('button', { name: 'Après' }).click();
         await moment.getByRole('button', { name: 'Après', pressed: true }).waitFor();
         seen.afterShot = await preview.locator('img').getAttribute('src');
@@ -267,6 +300,10 @@ describe('Recording UI (recorder window)', () => {
     expect(seen.shotSecond).not.toBe(seen.shotFirst);
   });
 
+  it('during the recording, a page change without any action refreshes the preview once settled', () => {
+    expect(seen.liveRefreshed).toBe(true);
+  });
+
   it('in the review, a click also shows the screen before it, the clicked button framed', () => {
     expect(seen.beforePressed).toBe('true');
     expect(String(seen.beforeShot)).toMatch(/^data:image\/jpeg;base64,/);
@@ -274,6 +311,13 @@ describe('Recording UI (recorder window)', () => {
     expect(seen.beforeNote).toContain('juste avant le clic');
     expect(String(seen.afterShot)).toMatch(/^data:image\/jpeg;base64,/);
     expect(seen.afterShot).not.toBe(seen.beforeShot);
+  });
+
+  it('in fullscreen, the frame stays on the clicked button (same position on the image as in the normal view)', () => {
+    const normal = seen.frameNormal as [number, number];
+    const full = seen.frameFullscreen as [number, number];
+    expect(full[0]).toBeCloseTo(normal[0], 2);
+    expect(full[1]).toBeCloseTo(normal[1], 2);
   });
 
   it('replay shows its progress then its result', () => {

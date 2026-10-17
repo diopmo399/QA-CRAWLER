@@ -764,6 +764,8 @@ export class HumanFlowRecorder {
       // AUCUN EFFET VISIBLE dans l'application : ni feuille de style injectée (le bandeau masqué puis
       // réaffiché faisait « flasher » l'écran), ni émulation d'écran (le `clip` de page.screenshot),
       // ni animation figée, ni curseur masqué.
+      // L'heure du DÉBUT de la capture : un changement de la page pendant la capture la rend périmée.
+      const at = Date.now();
       const buffer = await surfaceShot(page);
       const size =
         page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
@@ -774,11 +776,31 @@ export class HumanFlowRecorder {
         height: size.height,
         scrollX: Math.round(scroll.x),
         scrollY: Math.round(scroll.y),
-        at: Date.now(),
+        at,
       };
     } catch {
       return undefined;
     }
+  }
+
+  /** Le temps écoulé depuis le dernier geste humain capturé (undefined : aucun encore). */
+  sinceLastGesture(): number | undefined {
+    const last = this.session.rawEvents.at(-1);
+    return last ? this.now() - last.at : undefined;
+  }
+
+  /** L'heure du dernier changement visible de la page (horloge de la page), lue sans rien y changer. */
+  async lastChange(): Promise<number | undefined> {
+    const page = this.correctionPage;
+    if (!page || page.isClosed()) return undefined;
+    const value = await page
+      .evaluate(() =>
+        (
+          window as unknown as { __qaCrawlerRecorder?: { lastChange?(): number } }
+        ).__qaCrawlerRecorder?.lastChange?.(),
+      )
+      .catch(() => undefined);
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
   }
 
   /** La timeline a changé : le panneau, le bandeau (compteur, notification) et le journal (sans valeur). */
@@ -1579,10 +1601,20 @@ function boxOf(raw: Record<string, unknown>): { box?: PreActionContext['box'] } 
   const [x, y, width, height, scrollX, scrollY, viewWidth, viewHeight, at] = (values as number[]).map(
     (value, index) => (index === 8 ? value : Math.max(-100_000, Math.min(100_000, Math.round(value)))),
   );
+  const changedAt = raw.changedAt;
   return {
-    box: { x, y, width, height, scrollX, scrollY, viewWidth, viewHeight, at } as NonNullable<
-      PreActionContext['box']
-    >,
+    box: {
+      x,
+      y,
+      width,
+      height,
+      scrollX,
+      scrollY,
+      viewWidth,
+      viewHeight,
+      at,
+      ...(typeof changedAt === 'number' && Number.isFinite(changedAt) ? { changedAt } : {}),
+    } as NonNullable<PreActionContext['box']>,
   };
 }
 

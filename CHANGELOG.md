@@ -25,7 +25,10 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   l'application n'est touchée. Thème clair et sombre. En revue, l'aperçu montre l'écran de l'étape
   choisie : une image prise juste après chaque action pendant l'enregistrement, son élément encadré
   (mesuré sans rien afficher dans l'application), en mémoire seulement, 60 au plus. Pour un clic,
-  l'écran d'avant le clic, le bouton encadré là où il était à l'appui (bascule Avant le clic / Après).
+  l'écran d'avant le clic, le bouton encadré là où il était à l'appui (bascule Avant le clic / Après),
+  jamais une image prise avant le dernier changement de la page (un écran de chargement) ; l'aperçu
+  reprend une image quand la page change sans action, une fois posée (jamais pendant un geste). En
+  plein écran, le cadre reste sur l'élément (l'image réduite et centrée le décalait).
 - **Fournisseur IA Anthropic** (`ai.provider: anthropic`, `--ai-provider anthropic`) : un modèle de
   l'API Anthropic comme conseiller de raisonnement, par le SDK officiel `@anthropic-ai/sdk`
   (dépendance optionnelle, chargée dynamiquement). Même circuit que Copilot : requête nettoyée,

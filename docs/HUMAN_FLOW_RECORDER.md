@@ -109,9 +109,16 @@ USER ACTION → RECORDER → ACTION VALIDATION → RECORDED FLOW → REPLAY → 
   seulement** (jamais écrites, jamais journalisées), 60 au plus (les plus anciennes s'effacent).
   Pour un **clic**, l'aperçu montre d'abord l'écran **avant le clic**, le bouton encadré là où il
   était au moment de l'appui ; **Avant le clic / Après** passe d'une image à l'autre. Cette image est
-  la dernière prise avant l'appui ; le cadre n'est posé que si la page n'avait pas défilé et que la
-  fenêtre avait la même taille (sinon, seule l'image d'après est proposée). Une image de la page est
-  prise dès l'ouverture de l'enregistrement : le premier clic a lui aussi son écran d'avant.
+  la dernière prise avant l'appui, et **seulement si la page n'a pas changé depuis** (structure ou
+  texte, hors zones qui bougent sans cesse : région annoncée, minuterie, barre de progression, dessin,
+  vidéo) : un écran pris pendant un chargement n'est jamais montré pour un clic fait une fois la page
+  chargée. Le cadre n'est posé que si la page n'avait pas défilé et que la fenêtre avait la même
+  taille. Sinon, seule l'image d'après est proposée. Pour que l'image d'avant existe, l'aperçu est
+  tenu à jour : une image de la page est prise dès l'ouverture de l'enregistrement, puis chaque fois
+  que la page change sans action humaine (un chargement qui se termine, une liste qui arrive), une
+  fois posée (500 ms sans changement), au plus une fois par seconde, jamais pendant un geste (moins
+  d'une seconde après le dernier). Le cadre suit l'image dans tous les affichages : vue normale, plein
+  écran (image réduite et centrée) et fenêtre détachée.
   **Détacher** ouvre l'aperçu dans sa propre fenêtre (**Plein écran** possible, par exemple
   sur un second écran) : la fenêtre principale garde le parcours, l'inspecteur et les commandes.
   **Rattacher** (ou fermer la fenêtre de l'aperçu) le

@@ -367,6 +367,7 @@ details>summary:hover{color:var(--fg)}
 .preview .stage{background:var(--sunken);padding:16px}
 .viewport{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
 .viewport img{display:block;width:100%;height:auto}
+.viewport .frame{position:relative}
 .viewport .hl{position:absolute;border:2px solid var(--accent);border-radius:5px;box-shadow:0 0 0 3px rgba(43,80,216,.15);pointer-events:none}
 .viewport .hl span{position:absolute;left:-2px;top:calc(100% + 4px);background:var(--accent);color:#FFFFFF;font:500 11px/1.5 var(--sans);padding:1px 7px;border-radius:5px;white-space:nowrap}
 .viewport .hl span.above{top:auto;bottom:calc(100% + 4px)}
@@ -387,7 +388,9 @@ details>summary:hover{color:var(--fg)}
 .detached-note:empty{display:none}
 .detached-note button{margin-left:auto}
 .preview:fullscreen{overflow:auto;padding:20px;background:var(--surface)}
-.preview:fullscreen .viewport img{max-height:calc(100vh - 160px);width:auto;max-width:100%;margin:0 auto}
+.preview:fullscreen .viewport{text-align:center}
+.preview:fullscreen .viewport .frame{display:inline-block;max-width:100%;vertical-align:top}
+.preview:fullscreen .viewport img{max-height:calc(100vh - 160px);width:auto;max-width:100%}
 body[data-mode=preview]{background:var(--bg)}
 .detached-main{flex:1;padding:20px;display:flex;flex-direction:column}
 .preview.detached{flex:1;display:flex;flex-direction:column}
@@ -1599,7 +1602,9 @@ const SCRIPT = `
     var h = '<header class="card-head"><h2>' + esc(shotOf ? T.shotTitle(shotOf.index) : T.previewTitle) + '</h2><span class="purl">' + esc(img ? routeOf(img.url) : '') + '</span>' + (picking ? '<span class="pickbadge" role="status">' + esc(T.cPickActive) + '</span>' : '') + '<span class="actions">' + button('', { cmd: 'refresh-preview', cls: 'ghost icon small', icon: 'refresh', aria: T.refresh, title: T.refresh }) + (DETACHED ? '' : button('', { cmd: 'fullscreen', cls: 'ghost icon small', icon: 'expand', aria: T.fullscreen, title: T.fullscreen }) + button('', { cmd: 'detach', cls: 'ghost icon small', icon: 'external', aria: T.detachLabel, title: T.detachLabel })) + '</span></header>';
     h += '<div class="stage">';
     if (both) h += '<div class="shotview" role="group" aria-label="' + esc(T.shotViewLabel) + '">' + [['before', T.shotBefore], ['after', T.shotAfter]].map(function (d) { return '<button type="button" data-shotview="' + d[0] + '" aria-pressed="' + (shotView === d[0]) + '">' + esc(d[1]) + '</button>'; }).join('') + '</div>';
-    h += '<div class="viewport">' + (DETACHED ? '<div class="frame">' : '');
+    // L'image et son cadre dans le même bloc, à la taille exacte de l'image : le cadre (en %) tombe juste
+    // même quand l'image est réduite et centrée (plein écran, fenêtre détachée).
+    h += '<div class="viewport"><div class="frame">';
     if (!pv) h += '<p class="placeholder">' + esc(T.noPreview) + '</p>';
     else {
       h += '<img alt="' + esc(T.previewTitle) + '" src="' + img.image + '">';
@@ -1610,7 +1615,7 @@ const SCRIPT = `
         h += '<div class="hl" style="left:' + (hl.x * sx) + '%;top:' + (hl.y * sy) + '%;width:' + (hl.width * sx) + '%;height:' + (hl.height * sy) + '%"><span class="' + (hl.y / img.height > 0.75 ? 'above' : '') + ((hl.x + hl.width / 2) / img.width > 0.6 ? ' end' : '') + '">' + esc(short(hl.label || '', 36)) + '</span></div>';
       }
     }
-    h += (DETACHED ? '</div>' : '') + '</div>';
+    h += '</div></div>';
     var hlState = state.highlight && (DETACHED || state.highlight.actionId === selected) ? state.highlight.result : null;
     if (hlState && hlState !== 'NOT_FOUND' && pv && pv.highlight) h += '<p class="selnote" role="status">' + svg('okCircle') + esc(T.isHighlighted(pv.highlight.label || '')) + '</p>';
     else if (hlState === 'NOT_FOUND') h += '<p class="selnote warn" role="status">' + svg('alert') + esc(T.notFoundShort) + '</p>';

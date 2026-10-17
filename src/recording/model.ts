@@ -130,6 +130,8 @@ export interface PreActionBox {
   viewHeight: number;
   /** L'heure de l'appui (horloge de la page). */
   at: number;
+  /** L'heure du dernier changement visible de la page avant l'appui. */
+  changedAt?: number;
 }
 
 export interface PreActionDropZone {

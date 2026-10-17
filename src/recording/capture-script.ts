@@ -112,6 +112,33 @@ export function installRecorder(
     return domGeneration;
   };
   global.__qaCrawlerDomGeneration = generationNow;
+  // LE DERNIER CHANGEMENT VISIBLE de la page (structure ou texte) : l'image « avant le clic » de la revue
+  // n'est gardée que si elle a été prise après lui (sinon elle montrerait, par exemple, un écran encore
+  // en chargement). Les zones qui bougent sans cesse ne comptent pas : région annoncée, minuterie, barre
+  // de progression, dessin, vidéo, et le bandeau du recorder.
+  const restless =
+    '[aria-live], [role="timer"], [role="progressbar"], [role="marquee"], svg, canvas, video, [data-qa-crawler-overlay]';
+  const visibleChange = (records: MutationRecord[]): boolean =>
+    records.some((record) => {
+      const node = record.target;
+      const element = node instanceof Element ? node : node.parentElement;
+      return !element || !element.closest(restless);
+    });
+  let changedAt = Date.now();
+  let changeObserver: MutationObserver | undefined;
+  try {
+    changeObserver = new MutationObserver((records) => {
+      if (visibleChange(records)) changedAt = Date.now();
+    });
+    changeObserver.observe(document, { childList: true, characterData: true, subtree: true });
+  } catch {
+    // sans observateur : l'heure du chargement du script
+  }
+  // Lue de façon SYNCHRONE : un changement fait juste avant l'appui, sans retour à la boucle d'événements, compte déjà.
+  const changedNow = (): number => {
+    if (changeObserver && visibleChange(changeObserver.takeRecords())) changedAt = Date.now();
+    return changedAt;
+  };
   // Le contexte AVANT l'effet (défini plus bas, une fois les lecteurs disponibles).
   const preContext: {
     of?: (el: Element, css: string, phase?: string) => Record<string, unknown>;
@@ -1394,6 +1421,7 @@ export function installRecorder(
         viewWidth: window.innerWidth,
         viewHeight: window.innerHeight,
         at: Date.now(),
+        changedAt: changedNow(),
       },
       ...(dialogName(ownDialog ?? openDialog) ? { dialog: dialogName(ownDialog ?? openDialog) } : {}),
       headings,
@@ -2203,10 +2231,8 @@ export function installRecorder(
       endPick(true);
     },
     isPicking: (): boolean => picking !== undefined,
-    /**
-     * Met en évidence l'élément d'une action : l'ORIGINAL s'il est encore dans la page, sinon le
-     * seul élément que son sélecteur désigne ; jamais un élément deviné.
-     */
+    /** L'heure du dernier changement visible de la page (horloge de la page). */
+    lastChange: (): number => changedNow(),
     /**
      * MESURER sans rien montrer : la position de l'élément d'une action (l'original s'il existe encore,
      * sinon le seul élément que son sélecteur désigne), s'il est visible à l'écran. Ni cadre, ni
@@ -2233,6 +2259,10 @@ export function installRecorder(
         rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
       return onScreen ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : undefined;
     },
+    /**
+     * Met en évidence l'élément d'une action : l'ORIGINAL s'il est encore dans la page, sinon le
+     * seul élément que son sélecteur désigne ; jamais un élément deviné.
+     */
     highlight: (ref?: string, css?: string, label?: string): string => {
       if (!root) return 'NOT_FOUND';
       let element: Element | null = null;

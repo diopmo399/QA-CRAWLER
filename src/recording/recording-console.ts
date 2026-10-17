@@ -9,6 +9,7 @@ import { slug } from '../knowledge/signatures.js';
 import type { ProgressUpdate } from '../progress/progress.js';
 import type { FlowAuditReport } from './flow-audit.js';
 import type { DockView, HumanFlowRecorder, ScreenShot, StepShot } from './human-flow-recorder.js';
+import type { PreActionBox } from './model.js';
 import {
   describeFlowStep,
   summaryOf,
@@ -114,13 +115,28 @@ export type PickOutcome =
   | { unavailable: string }
   | { unreachable: { index: number; label: string; reason: string } };
 
-/**
- * LA CONSOLE DU RECORDER : relie la fenêtre « QA-CRAWLER Recorder » au recorder (pendant
- * l'enregistrement) puis à la revue (après Stop). Elle construit l'état affiché ; elle ne décide
- * de rien : chaque commande passe par le recorder ou par l'orchestrateur.
- */
 /** Les images d'étapes gardées en mémoire (les plus anciennes s'effacent au-delà). */
 const STEP_SHOTS = 60;
+
+/**
+ * L'IMAGE « AVANT LE CLIC » : la dernière image prise avant l'appui, seulement si la page n'a pas changé
+ * depuis (sinon elle montrerait un autre écran, par exemple encore en chargement), au même défilement et
+ * à la même taille de fenêtre (sinon le cadre tomberait à côté). Jamais d'image périmée : sinon, rien.
+ */
+export function beforeScreenOf(screens: readonly ScreenShot[], box: PreActionBox): ScreenShot | undefined {
+  const screen = screens
+    .filter((entry) => entry.at <= box.at)
+    .sort((a, b) => a.at - b.at)
+    .at(-1);
+  if (!screen || box.width <= 0 || box.height <= 0) return undefined;
+  const fresh = box.changedAt === undefined || screen.at >= box.changedAt;
+  const same =
+    Math.abs(screen.scrollX - box.scrollX) <= 2 &&
+    Math.abs(screen.scrollY - box.scrollY) <= 2 &&
+    screen.width === box.viewWidth &&
+    screen.height === box.viewHeight;
+  return fresh && same ? screen : undefined;
+}
 
 /** Garde une image d'étape ; au-delà de STEP_SHOTS, les plus anciennes s'effacent. */
 function keep(shots: Map<string, StepShot>, id: string, shot: StepShot): void {
@@ -133,6 +149,11 @@ function keep(shots: Map<string, StepShot>, id: string, shot: StepShot): void {
   }
 }
 
+/**
+ * LA CONSOLE DU RECORDER : relie la fenêtre « QA-CRAWLER Recorder » au recorder (pendant
+ * l'enregistrement) puis à la revue (après Stop). Elle construit l'état affiché ; elle ne décide
+ * de rien : chaque commande passe par le recorder ou par l'orchestrateur.
+ */
 export class RecordingConsole {
   private phase: PanelState['phase'] = 'RECORDING';
   private progress: PanelState['progress'];
@@ -169,8 +190,10 @@ export class RecordingConsole {
   private readonly stepShots = new Map<string, StepShot>();
   /** L'image AVANT un clic : la dernière image prise avant l'appui, le bouton encadré là où il était. */
   private readonly beforeShots = new Map<string, StepShot>();
-  /** La dernière image de l'application (aperçu ou image d'étape) : l'écran tel qu'il était à ce moment. */
-  private lastScreen: ScreenShot | undefined;
+  /** Les dernières images de l'application (aperçu ou image d'étape), de la plus ancienne à la plus récente. */
+  private readonly recentScreens: ScreenShot[] = [];
+  /** Pendant l'enregistrement : une nouvelle image quand la page a changé puis s'est posée. */
+  private screenWatch: NodeJS.Timeout | undefined;
   /** La dernière action vue : une nouvelle action déclenche son image « avant ». */
   private lastActionSeen: string | undefined;
   /** L'action dont l'image attend que l'écran se pose (une saisie se termine, une page se charge). */
@@ -318,6 +341,44 @@ export class RecordingConsole {
   /** Au départ : l'écran de la page tout de suite (il sert d'image « avant » au premier clic). */
   async firstPreview(): Promise<void> {
     await this.refreshPreview();
+    this.watchScreen();
+  }
+
+  /**
+   * L'IMAGE TENUE À JOUR : une page qui change sans action humaine (un chargement qui se termine, une
+   * liste qui arrive) est reprise dès qu'elle s'est posée (500 ms sans changement), au plus une fois par
+   * seconde, jamais pendant un geste. L'image « avant le clic » montre ainsi l'écran que l'humain avait
+   * sous les yeux.
+   */
+  private watchScreen(): void {
+    if (this.screenWatch || !this.withPreview) return;
+    this.screenWatch = setInterval(() => {
+      void this.freshenScreen();
+    }, 1000);
+    this.screenWatch.unref();
+  }
+
+  private stopScreenWatch(): void {
+    if (this.screenWatch) clearInterval(this.screenWatch);
+    this.screenWatch = undefined;
+  }
+
+  private async freshenScreen(): Promise<void> {
+    if (this.phase !== 'RECORDING' || this.capturing || this.previewTimer) return;
+    // Jamais pendant un geste (une saisie en cours) : l'image suivra l'action, comme avant.
+    const since = this.recorder.sinceLastGesture();
+    if (since !== undefined && since < 1000) return;
+    const changed = await this.recorder.lastChange();
+    const latest = this.recentScreens.at(-1);
+    if (changed === undefined || Date.now() - changed < 500 || (latest && latest.at >= changed)) return;
+    await this.refreshPreview();
+  }
+
+  /** Une image de plus (les 3 dernières suffisent : l'image « avant » est la dernière prise avant l'appui). */
+  private noteScreen(shot: ScreenShot): void {
+    this.recentScreens.push(shot);
+    this.recentScreens.sort((a, b) => a.at - b.at);
+    if (this.recentScreens.length > 3) this.recentScreens.shift();
   }
 
   /** La timeline a changé (une action, une validation) : la fenêtre, puis un nouvel aperçu de la page. */
@@ -357,7 +418,7 @@ export class RecordingConsole {
     this.shotChain = this.shotChain.then(async () => {
       const shot = await this.recorder.stepShot(id).catch(() => undefined);
       if (!shot) return;
-      this.lastScreen = shot;
+      this.noteScreen(shot);
       keep(this.stepShots, id, shot);
     });
     return this.shotChain;
@@ -369,17 +430,11 @@ export class RecordingConsole {
    * serait faux : pas d'image « avant »).
    */
   private keepBeforeShot(id: string): void {
-    const screen = this.lastScreen;
     const click = this.recorder.clickBox(id);
-    if (!screen || !click) return;
+    if (!click) return;
     const { box } = click;
-    const same =
-      screen.at <= box.at &&
-      Math.abs(screen.scrollX - box.scrollX) <= 2 &&
-      Math.abs(screen.scrollY - box.scrollY) <= 2 &&
-      screen.width === box.viewWidth &&
-      screen.height === box.viewHeight;
-    if (!same || box.width <= 0 || box.height <= 0) return;
+    const screen = beforeScreenOf(this.recentScreens, box);
+    if (!screen) return;
     keep(this.beforeShots, id, {
       ...screen,
       rect: { x: box.x, y: box.y, width: box.width, height: box.height },
@@ -414,7 +469,7 @@ export class RecordingConsole {
     try {
       const shot = await this.recorder.preview();
       if (!shot) return;
-      if (this.phase === 'RECORDING' || this.phase === 'PAUSED') this.lastScreen = shot;
+      if (this.phase === 'RECORDING' || this.phase === 'PAUSED') this.noteScreen(shot);
       // Un cadre ne survit qu'à l'image où il a été mesuré (la page a pu bouger depuis).
       this.preview = { ...shot, ...(highlight ? { highlight } : {}) };
       this.render();
@@ -424,6 +479,7 @@ export class RecordingConsole {
   }
 
   async close(): Promise<void> {
+    this.stopScreenWatch();
     await this.detached?.close();
     await this.panel?.close();
   }
@@ -442,6 +498,7 @@ export class RecordingConsole {
   }
 
   stopped(): void {
+    this.stopScreenWatch();
     this.phase = 'FINALIZING';
     this.endedAt ??= Date.now();
     this.render();
