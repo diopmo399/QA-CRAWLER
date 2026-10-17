@@ -313,6 +313,16 @@ import { StuckDetector } from '../recovery/stuck-detector.js';
 import { AccessibilityChecker } from '../accessibility/accessibility-checker.js';
 import { CreatedDataRegistry, type CreatedDataRecord } from '../data/created-data.js';
 import { businessProofOf } from '../flows/business-proof.js';
+import { BusinessAssertionEngine, type ApiReadResult } from '../quality/assertion-engine.js';
+import { checkConsistency } from '../quality/consistency-engine.js';
+import {
+  verdictOf,
+  type AssertionResult,
+  type ConsistencyResult,
+  type FlowQualityReport,
+  type QualityEvent,
+} from '../quality/model.js';
+import type { ObservedExchange } from '../quality/values.js';
 import { routeKey } from '../crawler/route-normalizer.js';
 import { RuleBasedActionScorer, optionKey } from '../decision/action-scorer.js';
 import { AdvancedActionScorer } from '../decision/advanced-action-scorer.js';
@@ -431,6 +441,16 @@ export interface ExplorationListener {
       | 'TEST_DATA_REFERENCE_RESOLVED'
       | 'TEST_DATA_REFERENCE_UNRESOLVED';
     message: string;
+  }): void;
+  /** VÉRIFICATION MÉTIER : assertions, cohérence des données, couverture des exigences (jamais une valeur). */
+  onQuality?(event: {
+    at: string;
+    event: QualityEvent;
+    message: string;
+    runId: string;
+    flow?: string;
+    step?: number;
+    assertionId?: string;
   }): void;
   /** WORKFLOW SELF-HEALING : divergence analysée, objectif, plan, récupération, dérive. */
   onHealing?(event: HealingEventRecord): void;
@@ -611,6 +631,12 @@ export class FlowExplorer {
   }
   /** Le rapport du flow en cours (l'étape précédente, pour le contexte de la divergence). */
   private currentFlowReport: FlowRunReport | undefined;
+  /**
+   * VÉRIFICATION MÉTIER du flow en cours : son moteur d'assertions, la fenêtre réseau du flow (en
+   * empreintes) et l'étape de chaque échange (le nombre d'échanges au début de chaque étape).
+   */
+  private qualityRun:
+    { engine: BusinessAssertionEngine; marks: { step: number; from: number }[]; started: number } | undefined;
   /** Une récupération ne déclenche jamais une autre récupération (pas de boucle). */
   private healingDepth = 0;
   /** Récupération réussie, apprise quand l'étape suivante l'aura confirmée (ou infirmée). */
@@ -1052,8 +1078,9 @@ export class FlowExplorer {
     this.formNetwork = new FormKnowledgeObserver(
       (url) => this.safety.navigation.isAllowedHost(new URL(url).hostname),
       this.responseValues,
-      // La forme des corps (clés, types) n'est lue que pour l'intelligence fonctionnelle.
-      config.functionalIntelligence.enabled ? this.valueSalt : undefined,
+      // La forme des corps (clés, types) n'est lue que pour l'intelligence fonctionnelle, ou quand une
+      // vérification métier (assertions, cohérence des données) est déclarée.
+      config.functionalIntelligence.enabled || qualityDeclared(config) ? this.valueSalt : undefined,
     );
     this.coordinator = new FormRuleCoordinator({
       config,
@@ -2908,6 +2935,7 @@ export class FlowExplorer {
     this.currentStepReplay = undefined;
     this.listener.onFlowStart?.(flow);
     this.cognitive?.learnFlow(flow);
+    this.startQuality(flow, report, () => page);
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
     const knownStates = new Set(this.graph.allNodes().map((node) => node.id));
     let stopReason: StopReason | undefined;
@@ -2950,6 +2978,7 @@ export class FlowExplorer {
       }
 
       const networkMark = this.flowNetwork.length;
+      this.qualityRun?.marks.push({ step: index, from: this.formNetwork.functionalCount(QUALITY_WINDOW) });
       const contextBefore = functionalContextOf(this.lastSnapshot);
       this.lastActionMs = undefined;
       if (this.replayMachine) {
@@ -3001,6 +3030,8 @@ export class FlowExplorer {
       page = outcome.page;
       context = outcome.context ?? context;
       report.steps.push(outcome.report);
+      // Les assertions déclarées « after: N » : vérifiées dès la fin de l'étape N (jamais une écriture).
+      await this.verifyAssertions(flow, report, page, index);
       // RECOVERY LEARNING : une récupération n'est apprise que si le parcours CONTINUE ensuite.
       const pending = this.pendingRecovery();
       if (pending && pending.index < index && outcome.report.status !== 'MANUAL') {
@@ -3053,6 +3084,10 @@ export class FlowExplorer {
       }
       await this.memory.save(this.graph);
     }
+
+    // VÉRIFICATION MÉTIER : les assertions restantes et la cohérence des données, AVANT toute exploration
+    // (son trafic n'est pas celui du flow).
+    await this.finishQuality(flow, report, page);
 
     // Explorer le dernier écran du flow (souvent atteignable seulement par le flow).
     if (report.status === 'PASSED' && flow.thenExplore && context && !stopReason) {
@@ -3406,6 +3441,202 @@ export class FlowExplorer {
       entries.push({ ...entry, ...(produced !== undefined ? { producedAt: produced } : {}), usedBy });
     }
     return { entries };
+  }
+
+  /** Ouvre la vérification métier du flow (seulement s'il déclare des assertions ou une cohérence). */
+  private startQuality(flow: FlowConfig, report: FlowRunReport, currentPage: () => Page): void {
+    this.qualityRun = undefined;
+    if (flow.assertions.length === 0 && !flow.consistency && !this.config.quality.autoConsistency) return;
+    this.formNetwork.startFunctional(QUALITY_WINDOW, 300);
+    const networkObserved = this.formNetwork.observesFunctional(QUALITY_WINDOW);
+    const engine = new BusinessAssertionEngine({
+      runId: this.runId,
+      flow: flow.name,
+      salt: this.valueSalt,
+      networkObserved,
+      exchanges: () => this.qualityExchanges(),
+      runValue: (key) => this.qualityRunValue(key),
+      stepStatus: (index) => report.steps.find((step) => step.index === index)?.status,
+      uiText: () => screenText(currentPage()),
+      apiGet: (url) => this.readApi(currentPage(), url),
+      ...(this.contract ? { contract: this.contract.operations } : {}),
+      showValues: this.config.quality.showValues,
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    this.qualityRun = { engine, marks: [], started: Date.now() };
+  }
+
+  /** Les échanges du flow, chacun avec l'étape pendant laquelle il est parti. */
+  private qualityExchanges(): ObservedExchange[] {
+    const marks = this.qualityRun?.marks ?? [];
+    return this.formNetwork.functionalSnapshot(QUALITY_WINDOW).map((exchange, position) => {
+      const step = marks.filter((mark) => mark.from <= position).at(-1)?.step;
+      return step === undefined ? { ...exchange } : { ...exchange, step };
+    });
+  }
+
+  /** La valeur de CE run pour une clé ; affichable seulement si générée par le crawler et non sensible. */
+  private qualityRunValue(key: string): { value: string; displayable: boolean } | undefined {
+    const value = this.testDataRun.values().find((entry) => entry.key === key)?.value;
+    if (value === undefined) return undefined;
+    const entry = this.flowDataUsed.get(key);
+    return { value, displayable: entry?.value !== undefined && !entry.sensitive };
+  }
+
+  /** Une LECTURE d'API autorisée : GET seulement, hôte permis par la SafetyPolicy, session du navigateur. */
+  private async readApi(page: Page, url: string): Promise<ApiReadResult> {
+    let target: URL;
+    try {
+      target = new URL(url, this.config.target.baseUrl);
+    } catch {
+      return { error: 'invalid read URL' };
+    }
+    if (!/^https?:$/.test(target.protocol) || !this.safety.navigation.isAllowedHost(target.hostname))
+      return { error: `host ${target.hostname} is not allowed by the SafetyPolicy`, unauthorized: true };
+    if (page.isClosed()) return { error: 'no page to read from' };
+    try {
+      const response = await page.request.get(target.toString(), {
+        timeout: Math.min(this.config.exploration.actionTimeoutMs, 10_000),
+        failOnStatusCode: false,
+        maxRedirects: 0,
+      });
+      const status = response.status();
+      if (status === 401 || status === 403)
+        return { error: `read refused (${String(status)})`, unauthorized: true };
+      const text = await response.text();
+      let body: unknown = undefined;
+      try {
+        body = text.length <= 2_000_000 ? (JSON.parse(text) as unknown) : undefined;
+      } catch {
+        body = undefined;
+      }
+      return { status, body };
+    } catch (error) {
+      return { error: `read failed: ${(error as Error).message.split('\n')[0] ?? 'error'}` };
+    }
+  }
+
+  private emitQuality(
+    event: QualityEvent,
+    message: string,
+    extra: { flow?: string; step?: number; assertionId?: string } = {},
+  ): void {
+    this.listener.onQuality?.({ at: new Date().toISOString(), event, message, runId: this.runId, ...extra });
+  }
+
+  /** Les assertions à vérifier maintenant : « after: N » à la fin de l'étape N, les autres en fin de flow. */
+  private async verifyAssertions(
+    flow: FlowConfig,
+    report: FlowRunReport,
+    page: Page,
+    afterStep: number | 'end',
+  ): Promise<void> {
+    const run = this.qualityRun;
+    if (!run || page.isClosed()) {
+      if (run && afterStep === 'end')
+        for (const assertion of this.pendingAssertions(flow))
+          this.recordAssertion(flow, report, run.engine.blocked(assertion, 'the page was closed'));
+      return;
+    }
+    const due = flow.assertions.filter((assertion) =>
+      afterStep === 'end' ? true : assertion.after === afterStep,
+    );
+    const done = new Set(run.engine.allResults.map((result) => result.id));
+    for (const assertion of due) {
+      if (done.has(assertion.id)) continue;
+      // Les réponses en cours de lecture complètent les échanges avant de juger.
+      await this.formNetwork.settle(1000);
+      this.recordAssertion(flow, report, await run.engine.evaluate(assertion));
+    }
+  }
+
+  private pendingAssertions(flow: FlowConfig): FlowConfig['assertions'] {
+    const done = new Set(this.qualityRun?.engine.allResults.map((result) => result.id));
+    return flow.assertions.filter((assertion) => !done.has(assertion.id));
+  }
+
+  /** Un résultat d'assertion : événement, et anomalie quand il est contredit (jamais pour un « non vérifié »). */
+  private recordAssertion(flow: FlowConfig, report: FlowRunReport, result: AssertionResult): void {
+    const where = {
+      flow: flow.name,
+      assertionId: result.id,
+      ...(result.after ? { step: result.after } : {}),
+    };
+    const summary = `flow "${flow.name}" assertion ${result.id} (${result.kind}): ${result.status}${result.reasons[0] ? ` — ${result.reasons[0]}` : ''}`;
+    if (result.status === 'PASS') this.emitQuality('BUSINESS_ASSERTION_PASSED', summary, where);
+    else if (result.status === 'FAIL') this.emitQuality('BUSINESS_ASSERTION_FAILED', summary, where);
+    else this.emitQuality('BUSINESS_ASSERTION_NOT_VERIFIED', summary, where);
+    if (result.status !== 'FAIL') return;
+    const severity: Severity = !result.mandatory
+      ? 'WARNING'
+      : result.criticality === 'CRITICAL'
+        ? 'CRITICAL'
+        : result.criticality === 'LOW'
+          ? 'WARNING'
+          : 'ERROR';
+    this.collector.add({
+      type: 'BUSINESS_ASSERTION',
+      severity,
+      message: `Flow "${flow.name}" — business assertion ${result.id} failed: ${result.description} (expected ${result.expected}; observed ${result.observed})`,
+      pageUrl: this.startUrl,
+    });
+    if (result.mandatory && report.status === 'PASSED') report.status = 'FAILED';
+  }
+
+  /** Fin du flow : les assertions restantes, la cohérence des données, le rapport de vérification. */
+  private async finishQuality(flow: FlowConfig, report: FlowRunReport, page: Page): Promise<void> {
+    const run = this.qualityRun;
+    if (!run) return;
+    await this.verifyAssertions(flow, report, page, 'end');
+    await this.formNetwork.settle(1000);
+    const exchanges = this.qualityExchanges();
+    const networkObserved = this.formNetwork.observesFunctional(QUALITY_WINDOW);
+    await this.formNetwork.stopFunctional(QUALITY_WINDOW);
+    const testData = this.flowTestDataReport()?.entries ?? [];
+    const consistency = checkConsistency({
+      runId: this.runId,
+      flow: flow.name,
+      salt: this.valueSalt,
+      networkObserved,
+      exchanges,
+      testData,
+      runValue: (key) => this.qualityRunValue(key),
+      extracted: (name) => run.engine.extractedValue(name),
+      ...(flow.consistency?.displayed.length || (!flow.consistency && this.config.quality.autoConsistency)
+        ? { uiText: await screenText(page) }
+        : {}),
+      businessProof: businessProofOf({ ...report, testDataReport: { entries: testData } }),
+      ...(flow.consistency ? { config: flow.consistency } : {}),
+      showValues: this.config.quality.showValues,
+    });
+    for (const result of consistency.results) this.recordConsistency(flow, report, result);
+    const assertions = run.engine.allResults;
+    report.quality = {
+      verdict: verdictOf(assertions),
+      assertions,
+      consistency: consistency.results,
+      evidence: [...run.engine.allEvidence, ...consistency.evidence],
+      networkObserved,
+      durationMs: Date.now() - run.started,
+    } satisfies FlowQualityReport;
+    this.qualityRun = undefined;
+  }
+
+  private recordConsistency(flow: FlowConfig, report: FlowRunReport, result: ConsistencyResult): void {
+    const summary = `flow "${flow.name}" ${result.rule}${result.key ? ` ${result.key}` : ''}: ${result.status}${result.difference ? ` — ${result.difference}` : ''}`;
+    if (result.status !== 'INCONSISTENT') {
+      this.emitQuality('DATA_CONSISTENCY_CHECKED', summary, { flow: flow.name });
+      return;
+    }
+    this.emitQuality('DATA_INCONSISTENCY_DETECTED', summary, { flow: flow.name });
+    this.collector.add({
+      type: 'DATA_CONSISTENCY',
+      severity: result.declared ? 'ERROR' : 'WARNING',
+      message: `Flow "${flow.name}" — data inconsistency (${result.rule}${result.key ? `, ${result.key}` : ''}): ${result.difference ?? 'the values differ'}`,
+      pageUrl: this.startUrl,
+    });
+    if (result.declared && report.status === 'PASSED') report.status = 'FAILED';
   }
 
   private async runFlowStep(
@@ -9686,4 +9917,21 @@ function functionalContextOf(snapshot: UiSnapshot | undefined): FunctionalStepCo
     expandedSections: visible.filter((element) => element.expanded === true).map((element) => element.name),
     ...(dialog ? { dialog } : {}),
   };
+}
+
+/** La fenêtre réseau d'un flow vérifié (assertions, cohérence des données). */
+const QUALITY_WINDOW = 'quality-flow';
+
+/** Une vérification métier est-elle déclarée (un flow avec assertions ou cohérence, ou la cohérence automatique) ? */
+function qualityDeclared(config: ScenarioConfig): boolean {
+  return (
+    config.quality.autoConsistency ||
+    config.flows.some((flow) => flow.assertions.length > 0 || flow.consistency !== undefined)
+  );
+}
+
+/** Le texte visible de l'écran (lecture seule, borné) ; jamais gardé au-delà de la vérification. */
+async function screenText(page: Page): Promise<string | undefined> {
+  if (page.isClosed()) return undefined;
+  return page.evaluate(() => document.body.innerText.slice(0, 200_000)).catch(() => undefined);
 }

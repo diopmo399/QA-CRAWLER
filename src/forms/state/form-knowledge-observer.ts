@@ -14,6 +14,7 @@ import { analyzeHttpRequest, foldValue, type HttpStructure } from '../../functio
 import type { NetworkExchange } from '../../model/network.js';
 import type { PageObserver } from '../../observers/observer.js';
 import { redactUrl } from '../../security/redactor.js';
+import { DurableResponseBodies } from './durable-bodies.js';
 import { apiOfExchange } from './field-dependencies.js';
 import { valueDigest } from './value-digest.js';
 import type { ResponseValueIndex } from './value-sources.js';
@@ -31,7 +32,11 @@ export class FormKnowledgeObserver implements PageObserver {
   private readonly windows = new Map<string, NetworkExchange[]>();
   /** Fenêtres de l'intelligence fonctionnelle : FORME des corps (clés, types), statut, code d'erreur. */
   private readonly functional = new Map<string, FunctionalExchange[]>();
+  /** Le plafond de chaque fenêtre fonctionnelle (30 par défaut ; plus pour la fenêtre d'un flow vérifié). */
+  private readonly functionalMax = new Map<string, number>();
   private readonly pending = new Map<Request, FunctionalExchange>();
+  /** Le secours des corps de réponse rendus illisibles par une navigation (Chromium). */
+  private readonly bodies = new DurableResponseBodies();
   private readonly reading = new Set<Promise<void>>();
   /** LE JOURNAL RÉSEAU (Recording) : tous les appels autorisés, dans l'ordre, borné. */
   private readonly journal: NetworkObservation[] = [];
@@ -80,7 +85,8 @@ export class FormKnowledgeObserver implements PageObserver {
         if (hints) entry.requestHints = hints;
       } else if (fromQuery.length > 0) entry.requestCriteria = fromQuery;
       this.pending.set(request, entry);
-      for (const window of this.functional.values()) if (window.length < 30) window.push(entry);
+      for (const [id, window] of this.functional)
+        if (window.length < (this.functionalMax.get(id) ?? 30)) window.push(entry);
     }
   };
 
@@ -167,8 +173,26 @@ export class FormKnowledgeObserver implements PageObserver {
       if (observation) summarize(observation, entry);
       return;
     }
+    // Une navigation juste après la réponse (créer puis ouvrir) la rend illisible par Playwright : le
+    // secours lit le corps gardé par Chromium ; sinon l'échange le DIT (responseUnread), jamais « vide ».
     const read = response
       .text()
+      .catch(async () => {
+        let page: Page | undefined;
+        try {
+          page = response.frame().page();
+        } catch {
+          page = undefined;
+        }
+        const text = page
+          ? await this.bodies.text(page, response.request().method(), response.url())
+          : undefined;
+        if (text === undefined) {
+          entry.responseUnread = true;
+          throw new Error('response body unreadable');
+        }
+        return text;
+      })
       .then((text) => {
         if (text.length > 1_000_000) return;
         const body = parseJson(text);
@@ -192,6 +216,9 @@ export class FormKnowledgeObserver implements PageObserver {
         if (salt !== undefined && (entry.status ?? 0) < 400) {
           const found = identifiersOf(body, salt);
           if (found.length > 0) entry.identifiers = [...(entry.identifiers ?? []), ...found];
+          // Ce que l'écriture a ENREGISTRÉ (renvoyé) : comparable à ce qui a été envoyé, en empreintes.
+          const returned = valueDigestsOf(body, salt, 40);
+          if (returned.length > 0) entry.responseValues = returned;
           // Une LISTE servie par une écriture HTTP (un POST de recherche, une liste d'un BFF) : ses
           // enregistrements, comme pour une lecture. La méthode n'est qu'un indice.
           const size = listSizeOf(body);
@@ -222,7 +249,10 @@ export class FormKnowledgeObserver implements PageObserver {
   attach(page: Page): void {
     page.on('request', this.onRequest);
     page.on('requestfailed', this.onRequestFailed);
-    if (this.salt !== undefined) page.on('response', this.onResponse);
+    if (this.salt !== undefined) {
+      page.on('response', this.onResponse);
+      this.bodies.attach(page);
+    }
     this.responses?.attach(page, this.isAllowedUrl);
   }
 
@@ -230,11 +260,38 @@ export class FormKnowledgeObserver implements PageObserver {
     page.off('request', this.onRequest);
     page.off('requestfailed', this.onRequestFailed);
     page.off('response', this.onResponse);
+    this.bodies.detach(page);
   }
 
   /** Fenêtre fonctionnelle d'une action (intelligence fonctionnelle activée seulement). */
-  startFunctional(id: string): void {
-    if (this.salt !== undefined) this.functional.set(id, []);
+  startFunctional(id: string, max = 30): void {
+    if (this.salt === undefined) return;
+    this.functional.set(id, []);
+    this.functionalMax.set(id, max);
+  }
+
+  /** Le nombre d'échanges déjà dans une fenêtre ouverte (pour situer ceux d'une étape). */
+  functionalCount(id: string): number {
+    return this.functional.get(id)?.length ?? 0;
+  }
+
+  /** Les échanges d'une fenêtre encore ouverte (les réponses lentes la complètent encore). */
+  functionalSnapshot(id: string): readonly FunctionalExchange[] {
+    return this.functional.get(id) ?? [];
+  }
+
+  /** La fenêtre est-elle ouverte (le sel du run permet les empreintes) ? */
+  observesFunctional(id: string): boolean {
+    return this.functional.has(id);
+  }
+
+  /** Attend la lecture des corps de réponse en cours (`maxMs` au plus), sans fermer de fenêtre. */
+  async settle(maxMs = 1000): Promise<void> {
+    if (this.reading.size > 0)
+      await Promise.race([
+        Promise.all([...this.reading]),
+        new Promise((resolve) => setTimeout(resolve, maxMs)),
+      ]);
   }
 
   /** Ferme la fenêtre, après la lecture des corps de réponse en cours (1 s au plus). */
@@ -246,6 +303,7 @@ export class FormKnowledgeObserver implements PageObserver {
       ]);
     const window = this.functional.get(id) ?? [];
     this.functional.delete(id);
+    this.functionalMax.delete(id);
     // Une réponse lente (après la fermeture de la fenêtre) complète encore l'échange déjà rapporté : seulement borner.
     if (this.functional.size === 0 && this.pending.size > 200) this.pending.clear();
     return window;
