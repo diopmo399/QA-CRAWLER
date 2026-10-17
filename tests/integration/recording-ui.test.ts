@@ -85,33 +85,52 @@ describe('Recording UI (recorder window)', () => {
         // CHECK → « Cocher … ».
         await page.getByLabel('Accept terms').check();
         await row(panel, /Cocher "Accept terms"/).waitFor();
+        // L'APERÇU TENU À JOUR : la page change sans action humaine (un contenu qui arrive) ; une fois
+        // posée, une nouvelle image est prise (l'image « avant » du prochain clic sera la bonne).
+        const live = panel.locator('#preview-card img');
+        await page.waitForTimeout(1500);
+        const settled = await live.getAttribute('src');
+        await page.evaluate(() => {
+          const late = document.createElement('p');
+          late.textContent = 'Late content';
+          document.body.append(late);
+        });
+        await panel.waitForFunction(
+          (before) => document.querySelector('#preview-card img')?.getAttribute('src') !== before,
+          settled,
+          { timeout: 5000 },
+        );
+        seen.liveRefreshed = true;
         // AMBIGUÏTÉ : signalée, résolue par l'humain (seul l'élément touché peut être confirmé).
         const second = page.locator('section[aria-label="Secondary"] #valueInput');
         await second.click();
         await second.pressSequentially('42', { delay: 20 });
         await row(panel, /Saisir "42" dans "Value"/).waitFor();
         await injectAmbiguity(recorder, 'Value');
-        await panel.getByText('⚠ Action ambiguë').waitFor();
+        await panel.getByText('Action ambiguë', { exact: true }).waitFor();
         seen.ambiguousShown = true;
         // Le choix est proposé tout de suite : l'élément touché présélectionné.
         expect(await panel.getByLabel(/élément touché/).isChecked()).toBe(true);
         await panel.getByLabel(/Primary/).check();
-        await panel.getByRole('button', { name: '✓ Valider cet élément' }).click();
+        await panel.getByRole('button', { name: 'Valider cet élément' }).click();
         await panel
           .getByRole('alert')
           .getByText(/pas l'élément que vous avez touché/)
           .waitFor();
         seen.refusedOtherElement = true;
         await panel.getByLabel(/élément touché/).check();
-        await panel.getByRole('button', { name: '✓ Valider cet élément' }).click();
+        await panel.getByRole('button', { name: 'Valider cet élément' }).click();
         await panel.getByText(/Ambiguïté résolue/).waitFor();
         // DÉTAILS + MISE EN ÉVIDENCE dans la page.
         await row(panel, /First name/).click();
-        await panel.getByText("Détails de l'action").waitFor();
+        await panel
+          .locator('#details .ititle')
+          .getByText(/First name/)
+          .waitFor();
         await panel.getByText(/Élément mis en évidence dans la page/).waitFor();
         // PAUSE : aucune action enregistrée.
         await panel.getByRole('button', { name: "Mettre l'enregistrement en pause" }).click();
-        await panel.getByText('⏸ Enregistrement en pause').waitFor();
+        await panel.getByText('Enregistrement en pause').waitFor();
         const before = await timeline(panel).locator(':scope > li').count();
         await page.getByRole('button', { name: 'Action 9', exact: true }).click();
         await page.waitForTimeout(500);
@@ -133,21 +152,61 @@ describe('Recording UI (recorder window)', () => {
       },
       reviewDriver: async ({ panel }) => {
         // STOP → l'écran de revue.
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         // La fenêtre de l'application est fermée dès l'arrêt ; celle du recorder reste ouverte.
         seen.appClosedAtReview = appPage?.isClosed() ?? false;
         seen.panelOpenAtReview = !panel.isClosed();
         seen.reviewText = await panel.locator('body').innerText();
+        // L'APERÇU EN REVUE : l'image de l'étape choisie, prise pendant l'enregistrement, son élément encadré.
+        const preview = panel.locator('#preview-card');
+        await row(panel, /Saisir "Alex" dans "First name"/).click();
+        await preview.getByRole('heading', { name: /^Écran à l’étape \d+$/ }).waitFor();
+        seen.shotFirst = await preview.locator('img').getAttribute('src');
+        seen.shotFirstFramed = await preview.locator('.hl').count();
+        seen.shotTitle = await preview.locator('h2').innerText();
+        await row(panel, /Cocher "Accept terms"/).click();
+        await preview.getByRole('heading', { name: seen.shotTitle as string }).waitFor({ state: 'detached' });
+        seen.shotSecond = await preview.locator('img').getAttribute('src');
+        // Un clic : l'écran AVANT le clic (par défaut), le bouton encadré là où il était, puis celui d'après.
+        await row(panel, /Cliquer sur "Create item"/).click();
+        const moment = preview.getByRole('group', { name: 'Moment de l’image' });
+        await moment.waitFor();
+        seen.beforePressed = await moment
+          .getByRole('button', { name: 'Avant le clic' })
+          .getAttribute('aria-pressed');
+        seen.beforeShot = await preview.locator('img').getAttribute('src');
+        seen.beforeFramed = await preview.locator('.hl').innerText();
+        seen.beforeNote = await preview.locator('.shotnote').innerText();
+        // PLEIN ÉCRAN : l'image est réduite et centrée ; le cadre reste sur le bouton (même position
+        // relative à l'image qu'en vue normale).
+        const framePosition = () =>
+          panel.evaluate(() => {
+            const card = document.querySelector('#preview-card');
+            const image = card?.querySelector('.viewport img')?.getBoundingClientRect();
+            const frame = card?.querySelector('.viewport .hl')?.getBoundingClientRect();
+            return image && frame
+              ? [(frame.left - image.left) / image.width, (frame.top - image.top) / image.height]
+              : undefined;
+          });
+        seen.frameNormal = await framePosition();
+        await preview.getByRole('button', { name: 'Plein écran' }).click();
+        await panel.waitForFunction(() => document.fullscreenElement?.id === 'preview-card');
+        seen.frameFullscreen = await framePosition();
+        await panel.evaluate(() => document.exitFullscreen());
+        await panel.waitForFunction(() => document.fullscreenElement === null);
+        await moment.getByRole('button', { name: 'Après' }).click();
+        await moment.getByRole('button', { name: 'Après', pressed: true }).waitFor();
+        seen.afterShot = await preview.locator('img').getAttribute('src');
         // MODIFIER : retirer une étape la retire du flow (fichiers régénérés).
-        await panel.getByRole('button', { name: 'Modifier', exact: true }).click();
+        await row(panel, /Cliquer sur "Action 7"/).click();
         await panel.getByRole('button', { name: /Retirer l'étape « Cliquer sur "Action 7" »/ }).click();
         await row(panel, /Cliquer sur "Action 7"/).waitFor({ state: 'detached' });
         // Un mot de passe ne se rejoue qu'avec sa variable d'environnement (et si la SafetyPolicy le permet).
+        await row(panel, /Password/).click();
         await panel
           .getByRole('button', { name: /Retirer l'étape « Saisir "••••" dans "Password" »/ })
           .click();
         await row(panel, /Password/).waitFor({ state: 'detached' });
-        await panel.getByRole('button', { name: 'Terminer les modifications' }).click();
         // REJOUER → progression puis résultat.
         await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
         await panel
@@ -155,15 +214,18 @@ describe('Recording UI (recorder window)', () => {
           .getByText(/Rejeu en cours/)
           .waitFor({ timeout: 30_000 });
         seen.replayProgress = true;
-        await panel.getByText(/✓ Replay réussi|✕ Replay interrompu/).waitFor({ timeout: 180_000 });
+        await panel
+          .locator('#review')
+          .getByText(/Rejeu réussi|Rejeu interrompu/)
+          .waitFor({ timeout: 180_000 });
         seen.replayText = await panel.locator('#review').innerText();
         // SAUVEGARDER.
         await panel.getByRole('button', { name: /Sauvegarder/ }).click();
-        await panel.getByText('✓ Flow sauvegardé').waitFor();
+        await panel.getByText('Flow sauvegardé', { exact: true }).waitFor();
         // ANALYSE : l'intent n'apparaît QUE là.
         await panel.getByRole('tab', { name: 'Analyse' }).click();
         seen.analysisText = await panel.locator('#panel-analysis').innerText();
-        await panel.getByRole('tab', { name: 'Enregistrement' }).click();
+        await panel.getByRole('tab', { name: /^Parcours/ }).click();
         seen.recordingTabText = await panel.locator('#panel-recording').innerText();
         // MODE DÉVELOPPEUR : les détails techniques.
         await panel.getByRole('button', { name: 'Mode développeur' }).click();
@@ -230,9 +292,37 @@ describe('Recording UI (recorder window)', () => {
     expect(await file('generated.flow.yaml')).not.toContain('Action 7');
   });
 
+  it('in the review, the preview shows the screen recorded for the chosen step, its element framed', () => {
+    expect(String(seen.shotTitle)).toMatch(/^Écran à l’étape \d+$/);
+    expect(String(seen.shotFirst)).toMatch(/^data:image\/jpeg;base64,/);
+    expect(seen.shotFirstFramed).toBe(1);
+    expect(seen.shotSecond).toMatch(/^data:image\/jpeg;base64,/);
+    expect(seen.shotSecond).not.toBe(seen.shotFirst);
+  });
+
+  it('during the recording, a page change without any action refreshes the preview once settled', () => {
+    expect(seen.liveRefreshed).toBe(true);
+  });
+
+  it('in the review, a click also shows the screen before it, the clicked button framed', () => {
+    expect(seen.beforePressed).toBe('true');
+    expect(String(seen.beforeShot)).toMatch(/^data:image\/jpeg;base64,/);
+    expect(seen.beforeFramed).toBe('Create item');
+    expect(seen.beforeNote).toContain('juste avant le clic');
+    expect(String(seen.afterShot)).toMatch(/^data:image\/jpeg;base64,/);
+    expect(seen.afterShot).not.toBe(seen.beforeShot);
+  });
+
+  it('in fullscreen, the frame stays on the clicked button (same position on the image as in the normal view)', () => {
+    const normal = seen.frameNormal as [number, number];
+    const full = seen.frameFullscreen as [number, number];
+    expect(full[0]).toBeCloseTo(normal[0], 2);
+    expect(full[1]).toBeCloseTo(normal[1], 2);
+  });
+
   it('replay shows its progress then its result', () => {
     expect(seen.replayProgress).toBe(true);
-    expect(seen.replayText).toMatch(/✓ Replay réussi/);
+    expect(seen.replayText).toMatch(/Rejeu réussi/);
     expect(seen.replayText).toMatch(/\d+ \/ \d+ actions exécutées/);
     expect(outcome.replay.status).toBe('REPLAY_CONFIRMED');
   });
@@ -278,14 +368,17 @@ describe('Recording UI — a replay that fails', () => {
         await page.waitForTimeout(500);
       },
       reviewDriver: async ({ panel }) => {
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         // L'application change entre l'enregistrement et le rejeu : « Action 7 » n'existe plus.
         app.broken = true;
         await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
-        await panel.getByText('✕ Replay interrompu').waitFor({ timeout: 180_000 });
+        await panel
+          .locator('#review')
+          .getByText('Rejeu interrompu', { exact: true })
+          .waitFor({ timeout: 180_000 });
         seen.failure = await panel.locator('#review').innerText();
         await panel.getByRole('button', { name: "Modifier l'étape" }).waitFor();
-        await panel.getByRole('button', { name: '↻ Recommencer' }).waitFor();
+        await panel.getByRole('button', { name: 'Recommencer' }).waitFor();
         await panel.getByRole('button', { name: 'Fermer' }).click();
       },
     });
@@ -422,7 +515,7 @@ describe('Recording UI — the intelligence advisor never delays the review', ()
         await page.waitForTimeout(600);
       },
       reviewDriver: async ({ panel }) => {
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 30_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 30_000 });
         // La revue est là pendant que le conseiller travaille encore.
         await panel.getByRole('tab', { name: 'Analyse' }).click();
         seen.runningWhileReviewing = await panel.getByText(/Analyse par l'intelligence en cours/).isVisible();
