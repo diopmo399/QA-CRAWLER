@@ -128,6 +128,7 @@ export async function runCli(input: string[], options: CliOptions = {}): Promise
       ...(args.headless !== undefined ? { headless: args.headless } : {}),
       ...(args.reportsDir !== undefined ? { reportsDir: args.reportsDir } : {}),
       ...(args.screenshotsDir !== undefined ? { screenshotsDir: args.screenshotsDir } : {}),
+      ...(args.junit !== undefined ? { junit: args.junit } : {}),
       ...(args.persistence !== undefined ? { persistence: args.persistence } : {}),
       ...(args.memory !== undefined ? { memory: args.memory } : {}),
       ...(args.intelligence !== undefined ? { intelligence: args.intelligence } : {}),
@@ -305,6 +306,7 @@ export async function runCli(input: string[], options: CliOptions = {}): Promise
     logger.info(`  Stopped       : ${result.stopReason} after ${(result.durationMs / 1000).toFixed(1)} s`);
     if (result.artifacts.json) logger.info(`  JSON report   : ${result.artifacts.json}`);
     if (result.artifacts.html) logger.info(`  HTML report   : ${result.artifacts.html}`);
+    if (result.artifacts.junit) logger.info(`  JUnit XML     : ${result.artifacts.junit}`);
     if (result.artifacts.flowGraph) logger.info(`  Flow graph    : ${result.artifacts.flowGraph}`);
     if (result.artifacts.flowGraphHtml) logger.info(`  Flow graph UI : ${result.artifacts.flowGraphHtml}`);
     if (result.artifacts.generatedFlows) logger.info(`  Flows (YAML)  : ${result.artifacts.generatedFlows}`);

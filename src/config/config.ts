@@ -774,6 +774,20 @@ const reportSchema = z
     failOnSeverity: z.enum([...SEVERITIES, 'NONE']).default('ERROR'),
     /** Langue des rapports HTML (index.html, flow-graph.html). result.json reste en anglais. */
     language: z.enum(REPORT_LANGUAGES).default('en'),
+    /**
+     * JUNIT XML (reports/junit.xml) pour la CI : un fichier de plus, désactivé par défaut, qui ne
+     * change rien aux autres rapports. `required` : une erreur d'écriture fait échouer le run (sinon
+     * un avertissement). Les anomalies au seuil de failOnSeverity y sont des échecs.
+     */
+    junit: z
+      .object({
+        enabled: z.boolean().default(false),
+        /** Relatif à output.reportsDir. */
+        file: nonEmpty.default('junit.xml'),
+        required: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 
@@ -1179,7 +1193,29 @@ const platformSchema = z
       .default({}),
     /** Tests Playwright générés (reports/generated-tests/<flow>.spec.ts). */
     generatedTests: z
-      .object({ enabled: z.boolean().default(false) })
+      .object({
+        enabled: z.boolean().default(false),
+        /**
+         * Projet Maven JUnit 5 + Playwright Java généré des flows (reports/generated-tests-java/),
+         * indépendant des specs Playwright ci-dessus ; désactivé par défaut. Java et Maven ne servent
+         * qu'à exécuter le projet généré.
+         */
+        java: z
+          .object({
+            enabled: z.boolean().default(false),
+            packageName: z
+              .string()
+              .regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/)
+              .default('qa.generated'),
+            /** Version Playwright Java ; par défaut celle du Playwright Node du projet. */
+            playwrightVersion: z
+              .string()
+              .regex(/^\d+\.\d+\.\d+$/)
+              .optional(),
+          })
+          .strict()
+          .default({}),
+      })
       .strict()
       .default({}),
     /**

@@ -20,6 +20,8 @@ export interface CliArgs {
   headless?: boolean;
   reportsDir?: string;
   screenshotsDir?: string;
+  /** --junit : écrire reports/junit.xml (report.junit.enabled). */
+  junit?: boolean;
   persistence?: PersistenceChoice;
   memory?: boolean;
   intelligence?: IntelligenceChoice;
@@ -71,6 +73,7 @@ Options:
       --headed                Show the browser window (debugging; needs a display)
       --reports-dir <dir>     Override output.reportsDir (default: reports)
       --screenshots-dir <dir> Override output.screenshotsDir (default: screenshots)
+      --junit                 Also write a JUnit XML report for the CI (report.junit, reports/junit.xml)
       --baseline-dir <dir>    Override baseline.dir (default: baseline)
       --persistence <p>       Where runs and knowledge are stored: memory, file, postgres,
                               sqlserver, sqlite (also: QA_PERSISTENCE_*, QA_DB_TYPE)
@@ -138,6 +141,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
         headed: { type: 'boolean', default: false },
         'reports-dir': { type: 'string' },
         'screenshots-dir': { type: 'string' },
+        junit: { type: 'boolean', default: false },
         'baseline-dir': { type: 'string' },
         persistence: { type: 'string' },
         'no-persistence': { type: 'boolean', default: false },
@@ -204,6 +208,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     ...(values.headed ? { headless: false } : {}),
     ...(values['reports-dir'] !== undefined ? { reportsDir: values['reports-dir'] } : {}),
     ...(values['screenshots-dir'] !== undefined ? { screenshotsDir: values['screenshots-dir'] } : {}),
+    ...(values.junit ? { junit: true } : {}),
     ...(persistenceValue !== undefined ? { persistence: persistenceValue as PersistenceChoice } : {}),
     ...(memory !== undefined ? { memory } : {}),
     ...(intelligence !== undefined ? { intelligence: intelligence as IntelligenceChoice } : {}),

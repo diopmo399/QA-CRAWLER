@@ -26,21 +26,24 @@ ne sont jamais modifiés ; toute conclusion porte Conclusion / Evidence / Confid
 
 ## Artefacts (`reports/`)
 
-| Fichier                          | Contenu                                                                                        |
-| -------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `run.json`                       | statut global, raisons, chemin, modèle d'exécution compact, résumé des anomalies, conclusions  |
-| `anomalies.json`                 | anomalies catégorisées : symptôme, cause probable / confirmée, preuves, régression, avis       |
-| `workflow-graph.json`            | graphe observé : écrans annotés, arêtes, chemin de chaque flow, première divergence            |
-| `functional-coverage.json`       | couverture fonctionnelle (`COVERED` … `UNKNOWN`) par flow, preuve, checkpoint, workflow, règle |
-| `api-analysis.json`              | corrélation UI ↔ API par étape, tests d'API tirés du contrat, écarts contrat / runtime         |
-| `actor-analysis.json`            | profils, différences d'accès classées, écart de comportement avec le run précédent             |
-| `performance-analysis.json`      | tendances de durée par flow et par étape contre l'historique                                   |
-| `regression-analysis.json`       | `NEW_REGRESSION`, `REGRESSION_PERSISTING`, `REGRESSION_FIXED`, `FLAKY_BEHAVIOR`, …             |
-| `visual-analysis.json`           | verdict visuel par étape, baseline, image des différences                                      |
-| `reproductions.json`             | chemin de reproduction minimal et flow YAML autonome par anomalie                              |
-| `generated-tests/<flow>.spec.ts` | tests Playwright générés                                                                       |
-| `advisor.json`                   | ce que le conseiller d'ambiguïté a été consulté, et combien d'avis ont été retenus             |
-| `pull-request-comment.md`        | le commentaire de pull request généré                                                          |
+| Fichier                          | Contenu                                                                                                                     |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `run.json`                       | statut global, raisons, chemin, modèle d'exécution compact, résumé des anomalies, conclusions                               |
+| `anomalies.json`                 | anomalies catégorisées : symptôme, cause probable / confirmée, preuves, régression, avis                                    |
+| `workflow-graph.json`            | graphe observé : écrans annotés, arêtes, chemin de chaque flow, première divergence                                         |
+| `functional-coverage.json`       | couverture fonctionnelle (`COVERED` … `UNKNOWN`) par flow, preuve, checkpoint, workflow, règle                              |
+| `api-analysis.json`              | corrélation UI ↔ API par étape, tests d'API tirés du contrat, écarts contrat / runtime                                      |
+| `actor-analysis.json`            | profils, différences d'accès classées, écart de comportement avec le run précédent                                          |
+| `performance-analysis.json`      | tendances de durée par flow et par étape contre l'historique                                                                |
+| `regression-analysis.json`       | `NEW_REGRESSION`, `REGRESSION_PERSISTING`, `REGRESSION_FIXED`, `FLAKY_BEHAVIOR`, …                                          |
+| `visual-analysis.json`           | verdict visuel par étape, baseline, image des différences                                                                   |
+| `reproductions.json`             | chemin de reproduction minimal et flow YAML autonome par anomalie                                                           |
+| `generated-tests/<flow>.spec.ts` | tests Playwright générés                                                                                                    |
+| `generated-tests-java/`          | projet Maven JUnit 5 + Playwright Java (`platform.generatedTests.java`, [JAVA_TEST_GENERATION.md](JAVA_TEST_GENERATION.md)) |
+| `generated-java-tests.json`      | le résumé de ce projet : classes, étapes, assertions, étapes non rejouables, versions                                       |
+| `advisor.json`                   | ce que le conseiller d'ambiguïté a été consulté, et combien d'avis ont été retenus                                          |
+| `pull-request-comment.md`        | le commentaire de pull request généré                                                                                       |
+| `junit.xml`                      | le run au format JUnit XML pour la CI (`report.junit`, désactivé par défaut)                                                |
 
 Dans `index.html`, la section **Analyse du run de workflow** (analyse détaillée) les résume.
 
