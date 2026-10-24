@@ -109,7 +109,12 @@ function assertionsOf(flow: RecordedFlow, native: boolean): ArtifactAssertion[] 
 
 /** Le FlowDefinition (schéma de la mission) d'un flow enregistré : ce que les générateurs lisent. */
 export function definitionOf(flow: RecordedFlow, files: { yaml: string }): FlowDefinition {
-  const parsed: FlowConfig = flowSchema.parse(parseYaml(files.yaml));
+  const result = flowSchema.safeParse(withoutTestDataFile(parseYaml(files.yaml)));
+  if (!result.success)
+    throw new GenerationError(
+      `the generated flow YAML does not pass the flow schema: ${result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
+    );
+  const parsed: FlowConfig = result.data;
   return {
     name: parsed.name,
     ...(parsed.description !== undefined ? { description: parsed.description } : {}),
@@ -148,7 +153,15 @@ export function planGeneration(request: GenerationRequest): GenerationPlan | { e
       : replayOnly.map(
           (assertion) => `${assertion.id} is verified by the QA-CRAWLER replay only (run the flow YAML)`,
         );
-  for (const format of request.formats) {
+  try {
+    for (const format of request.formats) planFormat(format);
+  } catch (error) {
+    if (error instanceof GenerationError) return { error: error.message };
+    throw error;
+  }
+  return { name: flow.name, flow, artifacts, warnings };
+
+  function planFormat(format: GenerationFormat): void {
     switch (format) {
       case 'yaml':
         artifacts.push({
@@ -210,7 +223,6 @@ export function planGeneration(request: GenerationRequest): GenerationPlan | { e
       }
     }
   }
-  return { name: flow.name, flow, artifacts, warnings };
 }
 
 // ------------------------------------------------------------------ validation statique (outils réels)
@@ -279,8 +291,19 @@ function validateGherkin(content: string): { method: string; ok: boolean; messag
   };
 }
 
+/**
+ * Le fichier de données cité par le flow (`testData: test-data.yaml`) est relatif au flow écrit, pas au
+ * répertoire courant : les générateurs ne lisent pas les valeurs (le rejeu les résout), le schéma est
+ * donc vérifié sans cette citation.
+ */
+function withoutTestDataFile(document: unknown): unknown {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return document;
+  const { testData, ...rest } = document as { testData?: unknown };
+  return typeof testData === 'string' ? rest : document;
+}
+
 function validateYaml(content: string): { method: string; ok: boolean; messages: string[] } {
-  const parsed = flowSchema.safeParse(parseYaml(content));
+  const parsed = flowSchema.safeParse(withoutTestDataFile(parseYaml(content)));
   return {
     method: 'flow schema',
     ok: parsed.success,
@@ -429,3 +452,6 @@ export function planSummary(plan: GenerationPlan): {
     },
   };
 }
+
+/** Une génération refusée pour une raison dite (schéma du flow) : jamais un crash de la fenêtre. */
+class GenerationError extends Error {}

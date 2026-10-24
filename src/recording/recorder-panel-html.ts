@@ -1695,8 +1695,8 @@ const SCRIPT = `
     if (cmd === 'fullscreen') { fullscreen(DETACHED ? document.documentElement : $('preview-card')); return; }
     if (cmd === 'show') { selected = id; render(); send({ type: 'select', id: id }); return; }
     if (cmd === 'confirm-resolve') {
-      var picked = document.querySelector('input[name="cand-' + id + '"]:checked');
-      send({ type: 'resolve', id: id, candidate: picked ? Number(picked.value) : -1 });
+      var chosen = document.querySelector('input[name="cand-' + id + '"]:checked');
+      send({ type: 'resolve', id: id, candidate: chosen ? Number(chosen.value) : -1 });
       return;
     }
     if (cmd === 'edit') { editing = !editing; render(); return; }
@@ -1773,6 +1773,10 @@ const SCRIPT = `
   }, true);
   document.addEventListener('change', function (event) {
     var input = event.target;
+    // Les choix de génération survivent aux rendus (chaque mise à jour du panneau reconstruit les cases).
+    if (input instanceof HTMLInputElement && input.hasAttribute('data-gen-format')) { genFormats[input.getAttribute('data-gen-format')] = input.checked; return; }
+    if (input instanceof HTMLInputElement && input.hasAttribute('data-gen-group')) { genGroups[input.getAttribute('data-gen-group')] = input.checked; return; }
+    if (input instanceof HTMLInputElement && input.hasAttribute('data-gen-force')) { genForce = input.checked; return; }
     if (input instanceof HTMLInputElement && input.name.indexOf('cand-') === 0) choice[input.name.slice(5)] = Number(input.value);
     if (input instanceof HTMLInputElement && input.name.indexOf('rowopt-') === 0) { rowChoice[input.name.slice(7)] = input.value; render(); return; }
     var rc = input && input.getAttribute ? input.getAttribute('data-rowcol') : null;

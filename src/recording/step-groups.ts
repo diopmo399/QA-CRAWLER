@@ -432,6 +432,19 @@ export function applyGroupCommand(
     }
   }
   normalizeGroups(flow);
+  // Un groupe vidé par la commande (ses étapes passées à un autre groupe, détachées ou retirées) disparaît :
+  // un groupe est ses étapes ; la commande le dit dans ses avertissements.
+  const emptied = (flow.groups ?? []).filter((group) => group.stepIds.length === 0);
+  if (emptied.length > 0) {
+    flow.groups = (flow.groups ?? []).filter((group) => group.stepIds.length > 0);
+    const warnings = emptied.map(
+      (group) => `group "${group.name}" (${group.id}) removed: no step left in it`,
+    );
+    outcome =
+      outcome && 'ok' in outcome
+        ? { ok: true, warnings: [...outcome.warnings, ...warnings] }
+        : (outcome ?? { ok: true, warnings });
+  }
   return outcome ?? { ok: true, warnings: [] };
 }
 
@@ -566,12 +579,14 @@ export function flowForGroups(
 export function groupsForYaml(flow: RecordedFlow): Record<string, unknown>[] {
   if (!flow.groups || flow.groups.length === 0) return [];
   const position = new Map(flow.steps.map((item, index) => [item.id, index + 1]));
-  return flow.groups.map((group) => ({
-    id: group.id,
-    name: group.name,
-    ...(group.description ? { description: group.description } : {}),
-    steps: group.stepIds
-      .map((stepId) => position.get(stepId))
-      .filter((entry): entry is number => entry !== undefined),
-  }));
+  return flow.groups
+    .map((group) => ({
+      id: group.id,
+      name: group.name,
+      ...(group.description ? { description: group.description } : {}),
+      steps: group.stepIds
+        .map((stepId) => position.get(stepId))
+        .filter((entry): entry is number => entry !== undefined),
+    }))
+    .filter((group) => group.steps.length > 0);
 }

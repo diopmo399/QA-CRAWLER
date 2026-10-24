@@ -166,7 +166,8 @@ export class RecorderPanel {
   }
 }
 
-function commandOf(payload: unknown): PanelCommand | undefined {
+/** La commande d'un message de la fenêtre : type connu, chaque champ vérifié et borné ; sinon rien. */
+export function commandOf(payload: unknown): PanelCommand | undefined {
   if (typeof payload !== 'object' || payload === null) return undefined;
   const raw = payload as Record<string, unknown>;
   const type = raw.type;
@@ -190,7 +191,49 @@ function commandOf(payload: unknown): PanelCommand | undefined {
     ...(typeof raw.option === 'string' && /^[a-z]{1,20}$/.test(raw.option) ? { option: raw.option } : {}),
     ...(typeof raw.column === 'string' && raw.column.length <= 60 ? { column: raw.column } : {}),
     ...columnsOf(raw.columns),
+    // Les décisions sur les propositions, les groupes métier et la génération : chaque champ borné.
+    ...(typeof raw.decision === 'string' && DECISIONS.has(raw.decision)
+      ? { decision: raw.decision as PanelCommand['decision'] }
+      : {}),
+    ...(typeof raw.op === 'string' && GROUP_OPS.has(raw.op) ? { op: raw.op } : {}),
+    ...(typeof raw.name === 'string' && raw.name.trim().length > 0
+      ? { name: raw.name.trim().slice(0, 120) }
+      : {}),
+    ...(typeof raw.description === 'string' ? { description: raw.description.slice(0, 500) } : {}),
+    ...(typeof raw.groupId === 'string' && /^g\d{1,6}$/.test(raw.groupId) ? { groupId: raw.groupId } : {}),
+    ...idsOf('stepIds', raw.stepIds, /^s\d{1,6}$/),
+    ...(raw.direction === 'up' || raw.direction === 'down' ? { direction: raw.direction } : {}),
+    ...(typeof raw.collapsed === 'boolean' ? { collapsed: raw.collapsed } : {}),
+    ...(typeof raw.keepSteps === 'boolean' ? { keepSteps: raw.keepSteps } : {}),
+    ...(typeof raw.force === 'boolean' ? { force: raw.force } : {}),
+    ...idsOf('formats', raw.formats, /^(yaml|gherkin|playwright|java)$/),
+    ...idsOf('groupIds', raw.groupIds, /^g\d{1,6}$/),
   };
+}
+
+const DECISIONS = new Set<string>(['ACCEPT', 'REJECT', 'DISABLE', 'RESET', 'MODIFY']);
+const GROUP_OPS = new Set<string>([
+  'create',
+  'rename',
+  'describe',
+  'assign',
+  'detach',
+  'move-step',
+  'reorder-steps',
+  'move-group',
+  'collapse',
+  'delete',
+]);
+
+/** Une liste d'identifiants bornée (50 au plus), chacun au format attendu ; une entrée mal formée invalide la liste. */
+function idsOf<K extends string>(key: K, raw: unknown, pattern: RegExp): Partial<Record<K, string[]>> {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 50) return {};
+  const ids: string[] = [];
+  for (const entry of raw as unknown[]) {
+    if (typeof entry !== 'string' || !pattern.test(entry)) return {};
+    ids.push(entry);
+  }
+  return { [key]: ids } as Partial<Record<K, string[]>>;
 }
 
 const SOURCES = new Set<RowColumnChoice['source']>(['recorded', 'value', 'variable', 'new-variable']);

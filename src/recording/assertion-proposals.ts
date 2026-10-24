@@ -66,15 +66,25 @@ const DEDUCED_KINDS = new Set<AssertionCandidate['kind']>([
 /** Les propositions d'un recording (pures, déterministes). */
 export function proposeAssertions(input: ProposalInput): AssertionProposal[] {
   const proposals: AssertionProposal[] = [];
-  const keys = new Set<string>();
+  const keys = new Map<string, AssertionProposal>();
   const stepOf = (actionId: string): RecordedFlowStep | undefined =>
     input.flow.steps.find((item) => item.step.kind !== 'expect' && item.actionIds.includes(actionId));
   const add = (
     proposal: Omit<AssertionProposal, 'id' | 'status' | 'afterStepId'>,
   ): AssertionProposal | undefined => {
-    const key = `${proposal.afterActionId}|${JSON.stringify(proposal.expect ?? proposal.assertion?.check ?? proposal.description)}`;
-    if (keys.has(key)) return undefined;
-    keys.add(key);
+    // La même vérification proposée après une autre action est redondante : la première ancre est gardée,
+    // ses preuves s'ajoutent, et elle hérite de la recommandation (un candidat stable retenu par le recorder).
+    const key = JSON.stringify(proposal.expect ?? proposal.assertion?.check ?? proposal.description);
+    const existing = keys.get(key);
+    if (existing) {
+      for (const id of proposal.sourceObservationIds)
+        if (!existing.sourceObservationIds.includes(id)) existing.sourceObservationIds.push(id);
+      if (proposal.recommended && !existing.recommended) {
+        existing.recommended = true;
+        existing.candidateId = proposal.candidateId ?? existing.candidateId;
+      }
+      return undefined;
+    }
     const step = stepOf(proposal.afterActionId);
     const created: AssertionProposal = {
       id: `p${String(proposals.length + 1)}`,
@@ -83,6 +93,7 @@ export function proposeAssertions(input: ProposalInput): AssertionProposal[] {
       status: 'PROPOSED',
     };
     proposals.push(created);
+    keys.set(key, created);
     return created;
   };
 
