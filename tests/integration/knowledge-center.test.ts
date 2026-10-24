@@ -114,8 +114,9 @@ output: { reportsDir: ${path.join(root, 'reports')}, screenshotsDir: ${path.join
     await expect.poll(() => page.locator('tr.row').count()).toBe(1);
     await page.locator('tr.row').first().click();
     await expect.poll(() => page.locator('#drawer').getAttribute('data-open')).toBe('true');
+    // le panneau s'ouvre avec « Chargement… » puis reçoit le détail : attendre le détail
+    await expect.poll(() => page.locator('#drawer-body').innerText()).toContain('transition_knowledge');
     const drawer = await page.locator('#drawer-body').innerText();
-    expect(drawer).toContain('transition_knowledge');
     expect(drawer).toContain('EXÉCUTIONS DES DERNIERS RUNS');
     expect(await page.locator('#drawer-body tbody tr').count()).toBeGreaterThanOrEqual(2);
     await page.fill('#d-note', 'bloquée par la politique de sécurité, normal');
