@@ -124,6 +124,7 @@ const CSS = `
   --ok:#15803D;--ok-soft:#F0FDF4;--warn:#B45309;--warn-soft:#FFFBEB;--bad:#B91C1C;--bad-soft:#FEF2F2;--run:#4F46E5;--run-soft:#EEF2FF;--idle:#C7CCD8;--idle-soft:#F1F2F8;
   --violet:#6D28D9;--violet-soft:#F3EEFF;--teal:#0F766E;--teal-soft:#E6FAF7;--orange:#4338CA;--orange-soft:#EEF2FF;--pink:#1D4ED8;--pink-soft:#E8F0FE;
   --radius:14px;--shadow:0 1px 2px rgba(16,24,40,.05);--focus:#4F46E5;--ring:#E0E7FF;--bad-line:#FECACA;--ok-line:#BBF7D0;
+  --obs:#1D4ED8;--obs-soft:#DBEAFE;--ded:#92400E;--ded-soft:#FEF3C7;--exp:#5B21B6;--exp-soft:#EDE9FE;--code-bg:#F1F2F8;
   --accent-2:#7C3AED;--text:var(--fg);--text-2:var(--muted-strong);--nav-hover:#F1F2F8;
 }
 :root[data-theme="dark"]{color-scheme:dark;
@@ -132,6 +133,7 @@ const CSS = `
   --ok:#22C55E;--ok-soft:#0E3B22;--warn:#F59E0B;--warn-soft:#2A1F0C;--bad:#EF4444;--bad-soft:#2A1215;--run:#818CF8;--run-soft:#1C1A4A;--idle:#64748B;--idle-soft:#1A2133;
   --violet:#A78BFA;--violet-soft:#2E1F6B;--teal:#5EEAD4;--teal-soft:#0E3B33;--orange:#A5B4FC;--orange-soft:#1C1A4A;--pink:#93C5FD;--pink-soft:#0F1B3A;
   --shadow:none;--focus:#A5B4FC;--ring:#2E2A7A;--bad-line:#7F1D1D;--ok-line:#14532D;
+  --obs:#93C5FD;--obs-soft:#1E3A5F;--ded:#FCD34D;--ded-soft:#3B2A0A;--exp:#C4B5FD;--exp-soft:#2E1065;--code-bg:#1A2133;
   --accent-2:#8B5CF6;--nav-hover:#161C2D;
 }
 ${THEME_BASE_CSS}
@@ -273,9 +275,45 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .checks{margin-top:4px;margin-left:30px}
 .checks summary{cursor:pointer;color:var(--muted);font-weight:600}
 .checks ul{margin:6px 0 0;padding-left:18px;color:var(--muted)}
-.bgroup{display:block;padding:8px 10px;border:1px solid var(--line-strong);border-radius:8px;margin:8px 0 4px}.bgroup .pill{font-weight:500}.bgroup .row{margin-top:6px}.gtools{padding:8px 10px;border:1px dashed var(--line-strong);border-radius:8px;margin-bottom:8px}.gtools input[type=text]{min-width:160px}.gtools .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
-.generation .chk{margin-right:10px;display:inline-flex;gap:4px;align-items:center}.generation .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}.genpre{max-height:320px;overflow:auto;font-size:11px;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre}
-.proposals .plist{list-style:none;padding-left:0}.proposal{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0;color:var(--fg)}.proposal.inflow{border-color:var(--ok)}.proposal .phead .pill{margin-left:4px}.proposal .pill.off{opacity:.7}.proposal .row{margin-top:6px}
+/* ——— Assertions proposées, groupes métier, génération (maquette validée) ——— */
+.chip2{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;border-radius:6px;padding:1px 8px;line-height:18px;white-space:nowrap}
+.chip2.obs{color:var(--obs);background:var(--obs-soft)}.chip2.ded{color:var(--ded);background:var(--ded-soft)}.chip2.exp{color:var(--exp);background:var(--exp-soft)}.chip2.ok{color:var(--ok);background:var(--ok-soft)}.chip2.neutral{color:var(--muted-strong);background:var(--chip-bg)}.chip2.bad{color:var(--bad);background:var(--bad-soft)}
+.ok-t{color:var(--ok);font-weight:600;display:inline-flex;align-items:center;gap:4px}.warn-t{color:var(--warn);font-weight:600;display:inline-flex;align-items:center;gap:4px}.bad-t{color:var(--bad);font-weight:600}
+.dotsep{color:var(--muted);font-style:normal;margin:0 2px}.sp{flex:1 1 auto}
+.pbtn{font:inherit;font-size:12.5px;font-weight:600;min-height:34px;height:34px;padding:0 12px;border-radius:9px;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.pbtn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}.pbtn.ghost{border-color:transparent;background:transparent;color:var(--muted)}.pbtn.warn{border-color:var(--warn);color:var(--warn);background:var(--surface)}.pbtn.big{height:38px;font-size:13px;font-weight:700;padding:0 16px;border-radius:10px}.pbtn.small{height:28px;min-height:28px;font-size:11.5px;padding:0 8px;border-radius:7px}.pbtn:disabled{opacity:.55;cursor:default}
+.ib{font:inherit;width:32px;height:32px;min-height:32px;padding:0;border-radius:8px;border:1px solid var(--line-strong);background:var(--surface);color:var(--muted-strong);display:inline-flex;align-items:center;justify-content:center}.ib.danger{color:var(--bad)}.ib:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}.ib.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
+.psec,.gsec{margin:14px 0 0;display:flex;flex-direction:column;gap:12px}
+.pttl h3{margin:0;font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;color:var(--fg)}.pttl h3 svg{color:var(--accent)}.pttl .sub{margin:3px 0 0;font-size:12.5px}
+.phd{display:flex;align-items:flex-start;gap:16px}.phd .pttl{flex:1 1 auto;min-width:0}
+.pstats{display:flex;align-items:center;gap:16px;padding:8px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px;flex:none}.pstats div{display:flex;flex-direction:column;align-items:center;min-width:50px}.pstats b{font-size:19px;line-height:1.1}.pstats b.ok{color:var(--ok)}.pstats b.warn{color:var(--warn)}.pstats span{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.02em}.pstats i{width:1px;height:28px;background:var(--line)}
+.pfilters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pf{font:inherit;font-size:12px;font-weight:600;min-height:30px;height:30px;padding:0 12px;border-radius:999px;border:1px solid var(--line-strong);background:var(--surface);color:var(--muted-strong)}.pf.on{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.plegend{display:flex;gap:12px;font-size:12px;color:var(--muted)}.plegend span{display:inline-flex;align-items:center;gap:5px}.plegend i{width:9px;height:9px;border-radius:3px;display:inline-block}.plegend i.obs{background:var(--obs)}.plegend i.ded{background:var(--ded)}.plegend i.exp{background:var(--exp)}
+.pz{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}.pzh{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);background:var(--surface-2)}.pzt{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}.pzn{font-size:11px;font-weight:700;border-radius:999px;padding:0 8px}
+.pz.decide .pzt,.pz.decide .pzn{color:var(--warn)}.pz.decide .pzn{background:var(--ded-soft)}.pz.inFlow .pzt,.pz.inFlow .pzn{color:var(--ok)}.pz.inFlow .pzn{background:var(--ok-soft)}.pz.out .pzt,.pz.out .pzn{color:var(--muted)}.pz.out .pzn{background:var(--chip-bg)}
+.prow{display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:12px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line)}.prow:last-child{border-bottom:0}.prow.open{background:var(--surface-2)}.prow.out .pt{color:var(--muted-strong);text-decoration:line-through;text-decoration-color:var(--line-strong)}
+.pic{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--accent-soft);color:var(--title)}.pic.ok{background:var(--ok-soft);color:var(--ok)}.pic.ded{background:var(--ded-soft);color:var(--ded)}.pic.off{background:var(--chip-bg);color:var(--muted)}
+.pbody{display:flex;flex-direction:column;gap:5px;min-width:0}.pt{font-size:13.5px;font-weight:700}.pt code,.gmeta code,.obs-ids code,.gchip code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--code-bg);padding:1px 6px;border-radius:5px;font-weight:600}
+.pm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted)}.conf{display:inline-flex;align-items:center;gap:6px}.conf .bar{width:64px;height:6px;border-radius:3px;background:var(--line);display:inline-block;position:relative;overflow:hidden}.conf .fill{position:absolute;left:0;top:0;height:6px;border-radius:3px;background:var(--accent)}.conf .fill.ok{background:var(--ok)}.conf .fill.warn{background:var(--warn)}
+.pacts{display:flex;gap:6px;align-items:center;justify-content:flex-end}.pacts .ib{border-color:transparent;background:transparent;color:var(--muted)}
+.pdet{grid-column:2/4;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.pdet>div{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 12px;display:flex;flex-direction:column;gap:4px;font-size:12.5px;min-width:0}.pdet .lbl,.gconf .lbl,.greshd .lbl{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.obs-ids{display:flex;gap:4px;flex-wrap:wrap;align-items:center}.obs-ids code{background:var(--accent-soft);color:var(--title)}.obs-ids small{color:var(--muted)}
+.gtoolbar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;margin:0 0 8px;background:var(--surface);border:1px solid var(--ring);border-radius:12px;box-shadow:0 6px 18px rgba(79,70,229,.08)}.gcount{display:inline-flex;align-items:center;gap:8px;font-weight:700;color:var(--title)}.gcount .n{width:24px;height:24px;border-radius:999px;background:var(--accent);color:var(--accent-fg);display:inline-flex;align-items:center;justify-content:center;font-size:12px}.vsep{width:1px;height:24px;background:var(--line)}.glab{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted-strong)}.gtoolbar input[type=text],.gtoolbar select,.grename input{font:inherit;height:34px;border:1px solid var(--line-strong);border-radius:9px;padding:0 10px;background:var(--surface);color:var(--fg)}.gtoolbar input[type=text]{width:220px}.gtoolbar .full{flex-basis:100%;margin:0}
+.grefuse{display:flex;gap:12px;align-items:flex-start;padding:11px 14px;margin:0 0 8px;background:var(--warn-soft);border:1px solid var(--warn);border-radius:12px;color:var(--warn)}.grefuse .gtxt{display:flex;flex-direction:column;gap:2px;flex:1 1 auto;min-width:0;color:var(--fg)}.grefuse .gtxt b{color:var(--warn)}.grefuse .gtxt span{font-size:12.5px}.grefuse svg{flex:none;margin-top:2px}.ginfo{display:flex;gap:8px;align-items:center;padding:8px 12px;margin:0 0 8px;background:var(--accent-soft);border-radius:10px;font-size:12.5px;color:var(--title)}
+.bgroup{display:block;margin:8px 0 4px;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}.ghead{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface-2)}.ghead .ib{border-color:transparent;background:transparent}.gsq{width:10px;height:10px;border-radius:3px;background:var(--accent);flex:none}.bgroup:nth-of-type(2n) .gsq{background:#0891B2}.gttl{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto}.gname{font-size:14px;font-weight:700}.gmeta{display:flex;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--muted);align-items:center}.gacts{display:inline-flex;gap:4px}.grename{display:inline-flex;gap:6px;align-items:center}
+li.erow{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align-items:center}li.erow>.item{grid-column:2}li.erow .etools{display:inline-flex;gap:2px;grid-column:3}li.erow .etools .ib{border-color:transparent;background:transparent;width:28px;height:28px;min-height:28px}li.erow.picked>.item{border-color:var(--accent);background:var(--accent-soft)}li.erow .attention,li.erow .remove{grid-column:2/4}.epick{width:16px;height:16px;margin:0;accent-color:var(--accent)}
+.gconf{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:12px}.gtiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:6px}.gtile{display:flex;gap:10px;align-items:flex-start;padding:11px;border:1px solid var(--line-strong);background:var(--surface);border-radius:12px;cursor:pointer}.gtile.on{border-color:var(--accent);background:var(--accent-soft)}.gtile input{width:16px;height:16px;margin:3px 0 0;accent-color:var(--accent);flex:none}.gtb{display:flex;flex-direction:column;gap:2px;min-width:0}.gtb b{font-size:13px}.gtb .sub{font-size:12px;margin:0}.gst{font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:4px;margin-top:4px;color:var(--muted-strong)}.gst.ok{color:var(--ok)}.gst.warn{color:var(--warn)}.gst.bad{color:var(--bad)}
+.ggroups{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.gchip{display:inline-flex;align-items:center;gap:6px;padding:0 10px;height:32px;border:1px solid var(--line-strong);background:var(--surface);border-radius:999px;font-size:12.5px;font-weight:600;color:var(--muted-strong);cursor:pointer}.gchip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--title)}.gchip input{margin:0;accent-color:var(--accent)}
+.gres{display:flex;flex-direction:column;gap:10px}.greshd{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.greshd .sub{margin:0;font-size:12px}.gdir{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}.gdir code{font-family:ui-monospace,Menlo,monospace;font-size:11px}
+.ggrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,42%);gap:12px;align-items:start}.glist{display:flex;flex-direction:column;gap:8px;min-width:0}
+.grow{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 12px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.grow.on{border-color:var(--accent);background:var(--accent-soft)}.gtag{width:34px;height:34px;border-radius:9px;background:var(--chip-bg);display:inline-flex;align-items:center;justify-content:center;font-family:ui-monospace,Menlo,monospace;font-size:10px;font-weight:700;color:var(--muted-strong)}.grow.on .gtag{background:var(--surface);color:var(--title)}.gbody{display:flex;flex-direction:column;gap:2px;min-width:0}.gbody .sub{margin:0;font-size:12px}.gpath{font-weight:700;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.gacts2{display:inline-flex;align-items:center;gap:8px}.gacts2 .pbtn{height:32px;min-height:32px;font-size:12px;padding:0 10px;border-radius:8px}
+.gfiles{display:flex;flex-direction:column;gap:4px;padding:0 0 0 46px}.gfile{font:inherit;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--fg);text-align:left}.gfile.on{border-color:var(--accent)}.gfile code{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.glegend{display:flex;flex-wrap:wrap;gap:6px 12px;padding:6px 4px 0;font-size:12px;color:var(--muted);align-items:center}.glegend b{color:var(--muted-strong)}.glegend span{display:inline-flex;align-items:center;gap:5px}
+.gpane{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;min-width:0}.gpane.empty{padding:16px;align-items:center;justify-content:center;min-height:120px}.gphd{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--surface-2)}.gphd .gpath{flex:1 1 auto;min-width:0;font-size:12px}.gphd .sub{margin:0;font-size:11px;white-space:nowrap}
+.gwarn{display:flex;gap:8px;align-items:flex-start;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--warn-soft);font-size:12px;color:var(--warn)}.gwarn svg{flex:none;margin-top:2px}
+.gcode{margin:0;padding:10px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.55;color:var(--fg);white-space:pre;overflow:auto;max-height:520px}.gcode .ln{color:var(--muted);user-select:none}
+.gsec{container-type:inline-size}@container (max-width:860px){.ggrid{grid-template-columns:1fr}.gtiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+
 .quality .qbody{display:flex;gap:14px;align-items:center}
 .ring{--p:0;width:86px;height:86px;border-radius:50%;background:conic-gradient(var(--ok) calc(var(--p)*1%),var(--line) 0);display:grid;place-items:center;flex:none}
 .ring>div{width:68px;height:68px;border-radius:50%;background:var(--surface);display:grid;place-items:center;text-align:center;line-height:1.1}
@@ -672,10 +710,16 @@ const SCRIPT = `
       pMethod: { UI_EXPECT: 'vérification d’écran au rejeu', BUSINESS_ASSERTION: 'assertion métier (réseau observé au rejeu)', REPORT_ONLY: 'rapport seulement : pas exécutable' },
       pInFlow: 'dans le flow', pOut: 'hors du flow', pAfter: function (n) { return 'après l’étape ' + n; }, pWhy: 'Pourquoi', pEvidence: 'Preuves', pLimits: 'Limites', pConflict: function (ids) { return 'Contredit ' + ids; },
       pAccept: 'Accepter', pReject: 'Refuser', pDisable: 'Désactiver', pReset: 'Réinitialiser', pConfidence: function (c) { return 'confiance ' + Math.round(c * 100) + ' %'; },
+      pTitle: 'Assertions proposées', pLead: "Rien n'entre dans le flow sans votre décision. Une déduction reste « à confirmer » tant que vous ne l'avez pas acceptée.", pCount: { all: 'proposées', inFlow: 'dans le flow', decide: 'à décider' },
+      pFilter: { all: 'Toutes', decide: 'À décider', inFlow: 'Dans le flow', deduced: 'Déduites' }, pLegend: { OBSERVED: 'observée', DEDUCED: 'déduite · à confirmer', EXPLICIT: 'explicite' },
+      pZone: { decide: 'À décider', inFlow: 'Dans le flow', out: 'Écartées' }, pZoneNote: { decide: "hors du flow tant que vous n'avez pas tranché", inFlow: 'vérifiées au rejeu ; retirables à tout moment', out: 'refusées ou désactivées ; réinitialisables' },
+      pRemove: 'Retirer', pKept: 'retenue par le recorder', pByYou: function (st) { return st + ' par vous'; }, pDetails: 'Voir les détails', pHide: 'Replier les détails', pNoLimits: 'Aucune limite déclarée.', pNotExec: 'rapport seulement, pas exécutable', pLow: 'peu discriminante', pMore: function (n) { return '+' + n; },
       groups: 'Groupes métier', groupName: 'Nom du groupe', createGroup: 'Créer un groupe avec les étapes cochées', addTo: 'Ajouter les étapes cochées à', groupPick: 'Cocher', groupPicked: 'Cochée', detach: 'Détacher', deleteGroup: 'Supprimer le groupe (étapes gardées)', rename: 'Renommer', apply: 'Valider', collapse: 'Replier', expand: 'Déplier', moveUp: 'Monter', moveDown: 'Descendre',
-      gen: 'Génération des tests', genNote: "Choisissez les formats et les groupes ; les fichiers sont écrits sous generated/ et validés avec les outils réels disponibles. Un statut ne confond jamais généré, validé statiquement et exécuté.", genFormats: { yaml: 'Flow YAML (rejeu QA-CRAWLER)', gherkin: 'Scénario Gherkin', playwright: 'Playwright TypeScript', java: 'Java JUnit 5 + Playwright' }, genGroups: 'Groupes à générer (tous par défaut)', genRun: 'Générer et valider', genForce: 'Forcer malgré les données manquantes',
+      gPicked: function (n) { return n === 1 ? 'étape cochée' : 'étapes cochées'; }, gNew: 'Nouveau groupe', gCreate: 'Créer', gOr: 'ou', gAddTo: 'ajouter à', gAdd: 'Ajouter', gUnpick: 'Tout décocher', gProduces: 'produit', gNeeds: 'entrées', gOutside: 'Hors groupe', gCollapsedRange: function (a, b) { return 'étapes ' + a + ' à ' + b + ', repliées'; }, gForce: 'Forcer quand même', gRefused: 'Déplacement refusé', gPickStep: function (n) { return "Cocher l'étape " + n; }, gRemoveStep: 'Retirer cette étape du flow', gCollapseG: 'Replier le groupe', gExpandG: 'Déplier le groupe', gMoveUp: 'Monter le groupe', gMoveDown: 'Descendre le groupe', gRenameG: 'Renommer le groupe', gDeleteG: 'Supprimer le groupe, les étapes restent', gActions: function (a, c, s) { return a + ' action' + (a > 1 ? 's' : '') + ', ' + c + ' vérification' + (c > 1 ? 's' : '') + ', ' + s + ' assertion' + (s > 1 ? 's' : '') + ' métier'; },
+      genFormatsL: 'Formats', genGroupsL: 'Groupes', genAll: 'Tout le parcours', genAlone: '✓ seul', genDepends: function (m) { return '⚠ dépend de ' + m; }, genLast: 'Dernière génération', genFiles: function (n) { return n + ' fichier' + (n > 1 ? 's' : ''); }, genValidated: function (n) { return n + ' validé' + (n > 1 ? 's' : '') + ' statiquement'; }, genExecuted: function (n) { return n + ' exécuté' + (n > 1 ? 's' : ''); }, genDesc: { yaml: 'rejeu QA-CRAWLER, assertions métier exécutées', gherkin: 'phrases du dictionnaire du moteur', playwright: 'test autonome, données par run', java: 'projet Maven complet' }, genValidatedShort: 'validé', genJavaProject: function (n) { return 'projet Maven, ' + n + ' fichiers'; }, genReplayWarn: function (id) { return id + " n'est pas vérifiable par ce test seul : le rejeu QA-CRAWLER la vérifie sur le réseau observé."; }, genLegend: { GENERATED: 'écrit', STATICALLY_VALIDATED: 'relu par un outil', NOT_VALIDATED: 'outil absent', EXECUTED: 'réussi · échoué · bloqué · non concluant, d’après une exécution réelle' }, genLegendL: 'Statuts', genLines: function (n) { return n + ' lignes'; }, genCopy: 'Copier', genCopied: 'Copié', genNativeN: function (n) { return n + ' assertion' + (n > 1 ? 's' : '') + ' métier native' + (n > 1 ? 's' : ''); }, genReplayN: function (n) { return n + ' assertion' + (n > 1 ? 's' : '') + ' vérifiée' + (n > 1 ? 's' : '') + ' par le rejeu seulement'; }, genExpandJava: 'Déplier les fichiers', genCollapseJava: 'Replier les fichiers', genNone: 'Aucune génération pour le moment.',
+      gen: 'Génération des tests', genNote: "Choisissez les formats et les groupes ; les fichiers sont écrits sous generated/ et validés avec les outils réels disponibles. Un statut ne confond jamais généré, validé statiquement et exécuté.", genFormats: { yaml: 'Flow YAML', gherkin: 'Scénario Gherkin', playwright: 'Playwright TypeScript', java: 'Java JUnit 5 + Playwright' }, genGroups: 'Groupes à générer (tous par défaut)', genRun: 'Générer et valider', genForce: 'Forcer malgré les données manquantes',
       genStatus: { GENERATED: 'généré', STATICALLY_VALIDATED: 'validé statiquement', NOT_VALIDATED: 'non validé (outil absent)', EXECUTED: 'exécuté', PASSED: 'réussi', FAILED: 'échoué', BLOCKED: 'bloqué', INCONCLUSIVE: 'non concluant' }, genValidation: 'Validation', genAssertions: function (n, r) { return n + ' assertion(s) native(s), ' + r + ' vérifiée(s) par le rejeu seulement'; }, genLimits: 'Limites', genPreview: 'Aperçu', genDir: function (d) { return 'Écrit dans ' + d; }, genNative: 'native', genReplay: 'rejeu seulement',
-      gInputs: 'Entrées', gOutputs: 'Sorties', gRunnable: 'jouable seul', gMissing: function (m) { return 'dépend de ' + m; }, gStart: function (r) { return 'départ ' + r; }, gChecks: function (c, a) { return c + ' vérification(s), ' + a + ' assertion(s) métier'; }, gSteps: function (n) { return n + ' étape(s)'; }, gNone: 'Aucun groupe : cochez des étapes puis créez un groupe.',
+      gInputs: 'Entrées', gOutputs: 'Sorties', gRunnable: 'jouable seul', gMissing: function (m) { return 'dépend de ' + m; }, gStart: function (r) { return 'départ ' + r; }, gChecks: function (c, a) { return c + ' vérification' + (c > 1 ? 's' : '') + ', ' + a + ' assertion' + (a > 1 ? 's' : '') + ' métier'; }, gSteps: function (n) { return n + ' étape' + (n > 1 ? 's' : ''); }, gNone: 'Aucun groupe : cochez des étapes puis créez un groupe.',
       analysisTitle: 'Analyse', analysisNote: "L'analyse ne modifie jamais le recording. Elle est disponible après l'arrêt.", analysisWaiting: "L'analyse sera disponible après l'arrêt de l'enregistrement.",
       business: 'Interprétation métier', businessNote: "Déduite du parcours enregistré : jamais une étape ajoutée au flow.", noBusiness: 'Aucune interprétation métier sûre.', recordedActions: 'Actions enregistrées', observed: 'Observé', deduced: 'Déduit', uncertain: 'Incertain (jamais une vérité métier)', candidatesL: 'Possibles', bstatus: { CONFIRMED: 'Confirmé', PROBABLE: 'Probable', AMBIGUOUS: 'Ambigu', UNKNOWN: 'Inconnu' }, aiChoice: 'choix de l’IA parmi les candidats observés', referenceL: 'référence', baction: { create: 'CRÉER', search: 'RECHERCHER', retrieve: 'RETROUVER', correlate: 'CORRÉLER', open: 'OUVRIR', update: 'MODIFIER', save: 'ENREGISTRER', delete: 'SUPPRIMER' }, entitiesL: 'Entités observées', applicationL: 'Application', applicationNote: 'Ce que le Recorder comprend de l’application (contextes, tasks, entités, relations). Les actions techniques restent dans le parcours.', evidenceL: 'Preuves', istatus: { OBSERVED: 'Observé', DEDUCED: 'Déduit', CONFIRMED: 'Confirmé', UNCERTAIN: 'Incertain' }, actionLevels: function (c) { return c.recorded + ' actions enregistrées · ' + c.validated + ' validées · ' + c.interpreted + ' interprétées · ' + c.uninterpreted + ' non interprétées (UNKNOWN, normal pour une application inconnue)'; }, provenanceL: { CREATED_DURING_RECORDING: 'créée pendant l’enregistrement', CONFIRMED_EXISTING: 'existait déjà (écran de départ)', DISCOVERED_DURING_RECORDING: 'découverte (origine inconnue)', UNKNOWN: 'provenance inconnue', AMBIGUOUS: 'provenance ambiguë' },
       httpLive: function (h) { return h.network + ' requêtes · ' + h.correlated + ' reliées · ' + h.hypotheses + ' hypothèses' + (h.inconsistencies ? ' · ' + h.inconsistencies + ' incohérences' : '') + (h.failed ? ' · analyse en erreur' : '') + ' (provisoire)'; }, httpL: 'Analyse HTTP', httpNote: 'Requêtes, corrélations et correspondances : consolidées après l’arrêt (un « VALIDATED » exige des preuves suffisantes ; le reste est une hypothèse).', httpFailed: 'L’analyse différée a échoué : les événements bruts et le journal réseau sont conservés.', httpCounts: function (c) { return c.events + ' événements · ' + c.network + ' requêtes · ' + c.correlated + ' reliées · ' + c.independent + ' indépendantes · ' + c.hypotheses + ' hypothèses à confirmer · ' + c.inconsistencies + ' incohérences · ' + c.revisions + ' révisions du direct'; }, httpMappings: 'Champ ↔ propriété', httpIncons: 'Incohérences', httpRevisions: 'Révisions', intents: 'Intents métier', noIntent: 'Aucun intent métier (aucune écriture ni recherche métier corrélée).', searchL: 'Recherche', critL: 'Critères détectés', apiL: 'API', opL: 'Opérateur', valL: 'Valeur', logicL: 'Logique', sortL: 'Tri', paramsL: 'Paramètres techniques', techL: 'Classification technique (distincte)', fromCreateL: 'valeur issue de la création', searchesL: 'Recherches reconnues', roles: { PAGINATION: 'pagination', OPTION: 'options d’inclusion', CONTEXT: 'contexte', CRITERION_FLAG: 'indicateurs de critère' }, liveSearch: 'recherche détectée', technicalIntents: 'Intents techniques (jamais métier)', possibleCreate: 'création possible, non prouvée', confidence: 'Confiance', why: 'Voir pourquoi', findings: 'Constats et suggestions', noFinding: 'Aucun constat.', ai: function (n) { return n + ' suggestion(s) de connaissance proposée(s) par l’IA (à revoir).'; },
@@ -738,10 +782,16 @@ const SCRIPT = `
       pMethod: { UI_EXPECT: 'screen check at replay', BUSINESS_ASSERTION: 'business assertion (network observed at replay)', REPORT_ONLY: 'report only: not executable' },
       pInFlow: 'in the flow', pOut: 'out of the flow', pAfter: function (n) { return 'after step ' + n; }, pWhy: 'Why', pEvidence: 'Evidence', pLimits: 'Limits', pConflict: function (ids) { return 'Contradicts ' + ids; },
       pAccept: 'Accept', pReject: 'Reject', pDisable: 'Disable', pReset: 'Reset', pConfidence: function (c) { return 'confidence ' + Math.round(c * 100) + '%'; },
+      pTitle: 'Proposed assertions', pLead: 'Nothing enters the flow without your decision. A deduction stays "to confirm" until you accept it.', pCount: { all: 'proposed', inFlow: 'in the flow', decide: 'to decide' },
+      pFilter: { all: 'All', decide: 'To decide', inFlow: 'In the flow', deduced: 'Deduced' }, pLegend: { OBSERVED: 'observed', DEDUCED: 'deduced · to confirm', EXPLICIT: 'explicit' },
+      pZone: { decide: 'To decide', inFlow: 'In the flow', out: 'Set aside' }, pZoneNote: { decide: 'out of the flow until you decide', inFlow: 'verified at replay; removable at any time', out: 'rejected or disabled; can be reset' },
+      pRemove: 'Remove', pKept: 'kept by the recorder', pByYou: function (st) { return st + ' by you'; }, pDetails: 'Show details', pHide: 'Hide details', pNoLimits: 'No declared limit.', pNotExec: 'report only, not executable', pLow: 'weakly discriminating', pMore: function (n) { return '+' + n; },
       groups: 'Business groups', groupName: 'Group name', createGroup: 'Create a group with the checked steps', addTo: 'Add the checked steps to', groupPick: 'Check', groupPicked: 'Checked', detach: 'Detach', deleteGroup: 'Delete the group (steps kept)', rename: 'Rename', apply: 'Apply', collapse: 'Collapse', expand: 'Expand', moveUp: 'Move up', moveDown: 'Move down',
-      gen: 'Test generation', genNote: 'Choose the formats and the groups; the files are written under generated/ and validated with the real tools available. A status never confuses generated, statically validated and executed.', genFormats: { yaml: 'Flow YAML (QA-CRAWLER replay)', gherkin: 'Gherkin scenario', playwright: 'Playwright TypeScript', java: 'Java JUnit 5 + Playwright' }, genGroups: 'Groups to generate (all by default)', genRun: 'Generate and validate', genForce: 'Force despite missing data',
+      gPicked: function (n) { return n === 1 ? 'step checked' : 'steps checked'; }, gNew: 'New group', gCreate: 'Create', gOr: 'or', gAddTo: 'add to', gAdd: 'Add', gUnpick: 'Uncheck all', gProduces: 'produces', gNeeds: 'inputs', gOutside: 'Outside any group', gCollapsedRange: function (a, b) { return 'steps ' + a + ' to ' + b + ', collapsed'; }, gForce: 'Force anyway', gRefused: 'Move refused', gPickStep: function (n) { return 'Check step ' + n; }, gRemoveStep: 'Remove this step from the flow', gCollapseG: 'Collapse the group', gExpandG: 'Expand the group', gMoveUp: 'Move the group up', gMoveDown: 'Move the group down', gRenameG: 'Rename the group', gDeleteG: 'Delete the group, the steps stay', gActions: function (a, c, s) { return a + ' action' + (a > 1 ? 's' : '') + ', ' + c + ' check' + (c > 1 ? 's' : '') + ', ' + s + ' business assertion' + (s > 1 ? 's' : ''); },
+      genFormatsL: 'Formats', genGroupsL: 'Groups', genAll: 'Whole journey', genAlone: '✓ alone', genDepends: function (m) { return '⚠ depends on ' + m; }, genLast: 'Last generation', genFiles: function (n) { return n + ' file' + (n > 1 ? 's' : ''); }, genValidated: function (n) { return n + ' statically validated'; }, genExecuted: function (n) { return n + ' executed'; }, genDesc: { yaml: 'QA-CRAWLER replay, business assertions executed', gherkin: 'sentences of the engine dictionary', playwright: 'standalone test, data per run', java: 'complete Maven project' }, genValidatedShort: 'validated', genJavaProject: function (n) { return 'Maven project, ' + n + ' files'; }, genReplayWarn: function (id) { return id + ' cannot be verified by this test alone: the QA-CRAWLER replay verifies it on the observed network.'; }, genLegend: { GENERATED: 'written', STATICALLY_VALIDATED: 'read back by a tool', NOT_VALIDATED: 'tool missing', EXECUTED: 'passed · failed · blocked · inconclusive, from a real execution' }, genLegendL: 'Statuses', genLines: function (n) { return n + ' lines'; }, genCopy: 'Copy', genCopied: 'Copied', genNativeN: function (n) { return n + ' native business assertion' + (n > 1 ? 's' : ''); }, genReplayN: function (n) { return n + ' assertion' + (n > 1 ? 's' : '') + ' verified by the replay only'; }, genExpandJava: 'Expand the files', genCollapseJava: 'Collapse the files', genNone: 'No generation yet.',
+      gen: 'Test generation', genNote: 'Choose the formats and the groups; the files are written under generated/ and validated with the real tools available. A status never confuses generated, statically validated and executed.', genFormats: { yaml: 'Flow YAML', gherkin: 'Gherkin scenario', playwright: 'Playwright TypeScript', java: 'Java JUnit 5 + Playwright' }, genGroups: 'Groups to generate (all by default)', genRun: 'Generate and validate', genForce: 'Force despite missing data',
       genStatus: { GENERATED: 'generated', STATICALLY_VALIDATED: 'statically validated', NOT_VALIDATED: 'not validated (tool missing)', EXECUTED: 'executed', PASSED: 'passed', FAILED: 'failed', BLOCKED: 'blocked', INCONCLUSIVE: 'inconclusive' }, genValidation: 'Validation', genAssertions: function (n, r) { return n + ' native assertion(s), ' + r + ' verified by the replay only'; }, genLimits: 'Limits', genPreview: 'Preview', genDir: function (d) { return 'Written to ' + d; }, genNative: 'native', genReplay: 'replay only',
-      gInputs: 'Inputs', gOutputs: 'Outputs', gRunnable: 'runnable alone', gMissing: function (m) { return 'depends on ' + m; }, gStart: function (r) { return 'starts at ' + r; }, gChecks: function (c, a) { return c + ' check(s), ' + a + ' business assertion(s)'; }, gSteps: function (n) { return n + ' step(s)'; }, gNone: 'No group yet: check steps, then create a group.',
+      gInputs: 'Inputs', gOutputs: 'Outputs', gRunnable: 'runnable alone', gMissing: function (m) { return 'depends on ' + m; }, gStart: function (r) { return 'starts at ' + r; }, gChecks: function (c, a) { return c + ' check' + (c > 1 ? 's' : '') + ', ' + a + ' business assertion' + (a > 1 ? 's' : ''); }, gSteps: function (n) { return n + ' step' + (n > 1 ? 's' : ''); }, gNone: 'No group yet: check steps, then create a group.',
       analysisTitle: 'Analysis', analysisNote: 'The analysis never changes the recording. It is available after Stop.', analysisWaiting: 'The analysis will be available once the recording is stopped.',
       business: 'Business interpretation', businessNote: 'Deduced from the recorded journey: never a step added to the flow.', noBusiness: 'No reliable business interpretation.', recordedActions: 'Recorded actions', observed: 'Observed', deduced: 'Deduced', uncertain: 'Uncertain (never a business fact)', candidatesL: 'Possible', bstatus: { CONFIRMED: 'Confirmed', PROBABLE: 'Probable', AMBIGUOUS: 'Ambiguous', UNKNOWN: 'Unknown' }, aiChoice: 'AI choice among the observed candidates', referenceL: 'reference', baction: { create: 'CREATE', search: 'SEARCH', retrieve: 'RETRIEVE', correlate: 'CORRELATE', open: 'OPEN', update: 'UPDATE', save: 'SAVE', delete: 'DELETE' }, entitiesL: 'Observed entities', applicationL: 'Application', applicationNote: 'What the Recorder understands of the application (contexts, tasks, entities, relations). The technical actions stay in the journey.', evidenceL: 'Evidence', istatus: { OBSERVED: 'Observed', DEDUCED: 'Deduced', CONFIRMED: 'Confirmed', UNCERTAIN: 'Uncertain' }, actionLevels: function (c) { return c.recorded + ' recorded actions · ' + c.validated + ' validated · ' + c.interpreted + ' interpreted · ' + c.uninterpreted + ' not interpreted (UNKNOWN, normal for an unknown application)'; }, provenanceL: { CREATED_DURING_RECORDING: 'created during the recording', CONFIRMED_EXISTING: 'already existed (starting screen)', DISCOVERED_DURING_RECORDING: 'discovered (origin unknown)', UNKNOWN: 'unknown provenance', AMBIGUOUS: 'ambiguous provenance' },
       httpLive: function (h) { return h.network + ' requests · ' + h.correlated + ' linked · ' + h.hypotheses + ' hypotheses' + (h.inconsistencies ? ' · ' + h.inconsistencies + ' inconsistencies' : '') + (h.failed ? ' · analysis error' : '') + ' (provisional)'; }, httpL: 'HTTP analysis', httpNote: 'Requests, correlations and mappings: consolidated after the stop (VALIDATED needs sufficient evidence; the rest is a hypothesis).', httpFailed: 'The deferred analysis failed: the raw events and the network journal are kept.', httpCounts: function (c) { return c.events + ' events · ' + c.network + ' requests · ' + c.correlated + ' linked · ' + c.independent + ' independent · ' + c.hypotheses + ' hypotheses to confirm · ' + c.inconsistencies + ' inconsistencies · ' + c.revisions + ' revisions of the live analysis'; }, httpMappings: 'Field ↔ property', httpIncons: 'Inconsistencies', httpRevisions: 'Revisions', intents: 'Business intents', noIntent: 'No business intent (no correlated business write or search).', searchL: 'Search', critL: 'Detected criteria', apiL: 'API', opL: 'Operator', valL: 'Value', logicL: 'Logic', sortL: 'Sort', paramsL: 'Technical parameters', techL: 'Technical classification (separate)', fromCreateL: 'value from the creation', searchesL: 'Recognised searches', roles: { PAGINATION: 'pagination', OPTION: 'inclusion options', CONTEXT: 'context', CRITERION_FLAG: 'criterion flags' }, liveSearch: 'search detected', technicalIntents: 'Technical intents (never business)', possibleCreate: 'possible creation, not proven', confidence: 'Confidence', why: 'See why', findings: 'Findings and suggestions', noFinding: 'No finding.', ai: function (n) { return n + ' knowledge suggestion(s) proposed by the AI (to review).'; },
@@ -848,6 +898,22 @@ const SCRIPT = `
   var filterText = '', onlyAttention = false, layout = null, editingIntent = null;
   // GROUPES MÉTIER : les étapes cochées (pour créer / affecter), le groupe en cours de renommage.
   var picked = {}, renamingGroup = null;
+  var pFilter = 'all', pOpen = {}, lastGroup = null, genJavaOpen = false, copied = false;
+  function sendGroup(payload) { lastGroup = payload; send(payload); }
+  /** Les pictogrammes des trois sections (traits, jamais d'emoji). */
+  var UI = {
+    up: '<path d="M12 19V5M5 12l7-7 7 7"/>', down: '<path d="M12 5v14M19 12l-7 7-7-7"/>', chevD: '<path d="M6 9l6 6 6-6"/>', chevU: '<path d="M18 15l-6-6-6 6"/>', chevR: '<path d="M9 18l6-6-6-6"/>',
+    check: '<path d="M20 6L9 17l-5-5"/>', x: '<path d="M18 6L6 18M6 6l12 12"/>', plus: '<path d="M12 5v14M5 12h14"/>', play: '<path d="M5 3l14 9-14 9V3z"/>', reset: '<path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
+    pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>', trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>', unlink: '<path d="M18.84 12.25l1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M5.17 11.75l-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="M8 2v3M2 8h3M16 22v-3M22 16h-3"/>',
+    eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>', globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>', file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h8"/>', msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    warn: '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>', info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>', folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>', code: '<path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>', grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>', tick: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>'
+  };
+  function ui(name, size) { return '<svg viewBox="0 0 24 24" width="' + (size || 16) + '" height="' + (size || 16) + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + (UI[name] || '') + '</svg>'; }
+  /** Un bouton-icône (libellé accessible seulement). */
+  function ib(name, attrs) { var a = attrs || {}; return '<button type="button" class="ib' + (a.cls ? ' ' + a.cls : '') + '"' + (a.cmd ? ' data-cmd="' + a.cmd + '"' : '') + (a.id ? ' data-id="' + esc(a.id) + '"' : '') + ' aria-label="' + esc(a.aria || name) + '" title="' + esc(a.aria || name) + '"' + (a.disabled ? ' disabled' : '') + '>' + ui(name, a.size || 15) + '</button>'; }
+  /** Les chemins et méthodes HTTP d'une description, en code (le texte est déjà échappé). */
+  function codify(text) { return esc(text).replace(/((?:GET|POST|PUT|PATCH|DELETE) )?(\\/[\\w\\-.\\/?=&:%]+)/g, function (m, verb, path) { return '<code>' + (verb || '') + path + '</code>'; }); }
+  function chip(cls, text) { return '<span class="chip2 ' + cls + '">' + esc(text) + '</span>'; }
   // GÉNÉRATION : les formats cochés, les groupes cochés, l'artefact dont l'aperçu est ouvert.
   var genFormats = { yaml: true, gherkin: true, playwright: true, java: false }, genGroups = {}, genForce = false, genSelected = null;
   var storedLayout = function () { try { return window.localStorage.getItem('qa-recorder-layout'); } catch (e) { return null; } };
@@ -983,6 +1049,7 @@ const SCRIPT = `
     var html = visible.map(function (step) {
       var head = '';
       if (step.groupId && step.groupId !== lastGroupId && !needle && !onlyAttention) head = groupHeadHtml(groupsById[step.groupId] || { id: step.groupId, name: step.group, stepIds: [], inputs: [], outputs: [], missing: [] });
+      else if (!step.groupId && lastGroupId && !needle && !onlyAttention) head = '<li class="group">' + esc(T.gOutside) + '</li>';
       else if (!step.groupId && step.group && step.group !== lastGroup && !needle && !onlyAttention) head = '<li class="group">' + esc(step.group) + '</li>';
       lastGroup = step.group || lastGroup; lastGroupId = step.groupId || null;
       var g = step.groupId ? groupsById[step.groupId] : null;
@@ -997,30 +1064,60 @@ const SCRIPT = `
   }
 
   /** LES PROPOSITIONS D'ASSERTIONS : origine, méthode, preuves, limites, et la décision de l'humain. */
+  /** LES ASSERTIONS PROPOSÉES : trois zones (à décider, dans le flow, écartées), une ligne par proposition, le détail replié. */
   function proposalsHtml() {
     var list = state.proposals || [];
     if (!list.length) return '';
-    var kept = list.filter(function (p) { return p.inFlow; }).length;
-    var h = '<details class="checks proposals" open><summary>' + esc(T.proposals(list.length, kept)) + '</summary><p class="sub">' + esc(T.proposalsNote) + '</p><ul class="plist">';
-    list.forEach(function (p) {
-      var decided = p.status !== 'PROPOSED';
-      h += '<li class="proposal ' + esc(p.origin) + (p.inFlow ? ' inflow' : '') + '" data-proposal="' + esc(p.id) + '">';
-      h += '<div class="phead"><b>' + esc(p.description) + '</b> <span class="pill">' + esc(T.origin[p.origin] || p.origin) + '</span> <span class="pill">' + esc(p.category) + '</span> <span class="pill ' + (p.inFlow ? 'ok' : 'off') + '">' + esc(p.inFlow ? T.pInFlow : T.pOut) + (decided ? ' · ' + esc(T.pStatus[p.status] || p.status) : '') + '</span></div>';
-      h += '<p class="sub">' + (p.afterStep ? esc(T.pAfter(p.afterStep)) + ' · ' : '') + esc(T.pMethod[p.method] || p.method) + ' · ' + esc(T.pConfidence(p.confidence)) + (p.needsConfirmation && !decided ? ' · ⚠' : '') + '</p>';
-      h += '<p class="sub"><b>' + esc(T.pWhy) + '</b> : ' + esc(p.why) + '</p>';
-      if (p.evidence.length) h += '<p class="sub"><b>' + esc(T.pEvidence) + '</b> : ' + p.evidence.map(esc).join(' · ') + (p.observations.length ? ' (' + esc(p.observations.join(', ')) + ')' : '') + '</p>';
-      if (p.limits.length) h += '<p class="sub"><b>' + esc(T.pLimits) + '</b> : ' + p.limits.map(esc).join(' · ') + '</p>';
-      if (p.conflictsWith.length) h += '<p class="error">' + esc(T.pConflict(p.conflictsWith.join(', '))) + '</p>';
-      if (p.note) h += '<p class="sub">' + esc(p.note) + '</p>';
-      var row = '';
-      if (p.method !== 'REPORT_ONLY' && !p.inFlow) row += button(T.pAccept, { cmd: 'assert-accept', id: p.id, cls: 'primary' });
-      if (p.inFlow) row += button(T.pReject, { cmd: 'assert-reject', id: p.id }) + button(T.pDisable, { cmd: 'assert-disable', id: p.id, cls: 'ghost' });
-      else if (p.status === 'PROPOSED') row += button(T.pReject, { cmd: 'assert-reject', id: p.id, cls: 'ghost' });
-      if (decided) row += button(T.pReset, { cmd: 'assert-reset', id: p.id, cls: 'ghost' });
-      if (row) h += '<div class="row">' + row + '</div>';
-      h += '</li>';
+    var zoneOf = function (p) { return p.inFlow ? 'inFlow' : (p.status === 'REJECTED' || p.status === 'DISABLED') ? 'out' : 'decide'; };
+    var counts = { all: list.length, inFlow: 0, decide: 0, deduced: 0 };
+    list.forEach(function (p) { var z = zoneOf(p); if (z === 'inFlow') counts.inFlow++; if (z === 'decide') counts.decide++; if (p.origin === 'DEDUCED') counts.deduced++; });
+    var shown = list.filter(function (p) { return pFilter === 'all' || (pFilter === 'deduced' ? p.origin === 'DEDUCED' : zoneOf(p) === pFilter); });
+    var h = '<section class="psec" aria-label="' + esc(T.pTitle) + '">';
+    h += '<div class="phd"><div class="pttl"><h3>' + ui('tick', 18) + esc(T.pTitle) + '</h3><p class="sub">' + esc(T.pLead) + '</p></div>';
+    h += '<div class="pstats"><div><b>' + counts.all + '</b><span>' + esc(T.pCount.all) + '</span></div><i></i><div><b class="ok">' + counts.inFlow + '</b><span>' + esc(T.pCount.inFlow) + '</span></div><i></i><div><b class="warn">' + counts.decide + '</b><span>' + esc(T.pCount.decide) + '</span></div></div></div>';
+    h += '<div class="pfilters">' + ['all', 'decide', 'inFlow', 'deduced'].map(function (k) { return '<button type="button" class="pf' + (pFilter === k ? ' on' : '') + '" data-cmd="p-filter" data-id="' + k + '" aria-pressed="' + (pFilter === k) + '">' + esc(T.pFilter[k]) + ' · ' + counts[k] + '</button>'; }).join('');
+    h += '<span class="sp"></span><span class="plegend"><span><i class="obs"></i>' + esc(T.pLegend.OBSERVED) + '</span><span><i class="ded"></i>' + esc(T.pLegend.DEDUCED) + '</span><span><i class="exp"></i>' + esc(T.pLegend.EXPLICIT) + '</span></span></div>';
+    ['decide', 'inFlow', 'out'].forEach(function (zone) {
+      var items = shown.filter(function (p) { return zoneOf(p) === zone; });
+      if (!items.length) return;
+      h += '<div class="pz ' + zone + '"><div class="pzh"><span class="pzt">' + esc(T.pZone[zone]) + '</span><span class="pzn">' + items.length + '</span><span class="sub">' + esc(T.pZoneNote[zone]) + '</span></div>';
+      items.forEach(function (p) { h += proposalRow(p, zone); });
+      h += '</div>';
     });
-    return h + '</ul></details>';
+    return h + '</section>';
+  }
+
+  function proposalRow(p, zone) {
+    var decided = p.status !== 'PROPOSED', open = !!pOpen[p.id];
+    var icon = p.method === 'BUSINESS_ASSERTION' ? 'globe' : p.method === 'REPORT_ONLY' ? 'file' : p.category === 'UI_CONTENT' ? 'msg' : 'eye';
+    var tone = zone === 'inFlow' ? 'ok' : zone === 'out' ? 'off' : p.origin === 'DEDUCED' ? 'ded' : 'acc';
+    var pct = Math.round(p.confidence * 100), bar = zone === 'inFlow' ? 'ok' : p.confidence < 0.5 ? 'warn' : 'acc';
+    var h = '<article class="prow ' + zone + (open ? ' open' : '') + '" data-proposal="' + esc(p.id) + '">';
+    h += '<span class="pic ' + tone + '" aria-hidden="true">' + ui(icon, 18) + '</span>';
+    h += '<div class="pbody"><div class="pt">' + codify(p.description) + '</div><div class="pm">';
+    h += chip(p.origin === 'DEDUCED' ? 'ded' : p.origin === 'EXPLICIT' ? 'exp' : 'obs', T.pLegend[p.origin] || p.origin);
+    if (zone === 'inFlow') h += chip(decided ? 'ok' : 'neutral', decided ? T.pByYou(T.pStatus[p.status] || p.status) : T.pKept);
+    if (zone === 'out') h += chip('neutral', T.pByYou(T.pStatus[p.status] || p.status));
+    if (p.afterStep) h += '<span>' + esc(T.pAfter(p.afterStep)) + '</span>';
+    h += '<span class="dotsep" aria-hidden="true">·</span><span' + (p.method === 'REPORT_ONLY' ? ' class="warn-t"' : '') + '>' + esc(p.method === 'REPORT_ONLY' ? T.pNotExec : T.pMethod[p.method] || p.method) + '</span>';
+    h += '<span class="dotsep" aria-hidden="true">·</span><span class="conf"><span class="bar"><span class="fill ' + bar + '" style="width:' + pct + '%"></span></span>' + esc(T.pConfidence(p.confidence)) + '</span>';
+    if (zone === 'decide' && p.confidence < 0.5) h += '<span class="warn-t">' + esc(T.pLow) + '</span>';
+    if (p.conflictsWith.length) h += '<span class="bad-t">' + esc(T.pConflict(p.conflictsWith.join(', '))) + '</span>';
+    h += '</div></div>';
+    var row = '';
+    if (p.method !== 'REPORT_ONLY' && !p.inFlow) row += '<button type="button" class="pbtn primary" data-cmd="assert-accept" data-id="' + esc(p.id) + '">' + ui('check', 14) + esc(T.pAccept) + '</button>';
+    if (p.inFlow) row += '<button type="button" class="pbtn" data-cmd="assert-reject" data-id="' + esc(p.id) + '">' + esc(T.pRemove) + '</button><button type="button" class="pbtn ghost" data-cmd="assert-disable" data-id="' + esc(p.id) + '">' + esc(T.pDisable) + '</button>';
+    else if (p.status === 'PROPOSED') row += '<button type="button" class="pbtn" data-cmd="assert-reject" data-id="' + esc(p.id) + '">' + esc(T.pReject) + '</button>';
+    if (decided) row += '<button type="button" class="pbtn' + (zone === 'out' ? '' : ' ghost') + '" data-cmd="assert-reset" data-id="' + esc(p.id) + '">' + (zone === 'out' ? ui('reset', 14) : '') + esc(T.pReset) + '</button>';
+    row += ib(open ? 'chevU' : 'chevD', { cmd: 'p-toggle', id: p.id, aria: open ? T.pHide : T.pDetails });
+    h += '<div class="pacts">' + row + '</div>';
+    if (open) {
+      var ev = p.observations || [];
+      h += '<div class="pdet"><div><span class="lbl">' + esc(T.pWhy) + '</span><span>' + esc(p.why) + '</span></div>';
+      h += '<div><span class="lbl">' + esc(T.pEvidence) + '</span>' + (p.evidence.length ? '<span>' + p.evidence.map(esc).join(' · ') + '</span>' : '') + (ev.length ? '<span class="obs-ids">' + ev.slice(0, 6).map(function (o) { return '<code>' + esc(o) + '</code>'; }).join('') + (ev.length > 6 ? '<small>' + esc(T.pMore(ev.length - 6)) + '</small>' : '') + '</span>' : '') + '</div>';
+      h += '<div><span class="lbl">' + esc(T.pLimits) + '</span><span' + (p.limits.length ? '' : ' class="sub"') + '>' + (p.limits.length ? p.limits.map(esc).join(' · ') : esc(T.pNoLimits)) + (p.note ? '<br>' + esc(p.note) : '') + '</span></div></div>';
+    }
+    return h + '</article>';
   }
 
   function stepHtml(step) {
@@ -1048,65 +1145,118 @@ const SCRIPT = `
         if (state.notice && state.notice.actionId === step.id) h += '<p class="error" role="alert">' + esc(state.notice.message === 'NOT_TOUCHED' ? T.notTouched : state.notice.message) + '</p>';
         h += '</div>';
       }
-      if (editing && step.removable) h += '<div class="remove">' + button(T.remove, { cmd: 'remove', id: step.id, aria: T.removeLabel(step.description) }) + (state.phase === 'REVIEW' ? button(picked[step.id] ? '☑ ' + T.groupPicked : '☐ ' + T.groupPick, { cmd: 'step-pick', id: step.id, cls: 'ghost' }) + button('↑', { cmd: 'step-up', id: step.id, cls: 'ghost', aria: T.moveUp }) + button('↓', { cmd: 'step-down', id: step.id, cls: 'ghost', aria: T.moveDown }) + (step.groupId ? button(T.detach, { cmd: 'step-detach', id: step.id, cls: 'ghost' }) : '') : '') + '</div>';
+      if (editing && step.removable && state.phase === 'REVIEW') {
+        // Mode Modifier (revue) : une case à cocher, puis les actions en icônes (monter, descendre, détacher, retirer).
+        h += '<div class="etools">' + ib('up', { cmd: 'step-up', id: step.id, aria: T.moveUp }) + ib('down', { cmd: 'step-down', id: step.id, aria: T.moveDown }) + (step.groupId ? ib('unlink', { cmd: 'step-detach', id: step.id, aria: T.detach }) : '') + ib('x', { cmd: 'remove', id: step.id, aria: T.removeLabel(step.description), cls: 'danger' }) + '</div>';
+        h = h.replace('<button type="button" class="item ', '<input type="checkbox" class="epick" data-step-pick="' + esc(step.id) + '"' + (picked[step.id] ? ' checked' : '') + ' aria-label="' + esc(T.gPickStep(step.index)) + '"><button type="button" class="item ');
+        h = h.replace('<li data-step="', '<li class="erow' + (picked[step.id] ? ' picked' : '') + (step.groupId ? ' ingroup' : '') + '" data-step="');
+      } else if (editing && step.removable) h += '<div class="remove">' + button(T.remove, { cmd: 'remove', id: step.id, aria: T.removeLabel(step.description) }) + '</div>';
       return h + '</li>';
     }
   }
 
-  /** L'EN-TÊTE d'un groupe métier : nom, description, données entrantes / sortantes, exécutabilité, commandes. */
+  /** LE BANDEAU d'un groupe métier : nom, étapes, départ, entrées / sorties, exécutabilité ; actions en icônes en mode Modifier. */
   function groupHeadHtml(g) {
-    var h = '<li class="group bgroup" data-group="' + esc(g.id) + '">';
-    if (editing && renamingGroup === g.id) h += '<input type="text" id="grp-name-' + esc(g.id) + '" value="' + esc(g.name) + '" aria-label="' + esc(T.groupName) + '"> ' + button(T.apply, { cmd: 'grp-rename-apply', id: g.id, cls: 'primary' });
-    else h += '<b>' + esc(g.name) + '</b>' + (g.description ? ' <span class="sub">' + esc(g.description) + '</span>' : '');
-    h += ' <span class="pill">' + esc(T.gSteps((g.stepIds || []).length)) + '</span>';
-    if (g.startAt) h += ' <span class="pill">' + esc(T.gStart(g.startAt)) + '</span>';
-    if (g.inputs && g.inputs.length) h += ' <span class="pill">' + esc(T.gInputs) + ' : ' + esc(g.inputs.join(', ')) + '</span>';
-    if (g.outputs && g.outputs.length) h += ' <span class="pill">' + esc(T.gOutputs) + ' : ' + esc(g.outputs.join(', ')) + '</span>';
-    h += ' <span class="pill ' + (g.runnableAlone ? 'ok' : 'warn') + '">' + esc(g.runnableAlone ? T.gRunnable : T.gMissing((g.missing || []).join(', '))) + '</span>';
-    if (g.checks !== undefined) h += ' <span class="pill">' + esc(T.gChecks(g.checks, g.assertions)) + '</span>';
-    if (editing) h += '<div class="row">' + button(g.collapsed ? T.expand : T.collapse, { cmd: g.collapsed ? 'grp-expand' : 'grp-collapse', id: g.id, cls: 'ghost' }) + button('↑', { cmd: 'grp-up', id: g.id, cls: 'ghost', aria: T.moveUp }) + button('↓', { cmd: 'grp-down', id: g.id, cls: 'ghost', aria: T.moveDown }) + button(T.rename, { cmd: 'grp-rename-open', id: g.id, cls: 'ghost' }) + button(T.deleteGroup, { cmd: 'grp-delete', id: g.id, cls: 'ghost' }) + '</div>';
-    else h += button(g.collapsed ? T.expand : T.collapse, { cmd: g.collapsed ? 'grp-expand' : 'grp-collapse', id: g.id, cls: 'ghost' });
-    return h + '</li>';
+    var ids = g.stepIds || [], n = ids.length, acts = 0;
+    var positions = [];
+    state.actions.forEach(function (st) { if (st.groupId === g.id) { acts++; positions.push(st.index); } });
+    var h = '<li class="bgroup' + (g.collapsed ? ' collapsed' : '') + '" data-group="' + esc(g.id) + '">';
+    h += '<div class="ghead">' + ib(g.collapsed ? 'chevR' : 'chevD', { cmd: g.collapsed ? 'grp-expand' : 'grp-collapse', id: g.id, aria: g.collapsed ? T.gExpandG : T.gCollapseG });
+    h += '<span class="gsq" aria-hidden="true"></span><div class="gttl">';
+    if (editing && renamingGroup === g.id) h += '<span class="grename"><input type="text" id="grp-name-' + esc(g.id) + '" value="' + esc(g.name) + '" aria-label="' + esc(T.groupName) + '">' + '<button type="button" class="pbtn primary" data-cmd="grp-rename-apply" data-id="' + esc(g.id) + '">' + esc(T.apply) + '</button></span>';
+    else h += '<span class="gname">' + esc(g.name) + (g.collapsed && positions.length ? ' <span class="sub">· ' + esc(T.gCollapsedRange(positions[0], positions[positions.length - 1])) + '</span>' : '') + '</span>';
+    if (g.description) h += '<span class="sub">' + esc(g.description) + '</span>';
+    var meta = [];
+    meta.push(g.collapsed && g.checks !== undefined ? esc(T.gActions(acts, g.checks, g.assertions)) : esc(T.gSteps(n)));
+    if (g.startAt) meta.push(esc(T.gStart('')).trim() + ' <code>' + esc(g.startAt) + '</code>');
+    meta.push(g.runnableAlone ? '<span class="ok-t">' + ui('check', 13) + esc(T.gRunnable) + '</span>' : '<span class="warn-t">' + ui('warn', 13) + esc(T.gMissing((g.missing || []).join(', '))) + '</span>');
+    if (g.outputs && g.outputs.length) meta.push(esc(T.gProduces) + ' ' + g.outputs.map(function (k) { return '<code>' + esc(k) + '</code>'; }).join(' '));
+    if (g.inputs && g.inputs.length) meta.push(esc(T.gNeeds) + ' ' + g.inputs.map(function (k) { return '<code>' + esc(k) + '</code>'; }).join(' '));
+    if (!g.collapsed && g.checks !== undefined && (g.checks || g.assertions)) meta.push(esc(T.gChecks(g.checks, g.assertions)));
+    h += '<span class="gmeta">' + meta.join('<i class="dotsep" aria-hidden="true">·</i>') + '</span></div>';
+    if (editing) h += '<span class="gacts">' + ib('up', { cmd: 'grp-up', id: g.id, aria: T.gMoveUp }) + ib('down', { cmd: 'grp-down', id: g.id, aria: T.gMoveDown }) + ib('pencil', { cmd: 'grp-rename-open', id: g.id, aria: T.gRenameG }) + ib('trash', { cmd: 'grp-delete', id: g.id, aria: T.gDeleteG, cls: 'danger' }) + '</span>';
+    return h + '</div></li>';
   }
 
-  /** LES OUTILS de groupe (mode Modifier) : créer un groupe avec les étapes cochées, les ajouter à un groupe. */
+  /** LA BARRE D'OUTILS collante (mode Modifier) : étapes cochées, créer un groupe, ajouter à un groupe, tout décocher ; le refus expliqué. */
   function groupToolsHtml() {
     var groups = state.groups || [];
-    var n = Object.keys(picked).filter(function (k) { return picked[k]; }).length;
-    var h = '<li class="gtools" role="group" aria-label="' + esc(T.groups) + '"><b>' + esc(T.groups) + '</b>';
-    if (!groups.length) h += '<p class="sub">' + esc(T.gNone) + '</p>';
-    h += '<div class="row"><input type="text" id="grp-new-name" placeholder="' + esc(T.groupName) + '" aria-label="' + esc(T.groupName) + '">' + button(T.createGroup + (n ? ' (' + n + ')' : ''), { cmd: 'grp-create', cls: 'primary', disabled: !n }) + '</div>';
-    if (groups.length) h += '<div class="row"><label>' + esc(T.addTo) + ' <select id="grp-add-target">' + groups.map(function (g) { return '<option value="' + esc(g.id) + '">' + esc(g.name) + '</option>'; }).join('') + '</select></label>' + button(T.apply, { cmd: 'grp-add', disabled: !n }) + '</div>';
-    return h + '</li>';
+    var n = pickedIds().length;
+    var h = '<li class="gtoolbar" role="group" aria-label="' + esc(T.groups) + '">';
+    h += '<span class="gcount"><span class="n">' + n + '</span>' + esc(T.gPicked(n)) + '</span><i class="vsep"></i>';
+    h += '<label class="glab">' + esc(T.gNew) + ' <input type="text" id="grp-new-name" placeholder="' + esc(T.groupName) + '" aria-label="' + esc(T.groupName) + '"></label>';
+    h += '<button type="button" class="pbtn primary" data-cmd="grp-create"' + (n ? '' : ' disabled') + '>' + ui('plus', 14) + esc(T.gCreate) + '</button>';
+    if (groups.length) h += '<span class="sub">' + esc(T.gOr) + '</span><label class="glab">' + esc(T.gAddTo) + ' <select id="grp-add-target">' + groups.map(function (g) { return '<option value="' + esc(g.id) + '">' + esc(g.name) + '</option>'; }).join('') + '</select></label><button type="button" class="pbtn" data-cmd="grp-add"' + (n ? '' : ' disabled') + '>' + esc(T.gAdd) + '</button>';
+    h += '<span class="sp"></span><button type="button" class="pbtn ghost" data-cmd="grp-unpick"' + (n ? '' : ' disabled') + '>' + esc(T.gUnpick) + '</button>';
+    if (!groups.length) h += '<p class="sub full">' + esc(T.gNone) + '</p>';
+    h += '</li>';
+    if (state.notice && !state.notice.actionId && state.notice.kind === 'error') {
+      h += '<li class="grefuse" role="alert">' + ui('warn', 18) + '<span class="gtxt"><b>' + esc(T.gRefused) + '</b><span>' + esc(state.notice.message) + '</span></span>' + (lastGroup ? '<button type="button" class="pbtn warn" data-cmd="grp-force">' + esc(T.gForce) + '</button>' : '') + '</li>';
+    } else if (state.notice && !state.notice.actionId) h += '<li class="ginfo" role="status">' + ui('info', 16) + '<span>' + esc(state.notice.message) + '</span></li>';
+    return h;
   }
 
   function pickedIds() { return Object.keys(picked).filter(function (k) { return picked[k]; }); }
 
-  /** LA GÉNÉRATION : formats, groupes, lancement ; puis les artefacts, leur statut, leur validation et l'aperçu. */
+  /** LA GÉNÉRATION : tuiles de format (leur état après génération), groupes en puces, un bouton ; puis une ligne par format, le projet Java replié, l'aperçu dans un volet code. */
   function generationHtml() {
     if (state.phase !== 'REVIEW') return '';
-    var groups = state.groups || [], gen = state.generation;
-    var h = '<details class="checks generation" open><summary>' + esc(T.gen) + '</summary><p class="sub">' + esc(T.genNote) + '</p>';
-    h += '<div class="row">' + ['yaml', 'gherkin', 'playwright', 'java'].map(function (f) { return '<label class="chk"><input type="checkbox" data-gen-format="' + f + '"' + (genFormats[f] ? ' checked' : '') + '> ' + esc(T.genFormats[f]) + '</label>'; }).join('') + '</div>';
-    if (groups.length) h += '<p class="sub">' + esc(T.genGroups) + '</p><div class="row">' + groups.map(function (g) { return '<label class="chk"><input type="checkbox" data-gen-group="' + esc(g.id) + '"' + (genGroups[g.id] ? ' checked' : '') + '> ' + esc(g.name) + (g.runnableAlone ? '' : ' ⚠') + '</label>'; }).join('') + '<label class="chk"><input type="checkbox" data-gen-force="1"' + (genForce ? ' checked' : '') + '> ' + esc(T.genForce) + '</label></div>';
-    h += '<div class="row">' + button(T.genRun, { cmd: 'gen-run', cls: 'primary' }) + '</div>';
+    var groups = state.groups || [], gen = state.generation, byFormat = {};
+    (gen ? gen.artifacts : []).forEach(function (a, i) { (byFormat[a.format] = byFormat[a.format] || []).push({ a: a, i: i }); });
+    var statusOf = function (f) { var list = byFormat[f] || []; if (!list.length) return null; var worst = null; list.forEach(function (e) { var st = e.a.status; if (!worst || st === 'FAILED' || st === 'BLOCKED' || (st === 'NOT_VALIDATED' && worst !== 'FAILED') || (st === 'GENERATED' && worst === 'STATICALLY_VALIDATED')) worst = st; }); return worst; };
+    var h = '<section class="gsec" aria-label="' + esc(T.gen) + '"><div class="pttl"><h3>' + ui('code', 18) + esc(T.gen) + '</h3><p class="sub">' + esc(T.genNote) + '</p></div>';
+    h += '<div class="gconf"><span class="lbl">' + esc(T.genFormatsL) + '</span><div class="gtiles">' + ['yaml', 'gherkin', 'playwright', 'java'].map(function (f) {
+      var st = statusOf(f), cls = st === 'STATICALLY_VALIDATED' || st === 'PASSED' ? 'ok' : st === 'FAILED' || st === 'BLOCKED' ? 'bad' : st ? 'warn' : '';
+      return '<label class="gtile' + (genFormats[f] ? ' on' : '') + '"><input type="checkbox" data-gen-format="' + f + '"' + (genFormats[f] ? ' checked' : '') + '><span class="gtb"><b>' + esc(T.genFormats[f]) + '</b><span class="sub">' + esc(T.genDesc[f]) + '</span>' + (st ? '<span class="gst ' + cls + '">' + (cls === 'ok' ? ui('check', 12) : '') + esc(st === 'STATICALLY_VALIDATED' && byFormat[f][0].a.validation ? T.genValidatedShort + ' · ' + shortMethod(byFormat[f][0].a.validation.method) : T.genStatus[st] || st) + '</span>' : '') + '</span></label>';
+    }).join('') + '</div>';
+    h += '<div class="ggroups"><span class="lbl">' + esc(T.genGroupsL) + '</span>';
+    var none = !groups.some(function (g) { return genGroups[g.id]; });
+    h += '<span class="gchip' + (none ? ' on' : '') + '">' + ui(none ? 'check' : 'grid', 13) + esc(T.genAll) + '</span>';
+    groups.forEach(function (g) { h += '<label class="gchip' + (genGroups[g.id] ? ' on' : '') + '"><input type="checkbox" data-gen-group="' + esc(g.id) + '"' + (genGroups[g.id] ? ' checked' : '') + '>' + esc(g.name) + ' <span class="' + (g.runnableAlone ? 'ok-t' : 'warn-t') + '">' + esc(g.runnableAlone ? T.genAlone : T.genDepends((g.missing || []).join(', '))) + '</span></label>'; });
+    if (groups.length) h += '<label class="gchip' + (genForce ? ' on' : '') + '"><input type="checkbox" data-gen-force="1"' + (genForce ? ' checked' : '') + '>' + esc(T.genForce) + '</label>';
+    h += '<span class="sp"></span><button type="button" class="pbtn primary big" data-cmd="gen-run">' + ui('play', 15) + esc(T.genRun) + '</button></div></div>';
     if (gen) {
-      h += '<p class="sub">' + esc(T.genDir(gen.directory)) + '</p>';
+      var validated = gen.artifacts.filter(function (a) { return a.status === 'STATICALLY_VALIDATED'; }).length, executed = gen.artifacts.filter(function (a) { return a.status === 'EXECUTED' || a.status === 'PASSED' || a.status === 'FAILED' || a.status === 'BLOCKED' || a.status === 'INCONCLUSIVE'; }).length;
+      h += '<div class="gres"><div class="greshd"><span class="lbl">' + esc(T.genLast) + '</span><span class="sub">' + esc(T.genFiles(gen.artifacts.length)) + ' · ' + esc(T.genValidated(validated)) + ' · ' + esc(T.genExecuted(executed)) + '</span><span class="sp"></span><span class="gdir">' + ui('folder', 14) + '<code>' + esc(gen.directory) + '</code></span></div>';
       (gen.warnings || []).forEach(function (w) { h += '<p class="error">' + esc(w) + '</p>'; });
-      h += '<ul class="plist">';
-      gen.artifacts.forEach(function (a, i) {
-        var native = a.assertions.filter(function (x) { return x.support === 'NATIVE'; }).length, replay = a.assertions.length - native;
-        var cls = a.status === 'STATICALLY_VALIDATED' || a.status === 'PASSED' ? 'ok' : a.status === 'FAILED' || a.status === 'BLOCKED' ? 'warn' : '';
-        h += '<li class="proposal' + (genSelected === i ? ' inflow' : '') + '"><div class="phead">' + button(a.path, { cmd: 'gen-preview', id: String(i), cls: 'ghost' }) + ' <span class="pill">' + esc(a.format) + '</span> <span class="pill ' + cls + '">' + esc(T.genStatus[a.status] || a.status) + '</span></div>';
-        if (a.validation) h += '<p class="sub"><b>' + esc(T.genValidation) + '</b> : ' + esc(a.validation.method) + (a.validation.messages.length ? ' — ' + a.validation.messages.map(esc).join(' · ') : '') + '</p>';
-        if (a.assertions.length) h += '<p class="sub">' + esc(T.genAssertions(native, replay)) + ' : ' + a.assertions.map(function (x) { return esc(x.id) + ' (' + esc(x.support === 'NATIVE' ? T.genNative : T.genReplay) + ', ' + esc(x.status) + ')'; }).join(' · ') + '</p>';
-        if (a.limits.length) h += '<p class="sub"><b>' + esc(T.genLimits) + '</b> : ' + a.limits.map(esc).join(' · ') + '</p>';
-        if (genSelected === i) h += '<pre class="genpre" aria-label="' + esc(T.genPreview) + '">' + esc(a.content) + '</pre>';
-        h += '</li>';
+      h += '<div class="ggrid"><div class="glist">';
+      ['yaml', 'gherkin', 'playwright', 'java'].forEach(function (f) {
+        var list = byFormat[f]; if (!list || !list.length) return;
+        if (f === 'java') h += javaRow(list);
+        else h += artifactRow(list[0].a, list[0].i, f);
       });
-      h += '</ul>';
+      h += '<div class="glegend"><b>' + esc(T.genLegendL) + '</b>' + ['GENERATED', 'STATICALLY_VALIDATED', 'NOT_VALIDATED', 'EXECUTED'].map(function (k) { return '<span>' + chip(k === 'STATICALLY_VALIDATED' ? 'ok' : k === 'NOT_VALIDATED' ? 'ded' : k === 'EXECUTED' ? 'obs' : 'neutral', T.genStatus[k]) + ' ' + esc(T.genLegend[k]) + '</span>'; }).join('') + '</div></div>';
+      h += genPane(gen) + '</div></div>';
     }
-    return h + '</details>';
+    return h + '</section>';
+  }
+  function shortMethod(m) { return String(m || '').split(' (')[0].split(';')[0].replace('typescript syntax', 'TS syntax'); }
+  function statusChip(a) { var st = a.status, cls = st === 'STATICALLY_VALIDATED' || st === 'PASSED' ? 'ok' : st === 'FAILED' || st === 'BLOCKED' ? 'bad' : st === 'NOT_VALIDATED' ? 'ded' : st === 'GENERATED' ? 'neutral' : 'obs'; return chip(cls, T.genStatus[st] || st); }
+  function artifactMeta(a) {
+    var native = a.assertions.filter(function (x) { return x.support === 'NATIVE'; }).length, replay = a.assertions.length - native, parts = [];
+    if (native) parts.push(T.genNativeN(native)); if (replay) parts.push(T.genReplayN(replay));
+    if (a.validation) parts.push(shortMethod(a.validation.method));
+    return parts.map(esc).join(' · ');
+  }
+  function artifactRow(a, i, f) {
+    var tag = { yaml: 'YML', gherkin: 'GHK', playwright: 'TS', java: 'JVM' }[f] || f.toUpperCase();
+    return '<article class="grow' + (genSelected === i ? ' on' : '') + '"><span class="gtag" aria-hidden="true">' + esc(tag) + '</span><span class="gbody"><span class="gpath">' + esc(a.path) + '</span><span class="sub">' + artifactMeta(a) + '</span></span><span class="gacts2">' + statusChip(a) + '<button type="button" class="pbtn' + (genSelected === i ? ' primary' : '') + '" data-cmd="gen-preview" data-id="' + i + '">' + esc(T.genPreview) + '</button></span></article>';
+  }
+  function javaRow(list) {
+    var test = list.filter(function (e) { return /Test\\.java$/.test(e.a.path) && e.a.path.indexOf('/support/') < 0; })[0] || list[0];
+    var h = '<article class="grow' + (genSelected === test.i ? ' on' : '') + '"><span class="gtag" aria-hidden="true">JVM</span><span class="gbody"><span class="gpath">java/ <span class="sub">' + esc(T.genJavaProject(list.length)) + '</span></span><span class="sub">' + artifactMeta(test.a) + '</span></span><span class="gacts2">' + statusChip(test.a) + '<button type="button" class="pbtn' + (genSelected === test.i ? ' primary' : '') + '" data-cmd="gen-preview" data-id="' + test.i + '">' + esc(T.genPreview) + '</button>' + ib(genJavaOpen ? 'chevU' : 'chevD', { cmd: 'gen-java-toggle', aria: genJavaOpen ? T.genCollapseJava : T.genExpandJava }) + '</span></article>';
+    if (genJavaOpen) h += '<div class="gfiles">' + list.map(function (e) { return '<button type="button" class="gfile' + (genSelected === e.i ? ' on' : '') + '" data-cmd="gen-preview" data-id="' + e.i + '"><code>' + esc(e.a.path.replace(/^java\\//, '')) + '</code>' + statusChip(e.a) + '</button>'; }).join('') + '</div>';
+    return h;
+  }
+  function genPane(gen) {
+    var a = genSelected !== null && gen.artifacts[genSelected];
+    if (!a) return '<aside class="gpane empty"><p class="sub">' + esc(T.genPreview) + '</p></aside>';
+    var lines = a.content.split('\\n'), w = String(lines.length).length;
+    var h = '<aside class="gpane"><div class="gphd"><span class="gpath">' + esc(a.path) + '</span><span class="sub">' + esc(T.genLines(lines.length)) + '</span><button type="button" class="pbtn small" data-cmd="gen-copy">' + esc(copied ? T.genCopied : T.genCopy) + '</button></div>';
+    a.assertions.filter(function (x) { return x.support === 'REPLAY_ONLY'; }).forEach(function (x) { h += '<div class="gwarn">' + ui('info', 14) + '<span>' + esc(T.genReplayWarn(x.id)) + '</span></div>'; });
+    (a.limits || []).filter(function (l) { return l.indexOf('verified by the QA-CRAWLER replay only') < 0; }).forEach(function (l) { h += '<div class="gwarn">' + ui('info', 14) + '<span>' + esc(l) + '</span></div>'; });
+    h += '<pre class="gcode" aria-label="' + esc(T.genPreview) + '">' + lines.map(function (l, i) { var n = String(i + 1); while (n.length < w) n = ' ' + n; return '<span class="ln">' + n + ' </span>' + esc(l); }).join('\\n') + '</pre></aside>';
+    return h;
   }
 
   /** B · les étapes métier de la revue, en cartes numérotées (le détail des actions reste dessous). */
@@ -1738,6 +1888,12 @@ const SCRIPT = `
     if (cmd === 'row-edit-close') { delete rowEditOpen[id]; delete rowDraft[id]; render(); return; }
     if (cmd === 'row-preview' || cmd === 'row-edit') { send({ type: cmd, id: id, columns: rowColumns(id) }); return; }
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
+    if (cmd === 'p-filter') { pFilter = id || 'all'; render(); return; }
+    if (cmd === 'p-toggle') { pOpen[id] = !pOpen[id]; render(); return; }
+    if (cmd === 'grp-unpick') { picked = {}; render(); return; }
+    if (cmd === 'grp-force') { if (lastGroup) { var forced = {}; for (var k in lastGroup) forced[k] = lastGroup[k]; forced.force = true; send(forced); } return; }
+    if (cmd === 'gen-java-toggle') { genJavaOpen = !genJavaOpen; render(); return; }
+    if (cmd === 'gen-copy') { var art = state.generation && genSelected !== null ? state.generation.artifacts[genSelected] : null; if (art && navigator.clipboard) { navigator.clipboard.writeText(art.content).then(function () { copied = true; render(); setTimeout(function () { copied = false; render(); }, 1500); }, function () {}); } return; }
     if (cmd.indexOf('assert-') === 0) { send({ type: 'assertion-decide', id: id, decision: cmd.slice(7).toUpperCase() }); return; }
     if (cmd === 'step-pick') { picked[id] = !picked[id]; render(); return; }
     if (cmd === 'gen-preview') { genSelected = genSelected === Number(id) ? null : Number(id); render(); return; }
@@ -1751,15 +1907,15 @@ const SCRIPT = `
       send({ type: 'generate', formats: formats, groupIds: groupIds, force: genForce });
       return;
     }
-    if (cmd === 'step-up' || cmd === 'step-down') { send({ type: 'group', op: 'move-step', id: id, direction: cmd === 'step-up' ? 'up' : 'down' }); return; }
-    if (cmd === 'step-detach') { send({ type: 'group', op: 'detach', stepIds: [id] }); return; }
-    if (cmd === 'grp-create') { var nameEl = $('grp-new-name'); var ids = pickedIds(); if (!ids.length) return; picked = {}; send({ type: 'group', op: 'create', name: (nameEl && nameEl.value.trim()) || (T.groups + ' ' + (((state.groups || []).length) + 1)), stepIds: ids }); return; }
-    if (cmd === 'grp-add') { var sel = $('grp-add-target'); var ids2 = pickedIds(); if (!sel || !ids2.length) return; picked = {}; send({ type: 'group', op: 'assign', groupId: sel.value, stepIds: ids2 }); return; }
+    if (cmd === 'step-up' || cmd === 'step-down') { sendGroup({ type: 'group', op: 'move-step', id: id, direction: cmd === 'step-up' ? 'up' : 'down' }); return; }
+    if (cmd === 'step-detach') { sendGroup({ type: 'group', op: 'detach', stepIds: [id] }); return; }
+    if (cmd === 'grp-create') { var nameEl = $('grp-new-name'); var ids = pickedIds(); if (!ids.length) return; picked = {}; sendGroup({ type: 'group', op: 'create', name: (nameEl && nameEl.value.trim()) || (T.groups + ' ' + (((state.groups || []).length) + 1)), stepIds: ids }); return; }
+    if (cmd === 'grp-add') { var sel = $('grp-add-target'); var ids2 = pickedIds(); if (!sel || !ids2.length) return; picked = {}; sendGroup({ type: 'group', op: 'assign', groupId: sel.value, stepIds: ids2 }); return; }
     if (cmd === 'grp-rename-open') { renamingGroup = id; render(); var inp = $('grp-name-' + id); if (inp) inp.focus(); return; }
-    if (cmd === 'grp-rename-apply') { var field = $('grp-name-' + id); renamingGroup = null; send({ type: 'group', op: 'rename', groupId: id, name: field ? field.value : '' }); return; }
-    if (cmd === 'grp-up' || cmd === 'grp-down') { send({ type: 'group', op: 'move-group', groupId: id, direction: cmd === 'grp-up' ? 'up' : 'down' }); return; }
-    if (cmd === 'grp-collapse' || cmd === 'grp-expand') { send({ type: 'group', op: 'collapse', groupId: id, collapsed: cmd === 'grp-collapse' }); return; }
-    if (cmd === 'grp-delete') { send({ type: 'group', op: 'delete', groupId: id, keepSteps: true }); return; }
+    if (cmd === 'grp-rename-apply') { var field = $('grp-name-' + id); renamingGroup = null; sendGroup({ type: 'group', op: 'rename', groupId: id, name: field ? field.value : '' }); return; }
+    if (cmd === 'grp-up' || cmd === 'grp-down') { sendGroup({ type: 'group', op: 'move-group', groupId: id, direction: cmd === 'grp-up' ? 'up' : 'down' }); return; }
+    if (cmd === 'grp-collapse' || cmd === 'grp-expand') { sendGroup({ type: 'group', op: 'collapse', groupId: id, collapsed: cmd === 'grp-collapse' }); return; }
+    if (cmd === 'grp-delete') { sendGroup({ type: 'group', op: 'delete', groupId: id, keepSteps: true }); return; }
     send({ type: cmd, id: id });
   });
 
@@ -1774,9 +1930,10 @@ const SCRIPT = `
   document.addEventListener('change', function (event) {
     var input = event.target;
     // Les choix de génération survivent aux rendus (chaque mise à jour du panneau reconstruit les cases).
-    if (input instanceof HTMLInputElement && input.hasAttribute('data-gen-format')) { genFormats[input.getAttribute('data-gen-format')] = input.checked; return; }
-    if (input instanceof HTMLInputElement && input.hasAttribute('data-gen-group')) { genGroups[input.getAttribute('data-gen-group')] = input.checked; return; }
-    if (input instanceof HTMLInputElement && input.hasAttribute('data-gen-force')) { genForce = input.checked; return; }
+    if (input instanceof HTMLInputElement && input.hasAttribute('data-step-pick')) { picked[input.getAttribute('data-step-pick')] = input.checked; render(); return; }
+    if (input instanceof HTMLInputElement && input.hasAttribute('data-gen-format')) { genFormats[input.getAttribute('data-gen-format')] = input.checked; render(); return; }
+    if (input instanceof HTMLInputElement && input.hasAttribute('data-gen-group')) { genGroups[input.getAttribute('data-gen-group')] = input.checked; render(); return; }
+    if (input instanceof HTMLInputElement && input.hasAttribute('data-gen-force')) { genForce = input.checked; render(); return; }
     if (input instanceof HTMLInputElement && input.name.indexOf('cand-') === 0) choice[input.name.slice(5)] = Number(input.value);
     if (input instanceof HTMLInputElement && input.name.indexOf('rowopt-') === 0) { rowChoice[input.name.slice(7)] = input.value; render(); return; }
     var rc = input && input.getAttribute ? input.getAttribute('data-rowcol') : null;
