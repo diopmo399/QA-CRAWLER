@@ -32,6 +32,21 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   l'application, et génère un flow issu d'un enregistrement (cible CSS de repli, ligne de tableau,
   donnée du run citée).
 
+- **Vérification métier : assertions, cohérence des données, traçabilité** (`src/quality/`,
+  `docs/BUSINESS_ASSERTIONS.md`, audit `docs/quality-capabilities-audit.md`). Un flow déclare ses
+  assertions métier (`flows[].assertions`, 9 genres : requête, valeur, entité, état, cardinalité,
+  relation, transition, effets de bord, contrat), jugées sur le trafic observé en empreintes salées,
+  l'écran final et des lectures d'API autorisées (GET, hôte permis, jamais une écriture), avec les
+  valeurs DU RUN, préconditions, attente asynchrone et preuves exigées. Statuts PASS / FAIL /
+  BLOCKED / INCONCLUSIVE / UNVERIFIABLE : une assertion obligatoire contredite fait échouer le flow
+  (anomalie `BUSINESS_ASSERTION`) et le run ; non vérifiée, le run est INCONCLUSIVE, jamais PASS.
+  La cohérence des données suit la valeur du run de la saisie à la requête, à la réponse, à l'écran
+  et à la recherche, plus les relations, les clés uniques déclarées et les effets de bord
+  (`flows[].consistency`, anomalie `DATA_CONSISTENCY`). La traçabilité relie exigences
+  (`requirements`), règles (`businessRules`), flows (`flows[].requirements`, tags Gherkin `@REQ-…`,
+  `x-requirements` OpenAPI), assertions et preuves, avec un historique pour les preuves périmées.
+  Rapports `quality-verification.json` et section « Vérification métier ». L'observateur réseau
+  relit, par une session CDP de lecture, le corps d'une réponse suivie d'une navigation immédiate.
 - **Fournisseur IA Anthropic** (`ai.provider: anthropic`, `--ai-provider anthropic`) : un modèle de
   l'API Anthropic comme conseiller de raisonnement, par le SDK officiel `@anthropic-ai/sdk`
   (dépendance optionnelle, chargée dynamiquement). Même circuit que Copilot : requête nettoyée,

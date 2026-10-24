@@ -5,6 +5,7 @@ import { redactText, redactUrl } from '../security/redactor.js';
 import type { StaticAnalysisEvent } from '../static-analysis/static-analyzer.js';
 import type { RuleEvent } from '../rules/runtime-rule-verifier.js';
 import type { FunctionalEvent } from '../functional/functional-intelligence.js';
+import type { QualityEvent } from '../quality/model.js';
 import type { RecordingEventType } from '../recording/model.js';
 import type { HealingEvent } from '../workflow-healing/model.js';
 import type { CognitiveEvent } from '../cognitive/cognitive-engine.js';
@@ -68,7 +69,8 @@ export type EngineEvent =
   | RecordingEventType
   | StaticAnalysisEvent
   | RuleEvent
-  | FunctionalEvent;
+  | FunctionalEvent
+  | QualityEvent;
 
 /**
  * Une ligne du journal du moteur (engine-log.jsonl). Seulement des id, des libellés
@@ -361,6 +363,13 @@ export class EngineEventLog {
           event.event,
           redactText(event.message),
         );
+      },
+      onQuality: (event) => {
+        const warn =
+          event.event === 'BUSINESS_ASSERTION_FAILED' ||
+          event.event === 'BUSINESS_ASSERTION_NOT_VERIFIED' ||
+          event.event === 'DATA_INCONSISTENCY_DETECTED';
+        this.log(warn ? 'WARN' : 'INFO', event.event, redactText(event.message));
       },
       onFunctional: (event) => {
         const warn =

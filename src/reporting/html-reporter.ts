@@ -36,6 +36,7 @@ import { renderFlowMap, renderFlowSteps } from './flow-diagram.js';
 import { flowAnalysisBlocks } from './flow-analysis-section.js';
 import { runAnalysisSection } from './run-analysis-section.js';
 import { platformSection } from './platform-section.js';
+import { qualitySection } from './quality-section.js';
 import { intelligenceSection } from './intelligence-section.js';
 import { persistenceSection } from './persistence-section.js';
 import { staticAnalysisSection } from './static-section.js';
@@ -227,6 +228,7 @@ export function renderHtml(
         sections: [
           runAnalysisSection(result, language),
           platformSection(result, language),
+          qualitySection(result, language),
           intelligenceSection(result, nameOf, language),
           regressionSection(result, language),
           persistenceSection(result, language),
