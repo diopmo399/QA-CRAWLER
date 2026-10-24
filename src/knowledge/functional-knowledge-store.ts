@@ -89,6 +89,15 @@ export interface RememberedIntentPattern {
  * et à afficher (« confirmée en 1.4.0 ») ; une transition reste non vérifiée tant que
  * le runtime courant ne l'a pas observée. Aucune valeur saisie n'est gardée.
  */
+/** Le fichier d'une application et d'un environnement (le même calcul pour le store et pour qui le lit). */
+export function functionalKnowledgeFile(
+  directory: string,
+  identity: Pick<RuleIdentity, 'application' | 'environment'>,
+): string {
+  const key = sha256(`${identity.application}\n${identity.environment ?? ''}`).slice(0, 24);
+  return path.join(directory, `functional-${key}.json`);
+}
+
 export class FunctionalKnowledgeStore {
   private remembered = new Map<string, RememberedFunctional>();
   /** Workflows, états et transitions appris du réseau lors des runs précédents (cumulés). */
@@ -108,8 +117,7 @@ export class FunctionalKnowledgeStore {
   ) {}
 
   private file(): string {
-    const key = sha256(`${this.identity.application}\n${this.identity.environment ?? ''}`).slice(0, 24);
-    return path.join(this.directory, `functional-${key}.json`);
+    return functionalKnowledgeFile(this.directory, this.identity);
   }
 
   async load(): Promise<void> {

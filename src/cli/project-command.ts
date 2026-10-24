@@ -31,6 +31,7 @@ import { logger } from './logger.js';
  *   test-api        flows + tests d'API tirés du contrat OpenAPI
  *   reproduce       rejoue le chemin de reproduction minimal d'une anomalie et juge le rejeu
  *   generate-tests  écrit les tests Playwright des flows
+ *   knowledge-center (à part, src/cli/knowledge-center-command.ts) : le tableau de bord de la mémoire
  *
  * Chaque commande dérive une MISSION de la configuration du projet et la confie aux moteurs
  * existants par la CLI de mission : aucune logique métier n'est dupliquée ici.
@@ -59,6 +60,7 @@ Usage:
   npx qa-crawler test-api [run options]
   npx qa-crawler reproduce [<anomaly id>] [run options]
   npx qa-crawler generate-tests [--out <dir>]
+  npx qa-crawler knowledge-center [--port 4190] [--read-only]  The Knowledge Center: what the tool learned, served locally
 
 Run options (every command that runs the application):
       --base-url <url>        Override qaCrawler.application.baseUrl (also QA_BASE_URL)

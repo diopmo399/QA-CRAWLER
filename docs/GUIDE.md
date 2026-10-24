@@ -484,6 +484,11 @@ authorization:
 
 Les identifiants de base de données viennent **toujours** de l'environnement (`QA_DB_USERNAME`, `QA_DB_PASSWORD`). Exemples : `scenarios/persistence-*.yaml`.
 
+**Voir ce que l'outil a appris** : `npx qa-crawler knowledge-center` (ou `npm run qa -- knowledge-center -c <mission.yaml>`)
+sert en local le Knowledge Center : connaissances, flows, variables, qualité, historique, persistance,
+export / import / sauvegarde. Il lit la configuration effective sans rien activer ; `--read-only` pour
+consulter seulement. Détails : [KNOWLEDGE_CENTER.md](KNOWLEDGE_CENTER.md).
+
 ---
 
 ## 14. Lire les résultats
@@ -566,6 +571,7 @@ docker run --rm \
 npm run qa -- [learn|verify|explore] <mission.yaml> [options]
 npm run qa -- dry-run <scénario.feature|flow.yaml|mission.yaml> [-c <mission.yaml>] [options]
 npm run qa -- record --url <adresse> --name <nom du flow> [-c <mission.yaml>] [--validate]
+npm run qa -- knowledge-center [-c <mission.yaml>] [--port 4190] [--read-only]
 ```
 
 | Option                                                 | Effet                                                    |

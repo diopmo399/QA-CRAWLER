@@ -16,7 +16,9 @@ import {
   validateObservation,
 } from '../model.js';
 import type {
+  ApplicationInventory,
   FlowMemoryRepository,
+  InventoryRepository,
   KeyedRepository,
   KnowledgeRepository,
   PersistenceKind,
@@ -200,6 +202,51 @@ export class InMemoryPersistenceProvider implements PersistenceProvider {
         ),
     };
   }
+
+  /** Les applications et leurs comptages, calculés sur les tables (les états et transitions par leur run). */
+  readonly inventory: InventoryRepository = {
+    applications: () => {
+      const byApp = new Map<string, ApplicationInventory>();
+      const of = (applicationId: string): ApplicationInventory => {
+        const found = byApp.get(applicationId);
+        if (found) return found;
+        const created: ApplicationInventory = {
+          applicationId,
+          counts: { runs: 0, states: 0, transitions: 0, knowledge: 0, evolution: 0, anomalies: 0, memory: 0 },
+        };
+        byApp.set(applicationId, created);
+        return created;
+      };
+      const seen = (inventory: ApplicationInventory, at: string): void => {
+        if (!inventory.lastSeenAt || at > inventory.lastSeenAt) inventory.lastSeenAt = at;
+      };
+      const runApp = new Map(this.tables.runs.map((run) => [run.id, run.applicationId]));
+      for (const run of this.tables.runs) {
+        const inventory = of(run.applicationId);
+        inventory.counts.runs += 1;
+        seen(inventory, run.startedAt);
+      }
+      for (const state of this.tables.states) {
+        const app = runApp.get(state.runId);
+        if (app) of(app).counts.states += 1;
+      }
+      for (const transition of this.tables.transitions) {
+        const app = runApp.get(transition.runId);
+        if (app) of(app).counts.transitions += 1;
+      }
+      for (const row of this.tables.knowledge) {
+        const inventory = of(row.applicationId);
+        inventory.counts.knowledge += 1;
+        seen(inventory, row.lastSeenAt);
+      }
+      for (const row of this.tables.evolution) of(row.applicationId).counts.evolution += 1;
+      for (const row of this.tables.anomalies) of(row.applicationId).counts.anomalies += 1;
+      for (const row of this.tables.memory) of(row.applicationId).counts.memory += 1;
+      return Promise.resolve(
+        [...byApp.values()].sort((a, b) => a.applicationId.localeCompare(b.applicationId)),
+      );
+    },
+  };
 
   initialize(): Promise<void> {
     return Promise.resolve();

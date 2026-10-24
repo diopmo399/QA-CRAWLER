@@ -110,6 +110,7 @@ export function sanitizingProvider(provider: PersistenceProvider): PersistencePr
       save: (records) => provider.memory.save(records.map((record) => sanitizeRecord(record))),
       search: (query) => provider.memory.search(sanitizeRecord(query)),
     },
+    ...(provider.inventory ? { inventory: provider.inventory } : {}),
     knowledge: {
       record: (observations) =>
         provider.knowledge.record(observations.map((observation) => sanitizeRecord(observation))),

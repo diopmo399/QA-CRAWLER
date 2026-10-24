@@ -36,6 +36,15 @@ export interface RuleIdentity {
  * STATIC_DISCOVERED tant que le runtime courant ne l'a pas revue ; l'historique sert
  * seulement à l'afficher (« confirmée en 1.4.0 ») et à prioriser.
  */
+/** Le fichier d'une application et d'un environnement (le même calcul pour le store et pour qui le lit). */
+export function ruleKnowledgeFile(
+  directory: string,
+  identity: Pick<RuleIdentity, 'application' | 'environment'>,
+): string {
+  const key = sha256(`${identity.application}\n${identity.environment ?? ''}`).slice(0, 24);
+  return path.join(directory, `rules-${key}.json`);
+}
+
 export class RuleKnowledgeStore {
   private remembered = new Map<string, RememberedRule>();
 
@@ -45,8 +54,7 @@ export class RuleKnowledgeStore {
   ) {}
 
   private file(): string {
-    const key = sha256(`${this.identity.application}\n${this.identity.environment ?? ''}`).slice(0, 24);
-    return path.join(this.directory, `rules-${key}.json`);
+    return ruleKnowledgeFile(this.directory, this.identity);
   }
 
   async load(): Promise<void> {

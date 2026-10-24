@@ -72,6 +72,25 @@ export interface FlowMemoryRepository {
   search(query: FlowMemoryQuery): Promise<FlowMemoryRecord[]>;
 }
 
+/**
+ * INVENTAIRE (Knowledge Center) : les applications connues du stockage et le nombre de lignes de
+ * chacune, par table. Facultatif : un provider qui ne sait pas compter n'en a pas, et le Knowledge
+ * Center dit « non disponible ». Aucune ligne n'est lue : seulement des comptages.
+ */
+export interface ApplicationInventory {
+  applicationId: string;
+  counts: Record<
+    'runs' | 'states' | 'transitions' | 'knowledge' | 'evolution' | 'anomalies' | 'memory',
+    number
+  >;
+  /** La dernière écriture connue (run démarré ou connaissance vue). */
+  lastSeenAt?: string;
+}
+
+export interface InventoryRepository {
+  applications(): Promise<ApplicationInventory[]>;
+}
+
 export type PersistenceKind = 'memory' | 'file' | 'database';
 
 export interface PersistenceProvider {
@@ -92,4 +111,6 @@ export interface PersistenceProvider {
   readonly anomalies: KeyedRepository;
   /** QA PLATFORM : la mémoire des flows (états, transitions, anomalies, récupérations, acteurs, runs, reproductions…). */
   readonly memory: FlowMemoryRepository;
+  /** KNOWLEDGE CENTER : comptages par application (facultatif). */
+  readonly inventory?: InventoryRepository;
 }
