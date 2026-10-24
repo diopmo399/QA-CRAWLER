@@ -8,6 +8,16 @@ import {
 } from './application/human-review.js';
 import { generateFlowFiles } from './recorded-flow.js';
 import { addRowVariables, applyTestDataBinding } from './test-data-binding.js';
+import { decideProposal, proposalSummary } from './assertion-proposals.js';
+import { applyGroupCommand } from './step-groups.js';
+import {
+  type GenerationFormat,
+  planGeneration,
+  planSummary,
+  validateArtifacts,
+  writeArtifacts,
+} from '../platform/generation-plan.js';
+import { observationSummary } from './observations.js';
 import {
   PROPOSABLE_OPERATIONS,
   analyzeRecording,
@@ -44,7 +54,7 @@ import { summarize as summarizeIntents } from '../intent/resolve-recording.js';
 import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
-import type { RecordedIntent, RecordingEvent, TechnicalIntentRecord } from './model.js';
+import type { RecordedFlow, RecordedIntent, RecordingEvent, TechnicalIntentRecord } from './model.js';
 import type { IntelligenceProvider } from '../ai/provider.js';
 import {
   describeFieldIdentity,
@@ -486,6 +496,13 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
   // aucune intention ; l'intention métier déduite après coup est dans semantic-intents.json.
   const { intent: semanticIntent, ...recordedFlow } = result.flow;
   await write('recorded-flow.json', json(recordedFlow));
+  // LES OBSERVATIONS (faits identifiés, par source, avec ce qui manque) et LES PROPOSITIONS D'ASSERTIONS.
+  if (result.observations)
+    await write(
+      'observations.json',
+      json({ summary: observationSummary(result.observations), ...result.observations }),
+    );
+  await write('assertion-proposals.json', json(proposalsFile(result.flow)));
   await write(
     'semantic-intents.json',
     json(semanticIntentsOf(result.flow.recordingSessionId, semanticIntent)),
@@ -932,6 +949,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
       if (format !== 'yaml') await write('generated.feature', result.files.feature);
       const { intent: _intent, ...recordedFlow } = result.flow;
       await write('recorded-flow.json', json(recordedFlow));
+      await write('assertion-proposals.json', json(proposalsFile(result.flow)));
       replay = { status: 'NOT_VALIDATED' };
       saved = undefined;
     };
@@ -993,6 +1011,34 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
           if (config.recording.knowledge)
             await rememberIntentDecision(config, result, env, decision).catch(() => undefined);
           return { ok: true };
+        },
+        // LA DÉCISION SUR UNE PROPOSITION D'ASSERTION : accepter, refuser, désactiver, réinitialiser,
+        // modifier ; le flow (étape expect, assertions métier), le YAML et le .feature sont réécrits.
+        reviewAssertion: async (input) => {
+          const outcome = decideProposal(result.flow, input);
+          if ('error' in outcome) return outcome;
+          await rewriteFlow();
+          const proposal = result.flow.proposals?.find((entry) => entry.id === input.id);
+          onEvent({
+            type: 'RECORDING_ASSERTION_DECIDED',
+            at: new Date().toISOString(),
+            message: `${input.id} ${input.decision}: ${proposal?.description ?? ''} → ${proposal?.status ?? ''}`,
+          });
+          return { ok: true };
+        },
+        // LES GROUPES MÉTIER : créer, renommer, décrire, regrouper, déplacer, réordonner, replier, détacher,
+        // supprimer ; les dépendances de données sont vérifiées avant tout déplacement (force : avertissement) ;
+        // le flow, le YAML (groups:) et le .feature sont réécrits.
+        editGroups: async (command, options) => {
+          const outcome = applyGroupCommand(result.flow, command, options);
+          if ('error' in outcome) return outcome;
+          await rewriteFlow();
+          onEvent({
+            type: 'RECORDING_GROUPS_EDITED',
+            at: new Date().toISOString(),
+            message: `group ${command.op}${'groupId' in command ? ` ${command.groupId}` : ''}${outcome.warnings.length > 0 ? ` — ${outcome.warnings.join('; ')}` : ''} (${result.flow.groups?.length ?? 0} groups)`,
+          });
+          return outcome;
         },
         // LA LIAISON DE DONNÉES : la source de la valeur d'une saisie (fixe, générée, réutilisée), choisie
         // par l'humain ; le flow, le .feature, test-data.yaml et le registre sont réécrits.
@@ -1272,6 +1318,55 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
             message: `step ${stepId}: original target restored by the user (${describeTarget(outcome.restored)})`,
           });
           return { ok: true };
+        },
+        // LA GÉNÉRATION (revue) : les formats choisis pour les groupes choisis, écrits sous generated/ et
+        // validés avec les outils réels disponibles (schéma, dictionnaire, TypeScript, Maven) ; jamais exécutés ici.
+        generate: async (input) => {
+          const formats = input.formats.filter((entry): entry is GenerationFormat =>
+            ['yaml', 'gherkin', 'playwright', 'java'].includes(entry),
+          );
+          if (formats.length === 0) return { error: 'no format selected' };
+          const plan = planGeneration({
+            flow: result.flow,
+            formats,
+            baseUrl: config.target.baseUrl,
+            language,
+            ...(input.groupIds ? { groupIds: input.groupIds } : {}),
+            ...(input.force ? { force: true } : {}),
+            recordedAt: result.session.startedAt,
+            ...(result.testData && Object.keys(result.testData.set.values).length > 0
+              ? { testDataFile: TEST_DATA_FILE }
+              : {}),
+            ...(config.platform.generatedTests.java.packageName
+              ? { java: { packageName: config.platform.generatedTests.java.packageName } }
+              : {}),
+          });
+          if ('error' in plan) return plan;
+          const generatedDir = path.join(directory, 'generated');
+          await writeArtifacts(plan.artifacts, generatedDir);
+          if (result.testData && formats.includes('yaml'))
+            await writeFile(
+              path.join(generatedDir, TEST_DATA_FILE),
+              stringifyYaml(result.testData.document, { lineWidth: 0 }),
+            );
+          const validated = await validateArtifacts(plan.artifacts, { directory: generatedDir });
+          await write(
+            'generation.json',
+            json({
+              generatedAt: new Date().toISOString(),
+              directory: generatedDir,
+              flow: plan.name,
+              summary: planSummary({ ...plan, artifacts: validated }),
+              warnings: plan.warnings,
+              artifacts: validated.map(({ content: _content, ...artifact }) => artifact),
+            }),
+          );
+          onEvent({
+            type: 'RECORDING_TESTS_GENERATED',
+            at: new Date().toISOString(),
+            message: `${String(validated.length)} file(s) generated for ${plan.name} (${formats.join(', ')}): ${validated.map((artifact) => `${artifact.path} ${artifact.status}`).join('; ')}`,
+          });
+          return { directory: generatedDir, warnings: plan.warnings, artifacts: validated };
         },
         save: async () => {
           saved = await saveRecordedFlow({
@@ -1858,5 +1953,15 @@ function typingMergeReport(result: RecordingResult): Record<string, unknown> {
     decisions: result.normalized.mergeDecisions.map(
       ({ previousIdentity: _previous, currentIdentity: _current, ...decision }) => decision,
     ),
+  };
+}
+
+/** assertion-proposals.json : le résumé, les propositions et leurs décisions, les assertions métier acceptées. */
+function proposalsFile(flow: RecordedFlow): Record<string, unknown> {
+  const proposals = flow.proposals ?? [];
+  return {
+    summary: proposalSummary(proposals),
+    proposals,
+    businessAssertions: flow.businessAssertions ?? [],
   };
 }

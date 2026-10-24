@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Issue } from '../../src/model/issue.js';
+import type { AssertionResult } from '../../src/quality/model.js';
 import { JUnitReporter, junitSuitesOf, junitXmlOf } from '../../src/reporting/junit-reporter.js';
 import { flow, result, step } from '../fixtures/qa-platform-results.js';
 
@@ -74,6 +75,66 @@ describe('JUnit XML reporter', () => {
     expect(suites[2]?.cases.map((entry) => entry.outcome)).toEqual(['skipped', 'skipped']);
     expect(suites[2]?.cases[0]?.message).toBe('optional step failed: not visible');
     expect(suites[0]?.properties).toContainEqual(['qa-crawler.flow.status', 'FAILED']);
+  });
+
+  it('adds one case per executed business assertion, never a success by default', () => {
+    const assertion = (
+      id: string,
+      status: AssertionResult['status'],
+      extra: Partial<AssertionResult> = {},
+    ): AssertionResult => ({
+      id,
+      description: `the request ${id}`,
+      flow: 'create item',
+      kind: 'request',
+      criticality: 'HIGH',
+      mandatory: true,
+      status,
+      entities: [],
+      expected: 'POST /api/items → 201',
+      observed: status === 'PASS' ? '201' : status === 'FAIL' ? '409' : 'no network observed',
+      reasons: status === 'PASS' ? [] : [`${status.toLowerCase()} reason`],
+      evidence: status === 'PASS' ? ['EV-1'] : [],
+      attempts: 1,
+      durationMs: 12,
+      ...extra,
+    });
+    const withQuality = result([
+      flow('create item', [step(1, 'Save')], {
+        quality: {
+          verdict: 'FAIL',
+          assertions: [
+            assertion('ASSERT-1', 'PASS'),
+            assertion('ASSERT-2', 'FAIL'),
+            assertion('ASSERT-3', 'BLOCKED'),
+            assertion('ASSERT-4', 'INCONCLUSIVE', { mandatory: false }),
+            assertion('ASSERT-5', 'UNVERIFIABLE'),
+          ],
+          consistency: [],
+          evidence: [],
+          networkObserved: false,
+          durationMs: 60,
+        },
+      }),
+    ]);
+    const suite = junitSuitesOf(withQuality, { failOnSeverity: 'ERROR' })[0];
+    expect(suite?.cases.map((entry) => entry.outcome)).toEqual([
+      'passed',
+      'passed',
+      'failure',
+      'skipped',
+      'skipped',
+      'skipped',
+    ]);
+    expect(suite?.cases[1]?.classname).toBe('qa-crawler.assertions.create_item');
+    expect(suite?.cases[2]?.message).toBe('fail reason');
+    expect(suite?.cases[3]?.message).toBe('BLOCKED: blocked reason');
+    expect(suite?.cases[3]?.body).toContain('status: BLOCKED');
+    expect(suite?.properties).toContainEqual(['qa-crawler.businessVerdict', 'FAIL']);
+    // Une assertion seulement générée (sans exécution) n'existe pas dans le rapport : rien à mapper.
+    const { xml } = junitXmlOf(withQuality, { failOnSeverity: 'ERROR' });
+    expect(xml).toContain('assertion ASSERT-3');
+    expect(xml).not.toContain('409 reason');
   });
 
   it('turns the anomalies at or above failOnSeverity into failures, none with NONE', () => {

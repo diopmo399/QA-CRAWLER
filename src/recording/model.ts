@@ -8,6 +8,7 @@ import type {
   StepEffects,
   TargetFingerprint,
 } from '../config/flow-schema.js';
+import type { AssertionConfig } from '../config/quality-schema.js';
 import type { FunctionalExchange } from '../functional/model.js';
 import type { StepIntentAnnotation } from '../intent/model.js';
 import type { RecordingTargetValidation } from './target-validator.js';
@@ -454,7 +455,9 @@ export type RecordedProvenance =
   | 'INFERRED_OUTCOME'
   | 'MANUAL_CHECKPOINT'
   | 'STATIC_ENRICHED'
-  | 'RUNTIME_OBSERVED';
+  | 'RUNTIME_OBSERVED'
+  /** Une vérification acceptée par l'humain parmi les propositions (assertion-proposals). */
+  | 'HUMAN_DECISION';
 
 /** Une cible choisie pour le rejeu, et pourquoi. */
 export interface RecordedTarget {
@@ -710,6 +713,126 @@ export interface RecordedFlowStep {
   functionalIntent?: StepIntentAnnotation;
 }
 
+/**
+ * UNE OBSERVATION du recording : un fait capturé (écran, élément, saisie, navigation, requête,
+ * réponse, message, dialogue, point de contrôle), identifié, daté, relié à son action et à son
+ * étape, avec sa source et sa fiabilité. Jamais une valeur sensible ; jamais reconstituée : ce qui
+ * n'a pas été capturé est listé comme absent (ObservationSet.missing).
+ */
+export type ObservationSource =
+  | 'DOM'
+  | 'ACCESSIBILITY'
+  | 'NETWORK_REQUEST'
+  | 'NETWORK_RESPONSE'
+  | 'NAVIGATION'
+  | 'CONSOLE'
+  | 'USER_INPUT'
+  | 'API_CONTRACT'
+  | 'EXPLICIT_REQUIREMENT';
+
+export type ObservationKind =
+  | 'TARGET'
+  | 'INPUT_VALUE'
+  | 'SELECTED_OPTION'
+  | 'CONTROL_STATE'
+  | 'NAVIGATION'
+  | 'PAGE_STATE'
+  | 'MESSAGE'
+  | 'ELEMENT_APPEARED'
+  | 'ELEMENT_DISAPPEARED'
+  | 'REQUEST'
+  | 'RESPONSE'
+  | 'IDENTIFIER'
+  | 'RECORDS'
+  | 'DIALOG'
+  | 'SIDE_EFFECT'
+  | 'CHECKPOINT';
+
+export interface RecordingObservation {
+  id: string;
+  kind: ObservationKind;
+  source: ObservationSource;
+  /** L'action sémantique observée et, quand elle en a une, l'étape du flow. */
+  actionId: string;
+  stepId?: string;
+  /** L'ordre d'observation (et l'horloge de l'enregistreur quand elle est connue). */
+  order: number;
+  at?: number;
+  summary: string;
+  /** La valeur, seulement quand elle est affichable (jamais une saisie sensible ni une valeur masquée). */
+  value?: string;
+  /** La fiabilité (0..1) : le plafond de sa source (DOM 0.95, réseau 0.95, humain 0.8…). */
+  reliability: number;
+  /** Les événements bruts, écrans, échanges (« POST /api/x ») reliés. */
+  references: string[];
+  redacted?: boolean;
+}
+
+export type ProposalOrigin = 'OBSERVED' | 'DEDUCED' | 'EXPLICIT';
+
+export type ProposalCategory =
+  | 'UI_STATE'
+  | 'UI_CONTENT'
+  | 'FORM_VALUE'
+  | 'NAVIGATION'
+  | 'NETWORK'
+  | 'API_RESPONSE'
+  | 'DATA_CONSISTENCY'
+  | 'BUSINESS_RULE'
+  | 'RELATIONSHIP'
+  | 'ACCESSIBILITY'
+  | 'ERROR_ABSENCE'
+  | 'REQUIREMENT';
+
+/** PROPOSED : à décider ; APPROVED / MODIFIED : dans le flow ; REJECTED / DISABLED : hors du flow. */
+export type ProposalStatus = 'PROPOSED' | 'APPROVED' | 'MODIFIED' | 'REJECTED' | 'DISABLED';
+
+/**
+ * UNE ASSERTION CANDIDATE PROPOSÉE À L'HUMAIN : ce qui est vérifié, pourquoi, d'après quelles
+ * observations et preuves, comment, avec quelles limites et quelle confiance. OBSERVED : tirée d'une
+ * observation concrète ; DEDUCED : d'une relation plausible entre plusieurs observations (à confirmer) ;
+ * EXPLICIT : posée par l'humain (point de contrôle). Une déduction ne devient jamais une règle sans
+ * décision humaine.
+ */
+export interface AssertionProposal {
+  id: string;
+  origin: ProposalOrigin;
+  category: ProposalCategory;
+  description: string;
+  why: string;
+  /** L'action après laquelle la vérification s'applique, et son étape dans le flow. */
+  afterActionId: string;
+  afterStepId?: string;
+  sourceObservationIds: string[];
+  evidence: string[];
+  /** UI_EXPECT : une étape `expect` ; BUSINESS_ASSERTION : une assertion métier (`assertions:`) ; REPORT_ONLY : pas exécutable. */
+  verificationMethod: 'UI_EXPECT' | 'BUSINESS_ASSERTION' | 'REPORT_ONLY';
+  limits: string[];
+  confidence: number;
+  needsConfirmation: boolean;
+  /** QA-CRAWLER la garde dans le flow sans décision (candidat stable) : l'humain peut la retirer. */
+  recommended: boolean;
+  status: ProposalStatus;
+  decidedAt?: string;
+  note?: string;
+  conflictsWith?: string[];
+  /** Ce qu'une acceptation écrit dans le flow. */
+  expect?: FlowExpectation;
+  assertion?: AssertionConfig;
+  /** Le candidat d'outcome d'où elle vient (AssertionCandidate.id), le cas échéant. */
+  candidateId?: string;
+}
+
+/** UN GROUPE MÉTIER d'étapes du recording (« Création de la demande ») : un objet fonctionnel, ordonné. */
+export interface BusinessStepGroup {
+  id: string;
+  name: string;
+  description?: string;
+  /** Les étapes (RecordedFlowStep.id), dans l'ordre du flow. */
+  stepIds: string[];
+  collapsed?: boolean;
+}
+
 /** LA représentation intermédiaire : la seule source du YAML et du Gherkin. */
 export interface RecordedFlow {
   name: string;
@@ -721,6 +844,12 @@ export interface RecordedFlow {
   /** Un enregistrement d'erreur de validation voulu (point de contrôle sur l'erreur). */
   negative: boolean;
   quality: RecordingQuality;
+  /** Les propositions d'assertions et leurs décisions (absentes d'un ancien enregistrement). */
+  proposals?: AssertionProposal[];
+  /** Les assertions métier acceptées (écrites dans `assertions:` du YAML ; schéma de la mission). */
+  businessAssertions?: AssertionConfig[];
+  /** Les groupes métier (absents d'un ancien enregistrement : toutes les étapes sont hors groupe). */
+  groups?: BusinessStepGroup[];
 }
 
 /** La qualité, exposée sans note globale : des faits, à juger par l'humain. */
@@ -798,6 +927,13 @@ export type RecordingEventType =
   | 'REPLAY_RESUME_BLOCKED'
   | 'RECORDING_INTENT_REVIEWED'
   | 'RECORDING_TEST_DATA_BOUND'
+  /** ASSERTION PROPOSALS : les propositions tirées des observations, et la décision humaine sur l'une d'elles. */
+  | 'ASSERTIONS_PROPOSED'
+  | 'RECORDING_ASSERTION_DECIDED'
+  /** Un groupe métier créé, renommé, déplacé, replié, détaché ou supprimé par l'humain. */
+  | 'RECORDING_GROUPS_EDITED'
+  /** GÉNÉRATION (revue) : les fichiers produits et leur statut de validation. */
+  | 'RECORDING_TESTS_GENERATED'
   | 'SEMANTIC_ACTION_RESOLVED'
   | 'CHECKPOINT_ADDED'
   | 'RECORDING_PAUSED'

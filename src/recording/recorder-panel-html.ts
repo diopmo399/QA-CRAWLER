@@ -273,6 +273,9 @@ main{flex:1;padding:16px 24px 24px;min-height:0}
 .checks{margin-top:4px;margin-left:30px}
 .checks summary{cursor:pointer;color:var(--muted);font-weight:600}
 .checks ul{margin:6px 0 0;padding-left:18px;color:var(--muted)}
+.bgroup{display:block;padding:8px 10px;border:1px solid var(--line-strong);border-radius:8px;margin:8px 0 4px}.bgroup .pill{font-weight:500}.bgroup .row{margin-top:6px}.gtools{padding:8px 10px;border:1px dashed var(--line-strong);border-radius:8px;margin-bottom:8px}.gtools input[type=text]{min-width:160px}.gtools .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.generation .chk{margin-right:10px;display:inline-flex;gap:4px;align-items:center}.generation .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}.genpre{max-height:320px;overflow:auto;font-size:11px;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre}
+.proposals .plist{list-style:none;padding-left:0}.proposal{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0;color:var(--fg)}.proposal.inflow{border-color:var(--ok)}.proposal .phead .pill{margin-left:4px}.proposal .pill.off{opacity:.7}.proposal .row{margin-top:6px}
 .quality .qbody{display:flex;gap:14px;align-items:center}
 .ring{--p:0;width:86px;height:86px;border-radius:50%;background:conic-gradient(var(--ok) calc(var(--p)*1%),var(--line) 0);display:grid;place-items:center;flex:none}
 .ring>div{width:68px;height:68px;border-radius:50%;background:var(--surface);display:grid;place-items:center;text-align:center;line-height:1.1}
@@ -664,6 +667,15 @@ const SCRIPT = `
       recoveredSteps: function (l) { return 'Étapes rejouées pour le contexte : ' + l; },
       saved: '✓ Flow sauvegardé', remove: '✕ Retirer cette étape', removeLabel: function (d) { return "Retirer l'étape « " + d + ' » du flow'; },
       checks: function (n) { return 'Vérifications ajoutées au flow (' + n + ')'; }, checksNote: 'Déduites des résultats observés : ce ne sont pas des actions enregistrées.',
+      proposals: function (n, k) { return 'Assertions proposées (' + n + ', ' + k + ' dans le flow)'; }, proposalsNote: "Chaque proposition dit ce qu'elle vérifie, d'où elle vient et ce qu'elle ne prouve pas. Rien n'entre dans le flow sans votre décision, sauf les vérifications stables déjà retenues (que vous pouvez retirer).",
+      origin: { OBSERVED: 'observée', DEDUCED: 'déduite — à confirmer', EXPLICIT: 'explicite' }, pStatus: { PROPOSED: 'proposée', APPROVED: 'acceptée', MODIFIED: 'modifiée', REJECTED: 'refusée', DISABLED: 'désactivée' },
+      pMethod: { UI_EXPECT: 'vérification d’écran au rejeu', BUSINESS_ASSERTION: 'assertion métier (réseau observé au rejeu)', REPORT_ONLY: 'rapport seulement : pas exécutable' },
+      pInFlow: 'dans le flow', pOut: 'hors du flow', pAfter: function (n) { return 'après l’étape ' + n; }, pWhy: 'Pourquoi', pEvidence: 'Preuves', pLimits: 'Limites', pConflict: function (ids) { return 'Contredit ' + ids; },
+      pAccept: 'Accepter', pReject: 'Refuser', pDisable: 'Désactiver', pReset: 'Réinitialiser', pConfidence: function (c) { return 'confiance ' + Math.round(c * 100) + ' %'; },
+      groups: 'Groupes métier', groupName: 'Nom du groupe', createGroup: 'Créer un groupe avec les étapes cochées', addTo: 'Ajouter les étapes cochées à', groupPick: 'Cocher', groupPicked: 'Cochée', detach: 'Détacher', deleteGroup: 'Supprimer le groupe (étapes gardées)', rename: 'Renommer', apply: 'Valider', collapse: 'Replier', expand: 'Déplier', moveUp: 'Monter', moveDown: 'Descendre',
+      gen: 'Génération des tests', genNote: "Choisissez les formats et les groupes ; les fichiers sont écrits sous generated/ et validés avec les outils réels disponibles. Un statut ne confond jamais généré, validé statiquement et exécuté.", genFormats: { yaml: 'Flow YAML (rejeu QA-CRAWLER)', gherkin: 'Scénario Gherkin', playwright: 'Playwright TypeScript', java: 'Java JUnit 5 + Playwright' }, genGroups: 'Groupes à générer (tous par défaut)', genRun: 'Générer et valider', genForce: 'Forcer malgré les données manquantes',
+      genStatus: { GENERATED: 'généré', STATICALLY_VALIDATED: 'validé statiquement', NOT_VALIDATED: 'non validé (outil absent)', EXECUTED: 'exécuté', PASSED: 'réussi', FAILED: 'échoué', BLOCKED: 'bloqué', INCONCLUSIVE: 'non concluant' }, genValidation: 'Validation', genAssertions: function (n, r) { return n + ' assertion(s) native(s), ' + r + ' vérifiée(s) par le rejeu seulement'; }, genLimits: 'Limites', genPreview: 'Aperçu', genDir: function (d) { return 'Écrit dans ' + d; }, genNative: 'native', genReplay: 'rejeu seulement',
+      gInputs: 'Entrées', gOutputs: 'Sorties', gRunnable: 'jouable seul', gMissing: function (m) { return 'dépend de ' + m; }, gStart: function (r) { return 'départ ' + r; }, gChecks: function (c, a) { return c + ' vérification(s), ' + a + ' assertion(s) métier'; }, gSteps: function (n) { return n + ' étape(s)'; }, gNone: 'Aucun groupe : cochez des étapes puis créez un groupe.',
       analysisTitle: 'Analyse', analysisNote: "L'analyse ne modifie jamais le recording. Elle est disponible après l'arrêt.", analysisWaiting: "L'analyse sera disponible après l'arrêt de l'enregistrement.",
       business: 'Interprétation métier', businessNote: "Déduite du parcours enregistré : jamais une étape ajoutée au flow.", noBusiness: 'Aucune interprétation métier sûre.', recordedActions: 'Actions enregistrées', observed: 'Observé', deduced: 'Déduit', uncertain: 'Incertain (jamais une vérité métier)', candidatesL: 'Possibles', bstatus: { CONFIRMED: 'Confirmé', PROBABLE: 'Probable', AMBIGUOUS: 'Ambigu', UNKNOWN: 'Inconnu' }, aiChoice: 'choix de l’IA parmi les candidats observés', referenceL: 'référence', baction: { create: 'CRÉER', search: 'RECHERCHER', retrieve: 'RETROUVER', correlate: 'CORRÉLER', open: 'OUVRIR', update: 'MODIFIER', save: 'ENREGISTRER', delete: 'SUPPRIMER' }, entitiesL: 'Entités observées', applicationL: 'Application', applicationNote: 'Ce que le Recorder comprend de l’application (contextes, tasks, entités, relations). Les actions techniques restent dans le parcours.', evidenceL: 'Preuves', istatus: { OBSERVED: 'Observé', DEDUCED: 'Déduit', CONFIRMED: 'Confirmé', UNCERTAIN: 'Incertain' }, actionLevels: function (c) { return c.recorded + ' actions enregistrées · ' + c.validated + ' validées · ' + c.interpreted + ' interprétées · ' + c.uninterpreted + ' non interprétées (UNKNOWN, normal pour une application inconnue)'; }, provenanceL: { CREATED_DURING_RECORDING: 'créée pendant l’enregistrement', CONFIRMED_EXISTING: 'existait déjà (écran de départ)', DISCOVERED_DURING_RECORDING: 'découverte (origine inconnue)', UNKNOWN: 'provenance inconnue', AMBIGUOUS: 'provenance ambiguë' },
       httpLive: function (h) { return h.network + ' requêtes · ' + h.correlated + ' reliées · ' + h.hypotheses + ' hypothèses' + (h.inconsistencies ? ' · ' + h.inconsistencies + ' incohérences' : '') + (h.failed ? ' · analyse en erreur' : '') + ' (provisoire)'; }, httpL: 'Analyse HTTP', httpNote: 'Requêtes, corrélations et correspondances : consolidées après l’arrêt (un « VALIDATED » exige des preuves suffisantes ; le reste est une hypothèse).', httpFailed: 'L’analyse différée a échoué : les événements bruts et le journal réseau sont conservés.', httpCounts: function (c) { return c.events + ' événements · ' + c.network + ' requêtes · ' + c.correlated + ' reliées · ' + c.independent + ' indépendantes · ' + c.hypotheses + ' hypothèses à confirmer · ' + c.inconsistencies + ' incohérences · ' + c.revisions + ' révisions du direct'; }, httpMappings: 'Champ ↔ propriété', httpIncons: 'Incohérences', httpRevisions: 'Révisions', intents: 'Intents métier', noIntent: 'Aucun intent métier (aucune écriture ni recherche métier corrélée).', searchL: 'Recherche', critL: 'Critères détectés', apiL: 'API', opL: 'Opérateur', valL: 'Valeur', logicL: 'Logique', sortL: 'Tri', paramsL: 'Paramètres techniques', techL: 'Classification technique (distincte)', fromCreateL: 'valeur issue de la création', searchesL: 'Recherches reconnues', roles: { PAGINATION: 'pagination', OPTION: 'options d’inclusion', CONTEXT: 'contexte', CRITERION_FLAG: 'indicateurs de critère' }, liveSearch: 'recherche détectée', technicalIntents: 'Intents techniques (jamais métier)', possibleCreate: 'création possible, non prouvée', confidence: 'Confiance', why: 'Voir pourquoi', findings: 'Constats et suggestions', noFinding: 'Aucun constat.', ai: function (n) { return n + ' suggestion(s) de connaissance proposée(s) par l’IA (à revoir).'; },
@@ -721,6 +733,15 @@ const SCRIPT = `
       recoveredSteps: function (l) { return 'Steps replayed for the context: ' + l; },
       saved: '✓ Flow saved', remove: '✕ Remove this step', removeLabel: function (d) { return 'Remove the step "' + d + '" from the flow'; },
       checks: function (n) { return 'Checks added to the flow (' + n + ')'; }, checksNote: 'Inferred from the observed results: these are not recorded actions.',
+      proposals: function (n, k) { return 'Proposed assertions (' + n + ', ' + k + ' in the flow)'; }, proposalsNote: 'Each proposal says what it checks, where it comes from and what it does not prove. Nothing enters the flow without your decision, except the stable checks already kept (which you can remove).',
+      origin: { OBSERVED: 'observed', DEDUCED: 'deduced — to confirm', EXPLICIT: 'explicit' }, pStatus: { PROPOSED: 'proposed', APPROVED: 'accepted', MODIFIED: 'modified', REJECTED: 'rejected', DISABLED: 'disabled' },
+      pMethod: { UI_EXPECT: 'screen check at replay', BUSINESS_ASSERTION: 'business assertion (network observed at replay)', REPORT_ONLY: 'report only: not executable' },
+      pInFlow: 'in the flow', pOut: 'out of the flow', pAfter: function (n) { return 'after step ' + n; }, pWhy: 'Why', pEvidence: 'Evidence', pLimits: 'Limits', pConflict: function (ids) { return 'Contradicts ' + ids; },
+      pAccept: 'Accept', pReject: 'Reject', pDisable: 'Disable', pReset: 'Reset', pConfidence: function (c) { return 'confidence ' + Math.round(c * 100) + '%'; },
+      groups: 'Business groups', groupName: 'Group name', createGroup: 'Create a group with the checked steps', addTo: 'Add the checked steps to', groupPick: 'Check', groupPicked: 'Checked', detach: 'Detach', deleteGroup: 'Delete the group (steps kept)', rename: 'Rename', apply: 'Apply', collapse: 'Collapse', expand: 'Expand', moveUp: 'Move up', moveDown: 'Move down',
+      gen: 'Test generation', genNote: 'Choose the formats and the groups; the files are written under generated/ and validated with the real tools available. A status never confuses generated, statically validated and executed.', genFormats: { yaml: 'Flow YAML (QA-CRAWLER replay)', gherkin: 'Gherkin scenario', playwright: 'Playwright TypeScript', java: 'Java JUnit 5 + Playwright' }, genGroups: 'Groups to generate (all by default)', genRun: 'Generate and validate', genForce: 'Force despite missing data',
+      genStatus: { GENERATED: 'generated', STATICALLY_VALIDATED: 'statically validated', NOT_VALIDATED: 'not validated (tool missing)', EXECUTED: 'executed', PASSED: 'passed', FAILED: 'failed', BLOCKED: 'blocked', INCONCLUSIVE: 'inconclusive' }, genValidation: 'Validation', genAssertions: function (n, r) { return n + ' native assertion(s), ' + r + ' verified by the replay only'; }, genLimits: 'Limits', genPreview: 'Preview', genDir: function (d) { return 'Written to ' + d; }, genNative: 'native', genReplay: 'replay only',
+      gInputs: 'Inputs', gOutputs: 'Outputs', gRunnable: 'runnable alone', gMissing: function (m) { return 'depends on ' + m; }, gStart: function (r) { return 'starts at ' + r; }, gChecks: function (c, a) { return c + ' check(s), ' + a + ' business assertion(s)'; }, gSteps: function (n) { return n + ' step(s)'; }, gNone: 'No group yet: check steps, then create a group.',
       analysisTitle: 'Analysis', analysisNote: 'The analysis never changes the recording. It is available after Stop.', analysisWaiting: 'The analysis will be available once the recording is stopped.',
       business: 'Business interpretation', businessNote: 'Deduced from the recorded journey: never a step added to the flow.', noBusiness: 'No reliable business interpretation.', recordedActions: 'Recorded actions', observed: 'Observed', deduced: 'Deduced', uncertain: 'Uncertain (never a business fact)', candidatesL: 'Possible', bstatus: { CONFIRMED: 'Confirmed', PROBABLE: 'Probable', AMBIGUOUS: 'Ambiguous', UNKNOWN: 'Unknown' }, aiChoice: 'AI choice among the observed candidates', referenceL: 'reference', baction: { create: 'CREATE', search: 'SEARCH', retrieve: 'RETRIEVE', correlate: 'CORRELATE', open: 'OPEN', update: 'UPDATE', save: 'SAVE', delete: 'DELETE' }, entitiesL: 'Observed entities', applicationL: 'Application', applicationNote: 'What the Recorder understands of the application (contexts, tasks, entities, relations). The technical actions stay in the journey.', evidenceL: 'Evidence', istatus: { OBSERVED: 'Observed', DEDUCED: 'Deduced', CONFIRMED: 'Confirmed', UNCERTAIN: 'Uncertain' }, actionLevels: function (c) { return c.recorded + ' recorded actions · ' + c.validated + ' validated · ' + c.interpreted + ' interpreted · ' + c.uninterpreted + ' not interpreted (UNKNOWN, normal for an unknown application)'; }, provenanceL: { CREATED_DURING_RECORDING: 'created during the recording', CONFIRMED_EXISTING: 'already existed (starting screen)', DISCOVERED_DURING_RECORDING: 'discovered (origin unknown)', UNKNOWN: 'unknown provenance', AMBIGUOUS: 'ambiguous provenance' },
       httpLive: function (h) { return h.network + ' requests · ' + h.correlated + ' linked · ' + h.hypotheses + ' hypotheses' + (h.inconsistencies ? ' · ' + h.inconsistencies + ' inconsistencies' : '') + (h.failed ? ' · analysis error' : '') + ' (provisional)'; }, httpL: 'HTTP analysis', httpNote: 'Requests, correlations and mappings: consolidated after the stop (VALIDATED needs sufficient evidence; the rest is a hypothesis).', httpFailed: 'The deferred analysis failed: the raw events and the network journal are kept.', httpCounts: function (c) { return c.events + ' events · ' + c.network + ' requests · ' + c.correlated + ' linked · ' + c.independent + ' independent · ' + c.hypotheses + ' hypotheses to confirm · ' + c.inconsistencies + ' inconsistencies · ' + c.revisions + ' revisions of the live analysis'; }, httpMappings: 'Field ↔ property', httpIncons: 'Inconsistencies', httpRevisions: 'Revisions', intents: 'Business intents', noIntent: 'No business intent (no correlated business write or search).', searchL: 'Search', critL: 'Detected criteria', apiL: 'API', opL: 'Operator', valL: 'Value', logicL: 'Logic', sortL: 'Sort', paramsL: 'Technical parameters', techL: 'Technical classification (separate)', fromCreateL: 'value from the creation', searchesL: 'Recognised searches', roles: { PAGINATION: 'pagination', OPTION: 'inclusion options', CONTEXT: 'context', CRITERION_FLAG: 'criterion flags' }, liveSearch: 'search detected', technicalIntents: 'Technical intents (never business)', possibleCreate: 'possible creation, not proven', confidence: 'Confidence', why: 'See why', findings: 'Findings and suggestions', noFinding: 'No finding.', ai: function (n) { return n + ' knowledge suggestion(s) proposed by the AI (to review).'; },
@@ -825,6 +846,10 @@ const SCRIPT = `
   // Le brouillon de la source de chaque saisie (revue) : gardé entre deux rendus de la fenêtre.
   var dataDraft = {};
   var filterText = '', onlyAttention = false, layout = null, editingIntent = null;
+  // GROUPES MÉTIER : les étapes cochées (pour créer / affecter), le groupe en cours de renommage.
+  var picked = {}, renamingGroup = null;
+  // GÉNÉRATION : les formats cochés, les groupes cochés, l'artefact dont l'aperçu est ouvert.
+  var genFormats = { yaml: true, gherkin: true, playwright: true, java: false }, genGroups = {}, genForce = false, genSelected = null;
   var storedLayout = function () { try { return window.localStorage.getItem('qa-recorder-layout'); } catch (e) { return null; } };
   var storeLayout = function (v) { try { window.localStorage.setItem('qa-recorder-layout', v); } catch (e) { /* stockage indisponible */ } };
   var $ = function (id) { return document.getElementById(id); };
@@ -952,17 +977,50 @@ const SCRIPT = `
       if (onlyAttention && step.status !== 'AMBIGUOUS' && step.status !== 'FAILED') return false;
       return !needle || (step.description + ' ' + (step.detail || '')).toLowerCase().indexOf(needle) >= 0;
     });
-    var lastGroup = null;
+    var lastGroup = null, lastGroupId = null;
+    var groupsById = {};
+    (state.groups || []).forEach(function (g) { groupsById[g.id] = g; });
     var html = visible.map(function (step) {
       var head = '';
-      if (step.group && step.group !== lastGroup && !needle && !onlyAttention) head = '<li class="group">' + esc(step.group) + '</li>';
-      lastGroup = step.group || lastGroup;
+      if (step.groupId && step.groupId !== lastGroupId && !needle && !onlyAttention) head = groupHeadHtml(groupsById[step.groupId] || { id: step.groupId, name: step.group, stepIds: [], inputs: [], outputs: [], missing: [] });
+      else if (!step.groupId && step.group && step.group !== lastGroup && !needle && !onlyAttention) head = '<li class="group">' + esc(step.group) + '</li>';
+      lastGroup = step.group || lastGroup; lastGroupId = step.groupId || null;
+      var g = step.groupId ? groupsById[step.groupId] : null;
+      if (g && g.collapsed && !needle && !onlyAttention) return head;
       return head + stepHtml(step);
     }).join('');
+    if (editing && state.phase === 'REVIEW') html = groupToolsHtml() + html;
     if (!html && state.actions.length) html = '<li class="empty">' + esc(T.noMatch) + '</li>';
     setHtml($('timeline'), html || '<li class="empty">' + esc(T.empty) + '</li>');
     var checks = state.checks || [];
-    setHtml($('checks'), checks.length ? '<details class="checks"><summary>' + esc(T.checks(checks.length)) + '</summary><p class="sub">' + esc(T.checksNote) + '</p><ul>' + checks.map(function (c) { return '<li>' + esc(c.description) + '</li>'; }).join('') + '</ul></details>' : '');
+    setHtml($('checks'), (checks.length ? '<details class="checks"><summary>' + esc(T.checks(checks.length)) + '</summary><p class="sub">' + esc(T.checksNote) + '</p><ul>' + checks.map(function (c) { return '<li>' + esc(c.description) + '</li>'; }).join('') + '</ul></details>' : '') + proposalsHtml() + generationHtml());
+  }
+
+  /** LES PROPOSITIONS D'ASSERTIONS : origine, méthode, preuves, limites, et la décision de l'humain. */
+  function proposalsHtml() {
+    var list = state.proposals || [];
+    if (!list.length) return '';
+    var kept = list.filter(function (p) { return p.inFlow; }).length;
+    var h = '<details class="checks proposals" open><summary>' + esc(T.proposals(list.length, kept)) + '</summary><p class="sub">' + esc(T.proposalsNote) + '</p><ul class="plist">';
+    list.forEach(function (p) {
+      var decided = p.status !== 'PROPOSED';
+      h += '<li class="proposal ' + esc(p.origin) + (p.inFlow ? ' inflow' : '') + '" data-proposal="' + esc(p.id) + '">';
+      h += '<div class="phead"><b>' + esc(p.description) + '</b> <span class="pill">' + esc(T.origin[p.origin] || p.origin) + '</span> <span class="pill">' + esc(p.category) + '</span> <span class="pill ' + (p.inFlow ? 'ok' : 'off') + '">' + esc(p.inFlow ? T.pInFlow : T.pOut) + (decided ? ' · ' + esc(T.pStatus[p.status] || p.status) : '') + '</span></div>';
+      h += '<p class="sub">' + (p.afterStep ? esc(T.pAfter(p.afterStep)) + ' · ' : '') + esc(T.pMethod[p.method] || p.method) + ' · ' + esc(T.pConfidence(p.confidence)) + (p.needsConfirmation && !decided ? ' · ⚠' : '') + '</p>';
+      h += '<p class="sub"><b>' + esc(T.pWhy) + '</b> : ' + esc(p.why) + '</p>';
+      if (p.evidence.length) h += '<p class="sub"><b>' + esc(T.pEvidence) + '</b> : ' + p.evidence.map(esc).join(' · ') + (p.observations.length ? ' (' + esc(p.observations.join(', ')) + ')' : '') + '</p>';
+      if (p.limits.length) h += '<p class="sub"><b>' + esc(T.pLimits) + '</b> : ' + p.limits.map(esc).join(' · ') + '</p>';
+      if (p.conflictsWith.length) h += '<p class="error">' + esc(T.pConflict(p.conflictsWith.join(', '))) + '</p>';
+      if (p.note) h += '<p class="sub">' + esc(p.note) + '</p>';
+      var row = '';
+      if (p.method !== 'REPORT_ONLY' && !p.inFlow) row += button(T.pAccept, { cmd: 'assert-accept', id: p.id, cls: 'primary' });
+      if (p.inFlow) row += button(T.pReject, { cmd: 'assert-reject', id: p.id }) + button(T.pDisable, { cmd: 'assert-disable', id: p.id, cls: 'ghost' });
+      else if (p.status === 'PROPOSED') row += button(T.pReject, { cmd: 'assert-reject', id: p.id, cls: 'ghost' });
+      if (decided) row += button(T.pReset, { cmd: 'assert-reset', id: p.id, cls: 'ghost' });
+      if (row) h += '<div class="row">' + row + '</div>';
+      h += '</li>';
+    });
+    return h + '</ul></details>';
   }
 
   function stepHtml(step) {
@@ -990,9 +1048,65 @@ const SCRIPT = `
         if (state.notice && state.notice.actionId === step.id) h += '<p class="error" role="alert">' + esc(state.notice.message === 'NOT_TOUCHED' ? T.notTouched : state.notice.message) + '</p>';
         h += '</div>';
       }
-      if (editing && step.removable) h += '<div class="remove">' + button(T.remove, { cmd: 'remove', id: step.id, aria: T.removeLabel(step.description) }) + '</div>';
+      if (editing && step.removable) h += '<div class="remove">' + button(T.remove, { cmd: 'remove', id: step.id, aria: T.removeLabel(step.description) }) + (state.phase === 'REVIEW' ? button(picked[step.id] ? '☑ ' + T.groupPicked : '☐ ' + T.groupPick, { cmd: 'step-pick', id: step.id, cls: 'ghost' }) + button('↑', { cmd: 'step-up', id: step.id, cls: 'ghost', aria: T.moveUp }) + button('↓', { cmd: 'step-down', id: step.id, cls: 'ghost', aria: T.moveDown }) + (step.groupId ? button(T.detach, { cmd: 'step-detach', id: step.id, cls: 'ghost' }) : '') : '') + '</div>';
       return h + '</li>';
     }
+  }
+
+  /** L'EN-TÊTE d'un groupe métier : nom, description, données entrantes / sortantes, exécutabilité, commandes. */
+  function groupHeadHtml(g) {
+    var h = '<li class="group bgroup" data-group="' + esc(g.id) + '">';
+    if (editing && renamingGroup === g.id) h += '<input type="text" id="grp-name-' + esc(g.id) + '" value="' + esc(g.name) + '" aria-label="' + esc(T.groupName) + '"> ' + button(T.apply, { cmd: 'grp-rename-apply', id: g.id, cls: 'primary' });
+    else h += '<b>' + esc(g.name) + '</b>' + (g.description ? ' <span class="sub">' + esc(g.description) + '</span>' : '');
+    h += ' <span class="pill">' + esc(T.gSteps((g.stepIds || []).length)) + '</span>';
+    if (g.startAt) h += ' <span class="pill">' + esc(T.gStart(g.startAt)) + '</span>';
+    if (g.inputs && g.inputs.length) h += ' <span class="pill">' + esc(T.gInputs) + ' : ' + esc(g.inputs.join(', ')) + '</span>';
+    if (g.outputs && g.outputs.length) h += ' <span class="pill">' + esc(T.gOutputs) + ' : ' + esc(g.outputs.join(', ')) + '</span>';
+    h += ' <span class="pill ' + (g.runnableAlone ? 'ok' : 'warn') + '">' + esc(g.runnableAlone ? T.gRunnable : T.gMissing((g.missing || []).join(', '))) + '</span>';
+    if (g.checks !== undefined) h += ' <span class="pill">' + esc(T.gChecks(g.checks, g.assertions)) + '</span>';
+    if (editing) h += '<div class="row">' + button(g.collapsed ? T.expand : T.collapse, { cmd: g.collapsed ? 'grp-expand' : 'grp-collapse', id: g.id, cls: 'ghost' }) + button('↑', { cmd: 'grp-up', id: g.id, cls: 'ghost', aria: T.moveUp }) + button('↓', { cmd: 'grp-down', id: g.id, cls: 'ghost', aria: T.moveDown }) + button(T.rename, { cmd: 'grp-rename-open', id: g.id, cls: 'ghost' }) + button(T.deleteGroup, { cmd: 'grp-delete', id: g.id, cls: 'ghost' }) + '</div>';
+    else h += button(g.collapsed ? T.expand : T.collapse, { cmd: g.collapsed ? 'grp-expand' : 'grp-collapse', id: g.id, cls: 'ghost' });
+    return h + '</li>';
+  }
+
+  /** LES OUTILS de groupe (mode Modifier) : créer un groupe avec les étapes cochées, les ajouter à un groupe. */
+  function groupToolsHtml() {
+    var groups = state.groups || [];
+    var n = Object.keys(picked).filter(function (k) { return picked[k]; }).length;
+    var h = '<li class="gtools" role="group" aria-label="' + esc(T.groups) + '"><b>' + esc(T.groups) + '</b>';
+    if (!groups.length) h += '<p class="sub">' + esc(T.gNone) + '</p>';
+    h += '<div class="row"><input type="text" id="grp-new-name" placeholder="' + esc(T.groupName) + '" aria-label="' + esc(T.groupName) + '">' + button(T.createGroup + (n ? ' (' + n + ')' : ''), { cmd: 'grp-create', cls: 'primary', disabled: !n }) + '</div>';
+    if (groups.length) h += '<div class="row"><label>' + esc(T.addTo) + ' <select id="grp-add-target">' + groups.map(function (g) { return '<option value="' + esc(g.id) + '">' + esc(g.name) + '</option>'; }).join('') + '</select></label>' + button(T.apply, { cmd: 'grp-add', disabled: !n }) + '</div>';
+    return h + '</li>';
+  }
+
+  function pickedIds() { return Object.keys(picked).filter(function (k) { return picked[k]; }); }
+
+  /** LA GÉNÉRATION : formats, groupes, lancement ; puis les artefacts, leur statut, leur validation et l'aperçu. */
+  function generationHtml() {
+    if (state.phase !== 'REVIEW') return '';
+    var groups = state.groups || [], gen = state.generation;
+    var h = '<details class="checks generation" open><summary>' + esc(T.gen) + '</summary><p class="sub">' + esc(T.genNote) + '</p>';
+    h += '<div class="row">' + ['yaml', 'gherkin', 'playwright', 'java'].map(function (f) { return '<label class="chk"><input type="checkbox" data-gen-format="' + f + '"' + (genFormats[f] ? ' checked' : '') + '> ' + esc(T.genFormats[f]) + '</label>'; }).join('') + '</div>';
+    if (groups.length) h += '<p class="sub">' + esc(T.genGroups) + '</p><div class="row">' + groups.map(function (g) { return '<label class="chk"><input type="checkbox" data-gen-group="' + esc(g.id) + '"' + (genGroups[g.id] ? ' checked' : '') + '> ' + esc(g.name) + (g.runnableAlone ? '' : ' ⚠') + '</label>'; }).join('') + '<label class="chk"><input type="checkbox" data-gen-force="1"' + (genForce ? ' checked' : '') + '> ' + esc(T.genForce) + '</label></div>';
+    h += '<div class="row">' + button(T.genRun, { cmd: 'gen-run', cls: 'primary' }) + '</div>';
+    if (gen) {
+      h += '<p class="sub">' + esc(T.genDir(gen.directory)) + '</p>';
+      (gen.warnings || []).forEach(function (w) { h += '<p class="error">' + esc(w) + '</p>'; });
+      h += '<ul class="plist">';
+      gen.artifacts.forEach(function (a, i) {
+        var native = a.assertions.filter(function (x) { return x.support === 'NATIVE'; }).length, replay = a.assertions.length - native;
+        var cls = a.status === 'STATICALLY_VALIDATED' || a.status === 'PASSED' ? 'ok' : a.status === 'FAILED' || a.status === 'BLOCKED' ? 'warn' : '';
+        h += '<li class="proposal' + (genSelected === i ? ' inflow' : '') + '"><div class="phead">' + button(a.path, { cmd: 'gen-preview', id: String(i), cls: 'ghost' }) + ' <span class="pill">' + esc(a.format) + '</span> <span class="pill ' + cls + '">' + esc(T.genStatus[a.status] || a.status) + '</span></div>';
+        if (a.validation) h += '<p class="sub"><b>' + esc(T.genValidation) + '</b> : ' + esc(a.validation.method) + (a.validation.messages.length ? ' — ' + a.validation.messages.map(esc).join(' · ') : '') + '</p>';
+        if (a.assertions.length) h += '<p class="sub">' + esc(T.genAssertions(native, replay)) + ' : ' + a.assertions.map(function (x) { return esc(x.id) + ' (' + esc(x.support === 'NATIVE' ? T.genNative : T.genReplay) + ', ' + esc(x.status) + ')'; }).join(' · ') + '</p>';
+        if (a.limits.length) h += '<p class="sub"><b>' + esc(T.genLimits) + '</b> : ' + a.limits.map(esc).join(' · ') + '</p>';
+        if (genSelected === i) h += '<pre class="genpre" aria-label="' + esc(T.genPreview) + '">' + esc(a.content) + '</pre>';
+        h += '</li>';
+      });
+      h += '</ul>';
+    }
+    return h + '</details>';
   }
 
   /** B · les étapes métier de la revue, en cartes numérotées (le détail des actions reste dessous). */
@@ -1624,6 +1738,28 @@ const SCRIPT = `
     if (cmd === 'row-edit-close') { delete rowEditOpen[id]; delete rowDraft[id]; render(); return; }
     if (cmd === 'row-preview' || cmd === 'row-edit') { send({ type: cmd, id: id, columns: rowColumns(id) }); return; }
     if (cmd === 'edit-step') { editing = true; selected = id || selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
+    if (cmd.indexOf('assert-') === 0) { send({ type: 'assertion-decide', id: id, decision: cmd.slice(7).toUpperCase() }); return; }
+    if (cmd === 'step-pick') { picked[id] = !picked[id]; render(); return; }
+    if (cmd === 'gen-preview') { genSelected = genSelected === Number(id) ? null : Number(id); render(); return; }
+    if (cmd === 'gen-run') {
+      document.querySelectorAll('[data-gen-format]').forEach(function (el) { genFormats[el.getAttribute('data-gen-format')] = el.checked; });
+      document.querySelectorAll('[data-gen-group]').forEach(function (el) { genGroups[el.getAttribute('data-gen-group')] = el.checked; });
+      var forceEl = document.querySelector('[data-gen-force]'); genForce = !!(forceEl && forceEl.checked);
+      var formats = Object.keys(genFormats).filter(function (f) { return genFormats[f]; });
+      var groupIds = Object.keys(genGroups).filter(function (g) { return genGroups[g]; });
+      genSelected = null;
+      send({ type: 'generate', formats: formats, groupIds: groupIds, force: genForce });
+      return;
+    }
+    if (cmd === 'step-up' || cmd === 'step-down') { send({ type: 'group', op: 'move-step', id: id, direction: cmd === 'step-up' ? 'up' : 'down' }); return; }
+    if (cmd === 'step-detach') { send({ type: 'group', op: 'detach', stepIds: [id] }); return; }
+    if (cmd === 'grp-create') { var nameEl = $('grp-new-name'); var ids = pickedIds(); if (!ids.length) return; picked = {}; send({ type: 'group', op: 'create', name: (nameEl && nameEl.value.trim()) || (T.groups + ' ' + (((state.groups || []).length) + 1)), stepIds: ids }); return; }
+    if (cmd === 'grp-add') { var sel = $('grp-add-target'); var ids2 = pickedIds(); if (!sel || !ids2.length) return; picked = {}; send({ type: 'group', op: 'assign', groupId: sel.value, stepIds: ids2 }); return; }
+    if (cmd === 'grp-rename-open') { renamingGroup = id; render(); var inp = $('grp-name-' + id); if (inp) inp.focus(); return; }
+    if (cmd === 'grp-rename-apply') { var field = $('grp-name-' + id); renamingGroup = null; send({ type: 'group', op: 'rename', groupId: id, name: field ? field.value : '' }); return; }
+    if (cmd === 'grp-up' || cmd === 'grp-down') { send({ type: 'group', op: 'move-group', groupId: id, direction: cmd === 'grp-up' ? 'up' : 'down' }); return; }
+    if (cmd === 'grp-collapse' || cmd === 'grp-expand') { send({ type: 'group', op: 'collapse', groupId: id, collapsed: cmd === 'grp-collapse' }); return; }
+    if (cmd === 'grp-delete') { send({ type: 'group', op: 'delete', groupId: id, keepSteps: true }); return; }
     send({ type: cmd, id: id });
   });
 

@@ -9,6 +9,7 @@ import {
   generateJavaJUnitPlaywrightProject,
   writeJavaProject,
 } from '../platform/java-junit-playwright-generator.js';
+import { generateGherkinFeatures } from '../platform/gherkin-feature-generator.js';
 import { generatePlaywrightTests } from '../platform/playwright-test-generator.js';
 import type { ScenarioConfig } from '../config/config.js';
 import { assessReproduction, type ReproductionAnalysis } from '../platform/reproduction-planner.js';
@@ -66,6 +67,7 @@ Usage:
   npx qa-crawler reproduce [<anomaly id>] [run options]
   npx qa-crawler generate-tests [--out <dir>]              Playwright specs (qa-crawler/generated-tests/)
   npx qa-crawler generate-tests --java [--package <name>]  Maven project, JUnit 5 + Playwright Java (qa-crawler/generated-tests-java/)
+  npx qa-crawler generate-tests --gherkin                  Gherkin scenarios (qa-crawler/generated-features/)
 
 Run options (every command that runs the application):
       --base-url <url>        Override qaCrawler.application.baseUrl (also QA_BASE_URL)
@@ -99,6 +101,8 @@ interface ProjectArgs {
   out?: string;
   /** generate-tests --java : un projet Maven JUnit 5 + Playwright Java au lieu des specs TypeScript. */
   java: boolean;
+  /** generate-tests --gherkin : des scénarios .feature (exécutables par le moteur Gherkin de QA-CRAWLER). */
+  gherkin: boolean;
   javaPackage?: string;
   positional?: string;
   /** Options passées telles quelles à la CLI de mission. */
@@ -119,6 +123,7 @@ const OPTIONS = {
   'no-example': { type: 'boolean', default: false },
   out: { type: 'string' },
   java: { type: 'boolean', default: false },
+  gherkin: { type: 'boolean', default: false },
   package: { type: 'string' },
   persistence: { type: 'string' },
   'no-persistence': { type: 'boolean' },
@@ -176,6 +181,7 @@ export function parseProjectArgs(command: ProjectCommand, argv: readonly string[
     example: !values['no-example'],
     ...(values.out ? { out: values.out } : {}),
     java: values.java,
+    gherkin: values.gherkin,
     ...(values.package ? { javaPackage: values.package } : {}),
     ...(positionals[0] !== undefined ? { positional: positionals[0] } : {}),
     passthrough,
@@ -467,6 +473,20 @@ async function generateTests(args: ProjectArgs): Promise<number> {
     return 2;
   }
   if (args.java) return generateJavaTests(args, project.root, loaded.config, last);
+  if (args.gherkin) {
+    const features = generateGherkinFeatures(loaded.config.flows, {
+      language: loaded.config.report.language,
+    });
+    const directory = path.resolve(project.root, args.out ?? path.join(PROJECT_DIR, 'generated-features'));
+    await mkdir(directory, { recursive: true });
+    for (const feature of features) {
+      await writeFile(path.join(directory, feature.fileName), feature.content, 'utf8');
+      logger.info(
+        `  + ${path.relative(project.root, path.join(directory, feature.fileName))}${feature.unsaid > 0 ? ` (${String(feature.unsaid)} step(s) kept as comments: no Gherkin sentence)` : ''}${feature.replayOnly.length > 0 ? ` (${String(feature.replayOnly.length)} business assertion(s) verified by the replay only)` : ''}`,
+      );
+    }
+    return 0;
+  }
   const tests = generatePlaywrightTests(loaded.config.flows, last?.flows ?? [], {
     baseUrl: loaded.config.target.baseUrl,
     ...(last?.cognitive ? { checkpoints: last.cognitive.checkpoints } : {}),

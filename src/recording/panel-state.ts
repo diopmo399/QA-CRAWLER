@@ -1,3 +1,4 @@
+import { inFlow } from './assertion-proposals.js';
 import type { FlowStep, FlowTarget } from '../config/flow-schema.js';
 import type {
   LiveAction,
@@ -41,6 +42,8 @@ export interface PanelStep {
   correction?: PanelCorrection;
   /** Le groupe affiché au-dessus de l'étape : l'étape métier (revue) ou l'écran (en direct). */
   group?: string;
+  /** Le groupe métier (BusinessStepGroup.id) auquel l'étape appartient, le cas échéant. */
+  groupId?: string;
   /** Les requêtes reliées à l'action (analyse HTTP) : l'inspecteur les montre à côté de la cible. */
   network?: PanelNetwork[];
   /** Revue d'une SAISIE : la source de sa valeur (fixe, générée, réutilisée) et les variables réutilisables. */
@@ -343,6 +346,60 @@ export interface PanelBusinessStep {
   ai: boolean;
 }
 
+/** UNE PROPOSITION D'ASSERTION telle que la fenêtre la montre : origine, catégorie, preuves, décision. */
+export interface PanelProposal {
+  id: string;
+  origin: 'OBSERVED' | 'DEDUCED' | 'EXPLICIT';
+  category: string;
+  description: string;
+  why: string;
+  /** L'étape (numéro d'action, 1…n) après laquelle elle s'applique. */
+  afterStep?: number;
+  method: 'UI_EXPECT' | 'BUSINESS_ASSERTION' | 'REPORT_ONLY';
+  confidence: number;
+  needsConfirmation: boolean;
+  recommended: boolean;
+  status: 'PROPOSED' | 'APPROVED' | 'MODIFIED' | 'REJECTED' | 'DISABLED';
+  /** Dans le flow (acceptée, ou recommandée sans décision). */
+  inFlow: boolean;
+  evidence: string[];
+  limits: string[];
+  observations: string[];
+  conflictsWith: string[];
+  note?: string;
+}
+
+/** UN GROUPE MÉTIER tel que la fenêtre le montre. */
+export interface PanelGroup {
+  id: string;
+  name: string;
+  description?: string;
+  stepIds: string[];
+  collapsed: boolean;
+  inputs: string[];
+  outputs: string[];
+  startAt: string;
+  checks: number;
+  assertions: number;
+  runnableAlone: boolean;
+  missing: string[];
+}
+
+/** LA GÉNÉRATION : les artefacts produits (statut, validation réelle, assertions, limites) et leur contenu (aperçu). */
+export interface PanelGeneration {
+  directory: string;
+  warnings: string[];
+  artifacts: {
+    format: 'yaml' | 'gherkin' | 'playwright' | 'java';
+    path: string;
+    status: string;
+    validation?: { method: string; ok: boolean; messages: string[] };
+    assertions: { id: string; description: string; support: 'NATIVE' | 'REPLAY_ONLY'; status: string }[];
+    limits: string[];
+    content: string;
+  }[];
+}
+
 export interface PanelState {
   language: 'fr' | 'en';
   name: string;
@@ -352,6 +409,12 @@ export interface PanelState {
   actions: PanelStep[];
   /** Revue : les vérifications du flow (déduites des résultats observés), séparées des actions. */
   checks: { id: string; description: string }[];
+  /** Revue : les propositions d'assertions (observées, déduites, explicites) et leurs décisions. */
+  proposals?: PanelProposal[];
+  /** Revue : les groupes métier (objets fonctionnels : membres, entrées, sorties, exécutabilité seule). */
+  groups?: PanelGroup[];
+  /** Revue : la dernière génération (artefacts, statuts, validations, aperçus). */
+  generation?: PanelGeneration;
   summary: LiveSummary;
   quality: LiveQuality;
   progress?: { label: string; step: number; total: number; detail?: string };
@@ -597,6 +660,10 @@ export function reviewSteps(
       ...(hasTarget(item.step)
         ? { correctable: true, correction: correctionOf(item, item.step.target) }
         : {}),
+      ...(() => {
+        const owner = flow.groups?.find((group) => group.stepIds.includes(item.id));
+        return owner ? { group: owner.name, groupId: owner.id } : {};
+      })(),
       technical: {
         step: item.id,
         kind: item.step.kind,
@@ -661,4 +728,35 @@ export function summaryOf(steps: readonly PanelStep[]): LiveSummary {
     attention:
       steps.filter((step) => step.status === 'AMBIGUOUS' && step.resolution !== 'IGNORED').length + failed,
   };
+}
+
+/** Les propositions d'assertions du flow, dans l'ordre des étapes puis des propositions. */
+export function proposalRows(flow: RecordedFlow): PanelProposal[] {
+  const actions = flow.steps.filter((item) => item.step.kind !== 'expect');
+  const rows = (flow.proposals ?? []).map((proposal): PanelProposal => {
+    const index = actions.findIndex((item) => item.id === proposal.afterStepId);
+    return {
+      id: proposal.id,
+      origin: proposal.origin,
+      category: proposal.category,
+      description: proposal.description,
+      why: proposal.why,
+      ...(index >= 0 ? { afterStep: index + 1 } : {}),
+      method: proposal.verificationMethod,
+      confidence: proposal.confidence,
+      needsConfirmation: proposal.needsConfirmation,
+      recommended: proposal.recommended,
+      status: proposal.status,
+      inFlow: inFlow(proposal),
+      evidence: proposal.evidence,
+      limits: proposal.limits,
+      observations: proposal.sourceObservationIds,
+      conflictsWith: proposal.conflictsWith ?? [],
+      ...(proposal.note !== undefined ? { note: proposal.note } : {}),
+    };
+  });
+  // Par étape ; les propositions sans étape en dernier.
+  return rows.sort(
+    (a, b) => (a.afterStep ?? Number.MAX_SAFE_INTEGER) - (b.afterStep ?? Number.MAX_SAFE_INTEGER),
+  );
 }

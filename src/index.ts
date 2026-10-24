@@ -65,6 +65,45 @@ export {
   type GeneratedTest,
 } from './platform/playwright-test-generator.js';
 export {
+  translateAssertion,
+  translateAssertions,
+  type TranslatedAssertion,
+  type AssertionSupport,
+} from './platform/assertion-translation.js';
+export {
+  generateGherkinFeature,
+  generateGherkinFeatures,
+  type GeneratedFeature,
+} from './platform/gherkin-feature-generator.js';
+export {
+  planGeneration,
+  validateArtifacts,
+  writeArtifacts,
+  applyExecution,
+  planSummary,
+  type GenerationFormat,
+  type GenerationStatus,
+  type GeneratedArtifact,
+  type GenerationPlan,
+  type GenerationRequest,
+} from './platform/generation-plan.js';
+export { observationsOf, observationSummary, type ObservationSet } from './recording/observations.js';
+export {
+  proposeAssertions,
+  decideProposal,
+  proposalSummary,
+  type ProposalDecision,
+} from './recording/assertion-proposals.js';
+export {
+  applyGroupCommand,
+  groupViews,
+  flowForGroups,
+  stepDependencies,
+  dependencyViolations,
+  type GroupCommand,
+  type GroupView,
+} from './recording/step-groups.js';
+export {
   generateJavaJUnitPlaywrightProject,
   writeJavaProject,
   defaultPlaywrightJavaVersion,

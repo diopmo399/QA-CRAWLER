@@ -498,9 +498,33 @@ export const flowSchema = z
     assertions: z.array(assertionSchema).default([]),
     /** COHÉRENCE DES DONNÉES : saisie → requête → réponse → écran → recherche, et les règles déclarées. */
     consistency: consistencySchema.optional(),
+    /**
+     * GROUPES MÉTIER (recording) : des étapes (positions 1…n) regroupées sous un nom (« Création de la
+     * demande ») ; informatif pour le rejeu, structurant pour la génération (un test par groupe).
+     */
+    groups: z
+      .array(
+        z
+          .object({
+            id: nonEmpty,
+            name: nonEmpty,
+            description: z.string().optional(),
+            steps: z.array(z.number().int().min(1)).min(1),
+          })
+          .strict(),
+      )
+      .default([]),
   })
   .strict()
   .superRefine((flow, ctx) => {
+    for (const [index, group] of flow.groups.entries())
+      for (const position of group.steps)
+        if (position > flow.steps.length)
+          ctx.addIssue({
+            code: 'custom',
+            path: ['groups', index, 'steps'],
+            message: `step ${String(position)} is beyond the last step (${String(flow.steps.length)})`,
+          });
     const ids = new Set<string>();
     for (const [index, assertion] of flow.assertions.entries()) {
       if (ids.has(assertion.id))

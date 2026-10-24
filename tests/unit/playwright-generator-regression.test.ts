@@ -52,7 +52,12 @@ describe('Playwright generator — non-regression', () => {
     expect(content).toContain(`await page.goto("http://app.test/requests");`);
     expect(content).toContain(`page.locator("form > div > div > input").fill(testData["request.title"])`);
     expect(content).toContain(`page.getByLabel("Search").fill(testData["request.title"])`);
-    expect(content).toContain(`getByRole('row').filter({ hasText: "\${testData:request.title}" })`);
+    // Une citation ${testData:clé} devient la donnée du run (jamais le texte littéral de la citation).
+    expect(content).toContain('getByRole(\'row\').filter({ hasText: `${testData["request.title"]}` })');
+    expect(content).toContain(
+      'await expect(page.getByText(`${testData["request.title"]}`).first()).toBeVisible();',
+    );
+    expect(content).not.toContain('${testData:');
     expect(content).toContain(`toHaveURL(new RegExp("/requests/"))`);
     expect(content).toContain(`getByRole("button", { name: "Edit" }).first()).toBeVisible()`);
     expect(content).toContain(`"request.title": \`title-\${runTag}\``);

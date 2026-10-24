@@ -8,7 +8,9 @@ import {
   reportBrandBar,
 } from '../reporting/html-common.js';
 import { describeStep } from '../config/flow-schema.js';
-import type { RawRecordedEvent, SemanticRecordedAction } from './model.js';
+import type { RawRecordedEvent, RecordedFlow, SemanticRecordedAction } from './model.js';
+import { observationSummary, type ObservationSet } from './observations.js';
+import { groupViews } from './step-groups.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { SemanticAuditReport, SemanticInterpretation } from './semantic-audit.js';
 import type { RecordingResult } from './process-recording.js';
@@ -151,6 +153,8 @@ ${REPORT_THEME_HEAD}
     <tbody>${trace}</tbody></table>
     <p class="muted">Nothing is deleted: an action left out keeps its reason. Raw events are in raw-recording.json, semantic actions in semantic-recording.json.</p>
   </section>
+  ${proposalsSection(flow, input.result.observations)}
+  ${groupsSection(flow)}
   <section><h2>Assertion candidates</h2>
     <table class="rec"><thead><tr><th>Kind</th><th>Assertion</th><th>Stability</th><th>Confidence</th><th>Use</th><th>Why</th></tr></thead>
     <tbody>${assertions || '<tr><td colspan="6" class="muted">none</td></tr>'}</tbody></table>
@@ -668,4 +672,59 @@ function intentReviewHtml(result: RecordingResult): string {
       return `<tr><td><code>${esc(view.actionId)}</code> ${esc(view.type)}${view.label ? ` "${esc(view.label)}"` : ''}</td><td><b>${esc(review.source === 'HUMAN' ? review.finalIntent : view.interpretation.join(' + '))}</b></td><td>${esc(review.originalIntent.join(' + '))}</td><td>${esc(review.source)} · ${esc(review.status)}</td><td>${pct(review.originalConfidence)}</td><td>${review.correction?.reason ? esc(review.correction.reason) : '—'}${review.proposal ? `<br><span class="muted">proposal ${esc(review.proposal.intent.join(' + '))} (${esc(review.proposal.source)}, not applied)</span>` : ''}</td><td class="muted">${esc(review.history.map((entry) => `${entry.source} → ${entry.intent.join(' + ')}`).join(' · '))}</td></tr>`;
     })
     .join('')}</tbody></table>`;
+}
+
+/**
+ * LES OBSERVATIONS ET LES PROPOSITIONS D'ASSERTIONS : origine, méthode, confiance, preuves, décision ;
+ * ce qui n'a pas été observé est dit. Jamais une valeur sensible (les observations sont déjà rédigées).
+ */
+function proposalsSection(flow: RecordedFlow, observations: ObservationSet | undefined): string {
+  const proposals = flow.proposals ?? [];
+  if (proposals.length === 0 && !observations) return '';
+  const bySource = observations ? observationSummary(observations).bySource : {};
+  const cards = [
+    ...Object.entries(bySource).map(([source, count]) => card(`Observed · ${source}`, count)),
+    card('Not observed', observations?.missing.length ?? 0, '#b45309'),
+    card('Proposals', proposals.length, '#2563eb'),
+    card(
+      'Approved',
+      proposals.filter((p) => p.status === 'APPROVED' || p.status === 'MODIFIED').length,
+      '#15803d',
+    ),
+    card(
+      'Rejected / disabled',
+      proposals.filter((p) => p.status === 'REJECTED' || p.status === 'DISABLED').length,
+    ),
+    card(
+      'To confirm (deduced)',
+      proposals.filter((p) => p.origin === 'DEDUCED' && p.status === 'PROPOSED').length,
+      '#b45309',
+    ),
+  ].join('');
+  const rows = proposals
+    .map(
+      (p) =>
+        `<tr><td><code>${esc(p.id)}</code></td><td>${esc(p.origin)}</td><td>${esc(p.category)}</td><td>${esc(p.description)}</td><td>${esc(p.verificationMethod)}</td><td>${p.confidence.toFixed(2)}</td><td>${esc(p.status)}${p.conflictsWith?.length ? ` <span class="muted">conflicts with ${esc(p.conflictsWith.join(', '))}</span>` : ''}</td><td class="muted">${esc(p.why)}${p.limits.length > 0 ? ` · limits: ${esc(p.limits.join('; '))}` : ''} · evidence ${esc(p.sourceObservationIds.join(', ') || '—')}</td></tr>`,
+    )
+    .join('');
+  const missing = (observations?.missing ?? [])
+    .map((entry) => `<li><code>${esc(entry.actionId)}</code> ${esc(entry.what)}</li>`)
+    .join('');
+  return `<section><h2>Observations and proposed assertions</h2><div class="cards">${cards}</div>
+  <p class="muted">Origin OBSERVED: from a concrete observation · DEDUCED: a plausible relation between observations, to confirm by a human · EXPLICIT: a checkpoint. A deduced proposal never enters the flow as a rule without a human decision.${observations ? ` Not captured by the recorder: ${esc(observations.notCaptured.join(', '))}.` : ''}</p>
+  ${rows ? `<table><thead><tr><th>Id</th><th>Origin</th><th>Category</th><th>Assertion</th><th>Method</th><th>Confidence</th><th>Status</th><th>Why · limits · evidence</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">No proposal.</p>'}
+  ${missing ? `<h3>Not observed</h3><ul class="plain">${missing}</ul>` : ''}</section>`;
+}
+
+/** LES GROUPES MÉTIER : étapes, entrées, sorties, exécutabilité seule. */
+function groupsSection(flow: RecordedFlow): string {
+  if (!flow.groups || flow.groups.length === 0) return '';
+  const rows = groupViews(flow)
+    .map(
+      (view) =>
+        `<tr><td><code>${esc(view.id)}</code></td><td>${esc(view.name)}${view.description ? `<div class="muted">${esc(view.description)}</div>` : ''}</td><td>${esc(view.positions.join(', '))}</td><td>${esc(view.data.inputs.map((input) => input.key).join(', ') || '—')}</td><td>${esc(view.data.outputs.map((output) => output.key).join(', ') || '—')}</td><td>${String(view.checks.length)} / ${String(view.assertionIds.length)}</td><td>${view.runnableAlone.ok ? 'yes' : `no — ${esc(view.runnableAlone.missing.join('; '))}`}</td></tr>`,
+    )
+    .join('');
+  return `<section><h2>Business step groups</h2>
+  <table><thead><tr><th>Id</th><th>Group</th><th>Steps</th><th>Inputs (produced elsewhere)</th><th>Outputs</th><th>Checks / assertions</th><th>Runnable alone</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }

@@ -45,7 +45,9 @@ import {
 import type { IntentHistoryHint } from '../intent/evidence.js';
 import type { RememberedIntentDecision } from '../knowledge/functional-knowledge-store.js';
 import type { TrackedEntity } from './business/entity-tracker.js';
+import { proposalSummary, proposeAssertions } from './assertion-proposals.js';
 import { optimizeRecordedActions } from './flow-optimizer.js';
+import { observationsOf, type ObservationSet } from './observations.js';
 import {
   accountHumanJourney,
   clicksWithEffects,
@@ -105,6 +107,8 @@ export interface RecordingResult {
   session: RecordingSession;
   normalized: NormalizedRecording;
   flow: RecordedFlow;
+  /** LES OBSERVATIONS du recording (observations.json) : les faits capturés, identifiés, par source. */
+  observations?: ObservationSet;
   files: GeneratedFiles;
   graph: FlowGraphData;
   warnings: RecordingWarning[];
@@ -545,12 +549,27 @@ export function processRecording(
       ...(testData && Object.keys(testData.set.values).length > 0 ? { testDataFile: TEST_DATA_FILE } : {}),
     });
   }
+  // LES OBSERVATIONS et LES PROPOSITIONS D'ASSERTIONS : des faits identifiés, puis ce qu'ils permettent
+  // de vérifier (origine, preuves, limites) ; rien n'entre dans le flow sans décision humaine, sauf les
+  // candidats stables déjà retenus (le flow d'avant).
+  const observations = observationsOf({ session, kept: normalized.kept, flow: built.flow });
+  built.flow.proposals = proposeAssertions({
+    flow: built.flow,
+    kept: normalized.kept,
+    observations,
+    ...(http ? { fieldMappings: http.consolidated.fieldMappings } : {}),
+  });
+  emit(
+    'ASSERTIONS_PROPOSED',
+    `${String(built.flow.proposals.length)} assertion proposal(s): ${String(proposalSummary(built.flow.proposals).inFlow)} kept in the flow, ${String(proposalSummary(built.flow.proposals).needingConfirmation)} to confirm`,
+  );
   return {
     ...(http ? { http } : {}),
     ...(intents ? { intents } : {}),
     session,
     normalized,
     flow: built.flow,
+    observations,
     files,
     ...(business ? { business } : {}),
     ...(application ? { application } : {}),

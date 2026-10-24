@@ -31,8 +31,26 @@ export interface PanelCommand {
     | 'correct-restore'
     | 'resume-replay'
     | 'row-preview'
-    | 'row-edit';
+    | 'row-edit'
+    | 'assertion-decide'
+    | 'group'
+    | 'generate';
   id?: string;
+  /** generate : les formats demandés (yaml, gherkin, playwright, java) et les groupes choisis (tous sans sélection). */
+  formats?: string[];
+  groupIds?: string[];
+  /** group : l'opération sur les groupes métier (créer, renommer, affecter, déplacer, supprimer…). */
+  op?: string;
+  name?: string;
+  description?: string;
+  groupId?: string;
+  stepIds?: string[];
+  direction?: 'up' | 'down';
+  collapsed?: boolean;
+  keepSteps?: boolean;
+  force?: boolean;
+  /** assertion-decide : la décision sur une proposition d'assertion. */
+  decision?: 'ACCEPT' | 'REJECT' | 'DISABLE' | 'RESET' | 'MODIFY';
   candidate?: number;
   /** La revue d'une intention : l'intention choisie et sa justification (facultative). */
   intent?: string;
@@ -51,6 +69,9 @@ export interface PanelCommand {
 }
 
 const COMMANDS = new Set<PanelCommand['type']>([
+  'assertion-decide',
+  'group',
+  'generate',
   'pause',
   'resume',
   'stop',

@@ -1109,6 +1109,16 @@ intention, forme générale `SEARCH_ENTITY`) et reviennent comme indices HISTORY
 suivants ; les décisions de la revue sur une intention sont des preuves pour le même écran et le même
 élément. Voir [FUNCTIONAL_INTENT.md](FUNCTIONAL_INTENT.md).
 
+## Assertions proposées, groupes métier, génération
+
+À l'arrêt, le recorder tire de la session des **observations** (`observations.json`), **propose des
+assertions** avec leur origine (observée, déduite, explicite), leurs preuves et leurs limites
+(`assertion-proposals.json`), que la revue permet d'accepter, refuser, désactiver ou modifier ; les
+étapes se regroupent en **groupes métier** (dépendances de données protégées) ; la section
+« Génération des tests » produit le flow YAML, le scénario Gherkin, le test Playwright TypeScript et
+le projet Java, chacun avec un statut honnête (généré, validé statiquement, non validé, exécuté).
+Voir [RECORDING_ASSERTIONS.md](RECORDING_ASSERTIONS.md).
+
 ## Fichiers
 
 `<reportsDir>/recordings/<nom>/` : `raw-recording.json`, `semantic-recording.json`,

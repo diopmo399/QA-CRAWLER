@@ -1,3 +1,9 @@
+import {
+  expectStepOf,
+  nativeComment,
+  replayOnlyComment,
+  translateAssertions,
+} from './assertion-translation.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -494,12 +500,33 @@ function testClass(
   const unsupported: string[] = [];
   const body: string[] = [];
   let assertions = 0;
+  // LES ASSERTIONS MÉTIER (modèle commun) : natives → une assertion Playwright après leur étape ; sinon un commentaire.
+  const business = translateAssertions(definition.assertions, definition.steps.length);
+  const groupAt = new Map((definition.groups ?? []).map((group) => [group.steps[0] ?? 0, group]));
+  const pushNative = (position: number): void => {
+    for (const assertion of business.nativeAfter.get(position) ?? []) {
+      const step = expectStepOf(assertion);
+      if (!step) continue;
+      const generated = stepCode(step, position, definition.name, report, notes);
+      body.push(`// ${nativeComment(assertion)}`, ...generated.lines.slice(1), '');
+      assertions += generated.assertions;
+    }
+  };
   definition.steps.forEach((step, position) => {
+    const group = groupAt.get(position + 1);
+    if (group) body.push(`// ── group: ${group.name}${group.description ? ` — ${group.description}` : ''}`);
     const generated = stepCode(step, position + 1, definition.name, report, notes);
     body.push(...generated.lines, '');
     assertions += generated.assertions;
     if (generated.unsupported) unsupported.push(generated.unsupported);
+    pushNative(position + 1);
   });
+  pushNative(0);
+  for (const assertion of business.replayOnly) {
+    body.push(`// ${replayOnlyComment(assertion)}`);
+    notes.push(`${assertion.id}: verified by the QA-CRAWLER replay only (${assertion.reason ?? ''})`);
+  }
+  if (business.replayOnly.length > 0) body.push('');
   const keys = testDataKeysOf(definition.steps);
   const checkpoints = (options.checkpoints ?? []).map(
     (checkpoint) => ` *   - ${checkpoint.id}: ${checkpoint.status}`,
@@ -526,6 +553,12 @@ function testClass(
     ' * secrets come from the environment (QA_REPRO_<FLOW>_STEP_<n>).',
     ...(keys.length > 0 ? [` * Run data used: ${keys.join(', ')}.`] : []),
     ...(checkpoints.length > 0 ? [' * Semantic checkpoints observed:', ...checkpoints] : []),
+    ...(business.replayOnly.length > 0
+      ? [
+          ' * Business assertions this test cannot verify by itself (the QA-CRAWLER replay does, on the observed network):',
+          ...business.replayOnly.map((assertion) => ` *   - ${assertion.id}: ${assertion.description}`),
+        ]
+      : []),
     ...(unsupported.length > 0
       ? [
           ' * Steps the Java test cannot replay (the test is aborted there, never reported as passed):',
