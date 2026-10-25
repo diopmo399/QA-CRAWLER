@@ -363,6 +363,72 @@ export interface GroupViewDto {
   checks: string[];
   assertionIds: string[];
   runnableAlone: { ok: boolean; missing: string[] };
+  /** Ses entrées (données produites ailleurs) et ses sorties (données citées ailleurs). */
+  data?: {
+    inputs: { key: string; producerStepId?: string; producerGroupId?: string }[];
+    outputs: { key: string; consumerStepIds: string[] }[];
+  };
+}
+
+/**
+ * Le résultat d'une étape au dernier rejeu du flow, tel que le moteur l'a écrit (dry run) :
+ * retrouvée et jouée (`MATCHED`), vérification différente, plusieurs candidats, refusée par la
+ * SafetyPolicy, introuvable, non vérifiée.
+ */
+export const STEP_REPLAY_OUTCOMES = [
+  'MATCHED',
+  'ASSERTION_MISMATCH',
+  'AMBIGUOUS',
+  'BLOCKED_BY_POLICY',
+  'NOT_FOUND',
+  'NOT_VERIFIED',
+] as const;
+export type StepReplayOutcome = (typeof STEP_REPLAY_OUTCOMES)[number];
+
+export interface StudioStep {
+  id: string;
+  /** Position 1…n dans le flow tel qu'écrit. */
+  position: number;
+  kind: string;
+  description: string;
+  groupId?: string;
+  /** Les clés de données de test citées et produites (jamais une valeur). */
+  consumes: string[];
+  produces: string[];
+  /** Absent : l'étape n'a pas été rejouée (aucun rejeu, ou étape ajoutée depuis). */
+  replay?: { outcome: StepReplayOutcome; reasons: string[] };
+}
+
+/** Une donnée produite par une étape et citée par une autre. */
+export interface StudioDependency {
+  from: string;
+  to: string;
+  key: string;
+}
+
+/** Une étape qui cite une donnée avant l'étape qui la produit. */
+export interface StudioViolation {
+  stepId: string;
+  key: string;
+  producerStepId: string;
+  message: string;
+}
+
+/** La vue du Flow Studio : le flow, ses groupes, ses dépendances, et le dernier rejeu s'il existe. */
+export interface FlowStudioView {
+  name: string;
+  startAt: string;
+  steps: StudioStep[];
+  groups: GroupViewDto[];
+  dependencies: StudioDependency[];
+  violations: StudioViolation[];
+  replay?: {
+    /** Le statut du dry run (FULLY_MATCHED…). */
+    status: string;
+    at: string;
+    /** Le flow a été modifié après ce rejeu : les résultats peuvent ne plus correspondre. */
+    stale: boolean;
+  };
 }
 
 export type GroupCommandInput =
@@ -458,5 +524,16 @@ export const WIZARD_EVENTS = {
   explorationProgress: 'qa-exploration-progress',
   explorationCompleted: 'qa-exploration-completed',
   explorationFailed: 'qa-exploration-failed',
+  error: 'qa-error',
+} as const;
+
+/** Les événements DOM du Flow Studio (bubbles, composed). */
+export const STUDIO_EVENTS = {
+  /** `detail: { stepIds, groupId? }` : la sélection a changé. */
+  selection: 'qa-studio-selection',
+  /** `detail: { command, warnings }` : le moteur a accepté une commande de groupe. */
+  changed: 'qa-studio-changed',
+  /** `detail: { command, message, violations }` : le moteur a refusé une commande (rien n'a changé). */
+  refused: 'qa-studio-refused',
   error: 'qa-error',
 } as const;

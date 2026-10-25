@@ -251,6 +251,13 @@ describe('SDK server — access control', () => {
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("connect-src 'self'");
     expect(await page.text()).toContain('<qa-crawler-project-wizard mode="standalone"');
+    const studio = await fetch(`${server.url}/studio?project=x&recording=<y>`);
+    expect(studio.status).toBe(200);
+    expect(studio.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    const html = await studio.text();
+    expect(html).toContain('<qa-crawler-flow-studio endpoint="/api"');
+    // Le projet et l'enregistrement sont lus par le script, jamais recopiés dans la page.
+    expect(html).not.toContain('<y>');
   });
 });
 
@@ -461,6 +468,15 @@ describe('SDK server — recordings and reports', () => {
     expect((await client.recordings.flow(project.id, 'parcours-test')).yaml).toContain('parcours test');
     expect(await client.assertions.list(project.id, 'parcours-test')).toEqual([]);
     expect(await client.groups.list(project.id, 'parcours-test')).toEqual([]);
+    expect(await client.recordings.studio(project.id, 'parcours-test')).toEqual({
+      name: expect.any(String) as unknown,
+      startAt: '/',
+      steps: [],
+      groups: [],
+      dependencies: [],
+      violations: [],
+    });
+    await expect(client.recordings.studio(project.id, 'inconnu')).rejects.toMatchObject({ status: 404 });
     await expect(
       client.assertions.decide(project.id, 'parcours-test', 'p-unknown', { decision: 'ACCEPT' }),
     ).rejects.toMatchObject({ status: 422, code: 'REFUSED' });
@@ -499,5 +515,6 @@ describe('SDK server — recordings and reports', () => {
   it('keeps the new routes behind the token', async () => {
     expect((await call('/api/projects/prj_whatever/recordings', { token: null })).status).toBe(401);
     expect((await call('/api/projects/prj_whatever/reports', { token: null })).status).toBe(401);
+    expect((await call('/api/projects/prj_whatever/recordings/x/studio', { token: null })).status).toBe(401);
   });
 });

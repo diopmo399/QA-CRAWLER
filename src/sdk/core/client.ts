@@ -5,6 +5,7 @@ import type {
   ExplorationEvent,
   ExplorationSnapshot,
   ExplorationSummary,
+  FlowStudioView,
   FlowView,
   GenerationInput,
   GenerationResult,
@@ -140,6 +141,8 @@ export interface QaCrawlerClient {
       options?: SubscribeOptions,
     ): Subscription;
     flow(projectId: string, name: string): Promise<FlowView>;
+    /** Le Flow Studio : étapes, données produites et citées, dépendances, groupes, dernier rejeu. */
+    studio(projectId: string, name: string): Promise<FlowStudioView>;
   };
   /** Les propositions d'assertions d'un enregistrement et les décisions humaines. */
   assertions: {
@@ -384,6 +387,7 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           subscribeOptions,
         ),
       flow: (projectId, name) => request('GET', `${recording(projectId, name)}/flow`),
+      studio: (projectId, name) => request('GET', `${recording(projectId, name)}/studio`),
     },
     assertions: {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/assertions`),

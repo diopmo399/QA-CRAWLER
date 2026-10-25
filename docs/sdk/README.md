@@ -231,6 +231,7 @@ const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisate
 | `recordings.stop(projectId, name)`              | `POST /api/projects/:id/recordings/:name/stop`                   |
 | `recordings.subscribe(projectId, name, cb)`     | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
 | `recordings.flow(projectId, name)`              | `GET /api/projects/:id/recordings/:name/flow`                    |
+| `recordings.studio(projectId, name)`            | `GET /api/projects/:id/recordings/:name/studio`                  |
 | `assertions.list(projectId, name)`              | `GET /api/projects/:id/recordings/:name/assertions`              |
 | `assertions.decide(projectId, name, id, input)` | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
 | `groups.list(projectId, name)`                  | `GET /api/projects/:id/recordings/:name/groups`                  |
@@ -261,6 +262,56 @@ RECORDING_IN_PROGRESS` ; ensuite, les modifications d'un même enregistrement pa
   une dépendance de données est refusé (`422`) sauf `force` ;
 - la génération écrit sous `recordings/<nom>/generated/` ; le statut de chaque fichier dit ce qui a
   été vérifié (`GENERATED`, `STATICALLY_VALIDATED`, `NOT_VALIDATED`…), jamais une exécution.
+
+## Flow Studio
+
+`<qa-crawler-flow-studio>` montre le parcours d'un enregistrement en graphe et permet de l'organiser
+en groupes métier. Page autonome : `http://127.0.0.1:4310/studio?project=<id>&recording=<nom>`.
+
+```html
+<qa-crawler-flow-studio
+  endpoint="https://qa.example/api"
+  project="prj_…"
+  recording="ouvrir-un-utilisateur"
+  locale="fr"
+></qa-crawler-flow-studio>
+<script type="module">
+  import 'https://qa.example/sdk/ui/index.js';
+  const studio = document.querySelector('qa-crawler-flow-studio');
+  studio.token = await tokenFromMyBackend();
+  studio.addEventListener('qa-studio-changed', (event) => console.log(event.detail.command));
+</script>
+```
+
+| Ce qu'on voit                                      | D'où ça vient                                                                                             |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Les étapes, dans l'ordre, avec leur libellé        | le flow enregistré (`recorded-flow.json`)                                                                 |
+| Les groupes métier (cadres repliables)             | les groupes du flow (`groupViews` du moteur)                                                              |
+| Les données produites (◆) et citées (◇)            | `stepDependencies` du moteur : la première saisie d'une clé la produit, les citations la consomment       |
+| Les liens de données (pointillés bleus)            | producteur → consommateur, d'après les mêmes rôles                                                        |
+| Les citations avant production (pointillés rouges) | `dependencyViolations` du moteur                                                                          |
+| Le chemin exécuté (pastille de chaque carte)       | le dernier rejeu du flow (`replay/dry-run/…/reconciliation.json`) ; « périmé » si le flow a changé depuis |
+
+Gestes : molette ou boutons pour zoomer, glisser le fond pour déplacer la vue, « Ajuster la vue »,
+recherche (texte, clé de donnée, nom de groupe ; Entrée passe au résultat suivant), clic pour choisir,
+Maj + clic pour en choisir plusieurs. Clavier : flèches d'une étape à l'autre, Entrée pour choisir,
+Échap pour vider la sélection, `+` `-` `0` pour le zoom.
+
+**Ce qui modifie le parcours passe par le moteur** (`groups.edit`) : créer un groupe avec les étapes
+choisies, renommer, décrire, replier, avancer / reculer une étape ou un groupe, sortir une étape d'un
+groupe, supprimer un groupe (les étapes restent). Glisser une étape sur un groupe l'y place ; sur une
+autre étape du même groupe, la place avant elle ; glisser un groupe au-delà d'un autre demande au
+moteur de les échanger. Le moteur vérifie les dépendances de données : un refus s'affiche avec
+l'étape, la donnée et une proposition (« placez d'abord … »), et **rien n'est modifié**. Déplacer une
+carte ailleurs ne change que l'affichage (« Remettre les positions » l'annule).
+
+Événements DOM (`STUDIO_EVENTS`) : `qa-studio-selection` (`{ stepIds, groupId? }`),
+`qa-studio-changed` (`{ command, warnings }`), `qa-studio-refused` (`{ command, message, violations }`),
+`qa-error`.
+
+Non proposé : **jouer un groupe seul** (le panneau dit si ses entrées sont produites dans le groupe,
+mais le SDK ne lance pas de rejeu partiel) ; relancer un rejeu depuis le Studio (enregistrer avec
+`validate: true`).
 
 ## Statuts et événements
 
@@ -326,7 +377,8 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Les explorations et les flux d'enregistrement vivent en mémoire pendant la vie du serveur ; les
   projets, les enregistrements et les rapports restent sur disque, dans le dossier de travail.
 - L'enregistrement suppose un écran sur la machine du serveur (un humain joue le parcours).
-- L'assistant visuel couvre la création et l'exploration ; les extensions s'utilisent par le client.
+- L'assistant visuel couvre la création et l'exploration ; le Flow Studio, les groupes et le
+  chemin exécuté d'un enregistrement ; le reste des extensions s'utilise par le client.
 - Une exploration à la fois par défaut (`--concurrency`).
 - Chromium seulement.
 - Rien n'est publié sur un registre : le SDK fait partie de `@qa-crawler/core`.
@@ -342,6 +394,12 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/unit/sdk-server.test.ts` : jeton, origines, variables, modules, CSP, parcours complet avec
   un moteur **simulé** (tests seulement), liens de rapport, reprise du flux ; enregistrements avec un
   recorder **simulé** (un à la fois, arrêt par l'API, noms et chemins refusés, graphe, rapports).
+- `tests/unit/sdk-studio.test.ts` : la vue bâtie avec le moteur (données produites et citées,
+  liens, dernier rejeu par position, aucun résultat inventé sans rejeu), disposition (cadres,
+  repli, colonnes, 150 étapes), zoom, recherche, rendu échappé et explication d'un refus.
+- `tests/integration/sdk-studio.test.ts` : le **vrai** recorder et le **vrai** rejeu, puis le Studio
+  dans Chromium — zoom, déplacement, recherche, création d'un groupe, dépôt d'une étape sur un groupe,
+  carte déplacée sans changer l'ordre, repli et renommage gardés par le moteur, refus affiché, clavier.
 - `tests/unit/sdk-view.test.ts` : rendu pur (échappement, pas de champ mot de passe, compteurs
   sans pourcentage, mode embarqué).
 - `tests/integration/sdk-wizard.test.ts` : le **vrai** moteur, Chromium et le site de démo — page

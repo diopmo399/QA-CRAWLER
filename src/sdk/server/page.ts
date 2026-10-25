@@ -23,3 +23,33 @@ wizard.token = ${JSON.stringify(options.token)};
 </html>
 `;
 }
+
+/**
+ * LE FLOW STUDIO en pleine page : `/studio?project=<id>&recording=<nom>`. Le projet et
+ * l'enregistrement sont lus dans l'adresse par le script de la page (jamais recopiés dans le HTML).
+ */
+export function flowStudioHtml(options: { token: string; nonce: string; language: 'fr' | 'en' }): string {
+  return `<!doctype html>
+<html lang="${options.language}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA-CRAWLER — Flow Studio</title>
+<style>html,body{margin:0;height:100%}body{background:#F5F6FB;padding:16px;box-sizing:border-box}qa-crawler-flow-studio{height:calc(100vh - 32px)}</style>
+</head>
+<body>
+<qa-crawler-flow-studio endpoint="/api" locale="${options.language}"></qa-crawler-flow-studio>
+<script type="module" nonce="${options.nonce}">
+import '/sdk/ui/index.js';
+const studio = document.querySelector('qa-crawler-flow-studio');
+const query = new URLSearchParams(location.search);
+for (const name of ['project', 'recording']) {
+  const value = query.get(name);
+  if (value) studio.setAttribute(name, value);
+}
+studio.token = ${JSON.stringify(options.token)};
+</script>
+</body>
+</html>
+`;
+}

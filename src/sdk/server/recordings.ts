@@ -4,20 +4,26 @@ import type { RecordOutcome, RecordRequest } from '../../recording/record-orches
 import { inFlow } from '../../recording/assertion-proposals.js';
 import type { HumanFlowRecorder } from '../../recording/human-flow-recorder.js';
 import type { RecordedFlow, RecordingEvent } from '../../recording/model.js';
+import { dependencyViolations, stepDependencies } from '../../recording/step-groups.js';
 import {
   FLOW_FILES,
   loadStoredRecording,
   type StoredRecording,
 } from '../../recording/recording-workspace.js';
 import { redactText } from '../../security/redactor.js';
-import type {
-  FlowView,
-  GraphView,
-  RecordingSnapshot,
-  RecordingStatus,
-  RecordingStreamEvent,
-  RecordingSummary,
-  ReportEntry,
+import {
+  STEP_REPLAY_OUTCOMES,
+  type FlowStudioView,
+  type FlowView,
+  type GraphView,
+  type GroupViewDto,
+  type StepReplayOutcome,
+  type StudioStep,
+  type RecordingSnapshot,
+  type RecordingStatus,
+  type RecordingStreamEvent,
+  type RecordingSummary,
+  type ReportEntry,
 } from '../core/contracts.js';
 
 /**
@@ -250,6 +256,105 @@ export async function flowView(recording: StoredRecording): Promise<FlowView> {
     })),
     ...(yaml !== undefined ? { yaml } : {}),
     ...(feature !== undefined ? { feature } : {}),
+  };
+}
+
+interface ReplayFile {
+  status?: string;
+  findings?: { intentId?: string; outcome?: string; reasons?: string[] }[];
+}
+
+/**
+ * Le dernier rejeu du flow écrit par le moteur (`replay/dry-run/<…>/reconciliation.json`) : chaque
+ * résultat est rattaché à l'étape de même position (`…#<position>`, comme pendant le rejeu).
+ */
+async function lastReplay(directory: string): Promise<{ file: ReplayFile; at: Date } | undefined> {
+  const root = path.join(directory, 'replay', 'dry-run');
+  const runs = await readdir(root, { withFileTypes: true }).catch(() => []);
+  let best: { file: string; at: Date } | undefined;
+  for (const run of runs.filter((entry) => entry.isDirectory())) {
+    const file = path.join(root, run.name, 'reconciliation.json');
+    const info = await stat(file).catch(() => undefined);
+    if (info && (!best || info.mtime > best.at)) best = { file, at: info.mtime };
+  }
+  if (!best) return undefined;
+  try {
+    return { file: JSON.parse(await readFile(best.file, 'utf8')) as ReplayFile, at: best.at };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * LA VUE DU FLOW STUDIO : les étapes avec les données qu'elles produisent et citent (le moteur :
+ * `stepDependencies`), les liens producteur → consommateur, les citations placées avant leur
+ * producteur (`dependencyViolations`), les groupes, et le dernier rejeu s'il existe. Rien n'est
+ * recalculé ici : tout vient du moteur ou de ses fichiers.
+ */
+export async function studioView(
+  recording: StoredRecording,
+  groups: GroupViewDto[],
+): Promise<FlowStudioView> {
+  const steps = recording.flow.steps;
+  const roles = stepDependencies(recording.flow);
+  const groupOf = new Map<string, string>();
+  for (const group of groups) for (const stepId of group.stepIds) groupOf.set(stepId, group.id);
+  const producerOf = new Map<string, string>();
+  for (const role of roles) for (const key of role.produces) producerOf.set(key, role.stepId);
+  const dependencies = roles.flatMap((role) =>
+    role.consumes.flatMap((key) => {
+      const from = producerOf.get(key);
+      return from && from !== role.stepId ? [{ from, to: role.stepId, key }] : [];
+    }),
+  );
+  const replay = await lastReplay(recording.directory);
+  const outcomeAt = new Map<number, { outcome: StepReplayOutcome; reasons: string[] }>();
+  for (const finding of replay?.file.findings ?? []) {
+    const position = Number(finding.intentId?.split('#').pop());
+    const outcome = finding.outcome as StepReplayOutcome;
+    if (Number.isInteger(position) && STEP_REPLAY_OUTCOMES.includes(outcome))
+      outcomeAt.set(position, {
+        outcome,
+        reasons: (finding.reasons ?? []).map((reason) => redactText(reason)),
+      });
+  }
+  const flowChanged = replay
+    ? await stat(path.join(recording.directory, 'recorded-flow.json')).then(
+        (info) => info.mtime > replay.at,
+        () => false,
+      )
+    : false;
+  const studioSteps: StudioStep[] = steps.map((item, index) => {
+    const role = roles[index];
+    const replayed = outcomeAt.get(index + 1);
+    return {
+      id: item.id,
+      position: index + 1,
+      kind: item.step.kind,
+      // Le libellé que le moteur a donné à l'étape (« saisir le titre »), sinon sa cible.
+      description: item.label.trim() || describeStep(item.step),
+      ...(groupOf.has(item.id) ? { groupId: groupOf.get(item.id) } : {}),
+      consumes: role?.consumes ?? [],
+      produces: role?.produces ?? [],
+      ...(replayed ? { replay: replayed } : {}),
+    };
+  });
+  return {
+    name: recording.flow.name,
+    startAt: recording.flow.startAt,
+    steps: studioSteps,
+    groups,
+    dependencies,
+    violations: dependencyViolations(steps),
+    ...(replay
+      ? {
+          replay: {
+            status: replay.file.status ?? 'UNKNOWN',
+            at: replay.at.toISOString(),
+            stale: flowChanged,
+          },
+        }
+      : {}),
   };
 }
 

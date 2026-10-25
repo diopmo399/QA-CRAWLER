@@ -6,6 +6,14 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : Flow Studio** (`<qa-crawler-flow-studio>`, page `/studio`, `docs/sdk/README.md`). Le parcours
+  d'un enregistrement en graphe : groupes métier en cadres repliables, étapes, données produites et
+  citées, liens producteur → consommateur, citations avant production, chemin du dernier rejeu.
+  Zoom, déplacement, recherche, ajustement de la vue, panneau latéral, clavier. Créer, renommer,
+  décrire, replier, réordonner, déposer une étape sur un groupe : chaque geste est une commande que le
+  moteur vérifie ; un refus est expliqué et ne change rien. Nouvelle route
+  `GET /api/projects/:id/recordings/:name/studio` (`client.recordings.studio`), lue dans les fichiers
+  du moteur.
 - **SDK : flux d'événements qui survit aux coupures, contrat versionné** (`docs/sdk/README.md`, audit
   `docs/sdk/MASTER-AUDIT.md`). Le client rouvre lui-même un flux coupé avant sa fin, après le dernier
   événement reçu, et ne transmet jamais deux fois le même événement ; un refus n'est pas réessayé.

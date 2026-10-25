@@ -55,9 +55,10 @@ import {
   reportEntries,
   storedRecordingNames,
   storedSummary,
+  studioView,
   type RecordRunner,
 } from './recordings.js';
-import { sdkStandalonePage } from './page.js';
+import { sdkStandalonePage, flowStudioHtml } from './page.js';
 import {
   PROJECT_FILE,
   REPORTS_DIR,
@@ -250,7 +251,8 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
   if (segments[0] !== 'api') {
     if (method !== 'GET' && method !== 'HEAD')
       throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
-    if (segments.length > 0 && segments[0] !== 'index.html')
+    const studio = segments.length === 1 && segments[0] === 'studio';
+    if (segments.length > 0 && segments[0] !== 'index.html' && !studio)
       throw new HttpError(404, 'NOT_FOUND', 'not found');
     const nonce = randomBytes(16).toString('base64');
     response.writeHead(200, {
@@ -260,7 +262,11 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     response.end(
       method === 'HEAD'
         ? undefined
-        : sdkStandalonePage({ token: ctx.token, nonce, language: ctx.options.language ?? 'en' }),
+        : (studio ? flowStudioHtml : sdkStandalonePage)({
+            token: ctx.token,
+            nonce,
+            language: ctx.options.language ?? 'en',
+          }),
     );
     return;
   }
@@ -577,6 +583,11 @@ async function handleRecordings(
     sendJson(response, views);
     return;
   }
+  if (action === 'studio' && itemId === undefined && method === 'GET') {
+    const stored = await storedRecordingOf(ctx, project, name);
+    sendJson(response, await studioView(stored, groupDtos(stored)));
+    return;
+  }
   if (action === 'groups' && itemId === undefined && method === 'GET') {
     sendJson(response, groupDtos(await storedRecordingOf(ctx, project, name)));
     return;
@@ -788,6 +799,7 @@ function groupDtos(stored: StoredRecording): GroupViewDto[] {
     checks: group.checks,
     assertionIds: group.assertionIds,
     runnableAlone: group.runnableAlone,
+    data: group.data,
   }));
 }
 
