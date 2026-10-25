@@ -2277,6 +2277,9 @@ l'élément `<qa-crawler-project-wizard mode="embedded">` (Shadow DOM, thème pa
 événements DOM `qa-project-created`, `qa-exploration-completed`…). Le serveur garde les droits :
 jeton, origines autorisées, variables `QA_*` dont il ne donne que la présence, SafetyPolicy du moteur
 intacte, rapports par lien de courte durée. Pas d'annulation ni de pourcentage : le moteur n'en a pas.
+Le client donne aussi les enregistrements (le vrai recorder, un humain joue le parcours), les décisions
+sur les propositions d'assertions, les groupes métier, la génération des tests, le graphe d'écrans et
+les rapports d'un projet.
 
 Documentation : [docs/sdk/README.md](docs/sdk/README.md) ; décisions : [docs/sdk/AUDIT.md](docs/sdk/AUDIT.md) ;
 exemple d'hôte : [examples/sdk-host](examples/sdk-host/README.md).

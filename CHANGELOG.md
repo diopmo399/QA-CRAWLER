@@ -6,6 +6,15 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : enregistrements, assertions, groupes, génération, graphe et rapports** (`docs/sdk/README.md`).
+  Les espaces de noms réservés deviennent des appels réels du client (`recordings`, `assertions`,
+  `groups`, `generation`, `graph`, `reports`) et du serveur : un enregistrement lancé par l'API
+  ouvre le vrai recorder (navigateur visible, un à la fois, arrêt par la barre ou par l'API, flux
+  d'événements), puis décisions sur les propositions d'assertions, groupes métier (dépendances de
+  données vérifiées), génération YAML / Gherkin / Playwright / Java validée statiquement, graphe
+  d'écrans d'une exploration ou d'un enregistrement, liste des rapports d'un projet et liens à ticket.
+  La logique de la revue du recorder est extraite dans `src/recording/recording-workspace.ts`,
+  partagée par la fenêtre du recorder et le SDK.
 - **SDK : l'assistant de création de projet, autonome ou embarqué** (`docs/sdk/README.md`, décisions
   `docs/sdk/AUDIT.md`). `qa-crawler sdk-server --workspace <dir>` (`--allow-origin`,
   `--allow-source-root`, `--token-env`, `--concurrency`) sert une API locale à jeton et l'élément
