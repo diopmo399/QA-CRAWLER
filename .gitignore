@@ -24,5 +24,6 @@ screenshots/*
 # installable packages: build output and tarballs (sources stay in src/)
 /packages/core/dist/
 /packages/core/domain-packs/
+/packages/core/assets/
 /packages/*/README.md
 /dist-packages/

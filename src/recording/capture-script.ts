@@ -1,3 +1,4 @@
+import { recorderFontBase64 } from './recorder-fonts.js';
 import { isDynamicValue, selectorAnalyzerSource, type SelectorAnalysis } from './selector-builder.js';
 import { sectionPathOf } from './semantic-dom.js';
 
@@ -43,6 +44,11 @@ export interface CaptureOptions {
    * n'est pas montré ; seule la désignation d'un élément (`pick`) est envoyée.
    */
   pickOnly?: boolean;
+  /**
+   * LES POLICES DE LA BARRE (ajoutées par captureScript) : enregistrées sous un nom propre à QA-CRAWLER
+   * (document.fonts), jamais dans une feuille de style de l'application.
+   */
+  fonts?: { family: string; weight: number; data: string }[];
   /** CAPTURE AVANT MUTATION : la cible, son contexte et ses candidats, au premier événement du geste. */
   preActionCapture?: {
     enabled: boolean;
@@ -106,6 +112,33 @@ export function installRecorder(
     return domGeneration;
   };
   global.__qaCrawlerDomGeneration = generationNow;
+  // LE DERNIER CHANGEMENT VISIBLE de la page (structure ou texte) : l'image « avant le clic » de la revue
+  // n'est gardée que si elle a été prise après lui (sinon elle montrerait, par exemple, un écran encore
+  // en chargement). Les zones qui bougent sans cesse ne comptent pas : région annoncée, minuterie, barre
+  // de progression, dessin, vidéo, et le bandeau du recorder.
+  const restless =
+    '[aria-live], [role="timer"], [role="progressbar"], [role="marquee"], svg, canvas, video, [data-qa-crawler-overlay]';
+  const visibleChange = (records: MutationRecord[]): boolean =>
+    records.some((record) => {
+      const node = record.target;
+      const element = node instanceof Element ? node : node.parentElement;
+      return !element || !element.closest(restless);
+    });
+  let changedAt = Date.now();
+  let changeObserver: MutationObserver | undefined;
+  try {
+    changeObserver = new MutationObserver((records) => {
+      if (visibleChange(records)) changedAt = Date.now();
+    });
+    changeObserver.observe(document, { childList: true, characterData: true, subtree: true });
+  } catch {
+    // sans observateur : l'heure du chargement du script
+  }
+  // Lue de façon SYNCHRONE : un changement fait juste avant l'appui, sans retour à la boucle d'événements, compte déjà.
+  const changedNow = (): number => {
+    if (changeObserver && visibleChange(changeObserver.takeRecords())) changedAt = Date.now();
+    return changedAt;
+  };
   // Le contexte AVANT l'effet (défini plus bas, une fois les lecteurs disponibles).
   const preContext: {
     of?: (el: Element, css: string, phase?: string) => Record<string, unknown>;
@@ -1373,9 +1406,23 @@ export function installRecorder(
     const busy = Array.from(
       document.querySelectorAll('[aria-busy="true"], mat-progress-spinner, mat-spinner, .spinner, .loading'),
     ).some(visible);
+    // OÙ ÉTAIT L'ÉLÉMENT au début du geste (géométrie seulement) : l'image « avant le clic » de la revue.
+    const where = el.getBoundingClientRect();
     return {
       route: location.pathname,
       title: clean(document.title, 80),
+      box: {
+        x: where.left,
+        y: where.top,
+        width: where.width,
+        height: where.height,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        viewWidth: window.innerWidth,
+        viewHeight: window.innerHeight,
+        at: Date.now(),
+        changedAt: changedNow(),
+      },
       ...(dialogName(ownDialog ?? openDialog) ? { dialog: dialogName(ownDialog ?? openDialog) } : {}),
       headings,
       cssCount,
@@ -1826,9 +1873,11 @@ export function installRecorder(
         : `${String(count)} action${count === 1 ? '' : 's'}`,
     pause: 'Pause',
     resume: french ? 'Reprendre' : 'Resume',
-    undo: french ? '↶ Annuler' : '↶ Undo',
-    stop: french ? '■ Arrêter' : '■ Stop',
-    checkpoint: french ? 'Point de contrôle' : 'Checkpoint',
+    undo: french ? 'Annuler la dernière action' : 'Undo the last action',
+    stop: french ? 'Arrêter' : 'Stop',
+    pauseLabel: french ? "Mettre l'enregistrement en pause" : 'Pause the recording',
+    resumeLabel: french ? "Reprendre l'enregistrement" : 'Resume the recording',
+    checkpoint: french ? 'Ajouter une vérification' : 'Add a check',
     ok: french ? 'Action enregistrée' : 'Action recorded',
     recorded: french ? 'Action enregistrée (non vérifiable)' : 'Action recorded (not verifiable)',
     ambiguous: french
@@ -1852,7 +1901,7 @@ export function installRecorder(
         : `${String(count)} occurrence${count === 1 ? '' : 's'}`,
     minimize: french ? 'Réduire le bandeau' : 'Minimize the bar',
     expand: french ? 'Agrandir le bandeau' : 'Expand the bar',
-    window: french ? '▣ Fenêtre' : '▣ Window',
+    window: french ? 'Fenêtre' : 'Window',
     windowLabel: french ? 'Ouvrir la fenêtre du recorder' : 'Open the recorder window',
     resolve: french ? 'Résoudre' : 'Resolve',
     pill: {
@@ -1888,6 +1937,47 @@ export function installRecorder(
     upload: '⇧',
   };
   let info: { count: number; startedAt?: number } = { count: 0 };
+  // Les pictogrammes de la barre (SVG fixes, jamais une donnée de l'application).
+  const svgIcon = (body: string, size: number, filled = false): string =>
+    `<svg width="${String(size)}" height="${String(size)}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="${filled ? 'none' : 'currentColor'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  const ICON = {
+    grip: svgIcon(
+      '<circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/>',
+      14,
+      true,
+    ),
+    check: svgIcon('<path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="8"/>', 15),
+    undo: svgIcon('<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>', 15),
+    pause: svgIcon(
+      '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+      13,
+      true,
+    ),
+    play: svgIcon('<path d="M7 5l12 7-12 7V5z"/>', 13, true),
+    stop: svgIcon('<rect x="5" y="5" width="14" height="14" rx="2"/>', 11, true),
+    minimize: svgIcon('<path d="M6 12h12"/>', 15),
+    expand: svgIcon('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', 14),
+    window: svgIcon('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18"/>', 14),
+    ok: svgIcon('<path d="M5 12.5l4.5 4.5L19 7"/>', 16),
+  };
+  // LES POLICES DE LA BARRE : un nom de famille propre à QA-CRAWLER, ajouté à document.fonts (l'application n'est pas touchée).
+  let fontsAdded = false;
+  const addFonts = (): void => {
+    if (fontsAdded || !options.fonts || typeof FontFace === 'undefined') return;
+    fontsAdded = true;
+    for (const font of options.fonts) {
+      try {
+        const binary = atob(font.data);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+        const face = new FontFace(font.family, bytes.buffer, { weight: String(font.weight) });
+        document.fonts.add(face);
+        void face.load().catch(() => undefined);
+      } catch {
+        // Police indisponible : la police système prend le relais.
+      }
+    }
+  };
   // OÙ EST LE BANDEAU : un coin de la fenêtre, réduit ou non (jamais sur un bouton de l'application
   // que l'humain veut atteindre : il le glisse ailleurs ou le réduit, et le choix suit les pages).
   type Corner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
@@ -2141,6 +2231,34 @@ export function installRecorder(
       endPick(true);
     },
     isPicking: (): boolean => picking !== undefined,
+    /** L'heure du dernier changement visible de la page (horloge de la page). */
+    lastChange: (): number => changedNow(),
+    /**
+     * MESURER sans rien montrer : la position de l'élément d'une action (l'original s'il existe encore,
+     * sinon le seul élément que son sélecteur désigne), s'il est visible à l'écran. Ni cadre, ni
+     * défilement : l'application ne voit rien (l'image de l'étape, prise juste après, s'en sert).
+     */
+    measure: (
+      ref?: string,
+      css?: string,
+    ): { x: number; y: number; width: number; height: number } | undefined => {
+      let element: Element | null = null;
+      const original = ref ? originals.get(ref) : undefined;
+      if (original?.isConnected) element = original;
+      else if (css) {
+        try {
+          const matches = document.querySelectorAll(css);
+          if (matches.length === 1) element = matches[0] ?? null;
+        } catch {
+          element = null;
+        }
+      }
+      if (!element || !isVisible(element)) return undefined;
+      const rect = element.getBoundingClientRect();
+      const onScreen =
+        rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
+      return onScreen ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : undefined;
+    },
     /**
      * Met en évidence l'élément d'une action : l'ORIGINAL s'il est encore dans la page, sinon le
      * seul élément que son sélecteur désigne ; jamais un élément deviné.
@@ -2245,12 +2363,19 @@ export function installRecorder(
     bar?.classList.toggle('min', dock.minimized);
     const size = root.querySelector('[data-act="minimize"]');
     if (size) {
-      size.textContent = dock.minimized ? '▢' : '–';
+      size.innerHTML = dock.minimized ? ICON.expand : ICON.minimize;
       size.setAttribute('title', dock.minimized ? say.expand : say.minimize);
       size.setAttribute('aria-label', dock.minimized ? say.expand : say.minimize);
     }
     const toggle = root.querySelector('[data-act="pause"]');
-    if (toggle) toggle.textContent = paused ? `▶ ${say.resume}` : `⏸ ${say.pause}`;
+    if (toggle) {
+      // Dans le dock, le bouton garde son mot ; dans la barre, une icône (le nom reste dans aria-label).
+      toggle.innerHTML =
+        (paused ? ICON.play : ICON.pause) +
+        (options.dock ? `<span>${paused ? say.resume : say.pause}</span>` : '');
+      toggle.setAttribute('aria-label', paused ? say.resumeLabel : say.pauseLabel);
+      toggle.setAttribute('title', paused ? say.resume : say.pause);
+    }
     renderDock();
   };
   /** Le dock : compteurs ✓ ⚠ ✕ et les dernières actions (texte seulement, jamais une valeur saisie). */
@@ -2315,97 +2440,113 @@ export function installRecorder(
     const rootElement = document.querySelector(':root');
     if (!options.overlay || rootElement === null) return;
     if (host?.isConnected) return;
+    addFonts();
     host = document.createElement('qa-crawler-recorder');
     host.setAttribute(OVERLAY, 'true');
     host.setAttribute('aria-hidden', 'true');
     root = host.attachShadow({ mode: 'closed' });
     root.innerHTML = `<style>
-      .bar{font:500 12px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:rgba(11,16,32,.92);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#f8fafc;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:6px 6px 6px 6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;box-shadow:0 8px 28px rgba(2,6,23,.35);max-width:calc(100vw - 24px)}
-      .state{color:#fecaca;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:7px;letter-spacing:.04em}
-      .state::before{content:"";width:9px;height:9px;border-radius:50%;background:#ef4444;animation:qa-pulse 1.6s infinite}
-      .bar.paused .state{color:#fde68a}
-      .bar.paused .state::before{background:#f59e0b;animation:none}
-      .time{font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums;color:#e2e8f0}
-      .count{color:#cbd5e1;white-space:nowrap;background:rgba(255,255,255,.08);border-radius:999px;padding:2px 8px}
-      .note{color:#fde68a;flex-basis:100%;font-size:11px;padding:0 4px}
+      .bar{--sans:'QA-CRAWLER Plex Sans',ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--mono:'QA-CRAWLER Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font:500 13px/1.4 var(--sans);background:#17191F;color:#F3F4F6;border-radius:14px;padding:8px 8px 8px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;box-shadow:0 12px 32px rgba(17,24,39,.30);max-width:calc(100vw - 24px);-webkit-font-smoothing:antialiased}
+      .state{color:#F3F4F6;font:500 13px/1 var(--sans);white-space:nowrap;display:inline-flex;align-items:center;gap:8px;padding:0 0 0 6px}
+      .state::before{content:"";width:8px;height:8px;border-radius:50%;background:#F2555A;box-shadow:0 0 0 4px rgba(242,85,90,.22);flex:none;animation:qa-pulse 1.6s infinite}
+      .bar:not(.paused):not(.ended) .state{font-size:0;gap:0}
+      .bar.paused .state{color:#F5C46B}
+      .bar.paused .state::before{background:#F5A524;box-shadow:0 0 0 4px rgba(245,165,36,.2);animation:none}
+      .time{font:400 13px/1 var(--mono);font-variant-numeric:tabular-nums;color:#F3F4F6;padding-right:6px}
+      .time:empty{display:none}
+      .count{color:#C9CDD4;white-space:nowrap;padding:0 4px 0 12px;border-left:1px solid rgba(255,255,255,.14);height:20px;display:inline-flex;align-items:center}
+      .count:empty{display:none}
+      .note{color:#F5C46B;flex-basis:100%;font-size:12px;padding:0 6px}
       .note:empty{display:none}
-      input{font:inherit;width:120px;padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff}
-      input::placeholder{color:#94a3b8}
-      button{font:inherit;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:4px 11px;background:rgba(255,255,255,.08);color:#f8fafc}
-      button:hover{background:rgba(255,255,255,.16)}
-      button:focus-visible,input:focus-visible{outline:2px solid #a5b4fc;outline-offset:1px}
-      button[data-act="stop"]{background:#e11d48;border-color:#e11d48}
-      .busy{display:none;width:72px;height:4px;border-radius:2px;background:linear-gradient(90deg,#334155 0%,#22d3ee 50%,#334155 100%);background-size:200% 100%;animation:qa-busy 1s linear infinite}
+      input{font:400 12.5px/1.4 var(--sans);width:150px;height:34px;padding:0 10px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#F3F4F6}
+      input::placeholder{color:#9CA3AF}
+      button{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;padding:0 12px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#F3F4F6;font:500 13px/1 var(--sans);cursor:pointer;white-space:nowrap}
+      button:hover{background:rgba(255,255,255,.12)}
+      button:focus-visible,input:focus-visible{outline:2px solid #93A9FF;outline-offset:1px}
+      button svg{flex:none}
+      button[data-act="checkpoint"]{margin-left:4px;position:relative}
+      button[data-act="checkpoint"]::before{content:"";position:absolute;left:-7px;top:7px;bottom:7px;width:1px;background:rgba(255,255,255,.14)}
+      button[data-act="undo"],button[data-act="pause"],button[data-act="minimize"]{width:34px;padding:0}
+      button[data-act="stop"]{background:#E5484D;border-color:#E5484D;color:#FFFFFF}
+      button[data-act="stop"]:hover{background:#E5484D;filter:brightness(1.08)}
+      button[data-act="minimize"]{border-color:transparent;background:transparent;color:#9CA3AF}
+      button[data-act="minimize"]:hover{background:rgba(255,255,255,.08);color:#F3F4F6}
+      .busy{display:none;width:72px;height:3px;border-radius:2px;background:linear-gradient(90deg,#2A2E37 0%,#93A9FF 50%,#2A2E37 100%);background-size:200% 100%;animation:qa-busy 1s linear infinite}
       .bar.working .busy{display:inline-block}
-      .bar.ended{padding:6px 14px}
-      .grip{cursor:grab;color:#94a3b8;font-size:14px;line-height:1;padding:4px 6px;border-radius:999px;user-select:none;touch-action:none}
-      .grip:hover{color:#f8fafc;background:rgba(255,255,255,.1)}
+      .bar.ended{padding:10px 16px}
+      .grip{display:inline-grid;place-items:center;width:28px;height:34px;margin-left:-4px;cursor:grab;color:#9CA3AF;border-radius:8px;user-select:none;touch-action:none}
+      .grip:hover{color:#F3F4F6;background:rgba(255,255,255,.08)}
       .bar.dragging,.bar.dragging .grip{cursor:grabbing}
-      .bar.min{padding:4px}
-      .bar.min input,.bar.min .count,.bar.min .note,.bar.min button:not([data-act="minimize"]):not([data-act="stop"]){display:none}
-      button[data-act="minimize"]{padding:2px 9px;min-width:28px}
+      /* RÉDUITE : une pastille sombre, le point et le chrono ; la pastille entière rouvre la barre. */
+      .bar.min{border-radius:999px;padding:3px 3px 3px 14px;gap:8px;box-shadow:0 8px 20px rgba(17,24,39,.28)}
+      .bar.min input,.bar.min .count,.bar.min .note,.bar.min .grip,.bar.min button:not([data-act="minimize"]){display:none}
+      .bar.min .time{padding-right:0}
+      .bar.min button[data-act="minimize"]{border-radius:999px}
       .bar.ended .grip,.bar.ended button[data-act="minimize"]{display:none}
       .bar.ended input,.bar.ended button,.bar.ended .time,.bar.ended .count{display:none}
-      .bar.ended .state{color:#6ee7b7}
-      .bar.ended .state::before{background:#10b981;animation:none}
-      .toast{position:absolute;right:0;bottom:calc(100% + 10px);min-width:240px;max-width:340px;background:#fff;color:#0f172a;border:1px solid #e5e7eb;border-radius:14px;padding:10px 14px 10px 40px;font:13px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 12px 32px rgba(2,6,23,.18);opacity:0;transform:translateY(6px);transition:opacity .2s,transform .2s;pointer-events:none}
-      .toast::before{content:"✓";position:absolute;left:12px;top:11px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;color:#fff;background:#059669}
+      .bar.ended .state{color:#A7E3BC}
+      .bar.ended .state::before{background:#3FB96B;box-shadow:none;animation:none}
+      .toast{position:absolute;right:0;bottom:calc(100% + 12px);display:flex;align-items:center;gap:10px;min-width:240px;max-width:420px;background:#FFFFFF;color:#15171C;border:1px solid #DADDE3;border-radius:10px;padding:8px 14px;font:400 13px/1.4 'QA-CRAWLER Plex Sans',ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 6px 18px rgba(17,24,39,.10);opacity:0;transform:translateY(6px);transition:opacity .2s,transform .2s;pointer-events:none}
+      .toast .ti{display:inline-grid;place-items:center;color:#15803D;flex:none}
       .toast.show{opacity:1;transform:none}
       .toast[data-corner$="left"]{right:auto;left:0}
-      .toast[data-corner^="top"]{bottom:auto;top:calc(100% + 10px)}
-      .toast.recorded::before{content:"○";background:#94a3b8}
-      .toast.ambiguous::before{content:"!";background:#d97706}
-      .toast b{display:block;font-weight:700}
-      .toast span{color:#475569}
-      .highlight{display:none;position:fixed;border:2px solid #6366f1;border-radius:10px;background:rgba(99,102,241,.08);pointer-events:none;box-shadow:0 0 0 6px rgba(99,102,241,.18)}
-      .highlight span{position:absolute;left:0;top:calc(100% + 6px);background:#4f46e5;color:#fff;font:600 11px/1.4 ui-sans-serif,system-ui,sans-serif;padding:2px 8px;border-radius:999px;white-space:nowrap;box-shadow:0 4px 12px rgba(79,70,229,.35)}
-      .highlight.pick{border-color:#4f46e5;background:rgba(79,70,229,.10);box-shadow:0 0 0 6px rgba(79,70,229,.18);border-radius:10px}
-      .highlight.pick::before,.highlight.pick::after{content:"";position:absolute;width:10px;height:10px;border:2px solid #4f46e5}
+      .toast[data-corner^="top"]{bottom:auto;top:calc(100% + 12px)}
+      .toast.recorded .ti{color:#6B7280}
+      .toast.ambiguous .ti{color:#B45309}
+      .toast b{font-weight:500;white-space:nowrap}
+      .toast span{color:#4A5161;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .toast span:not(:empty)::before{content:"· ";color:#9CA3AF}
+      .highlight{display:none;position:fixed;border:2px solid #2B50D8;border-radius:10px;background:rgba(43,80,216,.08);pointer-events:none;box-shadow:0 0 0 6px rgba(43,80,216,.18)}
+      .highlight span{position:absolute;left:0;top:calc(100% + 6px);background:#2B50D8;color:#fff;font:500 11.5px/1.4 'QA-CRAWLER Plex Sans',ui-sans-serif,system-ui,sans-serif;padding:2px 8px;border-radius:6px;white-space:nowrap;box-shadow:0 4px 12px rgba(43,80,216,.35)}
+      .highlight.pick{border-color:#2B50D8;background:rgba(43,80,216,.10);box-shadow:0 0 0 6px rgba(43,80,216,.18);border-radius:10px}
+      .highlight.pick::before,.highlight.pick::after{content:"";position:absolute;width:10px;height:10px;border:2px solid #2B50D8}
       .highlight.pick::before{left:-6px;top:-6px;border-right:0;border-bottom:0}
       .highlight.pick::after{right:-6px;bottom:-6px;border-left:0;border-top:0}
-      .highlight.pick span{border-radius:8px;padding:5px 10px;font-weight:600;font-size:12px;box-shadow:0 8px 20px rgba(79,70,229,.35)}
-      .pickbar{position:fixed;top:12px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:8px 10px 8px 14px;border-radius:999px;background:#111827;color:#f9fafb;font:13px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.25);white-space:nowrap;z-index:1;pointer-events:none}
+      .highlight.pick span{border-radius:8px;padding:5px 10px;font-weight:600;font-size:12px;box-shadow:0 8px 20px rgba(43,80,216,.35)}
+      .pickbar{position:fixed;top:12px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:8px 10px 8px 14px;border-radius:999px;background:#17191F;color:#F3F4F6;font:400 13px/1.4 'QA-CRAWLER Plex Sans',ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 12px 32px rgba(17,24,39,.30);white-space:nowrap;z-index:1;pointer-events:none}
       .pickbar[hidden]{display:none}
-      .pickbar .dot{display:inline-flex;width:22px;height:22px;border-radius:50%;background:#4f46e5;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px}
-      .pickbar b{font-weight:700}
-      .pickbar kbd{padding:1px 6px;border:1px solid #4b5563;border-radius:5px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:#f9fafb}
+      .pickbar .dot{display:inline-flex;width:22px;height:22px;border-radius:50%;background:#2B50D8;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px}
+      .pickbar b{font-weight:500}
+      .pickbar kbd{padding:1px 6px;border:1px solid rgba(255,255,255,.2);border-radius:5px;font:400 11px 'QA-CRAWLER Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;color:#F3F4F6}
       .pickbar .esc{color:#cbd5e1;display:inline-flex;gap:6px;align-items:center}
       ${options.pickOnly ? '.bar,.toast{display:none!important}' : ''}
-      @keyframes qa-pulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.6)}70%{box-shadow:0 0 0 7px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
+      @keyframes qa-pulse{0%{box-shadow:0 0 0 0 rgba(242,85,90,.5)}70%{box-shadow:0 0 0 7px rgba(242,85,90,0)}100%{box-shadow:0 0 0 0 rgba(242,85,90,0)}}
       @keyframes qa-busy{from{background-position:200% 0}to{background-position:0 0}}
       @media (prefers-reduced-motion:reduce){.toast{transition:none}.busy,.state::before{animation:none}}
       /* LE DOCK (recording.panelLayout: docked) : un panneau collé au coin, les dernières actions dedans. */
-      .bar.dock{border-radius:14px;padding:0;width:390px;max-width:calc(100vw - 24px);flex-direction:column;align-items:stretch;gap:0}
+      .bar.dock{border-radius:14px;padding:0;font-size:12.5px;width:390px;max-width:calc(100vw - 24px);flex-direction:column;align-items:stretch;gap:0}
       .bar.dock .dhead{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
       .bar.dock .stats{display:flex;gap:4px;margin-left:auto}
-      .bar.dock .stats span{border-radius:999px;padding:2px 8px;background:rgba(255,255,255,.08);color:#cbd5e1;font-weight:700;white-space:nowrap}
+      .bar.dock .stats span{border-radius:999px;padding:1px 8px;background:rgba(255,255,255,.08);color:#C9CDD4;font-weight:500;white-space:nowrap}
       .bar.dock .stats .ok{color:#86efac}.bar.dock .stats .amb{color:#fde68a}.bar.dock .stats .bad{color:#fca5a5}
       .bar.dock .steps{list-style:none;margin:0;padding:3px 0;max-height:150px;overflow:auto}
       .bar.dock .steps li{display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid rgba(255,255,255,.05)}
       .bar.dock .steps li:last-child{border-bottom:0}
       .bar.dock .steps .empty{color:#94a3b8;font-style:italic}
-      .bar.dock .steps .n{color:#94a3b8;font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace;min-width:14px}
-      .bar.dock .steps .ic{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;background:rgba(165,180,252,.18);color:#c7d2fe;font-size:11px;font-weight:700;flex:none}
-      .bar.dock .steps .ic.k-fill{background:rgba(94,234,212,.18);color:#99f6e4}
+      .bar.dock .steps .n{color:#9CA3AF;font:400 11.5px var(--mono);min-width:14px;text-align:right}
+      .bar.dock .steps .ic{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;background:rgba(255,255,255,.08);color:#C9CDD4;font-size:11px;font-weight:500;flex:none}
       .bar.dock .steps .d{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#f1f5f9}
-      .bar.dock .steps .s{font-weight:700;white-space:nowrap;color:#cbd5e1}
+      .bar.dock .steps .s{font-weight:400;font-size:12px;white-space:nowrap;color:#C9CDD4}
       .bar.dock .steps .CONFIRMED .s{color:#86efac}.bar.dock .steps .PENDING .s{color:#a5b4fc}.bar.dock .steps .AMBIGUOUS .s{color:#fde68a}.bar.dock .steps .FAILED .s{color:#fca5a5}
       .bar.dock .steps li.AMBIGUOUS{background:rgba(245,158,11,.12)}
-      .bar.dock .steps .fix{border:1px solid rgba(253,230,138,.5);border-radius:999px;padding:2px 9px;background:rgba(245,158,11,.18);color:#fde68a;font-weight:700}
+      .bar.dock .steps .fix{height:26px;border:1px solid rgba(245,196,107,.45);padding:0 9px;background:rgba(245,165,36,.16);color:#F5C46B}
       .bar.dock .dacts{display:flex;gap:6px;padding:7px 10px;border-top:1px solid rgba(255,255,255,.08);align-items:center}
-      .bar.dock .dacts button{font-size:11px;padding:4px 9px;white-space:nowrap}
+      .bar.dock .dacts button{font-size:12px;height:30px;width:auto;padding:0 10px;white-space:nowrap}
       .bar.dock .dacts input,.bar.dock .dacts button[data-act="checkpoint"]{display:none}
-      .bar.dock button[data-act="window"]{margin-left:auto;background:transparent;color:#a5b4fc;border-color:rgba(165,180,252,.35)}
+      .bar.dock button[data-act="window"]{margin-left:auto;background:transparent;color:#93A9FF;border-color:rgba(147,169,255,.35)}
+      .bar.dock button[data-act="checkpoint"]::before{display:none}
+      .bar.dock .dhead .state{font-size:0;gap:0}
+      .bar.dock.paused .dhead .state{font-size:13px;gap:8px}
       .bar.dock .note{padding:0 10px 6px}
       .bar.dock.min{width:auto;border-radius:999px}
       .bar.dock.min .dhead{border-bottom:0;padding:4px 6px 4px 10px}
       .bar.dock.min .steps,.bar.dock.min .dacts,.bar.dock.min .grip,.bar.dock.min .count,.bar.dock.min .stats .bad{display:none}
       .bar.dock.ended .dhead{padding:6px 14px}
       .bar.dock.ended .steps,.bar.dock.ended .dacts,.bar.dock.ended .stats{display:none}
-    </style><div class="highlight"><span></span></div><div class="pickbar" role="status" hidden><span class="dot" aria-hidden="true">⌖</span><span><b>${say.pickMode}</b> · <span class="hint"></span></span><span class="esc"><kbd>Esc</kbd> ${say.pickCancel}</span></div><div class="toast" role="status"><b></b><span></span></div>${
+    </style><div class="highlight"><span></span></div><div class="pickbar" role="status" hidden><span class="dot" aria-hidden="true">⌖</span><span><b>${say.pickMode}</b> · <span class="hint"></span></span><span class="esc"><kbd>Esc</kbd> ${say.pickCancel}</span></div><div class="toast" role="status"><i class="ti" aria-hidden="true">${ICON.ok}</i><b></b><span></span></div>${
       options.dock
-        ? `<div class="bar dock"><div class="dhead"><span class="grip" title="${say.move}" aria-label="${say.move}">⠿</span><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><span class="stats"><span class="ok"></span><span class="amb"></span><span class="bad"></span></span><button data-act="minimize" title="${say.minimize}" aria-label="${say.minimize}">–</button></div><ol class="steps"></ol><div class="dacts"><input placeholder="${say.checkpoint}" aria-label="${say.checkpoint}" maxlength="80"><button data-act="checkpoint">${say.checkpoint}</button><button data-act="pause">⏸ ${say.pause}</button><button data-act="undo">${say.undo}</button><button data-act="stop">${say.stop}</button><button data-act="window" title="${say.windowLabel}" aria-label="${say.windowLabel}">${say.window}</button></div><span class="note"></span></div>`
-        : `<div class="bar"><span class="grip" title="${say.move}" aria-label="${say.move}">⠿</span><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><input placeholder="${say.checkpoint}" aria-label="${say.checkpoint}" maxlength="80"><button data-act="checkpoint">${say.checkpoint}</button><button data-act="pause">⏸ ${say.pause}</button><button data-act="undo">${say.undo}</button><button data-act="stop">${say.stop}</button><button data-act="minimize" title="${say.minimize}" aria-label="${say.minimize}">–</button><span class="note"></span></div>`
+        ? `<div class="bar dock"><div class="dhead"><span class="grip" title="${say.move}" aria-label="${say.move}">${ICON.grip}</span><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><span class="stats"><span class="ok"></span><span class="amb"></span><span class="bad"></span></span><button data-act="minimize" title="${say.minimize}" aria-label="${say.minimize}">${ICON.minimize}</button></div><ol class="steps"></ol><div class="dacts"><button data-act="checkpoint">${say.checkpoint}</button><button data-act="pause" aria-label="${say.pauseLabel}">${ICON.pause}<span>${say.pause}</span></button><button data-act="undo" aria-label="${say.undo}">${ICON.undo}</button><button data-act="stop">${ICON.stop}${say.stop}</button><button data-act="window" title="${say.windowLabel}" aria-label="${say.windowLabel}">${ICON.window}${say.window}</button></div><span class="note"></span></div>`
+        : `<div class="bar" role="toolbar"><span class="grip" title="${say.move}" aria-label="${say.move}">${ICON.grip}</span><span class="state">REC</span><span class="time"></span><span class="count"></span><span class="busy"></span><button data-act="checkpoint">${ICON.check}${say.checkpoint}</button><button data-act="undo" title="${say.undo}" aria-label="${say.undo}">${ICON.undo}</button><button data-act="pause" title="${say.pause}" aria-label="${say.pauseLabel}">${ICON.pause}</button><button data-act="stop">${ICON.stop}${say.stop}</button><button data-act="minimize" title="${say.minimize}" aria-label="${say.minimize}">${ICON.minimize}</button><span class="note"></span></div>`
     }`;
     // GLISSER le bandeau : il suit le pointeur, puis se range dans le coin le plus proche.
     const grip = root.querySelector<HTMLElement>('.grip');
@@ -2476,10 +2617,24 @@ export function installRecorder(
   window.setInterval(mount, 1000);
 }
 
+/** Les polices de la barre (IBM Plex, intégrées) : un nom de famille propre à QA-CRAWLER. */
+function barFonts(): NonNullable<CaptureOptions['fonts']> {
+  const faces = [
+    { family: 'QA-CRAWLER Plex Sans', source: 'IBM Plex Sans', weight: 400 },
+    { family: 'QA-CRAWLER Plex Sans', source: 'IBM Plex Sans', weight: 500 },
+    { family: 'QA-CRAWLER Plex Mono', source: 'IBM Plex Mono', weight: 400 },
+  ] as const;
+  return faces.flatMap((face) => {
+    const data = recorderFontBase64(face.source, face.weight);
+    return data ? [{ family: face.family, weight: face.weight, data }] : [];
+  });
+}
+
 /** Le contenu de l'init script : un remplacement de __name (chargeurs TypeScript) puis l'installation. */
 export function captureScript(options: CaptureOptions): string {
+  const withFonts = options.overlay ? { ...options, fonts: barFonts() } : options;
   return [
     'if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
-    `(${installRecorder.toString()})(${JSON.stringify(options)}, ${sectionPathOf.toString()}, ${selectorAnalyzerSource()}, ${isDynamicValue.toString()});`,
+    `(${installRecorder.toString()})(${JSON.stringify(withFonts)}, ${sectionPathOf.toString()}, ${selectorAnalyzerSource()}, ${isDynamicValue.toString()});`,
   ].join('\n');
 }

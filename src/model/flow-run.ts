@@ -4,6 +4,7 @@ import type { TargetResolutionTrace } from '../flows/functional-target.js';
 import type { TransitionWaitStatus } from '../observation/transition-waiter.js';
 import type { FlowDriftReport, StepRecoveryReport } from '../workflow-healing/model.js';
 import type { FlowReplayReport, ReplayStepReport } from '../replay/model.js';
+import type { FlowQualityReport } from '../quality/model.js';
 import type { ActionClassification } from './discovered-action.js';
 
 /**
@@ -225,6 +226,8 @@ export interface FlowRunReport {
   testDataReport?: FlowTestDataReport;
   /** PREUVE MÉTIER : la donnée créée a-t-elle été retrouvée puis ouverte dans ce run ? */
   businessProof?: BusinessProofReport;
+  /** VÉRIFICATION MÉTIER : les assertions déclarées et la cohérence des données du flow, avec leurs preuves. */
+  quality?: FlowQualityReport;
   /** L'écart avec le run précédent du même flow (base de connaissances). */
   comparison?: FlowRunComparison;
   /** INTENT-DRIVEN REPLAY : checkpoints, dépendances, position finale, fenêtre de divergence, confiance. */

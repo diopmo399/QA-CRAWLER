@@ -85,17 +85,27 @@ export function stepYaml(step: FlowStep, literalEnv?: string): Record<string, un
 const quote = (text: string): string => JSON.stringify(text);
 
 /** Le localisateur Playwright d'une cible (getByRole / getByLabel / getByText / getByTestId / locator). */
+/**
+ * Un texte du flow en expression TypeScript : une citation ${testData:clé} devient la donnée du run
+ * (`${testData["clé"]}` dans un gabarit), jamais le texte littéral de la citation.
+ */
+export function playwrightText(text: string): string {
+  if (!/\$\{testData:[^}]+\}/.test(text)) return quote(text);
+  const escaped = text.replace(/[\\`]/g, '\\$&').replace(/\$\{(?!testData:)/g, '\\${');
+  return `\`${escaped.replace(/\$\{testData:([^}]+)\}/g, (_match, key: string) => `\${testData[${quote(key)}]}`)}\``;
+}
+
 export function playwrightLocator(target: FlowTarget, scope = 'page'): string {
   let locator: string;
   switch (target.strategy) {
     case 'role':
-      locator = `${scope}.getByRole(${quote(target.role ?? 'button')}${target.name !== undefined ? `, { name: ${quote(target.name)}${target.exact ? ', exact: true' : ''} }` : ''})`;
+      locator = `${scope}.getByRole(${quote(target.role ?? 'button')}${target.name !== undefined ? `, { name: ${playwrightText(target.name)}${target.exact ? ', exact: true' : ''} }` : ''})`;
       break;
     case 'label':
-      locator = `${scope}.getByLabel(${quote(target.value ?? '')}${target.exact ? ', { exact: true }' : ''})`;
+      locator = `${scope}.getByLabel(${playwrightText(target.value ?? '')}${target.exact ? ', { exact: true }' : ''})`;
       break;
     case 'text':
-      locator = `${scope}.getByText(${quote(target.value ?? '')}${target.exact ? ', { exact: true }' : ''})`;
+      locator = `${scope}.getByText(${playwrightText(target.value ?? '')}${target.exact ? ', { exact: true }' : ''})`;
       break;
     case 'testId':
       locator = `${scope}.getByTestId(${quote(target.value ?? '')})`;
@@ -106,7 +116,7 @@ export function playwrightLocator(target: FlowTarget, scope = 'page'): string {
   }
   if (target.row) {
     const cells = Object.values(target.row)
-      .map((value) => `.filter({ hasText: ${quote(value)} })`)
+      .map((value) => `.filter({ hasText: ${playwrightText(value)} })`)
       .join('');
     locator = locator.replace(scope, `${scope}.getByRole('row')${cells}`);
   }
@@ -132,4 +142,11 @@ export function testDataKeysOf(steps: readonly FlowStep[]): string[] {
   return [...keys];
 }
 
-export type FlowDefinition = Pick<FlowConfig, 'name' | 'steps'> & { description?: string; startAt?: string };
+export type FlowDefinition = Pick<FlowConfig, 'name' | 'steps'> & {
+  description?: string;
+  startAt?: string;
+  /** Les assertions métier déclarées (traduites par assertion-translation : natives ou rejeu seulement). */
+  assertions?: FlowConfig['assertions'];
+  /** Les groupes métier (positions 1…n) : des en-têtes dans le test généré, jamais des tests indépendants. */
+  groups?: FlowConfig['groups'];
+};

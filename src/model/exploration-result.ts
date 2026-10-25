@@ -170,6 +170,8 @@ export interface ExplorationResult {
   artifacts: {
     json?: string;
     html?: string;
+    /** reports/junit.xml (report.junit.enabled) : le run au format JUnit, pour la CI. */
+    junit?: string;
     flowGraph?: string;
     flowGraphHtml?: string;
     /** reports/overview.html : la vue d'ensemble du run. */

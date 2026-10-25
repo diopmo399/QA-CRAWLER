@@ -397,6 +397,13 @@ export interface FunctionalExchange {
    * champ et l'empreinte salée de sa valeur — comparables à une saisie, jamais la valeur.
    */
   requestCriteria?: ValueDigest[];
+  /**
+   * Les valeurs RETOURNÉES par une écriture acceptée (le corps de sa réponse) : en empreintes salées,
+   * pour comparer la valeur enregistrée à la valeur envoyée, jamais la valeur.
+   */
+  responseValues?: ValueDigest[];
+  /** Le corps JSON de la réponse n'a pas pu être lu : ce qu'il portait n'est PAS observé (≠ absent). */
+  responseUnread?: boolean;
   /** Des indices de STRUCTURE de la requête (pagination, tri, conteneur de critères) : des indices, pas des règles. */
   requestHints?: { pagination?: boolean; sorting?: boolean; criteria?: boolean };
   /** L'entrée du journal réseau (NetworkObservation.id) de cet échange. */

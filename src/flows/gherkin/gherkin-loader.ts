@@ -120,6 +120,7 @@ export function gherkinFlows(
     if (wanted && !wanted.has(pickle.name)) continue;
     if (wantedTags && !wantedTags.some((tag) => tags.includes(tag))) continue;
     const allow = [...new Set(tags.flatMap((tag) => (TAG_ALLOW[tag] ? [TAG_ALLOW[tag]] : [])))];
+    const requirements = requirementTagsOf(pickle.tags.map((tag) => tag.name));
     const flowSteps: RawStep[] = [];
     for (const step of pickle.steps) {
       const source = steps.get(step.astNodeIds[0] ?? '');
@@ -181,6 +182,7 @@ export function gherkinFlows(
       ...(entry.startAt !== undefined ? { startAt: entry.startAt } : {}),
       ...(testData ? { testData } : {}),
       steps: flowSteps,
+      ...(requirements.length > 0 ? { requirements } : {}),
       ...(entry.thenExplore === true || tags.some((tag) => TAG_EXPLORE.has(tag))
         ? { thenExplore: true }
         : {}),
@@ -261,6 +263,21 @@ function stepTypeOf(type: PickleStepType | undefined): 'Context' | 'Action' | 'O
     default:
       return 'Unknown';
   }
+}
+
+/**
+ * Les exigences d'un scénario, par ses tags : `@REQ-12` (la casse est gardée), `@req:12`,
+ * `@requirement:12`, `@ticket:ABC-7`. Le scénario les COUVRE (traçabilité).
+ */
+export function requirementTagsOf(tags: readonly string[]): string[] {
+  const found: string[] = [];
+  for (const raw of tags) {
+    const tag = raw.trim().replace(/^@/, '');
+    const prefixed = /^(?:req|requirement|ticket):(.+)$/i.exec(tag)?.[1]?.trim();
+    const id = prefixed ?? (/^REQ-[A-Za-z0-9_.:-]+$/i.test(tag) ? tag : undefined);
+    if (id && /^[A-Za-z][A-Za-z0-9_.:-]{0,79}$/.test(id) && !found.includes(id)) found.push(id);
+  }
+  return found;
 }
 
 function normalizeTag(tag: string): string {

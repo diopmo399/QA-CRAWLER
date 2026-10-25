@@ -83,6 +83,8 @@ export type Provenance =
   | 'MANUAL_CHECKPOINT'
   | 'STATIC_ENRICHED'
   | 'RUNTIME_OBSERVED'
+  // ASSERTION PROPOSALS : une vérification acceptée par l'humain parmi les propositions du recording.
+  | 'HUMAN_DECISION'
   // WORKFLOW SELF-HEALING : une action trouvée au rejeu pour atteindre le même objectif fonctionnel.
   | 'RUNTIME_RECOVERED';
 
@@ -231,6 +233,8 @@ export interface SuggestedStep {
   fillFormBefore?: boolean;
   /** Commentaire écrit au-dessus de l'étape à la place de « statut · provenance » (flow enregistré). */
   comment?: string;
+  /** Seulement un commentaire (un en-tête de groupe, une assertion que le .feature ne sait pas dire) : jamais une étape. */
+  commentOnly?: boolean;
 }
 
 export interface SuggestedFlowGraph {

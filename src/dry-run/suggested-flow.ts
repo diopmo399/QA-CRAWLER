@@ -95,6 +95,8 @@ export function suggestedFlowYaml(
   header: string[] = [],
   /** Le jeu de données du flow (`testData: test-data.yaml`), relatif au fichier du flow. */
   testDataFile?: string,
+  /** Des clés de flow écrites APRÈS les étapes (`assertions:` acceptées par l'humain, par exemple). */
+  extra: Record<string, unknown> = {},
 ): string {
   const lines: string[] = [
     ...header.map((line) => `# ${line}`),
@@ -125,6 +127,7 @@ export function suggestedFlowYaml(
     const commented = item.review !== undefined && REVIEW_ONLY.has(item.status);
     for (const line of text) lines.push(commented ? `  # ${line}` : `  ${line}`);
   }
+  if (Object.keys(extra).length > 0) lines.push(...stringify(extra, { lineWidth: 0 }).trimEnd().split('\n'));
   return `${lines.join('\n')}\n`;
 }
 
@@ -255,6 +258,7 @@ export function suggestedFeature(
     }
     previousSentence = sentenceKey;
     lines.push(`    # ${note}`);
+    if (item.commentOnly) continue;
     const commented = item.review !== undefined && REVIEW_ONLY.has(item.status);
     const sentences: [Kind, string][] = [];
     if (item.fillFormBefore)

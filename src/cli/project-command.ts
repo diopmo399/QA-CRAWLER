@@ -4,7 +4,14 @@ import { parseArgs } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import { ConfigError } from '../config/config-loader.js';
 import type { ExplorationResult } from '../model/exploration-result.js';
+import {
+  defaultPlaywrightJavaVersion,
+  generateJavaJUnitPlaywrightProject,
+  writeJavaProject,
+} from '../platform/java-junit-playwright-generator.js';
+import { generateGherkinFeatures } from '../platform/gherkin-feature-generator.js';
 import { generatePlaywrightTests } from '../platform/playwright-test-generator.js';
+import type { ScenarioConfig } from '../config/config.js';
 import { assessReproduction, type ReproductionAnalysis } from '../platform/reproduction-planner.js';
 import { initProject } from '../project/init.js';
 import { missionOverridesOf, readPlaywrightConfig } from '../project/playwright-config.js';
@@ -59,7 +66,9 @@ Usage:
   npx qa-crawler analyze [--flow <name>]... [run options]
   npx qa-crawler test-api [run options]
   npx qa-crawler reproduce [<anomaly id>] [run options]
-  npx qa-crawler generate-tests [--out <dir>]
+  npx qa-crawler generate-tests [--out <dir>]              Playwright specs (qa-crawler/generated-tests/)
+  npx qa-crawler generate-tests --java [--package <name>]  Maven project, JUnit 5 + Playwright Java (qa-crawler/generated-tests-java/)
+  npx qa-crawler generate-tests --gherkin                  Gherkin scenarios (qa-crawler/generated-features/)
   npx qa-crawler knowledge-center [--port 4190] [--read-only]  The Knowledge Center: what the tool learned, served locally
 
 Run options (every command that runs the application):
@@ -70,6 +79,7 @@ Run options (every command that runs the application):
       --config <file>         Project configuration (default: qa-crawler.config.yaml, searched upwards)
       --cwd <dir>             Project directory (default: current directory)
       --persistence <p>       off | memory | file | sqlite | postgres | sqlserver
+      --junit                 Also write qa-reports/junit.xml for the CI (or reporting.format: [html, json, junit])
       --intelligence <m>      off | assist | hybrid (also QA_INTELLIGENCE_MODE)
       --max-states <n>, --max-actions <n>, --quiet, --dotenv <file>
 
@@ -91,6 +101,11 @@ interface ProjectArgs {
   force: boolean;
   example: boolean;
   out?: string;
+  /** generate-tests --java : un projet Maven JUnit 5 + Playwright Java au lieu des specs TypeScript. */
+  java: boolean;
+  /** generate-tests --gherkin : des scénarios .feature (exécutables par le moteur Gherkin de QA-CRAWLER). */
+  gherkin: boolean;
+  javaPackage?: string;
   positional?: string;
   /** Options passées telles quelles à la CLI de mission. */
   passthrough: string[];
@@ -109,6 +124,9 @@ const OPTIONS = {
   force: { type: 'boolean', default: false },
   'no-example': { type: 'boolean', default: false },
   out: { type: 'string' },
+  java: { type: 'boolean', default: false },
+  gherkin: { type: 'boolean', default: false },
+  package: { type: 'string' },
   persistence: { type: 'string' },
   'no-persistence': { type: 'boolean' },
   memory: { type: 'boolean' },
@@ -119,6 +137,7 @@ const OPTIONS = {
   'max-states': { type: 'string' },
   'max-actions': { type: 'string' },
   quiet: { type: 'boolean', short: 'q' },
+  junit: { type: 'boolean' },
   help: { type: 'boolean', short: 'h', default: false },
 } as const;
 
@@ -150,6 +169,7 @@ export function parseProjectArgs(command: ProjectCommand, argv: readonly string[
   if (values.memory) passthrough.push('--memory');
   if (values['no-memory']) passthrough.push('--no-memory');
   if (values.quiet) passthrough.push('--quiet');
+  if (values.junit) passthrough.push('--junit');
   return {
     command,
     cwd: values.cwd ?? process.cwd(),
@@ -162,6 +182,9 @@ export function parseProjectArgs(command: ProjectCommand, argv: readonly string[
     force: values.force,
     example: !values['no-example'],
     ...(values.out ? { out: values.out } : {}),
+    java: values.java,
+    gherkin: values.gherkin,
+    ...(values.package ? { javaPackage: values.package } : {}),
     ...(positionals[0] !== undefined ? { positional: positionals[0] } : {}),
     passthrough,
     help: values.help,
@@ -447,14 +470,29 @@ async function generateTests(args: ProjectArgs): Promise<number> {
   });
   const reportsDir = path.resolve(project.root, project.config.reporting.dir);
   const last = await readJson<ExplorationResult>(path.join(reportsDir, 'result.json'));
+  if (loaded.config.flows.length === 0) {
+    logger.error(`No flow to generate from: add flows under ${path.join(PROJECT_DIR, 'flows')}.`);
+    return 2;
+  }
+  if (args.java) return generateJavaTests(args, project.root, loaded.config, last);
+  if (args.gherkin) {
+    const features = generateGherkinFeatures(loaded.config.flows, {
+      language: loaded.config.report.language,
+    });
+    const directory = path.resolve(project.root, args.out ?? path.join(PROJECT_DIR, 'generated-features'));
+    await mkdir(directory, { recursive: true });
+    for (const feature of features) {
+      await writeFile(path.join(directory, feature.fileName), feature.content, 'utf8');
+      logger.info(
+        `  + ${path.relative(project.root, path.join(directory, feature.fileName))}${feature.unsaid > 0 ? ` (${String(feature.unsaid)} step(s) kept as comments: no Gherkin sentence)` : ''}${feature.replayOnly.length > 0 ? ` (${String(feature.replayOnly.length)} business assertion(s) verified by the replay only)` : ''}`,
+      );
+    }
+    return 0;
+  }
   const tests = generatePlaywrightTests(loaded.config.flows, last?.flows ?? [], {
     baseUrl: loaded.config.target.baseUrl,
     ...(last?.cognitive ? { checkpoints: last.cognitive.checkpoints } : {}),
   });
-  if (tests.length === 0) {
-    logger.error(`No flow to generate from: add flows under ${path.join(PROJECT_DIR, 'flows')}.`);
-    return 2;
-  }
   const directory = path.resolve(project.root, args.out ?? path.join(PROJECT_DIR, 'generated-tests'));
   await mkdir(directory, { recursive: true });
   for (const test of tests) {
@@ -463,5 +501,36 @@ async function generateTests(args: ProjectArgs): Promise<number> {
       `  + ${path.relative(project.root, path.join(directory, test.fileName))} (${String(test.steps)} step(s), ${String(test.assertions)} assertion(s))`,
     );
   }
+  return 0;
+}
+
+/**
+ * generate-tests --java : le projet Maven (JUnit 5 + Playwright Java) des flows, à côté du projet.
+ * Java et Maven ne sont pas nécessaires pour générer, seulement pour exécuter le projet écrit.
+ */
+async function generateJavaTests(
+  args: ProjectArgs,
+  root: string,
+  config: ScenarioConfig,
+  last: ExplorationResult | undefined,
+): Promise<number> {
+  const generated = generateJavaJUnitPlaywrightProject(config.flows, last?.flows ?? [], {
+    baseUrl: config.target.baseUrl,
+    ...(args.javaPackage ? { packageName: args.javaPackage } : {}),
+    versions: { playwright: defaultPlaywrightJavaVersion() },
+    ...(last?.cognitive ? { checkpoints: last.cognitive.checkpoints } : {}),
+  });
+  const directory = path.resolve(root, args.out ?? path.join(PROJECT_DIR, 'generated-tests-java'));
+  for (const file of await writeJavaProject(generated, directory))
+    logger.info(`  + ${path.relative(root, file)}`);
+  for (const test of generated.tests) {
+    logger.info(
+      `  ${test.className}: ${String(test.steps)} step(s), ${String(test.assertions)} assertion(s)${test.unsupported.length > 0 ? `, ${String(test.unsupported.length)} unsupported step(s) (the test is aborted there)` : ''}`,
+    );
+    for (const entry of [...test.unsupported, ...test.notes]) logger.info(`    - ${entry}`);
+  }
+  logger.info(
+    `Run: cd ${path.relative(root, directory) || '.'} && QA_BASE_URL=${config.target.baseUrl} mvn test   (JUnit XML in target/surefire-reports/)`,
+  );
   return 0;
 }

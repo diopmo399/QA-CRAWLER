@@ -1,3 +1,9 @@
+import {
+  expectStepOf,
+  nativeComment,
+  replayOnlyComment,
+  translateAssertions,
+} from './assertion-translation.js';
 import type { FlowStep } from '../config/flow-schema.js';
 import type { FlowRunReport } from '../model/flow-run.js';
 import {
@@ -5,6 +11,7 @@ import {
   playwrightLocator,
   playwrightValue,
   testDataKeysOf,
+  playwrightText,
   type FlowDefinition,
 } from './flow-steps.js';
 
@@ -21,6 +28,8 @@ import {
  */
 
 export interface GeneratedTest {
+  /** Les assertions métier que seul le rejeu QA-CRAWLER vérifie (dites en commentaire dans le test). */
+  replayOnly?: string[];
   flow: string;
   fileName: string;
   content: string;
@@ -82,7 +91,9 @@ function stepLines(
         assertions += 1;
       }
       if (expectation.text) {
-        lines.push(`await expect(page.getByText(${quote(expectation.text)}).first()).toBeVisible();`);
+        lines.push(
+          `await expect(page.getByText(${playwrightText(expectation.text)}).first()).toBeVisible();`,
+        );
         assertions += 1;
       }
       if (expectation.visible) {
@@ -141,8 +152,8 @@ function stepLines(
     const [role, name] = control.includes(':') ? control.split(':', 2) : ['text', control];
     lines.push(
       role === 'text' || !name
-        ? `await expect(page.getByText(${quote(name ?? role ?? '')}).first()).toBeVisible();`
-        : `await expect(page.getByRole(${quote(role ?? 'button')}, { name: ${quote(name)} }).first()).toBeVisible();`,
+        ? `await expect(page.getByText(${playwrightText(name ?? role ?? '')}).first()).toBeVisible();`
+        : `await expect(page.getByRole(${quote(role ?? 'button')}, { name: ${playwrightText(name)} }).first()).toBeVisible();`,
     );
     assertions += 1;
   }
@@ -158,11 +169,29 @@ export function generatePlaywrightTest(
   const keys = testDataKeysOf(definition.steps);
   const body: string[] = [];
   let assertions = 0;
+  // LES ASSERTIONS MÉTIER (modèle commun) : natives → une attente après leur étape ; sinon un commentaire.
+  const business = translateAssertions(definition.assertions, definition.steps.length);
+  const groupAt = new Map((definition.groups ?? []).map((group) => [group.steps[0] ?? 0, group]));
+  const pushNative = (position: number): void => {
+    for (const assertion of business.nativeAfter.get(position) ?? []) {
+      const step = expectStepOf(assertion);
+      if (!step) continue;
+      const generated = stepLines(step, position, report, definition.name);
+      body.push(`// ${nativeComment(assertion)}`, ...generated.lines.slice(1), '');
+      assertions += generated.assertions;
+    }
+  };
   definition.steps.forEach((step, position) => {
+    const group = groupAt.get(position + 1);
+    if (group) body.push(`// ── group: ${group.name}${group.description ? ` — ${group.description}` : ''}`);
     const generated = stepLines(step, position + 1, report, definition.name);
     body.push(...generated.lines, '');
     assertions += generated.assertions;
+    pushNative(position + 1);
   });
+  pushNative(0);
+  for (const assertion of business.replayOnly) body.push(`// ${replayOnlyComment(assertion)}`);
+  if (business.replayOnly.length > 0) body.push('');
   const start = new URL(definition.startAt ?? '/', options.baseUrl).toString();
   const checkpoints = (options.checkpoints ?? []).map(
     (checkpoint) => ` *   - ${checkpoint.id}: ${checkpoint.status}`,
@@ -175,6 +204,12 @@ export function generatePlaywrightTest(
     ` * Run status at generation time: ${report?.status ?? 'not executed'}.`,
     ' * Test data is generated per run (never a recorded value); literal values of the flow and secrets come from the environment (QA_REPRO_<FLOW>_STEP_<n>).',
     ...(checkpoints.length > 0 ? [' * Semantic checkpoints observed:', ...checkpoints] : []),
+    ...(business.replayOnly.length > 0
+      ? [
+          ' * Business assertions this test cannot verify by itself (the QA-CRAWLER replay does, on the observed network):',
+          ...business.replayOnly.map((assertion) => ` *   - ${assertion.id}: ${assertion.description}`),
+        ]
+      : []),
     ' */',
     `const runTag = \`QA-\${Date.now().toString(36)}\`;`,
     `const testData: Record<string, string> = {`,
@@ -196,6 +231,9 @@ export function generatePlaywrightTest(
     content,
     steps: definition.steps.length,
     assertions,
+    ...(business.replayOnly.length > 0
+      ? { replayOnly: business.replayOnly.map((assertion) => assertion.id) }
+      : {}),
   };
 }
 

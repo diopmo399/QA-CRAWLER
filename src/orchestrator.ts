@@ -24,6 +24,12 @@ import type { FlowGraphData } from './model/flow.js';
 import type { VerificationReport } from './model/verification.js';
 import { isAtLeast, type Issue } from './model/issue.js';
 import { buildResult } from './reporting/result-builder.js';
+import {
+  defaultPlaywrightJavaVersion,
+  generateJavaJUnitPlaywrightProject,
+  writeJavaProject,
+} from './platform/java-junit-playwright-generator.js';
+import { JUnitReporter } from './reporting/junit-reporter.js';
 import { writeReports } from './reporting/reporter.js';
 import { buildRunAnalysis } from './analysis/run-analysis.js';
 import {
@@ -70,6 +76,8 @@ import { compareFlowRuns, flowRunMemoryOf } from './flows/flow-run-comparison.js
 import { DefaultTestDataProvider } from './data/test-data-provider.js';
 import { AuthorizationObserver, type AuthorizationReport } from './actors/authorization-observer.js';
 import { JsonKnowledgeBase, knowledgeFileOf, knowledgeIdentityOf } from './knowledge/json-knowledge-base.js';
+import { buildQualityVerification, type QualityVerificationReport } from './quality/quality-verification.js';
+import { COVERAGE_STATUSES, loadHistory, saveHistory, updateHistory } from './quality/traceability.js';
 import { InvariantOracle } from './oracles/invariant-oracle.js';
 import { loadSemantics } from './semantics/domain-packs.js';
 import { IssueCollector } from './anomaly/issue-collector.js';
@@ -168,9 +176,8 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   // Vocabulaire et packs de domaine ; ce que le crawler a appris des runs précédents.
   const semantics = await loadSemantics(config);
   // PERSISTANCE (où enregistrer) et MÉMOIRE (l'historique influence-t-il ce run ?) : indépendantes.
-  const persistence = await openPersistence(config.persistence, env, {
-    warn: options.onWarning ?? ((message) => process.stderr.write(`WARNING: ${message}\n`)),
-  });
+  const warn = options.onWarning ?? ((message: string) => process.stderr.write(`WARNING: ${message}\n`));
+  const persistence = await openPersistence(config.persistence, env, { warn });
   const identity = knowledgeIdentityOf(
     config.knowledge,
     config.target.baseUrl,
@@ -730,24 +737,69 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       reproductions.findings,
     );
   }
+  // Les tests Playwright générés sont un produit DÉRIVÉ du run : une erreur de génération ou
+  // d'écriture est un avertissement, jamais l'échec d'un run QA par ailleurs valide.
   if (config.platform.generatedTests.enabled && config.flows.length > 0) {
-    const tests = generatePlaywrightTests(config.flows, result.flows, {
-      baseUrl: config.target.baseUrl,
-      ...(result.cognitive ? { checkpoints: result.cognitive.checkpoints } : {}),
-    });
-    const directory = path.join(config.output.reportsDir, 'generated-tests');
-    await mkdir(directory, { recursive: true });
-    for (const test of tests) await writeFile(path.join(directory, test.fileName), test.content, 'utf8');
-    attachExtension(workflowAnalysis, 'generatedTests', 'generated-tests.json', {
-      directory,
-      tests: tests.map((test) => ({
-        flow: test.flow,
-        file: path.join(directory, test.fileName),
-        steps: test.steps,
-        assertions: test.assertions,
-      })),
-    });
+    try {
+      const tests = generatePlaywrightTests(config.flows, result.flows, {
+        baseUrl: config.target.baseUrl,
+        ...(result.cognitive ? { checkpoints: result.cognitive.checkpoints } : {}),
+      });
+      const directory = path.join(config.output.reportsDir, 'generated-tests');
+      await mkdir(directory, { recursive: true });
+      for (const test of tests) await writeFile(path.join(directory, test.fileName), test.content, 'utf8');
+      attachExtension(workflowAnalysis, 'generatedTests', 'generated-tests.json', {
+        directory,
+        tests: tests.map((test) => ({
+          flow: test.flow,
+          file: path.join(directory, test.fileName),
+          steps: test.steps,
+          assertions: test.assertions,
+        })),
+      });
+    } catch (error) {
+      warn(`Playwright tests not generated: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
+  // Le projet JUnit 5 + Playwright Java (platform.generatedTests.java) : un adaptateur à part du
+  // moteur, dérivé du run ; une erreur de génération est un avertissement.
+  if (config.platform.generatedTests.java.enabled && config.flows.length > 0) {
+    try {
+      const javaOptions = config.platform.generatedTests.java;
+      const project = generateJavaJUnitPlaywrightProject(config.flows, result.flows, {
+        baseUrl: config.target.baseUrl,
+        packageName: javaOptions.packageName,
+        versions: { playwright: javaOptions.playwrightVersion ?? defaultPlaywrightJavaVersion() },
+        ...(result.cognitive ? { checkpoints: result.cognitive.checkpoints } : {}),
+      });
+      const directory = path.join(config.output.reportsDir, 'generated-tests-java');
+      await writeJavaProject(project, directory);
+      attachExtension(workflowAnalysis, 'generatedJavaTests', 'generated-java-tests.json', {
+        directory,
+        packageName: project.packageName,
+        versions: project.versions,
+        tests: project.tests.map((test) => ({ ...test, file: path.join(directory, test.file) })),
+      });
+    } catch (error) {
+      warn(`Java tests not generated: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  // VÉRIFICATION MÉTIER : verdict des assertions, cohérence des données, traçabilité des exigences.
+  const quality = await verifyQuality(config, result, outcome.runId, contract, engineLog);
+  if (quality)
+    attachExtension(workflowAnalysis, 'qualityVerification', 'quality-verification.json', quality, [
+      {
+        conclusion: `business verdict ${quality.verdict}: ${String(quality.metrics.assertionsByStatus.PASS)}/${String(quality.metrics.assertionsDeclared)} assertion(s) passed, ${String(quality.metrics.requirementsVerified)}/${String(quality.metrics.requirementsTotal)} requirement(s) verified`,
+        evidence: [
+          ...quality.traceability.summary.criticalFailures.map(
+            (id) => `critical requirement ${id} not verified`,
+          ),
+          ...quality.limits.slice(0, 1),
+        ],
+        confidence: 1,
+        source: 'RUNTIME',
+      },
+    ]);
   refreshOverallStatus(workflowAnalysis, result, {
     visualRegressions,
     performanceRegressions: performanceAnalysis.summary.PERFORMANCE_REGRESSION,
@@ -798,6 +850,20 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   }
   await persistence.provider?.close().catch(() => undefined);
   const written = await writeReports(result, config.output, memory.location, config.report.language);
+  // JUNIT XML (report.junit) : un fichier de plus pour la CI, écrit APRÈS les rapports QA-CRAWLER ;
+  // une erreur d'écriture est un avertissement, sauf `required`, où elle fait échouer le run.
+  if (config.report.junit.enabled) {
+    try {
+      written.artifacts.junit = await new JUnitReporter(config.output.reportsDir, config.report.junit.file, {
+        failOnSeverity: config.report.failOnSeverity,
+      }).write(written);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (config.report.junit.required)
+        throw new Error(`JUnit report not written (report.junit.required): ${reason}`);
+      warn(`JUnit report not written: ${reason}`);
+    }
+  }
   // QA PLATFORM — PULL REQUEST : le résultat structuré publié en commentaire (jeton par variable d'environnement, jamais journalisé).
   if (config.platform.pullRequest.enabled && written.workflowAnalysis) {
     const settings = config.platform.pullRequest;
@@ -1006,4 +1072,63 @@ async function regressionOf(
     log.log('WARN', 'FLOW_EVOLVED', `regression history not updated: ${message}`);
     return { skipped: `history storage failed: ${redactText(message)}` };
   }
+}
+
+/**
+ * Le rapport de vérification métier (quality-verification.json), quand la mission déclare des exigences,
+ * des règles ou des assertions. L'historique de la traçabilité (STALE_EVIDENCE) est facultatif ; une
+ * erreur de lecture ou d'écriture ne fait jamais échouer le run.
+ */
+async function verifyQuality(
+  config: ScenarioConfig,
+  result: ExplorationResult,
+  runId: string,
+  contract: ApiContract | undefined,
+  engineLog: EngineEventLog,
+): Promise<QualityVerificationReport | undefined> {
+  const declared = config.flows.map((flow) => ({
+    name: flow.name,
+    requirements: flow.requirements,
+    assertions: flow.assertions,
+    ...(/\.feature:\d*$/.test(flow.description ?? '') ? { gherkin: true } : {}),
+  }));
+  const operations = contract?.operations.filter((operation) => operation.requirements?.length);
+  const anything =
+    config.requirements.length > 0 ||
+    config.businessRules.length > 0 ||
+    (operations?.length ?? 0) > 0 ||
+    result.flows.some((flow) => flow.quality) ||
+    declared.some((flow) => flow.requirements.length > 0 || flow.assertions.length > 0);
+  if (!anything) return undefined;
+  const historyFile =
+    config.quality.history === false
+      ? undefined
+      : path.resolve(path.dirname(knowledgeFileOf(config)), config.quality.history);
+  const history = historyFile ? await loadHistory(historyFile) : undefined;
+  const report = buildQualityVerification({
+    runId,
+    flows: result.flows,
+    declared,
+    requirements: config.requirements,
+    rules: config.businessRules,
+    ...(operations?.length ? { operations } : {}),
+    ...(history ? { history } : {}),
+    evidenceMaxAgeDays: config.quality.evidenceMaxAgeDays,
+    now: new Date(),
+  });
+  if (historyFile)
+    await saveHistory(historyFile, updateHistory(history, report.traceability)).catch((error: unknown) => {
+      engineLog.log(
+        'WARN',
+        'REQUIREMENT_COVERAGE_COMPUTED',
+        `traceability history not saved: ${String(error)}`,
+      );
+    });
+  const summary = report.traceability.summary;
+  engineLog.log(
+    summary.criticalFailures.length > 0 ? 'WARN' : 'INFO',
+    'REQUIREMENT_COVERAGE_COMPUTED',
+    `business verdict ${report.verdict}; requirements ${COVERAGE_STATUSES.map((status) => `${status} ${String(summary.byStatus[status])}`).join(', ')}${summary.criticalFailures.length > 0 ? `; critical: ${summary.criticalFailures.join(', ')}` : ''}`,
+  );
+  return report;
 }

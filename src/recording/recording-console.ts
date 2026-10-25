@@ -1,3 +1,6 @@
+import type { ProposalDecision } from './assertion-proposals.js';
+import type { RecordedFlow } from './model.js';
+import { type GroupCommand, type GroupOutcome, groupViews } from './step-groups.js';
 import { REVIEWABLE_INTENTS } from './application/human-review.js';
 import type { RecordingAnalysis } from './analysis/recording-analysis.js';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
@@ -8,11 +11,15 @@ import type { ScenarioConfig } from '../config/config.js';
 import { slug } from '../knowledge/signatures.js';
 import type { ProgressUpdate } from '../progress/progress.js';
 import type { FlowAuditReport } from './flow-audit.js';
-import type { DockView, HumanFlowRecorder } from './human-flow-recorder.js';
+import type { DockView, HumanFlowRecorder, ScreenShot, StepShot } from './human-flow-recorder.js';
+import type { PreActionBox } from './model.js';
 import {
   describeFlowStep,
   summaryOf,
+  proposalRows,
   reviewSteps,
+  type PanelGeneration,
+  type PanelGroup,
   liveStep,
   type PanelAnalysis,
   type PanelReplay,
@@ -58,6 +65,16 @@ export interface ReviewActions {
     intent?: string;
     reason?: string;
   }) => Promise<{ ok: true } | { error: string }>;
+  /** LA DÉCISION sur une proposition d'assertion (accepter, refuser, désactiver, réinitialiser, modifier). */
+  reviewAssertion?: (input: ProposalDecision) => Promise<{ ok: true } | { error: string }>;
+  /** LES GROUPES MÉTIER : une opération (créer, renommer, affecter, déplacer, réordonner, replier, détacher, supprimer). */
+  editGroups?: (command: GroupCommand, options?: { force?: boolean }) => Promise<GroupOutcome>;
+  /** LA GÉNÉRATION : les formats demandés pour les groupes choisis, écrits et validés statiquement (outils réels). */
+  generate?: (input: {
+    formats: string[];
+    groupIds?: string[];
+    force?: boolean;
+  }) => Promise<PanelGeneration | { error: string }>;
   /** LA LIAISON DE DONNÉES d'une saisie : sa source (fixe, générée, réutilisée), choisie par l'humain. */
   bindTestData?: (input: {
     stepId: string;
@@ -114,6 +131,40 @@ export type PickOutcome =
   | { unavailable: string }
   | { unreachable: { index: number; label: string; reason: string } };
 
+/** Les images d'étapes gardées en mémoire (les plus anciennes s'effacent au-delà). */
+const STEP_SHOTS = 60;
+
+/**
+ * L'IMAGE « AVANT LE CLIC » : la dernière image prise avant l'appui, seulement si la page n'a pas changé
+ * depuis (sinon elle montrerait un autre écran, par exemple encore en chargement), au même défilement et
+ * à la même taille de fenêtre (sinon le cadre tomberait à côté). Jamais d'image périmée : sinon, rien.
+ */
+export function beforeScreenOf(screens: readonly ScreenShot[], box: PreActionBox): ScreenShot | undefined {
+  const screen = screens
+    .filter((entry) => entry.at <= box.at)
+    .sort((a, b) => a.at - b.at)
+    .at(-1);
+  if (!screen || box.width <= 0 || box.height <= 0) return undefined;
+  const fresh = box.changedAt === undefined || screen.at >= box.changedAt;
+  const same =
+    Math.abs(screen.scrollX - box.scrollX) <= 2 &&
+    Math.abs(screen.scrollY - box.scrollY) <= 2 &&
+    screen.width === box.viewWidth &&
+    screen.height === box.viewHeight;
+  return fresh && same ? screen : undefined;
+}
+
+/** Garde une image d'étape ; au-delà de STEP_SHOTS, les plus anciennes s'effacent. */
+function keep(shots: Map<string, StepShot>, id: string, shot: StepShot): void {
+  shots.delete(id);
+  shots.set(id, shot);
+  while (shots.size > STEP_SHOTS) {
+    const oldest = shots.keys().next().value;
+    if (oldest === undefined) break;
+    shots.delete(oldest);
+  }
+}
+
 /**
  * LA CONSOLE DU RECORDER : relie la fenêtre « QA-CRAWLER Recorder » au recorder (pendant
  * l'enregistrement) puis à la revue (après Stop). Elle construit l'état affiché ; elle ne décide
@@ -137,6 +188,8 @@ export class RecordingConsole {
   /** Les actions de la revue en cours (la session de correction se libère hors de la file des commandes). */
   private reviewActions: ReviewActions | undefined;
   private saved: PanelState['saved'];
+  /** La dernière génération (artefacts, statuts, validations) : montrée dans la revue. */
+  private generation: PanelGeneration | undefined;
   private analysis: PanelAnalysis = { available: false, intents: [], findings: [], aiCandidates: 0 };
   /** Les entrées de la dernière analyse affichée : la revue d'une intention la redessine. */
   private analysisInputs:
@@ -148,6 +201,22 @@ export class RecordingConsole {
   private busy = false;
   private preview: PanelState['preview'];
   private previewTimer: NodeJS.Timeout | undefined;
+  /**
+   * L'IMAGE DE CHAQUE ÉTAPE (en mémoire seulement, jamais écrite) : l'écran juste après l'action et le
+   * cadre de son élément. La revue la montre quand on choisit l'étape (l'application est alors fermée).
+   */
+  private readonly stepShots = new Map<string, StepShot>();
+  /** L'image AVANT un clic : la dernière image prise avant l'appui, le bouton encadré là où il était. */
+  private readonly beforeShots = new Map<string, StepShot>();
+  /** Les dernières images de l'application (aperçu ou image d'étape), de la plus ancienne à la plus récente. */
+  private readonly recentScreens: ScreenShot[] = [];
+  /** Pendant l'enregistrement : une nouvelle image quand la page a changé puis s'est posée. */
+  private screenWatch: NodeJS.Timeout | undefined;
+  /** La dernière action vue : une nouvelle action déclenche son image « avant ». */
+  private lastActionSeen: string | undefined;
+  /** L'action dont l'image attend que l'écran se pose (une saisie se termine, une page se charge). */
+  private pendingShot: { id: string; timer: NodeJS.Timeout } | undefined;
+  private shotChain: Promise<void> = Promise.resolve();
   private capturing = false;
   /** recording.panelPreview : l'aperçu de l'application dans la fenêtre. */
   withPreview = true;
@@ -287,10 +356,119 @@ export class RecordingConsole {
     this.render();
   }
 
+  /** Au départ : l'écran de la page tout de suite (il sert d'image « avant » au premier clic). */
+  async firstPreview(): Promise<void> {
+    await this.refreshPreview();
+    this.watchScreen();
+  }
+
+  /**
+   * L'IMAGE TENUE À JOUR : une page qui change sans action humaine (un chargement qui se termine, une
+   * liste qui arrive) est reprise dès qu'elle s'est posée (500 ms sans changement), au plus une fois par
+   * seconde, jamais pendant un geste. L'image « avant le clic » montre ainsi l'écran que l'humain avait
+   * sous les yeux.
+   */
+  private watchScreen(): void {
+    if (this.screenWatch || !this.withPreview) return;
+    this.screenWatch = setInterval(() => {
+      void this.freshenScreen();
+    }, 1000);
+    this.screenWatch.unref();
+  }
+
+  private stopScreenWatch(): void {
+    if (this.screenWatch) clearInterval(this.screenWatch);
+    this.screenWatch = undefined;
+  }
+
+  private async freshenScreen(): Promise<void> {
+    if (this.phase !== 'RECORDING' || this.capturing || this.previewTimer) return;
+    // Jamais pendant un geste (une saisie en cours) : l'image suivra l'action, comme avant.
+    const since = this.recorder.sinceLastGesture();
+    if (since !== undefined && since < 1000) return;
+    const changed = await this.recorder.lastChange();
+    const latest = this.recentScreens.at(-1);
+    if (changed === undefined || Date.now() - changed < 500 || (latest && latest.at >= changed)) return;
+    await this.refreshPreview();
+  }
+
+  /** Une image de plus (les 3 dernières suffisent : l'image « avant » est la dernière prise avant l'appui). */
+  private noteScreen(shot: ScreenShot): void {
+    this.recentScreens.push(shot);
+    this.recentScreens.sort((a, b) => a.at - b.at);
+    if (this.recentScreens.length > 3) this.recentScreens.shift();
+  }
+
   /** La timeline a changé (une action, une validation) : la fenêtre, puis un nouvel aperçu de la page. */
   timelineChanged(): void {
     this.render();
     this.schedulePreview();
+    this.scheduleStepShot();
+  }
+
+  /**
+   * L'image de la dernière action, prise quand l'écran s'est posé (600 ms sans nouveau changement) ;
+   * une nouvelle action prend aussitôt celle de la précédente si elle attendait encore.
+   */
+  private scheduleStepShot(): void {
+    if (!this.withPreview || (this.phase !== 'RECORDING' && this.phase !== 'PAUSED')) return;
+    const last = this.recorder.timeline.actions.at(-1);
+    if (!last) return;
+    if (last.id !== this.lastActionSeen) {
+      this.lastActionSeen = last.id;
+      if (last.kind === 'click') this.keepBeforeShot(last.id);
+    }
+    const pending = this.pendingShot;
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingShot = undefined;
+      if (pending.id !== last.id) void this.queueStepShot(pending.id);
+    }
+    const timer = setTimeout(() => {
+      this.pendingShot = undefined;
+      void this.queueStepShot(last.id);
+    }, 600);
+    timer.unref();
+    this.pendingShot = { id: last.id, timer };
+  }
+
+  private queueStepShot(id: string): Promise<void> {
+    this.shotChain = this.shotChain.then(async () => {
+      const shot = await this.recorder.stepShot(id).catch(() => undefined);
+      if (!shot) return;
+      this.noteScreen(shot);
+      keep(this.stepShots, id, shot);
+    });
+    return this.shotChain;
+  }
+
+  /**
+   * L'IMAGE AVANT UN CLIC : la dernière image prise AVANT l'appui, et le bouton encadré là où il était
+   * à l'appui — seulement si la page n'avait ni défilé ni changé de taille entre les deux (sinon le cadre
+   * serait faux : pas d'image « avant »).
+   */
+  private keepBeforeShot(id: string): void {
+    const click = this.recorder.clickBox(id);
+    if (!click) return;
+    const { box } = click;
+    const screen = beforeScreenOf(this.recentScreens, box);
+    if (!screen) return;
+    keep(this.beforeShots, id, {
+      ...screen,
+      rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+      label: click.label,
+    });
+  }
+
+  /** À l'arrêt, avant que l'application se ferme : l'image de la dernière action si elle attendait encore. */
+  async flushStepShots(): Promise<void> {
+    const pending = this.pendingShot;
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingShot = undefined;
+      void this.queueStepShot(pending.id);
+    }
+    await Promise.race([this.shotChain, new Promise((resolve) => setTimeout(resolve, 2000).unref())]);
   }
 
   /** L'aperçu se rafraîchit après les changements (au plus une image toutes les 800 ms), jamais pendant un rejeu. */
@@ -309,6 +487,7 @@ export class RecordingConsole {
     try {
       const shot = await this.recorder.preview();
       if (!shot) return;
+      if (this.phase === 'RECORDING' || this.phase === 'PAUSED') this.noteScreen(shot);
       // Un cadre ne survit qu'à l'image où il a été mesuré (la page a pu bouger depuis).
       this.preview = { ...shot, ...(highlight ? { highlight } : {}) };
       this.render();
@@ -318,6 +497,7 @@ export class RecordingConsole {
   }
 
   async close(): Promise<void> {
+    this.stopScreenWatch();
     await this.detached?.close();
     await this.panel?.close();
   }
@@ -336,6 +516,7 @@ export class RecordingConsole {
   }
 
   stopped(): void {
+    this.stopScreenWatch();
     this.phase = 'FINALIZING';
     this.endedAt ??= Date.now();
     this.render();
@@ -474,6 +655,50 @@ export class RecordingConsole {
             }
           } else if (command.type === 'save') {
             this.saved = await input.actions.save();
+          } else if (command.type === 'generate' && input.actions.generate) {
+            const outcome = await input.actions.generate({
+              formats: command.formats ?? ['yaml', 'gherkin', 'playwright'],
+              ...(command.groupIds && command.groupIds.length > 0 ? { groupIds: command.groupIds } : {}),
+              force: command.force === true,
+            });
+            if ('error' in outcome) this.notice = { kind: 'error', message: outcome.error };
+            else {
+              this.notice = undefined;
+              this.generation = outcome;
+            }
+          } else if (command.type === 'group' && command.op && input.actions.editGroups) {
+            const group = groupCommandOf(command);
+            if (!group) this.notice = { kind: 'error', message: `invalid group command ${command.op}` };
+            else {
+              const outcome = await input.actions.editGroups(group, { force: command.force === true });
+              if ('error' in outcome) this.notice = { kind: 'error', message: outcome.error };
+              else {
+                this.notice =
+                  outcome.warnings.length > 0
+                    ? { kind: 'info', message: outcome.warnings.join('; ') }
+                    : undefined;
+                this.replay = undefined;
+                this.saved = undefined;
+              }
+            }
+          } else if (
+            command.type === 'assertion-decide' &&
+            command.id &&
+            command.decision &&
+            input.actions.reviewAssertion
+          ) {
+            const outcome = await input.actions.reviewAssertion({
+              id: command.id,
+              decision: command.decision,
+              ...(command.reason ? { note: command.reason } : {}),
+            });
+            // Le flow change : un rejeu fait avant ne le valide plus.
+            if ('error' in outcome) this.notice = { kind: 'error', message: outcome.error };
+            else {
+              this.notice = undefined;
+              this.replay = undefined;
+              this.saved = undefined;
+            }
           } else if (
             command.type === 'data-bind' &&
             command.id &&
@@ -634,9 +859,38 @@ export class RecordingConsole {
         break;
       case 'select': {
         if (!command.id) break;
-        // Après l'arrêt, l'application est fermée : les détails s'affichent, sans mise en évidence.
+        const stepId = command.id;
+        // Après l'arrêt, l'application est fermée : l'aperçu montre l'image de l'étape, prise pendant
+        // l'enregistrement (l'écran juste après l'action, son élément encadré s'il était visible).
         if (!recording) {
           this.highlight = undefined;
+          const live = this.liveIdOf(command.id);
+          const shot = live ? this.stepShots.get(live) : undefined;
+          const before = live ? this.beforeShots.get(live) : undefined;
+          const frame = (image: StepShot): NonNullable<PanelState['preview']> => ({
+            image: image.image,
+            url: image.url,
+            width: image.width,
+            height: image.height,
+            ...(image.rect
+              ? {
+                  highlight: {
+                    actionId: stepId,
+                    ...image.rect,
+                    ...(image.label ? { label: image.label } : {}),
+                  },
+                }
+              : {}),
+          });
+          const main = shot ?? before;
+          if (main)
+            this.preview = {
+              ...frame(main),
+              step: command.id,
+              ...(shot && before ? { before: frame(before) } : {}),
+              ...(!shot && before ? { onlyBefore: true } : {}),
+            };
+          else if (this.preview) this.preview = { ...this.preview, step: command.id, missing: true };
           break;
         }
         const live = this.liveIdOf(command.id);
@@ -1010,6 +1264,9 @@ export class RecordingConsole {
       ...(this.endedAt !== undefined ? { endedAt: this.endedAt } : {}),
       actions: steps,
       checks: review?.checks ?? [],
+      ...(inReview && this.result ? { proposals: proposalRows(this.result.flow) } : {}),
+      ...(inReview && this.result ? { groups: groupRows(this.result.flow) } : {}),
+      ...(this.generation ? { generation: this.generation } : {}),
       summary: review ? summaryOf(steps) : live.summary(),
       quality: live.quality(),
       ...(this.progress ? { progress: this.progress } : {}),
@@ -1069,6 +1326,8 @@ function enrichSteps(
   },
 ): PanelStep[] {
   const groupOf = (step: PanelStep): string | undefined => {
+    // Un groupe métier décidé par l'humain l'emporte sur l'étape métier déduite.
+    if (step.groupId) return step.group;
     const owner = context.business?.find((entry) => entry.recordedActions.includes(step.id));
     if (owner)
       return `${owner.action.toLowerCase()} ${owner.entity ?? owner.entityKey?.split(':').at(-2) ?? ''}`.trim();
@@ -1684,4 +1943,72 @@ function httpPanelOf(
       .map((entry) => `${entry.ref}: ${entry.from} → ${entry.to} (${entry.reason})`),
     ...(result ? { searches: searchesOf(analysis, result) } : {}),
   };
+}
+
+/** La commande de groupe envoyée par la fenêtre, typée (ou rien quand elle est incomplète). */
+function groupCommandOf(command: PanelCommand): GroupCommand | undefined {
+  const stepIds = command.stepIds ?? (command.id ? [command.id] : []);
+  switch (command.op) {
+    case 'create':
+      return command.name !== undefined
+        ? {
+            op: 'create',
+            name: command.name,
+            ...(command.description !== undefined ? { description: command.description } : {}),
+            stepIds,
+          }
+        : undefined;
+    case 'rename':
+      return command.groupId && command.name !== undefined
+        ? { op: 'rename', groupId: command.groupId, name: command.name }
+        : undefined;
+    case 'describe':
+      return command.groupId
+        ? { op: 'describe', groupId: command.groupId, description: command.description ?? '' }
+        : undefined;
+    case 'assign':
+      return command.groupId ? { op: 'assign', groupId: command.groupId, stepIds } : undefined;
+    case 'detach':
+      return { op: 'detach', stepIds };
+    case 'move-step':
+      return command.id && command.direction
+        ? { op: 'move-step', stepId: command.id, direction: command.direction }
+        : undefined;
+    case 'reorder-steps':
+      return command.groupId ? { op: 'reorder-steps', groupId: command.groupId, stepIds } : undefined;
+    case 'move-group':
+      return command.groupId && command.direction
+        ? { op: 'move-group', groupId: command.groupId, direction: command.direction }
+        : undefined;
+    case 'collapse':
+      return command.groupId
+        ? { op: 'collapse', groupId: command.groupId, collapsed: command.collapsed !== false }
+        : undefined;
+    case 'delete':
+      return command.groupId
+        ? { op: 'delete', groupId: command.groupId, keepSteps: command.keepSteps !== false }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** Les groupes métier tels que la fenêtre les montre : membres, entrées, sorties, exécutabilité seule. */
+function groupRows(flow: RecordedFlow): PanelGroup[] {
+  return groupViews(flow).map((view) => ({
+    id: view.id,
+    name: view.name,
+    ...(view.description ? { description: view.description } : {}),
+    stepIds: view.stepIds,
+    collapsed: view.collapsed === true,
+    inputs: view.data.inputs.map(
+      (input) => `testData.${input.key}${input.producerGroupId ? ` ← ${input.producerGroupId}` : ''}`,
+    ),
+    outputs: view.data.outputs.map((output) => `testData.${output.key}`),
+    startAt: view.startAt,
+    checks: view.checks.length,
+    assertions: view.assertionIds.length,
+    runnableAlone: view.runnableAlone.ok,
+    missing: view.runnableAlone.missing,
+  }));
 }

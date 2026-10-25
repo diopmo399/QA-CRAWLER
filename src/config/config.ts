@@ -11,6 +11,7 @@ import { SEVERITIES } from '../model/issue.js';
 import { REPORT_LANGUAGES } from '../reporting/i18n.js';
 import { SCORING_WEIGHT_NAMES, type ScoringWeightName } from '../decision/scoring-weights.js';
 import { flowsSchema } from './flow-schema.js';
+import { businessRuleSchema, qualitySchema, requirementSchema } from './quality-schema.js';
 import { RECOVERY_STRATEGIES } from '../recovery/recovery-model.js';
 import { ACCESSIBILITY_RULES } from '../accessibility/accessibility-checker.js';
 import { LOG_LEVELS } from '../logging/engine-log.js';
@@ -774,6 +775,20 @@ const reportSchema = z
     failOnSeverity: z.enum([...SEVERITIES, 'NONE']).default('ERROR'),
     /** Langue des rapports HTML (index.html, flow-graph.html). result.json reste en anglais. */
     language: z.enum(REPORT_LANGUAGES).default('en'),
+    /**
+     * JUNIT XML (reports/junit.xml) pour la CI : un fichier de plus, désactivé par défaut, qui ne
+     * change rien aux autres rapports. `required` : une erreur d'écriture fait échouer le run (sinon
+     * un avertissement). Les anomalies au seuil de failOnSeverity y sont des échecs.
+     */
+    junit: z
+      .object({
+        enabled: z.boolean().default(false),
+        /** Relatif à output.reportsDir. */
+        file: nonEmpty.default('junit.xml'),
+        required: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 
@@ -1179,7 +1194,29 @@ const platformSchema = z
       .default({}),
     /** Tests Playwright générés (reports/generated-tests/<flow>.spec.ts). */
     generatedTests: z
-      .object({ enabled: z.boolean().default(false) })
+      .object({
+        enabled: z.boolean().default(false),
+        /**
+         * Projet Maven JUnit 5 + Playwright Java généré des flows (reports/generated-tests-java/),
+         * indépendant des specs Playwright ci-dessus ; désactivé par défaut. Java et Maven ne servent
+         * qu'à exécuter le projet généré.
+         */
+        java: z
+          .object({
+            enabled: z.boolean().default(false),
+            packageName: z
+              .string()
+              .regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/)
+              .default('qa.generated'),
+            /** Version Playwright Java ; par défaut celle du Playwright Node du projet. */
+            playwrightVersion: z
+              .string()
+              .regex(/^\d+\.\d+\.\d+$/)
+              .optional(),
+          })
+          .strict()
+          .default({}),
+      })
       .strict()
       .default({}),
     /**
@@ -2472,6 +2509,11 @@ export const scenarioSchema = z
     /** Invariants explicites : règles vérifiées sur chaque action, expliquées dans le rapport. */
     invariants: z.array(invariantSchema).default([]),
     propertyTesting: propertyTestingSchema.default({}),
+    /** TRAÇABILITÉ : les exigences (tickets, critères) et les règles métier qui en dérivent. */
+    requirements: z.array(requirementSchema).default([]),
+    businessRules: z.array(businessRuleSchema).default([]),
+    /** Vérification métier : affichage des valeurs, historique des preuves, cohérence automatique. */
+    quality: qualitySchema.default({}),
   })
   .strict();
 

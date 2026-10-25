@@ -123,12 +123,14 @@ npx qa-crawler record --url http://localhost:4200/users --name "Create user"
 npx qa-crawler test-api                   # tests dérivés du contrat OpenAPI
 npx qa-crawler reproduce                  # rejoue le chemin minimal de l'anomalie la plus grave
 npx qa-crawler generate-tests             # specs Playwright dans qa-crawler/generated-tests/
+npx qa-crawler generate-tests --java      # projet Maven JUnit 5 + Playwright Java dans qa-crawler/generated-tests-java/
+npx qa-crawler generate-tests --gherkin   # scénarios .feature dans qa-crawler/generated-features/
 ```
 
 Toutes les commandes acceptent `--base-url`, `--headless` / `--headed`, `--reports-dir`,
 `--flow <nom>` (répétable), `--playwright-config`, `--cwd`, `-c <config>` ainsi que les options de
 mission (`--intelligence`, `--ai-provider`, `--max-states`, `--max-actions`, `--no-persistence`,
-`--memory`, `--quiet`). `npx qa-crawler <commande> --help` les détaille.
+`--memory`, `--junit`, `--quiet`). `npx qa-crawler <commande> --help` les détaille.
 
 ### Init
 
@@ -248,7 +250,8 @@ Tout est écrit **dans le projet utilisateur** : `qa-reports/` (`index.html`, `r
 `run.json`, `run-analysis.json`, `anomalies.json`, `workflow-graph.json`, `functional-coverage.json`,
 `api-analysis.json`, `reproductions.json`, captures…), `qa-crawler/knowledge/knowledge-base.json`,
 `qa-crawler/memory/` (provider `file`), `qa-crawler/baselines/`, `qa-crawler/recordings/`,
-`qa-crawler/generated-tests/`, `qa-reports/reproductions/<id>/`.
+`qa-crawler/generated-tests/`, `qa-crawler/generated-tests-java/` (projet Maven JUnit 5 + Playwright Java, voir
+[docs/JAVA_TEST_GENERATION.md](docs/JAVA_TEST_GENERATION.md)), `qa-reports/reproductions/<id>/`.
 
 ### API programmatique et extension
 
@@ -1178,6 +1181,18 @@ rules: { enabled: true }
 
 Rapport : « Form state », « Application rules » (chaque règle : condition, effets ✓/✗, source fichier:ligne, runtime, effet réseau), « Rule graph », « Field dependencies ». Détails : [docs/RULES.md](docs/RULES.md).
 
+## Vérification métier : assertions, cohérence, traçabilité
+
+Un clic réussi n'est pas un résultat métier. Un flow peut déclarer ses **assertions métier**
+(`flows[].assertions` : requête, valeur, entité, état, cardinalité, relation, transition, effets de
+bord, contrat), jugées sur le trafic observé en empreintes salées, l'écran final et des lectures
+d'API autorisées (GET seulement), avec les valeurs du run. Il peut aussi déclarer la **cohérence des
+données** (`flows[].consistency` : saisie → requête → réponse → écran → recherche, relations, clés
+uniques, effets de bord) et les **exigences** qu'il couvre (`requirements`, `businessRules`, tags
+Gherkin `@REQ-…`, `x-requirements` OpenAPI). BLOCKED, INCONCLUSIVE et UNVERIFIABLE ne comptent
+jamais comme un succès. Rapports : `quality-verification.json` et la section « Vérification
+métier ». Détails : [docs/BUSINESS_ASSERTIONS.md](docs/BUSINESS_ASSERTIONS.md).
+
 ## Intelligence fonctionnelle et objectifs de test
 
 Au-delà des écrans et des règles, QA-CRAWLER comprend **ce que l'application fait** : cycles de vie des entités (DRAFT → PENDING → APPROVED), workflows (`CREATE:USER`, `APPROVE:REGISTRATION`), invariants (`paid + amount <= total`), effets attendus d'une action, chemins d'erreur (409 `EMAIL_ALREADY_EXISTS` → champ email), écarts entre le contrat OpenAPI et les requêtes réelles — puis en tire des **objectifs de test** (« Verify PENDING registration can transition to APPROVED ») planifiés, exécutés sous la SafetyPolicy et conclus VERIFIED, FAILED, BLOCKED ou INCONCLUSIVE, avec preuves.
@@ -1691,16 +1706,17 @@ Les anomalies identiques sont regroupées en une seule, qui compte ses occurrenc
 
 ## Rapports
 
-| Fichier                               | Contenu                                                                                                                                                                                                                                                                                        |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reports/result.json`                 | Résumé et statistiques de la mission. États avec leurs actions complètes (localisateurs, classe) et formulaires, transitions, flows, interactions navigateur, anomalies, paramètres effectifs                                                                                                  |
-| `reports/index.html`                  | Rapport statique : cartes de synthèse, flows imposés, interactions navigateur, arbre des flows découverts, anomalies (état · action · flow), états, actions exécutées et bloquées, captures                                                                                                    |
-| `reports/flow-graph.json`             | Le graphe des flows, qui sert de mémoire à l'explorateur (reprise possible avec `memory.resume`)                                                                                                                                                                                               |
-| `reports/flow-graph.html`             | Carte de l'application : arbre dépliable, arbre texte, transitions entre états, autres tentatives                                                                                                                                                                                              |
-| `reports/overview.html`               | Vue d'ensemble du run : indicateurs (actions validées, intentions interprétées / UNKNOWN, durée), parcours détecté avec les réutilisations de données, détails du run, timeline avec recherche et lignée des données de test ; thème clair / sombre (`output.overviewHtml`, par défaut `true`) |
-| `reports/generated-flows.yaml`        | Flows imposés générés à partir des chemins trouvés (voir [Générer des flows YAML](#générer-des-flows-yaml-à-partir-de-lexploration))                                                                                                                                                           |
-| `reports/engine-log.jsonl`            | Journal structuré du moteur, une ligne JSON par événement (`FLOW_STATE_DISCOVERED`, `ACTION_SELECTED`, `ACTION_BLOCKED`, `ACTION_EXECUTED`, `ORACLE_VERDICT`, `RECOVERY_ATTEMPT`, `STUCK_DETECTED`…), niveaux `ERROR` à `TRACE` (`logging.level`), secrets masqués                             |
-| `screenshots/NNN-<état>[-error…].png` | Une par état découvert, plus une par anomalie ERROR/CRITICAL et par étape `screenshot`                                                                                                                                                                                                         |
+| Fichier                               | Contenu                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reports/result.json`                 | Résumé et statistiques de la mission. États avec leurs actions complètes (localisateurs, classe) et formulaires, transitions, flows, interactions navigateur, anomalies, paramètres effectifs                                                                                                                                                                                                                 |
+| `reports/index.html`                  | Rapport statique : cartes de synthèse, flows imposés, interactions navigateur, arbre des flows découverts, anomalies (état · action · flow), états, actions exécutées et bloquées, captures                                                                                                                                                                                                                   |
+| `reports/flow-graph.json`             | Le graphe des flows, qui sert de mémoire à l'explorateur (reprise possible avec `memory.resume`)                                                                                                                                                                                                                                                                                                              |
+| `reports/flow-graph.html`             | Carte de l'application : arbre dépliable, arbre texte, transitions entre états, autres tentatives                                                                                                                                                                                                                                                                                                             |
+| `reports/overview.html`               | Vue d'ensemble du run : indicateurs (actions validées, intentions interprétées / UNKNOWN, durée), parcours détecté avec les réutilisations de données, détails du run, timeline avec recherche et lignée des données de test ; thème clair / sombre (`output.overviewHtml`, par défaut `true`)                                                                                                                |
+| `reports/generated-flows.yaml`        | Flows imposés générés à partir des chemins trouvés (voir [Générer des flows YAML](#générer-des-flows-yaml-à-partir-de-lexploration))                                                                                                                                                                                                                                                                          |
+| `reports/junit.xml`                   | Le run au format JUnit XML pour la CI (`report.junit.enabled`, `--junit`, ou `reporting.format: [junit]` dans un projet) : une suite par flow, un cas par étape (`FAILED` → failure, `BLOCKED` → error, ignorée ou manuelle → skipped), plus une suite `anomalies` au seuil de `report.failOnSeverity`. Désactivé par défaut ; une erreur d'écriture est un avertissement, sauf `report.junit.required: true` |
+| `reports/engine-log.jsonl`            | Journal structuré du moteur, une ligne JSON par événement (`FLOW_STATE_DISCOVERED`, `ACTION_SELECTED`, `ACTION_BLOCKED`, `ACTION_EXECUTED`, `ORACLE_VERDICT`, `RECOVERY_ATTEMPT`, `STUCK_DETECTED`…), niveaux `ERROR` à `TRACE` (`logging.level`), secrets masqués                                                                                                                                            |
+| `screenshots/NNN-<état>[-error…].png` | Une par état découvert, plus une par anomalie ERROR/CRITICAL et par étape `screenshot`                                                                                                                                                                                                                                                                                                                        |
 
 `index.html` montre aussi, quand il y a lieu : les verdicts des oracles (FAIL d'abord, décompte PASS / FAIL / WARNING / UNKNOWN, assertions observées), les formulaires découverts (champs, saisie, source, cas de validation), les événements de récupération, les branches abandonnées, les différences d'accès et les règles d'autorisation, les données créées et le budget de modifications, les anomalies d'accessibilité. Chaque anomalie garde son chemin de reproduction (états → action) et sa capture.
 

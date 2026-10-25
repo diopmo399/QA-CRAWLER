@@ -26,6 +26,8 @@ export interface ConfigOverrides {
   headless?: boolean;
   reportsDir?: string;
   screenshotsDir?: string;
+  /** --junit : active report.junit (le fichier et `required` restent ceux de la mission). */
+  junit?: boolean;
   /** --persistence <off|memory|file|postgres|sqlserver|sqlite|mysql>, --no-persistence (off). */
   persistence?: PersistenceChoice;
   /** --memory / --no-memory. */
@@ -344,6 +346,14 @@ function applyOverrides(
   if (overrides.headless !== undefined) section('browser').headless = overrides.headless;
   if (overrides.reportsDir !== undefined) section('output').reportsDir = overrides.reportsDir;
   if (overrides.screenshotsDir !== undefined) section('output').screenshotsDir = overrides.screenshotsDir;
+  if (overrides.junit !== undefined) {
+    const report = section('report');
+    const current = report.junit;
+    report.junit = {
+      ...(current !== null && typeof current === 'object' && !Array.isArray(current) ? current : {}),
+      enabled: overrides.junit,
+    };
+  }
   applyPersistenceOverrides(section, overrides, env);
   applyIntelligenceOverrides(section, overrides, env);
   return result;

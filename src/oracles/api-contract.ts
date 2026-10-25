@@ -15,6 +15,8 @@ export interface ContractOperation {
   requestFields: Record<string, ContractFieldSchema>;
   /** Schéma JSON des réponses décrites, par statut ("200") : propriétés et obligatoires. */
   responseSchemas?: Record<string, { fields: Record<string, ContractFieldSchema>; required: string[] }>;
+  /** Les exigences que l'opération réalise (`x-requirements: [REQ-12]`), pour la traçabilité. */
+  requirements?: string[];
 }
 
 export interface ContractFieldSchema {
@@ -77,6 +79,7 @@ interface OpenApiDocument {
   components?: { schemas?: Record<string, Schema | undefined> };
 }
 interface OpenApiOperation {
+  'x-requirements'?: unknown;
   responses?: Record<string, { content?: Record<string, { schema?: Schema } | undefined> } | undefined>;
   requestBody?: { content?: Record<string, { schema?: Schema } | undefined> };
 }
@@ -164,6 +167,10 @@ export function parseOpenApi(text: string, source = 'openapi'): ApiContract {
           ...(body?.required?.includes(name) ? { required: true } : {}),
         };
       }
+      const declared = operation['x-requirements'];
+      const requirements = (Array.isArray(declared) ? declared : [declared]).filter(
+        (id): id is string => typeof id === 'string' && id.trim() !== '',
+      );
       operations.push({
         method: method.toUpperCase(),
         path: template,
@@ -171,6 +178,7 @@ export function parseOpenApi(text: string, source = 'openapi'): ApiContract {
         responses: Object.keys(operation.responses ?? {}),
         requestFields,
         ...(Object.keys(responseSchemas).length > 0 ? { responseSchemas } : {}),
+        ...(requirements.length > 0 ? { requirements: requirements.map((id) => id.trim()) } : {}),
       });
     }
   }

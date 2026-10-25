@@ -21,6 +21,94 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   Ajout facultatif `inventory` au `PersistenceProvider` (applications et comptages), implémenté par les
   providers mémoire, fichier et base de données. Documentation : `docs/KNOWLEDGE_CENTER.md`, diagnostic
   préalable `docs/knowledge-center-audit.md`.
+- **Assertions issues du recording, groupes métier, génération multi-format**
+  (`docs/RECORDING_ASSERTIONS.md`, diagnostic `docs/recording-assertions-audit.md`). À l'arrêt d'un
+  enregistrement : des **observations** identifiées par source et fiabilité (`observations.json`, ce qui
+  manque est dit, rien n'est reconstitué) ; des **propositions d'assertions** avec origine (observée,
+  déduite — à confirmer —, explicite), catégorie, preuves, méthode, limites et confiance
+  (`assertion-proposals.json`), décidées dans la fenêtre du recorder (accepter, refuser, désactiver,
+  réinitialiser, modifier) : une acceptation écrit une étape `expect` ou une assertion métier
+  (`assertions:` du schéma de la mission, vérifiée par le rejeu) ; sans décision, le flow est celui
+  d'avant. Des **groupes métier** (`src/recording/step-groups.ts`) : créer, renommer, décrire,
+  regrouper, déplacer, réordonner, replier, détacher, supprimer (étapes gardées), avec les dépendances
+  de données vérifiées (un ordre qui cite une valeur avant sa production est bloqué et expliqué),
+  l'exécutabilité d'un groupe seul, et `groups:` dans le YAML (positions). Une **traduction commune des
+  assertions** (`src/platform/assertion-translation.ts`) pour les trois générateurs : natives sur
+  l'écran, sinon « vérifiée par le rejeu seulement » en commentaire explicite ; les groupes en en-têtes.
+  Un **plan de génération** (`src/platform/generation-plan.ts`, section « Génération des tests » de la
+  fenêtre, `generation.json`, `generated/`) avec des statuts honnêtes : `GENERATED`,
+  `STATICALLY_VALIDATED` (schéma, dictionnaire Gherkin, TypeScript en syntaxe, `mvn test-compile`),
+  `NOT_VALIDATED`, et `EXECUTED` / `PASSED` / `FAILED` / `BLOCKED` / `INCONCLUSIVE` seulement d'après une
+  exécution réelle. `npx qa-crawler generate-tests --gherkin` (`src/platform/gherkin-feature-generator.ts`).
+  Le rapport JUnit XML ajoute un cas par assertion métier exécutée (`PASS` → réussi, `FAIL` →
+  `failure`, sinon `skipped` avec le motif). API exportée : `observationsOf`, `proposeAssertions`,
+  `decideProposal`, `applyGroupCommand`, `groupViews`, `flowForGroups`, `translateAssertions`,
+  `planGeneration`, `validateArtifacts`, `generateGherkinFeatures`.
+
+- **Rapport JUnit XML** (`src/reporting/junit-reporter.ts`, `report.junit`, option `--junit`,
+  `reporting.format: [html, json, junit]` dans la configuration de projet). Un reporter de plus,
+  désactivé par défaut, qui ne lit que le résultat du run et ne change rien aux rapports existants :
+  `reports/junit.xml` avec une suite par flow et un cas par étape (`FAILED` → `failure`, `BLOCKED` →
+  `error`, ignorée, manuelle ou facultative échouée → `skipped`), une suite `anomalies` pour les
+  anomalies au seuil de `report.failOnSeverity`, et un cas réussi quand rien n'a tourné. Une erreur
+  d'écriture est un avertissement (`report.junit.required: true` la rend bloquante). Exporté par
+  l'API (`JUnitReporter`, `junitXmlOf`). Audit préalable : `docs/playwright-junit-audit.md`.
+- **Générateur Java JUnit 5 + Playwright Java** (`src/platform/java-junit-playwright-generator.ts`,
+  `npx qa-crawler generate-tests --java [--out] [--package]`, `platform.generatedTests.java`, API
+  `generateJavaJUnitPlaywrightProject` / `writeJavaProject`). Un adaptateur indépendant du moteur qui
+  produit un projet Maven exécutable des flows : une classe JUnit 5 par flow pilotée par Playwright
+  Java (localisateurs sémantiques, lignes de tableau, données de test générées par run et réutilisées
+  entre les étapes, valeurs littérales et secrets par variables d'environnement, assertions `expect` et
+  `effects`, preuves à l'échec, `manual` journalisé, `auto`/`intent` signalés et abandonnés plutôt que
+  faussement réussis), classes de support, `pom.xml` (Java 17, JUnit Jupiter 5.14.4, Playwright Java
+  alignée sur le Playwright Node du projet, Surefire 3.5.6), README. Vérifié par compilation et
+  exécution réelles contre l'application de test (`tests/integration/java-generated-tests.test.ts`).
+  Java et Maven ne servent qu'à exécuter le projet généré. Exemple : `examples/java-junit-playwright/`.
+  Documentation : `docs/JAVA_TEST_GENERATION.md`.
+- **Génération Playwright isolée** : pendant un run, une erreur du générateur de tests
+  (`platform.generatedTests`) devient un avertissement au lieu d'interrompre un run QA par ailleurs
+  valide. Tests de non-régression : le générateur ne modifie pas les flows source, n'agit pas sur
+  l'application, et génère un flow issu d'un enregistrement (cible CSS de repli, ligne de tableau,
+  donnée du run citée).
+
+- **Vérification métier : assertions, cohérence des données, traçabilité** (`src/quality/`,
+  `docs/BUSINESS_ASSERTIONS.md`, audit `docs/quality-capabilities-audit.md`). Un flow déclare ses
+  assertions métier (`flows[].assertions`, 9 genres : requête, valeur, entité, état, cardinalité,
+  relation, transition, effets de bord, contrat), jugées sur le trafic observé en empreintes salées,
+  l'écran final et des lectures d'API autorisées (GET, hôte permis, jamais une écriture), avec les
+  valeurs DU RUN, préconditions, attente asynchrone et preuves exigées. Statuts PASS / FAIL /
+  BLOCKED / INCONCLUSIVE / UNVERIFIABLE : une assertion obligatoire contredite fait échouer le flow
+  (anomalie `BUSINESS_ASSERTION`) et le run ; non vérifiée, le run est INCONCLUSIVE, jamais PASS.
+  La cohérence des données suit la valeur du run de la saisie à la requête, à la réponse, à l'écran
+  et à la recherche, plus les relations, les clés uniques déclarées et les effets de bord
+  (`flows[].consistency`, anomalie `DATA_CONSISTENCY`). La traçabilité relie exigences
+  (`requirements`), règles (`businessRules`), flows (`flows[].requirements`, tags Gherkin `@REQ-…`,
+  `x-requirements` OpenAPI), assertions et preuves, avec un historique pour les preuves périmées.
+  Rapports `quality-verification.json` et section « Vérification métier ». L'observateur réseau
+  relit, par une session CDP de lecture, le corps d'une réponse suivie d'une navigation immédiate.
+- **Nouveau design de la fenêtre du recorder et de la barre d'enregistrement**
+  (`src/recording/recorder-panel-html.ts`, `src/recording/capture-script.ts` ; `docs/HUMAN_FLOW_RECORDER.md`).
+  Polices IBM Plex Sans et Mono intégrées (`assets/fonts`, SIL OFL 1.1, copiées dans le paquet ; rien du
+  réseau). Un en-tête unique : « QA-CRAWLER / flow », pastille d'état et chrono, chiffres clés (actions,
+  requêtes reliées ou à vérifier, qualité) et les actions de la phase (Annuler la dernière / Pause /
+  Arrêter, puis Fermer / Rejouer / Sauvegarder le flow) ; la barre de résumé du bas et la carte qualité
+  disparaissent. Onglets soulignés Parcours, Réseau, Données de test (revue), Analyse. Le parcours : une
+  ligne par action (numéro, pictogramme, phrase avec la valeur en puce et le champ en gras, statut en
+  point et en mot ; Rejouée / Échec / Non rejouée après un rejeu), groupes par écran, étapes métier en
+  tête de groupe en revue. L'inspecteur suit la dernière action pendant l'enregistrement ; en revue,
+  sous-onglets Détails / Cible / Réseau, clés-valeurs en mots (élément, emplacement, repérage, donnée),
+  source de la valeur résumée (Modifier ouvre l'éditeur), Retirer l'étape. La correction devient la
+  carte « Corriger la cible » (Avant / Après, « Identifier la ligne par » colonne par colonne avec Source
+  et Comparaison, aperçu, détails techniques repliés). Barre dans la page : sombre, point rouge et chrono,
+  Ajouter une vérification, icônes Annuler / Pause, Arrêter, notification blanche, version réduite en
+  pastille ; ses polices sont ajoutées sous un nom propre à QA-CRAWLER, aucune feuille de style de
+  l'application n'est touchée. Thème clair et sombre. En revue, l'aperçu montre l'écran de l'étape
+  choisie : une image prise juste après chaque action pendant l'enregistrement, son élément encadré
+  (mesuré sans rien afficher dans l'application), en mémoire seulement, 60 au plus. Pour un clic,
+  l'écran d'avant le clic, le bouton encadré là où il était à l'appui (bascule Avant le clic / Après),
+  jamais une image prise avant le dernier changement de la page (un écran de chargement) ; l'aperçu
+  reprend une image quand la page change sans action, une fois posée (jamais pendant un geste). En
+  plein écran, le cadre reste sur l'élément (l'image réduite et centrée le décalait).
 - **Fournisseur IA Anthropic** (`ai.provider: anthropic`, `--ai-provider anthropic`) : un modèle de
   l'API Anthropic comme conseiller de raisonnement, par le SDK officiel `@anthropic-ai/sdk`
   (dépendance optionnelle, chargée dynamiquement). Même circuit que Copilot : requête nettoyée,
@@ -167,6 +255,10 @@ defaults`). Test d'intégration : flows passés, panne détectée, écritures bl
   plus l'intégration). Sur une machine à 4 cœurs : de 1 250 s à environ 600 s.
 
 ### Corrigé
+
+- **Citations `${testData:clé}` dans les tests Playwright générés** : dans un texte attendu, un nom de
+  cible ou une ligne de tableau, la citation devient la donnée du run (`` `${testData["clé"]}` ``) au
+  lieu du texte littéral de la citation (qui ne pouvait jamais correspondre).
 
 - **Rapport HTML en français : la section « Intelligence IA » entièrement traduite.** Précondition
   manquante, contexte fonctionnel (objectif, progression, manquant, bloqué), sélection et découverte des
