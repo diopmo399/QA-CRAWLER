@@ -36,6 +36,10 @@ export const ISSUE_TYPES = [
   'PERFORMANCE',
   /** SemanticFunctionalOracle : un effet, une transition ou une entité attendus n'ont pas été observés ; pas forcément un bug. */
   'FUNCTIONAL',
+  /** Vérification métier : une assertion déclarée (assertions:) contredite par les preuves du run. */
+  'BUSINESS_ASSERTION',
+  /** Cohérence des données : une valeur du run perdue ou changée entre l'écran, la requête, la réponse et la recherche. */
+  'DATA_CONSISTENCY',
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 

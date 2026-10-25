@@ -1,3 +1,4 @@
+import { qualityCountsOf } from '../quality/quality-verification.js';
 import type { RunAnalysis } from '../analysis/run-analysis.js';
 import type { ExplorationResult } from '../model/exploration-result.js';
 import { analyzeAnomalies, defects } from './anomaly-analyzer.js';
@@ -227,6 +228,8 @@ export interface OverallStatusInput {
     fixedRegressions?: number;
     flaky?: number;
   };
+  /** VÉRIFICATION MÉTIER : assertions obligatoires échouées, et non vérifiées (BLOCKED, INCONCLUSIVE, UNVERIFIABLE). */
+  business?: { failed: number; unverified: number };
 }
 
 /**
@@ -245,8 +248,31 @@ export function overallStatusOf(input: OverallStatusInput): { status: OverallSta
       !DEGRADING_CATEGORIES.has(anomaly.category),
   );
   const signals = input.signals ?? {};
+  // Une assertion métier obligatoire CONTREDITE par les preuves : un échec, quel que soit le reste.
+  if ((input.business?.failed ?? 0) > 0)
+    return {
+      status: 'FAIL',
+      reasons: [
+        `${String(input.business?.failed)} mandatory business assertion(s) failed`,
+        ...(blocking.length > 0
+          ? [
+              `${String(blocking.length)} blocking defect(s): ${[...new Set(blocking.map((anomaly) => anomaly.category))].join(', ')}`,
+            ]
+          : []),
+      ],
+    };
+  const unverifiedBusiness =
+    (input.business?.unverified ?? 0) > 0
+      ? `${String(input.business?.unverified)} mandatory business assertion(s) could not be verified (BLOCKED, INCONCLUSIVE or UNVERIFIABLE)`
+      : undefined;
   if (input.verdict === 'INCONCLUSIVE')
-    return { status: 'INCONCLUSIVE', reasons: ['the functional verdict is inconclusive'] };
+    return {
+      status: 'INCONCLUSIVE',
+      reasons: [
+        ...(unverifiedBusiness ? [unverifiedBusiness] : []),
+        'the functional verdict is inconclusive',
+      ],
+    };
   if (input.flows === 0 && input.states === 0)
     return { status: 'INCONCLUSIVE', reasons: ['nothing was executed: no flow, no screen reached'] };
   const fail: string[] = [];
@@ -257,6 +283,8 @@ export function overallStatusOf(input: OverallStatusInput): { status: OverallSta
     );
   if ((signals.newRegressions ?? 0) > 0) fail.push(`${String(signals.newRegressions)} new regression(s)`);
   if (fail.length > 0) return { status: 'FAIL', reasons: fail };
+  // Une assertion métier obligatoire non vérifiée n'est jamais un succès : le run ne peut pas conclure.
+  if (unverifiedBusiness) return { status: 'INCONCLUSIVE', reasons: [unverifiedBusiness] };
   const degraded: string[] = [];
   if (input.verdict === 'PASSED_WITH_RECOVERY') degraded.push('the flows passed only thanks to a recovery');
   if ((signals.performanceRegressions ?? 0) > 0)
@@ -329,6 +357,7 @@ export function buildRunWorkflowAnalysis(result: ExplorationResult): RunWorkflow
     anomalies,
     flows: result.flows.length,
     states: result.states.length,
+    business: qualityCountsOf(result.flows),
   });
   const recoveries = result.flows.filter((flow) => flow.steps.some((step) => step.recovery)).length;
   const path: AnalysisPath =
@@ -362,6 +391,7 @@ export function refreshOverallStatus(
     flows: result.flows.length,
     states: result.states.length,
     ...(signals ? { signals } : {}),
+    business: qualityCountsOf(result.flows),
   });
   report.overallStatus = status.status;
   report.statusReasons = status.reasons;

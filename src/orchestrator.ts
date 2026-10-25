@@ -70,6 +70,8 @@ import { compareFlowRuns, flowRunMemoryOf } from './flows/flow-run-comparison.js
 import { DefaultTestDataProvider } from './data/test-data-provider.js';
 import { AuthorizationObserver, type AuthorizationReport } from './actors/authorization-observer.js';
 import { JsonKnowledgeBase, knowledgeFileOf, knowledgeIdentityOf } from './knowledge/json-knowledge-base.js';
+import { buildQualityVerification, type QualityVerificationReport } from './quality/quality-verification.js';
+import { COVERAGE_STATUSES, loadHistory, saveHistory, updateHistory } from './quality/traceability.js';
 import { InvariantOracle } from './oracles/invariant-oracle.js';
 import { loadSemantics } from './semantics/domain-packs.js';
 import { IssueCollector } from './anomaly/issue-collector.js';
@@ -748,6 +750,22 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
       })),
     });
   }
+  // VÉRIFICATION MÉTIER : verdict des assertions, cohérence des données, traçabilité des exigences.
+  const quality = await verifyQuality(config, result, outcome.runId, contract, engineLog);
+  if (quality)
+    attachExtension(workflowAnalysis, 'qualityVerification', 'quality-verification.json', quality, [
+      {
+        conclusion: `business verdict ${quality.verdict}: ${String(quality.metrics.assertionsByStatus.PASS)}/${String(quality.metrics.assertionsDeclared)} assertion(s) passed, ${String(quality.metrics.requirementsVerified)}/${String(quality.metrics.requirementsTotal)} requirement(s) verified`,
+        evidence: [
+          ...quality.traceability.summary.criticalFailures.map(
+            (id) => `critical requirement ${id} not verified`,
+          ),
+          ...quality.limits.slice(0, 1),
+        ],
+        confidence: 1,
+        source: 'RUNTIME',
+      },
+    ]);
   refreshOverallStatus(workflowAnalysis, result, {
     visualRegressions,
     performanceRegressions: performanceAnalysis.summary.PERFORMANCE_REGRESSION,
@@ -1006,4 +1024,63 @@ async function regressionOf(
     log.log('WARN', 'FLOW_EVOLVED', `regression history not updated: ${message}`);
     return { skipped: `history storage failed: ${redactText(message)}` };
   }
+}
+
+/**
+ * Le rapport de vérification métier (quality-verification.json), quand la mission déclare des exigences,
+ * des règles ou des assertions. L'historique de la traçabilité (STALE_EVIDENCE) est facultatif ; une
+ * erreur de lecture ou d'écriture ne fait jamais échouer le run.
+ */
+async function verifyQuality(
+  config: ScenarioConfig,
+  result: ExplorationResult,
+  runId: string,
+  contract: ApiContract | undefined,
+  engineLog: EngineEventLog,
+): Promise<QualityVerificationReport | undefined> {
+  const declared = config.flows.map((flow) => ({
+    name: flow.name,
+    requirements: flow.requirements,
+    assertions: flow.assertions,
+    ...(/\.feature:\d*$/.test(flow.description ?? '') ? { gherkin: true } : {}),
+  }));
+  const operations = contract?.operations.filter((operation) => operation.requirements?.length);
+  const anything =
+    config.requirements.length > 0 ||
+    config.businessRules.length > 0 ||
+    (operations?.length ?? 0) > 0 ||
+    result.flows.some((flow) => flow.quality) ||
+    declared.some((flow) => flow.requirements.length > 0 || flow.assertions.length > 0);
+  if (!anything) return undefined;
+  const historyFile =
+    config.quality.history === false
+      ? undefined
+      : path.resolve(path.dirname(knowledgeFileOf(config)), config.quality.history);
+  const history = historyFile ? await loadHistory(historyFile) : undefined;
+  const report = buildQualityVerification({
+    runId,
+    flows: result.flows,
+    declared,
+    requirements: config.requirements,
+    rules: config.businessRules,
+    ...(operations?.length ? { operations } : {}),
+    ...(history ? { history } : {}),
+    evidenceMaxAgeDays: config.quality.evidenceMaxAgeDays,
+    now: new Date(),
+  });
+  if (historyFile)
+    await saveHistory(historyFile, updateHistory(history, report.traceability)).catch((error: unknown) => {
+      engineLog.log(
+        'WARN',
+        'REQUIREMENT_COVERAGE_COMPUTED',
+        `traceability history not saved: ${String(error)}`,
+      );
+    });
+  const summary = report.traceability.summary;
+  engineLog.log(
+    summary.criticalFailures.length > 0 ? 'WARN' : 'INFO',
+    'REQUIREMENT_COVERAGE_COMPUTED',
+    `business verdict ${report.verdict}; requirements ${COVERAGE_STATUSES.map((status) => `${status} ${String(summary.byStatus[status])}`).join(', ')}${summary.criticalFailures.length > 0 ? `; critical: ${summary.criticalFailures.join(', ')}` : ''}`,
+  );
+  return report;
 }
