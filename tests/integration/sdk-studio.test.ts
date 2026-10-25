@@ -31,6 +31,23 @@ let browser: Browser;
 let page: Page;
 const NAME = 'consulter-un-utilisateur';
 
+const SEARCH = 'chercher-sur-le-site';
+const humans = new Map<string, NonNullable<RecordRequest['drive']>>();
+
+// La clé est le nom donné à l'enregistrement (le dossier, lui, est son slug).
+humans.set('Chercher sur le site', async ({ page: app }) => {
+  const pause = (): Promise<void> => app.waitForTimeout(500);
+  await pause();
+  await app.getByRole('link', { name: 'Formulaires' }).click();
+  await app.waitForURL('**/forms');
+  await pause();
+  await app.getByRole('searchbox').fill('Ada Lovelace');
+  await pause();
+  await app.getByRole('button', { name: 'Rechercher' }).click();
+  await app.waitForURL('**/search?**');
+  await pause();
+});
+
 const human: NonNullable<RecordRequest['drive']> = async ({ page: app }) => {
   const pause = (): Promise<void> => app.waitForTimeout(500);
   await pause();
@@ -76,7 +93,11 @@ beforeAll(async () => {
     workspace,
     language: 'fr',
     record: (request) =>
-      runRecording({ ...request, overrides: { ...request.overrides, headless: true }, drive: human }),
+      runRecording({
+        ...request,
+        overrides: { ...request.overrides, headless: true },
+        drive: humans.get(request.name) ?? human,
+      }),
   });
   client = createQaCrawler({ endpoint: `${server.url}/api`, token: server.token });
   const draft: ProjectDraft = {
@@ -229,5 +250,72 @@ describe('Flow Studio — real recording, real replay, real engine commands', ()
     await expect.poll(() => inStudio(`[data-node="${second.id}"]`).getAttribute('aria-pressed')).toBe('true');
     await page.keyboard.press('Escape');
     await expect.poll(() => inStudio('[data-node].sel').count()).toBe(0);
+  });
+});
+
+describe('Flow Studio — data and assertions of a journey with a typed value', () => {
+  beforeAll(async () => {
+    await client.recordings.start(project.id, { name: 'Chercher sur le site', validate: true });
+    await client.recordings.subscribe(project.id, SEARCH, () => undefined).done;
+    await page.goto(`${server.url}/studio?project=${project.id}&recording=${SEARCH}`);
+    await inStudio('[data-node]').first().waitFor();
+  }, 240_000);
+
+  it('binds the typed value to a generated one: the engine rewrites the flow and keeps the human decision', async () => {
+    const data = await client.data.get(project.id, SEARCH);
+    const input = data.inputs.find((entry) => entry.source !== 'SENSITIVE');
+    if (!input) throw new Error('the recording has no input');
+    await inStudio(`[data-node="${input.stepId}"]`).click();
+    await expect.poll(() => inStudio('.side').innerText()).toContain('Source de la valeur');
+    await inStudio('form[data-form="bind"] input[value="GENERATED"]').check();
+    await inStudio('#qa-bind-generator').selectOption('text');
+    await inStudio('form[data-form="bind"] button').click();
+    await expect
+      .poll(async () =>
+        (await client.data.get(project.id, SEARCH)).inputs.find((entry) => entry.stepId === input.stepId),
+      )
+      .toMatchObject({ source: 'GENERATED', generator: 'text', manual: true });
+    await expect.poll(() => inStudio('.notice').innerText()).toContain('Modifié par le moteur');
+    // Le flow a changé depuis le rejeu de validation : le Studio le dit.
+    expect((await client.recordings.studio(project.id, SEARCH)).replay?.stale).toBe(true);
+  });
+
+  it('the data tab shows the lineage of the bound value, and links back to its step', async () => {
+    await inStudio('[data-tab="data"]').click();
+    const data = await client.data.get(project.id, SEARCH);
+    const variable = data.variables[0];
+    if (!variable) throw new Error('no variable');
+    await expect.poll(() => inStudio('.side').innerText()).toContain(variable.key);
+    await inStudio(`[data-variable="${variable.key}"] [data-select-step]`).first().click();
+    await expect.poll(() => inStudio('[data-tab="flow"]').getAttribute('aria-selected')).toBe('true');
+    await expect.poll(() => inStudio('[data-node].sel').count()).toBe(1);
+  });
+
+  it('the assertions tab shows each proposal with a verdict from a run, and a human decision goes to the engine', async () => {
+    const proposals = await client.assertions.list(project.id, SEARCH);
+    expect(proposals.length).toBeGreaterThan(0);
+    await inStudio('[data-tab="assertions"]').click();
+    await expect.poll(() => inStudio('[data-verdict]').count()).toBe(proposals.length);
+    // Une proposition dans le parcours, dont l'étape de vérification a été rejouée, porte le verdict
+    // du rejeu (et le signale périmé : le flow a changé depuis) ; hors du parcours, rien n'est vérifié.
+    for (const entry of proposals) {
+      if (!entry.inFlow) expect(entry.verdict.status).toBe('NOT_EXECUTED');
+      else if (entry.stepId) expect(entry.verdict).toMatchObject({ source: 'REPLAY_STEP', stale: true });
+    }
+    expect(proposals.some((entry) => entry.inFlow && entry.verdict.status === 'VERIFIED_PASS')).toBe(true);
+    const target = proposals[0];
+    if (!target) throw new Error('no proposal');
+    await inStudio(`[data-decide="REJECT"][data-assertion="${target.id}"]`).click();
+    await expect
+      .poll(
+        async () =>
+          (await client.assertions.list(project.id, SEARCH)).find((entry) => entry.id === target.id)?.status,
+      )
+      .toBe('REJECTED');
+    // Rejetée : hors du parcours, donc jamais vérifiée.
+    expect(
+      (await client.assertions.list(project.id, SEARCH)).find((entry) => entry.id === target.id)?.verdict
+        .status,
+    ).toBe('NOT_EXECUTED');
   });
 });

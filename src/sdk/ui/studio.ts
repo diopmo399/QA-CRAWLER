@@ -1,5 +1,11 @@
 import { createQaCrawler, QaCrawlerError, type QaCrawlerClient } from '../core/client.js';
-import type { FlowStudioView, GroupCommandInput, StudioViolation } from '../core/contracts.js';
+import type {
+  DataBindingInput,
+  FlowStudioView,
+  GroupCommandInput,
+  ProposalDecisionType,
+  StudioViolation,
+} from '../core/contracts.js';
 import { STUDIO_EVENTS } from '../core/contracts.js';
 import {
   centerOn,
@@ -87,6 +93,7 @@ export class QaCrawlerFlowStudio extends Base {
       matchIndex: 0,
       busy: false,
       moved: false,
+      tab: 'flow',
     };
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
@@ -228,12 +235,33 @@ export class QaCrawlerFlowStudio extends Base {
       this.setView(await api.recordings.studio(ids.project, ids.recording));
       this.state.phase = 'ready';
       this.fitPending = true;
+      await this.loadAside();
     } catch (error) {
       this.state.phase = 'error';
       this.state.error = error instanceof Error ? error.message : String(error);
       this.fail(error);
     }
     this.paint();
+  }
+
+  /** Les données et les assertions : un échec de l'une n'empêche pas d'afficher le parcours. */
+  private async loadAside(): Promise<void> {
+    const ids = this.ids;
+    const api = this.api;
+    if (!ids || !api) return;
+    const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+    const [data, assertions] = await Promise.allSettled([
+      api.data.get(ids.project, ids.recording),
+      api.assertions.list(ids.project, ids.recording),
+    ]);
+    if (data.status === 'fulfilled') {
+      this.state.data = data.value;
+      this.state.dataError = undefined;
+    } else this.state.dataError = message(data.reason);
+    if (assertions.status === 'fulfilled') {
+      this.state.assertions = assertions.value;
+      this.state.assertionsError = undefined;
+    } else this.state.assertionsError = message(assertions.reason);
   }
 
   private setView(view: FlowStudioView): void {
@@ -284,7 +312,9 @@ export class QaCrawlerFlowStudio extends Base {
     }
     group.innerHTML = renderGraph(this.state);
     const inPanel = !!active && side.contains(active);
-    if (!inPanel || !focusKey) side.innerHTML = renderPanel(this.state);
+    // Une saisie en cours dans le panneau n'est jamais effacée ; tout le reste est redessiné.
+    const typing = inPanel && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+    if (!typing) side.innerHTML = renderPanel(this.state);
     const output = this.root.querySelector('.search output');
     if (output)
       output.textContent = this.state.query.trim()
@@ -293,7 +323,7 @@ export class QaCrawlerFlowStudio extends Base {
             this.state.matches.length,
           )
         : '';
-    if (focusKey && !inPanel) this.root.querySelector<HTMLElement>(focusKey)?.focus({ preventScroll: true });
+    if (focusKey && !typing) this.root.querySelector<HTMLElement>(focusKey)?.focus({ preventScroll: true });
   }
 
   private scheduleGraph(): void {
@@ -384,22 +414,56 @@ export class QaCrawlerFlowStudio extends Base {
   // ———————————————————————————————————————————— commandes du moteur
 
   private async edit(commands: GroupCommandInput[]): Promise<void> {
+    if (commands.length === 0) return;
+    await this.mutate(commands.length === 1 ? commands[0] : commands, async (api, ids) => {
+      const warnings: string[] = [];
+      for (const command of commands)
+        warnings.push(...(await api.groups.edit(ids.project, ids.recording, command)).warnings);
+      return warnings;
+    });
+  }
+
+  private async bind(input: DataBindingInput): Promise<void> {
+    await this.mutate({ binding: input }, async (api, ids) => {
+      await api.data.bind(ids.project, ids.recording, input);
+      return [];
+    });
+  }
+
+  private async decide(
+    proposalId: string,
+    decision: ProposalDecisionType,
+    description?: string,
+  ): Promise<void> {
+    this.state.editingAssertion = undefined;
+    await this.mutate({ assertion: proposalId, decision }, async (api, ids) => {
+      await api.assertions.decide(ids.project, ids.recording, proposalId, {
+        decision,
+        ...(description ? { description } : {}),
+      });
+      return [];
+    });
+  }
+
+  /**
+   * UNE MODIFICATION PAR LE MOTEUR : la commande part, le moteur l'accepte ou la refuse (expliqué,
+   * rien n'est changé), puis tout est relu — le parcours, les données, les assertions. Jamais deviné.
+   */
+  private async mutate(
+    command: unknown,
+    act: (api: QaCrawlerClient, ids: { project: string; recording: string }) => Promise<string[]>,
+  ): Promise<void> {
     const ids = this.ids;
     const api = this.api;
-    if (!ids || !api || commands.length === 0) return;
+    if (!ids || !api) return;
     this.state.busy = true;
     this.state.notice = undefined;
     this.state.confirmDelete = undefined;
     this.paintParts();
-    let current: GroupCommandInput | undefined;
     try {
-      const warnings: string[] = [];
-      for (const command of commands) {
-        current = command;
-        warnings.push(...(await api.groups.edit(ids.project, ids.recording, command)).warnings);
-      }
+      const warnings = await act(api, ids);
       this.state.notice = { kind: 'ok', message: warnings.join(' ') };
-      this.emit(STUDIO_EVENTS.changed, { command: commands.length === 1 ? commands[0] : commands, warnings });
+      this.emit(STUDIO_EVENTS.changed, { command, warnings });
     } catch (error) {
       if (error instanceof QaCrawlerError && error.status === 422) {
         const violations = error.details
@@ -412,7 +476,7 @@ export class QaCrawlerFlowStudio extends Base {
           })
           .filter(isViolation);
         this.state.notice = { kind: 'refused', message: error.message, violations };
-        this.emit(STUDIO_EVENTS.refused, { command: current, message: error.message, violations });
+        this.emit(STUDIO_EVENTS.refused, { command, message: error.message, violations });
       } else {
         this.state.notice = {
           kind: 'error',
@@ -421,9 +485,9 @@ export class QaCrawlerFlowStudio extends Base {
         this.fail(error);
       }
     }
-    // Le moteur a pu réordonner les étapes : la vue est relue, jamais devinée.
     try {
       this.setView(await api.recordings.studio(ids.project, ids.recording));
+      await this.loadAside();
     } catch (error) {
       this.state.notice = { kind: 'error', message: error instanceof Error ? error.message : String(error) };
       this.fail(error);
@@ -631,6 +695,35 @@ export class QaCrawlerFlowStudio extends Base {
       return;
     }
     if (target.closest('.canvas')) return;
+    const tab = target.closest('[data-tab]')?.getAttribute('data-tab');
+    if (tab === 'flow' || tab === 'data' || tab === 'assertions') {
+      this.state.tab = tab;
+      this.state.notice = undefined;
+      this.paintParts();
+      this.root.querySelector<HTMLElement>(`[data-tab="${tab}"]`)?.focus();
+      return;
+    }
+    const stepLink = target.closest('[data-select-step]')?.getAttribute('data-select-step');
+    if (stepLink) {
+      this.state.tab = 'flow';
+      this.focusStep(stepLink);
+      this.select(stepLink, false);
+      return;
+    }
+    const decide = target.closest('[data-decide]');
+    if (decide) {
+      const proposalId = decide.getAttribute('data-assertion');
+      const decision = decide.getAttribute('data-decide') as ProposalDecisionType | null;
+      if (proposalId && decision) void this.decide(proposalId, decision);
+      return;
+    }
+    const editAssertion = target.closest('[data-edit-assertion]')?.getAttribute('data-edit-assertion');
+    if (editAssertion) {
+      this.state.editingAssertion = editAssertion;
+      this.paintParts();
+      this.root.querySelector<HTMLElement>(`#qa-modify-${cssEscape(editAssertion)}`)?.focus();
+      return;
+    }
     const link = target.closest('[data-select-group]');
     if (link) {
       this.selectGroup(link.getAttribute('data-select-group') ?? undefined);
@@ -716,6 +809,27 @@ export class QaCrawlerFlowStudio extends Base {
     if (kind === 'create' && name && this.state.selected.length > 0)
       void this.edit([{ op: 'create', name, stepIds: [...this.state.selected] }]);
     if (kind === 'rename' && name && groupId) void this.edit([{ op: 'rename', groupId, name }]);
+    if (kind === 'bind') {
+      const stepId = form.getAttribute('data-step');
+      const source = text('source');
+      if (!stepId) return;
+      if (source === 'FIXED') void this.bind({ stepId, source, value: text('value') });
+      if (source === 'GENERATED')
+        void this.bind({
+          stepId,
+          source,
+          ...(text('variable') ? { variable: text('variable') } : {}),
+          ...(text('generator') ? { generator: text('generator') } : {}),
+        });
+      if (source === 'REFERENCE' && text('reference'))
+        void this.bind({ stepId, source, variable: text('reference') });
+      return;
+    }
+    if (kind === 'modify') {
+      const proposalId = form.getAttribute('data-assertion');
+      if (proposalId && text('description')) void this.decide(proposalId, 'MODIFY', text('description'));
+      return;
+    }
     if (kind === 'describe' && groupId)
       void this.edit([{ op: 'describe', groupId, description: text('description') }]);
   }
@@ -736,6 +850,18 @@ export class QaCrawlerFlowStudio extends Base {
         target.value = '';
         this.onInput(event);
       }
+      return;
+    }
+    const tab = target.closest('[data-tab]');
+    if (tab && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
+      const order = ['flow', 'data', 'assertions'] as const;
+      const index = order.indexOf(this.state.tab);
+      const next =
+        order[(index + (event.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length] ?? 'flow';
+      this.state.tab = next;
+      this.paintParts();
+      this.root.querySelector<HTMLElement>(`[data-tab="${next}"]`)?.focus();
+      event.preventDefault();
       return;
     }
     if (!target.closest('.canvas')) return;

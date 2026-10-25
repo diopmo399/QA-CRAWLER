@@ -13,6 +13,7 @@ import {
 import { redactText } from '../../security/redactor.js';
 import {
   STEP_REPLAY_OUTCOMES,
+  type AssertionVerdict,
   type FlowStudioView,
   type FlowView,
   type GraphView,
@@ -25,6 +26,7 @@ import {
   type RecordingSummary,
   type ReportEntry,
 } from '../core/contracts.js';
+import { verdictOfAssertionStatus, verdictOfReplayOutcome } from '../core/verdicts.js';
 
 /**
  * LES ENREGISTREMENTS DU SERVEUR : chaque session lance le vrai recorder (`runRecording`) dans un
@@ -264,25 +266,153 @@ interface ReplayFile {
   findings?: { intentId?: string; outcome?: string; reasons?: string[] }[];
 }
 
-/**
- * Le dernier rejeu du flow écrit par le moteur (`replay/dry-run/<…>/reconciliation.json`) : chaque
- * résultat est rattaché à l'étape de même position (`…#<position>`, comme pendant le rejeu).
- */
-async function lastReplay(directory: string): Promise<{ file: ReplayFile; at: Date } | undefined> {
-  const root = path.join(directory, 'replay', 'dry-run');
-  const runs = await readdir(root, { withFileTypes: true }).catch(() => []);
-  let best: { file: string; at: Date } | undefined;
-  for (const run of runs.filter((entry) => entry.isDirectory())) {
-    const file = path.join(root, run.name, 'reconciliation.json');
-    const info = await stat(file).catch(() => undefined);
-    if (info && (!best || info.mtime > best.at)) best = { file, at: info.mtime };
-  }
-  if (!best) return undefined;
+interface QualityFile {
+  flows?: {
+    assertions?: {
+      id?: string;
+      status?: string;
+      observed?: string;
+      reasons?: string[];
+      evidence?: string[];
+    }[];
+  }[];
+}
+
+/** Le dernier rejeu du flow, tel que le moteur l'a écrit. */
+interface ReplayResults {
+  status: string;
+  at: Date;
+  /** Le flow a été réécrit après ce rejeu. */
+  stale: boolean;
+  /** Le résultat de chaque étape, par position (1…n) dans le flow rejoué. */
+  outcomes: Map<number, { outcome: StepReplayOutcome; reasons: string[] }>;
+  /** Le verdict du moteur d'assertions métier, quand il a tourné pendant ce rejeu. */
+  quality?: QualityFile;
+}
+
+const readJson = async <T>(file: string): Promise<T | undefined> => {
   try {
-    return { file: JSON.parse(await readFile(best.file, 'utf8')) as ReplayFile, at: best.at };
+    return JSON.parse(await readFile(file, 'utf8')) as T;
   } catch {
     return undefined;
   }
+};
+
+/**
+ * Le dernier rejeu du flow écrit par le moteur (`replay/dry-run/<…>/reconciliation.json`, et
+ * `exploration/quality-verification.json` à côté) : chaque résultat est rattaché à l'étape de même
+ * position (`…#<position>`, comme pendant le rejeu).
+ */
+async function lastReplay(directory: string): Promise<ReplayResults | undefined> {
+  const root = path.join(directory, 'replay', 'dry-run');
+  const runs = await readdir(root, { withFileTypes: true }).catch(() => []);
+  let best: { dir: string; at: Date } | undefined;
+  for (const run of runs.filter((entry) => entry.isDirectory())) {
+    const dir = path.join(root, run.name);
+    const info = await stat(path.join(dir, 'reconciliation.json')).catch(() => undefined);
+    if (info && (!best || info.mtime > best.at)) best = { dir, at: info.mtime };
+  }
+  if (!best) return undefined;
+  const file = await readJson<ReplayFile>(path.join(best.dir, 'reconciliation.json'));
+  if (!file) return undefined;
+  const outcomes = new Map<number, { outcome: StepReplayOutcome; reasons: string[] }>();
+  for (const finding of file.findings ?? []) {
+    const position = Number(finding.intentId?.split('#').pop());
+    const outcome = finding.outcome as StepReplayOutcome;
+    if (Number.isInteger(position) && STEP_REPLAY_OUTCOMES.includes(outcome))
+      outcomes.set(position, {
+        outcome,
+        reasons: (finding.reasons ?? []).map((reason) => redactText(reason)),
+      });
+  }
+  const at = best.at;
+  const stale = await stat(path.join(directory, 'recorded-flow.json')).then(
+    (info) => info.mtime > at,
+    () => false,
+  );
+  const quality = await readJson<QualityFile>(
+    path.join(best.dir, 'exploration', 'quality-verification.json'),
+  );
+  return { status: file.status ?? 'UNKNOWN', at, stale, outcomes, ...(quality ? { quality } : {}) };
+}
+
+/**
+ * LE VERDICT DE CHAQUE PROPOSITION D'ASSERTION au dernier rejeu : l'étape `expect` qui la porte
+ * (résultat du rejeu pour cette étape), ou le moteur d'assertions métier (quality-verification.json).
+ * Sans exécution : NOT_EXECUTED, jamais un succès supposé.
+ */
+export async function assertionVerdicts(
+  recording: StoredRecording,
+): Promise<Map<string, { stepId?: string; verdict: AssertionVerdict }>> {
+  const replay = await lastReplay(recording.directory);
+  const steps = recording.flow.steps;
+  const results = new Map<string, { stepId?: string; verdict: AssertionVerdict }>();
+  const business = new Map(
+    (replay?.quality?.flows ?? []).flatMap((flow) =>
+      (flow.assertions ?? []).flatMap((entry) => (entry.id ? [[entry.id, entry] as const] : [])),
+    ),
+  );
+  const when = replay ? { at: replay.at.toISOString(), stale: replay.stale } : {};
+  for (const proposal of recording.flow.proposals ?? []) {
+    if (!inFlow(proposal)) {
+      results.set(proposal.id, { verdict: { status: 'NOT_EXECUTED', reasons: ['not in the flow'] } });
+      continue;
+    }
+    if (proposal.verificationMethod === 'UI_EXPECT' && proposal.expect) {
+      const key = JSON.stringify(proposal.expect);
+      const same = (item: (typeof steps)[number]): boolean =>
+        item.step.kind === 'expect' && JSON.stringify(item.step.expect) === key;
+      // L'étape de l'action d'ancrage ; sinon la seule vérification identique du flow (le recorder
+      // peut ranger la vérification sous l'action suivante). Jamais une vérification ambiguë.
+      const anchored = steps.findIndex(
+        (item) => same(item) && item.actionIds.includes(proposal.afterActionId),
+      );
+      const alike = steps.flatMap((item, position) => (same(item) ? [position] : []));
+      const index = anchored >= 0 ? anchored : alike.length === 1 ? (alike[0] ?? -1) : -1;
+      const stepId = steps[index]?.id;
+      const played = index >= 0 ? replay?.outcomes.get(index + 1) : undefined;
+      results.set(proposal.id, {
+        ...(stepId ? { stepId } : {}),
+        verdict: played
+          ? {
+              status: verdictOfReplayOutcome(played.outcome),
+              source: 'REPLAY_STEP',
+              engineStatus: played.outcome,
+              reasons: played.reasons,
+              ...when,
+            }
+          : {
+              status: 'NOT_EXECUTED',
+              reasons: [replay ? 'not replayed since it was added' : 'never replayed'],
+            },
+      });
+      continue;
+    }
+    const checked = proposal.assertion ? business.get(proposal.assertion.id) : undefined;
+    results.set(proposal.id, {
+      verdict: checked
+        ? {
+            status: verdictOfAssertionStatus(checked.status),
+            source: 'QUALITY_ENGINE',
+            ...(checked.status ? { engineStatus: checked.status } : {}),
+            reasons: (checked.reasons ?? []).map((reason) => redactText(reason)),
+            ...(checked.observed ? { observed: redactText(checked.observed) } : {}),
+            ...(checked.evidence ? { evidence: checked.evidence } : {}),
+            ...when,
+          }
+        : {
+            status: 'NOT_EXECUTED',
+            reasons: [
+              proposal.verificationMethod === 'REPORT_ONLY'
+                ? 'reported only, never checked by a run'
+                : replay
+                  ? 'the business assertion engine gave no result for it in the last replay'
+                  : 'never replayed',
+            ],
+          },
+    });
+  }
+  return results;
 }
 
 /**
@@ -308,25 +438,9 @@ export async function studioView(
     }),
   );
   const replay = await lastReplay(recording.directory);
-  const outcomeAt = new Map<number, { outcome: StepReplayOutcome; reasons: string[] }>();
-  for (const finding of replay?.file.findings ?? []) {
-    const position = Number(finding.intentId?.split('#').pop());
-    const outcome = finding.outcome as StepReplayOutcome;
-    if (Number.isInteger(position) && STEP_REPLAY_OUTCOMES.includes(outcome))
-      outcomeAt.set(position, {
-        outcome,
-        reasons: (finding.reasons ?? []).map((reason) => redactText(reason)),
-      });
-  }
-  const flowChanged = replay
-    ? await stat(path.join(recording.directory, 'recorded-flow.json')).then(
-        (info) => info.mtime > replay.at,
-        () => false,
-      )
-    : false;
   const studioSteps: StudioStep[] = steps.map((item, index) => {
     const role = roles[index];
-    const replayed = outcomeAt.get(index + 1);
+    const replayed = replay?.outcomes.get(index + 1);
     return {
       id: item.id,
       position: index + 1,
@@ -349,9 +463,9 @@ export async function studioView(
     ...(replay
       ? {
           replay: {
-            status: replay.file.status ?? 'UNKNOWN',
+            status: replay.status,
             at: replay.at.toISOString(),
-            stale: flowChanged,
+            stale: replay.stale,
           },
         }
       : {}),

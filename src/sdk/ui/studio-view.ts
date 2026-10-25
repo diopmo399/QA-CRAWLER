@@ -1,4 +1,12 @@
-import type { FlowStudioView, GroupViewDto, StudioStep, StudioViolation } from '../core/contracts.js';
+import type {
+  AssertionProposalView,
+  DataInputView,
+  FlowStudioView,
+  GroupViewDto,
+  StudioStep,
+  StudioViolation,
+  TestDataView,
+} from '../core/contracts.js';
 import { NODE_HEIGHT, NODE_WIDTH, type LaidEdge, type StudioLayout, type Viewport } from './studio-layout.js';
 import type { StudioStrings } from './studio-i18n.js';
 import { esc, icon } from './view.js';
@@ -32,6 +40,14 @@ export interface StudioState {
   moved: boolean;
   /** La suppression d'un groupe attend une confirmation (deuxième clic). */
   confirmDelete?: string;
+  tab: 'flow' | 'data' | 'assertions';
+  /** Les données de test (absentes tant qu'elles ne sont pas chargées) ; dataError si elles ne le sont pas. */
+  data?: TestDataView;
+  dataError?: string;
+  assertions?: AssertionProposalView[];
+  assertionsError?: string;
+  /** La proposition dont la description est en cours de modification. */
+  editingAssertion?: string;
 }
 
 const KIND_CLASS: Record<string, string> = {
@@ -245,7 +261,135 @@ function stepPanel(state: StudioState, view: FlowStudioView): string {
 <div class="row"><button class="btn" data-cmd="move-step-up"${disabled}>${icon('arrowL')}${esc(t.moveUp)}</button><button class="btn" data-cmd="move-step-down"${disabled}>${esc(t.moveDown)}${icon('arrowR')}</button></div>
 ${group ? `<div class="row"><button class="btn" data-cmd="detach"${disabled}>${esc(t.detach)}</button></div>` : ''}
 <div class="row"><label for="qa-assign-one">${esc(t.assignTo)}</label><select id="qa-assign-one" data-assign="one"${disabled}>${groupOptions(view, group?.id, t)}</select></div>
-<form class="col" data-form="create"><label class="sr" for="qa-new-group">${esc(t.groupName)}</label><input id="qa-new-group" name="name" required maxlength="80" placeholder="${esc(t.groupName)}"><div class="row"><button class="btn pri"${disabled}>${esc(t.createGroup)}</button></div></form>`;
+<form class="col" data-form="create"><label class="sr" for="qa-new-group">${esc(t.groupName)}</label><input id="qa-new-group" name="name" required maxlength="80" placeholder="${esc(t.groupName)}"><div class="row"><button class="btn pri"${disabled}>${esc(t.createGroup)}</button></div></form>
+${bindingSection(state, step.id)}
+${stepAssertions(state, step.id)}`;
+}
+
+function bindingSection(state: StudioState, stepId: string): string {
+  const t = state.t;
+  const input = state.data?.inputs.find((entry) => entry.stepId === stepId);
+  if (!input) return '';
+  const disabled = state.busy ? ' disabled' : '';
+  if (input.source === 'SENSITIVE')
+    return `<h3>${esc(t.valueSource)}</h3><p><span class="pill r-none">${esc(t.sources.SENSITIVE)}</span></p><p class="mu">${esc(t.secretNote)}</p>`;
+  const radio = (source: DataInputView['source'], extra = ''): string =>
+    `<label class="opt"><input type="radio" name="source" value="${source}"${input.source === source ? ' checked' : ''}${extra}> ${esc(t.sources[source])}</label>`;
+  const options = input.options
+    .map(
+      (option) =>
+        `<option value="${esc(option.key)}"${input.reference === option.key ? ' selected' : ''}>${esc(option.key)} — ${esc(t.step)} ${String(option.position)}</option>`,
+    )
+    .join('');
+  const generators = (state.data?.generators ?? [])
+    .map(
+      (generator) =>
+        `<option value="${esc(generator)}"${input.generator === generator ? ' selected' : ''}>${esc(generator)}</option>`,
+    )
+    .join('');
+  return `<h3>${esc(t.valueSource)}</h3>
+<p class="mu">${input.key ? `<code>${esc(input.key)}</code> · ` : ''}${esc(input.manual ? t.manualChoice : t.autoChoice)}</p>
+<form class="col bind" data-form="bind" data-step="${esc(stepId)}">
+<fieldset class="col"><legend class="sr">${esc(t.valueSource)}</legend>
+${radio('FIXED')}
+<div class="sub"><label for="qa-bind-value">${esc(t.recorded)}</label><input id="qa-bind-value" name="value" maxlength="500" value="${esc(input.recordedValue ?? '')}"></div>
+${radio('GENERATED')}
+<div class="sub row"><label class="sr" for="qa-bind-variable">${esc(t.variable)}</label><input id="qa-bind-variable" name="variable" maxlength="120" placeholder="${esc(t.variable)}" value="${esc(input.source === 'GENERATED' ? (input.key ?? '') : '')}"><label class="sr" for="qa-bind-generator">${esc(t.generator)}</label><select id="qa-bind-generator" name="generator">${generators}</select></div>
+${radio('REFERENCE', input.options.length === 0 ? ' disabled' : '')}
+<div class="sub">${input.options.length === 0 ? `<p class="mu">${esc(t.noEarlier)}</p>` : `<label class="sr" for="qa-bind-reference">${esc(t.reuse)}</label><select id="qa-bind-reference" name="reference">${options}</select>`}</div>
+</fieldset>
+<div class="row"><button class="btn pri"${disabled}>${esc(t.bind)}</button></div>
+</form>`;
+}
+
+function verdictPill(state: StudioState, proposal: AssertionProposalView): string {
+  const t = state.t;
+  const cls =
+    proposal.verdict.status === 'VERIFIED_PASS'
+      ? 'r-ok'
+      : proposal.verdict.status === 'VERIFIED_FAIL'
+        ? 'r-ko'
+        : proposal.verdict.status === 'NOT_EXECUTED'
+          ? 'r-none'
+          : 'r-warn';
+  return `<span class="pill ${cls}" data-verdict="${proposal.verdict.status}">${esc(t.verdicts[proposal.verdict.status])}</span>${proposal.verdict.stale ? ` <span class="warn">${esc(t.verdictStale)}</span>` : ''}`;
+}
+
+function stepAssertions(state: StudioState, stepId: string): string {
+  const own = (state.assertions ?? []).filter(
+    (proposal) => proposal.stepId === stepId || proposal.afterStepId === stepId,
+  );
+  if (own.length === 0) return '';
+  return `<h3>${esc(state.t.stepAssertions)}</h3><ul class="asserts">${own
+    .map((proposal) => `<li>${verdictPill(state, proposal)} ${esc(proposal.description)}</li>`)
+    .join('')}</ul>`;
+}
+
+function dataPanel(state: StudioState): string {
+  const t = state.t;
+  if (state.dataError) return `<p class="warn">${esc(t.dataUnavailable + state.dataError)}</p>`;
+  const data = state.data;
+  if (!data) return `<p class="mu">${esc(t.loading)}</p>`;
+  const stepLink = (stepId: string, position: number, label: string): string =>
+    `<button class="lnk" data-select-step="${esc(stepId)}">${esc(t.step)} ${String(position)}</button> <span class="mu">${esc(label)}</span>`;
+  const missing =
+    data.missing.length === 0
+      ? ''
+      : `<div class="notice n-refused" role="alert"><b>${esc(t.missingTitle)}</b><ul>${data.missing
+          .map(
+            (entry) =>
+              `<li><code>${esc(entry.key)}</code> — ${entry.stepIds.map((id) => `<button class="lnk" data-select-step="${esc(id)}">${esc(id)}</button>`).join(', ')}</li>`,
+          )
+          .join('')}</ul><p>${esc(t.missingHint)}</p></div>`;
+  const variables =
+    data.variables.length === 0
+      ? `<p class="mu">${esc(t.dataNone)}</p>`
+      : `<ul class="vars">${data.variables
+          .map(
+            (
+              variable,
+            ) => `<li data-variable="${esc(variable.key)}"><p><code>${esc(variable.key)}</code> <span class="mu">${esc(variable.strategy)}${variable.generator ? ` · ${esc(variable.generator)}` : ''}</span></p>
+<p>${esc(t.producedBy)} : ${variable.producedBy ? stepLink(variable.producedBy.stepId, variable.producedBy.position, variable.producedBy.label) : `<span class="mu">${esc(t.notProduced)}</span>`}</p>
+${variable.usedBy.length > 0 ? `<p>${esc(t.usedBy)} :</p><ul>${variable.usedBy.map((use) => `<li>${stepLink(use.stepId, use.position, use.label)} <span class="mu">(${esc(use.how === 'INPUT' ? t.howInput : t.howCitation)})</span></li>`).join('')}</ul>` : ''}</li>`,
+          )
+          .join('')}</ul>`;
+  return `<h2>${esc(t.dataTitle)}</h2>${missing}${variables}`;
+}
+
+function assertionsPanel(state: StudioState): string {
+  const t = state.t;
+  if (state.assertionsError) return `<p class="warn">${esc(state.assertionsError)}</p>`;
+  const list = state.assertions;
+  if (!list) return `<p class="mu">${esc(t.loading)}</p>`;
+  if (list.length === 0)
+    return `<h2>${esc(t.assertionsTitle)}</h2><p class="mu">${esc(t.assertionsNone)}</p>`;
+  const disabled = state.busy ? ' disabled' : '';
+  const items = list
+    .map((proposal) => {
+      const anchor = proposal.stepId ?? proposal.afterStepId;
+      const editing = state.editingAssertion === proposal.id;
+      return `<li class="assert" data-assertion="${esc(proposal.id)}">
+<p class="row">${verdictPill(state, proposal)} <span class="pill r-none">${esc(t.statuses[proposal.status] ?? proposal.status)}</span> <span class="mu">${esc(t.methods[proposal.verificationMethod])} · ${esc(proposal.inFlow ? t.inFlowYes : t.inFlowNo)}</span></p>
+<p class="nm2">${esc(proposal.description)}</p>
+<p class="mu">${esc(t.why)} : ${esc(proposal.why)}${proposal.evidence.length > 0 ? ` · ${esc(t.evidenceCount(proposal.evidence.length))}` : ''}${proposal.needsConfirmation ? ` · ${esc(t.confirmNeeded)}` : ''}</p>
+${proposal.verdict.observed ? `<p class="mu">${esc(t.observed)} : ${esc(proposal.verdict.observed)}</p>` : ''}
+${proposal.verdict.reasons.length > 0 && proposal.verdict.status !== 'NOT_EXECUTED' ? `<ul class="reasons">${proposal.verdict.reasons.map((reason) => `<li>${esc(reason)}</li>`).join('')}</ul>` : ''}
+${
+  editing
+    ? `<form class="col" data-form="modify" data-assertion="${esc(proposal.id)}"><label for="qa-modify-${esc(proposal.id)}">${esc(t.description)}</label><textarea id="qa-modify-${esc(proposal.id)}" name="description" maxlength="500" rows="3" required>${esc(proposal.description)}</textarea><div class="row"><button class="btn pri"${disabled}>${esc(t.save)}</button></div></form>`
+    : `<div class="row">
+<button class="btn" data-decide="ACCEPT" data-assertion="${esc(proposal.id)}"${disabled}>${esc(t.accept)}</button>
+<button class="btn" data-decide="REJECT" data-assertion="${esc(proposal.id)}"${disabled}>${esc(t.reject)}</button>
+<button class="btn" data-decide="DISABLE" data-assertion="${esc(proposal.id)}"${disabled}>${esc(t.disable)}</button>
+<button class="btn" data-edit-assertion="${esc(proposal.id)}"${disabled}>${esc(t.modify)}</button>
+${proposal.status !== 'PROPOSED' ? `<button class="btn" data-decide="RESET" data-assertion="${esc(proposal.id)}"${disabled}>${esc(t.reset)}</button>` : ''}
+${anchor ? `<button class="lnk" data-select-step="${esc(anchor)}">${esc(t.showStep)}</button>` : ''}
+</div>`
+}
+</li>`;
+    })
+    .join('');
+  return `<h2>${esc(t.assertionsTitle)}</h2><ul class="asserts">${items}</ul>`;
 }
 
 function groupPanel(state: StudioState, view: FlowStudioView, group: GroupViewDto): string {
@@ -278,18 +422,35 @@ function groupPanel(state: StudioState, view: FlowStudioView, group: GroupViewDt
 <div class="row"><button class="btn danger" data-cmd="delete-group"${disabled}>${esc(state.confirmDelete === group.id ? t.confirmDelete : t.deleteGroup)}</button></div>`;
 }
 
+function tabsHtml(state: StudioState): string {
+  const t = state.t;
+  return `<div class="tabs" role="tablist" aria-label="${esc(t.title)}">${(
+    ['flow', 'data', 'assertions'] as const
+  )
+    .map(
+      (tab) =>
+        `<button role="tab" id="qa-tab-${tab}" data-tab="${tab}" aria-selected="${String(state.tab === tab)}" tabindex="${state.tab === tab ? '0' : '-1'}">${esc(t.tabs[tab])}</button>`,
+    )
+    .join('')}</div>`;
+}
+
 export function renderPanel(state: StudioState): string {
   const view = state.view;
   if (!view) return '';
   const group = state.selectedGroup
     ? view.groups.find((entry) => entry.id === state.selectedGroup)
     : undefined;
-  const body = group
-    ? groupPanel(state, view, group)
-    : state.selected.length > 0
-      ? stepPanel(state, view)
-      : overviewPanel(state, view);
-  return `${noticeHtml(state)}${body}`;
+  const body =
+    state.tab === 'data'
+      ? dataPanel(state)
+      : state.tab === 'assertions'
+        ? assertionsPanel(state)
+        : group
+          ? groupPanel(state, view, group)
+          : state.selected.length > 0
+            ? stepPanel(state, view)
+            : overviewPanel(state, view);
+  return `${tabsHtml(state)}<div class="tabpanel" role="tabpanel" aria-labelledby="qa-tab-${state.tab}">${noticeHtml(state)}${body}</div>`;
 }
 
 /** La page complète du composant (le style est posé à côté par le composant). */

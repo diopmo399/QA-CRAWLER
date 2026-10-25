@@ -233,6 +233,8 @@ const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisate
 | `recordings.flow(projectId, name)`              | `GET /api/projects/:id/recordings/:name/flow`                    |
 | `recordings.studio(projectId, name)`            | `GET /api/projects/:id/recordings/:name/studio`                  |
 | `assertions.list(projectId, name)`              | `GET /api/projects/:id/recordings/:name/assertions`              |
+| `data.get(projectId, name)`                     | `GET /api/projects/:id/recordings/:name/data`                    |
+| `data.bind(projectId, name, input)`             | `POST /api/projects/:id/recordings/:name/data/bindings`          |
 | `assertions.decide(projectId, name, id, input)` | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
 | `groups.list(projectId, name)`                  | `GET /api/projects/:id/recordings/:name/groups`                  |
 | `groups.edit(projectId, name, command)`         | `POST /api/projects/:id/recordings/:name/groups`                 |
@@ -262,6 +264,44 @@ RECORDING_IN_PROGRESS` ; ensuite, les modifications d'un même enregistrement pa
   une dépendance de données est refusé (`422`) sauf `force` ;
 - la génération écrit sous `recordings/<nom>/generated/` ; le statut de chaque fichier dit ce qui a
   été vérifié (`GENERATED`, `STATICALLY_VALIDATED`, `NOT_VALIDATED`…), jamais une exécution.
+
+### Données de test
+
+`data.get` rend, pour un enregistrement :
+
+- **la lignée de chaque donnée** : l'étape qui la produit et celles qui la saisissent à nouveau ou la
+  citent (`dataLineage` du moteur ; jamais un secret) ;
+- **la source de chaque saisie** : `FIXED` (la valeur gardée), `GENERATED` (générée à chaque rejeu),
+  `REFERENCE` (reprise d'une étape **antérieure** — les seules proposées), `SENSITIVE` (un secret, qui
+  vient toujours de sa variable d'environnement et ne se lie pas) ; et si c'est un choix humain ;
+- **les données citées sans origine** : ni produites avant l'étape, ni dans le jeu de données. Au
+  rejeu, le moteur leur inventerait une valeur ; le SDK le dit **avant** le rejeu.
+
+`data.bind(projectId, name, { stepId, source, variable?, generator?, value? })` applique la règle de la
+fenêtre du recorder (`applyTestDataBinding`) : `test-data.yaml`, le flow et le registre des décisions
+humaines (`human-review.json`) sont réécrits. Reprendre une donnée produite plus tard est refusé
+(`422 REFUSED`) et rien n'est écrit.
+
+### Verdicts des assertions
+
+Chaque proposition d'`assertions.list` porte `verdict`, tiré d'une exécution, jamais supposé :
+
+| Verdict         | Quand                                                                                                             |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `VERIFIED_PASS` | l'étape `expect` a été retrouvée et jouée au rejeu (`MATCHED`), ou le moteur d'assertions métier dit `PASS`       |
+| `VERIFIED_FAIL` | vérification différente au rejeu (`ASSERTION_MISMATCH`), ou `FAIL`                                                |
+| `BLOCKED`       | refusée par la politique de sécurité, ou `BLOCKED`                                                                |
+| `INCONCLUSIVE`  | introuvable, ambiguë, non vérifiée, `INCONCLUSIVE` ou `UNVERIFIABLE` : rien ne prouve ni la conformité ni l'écart |
+| `NOT_EXECUTED`  | hors du parcours, jamais rejouée, ou ajoutée depuis le dernier rejeu                                              |
+
+Les sources : le dernier rejeu de validation (`replay/dry-run/…/reconciliation.json`) pour les
+vérifications d'écran, `quality-verification.json` du même rejeu pour les assertions métier. `stale`
+signale un flow modifié depuis. Les tables sont publiques (`verdictOfReplayOutcome`,
+`verdictOfAssertionStatus`) et testées.
+
+Dans le Flow Studio : l'onglet **Données** (lignée, alertes), l'onglet **Assertions** (verdict,
+statut, preuves, Accepter / Rejeter / Désactiver / Modifier / Réinitialiser, « Voir l'étape »), et la
+**source de la valeur** dans le panneau de chaque saisie.
 
 ## Flow Studio
 
@@ -397,9 +437,15 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/unit/sdk-studio.test.ts` : la vue bâtie avec le moteur (données produites et citées,
   liens, dernier rejeu par position, aucun résultat inventé sans rejeu), disposition (cadres,
   repli, colonnes, 150 étapes), zoom, recherche, rendu échappé et explication d'un refus.
+- `tests/unit/sdk-data-assertions.test.ts` : tables de verdicts ; lignée, sources et données sans
+  origine d'un enregistrement écrit ; liaison (fichiers et registre réécrits) et refus sans écriture ;
+  verdicts lus dans le dernier rejeu (étape `expect`, moteur d'assertions, rien sans exécution) ;
+  panneaux Données, Assertions et source de la valeur.
 - `tests/integration/sdk-studio.test.ts` : le **vrai** recorder et le **vrai** rejeu, puis le Studio
   dans Chromium — zoom, déplacement, recherche, création d'un groupe, dépôt d'une étape sur un groupe,
-  carte déplacée sans changer l'ordre, repli et renommage gardés par le moteur, refus affiché, clavier.
+  carte déplacée sans changer l'ordre, repli et renommage gardés par le moteur, refus affiché, clavier ;
+  puis une saisie liée à une valeur générée, la lignée, un verdict `VERIFIED_PASS` venu du rejeu, et
+  une proposition rejetée depuis l'onglet Assertions.
 - `tests/unit/sdk-view.test.ts` : rendu pur (échappement, pas de champ mot de passe, compteurs
   sans pourcentage, mode embarqué).
 - `tests/integration/sdk-wizard.test.ts` : le **vrai** moteur, Chromium et le site de démo — page

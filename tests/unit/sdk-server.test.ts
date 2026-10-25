@@ -477,6 +477,26 @@ describe('SDK server — recordings and reports', () => {
       violations: [],
     });
     await expect(client.recordings.studio(project.id, 'inconnu')).rejects.toMatchObject({ status: 404 });
+    expect(await client.data.get(project.id, 'parcours-test')).toEqual({
+      variables: [],
+      inputs: [],
+      missing: [],
+      generators: expect.arrayContaining(['text', 'email']) as unknown,
+    });
+    await expect(
+      client.data.bind(project.id, 'parcours-test', { stepId: 's1', source: 'MAGIC' as never }),
+    ).rejects.toMatchObject({ status: 400, code: 'BAD_REQUEST' });
+    await expect(
+      client.data.bind(project.id, 'parcours-test', {
+        stepId: 's1',
+        source: 'FIXED',
+        value: 'x'.repeat(501),
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    // Sans jeu de données, le moteur refuse la liaison : rien n'est écrit.
+    await expect(
+      client.data.bind(project.id, 'parcours-test', { stepId: 's1', source: 'FIXED', value: 'x' }),
+    ).rejects.toMatchObject({ status: 422, code: 'REFUSED' });
     await expect(
       client.assertions.decide(project.id, 'parcours-test', 'p-unknown', { decision: 'ACCEPT' }),
     ).rejects.toMatchObject({ status: 422, code: 'REFUSED' });
@@ -516,5 +536,6 @@ describe('SDK server — recordings and reports', () => {
     expect((await call('/api/projects/prj_whatever/recordings', { token: null })).status).toBe(401);
     expect((await call('/api/projects/prj_whatever/reports', { token: null })).status).toBe(401);
     expect((await call('/api/projects/prj_whatever/recordings/x/studio', { token: null })).status).toBe(401);
+    expect((await call('/api/projects/prj_whatever/recordings/x/data', { token: null })).status).toBe(401);
   });
 });

@@ -6,6 +6,14 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : données de test et verdicts d'assertions** (`docs/sdk/README.md`). `client.data.get` donne
+  la lignée de chaque donnée, la source de chaque saisie et les données citées sans origine (que le
+  rejeu inventerait) ; `client.data.bind` choisit la source d'une saisie (fixe, générée, reprise d'une
+  étape antérieure) avec la règle de la fenêtre du recorder. Chaque proposition d'assertion porte un
+  verdict `VERIFIED_PASS / VERIFIED_FAIL / BLOCKED / INCONCLUSIVE / NOT_EXECUTED` lu dans le dernier
+  rejeu (étape `expect` ou moteur d'assertions métier), jamais supposé. Le Flow Studio gagne les
+  onglets Données et Assertions et la source de la valeur de chaque saisie. Le module de liaison
+  accepte un enregistrement relu sur disque (`BindingContext`).
 - **SDK : Flow Studio** (`<qa-crawler-flow-studio>`, page `/studio`, `docs/sdk/README.md`). Le parcours
   d'un enregistrement en graphe : groupes métier en cadres repliables, étapes, données produites et
   citées, liens producteur → consommateur, citations avant production, chemin du dernier rejeu.

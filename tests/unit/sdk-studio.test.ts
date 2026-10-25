@@ -313,6 +313,7 @@ describe('Flow Studio — rendering', () => {
     matchIndex: 0,
     busy: false,
     moved: false,
+    tab: 'flow',
     ...patch,
   });
 

@@ -9,7 +9,7 @@ import {
 import type { HumanReviewLedger } from './application/human-review.js';
 import type { RecordedFlowStep } from './model.js';
 import type { RecordingResult } from './process-recording.js';
-import { camel, citeIn } from './recorded-test-data.js';
+import { camel, citeIn, type RecordedTestDataResult } from './recorded-test-data.js';
 
 /**
  * LIAISON EXPLICITE DES DONNÉES ENTRE ÉTAPES. L'humain choisit d'où vient la valeur d'une saisie :
@@ -97,7 +97,20 @@ export const BINDING_GENERATORS = [
   'unique',
 ] as const;
 
-type Result = RecordingResult & { humanReview?: HumanReviewLedger };
+/**
+ * Ce que la liaison lit et écrit d'un enregistrement : le flow, le jeu de données, la session (son
+ * identifiant), l'analyse HTTP s'il y en a une, le registre humain. Un résultat complet du recorder
+ * convient, comme un enregistrement relu sur disque.
+ */
+export interface BindingContext {
+  flow: RecordingResult['flow'];
+  session: Pick<RecordingResult['session'], 'id'>;
+  testData?: Pick<RecordedTestDataResult, 'set' | 'items' | 'document'>;
+  http?: RecordingResult['http'];
+  humanReview?: HumanReviewLedger;
+}
+
+type Result = BindingContext;
 
 /** Les étapes d'action, dans l'ordre (les vérifications n'ont pas de position). */
 function actionSteps(result: Result): RecordedFlowStep[] {

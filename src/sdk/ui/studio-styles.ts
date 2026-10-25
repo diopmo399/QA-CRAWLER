@@ -83,6 +83,19 @@ code{font-family:var(--qa-font-family-mono);font-size:.86em;background:var(--qa-
 .n-ok{border-color:color-mix(in srgb,var(--qa-color-success) 40%,transparent);background:color-mix(in srgb,var(--qa-color-success) 9%,transparent)}
 .n-refused,.n-error{border-color:color-mix(in srgb,var(--qa-color-danger) 40%,transparent);background:color-mix(in srgb,var(--qa-color-danger) 8%,transparent)}
 
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--qa-color-border);margin:-4px 0 4px}
+.tabs button{all:unset;cursor:pointer;padding:6px 10px;font-weight:600;font-size:13px;color:var(--qa-color-muted);border-bottom:2px solid transparent}
+.tabs button[aria-selected="true"]{color:var(--qa-color-text);border-bottom-color:var(--qa-color-primary)}
+.tabs button:focus-visible{outline:3px solid color-mix(in srgb,var(--qa-color-primary) 45%,transparent)}
+.tabpanel{display:flex;flex-direction:column;gap:10px}
+fieldset{border:0;margin:0;padding:0}
+.opt{display:flex;gap:8px;align-items:center;font-size:13px}
+.sub{padding-left:24px}
+.bind input[type="radio"]{flex:none}
+.asserts,.vars{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.assert,.vars>li{border:1px solid var(--qa-color-border);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px}
+.vars ul{margin:0;padding-left:18px;font-size:12.5px}
+.nm2{font-weight:600}
 .frame>rect{fill:color-mix(in srgb,var(--qa-color-primary) 5%,var(--qa-color-surface));stroke:color-mix(in srgb,var(--qa-color-primary) 30%,var(--qa-color-border));stroke-width:1.2}
 .frame.on>rect{stroke:var(--qa-color-primary);stroke-width:2}
 .frame .hit{fill:transparent;stroke:none;cursor:move}

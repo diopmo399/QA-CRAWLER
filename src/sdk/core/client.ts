@@ -1,6 +1,8 @@
 import type {
   AssertionProposalView,
   Capabilities,
+  DataBindingInput,
+  DataBindingResult,
   ErrorBody,
   ExplorationEvent,
   ExplorationSnapshot,
@@ -21,6 +23,7 @@ import type {
   ReportEntry,
   ReportEntryKind,
   ReportLink,
+  TestDataView,
   UrlCheck,
   ValidationReport,
   DraftIssue,
@@ -153,6 +156,12 @@ export interface QaCrawlerClient {
       proposalId: string,
       input: ProposalDecisionInput,
     ): Promise<AssertionProposalView[]>;
+  };
+  /** Les données de test d'un enregistrement : lignée, source de chaque saisie, liaisons. */
+  data: {
+    get(projectId: string, recording: string): Promise<TestDataView>;
+    /** Choisir la source d'une saisie (fixe, générée, reprise d'une étape antérieure) ; le moteur vérifie. */
+    bind(projectId: string, recording: string, input: DataBindingInput): Promise<DataBindingResult>;
   };
   /** Les groupes métier d'étapes d'un enregistrement. */
   groups: {
@@ -393,6 +402,10 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/assertions`),
       decide: (projectId, name, proposalId, input) =>
         request('POST', `${recording(projectId, name)}/assertions/${encodeURIComponent(proposalId)}`, input),
+    },
+    data: {
+      get: (projectId, name) => request('GET', `${recording(projectId, name)}/data`),
+      bind: (projectId, name, input) => request('POST', `${recording(projectId, name)}/data/bindings`, input),
     },
     groups: {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/groups`),

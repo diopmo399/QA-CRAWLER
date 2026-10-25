@@ -140,6 +140,7 @@ export const EXTENSION_NAMES = [
   'assertions',
   'generation',
   'reports',
+  'data',
 ] as const;
 export type ExtensionName = (typeof EXTENSION_NAMES)[number];
 
@@ -342,6 +343,42 @@ export interface AssertionProposalView {
   decidedAt?: string;
   note?: string;
   conflictsWith?: string[];
+  /** L'étape `expect` du flow qui porte cette vérification (UI_EXPECT dans le flow). */
+  stepId?: string;
+  /** Le résultat au dernier rejeu ; `NOT_EXECUTED` quand aucun rejeu ne l'a vérifiée. */
+  verdict: AssertionVerdict;
+}
+
+/**
+ * LE VERDICT D'UNE ASSERTION, tel que le SDK le publie. Il vient toujours d'une exécution :
+ *   VERIFIED_PASS   vérifiée et conforme (preuve observée)
+ *   VERIFIED_FAIL   vérifiée et non conforme
+ *   BLOCKED         non jouée : la politique de sécurité ou une étape précédente l'a empêchée
+ *   INCONCLUSIVE    jouée sans preuve suffisante pour conclure
+ *   NOT_EXECUTED    aucune exécution ne l'a vérifiée (jamais rejouée, ou ajoutée depuis)
+ */
+export const ASSERTION_VERDICTS = [
+  'VERIFIED_PASS',
+  'VERIFIED_FAIL',
+  'BLOCKED',
+  'INCONCLUSIVE',
+  'NOT_EXECUTED',
+] as const;
+export type AssertionVerdictStatus = (typeof ASSERTION_VERDICTS)[number];
+
+export interface AssertionVerdict {
+  status: AssertionVerdictStatus;
+  /** Qui a conclu : le rejeu de l'étape `expect`, ou le moteur d'assertions métier. */
+  source?: 'REPLAY_STEP' | 'QUALITY_ENGINE';
+  /** Le statut tel que le moteur l'a écrit (MATCHED, FAIL, UNVERIFIABLE…). */
+  engineStatus?: string;
+  reasons: string[];
+  observed?: string;
+  /** Les identifiants des preuves du moteur. */
+  evidence?: string[];
+  at?: string;
+  /** Le flow a changé depuis cette exécution. */
+  stale?: boolean;
 }
 
 export interface ProposalDecisionInput {
@@ -429,6 +466,77 @@ export interface FlowStudioView {
     /** Le flow a été modifié après ce rejeu : les résultats peuvent ne plus correspondre. */
     stale: boolean;
   };
+}
+
+/** D'où vient la valeur d'une saisie : gardée, générée à chaque rejeu, ou reprise d'une étape antérieure. */
+export const DATA_SOURCES = ['FIXED', 'GENERATED', 'REFERENCE'] as const;
+export type DataSource = (typeof DATA_SOURCES)[number];
+
+export interface DataStepRef {
+  stepId: string;
+  /** Position parmi les étapes d'action (1…n). */
+  position: number;
+  label: string;
+}
+
+/** Une donnée du parcours : qui la produit, qui la saisit à nouveau ou la cite. Jamais un secret. */
+export interface DataVariableView {
+  key: string;
+  /** RECORDED_LITERAL, GENERATE_AT_REPLAY, REFERENCE, TEMPLATE… (le mot du moteur). */
+  strategy: string;
+  generator?: string;
+  producedBy?: DataStepRef;
+  usedBy: (DataStepRef & { how: 'INPUT' | 'CITATION' })[];
+}
+
+/** La source de la valeur d'une saisie et ce qu'on peut y lier. */
+export interface DataInputView extends DataStepRef {
+  source: DataSource | 'SENSITIVE';
+  key?: string;
+  generator?: string;
+  reference?: string;
+  /** La valeur enregistrée quand elle est gardée en clair (jamais un secret). */
+  recordedValue?: string;
+  /** Les données produites AVANT cette saisie : les seules réutilisables. */
+  options: (DataStepRef & { key: string; strategy: string })[];
+  /** Choisie par un humain (registre des décisions), et non par la détection automatique. */
+  manual: boolean;
+}
+
+/** Une donnée citée qu'aucune étape ne produit et que le jeu de données ne contient pas. */
+export interface MissingDataView {
+  key: string;
+  stepIds: string[];
+  message: string;
+}
+
+export interface TestDataView {
+  variables: DataVariableView[];
+  inputs: DataInputView[];
+  missing: MissingDataView[];
+  generators: readonly string[];
+}
+
+export interface DataBindingInput {
+  stepId: string;
+  source: DataSource;
+  /** GENERATED : le nom de la variable ; REFERENCE : la donnée reprise. */
+  variable?: string;
+  generator?: string;
+  /** FIXED : la valeur (par défaut, celle de l'enregistrement). */
+  value?: string;
+}
+
+export interface DataBindingResult {
+  decision: {
+    id: string;
+    stepId: string;
+    source: DataSource;
+    variable: string;
+    previousKey?: string;
+    at: string;
+  };
+  data: TestDataView;
 }
 
 export type GroupCommandInput =

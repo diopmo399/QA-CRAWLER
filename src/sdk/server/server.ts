@@ -11,11 +11,13 @@ import { runMission } from '../../orchestrator.js';
 import { inFlow } from '../../recording/assertion-proposals.js';
 import { runRecording } from '../../recording/record-orchestrator.js';
 import {
+  bindStoredTestData,
   decideStoredProposal,
   editStoredGroups,
   generateStoredTests,
   loadStoredRecording,
   storedGroups,
+  storedTestData,
   type StoredRecording,
 } from '../../recording/recording-workspace.js';
 import type { GroupCommand } from '../../recording/step-groups.js';
@@ -28,8 +30,10 @@ import type {
   ErrorBody,
   ExplorationEvent,
   GenerationResult,
+  DataBindingResult,
   GroupViewDto,
   Project,
+  TestDataView,
   ProposalDecisionType,
   RecordingSnapshot,
   RecordingStreamEvent,
@@ -39,6 +43,7 @@ import type {
 } from '../core/contracts.js';
 import {
   AUTH_TYPES,
+  DATA_SOURCES,
   EXTENSION_NAMES,
   FRAMEWORKS,
   GENERATION_FORMATS,
@@ -49,6 +54,7 @@ import { ExplorationManager, type MissionRunner } from './explorations.js';
 import {
   RecordingBusyError,
   RecordingManager,
+  assertionVerdicts,
   flowView,
   graphView,
   recordingsDir,
@@ -544,7 +550,57 @@ async function handleRecordings(
     return;
   }
   if (action === 'assertions' && itemId === undefined && method === 'GET') {
-    sendJson(response, proposalViews(await storedRecordingOf(ctx, project, name)));
+    sendJson(response, await proposalViews(await storedRecordingOf(ctx, project, name)));
+    return;
+  }
+  if (action === 'data' && itemId === undefined && method === 'GET') {
+    sendJson(response, await dataView(await storedRecordingOf(ctx, project, name)));
+    return;
+  }
+  if (action === 'data' && itemId === 'bindings' && method === 'POST') {
+    const body = await readJson(request);
+    const stepId = textOf(body.stepId, 80);
+    const source = body.source;
+    if (!stepId || typeof source !== 'string' || !(DATA_SOURCES as readonly string[]).includes(source))
+      throw new HttpError(400, 'BAD_REQUEST', `stepId and source (${DATA_SOURCES.join(', ')}) are required`);
+    const optional = (key: string, max: number): string | undefined => {
+      const value = body[key];
+      if (value === undefined) return undefined;
+      const text = textOf(value, max);
+      if (text === undefined)
+        throw new HttpError(400, 'BAD_REQUEST', `${key} must be a text of ${String(max)} characters at most`);
+      return text;
+    };
+    const variable = optional('variable', 120);
+    const generator = optional('generator', 40);
+    const value = optional('value', 500);
+    const result = await editRecording(ctx, project, name, async (stored): Promise<DataBindingResult> => {
+      const outcome = await bindStoredTestData(
+        stored,
+        {
+          stepId,
+          source: source as DataBindingResult['decision']['source'],
+          ...(variable ? { variable } : {}),
+          ...(generator ? { generator } : {}),
+          ...(value !== undefined ? { value } : {}),
+        },
+        language,
+      );
+      if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+      const { decision } = outcome;
+      return {
+        decision: {
+          id: decision.id,
+          stepId: decision.stepId,
+          source: decision.source,
+          variable: decision.variable,
+          ...(decision.previousKey ? { previousKey: decision.previousKey } : {}),
+          at: decision.at,
+        },
+        data: await dataView(stored),
+      };
+    });
+    sendJson(response, result);
     return;
   }
   if (action === 'assertions' && itemId !== undefined && method === 'POST') {
@@ -578,7 +634,7 @@ async function handleRecordings(
         language,
       );
       if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
-      return proposalViews(stored);
+      return await proposalViews(stored);
     });
     sendJson(response, views);
     return;
@@ -765,7 +821,8 @@ async function editRecording<T>(
   }
 }
 
-function proposalViews(stored: StoredRecording): AssertionProposalView[] {
+async function proposalViews(stored: StoredRecording): Promise<AssertionProposalView[]> {
+  const verdicts = await assertionVerdicts(stored);
   return (stored.flow.proposals ?? []).map((proposal) => ({
     id: proposal.id,
     origin: proposal.origin,
@@ -784,7 +841,52 @@ function proposalViews(stored: StoredRecording): AssertionProposalView[] {
     ...(proposal.decidedAt ? { decidedAt: proposal.decidedAt } : {}),
     ...(proposal.note ? { note: proposal.note } : {}),
     ...(proposal.conflictsWith ? { conflictsWith: proposal.conflictsWith } : {}),
+    ...(verdicts.get(proposal.id)?.stepId ? { stepId: verdicts.get(proposal.id)?.stepId } : {}),
+    verdict: verdicts.get(proposal.id)?.verdict ?? { status: 'NOT_EXECUTED', reasons: [] },
   }));
+}
+
+/** Les données de test d'un enregistrement, sans aucun secret ni valeur sensible. */
+async function dataView(stored: StoredRecording): Promise<TestDataView> {
+  const data = await storedTestData(stored);
+  const ref = (entry: { stepId: string; stepIndex: number; label: string }) => ({
+    stepId: entry.stepId,
+    position: entry.stepIndex,
+    label: entry.label,
+  });
+  return {
+    variables: data.lineage.map((entry) => ({
+      key: entry.key,
+      strategy: entry.strategy,
+      ...(entry.generator ? { generator: entry.generator } : {}),
+      ...(entry.producedBy ? { producedBy: ref(entry.producedBy) } : {}),
+      usedBy: entry.usedBy.map((use) => ({ ...ref(use), how: use.how })),
+    })),
+    inputs: data.inputs.map((input) => ({
+      stepId: input.stepId,
+      position: input.position,
+      label: input.label,
+      source: input.binding.source,
+      ...(input.binding.key ? { key: input.binding.key } : {}),
+      ...(input.binding.generator ? { generator: input.binding.generator } : {}),
+      ...(input.binding.reference ? { reference: input.binding.reference } : {}),
+      ...(input.binding.recordedValue !== undefined && input.binding.source !== 'SENSITIVE'
+        ? { recordedValue: input.binding.recordedValue }
+        : {}),
+      options: input.binding.options.map((option) => ({
+        ...ref(option),
+        key: option.key,
+        strategy: option.strategy,
+      })),
+      manual: input.binding.manual,
+    })),
+    missing: data.missing.map((entry) => ({
+      key: entry.key,
+      stepIds: entry.stepIds,
+      message: `testData.${entry.key} is used but no earlier step produces it and the data set does not hold it: a replay would make one up`,
+    })),
+    generators: data.generators,
+  };
 }
 
 function groupDtos(stored: StoredRecording): GroupViewDto[] {
