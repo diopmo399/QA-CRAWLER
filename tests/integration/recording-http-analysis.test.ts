@@ -75,18 +75,22 @@ recording: { knowledge: ${String(knowledge)}${knowledge ? '' : ', panelLayout: c
         }
       },
       reviewDriver: async ({ panel }) => {
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         await panel.getByRole('tab', { name: 'Analyse' }).click();
         await panel.getByText('Intents métier').waitFor({ timeout: 60_000 });
         panelText = await panel.locator('#panel-analysis').innerText();
         // B · les étapes métier en cartes ; C · la requête reliée à l'action ; recherche et « À vérifier seulement ».
-        await panel.getByRole('tab', { name: 'Enregistrement', exact: true }).click({ timeout: 10_000 });
-        ui.story = await panel.locator('#story').innerText();
+        await panel.getByRole('tab', { name: /^Parcours/ }).click({ timeout: 10_000 });
+        ui.story = await panel.locator('#timeline-title').innerText();
         ui.timeline = await panel.locator('#timeline').innerText();
         await panel
           .locator('#timeline .item', { hasText: 'Search companies' })
           .first()
           .click({ timeout: 10_000 });
+        await panel
+          .locator('#details')
+          .getByRole('tab', { name: /^Réseau/ })
+          .click();
         ui.linked = await panel.locator('#details').innerText();
         await panel.getByLabel('Chercher une action').fill('Search companies');
         ui.filtered = await panel.locator('#timeline > li:not(.group)').count();

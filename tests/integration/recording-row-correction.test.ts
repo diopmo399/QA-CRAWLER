@@ -87,12 +87,15 @@ describe('Correction manager — a table row is bound to the run data, never to 
         await page.waitForTimeout(600);
       },
       reviewDriver: async ({ panel, recorder }) => {
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         // Le rejeu crée la ligne 3025 : la clé enregistrée (3024) n'identifie plus rien → échec sur « Open ».
         await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
-        await panel.getByText(/✓ Replay réussi|✕ Replay interrompu/).waitFor({ timeout: 180_000 });
+        await panel
+          .locator('#review')
+          .getByText(/Rejeu réussi|Rejeu interrompu/)
+          .waitFor({ timeout: 180_000 });
         seen.firstReplay = await panel.locator('#review').innerText();
-        if (!String(seen.firstReplay).includes('✕ Replay interrompu')) {
+        if (!String(seen.firstReplay).includes('Rejeu interrompu')) {
           await panel.getByRole('button', { name: 'Fermer' }).click();
           return;
         }
@@ -103,7 +106,7 @@ describe('Correction manager — a table row is bound to the run data, never to 
         seen.rowAtPick = await page.locator('#items tbody tr').innerText();
         await pickLinkWithMouse(page, 'Open');
         await pickingIn(page, false);
-        await panel.getByText('NOUVELLE CIBLE').waitFor();
+        await panel.getByText('Après', { exact: true }).waitFor();
         seen.proposal = await panel.locator('#details .correction').innerText();
         // La clé lue dans le tableau reste offerte, avec l'avertissement « propre à ce run ».
         await panel.getByLabel(/La clé lue dans le tableau/).check();
@@ -121,7 +124,10 @@ describe('Correction manager — a table row is bound to the run data, never to 
         seen.history = await panel.locator('#details .correction').innerText();
         // Le rejeu suivant crée encore une autre ligne : liée à la donnée du run, elle se retrouve.
         await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
-        await panel.getByText(/✓ Replay réussi|✕ Replay interrompu/).waitFor({ timeout: 180_000 });
+        await panel
+          .locator('#review')
+          .getByText(/Rejeu réussi|Rejeu interrompu/)
+          .waitFor({ timeout: 180_000 });
         seen.secondReplay = await panel.locator('#review').innerText();
         await panel.getByRole('button', { name: 'Fermer' }).click();
       },
@@ -147,7 +153,7 @@ describe('Correction manager — a table row is bound to the run data, never to 
   });
 
   it('the replay fails on that row, and the correction page shows the row created by the replay itself', () => {
-    expect(String(seen.firstReplay)).toContain('✕ Replay interrompu');
+    expect(String(seen.firstReplay)).toContain('Rejeu interrompu');
     expect(String(seen.rowAtPick)).not.toContain('3024');
     expect(String(seen.rowAtPick)).toMatch(/Open/);
   });
@@ -177,10 +183,10 @@ describe('Correction manager — a table row is bound to the run data, never to 
     expect(target?.row).toBeDefined();
     expect(Object.values(target?.row ?? {})[0]).toMatch(/^\$\{testData:.+\}$/);
     // L'historique montre la correction lisible : la ligne cite la donnée du run, plus la clé lue.
-    expect(String(seen.history)).toMatch(/Correction\s[\s\S]*Ligne\s+(contient\s+)?[\w.-]+/);
+    expect(String(seen.history)).toMatch(/Correction\s[\s\S]*Ligne\s*:?\s+(contient\s+)?[\w.-]+/);
     expect(String(seen.history).split('Correction').pop()).not.toContain('3024');
     expect(outcome.result.files.yaml).toContain('${testData:');
     expect(outcome.result.files.yaml).not.toContain('3024');
-    expect(String(seen.secondReplay)).toContain('✓ Replay réussi');
+    expect(String(seen.secondReplay)).toContain('Rejeu réussi');
   });
 });

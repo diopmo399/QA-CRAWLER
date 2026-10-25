@@ -88,11 +88,14 @@ describe('Context recovery — resume a corrected replay where it stopped, with 
         await page.waitForTimeout(600);
       },
       reviewDriver: async ({ panel, recorder }) => {
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
-        await panel.getByText(/✓ Replay réussi|✕ Replay interrompu/).waitFor({ timeout: 180_000 });
+        await panel
+          .locator('#review')
+          .getByText(/Rejeu réussi|Rejeu interrompu/)
+          .waitFor({ timeout: 180_000 });
         seen.firstReplay = await panel.locator('#review').innerText();
-        if (!String(seen.firstReplay).includes('✕ Replay interrompu')) {
+        if (!String(seen.firstReplay).includes('Rejeu interrompu')) {
           await panel.getByRole('button', { name: 'Fermer' }).click();
           return;
         }
@@ -103,7 +106,7 @@ describe('Context recovery — resume a corrected replay where it stopped, with 
         seen.rowInSession = await page.locator('#items tbody tr').innerText();
         await pickLinkWithMouse(page, 'Open');
         await pickingIn(page, false);
-        await panel.getByText('NOUVELLE CIBLE').waitFor();
+        await panel.getByText('Après', { exact: true }).waitFor();
         await panel.getByRole('button', { name: 'Valider la correction' }).click();
         await panel.getByRole('button', { name: 'Reprendre ici' }).waitFor({ timeout: 15_000 });
         seen.resumeCard = await panel.locator('#review').innerText();
@@ -111,14 +114,20 @@ describe('Context recovery — resume a corrected replay where it stopped, with 
         // 1. La page quitte le contexte : la reconstruire répéterait la création → reprise manuelle, rien de répété.
         await page.goto(`${app.url}/done`);
         await panel.getByRole('button', { name: 'Reprendre ici' }).click();
-        await panel.getByText('✕ Replay interrompu').waitFor({ timeout: 60_000 });
+        await panel
+          .locator('#review')
+          .getByText('Rejeu interrompu', { exact: true })
+          .waitFor({ timeout: 60_000 });
         seen.manual = await panel.locator('#review').innerText();
         seen.createdAfterManual = app.created;
         // 2. La page revient dans le contexte : la reprise vérifie, puis rejoue l'étape corrigée et la suite.
         await page.goBack();
         await page.getByRole('link', { name: 'Open', exact: true }).waitFor({ timeout: 10_000 });
         await panel.getByRole('button', { name: 'Reprendre ici' }).click();
-        await panel.getByText(/✓ Replay réussi|✕ Replay interrompu/).waitFor({ timeout: 120_000 });
+        await panel
+          .locator('#review')
+          .getByText(/Rejeu réussi|Rejeu interrompu/)
+          .waitFor({ timeout: 120_000 });
         seen.resumed = await panel.locator('#review').innerText();
         // Le rejeu a réussi : la session s'est fermée ; l'élément ouvert est lu côté serveur.
         seen.itemName = app.lastItem?.name;
@@ -133,7 +142,7 @@ describe('Context recovery — resume a corrected replay where it stopped, with 
   });
 
   it('after the correction, the window offers to resume where the context was kept', () => {
-    expect(String(seen.firstReplay)).toContain('✕ Replay interrompu');
+    expect(String(seen.firstReplay)).toContain('Rejeu interrompu');
     expect(String(seen.resumeCard)).toContain('Contexte gardé devant l’étape');
     expect(String(seen.resumeCard)).toContain('Reprendre ici');
   });
@@ -145,7 +154,7 @@ describe('Context recovery — resume a corrected replay where it stopped, with 
   });
 
   it('9 · 14 · back in the context: the corrected step and the rest are replayed with the same run data, no second creation', () => {
-    expect(String(seen.resumed)).toContain('✓ Replay réussi');
+    expect(String(seen.resumed)).toContain('Rejeu réussi');
     expect(String(seen.resumed)).toMatch(/Repris à l’étape \d+ · contexte vérifié/);
     expect(seen.createdAfterResume).toBe(seen.createdBeforeResume);
     // L'élément est celui créé par la session (son nom généré, montré dans sa ligne), pas un autre.
