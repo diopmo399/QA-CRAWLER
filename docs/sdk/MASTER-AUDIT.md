@@ -93,15 +93,15 @@ Points d'entrée réutilisés par le SDK :
 
 ### E. Génération multi-format
 
-| Élément                                        | État                | Preuve / écart                                                                                                                       |
-| ---------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Représentation commune + plan de génération    | `EXISTANT_ET_TESTÉ` | `tests/unit/generation-plan.test.ts`, `assertion-translation.test.ts`                                                                |
-| Playwright Test TypeScript                     | `À_VALIDER`         | généré et vérifié statiquement (`playwright-generator-regression.test.ts`) ; **aucun test ne lance `playwright test` sur la sortie** |
-| Gherkin `.feature`                             | `EXISTANT_ET_TESTÉ` | exécutable par le moteur de QA-CRAWLER (`flows: gherkin`), `tests/integration/gherkin-glue.test.ts`                                  |
-| Définitions de steps pour un exécuteur externe | `ABSENT`            | rien ne permet de jouer le `.feature` sans QA-CRAWLER                                                                                |
-| Java JUnit 5 + Playwright Java (Maven)         | `EXISTANT_ET_TESTÉ` | `tests/integration/java-generated-tests.test.ts` lance `mvn test` quand Java et Maven sont présents (ils le sont ici)                |
-| JUnit XML (rapport de résultats)               | `EXISTANT_ET_TESTÉ` | `tests/unit/junit-reporter.test.ts`, `tests/integration/junit-report.test.ts`                                                        |
-| Génération depuis le SDK                       | `EXISTANT_ET_TESTÉ` | API `/generation`, `sdk-extensions.test.ts` ; statut `STATICALLY_VALIDATED`, jamais « exécuté »                                      |
+| Élément                                        | État                | Preuve / écart                                                                                                                                                           |
+| ---------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Représentation commune + plan de génération    | `EXISTANT_ET_TESTÉ` | `tests/unit/generation-plan.test.ts`, `assertion-translation.test.ts`                                                                                                    |
+| Playwright Test TypeScript                     | `EXISTANT_ET_TESTÉ` | phase 5 : `playwright.config.ts` généré (JUnit XML) ; `tests/integration/sdk-generated-execution.test.ts` lance `playwright test` sur la sortie d'un enregistrement réel |
+| Gherkin `.feature`                             | `EXISTANT_ET_TESTÉ` | exécutable par le moteur (`flows: gherkin`), `gherkin-glue.test.ts` ; phase 5 : mission générée à côté du `.feature`, jouée dans `sdk-generated-execution.test.ts`       |
+| Définitions de steps pour un exécuteur externe | `ABSENT` (choix)    | QA-CRAWLER est l'exécuteur Gherkin : ses phrases intégrées sont les définitions ; aucune n'est produite pour un autre exécuteur                                          |
+| Java JUnit 5 + Playwright Java (Maven)         | `EXISTANT_ET_TESTÉ` | `tests/integration/java-generated-tests.test.ts` lance `mvn test` quand Java et Maven sont présents (ils le sont ici)                                                    |
+| JUnit XML (rapport de résultats)               | `EXISTANT_ET_TESTÉ` | `tests/unit/junit-reporter.test.ts`, `tests/integration/junit-report.test.ts`                                                                                            |
+| Génération depuis le SDK                       | `EXISTANT_ET_TESTÉ` | API `/generation`, `sdk-extensions.test.ts` ; statut `STATICALLY_VALIDATED`, jamais « exécuté »                                                                          |
 
 ### F. Comparaison et régressions
 
@@ -219,13 +219,13 @@ Règles :
 
 ## 6. Plan
 
-| Phase | Contenu                                                                                                                                                                                                      | État au moment de l'audit          |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
-| 0     | ce document                                                                                                                                                                                                  | fait                               |
-| 1     | Core : vérification d'`apiVersion`, reconnexion SSE avec reprise `after` et déduplication par `seq`, test de formes des contrats (correspondance des statuts d'assertion : phase 4)                          | fait                               |
-| 2     | Assistant : déjà livré (PR #136, #138) ; rien d'autre que les écarts de la phase 1                                                                                                                           | fait                               |
-| 3     | Flow Studio : routes dépendances et chemin exécuté ; `<qa-crawler-flow-studio>` (graphe SVG interactif, groupes, panneau, recherche, ajustement, erreurs et dépendances, chemin exécuté, éditeur de groupes) | fait (sauf : jouer un groupe seul) |
-| 4     | Données (routes de lignée et de liaison, éditeur) ; assertions (verdicts publics, éditeur dans le Studio)                                                                                                    | fait                               |
-| 5     | Générateurs : définitions de steps exécutables pour le `.feature` ; exécution réelle d'un échantillon Playwright TS                                                                                          | à faire                            |
-| 6     | Comparaison de deux exécutions et traçabilité : routes et vues                                                                                                                                               | à faire                            |
-| 7     | Thème sombre, accessibilité, Run Monitor, exemple hôte complet, documentation, rapport final                                                                                                                 | à faire                            |
+| Phase | Contenu                                                                                                                                                                                                      | État au moment de l'audit                                            |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| 0     | ce document                                                                                                                                                                                                  | fait                                                                 |
+| 1     | Core : vérification d'`apiVersion`, reconnexion SSE avec reprise `after` et déduplication par `seq`, test de formes des contrats (correspondance des statuts d'assertion : phase 4)                          | fait                                                                 |
+| 2     | Assistant : déjà livré (PR #136, #138) ; rien d'autre que les écarts de la phase 1                                                                                                                           | fait                                                                 |
+| 3     | Flow Studio : routes dépendances et chemin exécuté ; `<qa-crawler-flow-studio>` (graphe SVG interactif, groupes, panneau, recherche, ajustement, erreurs et dépendances, chemin exécuté, éditeur de groupes) | fait (sauf : jouer un groupe seul)                                   |
+| 4     | Données (routes de lignée et de liaison, éditeur) ; assertions (verdicts publics, éditeur dans le Studio)                                                                                                    | fait                                                                 |
+| 5     | Générateurs : mission qui joue le `.feature`, configuration Playwright (JUnit XML), exécution réelle des deux sorties ; correctifs trouvés en les exécutant (première correspondance, gabarit de route)      | fait (sauf : définitions de steps pour un exécuteur Gherkin externe) |
+| 6     | Comparaison de deux exécutions et traçabilité : routes et vues                                                                                                                                               | à faire                                                              |
+| 7     | Thème sombre, accessibilité, Run Monitor, exemple hôte complet, documentation, rapport final                                                                                                                 | à faire                                                              |

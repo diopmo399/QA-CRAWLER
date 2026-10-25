@@ -265,6 +265,29 @@ RECORDING_IN_PROGRESS` ; ensuite, les modifications d'un même enregistrement pa
 - la génération écrit sous `recordings/<nom>/generated/` ; le statut de chaque fichier dit ce qui a
   été vérifié (`GENERATED`, `STATICALLY_VALIDATED`, `NOT_VALIDATED`…), jamais une exécution.
 
+### Tests générés, exécutables
+
+Chaque format arrive avec ce qu'il faut pour le lancer :
+
+| Format        | Fichiers                                                            | Lancer                                              |
+| ------------- | ------------------------------------------------------------------- | --------------------------------------------------- |
+| Gherkin       | `<nom>.feature` + `<nom>.gherkin.mission.yaml` (+ `test-data.yaml`) | `qa-crawler --config <nom>.gherkin.mission.yaml`    |
+| Playwright TS | `playwright/<nom>.spec.ts` + `playwright/playwright.config.ts`      | `npx playwright test --config playwright.config.ts` |
+| Java JUnit 5  | projet Maven (`pom.xml`, tests, README)                             | `mvn test`                                          |
+
+- **Gherkin** : les définitions de steps sont les phrases intégrées du moteur (français et
+  anglais). La mission générée joue le `.feature` avec QA-CRAWLER ; le chargeur du moteur la valide
+  à la génération (chaque ligne du scénario doit être une phrase connue), d'où
+  `STATICALLY_VALIDATED`. Aucune définition de steps pour un exécuteur Gherkin externe n'est
+  produite : QA-CRAWLER est l'exécuteur.
+- **Playwright TS** : la configuration écrit un rapport JUnit XML
+  (`test-results/junit.xml`) ; `@playwright/test` est à installer à côté des tests.
+- Les tests générés jouent les actions comme le moteur : sans position enregistrée, la première
+  correspondance d'un rôle, d'un libellé ou d'un texte (`.first()`) ; un gabarit de route
+  (`/users/{id}`) se lit comme un segment quelconque.
+- La génération ne lance rien : c'est `tests/integration/sdk-generated-execution.test.ts` qui joue
+  la sortie (voir Tests).
+
 ### Données de test
 
 `data.get` rend, pour un enregistrement :
@@ -421,6 +444,7 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   chemin exécuté d'un enregistrement ; le reste des extensions s'utilise par le client.
 - Une exploration à la fois par défaut (`--concurrency`).
 - Chromium seulement.
+- Pas de définitions de steps pour un exécuteur Gherkin externe : le `.feature` se joue avec QA-CRAWLER.
 - Rien n'est publié sur un registre : le SDK fait partie de `@qa-crawler/core`.
 
 ## Tests
@@ -451,6 +475,11 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/integration/sdk-wizard.test.ts` : le **vrai** moteur, Chromium et le site de démo — page
   autonome jusqu'au résultat, projet sans secret, rapport par lien ; hôte sur une autre origine
   (thème, jeton, événements) ; origine refusée.
+- `tests/integration/sdk-generated-execution.test.ts` : un parcours enregistré par le **vrai**
+  recorder, généré par le SDK, puis **exécuté** : le `.feature` par la mission générée (chaque
+  scénario `PASSED` sur l'application), le test Playwright par Playwright Test avec la configuration
+  générée (sortie `1 passed`, JUnit XML sans échec). Le projet Java est joué par `mvn test` dans
+  `tests/integration/java-generated-tests.test.ts`.
 - `tests/integration/sdk-extensions.test.ts` : le **vrai** recorder (seul l'humain est joué par
   Playwright) — enregistrement par l'API, décision sur une proposition, groupe métier, génération
   YAML / Gherkin / Playwright validée, graphe, liste des rapports, lien, arrêt par l'API.

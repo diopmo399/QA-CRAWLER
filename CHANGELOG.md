@@ -6,6 +6,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : tests générés exécutables** (`docs/sdk/README.md`). Le format Gherkin ajoute une mission
+  (`<nom>.gherkin.mission.yaml`) qui joue le `.feature` avec le moteur, validée par son chargeur à la
+  génération ; le format Playwright ajoute `playwright.config.ts`, qui écrit un rapport JUnit XML. Un
+  test d'intégration enregistre un parcours, le génère et joue les deux sorties (`.feature` par la
+  mission, spec par Playwright Test). `@playwright/test` 1.56.1 rejoint les dépendances de
+  développement (les tests du dépôt l'utilisent ; le paquet publié n'en dépend pas).
 - **SDK : données de test et verdicts d'assertions** (`docs/sdk/README.md`). `client.data.get` donne
   la lignée de chaque donnée, la source de chaque saisie et les données citées sans origine (que le
   rejeu inventerait) ; `client.data.bind` choisit la source d'une saisie (fixe, générée, reprise d'une
@@ -309,6 +315,11 @@ defaults`). Test d'intégration : flows passés, panne détectée, écritures bl
 
 ### Corrigé
 
+- **Tests Playwright TS et Java générés, joués comme le moteur** (trouvé en les exécutant) : une
+  action sur un rôle, un libellé ou un texte sans position enregistrée prend la première
+  correspondance (`.first()`), comme le moteur — « Utilisateur 1 » désigne aussi « Utilisateur 10 »
+  et le mode strict de Playwright refusait le clic ; un gabarit de route d'effet (`/users/{id}`,
+  `/users/:id`) devient un segment quelconque au lieu d'un texte littéral qui ne correspondait jamais.
 - **Citations `${testData:clé}` dans les tests Playwright générés** : dans un texte attendu, un nom de
   cible ou une ligne de tableau, la citation devient la donnée du run (`` `${testData["clé"]}` ``) au
   lieu du texte littéral de la citation (qui ne pouvait jamais correspondre).

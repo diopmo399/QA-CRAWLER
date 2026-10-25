@@ -181,7 +181,14 @@ describe('SDK extensions — real recorder, assertions, groups, generation, grap
     const result = await client.generation.run(project.id, 'ouvrir-un-utilisateur', {
       formats: ['yaml', 'gherkin', 'playwright'],
     });
-    expect(result.files.map((file) => file.format).sort()).toEqual(['gherkin', 'playwright', 'yaml']);
+    // Le .feature et la mission qui le joue ; le test Playwright et sa configuration.
+    expect(result.files.map((file) => file.format).sort()).toEqual([
+      'gherkin',
+      'gherkin',
+      'playwright',
+      'playwright',
+      'yaml',
+    ]);
     for (const file of result.files) {
       expect(file.content.length).toBeGreaterThan(0);
       expect(['EXECUTED', 'PASSED']).not.toContain(file.status);

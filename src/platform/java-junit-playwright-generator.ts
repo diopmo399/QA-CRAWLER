@@ -9,7 +9,13 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { FlowStep, FlowTarget, FlowValue } from '../config/flow-schema.js';
 import type { FlowRunReport } from '../model/flow-run.js';
-import { literalEnvName, testDataKeysOf, type FlowDefinition } from './flow-steps.js';
+import {
+  literalEnvName,
+  playsFirstMatch,
+  routeTemplatePattern,
+  testDataKeysOf,
+  type FlowDefinition,
+} from './flow-steps.js';
 
 /**
  * JAVA JUNIT 5 + PLAYWRIGHT JAVA GENERATOR : d'un flow (et de ce que son exécution a appris) à un
@@ -350,6 +356,13 @@ export function javaLocator(target: FlowTarget, notes: string[], scope = 'page')
 const regex = (text: string): string =>
   `Pattern.compile(${javaString(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))})`;
 
+/** Un gabarit de route (`effects.route`), lu comme le moteur le lit : `{id}` désigne un segment. */
+const routeRegex = (route: string): string => `Pattern.compile(${javaString(routeTemplatePattern(route))})`;
+
+/** Le localisateur d'une action, joué comme le moteur le joue (playsFirstMatch). */
+const actionLocator = (target: FlowTarget, notes: string[]): string =>
+  `${javaLocator(target, notes)}${playsFirstMatch(target) ? '.first()' : ''}`;
+
 interface StepCode {
   lines: string[];
   assertions: number;
@@ -384,19 +397,19 @@ function stepCode(
       lines.push(`page.navigate(Env.url(${javaString(step.url)}));`);
       break;
     case 'click':
-      lines.push(`${javaLocator(step.target, notes)}.click();`);
+      lines.push(`${actionLocator(step.target, notes)}.click();`);
       break;
     case 'check':
     case 'uncheck':
-      lines.push(`${javaLocator(step.target, notes)}.${step.kind}();`);
+      lines.push(`${actionLocator(step.target, notes)}.${step.kind}();`);
       break;
     case 'fill':
       lines.push(
-        `${javaLocator(step.target, notes)}.fill(${javaValue(step.value, literalEnvName(flowName, index))});`,
+        `${actionLocator(step.target, notes)}.fill(${javaValue(step.value, literalEnvName(flowName, index))});`,
       );
       break;
     case 'select':
-      lines.push(`${javaLocator(step.target, notes)}.selectOption(${javaString(step.option)});`);
+      lines.push(`${actionLocator(step.target, notes)}.selectOption(${javaString(step.option)});`);
       break;
     case 'expect': {
       const expectation = step.expect;
@@ -460,7 +473,7 @@ function stepCode(
       break;
   }
   if (step.effects?.route) {
-    lines.push(`assertThat(page).hasURL(${regex(step.effects.route)});`);
+    lines.push(`assertThat(page).hasURL(${routeRegex(step.effects.route)});`);
     assertions += 1;
   }
   for (const control of step.effects?.appears ?? []) {

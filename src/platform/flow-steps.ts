@@ -123,6 +123,33 @@ export function playwrightLocator(target: FlowTarget, scope = 'page'): string {
   return target.nth !== undefined ? `${locator}.nth(${String(target.nth)})` : locator;
 }
 
+/**
+ * Un gabarit de route (`effects.route`) en expression régulière, comme le moteur le lit
+ * (routeMatches) : `{id}` ou `:id` désigne un segment, le reste est littéral.
+ */
+export function routeTemplatePattern(route: string): string {
+  return route
+    .split(/(\{[^}]+\}|:[A-Za-z]\w*)/)
+    .map((part) =>
+      /^(\{[^}]+\}|:[A-Za-z]\w*)$/.test(part) ? '[^/]+' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    )
+    .join('');
+}
+
+/**
+ * Une ACTION se joue comme le moteur la joue : sans position, la première correspondance d'un rôle,
+ * d'un libellé ou d'un texte (« Utilisateur 1 » désigne aussi « Utilisateur 10 » sans exact). Le
+ * recorder enregistre la position quand l'humain n'a pas touché la première ; un CSS, un test id ou
+ * une ligne de tableau restent stricts.
+ */
+export function playsFirstMatch(target: FlowTarget): boolean {
+  return (
+    target.nth === undefined &&
+    target.row === undefined &&
+    (target.strategy === 'role' || target.strategy === 'label' || target.strategy === 'text')
+  );
+}
+
 /** L'expression Playwright d'une valeur : variable d'environnement (une valeur littérale n'est jamais recopiée), donnée de test. */
 export function playwrightValue(value: FlowValue, literalEnv?: string): string {
   if (typeof value === 'string') return `process.env[${quote(literalEnv ?? 'QA_VALUE')}] ?? ''`;

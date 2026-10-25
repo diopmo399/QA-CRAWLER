@@ -51,7 +51,7 @@ describe('Playwright generator — non-regression', () => {
     const content = test?.content ?? '';
     expect(content).toContain(`await page.goto("http://app.test/requests");`);
     expect(content).toContain(`page.locator("form > div > div > input").fill(testData["request.title"])`);
-    expect(content).toContain(`page.getByLabel("Search").fill(testData["request.title"])`);
+    expect(content).toContain(`page.getByLabel("Search").first().fill(testData["request.title"])`);
     // Une citation ${testData:clé} devient la donnée du run (jamais le texte littéral de la citation).
     expect(content).toContain('getByRole(\'row\').filter({ hasText: `${testData["request.title"]}` })');
     expect(content).toContain(
@@ -64,5 +64,37 @@ describe('Playwright generator — non-regression', () => {
     // Jamais une valeur enregistrée ni un secret : seule la clé de la donnée apparaît.
     expect(content).not.toMatch(/QA-CRAWLER-/);
     expect(test?.assertions).toBe(4);
+  });
+
+  it('plays a role, label or text action like the engine (first match) and reads an effect route as a template', () => {
+    const { config } = parseConfig(
+      `
+mission: { name: template }
+target: { baseUrl: http://app.test }
+flows:
+  - name: open a user
+    startAt: /users
+    steps:
+      - click: { role: link, name: User 1 }
+        effects: { route: '/users/{id}' }
+      - click: { role: link, name: Edit, nth: 1 }
+        effects: { route: /users/:id/edit }
+      - click: { css: '#save' }
+      - expect: { url: /users/1/edit }
+`,
+      {},
+      {},
+    );
+    const [test] = generatePlaywrightTests(config.flows, [], { baseUrl: 'http://app.test' });
+    const content = test?.content ?? '';
+    // « User 1 » désigne aussi « User 10 » : la première correspondance, comme le moteur.
+    expect(content).toContain('page.getByRole("link", { name: "User 1" }).first().click();');
+    // Une position enregistrée ou un CSS restent tels quels.
+    expect(content).toContain('page.getByRole("link", { name: "Edit" }).nth(1).click();');
+    expect(content).toContain('page.locator("#save").click();');
+    // {id} et :id désignent un segment de la route ; expect.url reste un texte que l'URL contient.
+    expect(content).toContain('toHaveURL(new RegExp("/users/[^/]+"))');
+    expect(content).toContain('toHaveURL(new RegExp("/users/[^/]+/edit"))');
+    expect(content).toContain('toHaveURL(new RegExp("/users/1/edit"))');
   });
 });

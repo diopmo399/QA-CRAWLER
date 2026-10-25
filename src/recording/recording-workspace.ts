@@ -137,7 +137,8 @@ export async function generateRecordingTests(
   if ('error' in plan) return plan;
   const generatedDir = path.join(context.directory, 'generated');
   await writeArtifacts(plan.artifacts, generatedDir);
-  if (context.testData && formats.includes('yaml'))
+  // Le flow YAML et le .feature citent tous deux test-data.yaml (`testData:` / `# testData:`).
+  if (context.testData && (formats.includes('yaml') || formats.includes('gherkin')))
     await writeFile(path.join(generatedDir, TEST_DATA_FILE), context.testData.yaml);
   const validated = await validateArtifacts(plan.artifacts, { directory: generatedDir });
   await context.write(
