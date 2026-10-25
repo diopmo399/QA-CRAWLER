@@ -65,7 +65,7 @@ import {
   type RecordRunner,
 } from './recordings.js';
 import { compareRuns, regressionView, traceabilityView } from './runs.js';
-import { flowStudioHtml, runComparePage, sdkStandalonePage } from './page.js';
+import { flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
 import {
   PROJECT_FILE,
   REPORTS_DIR,
@@ -260,7 +260,8 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
       throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
     const studio = segments.length === 1 && segments[0] === 'studio';
     const runs = segments.length === 1 && segments[0] === 'runs';
-    if (segments.length > 0 && segments[0] !== 'index.html' && !studio && !runs)
+    const monitor = segments.length === 1 && segments[0] === 'monitor';
+    if (segments.length > 0 && segments[0] !== 'index.html' && !studio && !runs && !monitor)
       throw new HttpError(404, 'NOT_FOUND', 'not found');
     const nonce = randomBytes(16).toString('base64');
     response.writeHead(200, {
@@ -270,7 +271,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     response.end(
       method === 'HEAD'
         ? undefined
-        : (studio ? flowStudioHtml : runs ? runComparePage : sdkStandalonePage)({
+        : (studio ? flowStudioHtml : runs ? runComparePage : monitor ? runMonitorPage : sdkStandalonePage)({
             token: ctx.token,
             nonce,
             language: ctx.options.language ?? 'en',

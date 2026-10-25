@@ -123,11 +123,11 @@ Points d'entrée réutilisés par le SDK :
 
 ### H. Run Monitor
 
-| Élément                                                       | État                      | Preuve / écart                                                                                   |
-| ------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| Événements réels numérotés (exploration, enregistrement)      | `EXISTANT_ET_TESTÉ`       | `sdk-server.test.ts`, `sdk-wizard.test.ts`                                                       |
-| Reprise après coupure, doublons ignorés                       | `EXISTANT_MAIS_INCOMPLET` | le serveur rejoue à partir de `after` ; le client ne se reconnecte pas seul et ne déduplique pas |
-| Écran de suivi avec sélection par groupe, étape, statut, type | `ABSENT`                  | l'assistant montre seulement des compteurs                                                       |
+| Élément                                                       | État                      | Preuve / écart                                                                                                                                                       |
+| ------------------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Événements réels numérotés (exploration, enregistrement)      | `EXISTANT_ET_TESTÉ`       | `sdk-server.test.ts`, `sdk-wizard.test.ts`                                                                                                                           |
+| Reprise après coupure, doublons ignorés                       | `EXISTANT_ET_TESTÉ`       | phase 1 (client) ; phase 7 : reprise vérifiée dans Chromium par `sdk-monitor.test.ts` (première ouverture du flux coupée)                                            |
+| Écran de suivi avec sélection par groupe, étape, statut, type | `EXISTANT_MAIS_INCOMPLET` | phase 7 : `<qa-crawler-run-monitor>` par flow, statut d'étape, type d'événement et type d'anomalie ; **pas par groupe métier** (absent des événements d'exploration) |
 
 ### I. API publique
 

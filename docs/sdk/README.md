@@ -376,6 +376,36 @@ Non proposé : **jouer un groupe seul** (le panneau dit si ses entrées sont pro
 mais le SDK ne lance pas de rejeu partiel) ; relancer un rejeu depuis le Studio (enregistrer avec
 `validate: true`).
 
+## Run Monitor
+
+`<qa-crawler-run-monitor exploration="exp_…">` (page autonome `/monitor?exploration=…`) suit une
+exploration en direct :
+
+- le statut et l'état du flux (connexion, en direct, reconnexion avec le numéro de tentative, flux
+  terminé, flux interrompu), annoncés par une région `role="status"` ;
+- les compteurs (écrans, actions, refus, anomalies, étapes de flow), qui sont des nombres
+  d'événements reçus ;
+- l'avancement de chaque flow imposé, avec le statut de fin donné par le moteur (« en cours » tant
+  que le flow n'est pas terminé) ;
+- le journal des événements, à afficher par flow, statut d'étape, type d'événement ou type
+  d'anomalie.
+
+Un flux coupé est rouvert après le dernier événement reçu (5 tentatives) et un événement déjà reçu
+n'est jamais affiché deux fois. Événements DOM : `qa-monitor-connection` (`{ state, attempt }`) et
+`qa-error`.
+
+Le flux d'une exploration porte désormais les flows imposés de la mission :
+
+- `{ type: 'flow', flow, phase: 'start' | 'end', status?, durationMs?, steps? }` ;
+- `{ type: 'flow-step', flow, index, kind, label, status, durationMs, reason? }`.
+
+Le libellé d'une étape ne porte jamais de valeur. Une saisie (`fill`) ou un choix (`select`) est
+décrit par sa cible seule. Une phrase libre (`auto`, `intent`, `manual`) n'est désignée que par son
+genre. La raison d'un échec n'est pas relayée pour ces étapes.
+
+Limite : les groupes métier d'un enregistrement ne sont pas portés par les événements d'exploration.
+Le suivi se fait donc par flow et par étape, pas par groupe.
+
 ## Comparaison et traçabilité des exécutions
 
 Deux explorations d'un projet se comparent sans rien rejouer. Le SDK lit ce que le moteur a écrit dans
@@ -509,6 +539,12 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/integration/sdk-wizard.test.ts` : le **vrai** moteur, Chromium et le site de démo — page
   autonome jusqu'au résultat, projet sans secret, rapport par lien ; hôte sur une autre origine
   (thème, jeton, événements) ; origine refusée.
+- `tests/unit/sdk-monitor.test.ts` : libellés d'étape sans valeur ; événements `flow` et
+  `flow-step` relayés par l'écouteur du moteur ; modèle du suivi ; rendu échappé, reconnexion
+  annoncée.
+- `tests/integration/sdk-monitor.test.ts` : le **vrai** moteur joue deux flows (l'un passe, l'autre
+  échoue) ; le flux porte les flows et les étapes ; `<qa-crawler-run-monitor>` dans Chromium, après une
+  première ouverture du flux coupée : reprise sans doublon, puis choix par statut d'étape et par flow.
 - `tests/unit/sdk-runs.test.ts` : vocabulaires alignés sur le moteur ; comparaison (règle du
   moteur, flows retirés ou nouveaux, exigences changées, rien sans traçabilité) ; routes et refus ;
   rendu échappé et sans pourcentage.

@@ -204,6 +204,33 @@ export type ExplorationEvent =
       route?: string;
     }
   | { seq: number; at: string; type: 'phase'; phase: string }
+  /** Un flow imposé de la mission commence (`start`) ou se termine (`end`, avec son statut). */
+  | {
+      seq: number;
+      at: string;
+      type: 'flow';
+      flow: string;
+      phase: 'start' | 'end';
+      status?: string;
+      durationMs?: number;
+      steps?: number;
+    }
+  /**
+   * Une étape d'un flow imposé, jouée par le moteur : PASSED, FAILED, BLOCKED, SKIPPED ou MANUAL. Le
+   * libellé ne porte jamais la valeur saisie (une étape `fill` est décrite par sa cible seulement).
+   */
+  | {
+      seq: number;
+      at: string;
+      type: 'flow-step';
+      flow: string;
+      index: number;
+      kind: string;
+      label: string;
+      status: string;
+      durationMs: number;
+      reason?: string;
+    }
   | { seq: number; at: string; type: 'completed'; summary: ExplorationSummary }
   | { seq: number; at: string; type: 'failed'; error: string };
 
@@ -781,6 +808,13 @@ export const WIZARD_EVENTS = {
 } as const;
 
 /** Les événements DOM du Flow Studio (bubbles, composed). */
+/** Les événements DOM du Run Monitor (bubbles + composed). */
+export const MONITOR_EVENTS = {
+  /** `detail: { state, attempt }` : connecting, live, reconnecting, closed ou lost. */
+  connection: 'qa-monitor-connection',
+  error: 'qa-error',
+} as const;
+
 /** Les événements DOM de la comparaison d'exécutions (bubbles + composed). */
 export const RUNS_EVENTS = {
   /** `detail: { base, head }` : les deux exécutions comparées ont changé. */

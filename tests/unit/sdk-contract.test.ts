@@ -30,6 +30,7 @@ const CORE_EXPORTS = [
   'COVERAGE_STATUSES',
   'REGRESSION_STATUSES',
   'RUNS_EVENTS',
+  'MONITOR_EVENTS',
   'verdictOfAssertionStatus',
   'verdictOfReplayOutcome',
   'canTransition',
@@ -106,6 +107,7 @@ describe('SDK public contract, version 1', () => {
       error: 'qa-error',
     });
     expect(core.RUNS_EVENTS).toMatchObject({ selection: 'qa-runs-selection', error: 'qa-error' });
+    expect(core.MONITOR_EVENTS).toMatchObject({ connection: 'qa-monitor-connection', error: 'qa-error' });
     expect(core.COVERAGE_STATUSES).toEqual(
       expect.arrayContaining(['NOT_COVERED', 'VERIFIED_PASS', 'VERIFIED_FAIL', 'STALE_EVIDENCE']),
     );

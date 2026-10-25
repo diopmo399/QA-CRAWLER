@@ -80,3 +80,27 @@ runs.token = ${JSON.stringify(options.token)};
 </html>
 `;
 }
+
+/** La page autonome de <qa-crawler-run-monitor> : `/monitor?exploration=…`. */
+export function runMonitorPage(options: { token: string; nonce: string; language: 'fr' | 'en' }): string {
+  return `<!doctype html>
+<html lang="${options.language}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA-CRAWLER — Run Monitor</title>
+<style>html,body{margin:0}body{background:#F5F6FB;padding:16px;box-sizing:border-box}</style>
+</head>
+<body>
+<qa-crawler-run-monitor endpoint="/api" locale="${options.language}"></qa-crawler-run-monitor>
+<script type="module" nonce="${options.nonce}">
+import '/sdk/ui/index.js';
+const monitor = document.querySelector('qa-crawler-run-monitor');
+const id = new URLSearchParams(location.search).get('exploration');
+if (id) monitor.setAttribute('exploration', id);
+monitor.token = ${JSON.stringify(options.token)};
+</script>
+</body>
+</html>
+`;
+}

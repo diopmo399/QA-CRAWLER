@@ -6,6 +6,10 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : Run Monitor** (`docs/sdk/README.md`). Le flux d'une exploration porte les flows imposés et
+  leurs étapes (`flow`, `flow-step`), avec des libellés sans valeur saisie. `<qa-crawler-run-monitor>`
+  (page `/monitor`) suit l'exploration en direct : statut, état du flux et reprise annoncés, avancement
+  des flows, journal à afficher par flow, statut d'étape, type d'événement ou type d'anomalie.
 - **SDK : comparaison de deux exécutions et traçabilité** (`docs/sdk/README.md`). `reports.compare`
   compare deux explorations flow par flow (règle `compareFlowRuns` du moteur) et exigence par
   exigence (couverture du moteur dans chaque run) ; `reports.traceability` et `reports.regression`
