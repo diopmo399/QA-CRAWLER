@@ -64,6 +64,9 @@ Commands (default: mission.mode, else explore):
            (staticAnalysis.source.git): qa-crawler sources <mission>
   k8s-manifest  Write a Kubernetes Job / CronJob manifest for a mission (secrets by reference):
            qa-crawler k8s-manifest --name <job> --image <image> --config-map <cm> --mission <file>
+  knowledge-center  Serve the Knowledge Center (what the tool learned: knowledge, flows,
+           transitions, quality, persistence): qa-crawler knowledge-center -c <mission.yaml>
+           (qa-crawler knowledge-center --help for its options)
 
 Options:
   -c, --config <file>         Mission YAML file (or pass it as the first argument)

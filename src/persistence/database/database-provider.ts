@@ -16,6 +16,8 @@ import {
   type FlowMemoryRecord,
 } from '../model.js';
 import type {
+  ApplicationInventory,
+  InventoryRepository,
   KeyedRepository,
   KnowledgeRepository,
   PersistenceKind,
@@ -263,6 +265,68 @@ export class DatabasePersistenceProvider implements PersistenceProvider {
 
   readonly evolution: KeyedRepository = this.keyed('flow_evolution');
   readonly anomalies: KeyedRepository = this.keyed('anomaly_lifecycle');
+
+  /** KNOWLEDGE CENTER : comptages par application, par table (GROUP BY ; les états et transitions par leur run). */
+  readonly inventory: InventoryRepository = {
+    applications: async () => {
+      const byApp = new Map<string, ApplicationInventory>();
+      const of = (applicationId: string): ApplicationInventory => {
+        const found = byApp.get(applicationId);
+        if (found) return found;
+        const created: ApplicationInventory = {
+          applicationId,
+          counts: { runs: 0, states: 0, transitions: 0, knowledge: 0, evolution: 0, anomalies: 0, memory: 0 },
+        };
+        byApp.set(applicationId, created);
+        return created;
+      };
+      const count = async (
+        table: keyof ApplicationInventory['counts'],
+        sql: string,
+        dateColumn?: string,
+      ): Promise<void> => {
+        for (const row of await this.adapter.query(sql)) {
+          const inventory = of(textOf(row.application_id));
+          inventory.counts[table] = Number(row.total);
+          if (dateColumn && !isNull(row.last_at)) {
+            const at = this.adapter.dialect.fromTimestamp(row.last_at);
+            if (!inventory.lastSeenAt || at > inventory.lastSeenAt) inventory.lastSeenAt = at;
+          }
+        }
+      };
+      await count(
+        'runs',
+        'SELECT application_id, COUNT(*) AS total, MAX(started_at) AS last_at FROM crawl_run GROUP BY application_id',
+        'started_at',
+      );
+      await count(
+        'states',
+        'SELECT r.application_id AS application_id, COUNT(*) AS total FROM run_state s JOIN crawl_run r ON r.id = s.run_id GROUP BY r.application_id',
+      );
+      await count(
+        'transitions',
+        'SELECT r.application_id AS application_id, COUNT(*) AS total FROM run_transition t JOIN crawl_run r ON r.id = t.run_id GROUP BY r.application_id',
+      );
+      await count(
+        'knowledge',
+        'SELECT application_id, COUNT(*) AS total, MAX(last_seen_at) AS last_at FROM transition_knowledge GROUP BY application_id',
+        'last_seen_at',
+      );
+      await count(
+        'evolution',
+        'SELECT application_id, COUNT(*) AS total FROM flow_evolution GROUP BY application_id',
+      );
+      await count(
+        'anomalies',
+        'SELECT application_id, COUNT(*) AS total FROM anomaly_lifecycle GROUP BY application_id',
+      );
+      await count(
+        'memory',
+        'SELECT application_id, COUNT(*) AS total FROM flow_memory GROUP BY application_id',
+      );
+      return [...byApp.values()].sort((a, b) => a.applicationId.localeCompare(b.applicationId));
+    },
+  };
 
   /** QA PLATFORM — FLOW MEMORY : (application, sorte, clé) remplacée sur place ; recherche indexée. */
   readonly memory: FlowMemoryRepository = {

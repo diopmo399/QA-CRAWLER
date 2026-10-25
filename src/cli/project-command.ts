@@ -38,6 +38,7 @@ import { logger } from './logger.js';
  *   test-api        flows + tests d'API tirés du contrat OpenAPI
  *   reproduce       rejoue le chemin de reproduction minimal d'une anomalie et juge le rejeu
  *   generate-tests  écrit les tests Playwright des flows
+ *   knowledge-center (à part, src/cli/knowledge-center-command.ts) : le tableau de bord de la mémoire
  *
  * Chaque commande dérive une MISSION de la configuration du projet et la confie aux moteurs
  * existants par la CLI de mission : aucune logique métier n'est dupliquée ici.
@@ -68,6 +69,7 @@ Usage:
   npx qa-crawler generate-tests [--out <dir>]              Playwright specs (qa-crawler/generated-tests/)
   npx qa-crawler generate-tests --java [--package <name>]  Maven project, JUnit 5 + Playwright Java (qa-crawler/generated-tests-java/)
   npx qa-crawler generate-tests --gherkin                  Gherkin scenarios (qa-crawler/generated-features/)
+  npx qa-crawler knowledge-center [--port 4190] [--read-only]  The Knowledge Center: what the tool learned, served locally
 
 Run options (every command that runs the application):
       --base-url <url>        Override qaCrawler.application.baseUrl (also QA_BASE_URL)

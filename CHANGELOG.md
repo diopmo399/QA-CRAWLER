@@ -6,6 +6,21 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Knowledge Center** (`qa-crawler knowledge-center`, `npm run qa -- knowledge-center -c <mission>`) :
+  le tableau de bord de la mémoire, servi en local (`node:http`, page au thème QA-CRAWLER, API JSON),
+  branché sur les données réelles : tables de persistance, base de connaissances fichier, connaissance
+  fonctionnelle, règles, enregistrements. Vue d'ensemble (métriques avec formule, « Non disponible »
+  sinon), Knowledge Explorer (recherche, critères, tri, pagination côté serveur, détail avec preuves,
+  provenance, historique, exécutions), flows et graphe interactif, variables des enregistrements
+  (producteur, consommateurs, problèmes détectés), qualité (statuts de fiabilité calculés à partir des
+  compteurs, signaux définis), historique, persistance (provider réel, santé, comptages, schéma), export
+  versionné (`qa-crawler-knowledge-export` v1, validé par zod), import avec aperçu et politique explicite,
+  sauvegardes et restauration confirmée. Les décisions humaines (valider, invalider) vont dans un
+  registre à part (`knowledge-center/review-ledger.json`, ajout seul, versions) que le moteur ne lit
+  jamais. Écritures protégées (jeton de session, en-tête dédié, origine), `--read-only`, aucun secret lu.
+  Ajout facultatif `inventory` au `PersistenceProvider` (applications et comptages), implémenté par les
+  providers mémoire, fichier et base de données. Documentation : `docs/KNOWLEDGE_CENTER.md`, diagnostic
+  préalable `docs/knowledge-center-audit.md`.
 - **Assertions issues du recording, groupes métier, génération multi-format**
   (`docs/RECORDING_ASSERTIONS.md`, diagnostic `docs/recording-assertions-audit.md`). À l'arrêt d'un
   enregistrement : des **observations** identifiées par source et fiabilité (`observations.json`, ce qui

@@ -53,6 +53,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Choix des actions (scoring) et objectifs](#choix-des-actions-scoring-et-objectifs)
 - [Moteur de décision avancé](#moteur-de-décision-avancé)
 - [Persistance et mémoire](#persistance-et-mémoire)
+- [Knowledge Center : voir et gérer ce que l'outil a appris](#knowledge-center--voir-et-gérer-ce-que-loutil-a-appris)
 - [Corrélation réseau](#corrélation-réseau)
 - [Ligne de commande](#ligne-de-commande)
 - [Docker](#docker)
@@ -2237,6 +2238,35 @@ npx vitest run tests/integration/persistence-postgres.test.ts tests/integration/
 
 Sans ces variables, ces tests sont ignorés (et l'indiquent) ; les providers mémoire, fichier et SQLite sont testés à chaque `npm test`.
 
+## Knowledge Center : voir et gérer ce que l'outil a appris
+
+Le **Knowledge Center** est le tableau de bord de la mémoire : une commande qui sert en local, avec la
+configuration effective du projet (ou d'une mission), une page branchée sur les **données réelles** :
+persistance (tables), base de connaissances fichier, connaissance fonctionnelle, règles, enregistrements.
+
+```bash
+npx qa-crawler knowledge-center                     # projet : qa-crawler.config.yaml cherché vers le haut
+npm run qa -- knowledge-center -c scenarios/persistence-file.yaml   # une mission
+npx qa-crawler knowledge-center --read-only --port 4191              # consultation seule
+```
+
+| Vue                 | Ce qu'elle montre                                                                                                                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vue d'ensemble      | métriques réelles avec leur formule (connaissances, flows, états, transitions, validées, à vérifier, obsolètes, runs, taux de réutilisation) ; « Non disponible » quand la donnée n'existe pas |
+| Knowledge Explorer  | recherche, type, statut, origine, source, décision ; tri et pagination côté serveur ; détail avec preuves, provenance, historique et exécutions des derniers runs                              |
+| Flows & transitions | flows, runs, états, transitions, graphe interactif                                                                                                                                             |
+| Variables           | variables des enregistrements : producteur, consommateurs, liaisons ; problèmes détectés (jamais corrigés automatiquement)                                                                     |
+| Qualité             | statuts de fiabilité calculés (`CONFIRMED`, `OBSERVED`, `FRAGILE`, `CONTRADICTED`, `STALE`, `HYPOTHESIS`, `UNVERIFIED`) et signaux, chacun avec sa définition                                  |
+| Historique          | journal des décisions et des opérations, versions                                                                                                                                              |
+| Persistance         | provider réel, santé mesurée, comptages par table, schéma ; export versionné, import avec aperçu, sauvegardes, restauration confirmée                                                          |
+
+Les décisions humaines (valider, invalider, annoter) vont dans un registre à part
+(`<knowledge>/knowledge-center/review-ledger.json`, ajout seul, versions contre les modifications
+concurrentes) : elles sont montrées, exportées et historisées, et **ne changent jamais les décisions du
+moteur**, qui ne lit pas ce registre. Le tableau de bord n'active ni la mémoire ni la persistance, ne lit
+aucun secret, et toute écriture exige un jeton de session, un en-tête dédié et une origine locale ;
+`--read-only` les refuse toutes. Détails, formules, API et limites : [docs/KNOWLEDGE_CENTER.md](docs/KNOWLEDGE_CENTER.md).
+
 ## Corrélation réseau
 
 Chaque action ouvre une fenêtre d'observation réseau, fermée une fois l'état suivant observé. Les échanges vus entre les deux sont attachés à la transition :
@@ -2270,6 +2300,7 @@ npm run qa -- --config scenarios/smoke.yaml --base-url https://pr-42.example.com
 npm run qa -- scenarios/mon-flow.yaml --headed      # voir le navigateur (nécessite un écran)
 npm run qa -- dry-run features/create-user.feature -c scenarios/demo.yaml   # voir « Dry Run »
 npm run qa -- record --url https://qa.example.com/users --name "Create user"   # voir « record »
+npm run qa -- knowledge-center -c scenarios/demo.yaml   # voir « Knowledge Center »
 npm run qa -- --help
 ```
 

@@ -15,6 +15,7 @@ import { runDryRunCli } from './dry-run-command.js';
 import { runRecordCli } from './record-command.js';
 import { runSourcesCli } from './sources-command.js';
 import { runManifestCli } from './manifest-command.js';
+import { runKnowledgeCenterCli } from './knowledge-center-command.js';
 import { PROJECT_COMMANDS, PROJECT_HELP, runProjectCli, type ProjectCommand } from './project-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
@@ -89,6 +90,8 @@ export async function runCli(input: string[], options: CliOptions = {}): Promise
   if (argv[0] === 'sources') return runSourcesCli(argv.slice(1));
   // K8S-MANIFEST : un Job / CronJob Kubernetes pour une mission (secrets par référence).
   if (argv[0] === 'k8s-manifest') return runManifestCli(argv.slice(1));
+  // KNOWLEDGE CENTER : le tableau de bord de la mémoire (projet ou mission), servi en local.
+  if (argv[0] === 'knowledge-center') return runKnowledgeCenterCli(argv.slice(1));
   if (argv[0] === '--version' || argv[0] === '-v') {
     logger.info(await versionText(options.cliVersion));
     return EXIT.OK;
