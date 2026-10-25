@@ -1,3 +1,6 @@
+import { nativeComment, translateAssertions } from '../platform/assertion-translation.js';
+import { businessAssertionsForYaml } from './assertion-proposals.js';
+import { groupsForYaml } from './step-groups.js';
 import type { FlowAllowance, FlowStep, FlowTarget, FlowValue } from '../config/flow-schema.js';
 import type { SuggestedFlowGraph } from '../dry-run/reconciliation-model.js';
 import { suggestedFeature, suggestedFlowYaml } from '../dry-run/suggested-flow.js';
@@ -377,10 +380,16 @@ export function generateFlowFiles(
     ...(flow.negative ? ['Negative validation flow: the refusal was shown on purpose (checkpoint).'] : []),
     'Review before use. The safety policy still applies when it is replayed.',
   ];
+  // Les assertions métier acceptées par l'humain (assertion-proposals) : `assertions:` du schéma de la mission.
+  const assertions = businessAssertionsForYaml(flow);
+  const groups = groupsForYaml(flow);
   return {
-    yaml: suggestedFlowYaml(suggested, header, options.testDataFile),
+    yaml: suggestedFlowYaml(suggested, header, options.testDataFile, {
+      ...(assertions.length > 0 ? { assertions } : {}),
+      ...(groups.length > 0 ? { groups } : {}),
+    }),
     // `# testData: …` en tête du .feature : le même jeu de données que le flow YAML.
-    feature: suggestedFeature(suggested, {
+    feature: suggestedFeature(featureGraph(suggested, flow), {
       language: options.language,
       header: options.testDataFile ? [`testData: ${options.testDataFile}`, ...header] : header,
     }),
@@ -400,4 +409,63 @@ export function isAuthCallback(route: string): boolean {
       const params = new URLSearchParams(query);
       return params.has('code') && params.has('state');
     });
+}
+
+/**
+ * Le graphe du .feature : les étapes du flow, les en-têtes de groupe (commentaires), et les assertions
+ * métier acceptées — natives en phrase « Alors », sinon en commentaire (le .feature ne sait pas les
+ * dire : le flow YAML les porte, le rejeu les vérifie).
+ */
+function featureGraph(suggested: SuggestedFlowGraph, flow: RecordedFlow): SuggestedFlowGraph {
+  const business = translateAssertions(flow.businessAssertions, flow.steps.length);
+  const anchored = new Map<number, string[]>();
+  for (const proposal of flow.proposals ?? [])
+    if (proposal.assertion && proposal.afterStepId !== undefined) {
+      const position = flow.steps.findIndex((item) => item.id === proposal.afterStepId) + 1;
+      if (position > 0)
+        (anchored.get(position) ?? anchored.set(position, []).get(position))?.push(proposal.assertion.id);
+    }
+  const firstOf = new Map<number, typeof flow.groups extends (infer G)[] | undefined ? G : never>();
+  for (const group of flow.groups ?? []) {
+    const first = flow.steps.findIndex((item) => group.stepIds.includes(item.id)) + 1;
+    if (first > 0) firstOf.set(first, group);
+  }
+  const comment = (text: string): SuggestedFlowGraph['steps'][number] => ({
+    provenance: 'HUMAN_DECISION',
+    status: 'MATCHED',
+    label: text,
+    comment: text,
+    commentOnly: true,
+  });
+  const steps: SuggestedFlowGraph['steps'] = [];
+  const emit = (position: number): void => {
+    for (const assertion of business.all) {
+      const anchor = anchored.get(position)?.includes(assertion.id) ?? false;
+      const atEnd = position === 0 && ![...anchored.values()].some((ids) => ids.includes(assertion.id));
+      if (!anchor && !atEnd) continue;
+      if (assertion.support === 'NATIVE' && assertion.expect)
+        steps.push({
+          provenance: 'HUMAN_DECISION',
+          status: 'MATCHED',
+          step: { kind: 'expect', expect: assertion.expect, allow: [], optional: false },
+          label: assertion.description,
+          comment: nativeComment(assertion),
+        });
+      else
+        steps.push(
+          comment(
+            `business assertion ${assertion.id} — replay only (declared in the flow YAML, verified by the QA-CRAWLER replay): ${assertion.description}`,
+          ),
+        );
+    }
+  };
+  suggested.steps.forEach((item, index) => {
+    const group = firstOf.get(index + 1);
+    if (group)
+      steps.push(comment(`── group: ${group.name}${group.description ? ` — ${group.description}` : ''}`));
+    steps.push(item);
+    emit(index + 1);
+  });
+  emit(0);
+  return { ...suggested, steps };
 }

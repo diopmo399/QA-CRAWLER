@@ -28,13 +28,14 @@ export function persistenceProviderContract(name: string, target: ContractTarget
     const app = `app-${randomUUID().slice(0, 8)}`;
     const other = `${app}-other`;
 
+    // Créer et initialiser un fournisseur (base, fichiers) dépasse les 10 s par défaut sur un runner lent (Windows en CI).
     beforeAll(async () => {
       provider = await target.create();
       await provider.initialize();
-    });
+    }, 60_000);
     afterAll(async () => {
       await provider.close();
-    });
+    }, 60_000);
 
     const run = (overrides: Partial<CrawlRunRecord> = {}): CrawlRunRecord => ({
       id: randomUUID(),

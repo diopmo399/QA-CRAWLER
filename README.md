@@ -123,6 +123,7 @@ npx qa-crawler test-api                   # tests dérivés du contrat OpenAPI
 npx qa-crawler reproduce                  # rejoue le chemin minimal de l'anomalie la plus grave
 npx qa-crawler generate-tests             # specs Playwright dans qa-crawler/generated-tests/
 npx qa-crawler generate-tests --java      # projet Maven JUnit 5 + Playwright Java dans qa-crawler/generated-tests-java/
+npx qa-crawler generate-tests --gherkin   # scénarios .feature dans qa-crawler/generated-features/
 ```
 
 Toutes les commandes acceptent `--base-url`, `--headless` / `--headed`, `--reports-dir`,

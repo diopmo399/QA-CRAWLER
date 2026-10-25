@@ -1,3 +1,6 @@
+import type { ProposalDecision } from './assertion-proposals.js';
+import type { RecordedFlow } from './model.js';
+import { type GroupCommand, type GroupOutcome, groupViews } from './step-groups.js';
 import { REVIEWABLE_INTENTS } from './application/human-review.js';
 import type { RecordingAnalysis } from './analysis/recording-analysis.js';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
@@ -13,7 +16,10 @@ import type { PreActionBox } from './model.js';
 import {
   describeFlowStep,
   summaryOf,
+  proposalRows,
   reviewSteps,
+  type PanelGeneration,
+  type PanelGroup,
   liveStep,
   type PanelAnalysis,
   type PanelReplay,
@@ -59,6 +65,16 @@ export interface ReviewActions {
     intent?: string;
     reason?: string;
   }) => Promise<{ ok: true } | { error: string }>;
+  /** LA DÉCISION sur une proposition d'assertion (accepter, refuser, désactiver, réinitialiser, modifier). */
+  reviewAssertion?: (input: ProposalDecision) => Promise<{ ok: true } | { error: string }>;
+  /** LES GROUPES MÉTIER : une opération (créer, renommer, affecter, déplacer, réordonner, replier, détacher, supprimer). */
+  editGroups?: (command: GroupCommand, options?: { force?: boolean }) => Promise<GroupOutcome>;
+  /** LA GÉNÉRATION : les formats demandés pour les groupes choisis, écrits et validés statiquement (outils réels). */
+  generate?: (input: {
+    formats: string[];
+    groupIds?: string[];
+    force?: boolean;
+  }) => Promise<PanelGeneration | { error: string }>;
   /** LA LIAISON DE DONNÉES d'une saisie : sa source (fixe, générée, réutilisée), choisie par l'humain. */
   bindTestData?: (input: {
     stepId: string;
@@ -172,6 +188,8 @@ export class RecordingConsole {
   /** Les actions de la revue en cours (la session de correction se libère hors de la file des commandes). */
   private reviewActions: ReviewActions | undefined;
   private saved: PanelState['saved'];
+  /** La dernière génération (artefacts, statuts, validations) : montrée dans la revue. */
+  private generation: PanelGeneration | undefined;
   private analysis: PanelAnalysis = { available: false, intents: [], findings: [], aiCandidates: 0 };
   /** Les entrées de la dernière analyse affichée : la revue d'une intention la redessine. */
   private analysisInputs:
@@ -637,6 +655,50 @@ export class RecordingConsole {
             }
           } else if (command.type === 'save') {
             this.saved = await input.actions.save();
+          } else if (command.type === 'generate' && input.actions.generate) {
+            const outcome = await input.actions.generate({
+              formats: command.formats ?? ['yaml', 'gherkin', 'playwright'],
+              ...(command.groupIds && command.groupIds.length > 0 ? { groupIds: command.groupIds } : {}),
+              force: command.force === true,
+            });
+            if ('error' in outcome) this.notice = { kind: 'error', message: outcome.error };
+            else {
+              this.notice = undefined;
+              this.generation = outcome;
+            }
+          } else if (command.type === 'group' && command.op && input.actions.editGroups) {
+            const group = groupCommandOf(command);
+            if (!group) this.notice = { kind: 'error', message: `invalid group command ${command.op}` };
+            else {
+              const outcome = await input.actions.editGroups(group, { force: command.force === true });
+              if ('error' in outcome) this.notice = { kind: 'error', message: outcome.error };
+              else {
+                this.notice =
+                  outcome.warnings.length > 0
+                    ? { kind: 'info', message: outcome.warnings.join('; ') }
+                    : undefined;
+                this.replay = undefined;
+                this.saved = undefined;
+              }
+            }
+          } else if (
+            command.type === 'assertion-decide' &&
+            command.id &&
+            command.decision &&
+            input.actions.reviewAssertion
+          ) {
+            const outcome = await input.actions.reviewAssertion({
+              id: command.id,
+              decision: command.decision,
+              ...(command.reason ? { note: command.reason } : {}),
+            });
+            // Le flow change : un rejeu fait avant ne le valide plus.
+            if ('error' in outcome) this.notice = { kind: 'error', message: outcome.error };
+            else {
+              this.notice = undefined;
+              this.replay = undefined;
+              this.saved = undefined;
+            }
           } else if (
             command.type === 'data-bind' &&
             command.id &&
@@ -1202,6 +1264,9 @@ export class RecordingConsole {
       ...(this.endedAt !== undefined ? { endedAt: this.endedAt } : {}),
       actions: steps,
       checks: review?.checks ?? [],
+      ...(inReview && this.result ? { proposals: proposalRows(this.result.flow) } : {}),
+      ...(inReview && this.result ? { groups: groupRows(this.result.flow) } : {}),
+      ...(this.generation ? { generation: this.generation } : {}),
       summary: review ? summaryOf(steps) : live.summary(),
       quality: live.quality(),
       ...(this.progress ? { progress: this.progress } : {}),
@@ -1261,6 +1326,8 @@ function enrichSteps(
   },
 ): PanelStep[] {
   const groupOf = (step: PanelStep): string | undefined => {
+    // Un groupe métier décidé par l'humain l'emporte sur l'étape métier déduite.
+    if (step.groupId) return step.group;
     const owner = context.business?.find((entry) => entry.recordedActions.includes(step.id));
     if (owner)
       return `${owner.action.toLowerCase()} ${owner.entity ?? owner.entityKey?.split(':').at(-2) ?? ''}`.trim();
@@ -1876,4 +1943,72 @@ function httpPanelOf(
       .map((entry) => `${entry.ref}: ${entry.from} → ${entry.to} (${entry.reason})`),
     ...(result ? { searches: searchesOf(analysis, result) } : {}),
   };
+}
+
+/** La commande de groupe envoyée par la fenêtre, typée (ou rien quand elle est incomplète). */
+function groupCommandOf(command: PanelCommand): GroupCommand | undefined {
+  const stepIds = command.stepIds ?? (command.id ? [command.id] : []);
+  switch (command.op) {
+    case 'create':
+      return command.name !== undefined
+        ? {
+            op: 'create',
+            name: command.name,
+            ...(command.description !== undefined ? { description: command.description } : {}),
+            stepIds,
+          }
+        : undefined;
+    case 'rename':
+      return command.groupId && command.name !== undefined
+        ? { op: 'rename', groupId: command.groupId, name: command.name }
+        : undefined;
+    case 'describe':
+      return command.groupId
+        ? { op: 'describe', groupId: command.groupId, description: command.description ?? '' }
+        : undefined;
+    case 'assign':
+      return command.groupId ? { op: 'assign', groupId: command.groupId, stepIds } : undefined;
+    case 'detach':
+      return { op: 'detach', stepIds };
+    case 'move-step':
+      return command.id && command.direction
+        ? { op: 'move-step', stepId: command.id, direction: command.direction }
+        : undefined;
+    case 'reorder-steps':
+      return command.groupId ? { op: 'reorder-steps', groupId: command.groupId, stepIds } : undefined;
+    case 'move-group':
+      return command.groupId && command.direction
+        ? { op: 'move-group', groupId: command.groupId, direction: command.direction }
+        : undefined;
+    case 'collapse':
+      return command.groupId
+        ? { op: 'collapse', groupId: command.groupId, collapsed: command.collapsed !== false }
+        : undefined;
+    case 'delete':
+      return command.groupId
+        ? { op: 'delete', groupId: command.groupId, keepSteps: command.keepSteps !== false }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** Les groupes métier tels que la fenêtre les montre : membres, entrées, sorties, exécutabilité seule. */
+function groupRows(flow: RecordedFlow): PanelGroup[] {
+  return groupViews(flow).map((view) => ({
+    id: view.id,
+    name: view.name,
+    ...(view.description ? { description: view.description } : {}),
+    stepIds: view.stepIds,
+    collapsed: view.collapsed === true,
+    inputs: view.data.inputs.map(
+      (input) => `testData.${input.key}${input.producerGroupId ? ` ← ${input.producerGroupId}` : ''}`,
+    ),
+    outputs: view.data.outputs.map((output) => `testData.${output.key}`),
+    startAt: view.startAt,
+    checks: view.checks.length,
+    assertions: view.assertionIds.length,
+    runnableAlone: view.runnableAlone.ok,
+    missing: view.runnableAlone.missing,
+  }));
 }

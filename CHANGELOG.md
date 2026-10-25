@@ -6,6 +6,30 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Assertions issues du recording, groupes métier, génération multi-format**
+  (`docs/RECORDING_ASSERTIONS.md`, diagnostic `docs/recording-assertions-audit.md`). À l'arrêt d'un
+  enregistrement : des **observations** identifiées par source et fiabilité (`observations.json`, ce qui
+  manque est dit, rien n'est reconstitué) ; des **propositions d'assertions** avec origine (observée,
+  déduite — à confirmer —, explicite), catégorie, preuves, méthode, limites et confiance
+  (`assertion-proposals.json`), décidées dans la fenêtre du recorder (accepter, refuser, désactiver,
+  réinitialiser, modifier) : une acceptation écrit une étape `expect` ou une assertion métier
+  (`assertions:` du schéma de la mission, vérifiée par le rejeu) ; sans décision, le flow est celui
+  d'avant. Des **groupes métier** (`src/recording/step-groups.ts`) : créer, renommer, décrire,
+  regrouper, déplacer, réordonner, replier, détacher, supprimer (étapes gardées), avec les dépendances
+  de données vérifiées (un ordre qui cite une valeur avant sa production est bloqué et expliqué),
+  l'exécutabilité d'un groupe seul, et `groups:` dans le YAML (positions). Une **traduction commune des
+  assertions** (`src/platform/assertion-translation.ts`) pour les trois générateurs : natives sur
+  l'écran, sinon « vérifiée par le rejeu seulement » en commentaire explicite ; les groupes en en-têtes.
+  Un **plan de génération** (`src/platform/generation-plan.ts`, section « Génération des tests » de la
+  fenêtre, `generation.json`, `generated/`) avec des statuts honnêtes : `GENERATED`,
+  `STATICALLY_VALIDATED` (schéma, dictionnaire Gherkin, TypeScript en syntaxe, `mvn test-compile`),
+  `NOT_VALIDATED`, et `EXECUTED` / `PASSED` / `FAILED` / `BLOCKED` / `INCONCLUSIVE` seulement d'après une
+  exécution réelle. `npx qa-crawler generate-tests --gherkin` (`src/platform/gherkin-feature-generator.ts`).
+  Le rapport JUnit XML ajoute un cas par assertion métier exécutée (`PASS` → réussi, `FAIL` →
+  `failure`, sinon `skipped` avec le motif). API exportée : `observationsOf`, `proposeAssertions`,
+  `decideProposal`, `applyGroupCommand`, `groupViews`, `flowForGroups`, `translateAssertions`,
+  `planGeneration`, `validateArtifacts`, `generateGherkinFeatures`.
+
 - **Rapport JUnit XML** (`src/reporting/junit-reporter.ts`, `report.junit`, option `--junit`,
   `reporting.format: [html, json, junit]` dans la configuration de projet). Un reporter de plus,
   désactivé par défaut, qui ne lit que le résultat du run et ne change rien aux rapports existants :
@@ -216,6 +240,10 @@ defaults`). Test d'intégration : flows passés, panne détectée, écritures bl
   plus l'intégration). Sur une machine à 4 cœurs : de 1 250 s à environ 600 s.
 
 ### Corrigé
+
+- **Citations `${testData:clé}` dans les tests Playwright générés** : dans un texte attendu, un nom de
+  cible ou une ligne de tableau, la citation devient la donnée du run (`` `${testData["clé"]}` ``) au
+  lieu du texte littéral de la citation (qui ne pouvait jamais correspondre).
 
 - **Rapport HTML en français : la section « Intelligence IA » entièrement traduite.** Précondition
   manquante, contexte fonctionnel (objectif, progression, manquant, bloqué), sélection et découverte des

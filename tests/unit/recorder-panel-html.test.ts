@@ -23,3 +23,41 @@ describe('recorder panel HTML: gesture pictograms', () => {
     });
   }
 });
+
+describe('panel commands: proposals, groups and generation', () => {
+  it('keeps the decision, group operation and generation fields, each validated, and drops the malformed ones', async () => {
+    const { commandOf } = await import('../../src/recording/recorder-panel.js');
+    expect(commandOf({ type: 'assertion-decide', id: 'p3', decision: 'ACCEPT' })).toEqual({
+      type: 'assertion-decide',
+      id: 'p3',
+      decision: 'ACCEPT',
+    });
+    expect(commandOf({ type: 'assertion-decide', id: 'p3', decision: 'DROP TABLE' })).toEqual({
+      type: 'assertion-decide',
+      id: 'p3',
+    });
+    expect(
+      commandOf({ type: 'group', op: 'create', name: '  Création de la demande ', stepIds: ['s1', 's2'] }),
+    ).toEqual({ type: 'group', op: 'create', name: 'Création de la demande', stepIds: ['s1', 's2'] });
+    expect(commandOf({ type: 'group', op: 'move-group', groupId: 'g1', direction: 'up' })).toEqual({
+      type: 'group',
+      op: 'move-group',
+      groupId: 'g1',
+      direction: 'up',
+    });
+    // Une liste avec une entrée mal formée est ignorée en bloc ; un identifiant de groupe hors format aussi.
+    expect(commandOf({ type: 'group', op: 'detach', stepIds: ['s1', '../x'], groupId: 'nope' })).toEqual({
+      type: 'group',
+      op: 'detach',
+    });
+    expect(commandOf({ type: 'generate', formats: ['yaml', 'java'], groupIds: ['g2'], force: true })).toEqual(
+      {
+        type: 'generate',
+        formats: ['yaml', 'java'],
+        groupIds: ['g2'],
+        force: true,
+      },
+    );
+    expect(commandOf({ type: 'generate', formats: ['yaml', 'rust'] })).toEqual({ type: 'generate' });
+  });
+});

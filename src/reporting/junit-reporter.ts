@@ -1,3 +1,4 @@
+import type { AssertionResult } from '../quality/model.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ExplorationResult } from '../model/exploration-result.js';
@@ -107,6 +108,51 @@ function stepDetails(step: FlowStepReport): string {
   ].join('\n');
 }
 
+/**
+ * UNE ASSERTION MÉTIER exécutée (FlowQualityReport) : PASS → réussi ; FAIL → failure ; BLOCKED,
+ * INCONCLUSIVE, UNVERIFIABLE → skipped avec le motif (le format ne sait pas dire « non concluant » ;
+ * le détail reste dans result.json / index.html). Jamais un succès par défaut.
+ */
+function assertionCase(flow: FlowRunReport, assertion: AssertionResult): Case {
+  const base = {
+    name: `assertion ${assertion.id} — ${assertion.description}`,
+    classname: `qa-crawler.assertions.${slug(flow.name)}`,
+    timeMs: assertion.durationMs,
+  };
+  const body = [
+    `status: ${assertion.status}`,
+    `kind: ${assertion.kind}`,
+    `criticality: ${assertion.criticality}${assertion.mandatory ? ' (mandatory)' : ''}`,
+    `expected: ${assertion.expected}`,
+    `observed: ${assertion.observed}`,
+    ...assertion.reasons.map((reason) => `reason: ${reason}`),
+    ...(assertion.source ? [`source: ${assertion.source}`] : []),
+    ...(assertion.evidence.length > 0 ? [`evidence: ${assertion.evidence.join(', ')}`] : []),
+  ].join('\n');
+  switch (assertion.status) {
+    case 'PASS':
+      return { ...base, outcome: 'passed' };
+    case 'FAIL':
+      return {
+        ...base,
+        outcome: 'failure',
+        type: assertion.mandatory ? 'FAIL' : 'FAIL_OPTIONAL',
+        message: assertion.reasons[0] ?? `expected ${assertion.expected}, observed ${assertion.observed}`,
+        body,
+      };
+    case 'BLOCKED':
+    case 'INCONCLUSIVE':
+    case 'UNVERIFIABLE':
+      return {
+        ...base,
+        outcome: 'skipped',
+        type: assertion.status,
+        message: `${assertion.status}: ${assertion.reasons[0] ?? 'not verified'}`,
+        body,
+      };
+  }
+}
+
 function flowSuite(flow: FlowRunReport): Suite {
   return {
     name: flow.name,
@@ -117,8 +163,13 @@ function flowSuite(flow: FlowRunReport): Suite {
       ...(flow.businessProof
         ? [['qa-crawler.businessProof', flow.businessProof.status] as [string, string]]
         : []),
+      ...(flow.quality ? [['qa-crawler.businessVerdict', flow.quality.verdict] as [string, string]] : []),
     ],
-    cases: flow.steps.map((step) => stepCase(flow, step)),
+    // Les étapes, puis les assertions métier réellement exécutées par le rejeu (jamais une assertion seulement générée).
+    cases: [
+      ...flow.steps.map((step) => stepCase(flow, step)),
+      ...(flow.quality?.assertions ?? []).map((assertion) => assertionCase(flow, assertion)),
+    ],
   };
 }
 
