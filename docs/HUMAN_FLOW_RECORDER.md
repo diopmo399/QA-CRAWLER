@@ -20,24 +20,27 @@ npm run qa -- record --help
 
 Deux surfaces, qui ne sont **jamais** enregistrées :
 
-1. **Le bandeau** en bas à droite de la page : `● REC`, minuteur, nombre d'actions,
-   **Point de contrôle**, **Pause / Reprendre**, **↶ Annuler**, **■ Arrêter**, et une notification
-   discrète après chaque action (`✓ Action enregistrée — Cliquer sur "Continuer"`, qui disparaît
-   seule). Il vit dans un shadow root fermé (`data-qa-crawler-overlay`) : ni capturé, ni observé.
-   **Il ne cache pas l'application** : la poignée **⠿** le glisse (il se range dans le coin le plus
-   proche : en haut ou en bas, à gauche ou à droite) et **–** le réduit à une pastille
-   `● REC 00:42 ■ Arrêter ▢`. Sa place et sa taille suivent les pages ; ni le glisser ni la
+1. **La barre** en bas à droite de la page, sombre : poignée, point rouge et chrono, nombre
+   d'actions, **Ajouter une vérification** (un point de contrôle), **Annuler la dernière action**,
+   **Pause / Reprendre** (icônes, nommées pour les lecteurs d'écran), **Arrêter**, et une notification
+   blanche discrète après chaque action (`✓ Action enregistrée · Cliquer sur "Continuer"`, qui
+   disparaît seule). Elle vit dans un shadow root fermé (`data-qa-crawler-overlay`) : ni capturée, ni
+   observée. Ses polices (IBM Plex) sont intégrées au script et ajoutées sous un nom propre à
+   QA-CRAWLER : aucune feuille de style de l'application n'est touchée, rien ne vient du réseau.
+   **Elle ne cache pas l'application** : la poignée la glisse (elle se range dans le coin le plus
+   proche : en haut ou en bas, à gauche ou à droite) et **–** la réduit à une pastille sombre
+   `● 00:42` qui la rouvre. Sa place et sa taille suivent les pages ; ni le glisser ni la
    réduction ne sont des actions enregistrées.
 2. **La fenêtre « QA-CRAWLER Recorder »** (`recording.panel: true`), une fenêtre à part (un contexte
    séparé du navigateur : ni cookies, ni scripts partagés avec l'application).
 
-| Geste                                  | Bandeau / fenêtre                 | Terminal                                |
-| -------------------------------------- | --------------------------------- | --------------------------------------- |
-| Arrêter                                | **■ Arrêter**                     | Entrée, Ctrl+C, ou fermer le navigateur |
-| Point de contrôle (« vérifier ici »)   | **Point de contrôle** (libellé)   | `c <libellé>` + Entrée                  |
-| Pause / reprise                        | **⏸ Pause** / **▶ Reprendre**     | `p` + Entrée                            |
-| Retirer la dernière action             | **↶ Annuler**                     |                                         |
-| Dégager un bouton caché par le bandeau | **⠿** (glisser) / **–** (réduire) |                                         |
+| Geste                                | Bandeau / fenêtre                   | Terminal                                 |
+| ------------------------------------ | ----------------------------------- | ---------------------------------------- |
+| Arrêter                              | **Arrêter**                         | Entrée, Ctrl+C, ou fermer le navigateur  |
+| Point de contrôle (« vérifier ici ») | **Ajouter une vérification**        | `c <libellé>` + Entrée (avec un libellé) |
+| Pause / reprise                      | **Pause** / **Reprendre**           | `p` + Entrée                             |
+| Retirer la dernière action           | **Annuler la dernière**             |                                          |
+| Dégager un bouton caché par la barre | poignée (glisser) / **–** (réduire) |                                          |
 
 ### La fenêtre du recorder
 
@@ -45,23 +48,27 @@ Deux surfaces, qui ne sont **jamais** enregistrées :
 USER ACTION → RECORDER → ACTION VALIDATION → RECORDED FLOW → REPLAY → (ANALYSIS → INTENT)
 ```
 
-- **Disposition** : en-tête (QA-CRAWLER, **Mode développeur**) · barre d'état (`● Enregistrement en
-cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annuler) · onglets
-  **Enregistrement / Analyse / Aperçu** · trois colonnes sur un grand écran — **Parcours enregistré**
-  (et la qualité), **Aperçu de l'application**, **Détails de l'action** — deux puis une sur une
-  fenêtre plus étroite (l'aperçu passe dans son onglet) · **Résumé du recording** en bas (actions,
-  confirmées, ambiguës, échecs, durée, **Rejouer le parcours**, **Sauvegarder le flow**).
-- **Disposition** (`recording.panelLayout: full | compact | docked`, bascule **▭ Compact / ▣ Complet**
-  dans la fenêtre, choix gardé d'une session à l'autre) :
+- **Disposition** : un **en-tête unique** — « QA-CRAWLER / nom du flow », une pastille d'état
+  (enregistrement en rouge avec le chrono, pause en ambre, terminé en vert, rejeu interrompu en
+  rouge), les chiffres clés (actions, requêtes reliées ou actions à vérifier, qualité), puis les
+  actions de la phase : **Annuler la dernière / Pause / Arrêter** pendant l'enregistrement,
+  **Fermer / Rejouer / Sauvegarder le flow** en revue ; à droite, le mode développeur, la disposition
+  et le thème · des **onglets soulignés** **Parcours / Réseau / Données de test** (revue) **/ Analyse**,
+  avec leurs comptes · deux colonnes : le **parcours enregistré** à gauche, l'**aperçu en direct** et
+  l'**inspecteur** de l'action à droite (une seule colonne sur une fenêtre étroite : l'aperçu passe
+  dans son onglet). Polices IBM Plex Sans et Mono intégrées (`assets/fonts`, SIL OFL 1.1), thème
+  clair et sombre ; la fenêtre ne charge rien depuis le réseau.
+- **Disposition** (`recording.panelLayout: full | compact | docked`, bascule **Compact / Complet**
+  dans les outils de l'en-tête, choix gardé d'une session à l'autre) :
   - **Complète** (cockpit) : les actions sont **groupées** par écran pendant l'enregistrement, puis par
-    étape métier dans la revue. La recherche reconnue en direct s'affiche en **puce** dans la barre
-    d'état (« recherche détectée : … → companyName CONTAINS », provisoire).
+    étape métier dans la revue. La recherche reconnue en direct s'affiche en tête du parcours
+    (« recherche détectée : … → companyName CONTAINS », provisoire).
   - **Compacte** (mini-dock sombre, étroit) : état et chrono, la recherche détectée, les dernières
     actions et les ambiguïtés à résoudre tout de suite, Pause / Reprendre / Arrêter / Annuler.
   - **Dock dans la page** (`docked`) : **une seule fenêtre Chromium pendant l'enregistrement**. Le
     bandeau de l'application devient le mini-dock, collé au coin choisi (déplaçable, repliable en
     pastille) : état et chrono, compteurs ✓ ⚠ ✕, les trois dernières actions avec leur statut en
-    direct, Pause / Annuler / Arrêter. Une action ambiguë y porte **Résoudre**, et **▣ Fenêtre** ouvre
+    direct, Pause / Annuler / Arrêter. Une action ambiguë y porte **Résoudre**, et **Fenêtre** ouvre
     le cockpit complet à la demande (le fermer rend le dock seul) ; la revue après l'arrêt ouvre la
     fenêtre d'elle-même. Le dock vit dans le shadow root fermé du bandeau (jamais capturé, jamais
     recouvert par l'application, réinjecté à chaque navigation, rien du réseau) ; Node lui pousse les
@@ -69,14 +76,22 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
     commandes que la fenêtre). Les points de contrôle, les détails d'une action et l'aperçu restent
     dans la fenêtre.
   - La revue après l'arrêt s'ouvre toujours en disposition complète.
-- **Revue en étapes métier** : au-dessus du détail, des **cartes numérotées** (Créer, Retrouver,
-  Ouvrir…) avec leur statut, leur confiance, les actions enregistrées qu'elles regroupent et ce qui a
-  été observé. Le détail action par action reste dessous.
+- **Revue en étapes métier** : le parcours s'intitule « Le parcours en étapes métier » ; chaque étape
+  (Créer, Retrouver, Ouvrir…) ouvre son groupe d'actions par un cercle numéroté, son titre, sa preuve
+  (« POST /api/… → 201 ») et une pastille de statut et de confiance. Après un rejeu, chaque ligne dit
+  **Rejouée**, **Échec** ou **Non rejouée** ; le bandeau sous les onglets donne le résultat.
 - **Inspecteur** : une recherche dans le parcours et un bouton **À vérifier seulement** (ambiguës et
-  échecs). Le détail d'une action montre la **requête liée** : API, statut, opération, lien
+  échecs). Pendant l'enregistrement, il suit la dernière action ; en revue, l'action choisie (ou
+  l'étape où le rejeu s'est arrêté), avec trois sous-onglets **Détails / Cible / Réseau**. Détails :
+  l'élément, son emplacement, son repérage (« Libellé du champ · stable »), la donnée ; la **source
+  de la valeur** (résumé, **Modifier** ouvre l'éditeur) ; **Corriger dans le navigateur**, **Modifier
+  la ligne**, **Retirer l'étape** ; les détails techniques repliés. Cible : la cible actuelle, les
+  sélecteurs (copiables) et la validation point par point. Réseau : la **requête liée** : API, statut, opération, lien
   (`TRIGGERED`, `CANDIDATE`, ou `VALUE_SENT` quand la valeur saisie part dans un critère), les critères
   « libellé → propriété opérateur · logique », le tri, la pagination et les options.
-- **Analyse** : les **intents métier en tête**. Une recherche s'affiche en tableau (champ de l'écran,
+- **Réseau** (onglet) : les requêtes métier reliées, étape par étape (en direct : le compteur
+  provisoire de l'analyse HTTP). **Données de test** (onglet, revue) : la lignée des variables.
+- **Analyse** : la **qualité du recording** (score et vérifications), puis les **intents métier**. Une recherche s'affiche en tableau (champ de l'écran,
   propriété API, opérateur, valeur, état) avec une jauge de confiance, des jetons (logique, tri,
   paramètres techniques, valeur issue de la création) et les preuves. L'arbre de l'application et le
   technique viennent ensuite.
@@ -87,19 +102,35 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   d'écran, aucun style injecté) ; choisir une étape dont l'élément est visible ne fait pas défiler
   l'application, un élément hors écran défile au plus près (jamais recentré) ; la validation des
   cibles lit les éléments sans y écrire le moindre attribut.
-  **⧉ Détacher** ouvre l'aperçu dans sa propre fenêtre (**⛶ Plein écran** possible, par exemple
-  sur un second écran) : la fenêtre principale garde le parcours, les détails, la qualité et les
-  commandes, sur deux colonnes plus larges. **↩ Rattacher** (ou fermer la fenêtre de l'aperçu) le
+  **En revue** (l'application est fermée), l'aperçu montre **l'écran de l'étape choisie** : une image
+  prise pendant l'enregistrement, juste après chaque action (quand l'écran s'est posé : 600 ms sans
+  nouveau changement), avec le cadre de son élément s'il était encore visible — mesuré sans rien
+  afficher dans l'application. Le titre dit « Écran à l'étape _n_ ». Ces images restent **en mémoire
+  seulement** (jamais écrites, jamais journalisées), 60 au plus (les plus anciennes s'effacent).
+  Pour un **clic**, l'aperçu montre d'abord l'écran **avant le clic**, le bouton encadré là où il
+  était au moment de l'appui ; **Avant le clic / Après** passe d'une image à l'autre. Cette image est
+  la dernière prise avant l'appui, et **seulement si la page n'a pas changé depuis** (structure ou
+  texte, hors zones qui bougent sans cesse : région annoncée, minuterie, barre de progression, dessin,
+  vidéo) : un écran pris pendant un chargement n'est jamais montré pour un clic fait une fois la page
+  chargée. Le cadre n'est posé que si la page n'avait pas défilé et que la fenêtre avait la même
+  taille. Sinon, seule l'image d'après est proposée. Pour que l'image d'avant existe, l'aperçu est
+  tenu à jour : une image de la page est prise dès l'ouverture de l'enregistrement, puis chaque fois
+  que la page change sans action humaine (un chargement qui se termine, une liste qui arrive), une
+  fois posée (500 ms sans changement), au plus une fois par seconde, jamais pendant un geste (moins
+  d'une seconde après le dernier). Le cadre suit l'image dans tous les affichages : vue normale, plein
+  écran (image réduite et centrée) et fenêtre détachée.
+  **Détacher** ouvre l'aperçu dans sa propre fenêtre (**Plein écran** possible, par exemple
+  sur un second écran) : la fenêtre principale garde le parcours, l'inspecteur et les commandes.
+  **Rattacher** (ou fermer la fenêtre de l'aperçu) le
   remet à sa place. La fenêtre détachée suit l'élément sélectionné dans la fenêtre principale.
-- **Détails de l'action** : étape _n_ sur _N_, informations générales (type, élément, texte, rôle),
-  sélecteurs et attributs (copiables), et la **validation point par point** — action confirmée,
-  élément retrouvé (_n_ correspondance(s)), sélecteur stable, navigation déclenchée, effets observés :
-  uniquement ce qui a vraiment été vérifié — puis les logs techniques.
+- **Validation point par point** (sous-onglet Cible) — action confirmée, élément retrouvé
+  (_n_ correspondance(s)), sélecteur stable, navigation déclenchée, effets observés : uniquement ce
+  qui a vraiment été vérifié — puis les événements bruts dans les détails techniques.
 - **Timeline** : une ligne par action **réellement faite**, en mots simples (« Cliquer sur
   "Continuer" », « Saisir "Alex" dans "Prénom" », « Cocher "J'accepte les conditions" »,
-  « Sélectionner "Québec" dans "Province" »). La ligne apparaît **dès la capture** (● en cours),
-  puis la validation de la cible, en arrière-plan, la passe à ✓ confirmée, ⚠ ambiguë, ✕ non
-  retrouvée (ou ○ non vérifiable). L'IA n'est jamais sur ce chemin. Une navigation est l'effet
+  « Sélectionner "Québec" dans "Province" ») : la valeur dans une puce, le champ en gras. La ligne
+  apparaît **dès la capture** (« Vérification… »), puis la validation de la cible, en arrière-plan,
+  la passe à confirmée, ambiguë, échec (ou non vérifiable) — un point de couleur et un mot. L'IA n'est jamais sur ce chemin. Une navigation est l'effet
   du clic qui l'a causée (« → /done »), jamais une ligne à part.
 - **Valeurs** : montrées dans la fenêtre seulement, en mémoire (jamais écrites) ; un mot de passe,
   un code ou une carte s'affiche toujours `••••`.
@@ -110,8 +141,8 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
 - **Ambiguïté** : jamais masquée ni résolue en silence. Le choix s'affiche tout de suite sous
   l'action : les éléments qui correspondent, **l'élément touché présélectionné** (marqué « touché »).
   Si la validation ne sait pas lequel des éléments trouvés est le bon, l'élément touché est proposé
-  tel quel (« l'élément que vous avez touché ») : il y a toujours de quoi valider. **👁 Montrer dans
-  la page** le met en évidence, **✓ Valider cet élément** le confirme. Seul l'élément réellement
+  tel quel (« l'élément que vous avez touché ») : il y a toujours de quoi valider. **Montrer dans
+  la page** le met en évidence, **Valider cet élément** le confirme. Seul l'élément réellement
   touché peut être confirmé (en choisir un autre enregistrerait une action jamais faite : il faut
   annuler et refaire). **Ignorer** la laisse
   signalée (`AMBIGUITY_LEFT_BY_USER`, à vérifier au rejeu). La décision est gardée sur
@@ -121,8 +152,9 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   de l'application en **mode sélection** : un bandeau le dit (« Mode sélection · cliquez l'élément
   qui remplace « … » · Échap pour annuler »), l'élément survolé s'encadre avec sa pastille
   (rôle · nom · test id · occurrences), le clic désigne l'élément **sans être transmis à
-  l'application**, Échap annule. La fenêtre montre alors **Ancienne cible → Nouvelle cible**, les
-  traits de l'élément (rôle, nom accessible, texte, testId, CSS de repli, contexte), **l'ordre de
+  l'application**, Échap annule. L'inspecteur devient la carte **Corriger la cible** : **Avant** /
+  **Après** côte à côte, « Identifier la ligne par » quand la cible est dans un tableau, puis, repliés,
+  les traits de l'élément (rôle, nom accessible, texte, testId, CSS de repli, contexte) et **l'ordre de
   résolution au rejeu** (le même résolveur que l'enregistrement : rôle + nom, libellé, testId,
   CSS…) puis **Tester l'étape** (l'élément est encadré de nouveau), **Annuler**, **Valider la
   correction**. Pendant l'enregistrement, la correction est posée sur les événements bruts de
@@ -152,7 +184,7 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   - **Donnée du run** : une donnée du jeu de test produite avant l'étape (`${testData:clé}`) ;
   - **Nouvelle donnée de test** (revue) : une donnée créée à partir de la cellule (nom `objet.attribut`,
     libre, jamais sensible), ajoutée à `test-data.yaml` — on y change la valeur sans toucher au flow ;
-  - **La cellule contient la valeur** : critère « contient » (`~`) au lieu de « égale ».
+  - **Comparaison** : « contient » (`~`) ou « égale ».
 
   **Aperçu dans la page** cherche la ligne ainsi définie dans la page ouverte (session de correction ou
   page de l'enregistrement) et dit combien de lignes correspondent (1, plusieurs : ajoutez une colonne,
@@ -164,34 +196,34 @@ cours · Actif`, durée, nombre d'actions, Pause / Reprendre / Arrêter / Annule
   Node vérifie chaque choix (colonne de la ligne, donnée proposée, nom libre et non sensible) ; un choix
   refusé ne touche ni au flow ni au jeu de test.
 
-- **Résumé et qualité** : « ✓ Recording valide » ou « ⚠ nécessite une vérification » ; la qualité
-  est calculée sur des faits (actions confirmées, sélecteurs stables, cibles uniques, aucun
+- **Qualité** (en-tête et onglet Analyse) ; une ligne « nécessite une vérification » en tête du
+  parcours quand une action est ambiguë ou en échec ; la qualité est calculée sur des faits (actions confirmées, sélecteurs stables, cibles uniques, aucun
   élément retrouvé seulement après un nouveau rendu, aucun doublon, aucune erreur) — jamais estimée.
-- **↶ Annuler** retire la dernière action **de l'enregistrement** : ses événements bruts (et ce
+- **Annuler la dernière** retire la dernière action **de l'enregistrement** : ses événements bruts (et ce
   qu'elle a causé) sont marqués `undone` dans `raw-recording.json` et exclus du flow
   (`USER_UNDONE_ACTIONS`). L'application n'est pas remise en arrière.
 - **Pause** : la page reste utilisable, rien n'est enregistré.
 - **Mode Utilisateur / Développeur** : en développeur, chaque ligne montre ses détails techniques
   (`event`, `selector`, `role`, `frame`, `rawEventId`, `validation`…).
-- **Onglets Enregistrement / Analyse** : l'analyse (intents détectés avec leur confiance et
+- **Onglets Parcours / Analyse** : l'analyse (intents détectés avec leur confiance et
   « Voir pourquoi », constats de l'audit du flow, suggestions de l'IA) n'apparaît **que** dans son
   onglet, après l'arrêt, et ne modifie jamais l'enregistrement.
 
 ### Après « Arrêter » : la revue
 
-`Enregistrement terminé ✓` — actions, confirmées, ambiguïtés, durée — puis :
+La pastille passe à `✓ Enregistrement terminé` — actions, à vérifier, qualité — puis :
 
 La **fenêtre de l'application se ferme dès l'arrêt** ; seule la fenêtre du recorder reste ouverte.
-**▶ Rejouer** ouvre une fenêtre neuve (session propre, comme un vrai rejeu), refermée à la fin :
+**Rejouer** ouvre une fenêtre neuve (session propre, comme un vrai rejeu), refermée à la fin :
 jamais deux applications ouvertes en même temps.
 
-- **▶ Rejouer** (conseillé) : le flow est rejoué par le Dry Run (même SafetyPolicy), avec la
-  progression étape par étape ; ensuite « ✓ Replay réussi — 5 / 5 actions exécutées » ou
-  « ✕ Replay interrompu — Étape 2 sur 5 — Cliquer sur "Continuer" — Cause : élément introuvable »,
-  le détail technique dans **Voir les détails**, puis **Modifier l'étape** / **↻ Recommencer**.
-- **✎ Modifier** : retirer une étape d'action (et les vérifications qui en dépendent) ;
-  `generated.flow.yaml`, `.feature` et `recorded-flow.json` sont régénérés.
-- **Corriger dans le navigateur** (depuis la carte « Replay interrompu » ou les détails d'une
+- **Rejouer** (conseillé) : le flow est rejoué par le Dry Run (même SafetyPolicy), avec la
+  progression étape par étape ; ensuite un bandeau vert « Rejeu réussi · 5 / 5 actions exécutées » ou
+  rouge « Rejeu interrompu · Étape 2 sur 5 · Cliquer sur "Continuer" · Cause : élément introuvable »,
+  le détail technique dans **Voir les détails**, puis **Modifier l'étape** / **Recommencer**.
+- **Retirer l'étape** (inspecteur) : retirer une étape d'action (et les vérifications qui en
+  dépendent) ; `generated.flow.yaml`, `.feature` et `recorded-flow.json` sont régénérés.
+- **Corriger dans le navigateur** (depuis le bandeau « Rejeu interrompu » ou les détails d'une
   étape) : **le même chemin est suivi** — l'URL d'une étape ne suffit pas, son écran dépend des
   étapes précédentes (dossier ouvert, fenêtre, assistant, donnée créée par le run). Une **session de
   correction** (`src/recording/correction-session.ts`) rejoue les étapes 1 à N-1 avec le moteur de
@@ -1143,7 +1175,7 @@ recording:
   language: fr # langue du .feature (défaut : report.language)
   mode: current # sources de capture : current | playwright | hybrid
   playwrightRecording: false # active playwright / hybrid (jamais d'interception)
-  overlay: true # le bandeau ● REC (minuteur, Pause, Annuler, Arrêter, notifications)
+  overlay: true # la barre (chrono, Pause, Annuler, Arrêter, notifications)
   panel: true # la fenêtre « QA-CRAWLER Recorder » (timeline, détails, ambiguïtés, revue, analyse)
   panelPreview: true # l'aperçu de l'application dans la fenêtre (image en mémoire, jamais écrite)
   panelLayout: full # full (cockpit) | compact (mini-dock dans sa fenêtre) | docked (mini-dock dans la page, une seule fenêtre)

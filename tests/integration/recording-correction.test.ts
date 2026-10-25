@@ -84,7 +84,10 @@ describe('Correction manager — the target of an action is corrected in the bro
         await page.waitForTimeout(400);
         // Ses détails : le bouton « Corriger dans le navigateur ».
         await row(panel, /Cliquer sur "Action 7"/).click();
-        await panel.getByText(/Correction de l'étape \d+/).waitFor();
+        await panel
+          .locator('#details')
+          .getByRole('button', { name: 'Corriger dans le navigateur' })
+          .waitFor();
         await panel.getByRole('button', { name: 'Corriger dans le navigateur' }).click();
         // La page passe en mode sélection ; la fenêtre le dit.
         await pickingIn(page, true);
@@ -104,7 +107,9 @@ describe('Correction manager — the target of an action is corrected in the bro
           () => (window as unknown as { __qaCrawlerLastRect?: { width: number } }).__qaCrawlerLastRect,
         );
         // La proposition : ancienne cible → nouvelle cible, ordre de résolution, Valider.
-        await panel.getByText('NOUVELLE CIBLE').waitFor();
+        await panel.getByText('Après', { exact: true }).waitFor();
+        // L'ordre de résolution et les traits sont repliés : les déplier pour les lire.
+        await panel.locator('#details .ctech summary').click();
         seen.proposalText = await panel.locator('#details .correction').innerText();
         await panel.getByRole('button', { name: 'Valider la correction' }).click();
         await row(panel, /Cible corrigée par l'utilisateur/).waitFor();
@@ -116,18 +121,21 @@ describe('Correction manager — the target of an action is corrected in the bro
         await panel.getByRole('button', { name: 'Corriger dans le navigateur' }).click();
         await pickingIn(page, true);
         await pickWithMouse(page, 'Action 8');
-        await panel.getByText('NOUVELLE CIBLE').waitFor();
+        await panel.getByText('Après', { exact: true }).waitFor();
         await panel.getByRole('button', { name: 'Valider la correction' }).click();
         await row(panel, /Cible corrigée par l'utilisateur/).waitFor();
         await page.waitForTimeout(400);
       },
       reviewDriver: async ({ panel, recorder }) => {
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         seen.reviewRow = await row(panel, /Action 7|Action 8/).innerText();
         // L'application change : « Action 8 » devient « Renamed 8 » → le rejeu échoue sur l'étape corrigée.
         app.renamed = 8;
         await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
-        await panel.getByText('✕ Replay interrompu').waitFor({ timeout: 180_000 });
+        await panel
+          .locator('#review')
+          .getByText('Rejeu interrompu', { exact: true })
+          .waitFor({ timeout: 180_000 });
         seen.failureText = await panel.locator('#review').innerText();
         // Depuis la carte d'échec : corriger dans le navigateur → l'application est rouverte en mode sélection.
         await panel.locator('#review').getByRole('button', { name: 'Corriger dans le navigateur' }).click();
@@ -147,7 +155,7 @@ describe('Correction manager — the target of an action is corrected in the bro
         seen.pathFollowed = await page.getByLabel('First name').inputValue();
         await pickWithMouse(page, 'Renamed 8');
         await pickingIn(page, false);
-        await panel.getByText('NOUVELLE CIBLE').waitFor();
+        await panel.getByText('Après', { exact: true }).waitFor();
         seen.reviewProposal = await panel.locator('#details .correction').innerText();
         await panel.getByRole('button', { name: "Tester l'étape" }).click();
         await panel.getByRole('button', { name: 'Valider la correction' }).click();
@@ -155,7 +163,10 @@ describe('Correction manager — the target of an action is corrected in the bro
         seen.reviewHistory = await panel.locator('#details .correction').innerText();
         // Le flow corrigé se rejoue : vert.
         await panel.getByRole('button', { name: 'Rejouer le parcours' }).click();
-        await panel.getByText(/✓ Replay réussi|✕ Replay interrompu/).waitFor({ timeout: 180_000 });
+        await panel
+          .locator('#review')
+          .getByText(/Rejeu réussi|Rejeu interrompu/)
+          .waitFor({ timeout: 180_000 });
         seen.secondReplay = await panel.locator('#review').innerText();
         await panel.getByRole('button', { name: 'Fermer' }).click();
       },
@@ -181,9 +192,9 @@ describe('Correction manager — the target of an action is corrected in the bro
 
   it('the proposal shows the old target, the new one (role + name), the traits and the resolution order', () => {
     const text = String(seen.proposalText);
-    expect(text).toContain('ANCIENNE CIBLE');
-    expect(text).toContain('NOUVELLE CIBLE');
-    expect(text).toContain('button "Action 8"');
+    expect(text).toContain('Avant');
+    expect(text).toContain('Après');
+    expect(text).toContain('Bouton Action 8');
     expect(text).toContain('Ordre de résolution au rejeu');
     expect(text).toContain('rôle + nom accessible');
     expect(text).toContain('Valider la correction');
@@ -191,7 +202,7 @@ describe('Correction manager — the target of an action is corrected in the bro
 
   it('during the recording, the corrected action becomes ✓ and the generated flow targets the new element', async () => {
     expect(String(seen.rowText)).toContain('Cible corrigée par l\'utilisateur : button "Action 8"');
-    expect(String(seen.afterApply)).toContain('CORRIGÉE');
+    expect(String(seen.afterApply)).toContain('Corrigée');
     expect(String(seen.afterApply)).toContain("Restaurer l'original");
     const flow = await steps();
     const click = flow.find((step) => step.step.kind === 'click');
@@ -213,16 +224,16 @@ describe('Correction manager — the target of an action is corrected in the bro
 
   it('in the review, the previous steps are replayed first (same path), the failed step is corrected in that page, then the replay passes', () => {
     expect(String(seen.reviewRow)).toContain("Cible corrigée par l'utilisateur");
-    expect(String(seen.failureText)).toContain('✕ Replay interrompu');
+    expect(String(seen.failureText)).toContain('Rejeu interrompu');
     expect(seen.preparingShown).toBe(true);
     expect(String(seen.reviewPageUrl)).toContain('/form');
     expect(seen.reviewPageHasBar).toBe(true);
     // La preuve que le chemin a été suivi : la saisie de l'étape 1 (une donnée de test générée au rejeu,
     // comme dans un vrai run) est déjà dans la page rouverte.
     expect(String(seen.pathFollowed)).toMatch(/^\S{2,}/);
-    expect(String(seen.reviewProposal)).toContain('button "Renamed 8"');
+    expect(String(seen.reviewProposal)).toContain('Bouton Renamed 8');
     expect(String(seen.reviewHistory)).toContain('Historique des corrections');
-    expect(String(seen.secondReplay)).toContain('✓ Replay réussi');
+    expect(String(seen.secondReplay)).toContain('Rejeu réussi');
   });
 
   it('the events journal says what was corrected, never a typed value', async () => {

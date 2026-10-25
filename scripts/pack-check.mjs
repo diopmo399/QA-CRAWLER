@@ -1,4 +1,4 @@
-// `npm pack --dry-run` des deux packages : le tarball ne contient que le runtime (dist, domain-packs, bin, README, package.json).
+// `npm pack --dry-run` des deux packages : le tarball ne contient que le runtime (dist, domain-packs, assets, bin, README, package.json).
 import { execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,14 @@ for (const directory of ['packages/core', 'packages/cli']) {
   const bad = files.filter((file) => forbidden.test(file));
   if (bad.length > 0) throw new Error(`${info.name}: files that must not be published: ${bad.join(', ')}`);
   const required = directory.endsWith('core')
-    ? ['dist/index.js', 'dist/cli/cli.js', 'domain-packs/generic.yaml', 'package.json']
+    ? [
+        'dist/index.js',
+        'dist/cli/cli.js',
+        'domain-packs/generic.yaml',
+        'assets/fonts/ibm-plex-sans-latin-400-normal.woff2',
+        'assets/fonts/OFL.txt',
+        'package.json',
+      ]
     : ['bin/qa-crawler.js', 'package.json'];
   for (const file of required)
     if (!files.includes(file)) throw new Error(`${info.name}: ${file} missing from the tarball`);

@@ -59,9 +59,10 @@ describe('Recording — explicit test data binding between steps (recorder windo
         await pause(900);
       },
       reviewDriver: async ({ panel }) => {
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         // 1. La saisie de création : GÉNÉRER une variable nommée par l'humain.
         await stepRow(panel, 'Display label').click();
+        await panel.getByRole('button', { name: 'Modifier la source de la valeur' }).click();
         const block = panel.locator('.databind');
         await block.waitFor();
         ui.createBefore = await block.innerText();
@@ -69,27 +70,35 @@ describe('Recording — explicit test data binding between steps (recorder windo
         await block.locator('input[data-bind-field="variable"]').fill('company.name');
         await block.locator('select[data-bind-field="generator"]').selectOption('company');
         await block.getByRole('button', { name: 'Enregistrer la source' }).click();
-        await block.locator('.dnote.manual').waitFor();
+        await panel
+          .locator('#details .box')
+          .getByText(/Choix explicite/)
+          .waitFor();
         // 2. La saisie de recherche : RÉUTILISER la variable produite à l'étape de création.
         await stepRow(panel, 'Search companies').click();
+        await panel.getByRole('button', { name: 'Modifier la source de la valeur' }).click();
         await panel.locator('.databind').getByLabel('Réutiliser une donnée existante').check();
         const search = panel.locator('.databind');
         ui.searchOptions = await search.locator('.dref').innerText();
         await search.locator('input[name^="dref-"][value="company.name"]').check();
         await search.getByRole('button', { name: 'Enregistrer la source' }).click();
-        await panel.locator('.databind .dnote.manual').waitFor();
-        ui.searchAfter = await panel.locator('.databind').innerText();
+        await panel
+          .locator('#details .box')
+          .getByText(/Choix explicite/)
+          .waitFor();
+        ui.searchAfter = await panel.locator('#details .box').innerText();
         // La carte « Intents métier » suit la liaison : le critère cite la variable choisie, pas la clé abandonnée.
         await panel.getByRole('tab', { name: 'Analyse' }).click();
         await panel.locator('.search').first().waitFor({ timeout: 30_000 });
         ui.searchIntent = await panel.locator('.search').first().innerText();
-        await panel.getByRole('tab', { name: 'Enregistrement' }).click();
+        await panel.getByRole('tab', { name: /^Parcours/ }).click();
         // 3. La première saisie ne peut rien réutiliser (aucune donnée produite avant elle).
         await stepRow(panel, 'Display label').click();
+        await panel.getByRole('button', { name: 'Modifier la source de la valeur' }).click();
         await panel.locator('.databind').getByLabel('Réutiliser une donnée existante').check();
         ui.firstReuse = await panel.locator('.databind').innerText();
-        // 4. La lignée, dans l'onglet Analyse.
-        await panel.getByRole('tab', { name: 'Analyse' }).click();
+        // 4. La lignée, dans l'onglet Données de test.
+        await panel.getByRole('tab', { name: /^Données de test/ }).click();
         await panel.locator('#data-lineage').waitFor({ timeout: 30_000 });
         ui.lineage = await panel.locator('#data-lineage').innerText();
       },

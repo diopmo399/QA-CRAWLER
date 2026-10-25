@@ -117,7 +117,7 @@ describe('In-page dock — one Chromium window while recording, the cockpit on d
       },
       reviewDriver: async ({ panel }) => {
         // La revue a ouvert la fenêtre d'elle-même.
-        await panel.getByText('Enregistrement terminé ✓').waitFor({ timeout: 60_000 });
+        await panel.getByText('Enregistrement terminé', { exact: true }).waitFor({ timeout: 60_000 });
         seen.reviewText = await panel.locator('#timeline').innerText();
         await panel.getByRole('button', { name: 'Fermer' }).click();
       },
