@@ -494,6 +494,9 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Retirer ou changer le sens d'un élément exige la version suivante du contrat ; le serveur
   servirait alors les deux versions le temps de la transition.
 - Le paquet suit sa propre version (`@qa-crawler/core`), indépendante du contrat.
+- Phases 1 à 7 : uniquement des ajouts ; `SDK_API_VERSION` reste `1`. Le flux d'une exploration a
+  gagné deux types d'événements (`flow`, `flow-step`) : un hôte ignore les types qu'il ne connaît pas
+  (l'assistant le fait), comme le prévoit cette règle.
 
 ## Sécurité
 
@@ -525,6 +528,12 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Une exploration à la fois par défaut (`--concurrency`).
 - Chromium seulement.
 - Pas de définitions de steps pour un exécuteur Gherkin externe : le `.feature` se joue avec QA-CRAWLER.
+- Le Flow Studio ne rejoue pas un groupe seul.
+- Le Run Monitor suit les flows et les étapes, pas les groupes métier (absents des événements
+  d'exploration).
+- La comparaison ne compare pas les captures d'écran de deux exécutions.
+- Accessibilité : clavier, annonces et contraste testés composant par composant ; aucun audit axe
+  automatique.
 - Rien n'est publié sur un registre : le SDK fait partie de `@qa-crawler/core`.
 
 ## Tests
