@@ -12,8 +12,8 @@ describe('recorder panel HTML: gesture pictograms', () => {
       const html = recorderPanelHtml(language);
       expect(html.match(/var SVG = \{/g)).toHaveLength(1);
       expect(html.match(/var KIND_SVG = \{/g)).toHaveLength(1);
-      // Les deux rendus d'un geste (timeline, en-tête des détails) passent par kindSvg, jamais par SVG[...].
-      expect(html.match(/kindSvg\(step\.kind\)/g)).toHaveLength(2);
+      // Le rendu d'un geste (la ligne du parcours) passe par kindSvg, jamais par SVG[...].
+      expect(html.match(/kindSvg\(step\.kind\)/g)).toHaveLength(1);
       expect(html).not.toContain('SVG[KIND_ICON[step.kind]');
       const kinds = /var KIND_ICON = \{([^}]*)\}/.exec(html)?.[1] ?? '';
       const icons = [...kinds.matchAll(/:\s*'([a-z]+)'/g)].map((match) => match[1]);

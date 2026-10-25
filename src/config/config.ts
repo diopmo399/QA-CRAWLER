@@ -11,6 +11,7 @@ import { SEVERITIES } from '../model/issue.js';
 import { REPORT_LANGUAGES } from '../reporting/i18n.js';
 import { SCORING_WEIGHT_NAMES, type ScoringWeightName } from '../decision/scoring-weights.js';
 import { flowsSchema } from './flow-schema.js';
+import { businessRuleSchema, qualitySchema, requirementSchema } from './quality-schema.js';
 import { RECOVERY_STRATEGIES } from '../recovery/recovery-model.js';
 import { ACCESSIBILITY_RULES } from '../accessibility/accessibility-checker.js';
 import { LOG_LEVELS } from '../logging/engine-log.js';
@@ -2508,6 +2509,11 @@ export const scenarioSchema = z
     /** Invariants explicites : règles vérifiées sur chaque action, expliquées dans le rapport. */
     invariants: z.array(invariantSchema).default([]),
     propertyTesting: propertyTestingSchema.default({}),
+    /** TRAÇABILITÉ : les exigences (tickets, critères) et les règles métier qui en dérivent. */
+    requirements: z.array(requirementSchema).default([]),
+    businessRules: z.array(businessRuleSchema).default([]),
+    /** Vérification métier : affichage des valeurs, historique des preuves, cohérence automatique. */
+    quality: qualitySchema.default({}),
   })
   .strict();
 

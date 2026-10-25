@@ -998,13 +998,20 @@ function verdictOf(
     );
     return { status: 'PASSED_WITH_RECOVERY', reasons };
   }
-  const proofs = flows.map((flow) => flow.businessProof?.status).filter((status) => status !== undefined);
+  // Les assertions métier déclarées et toutes vérifiées (PASS) prouvent le résultat du flow : elles
+  // valent la preuve structurelle CREATE → SEARCH → OPEN.
+  const byAssertions = flows.filter((flow) => flow.quality?.verdict === 'PASS').length;
+  const proofs = flows
+    .map((flow) => (flow.quality?.verdict === 'PASS' ? 'PROVEN' : flow.businessProof?.status))
+    .filter((status) => status !== undefined);
   const proven = proofs.filter((status) => status === 'PROVEN').length;
   const applicable = proofs.filter((status) => status !== 'NOT_APPLICABLE').length;
   if (applicable > 0 && proven === applicable) {
     // La preuve par les données l'emporte sur un effet d'écran non vérifié : le doute est noté, pas le verdict.
     reasons.push(
-      `every flow passed as recorded and the business proof is made (${String(proven)} CREATE → SEARCH → OPEN proven)`,
+      byAssertions > 0
+        ? `every flow passed as recorded and the business proof is made (${String(proven)} proven, ${String(byAssertions)} by declared business assertions)`
+        : `every flow passed as recorded and the business proof is made (${String(proven)} CREATE → SEARCH → OPEN proven)`,
     );
     if (doubt) reasons.push(`${doubt} — the data proof outweighs it`);
     return { status: 'PROVEN', reasons };
