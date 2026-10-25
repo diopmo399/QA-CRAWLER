@@ -1,0 +1,16 @@
+# The flows this example project was generated from (the demo back-office of `npm run demo:server`, port 4174).
+flows:
+  - name: create a request
+    description: the wizard opens and accepts a generated title
+    startAt: /dossiers
+    steps:
+      - click: { role: link, name: Nouveau dossier }
+      - expect: { text: Titre }
+      - fill: { label: Titre, value: { testData: request.title } }
+      - click: { role: button, name: Suivant }
+      - screenshot: after-first-step
+      - manual: check the layout of the second step
+  - name: a sentence interpreted at run time
+    startAt: /dossiers
+    steps:
+      - auto: { sentence: ouvrir le premier dossier }

@@ -64,6 +64,22 @@ export {
   generatePlaywrightTest,
   type GeneratedTest,
 } from './platform/playwright-test-generator.js';
+export {
+  generateJavaJUnitPlaywrightProject,
+  writeJavaProject,
+  defaultPlaywrightJavaVersion,
+  JAVA_GENERATOR_VERSIONS,
+  javaLocator,
+  javaValue,
+  javaText,
+  javaString,
+  javaIdentifier,
+  type GeneratedJavaProject,
+  type GeneratedJavaTest,
+  type GeneratedFile,
+  type JavaGenerationOptions,
+  type JavaGeneratorVersions,
+} from './platform/java-junit-playwright-generator.js';
 export { analyzeActors, type ActorAnalysis } from './platform/actor-analysis.js';
 export {
   runExplorationJobs,
@@ -72,6 +88,13 @@ export {
   type ParallelRunReport,
 } from './platform/exploration-jobs.js';
 export { renderQaJobManifest, type QaJobManifestOptions } from './platform/kubernetes-manifest.js';
+export {
+  JUnitReporter,
+  junitXmlOf,
+  junitSuitesOf,
+  type JUnitOptions,
+  type JUnitSummary,
+} from './reporting/junit-reporter.js';
 export {
   renderPullRequestComment,
   GitHubPullRequestReporter,

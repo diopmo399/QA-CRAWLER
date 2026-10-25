@@ -6,6 +6,32 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Rapport JUnit XML** (`src/reporting/junit-reporter.ts`, `report.junit`, option `--junit`,
+  `reporting.format: [html, json, junit]` dans la configuration de projet). Un reporter de plus,
+  désactivé par défaut, qui ne lit que le résultat du run et ne change rien aux rapports existants :
+  `reports/junit.xml` avec une suite par flow et un cas par étape (`FAILED` → `failure`, `BLOCKED` →
+  `error`, ignorée, manuelle ou facultative échouée → `skipped`), une suite `anomalies` pour les
+  anomalies au seuil de `report.failOnSeverity`, et un cas réussi quand rien n'a tourné. Une erreur
+  d'écriture est un avertissement (`report.junit.required: true` la rend bloquante). Exporté par
+  l'API (`JUnitReporter`, `junitXmlOf`). Audit préalable : `docs/playwright-junit-audit.md`.
+- **Générateur Java JUnit 5 + Playwright Java** (`src/platform/java-junit-playwright-generator.ts`,
+  `npx qa-crawler generate-tests --java [--out] [--package]`, `platform.generatedTests.java`, API
+  `generateJavaJUnitPlaywrightProject` / `writeJavaProject`). Un adaptateur indépendant du moteur qui
+  produit un projet Maven exécutable des flows : une classe JUnit 5 par flow pilotée par Playwright
+  Java (localisateurs sémantiques, lignes de tableau, données de test générées par run et réutilisées
+  entre les étapes, valeurs littérales et secrets par variables d'environnement, assertions `expect` et
+  `effects`, preuves à l'échec, `manual` journalisé, `auto`/`intent` signalés et abandonnés plutôt que
+  faussement réussis), classes de support, `pom.xml` (Java 17, JUnit Jupiter 5.14.4, Playwright Java
+  alignée sur le Playwright Node du projet, Surefire 3.5.6), README. Vérifié par compilation et
+  exécution réelles contre l'application de test (`tests/integration/java-generated-tests.test.ts`).
+  Java et Maven ne servent qu'à exécuter le projet généré. Exemple : `examples/java-junit-playwright/`.
+  Documentation : `docs/JAVA_TEST_GENERATION.md`.
+- **Génération Playwright isolée** : pendant un run, une erreur du générateur de tests
+  (`platform.generatedTests`) devient un avertissement au lieu d'interrompre un run QA par ailleurs
+  valide. Tests de non-régression : le générateur ne modifie pas les flows source, n'agit pas sur
+  l'application, et génère un flow issu d'un enregistrement (cible CSS de repli, ligne de tableau,
+  donnée du run citée).
+
 - **Vérification métier : assertions, cohérence des données, traçabilité** (`src/quality/`,
   `docs/BUSINESS_ASSERTIONS.md`, audit `docs/quality-capabilities-audit.md`). Un flow déclare ses
   assertions métier (`flows[].assertions`, 9 genres : requête, valeur, entité, état, cardinalité,

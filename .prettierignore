@@ -11,3 +11,6 @@ knowledge/
 tests/fixtures/static-apps/
 tests/fixtures/packaging/*-app/
 package-lock.json
+
+# Generated Maven project shipped as an example (output of the Java generator, kept as generated).
+examples/java-junit-playwright/

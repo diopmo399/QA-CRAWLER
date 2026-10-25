@@ -132,7 +132,8 @@ export const projectConfigSchema = z
       .default({}),
     reporting: z
       .object({
-        format: z.array(z.enum(['html', 'json'])).default(['html', 'json']),
+        /** `junit` ajoute reports/junit.xml pour la CI (report.junit), sans toucher aux autres formats. */
+        format: z.array(z.enum(['html', 'json', 'junit'])).default(['html', 'json']),
         language: z.enum(['en', 'fr']).default('en'),
         failOnSeverity: z.enum(['INFO', 'WARNING', 'ERROR', 'CRITICAL', 'NONE']).default('ERROR'),
         dir: nonEmpty.default(REPORTS_DIR),
@@ -328,7 +329,11 @@ export async function projectMission(
       html: config.reporting.format.includes('html'),
       json: config.reporting.format.includes('json'),
     },
-    report: { language: config.reporting.language, failOnSeverity: config.reporting.failOnSeverity },
+    report: {
+      language: config.reporting.language,
+      failOnSeverity: config.reporting.failOnSeverity,
+      ...(config.reporting.format.includes('junit') ? { junit: { enabled: true } } : {}),
+    },
     knowledge: { file: path.join(at(config.paths.knowledge), 'knowledge-base.json') },
     baseline: { dir: at(config.paths.baselines) },
     persistence: {
