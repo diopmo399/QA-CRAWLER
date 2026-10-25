@@ -6,6 +6,11 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : comparaison de deux exécutions et traçabilité** (`docs/sdk/README.md`). `reports.compare`
+  compare deux explorations flow par flow (règle `compareFlowRuns` du moteur) et exigence par
+  exigence (couverture du moteur dans chaque run) ; `reports.traceability` et `reports.regression`
+  servent `quality-verification.json` et `regression-analysis.json`. Le composant
+  `<qa-crawler-run-compare>` (page `/runs`) les montre, sans recalcul ni pourcentage.
 - **SDK : tests générés exécutables** (`docs/sdk/README.md`). Le format Gherkin ajoute une mission
   (`<nom>.gherkin.mission.yaml`) qui joue le `.feature` avec le moteur, validée par son chargeur à la
   génération ; le format Playwright ajoute `playwright.config.ts`, qui écrit un rapport JUnit XML. Un

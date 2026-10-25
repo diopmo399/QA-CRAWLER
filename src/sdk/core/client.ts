@@ -10,6 +10,9 @@ import type {
   FlowStudioView,
   FlowView,
   GenerationInput,
+  RegressionView,
+  RunComparisonView,
+  TraceabilityView,
   GenerationResult,
   GraphView,
   GroupCommandInput,
@@ -186,6 +189,12 @@ export interface QaCrawlerClient {
   reports: {
     list(projectId: string): Promise<ReportEntry[]>;
     link(projectId: string, kind: ReportEntryKind, name: string): Promise<ReportLink>;
+    /** Deux explorations (`run-…`) comparées flow par flow et exigence par exigence ; rien n'est rejoué. */
+    compare(projectId: string, base: string, head: string): Promise<RunComparisonView>;
+    /** La traçabilité d'une exploration (404 quand la mission ne déclare pas d'exigence). */
+    traceability(projectId: string, run: string): Promise<TraceabilityView>;
+    /** L'analyse de régression d'une exploration, par rapport à l'historique du moteur. */
+    regression(projectId: string, run: string): Promise<RegressionView>;
   };
   dispose(): void;
 }
@@ -424,6 +433,15 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       list: (projectId) => request('GET', `${project(projectId)}/reports`),
       link: (projectId, kind, name) =>
         request('POST', `${project(projectId)}/reports/${kind}/${encodeURIComponent(name)}/links`, {}),
+      compare: (projectId, base, head) =>
+        request(
+          'GET',
+          `${project(projectId)}/reports/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`,
+        ),
+      traceability: (projectId, run) =>
+        request('GET', `${project(projectId)}/reports/exploration/${encodeURIComponent(run)}/traceability`),
+      regression: (projectId, run) =>
+        request('GET', `${project(projectId)}/reports/exploration/${encodeURIComponent(run)}/regression`),
     },
     dispose() {
       disposed = true;

@@ -27,6 +27,9 @@ const CORE_EXPORTS = [
   'STEP_REPLAY_OUTCOMES',
   'ASSERTION_VERDICTS',
   'DATA_SOURCES',
+  'COVERAGE_STATUSES',
+  'REGRESSION_STATUSES',
+  'RUNS_EVENTS',
   'verdictOfAssertionStatus',
   'verdictOfReplayOutcome',
   'canTransition',
@@ -63,7 +66,7 @@ const CLIENT_SURFACE: Record<string, string[]> = {
   groups: ['list', 'edit'],
   generation: ['run'],
   graph: ['exploration', 'of'],
-  reports: ['list', 'link'],
+  reports: ['list', 'link', 'compare', 'traceability', 'regression'],
 };
 
 describe('SDK public contract, version 1', () => {
@@ -102,6 +105,10 @@ describe('SDK public contract, version 1', () => {
       explorationFailed: 'qa-exploration-failed',
       error: 'qa-error',
     });
+    expect(core.RUNS_EVENTS).toMatchObject({ selection: 'qa-runs-selection', error: 'qa-error' });
+    expect(core.COVERAGE_STATUSES).toEqual(
+      expect.arrayContaining(['NOT_COVERED', 'VERIFIED_PASS', 'VERIFIED_FAIL', 'STALE_EVIDENCE']),
+    );
   });
 
   it('keeps the client namespaces and their methods', () => {

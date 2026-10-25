@@ -53,3 +53,30 @@ studio.token = ${JSON.stringify(options.token)};
 </html>
 `;
 }
+
+/** La page autonome de <qa-crawler-run-compare> : `/runs?project=…&base=run-…&head=run-…`. */
+export function runComparePage(options: { token: string; nonce: string; language: 'fr' | 'en' }): string {
+  return `<!doctype html>
+<html lang="${options.language}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA-CRAWLER — Runs</title>
+<style>html,body{margin:0}body{background:#F5F6FB;padding:16px;box-sizing:border-box}</style>
+</head>
+<body>
+<qa-crawler-run-compare endpoint="/api" locale="${options.language}"></qa-crawler-run-compare>
+<script type="module" nonce="${options.nonce}">
+import '/sdk/ui/index.js';
+const runs = document.querySelector('qa-crawler-run-compare');
+const query = new URLSearchParams(location.search);
+for (const name of ['project', 'base', 'head']) {
+  const value = query.get(name);
+  if (value) runs.setAttribute(name, value);
+}
+runs.token = ${JSON.stringify(options.token)};
+</script>
+</body>
+</html>
+`;
+}

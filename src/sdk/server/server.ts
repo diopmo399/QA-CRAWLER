@@ -64,7 +64,8 @@ import {
   studioView,
   type RecordRunner,
 } from './recordings.js';
-import { sdkStandalonePage, flowStudioHtml } from './page.js';
+import { compareRuns, regressionView, traceabilityView } from './runs.js';
+import { flowStudioHtml, runComparePage, sdkStandalonePage } from './page.js';
 import {
   PROJECT_FILE,
   REPORTS_DIR,
@@ -258,7 +259,8 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     if (method !== 'GET' && method !== 'HEAD')
       throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
     const studio = segments.length === 1 && segments[0] === 'studio';
-    if (segments.length > 0 && segments[0] !== 'index.html' && !studio)
+    const runs = segments.length === 1 && segments[0] === 'runs';
+    if (segments.length > 0 && segments[0] !== 'index.html' && !studio && !runs)
       throw new HttpError(404, 'NOT_FOUND', 'not found');
     const nonce = randomBytes(16).toString('base64');
     response.writeHead(200, {
@@ -268,7 +270,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     response.end(
       method === 'HEAD'
         ? undefined
-        : (studio ? flowStudioHtml : sdkStandalonePage)({
+        : (studio ? flowStudioHtml : runs ? runComparePage : sdkStandalonePage)({
             token: ctx.token,
             nonce,
             language: ctx.options.language ?? 'en',
@@ -368,7 +370,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     return;
   }
   if (resource === 'projects' && id && sub === 'reports') {
-    await handleReports(ctx, await projectOf(ctx, id), segments.slice(4), method, request, response);
+    await handleReports(ctx, await projectOf(ctx, id), segments.slice(4), method, request, url, response);
     return;
   }
   if (resource === 'explorations' && id) {
@@ -969,6 +971,7 @@ async function handleReports(
   rest: string[],
   method: string,
   request: IncomingMessage,
+  url: URL,
   response: ServerResponse,
 ): Promise<void> {
   const [kind, rawName, action, extra] = rest;
@@ -976,8 +979,41 @@ async function handleReports(
     sendJson(response, await reportEntries(reportsDirOf(project)));
     return;
   }
+  // Deux explorations du projet, comparées par le moteur (compareFlowRuns) ; rien n'est rejoué.
+  if (kind === 'compare' && rawName === undefined && method === 'GET') {
+    const base = url.searchParams.get('base') ?? '';
+    const head = url.searchParams.get('head') ?? '';
+    if (!base || !head)
+      throw new HttpError(400, 'BAD_REQUEST', 'base and head (exploration runs) are required');
+    if (base === head) throw new HttpError(400, 'BAD_REQUEST', 'base and head are the same run');
+    const comparison = await compareRuns(
+      { dir: await reportDirOf(project, 'exploration', base), run: base },
+      { dir: await reportDirOf(project, 'exploration', head), run: head },
+    );
+    if (!comparison) throw new HttpError(404, 'NOT_FOUND', 'a run has no result.json');
+    sendJson(response, comparison);
+    return;
+  }
   if (rawName === undefined || extra !== undefined) throw new HttpError(404, 'NOT_FOUND', 'not found');
-  const directory = await reportDirOf(project, kind as ReportEntryKind, decodeURIComponent(rawName));
+  const name = decodeURIComponent(rawName);
+  const directory = await reportDirOf(project, kind as ReportEntryKind, name);
+  if (kind === 'exploration' && action === 'traceability' && method === 'GET') {
+    const view = await traceabilityView(directory, name);
+    if (!view)
+      throw new HttpError(
+        404,
+        'NOT_FOUND',
+        'no quality-verification.json in this run: the mission declares no requirements',
+      );
+    sendJson(response, view);
+    return;
+  }
+  if (kind === 'exploration' && action === 'regression' && method === 'GET') {
+    const view = await regressionView(directory, name);
+    if (!view) throw new HttpError(404, 'NOT_FOUND', 'no regression-analysis.json in this run');
+    sendJson(response, view);
+    return;
+  }
   if (action === 'graph' && method === 'GET') {
     const graph = await graphView(directory);
     if (!graph) throw new HttpError(404, 'NOT_FOUND', 'no flow-graph.json in this report');

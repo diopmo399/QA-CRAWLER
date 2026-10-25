@@ -617,6 +617,151 @@ export interface ReportLink {
   expiresAt: string;
 }
 
+/**
+ * La couverture d'une exigence, telle que le moteur la calcule (`quality-verification.json`) :
+ * NOT_COVERED (aucun flow ne la cite), COVERED_NOT_EXECUTED, VERIFIED_PASS, VERIFIED_FAIL, BLOCKED,
+ * INCONCLUSIVE, STALE_EVIDENCE (pas exécutée dans ce run, dernière preuve trop ancienne).
+ */
+export const COVERAGE_STATUSES = [
+  'NOT_COVERED',
+  'COVERED_NOT_EXECUTED',
+  'VERIFIED_PASS',
+  'VERIFIED_FAIL',
+  'BLOCKED',
+  'INCONCLUSIVE',
+  'STALE_EVIDENCE',
+] as const;
+export type CoverageStatusName = (typeof COVERAGE_STATUSES)[number];
+
+/** Le vocabulaire de l'analyse de régression du moteur (`regression-analysis.json`). */
+export const REGRESSION_STATUSES = [
+  'NEW_REGRESSION',
+  'REGRESSION_PERSISTING',
+  'REGRESSION_FIXED',
+  'FLAKY_BEHAVIOR',
+  'KNOWN_FAILURE',
+  'NEW_BEHAVIOR',
+  'EXPECTED_CHANGE',
+] as const;
+export type RegressionStatusName = (typeof REGRESSION_STATUSES)[number];
+
+export interface TraceAssertionView {
+  flow: string;
+  id: string;
+  /** PASS, FAIL, BLOCKED, INCONCLUSIVE, UNVERIFIABLE ou NOT_EXECUTED (moteur d'assertions). */
+  status: string;
+  mandatory: boolean;
+  criticality?: string;
+  evidence: string[];
+}
+
+export interface RequirementView {
+  id: string;
+  description: string;
+  criticality: string;
+  source?: string;
+  declared: boolean;
+  status: CoverageStatusName;
+  flows: string[];
+  rules: string[];
+  operations: string[];
+  assertions: TraceAssertionView[];
+  evidence: string[];
+  dependsOn: string[];
+  reasons: string[];
+  lastVerified?: { status: CoverageStatusName; at: string; runId: string };
+}
+
+export interface RuleView {
+  id: string;
+  description: string;
+  requirementIds: string[];
+  status: CoverageStatusName;
+  assertions: TraceAssertionView[];
+  conflictsWith: string[];
+  reasons: string[];
+}
+
+/** La traçabilité d'une exploration : exigences ↔ règles ↔ flows ↔ assertions ↔ preuves. */
+export interface TraceabilityView {
+  run: string;
+  generatedAt: string;
+  /** Le verdict métier du run (PASS, FAIL, BLOCKED, INCONCLUSIVE, UNVERIFIABLE, NOT_DECLARED). */
+  verdict: string;
+  requirements: RequirementView[];
+  rules: RuleView[];
+  warnings: string[];
+  summary: {
+    total: number;
+    byStatus: Record<CoverageStatusName, number>;
+    criticalFailures: string[];
+    /** Part des exigences exécutées vérifiées PASS (calculée par le moteur) ; null quand aucune n'a été exécutée. */
+    passRate: number | null;
+  };
+  /** Ce que la vérification ne peut pas affirmer (écrit par le moteur dans chaque rapport). */
+  limits: string[];
+}
+
+export interface RegressionEntryView {
+  status: RegressionStatusName;
+  subject: string;
+  anomalyId?: string;
+  evidence: string[];
+  source: 'RUNTIME' | 'HISTORICAL';
+}
+
+/** L'analyse de régression d'une exploration, par rapport à l'historique du moteur. */
+export interface RegressionView {
+  run: string;
+  entries: RegressionEntryView[];
+  summary: Record<RegressionStatusName, number>;
+}
+
+/** Les écarts d'un flow entre deux exécutions (`compareFlowRuns` du moteur). */
+export interface FlowComparisonView {
+  name: string;
+  presence: 'BOTH' | 'ONLY_BASE' | 'ONLY_HEAD';
+  baseStatus?: string;
+  headStatus?: string;
+  /** SAME : même statut, mêmes étapes, aucune dérive notable (seuils du moteur). */
+  verdict?: 'SAME' | 'CHANGED';
+  durationDeltaMs?: number;
+  /** FLOW_STATUS, STEP_STATUS, STEP_SLOWER, STEP_FASTER, TARGET_CHANGED, TARGET_HEALED, EFFECT_CHANGED, STEP_CHANGED, STEP_ADDED, STEP_REMOVED. */
+  changes: { kind: string; step?: number; detail: string }[];
+}
+
+/** La couverture d'une exigence dans chacune des deux exécutions (absente : pas de traçabilité, ou pas citée). */
+export interface RequirementComparisonView {
+  id: string;
+  description: string;
+  criticality: string;
+  baseStatus?: CoverageStatusName;
+  headStatus?: CoverageStatusName;
+  changed: boolean;
+}
+
+/** Deux explorations d'un même projet, comparées sans rien rejouer. */
+export interface RunComparisonView {
+  base: { run: string; at: string };
+  head: { run: string; at: string };
+  flows: FlowComparisonView[];
+  /** Vide quand aucune des deux exécutions n'a de traçabilité (la mission ne déclare pas d'exigence). */
+  requirements: RequirementComparisonView[];
+  traceability: { base: boolean; head: boolean };
+  summary: {
+    flows: number;
+    changed: number;
+    same: number;
+    onlyBase: number;
+    onlyHead: number;
+    /** Flows PASSED dans la base et pas dans la tête. */
+    newlyFailing: string[];
+    /** Flows non PASSED dans la base et PASSED dans la tête. */
+    newlyPassing: string[];
+    requirementsChanged: number;
+  };
+}
+
 export interface ErrorBody {
   error: string;
   status: number;
@@ -636,6 +781,13 @@ export const WIZARD_EVENTS = {
 } as const;
 
 /** Les événements DOM du Flow Studio (bubbles, composed). */
+/** Les événements DOM de la comparaison d'exécutions (bubbles + composed). */
+export const RUNS_EVENTS = {
+  /** `detail: { base, head }` : les deux exécutions comparées ont changé. */
+  selection: 'qa-runs-selection',
+  error: 'qa-error',
+} as const;
+
 export const STUDIO_EVENTS = {
   /** `detail: { stepIds, groupId? }` : la sélection a changé. */
   selection: 'qa-studio-selection',

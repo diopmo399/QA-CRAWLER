@@ -376,6 +376,40 @@ Non proposé : **jouer un groupe seul** (le panneau dit si ses entrées sont pro
 mais le SDK ne lance pas de rejeu partiel) ; relancer un rejeu depuis le Studio (enregistrer avec
 `validate: true`).
 
+## Comparaison et traçabilité des exécutions
+
+Deux explorations d'un projet se comparent sans rien rejouer. Le SDK lit ce que le moteur a écrit dans
+le dossier de chaque run : `result.json`, `quality-verification.json` et `regression-analysis.json`.
+
+| Client                                   | Route                                                         |
+| ---------------------------------------- | ------------------------------------------------------------- |
+| `reports.compare(projectId, base, head)` | `GET /api/projects/:id/reports/compare?base=run-…&head=run-…` |
+| `reports.traceability(projectId, run)`   | `GET /api/projects/:id/reports/exploration/:run/traceability` |
+| `reports.regression(projectId, run)`     | `GET /api/projects/:id/reports/exploration/:run/regression`   |
+
+- **Flow par flow** : `compareFlowRuns` du moteur, la règle de l'écart avec le run précédent du
+  rapport. On obtient le statut dans chaque run, `SAME` ou `CHANGED`, et les écarts (statut, étape
+  plus lente, cible changée ou réparée, étape ajoutée ou retirée…). Un flow absent d'un des deux runs
+  est marqué `ONLY_BASE` ou `ONLY_HEAD`.
+- **Exigence par exigence** : la couverture calculée par le moteur dans chaque run (`NOT_COVERED`,
+  `COVERED_NOT_EXECUTED`, `VERIFIED_PASS`, `VERIFIED_FAIL`, `BLOCKED`, `INCONCLUSIVE`,
+  `STALE_EVIDENCE`). Sans traçabilité, la liste est vide et `traceability.base/head` vaut `false` :
+  rien n'est déduit.
+- **Traçabilité d'un run** : exigences, règles, assertions et preuves, verdict métier, et ce que la
+  vérification ne peut pas affirmer. `404` quand la mission ne déclare pas d'exigence.
+- **Régression** : l'analyse du moteur par rapport à son historique (`NEW_REGRESSION`,
+  `REGRESSION_FIXED`…), servie telle quelle.
+
+`<qa-crawler-run-compare>` (page autonome `/runs?project=…&base=…&head=…`) montre la comparaison et
+la traçabilité de l'exécution comparée.
+
+- Attributs : `endpoint`, `project`, `base`, `head` (par défaut les deux plus récents), `locale`.
+- Propriétés : `token`, `client`.
+- Événements : `qa-runs-selection` (`{ base, head }`) et `qa-error`.
+- Onglets au clavier (flèches gauche et droite), écarts d'un flow dépliables, liste des exigences
+  par statut de couverture.
+- Les compteurs sont des nombres : aucun pourcentage n'est affiché.
+
 ## Statuts et événements
 
 ```
@@ -475,6 +509,12 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/integration/sdk-wizard.test.ts` : le **vrai** moteur, Chromium et le site de démo — page
   autonome jusqu'au résultat, projet sans secret, rapport par lien ; hôte sur une autre origine
   (thème, jeton, événements) ; origine refusée.
+- `tests/unit/sdk-runs.test.ts` : vocabulaires alignés sur le moteur ; comparaison (règle du
+  moteur, flows retirés ou nouveaux, exigences changées, rien sans traçabilité) ; routes et refus ;
+  rendu échappé et sans pourcentage.
+- `tests/integration/sdk-runs.test.ts` : deux **vrais** runs du moteur (le second avec un défaut de
+  l'application) ; la comparaison et la traçabilité par l'API, puis `<qa-crawler-run-compare>` dans
+  Chromium (écarts dépliés, exigence passée en échec, liste par statut, onglets au clavier).
 - `tests/integration/sdk-generated-execution.test.ts` : un parcours enregistré par le **vrai**
   recorder, généré par le SDK, puis **exécuté** : le `.feature` par la mission générée (chaque
   scénario `PASSED` sur l'application), le test Playwright par Playwright Test avec la configuration

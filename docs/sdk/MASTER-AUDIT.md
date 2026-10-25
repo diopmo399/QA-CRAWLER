@@ -105,21 +105,21 @@ Points d'entrée réutilisés par le SDK :
 
 ### F. Comparaison et régressions
 
-| Élément                                                                | État                | Preuve / écart                                                               |
-| ---------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------- |
-| Différence de structure entre deux graphes                             | `EXISTANT_ET_TESTÉ` | `tests/unit/flow-diff.test.ts`, `baseline-store.test.ts`                     |
-| Cycle de vie des anomalies (nouvelle, persistante, corrigée, instable) | `EXISTANT_ET_TESTÉ` | `regression-lot-c.test.ts`, `tests/integration/regression-evolution.test.ts` |
-| Comparaison visuelle à seuil                                           | `EXISTANT_ET_TESTÉ` | `qa-platform-visual-regression.test.ts`                                      |
-| Écart avec le run précédent (étapes, temps)                            | `EXISTANT_ET_TESTÉ` | `run-analysis.test.ts`                                                       |
-| Comparaison de deux exécutions choisies, exposée au SDK                | `ABSENT`            |                                                                              |
-| Vue de comparaison                                                     | `ABSENT`            |                                                                              |
+| Élément                                                                | État                | Preuve / écart                                                                                                                 |
+| ---------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Différence de structure entre deux graphes                             | `EXISTANT_ET_TESTÉ` | `tests/unit/flow-diff.test.ts`, `baseline-store.test.ts`                                                                       |
+| Cycle de vie des anomalies (nouvelle, persistante, corrigée, instable) | `EXISTANT_ET_TESTÉ` | `regression-lot-c.test.ts`, `tests/integration/regression-evolution.test.ts`                                                   |
+| Comparaison visuelle à seuil                                           | `EXISTANT_ET_TESTÉ` | `qa-platform-visual-regression.test.ts`                                                                                        |
+| Écart avec le run précédent (étapes, temps)                            | `EXISTANT_ET_TESTÉ` | `run-analysis.test.ts`                                                                                                         |
+| Comparaison de deux exécutions choisies, exposée au SDK                | `EXISTANT_ET_TESTÉ` | phase 6 : `GET …/reports/compare` (`compareFlowRuns` du moteur), `sdk-runs.test.ts` (unitaire et intégration, deux vrais runs) |
+| Vue de comparaison                                                     | `EXISTANT_ET_TESTÉ` | phase 6 : `<qa-crawler-run-compare>`, page `/runs`, pilotée dans Chromium                                                      |
 
 ### G. Traçabilité
 
-| Élément                                                  | État                | Preuve / écart                                                     |
-| -------------------------------------------------------- | ------------------- | ------------------------------------------------------------------ |
-| Sept statuts de couverture, liens explicites, historique | `EXISTANT_ET_TESTÉ` | `tests/unit/traceability.test.ts` ; jamais par ressemblance de nom |
-| Exposition au SDK et vue de couverture                   | `ABSENT`            | `quality-verification.json` est écrit, rien ne le sert             |
+| Élément                                                  | État                | Preuve / écart                                                                                                                      |
+| -------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Sept statuts de couverture, liens explicites, historique | `EXISTANT_ET_TESTÉ` | `tests/unit/traceability.test.ts` ; jamais par ressemblance de nom                                                                  |
+| Exposition au SDK et vue de couverture                   | `EXISTANT_ET_TESTÉ` | phase 6 : `GET …/reports/exploration/:run/traceability` et onglet Traçabilité ; `regression-analysis.json` servi par `…/regression` |
 
 ### H. Run Monitor
 
@@ -227,5 +227,5 @@ Règles :
 | 3     | Flow Studio : routes dépendances et chemin exécuté ; `<qa-crawler-flow-studio>` (graphe SVG interactif, groupes, panneau, recherche, ajustement, erreurs et dépendances, chemin exécuté, éditeur de groupes) | fait (sauf : jouer un groupe seul)                                   |
 | 4     | Données (routes de lignée et de liaison, éditeur) ; assertions (verdicts publics, éditeur dans le Studio)                                                                                                    | fait                                                                 |
 | 5     | Générateurs : mission qui joue le `.feature`, configuration Playwright (JUnit XML), exécution réelle des deux sorties ; correctifs trouvés en les exécutant (première correspondance, gabarit de route)      | fait (sauf : définitions de steps pour un exécuteur Gherkin externe) |
-| 6     | Comparaison de deux exécutions et traçabilité : routes et vues                                                                                                                                               | à faire                                                              |
+| 6     | Comparaison de deux exécutions et traçabilité : routes (`compare`, `traceability`, `regression`) et `<qa-crawler-run-compare>`                                                                               | fait (sauf : comparaison visuelle de deux runs dans la vue)          |
 | 7     | Thème sombre, accessibilité, Run Monitor, exemple hôte complet, documentation, rapport final                                                                                                                 | à faire                                                              |
