@@ -1,3 +1,4 @@
+import { readOnlyPostOf } from '../platforms/salesforce-lightning.js';
 import { hostMatches } from '../config/config-loader.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -866,6 +867,9 @@ export class FlowExplorer {
       enabled: config.safety.writeGuard.enabled,
       allow: config.safety.writeGuard.allow,
       isGuardedHost: (host) => this.safety.navigation.isAllowedHost(host),
+      ...(readOnlyPostOf(config.target.platform)
+        ? { readOnlyPost: readOnlyPostOf(config.target.platform) }
+        : {}),
     });
     this.decisionEngine =
       options.decisionEngine ??

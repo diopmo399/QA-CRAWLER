@@ -73,6 +73,8 @@ export type AttributeKind = 'id' | 'class' | 'attribute';
 export function isDynamicValue(kind: AttributeKind, value: string): boolean {
   const text = value.trim();
   if (text === '') return true;
+  // Aura (Salesforce Lightning) : « 123:0 », « 1052:2;a » — un compteur de rendu.
+  if (/^\d+:\d+(;[a-z])?$/.test(text)) return true;
   if (/^(mat|mdc|cdk|ng|ion|mui|react|ember|radix|headlessui|rc|el|ext|yui)[-_:].*\d/i.test(text))
     return true;
   if (/^_ng(content|host)/i.test(text) || /^ng-(tns|star|trigger)/i.test(text)) return true;

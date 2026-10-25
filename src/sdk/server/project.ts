@@ -178,6 +178,8 @@ export function projectDocument(draft: ProjectDraft, rules: ProjectRules): Recor
         startAt,
         name: draft.project.name,
         framework: draft.project.framework,
+        // Salesforce Lightning : le profil du moteur (lectures Aura/GraphQL admises par la garde d'écriture).
+        ...(draft.project.framework === 'salesforce' ? { platform: 'salesforce-lightning' } : {}),
       },
       browser: {
         browser: 'chromium',

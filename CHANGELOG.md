@@ -6,6 +6,16 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Salesforce Lightning : profil de plateforme** (`docs/SALESFORCE_LIGHTNING.md`). `target.platform:
+salesforce-lightning` (projet : `application.platform`, assistant du SDK : type « Salesforce
+  Lightning ») : la garde d'écriture laisse passer les `POST /aura` dont toutes les actions lisent
+  (reconnues au nom de la méthode) et les requêtes GraphQL sans `mutation` ; les écritures restent
+  bloquées et signalées. Pour toutes les applications : l'attente d'écran voit les chargeurs et les
+  éléments dans les arbres Shadow DOM (`lightning-spinner` reconnu), les routes
+  `/lightning/r/<Objet>/<Id>/…` deviennent un modèle (`:recordid`), `data-aura-rendered-by` est un
+  attribut généré. Vérifié sur une imitation locale de Lightning (`tests/fixtures/lightning-app.ts`),
+  jamais sur une vraie organisation Salesforce ; la documentation donne les scénarios et la grille
+  pour l'évaluer sur une sandbox.
 - **SDK : enregistrements, assertions, groupes, génération, graphe et rapports** (`docs/sdk/README.md`).
   Les espaces de noms réservés deviennent des appels réels du client (`recordings`, `assertions`,
   `groups`, `generation`, `graph`, `reports`) et du serveur : un enregistrement lancé par l'API

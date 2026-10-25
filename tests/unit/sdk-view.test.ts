@@ -150,6 +150,12 @@ describe('SDK wizard rendering', () => {
     expect(visible).not.toMatch(/restant|remaining|annuler|cancel/i);
   });
 
+  it('offers the Salesforce Lightning type next to the web frameworks', () => {
+    const html = render(state());
+    expect(html).toContain('data-value="salesforce"');
+    expect(html).toContain('Salesforce Lightning');
+  });
+
   it('uses a compact step bar in embedded mode (CSS hides the dark panel)', () => {
     const html = render(state({ mode: 'embedded' }));
     expect(html).toContain('class="hsteps"');

@@ -57,7 +57,8 @@ console.log(sdk.url); // le jeton est dans sdk.token ; sdk.close() arrête tout
 ## L'assistant en cinq étapes
 
 1. **Projet** : nom, adresse de l'application (vérifiée depuis le serveur, pas depuis le navigateur),
-   type d'application. Angular avec un dossier de sources active l'analyse statique, seulement sous un
+   type d'application (Angular, React, Vue, Salesforce Lightning — qui active le profil Lightning du
+   moteur, voir `docs/SALESFORCE_LIGHTNING.md` —, autre). Angular avec un dossier de sources active l'analyse statique, seulement sous un
    `--allow-source-root`.
 2. **Environnement** : Chromium (le seul navigateur du moteur), taille d'écran, langue, délais
    d'action et de navigation, connexion (aucune, formulaire, HTTP, SSO). Les identifiants sont des
