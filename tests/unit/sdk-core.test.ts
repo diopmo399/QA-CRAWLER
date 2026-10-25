@@ -4,6 +4,7 @@ import {
   canTransition,
   createQaCrawler,
   emptyCounters,
+  isCompatible,
   isTerminal,
   QaCrawlerError,
   readEventStream,
@@ -200,6 +201,126 @@ describe('SDK client', () => {
     expect(seen?.url).toBe('http://localhost/api/explorations/exp_1/events?after=5');
     expect(seen?.headers.authorization).toBe('Bearer t');
     expect(received).toHaveLength(1);
+  });
+
+  it('connect checks the contract version the server speaks', async () => {
+    const answering = (apiVersion: number) =>
+      createQaCrawler({
+        endpoint: 'http://localhost/api',
+        fetch: () => Promise.resolve(new Response(JSON.stringify({ apiVersion }))),
+      });
+    await expect(answering(1).connect()).resolves.toMatchObject({ apiVersion: 1 });
+    await expect(answering(2).connect()).rejects.toMatchObject({ code: 'API_VERSION_MISMATCH' });
+    expect(isCompatible({ apiVersion: 1 })).toBe(true);
+    expect(isCompatible({ apiVersion: 2 })).toBe(false);
+  });
+
+  const sse = (...events: object[]): string =>
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
+  const urlOf = (input: RequestInfo | URL): string =>
+    typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+  it('reopens a stream cut before the end, after the last event, and never repeats an event', async () => {
+    const urls: string[] = [];
+    const answers = [
+      sse({ seq: 1, at, type: 'status', status: 'RUNNING' }, { seq: 2, at, type: 'phase', phase: 'explore' }),
+      // Le serveur rejoue à partir de `after` ; un relais peut renvoyer le dernier événement.
+      sse(
+        { seq: 2, at, type: 'phase', phase: 'explore' },
+        { seq: 3, at, type: 'status', status: 'COMPLETED' },
+      ),
+    ];
+    const fake: typeof fetch = (input) => {
+      urls.push(urlOf(input));
+      return Promise.resolve(new Response(streamOf([answers.shift() ?? '']), { status: 200 }));
+    };
+    const client = createQaCrawler({ endpoint: 'http://localhost/api', fetch: fake });
+    const received: number[] = [];
+    const reconnects: [number, number][] = [];
+    const errors: Error[] = [];
+    const subscription = client.explorations.subscribe('exp_1', (event) => received.push(event.seq), {
+      reconnect: { delayMs: 0 },
+      onReconnect: (attempt, after) => reconnects.push([attempt, after]),
+      onError: (error) => errors.push(error),
+    });
+    await subscription.done;
+    expect(received).toEqual([1, 2, 3]);
+    expect(urls).toEqual([
+      'http://localhost/api/explorations/exp_1/events',
+      'http://localhost/api/explorations/exp_1/events?after=2',
+    ]);
+    expect(reconnects).toEqual([[1, 2]]);
+    expect(errors).toEqual([]);
+  });
+
+  it('does not retry a refusal, and gives up after the retries on a server that stays away', async () => {
+    let calls = 0;
+    const refusing = createQaCrawler({
+      endpoint: 'http://localhost/api',
+      fetch: () => {
+        calls += 1;
+        return Promise.resolve(new Response('{"error":"unknown exploration"}', { status: 404 }));
+      },
+    });
+    const refused: unknown[] = [];
+    await refusing.explorations.subscribe('exp_x', () => undefined, {
+      reconnect: { delayMs: 0 },
+      onError: (error) => refused.push(error),
+    }).done;
+    expect(calls).toBe(1);
+    expect(refused[0]).toMatchObject({ code: 'STREAM_REFUSED', status: 404, message: 'unknown exploration' });
+
+    let attempts = 0;
+    const away = createQaCrawler({
+      endpoint: 'http://localhost/api',
+      fetch: () => {
+        attempts += 1;
+        return Promise.reject(new TypeError('fetch failed'));
+      },
+    });
+    const failures: Error[] = [];
+    await away.explorations.subscribe('exp_1', () => undefined, {
+      reconnect: { retries: 2, delayMs: 0 },
+      onError: (error) => failures.push(error),
+    }).done;
+    expect(attempts).toBe(3);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.message).toBe('fetch failed');
+  });
+
+  it('a stream that ends without its end event is reported once retries are off', async () => {
+    const client = createQaCrawler({
+      endpoint: 'http://localhost/api',
+      fetch: () =>
+        Promise.resolve(new Response(streamOf([sse({ seq: 1, at, type: 'status', status: 'RUNNING' })]))),
+    });
+    const failures: unknown[] = [];
+    await client.recordings.subscribe('prj_1', 'parcours', () => undefined, {
+      reconnect: { retries: 0 },
+      onError: (error) => failures.push(error),
+    }).done;
+    expect(failures[0]).toMatchObject({ code: 'STREAM_CLOSED' });
+  });
+
+  it('closing during the wait before a retry stops for good', async () => {
+    let calls = 0;
+    const client = createQaCrawler({
+      endpoint: 'http://localhost/api',
+      fetch: () => {
+        calls += 1;
+        return Promise.reject(new TypeError('fetch failed'));
+      },
+    });
+    const failures: Error[] = [];
+    const subscription = client.explorations.subscribe('exp_1', () => undefined, {
+      reconnect: { delayMs: 60_000 },
+      onError: (error) => failures.push(error),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    subscription.close();
+    await subscription.done;
+    expect(calls).toBe(1);
+    expect(failures).toEqual([]);
   });
 
   it('dispose refuses later calls', async () => {

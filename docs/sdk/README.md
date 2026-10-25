@@ -161,6 +161,7 @@ const link = await qa.explorations.reportLink(started.id); // lien valable 10 mi
 | Méthode                                   | Route                                           |
 | ----------------------------------------- | ----------------------------------------------- |
 | `capabilities()`                          | `GET /api/capabilities`                         |
+| `connect()`                               | `GET /api/capabilities` + version du contrat    |
 | `checks.url(url)`                         | `POST /api/checks/url`                          |
 | `checks.env(names)`                       | `POST /api/checks/env` (20 noms `QA_*` au plus) |
 | `projects.validate(draft)`                | `POST /api/projects/validate`                   |
@@ -175,6 +176,16 @@ const link = await qa.explorations.reportLink(started.id); // lien valable 10 mi
 Une erreur est une `QaCrawlerError { status, code, message, issues }` ; un serveur absent donne
 `status: 0, code: 'UNREACHABLE'`. `subscribe` lit le flux avec `fetch` (le jeton part en en-tête,
 jamais dans l'URL) et reprend après un numéro d'événement (`after`).
+
+**Coupures** : si le flux se ferme avant l'événement de fin (réseau, serveur redémarré, réponse
+5xx), le client le rouvre lui-même après le dernier `seq` reçu — 3 tentatives par défaut, à 1 s,
+2 s puis 4 s (`reconnect: { retries, delayMs }`, `retries: 0` pour s'en passer ; `onReconnect`
+prévient). Un événement déjà reçu n'est jamais transmis deux fois, même si un relais le renvoie.
+Un refus (4xx : jeton, origine, exploration inconnue) n'est pas réessayé. Quand les tentatives sont
+épuisées, `onError` reçoit la dernière erreur, ou `STREAM_CLOSED` si le flux s'est simplement fermé.
+
+**Version du contrat** : `connect()` rend les capacités et refuse (`API_VERSION_MISMATCH`) un
+serveur qui ne parle pas la version du client ; l'assistant l'utilise au chargement.
 
 ## Enregistrements, assertions, groupes, génération, graphe, rapports
 
@@ -278,6 +289,18 @@ Chaque événement porte `seq` (croissant) et `at` (horodatage serveur) :
 Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du résultat à
 `completed` : l'écran final montre toujours les chiffres du moteur.
 
+## Versionnement
+
+- `SDK_API_VERSION` (aujourd'hui `1`) est la version du **contrat** : routes, formes des réponses,
+  statuts, noms d'événements DOM. Le serveur l'annonce (`capabilities.apiVersion`), le client la
+  vérifie (`connect()`).
+- Dans une version de contrat, on **ajoute** seulement : une route, un champ facultatif, une
+  méthode du client, une valeur de statut (annoncée dans le CHANGELOG). Rien n'est retiré, renommé
+  ni ne change de sens. `tests/unit/sdk-contract.test.ts` fige ce qui est publié et échoue sinon.
+- Retirer ou changer le sens d'un élément exige la version suivante du contrat ; le serveur
+  servirait alors les deux versions le temps de la transition.
+- Le paquet suit sa propre version (`@qa-crawler/core`), indépendante du contrat.
+
 ## Sécurité
 
 - **Jeton** : toute l'API exige `Authorization: Bearer <jeton>`, comparé en temps constant. Les
@@ -310,7 +333,10 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 
 ## Tests
 
-- `tests/unit/sdk-core.test.ts` : cycle de vie, client, flux SSE découpé, reprise.
+- `tests/unit/sdk-core.test.ts` : cycle de vie, client, flux SSE découpé, reprise, reconnexion
+  après coupure sans doublon, refus non réessayé, abandon pendant l'attente, version du contrat.
+- `tests/unit/sdk-contract.test.ts` : exports, valeurs et méthodes publiés de la version 1 ; le
+  Core et l'UI n'importent ni module Node, ni Playwright, ni classe du moteur.
 - `tests/unit/sdk-project.test.ts` : brouillon → projet du moteur, aucun identifiant écrit,
   variables manquantes, sources Angular, validation par le moteur.
 - `tests/unit/sdk-server.test.ts` : jeton, origines, variables, modules, CSP, parcours complet avec

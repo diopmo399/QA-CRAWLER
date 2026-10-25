@@ -6,6 +6,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : flux d'événements qui survit aux coupures, contrat versionné** (`docs/sdk/README.md`, audit
+  `docs/sdk/MASTER-AUDIT.md`). Le client rouvre lui-même un flux coupé avant sa fin, après le dernier
+  événement reçu, et ne transmet jamais deux fois le même événement ; un refus n'est pas réessayé.
+  `client.connect()` vérifie la version du contrat annoncée par le serveur (`API_VERSION_MISMATCH`),
+  l'assistant l'utilise. Un test fige le contrat public de la version 1 et vérifie que le Core et
+  l'UI n'importent rien de Node, de Playwright ni du moteur.
 - **Salesforce Lightning : profil de plateforme** (`docs/SALESFORCE_LIGHTNING.md`). `target.platform:
 salesforce-lightning` (projet : `application.platform`, assistant du SDK : type « Salesforce
   Lightning ») : la garde d'écriture laisse passer les `POST /aura` dont toutes les actions lisent

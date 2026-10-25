@@ -6,6 +6,7 @@ export * from './contracts.js';
 export * from './lifecycle.js';
 export {
   createQaCrawler,
+  isCompatible,
   readEventStream,
   QaCrawlerError,
   type ClientOptions,

@@ -199,7 +199,7 @@ export class QaCrawlerProjectWizard extends Base {
       return;
     }
     try {
-      const caps = await api.capabilities();
+      const caps = await api.connect();
       this.state.caps = caps;
       this.state.draft = draftWith(caps.defaults, this.initial);
       this.state.phase = 'ready';
