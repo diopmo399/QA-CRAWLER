@@ -16,6 +16,7 @@ import { runRecordCli } from './record-command.js';
 import { runSourcesCli } from './sources-command.js';
 import { runManifestCli } from './manifest-command.js';
 import { runKnowledgeCenterCli } from './knowledge-center-command.js';
+import { runSdkServerCli } from './sdk-server-command.js';
 import { PROJECT_COMMANDS, PROJECT_HELP, runProjectCli, type ProjectCommand } from './project-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
@@ -92,6 +93,8 @@ export async function runCli(input: string[], options: CliOptions = {}): Promise
   if (argv[0] === 'k8s-manifest') return runManifestCli(argv.slice(1));
   // KNOWLEDGE CENTER : le tableau de bord de la mémoire (projet ou mission), servi en local.
   if (argv[0] === 'knowledge-center') return runKnowledgeCenterCli(argv.slice(1));
+  // SDK SERVER : l'assistant de création de projet embarquable et son API (moteur côté serveur).
+  if (argv[0] === 'sdk-server') return runSdkServerCli(argv.slice(1));
   if (argv[0] === '--version' || argv[0] === '-v') {
     logger.info(await versionText(options.cliVersion));
     return EXIT.OK;

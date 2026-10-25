@@ -6,6 +6,18 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : l'assistant de création de projet, autonome ou embarqué** (`docs/sdk/README.md`, décisions
+  `docs/sdk/AUDIT.md`). `qa-crawler sdk-server --workspace <dir>` (`--allow-origin`,
+  `--allow-source-root`, `--token-env`, `--concurrency`) sert une API locale à jeton et l'élément
+  `<qa-crawler-project-wizard>` (Web Component, Shadow DOM, FR/EN, variables de thème `--qa-*`,
+  mode `embedded`) : projet, environnement (Chromium, connexion par noms de variables `QA_*` dont le
+  serveur ne donne que la présence), exploration (budgets, exclusions, vérifications ; modifications
+  figées sur désactivées), récapitulatif validé par le moteur avec le fichier exact, puis
+  l'exploration par `runMission` suivie en direct (SSE numérotés et rejouables) jusqu'au résultat du
+  moteur et aux rapports (liens à ticket, CSP `sandbox`). Contrats, client (`createQaCrawler`) et
+  cycle de vie dans `@qa-crawler/core/sdk`, élément dans `@qa-crawler/core/sdk/ui`, serveur dans
+  `@qa-crawler/core/sdk/server`. Ni annulation, ni pourcentage, ni durée restante : le moteur n'en
+  offre pas. Exemple d'hôte sur une autre origine : `examples/sdk-host/`.
 - **Knowledge Center** (`qa-crawler knowledge-center`, `npm run qa -- knowledge-center -c <mission>`) :
   le tableau de bord de la mémoire, servi en local (`node:http`, page au thème QA-CRAWLER, API JSON),
   branché sur les données réelles : tables de persistance, base de connaissances fichier, connaissance

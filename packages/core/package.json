@@ -15,6 +15,18 @@
       "types": "./dist/cli/cli.d.ts",
       "default": "./dist/cli/cli.js"
     },
+    "./sdk": {
+      "types": "./dist/sdk/core/index.d.ts",
+      "default": "./dist/sdk/core/index.js"
+    },
+    "./sdk/ui": {
+      "types": "./dist/sdk/ui/index.d.ts",
+      "default": "./dist/sdk/ui/index.js"
+    },
+    "./sdk/server": {
+      "types": "./dist/sdk/server/index.d.ts",
+      "default": "./dist/sdk/server/index.js"
+    },
     "./package.json": "./package.json",
     "./dist/*": "./dist/*"
   },
