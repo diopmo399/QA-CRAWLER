@@ -372,6 +372,20 @@ export interface PanelState {
     width: number;
     height: number;
     highlight?: { actionId: string; x: number; y: number; width: number; height: number; label?: string };
+    /** Revue : l'image a été prise pendant l'enregistrement, juste après cette étape. */
+    step?: string;
+    /** Revue : aucune image n'a été prise pour l'étape choisie (l'aperçu garde la précédente). */
+    missing?: boolean;
+    /** Revue, un clic : l'écran AVANT le clic, le bouton encadré là où il était à l'appui. */
+    before?: {
+      image: string;
+      url: string;
+      width: number;
+      height: number;
+      highlight?: { actionId: string; x: number; y: number; width: number; height: number; label?: string };
+    };
+    /** Revue : seule l'image d'avant le clic existe (celle d'après manque). */
+    onlyBefore?: boolean;
   };
   analysis: PanelAnalysis;
   /** L'ANALYSE HTTP EN DIRECT (provisoire) : des compteurs, jamais une vérité. */

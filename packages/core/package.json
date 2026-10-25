@@ -21,6 +21,7 @@
   "files": [
     "dist",
     "domain-packs",
+    "assets",
     "README.md"
   ],
   "engines": {
