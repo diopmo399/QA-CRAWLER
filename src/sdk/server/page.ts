@@ -43,7 +43,7 @@ export function flowStudioHtml(options: { token: string; nonce: string; language
 import '/sdk/ui/index.js';
 const studio = document.querySelector('qa-crawler-flow-studio');
 const query = new URLSearchParams(location.search);
-for (const name of ['project', 'recording']) {
+for (const name of ['project', 'recording', 'theme']) {
   const value = query.get(name);
   if (value) studio.setAttribute(name, value);
 }
@@ -70,7 +70,7 @@ export function runComparePage(options: { token: string; nonce: string; language
 import '/sdk/ui/index.js';
 const runs = document.querySelector('qa-crawler-run-compare');
 const query = new URLSearchParams(location.search);
-for (const name of ['project', 'base', 'head']) {
+for (const name of ['project', 'base', 'head', 'theme']) {
   const value = query.get(name);
   if (value) runs.setAttribute(name, value);
 }
@@ -96,8 +96,11 @@ export function runMonitorPage(options: { token: string; nonce: string; language
 <script type="module" nonce="${options.nonce}">
 import '/sdk/ui/index.js';
 const monitor = document.querySelector('qa-crawler-run-monitor');
-const id = new URLSearchParams(location.search).get('exploration');
-if (id) monitor.setAttribute('exploration', id);
+const query = new URLSearchParams(location.search);
+for (const name of ['exploration', 'theme']) {
+  const value = query.get(name);
+  if (value) monitor.setAttribute(name, value);
+}
 monitor.token = ${JSON.stringify(options.token)};
 </script>
 </body>

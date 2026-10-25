@@ -139,11 +139,11 @@ Points d'entrée réutilisés par le SDK :
 
 ### J. Intégration visuelle
 
-| Élément                                                                                             | État                      | Preuve / écart                                                   |
-| --------------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------- |
-| Modes autonome / embarqué, styles isolés, couleur, nom, logo, langue, valeurs initiales, événements | `EXISTANT_ET_TESTÉ`       | `sdk-wizard.test.ts` (hôte embarqué)                             |
-| Thème sombre                                                                                        | `ABSENT`                  | jetons `--qa-*` en clair seulement                               |
-| Navigation clavier, états de chargement et d'erreur annoncés                                        | `EXISTANT_MAIS_INCOMPLET` | assistant seulement ; aucun contrôle automatique d'accessibilité |
+| Élément                                                                                             | État                      | Preuve / écart                                                                                                                                                  |
+| --------------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Modes autonome / embarqué, styles isolés, couleur, nom, logo, langue, valeurs initiales, événements | `EXISTANT_ET_TESTÉ`       | `sdk-wizard.test.ts` (hôte embarqué)                                                                                                                            |
+| Thème sombre                                                                                        | `EXISTANT_ET_TESTÉ`       | phase 7 : `theme="light\|dark\|auto"` sur les quatre composants ; `sdk-theme.test.ts`, rendu vérifié dans Chromium (`sdk-runs.test.ts`)                         |
+| Navigation clavier, états de chargement et d'erreur annoncés                                        | `EXISTANT_MAIS_INCOMPLET` | clavier et annonces testés par composant ; contraste AA calculé pour la comparaison et le Run Monitor ; **pas d'audit axe automatique** (outil absent du dépôt) |
 
 ### K. Sécurité et gouvernance
 

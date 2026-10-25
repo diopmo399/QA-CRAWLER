@@ -1,3 +1,5 @@
+import { darkThemeCss } from './theme.js';
+
 /**
  * LE STYLE DU FLOW STUDIO, enfermé dans le Shadow DOM. Mêmes variables publiques `--qa-*` que
  * l'assistant : l'hôte habille les deux composants d'un seul jeu de valeurs.
@@ -133,4 +135,4 @@ fieldset{border:0;margin:0;padding:0}
 .node:focus{outline:none}
 
 @container (max-width:760px){.side{width:100%;border-left:0;border-top:1px solid var(--qa-color-border);max-height:45%}.body{flex-direction:column}.search{min-width:0;flex:1}}
-`;
+${darkThemeCss()}`;

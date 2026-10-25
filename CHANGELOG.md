@@ -6,6 +6,10 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : thème sombre** (`theme="dark"` ou `"auto"`) pour l'assistant, le Flow Studio, la
+  comparaison et le Run Monitor ; les variables de l'hôte gardent la priorité. Les couleurs de statut
+  de la comparaison et du Run Monitor sont foncées vers la couleur du texte pour atteindre le contraste
+  WCAG AA dans les deux thèmes (calculé par un test).
 - **SDK : Run Monitor** (`docs/sdk/README.md`). Le flux d'une exploration porte les flows imposés et
   leurs étapes (`flow`, `flow-step`), avec des libellés sans valeur saisie. `<qa-crawler-run-monitor>`
   (page `/monitor`) suit l'exploration en direct : statut, état du flux et reprise annoncés, avancement

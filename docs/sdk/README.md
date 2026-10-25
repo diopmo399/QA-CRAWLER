@@ -135,6 +135,22 @@ qa-crawler-project-wizard {
 }
 ```
 
+Thème sombre : l'attribut `theme` vaut `light` (défaut, inchangé), `dark`, ou `auto` (suit
+`prefers-color-scheme` du système). Il vaut pour les quatre composants : assistant, Flow Studio,
+comparaison et Run Monitor. Les pages autonomes le prennent dans l'URL (`?theme=dark`). Le thème ne
+change que les jetons `--qa-*` : une variable posée par l'hôte sur l'élément l'emporte toujours.
+
+Accessibilité vérifiée par les tests :
+
+- contraste WCAG AA (4,5:1) du texte, du texte secondaire, de l'accent et des statuts de la
+  comparaison et du Run Monitor, dans les deux thèmes (`tests/unit/sdk-theme.test.ts`) ;
+- onglets au clavier ;
+- régions `role="status"` annoncées ;
+- refus annoncés (`role="alert"`) ;
+- mouvement réduit respecté (`prefers-reduced-motion`).
+
+Aucun audit automatique complet (de type axe) n'est lancé : l'outil n'est pas une dépendance du dépôt.
+
 Variables : `--qa-color-primary`, `--qa-color-primary-2`, `--qa-color-background`,
 `--qa-color-surface`, `--qa-color-surface-2`, `--qa-color-panel`, `--qa-color-panel-2`,
 `--qa-color-text`, `--qa-color-muted`, `--qa-color-faint`, `--qa-color-border`,
@@ -539,6 +555,8 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/integration/sdk-wizard.test.ts` : le **vrai** moteur, Chromium et le site de démo — page
   autonome jusqu'au résultat, projet sans secret, rapport par lien ; hôte sur une autre origine
   (thème, jeton, événements) ; origine refusée.
+- `tests/unit/sdk-theme.test.ts` : thème sombre présent dans les quatre composants (attribut et
+  système), chaque jeton redéfini, contraste WCAG AA calculé dans les deux thèmes.
 - `tests/unit/sdk-monitor.test.ts` : libellés d'étape sans valeur ; événements `flow` et
   `flow-step` relayés par l'écouteur du moteur ; modèle du suivi ; rendu échappé, reconnexion
   annoncée.
@@ -550,7 +568,8 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   rendu échappé et sans pourcentage.
 - `tests/integration/sdk-runs.test.ts` : deux **vrais** runs du moteur (le second avec un défaut de
   l'application) ; la comparaison et la traçabilité par l'API, puis `<qa-crawler-run-compare>` dans
-  Chromium (écarts dépliés, exigence passée en échec, liste par statut, onglets au clavier).
+  Chromium (écarts dépliés, exigence passée en échec, liste par statut, onglets au clavier) ; thème
+  sombre par attribut, `auto` selon le système, variable de l'hôte prioritaire.
 - `tests/integration/sdk-generated-execution.test.ts` : un parcours enregistré par le **vrai**
   recorder, généré par le SDK, puis **exécuté** : le `.feature` par la mission générée (chaque
   scénario `PASSED` sur l'application), le test Playwright par Playwright Test avec la configuration

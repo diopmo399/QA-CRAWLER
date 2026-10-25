@@ -1,3 +1,5 @@
+import { darkThemeCss } from './theme.js';
+
 /**
  * LE STYLE DU RUN MONITOR, enfermé dans le Shadow DOM. Mêmes variables publiques `--qa-*` que les
  * autres composants du SDK.
@@ -24,13 +26,13 @@ code{font-family:var(--qa-font-family-mono);font-size:.86em;background:var(--qa-
 .spin{width:22px;height:22px;border-radius:50%;border:3px solid var(--qa-color-border);border-top-color:var(--qa-color-primary);animation:sp 1s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.spin{animation:none}}
-.err{color:var(--qa-color-danger)}
+.err{color:color-mix(in srgb,var(--qa-color-danger) 60%,var(--qa-color-text))}
 .tb{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--qa-color-border);flex-wrap:wrap}
 .ttl{margin:0 auto 0 0;font-size:16px;font-weight:800}
 .conn{font-size:12px;font-weight:700;padding:2px 10px;border-radius:999px;background:var(--qa-color-surface-2)}
-.conn.live{color:var(--qa-color-success)}
-.conn.reconnecting,.conn.connecting{color:var(--qa-color-warning)}
-.conn.lost{color:var(--qa-color-danger)}
+.conn.live{color:color-mix(in srgb,var(--qa-color-success) 60%,var(--qa-color-text))}
+.conn.reconnecting,.conn.connecting{color:color-mix(in srgb,var(--qa-color-warning) 60%,var(--qa-color-text))}
+.conn.lost{color:color-mix(in srgb,var(--qa-color-danger) 60%,var(--qa-color-text))}
 .counts{list-style:none;margin:0;padding:10px 16px;display:flex;flex-wrap:wrap;gap:6px 18px;border-bottom:1px solid var(--qa-color-border)}
 .counts b{font-size:16px}
 .body{padding:12px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
@@ -39,9 +41,9 @@ code{font-family:var(--qa-font-family-mono);font-size:.86em;background:var(--qa-
 .flows li{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--qa-color-border);border-radius:10px;padding:6px 10px}
 .flows .nm{font-weight:700}
 .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid currentColor;white-space:nowrap}
-.pill.ok{color:var(--qa-color-success)}
-.pill.ko{color:var(--qa-color-danger)}
-.pill.warn{color:var(--qa-color-warning)}
+.pill.ok{color:color-mix(in srgb,var(--qa-color-success) 60%,var(--qa-color-text))}
+.pill.ko{color:color-mix(in srgb,var(--qa-color-danger) 60%,var(--qa-color-text))}
+.pill.warn{color:color-mix(in srgb,var(--qa-color-warning) 60%,var(--qa-color-text))}
 .pill.mu{color:var(--qa-color-muted)}
 .view{display:flex;flex-wrap:wrap;gap:10px;border:1px solid var(--qa-color-border);border-radius:10px;padding:8px 12px;margin:0}
 .view legend{font-size:12px;font-weight:700;color:var(--qa-color-muted);padding:0 4px}
@@ -56,4 +58,4 @@ code{font-family:var(--qa-font-family-mono);font-size:.86em;background:var(--qa-
 .ev .tx{overflow-wrap:anywhere}
 .why{font-size:12px}
 @container (max-width:520px){.ev{grid-template-columns:1fr}.ev .ty{min-width:0}}
-`;
+${darkThemeCss()}`;

@@ -1,3 +1,5 @@
+import { darkThemeCss } from './theme.js';
+
 /**
  * LE STYLE DE LA COMPARAISON D'EXÉCUTIONS, enfermé dans le Shadow DOM. Mêmes variables publiques
  * `--qa-*` que l'assistant et le Studio : l'hôte habille les trois composants d'un seul jeu de valeurs.
@@ -34,16 +36,16 @@ code{font-family:var(--qa-font-family-mono);font-size:.86em;background:var(--qa-
 .panel{padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
 .panel h3{margin:8px 0 0;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--qa-color-muted)}
 .note{margin:0}
-.err{color:var(--qa-color-danger)}
+.err{color:color-mix(in srgb,var(--qa-color-danger) 60%,var(--qa-color-text))}
 .counts{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px 16px}
 .counts b{font-size:16px}
 .move{margin:0;padding:8px 10px;border-radius:10px;background:var(--qa-color-surface-2)}
 .move.ko{border-left:3px solid var(--qa-color-danger)}
 .move.ok{border-left:3px solid var(--qa-color-success)}
 .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid currentColor;white-space:nowrap}
-.pill.ok{color:var(--qa-color-success)}
-.pill.ko{color:var(--qa-color-danger)}
-.pill.warn{color:var(--qa-color-warning)}
+.pill.ok{color:color-mix(in srgb,var(--qa-color-success) 60%,var(--qa-color-text))}
+.pill.ko{color:color-mix(in srgb,var(--qa-color-danger) 60%,var(--qa-color-text))}
+.pill.warn{color:color-mix(in srgb,var(--qa-color-warning) 60%,var(--qa-color-text))}
 .pill.mu{color:var(--qa-color-muted)}
 .flows,.reqlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .flow{border:1px solid var(--qa-color-border);border-radius:10px;overflow:hidden}
@@ -65,4 +67,4 @@ code{font-family:var(--qa-font-family-mono);font-size:.86em;background:var(--qa-
 .kv{font-size:13px;overflow-wrap:anywhere}
 details summary{cursor:pointer;color:var(--qa-color-muted)}
 @container (max-width:560px){.flow .row{grid-template-columns:1fr auto}.flow .du{display:none}}
-`;
+${darkThemeCss()}`;
