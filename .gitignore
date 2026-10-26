@@ -27,3 +27,5 @@ screenshots/*
 /packages/core/assets/
 /packages/*/README.md
 /dist-packages/
+# Projets écrits par l'exemple d'hôte du SDK
+/examples/sdk-host/.workspace/

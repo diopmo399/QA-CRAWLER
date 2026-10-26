@@ -54,6 +54,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Moteur de décision avancé](#moteur-de-décision-avancé)
 - [Persistance et mémoire](#persistance-et-mémoire)
 - [Knowledge Center : voir et gérer ce que l'outil a appris](#knowledge-center--voir-et-gérer-ce-que-loutil-a-appris)
+- [SDK : l'assistant de projet dans une autre application](#sdk--lassistant-de-projet-dans-une-autre-application)
 - [Corrélation réseau](#corrélation-réseau)
 - [Ligne de commande](#ligne-de-commande)
 - [Docker](#docker)
@@ -2266,6 +2267,19 @@ concurrentes) : elles sont montrées, exportées et historisées, et **ne change
 moteur**, qui ne lit pas ce registre. Le tableau de bord n'active ni la mémoire ni la persistance, ne lit
 aucun secret, et toute écriture exige un jeton de session, un en-tête dédié et une origine locale ;
 `--read-only` les refuse toutes. Détails, formules, API et limites : [docs/KNOWLEDGE_CENTER.md](docs/KNOWLEDGE_CENTER.md).
+
+## SDK : l'assistant de projet dans une autre application
+
+`qa-crawler sdk-server --workspace <dir>` sert un assistant en cinq étapes (projet, environnement,
+exploration, récapitulatif, exploration en direct) qui écrit un `qa-crawler.config.yaml` validé par le
+moteur et lance une vraie exploration. Le même assistant s'embarque dans une application hôte par
+l'élément `<qa-crawler-project-wizard mode="embedded">` (Shadow DOM, thème par variables `--qa-*`,
+événements DOM `qa-project-created`, `qa-exploration-completed`…). Le serveur garde les droits :
+jeton, origines autorisées, variables `QA_*` dont il ne donne que la présence, SafetyPolicy du moteur
+intacte, rapports par lien de courte durée. Pas d'annulation ni de pourcentage : le moteur n'en a pas.
+
+Documentation : [docs/sdk/README.md](docs/sdk/README.md) ; décisions : [docs/sdk/AUDIT.md](docs/sdk/AUDIT.md) ;
+exemple d'hôte : [examples/sdk-host](examples/sdk-host/README.md).
 
 ## Corrélation réseau
 

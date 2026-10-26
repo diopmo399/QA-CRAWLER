@@ -67,6 +67,8 @@ Commands (default: mission.mode, else explore):
   knowledge-center  Serve the Knowledge Center (what the tool learned: knowledge, flows,
            transitions, quality, persistence): qa-crawler knowledge-center -c <mission.yaml>
            (qa-crawler knowledge-center --help for its options)
+  sdk-server  Serve the embeddable SDK (project wizard + API): qa-crawler sdk-server --workspace <dir>
+           (qa-crawler sdk-server --help for its options)
 
 Options:
   -c, --config <file>         Mission YAML file (or pass it as the first argument)
