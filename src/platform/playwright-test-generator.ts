@@ -4,11 +4,13 @@ import {
   replayOnlyComment,
   translateAssertions,
 } from './assertion-translation.js';
-import type { FlowStep } from '../config/flow-schema.js';
+import type { FlowStep, FlowTarget } from '../config/flow-schema.js';
 import type { FlowRunReport } from '../model/flow-run.js';
 import {
   literalEnvName,
   playwrightLocator,
+  playsFirstMatch,
+  routeTemplatePattern,
   playwrightValue,
   testDataKeysOf,
   playwrightText,
@@ -50,8 +52,18 @@ const slug = (text: string): string =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'flow';
 
-function routeAssertion(route: string): string {
-  return `await expect(page).toHaveURL(new RegExp(${quote(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))}));`;
+/**
+ * L'URL attendue, lue comme le moteur la lit : `expect.url` est un texte que l'URL contient ;
+ * `effects.route` est un gabarit de route (routeTemplatePattern).
+ */
+function routeAssertion(route: string, template = false): string {
+  const pattern = template ? routeTemplatePattern(route) : route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return `await expect(page).toHaveURL(new RegExp(${quote(pattern)}));`;
+}
+
+/** Le localisateur d'une action, joué comme le moteur le joue (playsFirstMatch). */
+function actionLocator(target: FlowTarget): string {
+  return `${playwrightLocator(target)}${playsFirstMatch(target) ? '.first()' : ''}`;
 }
 
 function stepLines(
@@ -70,19 +82,19 @@ function stepLines(
       lines.push(`await page.goto(${quote(step.url)});`);
       break;
     case 'click':
-      lines.push(`await ${playwrightLocator(step.target)}.click();`);
+      lines.push(`await ${actionLocator(step.target)}.click();`);
       break;
     case 'check':
     case 'uncheck':
-      lines.push(`await ${playwrightLocator(step.target)}.${step.kind}();`);
+      lines.push(`await ${actionLocator(step.target)}.${step.kind}();`);
       break;
     case 'fill':
       lines.push(
-        `await ${playwrightLocator(step.target)}.fill(${playwrightValue(step.value, literalEnvName(flowName, index))});`,
+        `await ${actionLocator(step.target)}.fill(${playwrightValue(step.value, literalEnvName(flowName, index))});`,
       );
       break;
     case 'select':
-      lines.push(`await ${playwrightLocator(step.target)}.selectOption(${quote(step.option)});`);
+      lines.push(`await ${actionLocator(step.target)}.selectOption(${quote(step.option)});`);
       break;
     case 'expect': {
       const expectation = step.expect;
@@ -145,7 +157,7 @@ function stepLines(
   }
   // Les effets attendus appris à l'enregistrement deviennent des assertions.
   if (step.effects?.route) {
-    lines.push(routeAssertion(step.effects.route));
+    lines.push(routeAssertion(step.effects.route, true));
     assertions += 1;
   }
   for (const control of step.effects?.appears ?? []) {

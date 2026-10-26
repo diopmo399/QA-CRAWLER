@@ -1,3 +1,5 @@
+import { darkThemeCss } from './theme.js';
+
 /**
  * LE STYLE DE L'ASSISTANT (proposition B validée), enfermé dans le Shadow DOM. L'hôte le règle par
  * des variables CSS publiques posées sur l'élément ; aucune règle ne sort de l'élément.
@@ -239,4 +241,19 @@ h1{font:800 29px/1.15 var(--qa-font-family-heading);letter-spacing:-.012em;margi
   .tiles,.rings{grid-template-columns:minmax(0,1fr)}
   h1{font-size:24px}
 }
-`;
+${darkThemeCss([
+  [
+    '.win',
+    'background:radial-gradient(900px 520px at 12% 0%,color-mix(in srgb,var(--qa-color-primary) 16%,transparent),transparent 70%),var(--qa-color-background)',
+  ],
+  [
+    '.lock',
+    'background:linear-gradient(135deg,color-mix(in srgb,var(--qa-color-primary) 14%,var(--qa-color-surface)),var(--qa-color-surface-2))',
+  ],
+  ['.alert.e', 'color:#FFB3B6;border-color:#6B2A2E'],
+  ['.alert.w', 'color:#F5CF86;border-color:#6A4C14'],
+  ['.alert.ok', 'color:#9BEBD6;border-color:#1F5E50'],
+  ['.ck.ok', 'color:#7DE6CC'],
+  ['.ck.e', 'color:#FF9EA1'],
+  ['.b-state', 'color:#7DE6CC'],
+])}`;

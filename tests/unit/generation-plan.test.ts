@@ -202,13 +202,20 @@ describe('generation plan', () => {
     expect(plan.artifacts.map((artifact) => artifact.format)).toEqual([
       'yaml',
       'gherkin',
+      'gherkin',
+      'playwright',
       'playwright',
       ...new Array<string>(8).fill('java'),
     ]);
+    // Le .feature vient avec la mission qui le joue ; les tests Playwright avec leur configuration.
+    expect(plan.artifacts[2]?.path).toMatch(/\.gherkin\.mission\.yaml$/);
+    expect(plan.artifacts[2]?.content).toContain('  - gherkin: ./');
+    expect(plan.artifacts[4]?.path).toBe('playwright/playwright.config.ts');
+    expect(plan.artifacts[4]?.content).toContain("['junit', { outputFile: 'test-results/junit.xml' }]");
     expect(plan.artifacts.every((artifact) => artifact.status === 'GENERATED')).toBe(true);
     const yaml = plan.artifacts[0];
     const feature = plan.artifacts[1];
-    const spec = plan.artifacts[2];
+    const spec = plan.artifacts[3];
     expect(yaml?.content).toContain('assertions:');
     expect(yaml?.content).toContain('groups:');
     expect(feature?.content).toContain('── group: Create');
@@ -235,9 +242,12 @@ describe('generation plan', () => {
     expect(validated.map((artifact) => [artifact.format, artifact.status])).toEqual([
       ['yaml', 'STATICALLY_VALIDATED'],
       ['gherkin', 'STATICALLY_VALIDATED'],
+      // La mission ne se vérifie qu'écrite à côté de son .feature : non validée ici, dit tel quel.
+      ['gherkin', 'NOT_VALIDATED'],
+      ['playwright', 'STATICALLY_VALIDATED'],
       ['playwright', 'STATICALLY_VALIDATED'],
     ]);
-    expect(validated[2]?.validation?.method).toContain('types are not checked');
+    expect(validated[3]?.validation?.method).toContain('types are not checked');
     // Java sans Maven lancé : NON VALIDÉ, dit tel quel (jamais « validé » par défaut).
     const java = await validateArtifacts(
       plan.artifacts.filter((artifact) => artifact.format === 'java'),
@@ -262,6 +272,12 @@ describe('generation plan', () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'qa-generation-'));
     const written = await writeArtifacts(plan.artifacts, directory);
     expect(written.length).toBe(plan.artifacts.length);
+    // Écrite à côté du .feature, la mission est lue par le chargeur du moteur : .feature et steps compris.
+    const [mission] = await validateArtifacts([plan.artifacts[2] as (typeof plan.artifacts)[number]], {
+      directory,
+    });
+    expect(mission).toMatchObject({ status: 'STATICALLY_VALIDATED' });
+    expect(mission?.validation?.method).toContain('every sentence has a step definition');
     expect(await readFile(path.join(directory, 'java', 'pom.xml'), 'utf8')).toContain(
       '<artifactId>junit-jupiter</artifactId>',
     );

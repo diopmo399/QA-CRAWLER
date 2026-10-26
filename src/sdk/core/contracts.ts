@@ -140,6 +140,7 @@ export const EXTENSION_NAMES = [
   'assertions',
   'generation',
   'reports',
+  'data',
 ] as const;
 export type ExtensionName = (typeof EXTENSION_NAMES)[number];
 
@@ -203,6 +204,33 @@ export type ExplorationEvent =
       route?: string;
     }
   | { seq: number; at: string; type: 'phase'; phase: string }
+  /** Un flow imposé de la mission commence (`start`) ou se termine (`end`, avec son statut). */
+  | {
+      seq: number;
+      at: string;
+      type: 'flow';
+      flow: string;
+      phase: 'start' | 'end';
+      status?: string;
+      durationMs?: number;
+      steps?: number;
+    }
+  /**
+   * Une étape d'un flow imposé, jouée par le moteur : PASSED, FAILED, BLOCKED, SKIPPED ou MANUAL. Le
+   * libellé ne porte jamais la valeur saisie (une étape `fill` est décrite par sa cible seulement).
+   */
+  | {
+      seq: number;
+      at: string;
+      type: 'flow-step';
+      flow: string;
+      index: number;
+      kind: string;
+      label: string;
+      status: string;
+      durationMs: number;
+      reason?: string;
+    }
   | { seq: number; at: string; type: 'completed'; summary: ExplorationSummary }
   | { seq: number; at: string; type: 'failed'; error: string };
 
@@ -342,6 +370,42 @@ export interface AssertionProposalView {
   decidedAt?: string;
   note?: string;
   conflictsWith?: string[];
+  /** L'étape `expect` du flow qui porte cette vérification (UI_EXPECT dans le flow). */
+  stepId?: string;
+  /** Le résultat au dernier rejeu ; `NOT_EXECUTED` quand aucun rejeu ne l'a vérifiée. */
+  verdict: AssertionVerdict;
+}
+
+/**
+ * LE VERDICT D'UNE ASSERTION, tel que le SDK le publie. Il vient toujours d'une exécution :
+ *   VERIFIED_PASS   vérifiée et conforme (preuve observée)
+ *   VERIFIED_FAIL   vérifiée et non conforme
+ *   BLOCKED         non jouée : la politique de sécurité ou une étape précédente l'a empêchée
+ *   INCONCLUSIVE    jouée sans preuve suffisante pour conclure
+ *   NOT_EXECUTED    aucune exécution ne l'a vérifiée (jamais rejouée, ou ajoutée depuis)
+ */
+export const ASSERTION_VERDICTS = [
+  'VERIFIED_PASS',
+  'VERIFIED_FAIL',
+  'BLOCKED',
+  'INCONCLUSIVE',
+  'NOT_EXECUTED',
+] as const;
+export type AssertionVerdictStatus = (typeof ASSERTION_VERDICTS)[number];
+
+export interface AssertionVerdict {
+  status: AssertionVerdictStatus;
+  /** Qui a conclu : le rejeu de l'étape `expect`, ou le moteur d'assertions métier. */
+  source?: 'REPLAY_STEP' | 'QUALITY_ENGINE';
+  /** Le statut tel que le moteur l'a écrit (MATCHED, FAIL, UNVERIFIABLE…). */
+  engineStatus?: string;
+  reasons: string[];
+  observed?: string;
+  /** Les identifiants des preuves du moteur. */
+  evidence?: string[];
+  at?: string;
+  /** Le flow a changé depuis cette exécution. */
+  stale?: boolean;
 }
 
 export interface ProposalDecisionInput {
@@ -363,6 +427,143 @@ export interface GroupViewDto {
   checks: string[];
   assertionIds: string[];
   runnableAlone: { ok: boolean; missing: string[] };
+  /** Ses entrées (données produites ailleurs) et ses sorties (données citées ailleurs). */
+  data?: {
+    inputs: { key: string; producerStepId?: string; producerGroupId?: string }[];
+    outputs: { key: string; consumerStepIds: string[] }[];
+  };
+}
+
+/**
+ * Le résultat d'une étape au dernier rejeu du flow, tel que le moteur l'a écrit (dry run) :
+ * retrouvée et jouée (`MATCHED`), vérification différente, plusieurs candidats, refusée par la
+ * SafetyPolicy, introuvable, non vérifiée.
+ */
+export const STEP_REPLAY_OUTCOMES = [
+  'MATCHED',
+  'ASSERTION_MISMATCH',
+  'AMBIGUOUS',
+  'BLOCKED_BY_POLICY',
+  'NOT_FOUND',
+  'NOT_VERIFIED',
+] as const;
+export type StepReplayOutcome = (typeof STEP_REPLAY_OUTCOMES)[number];
+
+export interface StudioStep {
+  id: string;
+  /** Position 1…n dans le flow tel qu'écrit. */
+  position: number;
+  kind: string;
+  description: string;
+  groupId?: string;
+  /** Les clés de données de test citées et produites (jamais une valeur). */
+  consumes: string[];
+  produces: string[];
+  /** Absent : l'étape n'a pas été rejouée (aucun rejeu, ou étape ajoutée depuis). */
+  replay?: { outcome: StepReplayOutcome; reasons: string[] };
+}
+
+/** Une donnée produite par une étape et citée par une autre. */
+export interface StudioDependency {
+  from: string;
+  to: string;
+  key: string;
+}
+
+/** Une étape qui cite une donnée avant l'étape qui la produit. */
+export interface StudioViolation {
+  stepId: string;
+  key: string;
+  producerStepId: string;
+  message: string;
+}
+
+/** La vue du Flow Studio : le flow, ses groupes, ses dépendances, et le dernier rejeu s'il existe. */
+export interface FlowStudioView {
+  name: string;
+  startAt: string;
+  steps: StudioStep[];
+  groups: GroupViewDto[];
+  dependencies: StudioDependency[];
+  violations: StudioViolation[];
+  replay?: {
+    /** Le statut du dry run (FULLY_MATCHED…). */
+    status: string;
+    at: string;
+    /** Le flow a été modifié après ce rejeu : les résultats peuvent ne plus correspondre. */
+    stale: boolean;
+  };
+}
+
+/** D'où vient la valeur d'une saisie : gardée, générée à chaque rejeu, ou reprise d'une étape antérieure. */
+export const DATA_SOURCES = ['FIXED', 'GENERATED', 'REFERENCE'] as const;
+export type DataSource = (typeof DATA_SOURCES)[number];
+
+export interface DataStepRef {
+  stepId: string;
+  /** Position parmi les étapes d'action (1…n). */
+  position: number;
+  label: string;
+}
+
+/** Une donnée du parcours : qui la produit, qui la saisit à nouveau ou la cite. Jamais un secret. */
+export interface DataVariableView {
+  key: string;
+  /** RECORDED_LITERAL, GENERATE_AT_REPLAY, REFERENCE, TEMPLATE… (le mot du moteur). */
+  strategy: string;
+  generator?: string;
+  producedBy?: DataStepRef;
+  usedBy: (DataStepRef & { how: 'INPUT' | 'CITATION' })[];
+}
+
+/** La source de la valeur d'une saisie et ce qu'on peut y lier. */
+export interface DataInputView extends DataStepRef {
+  source: DataSource | 'SENSITIVE';
+  key?: string;
+  generator?: string;
+  reference?: string;
+  /** La valeur enregistrée quand elle est gardée en clair (jamais un secret). */
+  recordedValue?: string;
+  /** Les données produites AVANT cette saisie : les seules réutilisables. */
+  options: (DataStepRef & { key: string; strategy: string })[];
+  /** Choisie par un humain (registre des décisions), et non par la détection automatique. */
+  manual: boolean;
+}
+
+/** Une donnée citée qu'aucune étape ne produit et que le jeu de données ne contient pas. */
+export interface MissingDataView {
+  key: string;
+  stepIds: string[];
+  message: string;
+}
+
+export interface TestDataView {
+  variables: DataVariableView[];
+  inputs: DataInputView[];
+  missing: MissingDataView[];
+  generators: readonly string[];
+}
+
+export interface DataBindingInput {
+  stepId: string;
+  source: DataSource;
+  /** GENERATED : le nom de la variable ; REFERENCE : la donnée reprise. */
+  variable?: string;
+  generator?: string;
+  /** FIXED : la valeur (par défaut, celle de l'enregistrement). */
+  value?: string;
+}
+
+export interface DataBindingResult {
+  decision: {
+    id: string;
+    stepId: string;
+    source: DataSource;
+    variable: string;
+    previousKey?: string;
+    at: string;
+  };
+  data: TestDataView;
 }
 
 export type GroupCommandInput =
@@ -443,6 +644,151 @@ export interface ReportLink {
   expiresAt: string;
 }
 
+/**
+ * La couverture d'une exigence, telle que le moteur la calcule (`quality-verification.json`) :
+ * NOT_COVERED (aucun flow ne la cite), COVERED_NOT_EXECUTED, VERIFIED_PASS, VERIFIED_FAIL, BLOCKED,
+ * INCONCLUSIVE, STALE_EVIDENCE (pas exécutée dans ce run, dernière preuve trop ancienne).
+ */
+export const COVERAGE_STATUSES = [
+  'NOT_COVERED',
+  'COVERED_NOT_EXECUTED',
+  'VERIFIED_PASS',
+  'VERIFIED_FAIL',
+  'BLOCKED',
+  'INCONCLUSIVE',
+  'STALE_EVIDENCE',
+] as const;
+export type CoverageStatusName = (typeof COVERAGE_STATUSES)[number];
+
+/** Le vocabulaire de l'analyse de régression du moteur (`regression-analysis.json`). */
+export const REGRESSION_STATUSES = [
+  'NEW_REGRESSION',
+  'REGRESSION_PERSISTING',
+  'REGRESSION_FIXED',
+  'FLAKY_BEHAVIOR',
+  'KNOWN_FAILURE',
+  'NEW_BEHAVIOR',
+  'EXPECTED_CHANGE',
+] as const;
+export type RegressionStatusName = (typeof REGRESSION_STATUSES)[number];
+
+export interface TraceAssertionView {
+  flow: string;
+  id: string;
+  /** PASS, FAIL, BLOCKED, INCONCLUSIVE, UNVERIFIABLE ou NOT_EXECUTED (moteur d'assertions). */
+  status: string;
+  mandatory: boolean;
+  criticality?: string;
+  evidence: string[];
+}
+
+export interface RequirementView {
+  id: string;
+  description: string;
+  criticality: string;
+  source?: string;
+  declared: boolean;
+  status: CoverageStatusName;
+  flows: string[];
+  rules: string[];
+  operations: string[];
+  assertions: TraceAssertionView[];
+  evidence: string[];
+  dependsOn: string[];
+  reasons: string[];
+  lastVerified?: { status: CoverageStatusName; at: string; runId: string };
+}
+
+export interface RuleView {
+  id: string;
+  description: string;
+  requirementIds: string[];
+  status: CoverageStatusName;
+  assertions: TraceAssertionView[];
+  conflictsWith: string[];
+  reasons: string[];
+}
+
+/** La traçabilité d'une exploration : exigences ↔ règles ↔ flows ↔ assertions ↔ preuves. */
+export interface TraceabilityView {
+  run: string;
+  generatedAt: string;
+  /** Le verdict métier du run (PASS, FAIL, BLOCKED, INCONCLUSIVE, UNVERIFIABLE, NOT_DECLARED). */
+  verdict: string;
+  requirements: RequirementView[];
+  rules: RuleView[];
+  warnings: string[];
+  summary: {
+    total: number;
+    byStatus: Record<CoverageStatusName, number>;
+    criticalFailures: string[];
+    /** Part des exigences exécutées vérifiées PASS (calculée par le moteur) ; null quand aucune n'a été exécutée. */
+    passRate: number | null;
+  };
+  /** Ce que la vérification ne peut pas affirmer (écrit par le moteur dans chaque rapport). */
+  limits: string[];
+}
+
+export interface RegressionEntryView {
+  status: RegressionStatusName;
+  subject: string;
+  anomalyId?: string;
+  evidence: string[];
+  source: 'RUNTIME' | 'HISTORICAL';
+}
+
+/** L'analyse de régression d'une exploration, par rapport à l'historique du moteur. */
+export interface RegressionView {
+  run: string;
+  entries: RegressionEntryView[];
+  summary: Record<RegressionStatusName, number>;
+}
+
+/** Les écarts d'un flow entre deux exécutions (`compareFlowRuns` du moteur). */
+export interface FlowComparisonView {
+  name: string;
+  presence: 'BOTH' | 'ONLY_BASE' | 'ONLY_HEAD';
+  baseStatus?: string;
+  headStatus?: string;
+  /** SAME : même statut, mêmes étapes, aucune dérive notable (seuils du moteur). */
+  verdict?: 'SAME' | 'CHANGED';
+  durationDeltaMs?: number;
+  /** FLOW_STATUS, STEP_STATUS, STEP_SLOWER, STEP_FASTER, TARGET_CHANGED, TARGET_HEALED, EFFECT_CHANGED, STEP_CHANGED, STEP_ADDED, STEP_REMOVED. */
+  changes: { kind: string; step?: number; detail: string }[];
+}
+
+/** La couverture d'une exigence dans chacune des deux exécutions (absente : pas de traçabilité, ou pas citée). */
+export interface RequirementComparisonView {
+  id: string;
+  description: string;
+  criticality: string;
+  baseStatus?: CoverageStatusName;
+  headStatus?: CoverageStatusName;
+  changed: boolean;
+}
+
+/** Deux explorations d'un même projet, comparées sans rien rejouer. */
+export interface RunComparisonView {
+  base: { run: string; at: string };
+  head: { run: string; at: string };
+  flows: FlowComparisonView[];
+  /** Vide quand aucune des deux exécutions n'a de traçabilité (la mission ne déclare pas d'exigence). */
+  requirements: RequirementComparisonView[];
+  traceability: { base: boolean; head: boolean };
+  summary: {
+    flows: number;
+    changed: number;
+    same: number;
+    onlyBase: number;
+    onlyHead: number;
+    /** Flows PASSED dans la base et pas dans la tête. */
+    newlyFailing: string[];
+    /** Flows non PASSED dans la base et PASSED dans la tête. */
+    newlyPassing: string[];
+    requirementsChanged: number;
+  };
+}
+
 export interface ErrorBody {
   error: string;
   status: number;
@@ -458,5 +804,30 @@ export const WIZARD_EVENTS = {
   explorationProgress: 'qa-exploration-progress',
   explorationCompleted: 'qa-exploration-completed',
   explorationFailed: 'qa-exploration-failed',
+  error: 'qa-error',
+} as const;
+
+/** Les événements DOM du Flow Studio (bubbles, composed). */
+/** Les événements DOM du Run Monitor (bubbles + composed). */
+export const MONITOR_EVENTS = {
+  /** `detail: { state, attempt }` : connecting, live, reconnecting, closed ou lost. */
+  connection: 'qa-monitor-connection',
+  error: 'qa-error',
+} as const;
+
+/** Les événements DOM de la comparaison d'exécutions (bubbles + composed). */
+export const RUNS_EVENTS = {
+  /** `detail: { base, head }` : les deux exécutions comparées ont changé. */
+  selection: 'qa-runs-selection',
+  error: 'qa-error',
+} as const;
+
+export const STUDIO_EVENTS = {
+  /** `detail: { stepIds, groupId? }` : la sélection a changé. */
+  selection: 'qa-studio-selection',
+  /** `detail: { command, warnings }` : le moteur a accepté une commande de groupe. */
+  changed: 'qa-studio-changed',
+  /** `detail: { command, message, violations }` : le moteur a refusé une commande (rien n'a changé). */
+  refused: 'qa-studio-refused',
   error: 'qa-error',
 } as const;

@@ -1,7 +1,14 @@
-# Exemple : une application hôte qui embarque l'assistant QA-CRAWLER
+# Exemple : une application hôte qui embarque les composants QA-CRAWLER
 
-« Acme Portail » est une application fictive. Elle pose `<qa-crawler-project-wizard mode="embedded">`
-dans sa page, avec son propre thème (variables CSS publiques), et reçoit les événements de l'assistant.
+« Acme Portail » est une application fictive. Elle pose les quatre composants du SDK dans ses
+propres pages, avec son thème (variables CSS publiques), un seul jeton et un seul réglage clair/sombre :
+
+| Section        | Élément                                       | Branché sur                              |
+| -------------- | --------------------------------------------- | ---------------------------------------- |
+| Nouveau projet | `<qa-crawler-project-wizard mode="embedded">` | —                                        |
+| Suivi          | `<qa-crawler-run-monitor>`                    | l'exploration lancée par l'assistant     |
+| Comparaison    | `<qa-crawler-run-compare>`                    | les explorations du projet créé          |
+| Studio         | `<qa-crawler-flow-studio>`                    | un enregistrement du projet, par son nom |
 
 ```bash
 npm run build                      # compile @qa-crawler/core, SDK compris
@@ -16,9 +23,11 @@ Ce que l'exemple montre :
   origines listées (`allowedOrigins`) ;
 - **le jeton** n'est jamais écrit dans la page : le back-end de l'hôte le remet à sa propre page
   (`/host-api/qa-crawler-token`), après avoir vérifié sa session utilisateur ;
-- **le thème** : `--qa-color-primary`, `--qa-radius`, `--qa-font-family` posés sur l'élément ;
-- **les événements** : `qa-project-created`, `qa-exploration-started`, `qa-exploration-completed`,
-  `qa-exploration-failed`.
+- **le thème** : `--qa-color-primary`, `--qa-radius`, `--qa-font-family` posés sur les éléments, et
+  `theme="auto|light|dark"` réglé une fois pour les quatre ;
+- **les événements** : `qa-project-created` (la comparaison et le Studio prennent le projet),
+  `qa-exploration-started` (le suivi prend l'exploration), `qa-exploration-completed` (la comparaison
+  se recharge), `qa-exploration-failed`, `qa-monitor-connection`.
 
 Les projets créés sont écrits dans `examples/sdk-host/.workspace/` (ignoré par git). Voir
 [docs/sdk/README.md](../../docs/sdk/README.md) pour l'API complète.

@@ -557,8 +557,9 @@ describe('QA platform — reproduction planner and Playwright generator', () => 
     expect(test.fileName).toBe('create-item.spec.ts');
     expect(test.content).toContain(`import { test, expect } from '@playwright/test';`);
     expect(test.content).toContain(`await page.goto("http://app.test/items");`);
-    expect(test.content).toContain(`page.getByRole("button", { name: "New item" }).click()`);
-    expect(test.content).toContain(`page.getByLabel("Item label").fill(testData["item.label"])`);
+    // Comme le moteur : sans position enregistrée, la première correspondance (jamais un échec en mode strict).
+    expect(test.content).toContain(`page.getByRole("button", { name: "New item" }).first().click()`);
+    expect(test.content).toContain(`page.getByLabel("Item label").first().fill(testData["item.label"])`);
     expect(test.content).toContain(`fill(process.env["ITEM_CODE"] ?? '')`);
     expect(test.content).toContain(`selectOption("standard")`);
     expect(test.content).toContain(`getByRole("button", { name: "Search", exact: true })`);

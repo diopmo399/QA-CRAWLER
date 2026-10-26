@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { parseTestDataSet, testDataSetDocument } from '../data/test-data-set.js';
 import {
   planGeneration,
   planSummary,
@@ -9,13 +10,26 @@ import {
   type GeneratedArtifact,
   type GenerationFormat,
 } from '../platform/generation-plan.js';
+import { HUMAN_REVIEW_FILE, type HumanReviewLedger } from './application/human-review.js';
 import { decideProposal, proposalSummary, type ProposalDecision } from './assertion-proposals.js';
 import type { RecordedFlow } from './model.js';
 import { TEST_DATA_FILE } from './process-recording.js';
 import { generateFlowFiles, type GeneratedFiles } from './recorded-flow.js';
 import {
+  BINDING_GENERATORS,
+  applyTestDataBinding,
+  dataLineage,
+  stepDataBinding,
+  type BindingContext,
+  type DataLineageEntry,
+  type StepDataBinding,
+  type TestDataBindingDecision,
+  type TestDataBindingInput,
+} from './test-data-binding.js';
+import {
   applyGroupCommand,
   groupViews,
+  stepDependencies,
   type GroupCommand,
   type GroupOutcome,
   type GroupView,
@@ -123,7 +137,8 @@ export async function generateRecordingTests(
   if ('error' in plan) return plan;
   const generatedDir = path.join(context.directory, 'generated');
   await writeArtifacts(plan.artifacts, generatedDir);
-  if (context.testData && formats.includes('yaml'))
+  // Le flow YAML et le .feature citent tous deux test-data.yaml (`testData:` / `# testData:`).
+  if (context.testData && (formats.includes('yaml') || formats.includes('gherkin')))
     await writeFile(path.join(generatedDir, TEST_DATA_FILE), context.testData.yaml);
   const validated = await validateArtifacts(plan.artifacts, { directory: generatedDir });
   await context.write(
@@ -249,4 +264,76 @@ export function generateStoredTests(
     },
     request,
   );
+}
+
+// ── Les données de test d'un enregistrement écrit ─────────────────────────────────────────────
+
+/** Le contexte de liaison : le flow, le jeu relu dans test-data.yaml, le registre human-review.json. */
+async function bindingContextOf(recording: StoredRecording): Promise<BindingContext> {
+  const raw = recording.testData ? (parseYaml(recording.testData.yaml) as unknown) : undefined;
+  const set = raw ? parseTestDataSet(raw, path.basename(recording.directory)) : undefined;
+  const review = await readFile(path.join(recording.directory, HUMAN_REVIEW_FILE), 'utf8')
+    .then((text) => JSON.parse(text) as HumanReviewLedger)
+    .catch(() => undefined);
+  return {
+    flow: recording.flow,
+    session: { id: recording.flow.recordingSessionId },
+    ...(set ? { testData: { set, items: [], document: testDataSetDocument(set) } } : {}),
+    ...(review ? { humanReview: review } : {}),
+  };
+}
+
+export interface StoredTestData {
+  lineage: DataLineageEntry[];
+  inputs: { stepId: string; position: number; label: string; binding: StepDataBinding }[];
+  /** Citées par une étape, ni produites avant elle ni présentes dans le jeu : le rejeu en inventerait une. */
+  missing: { key: string; stepIds: string[] }[];
+  generators: readonly string[];
+}
+
+/** Les données d'un enregistrement : lignée, source de chaque saisie, citations sans origine. */
+export async function storedTestData(recording: StoredRecording): Promise<StoredTestData> {
+  const context = await bindingContextOf(recording);
+  const actions = recording.flow.steps.filter((item) => item.step.kind !== 'expect');
+  const inputs = actions.flatMap((item, index) => {
+    const binding = stepDataBinding(context, item.id);
+    return binding ? [{ stepId: item.id, position: index + 1, label: item.label, binding }] : [];
+  });
+  const known = new Set(Object.keys(context.testData?.set.values ?? {}));
+  const produced = new Set<string>();
+  const missing = new Map<string, string[]>();
+  for (const role of stepDependencies(recording.flow)) {
+    for (const key of role.consumes)
+      if (!produced.has(key) && !known.has(key)) missing.set(key, [...(missing.get(key) ?? []), role.stepId]);
+    for (const key of role.produces) produced.add(key);
+  }
+  return {
+    lineage: dataLineage(context),
+    inputs,
+    missing: [...missing].map(([key, stepIds]) => ({ key, stepIds })),
+    generators: BINDING_GENERATORS,
+  };
+}
+
+/**
+ * Lie la valeur d'une saisie (fixe, générée, reprise d'une étape antérieure) avec la règle de la
+ * fenêtre du recorder, puis réécrit test-data.yaml, le flow et le registre des décisions humaines.
+ */
+export async function bindStoredTestData(
+  recording: StoredRecording,
+  input: TestDataBindingInput,
+  language: 'fr' | 'en',
+): Promise<{ decision: TestDataBindingDecision } | { error: string }> {
+  const context = await bindingContextOf(recording);
+  const outcome = applyTestDataBinding(context, input, () => undefined);
+  if ('error' in outcome) return outcome;
+  const write = writerOf(recording.directory);
+  if (context.testData) {
+    const yaml = stringifyYaml(context.testData.document, { lineWidth: 0 });
+    await write(TEST_DATA_FILE, yaml);
+    recording.testData = { yaml, hasValues: Object.keys(context.testData.set.values).length > 0 };
+  }
+  await rewrite(recording, language);
+  if (context.humanReview) await write(HUMAN_REVIEW_FILE, json(context.humanReview));
+  return outcome;
 }

@@ -4,8 +4,10 @@
  */
 export * from './contracts.js';
 export * from './lifecycle.js';
+export * from './verdicts.js';
 export {
   createQaCrawler,
+  isCompatible,
   readEventStream,
   QaCrawlerError,
   type ClientOptions,

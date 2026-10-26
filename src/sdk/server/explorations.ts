@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { ScenarioConfig } from '../../config/config.js';
 import type { ExplorationListener } from '../../explorer/flow-explorer.js';
 import type { ExplorationResult } from '../../model/exploration-result.js';
+import type { FlowStepReport } from '../../model/flow-run.js';
 import type { RunOptions, RunOutcome } from '../../orchestrator.js';
 import { redactText } from '../../security/redactor.js';
 import type {
@@ -164,6 +165,34 @@ export class Exploration {
           reason: redactText(reason),
         });
       },
+      onFlowStart: (flow) => {
+        this.emit({ type: 'flow', flow: redactText(flow.name), phase: 'start' });
+      },
+      onFlowStep: (flow, step) => {
+        this.emit({
+          type: 'flow-step',
+          flow: redactText(flow.name),
+          index: step.index,
+          kind: step.kind,
+          label: stepLabel(step),
+          status: step.status,
+          durationMs: step.durationMs,
+          // La raison d'une saisie peut citer la valeur : elle n'est jamais relayée.
+          ...(step.reason && !VALUE_KINDS.has(step.kind) && !FREE_TEXT_KINDS.has(step.kind)
+            ? { reason: redactText(step.reason).slice(0, 300) }
+            : {}),
+        });
+      },
+      onFlowEnd: (report) => {
+        this.emit({
+          type: 'flow',
+          flow: redactText(report.name),
+          phase: 'end',
+          status: report.status,
+          durationMs: report.durationMs,
+          steps: report.steps.length,
+        });
+      },
       onIssue: (issue, isNew) => {
         if (!isNew) return;
         let route: string | undefined;
@@ -182,6 +211,22 @@ export class Exploration {
       },
     };
   }
+}
+
+/** Les étapes dont la description du moteur porte la valeur saisie ou choisie (après « = »). */
+const VALUE_KINDS = new Set(['fill', 'select']);
+/** Les étapes décrites par une phrase libre, qui peut citer une valeur. */
+const FREE_TEXT_KINDS = new Set(['auto', 'intent', 'manual']);
+
+/**
+ * Le libellé public d'une étape : la description du moteur, sans valeur. `fill … = "valeur"` garde sa
+ * cible ; une phrase libre (auto, intention, vérification manuelle) n'est désignée que par son genre.
+ */
+export function stepLabel(step: Pick<FlowStepReport, 'kind' | 'description'>): string {
+  if (VALUE_KINDS.has(step.kind))
+    return redactText(step.description.replace(/\s=\s[\s\S]*$/, '')).slice(0, 200);
+  if (FREE_TEXT_KINDS.has(step.kind)) return step.kind;
+  return redactText(step.description).slice(0, 200);
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;

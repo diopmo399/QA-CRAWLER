@@ -155,7 +155,7 @@ flows:
       'utf8',
     );
     expect(spec).toContain(`getByRole("button", { name: "New company" })`);
-    expect(spec).toContain(`getByLabel("Company name").fill(testData["company.name"])`);
+    expect(spec).toContain(`getByLabel("Company name").first().fill(testData["company.name"])`);
     expect(analysis?.artifacts.flowMemory).toMatch(/record\(s\) in/);
     const html = await readFile(path.join(dir, 'first', 'index.html'), 'utf8');
     expect(html).toContain('Analyse du run de workflow');

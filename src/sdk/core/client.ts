@@ -1,12 +1,18 @@
 import type {
   AssertionProposalView,
   Capabilities,
+  DataBindingInput,
+  DataBindingResult,
   ErrorBody,
   ExplorationEvent,
   ExplorationSnapshot,
   ExplorationSummary,
+  FlowStudioView,
   FlowView,
   GenerationInput,
+  RegressionView,
+  RunComparisonView,
+  TraceabilityView,
   GenerationResult,
   GraphView,
   GroupCommandInput,
@@ -20,10 +26,12 @@ import type {
   ReportEntry,
   ReportEntryKind,
   ReportLink,
+  TestDataView,
   UrlCheck,
   ValidationReport,
   DraftIssue,
 } from './contracts.js';
+import { SDK_API_VERSION } from './contracts.js';
 
 /**
  * LE CLIENT DU SDK : les appels à l'API du serveur QA-CRAWLER, depuis le navigateur (ou Node 20+).
@@ -66,6 +74,30 @@ export interface SubscribeOptions {
   /** Reprendre après cet événement (numéro `seq`) : les événements déjà reçus ne sont pas renvoyés. */
   after?: number;
   onError?: (error: Error) => void;
+  /**
+   * Après une coupure (réseau, serveur redémarré, réponse 5xx) avant l'événement de fin, le flux est
+   * rouvert après le dernier `seq` reçu ; un événement déjà reçu n'est jamais transmis deux fois.
+   * `retries: 0` désactive la reprise. Par défaut : 3 tentatives, 1 s puis 2 s puis 4 s.
+   */
+  reconnect?: { retries?: number; delayMs?: number };
+  /** Appelé avant chaque nouvelle tentative, avec le dernier `seq` reçu. */
+  onReconnect?: (attempt: number, after: number) => void;
+}
+
+/** Un statut qui termine un flux : après lui, le serveur ferme et rien ne doit être rouvert. */
+const TERMINAL_STATUSES = new Set(['COMPLETED', 'FAILED', 'CANCELLED', 'STORED']);
+
+function isEndEvent(event: unknown): boolean {
+  if (!event || typeof event !== 'object') return false;
+  const { type, status } = event as { type?: unknown; status?: unknown };
+  return (
+    type === 'completed' || type === 'failed' || (type === 'status' && TERMINAL_STATUSES.has(String(status)))
+  );
+}
+
+/** Le serveur parle-t-il la version de contrat de ce client ? */
+export function isCompatible(capabilities: Pick<Capabilities, 'apiVersion'>): boolean {
+  return capabilities.apiVersion === SDK_API_VERSION;
 }
 
 export interface RecordingStartInput {
@@ -79,6 +111,8 @@ export interface RecordingStartInput {
 
 export interface QaCrawlerClient {
   capabilities(): Promise<Capabilities>;
+  /** Les capacités, après vérification de la version du contrat (`API_VERSION_MISMATCH` sinon). */
+  connect(): Promise<Capabilities>;
   checks: {
     url(url: string): Promise<UrlCheck>;
     env(names: string[]): Promise<Record<string, boolean>>;
@@ -113,6 +147,8 @@ export interface QaCrawlerClient {
       options?: SubscribeOptions,
     ): Subscription;
     flow(projectId: string, name: string): Promise<FlowView>;
+    /** Le Flow Studio : étapes, données produites et citées, dépendances, groupes, dernier rejeu. */
+    studio(projectId: string, name: string): Promise<FlowStudioView>;
   };
   /** Les propositions d'assertions d'un enregistrement et les décisions humaines. */
   assertions: {
@@ -123,6 +159,12 @@ export interface QaCrawlerClient {
       proposalId: string,
       input: ProposalDecisionInput,
     ): Promise<AssertionProposalView[]>;
+  };
+  /** Les données de test d'un enregistrement : lignée, source de chaque saisie, liaisons. */
+  data: {
+    get(projectId: string, recording: string): Promise<TestDataView>;
+    /** Choisir la source d'une saisie (fixe, générée, reprise d'une étape antérieure) ; le moteur vérifie. */
+    bind(projectId: string, recording: string, input: DataBindingInput): Promise<DataBindingResult>;
   };
   /** Les groupes métier d'étapes d'un enregistrement. */
   groups: {
@@ -147,6 +189,12 @@ export interface QaCrawlerClient {
   reports: {
     list(projectId: string): Promise<ReportEntry[]>;
     link(projectId: string, kind: ReportEntryKind, name: string): Promise<ReportLink>;
+    /** Deux explorations (`run-…`) comparées flow par flow et exigence par exigence ; rien n'est rejoué. */
+    compare(projectId: string, base: string, head: string): Promise<RunComparisonView>;
+    /** La traçabilité d'une exploration (404 quand la mission ne déclare pas d'exigence). */
+    traceability(projectId: string, run: string): Promise<TraceabilityView>;
+    /** L'analyse de régression d'une exploration, par rapport à l'historique du moteur. */
+    regression(projectId: string, run: string): Promise<RegressionView>;
   };
   dispose(): void;
 }
@@ -207,27 +255,91 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
   ): Subscription {
     const controller = new AbortController();
     controllers.add(controller);
-    const query = subscribeOptions.after !== undefined ? `?after=${String(subscribeOptions.after)}` : '';
-    const done = (async () => {
+    const retries = Math.max(0, subscribeOptions.reconnect?.retries ?? 3);
+    const delayMs = Math.max(0, subscribeOptions.reconnect?.delayMs ?? 1000);
+    let lastSeq = subscribeOptions.after ?? 0;
+    let ended = false;
+    const wait = (ms: number): Promise<void> =>
+      new Promise((resolve) => {
+        const timer = setTimeout(resolve, ms);
+        controller.signal.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          { once: true },
+        );
+      });
+    /** Une ouverture du flux ; rend l'erreur qui l'a interrompu (undefined : fin normale). */
+    const open = async (): Promise<{ error?: Error; retryable: boolean }> => {
+      const query = lastSeq > 0 ? `?after=${String(lastSeq)}` : '';
+      let response: Response;
       try {
-        const response = await doFetch(`${endpoint}${path}${query}`, {
+        response = await doFetch(`${endpoint}${path}${query}`, {
           headers: { ...headers(false), accept: 'text/event-stream' },
           signal: controller.signal,
         });
-        if (!response.ok || !response.body) {
-          const text = await response.text().catch(() => '');
-          let message = `HTTP ${String(response.status)}`;
-          try {
-            message = (JSON.parse(text) as Partial<ErrorBody>).error ?? message;
-          } catch {
-            // corps non JSON : le statut suffit
-          }
-          throw new QaCrawlerError({ error: message, status: response.status, code: 'STREAM_REFUSED' });
-        }
-        for await (const event of readEventStream<unknown>(response.body)) onEvent(event);
       } catch (error) {
-        if (controller.signal.aborted) return;
-        subscribeOptions.onError?.(error instanceof Error ? error : new Error(String(error)));
+        return { error: error instanceof Error ? error : new Error(String(error)), retryable: true };
+      }
+      if (!response.ok || !response.body) {
+        const text = await response.text().catch(() => '');
+        let message = `HTTP ${String(response.status)}`;
+        try {
+          message = (JSON.parse(text) as Partial<ErrorBody>).error ?? message;
+        } catch {
+          // corps non JSON : le statut suffit
+        }
+        return {
+          error: new QaCrawlerError({ error: message, status: response.status, code: 'STREAM_REFUSED' }),
+          // Un refus (jeton, origine, exploration inconnue) ne change pas en réessayant.
+          retryable: response.status >= 500,
+        };
+      }
+      try {
+        for await (const event of readEventStream<unknown>(response.body)) {
+          const seq = (event as { seq?: unknown }).seq;
+          if (typeof seq === 'number') {
+            if (seq <= lastSeq) continue;
+            lastSeq = seq;
+          }
+          if (isEndEvent(event)) ended = true;
+          onEvent(event);
+        }
+      } catch (error) {
+        return { error: error instanceof Error ? error : new Error(String(error)), retryable: true };
+      }
+      return { retryable: true };
+    };
+    // Lus par fonction : les deux changent pendant les attentes (abandon, événement de fin).
+    const aborted = (): boolean => controller.signal.aborted;
+    const finished = (): boolean => ended;
+    const done = (async () => {
+      try {
+        let attempt = 0;
+        for (;;) {
+          const before = lastSeq;
+          const outcome = await open();
+          if (aborted() || finished()) return;
+          // Des événements sont arrivés : la connexion vivait, le compte des tentatives repart.
+          if (lastSeq > before) attempt = 0;
+          if (!outcome.retryable || attempt >= retries) {
+            subscribeOptions.onError?.(
+              outcome.error ??
+                new QaCrawlerError({
+                  error: 'event stream closed before the end',
+                  status: 0,
+                  code: 'STREAM_CLOSED',
+                }),
+            );
+            return;
+          }
+          attempt += 1;
+          await wait(delayMs * 2 ** (attempt - 1));
+          if (aborted()) return;
+          subscribeOptions.onReconnect?.(attempt, lastSeq);
+        }
       } finally {
         controllers.delete(controller);
       }
@@ -246,6 +358,16 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
 
   return {
     capabilities: () => request('GET', '/capabilities'),
+    async connect() {
+      const capabilities = await request<Capabilities>('GET', '/capabilities');
+      if (!isCompatible(capabilities))
+        throw new QaCrawlerError({
+          error: `the server speaks contract version ${String(capabilities.apiVersion)}, this SDK speaks ${String(SDK_API_VERSION)}`,
+          status: 0,
+          code: 'API_VERSION_MISMATCH',
+        });
+      return capabilities;
+    },
     checks: {
       url: (url) => request('POST', '/checks/url', { url }),
       env: (names) => request('POST', '/checks/env', { names }),
@@ -283,11 +405,16 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           subscribeOptions,
         ),
       flow: (projectId, name) => request('GET', `${recording(projectId, name)}/flow`),
+      studio: (projectId, name) => request('GET', `${recording(projectId, name)}/studio`),
     },
     assertions: {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/assertions`),
       decide: (projectId, name, proposalId, input) =>
         request('POST', `${recording(projectId, name)}/assertions/${encodeURIComponent(proposalId)}`, input),
+    },
+    data: {
+      get: (projectId, name) => request('GET', `${recording(projectId, name)}/data`),
+      bind: (projectId, name, input) => request('POST', `${recording(projectId, name)}/data/bindings`, input),
     },
     groups: {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/groups`),
@@ -306,6 +433,15 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       list: (projectId) => request('GET', `${project(projectId)}/reports`),
       link: (projectId, kind, name) =>
         request('POST', `${project(projectId)}/reports/${kind}/${encodeURIComponent(name)}/links`, {}),
+      compare: (projectId, base, head) =>
+        request(
+          'GET',
+          `${project(projectId)}/reports/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`,
+        ),
+      traceability: (projectId, run) =>
+        request('GET', `${project(projectId)}/reports/exploration/${encodeURIComponent(run)}/traceability`),
+      regression: (projectId, run) =>
+        request('GET', `${project(projectId)}/reports/exploration/${encodeURIComponent(run)}/regression`),
     },
     dispose() {
       disposed = true;

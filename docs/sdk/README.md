@@ -135,6 +135,22 @@ qa-crawler-project-wizard {
 }
 ```
 
+Thème sombre : l'attribut `theme` vaut `light` (défaut, inchangé), `dark`, ou `auto` (suit
+`prefers-color-scheme` du système). Il vaut pour les quatre composants : assistant, Flow Studio,
+comparaison et Run Monitor. Les pages autonomes le prennent dans l'URL (`?theme=dark`). Le thème ne
+change que les jetons `--qa-*` : une variable posée par l'hôte sur l'élément l'emporte toujours.
+
+Accessibilité vérifiée par les tests :
+
+- contraste WCAG AA (4,5:1) du texte, du texte secondaire, de l'accent et des statuts de la
+  comparaison et du Run Monitor, dans les deux thèmes (`tests/unit/sdk-theme.test.ts`) ;
+- onglets au clavier ;
+- régions `role="status"` annoncées ;
+- refus annoncés (`role="alert"`) ;
+- mouvement réduit respecté (`prefers-reduced-motion`).
+
+Aucun audit automatique complet (de type axe) n'est lancé : l'outil n'est pas une dépendance du dépôt.
+
 Variables : `--qa-color-primary`, `--qa-color-primary-2`, `--qa-color-background`,
 `--qa-color-surface`, `--qa-color-surface-2`, `--qa-color-panel`, `--qa-color-panel-2`,
 `--qa-color-text`, `--qa-color-muted`, `--qa-color-faint`, `--qa-color-border`,
@@ -161,6 +177,7 @@ const link = await qa.explorations.reportLink(started.id); // lien valable 10 mi
 | Méthode                                   | Route                                           |
 | ----------------------------------------- | ----------------------------------------------- |
 | `capabilities()`                          | `GET /api/capabilities`                         |
+| `connect()`                               | `GET /api/capabilities` + version du contrat    |
 | `checks.url(url)`                         | `POST /api/checks/url`                          |
 | `checks.env(names)`                       | `POST /api/checks/env` (20 noms `QA_*` au plus) |
 | `projects.validate(draft)`                | `POST /api/projects/validate`                   |
@@ -175,6 +192,16 @@ const link = await qa.explorations.reportLink(started.id); // lien valable 10 mi
 Une erreur est une `QaCrawlerError { status, code, message, issues }` ; un serveur absent donne
 `status: 0, code: 'UNREACHABLE'`. `subscribe` lit le flux avec `fetch` (le jeton part en en-tête,
 jamais dans l'URL) et reprend après un numéro d'événement (`after`).
+
+**Coupures** : si le flux se ferme avant l'événement de fin (réseau, serveur redémarré, réponse
+5xx), le client le rouvre lui-même après le dernier `seq` reçu — 3 tentatives par défaut, à 1 s,
+2 s puis 4 s (`reconnect: { retries, delayMs }`, `retries: 0` pour s'en passer ; `onReconnect`
+prévient). Un événement déjà reçu n'est jamais transmis deux fois, même si un relais le renvoie.
+Un refus (4xx : jeton, origine, exploration inconnue) n'est pas réessayé. Quand les tentatives sont
+épuisées, `onError` reçoit la dernière erreur, ou `STREAM_CLOSED` si le flux s'est simplement fermé.
+
+**Version du contrat** : `connect()` rend les capacités et refuse (`API_VERSION_MISMATCH`) un
+serveur qui ne parle pas la version du client ; l'assistant l'utilise au chargement.
 
 ## Enregistrements, assertions, groupes, génération, graphe, rapports
 
@@ -220,7 +247,10 @@ const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisate
 | `recordings.stop(projectId, name)`              | `POST /api/projects/:id/recordings/:name/stop`                   |
 | `recordings.subscribe(projectId, name, cb)`     | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
 | `recordings.flow(projectId, name)`              | `GET /api/projects/:id/recordings/:name/flow`                    |
+| `recordings.studio(projectId, name)`            | `GET /api/projects/:id/recordings/:name/studio`                  |
 | `assertions.list(projectId, name)`              | `GET /api/projects/:id/recordings/:name/assertions`              |
+| `data.get(projectId, name)`                     | `GET /api/projects/:id/recordings/:name/data`                    |
+| `data.bind(projectId, name, input)`             | `POST /api/projects/:id/recordings/:name/data/bindings`          |
 | `assertions.decide(projectId, name, id, input)` | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
 | `groups.list(projectId, name)`                  | `GET /api/projects/:id/recordings/:name/groups`                  |
 | `groups.edit(projectId, name, command)`         | `POST /api/projects/:id/recordings/:name/groups`                 |
@@ -251,6 +281,181 @@ RECORDING_IN_PROGRESS` ; ensuite, les modifications d'un même enregistrement pa
 - la génération écrit sous `recordings/<nom>/generated/` ; le statut de chaque fichier dit ce qui a
   été vérifié (`GENERATED`, `STATICALLY_VALIDATED`, `NOT_VALIDATED`…), jamais une exécution.
 
+### Tests générés, exécutables
+
+Chaque format arrive avec ce qu'il faut pour le lancer :
+
+| Format        | Fichiers                                                            | Lancer                                              |
+| ------------- | ------------------------------------------------------------------- | --------------------------------------------------- |
+| Gherkin       | `<nom>.feature` + `<nom>.gherkin.mission.yaml` (+ `test-data.yaml`) | `qa-crawler --config <nom>.gherkin.mission.yaml`    |
+| Playwright TS | `playwright/<nom>.spec.ts` + `playwright/playwright.config.ts`      | `npx playwright test --config playwright.config.ts` |
+| Java JUnit 5  | projet Maven (`pom.xml`, tests, README)                             | `mvn test`                                          |
+
+- **Gherkin** : les définitions de steps sont les phrases intégrées du moteur (français et
+  anglais). La mission générée joue le `.feature` avec QA-CRAWLER ; le chargeur du moteur la valide
+  à la génération (chaque ligne du scénario doit être une phrase connue), d'où
+  `STATICALLY_VALIDATED`. Aucune définition de steps pour un exécuteur Gherkin externe n'est
+  produite : QA-CRAWLER est l'exécuteur.
+- **Playwright TS** : la configuration écrit un rapport JUnit XML
+  (`test-results/junit.xml`) ; `@playwright/test` est à installer à côté des tests.
+- Les tests générés jouent les actions comme le moteur : sans position enregistrée, la première
+  correspondance d'un rôle, d'un libellé ou d'un texte (`.first()`) ; un gabarit de route
+  (`/users/{id}`) se lit comme un segment quelconque.
+- La génération ne lance rien : c'est `tests/integration/sdk-generated-execution.test.ts` qui joue
+  la sortie (voir Tests).
+
+### Données de test
+
+`data.get` rend, pour un enregistrement :
+
+- **la lignée de chaque donnée** : l'étape qui la produit et celles qui la saisissent à nouveau ou la
+  citent (`dataLineage` du moteur ; jamais un secret) ;
+- **la source de chaque saisie** : `FIXED` (la valeur gardée), `GENERATED` (générée à chaque rejeu),
+  `REFERENCE` (reprise d'une étape **antérieure** — les seules proposées), `SENSITIVE` (un secret, qui
+  vient toujours de sa variable d'environnement et ne se lie pas) ; et si c'est un choix humain ;
+- **les données citées sans origine** : ni produites avant l'étape, ni dans le jeu de données. Au
+  rejeu, le moteur leur inventerait une valeur ; le SDK le dit **avant** le rejeu.
+
+`data.bind(projectId, name, { stepId, source, variable?, generator?, value? })` applique la règle de la
+fenêtre du recorder (`applyTestDataBinding`) : `test-data.yaml`, le flow et le registre des décisions
+humaines (`human-review.json`) sont réécrits. Reprendre une donnée produite plus tard est refusé
+(`422 REFUSED`) et rien n'est écrit.
+
+### Verdicts des assertions
+
+Chaque proposition d'`assertions.list` porte `verdict`, tiré d'une exécution, jamais supposé :
+
+| Verdict         | Quand                                                                                                             |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `VERIFIED_PASS` | l'étape `expect` a été retrouvée et jouée au rejeu (`MATCHED`), ou le moteur d'assertions métier dit `PASS`       |
+| `VERIFIED_FAIL` | vérification différente au rejeu (`ASSERTION_MISMATCH`), ou `FAIL`                                                |
+| `BLOCKED`       | refusée par la politique de sécurité, ou `BLOCKED`                                                                |
+| `INCONCLUSIVE`  | introuvable, ambiguë, non vérifiée, `INCONCLUSIVE` ou `UNVERIFIABLE` : rien ne prouve ni la conformité ni l'écart |
+| `NOT_EXECUTED`  | hors du parcours, jamais rejouée, ou ajoutée depuis le dernier rejeu                                              |
+
+Les sources : le dernier rejeu de validation (`replay/dry-run/…/reconciliation.json`) pour les
+vérifications d'écran, `quality-verification.json` du même rejeu pour les assertions métier. `stale`
+signale un flow modifié depuis. Les tables sont publiques (`verdictOfReplayOutcome`,
+`verdictOfAssertionStatus`) et testées.
+
+Dans le Flow Studio : l'onglet **Données** (lignée, alertes), l'onglet **Assertions** (verdict,
+statut, preuves, Accepter / Rejeter / Désactiver / Modifier / Réinitialiser, « Voir l'étape »), et la
+**source de la valeur** dans le panneau de chaque saisie.
+
+## Flow Studio
+
+`<qa-crawler-flow-studio>` montre le parcours d'un enregistrement en graphe et permet de l'organiser
+en groupes métier. Page autonome : `http://127.0.0.1:4310/studio?project=<id>&recording=<nom>`.
+
+```html
+<qa-crawler-flow-studio
+  endpoint="https://qa.example/api"
+  project="prj_…"
+  recording="ouvrir-un-utilisateur"
+  locale="fr"
+></qa-crawler-flow-studio>
+<script type="module">
+  import 'https://qa.example/sdk/ui/index.js';
+  const studio = document.querySelector('qa-crawler-flow-studio');
+  studio.token = await tokenFromMyBackend();
+  studio.addEventListener('qa-studio-changed', (event) => console.log(event.detail.command));
+</script>
+```
+
+| Ce qu'on voit                                      | D'où ça vient                                                                                             |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Les étapes, dans l'ordre, avec leur libellé        | le flow enregistré (`recorded-flow.json`)                                                                 |
+| Les groupes métier (cadres repliables)             | les groupes du flow (`groupViews` du moteur)                                                              |
+| Les données produites (◆) et citées (◇)            | `stepDependencies` du moteur : la première saisie d'une clé la produit, les citations la consomment       |
+| Les liens de données (pointillés bleus)            | producteur → consommateur, d'après les mêmes rôles                                                        |
+| Les citations avant production (pointillés rouges) | `dependencyViolations` du moteur                                                                          |
+| Le chemin exécuté (pastille de chaque carte)       | le dernier rejeu du flow (`replay/dry-run/…/reconciliation.json`) ; « périmé » si le flow a changé depuis |
+
+Gestes : molette ou boutons pour zoomer, glisser le fond pour déplacer la vue, « Ajuster la vue »,
+recherche (texte, clé de donnée, nom de groupe ; Entrée passe au résultat suivant), clic pour choisir,
+Maj + clic pour en choisir plusieurs. Clavier : flèches d'une étape à l'autre, Entrée pour choisir,
+Échap pour vider la sélection, `+` `-` `0` pour le zoom.
+
+**Ce qui modifie le parcours passe par le moteur** (`groups.edit`) : créer un groupe avec les étapes
+choisies, renommer, décrire, replier, avancer / reculer une étape ou un groupe, sortir une étape d'un
+groupe, supprimer un groupe (les étapes restent). Glisser une étape sur un groupe l'y place ; sur une
+autre étape du même groupe, la place avant elle ; glisser un groupe au-delà d'un autre demande au
+moteur de les échanger. Le moteur vérifie les dépendances de données : un refus s'affiche avec
+l'étape, la donnée et une proposition (« placez d'abord … »), et **rien n'est modifié**. Déplacer une
+carte ailleurs ne change que l'affichage (« Remettre les positions » l'annule).
+
+Événements DOM (`STUDIO_EVENTS`) : `qa-studio-selection` (`{ stepIds, groupId? }`),
+`qa-studio-changed` (`{ command, warnings }`), `qa-studio-refused` (`{ command, message, violations }`),
+`qa-error`.
+
+Non proposé : **jouer un groupe seul** (le panneau dit si ses entrées sont produites dans le groupe,
+mais le SDK ne lance pas de rejeu partiel) ; relancer un rejeu depuis le Studio (enregistrer avec
+`validate: true`).
+
+## Run Monitor
+
+`<qa-crawler-run-monitor exploration="exp_…">` (page autonome `/monitor?exploration=…`) suit une
+exploration en direct :
+
+- le statut et l'état du flux (connexion, en direct, reconnexion avec le numéro de tentative, flux
+  terminé, flux interrompu), annoncés par une région `role="status"` ;
+- les compteurs (écrans, actions, refus, anomalies, étapes de flow), qui sont des nombres
+  d'événements reçus ;
+- l'avancement de chaque flow imposé, avec le statut de fin donné par le moteur (« en cours » tant
+  que le flow n'est pas terminé) ;
+- le journal des événements, à afficher par flow, statut d'étape, type d'événement ou type
+  d'anomalie.
+
+Un flux coupé est rouvert après le dernier événement reçu (5 tentatives) et un événement déjà reçu
+n'est jamais affiché deux fois. Événements DOM : `qa-monitor-connection` (`{ state, attempt }`) et
+`qa-error`.
+
+Le flux d'une exploration porte désormais les flows imposés de la mission :
+
+- `{ type: 'flow', flow, phase: 'start' | 'end', status?, durationMs?, steps? }` ;
+- `{ type: 'flow-step', flow, index, kind, label, status, durationMs, reason? }`.
+
+Le libellé d'une étape ne porte jamais de valeur. Une saisie (`fill`) ou un choix (`select`) est
+décrit par sa cible seule. Une phrase libre (`auto`, `intent`, `manual`) n'est désignée que par son
+genre. La raison d'un échec n'est pas relayée pour ces étapes.
+
+Limite : les groupes métier d'un enregistrement ne sont pas portés par les événements d'exploration.
+Le suivi se fait donc par flow et par étape, pas par groupe.
+
+## Comparaison et traçabilité des exécutions
+
+Deux explorations d'un projet se comparent sans rien rejouer. Le SDK lit ce que le moteur a écrit dans
+le dossier de chaque run : `result.json`, `quality-verification.json` et `regression-analysis.json`.
+
+| Client                                   | Route                                                         |
+| ---------------------------------------- | ------------------------------------------------------------- |
+| `reports.compare(projectId, base, head)` | `GET /api/projects/:id/reports/compare?base=run-…&head=run-…` |
+| `reports.traceability(projectId, run)`   | `GET /api/projects/:id/reports/exploration/:run/traceability` |
+| `reports.regression(projectId, run)`     | `GET /api/projects/:id/reports/exploration/:run/regression`   |
+
+- **Flow par flow** : `compareFlowRuns` du moteur, la règle de l'écart avec le run précédent du
+  rapport. On obtient le statut dans chaque run, `SAME` ou `CHANGED`, et les écarts (statut, étape
+  plus lente, cible changée ou réparée, étape ajoutée ou retirée…). Un flow absent d'un des deux runs
+  est marqué `ONLY_BASE` ou `ONLY_HEAD`.
+- **Exigence par exigence** : la couverture calculée par le moteur dans chaque run (`NOT_COVERED`,
+  `COVERED_NOT_EXECUTED`, `VERIFIED_PASS`, `VERIFIED_FAIL`, `BLOCKED`, `INCONCLUSIVE`,
+  `STALE_EVIDENCE`). Sans traçabilité, la liste est vide et `traceability.base/head` vaut `false` :
+  rien n'est déduit.
+- **Traçabilité d'un run** : exigences, règles, assertions et preuves, verdict métier, et ce que la
+  vérification ne peut pas affirmer. `404` quand la mission ne déclare pas d'exigence.
+- **Régression** : l'analyse du moteur par rapport à son historique (`NEW_REGRESSION`,
+  `REGRESSION_FIXED`…), servie telle quelle.
+
+`<qa-crawler-run-compare>` (page autonome `/runs?project=…&base=…&head=…`) montre la comparaison et
+la traçabilité de l'exécution comparée.
+
+- Attributs : `endpoint`, `project`, `base`, `head` (par défaut les deux plus récents), `locale`.
+- Propriétés : `token`, `client`.
+- Événements : `qa-runs-selection` (`{ base, head }`) et `qa-error`.
+- Onglets au clavier (flèches gauche et droite), écarts d'un flow dépliables, liste des exigences
+  par statut de couverture.
+- Les compteurs sont des nombres : aucun pourcentage n'est affiché.
+
 ## Statuts et événements
 
 ```
@@ -278,6 +483,21 @@ Chaque événement porte `seq` (croissant) et `at` (horodatage serveur) :
 Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du résultat à
 `completed` : l'écran final montre toujours les chiffres du moteur.
 
+## Versionnement
+
+- `SDK_API_VERSION` (aujourd'hui `1`) est la version du **contrat** : routes, formes des réponses,
+  statuts, noms d'événements DOM. Le serveur l'annonce (`capabilities.apiVersion`), le client la
+  vérifie (`connect()`).
+- Dans une version de contrat, on **ajoute** seulement : une route, un champ facultatif, une
+  méthode du client, une valeur de statut (annoncée dans le CHANGELOG). Rien n'est retiré, renommé
+  ni ne change de sens. `tests/unit/sdk-contract.test.ts` fige ce qui est publié et échoue sinon.
+- Retirer ou changer le sens d'un élément exige la version suivante du contrat ; le serveur
+  servirait alors les deux versions le temps de la transition.
+- Le paquet suit sa propre version (`@qa-crawler/core`), indépendante du contrat.
+- Phases 1 à 7 : uniquement des ajouts ; `SDK_API_VERSION` reste `1`. Le flux d'une exploration a
+  gagné deux types d'événements (`flow`, `flow-step`) : un hôte ignore les types qu'il ne connaît pas
+  (l'assistant le fait), comme le prévoit cette règle.
+
 ## Sécurité
 
 - **Jeton** : toute l'API exige `Authorization: Bearer <jeton>`, comparé en temps constant. Les
@@ -303,24 +523,67 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Les explorations et les flux d'enregistrement vivent en mémoire pendant la vie du serveur ; les
   projets, les enregistrements et les rapports restent sur disque, dans le dossier de travail.
 - L'enregistrement suppose un écran sur la machine du serveur (un humain joue le parcours).
-- L'assistant visuel couvre la création et l'exploration ; les extensions s'utilisent par le client.
+- L'assistant visuel couvre la création et l'exploration ; le Flow Studio, les groupes et le
+  chemin exécuté d'un enregistrement ; le reste des extensions s'utilise par le client.
 - Une exploration à la fois par défaut (`--concurrency`).
 - Chromium seulement.
+- Pas de définitions de steps pour un exécuteur Gherkin externe : le `.feature` se joue avec QA-CRAWLER.
+- Le Flow Studio ne rejoue pas un groupe seul.
+- Le Run Monitor suit les flows et les étapes, pas les groupes métier (absents des événements
+  d'exploration).
+- La comparaison ne compare pas les captures d'écran de deux exécutions.
+- Accessibilité : clavier, annonces et contraste testés composant par composant ; aucun audit axe
+  automatique.
 - Rien n'est publié sur un registre : le SDK fait partie de `@qa-crawler/core`.
 
 ## Tests
 
-- `tests/unit/sdk-core.test.ts` : cycle de vie, client, flux SSE découpé, reprise.
+- `tests/unit/sdk-core.test.ts` : cycle de vie, client, flux SSE découpé, reprise, reconnexion
+  après coupure sans doublon, refus non réessayé, abandon pendant l'attente, version du contrat.
+- `tests/unit/sdk-contract.test.ts` : exports, valeurs et méthodes publiés de la version 1 ; le
+  Core et l'UI n'importent ni module Node, ni Playwright, ni classe du moteur.
 - `tests/unit/sdk-project.test.ts` : brouillon → projet du moteur, aucun identifiant écrit,
   variables manquantes, sources Angular, validation par le moteur.
 - `tests/unit/sdk-server.test.ts` : jeton, origines, variables, modules, CSP, parcours complet avec
   un moteur **simulé** (tests seulement), liens de rapport, reprise du flux ; enregistrements avec un
   recorder **simulé** (un à la fois, arrêt par l'API, noms et chemins refusés, graphe, rapports).
+- `tests/unit/sdk-studio.test.ts` : la vue bâtie avec le moteur (données produites et citées,
+  liens, dernier rejeu par position, aucun résultat inventé sans rejeu), disposition (cadres,
+  repli, colonnes, 150 étapes), zoom, recherche, rendu échappé et explication d'un refus.
+- `tests/unit/sdk-data-assertions.test.ts` : tables de verdicts ; lignée, sources et données sans
+  origine d'un enregistrement écrit ; liaison (fichiers et registre réécrits) et refus sans écriture ;
+  verdicts lus dans le dernier rejeu (étape `expect`, moteur d'assertions, rien sans exécution) ;
+  panneaux Données, Assertions et source de la valeur.
+- `tests/integration/sdk-studio.test.ts` : le **vrai** recorder et le **vrai** rejeu, puis le Studio
+  dans Chromium — zoom, déplacement, recherche, création d'un groupe, dépôt d'une étape sur un groupe,
+  carte déplacée sans changer l'ordre, repli et renommage gardés par le moteur, refus affiché, clavier ;
+  puis une saisie liée à une valeur générée, la lignée, un verdict `VERIFIED_PASS` venu du rejeu, et
+  une proposition rejetée depuis l'onglet Assertions.
 - `tests/unit/sdk-view.test.ts` : rendu pur (échappement, pas de champ mot de passe, compteurs
   sans pourcentage, mode embarqué).
 - `tests/integration/sdk-wizard.test.ts` : le **vrai** moteur, Chromium et le site de démo — page
   autonome jusqu'au résultat, projet sans secret, rapport par lien ; hôte sur une autre origine
   (thème, jeton, événements) ; origine refusée.
+- `tests/unit/sdk-theme.test.ts` : thème sombre présent dans les quatre composants (attribut et
+  système), chaque jeton redéfini, contraste WCAG AA calculé dans les deux thèmes.
+- `tests/unit/sdk-monitor.test.ts` : libellés d'étape sans valeur ; événements `flow` et
+  `flow-step` relayés par l'écouteur du moteur ; modèle du suivi ; rendu échappé, reconnexion
+  annoncée.
+- `tests/integration/sdk-monitor.test.ts` : le **vrai** moteur joue deux flows (l'un passe, l'autre
+  échoue) ; le flux porte les flows et les étapes ; `<qa-crawler-run-monitor>` dans Chromium, après une
+  première ouverture du flux coupée : reprise sans doublon, puis choix par statut d'étape et par flow.
+- `tests/unit/sdk-runs.test.ts` : vocabulaires alignés sur le moteur ; comparaison (règle du
+  moteur, flows retirés ou nouveaux, exigences changées, rien sans traçabilité) ; routes et refus ;
+  rendu échappé et sans pourcentage.
+- `tests/integration/sdk-runs.test.ts` : deux **vrais** runs du moteur (le second avec un défaut de
+  l'application) ; la comparaison et la traçabilité par l'API, puis `<qa-crawler-run-compare>` dans
+  Chromium (écarts dépliés, exigence passée en échec, liste par statut, onglets au clavier) ; thème
+  sombre par attribut, `auto` selon le système, variable de l'hôte prioritaire.
+- `tests/integration/sdk-generated-execution.test.ts` : un parcours enregistré par le **vrai**
+  recorder, généré par le SDK, puis **exécuté** : le `.feature` par la mission générée (chaque
+  scénario `PASSED` sur l'application), le test Playwright par Playwright Test avec la configuration
+  générée (sortie `1 passed`, JUnit XML sans échec). Le projet Java est joué par `mvn test` dans
+  `tests/integration/java-generated-tests.test.ts`.
 - `tests/integration/sdk-extensions.test.ts` : le **vrai** recorder (seul l'humain est joué par
   Playwright) — enregistrement par l'API, décision sur une proposition, groupe métier, génération
   YAML / Gherkin / Playwright validée, graphe, liste des rapports, lien, arrêt par l'API.
