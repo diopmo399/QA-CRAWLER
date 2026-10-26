@@ -435,7 +435,17 @@ export async function readTransitionProbe(page: Page): Promise<ProbeReading | un
           href: location.href,
           route: `${location.pathname}${location.hash}`,
           dialogs: Array.from(document.querySelectorAll(dialog)).filter(shown).length,
-          loaderVisible: Array.from(document.querySelectorAll(busy)).some(shown),
+          // Aussi dans les arbres « shadow » des composants web (chargeurs Lightning, Lit…).
+          loaderVisible: ((): boolean => {
+            const roots: (Document | ShadowRoot)[] = [document];
+            while (roots.length > 0) {
+              const root = roots.pop() as Document | ShadowRoot;
+              if (Array.from(root.querySelectorAll(busy)).some(shown)) return true;
+              for (const element of Array.from(root.querySelectorAll('*')))
+                if (element.shadowRoot) roots.push(element.shadowRoot);
+            }
+            return false;
+          })(),
         };
       },
       { dialog: DIALOG_SELECTOR, busy: BUSY_SELECTOR },

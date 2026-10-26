@@ -92,7 +92,7 @@ h1{font:800 29px/1.15 var(--qa-font-family-heading);letter-spacing:-.012em;margi
 .ck.ok{background:var(--qa-color-success-soft);color:#0B7A65}.ck.w{background:var(--qa-color-warning-soft);color:var(--qa-color-warning)}.ck.e{background:var(--qa-color-danger-soft);color:#B4232A}.ck.n{background:var(--qa-color-surface-2);color:var(--qa-color-muted);border:1px solid var(--qa-color-border)}
 .ck .ico{width:14px;height:14px;stroke-width:2.2}
 .wrapmsg{white-space:normal}
-.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
 .tile{all:unset;box-sizing:border-box;border:1.5px solid var(--qa-color-border);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px;background:var(--qa-color-surface);position:relative;cursor:pointer}
 .tile .gl{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--qa-color-surface-2);color:var(--qa-color-muted)}
 .tile b{font-size:15px}.tile span.d{font-size:12.5px;color:var(--qa-color-muted);line-height:1.4}

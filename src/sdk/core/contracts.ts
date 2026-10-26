@@ -9,7 +9,8 @@
 
 export const SDK_API_VERSION = 1;
 
-export const FRAMEWORKS = ['angular', 'react', 'vue', 'other'] as const;
+/** `salesforce` : une application Salesforce Lightning (profil de plateforme du moteur). */
+export const FRAMEWORKS = ['angular', 'react', 'vue', 'salesforce', 'other'] as const;
 export type Framework = (typeof FRAMEWORKS)[number];
 
 export const AUTH_TYPES = ['none', 'form', 'http', 'sso'] as const;

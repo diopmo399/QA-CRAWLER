@@ -55,6 +55,7 @@ Ni IA, ni LLM, ni jeton d'API, ni GPU : même application, même exploration.
 - [Persistance et mémoire](#persistance-et-mémoire)
 - [Knowledge Center : voir et gérer ce que l'outil a appris](#knowledge-center--voir-et-gérer-ce-que-loutil-a-appris)
 - [SDK : l'assistant de projet dans une autre application](#sdk--lassistant-de-projet-dans-une-autre-application)
+- [Salesforce Lightning](#salesforce-lightning)
 - [Corrélation réseau](#corrélation-réseau)
 - [Ligne de commande](#ligne-de-commande)
 - [Docker](#docker)
@@ -2283,6 +2284,14 @@ les rapports d'un projet.
 
 Documentation : [docs/sdk/README.md](docs/sdk/README.md) ; décisions : [docs/sdk/AUDIT.md](docs/sdk/AUDIT.md) ;
 exemple d'hôte : [examples/sdk-host](examples/sdk-host/README.md).
+
+## Salesforce Lightning
+
+`target.platform: salesforce-lightning` (projet : `application.platform`) adapte la garde d'écriture
+au framework Aura de Lightning : ses lectures (`POST /aura` dont toutes les actions lisent, GraphQL sans
+mutation) passent, ses écritures restent bloquées. Vérifié sur une imitation locale, **pas sur une vraie
+organisation** : voir [docs/SALESFORCE_LIGHTNING.md](docs/SALESFORCE_LIGHTNING.md) pour les limites
+et les scénarios d'évaluation sur une sandbox.
 
 ## Corrélation réseau
 

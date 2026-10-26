@@ -90,6 +90,7 @@ const ICONS: Record<string, string> = {
   shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
   atom: '<circle cx="12" cy="12" r="1.6"/><ellipse cx="12" cy="12" rx="9" ry="3.6"/><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(120 12 12)"/>',
   vee: '<path d="M3 5h4l5 9 5-9h4l-9 15z"/>',
+  cloud: '<path d="M7 18h10.5a3.5 3.5 0 0 0 .4-6.98A5.5 5.5 0 0 0 7.3 9.6 4.2 4.2 0 0 0 7 18z"/>',
   grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
   route:
@@ -333,10 +334,12 @@ function stepProject(state: WizardState): string {
   c += `<div class="f"><label for="f-project-description">${esc(t.s1.description)} <em>${esc(t.s1.optional)}</em></label><div class="ip">${icon('text')}<input id="f-project-description" data-bind="project.description" value="${esc(draft.project.description ?? '')}" placeholder="${esc(t.s1.descriptionPh)}" autocomplete="off"></div></div></div>`;
   const urlError = state.showErrors[1] ? errors['project.targetUrl'] : undefined;
   c += `<div class="f"><label for="f-project-targetUrl">${esc(t.s1.url)}</label><div class="ip${urlError ? ' bad' : ''}">${icon('link')}<input id="f-project-targetUrl" class="mono" data-bind="project.targetUrl" type="url" value="${esc(draft.project.targetUrl)}" placeholder="https://" autocomplete="off" spellcheck="false" ${urlError ? 'aria-invalid="true"' : ''}><button class="btn sm" data-act="check-url" ${state.urlChecking ? 'disabled' : ''}>${state.urlChecking ? `<span class="spin" style="width:14px;height:14px;border-width:2px"></span>${esc(t.s1.checking)}` : `${icon('refresh')}${esc(t.s1.check)}`}</button></div>${urlError ? `<span class="err-t">${esc(urlError)}</span>` : ''}${urlChecks(state)}</div>`;
-  const tiles = (['angular', 'react', 'vue', 'other'] as const)
+  const tiles = (['angular', 'react', 'vue', 'salesforce', 'other'] as const)
     .map((framework) => {
       const [title, description] = t.s1.frameworks[framework] ?? [framework, ''];
-      const glyph = { angular: 'shield', react: 'atom', vue: 'vee', other: 'grid' }[framework];
+      const glyph = { angular: 'shield', react: 'atom', vue: 'vee', salesforce: 'cloud', other: 'grid' }[
+        framework
+      ];
       return `<button class="tile" role="radio" aria-checked="${String(draft.project.framework === framework)}" data-act="framework" data-value="${framework}"><span class="tick">${icon('check')}</span><span class="gl">${icon(glyph)}</span><span><b>${esc(title)}</b><br><span class="d">${esc(description)}</span></span></button>`;
     })
     .join('');

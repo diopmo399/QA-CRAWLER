@@ -1,3 +1,4 @@
+import { PLATFORMS } from '../platforms/salesforce-lightning.js';
 import { z } from 'zod';
 import {
   loadTestDataSetFile,
@@ -2347,6 +2348,11 @@ export const scenarioSchema = z
           .url()
           .refine((value) => /^https?:\/\//i.test(value), 'baseUrl must use http or https'),
         startAt: z.string().default('/'),
+        /**
+         * La plateforme de l'application : `salesforce-lightning` laisse passer les POST de lecture
+         * d'Aura et de GraphQL (garde d'écriture) ; `generic` (défaut) n'en suppose aucun.
+         */
+        platform: z.enum(PLATFORMS).default('generic'),
       })
       .strict(),
     browser: browserSchema.default({}),

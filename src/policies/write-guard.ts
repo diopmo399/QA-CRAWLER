@@ -31,6 +31,11 @@ export interface WriteGuardOptions {
   allow: readonly string[];
   /** Hôtes gardés : ceux que la mission explore (les autres ne sont jamais visités). */
   isGuardedHost(hostname: string): boolean;
+  /**
+   * Un POST de LECTURE propre à la plateforme (profil `salesforce-lightning` : `POST /aura` dont toutes
+   * les actions lisent) : il passe ; tout autre POST reste gardé.
+   */
+  readOnlyPost?: (pathname: string, body: string | null | undefined) => boolean;
 }
 
 /**
@@ -113,6 +118,7 @@ export class WriteGuard {
       )
     )
       return 'continue';
+    if (upper === 'POST' && this.options.readOnlyPost?.(parsed.pathname, body)) return 'continue';
     return 'block';
   }
 

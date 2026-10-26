@@ -1,3 +1,4 @@
+import { PLATFORMS } from '../platforms/salesforce-lightning.js';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml, stringify } from 'yaml';
@@ -54,6 +55,8 @@ export const projectConfigSchema = z
         name: nonEmpty.optional(),
         /** angular, react, vue, other : informatif (détecté par init). */
         framework: nonEmpty.optional(),
+        /** La plateforme : `salesforce-lightning` active le profil Lightning du moteur (mission `target.platform`). */
+        platform: z.enum(PLATFORMS).optional(),
       })
       .passthrough()
       .default({}),
@@ -308,7 +311,11 @@ export async function projectMission(
       name: options.missionName ?? config.application.name ?? `qa-crawler-${options.command}`,
       mode: 'explore',
     },
-    target: { baseUrl: config.application.baseUrl, startAt: config.application.startAt },
+    target: {
+      baseUrl: config.application.baseUrl,
+      startAt: config.application.startAt,
+      ...(config.application.platform ? { platform: config.application.platform } : {}),
+    },
     browser: browserRest,
     exploration: { autonomous },
     ...(primary ? { auth: actorAuthOf(primary, root, config.paths.actors) } : {}),

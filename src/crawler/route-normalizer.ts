@@ -34,10 +34,18 @@ export function normalizeSegment(segment: string): string {
   return decoded.toLowerCase();
 }
 
+/**
+ * Salesforce Lightning : /lightning/r/<Objet>/<Id 15 ou 18 caractères>/view — l'identifiant d'un
+ * enregistrement, que les règles génériques ne reconnaissent pas (ni nombre, ni hexadécimal).
+ */
+const LIGHTNING_RECORD = /^\/lightning\/r\/[^/]+\/([a-zA-Z0-9]{15}|[a-zA-Z0-9]{18})(?=\/|$)/;
+
 export function routePattern(path: string): string {
+  const record = LIGHTNING_RECORD.exec(path);
+  const recordIndex = record ? 4 : -1;
   const pattern = path
     .split('/')
-    .map((segment) => normalizeSegment(segment))
+    .map((segment, index) => (index === recordIndex ? ':recordid' : normalizeSegment(segment)))
     .join('/');
   return pattern === '' ? '/' : pattern;
 }

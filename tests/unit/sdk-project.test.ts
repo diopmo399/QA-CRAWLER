@@ -169,4 +169,28 @@ describe('SDK project draft', () => {
     expect(back?.draft.project.name).toBe('Demo');
     expect(renderProjectFile(draft(), rules)).toMatch(/^# QA-Crawler project created by the SDK wizard/);
   });
+
+  it('turns the Salesforce Lightning type into the engine platform profile (and only that type)', async () => {
+    const lightning = draft({
+      project: {
+        name: 'Org',
+        targetUrl: 'https://org.example.test/lightning/page/home',
+        framework: 'salesforce',
+      },
+    });
+    const document = projectDocument(lightning, rules) as {
+      qaCrawler: { application: Record<string, unknown> };
+    };
+    expect(document.qaCrawler.application).toMatchObject({
+      framework: 'salesforce',
+      platform: 'salesforce-lightning',
+    });
+    const outcome = await validateDraft(lightning, rules, {}, '/tmp/sdk-project');
+    expect(outcome.report.ok).toBe(true);
+    expect(outcome.config?.target.platform).toBe('salesforce-lightning');
+    expect(
+      (projectDocument(draft(), rules) as { qaCrawler: { application: Record<string, unknown> } }).qaCrawler
+        .application,
+    ).not.toHaveProperty('platform');
+  });
 });
