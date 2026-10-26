@@ -124,10 +124,50 @@ describe('SDK client', () => {
     await expect(client.capabilities()).rejects.toMatchObject({ status: 0, code: 'UNREACHABLE' });
   });
 
-  it('exposes the planned extensions as reserved namespaces, never as fake services', () => {
-    const client = createQaCrawler({ endpoint: 'http://localhost/api' });
-    for (const name of ['recordings', 'groups', 'graph', 'assertions', 'generation', 'reports'] as const)
-      expect(client.extensions[name]).toEqual({ available: false });
+  it('calls the extension routes of the server (recordings, assertions, groups, generation, graph, reports)', async () => {
+    const calls: string[] = [];
+    const fake: typeof fetch = (input, init) => {
+      calls.push(
+        `${init?.method ?? 'GET'} ${typeof input === 'string' ? input : input instanceof URL ? input.href : input.url}`,
+      );
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    };
+    const client = createQaCrawler({ endpoint: 'http://localhost/api', token: 't', fetch: fake });
+    await client.recordings.start('prj_1', { name: 'Ouvrir' });
+    await client.recordings.stop('prj_1', 'ouvrir');
+    await client.recordings.flow('prj_1', 'ouvrir');
+    await client.assertions.decide('prj_1', 'ouvrir', 'p1', { decision: 'ACCEPT' });
+    await client.groups.edit('prj_1', 'ouvrir', { op: 'create', name: 'G' }, { force: true });
+    await client.generation.run('prj_1', 'ouvrir', { formats: ['yaml'] });
+    await client.graph.exploration('exp_1');
+    await client.graph.of('prj_1', 'recording', 'ouvrir');
+    await client.reports.list('prj_1');
+    await client.reports.link('prj_1', 'exploration', 'run-1');
+    expect(calls).toEqual([
+      'POST http://localhost/api/projects/prj_1/recordings',
+      'POST http://localhost/api/projects/prj_1/recordings/ouvrir/stop',
+      'GET http://localhost/api/projects/prj_1/recordings/ouvrir/flow',
+      'POST http://localhost/api/projects/prj_1/recordings/ouvrir/assertions/p1',
+      'POST http://localhost/api/projects/prj_1/recordings/ouvrir/groups',
+      'POST http://localhost/api/projects/prj_1/recordings/ouvrir/generation',
+      'GET http://localhost/api/explorations/exp_1/graph',
+      'GET http://localhost/api/projects/prj_1/reports/recording/ouvrir/graph',
+      'GET http://localhost/api/projects/prj_1/reports',
+      'POST http://localhost/api/projects/prj_1/reports/exploration/run-1/links',
+    ]);
+  });
+
+  it('encodes recording names in the path (the engine writes # for digits)', async () => {
+    let seen = '';
+    const client = createQaCrawler({
+      endpoint: 'http://localhost/api',
+      fetch: (input) => {
+        seen = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        return Promise.resolve(new Response('{}'));
+      },
+    });
+    await client.recordings.get('prj_1', 'etape-#');
+    expect(seen).toBe('http://localhost/api/projects/prj_1/recordings/etape-%23');
   });
 
   it('reads an event stream split across chunks, ignoring comments', async () => {

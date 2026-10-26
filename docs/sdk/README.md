@@ -175,8 +175,80 @@ Une erreur est une `QaCrawlerError { status, code, message, issues }` ; un serve
 `status: 0, code: 'UNREACHABLE'`. `subscribe` lit le flux avec `fetch` (le jeton part en en-tête,
 jamais dans l'URL) et reprend après un numéro d'événement (`after`).
 
-`client.extensions.{recordings, groups, graph, assertions, generation, reports}` valent
-`{ available: false }` : ce sont des emplacements réservés, pas des services simulés.
+## Enregistrements, assertions, groupes, génération, graphe, rapports
+
+Au-delà de la création de projet et de l'exploration, le client donne accès à ce que la fenêtre du
+recorder et les rapports font déjà dans QA-CRAWLER. Chaque appel passe par le module du moteur qui le
+réalise (`runRecording`, `decideProposal`, `applyGroupCommand`, `planGeneration`, `flow-graph.json`) :
+une seule implémentation pour la CLI, la fenêtre du recorder et le SDK
+(`src/recording/recording-workspace.ts`).
+
+```ts
+// 1. Un humain joue le parcours dans le Chromium ouvert sur la machine du serveur.
+await qa.recordings.start(project.id, { name: 'Ouvrir un utilisateur', startPath: '/users' });
+qa.recordings.subscribe(project.id, 'ouvrir-un-utilisateur', (event) => show(event));
+// … il l'arrête depuis la barre d'enregistrement, ou l'hôte l'arrête :
+await qa.recordings.stop(project.id, 'ouvrir-un-utilisateur');
+
+// 2. Le flow construit par le moteur, ses propositions d'assertions, ses groupes métier.
+const flow = await qa.recordings.flow(project.id, 'ouvrir-un-utilisateur'); // étapes, YAML, .feature
+const proposals = await qa.assertions.list(project.id, 'ouvrir-un-utilisateur');
+await qa.assertions.decide(project.id, 'ouvrir-un-utilisateur', proposals[0].id, { decision: 'ACCEPT' });
+await qa.groups.edit(project.id, 'ouvrir-un-utilisateur', {
+  op: 'create',
+  name: 'Aller à la liste',
+  stepIds,
+});
+
+// 3. Les tests générés, validés statiquement avec les outils disponibles (jamais « exécutés » ici).
+const { files } = await qa.generation.run(project.id, 'ouvrir-un-utilisateur', {
+  formats: ['yaml', 'gherkin', 'playwright', 'java'],
+});
+
+// 4. Le graphe d'écrans, la liste des rapports, un lien vers un rapport HTML.
+const graph = await qa.graph.exploration(exploration.id); // ou qa.graph.of(projectId, 'recording', nom)
+const reports = await qa.reports.list(project.id);
+const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisateur');
+```
+
+| Méthode                                         | Route                                                            |
+| ----------------------------------------------- | ---------------------------------------------------------------- |
+| `recordings.start(projectId, input)`            | `POST /api/projects/:id/recordings` (202)                        |
+| `recordings.list(projectId)`                    | `GET /api/projects/:id/recordings`                               |
+| `recordings.get(projectId, name)`               | `GET /api/projects/:id/recordings/:name`                         |
+| `recordings.stop(projectId, name)`              | `POST /api/projects/:id/recordings/:name/stop`                   |
+| `recordings.subscribe(projectId, name, cb)`     | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
+| `recordings.flow(projectId, name)`              | `GET /api/projects/:id/recordings/:name/flow`                    |
+| `assertions.list(projectId, name)`              | `GET /api/projects/:id/recordings/:name/assertions`              |
+| `assertions.decide(projectId, name, id, input)` | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
+| `groups.list(projectId, name)`                  | `GET /api/projects/:id/recordings/:name/groups`                  |
+| `groups.edit(projectId, name, command)`         | `POST /api/projects/:id/recordings/:name/groups`                 |
+| `generation.run(projectId, name, input)`        | `POST /api/projects/:id/recordings/:name/generation`             |
+| `graph.exploration(id)`                         | `GET /api/explorations/:id/graph` (409 avant la fin)             |
+| `graph.of(projectId, kind, name)`               | `GET /api/projects/:id/reports/:kind/:name/graph`                |
+| `reports.list(projectId)`                       | `GET /api/projects/:id/reports`                                  |
+| `reports.link(projectId, kind, name)`           | `POST /api/projects/:id/reports/:kind/:name/links`               |
+
+**Enregistrement** : `RECORDING → PROCESSING → COMPLETED | FAILED` ; `STORED` désigne un
+enregistrement lu sur disque (écrit par la CLI, ou avant le démarrage du serveur). Le nom donné
+devient le dossier du moteur (`recordings/<nom>/`, en minuscules, les chiffres remplacés par `#`).
+Le flux relaie les événements du recorder (sauf les traces brutes, une par événement clavier ou
+souris), les phases après l'arrêt, puis le résumé : étapes, raison de l'arrêt, rejeu de validation
+(si demandé avec `validate: true`), propositions, groupes, fichiers.
+
+Règles :
+
+- **un enregistrement à la fois** (un humain, un navigateur) : un second démarrage répond `409
+RECORDING_ACTIVE` ; un nom déjà pris répond `409 NAME_TAKEN` (rien n'est écrasé) ;
+- le navigateur est **visible** sur la machine du serveur : l'humain doit y avoir accès ;
+- le chemin de départ est un chemin de l'application (`/…`), jamais une autre adresse ;
+- pendant l'enregistrement, le flow, les assertions, les groupes et la génération répondent `409
+RECORDING_IN_PROGRESS` ; ensuite, les modifications d'un même enregistrement passent une par une ;
+- une décision ou un groupe réécrit le flow (YAML, .feature, `recorded-flow.json`,
+  `assertion-proposals.json`) avec la même règle que la revue du recorder ; un groupe qui casserait
+  une dépendance de données est refusé (`422`) sauf `force` ;
+- la génération écrit sous `recordings/<nom>/generated/` ; le statut de chaque fichier dit ce qui a
+  été vérifié (`GENERATED`, `STATICALLY_VALIDATED`, `NOT_VALIDATED`…), jamais une exécution.
 
 ## Statuts et événements
 
@@ -218,15 +290,19 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - **SafetyPolicy** : la mission dérivée garde les règles du moteur (modifications désactivées,
   hôtes autorisés, chemins de déconnexion exclus). Ni l'hôte ni l'assistant ne peuvent les lever.
 - **Rapports** : servis par un lien à ticket (10 minutes), sous une CSP `sandbox`, sans remonter
-  au-dessus du dossier de l'exploration.
+  au-dessus du dossier de l'exploration ou de l'enregistrement.
+- **Noms et chemins** : un nom d'enregistrement ou de rapport est vérifié avant tout accès disque ;
+  un chemin de départ d'enregistrement reste dans l'application.
 - **Page autonome** : CSP stricte avec nonce, `frame-ancestors 'none'`.
 - **Textes** : tout texte venant du serveur ou de l'utilisateur est échappé avant affichage.
 
 ## Limites actuelles
 
-- Pas d'annulation d'une exploration (le moteur ne l'offre pas).
-- Les explorations vivent en mémoire pendant la vie du serveur ; les projets et les rapports restent
-  sur disque, dans le dossier de travail.
+- Pas d'annulation d'une exploration (le moteur ne l'offre pas). Un enregistrement, lui, s'arrête.
+- Les explorations et les flux d'enregistrement vivent en mémoire pendant la vie du serveur ; les
+  projets, les enregistrements et les rapports restent sur disque, dans le dossier de travail.
+- L'enregistrement suppose un écran sur la machine du serveur (un humain joue le parcours).
+- L'assistant visuel couvre la création et l'exploration ; les extensions s'utilisent par le client.
 - Une exploration à la fois par défaut (`--concurrency`).
 - Chromium seulement.
 - Rien n'est publié sur un registre : le SDK fait partie de `@qa-crawler/core`.
@@ -237,9 +313,13 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/unit/sdk-project.test.ts` : brouillon → projet du moteur, aucun identifiant écrit,
   variables manquantes, sources Angular, validation par le moteur.
 - `tests/unit/sdk-server.test.ts` : jeton, origines, variables, modules, CSP, parcours complet avec
-  un moteur **simulé** (tests seulement), liens de rapport, reprise du flux.
+  un moteur **simulé** (tests seulement), liens de rapport, reprise du flux ; enregistrements avec un
+  recorder **simulé** (un à la fois, arrêt par l'API, noms et chemins refusés, graphe, rapports).
 - `tests/unit/sdk-view.test.ts` : rendu pur (échappement, pas de champ mot de passe, compteurs
   sans pourcentage, mode embarqué).
 - `tests/integration/sdk-wizard.test.ts` : le **vrai** moteur, Chromium et le site de démo — page
   autonome jusqu'au résultat, projet sans secret, rapport par lien ; hôte sur une autre origine
   (thème, jeton, événements) ; origine refusée.
+- `tests/integration/sdk-extensions.test.ts` : le **vrai** recorder (seul l'humain est joué par
+  Playwright) — enregistrement par l'API, décision sur une proposition, groupe métier, génération
+  YAML / Gherkin / Playwright validée, graphe, liste des rapports, lien, arrêt par l'API.

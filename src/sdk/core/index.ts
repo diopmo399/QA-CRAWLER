@@ -10,7 +10,7 @@ export {
   QaCrawlerError,
   type ClientOptions,
   type QaCrawlerClient,
-  type ReservedNamespace,
+  type RecordingStartInput,
   type SubscribeOptions,
   type Subscription,
 } from './client.js';

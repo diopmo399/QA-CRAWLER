@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ScenarioConfig } from '../../src/config/config.js';
 import type { RunOptions, RunOutcome } from '../../src/orchestrator.js';
+import type { RecordOutcome, RecordRequest } from '../../src/recording/record-orchestrator.js';
 import { createQaCrawler, type ExplorationEvent, type ProjectDraft } from '../../src/sdk/core/index.js';
 import { engineDefaults } from '../../src/sdk/server/project.js';
 import { startSdkServer, type RunningSdkServer } from '../../src/sdk/server/server.js';
@@ -59,6 +60,18 @@ async function fakeRun(config: ScenarioConfig, options: RunOptions): Promise<Run
   );
   await writeFile(path.join(reports, 'screenshots', 'a.png'), 'png');
   await writeFile(path.join(reports, 'result.json'), '{}');
+  await writeFile(
+    path.join(reports, 'flow-graph.json'),
+    JSON.stringify({
+      version: 1,
+      rootId: 's1',
+      nodes: [
+        { id: 's1', label: 'home', route: '/', title: 'Home', depth: 0 },
+        { id: 's2', label: 'users', route: '/users', title: 'Users', depth: 1 },
+      ],
+      edges: [{ from: 's1', to: 's2', action: { type: 'click', text: 'Users' }, result: 'SUCCESS' }],
+    }),
+  );
   return {
     passed: true,
     failingIssues: [],
@@ -87,6 +100,69 @@ async function fakeRun(config: ScenarioConfig, options: RunOptions): Promise<Run
   } as unknown as RunOutcome;
 }
 
+/**
+ * Un recorder SIMULÉ (tests uniquement) : il annonce le début, attend l'arrêt (API), écrit un dossier
+ * d'enregistrement minimal et rend un résultat. Le vrai recorder est couvert par
+ * tests/integration/sdk-extensions.test.ts.
+ */
+const records: RecordRequest[] = [];
+async function fakeRecord(request: RecordRequest): Promise<RecordOutcome> {
+  records.push(request);
+  const at = new Date().toISOString();
+  let stop: (reason: string) => void = () => undefined;
+  const stopped = new Promise<string>((resolve) => {
+    stop = resolve;
+  });
+  request.onEvent?.({ type: 'RECORDING_STARTED', at, message: 'recording started' } as never);
+  request.onEvent?.({ type: 'RAW_EVENT_CAPTURED', at, message: 'click r1' } as never);
+  request.control?.({
+    requestStop: (reason: string) => {
+      stop(reason);
+    },
+    stopped,
+  } as never);
+  const reason = await stopped;
+  request.onEvent?.({ type: 'RECORDING_STOPPED', at, message: 'stopped (api)' } as never);
+  request.onProgress?.({
+    task: 'Finalizing',
+    step: 1,
+    total: 2,
+    label: 'Building the flow',
+    elapsedMs: 1,
+  } as never);
+  const dir = path.join(request.overrides?.reportsDir ?? '', 'recordings', 'parcours-test');
+  await mkdir(dir, { recursive: true });
+  const flow = {
+    name: request.name,
+    recordingSessionId: 'rec-1',
+    startAt: '/',
+    steps: [],
+    assertions: [],
+    proposals: [],
+  };
+  await writeFile(path.join(dir, 'recorded-flow.json'), JSON.stringify(flow));
+  await writeFile(path.join(dir, 'raw-recording.json'), JSON.stringify({ startedAt: at, rawEvents: [] }));
+  await writeFile(path.join(dir, 'generated.flow.yaml'), 'name: parcours test\nsteps: []\n');
+  await writeFile(path.join(dir, 'index.html'), '<!doctype html><title>Recording</title>');
+  await writeFile(
+    path.join(dir, 'flow-graph.json'),
+    JSON.stringify({
+      version: 1,
+      rootId: 'a',
+      nodes: [{ id: 'a', label: 'home', route: '/', title: 'Home', depth: 0 }],
+      edges: [],
+    }),
+  );
+  return {
+    result: { flow },
+    directory: dir,
+    files: { 'recorded-flow.json': 'recorded-flow.json', 'generated.flow.yaml': 'generated.flow.yaml' },
+    replay: { status: 'NOT_VALIDATED' },
+    stopReason: reason,
+    warnings: [],
+  } as unknown as RecordOutcome;
+}
+
 const draft = (): ProjectDraft => ({
   ...engineDefaults(),
   project: { name: 'Demo', targetUrl: 'http://127.0.0.1:9/app', framework: 'vue' },
@@ -110,6 +186,7 @@ beforeAll(async () => {
   server = await startSdkServer({
     workspace,
     run: fakeRun,
+    record: fakeRecord,
     allowedOrigins: ['https://portal.example.test'],
     env: { QA_USERNAME: 'jane', QA_PASSWORD: 'secret-value', AWS_SECRET_ACCESS_KEY: 'x' },
   });
@@ -182,6 +259,7 @@ describe('SDK server — projects and explorations', () => {
     const client = createQaCrawler({ endpoint: `${server.url}/api`, token: server.token });
     const caps = await client.capabilities();
     expect(caps).toMatchObject({ browsers: ['chromium'], cancellation: false, staticAnalysis: false });
+    expect(Object.values(caps.extensions).every(Boolean)).toBe(true);
 
     const report = await client.projects.validate(draft());
     expect(report.ok).toBe(true);
@@ -199,6 +277,7 @@ describe('SDK server — projects and explorations', () => {
     // Pas de résultat ni de rapport avant la fin : jamais un « terminé » anticipé.
     await expect(client.explorations.result(started.id)).rejects.toMatchObject({ status: 409 });
     await expect(client.explorations.reportLink(started.id)).rejects.toMatchObject({ status: 409 });
+    await expect(client.graph.exploration(started.id)).rejects.toMatchObject({ status: 409 });
 
     const events: ExplorationEvent[] = [];
     const subscription = client.explorations.subscribe(started.id, (event) => events.push(event));
@@ -248,6 +327,17 @@ describe('SDK server — projects and explorations', () => {
     const escape = await fetch(link.url.replace('index.html', '..%2F..%2Fqa-crawler.config.yaml'));
     expect(escape.status).toBe(404);
     expect((await fetch(`${server.url}/reports/not-a-ticket/index.html`)).status).toBe(404);
+
+    // Le graphe écrit par le moteur, réduit à ce qu'un écran affiche.
+    const graph = await client.graph.exploration(started.id);
+    expect(graph).toMatchObject({ rootId: 's1', nodes: [{ id: 's1' }, { id: 's2' }] });
+    expect(graph.edges[0]).toMatchObject({
+      from: 's1',
+      to: 's2',
+      action: 'Users',
+      type: 'click',
+      result: 'SUCCESS',
+    });
 
     // Le flux d'une exploration terminée se rejoue, puis se ferme.
     const replay: ExplorationEvent[] = [];
@@ -303,5 +393,111 @@ describe('SDK server — projects and explorations', () => {
     expect((await call('/api/projects/prj_unknown123')).status).toBe(404);
     expect((await call('/api/explorations/exp_unknown123')).status).toBe(404);
     expect((await call('/api/projects/../../etc')).status).toBe(404);
+  });
+});
+
+describe('SDK server — recordings and reports', () => {
+  it('refuses a bad name or a start path outside the application', async () => {
+    const client = createQaCrawler({ endpoint: `${server.url}/api`, token: server.token });
+    const project = await client.projects.create(draft());
+    await expect(client.recordings.start(project.id, { name: '   ' })).rejects.toMatchObject({ status: 400 });
+    for (const startPath of ['//evil.example.test/x', 'https://evil.example.test', 'users'])
+      await expect(client.recordings.start(project.id, { name: 'X', startPath })).rejects.toMatchObject({
+        status: 400,
+      });
+    // Un « / » encodé ne sort pas du dossier des enregistrements ; « .. » est résolu par l'URL avant le routage.
+    expect((await call(`/api/projects/${project.id}/recordings/a%2Fb`)).status).toBe(404);
+    expect((await call(`/api/projects/${project.id}/recordings/%2E%2E/%2E%2E/%2E%2E/etc`)).status).toBe(404);
+    await expect(client.recordings.get(project.id, 'unknown')).rejects.toMatchObject({ status: 404 });
+    await expect(
+      client.recordings.subscribe(project.id, 'unknown', () => undefined).done,
+    ).resolves.toBeUndefined();
+  });
+
+  it('runs one recording at a time, relays the recorder (not its raw events), stops by API, then serves the stored recording', async () => {
+    const client = createQaCrawler({ endpoint: `${server.url}/api`, token: server.token });
+    const project = await client.projects.create(draft());
+    const started = await client.recordings.start(project.id, { name: 'Parcours test', startPath: '/users' });
+    expect(started).toMatchObject({ name: 'parcours-test', status: 'RECORDING' });
+    await expect.poll(() => records.length).toBe(1);
+    // La mission du projet, un navigateur visible (un humain y joue le parcours), les rapports du projet.
+    expect(records[0]).toMatchObject({ name: 'Parcours test', url: '/users', review: false });
+    expect(records[0]?.overrides).toMatchObject({ headless: false });
+    expect(records[0]?.missionFile).toContain(path.join(project.id, '.derived'));
+    await expect(client.recordings.start(project.id, { name: 'Autre' })).rejects.toMatchObject({
+      status: 409,
+      code: 'RECORDING_ACTIVE',
+    });
+    await expect(client.recordings.flow(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 409,
+      code: 'RECORDING_IN_PROGRESS',
+    });
+
+    const events: { type: string; event?: string; status?: string }[] = [];
+    const subscription = client.recordings.subscribe(project.id, 'parcours-test', (event) =>
+      events.push(event),
+    );
+    await expect.poll(() => events.length).toBeGreaterThan(1);
+    expect((await client.recordings.stop(project.id, 'parcours-test')).name).toBe('parcours-test');
+    await subscription.done;
+    expect(events.map((event) => event.type)).toEqual([
+      'status',
+      'recorder',
+      'recorder',
+      'status',
+      'phase',
+      'completed',
+      'status',
+    ]);
+    expect(events.some((event) => event.event === 'RAW_EVENT_CAPTURED')).toBe(false);
+    expect(events.filter((event) => event.type === 'status').map((event) => event.status)).toEqual([
+      'RECORDING',
+      'PROCESSING',
+      'COMPLETED',
+    ]);
+
+    const done = await client.recordings.get(project.id, 'parcours-test');
+    expect(done.summary).toMatchObject({ steps: 0, stopReason: 'api', replay: 'NOT_VALIDATED' });
+    expect((await client.recordings.flow(project.id, 'parcours-test')).yaml).toContain('parcours test');
+    expect(await client.assertions.list(project.id, 'parcours-test')).toEqual([]);
+    expect(await client.groups.list(project.id, 'parcours-test')).toEqual([]);
+    await expect(
+      client.assertions.decide(project.id, 'parcours-test', 'p-unknown', { decision: 'ACCEPT' }),
+    ).rejects.toMatchObject({ status: 422, code: 'REFUSED' });
+    await expect(
+      client.assertions.decide(project.id, 'parcours-test', 'p1', { decision: 'MAYBE' as never }),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      client.groups.edit(project.id, 'parcours-test', { op: 'explode' } as never),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(client.generation.run(project.id, 'parcours-test', { formats: [] })).rejects.toMatchObject({
+      status: 400,
+    });
+    await expect(client.recordings.stop(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 409,
+      code: 'NOT_RECORDING',
+    });
+
+    const reports = await client.reports.list(project.id);
+    expect(reports).toEqual([
+      expect.objectContaining({
+        kind: 'recording',
+        name: 'parcours-test',
+        recording: { steps: 0 },
+        hasGraph: true,
+      }),
+    ]);
+    expect((await client.graph.of(project.id, 'recording', 'parcours-test')).nodes).toHaveLength(1);
+    const link = await client.reports.link(project.id, 'recording', 'parcours-test');
+    expect((await fetch(link.url)).status).toBe(200);
+    await expect(client.reports.link(project.id, 'exploration', '../../etc')).rejects.toMatchObject({
+      status: 404,
+    });
+    await expect(client.graph.of(project.id, 'recording', 'unknown')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('keeps the new routes behind the token', async () => {
+    expect((await call('/api/projects/prj_whatever/recordings', { token: null })).status).toBe(401);
+    expect((await call('/api/projects/prj_whatever/reports', { token: null })).status).toBe(401);
   });
 });

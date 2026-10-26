@@ -8,15 +8,9 @@ import {
 } from './application/human-review.js';
 import { generateFlowFiles } from './recorded-flow.js';
 import { addRowVariables, applyTestDataBinding } from './test-data-binding.js';
-import { decideProposal, proposalSummary } from './assertion-proposals.js';
+import { decideProposal } from './assertion-proposals.js';
 import { applyGroupCommand } from './step-groups.js';
-import {
-  type GenerationFormat,
-  planGeneration,
-  planSummary,
-  validateArtifacts,
-  writeArtifacts,
-} from '../platform/generation-plan.js';
+import { generateRecordingTests, proposalsFile, writeFlowFiles } from './recording-workspace.js';
 import { observationSummary } from './observations.js';
 import {
   PROPOSABLE_OPERATIONS,
@@ -54,7 +48,7 @@ import { summarize as summarizeIntents } from '../intent/resolve-recording.js';
 import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
-import type { RecordedFlow, RecordedIntent, RecordingEvent, TechnicalIntentRecord } from './model.js';
+import type { RecordedIntent, RecordingEvent, TechnicalIntentRecord } from './model.js';
 import type { IntelligenceProvider } from '../ai/provider.js';
 import {
   describeFieldIdentity,
@@ -948,11 +942,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     };
     const rewriteFlow = async (): Promise<void> => {
       regenerateFlowFiles(result, language);
-      if (format !== 'gherkin') await write('generated.flow.yaml', result.files.yaml);
-      if (format !== 'yaml') await write('generated.feature', result.files.feature);
-      const { intent: _intent, ...recordedFlow } = result.flow;
-      await write('recorded-flow.json', json(recordedFlow));
-      await write('assertion-proposals.json', json(proposalsFile(result.flow)));
+      await writeFlowFiles(write, result.flow, result.files, format);
       replay = { status: 'NOT_VALIDATED' };
       saved = undefined;
     };
@@ -1325,51 +1315,38 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         // LA GÉNÉRATION (revue) : les formats choisis pour les groupes choisis, écrits sous generated/ et
         // validés avec les outils réels disponibles (schéma, dictionnaire, TypeScript, Maven) ; jamais exécutés ici.
         generate: async (input) => {
-          const formats = input.formats.filter((entry): entry is GenerationFormat =>
-            ['yaml', 'gherkin', 'playwright', 'java'].includes(entry),
+          const testDataYaml = result.testData
+            ? stringifyYaml(result.testData.document, { lineWidth: 0 })
+            : undefined;
+          const outcome = await generateRecordingTests(
+            {
+              flow: result.flow,
+              directory,
+              baseUrl: config.target.baseUrl,
+              language,
+              recordedAt: result.session.startedAt,
+              ...(result.testData && testDataYaml !== undefined
+                ? {
+                    testData: {
+                      yaml: testDataYaml,
+                      hasValues: Object.keys(result.testData.set.values).length > 0,
+                    },
+                  }
+                : {}),
+              ...(config.platform.generatedTests.java.packageName
+                ? { javaPackage: config.platform.generatedTests.java.packageName }
+                : {}),
+              write,
+            },
+            input,
           );
-          if (formats.length === 0) return { error: 'no format selected' };
-          const plan = planGeneration({
-            flow: result.flow,
-            formats,
-            baseUrl: config.target.baseUrl,
-            language,
-            ...(input.groupIds ? { groupIds: input.groupIds } : {}),
-            ...(input.force ? { force: true } : {}),
-            recordedAt: result.session.startedAt,
-            ...(result.testData && Object.keys(result.testData.set.values).length > 0
-              ? { testDataFile: TEST_DATA_FILE }
-              : {}),
-            ...(config.platform.generatedTests.java.packageName
-              ? { java: { packageName: config.platform.generatedTests.java.packageName } }
-              : {}),
-          });
-          if ('error' in plan) return plan;
-          const generatedDir = path.join(directory, 'generated');
-          await writeArtifacts(plan.artifacts, generatedDir);
-          if (result.testData && formats.includes('yaml'))
-            await writeFile(
-              path.join(generatedDir, TEST_DATA_FILE),
-              stringifyYaml(result.testData.document, { lineWidth: 0 }),
-            );
-          const validated = await validateArtifacts(plan.artifacts, { directory: generatedDir });
-          await write(
-            'generation.json',
-            json({
-              generatedAt: new Date().toISOString(),
-              directory: generatedDir,
-              flow: plan.name,
-              summary: planSummary({ ...plan, artifacts: validated }),
-              warnings: plan.warnings,
-              artifacts: validated.map(({ content: _content, ...artifact }) => artifact),
-            }),
-          );
+          if ('error' in outcome) return outcome;
           onEvent({
             type: 'RECORDING_TESTS_GENERATED',
             at: new Date().toISOString(),
-            message: `${String(validated.length)} file(s) generated for ${plan.name} (${formats.join(', ')}): ${validated.map((artifact) => `${artifact.path} ${artifact.status}`).join('; ')}`,
+            message: `${String(outcome.artifacts.length)} file(s) generated for ${outcome.name} (${outcome.formats.join(', ')}): ${outcome.artifacts.map((artifact) => `${artifact.path} ${artifact.status}`).join('; ')}`,
           });
-          return { directory: generatedDir, warnings: plan.warnings, artifacts: validated };
+          return { directory: outcome.directory, warnings: outcome.warnings, artifacts: outcome.artifacts };
         },
         save: async () => {
           saved = await saveRecordedFlow({
@@ -1960,11 +1937,3 @@ function typingMergeReport(result: RecordingResult): Record<string, unknown> {
 }
 
 /** assertion-proposals.json : le résumé, les propositions et leurs décisions, les assertions métier acceptées. */
-function proposalsFile(flow: RecordedFlow): Record<string, unknown> {
-  const proposals = flow.proposals ?? [];
-  return {
-    summary: proposalSummary(proposals),
-    proposals,
-    businessAssertions: flow.businessAssertions ?? [],
-  };
-}
