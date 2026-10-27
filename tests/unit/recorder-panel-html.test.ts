@@ -60,4 +60,36 @@ describe('panel commands: proposals, groups and generation', () => {
     );
     expect(commandOf({ type: 'generate', formats: ['yaml', 'rust'] })).toEqual({ type: 'generate' });
   });
+
+  it('keeps the organised-review commands: grouped decisions, group proposals, group checks', async () => {
+    const { commandOf } = await import('../../src/recording/recorder-panel.js');
+    // « Accepter les 3 » / « Tout refuser » : des identifiants de proposition, une seule décision.
+    expect(commandOf({ type: 'assertion-decide', ids: ['p1', 'p4', 'p12'], decision: 'ACCEPT' })).toEqual({
+      type: 'assertion-decide',
+      ids: ['p1', 'p4', 'p12'],
+      decision: 'ACCEPT',
+    });
+    expect(commandOf({ type: 'assertion-decide', ids: ['p1', 's2'], decision: 'REJECT' })).toEqual({
+      type: 'assertion-decide',
+      decision: 'REJECT',
+    });
+    expect(commandOf({ type: 'group', op: 'accept-proposals' })).toEqual({
+      type: 'group',
+      op: 'accept-proposals',
+    });
+    expect(commandOf({ type: 'group', op: 'dismiss-proposals' })).toEqual({
+      type: 'group',
+      op: 'dismiss-proposals',
+    });
+    expect(commandOf({ type: 'group', op: 'add-check', groupId: 'g2', variable: 'company.name' })).toEqual({
+      type: 'group',
+      op: 'add-check',
+      groupId: 'g2',
+      variable: 'company.name',
+    });
+    expect(commandOf({ type: 'group', op: 'drop-everything', groupId: 'g2' })).toEqual({
+      type: 'group',
+      groupId: 'g2',
+    });
+  });
 });

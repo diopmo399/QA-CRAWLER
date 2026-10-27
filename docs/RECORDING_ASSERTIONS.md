@@ -82,6 +82,53 @@ vérifications et assertions, et s'il est **jouable seul** (sinon ce qui manque)
 Dans le YAML : `groups: [{ id, name, description?, steps: [positions 1…n] }]` (informatif pour le rejeu,
 structurant pour la génération). Un ancien enregistrement sans groupe reste valide.
 
+### Groupes proposés
+
+Quand le flow n'a encore aucun groupe, la revue **propose** un découpage d'après les étapes métier que
+l'analyse a reconnues (`CONFIRMED` ou `PROBABLE` : créer, rechercher, ouvrir…) : chaque étape métier ferme
+un segment, de l'action qui suit le segment précédent jusqu'à sa dernière action (« Création — company ·
+étapes 1–4 », « Recherche — company · étapes 5–6 »). Les numéros sont ceux des actions dans la fenêtre.
+
+- Rien n'est créé sans décision : **Créer les N groupes** les crée d'un coup, **Ignorer** écarte la
+  proposition pour cette revue.
+- L'ordre des étapes ne change jamais ; les vérifications suivent leur action dans son groupe ; les
+  actions après la dernière étape métier restent hors groupe.
+- Aucune proposition quand l'humain a déjà créé un groupe, ni quand un seul segment couvrirait tout le
+  parcours.
+
+API : `proposeGroups(flow, businessSteps, language)` et `acceptGroupProposals(flow, proposals)`
+(`src/recording/step-groups.ts`).
+
+### Vérification de groupe
+
+Pour chaque groupe qui **reçoit** une donnée d'un autre groupe (la recherche qui doit retrouver la fiche
+créée), la revue suggère « La donnée `testData.<clé>` est visible à la fin de « <groupe> » ». **Ajouter**
+écrit, après la dernière action du groupe, une étape `expect: { text: '${testData:<clé>}' }` : la donnée
+est **citée**, le rejeu la résout par la valeur de CE run (générée ou réutilisée), jamais par la valeur
+tapée à l'enregistrement. Elle devient une proposition `EXPLICIT` acceptée (`DATA_CONSISTENCY`) : la
+retirer, la désactiver ou la réinitialiser passe par les décisions habituelles. Le `.feature` la dit
+« Alors je vois "${testData:<clé>}" », relue par le moteur Gherkin comme la même attente.
+
+Aucune vérification n'est suggérée pour la donnée qu'un groupe produit lui-même : après « Enregistrer »,
+l'écran a souvent changé et la valeur n'y est plus. API : `groupCheckSuggestions(flow)` et
+`addDataCheck(flow, { afterStepId, key })` (`src/recording/assertion-proposals.ts`).
+
+### La revue organisée (fenêtre)
+
+- Un **fil en trois étapes** en tête de la revue : organiser le parcours, décider des assertions, générer
+  les tests ; chaque étape dit où l'on en est et mène à sa section.
+- Chaque groupe est une **carte qui contient ses étapes** (bande de couleur, pastilles : étapes, départ,
+  jouable seul, données produites et reçues, vérifications, étapes à vérifier).
+- En mode **Modifier**, la barre de sélection n'apparaît que lorsque des étapes sont cochées ; elle reste
+  en bas du parcours et garde le nom saisi d'une coche à l'autre. Les icônes d'une étape (monter,
+  descendre, détacher, retirer) apparaissent au survol, au clavier ou sur l'étape choisie.
+- Les **propositions à décider** sont triées : _Recommandées_ (observées, exécutables, confiance ≥ 75 %,
+  sans conflit ; **Accepter les N**), _À décider_, _Faibles ou non exécutables_ (rapport seulement ou
+  confiance < 50 % ; repliées, une ligne et sa raison, **Tout refuser**).
+- La **génération** est repliée sur une ligne (formats, portée, **Générer et valider**) tant qu'aucune
+  génération n'existe ; ses options se déplient.
+- L'en-tête passe sur deux lignes dans une fenêtre étroite au lieu de déborder.
+
 ## 4. La génération (`generation.json`, `generated/`)
 
 Dans la fenêtre (revue, section **Génération des tests**) : choisir les formats, les groupes (tous par

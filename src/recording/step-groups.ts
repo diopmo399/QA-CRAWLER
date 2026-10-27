@@ -575,6 +575,173 @@ export function flowForGroups(
   };
 }
 
+// ── Groupes proposés ────────────────────────────────────────────────────────────────────────
+
+/** Une étape métier reconnue par l'analyse (créer, rechercher, ouvrir…) : ce qu'en lit la proposition. */
+export interface BusinessStepRef {
+  action: string;
+  entity?: string;
+  status: string;
+  confidence: number;
+  businessEventId: string;
+  /** Les étapes du flow (RecordedFlowStep.id) qui portent l'étape métier. */
+  recordedActions: string[];
+}
+
+/** UN GROUPE PROPOSÉ : un découpage du parcours, jamais appliqué sans décision humaine. */
+export interface GroupProposal {
+  name: string;
+  /** Les étapes d'action proposées (leurs vérifications suivent à la création). */
+  stepIds: string[];
+  /** Numéros (1…n) de la première et de la dernière action, comme la fenêtre les numérote. */
+  from: number;
+  to: number;
+  businessEventId: string;
+  action: string;
+  confidence: number;
+}
+
+const ACTION_NAMES: Record<'fr' | 'en', Record<string, string>> = {
+  fr: {
+    create: 'Création',
+    search: 'Recherche',
+    retrieve: 'Recherche',
+    correlate: 'Recherche',
+    open: 'Ouverture',
+    update: 'Modification',
+    save: 'Enregistrement',
+    delete: 'Suppression',
+  },
+  en: {
+    create: 'Creation',
+    search: 'Search',
+    retrieve: 'Search',
+    correlate: 'Search',
+    open: 'Opening',
+    update: 'Update',
+    save: 'Save',
+    delete: 'Deletion',
+  },
+};
+
+/**
+ * LES GROUPES PROPOSÉS d'après les étapes métier reconnues : chaque étape métier sûre (CONFIRMED ou
+ * PROBABLE) ferme un segment du parcours, de l'étape qui suit le segment précédent jusqu'à sa dernière
+ * étape. Rien n'est proposé quand le flow a déjà des groupes (l'humain a commencé à organiser) ; l'ordre
+ * des étapes n'est jamais touché ; les étapes après la dernière étape métier restent hors groupe.
+ */
+export function proposeGroups(
+  flow: Pick<RecordedFlow, 'steps' | 'groups'>,
+  business: readonly BusinessStepRef[],
+  language: 'fr' | 'en' = 'fr',
+): GroupProposal[] {
+  if ((flow.groups?.length ?? 0) > 0) return [];
+  const anchors = blocks(flow.steps)
+    .map((block) => block[0])
+    .filter((item) => item !== undefined);
+  const indexOf = new Map(anchors.map((item, index) => [item.id, index]));
+  // Le numéro d'une action tel que la fenêtre le montre (les vérifications ne sont pas numérotées).
+  const position = new Map(
+    flow.steps.filter((item) => item.step.kind !== 'expect').map((item, index) => [item.id, index + 1]),
+  );
+  const ends = business
+    .filter((step) => step.status === 'CONFIRMED' || step.status === 'PROBABLE')
+    .map((step) => {
+      const indexes = step.recordedActions
+        .map((stepId) => indexOf.get(actionStepId(flow as RecordedFlow, stepId) ?? ''))
+        .filter((index): index is number => index !== undefined);
+      return { step, end: indexes.length > 0 ? Math.max(...indexes) : -1 };
+    })
+    .filter((entry) => entry.end >= 0)
+    .sort((a, b) => a.end - b.end);
+  const proposals: GroupProposal[] = [];
+  const used = new Map<string, number>();
+  let start = 0;
+  for (const { step, end } of ends) {
+    if (end < start) continue;
+    const members = anchors.slice(start, end + 1);
+    start = end + 1;
+    const first = members[0];
+    const last = members[members.length - 1];
+    if (!first || !last) continue;
+    const base = `${ACTION_NAMES[language][step.action] ?? step.action}${step.entity ? ` — ${step.entity}` : ''}`;
+    const count = (used.get(base) ?? 0) + 1;
+    used.set(base, count);
+    proposals.push({
+      name: count > 1 ? `${base} ${String(count)}` : base,
+      stepIds: members.map((item) => item.id),
+      from: position.get(first.id) ?? 0,
+      to: position.get(last.id) ?? 0,
+      businessEventId: step.businessEventId,
+      action: step.action,
+      confidence: step.confidence,
+    });
+  }
+  // Un seul segment qui couvre tout le parcours n'organise rien : pas de proposition.
+  return proposals.length === 1 && start >= anchors.length ? [] : proposals;
+}
+
+/** Crée les groupes proposés (en une fois) ; un nom déjà pris reçoit un suffixe. */
+export function acceptGroupProposals(flow: RecordedFlow, proposals: readonly GroupProposal[]): GroupOutcome {
+  if (proposals.length === 0) return { error: 'no group to propose' };
+  if ((flow.groups?.length ?? 0) > 0) return { error: 'the flow already has groups' };
+  const warnings: string[] = [];
+  for (const proposal of proposals) {
+    const outcome = applyGroupCommand(flow, { op: 'create', name: proposal.name, stepIds: proposal.stepIds });
+    if ('error' in outcome) return outcome;
+    warnings.push(...outcome.warnings);
+  }
+  return { ok: true, warnings };
+}
+
+// ── Vérifications de groupe suggérées ───────────────────────────────────────────────────────
+
+/** Une vérification à proposer pour un groupe : la donnée de test qu'il reçoit d'un autre groupe est visible à sa fin. */
+export interface GroupCheckSuggestion {
+  groupId: string;
+  groupName: string;
+  key: string;
+  /** La donnée vient d'un autre groupe : ce qui a été créé plus haut doit être retrouvé ici. */
+  role: 'input';
+  /** L'étape d'action après laquelle la vérification s'écrit (la dernière du groupe). */
+  afterStepId: string;
+}
+
+/** Les clés de testData qu'une étape `expect` cite déjà. */
+function checkedKeys(steps: readonly RecordedFlowStep[]): Set<string> {
+  const keys = new Set<string>();
+  for (const item of steps) if (item.step.kind === 'expect') citations(item.step.expect, keys);
+  return keys;
+}
+
+/**
+ * LES VÉRIFICATIONS DE GROUPE à suggérer : pour chaque groupe, la première donnée qu'il reçoit d'un autre
+ * groupe (la recherche qui doit retrouver la fiche créée), quand aucune vérification du groupe ne la cite
+ * encore. Jamais la donnée qu'un groupe produit lui-même : après « Enregistrer », l'écran a souvent changé
+ * et la valeur n'y est plus. Rien n'est écrit sans décision humaine.
+ */
+export function groupCheckSuggestions(flow: RecordedFlow): GroupCheckSuggestion[] {
+  const suggestions: GroupCheckSuggestion[] = [];
+  for (const view of groupViews(flow)) {
+    const members = flow.steps.filter((item) => view.stepIds.includes(item.id));
+    const last = [...members].reverse().find((item) => item.step.kind !== 'expect');
+    if (!last) continue;
+    const already = checkedKeys(members);
+    const input = view.data.inputs.find(
+      (entry) => entry.producerStepId !== undefined && !already.has(entry.key),
+    );
+    if (input)
+      suggestions.push({
+        groupId: view.id,
+        groupName: view.name,
+        key: input.key,
+        role: 'input',
+        afterStepId: last.id,
+      });
+  }
+  return suggestions;
+}
+
 /** Les groupes à écrire dans le YAML : nom, description, positions des étapes (1…n) dans le flow écrit. */
 export function groupsForYaml(flow: RecordedFlow): Record<string, unknown>[] {
   if (!flow.groups || flow.groups.length === 0) return [];

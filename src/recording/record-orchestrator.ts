@@ -8,8 +8,8 @@ import {
 } from './application/human-review.js';
 import { generateFlowFiles } from './recorded-flow.js';
 import { addRowVariables, applyTestDataBinding } from './test-data-binding.js';
-import { decideProposal } from './assertion-proposals.js';
-import { applyGroupCommand } from './step-groups.js';
+import { addDataCheck, decideProposal } from './assertion-proposals.js';
+import { acceptGroupProposals, applyGroupCommand, groupViews, proposeGroups } from './step-groups.js';
 import { generateRecordingTests, proposalsFile, writeFlowFiles } from './recording-workspace.js';
 import { observationSummary } from './observations.js';
 import {
@@ -1032,6 +1032,43 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
             message: `group ${command.op}${'groupId' in command ? ` ${command.groupId}` : ''}${outcome.warnings.length > 0 ? ` — ${outcome.warnings.join('; ')}` : ''} (${result.flow.groups?.length ?? 0} groups)`,
           });
           return outcome;
+        },
+        // LES GROUPES PROPOSÉS d'après les étapes métier reconnues : créés d'un coup sur décision humaine
+        // (jamais quand des groupes existent) ; l'ordre des étapes ne change pas.
+        acceptGroupProposals: async () => {
+          const proposals = proposeGroups(result.flow, result.business?.model.steps ?? [], language);
+          const outcome = acceptGroupProposals(result.flow, proposals);
+          if ('error' in outcome) return outcome;
+          await rewriteFlow();
+          onEvent({
+            type: 'RECORDING_GROUPS_EDITED',
+            at: new Date().toISOString(),
+            message: `group proposals accepted: ${proposals.map((proposal) => `${proposal.name} (${String(proposal.from)}–${String(proposal.to)})`).join(', ')}`,
+          });
+          return outcome;
+        },
+        // LA VÉRIFICATION D'UN GROUPE : la donnée de test reçue (ou produite) est visible après sa dernière
+        // action ; une proposition EXPLICIT acceptée, retirable comme les autres.
+        addGroupCheck: async (input) => {
+          const view = groupViews(result.flow).find((entry) => entry.id === input.groupId);
+          if (!view) return { error: `unknown group ${input.groupId}` };
+          const last = [...result.flow.steps]
+            .reverse()
+            .find((item) => view.stepIds.includes(item.id) && item.step.kind !== 'expect');
+          if (!last) return { error: `group ${input.groupId} has no action` };
+          const outcome = addDataCheck(result.flow, {
+            afterStepId: last.id,
+            key: input.key,
+            groupName: view.name,
+          });
+          if ('error' in outcome) return outcome;
+          await rewriteFlow();
+          onEvent({
+            type: 'RECORDING_ASSERTION_DECIDED',
+            at: new Date().toISOString(),
+            message: `${outcome.proposalId} ADDED: testData.${input.key} is displayed at the end of group ${view.name}`,
+          });
+          return { ok: true };
         },
         // LA LIAISON DE DONNÉES : la source de la valeur d'une saisie (fixe, générée, réutilisée), choisie
         // par l'humain ; le flow, le .feature, test-data.yaml et le registre sont réécrits.
