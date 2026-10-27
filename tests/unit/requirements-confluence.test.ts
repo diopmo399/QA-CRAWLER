@@ -8,6 +8,7 @@ import {
   ConfluenceConnector,
   importSource,
   pageIdOf,
+  pageRefOf,
   RequirementsStore,
   storageToBlocks,
   variantOf,
@@ -23,6 +24,9 @@ import {
 const EMAIL = 'analyste@example.test';
 const API_TOKEN = 'cloud-api-token-0123456789';
 const PAT = 'dc-personal-token-0123456789';
+const SERVER_USER = 'svc-qa';
+const SERVER_PASSWORD = 'server-password-0123456789';
+const TITLE = 'Spécification demandes (fictive)';
 
 const STORAGE = `<h1>Gestion des demandes</h1>
 <p>Cette page d&eacute;crit les exigences du module de demandes (exemple fictif).</p>
@@ -108,30 +112,75 @@ function handle(request: IncomingMessage, response: ServerResponse): void {
     response.end(JSON.stringify({ body: { storage: { value: 'x'.repeat(4096) } } }));
     return;
   }
+  const cloudAuth = `Basic ${Buffer.from(`${EMAIL}:${API_TOKEN}`).toString('base64')}`;
+  const dcAuth = [
+    `Bearer ${PAT}`,
+    `Basic ${Buffer.from(`${SERVER_USER}:${SERVER_PASSWORD}`).toString('base64')}`,
+  ];
+  const refuse = (expected: string[]): boolean => {
+    if (expected.includes(request.headers.authorization ?? '')) return false;
+    json(401, { message: 'Unauthorized' });
+    return true;
+  };
+  // CLOUD (API v2) : page par identifiant, espace par clé, page par titre, lien court.
   const cloud = /^\/wiki\/api\/v2\/pages\/(\d+)$/.exec(url.pathname);
   if (cloud && url.searchParams.get('body-format') === 'storage') {
-    if (
-      request.headers.authorization !== `Basic ${Buffer.from(`${EMAIL}:${API_TOKEN}`).toString('base64')}`
-    ) {
-      json(401, { message: 'Unauthorized' });
-      return;
-    }
-    json(200, cloudPage(cloud[1] ?? ''));
+    if (!refuse([cloudAuth])) json(200, cloudPage(cloud[1] ?? ''));
     return;
   }
-  const dc = /^\/rest\/api\/content\/(\d+)$/.exec(url.pathname);
+  if (url.pathname === '/wiki/api/v2/spaces') {
+    if (!refuse([cloudAuth]))
+      json(200, { results: url.searchParams.get('keys') === 'DEM' ? [{ id: '98304', key: 'DEM' }] : [] });
+    return;
+  }
+  if (url.pathname === '/wiki/api/v2/pages' && url.searchParams.get('body-format') === 'storage') {
+    if (refuse([cloudAuth])) return;
+    const found = url.searchParams.get('space-id') === '98304' && url.searchParams.get('title') === TITLE;
+    json(200, { results: found ? [cloudPage('65538')] : [] });
+    return;
+  }
+  if (url.pathname.startsWith('/wiki/x/')) {
+    if (refuse([cloudAuth])) return;
+    response.writeHead(302, {
+      location:
+        url.pathname === '/wiki/x/AgAB'
+          ? '/wiki/spaces/DEM/pages/65538/Specification'
+          : 'https://other.example.test/x',
+    });
+    response.end();
+    return;
+  }
+  // DATA CENTER (API content), installé à la racine ou sous /confluence.
+  const path = url.pathname.replace(/^\/confluence(?=\/)/, '');
+  const dc = /^\/rest\/api\/content\/(\d+)$/.exec(path);
   if (dc && url.searchParams.get('expand') === 'body.storage,version,space') {
-    if (request.headers.authorization !== `Bearer ${PAT}`) {
-      json(401, { message: 'Unauthorized' });
-      return;
-    }
-    json(200, datacenterPage(dc[1] ?? ''));
+    if (!refuse(dcAuth)) json(200, datacenterPage(dc[1] ?? ''));
+    return;
+  }
+  if (path === '/rest/api/content' && url.searchParams.get('expand') === 'body.storage,version,space') {
+    if (refuse(dcAuth)) return;
+    const found = url.searchParams.get('spaceKey') === 'DEM' && url.searchParams.get('title') === TITLE;
+    json(200, { results: found ? [datacenterPage('4242')] : [], size: found ? 1 : 0 });
+    return;
+  }
+  if (path.startsWith('/x/')) {
+    if (refuse(dcAuth)) return;
+    response.writeHead(302, {
+      location: path === '/x/AgAB' ? '/pages/viewpage.action?pageId=4242' : '/display/DEM/Page+inconnue',
+    });
+    response.end();
     return;
   }
   json(404, { message: 'Not found' });
 }
 
-const env = { QA_CONFLUENCE_USER: EMAIL, QA_CONFLUENCE_TOKEN: API_TOKEN, QA_CONFLUENCE_PAT: PAT };
+const env = {
+  QA_CONFLUENCE_USER: EMAIL,
+  QA_CONFLUENCE_TOKEN: API_TOKEN,
+  QA_CONFLUENCE_PAT: PAT,
+  QA_CONFLUENCE_SERVER_USER: SERVER_USER,
+  QA_CONFLUENCE_SERVER_PASSWORD: SERVER_PASSWORD,
+};
 const context = (extra: Partial<{ signal: AbortSignal }> = {}) => ({
   now: new Date('2026-10-27T10:00:00Z'),
   env,
@@ -337,6 +386,102 @@ describe('Confluence connector — simulated server', () => {
     await expect(connector.extract(cloudInput(), context({ signal: abort.signal }))).rejects.toMatchObject({
       code: 'CANCELLED',
     });
+  });
+
+  it('recognises every page address form, for both variants', () => {
+    expect(pageRefOf('https://example.atlassian.net/wiki/display/DEM/Sp%C3%A9cification+demandes')).toEqual({
+      spaceKey: 'DEM',
+      title: 'Spécification demandes',
+    });
+    expect(pageRefOf('https://confluence.example.org/confluence/display/DEM/Page+A')).toEqual({
+      spaceKey: 'DEM',
+      title: 'Page A',
+    });
+    expect(
+      pageRefOf('https://confluence.example.org/pages/viewpage.action?spaceKey=DEM&title=Page+A'),
+    ).toEqual({
+      spaceKey: 'DEM',
+      title: 'Page A',
+    });
+    expect(pageRefOf('https://example.atlassian.net/wiki/x/AgAB')).toEqual({ tiny: 'AgAB' });
+    expect(pageRefOf('https://confluence.example.org/x/AgAB')).toEqual({ tiny: 'AgAB' });
+    expect(pageRefOf('https://confluence.example.org/dashboard.action')).toBeUndefined();
+  });
+
+  for (const [label, variant, page, expectedId] of [
+    [
+      'Cloud, /display/ address',
+      'cloud',
+      '/wiki/display/DEM/Sp%C3%A9cification+demandes+%28fictive%29',
+      '65538',
+    ],
+    ['Cloud, short link', 'cloud', '/wiki/x/AgAB', '65538'],
+    [
+      'Data Center, /display/ address',
+      'datacenter',
+      '/display/DEM/Sp%C3%A9cification+demandes+%28fictive%29',
+      '4242',
+    ],
+    [
+      'Data Center, viewpage by space and title',
+      'datacenter',
+      `/pages/viewpage.action?spaceKey=DEM&title=${encodeURIComponent(TITLE)}`,
+      '4242',
+    ],
+    ['Data Center, short link', 'datacenter', '/x/AgAB', '4242'],
+  ] as const) {
+    it(`${label}: the page is found by the official API`, async () => {
+      mode = 'ok';
+      const input =
+        variant === 'cloud' ? cloudInput({ page: `${base}${page}` }) : dcInput({ page: `${base}${page}` });
+      const document = await connector.extract(input, context());
+      expect(document.source.sourceId).toBe(`confluence:${new URL(base).host}:${expectedId}`);
+      expect(document.source.title).toBe(TITLE);
+    });
+  }
+
+  it('Data Center under a context path, and older servers with a user and a password (Basic)', async () => {
+    mode = 'ok';
+    seen.length = 0;
+    const document = await connector.extract(
+      dcInput({
+        baseUrl: `${base}/confluence`,
+        page: '4242',
+        auth: { userEnv: 'QA_CONFLUENCE_SERVER_USER', tokenEnv: 'QA_CONFLUENCE_SERVER_PASSWORD' },
+      }),
+      context(),
+    );
+    expect(seen[0]).toEqual({
+      url: '/confluence/rest/api/content/4242?expand=body.storage,version,space',
+      authorization: `Basic ${Buffer.from(`${SERVER_USER}:${SERVER_PASSWORD}`).toString('base64')}`,
+    });
+    expect(document.source.version).toBe('3');
+  });
+
+  it('says when a title, a space or a short link leads nowhere, and never follows a link to another host', async () => {
+    mode = 'ok';
+    await expect(
+      connector.extract(dcInput({ page: `${base}/display/DEM/Page+inconnue` }), context()),
+    ).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: expect.stringContaining('Page inconnue') as string,
+    });
+    await expect(
+      connector.extract(cloudInput({ page: `${base}/wiki/display/AUTRE/Page` }), context()),
+    ).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: expect.stringContaining('space AUTRE') as string,
+    });
+    await expect(connector.extract(dcInput({ page: `${base}/x/ZZZZ` }), context())).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    seen.length = 0;
+    await expect(
+      connector.extract(cloudInput({ page: `${base}/wiki/x/EVIL` }), context()),
+    ).rejects.toMatchObject({
+      code: 'UNSUPPORTED',
+    });
+    expect(seen.map((entry) => entry.url)).toEqual(['/wiki/x/EVIL']);
   });
 
   it('imports a page into a batch: candidates with Confluence provenance, partial read flagged, no secret stored', async () => {

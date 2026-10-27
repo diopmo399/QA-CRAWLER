@@ -145,9 +145,25 @@ jamais supprimé.
 | Cloud       | `GET /wiki/api/v2/pages/{id}?body-format=storage`              | `auth.userEnv` (courriel) + `auth.tokenEnv` (jeton d'API) |
 | Data Center | `GET /rest/api/content/{id}?expand=body.storage,version,space` | `auth.tokenEnv` (jeton d'accès personnel, Bearer)         |
 
+- **Cible :** les deux variantes sont prises en charge à égalité. Data Center est la cible annoncée
+  (à confirmer).
 - **Variante :** `variant` explicite, sinon déduite de l'hôte (`*.atlassian.net` : Cloud).
-- **Page :** un identifiant ou une URL (`…/pages/123/…`, `?pageId=123`). Une URL `/display/ESPACE/Titre`
-  n'est pas encore reconnue.
+- **Adresse de la page**, pour les deux variantes, chacune par son API officielle :
+
+  | Forme           | Exemple                                                                    | Résolution                                                                                                                                        |
+  | --------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | identifiant     | `123`                                                                      | lecture directe                                                                                                                                   |
+  | URL de page     | `…/spaces/DEM/pages/123/Titre`, `…/viewpage.action?pageId=123`             | lecture directe                                                                                                                                   |
+  | espace et titre | `…/display/DEM/Titre+de+la+page`, `…/viewpage.action?spaceKey=DEM&title=…` | Cloud : espace par clé, puis page par titre (API v2) ; Data Center : `GET /rest/api/content?spaceKey=…&title=…`                                   |
+  | lien court      | `…/x/AgAB`                                                                 | le serveur redirige vers la page ; l'adresse de redirection est lue (même hôte seulement), jamais suivie avec les identifiants vers un autre hôte |
+
+- **Installation sous un sous-chemin** (Data Center : `https://hote/confluence`) : donner ce chemin
+  dans `baseUrl`.
+- **Authentification :**
+  - Cloud : courriel et jeton d'API (Basic) ;
+  - Data Center : jeton d'accès personnel (Bearer) ;
+  - anciens serveurs sans jeton personnel : `auth.userEnv` (utilisateur) et `auth.tokenEnv` (mot de
+    passe), en Basic.
 - **Secrets :** lus dans des variables `QA_*` nommées, jamais passés en argument ni écrits.
 - **Sécurité :** `https` obligatoire (`http` seulement sur la machine locale). Les redirections ne
   sont pas suivies.
@@ -180,6 +196,6 @@ n'est supprimé.
   partielle, échecs, liens rejetés jamais réactivés, liens manuels, persistance. Connecteur de
   **test** en mémoire.
 - `tests/unit/requirements-confluence.test.ts` : format storage vers blocs, éléments non lus
-  signalés, balisage réparé, identifiant et variante, validation de l'entrée, Cloud et Data Center,
+  signalés, balisage réparé, formes d'adresse, validation de l'entrée, Cloud et Data Center (identifiant, `/display/`, espace et titre, lien court, sous-chemin, Basic des anciens serveurs ; titre, espace ou lien court introuvable ; lien court vers un autre hôte refusé),
   erreurs 401, 403, 404, redirection, réponse non JSON, délai, limitation 429, taille, réseau,
   annulation, import complet sans secret stocké. Serveur **simulé**.

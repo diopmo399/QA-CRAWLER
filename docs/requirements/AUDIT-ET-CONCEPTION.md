@@ -219,8 +219,9 @@ avec ses statuts existants : aucune règle n'est réécrite.
 
 - **Q1 — Utilisateurs et rôles.** Voir `docs/sdk/MASTER-PLAN.md`. En attendant, une décision porte
   le nom donné par l'appelant (`by`). Le service ne l'authentifie pas.
-- **Q2 — Confluence cible.** Cloud, Data Center ou les deux ? Une URL et un compte de test
-  permettraient la validation réelle que les tests simulés ne remplacent pas.
+- **Q2 — Confluence cible.** Réponse : Data Center probablement, à confirmer ; les deux variantes
+  sont prises en charge à égalité. Une URL et un compte de test permettraient la validation réelle,
+  que les tests simulés ne remplacent pas.
 - **Q3 — Préfixes d'identifiants.** Les préfixes reconnus par défaut sont listés dans
   `classify.ts`. Les conventions maison se règlent par un profil d'importation.
 - **Q4 — PDF.** Faut-il ajouter `pdfjs-dist` (D3) ? Faut-il un OCR ?

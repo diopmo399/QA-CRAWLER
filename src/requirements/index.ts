@@ -35,6 +35,8 @@ export {
 export {
   ConfluenceConnector,
   pageIdOf,
+  pageRefOf,
+  type PageRef,
   variantOf,
   type ConfluenceInput,
   type ConfluenceVariant,

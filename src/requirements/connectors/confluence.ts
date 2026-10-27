@@ -29,7 +29,7 @@ export type ConfluenceVariant = 'cloud' | 'datacenter';
 export interface ConfluenceInput {
   /** L'adresse du site : https://example.atlassian.net (Cloud) ou https://confluence.example.org (Data Center). */
   baseUrl: string;
-  /** L'identifiant de la page, ou son URL (…/pages/123/…, …?pageId=123). */
+  /** La page : identifiant, URL de page, /display/CLÉ/Titre, viewpage.action?spaceKey=…&title=…, ou lien court /x/… */
   page: string;
   /** Défaut : `cloud` pour un hôte *.atlassian.net, `datacenter` sinon. */
   variant?: ConfluenceVariant;
@@ -59,10 +59,19 @@ export function variantOf(input: Pick<ConfluenceInput, 'baseUrl' | 'variant'>): 
   }
 }
 
-/** L'identifiant d'une page, à partir de son identifiant ou de son URL. */
-export function pageIdOf(page: string): string | undefined {
+/**
+ * La page désignée, sous l'une des formes d'adresse de Confluence (Cloud et Data Center) :
+ *   identifiant          123
+ *   URL de page          …/spaces/CLÉ/pages/123/Titre, …/pages/viewpage.action?pageId=123
+ *   espace et titre      …/display/CLÉ/Titre+de+la+page, …/pages/viewpage.action?spaceKey=CLÉ&title=Titre
+ *   lien court           …/x/AbCd (résolu par le serveur, qui redirige vers la page)
+ * Le chemin d'installation (`/wiki` sur Cloud, `/confluence` ou autre sur Data Center) est accepté.
+ */
+export type PageRef = { id: string } | { spaceKey: string; title: string } | { tiny: string };
+
+export function pageRefOf(page: string): PageRef | undefined {
   const trimmed = page.trim();
-  if (/^\d+$/.test(trimmed)) return trimmed;
+  if (/^\d+$/.test(trimmed)) return { id: trimmed };
   let url: URL;
   try {
     url = new URL(trimmed);
@@ -70,9 +79,26 @@ export function pageIdOf(page: string): string | undefined {
     return undefined;
   }
   const query = url.searchParams.get('pageId');
-  if (query && /^\d+$/.test(query)) return query;
-  const path = /\/pages\/(\d+)(?:\/|$)/.exec(url.pathname);
-  return path?.[1];
+  if (query && /^\d+$/.test(query)) return { id: query };
+  const spaceKey = url.searchParams.get('spaceKey');
+  const queryTitle = url.searchParams.get('title');
+  if (spaceKey && queryTitle) return { spaceKey, title: queryTitle };
+  const byId = /\/pages\/(\d+)(?:\/|$)/.exec(url.pathname);
+  if (byId?.[1]) return { id: byId[1] };
+  const display = /\/display\/([^/]+)\/([^/]+)\/?$/.exec(url.pathname);
+  if (display?.[1] && display[2]) {
+    const decode = (part: string): string => decodeURIComponent(part.replace(/\+/g, ' '));
+    return { spaceKey: decode(display[1]), title: decode(display[2]) };
+  }
+  const tiny = /\/x\/([A-Za-z0-9_-]+)\/?$/.exec(url.pathname);
+  if (tiny?.[1]) return { tiny: tiny[1] };
+  return undefined;
+}
+
+/** L'identifiant d'une page quand l'adresse le donne directement. */
+export function pageIdOf(page: string): string | undefined {
+  const ref = pageRefOf(page);
+  return ref && 'id' in ref ? ref.id : undefined;
 }
 
 const loopback = (hostname: string): boolean =>
@@ -125,8 +151,11 @@ export class ConfluenceConnector implements SourceConnector<ConfluenceInput> {
       error('INVALID_INPUT', 'baseUrl must use https (http only on this machine)');
     if (base && (base.username || base.password))
       error('INVALID_INPUT', 'baseUrl must not carry credentials');
-    if (!pageIdOf(input.page))
-      error('INVALID_INPUT', 'page must be a page identifier or a page URL (…/pages/123/… or ?pageId=123)');
+    if (!pageRefOf(input.page))
+      error(
+        'INVALID_INPUT',
+        'page must be a page identifier or a page URL (…/pages/123/…, ?pageId=123, /display/KEY/Title, /x/…)',
+      );
     const variant = variantOf(input);
     for (const name of [input.auth.tokenEnv, ...(input.auth.userEnv ? [input.auth.userEnv] : [])]) {
       if (!ENV_NAME.test(name))
@@ -140,24 +169,51 @@ export class ConfluenceConnector implements SourceConnector<ConfluenceInput> {
 
   async extract(input: ConfluenceInput, context: ExtractionContext): Promise<ExtractedDocument> {
     const variant = variantOf(input);
-    const pageId = pageIdOf(input.page);
-    if (!pageId) throw new ConnectorError('INVALID_INPUT', 'no page identifier');
+    let ref = pageRefOf(input.page);
+    if (!ref) throw new ConnectorError('INVALID_INPUT', 'no page reference');
     const base = input.baseUrl.replace(/\/+$/, '');
-    const url =
-      variant === 'cloud'
-        ? `${base}/wiki/api/v2/pages/${pageId}?body-format=storage`
-        : `${base}/rest/api/content/${pageId}?expand=body.storage,version,space`;
     const token = context.env[input.auth.tokenEnv] ?? '';
     const user = input.auth.userEnv ? (context.env[input.auth.userEnv] ?? '') : undefined;
     const authorization =
       user !== undefined ? `Basic ${Buffer.from(`${user}:${token}`).toString('base64')}` : `Bearer ${token}`;
-    const body = await this.request(url, authorization, input, context);
+    const get = (url: string): Promise<string> => this.request(url, authorization, input, context);
+    if ('tiny' in ref) ref = await this.resolveTiny(base, variant, ref.tiny, authorization, input, context);
     let page: ConfluencePage;
-    try {
-      page = JSON.parse(body) as ConfluencePage;
-    } catch {
-      throw new ConnectorError('CORRUPTED', 'the Confluence answer is not JSON');
+    if ('id' in ref) {
+      page = parseJson(
+        await get(
+          variant === 'cloud'
+            ? `${base}/wiki/api/v2/pages/${ref.id}?body-format=storage`
+            : `${base}/rest/api/content/${ref.id}?expand=body.storage,version,space`,
+        ),
+      ) as ConfluencePage;
+    } else if (variant === 'cloud') {
+      // Cloud v2 : l'espace par sa clé, puis la page par son titre dans l'espace.
+      const spaces = parseJson(
+        await get(`${base}/wiki/api/v2/spaces?keys=${encodeURIComponent(ref.spaceKey)}`),
+      ) as { results?: { id?: string | number }[] };
+      const spaceId = spaces.results?.[0]?.id;
+      if (spaceId === undefined)
+        throw new ConnectorError(
+          'NOT_FOUND',
+          `space ${ref.spaceKey} not found, or not visible to this account`,
+        );
+      page = firstPage(
+        await get(
+          `${base}/wiki/api/v2/pages?space-id=${encodeURIComponent(String(spaceId))}&title=${encodeURIComponent(ref.title)}&body-format=storage`,
+        ),
+        ref,
+      );
+    } else {
+      page = firstPage(
+        await get(
+          `${base}/rest/api/content?spaceKey=${encodeURIComponent(ref.spaceKey)}&title=${encodeURIComponent(ref.title)}&expand=body.storage,version,space`,
+        ),
+        ref,
+      );
     }
+    const pageId = page.id ?? ('id' in ref ? ref.id : '');
+    if (!pageId) throw new ConnectorError('CORRUPTED', 'the Confluence answer has no page identifier');
     const storage = page.body?.storage?.value;
     if (typeof storage !== 'string')
       throw new ConnectorError('CORRUPTED', 'the Confluence answer has no storage body (body.storage.value)');
@@ -188,11 +244,35 @@ export class ConfluenceConnector implements SourceConnector<ConfluenceInput> {
     };
   }
 
+  /**
+   * Un lien court : le serveur le résout (il redirige vers la page). La redirection n'est pas suivie :
+   * son adresse est lue, et acceptée seulement sur le même hôte.
+   */
+  private async resolveTiny(
+    base: string,
+    variant: ConfluenceVariant,
+    code: string,
+    authorization: string,
+    input: ConfluenceInput,
+    context: ExtractionContext,
+  ): Promise<{ id: string } | { spaceKey: string; title: string }> {
+    const tinyUrl = `${base}${variant === 'cloud' ? '/wiki' : ''}/x/${code}`;
+    const location = await this.request(tinyUrl, authorization, input, context, { redirect: true });
+    const target = new URL(location, tinyUrl);
+    if (target.host !== new URL(base).host)
+      throw new ConnectorError('UNSUPPORTED', 'the short link leads to another host: not followed');
+    const ref = pageRefOf(target.toString());
+    if (!ref || 'tiny' in ref)
+      throw new ConnectorError('NOT_FOUND', `the short link /x/${code} does not lead to a page`);
+    return ref;
+  }
+
   private async request(
     url: string,
     authorization: string,
     input: ConfluenceInput,
     context: ExtractionContext,
+    options: { redirect?: boolean } = {},
   ): Promise<string> {
     const retries = Math.max(0, input.maxRetries ?? 3);
     for (let attempt = 0; ; attempt += 1) {
@@ -227,11 +307,40 @@ export class ConfluenceConnector implements SourceConnector<ConfluenceInput> {
         await new Promise((resolve) => setTimeout(resolve, wait));
         continue;
       }
+      if (options.redirect && response.status >= 300 && response.status < 400) {
+        await response.body?.cancel();
+        const location = response.headers.get('location');
+        if (!location) throw new ConnectorError('NOT_FOUND', 'the short link was not resolved');
+        return location;
+      }
+      if (options.redirect && response.ok) {
+        await response.body?.cancel();
+        throw new ConnectorError('UNSUPPORTED', 'the short link was not redirected to a page');
+      }
       if (response.ok) return readLimited(response, input.maxBytes ?? DEFAULT_MAX_BYTES);
       await response.body?.cancel();
       throw statusError(response.status, response.headers.get('location'));
     }
   }
+}
+
+function parseJson(body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new ConnectorError('CORRUPTED', 'the Confluence answer is not JSON');
+  }
+}
+
+/** La page trouvée par son titre (un titre est unique dans un espace). */
+function firstPage(body: string, ref: { spaceKey: string; title: string }): ConfluencePage {
+  const found = (parseJson(body) as { results?: ConfluencePage[] }).results?.[0];
+  if (!found)
+    throw new ConnectorError(
+      'NOT_FOUND',
+      `page « ${ref.title} » not found in space ${ref.spaceKey}, or not visible to this account`,
+    );
+  return found;
 }
 
 function statusError(status: number, location: string | null): ConnectorError {
