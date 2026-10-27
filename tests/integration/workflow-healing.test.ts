@@ -243,8 +243,9 @@ ${flow}
     });
   }, 120_000);
 
-  it.sequential(
+  it(
     '§80: the original action exists but its write fails (500): a possible regression, never bypassed, never resent',
+    { concurrent: false, timeout: 90_000 },
     async () => {
       const before = app.counts.submit;
       const { report } = await replay('bug', '?v=1&fail=1');
@@ -259,7 +260,6 @@ ${flow}
       });
       expect(app.counts.submit).toBe(before + 1);
     },
-    90_000,
   );
 
   it('§83: when the budget is reached the result is RECOVERY_BUDGET_EXHAUSTED (inconclusive), never "unreachable"', async () => {

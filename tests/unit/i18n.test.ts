@@ -7,7 +7,7 @@ describe('report language', () => {
     const base = 'target:\n  baseUrl: http://localhost:4200\n';
     expect(parseConfig(base, {}, {}).config.report.language).toBe('en');
     expect(parseConfig(`${base}report:\n  language: fr\n`, {}, {}).config.report.language).toBe('fr');
-    expect(() => parseConfig(`${base}report:\n  language: de\n`, {}, {})).toThrowError(/report\.language/);
+    expect(() => parseConfig(`${base}report:\n  language: de\n`, {}, {})).toThrow(/report\.language/);
   });
 
   it('translates statuses, classes and severities in French only', () => {

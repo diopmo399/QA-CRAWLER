@@ -46,7 +46,7 @@ const adviceSchema = z
     uncertainties: z.array(z.string().max(200)).max(10),
     confidence: z.number().min(0).max(1),
   })
-  .passthrough();
+  .loose();
 
 /** Les anomalies qui méritent un avis : symptôme non reconnu ou catégorie peu sûre. */
 export function ambiguousAnomalies(anomalies: readonly RunAnomaly[], minConfidence: number): RunAnomaly[] {
