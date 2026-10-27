@@ -107,12 +107,12 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['explore', 'm.yaml']).mode).toBe('explore');
     expect(parseCliArgs(['m.yaml']).mode).toBeUndefined();
     expect(parseCliArgs(['learn']).configPath).toBeUndefined();
-    expect(() => parseCliArgs(['learn', 'a.yaml', 'b.yaml'])).toThrowError(UsageError);
+    expect(() => parseCliArgs(['learn', 'a.yaml', 'b.yaml'])).toThrow(UsageError);
   });
 
   it('rejects invalid usage', () => {
-    expect(() => parseCliArgs(['a.yaml', 'b.yaml'])).toThrowError(UsageError);
-    expect(() => parseCliArgs(['--max-states', 'zero'])).toThrowError(UsageError);
-    expect(() => parseCliArgs(['--max-pages', '3'])).toThrowError(UsageError);
+    expect(() => parseCliArgs(['a.yaml', 'b.yaml'])).toThrow(UsageError);
+    expect(() => parseCliArgs(['--max-states', 'zero'])).toThrow(UsageError);
+    expect(() => parseCliArgs(['--max-pages', '3'])).toThrow(UsageError);
   });
 });

@@ -319,16 +319,16 @@ describe('configuration', () => {
   it('rejects unknown profiles, secrets in the file and unbounded retries', () => {
     expect(() =>
       parseConfig(`${base}browserInteractions:\n  httpAuth:\n    credentialProfile: nope\n`, {}, {}),
-    ).toThrowError(/unknown profile "nope"/);
-    expect(() =>
-      parseConfig(`${base}credentials:\n  qa: { username: a, password: b }\n`, {}, {}),
-    ).toThrowError(/credentials/);
-    expect(() =>
-      parseConfig(`${base}browserInteractions:\n  retry:\n    maxAttempts: 50\n`, {}, {}),
-    ).toThrowError(/maxAttempts/);
+    ).toThrow(/unknown profile "nope"/);
+    expect(() => parseConfig(`${base}credentials:\n  qa: { username: a, password: b }\n`, {}, {})).toThrow(
+      /credentials/,
+    );
+    expect(() => parseConfig(`${base}browserInteractions:\n  retry:\n    maxAttempts: 50\n`, {}, {})).toThrow(
+      /maxAttempts/,
+    );
     expect(() =>
       parseConfig(`${base}browserInteractions:\n  permissions:\n    grant: [everything]\n`, {}, {}),
-    ).toThrowError(/grant/);
+    ).toThrow(/grant/);
   });
 });
 

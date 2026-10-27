@@ -106,26 +106,26 @@ checks: { screenshots: false }
   });
 
   it('rejects invalid values with a readable path', () => {
-    expect(() => parseConfig('target:\n  baseUrl: not-a-url\n', {}, {})).toThrowError(/target\.baseUrl/);
-    expect(() => parseConfig(`${minimal}exploration:\n  maxStates: -1\n`, {}, {})).toThrowError(
+    expect(() => parseConfig('target:\n  baseUrl: not-a-url\n', {}, {})).toThrow(/target\.baseUrl/);
+    expect(() => parseConfig(`${minimal}exploration:\n  maxStates: -1\n`, {}, {})).toThrow(
       /exploration\.maxStates/,
     );
-    expect(() => parseConfig(`${minimal}safety:\n  block: [nuke]\n`, {}, {})).toThrowError(/safety\.block/);
-    expect(() => parseConfig('target:\n  baseUrl: ftp://x.test\n', {}, {})).toThrowError(/http or https/);
-    expect(() => parseConfig('mission:\n  name: x\n', {}, {})).toThrowError(ConfigError);
+    expect(() => parseConfig(`${minimal}safety:\n  block: [nuke]\n`, {}, {})).toThrow(/safety\.block/);
+    expect(() => parseConfig('target:\n  baseUrl: ftp://x.test\n', {}, {})).toThrow(/http or https/);
+    expect(() => parseConfig('mission:\n  name: x\n', {}, {})).toThrow(ConfigError);
   });
 
   it('rejects unknown keys and hints that credentials belong in environment variables', () => {
-    expect(() => parseConfig(`${minimal}explorations: {}\n`, {}, {})).toThrowError(
+    expect(() => parseConfig(`${minimal}explorations: {}\n`, {}, {})).toThrow(
       /unknown key\(s\) "explorations"/,
     );
     const withPassword = `${minimal}auth:\n  type: form\n  loginUrl: /login\n  usernameSelector: '#u'\n  passwordSelector: '#p'\n  submitSelector: button\n  password: hunter2\n`;
-    expect(() => parseConfig(withPassword, {}, {})).toThrowError(/environment variables/);
+    expect(() => parseConfig(withPassword, {}, {})).toThrow(/environment variables/);
   });
 
   it('rejects malformed YAML and non-mapping documents', () => {
-    expect(() => parseConfig('target: [unclosed', {}, {})).toThrowError(/Invalid YAML/);
-    expect(() => parseConfig('- a\n- b\n', {}, {})).toThrowError(/mapping/);
+    expect(() => parseConfig('target: [unclosed', {}, {})).toThrow(/Invalid YAML/);
+    expect(() => parseConfig('- a\n- b\n', {}, {})).toThrow(/mapping/);
   });
 
   it('warns about risky settings', () => {
@@ -160,9 +160,7 @@ describe('loadConfigFile', () => {
   });
 
   it('reports a missing file clearly', async () => {
-    await expect(loadConfigFile('does/not/exist.yaml', {}, {})).rejects.toThrowError(
-      /Scenario file not found/,
-    );
+    await expect(loadConfigFile('does/not/exist.yaml', {}, {})).rejects.toThrow(/Scenario file not found/);
   });
 
   it('accepts the bundled missions without warnings', async () => {
@@ -208,12 +206,10 @@ describe('auth.type: http', () => {
   it('warns when the credentials may go to any host, and rejects inline secrets', () => {
     const { warnings } = parseConfig(`${base}auth:\n  type: http\n`, {}, {});
     expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining('auth.origin is not set')]));
-    expect(() => parseConfig(`${base}auth:\n  type: http\n  password: x\n`, {}, {})).toThrowError(
+    expect(() => parseConfig(`${base}auth:\n  type: http\n  password: x\n`, {}, {})).toThrow(
       /environment variables/,
     );
-    expect(() => parseConfig(`${base}auth:\n  type: http\n  origin: ftp://x\n`, {}, {})).toThrowError(
-      /origin/,
-    );
+    expect(() => parseConfig(`${base}auth:\n  type: http\n  origin: ftp://x\n`, {}, {})).toThrow(/origin/);
   });
 
   it('forms.submit decides whether buttons that send a form may run', () => {
