@@ -32,3 +32,11 @@ export {
   type PublishOptions,
   type PublishResult,
 } from './pipeline.js';
+export {
+  ConfluenceConnector,
+  pageIdOf,
+  variantOf,
+  type ConfluenceInput,
+  type ConfluenceVariant,
+} from './connectors/confluence.js';
+export { storageToBlocks, type StorageResult } from './connectors/confluence-storage.js';
