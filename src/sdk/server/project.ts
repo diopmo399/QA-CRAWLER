@@ -15,6 +15,7 @@ import type {
   Framework,
   Project,
   ProjectDraft,
+  ProjectState,
   ValidationReport,
 } from '../core/contracts.js';
 import { ENV_NAME_PATTERN, FRAMEWORKS } from '../core/contracts.js';
@@ -354,6 +355,64 @@ export function sourceRootAllowed(candidate: string, allowed: string[]): boolean
 
 export interface StoredProject extends Project {
   dir: string;
+  /** Absent : ACTIVE (fiches écrites avant le cycle de vie). */
+  state?: ProjectState;
+  updatedAt?: string;
+  archivedAt?: string;
+}
+
+type StoredMeta = Project & {
+  draft: ProjectDraft;
+  state?: ProjectState;
+  updatedAt?: string;
+  archivedAt?: string;
+};
+
+async function writeMeta(dir: string, meta: StoredMeta): Promise<void> {
+  await writeFile(path.join(dir, PROJECT_META_FILE), `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
+}
+
+/**
+ * La configuration d'un projet remplacée : un brouillon déjà validé par le moteur réécrit
+ * qa-crawler.config.yaml ; l'identifiant, la date de création et l'état restent.
+ */
+export async function updateProject(
+  dir: string,
+  draft: ProjectDraft,
+  rules: ProjectRules,
+): Promise<StoredProject & { draft: ProjectDraft }> {
+  const stored = await readProject(dir);
+  if (!stored) throw new Error('project not found');
+  const { dir: _dir, ...previous } = stored;
+  const meta: StoredMeta = {
+    ...previous,
+    name: draft.project.name,
+    framework: draft.project.framework,
+    targetUrl: draft.project.targetUrl,
+    draft,
+    updatedAt: new Date().toISOString(),
+  };
+  if (draft.project.description) meta.description = draft.project.description;
+  else delete meta.description;
+  await writeFile(path.join(dir, PROJECT_FILE), renderProjectFile(draft, rules), 'utf8');
+  await writeMeta(dir, meta);
+  return { ...meta, dir };
+}
+
+/** ACTIVE ↔ ARCHIVED : seule la fiche change ; aucun fichier du projet n'est supprimé. */
+export async function setProjectState(
+  dir: string,
+  state: ProjectState,
+): Promise<StoredProject & { draft: ProjectDraft }> {
+  const stored = await readProject(dir);
+  if (!stored) throw new Error('project not found');
+  const { dir: _dir, ...previous } = stored;
+  const now = new Date().toISOString();
+  const meta: StoredMeta = { ...previous, state, updatedAt: now };
+  if (state === 'ARCHIVED') meta.archivedAt = now;
+  else delete meta.archivedAt;
+  await writeMeta(dir, meta);
+  return { ...meta, dir };
 }
 
 /** Écrit le projet : qa-crawler.config.yaml, le dossier des flows et la fiche du SDK. */
@@ -386,9 +445,7 @@ export async function readProject(
   dir: string,
 ): Promise<(StoredProject & { draft: ProjectDraft }) | undefined> {
   try {
-    const stored = JSON.parse(await readFile(path.join(dir, PROJECT_META_FILE), 'utf8')) as Project & {
-      draft: ProjectDraft;
-    };
+    const stored = JSON.parse(await readFile(path.join(dir, PROJECT_META_FILE), 'utf8')) as StoredMeta;
     return { ...stored, dir };
   } catch {
     return undefined;

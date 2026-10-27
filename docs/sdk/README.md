@@ -456,6 +456,88 @@ la traçabilité de l'exécution comparée.
   par statut de couverture.
 - Les compteurs sont des nombres : aucun pourcentage n'est affiché.
 
+## Plateforme : projets, environnements, scénarios, exécutions, vue d'ensemble
+
+Le SDK central de la plateforme (audit : [PLATFORM-AUDIT.md](PLATFORM-AUDIT.md)). Tout est lu ou
+écrit dans le dossier du projet (`<workspace>/<id>/`), et chaque exécution est une mission du moteur.
+
+| Client                                                        | Route                                               |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| `projects.list({ archived? })`                                | `GET /api/projects[?archived=true]`                 |
+| `projects.detail(id)`                                         | `GET /api/projects/:id/detail`                      |
+| `projects.update(id, draft)`                                  | `POST /api/projects/:id/config`                     |
+| `projects.duplicate(id, { name })`                            | `POST /api/projects/:id/duplicate`                  |
+| `projects.archive(id)`, `projects.restore(id)`                | `POST /api/projects/:id/archive`, `…/restore`       |
+| `environments.list(projectId)`                                | `GET /api/projects/:id/environments`                |
+| `environments.check(projectId, input, { reach? })`            | `POST /api/projects/:id/environments/check`         |
+| `environments.create(projectId, input)`                       | `POST /api/projects/:id/environments`               |
+| `environments.update(projectId, envId, input)`                | `POST /api/projects/:id/environments/:envId`        |
+| `environments.remove(projectId, envId, { confirm: true })`    | `POST /api/projects/:id/environments/:envId/remove` |
+| `scenarios.list(projectId)`                                   | `GET /api/projects/:id/scenarios`                   |
+| `scenarios.promote(projectId, recording)`                     | `POST /api/projects/:id/scenarios`                  |
+| `executions.start(projectId, { scenarios?, environmentId? })` | `POST /api/projects/:id/executions`                 |
+| `executions.list(projectId)`                                  | `GET /api/projects/:id/executions`                  |
+| `executions.get(projectId, run)`                              | `GET /api/projects/:id/executions/:run`             |
+| `overview.get({ days? })`                                     | `GET /api/overview[?days=30]`                       |
+
+`explorations.start(projectId)` accepte aussi `{ environmentId }`.
+
+**Projets.**
+
+- **Modifier** : le brouillon est revalidé par le moteur, comme à la création, puis
+  `qa-crawler.config.yaml` est réécrit. L'identifiant et la date de création restent.
+- **Dupliquer** : copie la configuration, les environnements (de nouveaux identifiants, des noms de
+  variables seulement) et les scénarios. Ne copie jamais les exécutions ni les enregistrements.
+- **Archiver** : rien n'est supprimé. Un projet archivé n'apparaît dans la liste qu'avec
+  `archived: true`, et refuse toute exécution, exploration ou modification (`409 PROJECT_ARCHIVED`)
+  jusqu'à sa restauration.
+
+**Environnements** (`DEVELOPMENT`, `TEST`, `CERTIFICATION`, `PREPRODUCTION`, `OTHER`). Chacun porte :
+
+- une URL de base ;
+- des domaines autorisés (`safety.allowedHosts` du moteur), qui doivent contenir l'hôte de la cible ;
+- des variables non secrètes, passées au moteur comme variables d'environnement d'exécution (`${env:NOM}`) ;
+  un nom qui ressemble à un secret y est refusé ;
+- des noms de secrets (`secretEnv`), lus sur le serveur et jamais renvoyés ;
+- des délais et limites ;
+- les écritures permises (`mutations: { enabled, maxPerRun }`). Absent : la mission du projet garde
+  son réglage. Les actions `DANGEROUS` restent toujours bloquées.
+
+`check` vérifie tout cela sans rien écrire, plus l'accès à l'URL avec `reach: true`. Supprimer un
+environnement exige `{ confirm: true }`.
+
+**Scénarios** : les flows du dossier `qa-crawler/flows` du projet (YAML nommés, fichiers
+`.feature`). `promote` copie le flow YAML d'un enregistrement et son `test-data.yaml` dans ce
+dossier, comme « Sauvegarder » dans la fenêtre du recorder.
+
+**Exécutions** : `executions.start` construit la mission `replay` du projet (`loadProjectMission`)
+avec les scénarios choisis, applique l'environnement, puis lance `runMission`. Le suivi passe par la
+même mécanique que les explorations : `explorations.status`, `explorations.subscribe` (événements
+`flow` et `flow-step`) et le Run Monitor. Le snapshot porte `kind: 'REPLAY'` et `run`. Ensuite,
+`executions.get` lit le run sur disque :
+
+- le verdict (`PASSED` quand tous les flows sont `PASSED`, `FAILED` sinon, `NO_FLOW`, `INCOMPLETE`) ;
+- les flows et leurs étapes, avec des libellés sans valeur saisie ;
+- la première divergence ;
+- les assertions métier et leur statut, sans jamais de succès par défaut ;
+- les clés de données de test, jamais leurs valeurs ;
+- les captures, en chemins relatifs servis par un lien de rapport ;
+- les anomalies et les rapports.
+
+Un run sans fiche du SDK (lancé par la CLI) est classé `REPLAY` s'il n'a joué que des flows.
+
+**Vue d'ensemble** : projets actifs et archivés, scénarios, enregistrements, exécutions de la
+période par type, anomalies par gravité, dix dernières exécutions, tendance par jour, et alertes :
+
+- dernière exécution en échec ;
+- anomalies critiques ;
+- secret d'un environnement absent du serveur.
+
+Le **taux de réussite** dit son périmètre dans `replays.definition` : les exécutions de rejeu
+terminées dans la période (le moteur a écrit leur résultat), réussies quand leur verdict est
+`PASSED`. Les explorations n'y entrent pas. Sans rejeu terminé, `passRate` est absent : jamais `0`
+ni `100` par défaut.
+
 ## Statuts et événements
 
 ```
@@ -519,7 +601,13 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 
 ## Limites actuelles
 
-- Pas d'annulation d'une exploration (le moteur ne l'offre pas). Un enregistrement, lui, s'arrête.
+- Pas d'annulation d'une exploration ni d'un rejeu (le moteur ne l'offre pas). Un enregistrement, lui,
+  s'arrête.
+- Les environnements changent la cible, les domaines, les délais, les limites, les variables et les
+  écritures. Ils ne changent pas l'authentification du projet : une page de connexion écrite en
+  absolu reste celle du projet.
+- Les scénarios Gherkin se choisissent par leur fichier ; un `.feature` est lu par le moteur au
+  lancement, ses étapes ne sont donc pas comptées dans la liste.
 - Les explorations et les flux d'enregistrement vivent en mémoire pendant la vie du serveur ; les
   projets, les enregistrements et les rapports restent sur disque, dans le dossier de travail.
 - L'enregistrement suppose un écran sur la machine du serveur (un humain joue le parcours).
@@ -540,6 +628,15 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 
 - `tests/unit/sdk-core.test.ts` : cycle de vie, client, flux SSE découpé, reprise, reconnexion
   après coupure sans doublon, refus non réessayé, abandon pendant l'attente, version du contrat.
+- `tests/unit/sdk-platform.test.ts` : cycle de vie des projets (modifier, dupliquer, archiver,
+  restaurer), environnements (règles, secrets jamais renvoyés, confirmation, isolation entre
+  projets), mission du rejeu (scénarios, cible, domaines, limites, variables, sans IA), lecture d'un
+  run sans valeur saisie, promotion d'un enregistrement, vue d'ensemble et périmètre du taux de
+  réussite. Le moteur y est **simulé** (tests seulement).
+- `tests/integration/sdk-platform.test.ts` : le **vrai** moteur. Un scénario est rejoué dans deux
+  environnements (deux instances de l'application) et suivi en direct. Une seule instance reçoit
+  l'écriture. L'assertion métier passe dans l'un et échoue dans l'autre, puis viennent la
+  comparaison, la vue d'ensemble et le refus d'un projet archivé.
 - `tests/unit/sdk-contract.test.ts` : exports, valeurs et méthodes publiés de la version 1 ; le
   Core et l'UI n'importent ni module Node, ni Playwright, ni classe du moteur.
 - `tests/unit/sdk-project.test.ts` : brouillon → projet du moteur, aucun identifiant écrit,

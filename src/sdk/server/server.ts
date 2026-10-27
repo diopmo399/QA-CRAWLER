@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -40,6 +40,9 @@ import type {
   ReportEntryKind,
   ReportLink,
   UrlCheck,
+  Environment,
+  ProjectDetail,
+  ProjectSummary,
 } from '../core/contracts.js';
 import {
   AUTH_TYPES,
@@ -65,12 +68,29 @@ import {
   type RecordRunner,
 } from './recordings.js';
 import { compareRuns, regressionView, traceabilityView } from './runs.js';
+import {
+  applyEnvironment,
+  checkEnvironmentShape,
+  computeOverview,
+  executionDetail,
+  flowsDirOf,
+  isRunName,
+  listExecutions,
+  listScenarios,
+  newEnvironmentId,
+  promoteRecording,
+  readEnvironments,
+  writeEnvironments,
+  writeExecutionMeta,
+} from './platform.js';
 import { flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
 import {
   PROJECT_FILE,
   REPORTS_DIR,
   engineDefaults,
   readProject,
+  setProjectState,
+  updateProject,
   referencedEnv,
   validateDraft,
   writeProject,
@@ -351,17 +371,29 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     json(publicProject(await projectOf(ctx, id)));
     return;
   }
+  if (await handlePlatform(ctx, segments, method, request, url, json)) return;
   if (resource === 'projects' && id && sub === 'explorations' && method === 'POST') {
     const project = await projectOf(ctx, id);
-    const loaded = await projectMission(ctx, project, 'explore');
+    refuseArchived(project);
+    const body = await readOptionalJson(request);
+    const environment = await environmentOf(project, body.environmentId);
+    const loaded = await projectMission(ctx, project, 'explore', { ...(environment ? { environment } : {}) });
+    const reportsDir = path.join(
+      project.dir,
+      REPORTS_DIR,
+      `run-${new Date().toISOString().replace(/[:.]/g, '-')}`,
+    );
+    await writeExecutionMeta(reportsDir, {
+      kind: 'EXPLORATION',
+      startedAt: new Date().toISOString(),
+      ...(environment ? { environment: { id: environment.id, name: environment.name } } : {}),
+    });
     const exploration = ctx.explorations.start({
       projectId: project.id,
       config: loaded.config,
-      reportsDir: path.join(
-        project.dir,
-        REPORTS_DIR,
-        `run-${new Date().toISOString().replace(/[:.]/g, '-')}`,
-      ),
+      reportsDir,
+      kind: 'EXPLORATION',
+      env: missionEnv(ctx, environment),
     });
     json(exploration.snapshot(), 202);
     return;
@@ -436,11 +468,12 @@ const afterOf = (url: URL, request: IncomingMessage): number =>
 async function projectMission(
   ctx: Context,
   project: StoredProject,
-  command: 'explore' | 'record',
+  command: 'explore' | 'record' | 'replay',
+  extra: { flows?: string[]; extraFlows?: Record<string, unknown>[]; environment?: Environment } = {},
 ): Promise<Awaited<ReturnType<typeof loadProjectMission>>> {
   const stored = await readProject(project.dir);
   if (!stored) throw new HttpError(404, 'NOT_FOUND', 'project not found');
-  const missing = referencedEnv(stored.draft).filter(
+  const missing = [...referencedEnv(stored.draft), ...(extra.environment?.secretEnv ?? [])].filter(
     (name) => !(typeof ctx.env[name] === 'string' && ctx.env[name] !== ''),
   );
   if (missing.length > 0)
@@ -460,12 +493,54 @@ async function projectMission(
     qaCrawler?: unknown;
   };
   const parsed = projectConfigSchema.parse(document.qaCrawler);
-  return loadProjectMission(
+  const loaded = await loadProjectMission(
     { file: path.join(project.dir, PROJECT_FILE), root: project.dir, config: parsed },
-    { command, missionName: stored.name },
+    {
+      command,
+      missionName: stored.name,
+      ...(extra.flows ? { flows: extra.flows } : {}),
+      ...(extra.extraFlows ? { extraFlows: extra.extraFlows } : {}),
+    },
     {},
-    ctx.env,
+    missionEnv(ctx, extra.environment),
   );
+  // L'environnement choisi : cible, domaines, délais et limites ; ses variables passent par `env`.
+  if (extra.environment) applyEnvironment(loaded.config, extra.environment);
+  return loaded;
+}
+
+/** Les variables d'environnement d'exécution d'une mission : celles du serveur, plus les variables non secrètes choisies. */
+function missionEnv(ctx: Context, environment: Environment | undefined): NodeJS.ProcessEnv {
+  return environment?.variables ? { ...ctx.env, ...environment.variables } : ctx.env;
+}
+
+function refuseArchived(project: StoredProject): void {
+  if (project.state === 'ARCHIVED')
+    throw new HttpError(
+      409,
+      'PROJECT_ARCHIVED',
+      'the project is archived: restore it before running anything',
+    );
+}
+
+async function environmentOf(project: StoredProject, raw: unknown): Promise<Environment | undefined> {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (typeof raw !== 'string') throw new HttpError(400, 'BAD_REQUEST', 'environmentId must be a string');
+  const environment = (await readEnvironments(project.dir)).find((entry) => entry.id === raw);
+  if (!environment) throw new HttpError(404, 'NOT_FOUND', `environment ${raw} not found`);
+  return environment;
+}
+
+/** Un corps JSON facultatif : vide (ou sans type) vaut `{}`, comme avant l'ajout des options. */
+async function readOptionalJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const length = Number(request.headers['content-length'] ?? '0');
+  const type = request.headers['content-type'] ?? '';
+  if (
+    !type.toLowerCase().startsWith('application/json') ||
+    (length === 0 && !request.headers['transfer-encoding'])
+  )
+    return {};
+  return readJson(request);
 }
 
 function reportLink(ctx: Context, request: IncomingMessage, directory: string, entry: string): ReportLink {
@@ -1094,6 +1169,346 @@ async function projectOf(ctx: Context, id: string): Promise<StoredProject> {
   if (!stored) throw new HttpError(404, 'NOT_FOUND', 'project not found');
   ctx.projects.set(id, stored);
   return stored;
+}
+
+// ── La plateforme : cycle de vie des projets, environnements, scénarios, exécutions, vue d'ensemble ──
+
+/** Les projets de l'espace de travail (dossiers `prj_…` qui portent une fiche du SDK). */
+async function workspaceProjects(ctx: Context): Promise<StoredProject[]> {
+  let entries: string[];
+  try {
+    entries = (await readdir(ctx.workspace, { withFileTypes: true }))
+      .filter(
+        (entry) => entry.isDirectory() && entry.name.startsWith('prj_') && entry.name !== 'prj_validation',
+      )
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+  const projects: StoredProject[] = [];
+  for (const name of entries.sort()) {
+    if (!ID_PATTERN.test(name)) continue;
+    const stored = await readProject(path.join(ctx.workspace, name));
+    if (!stored) continue;
+    ctx.projects.set(stored.id, stored);
+    projects.push(stored);
+  }
+  return projects;
+}
+
+/** Un nombre lu sur disque ; un projet dont la configuration ne se lit plus compte 0, sans casser la liste. */
+async function counted<T>(read: () => Promise<T[]>): Promise<T[]> {
+  try {
+    return await read();
+  } catch {
+    return [];
+  }
+}
+
+async function projectSummary(project: StoredProject): Promise<ProjectSummary> {
+  const reportsDir = path.join(project.dir, REPORTS_DIR);
+  const executions = await counted(() => listExecutions(project.id, reportsDir));
+  const last = executions.find((execution) => execution.verdict !== 'INCOMPLETE');
+  return {
+    ...publicProject(project),
+    state: project.state ?? 'ACTIVE',
+    ...(project.updatedAt ? { updatedAt: project.updatedAt } : {}),
+    ...(project.archivedAt ? { archivedAt: project.archivedAt } : {}),
+    counts: {
+      environments: (await readEnvironments(project.dir)).length,
+      scenarios: (await counted(() => listScenarios(project.dir))).length,
+      recordings: (await counted(() => storedRecordingNames(reportsDir))).length,
+      executions: executions.length,
+    },
+    ...(last ? { lastExecution: last } : {}),
+  };
+}
+
+async function projectDetail(project: StoredProject): Promise<ProjectDetail> {
+  const stored = await readProject(project.dir);
+  if (!stored) throw new HttpError(404, 'NOT_FOUND', 'project not found');
+  return {
+    ...(await projectSummary(stored)),
+    draft: stored.draft,
+    environments: await readEnvironments(project.dir),
+    scenarios: await counted(() => listScenarios(project.dir)),
+  };
+}
+
+function stringList(raw: unknown, field: string, max: number): string[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.some((entry) => typeof entry !== 'string') || raw.length > max)
+    throw new HttpError(400, 'BAD_REQUEST', `${field} must be a list of at most ${String(max)} names`);
+  return raw as string[];
+}
+
+/** Les routes de la plateforme ; `false` : la requête n'en est pas une. */
+async function handlePlatform(
+  ctx: Context,
+  segments: string[],
+  method: string,
+  request: IncomingMessage,
+  url: URL,
+  json: (body: unknown, status?: number) => void,
+): Promise<boolean> {
+  const [, resource, id, sub, item, action] = segments;
+  if (resource === 'overview' && id === undefined && method === 'GET') {
+    const days = Number(url.searchParams.get('days') ?? '30');
+    const projects = await workspaceProjects(ctx);
+    const inputs = await Promise.all(
+      projects.map(async (project) => {
+        const reportsDir = path.join(project.dir, REPORTS_DIR);
+        return {
+          id: project.id,
+          name: project.name,
+          archived: project.state === 'ARCHIVED',
+          reportsDir,
+          scenarios: (await counted(() => listScenarios(project.dir))).length,
+          recordings: (await counted(() => storedRecordingNames(reportsDir))).length,
+          environments: await readEnvironments(project.dir),
+        };
+      }),
+    );
+    json(await computeOverview(inputs, { days: Number.isFinite(days) ? days : 30, env: ctx.env }));
+    return true;
+  }
+  if (resource !== 'projects') return false;
+  if (id === undefined && method === 'GET') {
+    const archived = url.searchParams.get('archived') === 'true';
+    const projects = (await workspaceProjects(ctx)).filter(
+      (project) => archived || project.state !== 'ARCHIVED',
+    );
+    json(await Promise.all(projects.map((project) => projectSummary(project))));
+    return true;
+  }
+  if (!id || id === 'validate') return false;
+  if (sub === 'detail' && item === undefined && method === 'GET') {
+    json(await projectDetail(await projectOf(ctx, id)));
+    return true;
+  }
+  if (sub === 'config' && item === undefined && method === 'POST') {
+    const project = await projectOf(ctx, id);
+    refuseArchived(project);
+    const body = await readJson(request);
+    const { report, draft } = await validate(ctx, body.draft, project.dir);
+    if (!report.ok || !draft)
+      throw new HttpError(422, 'DRAFT_INVALID', 'the project is not valid', { issues: report.blocking });
+    const updated = await updateProject(project.dir, draft, ctx.rules);
+    ctx.projects.set(id, updated);
+    json(await projectDetail(updated));
+    return true;
+  }
+  if (sub === 'duplicate' && item === undefined && method === 'POST') {
+    const project = await projectOf(ctx, id);
+    const stored = await readProject(project.dir);
+    if (!stored) throw new HttpError(404, 'NOT_FOUND', 'project not found');
+    const body = await readJson(request);
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name || name.length > 200)
+      throw new HttpError(400, 'BAD_REQUEST', 'the copy needs a name (1 to 200 characters)');
+    const copyId = `prj_${randomBytes(9).toString('base64url')}`;
+    const dir = path.join(ctx.workspace, copyId);
+    const { report, draft } = await validate(
+      ctx,
+      { ...stored.draft, project: { ...stored.draft.project, name } },
+      dir,
+    );
+    if (!report.ok || !draft)
+      throw new HttpError(422, 'DRAFT_INVALID', 'the copy is not valid', { issues: report.blocking });
+    const copy = await writeProject(dir, copyId, draft, ctx.rules);
+    // Les environnements (sans valeur secrète : des noms seulement) et les scénarios ; jamais les runs.
+    await writeEnvironments(
+      dir,
+      (await readEnvironments(project.dir)).map((environment) => ({
+        ...environment,
+        id: newEnvironmentId(),
+      })),
+    );
+    const source = path.join(project.dir, 'qa-crawler', 'flows');
+    const isDirectory = await stat(source).then(
+      (info) => info.isDirectory(),
+      () => false,
+    );
+    if (isDirectory) await cp(source, path.join(dir, 'qa-crawler', 'flows'), { recursive: true });
+    ctx.projects.set(copyId, copy);
+    json(await projectDetail(copy), 201);
+    return true;
+  }
+  if ((sub === 'archive' || sub === 'restore') && item === undefined && method === 'POST') {
+    const project = await projectOf(ctx, id);
+    const updated = await setProjectState(project.dir, sub === 'archive' ? 'ARCHIVED' : 'ACTIVE');
+    ctx.projects.set(id, updated);
+    json(await projectDetail(updated));
+    return true;
+  }
+  if (sub === 'environments') {
+    const project = await projectOf(ctx, id);
+    const environments = await readEnvironments(project.dir);
+    const shape = (raw: unknown, selfId?: string): ReturnType<typeof checkEnvironmentShape> =>
+      checkEnvironmentShape(raw, environments, {
+        ...(selfId ? { selfId } : {}),
+        envNames: ctx.envNames,
+        env: ctx.env,
+      });
+    if (item === undefined && method === 'GET') {
+      json(environments);
+      return true;
+    }
+    if (item === 'check' && method === 'POST') {
+      const body = await readJson(request);
+      const { input, check } = shape(
+        body.environment,
+        typeof body.selfId === 'string' ? body.selfId : undefined,
+      );
+      json(
+        input && body.reach === true
+          ? { ...check, url: await checkUrl(input.baseUrl, ctx.options.urlCheckTimeoutMs ?? 10_000) }
+          : check,
+      );
+      return true;
+    }
+    refuseArchived(project);
+    if (item === undefined && method === 'POST') {
+      const body = await readJson(request);
+      const { input, check } = shape(body.environment);
+      if (!input || !check.ok)
+        throw new HttpError(422, 'ENVIRONMENT_INVALID', 'the environment is not valid', {
+          details: check.issues.map((issue) => `${issue.field}: ${issue.message}`),
+        });
+      if (environments.length >= 20)
+        throw new HttpError(409, 'TOO_MANY', 'at most 20 environments per project');
+      const now = new Date().toISOString();
+      const environment: Environment = { ...input, id: newEnvironmentId(), createdAt: now, updatedAt: now };
+      await writeEnvironments(project.dir, [...environments, environment]);
+      json(environment, 201);
+      return true;
+    }
+    const existing = environments.find((entry) => entry.id === item);
+    if (!existing) throw new HttpError(404, 'NOT_FOUND', `environment ${item ?? ''} not found`);
+    if (action === undefined && method === 'POST') {
+      const body = await readJson(request);
+      const { input, check } = shape(body.environment, existing.id);
+      if (!input || !check.ok)
+        throw new HttpError(422, 'ENVIRONMENT_INVALID', 'the environment is not valid', {
+          details: check.issues.map((issue) => `${issue.field}: ${issue.message}`),
+        });
+      const environment: Environment = {
+        ...input,
+        id: existing.id,
+        createdAt: existing.createdAt,
+        updatedAt: new Date().toISOString(),
+      };
+      await writeEnvironments(
+        project.dir,
+        environments.map((entry) => (entry.id === existing.id ? environment : entry)),
+      );
+      json(environment);
+      return true;
+    }
+    if (action === 'remove' && method === 'POST') {
+      const body = await readJson(request);
+      if (body.confirm !== true)
+        throw new HttpError(
+          409,
+          'CONFIRMATION_REQUIRED',
+          'removing an environment cannot be undone: send { "confirm": true }',
+        );
+      await writeEnvironments(
+        project.dir,
+        environments.filter((entry) => entry.id !== existing.id),
+      );
+      json({ removed: existing.id });
+      return true;
+    }
+    return false;
+  }
+  if (sub === 'scenarios' && item === undefined) {
+    const project = await projectOf(ctx, id);
+    if (method === 'GET') {
+      json(await listScenarios(project.dir));
+      return true;
+    }
+    if (method === 'POST') {
+      refuseArchived(project);
+      const body = await readJson(request);
+      const name = typeof body.recording === 'string' ? body.recording : '';
+      if (!RECORDING_NAME_PATTERN.test(name))
+        throw new HttpError(400, 'BAD_REQUEST', 'recording must be a recording name');
+      const outcome = await promoteRecording(
+        project.dir,
+        path.join(recordingsDir(path.join(project.dir, REPORTS_DIR)), name),
+        name,
+      );
+      if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+      json(outcome.scenario, 201);
+      return true;
+    }
+    return false;
+  }
+  if (sub === 'executions') {
+    const project = await projectOf(ctx, id);
+    const reportsDir = path.join(project.dir, REPORTS_DIR);
+    if (item === undefined && method === 'GET') {
+      json(await listExecutions(project.id, reportsDir));
+      return true;
+    }
+    if (item !== undefined && action === undefined && method === 'GET') {
+      if (!isRunName(item)) throw new HttpError(404, 'NOT_FOUND', 'execution not found');
+      const detail = await executionDetail(project.id, reportsDir, item);
+      if (!detail) throw new HttpError(404, 'NOT_FOUND', 'execution not found');
+      json(detail);
+      return true;
+    }
+    if (item === undefined && method === 'POST') {
+      refuseArchived(project);
+      const body = await readOptionalJson(request);
+      const environment = await environmentOf(project, body.environmentId);
+      const wanted = stringList(body.scenarios, 'scenarios', 50);
+      const known = await listScenarios(project.dir);
+      if (known.length === 0)
+        throw new HttpError(
+          409,
+          'NO_SCENARIO',
+          'the project has no scenario: promote a recording or add a flow under qa-crawler/flows',
+        );
+      const unknown = (wanted ?? []).filter((name) => !known.some((scenario) => scenario.name === name));
+      if (unknown.length > 0)
+        throw new HttpError(404, 'NOT_FOUND', `unknown scenario(s): ${unknown.join(', ')}`);
+      const flowsDir = await flowsDirOf(project.dir);
+      const selected = wanted ? known.filter((scenario) => wanted.includes(scenario.name)) : undefined;
+      const loaded = await projectMission(ctx, project, 'replay', {
+        ...(selected
+          ? {
+              flows: selected
+                .filter((scenario) => scenario.format === 'yaml')
+                .map((scenario) => scenario.name),
+              extraFlows: selected
+                .filter((scenario) => scenario.format === 'gherkin')
+                .map((scenario) => ({ gherkin: path.join(flowsDir, scenario.file) })),
+            }
+          : {}),
+        ...(environment ? { environment } : {}),
+      });
+      const runDir = path.join(reportsDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+      await writeExecutionMeta(runDir, {
+        kind: 'REPLAY',
+        startedAt: new Date().toISOString(),
+        ...(environment ? { environment: { id: environment.id, name: environment.name } } : {}),
+        scenarios: (selected ?? known).map((scenario) => scenario.name),
+      });
+      const execution = ctx.explorations.start({
+        projectId: project.id,
+        config: loaded.config,
+        reportsDir: runDir,
+        kind: 'REPLAY',
+        env: missionEnv(ctx, environment),
+      });
+      json(execution.snapshot(), 202);
+      return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 function publicProject(project: StoredProject): Project {

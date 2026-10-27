@@ -141,6 +141,12 @@ export const EXTENSION_NAMES = [
   'generation',
   'reports',
   'data',
+  // La plateforme : cycle de vie des projets, environnements, scénarios, exécutions, vue d'ensemble.
+  'lifecycle',
+  'environments',
+  'scenarios',
+  'executions',
+  'overview',
 ] as const;
 export type ExtensionName = (typeof EXTENSION_NAMES)[number];
 
@@ -250,6 +256,10 @@ export interface ExplorationSnapshot {
   error?: string;
   /** Le numéro du dernier événement émis. */
   lastSeq: number;
+  /** EXPLORATION (exploration autonome) ou REPLAY (rejeu des scénarios) ; absent : EXPLORATION. */
+  kind?: ExecutionKind;
+  /** Le dossier du run sous `qa-reports/` (`run-…`) : la clé de l'exécution une fois terminée. */
+  run?: string;
 }
 
 export type StopReason =
@@ -831,3 +841,168 @@ export const STUDIO_EVENTS = {
   refused: 'qa-studio-refused',
   error: 'qa-error',
 } as const;
+
+// ── Plateforme : projets, environnements, scénarios, exécutions, vue d'ensemble ───────────────
+
+/** ACTIVE ; ARCHIVED : gardé sur disque, en lecture seule (aucune exécution), restaurable. */
+export const PROJECT_STATES = ['ACTIVE', 'ARCHIVED'] as const;
+export type ProjectState = (typeof PROJECT_STATES)[number];
+
+/** Un projet dans une liste : sa fiche et ce qu'il contient, compté sur disque. */
+export interface ProjectSummary extends Omit<Project, 'status'> {
+  status: Project['status'];
+  state: ProjectState;
+  updatedAt?: string;
+  archivedAt?: string;
+  counts: { environments: number; scenarios: number; recordings: number; executions: number };
+  /** La dernière exécution terminée (lue dans son result.json), s'il y en a une. */
+  lastExecution?: ExecutionRecord;
+}
+
+/** Le détail d'un projet : son brouillon (la configuration du moteur), ses environnements, ses scénarios. */
+export interface ProjectDetail extends ProjectSummary {
+  draft: ProjectDraft;
+  environments: Environment[];
+  scenarios: ScenarioView[];
+}
+
+export const ENVIRONMENT_KINDS = ['DEVELOPMENT', 'TEST', 'CERTIFICATION', 'PREPRODUCTION', 'OTHER'] as const;
+export type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
+
+/**
+ * UN ENVIRONNEMENT d'un projet : la cible d'une exécution. Aucun secret : `secretEnv` nomme des
+ * variables d'environnement lues sur le serveur, jamais renvoyées ; `variables` sont des valeurs non
+ * secrètes (un nom qui ressemble à un secret est refusé) passées au moteur comme `${env:NOM}`.
+ */
+export interface EnvironmentInput {
+  name: string;
+  kind: EnvironmentKind;
+  baseUrl: string;
+  /** Les hôtes que le navigateur peut visiter (safety.allowedHosts) ; vide : l'hôte de baseUrl seul. */
+  allowedDomains?: string[];
+  variables?: Record<string, string>;
+  secretEnv?: string[];
+  limits?: { actionTimeoutMs?: number; maxDurationMinutes?: number; maxStates?: number; maxActions?: number };
+  /**
+   * Les écritures (créer, modifier : actions MUTATION de la SafetyPolicy) permises dans CET
+   * environnement, bornées par run. Absent : aucune écriture. Les actions DANGEROUS restent bloquées.
+   */
+  mutations?: { enabled: boolean; maxPerRun?: number };
+}
+
+export interface Environment extends EnvironmentInput {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** La vérification d'un environnement avant un lancement (format, règles du moteur, variables, URL). */
+export interface EnvironmentCheck {
+  ok: boolean;
+  issues: { field: string; message: string }[];
+  /** Les variables secrètes citées et leur présence sur le serveur (jamais leur valeur). */
+  secrets: Record<string, boolean>;
+  url?: UrlCheck;
+}
+
+/** UN SCÉNARIO : un flow du projet (`qa-crawler/flows/`), joué par le rejeu du moteur. */
+export interface ScenarioView {
+  name: string;
+  /** Le fichier, relatif au dossier des flows. */
+  file: string;
+  format: 'yaml' | 'gherkin';
+  /** Étapes du flow (YAML) ; absent pour un .feature (lu par le moteur au lancement). */
+  steps?: number;
+  /** L'enregistrement d'où il vient, quand le SDK l'a promu. */
+  fromRecording?: string;
+}
+
+export const EXECUTION_KINDS = ['EXPLORATION', 'REPLAY'] as const;
+export type ExecutionKind = (typeof EXECUTION_KINDS)[number];
+
+/** Lancer une exécution : rejouer des scénarios du projet (tous par défaut) dans un environnement. */
+export interface ExecutionStartInput {
+  scenarios?: string[];
+  environmentId?: string;
+}
+
+/**
+ * Le verdict d'une exécution, lu dans le résultat du moteur : PASSED (tous les flows joués PASSED),
+ * FAILED (au moins un flow non PASSED), NO_FLOW (exploration sans flow), INCOMPLETE (pas de résultat).
+ */
+export const EXECUTION_VERDICTS = ['PASSED', 'FAILED', 'NO_FLOW', 'INCOMPLETE'] as const;
+export type ExecutionVerdict = (typeof EXECUTION_VERDICTS)[number];
+
+/** Une exécution terminée (un run sur disque) : ce que le SDK en sait sans le recalculer. */
+export interface ExecutionRecord {
+  run: string;
+  projectId: string;
+  kind: ExecutionKind;
+  createdAt: string;
+  verdict: ExecutionVerdict;
+  durationMs?: number;
+  flows: { total: number; passed: number; failed: number };
+  issues: number;
+  environment?: { id: string; name: string };
+  scenarios?: string[];
+}
+
+/** Une étape jouée, telle que le moteur l'a rapportée (libellé sans valeur saisie). */
+export interface ExecutionStepView {
+  index: number;
+  kind: string;
+  label: string;
+  status: string;
+  durationMs: number;
+  reason?: string;
+  /** La capture de l'étape, relative au dossier du run (servie par un lien de rapport). */
+  screenshot?: string;
+}
+
+export interface ExecutionFlowView {
+  name: string;
+  status: string;
+  durationMs: number;
+  steps: ExecutionStepView[];
+  /** La première divergence (la vraie cause, quand le symptôme est plus loin). */
+  divergence?: { stepIndex: number; reason: string };
+  /** Les assertions métier jouées : leur statut, jamais un succès par défaut. */
+  assertions: { id: string; description: string; status: string }[];
+  /** Les clés de données de test utilisées (jamais leurs valeurs). */
+  testData: string[];
+}
+
+export interface ExecutionDetail extends ExecutionRecord {
+  stopReason?: StopReason;
+  flowsDetail: ExecutionFlowView[];
+  issuesList: ExplorationIssue[];
+  reports: Partial<Record<ReportKind, string>>;
+}
+
+/** Une alerte de la vue d'ensemble : ce qui demande une action, et où. */
+export interface OverviewAlert {
+  kind: 'EXECUTION_FAILED' | 'CRITICAL_ISSUES' | 'SECRET_MISSING';
+  projectId: string;
+  projectName: string;
+  message: string;
+  run?: string;
+}
+
+/**
+ * LA VUE D'ENSEMBLE, calculée sur disque. Le taux de réussite dit son périmètre : les exécutions de
+ * REJEU terminées dans la période (celles dont le moteur a écrit le résultat) ; réussie = verdict PASSED.
+ */
+export interface OverviewView {
+  generatedAt: string;
+  period: { days: number; from: string; to: string };
+  projects: { active: number; archived: number };
+  scenarios: number;
+  recordings: number;
+  executions: { total: number; byKind: Record<ExecutionKind, number> };
+  replays: { finished: number; passed: number; failed: number; passRate?: number; definition: string };
+  issues: Record<Severity, number>;
+  recent: (ExecutionRecord & { projectName: string })[];
+  alerts: OverviewAlert[];
+  /** Par jour de la période : rejeux réussis et échoués. */
+  trend: { day: string; passed: number; failed: number }[];
+}

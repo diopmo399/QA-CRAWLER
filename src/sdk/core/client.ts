@@ -30,6 +30,16 @@ import type {
   UrlCheck,
   ValidationReport,
   DraftIssue,
+  Environment,
+  EnvironmentCheck,
+  EnvironmentInput,
+  ExecutionDetail,
+  ExecutionRecord,
+  ExecutionStartInput,
+  OverviewView,
+  ProjectDetail,
+  ProjectSummary,
+  ScenarioView,
 } from './contracts.js';
 import { SDK_API_VERSION } from './contracts.js';
 
@@ -121,6 +131,45 @@ export interface QaCrawlerClient {
     validate(draft: ProjectDraft): Promise<ValidationReport>;
     create(draft: ProjectDraft): Promise<Project>;
     get(id: string): Promise<Project>;
+    /** Les projets de l'espace de travail (les archivés avec `archived: true`), comptés sur disque. */
+    list(options?: { archived?: boolean }): Promise<ProjectSummary[]>;
+    /** La fiche, la configuration, les environnements et les scénarios d'un projet. */
+    detail(id: string): Promise<ProjectDetail>;
+    /** Remplace la configuration (validée par le moteur, comme à la création) ; l'identifiant reste. */
+    update(id: string, draft: ProjectDraft): Promise<ProjectDetail>;
+    /** Une copie : configuration, environnements et scénarios ; ni exécutions ni enregistrements. */
+    duplicate(id: string, input: { name: string }): Promise<ProjectDetail>;
+    /** Archivé : gardé sur disque, en lecture seule, restaurable. Rien n'est supprimé. */
+    archive(id: string): Promise<ProjectDetail>;
+    restore(id: string): Promise<ProjectDetail>;
+  };
+  /** Les environnements d'un projet (dev, test, certification, préproduction) : les cibles d'une exécution. */
+  environments: {
+    list(projectId: string): Promise<Environment[]>;
+    check(
+      projectId: string,
+      input: EnvironmentInput,
+      options?: { reach?: boolean },
+    ): Promise<EnvironmentCheck>;
+    create(projectId: string, input: EnvironmentInput): Promise<Environment>;
+    update(projectId: string, id: string, input: EnvironmentInput): Promise<Environment>;
+    /** Irréversible : `confirm: true` est exigé par le serveur. */
+    remove(projectId: string, id: string, input: { confirm: true }): Promise<{ removed: string }>;
+  };
+  /** Les scénarios d'un projet (ses flows) ; un enregistrement devient un scénario par promotion. */
+  scenarios: {
+    list(projectId: string): Promise<ScenarioView[]>;
+    promote(projectId: string, recording: string): Promise<ScenarioView>;
+  };
+  /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
+  executions: {
+    start(projectId: string, input?: ExecutionStartInput): Promise<ExplorationSnapshot>;
+    list(projectId: string): Promise<ExecutionRecord[]>;
+    get(projectId: string, run: string): Promise<ExecutionDetail>;
+  };
+  /** La vue d'ensemble, calculée sur disque (périmètre du taux de réussite : voir `definition`). */
+  overview: {
+    get(options?: { days?: number }): Promise<OverviewView>;
   };
   explorations: {
     start(projectId: string): Promise<ExplorationSnapshot>;
@@ -376,6 +425,38 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       validate: (draft) => request('POST', '/projects/validate', { draft }),
       create: (draft) => request('POST', '/projects', { draft }),
       get: (id) => request('GET', `/projects/${encodeURIComponent(id)}`),
+      list: (listOptions = {}) => request('GET', `/projects${listOptions.archived ? '?archived=true' : ''}`),
+      detail: (id) => request('GET', `${project(id)}/detail`),
+      update: (id, draft) => request('POST', `${project(id)}/config`, { draft }),
+      duplicate: (id, input) => request('POST', `${project(id)}/duplicate`, input),
+      archive: (id) => request('POST', `${project(id)}/archive`, {}),
+      restore: (id) => request('POST', `${project(id)}/restore`, {}),
+    },
+    environments: {
+      list: (projectId) => request('GET', `${project(projectId)}/environments`),
+      check: (projectId, input, checkOptions = {}) =>
+        request('POST', `${project(projectId)}/environments/check`, { environment: input, ...checkOptions }),
+      create: (projectId, input) =>
+        request('POST', `${project(projectId)}/environments`, { environment: input }),
+      update: (projectId, id, input) =>
+        request('POST', `${project(projectId)}/environments/${encodeURIComponent(id)}`, {
+          environment: input,
+        }),
+      remove: (projectId, id, input) =>
+        request('POST', `${project(projectId)}/environments/${encodeURIComponent(id)}/remove`, input),
+    },
+    scenarios: {
+      list: (projectId) => request('GET', `${project(projectId)}/scenarios`),
+      promote: (projectId, name) => request('POST', `${project(projectId)}/scenarios`, { recording: name }),
+    },
+    executions: {
+      start: (projectId, input = {}) => request('POST', `${project(projectId)}/executions`, input),
+      list: (projectId) => request('GET', `${project(projectId)}/executions`),
+      get: (projectId, run) => request('GET', `${project(projectId)}/executions/${encodeURIComponent(run)}`),
+    },
+    overview: {
+      get: (overviewOptions = {}) =>
+        request('GET', `/overview${overviewOptions.days ? `?days=${String(overviewOptions.days)}` : ''}`),
     },
     explorations: {
       start: (projectId) => request('POST', `/projects/${encodeURIComponent(projectId)}/explorations`, {}),
