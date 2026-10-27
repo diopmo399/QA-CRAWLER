@@ -13,10 +13,10 @@ const domainPackSchema = z
   .object({
     name: z.string().min(1),
     description: z.string().optional(),
-    concepts: words.default({}),
-    synonyms: words.default({}),
+    concepts: words.prefault({}),
+    synonyms: words.prefault({}),
     /** Indices de score : intérêt supplémentaire d'un concept sur un écran qui montre ce motif. */
-    patternRules: z.record(z.enum(UI_PATTERNS), z.record(z.string().min(1), z.number())).default({}),
+    patternRules: z.partialRecord(z.enum(UI_PATTERNS), z.record(z.string().min(1), z.number())).prefault({}),
     invariants: z.array(invariantSchema).default([]),
   })
   .strict();

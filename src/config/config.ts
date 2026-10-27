@@ -43,7 +43,7 @@ const browserSchema = z
         height: z.number().int().positive().default(768),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     locale: nonEmpty.optional(),
     userAgent: nonEmpty.optional(),
     ignoreHttpsErrors: z.boolean().default(false),
@@ -90,7 +90,7 @@ const explorationSchema = z
     readyTimeoutMs: z.number().int().min(0).default(10_000),
     /** États distincts explorés par modèle de route (/users/:id → seulement N utilisateurs). */
     maxStatesPerRoute: z.number().int().positive().default(3),
-    queryParams: queryParamsSchema.default({}),
+    queryParams: queryParamsSchema.prefault({}),
     /**
      * Les contrôles pareils d'un écran (jours d'un calendrier, numéros de page,
      * « Voir » sur chaque ligne…) sont essayés au plus ce nombre de fois, pas un par un.
@@ -262,7 +262,7 @@ const safetySchema = z
         maxPerRun: z.number().int().min(0).default(10),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Mots-clés supplémentaires (toute langue) ajoutés aux règles de classement intégrées. */
     keywords: z
       .object({
@@ -271,7 +271,7 @@ const safetySchema = z
         dangerous: z.array(nonEmpty).default([]),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * Garde d'écriture : pendant l'exploration, toute requête POST, PUT, PATCH ou DELETE
      * vers un hôte autorisé est interceptée et annulée, sauf si l'action en cours a le
@@ -286,12 +286,11 @@ const safetySchema = z
         allow: z.array(nonEmpty).default([]),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
 const httpOrigin = z
-  .string()
   .url()
   .refine((value) => /^https?:\/\//i.test(value), 'must use http or https')
   .transform((value) => new URL(value).origin);
@@ -310,7 +309,7 @@ const authSessionSchema = z
     maxAgeMinutes: z.number().int().positive().default(480),
   })
   .strict()
-  .default({});
+  .prefault({});
 
 const formAuthSchema = z
   .object({
@@ -349,7 +348,6 @@ const httpAuthSchema = z
      * Recommandé ; sans elle, ils sont envoyés à tout hôte qui les demande.
      */
     origin: z
-      .string()
       .url()
       .refine((value) => /^https?:\/\//i.test(value), 'origin must use http or https')
       .transform((value) => new URL(value).origin)
@@ -405,7 +403,7 @@ const actorProfileSchema = z
     tenant: nonEmpty.optional(),
   })
   .strict()
-  .default({});
+  .prefault({});
 
 /**
  * Autres utilisateurs de l'application (lecteur, gestionnaire…). Après
@@ -461,7 +459,7 @@ export type BrowserPermission = (typeof BROWSER_PERMISSIONS)[number];
  */
 const credentialsSchema = z
   .record(nonEmpty, z.object({ usernameEnv: nonEmpty, passwordEnv: nonEmpty }).strict())
-  .default({});
+  .prefault({});
 
 /**
  * Interactions levées par le navigateur lui-même, hors du DOM de l'application
@@ -479,7 +477,7 @@ const browserInteractionsSchema = z
         maxAttempts: z.number().int().min(1).max(5).default(2),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Même interaction (type, origine, action) vue plus de ce nombre de fois : INTERACTION_LOOP_DETECTED. */
     loopThreshold: z.number().int().min(2).default(5),
     /** Origines jamais visitées ni considérées de confiance (popups, redirections, identifiants). */
@@ -499,7 +497,7 @@ const browserInteractionsSchema = z
         answerByBrowser: z.boolean().default(false),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     dialogs: z
       .object({
         /** alert() : accepter (OK) ou fermer. */
@@ -522,7 +520,7 @@ const browserInteractionsSchema = z
           .default([]),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     popups: z
       .object({
         /** Enregistrer la nouvelle page comme un état du graphe (origines autorisées seulement), puis la fermer. */
@@ -535,14 +533,14 @@ const browserInteractionsSchema = z
         closeAfterMs: z.number().int().min(0).max(60_000).default(0),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     permissions: z
       .object({
         /** Permissions accordées à l'origine cible. Par défaut : aucune (toute demande est refusée). */
         grant: z.array(z.enum(BROWSER_PERMISSIONS)).default([]),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -582,12 +580,12 @@ const memorySchema = z
         maxTransitions: z.number().int().positive().default(5000),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Mémoire de travail en RAM : le moteur de décision n'interroge jamais la base directement. */
     cache: z
       .object({ enabled: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -617,7 +615,7 @@ const databaseSchema = z
         trustServerCertificate: z.boolean().default(false),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -637,7 +635,7 @@ const intelligenceSchema = z
         sampleHalfPoint: z.number().positive().default(5),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     aging: z
       .object({
         enabled: z.boolean().default(true),
@@ -647,16 +645,16 @@ const intelligenceSchema = z
         minWeight: z.number().min(0).max(1).default(0.05),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     context: z
       .object({ enabled: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
     /** NoveltyScore : exécutions passées pondérées par la récence (demi-point : confidence.sampleHalfPoint). */
     novelty: z
       .object({ enabled: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
     /** StabilityScore : succès, destinations, p50 / p95 des durées RÉELLES (jamais d'une moyenne). */
     stability: z
       .object({
@@ -667,7 +665,7 @@ const intelligenceSchema = z
         minConfidence: z.number().min(0).max(1).default(0.4),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * FLAKY DETECTION : les transitions historiquement instables (réussites, destinations).
      * Une transition instable qui change n'est jamais une régression potentielle : WARNING,
@@ -683,7 +681,7 @@ const intelligenceSchema = z
         minConfidence: z.number().min(0).max(1).default(0.4),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * AdaptiveScoring : le score des actions nuancé par la confiance, la nouveauté et la
      * stabilité de l'historique. Désactivé par défaut (il change les décisions) ; sans
@@ -697,7 +695,7 @@ const intelligenceSchema = z
         stabilityWeight: z.number().min(0).max(2).default(1),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -721,7 +719,7 @@ const regressionSchema = z
         loadLimit: z.number().int().positive().default(20_000),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** NEW → KNOWN → RESOLVED → REOPENED (et FLAKY) : chaque anomalie suivie de run en run. */
     anomalyLifecycle: z
       .object({
@@ -733,7 +731,7 @@ const regressionSchema = z
         loadLimit: z.number().int().positive().default(5_000),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -744,7 +742,7 @@ const persistenceSchema = z
     file: z
       .object({ directory: nonEmpty.default('.qa-crawler/memory') })
       .strict()
-      .default({}),
+      .prefault({}),
     database: databaseSchema.optional(),
     /** Stockage inutilisable : fail arrête le run avec une erreur claire ; fallback continue avec le repli. */
     failureMode: z.enum(['fail', 'fallback']).default('fallback'),
@@ -755,7 +753,7 @@ const persistenceSchema = z
         directory: nonEmpty.optional(),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Écritures par lots : états, transitions et connaissances enregistrés toutes les N observations. */
     flushEvery: z.number().int().positive().default(25),
   })
@@ -763,7 +761,7 @@ const persistenceSchema = z
   .superRefine((persistence, ctx) => {
     if (persistence.provider === 'database' && !persistence.database)
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['database'],
         message:
           'persistence.database (type: postgres | sqlserver | sqlite) is required when provider is database',
@@ -789,7 +787,7 @@ const reportSchema = z
         required: z.boolean().default(false),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -828,7 +826,7 @@ const oraclesSchema = z
         api404: z.enum(['warning', 'fail']).default('warning'),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     ui: z
       .object({
         enabled: z.boolean().default(true),
@@ -836,11 +834,11 @@ const oraclesSchema = z
         errorTexts: z.array(nonEmpty).default([]),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     baseline: z
       .object({ enabled: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -867,7 +865,7 @@ const recoverySchema = z
         maxFailuresPerState: z.number().int().min(1).default(5),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     stuck: z
       .object({
         /** A→B→A→B… ce nombre de fois : la branche est abandonnée. */
@@ -878,7 +876,7 @@ const recoverySchema = z
         maxBusyObservations: z.number().int().min(1).default(3),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -921,7 +919,7 @@ const performanceSchema = z
         confirmationQuietMs: z.number().int().min(50).max(5000).default(150),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * PERFORMANCE BASELINE : un fichier (performance-baseline.json). Absent : il est créé par ce run ;
      * présent : ce run lui est comparé (PERFORMANCE_REGRESSION au-delà de tolerance ET de 500 ms).
@@ -932,7 +930,7 @@ const performanceSchema = z
         tolerance: z.number().min(1).max(10).default(1.3),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     tracing: z
       .object({
         enabled: z.boolean().default(true),
@@ -940,7 +938,7 @@ const performanceSchema = z
         slowActionThresholdMs: z.number().int().min(100).default(2000),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -1028,7 +1026,7 @@ const staticAnalysisSchema = z
         gitFetch: z.enum(['command', 'run']).default('command'),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     bundle: z
       .object({
         enabled: z.boolean().default(true),
@@ -1042,7 +1040,7 @@ const staticAnalysisSchema = z
         allowedHosts: z.array(nonEmpty).default([]),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Source maps publiées par le déploiement : une donnée non fiable, lue avec prudence. */
     sourceMaps: z
       .object({
@@ -1057,12 +1055,12 @@ const staticAnalysisSchema = z
         incrementalChunks: z.boolean().default(true),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Sans source map utilisable : analyser le bundle minifié lui-même (couverture LIMITED/PARTIAL). */
     bundleFallback: z
       .object({ enabled: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
     cache: z
       .object({
         enabled: z.boolean().default(true),
@@ -1070,7 +1068,7 @@ const staticAnalysisSchema = z
         directory: nonEmpty.optional(),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     budgets: z
       .object({
         maxFiles: z.number().int().positive().default(500),
@@ -1088,11 +1086,11 @@ const staticAnalysisSchema = z
         maxExtractedSources: z.number().int().positive().default(2000),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     analyzers: z
       .object({ angular: z.boolean().default(true), genericJs: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
     features: z
       .object({
         routes: z.boolean().default(true),
@@ -1105,15 +1103,15 @@ const staticAnalysisSchema = z
         rules: z.boolean().default(true),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     semanticResolution: z
       .object({ enabled: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
     dryRun: z
       .object({ useStaticKnowledge: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Version et commit de l'application analysée (sinon QA_COMMIT / QA_VERSION, sinon rien). */
     version: nonEmpty.optional(),
     commit: nonEmpty.optional(),
@@ -1187,12 +1185,12 @@ const platformSchema = z
         floorMs: z.number().int().min(0).default(300),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Chemins de reproduction minimaux (reproductions.json) pour les anomalies rattachées à une étape. */
     reproductions: z
       .object({ enabled: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Tests Playwright générés (reports/generated-tests/<flow>.spec.ts). */
     generatedTests: z
       .object({
@@ -1216,10 +1214,10 @@ const platformSchema = z
               .optional(),
           })
           .strict()
-          .default({}),
+          .prefault({}),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * Le conseiller d'ambiguïté (ai.enabled, mode ASSIST/HYBRID) : consulté seulement pour les anomalies
      * qu'aucune règle n'explique ; un avis attaché à l'anomalie, jamais une décision.
@@ -1232,12 +1230,12 @@ const platformSchema = z
         timeoutMs: z.number().int().positive().default(60_000),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** La mémoire des flows (persistence.enabled) : une ligne par élément du run, par sorte. */
     flowMemory: z
       .object({ enabled: z.boolean().default(true) })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * Le commentaire de pull request (GitHub) : le résultat structuré, régénéré à chaque run. Le jeton
      * vient de tokenEnv ; owner/repo/number peuvent venir de GITHUB_REPOSITORY et QA_PR_NUMBER.
@@ -1250,12 +1248,12 @@ const platformSchema = z
         repo: nonEmpty.optional(),
         number: z.number().int().positive().optional(),
         tokenEnv: nonEmpty.default('GITHUB_TOKEN'),
-        apiBaseUrl: z.string().url().optional(),
+        apiBaseUrl: z.url().optional(),
         /** Lien vers le rapport publié (artefact de CI), ajouté au commentaire. */
-        reportUrl: z.string().url().optional(),
+        reportUrl: z.url().optional(),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -1272,16 +1270,16 @@ const networkSchema = z
 const scoringSchema = z
   .object({
     /** Surcharges de DEFAULT_SCORING_WEIGHTS (newState, goalText, export…). */
-    weights: z.record(z.enum(SCORING_WEIGHT_NAMES_TUPLE), z.number()).default({}),
+    weights: z.partialRecord(z.enum(SCORING_WEIGHT_NAMES_TUPLE), z.number()).prefault({}),
   })
   .strict();
 
 const semanticsSchema = z
   .object({
     /** Mots ajoutés aux concepts (create, delete, save, cancel…), ou nouveaux concepts. */
-    concepts: z.record(nonEmpty, z.array(nonEmpty)).default({}),
+    concepts: z.record(nonEmpty, z.array(nonEmpty)).prefault({}),
     /** Synonymes des termes de la mission (users: [utilisateurs, membres]). */
-    synonyms: z.record(nonEmpty, z.array(nonEmpty)).default({}),
+    synonyms: z.record(nonEmpty, z.array(nonEmpty)).prefault({}),
   })
   .strict();
 
@@ -1337,7 +1335,7 @@ export const invariantSchema = z
         path: nonEmpty.optional(),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     expect: z
       .object({
         /** Toutes les réponses sous ce statut (500 : aucune erreur serveur). */
@@ -1410,7 +1408,7 @@ const formsSchema = z
         maxDurationMs: z.number().int().positive().default(15_000),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -1441,7 +1439,7 @@ const rulesSchema = z
     runtimeVerification: z.boolean().default(true),
     /** Le moteur de décision favorise les actions qui vérifient des règles non couvertes. */
     influenceDecisionEngine: z.boolean().default(true),
-    categories: ruleCategoriesSchema.default({}),
+    categories: ruleCategoriesSchema.prefault({}),
     budgets: z
       .object({
         maxRulesPerPage: z.number().int().positive().default(100),
@@ -1450,7 +1448,7 @@ const rulesSchema = z
         maxDurationMs: z.number().int().positive().default(30_000),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Poids du signal « couverture de règles » dans le score des actions. */
     decisionWeight: z.number().nonnegative().default(1),
   })
@@ -1516,10 +1514,10 @@ const recordingSchema = z
             maxAiCalls: z.number().int().min(0).max(20).default(3),
           })
           .strict()
-          .default({}),
+          .prefault({}),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     playwrightRecording: z.boolean().default(false),
     /** Le bandeau « ● RECORDING » (Stop, Checkpoint, Pause) dans la page. */
     overlay: z.boolean().default(true),
@@ -1558,7 +1556,7 @@ const recordingSchema = z
     dialogs: z
       .object({ confirm: z.enum(['accept', 'dismiss']).default('accept') })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Variables d'environnement des identifiants tapés pendant l'enregistrement (jamais leurs valeurs). */
     credentials: z
       .object({
@@ -1566,7 +1564,7 @@ const recordingSchema = z
         passwordEnv: nonEmpty.default('QA_PASSWORD'),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Ajouter ce qui a été appris (workflow, états) à la connaissance fonctionnelle, provenance HUMAN_RECORDED. */
     knowledge: z.boolean().default(true),
     /**
@@ -1587,10 +1585,10 @@ const recordingSchema = z
             margin: z.number().min(0).max(1).default(0.12),
           })
           .strict()
-          .default({}),
+          .prefault({}),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Rejouer le flow généré (dry run) juste après : REPLAY_CONFIRMED / REPLAY_FAILED. */
     validate: z.boolean().default(false),
     /**
@@ -1613,7 +1611,7 @@ const recordingSchema = z
         networkEvidence: z.boolean().default(true),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Contrôles avant la génération : aucune action métier perdue, pas un flow fait de goto. */
     validation: z
       .object({
@@ -1623,7 +1621,7 @@ const recordingSchema = z
         collapseMinGotos: z.number().int().min(1).default(2),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * FIDÉLITÉ du flow généré (PRESERVE FIRST, UNDERSTAND SECOND, OPTIMIZE LAST) :
      *   EXACT     toutes les interactions fonctionnelles, corrections comprises (seul le bruit
@@ -1662,7 +1660,7 @@ const recordingSchema = z
         includeSameSection: z.boolean().default(true),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     targetValidation: z
       .object({
         enabled: z.boolean().default(true),
@@ -1675,7 +1673,7 @@ const recordingSchema = z
         aiAudit: z.boolean().default(false),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * FLOW AUDIT : le flow GÉNÉRÉ relu dans son ensemble (étapes dupliquées, clic sans effet avant le
      * même clic, double écriture, saisies jamais envoyées, aucune vérification finale…) ; le conseiller
@@ -1688,7 +1686,7 @@ const recordingSchema = z
         maxCalls: z.number().int().min(0).max(50).default(5),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     intelligenceAudit: z
       .object({
         enabled: z.boolean().default(true),
@@ -1706,10 +1704,10 @@ const recordingSchema = z
             suspiciousMerge: z.boolean().default(true),
           })
           .strict()
-          .default({}),
+          .prefault({}),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Un clic sur un composant maison non reconnu, mais qui a un effet : une action UNRESOLVED gardée. */
     preserveUnknownInteractiveActions: z.boolean().default(true),
     /** Une action qui a changé l'écran (section, champ, fenêtre) n'est jamais fusionnée ni retirée. */
@@ -1724,12 +1722,12 @@ const recordingSchema = z
         removeUnresolvedClicks: z.boolean().default(false),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** FlowOptimizer : un flow raccourci SÉPARÉ (optimized.flow.yaml) ; generated.flow.yaml reste le parcours humain. */
     optimization: z
       .object({ enabled: z.boolean().default(false) })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * RECORDED TEST DATA : les valeurs saisies pendant l'enregistrement deviennent un jeu de
      * données (test-data.yaml) cité par le flow et le .feature : `{ testData: request.title }`.
@@ -1755,9 +1753,9 @@ const recordingSchema = z
         sensitiveValues: z
           .object({ useCredentialReferences: z.boolean().default(true) })
           .strict()
-          .default({}),
+          .prefault({}),
         /** Stratégie par sens ou par nom de champ : email: generated, description: recorded… */
-        strategies: z.record(nonEmpty, z.enum(['recorded', 'generated', 'literal', 'template'])).default({}),
+        strategies: z.record(nonEmpty, z.enum(['recorded', 'generated', 'literal', 'template'])).prefault({}),
         /** Priorité absolue (sauf sécurité) : par clé (request.title) ou nom de champ (title). */
         overrides: z
           .record(
@@ -1770,10 +1768,10 @@ const recordingSchema = z
               })
               .strict(),
           )
-          .default({}),
+          .prefault({}),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -1823,7 +1821,7 @@ const replaySchema = z
         ambiguityMargin: z.number().min(0).max(1).default(0.12),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** La cible de l'étape suivante, absente avant l'action, doit apparaître après. */
     verifyNextActionPrecondition: z.boolean().default(true),
     /**
@@ -1847,7 +1845,7 @@ const replaySchema = z
         loginRoutes: z.array(z.string()).default([]),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Vérifier, avant de cliquer, que l'élément trouvé est celui enregistré (empreinte). */
     targetFingerprintMatching: z.boolean().default(true),
     /** Retrouver le même élément par son empreinte (rôle + nom, test id, texte) si le localisateur échoue. */
@@ -1890,7 +1888,7 @@ const replaySchema = z
         reacquireAfterRerender: z.boolean().default(true),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Attente bornée d'un effet attendu (attente sur condition, jamais un sommeil fixe). */
     effectTimeoutMs: z.number().int().min(100).max(60_000).default(8000),
     recovery: z
@@ -1902,7 +1900,7 @@ const replaySchema = z
         retryMutations: z.boolean().default(false),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     locator: z
       .object({
         preferSemantic: z.boolean().default(true),
@@ -1910,7 +1908,7 @@ const replaySchema = z
         rejectFingerprintMismatch: z.boolean().default(true),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * RÉSOLUTION FONCTIONNELLE DE CIBLE : un TARGET_FINGERPRINT_MISMATCH n'est plus terminal. Les
      * candidats de l'écran sont comparés par leur FONCTION dans le contexte du parcours (section,
@@ -1945,7 +1943,7 @@ const replaySchema = z
         resolveNonUniqueLocators: z.boolean().default(true),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * WORKFLOW SELF-HEALING : quand une action n'est plus rejouable telle quelle, comprendre
      * POURQUOI (DivergenceAnalyzer), ce qu'elle devait accomplir (objectif fonctionnel, déduit
@@ -1977,10 +1975,10 @@ const replaySchema = z
             maxSafeExperiments: z.number().int().min(1).max(50).default(8),
           })
           .strict()
-          .default({}),
+          .prefault({}),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -2001,7 +1999,7 @@ const modelProfileSchema = (autoTier: 'efficiency' | 'balance' | 'intelligence')
       autoTier: z.enum(['efficiency', 'balance', 'intelligence', 'fast']).default(autoTier),
     })
     .strict()
-    .default({});
+    .prefault({});
 
 const aiSchema = z
   .object({
@@ -2031,10 +2029,10 @@ const aiSchema = z
                 INTELLIGENCE: modelProfileSchema('intelligence'),
               })
               .strict()
-              .default({}),
+              .prefault({}),
           })
           .strict()
-          .default({}),
+          .prefault({}),
         /** REASONING EFFORT : envoyé seulement si le modèle choisi le déclare (sinon ajusté ou omis). */
         reasoning: z
           .object({
@@ -2046,7 +2044,7 @@ const aiSchema = z
             veryHighComplexity: reasoningLevel.default('HIGH'),
           })
           .strict()
-          .default({}),
+          .prefault({}),
         /** Modèle demandé inutilisable : AUTO (routage officiel), ALTERNATIVE (autre modèle découvert, sinon AUTO), DETERMINISTIC (pas d'IA). */
         fallback: z
           .object({
@@ -2054,7 +2052,7 @@ const aiSchema = z
             strategy: z.enum(['AUTO', 'ALTERNATIVE', 'DETERMINISTIC']).default('AUTO'),
           })
           .strict()
-          .default({}),
+          .prefault({}),
         /** Découverte des modèles (client.listModels()) : en cache, rafraîchie si un modèle est refusé. */
         discovery: z
           .object({
@@ -2063,7 +2061,7 @@ const aiSchema = z
             refreshOnUnavailableModel: z.boolean().default(true),
           })
           .strict()
-          .default({}),
+          .prefault({}),
         timeoutMs: z.number().int().min(1000).max(600_000).default(30_000),
         maxRetries: z.number().int().min(0).max(3).default(1),
         sessionReuse: z.boolean().default(true),
@@ -2075,7 +2073,7 @@ const aiSchema = z
         tokenEnv: nonEmpty.optional(),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Le fournisseur `anthropic` : API Anthropic par le SDK officiel (`@anthropic-ai/sdk`, optionnel). */
     anthropic: z
       .object({
@@ -2094,7 +2092,7 @@ const aiSchema = z
         baseUrl: nonEmpty.optional(),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     triggers: z
       .object({
         ambiguousTarget: z.boolean().default(true),
@@ -2114,7 +2112,7 @@ const aiSchema = z
         recordingEnrichment: z.boolean().default(true),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     thresholds: z
       .object({
         /** Au-dessus : FAST PATH déterministe, aucun appel. */
@@ -2124,7 +2122,7 @@ const aiSchema = z
         overrideMargin: z.number().min(0).max(1).default(0.15),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     budgets: z
       .object({
         maxCallsPerRun: z.number().int().min(0).max(1000).default(10),
@@ -2134,7 +2132,7 @@ const aiSchema = z
         maxReasoningDurationMs: z.number().int().min(1000).max(600_000).default(60_000),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     context: z
       .object({
         maxActions: z.number().int().min(1).max(100).default(25),
@@ -2144,20 +2142,20 @@ const aiSchema = z
         sensitiveFields: z.array(nonEmpty).default([]),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     audit: z
       .object({
         enabled: z.boolean().default(true),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict()
   .superRefine((ai, context) => {
     const selection = ai.copilot.modelSelection;
     if (selection.mode === 'EXPLICIT' && !selection.model)
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['copilot', 'modelSelection', 'model'],
         message:
           'modelSelection.mode EXPLICIT needs modelSelection.model (an id discovered for this account)',
@@ -2190,7 +2188,7 @@ const cognitiveSchema = z
         runsForConfirmed: z.number().int().min(1).default(3),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * QA REASONING ENGINE : une décision raisonnée par écran (but, préconditions, couverture,
      * hypothèses), donnée au moteur de décision existant comme un signal. Il ne clique jamais.
@@ -2205,7 +2203,7 @@ const cognitiveSchema = z
         maxAdvisorCalls: z.number().int().min(0).max(100).default(5),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     budgets: z
       .object({
         maxHypotheses: z.number().int().min(10).max(10_000).default(500),
@@ -2215,24 +2213,24 @@ const cognitiveSchema = z
         maxReasoningDurationMs: z.number().int().min(10).max(60_000).default(250),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
 const functionalIntelligenceSchema = z
   .object({
     enabled: z.boolean().default(false),
-    stateMachines: toggle.default({}),
-    invariants: toggle.default({}),
-    workflows: toggle.default({}),
-    sideEffects: toggle.default({}),
-    errorPaths: toggle.default({}),
-    runtimeContracts: toggle.default({}),
+    stateMachines: toggle.prefault({}),
+    invariants: toggle.prefault({}),
+    workflows: toggle.prefault({}),
+    sideEffects: toggle.prefault({}),
+    errorPaths: toggle.prefault({}),
+    runtimeContracts: toggle.prefault({}),
     /**
      * Apprendre du réseau à chaque run : écritures acceptées → workflows, codes d'état →
      * états et transitions, gardés comme historique pour les runs suivants (jamais une preuve).
      */
-    runtimeLearning: toggle.default({}),
+    runtimeLearning: toggle.prefault({}),
     testGoals: z
       .object({
         enabled: z.boolean().default(true),
@@ -2248,10 +2246,10 @@ const functionalIntelligenceSchema = z
             maxGoalDurationMs: z.number().int().positive().default(60_000),
           })
           .strict()
-          .default({}),
+          .prefault({}),
       })
       .strict()
-      .default({}),
+      .prefault({}),
   })
   .strict();
 
@@ -2264,7 +2262,7 @@ const testDataSchema = z
      */
     fields: z
       .record(nonEmpty, z.union([z.string(), z.object({ value: z.string() }).strict()]))
-      .default({})
+      .prefault({})
       .transform((fields) =>
         Object.fromEntries(
           Object.entries(fields).map(([key, value]) => [
@@ -2294,7 +2292,7 @@ const testDataSchema = z
       })
       .partial()
       .strict()
-      .default({}),
+      .prefault({}),
     /** Id du run dans les données créées (QA-CRAWLER-<runId>) ; par défaut : généré à chaque run. */
     runId: z
       .string()
@@ -2306,7 +2304,7 @@ const testDataSchema = z
      * fichier). Le jeu propre à un flow (`testData:` du flow) l'emporte, puis celui-ci.
      */
     include: z.array(nonEmpty).default([]),
-    values: z.record(z.unknown()).optional(),
+    values: z.record(z.string(), z.unknown()).optional(),
   })
   .strict()
   .transform((data, ctx) => {
@@ -2321,7 +2319,7 @@ const testDataSchema = z
       );
     } catch (error) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['include'],
         message: error instanceof TestDataSetError ? error.message : String(error),
       });
@@ -2340,13 +2338,10 @@ export const scenarioSchema = z
         mode: z.enum(MISSION_MODES).default('explore'),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     target: z
       .object({
-        baseUrl: z
-          .string()
-          .url()
-          .refine((value) => /^https?:\/\//i.test(value), 'baseUrl must use http or https'),
+        baseUrl: z.url().refine((value) => /^https?:\/\//i.test(value), 'baseUrl must use http or https'),
         startAt: z.string().default('/'),
         /**
          * La plateforme de l'application : `salesforce-lightning` laisse passer les POST de lecture
@@ -2355,18 +2350,18 @@ export const scenarioSchema = z
         platform: z.enum(PLATFORMS).default('generic'),
       })
       .strict(),
-    browser: browserSchema.default({}),
-    exploration: explorationSchema.default({}),
-    goals: goalsSchema.default({}),
-    checks: checksSchema.default({}),
-    http: httpSchema.default({}),
-    safety: safetySchema.default({}),
-    auth: authSchema.default({ type: 'none' }),
-    output: outputSchema.default({}),
-    memory: memorySchema.default({}),
-    persistence: persistenceSchema.default({}),
-    regression: regressionSchema.default({}),
-    report: reportSchema.default({}),
+    browser: browserSchema.prefault({}),
+    exploration: explorationSchema.prefault({}),
+    goals: goalsSchema.prefault({}),
+    checks: checksSchema.prefault({}),
+    http: httpSchema.prefault({}),
+    safety: safetySchema.prefault({}),
+    auth: authSchema.prefault({ type: 'none' }),
+    output: outputSchema.prefault({}),
+    memory: memorySchema.prefault({}),
+    persistence: persistenceSchema.prefault({}),
+    regression: regressionSchema.prefault({}),
+    report: reportSchema.prefault({}),
     /** Flows de test imposés, exécutés avant l'exploration autonome. */
     flows: flowsSchema,
     /** Phrases Gherkin propres à l'équipe (en plus des phrases intégrées) pour `flows: - gherkin: …`. */
@@ -2400,7 +2395,7 @@ export const scenarioSchema = z
             /** Vocabulaire ajouté : alias de champs par concept, mots d'action. */
             vocabulary: z
               .object({
-                fields: z.record(z.array(nonEmpty)).default({}),
+                fields: z.record(z.string(), z.array(nonEmpty)).prefault({}),
                 actions: z
                   .object({
                     submit: z.array(nonEmpty).default([]),
@@ -2409,20 +2404,20 @@ export const scenarioSchema = z
                     previous: z.array(nonEmpty).default([]),
                   })
                   .strict()
-                  .default({}),
+                  .prefault({}),
               })
               .strict()
-              .default({}),
+              .prefault({}),
           })
           .strict()
-          .default({}),
+          .prefault({}),
         steps: z
           .array(
             z
               .object({
                 pattern: nonEmpty,
-                step: z.record(z.unknown()).optional(),
-                steps: z.array(z.record(z.unknown())).min(1).optional(),
+                step: z.record(z.string(), z.unknown()).optional(),
+                steps: z.array(z.record(z.string(), z.unknown())).min(1).optional(),
                 manual: z.literal(true).optional(),
                 allow: z.union([z.string(), z.array(z.string())]).optional(),
               })
@@ -2436,7 +2431,7 @@ export const scenarioSchema = z
           .default([]),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /**
      * DRY RUN (`qa-crawler dry-run <scénario>`) : le scénario du développeur est confronté à
      * l'application — exploration guidée quand une étape ne correspond pas, puis une seule
@@ -2461,7 +2456,7 @@ export const scenarioSchema = z
             generateYaml: z.boolean().default(true),
           })
           .strict()
-          .default({}),
+          .prefault({}),
         /**
          * SEMANTIC RECONCILIATION : une étape attendue manquante et une étape observée insérée qui
          * désignent le même événement fonctionnel (cible, intention, entité, contexte, séquence, effet)
@@ -2476,50 +2471,50 @@ export const scenarioSchema = z
             ambiguityMargin: z.number().min(0).max(1).default(0.1),
           })
           .strict()
-          .default({}),
+          .prefault({}),
       })
       .strict()
-      .default({}),
-    recording: recordingSchema.default({}),
-    replay: replaySchema.default({}),
-    cognitive: cognitiveSchema.default({}),
-    ai: aiSchema.default({}),
+      .prefault({}),
+    recording: recordingSchema.prefault({}),
+    replay: replaySchema.prefault({}),
+    cognitive: cognitiveSchema.prefault({}),
+    ai: aiSchema.prefault({}),
     credentials: credentialsSchema,
-    browserInteractions: browserInteractionsSchema.default({}),
-    forms: formsSchema.default({}),
-    scoring: scoringSchema.default({}),
-    network: networkSchema.default({}),
-    oracles: oraclesSchema.default({}),
-    recovery: recoverySchema.default({}),
-    accessibility: accessibilitySchema.default({}),
-    logging: loggingSchema.default({}),
-    performance: performanceSchema.default({}),
-    flowGeneration: flowGenerationSchema.default({}),
+    browserInteractions: browserInteractionsSchema.prefault({}),
+    forms: formsSchema.prefault({}),
+    scoring: scoringSchema.prefault({}),
+    network: networkSchema.prefault({}),
+    oracles: oraclesSchema.prefault({}),
+    recovery: recoverySchema.prefault({}),
+    accessibility: accessibilitySchema.prefault({}),
+    logging: loggingSchema.prefault({}),
+    performance: performanceSchema.prefault({}),
+    flowGeneration: flowGenerationSchema.prefault({}),
     actors: z.array(actorSchema).default([]),
-    authorization: authorizationSchema.default({}),
-    openapi: openApiSchema.default({}),
-    apiTesting: apiTestingSchema.default({}),
-    visual: visualSchema.default({}),
-    platform: platformSchema.default({}),
-    staticAnalysis: staticAnalysisSchema.default({}),
-    baseline: baselineSchema.default({}),
-    verify: verifySchema.default({}),
-    testData: testDataSchema.default({}),
-    rules: rulesSchema.default({}),
-    functionalIntelligence: functionalIntelligenceSchema.default({}),
-    semantics: semanticsSchema.default({}),
+    authorization: authorizationSchema.prefault({}),
+    openapi: openApiSchema.prefault({}),
+    apiTesting: apiTestingSchema.prefault({}),
+    visual: visualSchema.prefault({}),
+    platform: platformSchema.prefault({}),
+    staticAnalysis: staticAnalysisSchema.prefault({}),
+    baseline: baselineSchema.prefault({}),
+    verify: verifySchema.prefault({}),
+    testData: testDataSchema.prefault({}),
+    rules: rulesSchema.prefault({}),
+    functionalIntelligence: functionalIntelligenceSchema.prefault({}),
+    semantics: semanticsSchema.prefault({}),
     /** Packs de domaine (vocabulaire, synonymes, invariants, indices de score) : nom intégré (generic, ecommerce, administration) ou chemin d'un fichier YAML. */
     domainPacks: z.array(nonEmpty).default(['generic']),
-    knowledge: knowledgeSchema.default({}),
-    intelligence: intelligenceSchema.default({}),
+    knowledge: knowledgeSchema.prefault({}),
+    intelligence: intelligenceSchema.prefault({}),
     /** Invariants explicites : règles vérifiées sur chaque action, expliquées dans le rapport. */
     invariants: z.array(invariantSchema).default([]),
-    propertyTesting: propertyTestingSchema.default({}),
+    propertyTesting: propertyTestingSchema.prefault({}),
     /** TRAÇABILITÉ : les exigences (tickets, critères) et les règles métier qui en dérivent. */
     requirements: z.array(requirementSchema).default([]),
     businessRules: z.array(businessRuleSchema).default([]),
     /** Vérification métier : affichage des valeurs, historique des preuves, cohérence automatique. */
-    quality: qualitySchema.default({}),
+    quality: qualitySchema.prefault({}),
   })
   .strict();
 
