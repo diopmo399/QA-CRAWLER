@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { open, realpath, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -12,6 +11,7 @@ import {
 } from '../connector.js';
 import { cleanText, type Block, type ExtractedDocument } from '../document.js';
 import type { ImportIssue } from '../model.js';
+import { readSourceFile, type FileInput } from './files.js';
 
 /**
  * LE CONNECTEUR PDF (décision D3) : le texte de chaque page, lu par pdf.js (`pdfjs-dist`, dépendance
@@ -29,10 +29,7 @@ import type { ImportIssue } from '../model.js';
  * LIMITES, dites : aucun OCR (une page sans couche texte est signalée, jamais inventée) ; les
  * tableaux sont lus comme des lignes de texte ; un PDF protégé par mot de passe est refusé.
  */
-export type PdfInput = ({ file: string } | { data: Uint8Array; name: string }) & {
-  /** Identifiant stable de la source (défaut : `pdf:<nom du fichier>`). */
-  sourceId?: string;
-  maxBytes?: number;
+export type PdfInput = FileInput & {
   maxPages?: number;
   timeoutMs?: number;
   /** Mémoire du worker, en Mo. */
@@ -133,13 +130,7 @@ export class PdfConnector implements SourceConnector<PdfInput> {
 
   async extract(input: PdfInput, context: ExtractionContext): Promise<ExtractedDocument> {
     if (context.signal?.aborted) throw new ConnectorError('CANCELLED', 'import cancelled');
-    const data =
-      'file' in input ? await readFileLimited(input.file, input.maxBytes ?? DEFAULT_MAX_BYTES) : input.data;
-    if (data.byteLength > (input.maxBytes ?? DEFAULT_MAX_BYTES))
-      throw new ConnectorError(
-        'TOO_LARGE',
-        `the document is larger than ${String(input.maxBytes ?? DEFAULT_MAX_BYTES)} bytes`,
-      );
+    const data = await readSourceFile(input, input.maxBytes ?? DEFAULT_MAX_BYTES);
     if (Buffer.from(data.subarray(0, 5)).toString('latin1') !== '%PDF-')
       throw new ConnectorError('CORRUPTED', 'the file does not start with %PDF-: not a PDF document');
     const raw = await this.reader(data, input);
@@ -162,29 +153,6 @@ export class PdfConnector implements SourceConnector<PdfInput> {
       issues,
       completeness: blocks.length === 0 && !unread ? 'EMPTY' : unread ? 'PARTIAL' : 'COMPLETE',
     };
-  }
-}
-
-/** Un fichier lu entièrement, seulement s'il est ordinaire et sous la taille maximale. */
-async function readFileLimited(file: string, maxBytes: number): Promise<Uint8Array> {
-  let resolved: string;
-  try {
-    resolved = await realpath(file);
-  } catch {
-    throw new ConnectorError('NOT_FOUND', `${path.basename(file)} not found`);
-  }
-  const info = await stat(resolved);
-  if (!info.isFile())
-    throw new ConnectorError('INVALID_INPUT', `${path.basename(file)} is not a regular file`);
-  if (info.size > maxBytes)
-    throw new ConnectorError('TOO_LARGE', `the document is larger than ${String(maxBytes)} bytes`);
-  const handle = await open(resolved, 'r');
-  try {
-    const buffer = Buffer.alloc(info.size);
-    await handle.read(buffer, 0, info.size, 0);
-    return new Uint8Array(buffer);
-  } finally {
-    await handle.close();
   }
 }
 

@@ -306,6 +306,25 @@ export interface TraceabilityLink {
   updatedAt: string;
 }
 
+/**
+ * UN PROFIL D'IMPORTATION réutilisable : la normalisation (préfixes, correspondance des colonnes) et
+ * les réglages du connecteur (feuilles, ligne d'en-tête…), enregistrés sous un nom.
+ */
+export interface ImportProfile {
+  name: string;
+  connector: SourceKind;
+  classify: {
+    idPrefixes?: Partial<Record<'REQUIREMENT' | 'BUSINESS_RULE' | 'ACCEPTANCE_CRITERION', string[]>>;
+    columns?: Partial<
+      Record<'id' | 'title' | 'description' | 'type' | 'priority' | 'status' | 'rule' | 'criterion', string>
+    >;
+  };
+  /** Réglages du connecteur, sans secret ni contenu (ex. Excel : `{ sheets, headerRow }`). */
+  options: Record<string, string | number | boolean | string[]>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Le référentiel d'un projet : ce qui est publié, et les liens. */
 export interface RequirementsRepository {
   formatVersion: 1;

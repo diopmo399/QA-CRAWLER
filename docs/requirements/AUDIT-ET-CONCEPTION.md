@@ -121,7 +121,7 @@ modèle ni au moteur.
   nouveaux dépôts et migrations sur cinq fournisseurs. Cette option est reportée, à reprendre si
   plusieurs services doivent écrire le même référentiel.
 
-### D2 — Word et Excel : lecture du format Office Open XML sans dépendance
+### D2 — Word et Excel : lecture du format Office Open XML sans dépendance (réalisé)
 
 Un `.docx` et un `.xlsx` sont des archives ZIP de XML.
 

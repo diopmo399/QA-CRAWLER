@@ -52,3 +52,7 @@ export {
   type PdfRaw,
   type PdfTextItem,
 } from './connectors/pdf.js';
+export { WordConnector, type WordInput } from './connectors/word.js';
+export { ExcelConnector, cellRef, columnName, type ExcelInput } from './connectors/excel.js';
+export { openZip, crc32, DEFAULT_ZIP_LIMITS, type ZipArchive, type ZipLimits } from './connectors/zip.js';
+export { readSourceFile, fileNameOf, type FileInput } from './connectors/files.js';

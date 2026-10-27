@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { ImportBatch, RequirementsRepository } from './model.js';
+import type { ImportBatch, ImportProfile, RequirementsRepository } from './model.js';
 
 /**
  * LA PERSISTANCE DU RÉFÉRENTIEL (décision D1) : des fichiers JSON dans le dossier du projet.
@@ -14,6 +14,7 @@ import type { ImportBatch, RequirementsRepository } from './model.js';
  * entité garde son historique.
  */
 const BATCH_ID = /^imp_[A-Za-z0-9_-]{6,64}$/;
+const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
 export class RequirementsStore {
   private chain: Promise<unknown> = Promise.resolve();
@@ -56,6 +57,47 @@ export class RequirementsStore {
 
   writeBatch(batch: ImportBatch): Promise<void> {
     return writeAtomic(this.batchFile(batch.id), batch);
+  }
+
+  private profileFile(name: string): string {
+    if (!PROFILE_NAME.test(name)) throw new Error(`invalid profile name: ${name} (letters, digits, . _ -)`);
+    return path.join(this.dir, 'profiles', `${name}.json`);
+  }
+
+  /** Enregistrer un profil d'importation (création ou mise à jour ; la date de création est gardée). */
+  saveProfile(profile: Omit<ImportProfile, 'createdAt' | 'updatedAt'>, now: Date): Promise<ImportProfile> {
+    return this.update(async () => {
+      const previous = await this.readProfile(profile.name);
+      const saved: ImportProfile = {
+        ...profile,
+        createdAt: previous?.createdAt ?? now.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+      await writeAtomic(this.profileFile(profile.name), saved);
+      return saved;
+    });
+  }
+
+  async readProfile(name: string): Promise<ImportProfile | undefined> {
+    const raw = await readOptional(this.profileFile(name));
+    return raw === undefined ? undefined : (JSON.parse(raw) as ImportProfile);
+  }
+
+  async listProfiles(): Promise<ImportProfile[]> {
+    let names: string[];
+    try {
+      names = await readdir(path.join(this.dir, 'profiles'));
+    } catch {
+      return [];
+    }
+    const profiles: ImportProfile[] = [];
+    for (const name of names.sort()) {
+      const id = name.replace(/\.json$/, '');
+      if (!name.endsWith('.json') || !PROFILE_NAME.test(id)) continue;
+      const profile = await this.readProfile(id);
+      if (profile) profiles.push(profile);
+    }
+    return profiles;
   }
 
   /** Les lots, du plus récent au plus ancien. */

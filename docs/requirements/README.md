@@ -181,6 +181,63 @@ jamais supprimé.
 - **Validation :** contre un serveur **simulé** seulement. La validation contre un Confluence réel
   reste à faire (Q2).
 
+## Word et Excel
+
+Les deux formats sont des archives ZIP de XML, lues sans dépendance par un lecteur ZIP défensif.
+
+- **Bornes :** nombre d'entrées, taille de chaque entrée et taille totale.
+- **Refus :** taux de compression suspect (bombe de décompression), contenu plus grand que déclaré,
+  CRC faux.
+- **Formats non pris en charge :** archives chiffrées, ZIP64, anciens fichiers `.doc` et `.xls`
+  ainsi que fichiers protégés par mot de passe (format composé, `UNSUPPORTED`).
+- Rien n'est écrit sur le disque, et le fichier original n'est jamais modifié.
+
+**Word (`.docx`)**
+
+- **Lus :**
+  - titres : par le nom du style (« heading 2 », « Titre 2 ») ou par le niveau de plan, hérité
+    d'un style parent compris ;
+  - paragraphes, listes à puces et numérotées, tableaux (la première ligne sert d'en-tête) ;
+  - texte inséré des modifications suivies ;
+  - liens, relevés.
+- **Signalés :**
+  - images (`IMAGE_NOT_READ`) et objets intégrés (`OBJECT_NOT_READ`) ;
+  - cellules fusionnées (`TABLE_MERGED_CELLS`) et tableaux imbriqués (`NESTED_TABLE`) ;
+  - modifications suivies (`TRACKED_CHANGES` : le texte supprimé n'est pas lu) ;
+  - en-têtes, pieds de page, notes et commentaires, non lus (`PARTS_NOT_READ`).
+
+**Excel (`.xlsx`)**
+
+- **Structure :** chaque feuille donne un titre (son nom) puis un tableau. Chaque valeur garde sa
+  cellule (`A3`), et chaque candidat sa feuille et sa cellule.
+- **Réglages :**
+  - `sheets` : les feuilles à lire (une feuille masquée n'est lue que si elle est choisie) ;
+  - `headerRow` : la ligne d'en-tête, une seule ou une par feuille (`{ "Exigences": 2 }`) ;
+  - `maxRows` : le nombre maximal de lignes lues.
+- **Signalés :**
+  - formule sans valeur enregistrée (`FORMULA_NOT_CALCULATED`, avec les cellules) ;
+  - cellule en erreur (`CELL_ERROR`) ;
+  - cellules fusionnées ;
+  - feuille masquée ignorée, feuille demandée absente ;
+  - lignes au-delà de la limite (lecture `PARTIAL`).
+- **Limite :** une date est lue telle qu'Excel l'enregistre (un nombre de jours).
+
+**Correspondance des colonnes**
+
+- C'est celle de la normalisation commune, d'après les en-têtes reconnus (`ID`, `Titre`,
+  `Description`, `Priorité`, `Statut`, `Règle métier`, `Critère d'acceptation`…), ou imposée par
+  un profil.
+- Sur une ligne qui est elle-même une règle ou un critère, la colonne « règle » ou « critère »
+  devient son texte. Sur une exigence, elle devient un candidat rattaché à la ligne.
+
+**Profils d'importation**
+
+- `store.saveProfile({ name, connector, classify, options })` enregistre un profil sous
+  `<dossier>/profiles/<nom>.json`.
+- `readProfile` et `listProfiles` le relisent. La date de création est gardée à chaque mise à jour.
+- Un profil contient la correspondance des colonnes, les préfixes et les réglages du connecteur ;
+  jamais un secret ni un contenu.
+
 ## PDF
 
 ```ts
@@ -237,3 +294,12 @@ n'est supprimé.
   - document protégé, faux PDF, PDF cassé, trop grand, délai dépassé, fichier absent, dossier ;
   - import complet avec la page dans la provenance ;
   - en dessous de Node 22.13, l'import se dit indisponible.
+- `tests/unit/requirements-office.test.ts` : de vrais `.docx` et `.xlsx` générés par le test. Il
+  couvre :
+  - le lecteur ZIP face aux archives hostiles : bombe, taille mentie, chiffrement, CRC, format
+    composé, données quelconques ;
+  - Word : titres par style, nom ou niveau de plan hérité ; listes ; tableau ; lien ;
+    modifications suivies ; éléments signalés ; import ;
+  - Excel : en-tête par feuille, cellules, formules, erreurs, fusions, feuille masquée, choix des
+    feuilles, limite de lignes ;
+  - les profils d'importation.

@@ -309,7 +309,10 @@ function table(context: Context, block: Extract<Block, { type: 'table' }>): void
         ? `colonne identifiant « ${externalId} »`
         : 'ligne d’un tableau d’exigences sans identifiant',
     );
-    const description = cell('description') || cell('title') || text;
+    // Une colonne « règle » ou « critère » sur une ligne qui EST une règle ou un critère : c'est son texte.
+    const ownField =
+      kind === 'BUSINESS_RULE' ? 'rule' : kind === 'ACCEPTANCE_CRITERION' ? 'criterion' : undefined;
+    const description = cell('description') || (ownField ? cell(ownField) : '') || cell('title') || text;
     const attributes: Record<string, string> = {};
     for (const field of ['priority', 'status', 'type'] as const)
       if (cell(field)) attributes[field] = cell(field);
@@ -331,7 +334,7 @@ function table(context: Context, block: Extract<Block, { type: 'table' }>): void
       ['rule', 'BUSINESS_RULE'],
       ['criterion', 'ACCEPTANCE_CRITERION'],
     ] as const) {
-      const childText = cell(field);
+      const childText = field === ownField ? '' : cell(field);
       if (!childText) continue;
       push(context, {
         kind: childKind,
