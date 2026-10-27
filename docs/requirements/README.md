@@ -12,7 +12,6 @@ L'audit, l'architecture et les décisions sont dans [AUDIT-ET-CONCEPTION.md](AUD
 | Connecteur PDF                                                                        | disponible (dépendance facultative `pdfjs-dist`, Node 22.13 ou plus)    |
 | Corrélation avec le code, les tests, les preuves                                      | non disponible (phase 5)                                                |
 | SDK, CLI, Dashboard                                                                   | non disponibles (phase 6) : le module s'utilise aujourd'hui depuis Node |
-| Démonstration de bout en bout (Word, Excel, PDF)                                      | `examples/requirements-demo` (données fictives)                         |
 
 ## Parcours
 
@@ -314,6 +313,3 @@ n'est supprimé.
   - Excel : en-tête par feuille, cellules, formules, erreurs, fusions, feuille masquée, choix des
     feuilles, limite de lignes ;
   - les profils d'importation.
-- `tests/integration/requirements-demo.test.ts` : la démonstration `examples/requirements-demo`
-  lancée comme un programme, sur des documents fictifs : Word, Excel avec un profil, PDF, puis une
-  nouvelle version du document Word (inchangé, modifié, nouveau, retiré).

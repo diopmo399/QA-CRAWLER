@@ -32,11 +32,6 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
-- **Démonstration du référentiel d'exigences** (`examples/requirements-demo`) : quatre documents
-  d'une médiathèque fictive (Word v1 et v2, Excel, PDF) importés de bout en bout. Elle montre les
-  candidats et leurs raisons, un profil d'importation, un conflit d'identifiant, un doublon probable
-  fusionné, la publication, puis la réimportation (inchangé, modifié, nouveau, retiré). Les décisions
-  y sont celles de la démonstration, déclarées comme telles.
 - Export `@qa-crawler/core/requirements` : le module d'exigences depuis Node.
 - **Référentiel d'exigences : socle et connecteur Confluence** (`docs/requirements/`).
   - Audit et conception : ce qui existe, ce qui manque, les décisions, le plan.
