@@ -2,6 +2,7 @@ import type { ExplorationEvent, ExplorationSnapshot } from '../core/contracts.js
 import { applyEvent, emptyCounters, totalIssues } from '../core/lifecycle.js';
 import type { MonitorStrings } from './monitor-i18n.js';
 import { flowProgress, monitorFacets, selectEvents, type MonitorView } from './monitor-model.js';
+import { enginePhase } from './engine-phases.js';
 import { esc } from './view.js';
 
 /** Le rendu du Run Monitor, en fonctions pures : un état → du HTML échappé. */
@@ -55,7 +56,7 @@ function eventLine(t: MonitorStrings, event: ExplorationEvent): string {
     case 'authenticated':
       return esc(event.message);
     case 'phase':
-      return esc(event.phase);
+      return esc(enginePhase(event.phase, t.locale));
     case 'completed':
       return esc(t.status.COMPLETED ?? 'COMPLETED');
     case 'failed':

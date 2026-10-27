@@ -54,6 +54,7 @@ const fr = {
   flowStart: 'commence',
   flowEnd: 'terminé',
   step: 'étape',
+  locale: 'fr' as 'fr' | 'en',
 };
 
 export type MonitorStrings = typeof fr;
@@ -112,6 +113,7 @@ const en: MonitorStrings = {
   },
   flowStart: 'starts',
   flowEnd: 'ended',
+  locale: 'en',
   step: 'step',
 };
 

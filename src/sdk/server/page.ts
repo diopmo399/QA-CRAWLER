@@ -107,3 +107,31 @@ monitor.token = ${JSON.stringify(options.token)};
 </html>
 `;
 }
+
+/** La page autonome du Dashboard : `/dashboard` (`?theme=dark|auto`, `?days=1|7|30`). */
+export function dashboardPage(options: { token: string; nonce: string; language: 'fr' | 'en' }): string {
+  return `<!doctype html>
+<html lang="${options.language}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA-CRAWLER — Dashboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>html,body{margin:0}body{background:#ECEEF6;padding:16px;box-sizing:border-box;min-height:100vh}@media (prefers-color-scheme:dark){body{background:#080A14}}</style>
+</head>
+<body>
+<qa-crawler-dashboard endpoint="/api" locale="${options.language}"></qa-crawler-dashboard>
+<script type="module" nonce="${options.nonce}">
+import '/sdk/ui/index.js';
+const dashboard = document.querySelector('qa-crawler-dashboard');
+const query = new URLSearchParams(location.search);
+for (const name of ['theme', 'days']) {
+  const value = query.get(name);
+  if (value) dashboard.setAttribute(name, value);
+}
+dashboard.token = ${JSON.stringify(options.token)};
+</script>
+</body>
+</html>
+`;
+}

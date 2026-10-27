@@ -11,6 +11,7 @@ import type {
   ValidationReport,
 } from '../core/contracts.js';
 import { ENV_NAME_PATTERN } from '../core/contracts.js';
+import { enginePhase } from './engine-phases.js';
 import type { Strings } from './i18n.js';
 
 /**
@@ -711,7 +712,7 @@ function eventText(state: WizardState, event: ExplorationEvent): string | undefi
     case 'issue':
       return e.issue(esc(state.t.severity[event.severity] ?? event.severity), esc(event.message));
     case 'phase':
-      return esc(e.phase(event.phase));
+      return esc(e.phase(enginePhase(event.phase, state.locale)));
     case 'status':
       return esc(e.status(state.t.s5.status[event.status] ?? event.status));
     case 'failed':

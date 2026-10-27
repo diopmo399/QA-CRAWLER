@@ -84,7 +84,7 @@ import {
   writeEnvironments,
   writeExecutionMeta,
 } from './platform.js';
-import { flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
+import { dashboardPage, flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
 import {
   PROJECT_FILE,
   REPORTS_DIR,
@@ -293,7 +293,8 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     const studio = segments.length === 1 && segments[0] === 'studio';
     const runs = segments.length === 1 && segments[0] === 'runs';
     const monitor = segments.length === 1 && segments[0] === 'monitor';
-    if (segments.length > 0 && segments[0] !== 'index.html' && !studio && !runs && !monitor)
+    const dashboard = segments.length === 1 && segments[0] === 'dashboard';
+    if (segments.length > 0 && segments[0] !== 'index.html' && !studio && !runs && !monitor && !dashboard)
       throw new HttpError(404, 'NOT_FOUND', 'not found');
     const nonce = randomBytes(16).toString('base64');
     response.writeHead(200, {
@@ -303,7 +304,15 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     response.end(
       method === 'HEAD'
         ? undefined
-        : (studio ? flowStudioHtml : runs ? runComparePage : monitor ? runMonitorPage : sdkStandalonePage)({
+        : (studio
+            ? flowStudioHtml
+            : runs
+              ? runComparePage
+              : monitor
+                ? runMonitorPage
+                : dashboard
+                  ? dashboardPage
+                  : sdkStandalonePage)({
             token: ctx.token,
             nonce,
             language: ctx.options.language ?? 'en',

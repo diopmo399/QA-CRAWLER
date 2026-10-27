@@ -567,6 +567,28 @@ terminées dans la période (le moteur a écrit leur résultat), réussies quand
 `PASSED`. Les explorations n'y entrent pas. Sans rejeu terminé, `passRate` est absent : jamais `0`
 ni `100` par défaut.
 
+## Dashboard
+
+`<qa-crawler-dashboard>` pilote un espace de travail. La page autonome est servie par le serveur
+SDK sur `/dashboard` (`?theme=dark|auto`, `?days=1|7|30`). Le composant peut aussi être embarqué
+comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
+
+| Vue            | Contenu                                                                                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Vue d'ensemble | projets, scénarios, exécutions de la période ; taux de réussite des rejeux avec numérateur, dénominateur et exclusions ; rejeux par jour ; alertes ; exécutions récentes |
+| Projets        | cartes (état, comptes, dernière exécution), archivés sur demande                                                                                                         |
+| Projet         | lancement d'un rejeu (environnement, scénarios), scénarios, environnements (noms des secrets seulement), exécutions ; archivage confirmé dans la page, restauration      |
+| Exécution      | suivi en direct (étapes, phase du moteur), annulation confirmée dans la page ; puis verdict, étapes, assertions, clés de données, lien vers le rapport                   |
+
+Le Dashboard n'appelle que le client du SDK : chaque règle est vérifiée par le serveur. Un bouton ne
+donne aucun droit que l'API refuse : archivage, écritures par environnement, annulation. Une action
+qui change l'état se confirme dans la page, jamais par une boîte de dialogue du navigateur.
+L'annulation n'est proposée que si le serveur l'offre (`capabilities.cancellation`).
+
+Événements (bubbles, composed) : `qa-dashboard-navigate` `{ route }`, `qa-execution-started`
+`{ projectId, exploration }`, `qa-error` `{ code, message }`. La méthode `open(route)` ouvre une vue
+depuis l'hôte.
+
 ## Statuts et événements
 
 ```
@@ -586,7 +608,7 @@ QUEUED ──▶ RUNNING ──▶ COMPLETED
   `phase: 'cancellation requested'` est émis à la demande.
 - Terminée : refus `409 NOT_CANCELLABLE`.
 
-Les composants d'interface n'offrent pas encore de bouton « Annuler » (prévu avec le Dashboard).
+Le Dashboard offre l'annulation d'une exécution suivie en direct, après confirmation.
 Une exécution annulée a le verdict `CANCELLED` : elle n'est ni une réussite ni un échec, et n'entre
 ni dans le taux de réussite ni dans les alertes de la vue d'ensemble.
 
@@ -670,6 +692,19 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Rien n'est publié sur un registre : le SDK fait partie de `@qa-crawler/core`.
 
 ## Tests
+
+- `tests/unit/sdk-dashboard.test.ts` : rendu du Dashboard. Chiffres tels que le SDK les donne ;
+  taux expliqué en champs (la définition du serveur est vérifiée) ; jamais de taux sans rejeu
+  terminé ; échappement ; noms de secrets seulement ; archivage et annulation confirmés dans la
+  page ; annulation absente quand le serveur ne l'offre pas ; statuts traduits ; état d'erreur.
+- `tests/integration/sdk-dashboard.test.ts` : `/dashboard` dans Chromium avec le **vrai** moteur.
+  Il couvre :
+  - la vue d'ensemble ;
+  - un rejeu lancé dans un environnement, suivi en direct, puis lu (verdict, assertion) ;
+  - une annulation confirmée : aucune écriture, verdict `CANCELLED` ;
+  - l'archivage confirmé, puis la restauration.
+- `tests/unit/sdk-engine-phases.test.ts` : chaque phase annoncée par le moteur est traduite ; le
+  Run Monitor l'affiche dans sa langue.
 
 - `tests/unit/sdk-cancellation.test.ts` : transitions vers `CANCELLED`, exécution en file jamais
   lancée, exécution en cours arrêtée par le signal du moteur, refus `409 NOT_CANCELLABLE`, exclusion

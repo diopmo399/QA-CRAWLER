@@ -1,7 +1,8 @@
 /**
  * @qa-crawler/core/sdk/ui — les éléments <qa-crawler-project-wizard>, <qa-crawler-flow-studio>,
- * <qa-crawler-run-compare> et <qa-crawler-run-monitor>, définis à l'import.
+ * <qa-crawler-run-compare>, <qa-crawler-run-monitor> et <qa-crawler-dashboard>, définis à l'import.
  */
+import { defineDashboard } from './dashboard.js';
 import { defineRunMonitor } from './monitor.js';
 import { defineRunCompare } from './runs.js';
 import { defineStudio } from './studio.js';
@@ -22,8 +23,14 @@ export { QaCrawlerRunMonitor, defineRunMonitor } from './monitor.js';
 export { monitorStrings, type MonitorStrings } from './monitor-i18n.js';
 export { MONITOR_CSS } from './monitor-styles.js';
 export { flowProgress, monitorFacets, selectEvents, type MonitorView } from './monitor-model.js';
+export { QaCrawlerDashboard, defineDashboard } from './dashboard.js';
+export { dashboardStrings, type DashboardStrings } from './dashboard-i18n.js';
+export { DASHBOARD_CSS } from './dashboard-styles.js';
+export { renderDashboard, type DashboardRoute, type DashboardState } from './dashboard-view.js';
+export { enginePhase } from './engine-phases.js';
 
 defineWizard();
 defineStudio();
 defineRunCompare();
 defineRunMonitor();
+defineDashboard();
