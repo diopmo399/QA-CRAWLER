@@ -61,12 +61,12 @@ function checkTarget(target: TargetInput, ctx: z.RefinementCtx): void {
   const used = TARGET_STRATEGIES.filter((key) => target[key] !== undefined);
   if (used.length !== 1) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       message: `exactly one of ${TARGET_STRATEGIES.join(', ')} is required${used.length > 0 ? ` (got ${used.join(', ')})` : ''}`,
     });
   }
   if (target.name !== undefined && target.role === undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '"name" is only valid with "role"' });
+    ctx.addIssue({ code: 'custom', message: '"name" is only valid with "role"' });
   }
 }
 
@@ -336,7 +336,7 @@ const functionalIntentSchema = z
     operation: nonEmpty.optional(),
     entity: nonEmpty.optional(),
     alternatives: z.array(nonEmpty).optional(),
-    context: z.record(nonEmpty).optional(),
+    context: z.record(z.string(), nonEmpty).optional(),
     expectedEffects: z.array(nonEmpty).optional(),
   })
   .strict();
@@ -393,7 +393,7 @@ const stepSchema = z
     const kinds = STEP_KINDS.filter((kind) => step[kind] !== undefined);
     if (kinds.length !== 1) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         message: `a step needs exactly one of ${STEP_KINDS.join(', ')}${kinds.length > 0 ? ` (got ${kinds.join(', ')})` : ''}`,
       });
     }
@@ -467,7 +467,7 @@ export const testDataSetInput = z.unknown().transform((input, ctx): TestDataSet 
     return parseTestDataSet(input, 'inline');
   } catch (error) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       message: error instanceof TestDataSetError ? error.message : String(error),
     });
     return z.NEVER;
@@ -559,7 +559,7 @@ export const flowsSchema = z
     flows.forEach((flow, index) => {
       if (seen.has(flow.name)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: 'custom',
           path: [index, 'name'],
           message: `duplicate flow name "${flow.name}"`,
         });

@@ -201,7 +201,7 @@ export const consistencySchema = z
     /** Les données de test à suivre (par défaut : toutes celles saisies, sauf les valeurs sensibles). */
     keys: z.array(nonEmpty).optional(),
     /** Transformations documentées (date affichée « 12/03 », envoyée « 2026-03-12 ») : jamais une divergence. */
-    transforms: z.record(nonEmpty, nonEmpty).default({}),
+    transforms: z.record(nonEmpty, nonEmpty).prefault({}),
     /** Valeurs qui doivent être affichées par l'écran final (l'entité ouverte). */
     displayed: z.array(nonEmpty).default([]),
     /** Clés métier uniques : deux enregistrements avec la même valeur sont un doublon. */

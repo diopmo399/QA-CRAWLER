@@ -251,8 +251,9 @@ ${FLOW}
     });
   }, 180_000);
 
-  it.sequential(
+  it(
     '§88 HYBRID, unsafe proposal: the SafetyPolicy refuses it — the writing button is never clicked',
+    { concurrent: false, timeout: 180_000 },
     async () => {
       const before = app.counts.removed;
       const { result, audit } = await run(
@@ -268,7 +269,6 @@ ${FLOW}
       expect(summary.accepted).toBe(0);
       expect(summary.decisions[0]?.reasons.join(' ')).toMatch(/SafetyPolicy refuses/);
     },
-    180_000,
   );
 
   it('§87 HYBRID, invented action: rejected before anything reaches the browser', async () => {
