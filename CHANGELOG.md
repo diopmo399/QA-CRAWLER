@@ -32,6 +32,27 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Référentiel d'exigences : socle et connecteur Confluence** (`docs/requirements/`).
+  - Audit et conception : ce qui existe, ce qui manque, les décisions, le plan.
+  - Modèle canonique (exigence, règle d'affaires, critère d'acceptation, provenance, lien de
+    traçabilité) et contrat de connecteur.
+  - Normalisation par règles explicites : chaque candidat dit pourquoi il est classé.
+  - Doublons et conflits, décisions humaines avant publication, versions et historique, liens
+    proposés ou confirmés, persistance en fichiers JSON.
+  - Connecteur Confluence Cloud et Data Center (API REST officielles), testé contre un serveur
+    **simulé** seulement.
+  - Connecteur PDF : `pdfjs-dist` 6.4.299, dépendance facultative à version exacte, sans
+    vulnérabilité connue. La lecture est durcie (worker isolé, `isEvalSupported: false`, aucun accès
+    réseau) ; la page de chaque bloc est gardée ; une page sans texte est signalée ; aucun OCR.
+  - Connecteurs Word (`.docx`) et Excel (`.xlsx`), sans dépendance.
+    - Un lecteur ZIP défensif refuse les bombes de décompression, les archives chiffrées, les CRC
+      faux et les anciens formats.
+    - Word : titres par style ou niveau de plan, listes, tableaux, modifications suivies signalées.
+    - Excel : feuille et cellule d'origine, en-tête par feuille, formules non calculées et
+      cellules en erreur signalées.
+    - Profils d'importation réutilisables (colonnes, préfixes, feuilles).
+  - La corrélation et les interfaces (SDK, CLI, Dashboard) restent à venir.
+
 - **Annulation contrôlée** d'une exploration ou d'un rejeu (`docs/sdk/README.md`, « Statuts »).
   - Moteur : `RunOptions.signal` ; il s'arrête avant l'action ou l'étape suivante, ferme le
     navigateur et écrit son rapport (`stopReason: cancelled`).
