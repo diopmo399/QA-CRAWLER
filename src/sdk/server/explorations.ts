@@ -7,6 +7,7 @@ import type { FlowStepReport } from '../../model/flow-run.js';
 import type { RunOptions, RunOutcome } from '../../orchestrator.js';
 import { redactText } from '../../security/redactor.js';
 import type {
+  ExecutionKind,
   ExplorationBudget,
   ExplorationCounters,
   ExplorationEvent,
@@ -31,6 +32,10 @@ export interface ExplorationRequest {
   config: ScenarioConfig;
   /** Le dossier des rapports de cette exploration (sous le projet). */
   reportsDir: string;
+  /** EXPLORATION (défaut) ou REPLAY : la même mécanique, une autre mission du moteur. */
+  kind?: ExecutionKind;
+  /** Les variables d'environnement d'exécution de CETTE mission (variables d'un environnement du projet). */
+  env?: NodeJS.ProcessEnv;
 }
 
 type Listener = (event: ExplorationEvent) => void;
@@ -89,6 +94,8 @@ export class Exploration {
       counters: this.counters,
       ...(this.error ? { error: this.error } : {}),
       lastSeq: this.seq,
+      kind: this.request.kind ?? 'EXPLORATION',
+      run: path.basename(this.reportsDir),
     };
   }
 
@@ -294,7 +301,7 @@ export class ExplorationManager {
     try {
       const outcome = await this.options.run(exploration.request.config, {
         listener: exploration.listener(),
-        env: this.options.env,
+        env: exploration.request.env ?? this.options.env,
         onWarning: (message) => this.options.onWarning?.(redactText(message)),
         onProgress: (update) => {
           // Une phase est annoncée une fois, quand elle commence (pas à chaque détail).

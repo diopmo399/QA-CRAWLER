@@ -31,6 +31,10 @@ const CORE_EXPORTS = [
   'REGRESSION_STATUSES',
   'RUNS_EVENTS',
   'MONITOR_EVENTS',
+  'PROJECT_STATES',
+  'ENVIRONMENT_KINDS',
+  'EXECUTION_KINDS',
+  'EXECUTION_VERDICTS',
   'verdictOfAssertionStatus',
   'verdictOfReplayOutcome',
   'canTransition',
@@ -59,7 +63,11 @@ const SERVER_EXPORTS = [
 
 const CLIENT_SURFACE: Record<string, string[]> = {
   checks: ['url', 'env'],
-  projects: ['validate', 'create', 'get'],
+  projects: ['validate', 'create', 'get', 'list', 'detail', 'update', 'duplicate', 'archive', 'restore'],
+  environments: ['list', 'check', 'create', 'update', 'remove'],
+  scenarios: ['list', 'promote'],
+  executions: ['start', 'list', 'get'],
+  overview: ['get'],
   explorations: ['start', 'status', 'result', 'subscribe', 'reportLink'],
   recordings: ['start', 'list', 'get', 'stop', 'subscribe', 'flow', 'studio'],
   assertions: ['list', 'decide'],
@@ -93,6 +101,17 @@ describe('SDK public contract, version 1', () => {
     );
     expect(core.EXTENSION_NAMES).toEqual(
       expect.arrayContaining(['recordings', 'groups', 'graph', 'assertions', 'generation', 'reports']),
+    );
+    expect(core.EXTENSION_NAMES).toEqual(
+      expect.arrayContaining(['lifecycle', 'environments', 'scenarios', 'executions', 'overview']),
+    );
+    expect(core.PROJECT_STATES).toEqual(expect.arrayContaining(['ACTIVE', 'ARCHIVED']));
+    expect(core.ENVIRONMENT_KINDS).toEqual(
+      expect.arrayContaining(['DEVELOPMENT', 'TEST', 'CERTIFICATION', 'PREPRODUCTION', 'OTHER']),
+    );
+    expect(core.EXECUTION_KINDS).toEqual(expect.arrayContaining(['EXPLORATION', 'REPLAY']));
+    expect(core.EXECUTION_VERDICTS).toEqual(
+      expect.arrayContaining(['PASSED', 'FAILED', 'NO_FLOW', 'INCOMPLETE']),
     );
     expect(core.FRAMEWORKS).toEqual(
       expect.arrayContaining(['angular', 'react', 'vue', 'salesforce', 'other']),

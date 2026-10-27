@@ -6,6 +6,17 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **SDK : plateforme** (`docs/sdk/README.md`, audit `docs/sdk/PLATFORM-AUDIT.md`).
+  - **Projets** : liste, détail, modification revalidée par le moteur, duplication sans secret,
+    archivage sans suppression, restauration.
+  - **Environnements** : cible, domaines autorisés, variables non secrètes, noms de secrets, délais,
+    limites et écritures permises. Ils sont vérifiés avant le lancement et appliqués à la mission.
+  - **Scénarios** : les flows du projet, et la promotion d'un enregistrement en scénario.
+  - **Exécutions** : rejeu par le moteur (`runMission`, mission `replay`), suivi en direct, puis
+    détail lu dans le run (verdict, étapes, assertions, preuves).
+  - **Vue d'ensemble** : calculée sur disque, avec un taux de réussite qui dit son périmètre.
+    Uniquement des ajouts : `SDK_API_VERSION` reste `1`.
+
 - **Recorder : revue organisée** (`docs/RECORDING_ASSERTIONS.md`). Groupes proposés d'après les étapes
   métier reconnues (créés d'un clic, jamais sans décision, ordre des étapes intact) ; vérification de
   groupe « la donnée reçue est visible à la fin du groupe », écrite comme une étape `expect` qui cite
