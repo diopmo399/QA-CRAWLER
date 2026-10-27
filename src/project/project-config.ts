@@ -44,7 +44,7 @@ const actorAuthSchema = z
     storageState: nonEmpty.optional(),
     reuseSession: z.boolean().default(true),
   })
-  .passthrough();
+  .loose();
 
 export const projectConfigSchema = z
   .object({
@@ -58,53 +58,53 @@ export const projectConfigSchema = z
         /** La plateforme : `salesforce-lightning` active le profil Lightning du moteur (mission `target.platform`). */
         platform: z.enum(PLATFORMS).optional(),
       })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     browser: z
       .object({
         browser: z.enum(['chromium']).default('chromium'),
         headless: z.boolean().default(true),
       })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     playwright: z
       .object({
         /** playwright.config.ts|js du projet : baseURL, headless, viewport, storageState sont repris. */
         config: nonEmpty.optional(),
       })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     recording: z
       .object({ enabled: z.boolean().default(true) })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     replay: z
       .object({ enabled: z.boolean().default(true) })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     exploration: z
       .object({ enabled: z.boolean().default(true) })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     analysis: z
       .object({ enabled: z.boolean().default(true) })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     api: z
       .object({
         openapi: nonEmpty.optional(),
         testing: z.boolean().default(true),
       })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     visual: z
       .object({ enabled: z.boolean().default(false) })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     staticAnalysis: z
       .object({ enabled: z.boolean().default(false), source: nonEmpty.optional() })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     actors: z
       .array(
         z
@@ -112,10 +112,10 @@ export const projectConfigSchema = z
             name: nonEmpty,
             description: z.string().optional(),
             primary: z.boolean().default(false),
-            auth: actorAuthSchema.default({}),
-            profile: z.record(z.unknown()).optional(),
+            auth: actorAuthSchema.prefault({}),
+            profile: z.record(z.string(), z.unknown()).optional(),
           })
-          .passthrough(),
+          .loose(),
       )
       .default([]),
     intelligence: z
@@ -124,15 +124,15 @@ export const projectConfigSchema = z
         mode: z.enum(['OFF', 'ASSIST', 'HYBRID']).default('OFF'),
         provider: z.enum(['copilot', 'anthropic', 'deterministic']).default('copilot'),
       })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     persistence: z
       .object({
         enabled: z.boolean().default(true),
         provider: z.enum(['memory', 'file', 'database']).default('file'),
       })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     reporting: z
       .object({
         /** `junit` ajoute reports/junit.xml pour la CI (report.junit), sans toucher aux autres formats. */
@@ -141,8 +141,8 @@ export const projectConfigSchema = z
         failOnSeverity: z.enum(['INFO', 'WARNING', 'ERROR', 'CRITICAL', 'NONE']).default('ERROR'),
         dir: nonEmpty.default(REPORTS_DIR),
       })
-      .passthrough()
-      .default({}),
+      .loose()
+      .prefault({}),
     paths: z
       .object({
         flows: nonEmpty.default(`${PROJECT_DIR}/flows`),
@@ -154,11 +154,11 @@ export const projectConfigSchema = z
         memory: nonEmpty.default(`${PROJECT_DIR}/memory`),
       })
       .strict()
-      .default({}),
+      .prefault({}),
     /** Toute clé d'une mission (safety, goals, oracles, gherkin, …) : fusionnée en dernier, elle l'emporte. */
-    mission: z.record(z.unknown()).default({}),
+    mission: z.record(z.string(), z.unknown()).prefault({}),
   })
-  .passthrough();
+  .loose();
 
 export type ProjectConfig = z.output<typeof projectConfigSchema>;
 

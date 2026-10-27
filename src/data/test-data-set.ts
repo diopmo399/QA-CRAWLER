@@ -127,7 +127,7 @@ const entrySchema = z
     };
     const field = need[entry.strategy];
     if (field && entry[field] === undefined)
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `strategy ${entry.strategy} needs "${field}"` });
+      ctx.addIssue({ code: 'custom', message: `strategy ${entry.strategy} needs "${field}"` });
   });
 
 const setSchema = z
@@ -137,7 +137,7 @@ const setSchema = z
     source: z.enum(['HUMAN_RECORDING', 'GENERATED', 'MANUAL', 'MIXED']).optional(),
     recordingSessionId: z.string().optional(),
     createdAt: z.string().optional(),
-    values: z.record(z.unknown()).default({}),
+    values: z.record(z.string(), z.unknown()).prefault({}),
   })
   .strict();
 
