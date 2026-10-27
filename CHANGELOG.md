@@ -6,6 +6,14 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Recorder : revue organisée** (`docs/RECORDING_ASSERTIONS.md`). Groupes proposés d'après les étapes
+  métier reconnues (créés d'un clic, jamais sans décision, ordre des étapes intact) ; vérification de
+  groupe « la donnée reçue est visible à la fin du groupe », écrite comme une étape `expect` qui cite
+  `${testData:…}` (valeur du run au rejeu) ; fil des trois étapes de la revue ; groupes en cartes qui
+  contiennent leurs étapes ; barre de sélection seulement quand des étapes sont cochées ; propositions
+  triées en recommandées, à décider et faibles (décisions groupées) ; génération repliée ; en-tête sur
+  deux lignes dans une fenêtre étroite.
+
 - **SDK : thème sombre** (`theme="dark"` ou `"auto"`) pour l'assistant, le Flow Studio, la
   comparaison et le Run Monitor ; les variables de l'hôte gardent la priorité. Les couleurs de statut
   de la comparaison et du Run Monitor sont foncées vers la couleur du texte pour atteindre le contraste
@@ -328,6 +336,9 @@ defaults`). Test d'intégration : flows passés, panne détectée, écritures bl
 
 ### Corrigé
 
+- **Recorder : une vérification acceptée rejoint le groupe de son action.** Accepter une proposition
+  (ou ajouter une vérification de groupe) après avoir créé des groupes laissait l'étape `expect` hors du
+  groupe de l'action vérifiée ; les groupes sont renormalisés à chaque décision.
 - **Tests Playwright TS et Java générés, joués comme le moteur** (trouvé en les exécutant) : une
   action sur un rôle, un libellé ou un texte sans position enregistrée prend la première
   correspondance (`.first()`), comme le moteur — « Utilisateur 1 » désigne aussi « Utilisateur 10 »

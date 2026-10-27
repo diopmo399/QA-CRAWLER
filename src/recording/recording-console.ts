@@ -1,6 +1,12 @@
 import type { ProposalDecision } from './assertion-proposals.js';
 import type { RecordedFlow } from './model.js';
-import { type GroupCommand, type GroupOutcome, groupViews } from './step-groups.js';
+import {
+  type GroupCommand,
+  type GroupOutcome,
+  groupCheckSuggestions,
+  groupViews,
+  proposeGroups,
+} from './step-groups.js';
 import { REVIEWABLE_INTENTS } from './application/human-review.js';
 import type { RecordingAnalysis } from './analysis/recording-analysis.js';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
@@ -69,6 +75,10 @@ export interface ReviewActions {
   reviewAssertion?: (input: ProposalDecision) => Promise<{ ok: true } | { error: string }>;
   /** LES GROUPES MÉTIER : une opération (créer, renommer, affecter, déplacer, réordonner, replier, détacher, supprimer). */
   editGroups?: (command: GroupCommand, options?: { force?: boolean }) => Promise<GroupOutcome>;
+  /** LES GROUPES PROPOSÉS d'après les étapes métier : tous créés d'un coup, sur décision humaine. */
+  acceptGroupProposals?: () => Promise<GroupOutcome>;
+  /** LA VÉRIFICATION D'UN GROUPE : la donnée de test reçue (ou produite) est visible à la fin du groupe. */
+  addGroupCheck?: (input: { groupId: string; key: string }) => Promise<{ ok: true } | { error: string }>;
   /** LA GÉNÉRATION : les formats demandés pour les groupes choisis, écrits et validés statiquement (outils réels). */
   generate?: (input: {
     formats: string[];
@@ -199,6 +209,8 @@ export class RecordingConsole {
   private directory: string | undefined;
   private review: ((command: PanelCommand) => Promise<void>) | undefined;
   private busy = false;
+  /** « Ignorer » les groupes proposés : la proposition ne revient plus pendant cette revue. */
+  private groupProposalsDismissed = false;
   private preview: PanelState['preview'];
   private previewTimer: NodeJS.Timeout | undefined;
   /**
@@ -666,6 +678,29 @@ export class RecordingConsole {
               this.notice = undefined;
               this.generation = outcome;
             }
+          } else if (command.type === 'group' && command.op === 'dismiss-proposals') {
+            this.groupProposalsDismissed = true;
+          } else if (
+            command.type === 'group' &&
+            (command.op === 'accept-proposals' || command.op === 'add-check')
+          ) {
+            const outcome =
+              command.op === 'accept-proposals'
+                ? await (input.actions.acceptGroupProposals?.() ??
+                    Promise.resolve({ error: 'group proposals are not available' }))
+                : command.groupId && command.variable
+                  ? await (input.actions.addGroupCheck?.({
+                      groupId: command.groupId,
+                      key: command.variable,
+                    }) ?? Promise.resolve({ error: 'group checks are not available' }))
+                  : { error: 'a group check needs a group and a test data key' };
+            // Le flow change : un rejeu fait avant ne le valide plus.
+            if ('error' in outcome) this.notice = { kind: 'error', message: outcome.error };
+            else {
+              this.notice = undefined;
+              this.replay = undefined;
+              this.saved = undefined;
+            }
           } else if (command.type === 'group' && command.op && input.actions.editGroups) {
             const group = groupCommandOf(command);
             if (!group) this.notice = { kind: 'error', message: `invalid group command ${command.op}` };
@@ -683,15 +718,21 @@ export class RecordingConsole {
             }
           } else if (
             command.type === 'assertion-decide' &&
-            command.id &&
+            (command.id || (command.ids && command.ids.length > 0)) &&
             command.decision &&
             input.actions.reviewAssertion
           ) {
-            const outcome = await input.actions.reviewAssertion({
-              id: command.id,
-              decision: command.decision,
-              ...(command.reason ? { note: command.reason } : {}),
-            });
+            // Une décision, ou la même pour plusieurs propositions (« Accepter les 3 ») : une par une, la
+            // première erreur arrête et est montrée.
+            let outcome: { ok: true } | { error: string } = { ok: true };
+            for (const id of command.ids ?? (command.id ? [command.id] : [])) {
+              outcome = await input.actions.reviewAssertion({
+                id,
+                decision: command.decision,
+                ...(command.reason ? { note: command.reason } : {}),
+              });
+              if ('error' in outcome) break;
+            }
             // Le flow change : un rejeu fait avant ne le valide plus.
             if ('error' in outcome) this.notice = { kind: 'error', message: outcome.error };
             else {
@@ -1188,6 +1229,37 @@ export class RecordingConsole {
     );
   }
 
+  /** L'ORGANISATION proposée (revue) : les groupes déduits des étapes métier et les vérifications de groupe. */
+  private organisation(result: RecordingResult): Pick<PanelState, 'groupProposals' | 'checkSuggestions'> {
+    const proposals = this.groupProposalsDismissed
+      ? []
+      : proposeGroups(result.flow, result.business?.model.steps ?? [], this.language);
+    const checks = groupCheckSuggestions(result.flow);
+    return {
+      ...(proposals.length > 0
+        ? {
+            groupProposals: proposals.map((proposal) => ({
+              name: proposal.name,
+              from: proposal.from,
+              to: proposal.to,
+              steps: proposal.stepIds.length,
+              confidence: proposal.confidence,
+            })),
+          }
+        : {}),
+      ...(checks.length > 0
+        ? {
+            checkSuggestions: checks.map((check) => ({
+              groupId: check.groupId,
+              groupName: check.groupName,
+              key: check.key,
+              role: check.role,
+            })),
+          }
+        : {}),
+    };
+  }
+
   /** Une étape de la revue → l'action en direct qui vient des mêmes événements bruts (mise en évidence). */
   private liveIdOf(id: string): string | undefined {
     const live = this.recorder.timeline.actions;
@@ -1266,6 +1338,7 @@ export class RecordingConsole {
       checks: review?.checks ?? [],
       ...(inReview && this.result ? { proposals: proposalRows(this.result.flow) } : {}),
       ...(inReview && this.result ? { groups: groupRows(this.result.flow) } : {}),
+      ...(inReview && this.result ? this.organisation(this.result) : {}),
       ...(this.generation ? { generation: this.generation } : {}),
       summary: review ? summaryOf(steps) : live.summary(),
       quality: live.quality(),

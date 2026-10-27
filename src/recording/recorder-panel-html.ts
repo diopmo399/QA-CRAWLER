@@ -89,6 +89,7 @@ ${style}
           <ol id="timeline" class="timeline"></ol>
           <div id="checks"></div>
         </section>
+        <div id="sections" class="sections"></div>
       </div>
       <div class="col-side">
         <section class="card preview col-mid" id="preview-card"></section>
@@ -115,7 +116,8 @@ const DARK_TOKENS = `--bg:#0F1115;--surface:#171A21;--surface-2:#1C2028;--sunken
   --ok:#3FB96B;--ok-text:#7FD69E;--ok-soft:#14281D;--ok-line:#21452F;--ok-wash:#13231A;--ok-ink:#A7D9B8;
   --bad:#E5484D;--bad-text:#FF9B95;--bad-soft:#2C1517;--bad-line:#4E2326;--bad-wash:#251315;--bad-ink:#F1C1BC;--rec:#F2555A;
   --warn:#E2A03F;--warn-text:#F3C77D;--warn-soft:#2A2113;--warn-line:#4A3A1C;
-  --shadow:none;--focus:#93A9FF;--text:var(--fg);--text-2:var(--fg-2);--nav-hover:var(--chip)`;
+  --shadow:none;--focus:#93A9FF;--text:var(--fg);--text-2:var(--fg-2);--nav-hover:var(--chip);
+  --g1:#2BB3A3;--g2:#6E8CF5;--g3:#C58AF0;--g4:#E0A050`;
 
 const CSS = `
 :root{color-scheme:light;
@@ -130,6 +132,7 @@ const CSS = `
   --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   --muted-strong:var(--fg-2);--chip-bg:var(--chip);--title:var(--accent-text);--ring:var(--accent-chip);--code-bg:var(--chip);
   --obs:#1D4ED8;--obs-soft:#DBEAFE;--ded:#92400E;--ded-soft:#FEF3C7;--exp:#5B21B6;--exp-soft:#EDE9FE;
+  --g1:#0E9F8E;--g2:#2B50D8;--g3:#7C3AED;--g4:#B45309;
 }
 :root[data-theme="dark"]{color-scheme:dark;${DARK_TOKENS}}
 ${THEME_BASE_CSS}
@@ -406,6 +409,93 @@ li.erow{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align
 .gcode{margin:0;padding:10px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.55;color:var(--fg);white-space:pre;overflow:auto;max-height:520px}.gcode .ln{color:var(--muted);user-select:none}
 .gsec{container-type:inline-size}@container (max-width:700px){.gtiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .viewport img{display:block;width:100%;height:auto}
+/* ——— Revue : organisation (groupes en cartes, barre de sélection, fil des trois étapes, propositions triées) ——— */
+.journey{overflow:clip}
+.item{min-height:50px;grid-template-columns:28px 28px minmax(0,1fr) minmax(104px,auto)}
+.item>.st{justify-self:end}
+.status-line.warn{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.status-line.warn .atxt{flex:1 1 220px;min-width:0}
+.status-line.warn button{min-height:28px;padding:2px 10px;font-size:12px}
+.rsteps{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap}
+.rstep{display:flex;align-items:center;gap:10px;min-height:0;padding:7px 14px 7px 8px;border-radius:12px;border:1px solid var(--line);background:var(--surface);text-align:left;font:inherit;color:var(--fg)}
+.rstep .n{width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:var(--chip);color:var(--fg-2);flex:none}
+.rstep .n svg{width:13px;height:13px}
+.rstep.done .n{background:var(--ok);color:#FFFFFF}
+.rstep.cur{border-color:var(--accent-line);background:var(--accent-soft)}.rstep.cur .n{background:var(--accent);color:var(--accent-fg)}
+.rstep .rt{display:flex;flex-direction:column;min-width:0}.rstep b{font-size:13px;white-space:nowrap}.rstep small{font-size:11.5px;color:var(--muted);white-space:nowrap}
+.rarrow{align-self:center;color:var(--faint)}
+.timeline>li.gpropose{display:flex;align-items:center;gap:10px 12px;flex-wrap:wrap;margin:12px 14px;padding:12px 14px;border:1px dashed var(--accent-line);border-radius:12px;background:var(--accent-wash)}
+.gpropose .gptxt{flex:1 1 300px;min-width:0;display:flex;flex-direction:column;gap:6px}
+.gpropose .gptxt b{font-size:13.5px}
+.gpchips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.gpchip{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;background:var(--surface);border:1px solid var(--line-strong);font-size:12px;font-weight:500;white-space:nowrap}
+.gpchip i{width:8px;height:8px;border-radius:2px;display:inline-block;background:var(--gc,var(--accent))}
+.timeline>li.ghint{padding:10px 16px;font-size:12.5px;color:var(--muted);background:var(--surface-2)}
+.timeline>li.bgroup{margin:12px 14px;border:1px solid var(--line);border-left:4px solid var(--gc,var(--accent));border-radius:12px;overflow:hidden;padding:0}
+.timeline>li.bgroup+li{border-top:0}
+.bgroup.t0,.gpchip.t0{--gc:var(--g1)}.bgroup.t1,.gpchip.t1{--gc:var(--g2)}.bgroup.t2,.gpchip.t2{--gc:var(--g3)}.bgroup.t3,.gpchip.t3{--gc:var(--g4)}
+.bgroup .ghead{padding:12px 14px;gap:12px}
+.bgroup .ghead>.ib{flex:none}
+.bgroup .gsq{background:var(--gc,var(--accent))}
+.bgroup .gname{font-size:15px}
+.gmeta .m{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--line);font-size:12px;color:var(--fg-2);white-space:nowrap}
+.gmeta .m.ok{color:var(--ok-text);border-color:var(--ok-line);background:var(--ok-soft)}
+.gmeta .m.warn{color:var(--warn-text);border-color:var(--warn-line);background:var(--warn-soft)}
+.gsteps{list-style:none;margin:0;padding:0;border-top:1px solid var(--line-soft)}
+.gsteps:empty{display:none}
+.gsteps>li{border-top:1px solid var(--line-soft)}.gsteps>li:first-child{border-top:0}
+.timeline>li.gout{padding:14px 16px 6px}
+li.erow{padding-left:14px}
+li.erow .etools{width:124px;justify-content:flex-end;opacity:0;transition:opacity .12s}
+li.erow:hover .etools,li.erow:focus-within .etools,li.erow.picked .etools,li.erow.cur .etools{opacity:1}
+li.erow.picked{background:var(--accent-soft)}li.erow.picked>.item{background:transparent}
+.timeline>li.selbar{position:sticky;bottom:12px;z-index:3;display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 14px;padding:10px 12px;border:0;border-radius:14px;background:#14182A;color:#FFFFFF;box-shadow:0 10px 30px rgba(16,24,40,.25)}
+.selbar .n{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;border-radius:999px;background:var(--accent);color:var(--accent-fg);font-weight:700;font-size:12.5px;padding:0 7px}
+.selbar input[type=text],.selbar select{height:32px;min-height:32px;border:1px solid #3A4160;background:#1D2238;color:#FFFFFF;border-radius:8px;padding:0 10px;font-size:13px}
+.selbar input[type=text]{width:200px}.selbar input[type=text]::placeholder{color:#9AA3BF}
+.selbar .or{color:#9AA3BF;font-size:13px}
+.selbar .pbtn{height:32px;min-height:32px}.selbar .pbtn.ghost{color:#C9CFE3}
+.selbar .ib{margin-left:auto;border-color:transparent;background:transparent;color:#C9CFE3}.selbar .ib:hover:not(:disabled){border-color:#3A4160;color:#FFFFFF}
+.selbar .pbtn:not(.primary):not(.ghost){background:#FFFFFF;color:#14182A;border-color:#FFFFFF}
+.sections{display:grid;gap:18px;min-width:0}.sections:empty{display:none}.sections>.gsec{margin:0}
+.card.psec{margin:0;gap:0;border-radius:16px;overflow:hidden}
+.psec>.phd{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid var(--line-soft)}
+.psec>.phd h2{margin:0;font-size:16px;font-weight:700}
+.psec>.phd .sub{font-size:13px}
+.psec .pstats{margin-left:auto;gap:0;padding:0;border-radius:12px;overflow:hidden}
+.psec .pstats div{padding:6px 16px;border-left:1px solid var(--line)}.psec .pstats div:first-child{border-left:0}
+.pbody2{display:flex;flex-direction:column;gap:16px;padding:14px 18px 18px}
+.psec .pz{background:none;border:0;border-radius:0;overflow:visible;display:flex;flex-direction:column;gap:10px}
+.psec .pzh{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0;border:0;background:none}
+.psec .pzh h3{margin:0;font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--fg-2)}
+.psec .pzh .sub{font-size:12.5px}
+.prows{display:flex;flex-direction:column;gap:10px}
+.psec .prow{grid-template-columns:32px minmax(0,1fr) auto;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--surface)}
+.psec .prow:last-child{border-bottom:1px solid var(--line)}
+.psec .prow.open{background:var(--surface-2)}
+.psec .pic{width:32px;height:32px;border-radius:9px;background:var(--obs-soft);color:var(--obs)}
+.psec .pic.ded{background:var(--ded-soft);color:var(--ded)}.psec .pic.ok{background:var(--ok-soft);color:var(--ok)}.psec .pic.off{background:var(--chip-bg);color:var(--muted)}.psec .pic.exp{background:var(--exp-soft);color:var(--exp)}
+.psec .pt{font-size:14px;font-weight:600}
+.pbtn.ok{border-color:var(--ok-line);background:var(--ok-soft);color:var(--ok-text)}
+.pbtn.no{border-color:var(--bad-line);background:var(--surface);color:var(--bad-text)}
+.psec .pacts .ib{width:30px;height:30px;min-height:30px}
+.psec .prow.pchk{border-style:dashed;border-color:var(--exp)}
+.psec .prow.pchk .pm{display:block;line-height:1.7}
+.psec .prow.pchk code{font-family:var(--mono);font-size:12px;background:var(--code-bg);padding:1px 6px;border-radius:5px}
+.pweakbox{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.pwh{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;background:var(--surface-2)}
+.pwh b{font-weight:600}.pwh .sub{font-size:12.5px}.pwh svg{color:var(--muted);flex:none}
+.pweakbox .prows{padding:10px 14px 14px}
+.pweak{margin:0;padding:8px 14px 12px 40px;font-size:13px;color:var(--fg-2);line-height:1.9}
+.pweak span{color:var(--muted);font-size:12px}
+.gline{flex-direction:row;align-items:center;flex-wrap:wrap;gap:10px 12px;padding:14px 18px;background:var(--surface);border:1px solid var(--line);border-radius:16px}
+.sections .gsec:not(.gline){margin:0;padding:16px 18px;background:var(--surface);border:1px solid var(--line);border-radius:16px}
+.gline h3{margin:0;font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}
+.gline h3 svg{color:var(--accent)}
+.gline .gfmt{display:inline-flex;align-items:center;gap:6px;padding:0 10px;height:30px;border-radius:999px;border:1px solid var(--line-strong);background:var(--surface);font-size:12.5px;font-weight:600;color:var(--muted-strong);cursor:pointer}
+.gline .gfmt.on{border-color:var(--accent-line);background:var(--accent-soft);color:var(--accent-text)}
+.gline .gfmt input{margin:0}
+.gline .sub{font-size:12.5px}
 .viewport .frame{position:relative}
 .viewport .hl{position:absolute;border:2px solid var(--accent);border-radius:5px;box-shadow:0 0 0 3px rgba(43,80,216,.15);pointer-events:none}
 .viewport .hl span{position:absolute;left:-2px;top:calc(100% + 4px);background:var(--accent);color:#FFFFFF;font:500 11px/1.5 var(--sans);padding:1px 7px;border-radius:5px;white-space:nowrap}
@@ -654,7 +744,7 @@ body.compact .tools{border-left:0;padding-left:0;margin-left:auto}
 /* FENÊTRE DE PORTABLE (1366 px, ou 1920 px à 150 % sous Windows) : l'en-tête tient sur une ligne —
    « Annuler la dernière » en icône, le deuxième chiffre (aussi dans les onglets) masqué, marges resserrées. */
 @media (max-width:1440px) and (min-width:641px){
-  .topbar{gap:12px;padding:8px 16px;flex-wrap:nowrap}
+  .topbar{gap:8px 12px;padding:8px 16px;flex-wrap:wrap}
   .crumb{flex:0 1 auto}.subtitle{max-width:180px}
   .statepill{margin-left:4px}
   .stats{gap:14px;margin-left:0;flex-wrap:nowrap}.stats span:nth-child(2){display:none}
@@ -749,6 +839,12 @@ const SCRIPT = `
       gen: 'Génération des tests', genNote: "Choisissez les formats et les groupes ; les fichiers sont écrits sous generated/ et validés avec les outils réels disponibles. Un statut ne confond jamais généré, validé statiquement et exécuté.", genFormats: { yaml: 'Flow YAML', gherkin: 'Scénario Gherkin', playwright: 'Playwright TypeScript', java: 'Java JUnit 5 + Playwright' }, genGroups: 'Groupes à générer (tous par défaut)', genRun: 'Générer et valider', genForce: 'Forcer malgré les données manquantes',
       genStatus: { GENERATED: 'généré', STATICALLY_VALIDATED: 'validé statiquement', NOT_VALIDATED: 'non validé (outil absent)', EXECUTED: 'exécuté', PASSED: 'réussi', FAILED: 'échoué', BLOCKED: 'bloqué', INCONCLUSIVE: 'non concluant' }, genValidation: 'Validation', genAssertions: function (n, r) { return n + ' assertion(s) native(s), ' + r + ' vérifiée(s) par le rejeu seulement'; }, genLimits: 'Limites', genPreview: 'Aperçu', genDir: function (d) { return 'Écrit dans ' + d; }, genNative: 'native', genReplay: 'rejeu seulement',
       gInputs: 'Entrées', gOutputs: 'Sorties', gRunnable: 'jouable seul', gMissing: function (m) { return 'dépend de ' + m; }, gStart: function (r) { return 'départ ' + r; }, gChecks: function (c, a) { return c + ' vérification' + (c > 1 ? 's' : '') + ', ' + a + ' assertion' + (a > 1 ? 's' : '') + ' métier'; }, gSteps: function (n) { return n + ' étape' + (n > 1 ? 's' : ''); }, gNone: 'Aucun groupe : cochez des étapes puis créez un groupe.',
+      stOrg: 'Organiser le parcours', stDecide: 'Décider des assertions', stGen: 'Générer les tests', stOrgSub: function (g, n) { return g + ' groupe' + (g > 1 ? 's' : '') + ' · ' + n + ' étape' + (n > 1 ? 's' : ''); }, stOrgNone: 'aucun groupe', stOrgProposed: function (n) { return n + ' groupe' + (n > 1 ? 's' : '') + ' proposé' + (n > 1 ? 's' : ''); }, stDecideSub: function (r, d, t) { return (r ? r + ' recommandée' + (r > 1 ? 's' : '') + ' · ' : '') + d + '/' + t + ' décidée' + (t > 1 ? 's' : ''); }, stDecideNone: 'aucune proposition', stGenNone: 'aucune génération', stGoto: function (t) { return 'Aller à : ' + t; },
+      propTitle: "Groupes proposés d'après les étapes métier reconnues", propNote: "L'ordre des étapes ne change pas ; vous pouvez renommer ou défaire ensuite.", propSteps: function (a, b) { return a === b ? 'étape ' + a : 'étapes ' + a + '–' + b; }, propAccept: function (n) { return n > 1 ? 'Créer les ' + n + ' groupes' : 'Créer le groupe'; }, propIgnore: 'Ignorer',
+      selHint: 'Cochez des étapes pour créer un groupe ou les ajouter à un groupe existant.', gToCheck: function (n) { return n + ' à vérifier'; }, attShow: 'Voir', attAll: 'Tout voir',
+      genOptions: 'Options de génération', genHideOptions: 'Replier les options', genScope: function (n) { return n ? n + ' groupe' + (n > 1 ? 's' : '') : 'tout le parcours'; },
+      pzRecommend: 'Recommandées', pzRecommendNote: 'exécutables, observées, confiance ≥ 75 %', pAcceptAll: function (n) { return n > 1 ? 'Accepter les ' + n : 'Accepter'; }, pzWeak: 'Faibles ou non exécutables', pzWeakNote: 'repliées par défaut', pRejectAll: 'Tout refuser', pShowWeak: 'Déplier', pHideWeak: 'Replier',
+      pLeadShort: "Rien n'entre dans le flow sans votre décision.", chkTitleRow: function (g) { return 'Ajouter une vérification au groupe « ' + g + ' »'; }, chkExample: 'Ex. le résultat contient', chkTitle: 'Vérifications de groupe suggérées', chkRow: function (k, g) { return 'La donnée ' + k + ' est visible à la fin de « ' + g + ' »'; }, chkInput: 'la donnée créée plus haut, citée par sa valeur du rejeu', chkAdd: 'Ajouter', chkNote: 'Une étape « je vois » qui cite la donnée : la valeur du rejeu, jamais celle de l’enregistrement.',
       analysisTitle: 'Analyse', analysisNote: "L'analyse ne modifie jamais le recording. Elle est disponible après l'arrêt.", analysisWaiting: "L'analyse sera disponible après l'arrêt de l'enregistrement.",
       business: 'Interprétation métier', businessNote: "Déduite du parcours enregistré : jamais une étape ajoutée au flow.", noBusiness: 'Aucune interprétation métier sûre.', recordedActions: 'Actions enregistrées', observed: 'Observé', deduced: 'Déduit', uncertain: 'Incertain (jamais une vérité métier)', candidatesL: 'Possibles', bstatus: { CONFIRMED: 'Confirmé', PROBABLE: 'Probable', AMBIGUOUS: 'Ambigu', UNKNOWN: 'Inconnu' }, aiChoice: 'choix de l’IA parmi les candidats observés', referenceL: 'référence', baction: { create: 'CRÉER', search: 'RECHERCHER', retrieve: 'RETROUVER', correlate: 'CORRÉLER', open: 'OUVRIR', update: 'MODIFIER', save: 'ENREGISTRER', delete: 'SUPPRIMER' }, entitiesL: 'Entités observées', applicationL: 'Application', applicationNote: 'Ce que le Recorder comprend de l’application (contextes, tasks, entités, relations). Les actions techniques restent dans le parcours.', evidenceL: 'Preuves', istatus: { OBSERVED: 'Observé', DEDUCED: 'Déduit', CONFIRMED: 'Confirmé', UNCERTAIN: 'Incertain' }, actionLevels: function (c) { return c.recorded + ' actions enregistrées · ' + c.validated + ' validées · ' + c.interpreted + ' interprétées · ' + c.uninterpreted + ' non interprétées (UNKNOWN, normal pour une application inconnue)'; }, provenanceL: { CREATED_DURING_RECORDING: 'créée pendant l’enregistrement', CONFIRMED_EXISTING: 'existait déjà (écran de départ)', DISCOVERED_DURING_RECORDING: 'découverte (origine inconnue)', UNKNOWN: 'provenance inconnue', AMBIGUOUS: 'provenance ambiguë' },
       httpLive: function (h) { return h.network + ' requêtes · ' + h.correlated + ' reliées · ' + h.hypotheses + ' hypothèses' + (h.inconsistencies ? ' · ' + h.inconsistencies + ' incohérences' : '') + (h.failed ? ' · analyse en erreur' : '') + ' (provisoire)'; }, httpL: 'Analyse HTTP', httpNote: 'Requêtes, corrélations et correspondances : consolidées après l’arrêt (un « VALIDATED » exige des preuves suffisantes ; le reste est une hypothèse).', httpFailed: 'L’analyse différée a échoué : les événements bruts et le journal réseau sont conservés.', httpCounts: function (c) { return c.events + ' événements · ' + c.network + ' requêtes · ' + c.correlated + ' reliées · ' + c.independent + ' indépendantes · ' + c.hypotheses + ' hypothèses à confirmer · ' + c.inconsistencies + ' incohérences · ' + c.revisions + ' révisions du direct'; }, httpMappings: 'Champ ↔ propriété', httpIncons: 'Incohérences', httpRevisions: 'Révisions', intents: 'Intents métier', noIntent: 'Aucun intent métier (aucune écriture ni recherche métier corrélée).', searchL: 'Recherche', critL: 'Critères détectés', apiL: 'API', opL: 'Opérateur', valL: 'Valeur', logicL: 'Logique', sortL: 'Tri', paramsL: 'Paramètres techniques', techL: 'Classification technique (distincte)', fromCreateL: 'valeur issue de la création', searchesL: 'Recherches reconnues', roles: { PAGINATION: 'pagination', OPTION: 'options d’inclusion', CONTEXT: 'contexte', CRITERION_FLAG: 'indicateurs de critère' }, liveSearch: 'recherche détectée', technicalIntents: 'Intents techniques (jamais métier)', possibleCreate: 'création possible, non prouvée', confidence: 'Confiance', why: 'Voir pourquoi', findings: 'Constats et suggestions', noFinding: 'Aucun constat.', ai: function (n) { return n + ' suggestion(s) de connaissance proposée(s) par l’IA (à revoir).'; },
@@ -821,6 +917,12 @@ const SCRIPT = `
       gen: 'Test generation', genNote: 'Choose the formats and the groups; the files are written under generated/ and validated with the real tools available. A status never confuses generated, statically validated and executed.', genFormats: { yaml: 'Flow YAML', gherkin: 'Gherkin scenario', playwright: 'Playwright TypeScript', java: 'Java JUnit 5 + Playwright' }, genGroups: 'Groups to generate (all by default)', genRun: 'Generate and validate', genForce: 'Force despite missing data',
       genStatus: { GENERATED: 'generated', STATICALLY_VALIDATED: 'statically validated', NOT_VALIDATED: 'not validated (tool missing)', EXECUTED: 'executed', PASSED: 'passed', FAILED: 'failed', BLOCKED: 'blocked', INCONCLUSIVE: 'inconclusive' }, genValidation: 'Validation', genAssertions: function (n, r) { return n + ' native assertion(s), ' + r + ' verified by the replay only'; }, genLimits: 'Limits', genPreview: 'Preview', genDir: function (d) { return 'Written to ' + d; }, genNative: 'native', genReplay: 'replay only',
       gInputs: 'Inputs', gOutputs: 'Outputs', gRunnable: 'runnable alone', gMissing: function (m) { return 'depends on ' + m; }, gStart: function (r) { return 'starts at ' + r; }, gChecks: function (c, a) { return c + ' check' + (c > 1 ? 's' : '') + ', ' + a + ' business assertion' + (a > 1 ? 's' : ''); }, gSteps: function (n) { return n + ' step' + (n > 1 ? 's' : ''); }, gNone: 'No group yet: check steps, then create a group.',
+      stOrg: 'Organise the journey', stDecide: 'Decide on assertions', stGen: 'Generate the tests', stOrgSub: function (g, n) { return g + ' group' + (g > 1 ? 's' : '') + ' · ' + n + ' step' + (n > 1 ? 's' : ''); }, stOrgNone: 'no group', stOrgProposed: function (n) { return n + ' group' + (n > 1 ? 's' : '') + ' proposed'; }, stDecideSub: function (r, d, t) { return (r ? r + ' recommended · ' : '') + d + '/' + t + ' decided'; }, stDecideNone: 'no proposal', stGenNone: 'no generation', stGoto: function (t) { return 'Go to: ' + t; },
+      propTitle: 'Groups proposed from the recognised business steps', propNote: 'The step order does not change; you can rename or undo afterwards.', propSteps: function (a, b) { return a === b ? 'step ' + a : 'steps ' + a + '–' + b; }, propAccept: function (n) { return n > 1 ? 'Create the ' + n + ' groups' : 'Create the group'; }, propIgnore: 'Dismiss',
+      selHint: 'Check steps to create a group or to add them to an existing group.', gToCheck: function (n) { return n + ' to check'; }, attShow: 'Show', attAll: 'Show all',
+      genOptions: 'Generation options', genHideOptions: 'Hide the options', genScope: function (n) { return n ? n + ' group' + (n > 1 ? 's' : '') : 'the whole journey'; },
+      pzRecommend: 'Recommended', pzRecommendNote: 'executable, observed, confidence ≥ 75 %', pAcceptAll: function (n) { return n > 1 ? 'Accept the ' + n : 'Accept'; }, pzWeak: 'Weak or not executable', pzWeakNote: 'collapsed by default', pRejectAll: 'Reject all', pShowWeak: 'Expand', pHideWeak: 'Collapse',
+      pLeadShort: 'Nothing enters the flow without your decision.', chkTitleRow: function (g) { return 'Add a check to the group "' + g + '"'; }, chkExample: 'E.g. the result contains', chkTitle: 'Suggested group checks', chkRow: function (k, g) { return 'The data ' + k + ' is visible at the end of "' + g + '"'; }, chkInput: 'the data created earlier, cited by its replay value', chkAdd: 'Add', chkNote: 'An "I see" step that cites the data: the replay value, never the recorded one.',
       analysisTitle: 'Analysis', analysisNote: 'The analysis never changes the recording. It is available after Stop.', analysisWaiting: 'The analysis will be available once the recording is stopped.',
       business: 'Business interpretation', businessNote: 'Deduced from the recorded journey: never a step added to the flow.', noBusiness: 'No reliable business interpretation.', recordedActions: 'Recorded actions', observed: 'Observed', deduced: 'Deduced', uncertain: 'Uncertain (never a business fact)', candidatesL: 'Possible', bstatus: { CONFIRMED: 'Confirmed', PROBABLE: 'Probable', AMBIGUOUS: 'Ambiguous', UNKNOWN: 'Unknown' }, aiChoice: 'AI choice among the observed candidates', referenceL: 'reference', baction: { create: 'CREATE', search: 'SEARCH', retrieve: 'RETRIEVE', correlate: 'CORRELATE', open: 'OPEN', update: 'UPDATE', save: 'SAVE', delete: 'DELETE' }, entitiesL: 'Observed entities', applicationL: 'Application', applicationNote: 'What the Recorder understands of the application (contexts, tasks, entities, relations). The technical actions stay in the journey.', evidenceL: 'Evidence', istatus: { OBSERVED: 'Observed', DEDUCED: 'Deduced', CONFIRMED: 'Confirmed', UNCERTAIN: 'Uncertain' }, actionLevels: function (c) { return c.recorded + ' recorded actions · ' + c.validated + ' validated · ' + c.interpreted + ' interpreted · ' + c.uninterpreted + ' not interpreted (UNKNOWN, normal for an unknown application)'; }, provenanceL: { CREATED_DURING_RECORDING: 'created during the recording', CONFIRMED_EXISTING: 'already existed (starting screen)', DISCOVERED_DURING_RECORDING: 'discovered (origin unknown)', UNKNOWN: 'unknown provenance', AMBIGUOUS: 'ambiguous provenance' },
       httpLive: function (h) { return h.network + ' requests · ' + h.correlated + ' linked · ' + h.hypotheses + ' hypotheses' + (h.inconsistencies ? ' · ' + h.inconsistencies + ' inconsistencies' : '') + (h.failed ? ' · analysis error' : '') + ' (provisional)'; }, httpL: 'HTTP analysis', httpNote: 'Requests, correlations and mappings: consolidated after the stop (VALIDATED needs sufficient evidence; the rest is a hypothesis).', httpFailed: 'The deferred analysis failed: the raw events and the network journal are kept.', httpCounts: function (c) { return c.events + ' events · ' + c.network + ' requests · ' + c.correlated + ' linked · ' + c.independent + ' independent · ' + c.hypotheses + ' hypotheses to confirm · ' + c.inconsistencies + ' inconsistencies · ' + c.revisions + ' revisions of the live analysis'; }, httpMappings: 'Field ↔ property', httpIncons: 'Inconsistencies', httpRevisions: 'Revisions', intents: 'Business intents', noIntent: 'No business intent (no correlated business write or search).', searchL: 'Search', critL: 'Detected criteria', apiL: 'API', opL: 'Operator', valL: 'Value', logicL: 'Logic', sortL: 'Sort', paramsL: 'Technical parameters', techL: 'Technical classification (separate)', fromCreateL: 'value from the creation', searchesL: 'Recognised searches', roles: { PAGINATION: 'pagination', OPTION: 'inclusion options', CONTEXT: 'context', CRITERION_FLAG: 'criterion flags' }, liveSearch: 'search detected', technicalIntents: 'Technical intents (never business)', possibleCreate: 'possible creation, not proven', confidence: 'Confidence', why: 'See why', findings: 'Findings and suggestions', noFinding: 'No finding.', ai: function (n) { return n + ' knowledge suggestion(s) proposed by the AI (to review).'; },
@@ -966,7 +1068,9 @@ const SCRIPT = `
   var filterText = '', onlyAttention = false, layout = null, editingIntent = null;
   // GROUPES MÉTIER : les étapes cochées (pour créer / affecter), le groupe en cours de renommage.
   var picked = {}, renamingGroup = null;
-  var pFilter = 'all', pOpen = {}, lastGroup = null, genJavaOpen = false, copied = false;
+  var pOpen = {}, lastGroup = null, genJavaOpen = false, copied = false;
+  // Le nom d'un nouveau groupe (gardé d'un rendu à l'autre), les faibles dépliées, les options de génération ouvertes.
+  var groupNameDraft = '', weakOpen = false, genOpen = false;
   function sendGroup(payload) { lastGroup = payload; send(payload); }
   /** Les pictogrammes des trois sections (traits, jamais d'emoji). */
   var UI = {
@@ -1133,12 +1237,13 @@ const SCRIPT = `
   function renderSummary() {
     var s = state.summary, el = $('summary');
     $('journey-hint').textContent = recordingPhase() ? T.journeyHint : '';
-    if (s.actions === 0 || s.attention === 0) { el.className = 'status-line'; el.textContent = ''; return; }
+    if (s.actions === 0 || s.attention === 0) { el.className = 'status-line'; setHtml(el, ''); return; }
     var lines = [];
     if (s.ambiguous) lines.push(T.ambiguousN(s.ambiguous));
     if (s.failed) lines.push(T.failedN(s.failed));
     el.className = 'status-line warn';
-    el.textContent = T.needsCheck + ' — ' + T.attention(s.attention) + (lines.length ? ' · ' + lines.join(' · ') : '');
+    // Une ligne : ce qui demande l'attention, et le bouton qui ne montre que ces étapes (ou tout à nouveau).
+    setHtml(el, ui('warn', 15) + '<span class="atxt"><b>' + esc(T.attention(s.attention)) + '</b>' + (lines.length ? ' · ' + esc(lines.join(' · ')) : '') + '</span><button type="button" class="small" data-cmd="att-toggle" aria-pressed="' + onlyAttention + '">' + esc(onlyAttention ? T.attAll : T.attShow) + '</button>');
   }
 
   function techLines(step) {
@@ -1216,50 +1321,99 @@ const SCRIPT = `
       if (onlyAttention && step.status !== 'AMBIGUOUS' && step.status !== 'FAILED') return false;
       return !needle || (step.description + ' ' + (step.detail || '')).toLowerCase().indexOf(needle) >= 0;
     });
-    var lastGroup = null, lastGroupId = null;
-    var groupsById = {};
-    (state.groups || []).forEach(function (g) { groupsById[g.id] = g; });
-    var html = visible.map(function (step) {
-      var head = '';
-      if (step.groupId && step.groupId !== lastGroupId && !needle && !onlyAttention) head = groupHeadHtml(groupsById[step.groupId] || { id: step.groupId, name: step.group, stepIds: [], inputs: [], outputs: [], missing: [] });
-      else if (!step.groupId && lastGroupId && !needle && !onlyAttention) head = '<li class="group">' + esc(T.gOutside) + '</li>';
-      else if (!step.groupId && step.group && step.group !== lastGroup && !needle && !onlyAttention) head = groupHead(step.group);
+    var lastGroup = null, lastGroupId = null, openGroup = null;
+    var groupsById = {}, tone = {};
+    (state.groups || []).forEach(function (g, i) { groupsById[g.id] = g; tone[g.id] = i % 4; });
+    var grouping = !needle && !onlyAttention;
+    // Un groupe métier est une carte qui CONTIENT ses étapes ; les étapes hors groupe gardent leurs titres d'écran.
+    var html = '';
+    visible.forEach(function (step) {
+      if (grouping && (step.groupId || null) !== openGroup) {
+        if (openGroup) html += '</ol></li>';
+        openGroup = null;
+        if (step.groupId) {
+          html += groupHeadHtml(groupsById[step.groupId] || { id: step.groupId, name: step.group, stepIds: [], inputs: [], outputs: [], missing: [] }, tone[step.groupId] || 0);
+          openGroup = step.groupId;
+        } else if (lastGroupId) html += '<li class="group gout">' + esc(T.gOutside) + '</li>';
+      }
+      if (!step.groupId && step.group && step.group !== lastGroup && grouping) html += groupHead(step.group);
       lastGroup = step.group || lastGroup; lastGroupId = step.groupId || null;
       var g = step.groupId ? groupsById[step.groupId] : null;
-      if (g && g.collapsed && !needle && !onlyAttention) return head;
-      return head + stepHtml(step);
-    }).join('');
-    if (editing && state.phase === 'REVIEW') html = groupToolsHtml() + html;
+      if (g && g.collapsed && grouping) return;
+      html += stepHtml(step);
+    });
+    if (openGroup) html += '</ol></li>';
+    if (state.phase === 'REVIEW' && grouping) html = groupProposalsHtml() + html;
+    if (editing && state.phase === 'REVIEW') html = groupNoticeHtml() + html + selBarHtml();
     if (!html && state.actions.length) html = '<li class="empty">' + esc(T.noMatch) + '</li>';
     if (!html) html = '<li class="empty">' + esc(T.empty) + '</li>';
     if (state.phase === 'RECORDING' && !needle && !onlyAttention) html += '<li class="waiting"><span class="dotc" aria-hidden="true"></span>' + esc(T.waiting) + '</li>';
     setHtml($('timeline'), html);
     var checks = state.checks || [];
-    setHtml($('checks'), (checks.length ? '<details class="checks"><summary>' + esc(T.checks(checks.length)) + '</summary><p class="sub">' + esc(T.checksNote) + '</p><ul>' + checks.map(function (c) { return '<li>' + esc(c.description) + '</li>'; }).join('') + '</ul></details>' : '') + proposalsHtml() + generationHtml());
+    setHtml($('checks'), (checks.length ? '<details class="checks"><summary>' + esc(T.checks(checks.length)) + '</summary><p class="sub">' + esc(T.checksNote) + '</p><ul>' + checks.map(function (c) { return '<li>' + esc(c.description) + '</li>'; }).join('') + '</ul></details>' : ''));
+    setHtml($('sections'), proposalsHtml() + generationHtml());
   }
 
-  /** LES PROPOSITIONS D'ASSERTIONS : origine, méthode, preuves, limites, et la décision de l'humain. */
-  /** LES ASSERTIONS PROPOSÉES : trois zones (à décider, dans le flow, écartées), une ligne par proposition, le détail replié. */
+  /**
+   * La zone d'une proposition : dans le flow, écartée, ou à décider — elle-même triée en RECOMMANDÉE
+   * (exécutable, observée, confiance ≥ 75 %, sans conflit), FAIBLE (rapport seulement, ou confiance < 50 %)
+   * et le reste.
+   */
+  function pzoneOf(p) {
+    if (p.inFlow) return 'inFlow';
+    if (p.status === 'REJECTED' || p.status === 'DISABLED') return 'out';
+    if (p.method === 'REPORT_ONLY' || p.confidence < 0.5) return 'weak';
+    if (p.origin === 'OBSERVED' && p.confidence >= 0.75 && !p.conflictsWith.length) return 'recommend';
+    return 'decide';
+  }
+  function weakWhy(p) { return p.method === 'REPORT_ONLY' ? T.pNotExec : T.pLow; }
+
+  /** LES ASSERTIONS PROPOSÉES (carte) : recommandées, vérifications de groupe, à décider, faibles (repliées), dans le flow, écartées. */
   function proposalsHtml() {
-    var list = state.proposals || [];
-    if (!list.length) return '';
-    var zoneOf = function (p) { return p.inFlow ? 'inFlow' : (p.status === 'REJECTED' || p.status === 'DISABLED') ? 'out' : 'decide'; };
-    var counts = { all: list.length, inFlow: 0, decide: 0, deduced: 0 };
-    list.forEach(function (p) { var z = zoneOf(p); if (z === 'inFlow') counts.inFlow++; if (z === 'decide') counts.decide++; if (p.origin === 'DEDUCED') counts.deduced++; });
-    var shown = list.filter(function (p) { return pFilter === 'all' || (pFilter === 'deduced' ? p.origin === 'DEDUCED' : zoneOf(p) === pFilter); });
-    var h = '<section class="psec" aria-label="' + esc(T.pTitle) + '">';
-    h += '<div class="phd"><div class="pttl"><h3>' + ui('tick', 18) + esc(T.pTitle) + '</h3><p class="sub">' + esc(T.pLead) + '</p></div>';
-    h += '<div class="pstats"><div><b>' + counts.all + '</b><span>' + esc(T.pCount.all) + '</span></div><i></i><div><b class="ok">' + counts.inFlow + '</b><span>' + esc(T.pCount.inFlow) + '</span></div><i></i><div><b class="warn">' + counts.decide + '</b><span>' + esc(T.pCount.decide) + '</span></div></div></div>';
-    h += '<div class="pfilters">' + ['all', 'decide', 'inFlow', 'deduced'].map(function (k) { return '<button type="button" class="pf' + (pFilter === k ? ' on' : '') + '" data-cmd="p-filter" data-id="' + k + '" aria-pressed="' + (pFilter === k) + '">' + esc(T.pFilter[k]) + ' · ' + counts[k] + '</button>'; }).join('');
-    h += '<span class="sp"></span><span class="plegend"><span><i class="obs"></i>' + esc(T.pLegend.OBSERVED) + '</span><span><i class="ded"></i>' + esc(T.pLegend.DEDUCED) + '</span><span><i class="exp"></i>' + esc(T.pLegend.EXPLICIT) + '</span></span></div>';
-    ['decide', 'inFlow', 'out'].forEach(function (zone) {
-      var items = shown.filter(function (p) { return zoneOf(p) === zone; });
+    var list = state.proposals || [], checks = state.checkSuggestions || [];
+    if (!list.length && !checks.length) return '';
+    var toDecide = function (z) { return z === 'recommend' || z === 'decide' || z === 'weak'; };
+    var counts = { all: list.length, inFlow: 0, decide: 0 };
+    list.forEach(function (p) { var z = pzoneOf(p); if (z === 'inFlow') counts.inFlow++; if (toDecide(z)) counts.decide++; });
+    var h = '<section class="card psec" id="sec-proposals" aria-labelledby="sec-proposals-title">';
+    h += '<div class="phd"><h2 id="sec-proposals-title">' + esc(T.pTitle) + '</h2><span class="sub">' + esc(T.pLeadShort) + '</span>';
+    h += '<div class="pstats"><div><b>' + counts.all + '</b><span>' + esc(T.pCount.all) + '</span></div><div><b class="ok">' + counts.inFlow + '</b><span>' + esc(T.pCount.inFlow) + '</span></div><div><b class="warn">' + counts.decide + '</b><span>' + esc(T.pCount.decide) + '</span></div></div></div>';
+    h += '<div class="pbody2">';
+    var checksShown = false;
+    ['recommend', 'decide', 'weak', 'inFlow', 'out'].forEach(function (zone) {
+      var items = list.filter(function (p) { return pzoneOf(p) === zone; });
+      // Les vérifications de groupe suivent les recommandées (avant les propositions moins sûres).
+      if (zone === 'decide' && checks.length) { h += checksHtml(checks); checksShown = true; }
       if (!items.length) return;
-      h += '<div class="pz ' + zone + '"><div class="pzh"><span class="pzt">' + esc(T.pZone[zone]) + '</span><span class="pzn">' + items.length + '</span><span class="sub">' + esc(T.pZoneNote[zone]) + '</span></div>';
-      items.forEach(function (p) { h += proposalRow(p, zone); });
-      h += '</div>';
+      var ids = items.map(function (p) { return p.id; }).join(',');
+      if (zone === 'weak') {
+        // Les faibles : un bloc encadré, replié par défaut (une ligne chacune et sa raison).
+        h += '<div class="pweakbox" id="pz-weak"><div class="pwh">' + ui(weakOpen ? 'chevD' : 'chevR', 15) + '<b>' + esc(T.pzWeak) + ' · ' + items.length + '</b><span class="sub">' + esc(weakOpen ? T.pZoneNote.decide : T.pzWeakNote) + '</span><span class="sp"></span>';
+        h += '<button type="button" class="pbtn no" data-cmd="pbatch-reject" data-ids="' + esc(ids) + '">' + esc(T.pRejectAll) + '</button><button type="button" class="pbtn ghost" data-cmd="weak-toggle" aria-expanded="' + weakOpen + '">' + esc(weakOpen ? T.pHideWeak : T.pShowWeak) + '</button></div>';
+        if (weakOpen) h += '<div class="prows">' + items.map(function (p) { return proposalRow(p, 'decide'); }).join('') + '</div>';
+        else h += '<ul class="pweak">' + items.map(function (p) { return '<li>' + codify(p.description) + ' <span>— ' + esc(weakWhy(p)) + ' · ' + esc(T.pConfidence(p.confidence)) + '</span></li>'; }).join('') + '</ul>';
+        h += '</div>';
+        return;
+      }
+      var title = zone === 'recommend' ? T.pzRecommend : T.pZone[zone];
+      var note = zone === 'recommend' ? T.pzRecommendNote : T.pZoneNote[zone];
+      h += '<div class="pz ' + zone + '" id="pz-' + zone + '"><div class="pzh"><h3>' + esc(title) + ' · ' + items.length + '</h3><span class="sub">' + esc(note) + '</span><span class="sp"></span>';
+      if (zone === 'recommend') h += '<button type="button" class="pbtn ok" data-cmd="pbatch-accept" data-ids="' + esc(ids) + '">' + ui('check', 14) + esc(T.pAcceptAll(items.length)) + '</button>';
+      h += '</div><div class="prows">' + items.map(function (p) { return proposalRow(p, zone === 'recommend' ? 'decide' : zone); }).join('') + '</div></div>';
     });
-    return h + '</section>';
+    if (!checksShown && checks.length) h += checksHtml(checks);
+    return h + '</div></section>';
+  }
+
+  /** LES VÉRIFICATIONS DE GROUPE suggérées : une ligne en pointillés par groupe qui reçoit une donnée d'un autre groupe. */
+  function checksHtml(checks) {
+    var h = '<div class="prows" id="pz-checks">';
+    checks.forEach(function (c) {
+      var cited = '$' + '{testData:' + c.key + '}';
+      h += '<article class="prow pchk"><span class="pic exp" aria-hidden="true">' + ui('plus', 18) + '</span><div class="pbody"><div class="pt">' + esc(T.chkTitleRow(c.groupName)) + '</div><div class="pm"><span>' + esc(T.chkExample) + ' « </span><code>' + esc(cited) + '</code><span> » — ' + esc(T.chkInput) + '</span></div></div>';
+      h += '<div class="pacts"><button type="button" class="pbtn" data-cmd="grp-add-check" data-id="' + esc(c.groupId) + '" data-key="' + esc(c.key) + '">' + ui('plus', 14) + esc(T.chkAdd) + '</button></div></article>';
+    });
+    return h + '</div>';
   }
 
   function proposalRow(p, zone) {
@@ -1280,9 +1434,9 @@ const SCRIPT = `
     if (p.conflictsWith.length) h += '<span class="bad-t">' + esc(T.pConflict(p.conflictsWith.join(', '))) + '</span>';
     h += '</div></div>';
     var row = '';
-    if (p.method !== 'REPORT_ONLY' && !p.inFlow) row += '<button type="button" class="pbtn primary" data-cmd="assert-accept" data-id="' + esc(p.id) + '">' + ui('check', 14) + esc(T.pAccept) + '</button>';
+    if (p.method !== 'REPORT_ONLY' && !p.inFlow) row += '<button type="button" class="pbtn ok" data-cmd="assert-accept" data-id="' + esc(p.id) + '">' + ui('check', 14) + esc(T.pAccept) + '</button>';
     if (p.inFlow) row += '<button type="button" class="pbtn" data-cmd="assert-reject" data-id="' + esc(p.id) + '">' + esc(T.pRemove) + '</button><button type="button" class="pbtn ghost" data-cmd="assert-disable" data-id="' + esc(p.id) + '">' + esc(T.pDisable) + '</button>';
-    else if (p.status === 'PROPOSED') row += '<button type="button" class="pbtn" data-cmd="assert-reject" data-id="' + esc(p.id) + '">' + esc(T.pReject) + '</button>';
+    else if (p.status === 'PROPOSED') row += '<button type="button" class="pbtn no" data-cmd="assert-reject" data-id="' + esc(p.id) + '">' + esc(T.pReject) + '</button>';
     if (decided) row += '<button type="button" class="pbtn' + (zone === 'out' ? '' : ' ghost') + '" data-cmd="assert-reset" data-id="' + esc(p.id) + '">' + (zone === 'out' ? ui('reset', 14) : '') + esc(T.pReset) + '</button>';
     row += ib(open ? 'chevU' : 'chevD', { cmd: 'p-toggle', id: p.id, aria: open ? T.pHide : T.pDetails });
     h += '<div class="pacts">' + row + '</div>';
@@ -1336,50 +1490,67 @@ const SCRIPT = `
       // Mode Modifier (revue) : une case à cocher, puis les actions en icônes (monter, descendre, détacher, retirer).
       h += '<div class="etools">' + ib('up', { cmd: 'step-up', id: step.id, aria: T.moveUp }) + ib('down', { cmd: 'step-down', id: step.id, aria: T.moveDown }) + (step.groupId ? ib('unlink', { cmd: 'step-detach', id: step.id, aria: T.detach }) : '') + ib('x', { cmd: 'remove', id: step.id, aria: T.removeLabel(step.description), cls: 'danger' }) + '</div>';
       h = h.replace('<button type="button" class="item ', '<input type="checkbox" class="epick" data-step-pick="' + esc(step.id) + '"' + (picked[step.id] ? ' checked' : '') + ' aria-label="' + esc(T.gPickStep(step.index)) + '"><button type="button" class="item ');
-      h = h.replace('<li data-step="', '<li class="erow' + (picked[step.id] ? ' picked' : '') + (step.groupId ? ' ingroup' : '') + '" data-step="');
+      h = h.replace('<li data-step="', '<li class="erow' + (picked[step.id] ? ' picked' : '') + (step.groupId ? ' ingroup' : '') + (current ? ' cur' : '') + '" data-step="');
     }
     return h + '</li>';
   }
 
   /** LE BANDEAU d'un groupe métier : nom, étapes, départ, entrées / sorties, exécutabilité ; actions en icônes en mode Modifier. */
-  function groupHeadHtml(g) {
-    var ids = g.stepIds || [], n = ids.length, acts = 0;
+  function groupHeadHtml(g, t) {
+    var ids = g.stepIds || [], n = ids.length, acts = 0, attention = 0;
     var positions = [];
-    state.actions.forEach(function (st) { if (st.groupId === g.id) { acts++; positions.push(st.index); } });
-    var h = '<li class="bgroup' + (g.collapsed ? ' collapsed' : '') + '" data-group="' + esc(g.id) + '">';
+    state.actions.forEach(function (st) { if (st.groupId === g.id) { acts++; positions.push(st.index); if (st.status === 'AMBIGUOUS' || st.status === 'FAILED') attention++; } });
+    var h = '<li class="bgroup t' + (t || 0) + (g.collapsed ? ' collapsed' : '') + '" data-group="' + esc(g.id) + '">';
     h += '<div class="ghead">' + ib(g.collapsed ? 'chevR' : 'chevD', { cmd: g.collapsed ? 'grp-expand' : 'grp-collapse', id: g.id, aria: g.collapsed ? T.gExpandG : T.gCollapseG });
-    h += '<span class="gsq" aria-hidden="true"></span><div class="gttl">';
+    h += '<div class="gttl">';
     if (editing && renamingGroup === g.id) h += '<span class="grename"><input type="text" id="grp-name-' + esc(g.id) + '" value="' + esc(g.name) + '" aria-label="' + esc(T.groupName) + '">' + '<button type="button" class="pbtn primary" data-cmd="grp-rename-apply" data-id="' + esc(g.id) + '">' + esc(T.apply) + '</button></span>';
-    else h += '<span class="gname">' + esc(g.name) + (g.collapsed && positions.length ? ' <span class="sub">· ' + esc(T.gCollapsedRange(positions[0], positions[positions.length - 1])) + '</span>' : '') + '</span>';
+    else h += '<span class="gname">' + esc(g.name) + '</span>';
     if (g.description) h += '<span class="sub">' + esc(g.description) + '</span>';
+    // Les faits du groupe en pastilles : étapes, départ, exécutabilité seule, données, vérifications, attention.
     var meta = [];
-    meta.push(g.collapsed && g.checks !== undefined ? esc(T.gActions(acts, g.checks, g.assertions)) : esc(T.gSteps(n)));
-    if (g.startAt) meta.push(esc(T.gStart('')).trim() + ' <code>' + esc(g.startAt) + '</code>');
-    meta.push(g.runnableAlone ? '<span class="ok-t">' + ui('check', 13) + esc(T.gRunnable) + '</span>' : '<span class="warn-t">' + ui('warn', 13) + esc(T.gMissing((g.missing || []).join(', '))) + '</span>');
-    if (g.outputs && g.outputs.length) meta.push(esc(T.gProduces) + ' ' + g.outputs.map(function (k) { return '<code>' + esc(k) + '</code>'; }).join(' '));
-    if (g.inputs && g.inputs.length) meta.push(esc(T.gNeeds) + ' ' + g.inputs.map(function (k) { return '<code>' + esc(k) + '</code>'; }).join(' '));
-    if (!g.collapsed && g.checks !== undefined && (g.checks || g.assertions)) meta.push(esc(T.gChecks(g.checks, g.assertions)));
-    h += '<span class="gmeta">' + meta.join('<i class="dotsep" aria-hidden="true">·</i>') + '</span></div>';
+    meta.push('<span class="m">' + esc(g.collapsed && positions.length ? T.gCollapsedRange(positions[0], positions[positions.length - 1]) : T.gSteps(n)) + '</span>');
+    if (g.collapsed && g.checks !== undefined) meta.push('<span class="m">' + esc(T.gActions(acts, g.checks, g.assertions)) + '</span>');
+    if (g.startAt) meta.push('<span class="m">' + esc(T.gStart('')).trim() + ' <code>' + esc(g.startAt) + '</code></span>');
+    meta.push(g.runnableAlone ? '<span class="m ok">' + ui('check', 13) + esc(T.gRunnable) + '</span>' : '<span class="m warn">' + ui('warn', 13) + esc(T.gMissing((g.missing || []).map(function (m) { return m.split(' (')[0]; }).join(', '))) + '</span>');
+    if (g.outputs && g.outputs.length) meta.push('<span class="m">' + esc(T.gProduces) + ' ' + g.outputs.map(function (k) { return '<code>' + esc(k) + '</code>'; }).join(' ') + '</span>');
+    if (g.inputs && g.inputs.length) meta.push('<span class="m">' + esc(T.gNeeds) + ' ' + g.inputs.map(function (k) { return '<code>' + esc(k) + '</code>'; }).join(' ') + '</span>');
+    if (!g.collapsed && g.checks !== undefined && (g.checks || g.assertions)) meta.push('<span class="m">' + esc(T.gChecks(g.checks, g.assertions)) + '</span>');
+    if (attention) meta.push('<span class="m warn">' + ui('warn', 13) + esc(T.gToCheck(attention)) + '</span>');
+    h += '<span class="gmeta">' + meta.join('') + '</span></div>';
     if (editing) h += '<span class="gacts">' + ib('up', { cmd: 'grp-up', id: g.id, aria: T.gMoveUp }) + ib('down', { cmd: 'grp-down', id: g.id, aria: T.gMoveDown }) + ib('pencil', { cmd: 'grp-rename-open', id: g.id, aria: T.gRenameG }) + ib('trash', { cmd: 'grp-delete', id: g.id, aria: T.gDeleteG, cls: 'danger' }) + '</span>';
-    return h + '</div></li>';
+    return h + '</div><ol class="gsteps">';
   }
 
-  /** LA BARRE D'OUTILS collante (mode Modifier) : étapes cochées, créer un groupe, ajouter à un groupe, tout décocher ; le refus expliqué. */
-  function groupToolsHtml() {
+  /** LES GROUPES PROPOSÉS d'après les étapes métier : un bandeau, un clic pour les créer, ou les ignorer. */
+  function groupProposalsHtml() {
+    var list = state.groupProposals || [];
+    if (!list.length) return '';
+    var h = '<li class="gpropose" role="group" aria-label="' + esc(T.propTitle) + '"><div class="gptxt"><b>' + esc(T.propTitle) + '</b><span class="gpchips">';
+    list.forEach(function (p, i) { h += '<span class="gpchip t' + (i % 4) + '"><i aria-hidden="true"></i>' + esc(p.name) + ' · ' + esc(T.propSteps(p.from, p.to)) + '</span>'; });
+    h += '</span><span class="sub">' + esc(T.propNote) + '</span></div>';
+    return h + '<button type="button" class="pbtn primary" data-cmd="grp-accept-proposals">' + ui('plus', 14) + esc(T.propAccept(list.length)) + '</button><button type="button" class="pbtn ghost" data-cmd="grp-dismiss-proposals">' + esc(T.propIgnore) + '</button></li>';
+  }
+
+  /** Mode Modifier : le refus ou l'information de la dernière opération, en tête du parcours ; sinon l'aide. */
+  function groupNoticeHtml() {
+    if (state.notice && !state.notice.actionId && state.notice.kind === 'error')
+      return '<li class="grefuse" role="alert">' + ui('warn', 18) + '<span class="gtxt"><b>' + esc(T.gRefused) + '</b><span>' + esc(state.notice.message) + '</span></span>' + (lastGroup ? '<button type="button" class="pbtn warn" data-cmd="grp-force">' + esc(T.gForce) + '</button>' : '') + '</li>';
+    if (state.notice && !state.notice.actionId) return '<li class="ginfo" role="status">' + ui('info', 16) + '<span>' + esc(state.notice.message) + '</span></li>';
+    return pickedIds().length ? '' : '<li class="ghint">' + esc((state.groups || []).length ? T.selHint : T.gNone) + '</li>';
+  }
+
+  /** LA BARRE DE SÉLECTION (mode Modifier) : seulement quand des étapes sont cochées, collée en bas du parcours. */
+  function selBarHtml() {
     var groups = state.groups || [];
     var n = pickedIds().length;
-    var h = '<li class="gtoolbar" role="group" aria-label="' + esc(T.groups) + '">';
-    h += '<span class="gcount"><span class="n">' + n + '</span>' + esc(T.gPicked(n)) + '</span><i class="vsep"></i>';
-    h += '<label class="glab">' + esc(T.gNew) + ' <input type="text" id="grp-new-name" placeholder="' + esc(T.groupName) + '" aria-label="' + esc(T.groupName) + '"></label>';
-    h += '<button type="button" class="pbtn primary" data-cmd="grp-create"' + (n ? '' : ' disabled') + '>' + ui('plus', 14) + esc(T.gCreate) + '</button>';
-    if (groups.length) h += '<span class="sub">' + esc(T.gOr) + '</span><label class="glab">' + esc(T.gAddTo) + ' <select id="grp-add-target">' + groups.map(function (g) { return '<option value="' + esc(g.id) + '">' + esc(g.name) + '</option>'; }).join('') + '</select></label><button type="button" class="pbtn" data-cmd="grp-add"' + (n ? '' : ' disabled') + '>' + esc(T.gAdd) + '</button>';
-    h += '<span class="sp"></span><button type="button" class="pbtn ghost" data-cmd="grp-unpick"' + (n ? '' : ' disabled') + '>' + esc(T.gUnpick) + '</button>';
-    if (!groups.length) h += '<p class="sub full">' + esc(T.gNone) + '</p>';
-    h += '</li>';
-    if (state.notice && !state.notice.actionId && state.notice.kind === 'error') {
-      h += '<li class="grefuse" role="alert">' + ui('warn', 18) + '<span class="gtxt"><b>' + esc(T.gRefused) + '</b><span>' + esc(state.notice.message) + '</span></span>' + (lastGroup ? '<button type="button" class="pbtn warn" data-cmd="grp-force">' + esc(T.gForce) + '</button>' : '') + '</li>';
-    } else if (state.notice && !state.notice.actionId) h += '<li class="ginfo" role="status">' + ui('info', 16) + '<span>' + esc(state.notice.message) + '</span></li>';
-    return h;
+    if (!n) return '';
+    var h = '<li class="gtoolbar selbar" role="group" aria-label="' + esc(T.groups) + '">';
+    h += '<span class="n">' + n + '</span><span>' + esc(T.gPicked(n)) + '</span>';
+    h += '<input type="text" id="grp-new-name" value="' + esc(groupNameDraft) + '" placeholder="' + esc(T.groupName) + '" aria-label="' + esc(T.groupName) + '">';
+    h += '<button type="button" class="pbtn primary" data-cmd="grp-create">' + ui('plus', 14) + esc(T.gCreate) + '</button>';
+    if (groups.length) h += '<span class="or">' + esc(T.gOr + ' ' + T.gAddTo) + '</span><select id="grp-add-target" aria-label="' + esc(T.addTo) + '">' + groups.map(function (g) { return '<option value="' + esc(g.id) + '">' + esc(g.name) + '</option>'; }).join('') + '</select><button type="button" class="pbtn" data-cmd="grp-add">' + esc(T.gAdd) + '</button>';
+    h += ib('x', { cmd: 'grp-unpick', aria: T.gUnpick });
+    return h + '</li>';
   }
 
   function pickedIds() { return Object.keys(picked).filter(function (k) { return picked[k]; }); }
@@ -1390,7 +1561,14 @@ const SCRIPT = `
     var groups = state.groups || [], gen = state.generation, byFormat = {};
     (gen ? gen.artifacts : []).forEach(function (a, i) { (byFormat[a.format] = byFormat[a.format] || []).push({ a: a, i: i }); });
     var statusOf = function (f) { var list = byFormat[f] || []; if (!list.length) return null; var worst = null; list.forEach(function (e) { var st = e.a.status; if (!worst || st === 'FAILED' || st === 'BLOCKED' || (st === 'NOT_VALIDATED' && worst !== 'FAILED') || (st === 'GENERATED' && worst === 'STATICALLY_VALIDATED')) worst = st; }); return worst; };
-    var h = '<section class="gsec" aria-label="' + esc(T.gen) + '"><div class="pttl"><h3>' + ui('code', 18) + esc(T.gen) + '</h3><p class="sub">' + esc(T.genNote) + '</p></div>';
+    if (!genOpen && !gen) {
+      // REPLIÉE : les formats en puces, la portée, un bouton ; les options (groupes, forcer) au dépli.
+      var picks = groups.filter(function (g) { return genGroups[g.id]; }).length;
+      return '<section class="gsec gline" id="sec-generation" aria-label="' + esc(T.gen) + '">' + ib('chevR', { cmd: 'gen-toggle', aria: T.genOptions }) + '<h3>' + ui('code', 18) + esc(T.gen) + '</h3>' + ['yaml', 'gherkin', 'playwright', 'java'].map(function (f) {
+        return '<label class="gfmt' + (genFormats[f] ? ' on' : '') + '" title="' + esc(T.genFormats[f]) + '"><input type="checkbox" data-gen-format="' + f + '"' + (genFormats[f] ? ' checked' : '') + ' aria-label="' + esc(T.genFormats[f]) + '">' + esc({ yaml: 'YAML', gherkin: 'Gherkin', playwright: 'Playwright TS', java: 'Java' }[f]) + '</label>';
+      }).join('') + '<span class="sp"></span><span class="sub">' + esc(T.genScope(picks)) + ' · ' + esc(T.stGenNone) + '</span><button type="button" class="pbtn primary" data-cmd="gen-run">' + ui('play', 15) + esc(T.genRun) + '</button></section>';
+    }
+    var h = '<section class="gsec" id="sec-generation" aria-label="' + esc(T.gen) + '"><div class="pttl"><h3>' + (gen ? '' : ib('chevD', { cmd: 'gen-toggle', aria: T.genHideOptions })) + ui('code', 18) + esc(T.gen) + '</h3><p class="sub">' + esc(T.genNote) + '</p></div>';
     h += '<div class="gconf"><span class="lbl">' + esc(T.genFormatsL) + '</span><div class="gtiles">' + ['yaml', 'gherkin', 'playwright', 'java'].map(function (f) {
       var st = statusOf(f), cls = st === 'STATICALLY_VALIDATED' || st === 'PASSED' ? 'ok' : st === 'FAILED' || st === 'BLOCKED' ? 'bad' : st ? 'warn' : '';
       return '<label class="gtile' + (genFormats[f] ? ' on' : '') + '"><input type="checkbox" data-gen-format="' + f + '"' + (genFormats[f] ? ' checked' : '') + '><span class="gtb"><b>' + esc(T.genFormats[f]) + '</b><span class="sub">' + esc(T.genDesc[f]) + '</span>' + (st ? '<span class="gst ' + cls + '">' + (cls === 'ok' ? ui('check', 12) : '') + esc(st === 'STATICALLY_VALIDATED' && byFormat[f][0].a.validation ? T.genValidatedShort + ' · ' + shortMethod(byFormat[f][0].a.validation.method) : T.genStatus[st] || st) + '</span>' : '') + '</span></label>';
@@ -1922,6 +2100,25 @@ const SCRIPT = `
   }
 
   /** LE BANDEAU DE LA REVUE : la reprise possible, le résultat du rejeu, la sauvegarde. */
+  /** LE FIL DE LA REVUE : organiser, décider des assertions, générer ; chaque étape mène à sa section. */
+  function reviewStepsHtml() {
+    var groups = state.groups || [], props = state.proposals || [], gen = state.generation;
+    var actions = state.actions.length;
+    var decided = props.filter(function (p) { return p.status !== 'PROPOSED'; }).length;
+    var rec = props.filter(function (p) { return p.status === 'PROPOSED' && !p.inFlow && pzoneOf(p) === 'recommend'; }).length;
+    var steps = [
+      { id: 'journey', title: T.stOrg, done: groups.length > 0, sub: groups.length ? T.stOrgSub(groups.length, actions) : state.groupProposals && state.groupProposals.length ? T.stOrgProposed(state.groupProposals.length) : T.stOrgNone },
+      { id: 'proposals', title: T.stDecide, done: props.length > 0 && decided === props.length, sub: props.length ? T.stDecideSub(rec, decided, props.length) : T.stDecideNone },
+      { id: 'generation', title: T.stGen, done: !!gen, sub: gen ? T.genFiles(gen.artifacts.length) : T.stGenNone }
+    ];
+    var current = -1;
+    steps.forEach(function (st, i) { if (current < 0 && !st.done) current = i; });
+    return '<nav class="rsteps" aria-label="' + esc(T.stOrg + ' · ' + T.stDecide + ' · ' + T.stGen) + '">' + steps.map(function (st, i) {
+      var cls = st.done ? ' done' : i === current ? ' cur' : '';
+      return (i ? '<span class="rarrow" aria-hidden="true">→</span>' : '') + '<button type="button" class="rstep' + cls + '" data-cmd="goto-sec" data-id="' + st.id + '" aria-label="' + esc(T.stGoto(st.title)) + '"' + (i === current ? ' aria-current="step"' : '') + '><span class="n">' + (st.done ? ui('check', 13) : String(i + 1)) + '</span><span class="rt"><b>' + esc(st.title) + '</b><small>' + esc(st.sub) + '</small></span></button>';
+    }).join('') + '</nav>';
+  }
+
   function renderReview() {
     var el = $('review');
     if (state.phase !== 'REVIEW') { setHtml(el, ''); return; }
@@ -1945,7 +2142,7 @@ const SCRIPT = `
     }
     if (state.saved) h += '<div class="result saved" role="status">' + svg('okCircle') + '<span class="rtitle">' + esc(T.saved) + '</span><span class="sub mono">' + esc(state.saved.directory) + '</span></div>';
     if (!r && !state.saved && !rs) h += '<p class="sub" style="margin:0">' + esc(T.recommend) + '</p>';
-    setHtml(el, h);
+    setHtml(el, reviewStepsHtml() + h);
   }
 
   /** L'ONGLET RÉSEAU : les requêtes métier reliées, étape par étape (en direct : le compteur provisoire). */
@@ -2127,6 +2324,24 @@ const SCRIPT = `
     if (!cmd) return;
     if (cmd === 'select') { selected = id; render(); send({ type: 'select', id: id }); return; }
     if (cmd === 'deselect') { selected = null; render(); return; }
+    // LA REVUE ORGANISÉE : alerte, fil des trois étapes, groupes proposés, vérifications, décisions groupées.
+    if (cmd === 'att-toggle') { onlyAttention = !onlyAttention; render(); return; }
+    if (cmd === 'goto-sec') {
+      selectTab('recording');
+      var sec = id === 'proposals' ? $('sec-proposals') : id === 'generation' ? $('sec-generation') : document.querySelector('.journey');
+      if (sec) sec.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      return;
+    }
+    if (cmd === 'grp-accept-proposals') { sendGroup({ type: 'group', op: 'accept-proposals' }); return; }
+    if (cmd === 'grp-dismiss-proposals') { send({ type: 'group', op: 'dismiss-proposals' }); return; }
+    if (cmd === 'grp-add-check') { send({ type: 'group', op: 'add-check', groupId: id, variable: target.getAttribute('data-key') || '' }); return; }
+    if (cmd === 'pbatch-accept' || cmd === 'pbatch-reject') {
+      var batch = (target.getAttribute('data-ids') || '').split(',').filter(function (x) { return x; });
+      if (batch.length) send({ type: 'assertion-decide', ids: batch, decision: cmd === 'pbatch-accept' ? 'ACCEPT' : 'REJECT' });
+      return;
+    }
+    if (cmd === 'weak-toggle') { weakOpen = !weakOpen; render(); return; }
+    if (cmd === 'gen-toggle') { genOpen = !genOpen; render(); return; }
     if (cmd === 'copy') { try { navigator.clipboard.writeText(id || ''); target.textContent = T.copied; } catch (e) { /* presse-papiers indisponible */ } return; }
     if (cmd === 'refresh-preview') { send({ type: 'refresh' }); return; }
     if (cmd === 'fullscreen') { fullscreen(DETACHED ? document.documentElement : $('preview-card')); return; }
@@ -2177,9 +2392,8 @@ const SCRIPT = `
     if (cmd === 'row-preview' || cmd === 'row-edit') { send({ type: cmd, id: id, columns: rowColumns(id) }); return; }
     if (cmd === 'edit') { editing = !editing; render(); return; }
     if (cmd === 'edit-step') { selected = id || selected; inspTab = 'details'; inspFor = selected; render(); var row = document.querySelector('[data-step="' + id + '"]'); if (row) row.scrollIntoView({ block: 'center' }); return; }
-    if (cmd === 'p-filter') { pFilter = id || 'all'; render(); return; }
     if (cmd === 'p-toggle') { pOpen[id] = !pOpen[id]; render(); return; }
-    if (cmd === 'grp-unpick') { picked = {}; render(); return; }
+    if (cmd === 'grp-unpick') { picked = {}; groupNameDraft = ''; render(); return; }
     if (cmd === 'grp-force') { if (lastGroup) { var forced = {}; for (var k in lastGroup) forced[k] = lastGroup[k]; forced.force = true; send(forced); } return; }
     if (cmd === 'gen-java-toggle') { genJavaOpen = !genJavaOpen; render(); return; }
     if (cmd === 'gen-copy') { var art = state.generation && genSelected !== null ? state.generation.artifacts[genSelected] : null; if (art && navigator.clipboard) { navigator.clipboard.writeText(art.content).then(function () { copied = true; render(); setTimeout(function () { copied = false; render(); }, 1500); }, function () {}); } return; }
@@ -2198,7 +2412,7 @@ const SCRIPT = `
     }
     if (cmd === 'step-up' || cmd === 'step-down') { sendGroup({ type: 'group', op: 'move-step', id: id, direction: cmd === 'step-up' ? 'up' : 'down' }); return; }
     if (cmd === 'step-detach') { sendGroup({ type: 'group', op: 'detach', stepIds: [id] }); return; }
-    if (cmd === 'grp-create') { var nameEl = $('grp-new-name'); var ids = pickedIds(); if (!ids.length) return; picked = {}; sendGroup({ type: 'group', op: 'create', name: (nameEl && nameEl.value.trim()) || (T.groups + ' ' + (((state.groups || []).length) + 1)), stepIds: ids }); return; }
+    if (cmd === 'grp-create') { var nameEl = $('grp-new-name'); var ids = pickedIds(); if (!ids.length) return; picked = {}; groupNameDraft = ''; sendGroup({ type: 'group', op: 'create', name: (nameEl && nameEl.value.trim()) || (T.groups + ' ' + (((state.groups || []).length) + 1)), stepIds: ids }); return; }
     if (cmd === 'grp-add') { var sel = $('grp-add-target'); var ids2 = pickedIds(); if (!sel || !ids2.length) return; picked = {}; sendGroup({ type: 'group', op: 'assign', groupId: sel.value, stepIds: ids2 }); return; }
     if (cmd === 'grp-rename-open') { renamingGroup = id; render(); var inp = $('grp-name-' + id); if (inp) inp.focus(); return; }
     if (cmd === 'grp-rename-apply') { var field = $('grp-name-' + id); renamingGroup = null; sendGroup({ type: 'group', op: 'rename', groupId: id, name: field ? field.value : '' }); return; }
@@ -2247,6 +2461,8 @@ const SCRIPT = `
     var input = event.target;
     // La valeur d'une colonne ou le nom d'une nouvelle donnée : gardés dans le brouillon (aucun rendu).
     var rcol = input && input.getAttribute ? input.getAttribute('data-rowcol') : null;
+    // Le nom du nouveau groupe : gardé tant que des étapes sont cochées (la barre est redessinée à chaque coche).
+    if (input && input.id === 'grp-new-name') { groupNameDraft = input.value; return; }
     if (rcol === 'value' || rcol === 'newKey') {
       var draftCol = (rowDraft[input.getAttribute('data-step-id')] || {})[input.getAttribute('data-column')];
       if (draftCol) draftCol[rcol] = input.value;

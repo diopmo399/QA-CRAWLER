@@ -15,6 +15,7 @@ import type {
   SemanticRecordedAction,
 } from './model.js';
 import { isWrite } from './normalizer.js';
+import { normalizeGroups } from './step-groups.js';
 import { observationIds, type ObservationSet } from './observations.js';
 
 /**
@@ -427,6 +428,8 @@ export function applyProposal(flow: RecordedFlow, proposal: AssertionProposal): 
         explanation: `${proposal.origin.toLowerCase()} assertion ${proposal.id} ${proposal.status === 'PROPOSED' ? 'kept' : 'accepted by the human'}: ${proposal.why}`,
       });
     } else if (!wanted && existing >= 0) flow.steps.splice(existing, 1);
+    // Une vérification suit son action : elle entre dans (ou sort de) son groupe métier avec elle.
+    normalizeGroups(flow);
   }
   if (proposal.verificationMethod === 'BUSINESS_ASSERTION' && proposal.assertion) {
     const assertions = (flow.businessAssertions ??= []).filter(
@@ -444,6 +447,60 @@ function nextStepId(steps: readonly RecordedFlowStep[]): string {
     return match ? Math.max(best, Number(match[1])) : best;
   }, 0);
   return `s${String(max + 1)}`;
+}
+
+/**
+ * UNE VÉRIFICATION DE DONNÉE posée par l'humain : la donnée de test `key` est visible après l'étape
+ * `afterStepId` (« le résultat contient la fiche créée »). Elle devient une proposition EXPLICIT acceptée
+ * — une étape `expect` qui CITE la donnée, résolue au rejeu par la valeur du run, jamais par une valeur
+ * enregistrée. La retirer, la désactiver ou la réinitialiser passe par les décisions habituelles.
+ */
+export function addDataCheck(
+  flow: RecordedFlow,
+  input: { afterStepId: string; key: string; groupName?: string },
+  at = new Date().toISOString(),
+): { ok: true; proposalId: string } | { error: string } {
+  if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,79}$/.test(input.key))
+    return { error: `invalid test data key ${input.key}` };
+  const anchor = flow.steps.find((item) => item.id === input.afterStepId);
+  if (!anchor || anchor.step.kind === 'expect') return { error: `unknown action step ${input.afterStepId}` };
+  const actionId = anchor.actionIds[anchor.actionIds.length - 1];
+  if (actionId === undefined) return { error: `step ${input.afterStepId} has no recorded action` };
+  const expect: FlowExpectation = { text: `\${testData:${input.key}}` };
+  const same = JSON.stringify(expect);
+  if (
+    (flow.proposals ?? []).some(
+      (entry) => entry.afterActionId === actionId && JSON.stringify(entry.expect) === same && inFlow(entry),
+    )
+  )
+    return { error: `testData.${input.key} is already checked after step ${input.afterStepId}` };
+  const proposals = (flow.proposals ??= []);
+  const max = proposals.reduce((best, entry) => {
+    const match = /^p(\d+)$/.exec(entry.id);
+    return match ? Math.max(best, Number(match[1])) : best;
+  }, 0);
+  const proposal: AssertionProposal = {
+    id: `p${String(max + 1)}`,
+    origin: 'EXPLICIT',
+    category: 'DATA_CONSISTENCY',
+    description: `testData.${input.key} is displayed${input.groupName ? ` at the end of "${input.groupName}"` : ''}`,
+    why: `asked by the human: the value of testData.${input.key} used by this run must be visible here`,
+    afterActionId: actionId,
+    afterStepId: anchor.id,
+    sourceObservationIds: [],
+    evidence: [],
+    verificationMethod: 'UI_EXPECT',
+    limits: ['the text is looked for anywhere on the page, not in a given element'],
+    confidence: 1,
+    needsConfirmation: false,
+    recommended: false,
+    status: 'APPROVED',
+    decidedAt: at,
+    expect,
+  };
+  proposals.push(proposal);
+  applyProposal(flow, proposal);
+  return { ok: true, proposalId: proposal.id };
 }
 
 /**

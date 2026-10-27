@@ -49,6 +49,8 @@ export interface PanelCommand {
   collapsed?: boolean;
   keepSteps?: boolean;
   force?: boolean;
+  /** assertion-decide : les propositions décidées d'un coup (« Accepter les 3 », « Tout refuser »). */
+  ids?: string[];
   /** assertion-decide : la décision sur une proposition d'assertion. */
   decision?: 'ACCEPT' | 'REJECT' | 'DISABLE' | 'RESET' | 'MODIFY';
   candidate?: number;
@@ -208,11 +210,15 @@ export function commandOf(payload: unknown): PanelCommand | undefined {
     ...(typeof raw.force === 'boolean' ? { force: raw.force } : {}),
     ...idsOf('formats', raw.formats, /^(yaml|gherkin|playwright|java)$/),
     ...idsOf('groupIds', raw.groupIds, /^g\d{1,6}$/),
+    ...idsOf('ids', raw.ids, /^p\d{1,6}$/),
   };
 }
 
 const DECISIONS = new Set<string>(['ACCEPT', 'REJECT', 'DISABLE', 'RESET', 'MODIFY']);
 const GROUP_OPS = new Set<string>([
+  'accept-proposals',
+  'dismiss-proposals',
+  'add-check',
   'create',
   'rename',
   'describe',

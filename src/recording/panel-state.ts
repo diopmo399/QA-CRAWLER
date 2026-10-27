@@ -413,6 +413,10 @@ export interface PanelState {
   proposals?: PanelProposal[];
   /** Revue : les groupes métier (objets fonctionnels : membres, entrées, sorties, exécutabilité seule). */
   groups?: PanelGroup[];
+  /** Revue : les groupes PROPOSÉS d'après les étapes métier (aucun n'est créé sans décision). */
+  groupProposals?: { name: string; from: number; to: number; steps: number; confidence: number }[];
+  /** Revue : les vérifications de groupe à suggérer (la donnée reçue d'un autre groupe, visible à sa fin). */
+  checkSuggestions?: { groupId: string; groupName: string; key: string; role: 'input' }[];
   /** Revue : la dernière génération (artefacts, statuts, validations, aperçus). */
   generation?: PanelGeneration;
   summary: LiveSummary;
