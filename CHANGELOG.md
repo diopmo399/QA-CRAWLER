@@ -17,7 +17,7 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 - La copie de zod embarquée par `@github/copilot-sdk` (figée en 4.3.6, même dans sa dernière version)
   est ramenée à 4.6.7 par `overrides`. Ce réglage ne vaut que dans ce dépôt : un projet qui installe
-  `@qa-crawler/core` avec le conseiller Copilot doit poser le même `overrides`.
+  `@qa-crawler/core` avec l’assistant Copilot doit poser le même `overrides`.
 - `source-map-js` 1.2.2 et `vite` 7.3.7 : mises à jour correctives (`npm audit fix`).
 - **vitest 4.1.12** (outil de développement, au lieu de 3.2) : corrige GHSA-82fw-gwwq-j7x9 et
   GHSA-qxg6-89mg-rqv8 (`@vitest/mocker`), et retire `tinypool` (GHSA-5gmw-xhrv-c9v3,
