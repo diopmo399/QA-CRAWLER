@@ -40,7 +40,9 @@ export type StopReason =
   | 'max-actions'
   | 'max-duration'
   | 'engine-stop'
-  | 'unreachable-start';
+  | 'unreachable-start'
+  /** Arrêt demandé de l'extérieur (RunOptions.signal) : le run s'arrête comme sur une limite, rapport compris. */
+  | 'cancelled';
 
 export interface ExplorationStats {
   states: number;

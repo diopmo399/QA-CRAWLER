@@ -530,6 +530,7 @@ const FR_VALUES: Record<string, string> = {
   'max-duration': 'durée max atteinte',
   'engine-stop': 'arrêt du moteur',
   'unreachable-start': 'page de départ inaccessible',
+  cancelled: 'annulé à la demande',
   'rule-based': 'à règles',
 };
 

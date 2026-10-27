@@ -50,6 +50,7 @@ const CORE_EXPORTS = [
 
 const SERVER_EXPORTS = [
   'startSdkServer',
+  'openQaCrawler',
   'ExplorationManager',
   'Exploration',
   'summarize',
@@ -68,7 +69,7 @@ const CLIENT_SURFACE: Record<string, string[]> = {
   scenarios: ['list', 'promote'],
   executions: ['start', 'list', 'get'],
   overview: ['get'],
-  explorations: ['start', 'status', 'result', 'subscribe', 'reportLink'],
+  explorations: ['start', 'status', 'result', 'subscribe', 'reportLink', 'cancel'],
   recordings: ['start', 'list', 'get', 'stop', 'subscribe', 'flow', 'studio'],
   assertions: ['list', 'decide'],
   data: ['get', 'bind'],
@@ -111,7 +112,7 @@ describe('SDK public contract, version 1', () => {
     );
     expect(core.EXECUTION_KINDS).toEqual(expect.arrayContaining(['EXPLORATION', 'REPLAY']));
     expect(core.EXECUTION_VERDICTS).toEqual(
-      expect.arrayContaining(['PASSED', 'FAILED', 'NO_FLOW', 'INCOMPLETE']),
+      expect.arrayContaining(['PASSED', 'FAILED', 'NO_FLOW', 'INCOMPLETE', 'CANCELLED']),
     );
     expect(core.FRAMEWORKS).toEqual(
       expect.arrayContaining(['angular', 'react', 'vue', 'salesforce', 'other']),

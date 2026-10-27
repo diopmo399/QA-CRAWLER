@@ -265,7 +265,7 @@ describe('SDK server — projects and explorations', () => {
   it('validates, creates, explores with the engine events, and serves the reports through a short link', async () => {
     const client = createQaCrawler({ endpoint: `${server.url}/api`, token: server.token });
     const caps = await client.capabilities();
-    expect(caps).toMatchObject({ browsers: ['chromium'], cancellation: false, staticAnalysis: false });
+    expect(caps).toMatchObject({ browsers: ['chromium'], cancellation: true, staticAnalysis: false });
     expect(Object.values(caps.extensions).every(Boolean)).toBe(true);
 
     const report = await client.projects.validate(draft());

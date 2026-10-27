@@ -84,9 +84,10 @@ Run options (every command that runs the application):
       --max-states <n>, --max-actions <n>, --quiet, --dotenv <file>
 
 Priority: command line > environment variables > qa-crawler.config.yaml > defaults.
+SDK workspace (projects, environments, scenarios, runs, overview): qa-crawler project|env|scenario|run|overview|doctor --help
 Legacy usage (a mission file) still works: qa-crawler [learn|verify|explore] <mission.yaml>, dry-run, sources, k8s-manifest.
 
-Exit codes: 0 success · 1 QA failure · 2 usage or configuration error · 3 infrastructure/tool error
+Exit codes: 0 success · 1 QA failure · 2 usage or configuration error · 3 infrastructure/tool error · 130 cancelled (Ctrl+C)
 `;
 
 interface ProjectArgs {

@@ -344,6 +344,7 @@ function runDate(run: string, meta?: ExecutionMeta, result?: ExplorationResult):
 /** Le verdict, lu dans les flows du résultat (voir EXECUTION_VERDICTS). */
 export function verdictOf(result: ExplorationResult | undefined): ExecutionVerdict {
   if (!result) return 'INCOMPLETE';
+  if (result.stopReason === 'cancelled') return 'CANCELLED';
   if (result.flows.length === 0) return 'NO_FLOW';
   return result.flows.every((flow) => flow.status === 'PASSED') ? 'PASSED' : 'FAILED';
 }
@@ -488,7 +489,7 @@ export interface OverviewProject {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const PASS_RATE_DEFINITION =
-  'REPLAY executions finished in the period (the engine wrote their result); passed = every replayed flow PASSED';
+  'REPLAY executions finished in the period with a verdict (cancelled ones excluded); passed = every replayed flow PASSED';
 
 /** La vue d'ensemble, calculée sur les runs écrits par le moteur dans la période. */
 export async function computeOverview(
@@ -518,11 +519,8 @@ export async function computeOverview(
       total += 1;
       byKind[execution.kind] += 1;
       recent.push({ ...execution, projectName: project.name });
-      if (
-        execution.kind === 'REPLAY' &&
-        execution.verdict !== 'INCOMPLETE' &&
-        execution.verdict !== 'NO_FLOW'
-      ) {
+      // Un rejeu compte s'il a rendu un verdict : une annulation n'est ni une réussite ni un échec.
+      if (execution.kind === 'REPLAY' && (execution.verdict === 'PASSED' || execution.verdict === 'FAILED')) {
         finished += 1;
         if (execution.verdict === 'PASSED') passed += 1;
         const day = trend.get(execution.createdAt.slice(0, 10));
@@ -545,7 +543,9 @@ export async function computeOverview(
           message: `${String(bySeverity?.CRITICAL ?? 0)} critical issue(s) in ${execution.run}`,
         });
     }
-    const last = executions.find((execution) => execution.verdict !== 'INCOMPLETE');
+    const last = executions.find(
+      (execution) => execution.verdict !== 'INCOMPLETE' && execution.verdict !== 'CANCELLED',
+    );
     if (!project.archived && last?.verdict === 'FAILED')
       alerts.push({
         kind: 'EXECUTION_FAILED',

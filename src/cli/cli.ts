@@ -18,6 +18,7 @@ import { runManifestCli } from './manifest-command.js';
 import { runKnowledgeCenterCli } from './knowledge-center-command.js';
 import { runSdkServerCli } from './sdk-server-command.js';
 import { PROJECT_COMMANDS, PROJECT_HELP, runProjectCli, type ProjectCommand } from './project-command.js';
+import { PLATFORM_COMMANDS, runPlatformCli, type PlatformCommand } from './platform-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
 import { readCoreVersion, setToolIdentity } from '../tool-identity.js';
@@ -25,7 +26,8 @@ import { terminalProgress } from './progress-renderer.js';
 import { intelligenceActivity } from './intelligence-activity.js';
 import { driftLines, recoveryLines } from '../workflow-healing/explain.js';
 
-export const EXIT = { OK: 0, ISSUES: 1, USAGE: 2, RUNTIME: 3 } as const;
+/** 130 : interrompu par Ctrl+C (convention 128 + SIGINT) ; le rapport du run arrêté est écrit. */
+export const EXIT = { OK: 0, ISSUES: 1, USAGE: 2, RUNTIME: 3, CANCELLED: 130 } as const;
 
 const SEVERITY_COLOR: Record<Severity, (text: string) => string> = {
   INFO: color.blue,
@@ -69,6 +71,9 @@ export async function runCli(input: string[], options: CliOptions = {}): Promise
     !(argv[0] === 'explore' && legacyMission)
   )
     return runProjectCli(argv[0] as ProjectCommand, argv.slice(1), runtime);
+  // LA PLATEFORME (espace de travail du SDK) : projets, environnements, scénarios, exécutions, vue d'ensemble.
+  if ((PLATFORM_COMMANDS as readonly string[]).includes(argv[0] ?? ''))
+    return runPlatformCli(argv[0] as PlatformCommand, argv.slice(1));
   // RECORD sans mission explicite dans un projet configuré : la mission dérivée du projet.
   if (
     argv[0] === 'record' &&
@@ -187,8 +192,10 @@ export async function runCli(input: string[], options: CliOptions = {}): Promise
   const advisor = intelligenceActivity(advisorLine.sink, () => {
     advisorLine.stop();
   });
+  const interruption = interruptOnSigint();
   try {
     const outcome = await runMission(config, {
+      signal: interruption.signal,
       onProgress: (update) => {
         advisor.stop();
         finishing.sink(update);
@@ -351,6 +358,12 @@ export async function runCli(input: string[], options: CliOptions = {}): Promise
       logger.info('');
     }
 
+    if (result.stopReason === 'cancelled') {
+      logger.info(
+        color.yellow('CANCELLED — interrupted (Ctrl+C); the report of the steps played is written'),
+      );
+      return EXIT.CANCELLED;
+    }
     if (outcome.passed) {
       logger.info(color.green(`PASSED — no issue at or above ${config.report.failOnSeverity}`));
       return EXIT.OK;
@@ -382,7 +395,36 @@ export async function runCli(input: string[], options: CliOptions = {}): Promise
       logger.error('Chromium is not installed. Run: npx playwright install chromium');
     }
     return EXIT.RUNTIME;
+  } finally {
+    interruption.dispose();
   }
+}
+
+/**
+ * Ctrl+C pendant une mission : le premier demande l'arrêt contrôlé (le moteur s'arrête avant l'action
+ * suivante, ferme le navigateur, écrit son rapport) ; le second quitte tout de suite (code 130).
+ */
+export function interruptOnSigint(
+  exit: (code: number) => void = (code) => process.exit(code),
+  source: Pick<NodeJS.EventEmitter, 'on' | 'off'> = process,
+): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const onSignal = (): void => {
+    if (controller.signal.aborted) {
+      logger.warn('Second interruption: exiting now (the report may be incomplete).');
+      exit(EXIT.CANCELLED);
+      return;
+    }
+    logger.warn('Interruption requested: stopping before the next action (Ctrl+C again to exit now)…');
+    controller.abort();
+  };
+  source.on('SIGINT', onSignal);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      source.off('SIGINT', onSignal);
+    },
+  };
 }
 
 /** Les lignes [TRANSITION_WAIT] d'une étape : signaux, stabilité, préparation de la suite, ou la borne atteinte. */

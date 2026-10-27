@@ -105,6 +105,8 @@ Exit codes:
   1  exploration finished with failing issues, or verify found regressions
   2  invalid usage, invalid mission, or no baseline to verify
   3  runtime failure (browser could not start, authentication failed...)
+  130 interrupted by Ctrl+C: the engine stopped before the next action and wrote its report
+      (stopReason: cancelled); a second Ctrl+C exits at once, the report may then be incomplete
 
 Environment:
   QA_BASE_URL                Overrides target.baseUrl

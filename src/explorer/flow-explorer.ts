@@ -472,6 +472,8 @@ export const EXPLORER_CLOSING_PHASES = {
 
 export interface FlowExplorerOptions {
   memory: FlowMemory;
+  /** L'annulation : vérifiée avec les limites de la mission (avant chaque action et chaque étape de flow). */
+  signal?: AbortSignal;
   /** La progression de la fin du run (navigateur, client d'intelligence, mémoire…). */
   progress?: ProgressTracker;
   /**
@@ -683,6 +685,8 @@ export class FlowExplorer {
   private readonly interactions: BrowserInteractionManager;
   private readonly browserEvents: BrowserEventDiscovery;
   private readonly progress: ProgressTracker | undefined;
+  /** L'annulation demandée de l'extérieur (RunOptions.signal). */
+  private readonly signal: AbortSignal | undefined;
   private readonly credentials: EnvironmentCredentialProvider;
   /** Connexion HTTP confiée au navigateur (une origine, un profil) : aucune course avec les popups. */
   private readonly browserCredentials: BrowserHttpCredentials | undefined;
@@ -827,6 +831,7 @@ export class FlowExplorer {
   ) {
     const { exploration, goals } = config;
     this.progress = options.progress;
+    this.signal = options.signal;
     this.dryRunHook = options.dryRun;
     this.afterFlowsHook = options.afterFlows;
     this.historyAvailable = options.historyAvailable ?? false;
@@ -1302,7 +1307,8 @@ export class FlowExplorer {
     )
       await this.screenshots.prepare();
 
-    const browser = new BrowserManager(this.config.browser);
+    // Annulable de l'extérieur : Ctrl+C est géré par l'appelant, le moteur ferme le navigateur.
+    const browser = new BrowserManager(this.config.browser, { handleSIGINT: this.signal === undefined });
     const observers = this.createObservers();
     let stopReason: StopReason = 'exhausted';
     try {
@@ -9297,6 +9303,8 @@ export class FlowExplorer {
 
   /** Le budget central (états, actions, durée) : toutes les stratégies s'arrêtent au même endroit. */
   private limitReached(): StopReason | undefined {
+    // L'ANNULATION demandée de l'extérieur : un arrêt comme sur une limite (navigateur fermé, rapport écrit).
+    if (this.signal?.aborted) return 'cancelled';
     this.budget.set('states', this.graph.nodeCount);
     this.budget.set('actions', this.actionsExecuted);
     this.budget.set('mutations', this.safety.mutationCount);

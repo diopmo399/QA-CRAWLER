@@ -17,7 +17,14 @@ export class BrowserManager {
   private browser: Browser | undefined;
   private context: BrowserContext | undefined;
 
-  constructor(private readonly options: ScenarioConfig['browser']) {}
+  /**
+   * `handleSIGINT: false` : l'appelant gère Ctrl+C (annulation contrôlée, RunOptions.signal) ; le
+   * navigateur reste ouvert jusqu'à ce que le moteur s'arrête et le ferme lui-même.
+   */
+  constructor(
+    private readonly options: ScenarioConfig['browser'],
+    private readonly lifecycle: { handleSIGINT?: boolean } = {},
+  ) {}
 
   /** `extra` : options fixées par l'authentificateur (identifiants HTTP). */
   async start(extra: BrowserContextOptions = {}): Promise<BrowserContext> {
@@ -25,6 +32,7 @@ export class BrowserManager {
       headless: this.options.headless,
       args: this.options.args,
       slowMo: this.options.slowMoMs,
+      handleSIGINT: this.lifecycle.handleSIGINT ?? true,
     });
     this.context = await this.browser.newContext({
       viewport: this.options.viewport,

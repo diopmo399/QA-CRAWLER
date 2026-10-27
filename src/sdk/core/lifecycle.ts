@@ -1,12 +1,12 @@
 import type { ExplorationCounters, ExplorationEvent, ExplorationStatus, Severity } from './contracts.js';
 
 /**
- * LE CYCLE DE VIE d'une exploration : QUEUED → RUNNING → COMPLETED | FAILED. CANCELLED est
- * réservé (aucune transition n'y mène tant que le moteur n'a pas d'arrêt à la demande).
+ * LE CYCLE DE VIE d'une exploration : QUEUED → RUNNING → COMPLETED | FAILED, et CANCELLED sur
+ * demande (en file : jamais lancée ; en cours : le moteur s'arrête et écrit son rapport).
  */
 const NEXT: Record<ExplorationStatus, readonly ExplorationStatus[]> = {
-  QUEUED: ['RUNNING', 'FAILED'],
-  RUNNING: ['COMPLETED', 'FAILED'],
+  QUEUED: ['RUNNING', 'FAILED', 'CANCELLED'],
+  RUNNING: ['COMPLETED', 'FAILED', 'CANCELLED'],
   COMPLETED: [],
   FAILED: [],
   CANCELLED: [],

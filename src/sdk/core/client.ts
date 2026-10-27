@@ -146,10 +146,11 @@ export interface QaCrawlerClient {
   /** Les environnements d'un projet (dev, test, certification, préproduction) : les cibles d'une exécution. */
   environments: {
     list(projectId: string): Promise<Environment[]>;
+    /** `selfId` : vérifier un environnement existant (son propre nom n'est pas un doublon). */
     check(
       projectId: string,
       input: EnvironmentInput,
-      options?: { reach?: boolean },
+      options?: { reach?: boolean; selfId?: string },
     ): Promise<EnvironmentCheck>;
     create(projectId: string, input: EnvironmentInput): Promise<Environment>;
     update(projectId: string, id: string, input: EnvironmentInput): Promise<Environment>;
@@ -181,6 +182,8 @@ export interface QaCrawlerClient {
       options?: SubscribeOptions,
     ): Subscription;
     reportLink(id: string): Promise<ReportLink>;
+    /** Annule une exploration ou un rejeu (`capabilities.cancellation`) : CANCELLED quand le moteur s'est arrêté. */
+    cancel(id: string): Promise<ExplorationSnapshot>;
   };
   /** Un humain joue le parcours dans le Chromium ouvert par le serveur ; le moteur en fait un flow. */
   recordings: {
@@ -471,6 +474,7 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           subscribeOptions,
         ),
       reportLink: (id) => request('POST', `/explorations/${encodeURIComponent(id)}/report-links`, {}),
+      cancel: (id) => request('POST', `/explorations/${encodeURIComponent(id)}/cancel`, {}),
     },
     recordings: {
       start: (projectId, input) => request('POST', `${project(projectId)}/recordings`, input),

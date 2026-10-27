@@ -123,8 +123,11 @@ export interface Capabilities {
   defaults: ProjectDraft;
   /** Le serveur accepte-t-il un dossier de code source (analyse statique Angular) ? */
   staticAnalysis: boolean;
-  /** Le moteur ne sait pas arrêter une exploration en cours : l'annulation n'existe pas. */
-  cancellation: false;
+  /**
+   * Une exploration ou un rejeu s'annule (`explorations.cancel`) : en file, elle n'est jamais lancée ;
+   * en cours, le moteur s'arrête à la prochaine vérification de ses limites et écrit son rapport.
+   */
+  cancellation: boolean;
   /**
    * Les capacités au-delà de la création de projet, chacune branchée sur le module du moteur qui la
    * réalise. `recordings` ouvre un Chromium visible sur la machine du serveur : un humain y joue le
@@ -269,7 +272,8 @@ export type StopReason =
   | 'max-actions'
   | 'max-duration'
   | 'engine-stop'
-  | 'unreachable-start';
+  | 'unreachable-start'
+  | 'cancelled';
 
 export interface ExplorationIssue {
   id: string;
@@ -928,9 +932,10 @@ export interface ExecutionStartInput {
 
 /**
  * Le verdict d'une exécution, lu dans le résultat du moteur : PASSED (tous les flows joués PASSED),
- * FAILED (au moins un flow non PASSED), NO_FLOW (exploration sans flow), INCOMPLETE (pas de résultat).
+ * FAILED (au moins un flow non PASSED), NO_FLOW (exploration sans flow), INCOMPLETE (pas de résultat),
+ * CANCELLED (annulée à la demande : le moteur s'est arrêté, ce qu'il a joué reste dans le run).
  */
-export const EXECUTION_VERDICTS = ['PASSED', 'FAILED', 'NO_FLOW', 'INCOMPLETE'] as const;
+export const EXECUTION_VERDICTS = ['PASSED', 'FAILED', 'NO_FLOW', 'INCOMPLETE', 'CANCELLED'] as const;
 export type ExecutionVerdict = (typeof EXECUTION_VERDICTS)[number];
 
 /** Une exécution terminée (un run sur disque) : ce que le SDK en sait sans le recalculer. */

@@ -32,6 +32,31 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Annulation contrôlée** d'une exploration ou d'un rejeu (`docs/sdk/README.md`, « Statuts »).
+  - Moteur : `RunOptions.signal` ; il s'arrête avant l'action ou l'étape suivante, ferme le
+    navigateur et écrit son rapport (`stopReason: cancelled`).
+  - SDK : `client.explorations.cancel(id)`, statut et verdict `CANCELLED`
+    (`capabilities.cancellation: true`). Une exécution annulée n'entre pas dans le taux de réussite.
+  - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
+    quitte tout de suite.
+
+- **Audit et plan du SDK central** (`docs/sdk/MASTER-PLAN.md`) et décision d'architecture
+  (`docs/sdk/adr/0001-sdk-central.md`) : un service local, un client, une façade Node ; la CLI et le
+  Dashboard en sont des clients.
+
+- **CLI de la plateforme** (`docs/sdk/CLI.md`) : `project list|show`, `env list|show|validate`,
+  `scenario list|promote`, `run start|list|results|status|cancel`, `overview`, `doctor`, sur le
+  client du SDK.
+  - Deux modes : local (`--workspace`) ou distant (`--endpoint`, jeton par variable).
+  - Sortie `--json`, et JUnit XML d'un run (`--junit`).
+  - Codes de sortie : `0`, `1`, `2`, `3` et `130` (Ctrl+C annule).
+  - Le client accepte `selfId` pour vérifier un environnement existant.
+
+- **SDK dans un programme Node** : `openQaCrawler({ workspace })` démarre le service sur 127.0.0.1
+  (port libre, jeton jamais affiché) et rend le client ; `close()` annule ce qui tourne. Exemple
+  exécutable `examples/sdk-node/replay.mjs` (codes de sortie selon le verdict), testé avec le vrai
+  moteur. L'arrêt du serveur SDK annule désormais les exécutions en cours avant de fermer.
+
 - **SDK : plateforme** (`docs/sdk/README.md`, audit `docs/sdk/PLATFORM-AUDIT.md`).
   - **Projets** : liste, détail, modification revalidée par le moteur, duplication sans secret,
     archivage sans suppression, restauration.
