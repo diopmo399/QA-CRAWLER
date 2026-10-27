@@ -108,7 +108,9 @@ describe('Dashboard — requirements, in Chromium', () => {
 
   it('the matrix shows the link and exports a CSV; the indicators and trends count it', async () => {
     await dashboard().locator('.drawer [data-action="nav"][data-view="traceability"]').click();
-    const row = dashboard().locator('.mtx tbody tr', { hasText: 'REQ-501' });
+    const row = dashboard().locator('.mtx tbody tr', {
+      has: page.locator('th code', { hasText: /^REQ-501$/ }),
+    });
     await row.waitFor();
     expect(await row.locator('.mx.on').textContent()).toBe('create-request');
     const [download] = await Promise.all([
