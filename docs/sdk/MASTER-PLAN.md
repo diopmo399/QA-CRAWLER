@@ -90,12 +90,12 @@ maître sépare **trois dimensions** (implémentation, couverture, vérification
 
 ### 2.5 Dashboard
 
-| Capacité                                                             | État                      | Preuve / écart                                                                 |
-| -------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------ |
-| Composants : assistant, Run Monitor, comparaison, Flow Studio        | `EXISTANT_ET_TESTÉ`       | `sdk-wizard`, `sdk-monitor`, `sdk-runs`, `sdk-studio` (Chromium)               |
-| Page Dashboard (projets, environnements, exécutions, vue d'ensemble) | `ABSENT`                  | phase 3                                                                        |
-| Bouton « Annuler » dans le suivi                                     | `ABSENT`                  | l'API existe ; l'écran viendra avec le Dashboard                               |
-| Libellés des phases du moteur traduits                               | `EXISTANT_MAIS_INCOMPLET` | le Run Monitor en français affiche les phases du moteur en anglais (défaut D1) |
+| Capacité                                                             | État                | Preuve / écart                                                       |
+| -------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------- |
+| Composants : assistant, Run Monitor, comparaison, Flow Studio        | `EXISTANT_ET_TESTÉ` | `sdk-wizard`, `sdk-monitor`, `sdk-runs`, `sdk-studio` (Chromium)     |
+| Page Dashboard (projets, environnements, exécutions, vue d'ensemble) | `EXISTANT_ET_TESTÉ` | `sdk-dashboard.test.ts` (rendu ; Chromium avec le vrai moteur)       |
+| Bouton « Annuler » dans le suivi                                     | `EXISTANT_ET_TESTÉ` | Dashboard, après confirmation dans la page (`sdk-dashboard.test.ts`) |
+| Libellés des phases du moteur traduits                               | `EXISTANT_ET_TESTÉ` | défaut D1 corrigé (`sdk-engine-phases.test.ts`)                      |
 
 ### 2.6 Sécurité
 
@@ -148,7 +148,7 @@ SDK central (contrats, service, client)
 | 0     | Audit, cartographie, plan                                                                                                                                                | fait           |
 | 1     | Plateforme SDK : projets, environnements, scénarios, exécutions, vue d'ensemble                                                                                          | fait (PR #141) |
 | 2     | Annulation contrôlée ; SDK dans un programme Node ; CLI de la plateforme                                                                                                 | fait (ce lot)  |
-| 3     | Dashboard (thème clair, accent violet) sur le SDK : vue d'ensemble, projets, environnements, exécutions, annulation                                                      | à faire        |
+| 3     | Dashboard (thème clair, accent violet) sur le SDK : vue d'ensemble, projets, environnements, exécutions, annulation                                                      | fait           |
 | 4     | Traçabilité métier : critères d'acceptation, liens (provenance, confiance, confirmation), trois dimensions d'états, indicateurs structurés ; SDK, CLI `trace`, Dashboard | à faire        |
 | 5     | Génération par critère, aperçu sans écriture, dry run exposé par le SDK et la CLI                                                                                        | à faire        |
 | 6     | Références d'implémentation (selon Q2), exports protégés (selon Q3)                                                                                                      | à faire        |

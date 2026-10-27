@@ -127,6 +127,11 @@ describe('SDK public contract, version 1', () => {
       error: 'qa-error',
     });
     expect(core.RUNS_EVENTS).toMatchObject({ selection: 'qa-runs-selection', error: 'qa-error' });
+    expect(core.DASHBOARD_EVENTS).toMatchObject({
+      navigate: 'qa-dashboard-navigate',
+      executionStarted: 'qa-execution-started',
+      error: 'qa-error',
+    });
     expect(core.MONITOR_EVENTS).toMatchObject({ connection: 'qa-monitor-connection', error: 'qa-error' });
     expect(core.COVERAGE_STATUSES).toEqual(
       expect.arrayContaining(['NOT_COVERED', 'VERIFIED_PASS', 'VERIFIED_FAIL', 'STALE_EVIDENCE']),

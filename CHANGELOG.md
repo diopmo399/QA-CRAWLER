@@ -14,6 +14,14 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
     quitte tout de suite.
 
+- **Dashboard** (`<qa-crawler-dashboard>`, page `/dashboard`, `docs/sdk/README.md`) : vue
+  d'ensemble, projets, lancement d'un rejeu, suivi en direct, annulation et archivage confirmés
+  dans la page, détail d'une exécution. Il est construit sur le client du SDK, en thème clair
+  (accent violet) avec thème sombre, en français et en anglais, et il est testé dans Chromium avec
+  le vrai moteur.
+  - Le taux de réussite s'affiche avec son numérateur, son dénominateur et ses exclusions.
+  - Les phases du moteur sont traduites dans le Run Monitor et l'assistant.
+
 - **Audit et plan du SDK central** (`docs/sdk/MASTER-PLAN.md`) et décision d'architecture
   (`docs/sdk/adr/0001-sdk-central.md`) : un service local, un client, une façade Node ; la CLI et le
   Dashboard en sont des clients.

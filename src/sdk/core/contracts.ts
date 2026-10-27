@@ -836,6 +836,15 @@ export const RUNS_EVENTS = {
   error: 'qa-error',
 } as const;
 
+/** Les événements DOM du Dashboard (bubbles, composed). */
+export const DASHBOARD_EVENTS = {
+  /** `detail: { route }` : la vue affichée a changé (vue d'ensemble, projets, projet, exécution). */
+  navigate: 'qa-dashboard-navigate',
+  /** `detail: { projectId, exploration }` : un rejeu a été lancé depuis le Dashboard. */
+  executionStarted: 'qa-execution-started',
+  error: 'qa-error',
+} as const;
+
 export const STUDIO_EVENTS = {
   /** `detail: { stepIds, groupId? }` : la sélection a changé. */
   selection: 'qa-studio-selection',

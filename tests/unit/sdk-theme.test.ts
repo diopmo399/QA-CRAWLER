@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DASHBOARD_CSS } from '../../src/sdk/ui/dashboard-styles.js';
 import { MONITOR_CSS } from '../../src/sdk/ui/monitor-styles.js';
 import { RUNS_CSS } from '../../src/sdk/ui/runs-styles.js';
 import { STUDIO_CSS } from '../../src/sdk/ui/studio-styles.js';
@@ -46,7 +47,7 @@ const dark = tokens(darkThemeCss().split('@media')[0] ?? '');
 
 describe('SDK themes', () => {
   it('every component carries the dark theme, by attribute and by system preference', () => {
-    for (const css of [WIZARD_CSS, STUDIO_CSS, RUNS_CSS, MONITOR_CSS]) {
+    for (const css of [WIZARD_CSS, STUDIO_CSS, RUNS_CSS, MONITOR_CSS, DASHBOARD_CSS]) {
       expect(css).toContain(':host([theme="dark"]){');
       expect(css).toContain('@media (prefers-color-scheme:dark)');
       expect(css).toContain(':host([theme="auto"]){');
@@ -58,7 +59,7 @@ describe('SDK themes', () => {
   });
 
   it('the dark theme redefines every color token of the light one', () => {
-    for (const css of [WIZARD_CSS, STUDIO_CSS, RUNS_CSS, MONITOR_CSS])
+    for (const css of [WIZARD_CSS, STUDIO_CSS, RUNS_CSS, MONITOR_CSS, DASHBOARD_CSS])
       for (const name of Object.keys(lightOf(css))) expect(dark, name).toHaveProperty(name);
   });
 
@@ -83,5 +84,27 @@ describe('SDK themes', () => {
   it('status colors are always mixed with the text color in the comparison and the run monitor', () => {
     for (const css of [RUNS_CSS, MONITOR_CSS])
       expect(css).not.toMatch(/[{;]color:var\(--qa-color-(success|warning|danger)\)/);
+  });
+
+  it('dashboard: text, links and status pills reach WCAG AA, light and dark', () => {
+    for (const theme of [lightOf(DASHBOARD_CSS), { ...lightOf(DASHBOARD_CSS), ...dark }]) {
+      const text = theme.text as Rgb;
+      for (const ground of ['surface', 'background'] as const) {
+        const surface = theme[ground] as Rgb;
+        expect(contrast(text, surface), ground).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(theme.muted as Rgb, surface), `muted on ${ground}`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(theme.primary as Rgb, surface), `primary on ${ground}`).toBeGreaterThanOrEqual(4.5);
+      }
+      // Pastilles : la couleur du statut mêlée à 70-75 % à celle du texte, sur le fond doux du statut.
+      for (const [status, share] of [
+        ['success', 0.62],
+        ['warning', 0.75],
+        ['danger', 0.75],
+      ] as const)
+        expect(
+          contrast(mix(theme[status] as Rgb, text, share), theme[`${status}-soft`] as Rgb),
+          status,
+        ).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });
