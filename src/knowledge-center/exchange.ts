@@ -134,9 +134,9 @@ const keyed = z
     status: z.string().min(1).max(200),
     firstSeenAt: isoDate,
     lastSeenAt: isoDate,
-    data: z.record(z.unknown()),
+    data: z.record(z.string(), z.unknown()),
   })
-  .passthrough();
+  .loose();
 
 const exportSchema = z
   .object({
@@ -155,16 +155,12 @@ const exportSchema = z
         provider: z.string(),
         schemaVersion: z.number().int().nonnegative(),
         runs: z.array(
-          z
-            .object({ id: z.string().min(1), applicationId: z.string().min(1), startedAt: isoDate })
-            .passthrough(),
+          z.object({ id: z.string().min(1), applicationId: z.string().min(1), startedAt: isoDate }).loose(),
         ),
         states: z.array(
-          z
-            .object({ id: z.string().min(1), runId: z.string().min(1), stateId: z.string().min(1) })
-            .passthrough(),
+          z.object({ id: z.string().min(1), runId: z.string().min(1), stateId: z.string().min(1) }).loose(),
         ),
-        transitions: z.array(z.object({ id: z.string().min(1), runId: z.string().min(1) }).passthrough()),
+        transitions: z.array(z.object({ id: z.string().min(1), runId: z.string().min(1) }).loose()),
         knowledge: z.array(
           z
             .object({
@@ -180,7 +176,7 @@ const exportSchema = z
               firstSeenAt: isoDate,
               lastSeenAt: isoDate,
             })
-            .passthrough(),
+            .loose(),
         ),
         evolution: z.array(keyed),
         anomalies: z.array(keyed),
@@ -191,16 +187,14 @@ const exportSchema = z
       .object({
         schemaVersion: z.number().int(),
         key: z.string().min(1),
-        data: z.object({ identity: z.object({ application: z.string() }).passthrough() }).passthrough(),
+        data: z.object({ identity: z.object({ application: z.string() }).loose() }).loose(),
       })
       .optional(),
     functional: z.object({ content: z.unknown() }).optional(),
     rules: z.object({ content: z.unknown() }).optional(),
-    review: z
-      .array(z.object({ id: z.string(), at: isoDate, operation: z.string() }).passthrough())
-      .default([]),
+    review: z.array(z.object({ id: z.string(), at: isoDate, operation: z.string() }).loose()).default([]),
   })
-  .passthrough();
+  .loose();
 
 export function parseKnowledgeExport(raw: unknown): KnowledgeExport {
   if (raw && typeof raw === 'object' && (raw as { format?: unknown }).format !== KNOWLEDGE_EXPORT_FORMAT)
