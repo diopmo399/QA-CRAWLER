@@ -6,14 +6,31 @@ import type {
   ExecutionRecord,
   ExplorationEvent,
   ExplorationSnapshot,
+  GraphView,
   OverviewView,
   ProjectDetail,
   ProjectSummary,
+  RecordingSnapshot,
+  RunComparisonView,
+  ScenarioHistoryView,
 } from '../core/contracts.js';
 import { isTerminal } from '../core/lifecycle.js';
 import type { DashboardStrings } from './dashboard-i18n.js';
+import { environmentsView, explorationsView, historyView, scenariosView } from './dashboard-ops.js';
+import {
+  checkLines,
+  executionTable,
+  formatDate,
+  header,
+  icon,
+  pill,
+  readiness,
+  readinessPill,
+} from './dashboard-parts.js';
 import { enginePhase } from './engine-phases.js';
 import { esc } from './view.js';
+
+export { formatDate, pill, readiness } from './dashboard-parts.js';
 
 /**
  * LE RENDU DU DASHBOARD : des fonctions pures, de l'état vers le HTML (échappé). Tout chiffre vient
@@ -28,7 +45,29 @@ export type DashboardRoute =
   | { view: 'projects' }
   | { view: 'project'; projectId: string; tab?: ProjectTab }
   | { view: 'executions'; projectId: string }
-  | { view: 'execution'; projectId: string; run: string; explorationId?: string };
+  | { view: 'execution'; projectId: string; run: string; explorationId?: string }
+  | { view: 'history'; projectId: string }
+  | { view: 'scenarios'; projectId: string; scenario?: string }
+  /** `environmentId: 'new'` : la création d'un environnement. */
+  | { view: 'environments'; projectId: string; environmentId?: string }
+  | { view: 'explorations'; projectId: string; run?: string };
+
+/** Le formulaire d'un environnement, tel que saisi (converti en EnvironmentInput à l'envoi). */
+export interface EnvironmentForm {
+  id?: string;
+  name: string;
+  kind: string;
+  baseUrl: string;
+  domains: string;
+  writes: boolean;
+  maxPerRun: string;
+  secrets: string;
+  variables: string;
+  maxStates: string;
+  maxActions: string;
+  maxDurationMinutes: string;
+  actionTimeoutMs: string;
+}
 
 export interface LiveStep {
   flow: string;
@@ -71,7 +110,24 @@ export interface DashboardState {
   /** L'environnement dont la vérification (avec l'URL) est en cours. */
   checking?: string;
   /** Une action à confirmer dans la page (jamais une boîte de dialogue du navigateur). */
-  confirm?: 'archive' | 'cancel';
+  confirm?: 'archive' | 'cancel' | 'remove-env';
+  /** Historique : les deux exécutions cochées (la plus ancienne d'abord) et leur comparaison. */
+  picked: string[];
+  comparison?: RunComparisonView;
+  comparing?: boolean;
+  /** Scénarios : leur stabilité et les enregistrements du projet. */
+  scenarioHistory?: ScenarioHistoryView[];
+  recordings?: RecordingSnapshot[];
+  promoting?: string;
+  /** Environnements : le formulaire ouvert, sa vérification, l'enregistrement en cours. */
+  envForm?: EnvironmentForm;
+  envCheck?: EnvironmentCheck;
+  envBusy?: boolean;
+  envError?: string;
+  /** Explorations : le détail et la carte de l'exploration ouverte, la gravité affichée. */
+  explored?: ExecutionDetail;
+  graph?: GraphView;
+  severity: string;
   /** L'exécution suivie en direct (son instantané, ses étapes, la dernière phase annoncée). */
   live?: { snapshot: ExplorationSnapshot; steps: LiveStep[]; phase?: string; cancelRequested: boolean };
   execution?: ExecutionDetail;
@@ -82,69 +138,24 @@ export interface DashboardState {
 
 export const PERIODS = [1, 7, 30] as const;
 
-const TONE: Record<string, string> = {
-  PASSED: 'ok',
-  PASS: 'ok',
-  COMPLETED: 'ok',
-  ACTIVE: 'ok',
-  READY: 'ok',
-  FAILED: 'ko',
-  FAIL: 'ko',
-  NOT_READY: 'ko',
-  CANCELLED: 'mu',
-  INCOMPLETE: 'warn',
-  BLOCKED: 'warn',
-  INCONCLUSIVE: 'warn',
-  RUNNING: 'live',
-  QUEUED: 'mu',
-  SKIPPED: 'mu',
-  NO_FLOW: 'mu',
-  ARCHIVED: 'mu',
-  UNKNOWN: 'mu',
-};
-
-export const pill = (raw: string, text = raw): string =>
-  `<span class="pill ${TONE[raw] ?? 'mu'}">${esc(text)}</span>`;
-
-const ICONS: Record<string, string> = {
-  overview:
-    '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
-  projects: '<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',
-  executions: '<circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l6-3.5z"/>',
-  back: '<path d="M15 6l-6 6 6 6"/>',
-  play: '<path d="M8 5v14l11-7z"/>',
-  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
-  refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
-  alert: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
-  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
-  close: '<path d="M6 6l12 12M18 6L6 18"/>',
-  check: '<path d="M5 12l5 5 9-10"/>',
-  cross: '<path d="M6 6l12 12M18 6L6 18"/>',
-};
-
-const icon = (name: string): string =>
-  `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] ?? ''}</svg>`;
-
-export function formatDate(iso: string, locale: 'fr' | 'en'): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString(locale === 'fr' ? 'fr-FR' : 'en-GB', { dateStyle: 'short', timeStyle: 'short' });
-}
-
 // ── La coquille : menu par sections, sélecteur de projet, menu repliable sur écran étroit ───────────
 
-type NavView = 'overview' | 'projects' | 'executions';
+export type NavView = keyof DashboardStrings['nav'];
 type NavSection = keyof DashboardStrings['sections'];
 
 /** Les entrées du menu : seulement les écrans que le Dashboard sait afficher. */
 const NAV: { section: NavSection; items: NavView[] }[] = [
-  { section: 'pilot', items: ['overview', 'projects', 'executions'] },
+  { section: 'pilot', items: ['overview', 'projects', 'executions', 'history', 'scenarios', 'explorations'] },
+  { section: 'admin', items: ['environments'] },
 ];
 
 /** L'entrée du menu qui correspond à la vue affichée. */
 export function activeNav(route: DashboardRoute): NavView {
   if (route.view === 'project' || route.view === 'projects') return 'projects';
   if (route.view === 'execution' || route.view === 'executions') return 'executions';
+  if (route.view === 'history' || route.view === 'scenarios' || route.view === 'environments')
+    return route.view;
+  if (route.view === 'explorations') return 'explorations';
   return 'overview';
 }
 
@@ -198,21 +209,15 @@ function body(state: DashboardState): string {
       return executionsView(state);
     case 'execution':
       return executionView(state);
+    case 'history':
+      return historyView(state);
+    case 'scenarios':
+      return scenariosView(state);
+    case 'environments':
+      return environmentsView(state);
+    case 'explorations':
+      return explorationsView(state);
   }
-}
-
-/**
- * L'en-tête d'un écran. `title` est déjà échappé (il porte des pastilles) ; `back` : le retour
- * (`data-to`) et son libellé.
- */
-function header(
-  title: string,
-  options: { sub?: string; actions?: string; back?: [string, string] } = {},
-): string {
-  const back = options.back
-    ? `<button class="back" data-action="back" data-to="${esc(options.back[0])}">${icon('back')}<span>${esc(options.back[1])}</span></button>`
-    : '';
-  return `<header class="hd"><div class="hd-t">${back}<h1>${title}</h1>${options.sub ? `<p class="sub">${options.sub}</p>` : ''}</div><div class="acts">${options.actions ?? ''}</div></header>`;
 }
 
 // ── Vue d'ensemble ──────────────────────────────────────────────────────────────────────────────
@@ -250,32 +255,11 @@ function overviewView(state: DashboardState): string {
           .join('')}</ul>`
   }</section>`;
   const recent = `<section class="card wide"><h2>${esc(t.recent)}</h2>${
-    o.recent.length === 0 ? `<p class="mu">${esc(t.noExecution)}</p>` : executionTable(state, o.recent, true)
+    o.recent.length === 0
+      ? `<p class="mu">${esc(t.noExecution)}</p>`
+      : executionTable(state.t, o.recent, true)
   }</section>`;
   return `${header(esc(t.nav.overview), { sub: esc(t.overviewSub(formatDate(o.generatedAt, t.locale))), actions })}${kpis}<div class="grid">${trend}${alerts}</div>${recent}`;
-}
-
-function executionTable(
-  state: DashboardState,
-  rows: (ExecutionRecord & { projectName?: string })[],
-  withProject: boolean,
-): string {
-  const t = state.t;
-  const head = [
-    ...(withProject ? [t.col.project] : []),
-    t.col.kind,
-    t.col.verdict,
-    t.col.flows,
-    t.col.issues,
-    t.col.environment,
-    t.col.date,
-  ];
-  return `<div class="tw"><table class="tbl"><thead><tr>${head.map((cell) => `<th scope="col">${esc(cell)}</th>`).join('')}</tr></thead><tbody>${rows
-    .map(
-      (row) =>
-        `<tr>${withProject ? `<td>${esc(row.projectName ?? row.projectId)}</td>` : ''}<td>${esc(t.kinds[row.kind] ?? row.kind)}</td><td>${pill(row.verdict, t.verdicts[row.verdict] ?? row.verdict)}</td><td>${String(row.flows.passed)}/${String(row.flows.total)}</td><td>${String(row.issues)}</td><td>${esc(row.environment?.name ?? '—')}</td><td><button class="lnk" data-action="open-run" data-project="${esc(row.projectId)}" data-run="${esc(row.run)}">${esc(formatDate(row.createdAt, t.locale))}</button></td></tr>`,
-    )
-    .join('')}</tbody></table></div>`;
 }
 
 // ── Projets ─────────────────────────────────────────────────────────────────────────────────────
@@ -294,45 +278,6 @@ function projectsView(state: DashboardState): string {
           )
           .join('')}</ul>`;
   return `${header(esc(t.projects), { actions: toggle })}${list}`;
-}
-
-/** Ce qu'un environnement dit de lui-même une fois vérifié : prêt ou non, et pourquoi. */
-export function readiness(check: EnvironmentCheck | undefined): 'READY' | 'NOT_READY' | 'UNKNOWN' {
-  if (!check) return 'UNKNOWN';
-  const secrets = Object.values(check.secrets).every(Boolean);
-  const url = check.url?.reachable ? check.url.reachable.ok : true;
-  return check.ok && secrets && url ? 'READY' : 'NOT_READY';
-}
-
-function readinessPill(t: DashboardStrings, check: EnvironmentCheck | undefined): string {
-  const status = readiness(check);
-  const text =
-    status === 'READY'
-      ? t.readiness.ready
-      : status === 'NOT_READY'
-        ? t.readiness.notReady
-        : t.readiness.unknown;
-  return pill(status, text);
-}
-
-function checkLines(t: DashboardStrings, check: EnvironmentCheck | undefined): string {
-  if (!check) return '';
-  const lines = [
-    ...check.issues.map((issue) => `<li class="ko">${icon('cross')}<span>${esc(issue.message)}</span></li>`),
-    ...Object.entries(check.secrets).map(([name, present]) =>
-      present
-        ? `<li class="ok">${icon('check')}<span>${esc(t.secretPresent(name))}</span></li>`
-        : `<li class="ko">${icon('cross')}<span>${esc(t.secretMissing(name))}</span></li>`,
-    ),
-    ...(check.url?.reachable
-      ? [
-          check.url.reachable.ok
-            ? `<li class="ok">${icon('check')}<span>${esc(t.urlAnswers)}</span></li>`
-            : `<li class="ko">${icon('cross')}<span>${esc(t.urlDown(check.url.reachable.message ?? String(check.url.reachable.status ?? '')))}</span></li>`,
-        ]
-      : []),
-  ];
-  return lines.length > 0 ? `<ul class="checks">${lines.join('')}</ul>` : '';
 }
 
 function environmentCard(state: DashboardState, environment: Environment, archived: boolean): string {
@@ -378,7 +323,7 @@ function projectView(state: DashboardState): string {
         : tab === 'scenarios'
           ? scenariosTab(state, p)
           : tab === 'executions'
-            ? `<section class="card wide">${executions.length === 0 ? `<p class="mu">${esc(t.noExecutionYet)}</p>` : executionTable(state, executions, false)}</section>`
+            ? `<section class="card wide">${executions.length === 0 ? `<p class="mu">${esc(t.noExecutionYet)}</p>` : executionTable(state.t, executions, false)}</section>`
             : securityTab(state, p);
   return `${header(title, { sub, actions, back: ['projects', t.allProjectsBack] })}${archived ? `<p class="note">${esc(t.archivedNote)}</p>` : ''}${tabs}<div role="tabpanel">${content}</div>`;
 }
@@ -498,7 +443,7 @@ function executionsView(state: DashboardState): string {
     return `${header(esc(t.nav.executions))}<section class="msg"><p class="mu">${esc(t.pickProject)}</p></section>`;
   const executions = state.executions ?? [];
   const actions = `<button class="btn icon-only" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button>${p.state === 'ARCHIVED' ? '' : `<button class="btn primary" data-action="launch-shortcut">${icon('play')}<span>${esc(t.launchReplay)}</span></button>`}`;
-  return `${header(esc(t.nav.executions), { sub: esc(p.name), actions })}<section class="card wide">${executions.length === 0 ? `<p class="mu">${esc(t.noExecutionYet)}</p>` : executionTable(state, executions, false)}</section>`;
+  return `${header(esc(t.nav.executions), { sub: esc(p.name), actions })}<section class="card wide">${executions.length === 0 ? `<p class="mu">${esc(t.noExecutionYet)}</p>` : executionTable(state.t, executions, false)}</section>`;
 }
 
 // ── Exécution ───────────────────────────────────────────────────────────────────────────────────

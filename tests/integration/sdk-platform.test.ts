@@ -184,6 +184,16 @@ describe('SDK platform — real engine', () => {
     ]);
     const comparison = await client.reports.compare(project.id, passedRun, failedRun);
     expect(comparison.summary.newlyFailing).toEqual(['create-request']);
+    // L'historique par scénario : les deux runs, du plus récent au plus ancien, une bascule.
+    const history = await client.scenarios.history(project.id, { limit: 5 });
+    expect(history).toEqual([
+      expect.objectContaining({ name: 'create-request', passed: 1, failed: 1, flips: 1 }),
+    ]);
+    expect(history[0]?.runs.map((entry) => [entry.run, entry.status])).toEqual([
+      [failedRun, 'FAILED'],
+      [passedRun, 'PASSED'],
+    ]);
+    expect((await client.scenarios.history(project.id, { limit: 1 }))[0]?.runs).toHaveLength(1);
     const overview = await client.overview.get({ days: 1 });
     expect(overview.replays).toMatchObject({ finished: 2, passed: 1, failed: 1, passRate: 0.5 });
     expect(overview.alerts).toContainEqual(

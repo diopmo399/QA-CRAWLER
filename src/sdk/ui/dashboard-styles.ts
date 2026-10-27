@@ -205,6 +205,55 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 .live h2 .dot{width:8px;height:8px;border-radius:50%;background:var(--qa-color-primary);box-shadow:0 0 0 4px color-mix(in srgb,var(--qa-color-primary) 22%,transparent);animation:pl 1.4s ease-in-out infinite}
 @keyframes pl{50%{opacity:.35}}
 
+/* Historique et comparaison. */
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.cell-chk{display:inline-flex;width:44px;height:44px;align-items:center;justify-content:center;cursor:pointer}
+.cell-chk input{width:18px;height:18px;accent-color:var(--qa-color-primary)}
+.tbl tr.sel td{background:color-mix(in srgb,var(--qa-color-primary) 6%,var(--qa-color-surface))}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.tile{background:var(--qa-color-background);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:2px}
+.tile b{font-size:28px;font-weight:600;line-height:1.2}
+.tile.ko{background:var(--qa-color-danger-soft)}.tile.ko b{color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
+.tile.ok{background:var(--qa-color-success-soft)}.tile.ok b{color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text))}
+.plain.tight{gap:2px;font-size:13px}
+.form-acts.start{justify-content:flex-start}
+
+/* Scénarios. */
+.scard{width:100%;text-align:left;cursor:pointer;background:var(--qa-color-surface);border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:16px;display:flex;flex-direction:column;gap:8px;min-height:44px}
+.scard.on{border:2px solid var(--qa-color-primary)}
+.scard:hover{border-color:var(--qa-color-primary)}
+.row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;min-width:0;width:100%}
+.push{margin-left:auto}
+.strip{display:inline-flex;gap:3px;align-items:center}
+.strip i{width:10px;height:18px;border-radius:3px;display:inline-block;background:var(--qa-color-border)}
+.strip i.ok{background:var(--qa-color-success)}.strip i.ko{background:var(--qa-color-danger)}
+.rec{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:10px 0;border-top:1px solid var(--qa-color-border)}
+.rec:first-of-type{border-top:0}
+.big-name{font-size:17px}
+
+/* Édition d'un environnement. */
+.env.on{border:2px solid var(--qa-color-primary)}
+.section-t{margin:8px 0 0;font-size:20px;font-weight:600}
+.env-form{gap:16px}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.field input,.field textarea{min-height:44px;border-radius:10px;border:1px solid var(--qa-color-border-strong);padding:10px 12px;background:var(--qa-color-surface);color:var(--qa-color-text);font-weight:400;width:100%}
+.field input[disabled]{opacity:.55}
+.field textarea{resize:vertical;font-size:13px}
+
+/* Exploration : carte des écrans et anomalies. */
+.map{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.node{border:1px solid var(--qa-color-border);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.node.root{border:2px solid var(--qa-color-primary)}
+.node.has-issue{border-color:color-mix(in srgb,var(--qa-color-danger) 45%,var(--qa-color-border));background:color-mix(in srgb,var(--qa-color-danger-soft) 50%,var(--qa-color-surface))}
+.node code{font-size:12px;align-self:flex-start}
+.tag-s{font-size:12px;font-weight:600;color:var(--qa-color-primary)}
+.ko-t{font-size:13px;font-weight:600;color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{min-height:40px;padding:0 12px;border-radius:999px;border:1px solid var(--qa-color-border-strong);background:var(--qa-color-surface);cursor:pointer;font-size:13px;font-weight:500}
+.chip[aria-pressed="true"]{background:var(--qa-color-primary);border-color:var(--qa-color-primary);color:#fff}
+.issue{display:flex;gap:12px;align-items:flex-start;padding:10px 12px;border:1px solid var(--qa-color-border);border-radius:10px}
+.issue span{min-width:0;overflow-wrap:anywhere}
+
 /* Responsive : 1 100 px, 960 px (menu replié), 600 px (une colonne). */
 @container (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @container (max-width:960px){

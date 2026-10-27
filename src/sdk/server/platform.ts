@@ -21,6 +21,8 @@ import type {
   OverviewAlert,
   OverviewView,
   ReportKind,
+  ScenarioHistoryView,
+  ScenarioRunStatus,
   ScenarioView,
   Severity,
 } from '../core/contracts.js';
@@ -397,6 +399,45 @@ export async function listExecutions(projectId: string, reportsDir: string): Pro
     }),
   );
   return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.run.localeCompare(a.run));
+}
+
+/**
+ * L'HISTORIQUE DES SCÉNARIOS : pour chacun, le statut de son flow dans les derniers runs qui l'ont joué
+ * (du plus récent au plus ancien), lu dans les résultats du moteur. Une bascule est un passage de
+ * PASSED à FAILED ou l'inverse entre deux runs consécutifs ; les autres statuts (SKIPPED, BLOCKED) ne
+ * comptent ni comme réussite ni comme échec.
+ */
+export async function scenarioHistory(
+  projectId: string,
+  reportsDir: string,
+  limit: number,
+): Promise<ScenarioHistoryView[]> {
+  const records = await listExecutions(projectId, reportsDir);
+  const byName = new Map<string, ScenarioRunStatus[]>();
+  for (const record of records) {
+    const result = await readJson<ExplorationResult>(path.join(reportsDir, record.run, RESULT_FILE));
+    for (const flow of result?.flows ?? []) {
+      const runs = byName.get(flow.name) ?? [];
+      if (runs.length >= limit) continue;
+      runs.push({ run: record.run, at: record.createdAt, status: flow.status, durationMs: flow.durationMs });
+      byName.set(flow.name, runs);
+    }
+  }
+  return [...byName.entries()]
+    .map(([name, runs]) => {
+      const decided = runs.filter((entry) => entry.status === 'PASSED' || entry.status === 'FAILED');
+      let flips = 0;
+      for (let index = 1; index < decided.length; index += 1)
+        if (decided[index]?.status !== decided[index - 1]?.status) flips += 1;
+      return {
+        name,
+        runs,
+        passed: decided.filter((entry) => entry.status === 'PASSED').length,
+        failed: decided.filter((entry) => entry.status === 'FAILED').length,
+        flips,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function relativeTo(directory: string, file: string | undefined): string | undefined {

@@ -36,6 +36,8 @@ const base = (extra: Partial<DashboardState> = {}): DashboardState => ({
   menuOpen: false,
   checks: {},
   cancellation: true,
+  picked: [],
+  severity: 'ALL',
   ...extra,
 });
 

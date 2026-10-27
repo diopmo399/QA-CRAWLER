@@ -39,6 +39,7 @@ import type {
   OverviewView,
   ProjectDetail,
   ProjectSummary,
+  ScenarioHistoryView,
   ScenarioView,
 } from './contracts.js';
 import { SDK_API_VERSION } from './contracts.js';
@@ -161,6 +162,8 @@ export interface QaCrawlerClient {
   scenarios: {
     list(projectId: string): Promise<ScenarioView[]>;
     promote(projectId: string, recording: string): Promise<ScenarioView>;
+    /** La stabilité des scénarios : leurs statuts dans les derniers runs (10 par défaut, 50 au plus). */
+    history(projectId: string, options?: { limit?: number }): Promise<ScenarioHistoryView[]>;
   };
   /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
   executions: {
@@ -451,6 +454,11 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
     scenarios: {
       list: (projectId) => request('GET', `${project(projectId)}/scenarios`),
       promote: (projectId, name) => request('POST', `${project(projectId)}/scenarios`, { recording: name }),
+      history: (projectId, historyOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/scenarios/history${historyOptions.limit ? `?limit=${String(historyOptions.limit)}` : ''}`,
+        ),
     },
     executions: {
       start: (projectId, input = {}) => request('POST', `${project(projectId)}/executions`, input),

@@ -504,12 +504,18 @@ Le SDK central de la plateforme (audit : [PLATFORM-AUDIT.md](PLATFORM-AUDIT.md))
 | `environments.remove(projectId, envId, { confirm: true })`    | `POST /api/projects/:id/environments/:envId/remove` |
 | `scenarios.list(projectId)`                                   | `GET /api/projects/:id/scenarios`                   |
 | `scenarios.promote(projectId, recording)`                     | `POST /api/projects/:id/scenarios`                  |
+| `scenarios.history(projectId, { limit? })`                    | `GET /api/projects/:id/scenarios/history[?limit=]`  |
 | `executions.start(projectId, { scenarios?, environmentId? })` | `POST /api/projects/:id/executions`                 |
 | `executions.list(projectId)`                                  | `GET /api/projects/:id/executions`                  |
 | `executions.get(projectId, run)`                              | `GET /api/projects/:id/executions/:run`             |
 | `overview.get({ days? })`                                     | `GET /api/overview[?days=30]`                       |
 
 `explorations.start(projectId)` accepte aussi `{ environmentId }`.
+
+`scenarios.history` lit le statut de chaque scénario dans les derniers runs (`result.json`, 10 par
+défaut, 50 au plus), du plus récent au plus ancien. Il compte les réussites, les échecs et les
+**bascules** : un passage de réussi à échoué, ou l'inverse, entre deux runs consécutifs. Le Dashboard
+marque un scénario **instable** à partir de deux bascules.
 
 **Projets.**
 
@@ -580,6 +586,10 @@ comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 | Projet         | onglets : Lancer (rejeu dans un environnement ou exploration de la cible), Environnements (prêt ou non : règles, secrets présents sur le serveur, URL jointe sur demande ; noms des secrets seulement), Scénarios, Exécutions, Sécurité (risques toujours bloqués, écritures, domaines, chemins jamais visités) ; archivage confirmé dans la page, restauration |
 | Exécutions     | les exécutions du projet choisi dans le menu                                                                                                                                                                                                                                                                                                                    |
 | Exécution      | suivi en direct (étapes, phase du moteur, durée ; écrans et actions pour une exploration), annulation confirmée dans la page ; puis verdict, étapes, assertions vérifiées ou en échec, clés de données, anomalies, preuves, lien vers le rapport                                                                                                                |
+| Historique     | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                  |
+| Scénarios      | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                           |
+| Environnements | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                           |
+| Explorations   | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies filtrées par gravité                                                                                                      |
 
 Le menu range les écrans par section et porte le projet choisi (« Tous les projets » par défaut) ; il
 dit la version de l'API et du moteur. Sous 960 px de large (requête de conteneur), il se replie
@@ -704,6 +714,9 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   taux expliqué en champs (la définition du serveur est vérifiée) ; jamais de taux sans rejeu
   terminé ; échappement ; noms de secrets seulement ; archivage et annulation confirmés dans la
   page ; annulation absente quand le serveur ne l'offre pas ; statuts traduits ; état d'erreur.
+- `tests/unit/sdk-dashboard-ops.test.ts` : historique et comparaison (écarts échappés), stabilité
+  des scénarios et enregistrements à promouvoir, formulaire d'environnement (aller-retour, variable
+  invalide refusée, suppression confirmée), carte d'une exploration et sélection par gravité.
 - `tests/integration/sdk-dashboard.test.ts` : `/dashboard` dans Chromium avec le **vrai** moteur.
   Il couvre :
   - la vue d'ensemble ;

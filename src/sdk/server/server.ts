@@ -78,6 +78,7 @@ import {
   isRunName,
   listExecutions,
   listScenarios,
+  scenarioHistory,
   newEnvironmentId,
   promoteRecording,
   readEnvironments,
@@ -1451,6 +1452,12 @@ async function handlePlatform(
       return true;
     }
     return false;
+  }
+  if (sub === 'scenarios' && item === 'history' && method === 'GET') {
+    const project = await projectOf(ctx, id);
+    const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') ?? 10) || 10));
+    json(await scenarioHistory(project.id, path.join(project.dir, REPORTS_DIR), limit));
+    return true;
   }
   if (sub === 'scenarios' && item === undefined) {
     const project = await projectOf(ctx, id);
