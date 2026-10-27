@@ -25,6 +25,13 @@ const TONE: Record<string, string> = {
   NO_FLOW: 'mu',
   ARCHIVED: 'mu',
   UNKNOWN: 'mu',
+  VALIDATION_REQUIRED: 'warn',
+  PARTIAL: 'warn',
+  COMPLETED_WITH_WARNINGS: 'warn',
+  PENDING: 'mu',
+  CONFIRMED: 'ok',
+  PROPOSED: 'warn',
+  REJECTED: 'mu',
 };
 
 export const pill = (raw: string, text = raw): string =>
@@ -44,6 +51,13 @@ const ICONS: Record<string, string> = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   check: '<path d="M5 12l5 5 9-10"/>',
   history: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  requirements: '<path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M5 17a3 3 0 013-3h11M9 8h6"/>',
+  traceability:
+    '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="12" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8.5 6.5l7 4.5M8.5 17.5l7-4.5"/>',
+  sources: '<path d="M12 15V4M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/>',
+  indicators: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  trends: '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+  download: '<path d="M12 4v11M8 11l4 4 4-4"/><path d="M4 17v1a2 2 0 002 2h12a2 2 0 002-2v-1"/>',
   scenarios:
     '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
   explorations: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',

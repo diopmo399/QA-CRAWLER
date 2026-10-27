@@ -3,6 +3,14 @@ import { DASHBOARD_EVENTS, type Environment } from '../core/contracts.js';
 import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { environmentForm, environmentInputOf } from './dashboard-ops.js';
+import {
+  connectorOfFile,
+  emptyImportForm,
+  emptyLinkForm,
+  TREND_WEEKS,
+  type ImportForm,
+  type LinkForm,
+} from './dashboard-requirements.js';
 import { DASHBOARD_CSS } from './dashboard-styles.js';
 import {
   liveSteps,
@@ -58,6 +66,8 @@ export class QaCrawlerDashboard extends Base {
   private subscription?: Subscription;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
   private generation = 0;
+  /** Le fichier choisi pour un import (jamais dans l'état rendu). */
+  private file?: File;
 
   constructor() {
     super();
@@ -75,6 +85,7 @@ export class QaCrawlerDashboard extends Base {
       cancellation: false,
       picked: [],
       severity: 'ALL',
+      req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8 },
     };
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
@@ -89,6 +100,16 @@ export class QaCrawlerDashboard extends Base {
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
       const target = event.target as HTMLInputElement | HTMLTextAreaElement;
+      const reqField = target.dataset.req as keyof ImportForm | undefined;
+      if (reqField && reqField !== 'source' && target.type !== 'file') {
+        (this.state.req.form as unknown as Record<string, string>)[reqField] = target.value;
+        return;
+      }
+      const linkField = target.dataset.linkField as keyof LinkForm | undefined;
+      if (linkField && this.state.req.linkForm) {
+        this.state.req.linkForm[linkField] = target.value;
+        return;
+      }
       const name = target.dataset.field as keyof EnvironmentForm | undefined;
       if (!name || !this.state.envForm || name === 'writes') return;
       (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
@@ -180,12 +201,18 @@ export class QaCrawlerDashboard extends Base {
 
   private navigate(route: DashboardRoute): void {
     if (route.view !== 'execution') this.unsubscribe();
-    if ('projectId' in route && route.projectId !== this.state.projectId) {
+    if ('projectId' in route && route.projectId !== undefined && route.projectId !== this.state.projectId) {
       this.state.projectId = route.projectId;
       this.state.checks = {};
       this.state.picked = [];
       this.state.comparison = undefined;
+      const { form: _form, kind, source, weeks } = this.state.req;
+      this.state.req = { form: emptyImportForm(), kind, source, weeks };
+      this.file = undefined;
     }
+    if (route.view !== 'import') this.state.req.batch = undefined;
+    this.state.req.linkForm = undefined;
+    this.state.req.error = undefined;
     if (route.view !== 'environments' || route.environmentId !== formKey(this.state.envForm)) {
       this.state.envForm = undefined;
       this.state.envCheck = undefined;
@@ -266,10 +293,12 @@ export class QaCrawlerDashboard extends Base {
           this.state.explored = detail;
           this.state.graph = graph;
         }
-      } else {
+      } else if (route.view === 'execution') {
         if (this.state.project?.id !== route.projectId)
           await this.loadProject(api, route.projectId, generation);
         await this.loadExecution(api, route, generation);
+      } else {
+        await this.loadRequirements(api, route, generation);
       }
       if (generation !== this.generation) return;
       this.state.phase = 'ready';
@@ -281,6 +310,224 @@ export class QaCrawlerDashboard extends Base {
     this.paint();
     if (generation === this.generation && (route.view === 'project' || route.view === 'environments'))
       this.checkAll(api, generation);
+  }
+
+  /** Les écrans des exigences : le référentiel sert aussi au compteur du menu. */
+  private async loadRequirements(
+    api: QaCrawlerClient,
+    route: Extract<
+      DashboardRoute,
+      { view: 'sources' | 'import' | 'requirements' | 'traceability' | 'indicators' | 'trends' }
+    >,
+    generation: number,
+  ): Promise<void> {
+    const req = this.state.req;
+    if (route.view === 'trends') {
+      if (route.projectId) await this.loadProject(api, route.projectId, generation);
+      const trends = await api.trends.get({
+        weeks: req.weeks,
+        ...(route.projectId ? { projectId: route.projectId } : {}),
+      });
+      if (generation !== this.generation) return;
+      req.trends = trends;
+      return;
+    }
+    const projectId = route.projectId;
+    await this.loadProject(api, projectId, generation);
+    const [repository, extra] = await Promise.all([
+      api.requirements.get(projectId),
+      route.view === 'sources'
+        ? Promise.all([
+            api.requirements.connectors(projectId),
+            api.requirements.profiles(projectId),
+            api.requirements.imports(projectId),
+          ])
+        : route.view === 'import'
+          ? api.requirements.importBatch(projectId, route.batchId)
+          : route.view === 'traceability'
+            ? api.requirements.matrix(projectId)
+            : route.view === 'indicators'
+              ? api.requirements.indicators(projectId, { days: this.state.days })
+              : undefined,
+    ]);
+    if (generation !== this.generation) return;
+    req.repository = repository;
+    if (route.view === 'sources') {
+      const [connectors, profiles, imports] = extra as [
+        NonNullable<typeof req.connectors>,
+        NonNullable<typeof req.profiles>,
+        NonNullable<typeof req.imports>,
+      ];
+      req.connectors = connectors;
+      req.profiles = profiles;
+      req.imports = imports;
+    } else if (route.view === 'import') req.batch = extra as NonNullable<typeof req.batch>;
+    else if (route.view === 'traceability') req.matrix = extra as NonNullable<typeof req.matrix>;
+    else if (route.view === 'indicators') req.indicators = extra as NonNullable<typeof req.indicators>;
+  }
+
+  /** Lire une source : le fichier choisi (envoyé tel quel) ou une page Confluence (variables nommées). */
+  private async importSource(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const req = this.state.req;
+    if (!api || !project || req.busy) return;
+    const form = req.form;
+    const t = this.state.t.req;
+    let call: () => Promise<{ id: string }>;
+    if (form.source === 'FILE') {
+      const file = this.file;
+      const connector = file ? connectorOfFile(file.name) : undefined;
+      if (!file || !connector) {
+        req.error = file ? t.unknownFormat : t.noFile;
+        this.paint();
+        return;
+      }
+      call = () =>
+        api.requirements.importFile(project.id, {
+          connector,
+          name: file.name,
+          data: file,
+          ...(form.profile ? { profile: form.profile } : {}),
+        });
+    } else {
+      call = () =>
+        api.requirements.importConfluence(project.id, {
+          baseUrl: form.baseUrl.trim(),
+          page: form.page.trim(),
+          ...(form.variant ? { variant: form.variant } : {}),
+          auth: {
+            tokenEnv: form.tokenEnv.trim(),
+            ...(form.userEnv.trim() ? { userEnv: form.userEnv.trim() } : {}),
+          },
+          ...(form.profile ? { profile: form.profile } : {}),
+        });
+    }
+    req.busy = true;
+    req.error = undefined;
+    this.paint();
+    try {
+      const batch = await call();
+      req.busy = false;
+      this.file = undefined;
+      req.form = { ...emptyImportForm(), source: form.source };
+      this.navigate({ view: 'import', projectId: project.id, batchId: batch.id });
+    } catch (error) {
+      req.busy = false;
+      req.error = message(error);
+      this.paint();
+    }
+  }
+
+  private async decideItem(
+    itemId: string,
+    action: 'ACCEPT' | 'REJECT' | 'MERGE',
+    extra: { kind?: string; mergeInto?: string },
+  ): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const req = this.state.req;
+    const batch = req.batch;
+    if (!api || !project || !batch || req.deciding) return;
+    req.deciding = itemId;
+    req.error = undefined;
+    this.paint();
+    try {
+      req.batch = await api.requirements.decide(project.id, batch.id, [
+        {
+          itemId,
+          decision: {
+            action,
+            ...(extra.kind ? { kind: extra.kind as 'REQUIREMENT' } : {}),
+            ...(extra.mergeInto ? { mergeInto: extra.mergeInto } : {}),
+          },
+        },
+      ]);
+    } catch (error) {
+      req.error = message(error);
+    }
+    req.deciding = undefined;
+    this.paint();
+  }
+
+  private async publishBatch(acknowledgePartial: boolean): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const req = this.state.req;
+    const batch = req.batch;
+    if (!api || !project || !batch || req.busy) return;
+    req.busy = true;
+    req.error = undefined;
+    this.state.confirm = undefined;
+    this.paint();
+    try {
+      const result = await api.requirements.publish(project.id, batch.id, { acknowledgePartial });
+      req.busy = false;
+      await this.load();
+      this.state.notice = this.state.t.req.published(
+        result.created.length,
+        result.updated.length,
+        result.merged.length,
+      );
+      this.paint();
+    } catch (error) {
+      req.busy = false;
+      req.error = message(error);
+      this.paint();
+    }
+  }
+
+  /** L'élément affiché par le référentiel ou la matrice. */
+  private shownEntity(): string | undefined {
+    const route = this.state.route;
+    return route.view === 'requirements' || route.view === 'traceability' ? route.entityId : undefined;
+  }
+
+  private async addLinkNow(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const req = this.state.req;
+    const form = req.linkForm;
+    const entityId = this.shownEntity();
+    const entity = req.repository?.entities.find((candidate) => candidate.id === entityId);
+    if (!api || !project || !form || !entity) return;
+    try {
+      await api.requirements.addLink(project.id, {
+        type: form.type as 'TESTED_BY',
+        from: { kind: entity.kind, id: entity.id, version: String(entity.version) },
+        to: { kind: form.targetKind, id: form.targetId.trim() },
+        justification: form.justification.trim() ? [form.justification.trim()] : [],
+      });
+      req.linkForm = undefined;
+      await this.load();
+      this.state.notice = this.state.t.req.linkAdded;
+      this.paint();
+    } catch (error) {
+      req.error = message(error);
+      this.paint();
+    }
+  }
+
+  private async exportCsv(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    if (!api || !project) return;
+    try {
+      const csv = await api.requirements.matrixCsv(project.id);
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `traceability-${project.id}.csv`;
+      this.root.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 1000);
+    } catch (error) {
+      this.fail(error);
+      this.paint();
+    }
   }
 
   private async loadProject(api: QaCrawlerClient, projectId: string, generation: number): Promise<void> {
@@ -565,18 +812,93 @@ export class QaCrawlerDashboard extends Base {
         const view = target.dataset.view;
         const projectId = this.contextProject();
         if (view === 'projects') this.navigate({ view: 'projects' });
+        else if (view === 'trends')
+          this.navigate({
+            view: 'trends',
+            ...(this.state.projectId ? { projectId: this.state.projectId } : {}),
+          });
         else if (
           view === 'executions' ||
           view === 'history' ||
           view === 'scenarios' ||
           view === 'explorations' ||
-          view === 'environments'
+          view === 'environments' ||
+          view === 'sources' ||
+          view === 'requirements' ||
+          view === 'traceability' ||
+          view === 'indicators'
         ) {
           if (projectId) this.navigate({ view, projectId });
           else this.navigate({ view: 'projects' });
         } else this.navigate({ view: 'overview' });
         return;
       }
+      case 'import':
+        void this.importSource();
+        return;
+      case 'open-import': {
+        const project = this.state.project;
+        if (project && target.dataset.batch)
+          this.navigate({ view: 'import', projectId: project.id, batchId: target.dataset.batch });
+        return;
+      }
+      case 'decide': {
+        const itemId = target.dataset.item;
+        const decision = target.dataset.decision;
+        if (!itemId || (decision !== 'ACCEPT' && decision !== 'REJECT' && decision !== 'MERGE')) return;
+        const kind = this.root.querySelector<HTMLSelectElement>(
+          `select[data-kind-for="${CSS.escape(itemId)}"]`,
+        )?.value;
+        void this.decideItem(itemId, decision, {
+          ...(kind ? { kind } : {}),
+          ...(target.dataset.into ? { mergeInto: target.dataset.into } : {}),
+        });
+        return;
+      }
+      case 'publish':
+        if (this.state.req.batch?.completeness === 'PARTIAL') {
+          this.state.confirm = 'publish-partial';
+          this.paint();
+        } else void this.publishBatch(false);
+        return;
+      case 'publish-confirm':
+        void this.publishBatch(true);
+        return;
+      case 'pick-entity':
+      case 'pick-trace': {
+        const route = this.state.route;
+        if ((route.view === 'requirements' || route.view === 'traceability') && target.dataset.entity) {
+          this.state.route = { ...route, entityId: target.dataset.entity };
+          this.state.req.linkForm = undefined;
+          this.state.req.error = undefined;
+          this.paint();
+        }
+        return;
+      }
+      case 'link-open':
+        this.state.req.linkForm = emptyLinkForm();
+        this.state.req.error = undefined;
+        this.paint();
+        return;
+      case 'link-cancel':
+        this.state.req.linkForm = undefined;
+        this.state.req.error = undefined;
+        this.paint();
+        return;
+      case 'link-add':
+        void this.addLinkNow();
+        return;
+      case 'link-decide': {
+        const project = this.state.project;
+        const link = target.dataset.link;
+        const decision = target.dataset.decision;
+        if (!api || !project || !link || (decision !== 'CONFIRM' && decision !== 'REJECT')) return;
+        void this.act(() => api.requirements.decideLink(project.id, link, decision));
+        return;
+      }
+      case 'export-csv':
+        void this.exportCsv();
+        return;
       case 'pick-scenario': {
         const route = this.state.route;
         if (route.view === 'scenarios' && target.dataset.name) {
@@ -680,10 +1002,12 @@ export class QaCrawlerDashboard extends Base {
         return;
       case 'back': {
         const route = this.state.route;
-        if (target.dataset.to === 'project' && 'projectId' in route)
+        if (target.dataset.to === 'project' && 'projectId' in route && route.projectId)
           this.navigate({ view: 'project', projectId: route.projectId });
-        else if (target.dataset.to === 'explorations' && 'projectId' in route)
+        else if (target.dataset.to === 'explorations' && route.view === 'explorations')
           this.navigate({ view: 'explorations', projectId: route.projectId });
+        else if (target.dataset.to === 'sources' && route.view === 'import')
+          this.navigate({ view: 'sources', projectId: route.projectId });
         else this.navigate({ view: 'projects' });
         return;
       }
@@ -735,9 +1059,10 @@ export class QaCrawlerDashboard extends Base {
         const route = this.state.route;
         const run =
           route.view === 'execution' ? route.run : route.view === 'explorations' ? route.run : undefined;
-        if (!api || !run || !('projectId' in route)) return;
+        const reportProject = 'projectId' in route ? route.projectId : undefined;
+        if (!api || !run || !reportProject) return;
         api.reports
-          .link(route.projectId, 'exploration', run)
+          .link(reportProject, 'exploration', run)
           .then((link) => {
             globalThis.open(link.url, '_blank', 'noopener');
           })
@@ -769,13 +1094,65 @@ export class QaCrawlerDashboard extends Base {
       const projectId = target.value;
       const route = this.state.route;
       this.state.projectId = projectId;
+      if (route.view === 'trends') {
+        this.navigate({ view: 'trends', ...(projectId ? { projectId } : {}) });
+        return;
+      }
       if (!projectId) {
         if (route.view !== 'overview' && route.view !== 'projects') this.navigate({ view: 'overview' });
         else this.paint();
         return;
       }
-      if (route.view === 'executions') this.navigate({ view: 'executions', projectId });
+      if (
+        route.view === 'executions' ||
+        route.view === 'history' ||
+        route.view === 'scenarios' ||
+        route.view === 'explorations' ||
+        route.view === 'environments' ||
+        route.view === 'sources' ||
+        route.view === 'requirements' ||
+        route.view === 'traceability' ||
+        route.view === 'indicators'
+      )
+        this.navigate({ view: route.view, projectId });
+      else if (route.view === 'import') this.navigate({ view: 'sources', projectId });
       else this.navigate({ view: 'project', projectId });
+      return;
+    }
+    if (target.dataset.action === 'req-kind' || target.dataset.action === 'req-source') {
+      if (target.dataset.action === 'req-kind') this.state.req.kind = target.value;
+      else this.state.req.source = target.value;
+      this.paint();
+      return;
+    }
+    if (target.dataset.action === 'trend-weeks') {
+      const weeks = Number(target.value);
+      if ((TREND_WEEKS as readonly number[]).includes(weeks)) this.state.req.weeks = weeks;
+      void this.load();
+      return;
+    }
+    if (target.dataset.req) {
+      const form = this.state.req.form;
+      if (target.dataset.req === 'file') {
+        this.file = (target as HTMLInputElement).files?.[0];
+        form.fileName = this.file?.name ?? '';
+        form.profile = '';
+        this.state.req.error = undefined;
+        this.paint();
+        return;
+      }
+      if (target.dataset.req === 'source') {
+        form.source = target.value === 'CONFLUENCE' ? 'CONFLUENCE' : 'FILE';
+        form.profile = '';
+        this.state.req.error = undefined;
+        this.paint();
+        return;
+      }
+      (form as unknown as Record<string, string>)[target.dataset.req] = target.value;
+      return;
+    }
+    if (target.dataset.linkField && this.state.req.linkForm) {
+      (this.state.req.linkForm as unknown as Record<string, string>)[target.dataset.linkField] = target.value;
       return;
     }
     if (target.dataset.bind === 'pick') {
@@ -823,13 +1200,14 @@ export class QaCrawlerDashboard extends Base {
   private paint(): void {
     if (!this.connected) return;
     const focused = this.root.activeElement as HTMLElement | null;
-    const focusKey = focused?.dataset.action ?? focused?.dataset.bind ?? focused?.dataset.field;
+    const focusKey =
+      focused?.dataset.action ?? focused?.dataset.bind ?? focused?.dataset.field ?? focused?.dataset.req;
     const focusValue = (focused as HTMLInputElement | null)?.value;
     this.root.innerHTML = `<style>${DASHBOARD_CSS}</style>${renderDashboard(this.state)}`;
     if (focusKey) {
       const candidates = [
         ...this.root.querySelectorAll<HTMLElement>(
-          `[data-action="${focusKey}"],[data-bind="${focusKey}"],[data-field="${focusKey}"]`,
+          `[data-action="${focusKey}"],[data-bind="${focusKey}"],[data-field="${focusKey}"],[data-req="${focusKey}"]`,
         ),
       ];
       const same = candidates.find((element) => (element as HTMLInputElement).value === focusValue);

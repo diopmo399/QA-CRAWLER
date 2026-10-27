@@ -5,7 +5,22 @@
  * Un brouillon de projet (ProjectDraft) ne porte jamais de secret : seulement des NOMS de variables
  * d'environnement, que le serveur lit lui-même. Les compteurs d'une exploration viennent des
  * événements du moteur ; aucun pourcentage global, aucune durée restante ne sont calculés.
+ * Les exigences échangées par l'API sont décrites dans requirements-contracts.ts.
  */
+
+import type {
+  CanonicalEntity,
+  ConnectorDescription,
+  DuplicateStatus,
+  ImportStatus,
+  ItemDecision,
+  LinkEnd,
+  LinkType,
+  SourceKind,
+  TraceabilityLink,
+} from './requirements-contracts.js';
+
+export type * from './requirements-contracts.js';
 
 export const SDK_API_VERSION = 1;
 
@@ -1045,4 +1060,152 @@ export interface OverviewView {
   alerts: OverviewAlert[];
   /** Par jour de la période : rejeux réussis et échoués. */
   trend: { day: string; passed: number; failed: number }[];
+}
+
+// ── Exigences ───────────────────────────────────────────────────────────────────────────────
+
+/** Les connecteurs de source : ce qu'ils lisent, leur taille maximale, leurs limites. */
+export type RequirementConnectorView = ConnectorDescription & {
+  /** FILE : un fichier envoyé au serveur ; CONFLUENCE : une page lue par le serveur. */
+  transport: 'FILE' | 'CONFLUENCE';
+};
+
+/** Un lot d'importation résumé (liste des imports). */
+export interface ImportSummary {
+  id: string;
+  connector: SourceKind;
+  status: ImportStatus;
+  createdAt: string;
+  updatedAt: string;
+  source: { title: string; uri?: string; version?: string };
+  completeness: 'COMPLETE' | 'PARTIAL' | 'EMPTY';
+  candidates: number;
+  /** Candidats qui attendent encore une décision. */
+  toDecide: number;
+  decided: number;
+  published: number;
+  byDuplicate: Partial<Record<DuplicateStatus, number>>;
+  issues: { errors: number; warnings: number; first?: string };
+  missingFromSource: number;
+}
+
+/** Une page Confluence à importer : les secrets sont des NOMS de variables lues par le serveur. */
+export interface ConfluenceImportInput {
+  baseUrl: string;
+  page: string;
+  variant?: 'cloud' | 'datacenter';
+  auth: { userEnv?: string; tokenEnv: string };
+  profile?: string;
+}
+
+/** Un fichier Word, Excel ou PDF envoyé au serveur (le contenu va dans le corps de la requête). */
+export interface FileImportInput {
+  connector: 'WORD' | 'EXCEL' | 'PDF';
+  name: string;
+  data: Uint8Array | ArrayBuffer | Blob;
+  profile?: string;
+}
+
+export interface RequirementDecisionInput {
+  itemId: string;
+  decision: Omit<ItemDecision, 'at' | 'by'>;
+}
+
+export interface RequirementsPublishResult {
+  created: string[];
+  updated: string[];
+  merged: string[];
+  links: string[];
+}
+
+/** Le référentiel publié d'un projet. */
+export interface RequirementsView {
+  entities: CanonicalEntity[];
+  links: TraceabilityLink[];
+  /** Candidats d'import qui attendent une décision, tous lots confondus. */
+  pending: number;
+}
+
+export interface LinkAddInput {
+  type: LinkType;
+  from: LinkEnd;
+  to: LinkEnd;
+  justification: string[];
+}
+
+/** Une extrémité de lien vue depuis une ligne de la matrice. */
+export interface MatrixLinkCell {
+  linkId: string;
+  type: LinkType;
+  /** L'autre extrémité. */
+  target: LinkEnd;
+  /** L'identifiant externe de la cible (REQ-12…) quand c'est un élément du référentiel qui en a un. */
+  label?: string;
+  validation: TraceabilityLink['validation'];
+  freshness: TraceabilityLink['freshness'];
+  confidence: TraceabilityLink['confidence'];
+}
+
+/** UNE LIGNE DE LA MATRICE DE TRAÇABILITÉ : un élément publié et ses liens, groupés par rôle. */
+export interface MatrixRow {
+  id: string;
+  externalId?: string;
+  kind: CanonicalEntity['kind'];
+  title: string;
+  version: number;
+  sources: SourceKind[];
+  /** Règles et critères rattachés (HAS_RULE, HAS_CRITERION). */
+  children: MatrixLinkCell[];
+  /** IMPLEMENTED_BY. */
+  implementedBy: MatrixLinkCell[];
+  /** TESTED_BY, VERIFIED_BY. */
+  verifiedBy: MatrixLinkCell[];
+  /** Les autres liens (DEPENDS_ON, DERIVED_FROM, OBSERVED_IN, ou le lien vers le parent). */
+  other: MatrixLinkCell[];
+}
+
+/** Un ratio expliqué : rien n'est affiché sans son numérateur et son dénominateur. */
+export interface Ratio {
+  numerator: number;
+  denominator: number;
+  /** Absent quand le dénominateur est nul. */
+  value?: number;
+}
+
+/**
+ * LES INDICATEURS d'un projet, calculés sur le référentiel et sur les runs du moteur. Les formules et
+ * les limites sont dites par l'interface (une par identifiant) ; un indicateur qui demande la
+ * corrélation automatique (phase 5) est rendu `available: false`, jamais estimé.
+ */
+export interface RequirementsIndicators {
+  generatedAt: string;
+  period: { days: number; from: string; to: string };
+  published: { total: number; requirements: number; rules: number; criteria: number };
+  coverage: Ratio & { proposedOnly: number };
+  recentEvidence: { available: false; reason: 'CORRELATION_NOT_AVAILABLE' };
+  replays: Ratio & { cancelled: number; withoutVerdict: number };
+  links: Ratio & { confirmed: number; proposed: number; possiblyStale: number; rejected: number };
+  gaps: { withoutImplementation: number; withoutTest: number; staleLinks: number; pendingCandidates: number };
+}
+
+/** LES TENDANCES par semaine ISO (lundi, UTC), sur un projet ou tous. */
+export interface TrendsView {
+  generatedAt: string;
+  projectId?: string;
+  weeks: TrendWeek[];
+  /** Les scénarios qui changent le plus souvent de verdict (au moins une bascule), du plus instable au moins instable. */
+  unstable: { projectId: string; projectName: string; name: string; flips: number; runs: number }[];
+}
+
+export interface TrendWeek {
+  /** Année et numéro de semaine ISO (2026-W43). */
+  week: string;
+  from: string;
+  to: string;
+  replays: Ratio;
+  issues: Record<Severity, number>;
+  /** Durée médiane d'un rejeu terminé avec un verdict ; absente sans rejeu. */
+  medianReplayMs?: number;
+  /** Couverture des exigences par un test à la fin de la semaine ; absente avant le premier élément publié. */
+  coverage?: Ratio;
 }

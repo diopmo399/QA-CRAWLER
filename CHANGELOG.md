@@ -61,6 +61,15 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
     quitte tout de suite.
 
+- **Exigences dans le SDK et le Dashboard** :
+  - API `requirements.*` : connecteurs, import d'un fichier Word, Excel ou PDF (envoyé tel quel,
+    25 Mo au plus) ou d'une page Confluence (noms des variables seulement), lots, décisions,
+    publication (accord explicite pour une lecture partielle), matrice et son CSV protégé contre les
+    formules, liens ajoutés, confirmés ou rejetés, indicateurs ; `trends.get` par semaine ISO.
+  - Écrans Sources, Validation d'un import, Référentiel, Traçabilité, Indicateurs (formule,
+    dénominateur, exclusions, limites) et Tendances ; le menu compte les candidats en attente.
+  - Non disponibles, et dits comme tels : la corrélation automatique (phase 5), l'auteur des
+    décisions, la création d'un profil par l'API.
 - **Dashboard, écrans d'exploitation** :
   - Historique : deux exécutions cochées sont comparées par le serveur (régressions, corrections,
     écarts par flow et par étape, durée), et les flows qui échouent maintenant se rejouent.

@@ -17,6 +17,7 @@ import {
   type DashboardState,
 } from '../../src/sdk/ui/dashboard-view.js';
 
+import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
 /**
  * LE RENDU DU DASHBOARD (fonctions pures) : chiffres du SDK tels quels, taux avec numérateur,
  * dénominateur et exclusions, échappement, secrets jamais affichés, actions confirmées dans la page,
@@ -38,6 +39,7 @@ const base = (extra: Partial<DashboardState> = {}): DashboardState => ({
   cancellation: true,
   picked: [],
   severity: 'ALL',
+  req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8 },
   ...extra,
 });
 
