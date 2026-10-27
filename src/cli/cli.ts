@@ -18,6 +18,7 @@ import { runManifestCli } from './manifest-command.js';
 import { runKnowledgeCenterCli } from './knowledge-center-command.js';
 import { runSdkServerCli } from './sdk-server-command.js';
 import { PROJECT_COMMANDS, PROJECT_HELP, runProjectCli, type ProjectCommand } from './project-command.js';
+import { PLATFORM_COMMANDS, runPlatformCli, type PlatformCommand } from './platform-command.js';
 import { EnvFileError, loadEnvFile, takeEnvFileOption } from './env-file.js';
 import { color, logger } from './logger.js';
 import { readCoreVersion, setToolIdentity } from '../tool-identity.js';
@@ -70,6 +71,9 @@ export async function runCli(input: string[], options: CliOptions = {}): Promise
     !(argv[0] === 'explore' && legacyMission)
   )
     return runProjectCli(argv[0] as ProjectCommand, argv.slice(1), runtime);
+  // LA PLATEFORME (espace de travail du SDK) : projets, environnements, scénarios, exécutions, vue d'ensemble.
+  if ((PLATFORM_COMMANDS as readonly string[]).includes(argv[0] ?? ''))
+    return runPlatformCli(argv[0] as PlatformCommand, argv.slice(1));
   // RECORD sans mission explicite dans un projet configuré : la mission dérivée du projet.
   if (
     argv[0] === 'record' &&

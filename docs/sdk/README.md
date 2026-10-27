@@ -204,6 +204,9 @@ Un refus (4xx : jeton, origine, exploration inconnue) n'est pas réessayé. Quan
 **Version du contrat** : `connect()` rend les capacités et refuse (`API_VERSION_MISMATCH`) un
 serveur qui ne parle pas la version du client ; l'assistant l'utilise au chargement.
 
+La CLI de la plateforme (`qa-crawler project|env|scenario|run|overview|doctor`) appelle ce même
+client : voir [CLI.md](CLI.md).
+
 ### Dans un programme Node : `openQaCrawler`
 
 Pour un script, une CI ou un outil interne, la façade démarre le service dans le programme même

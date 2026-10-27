@@ -14,6 +14,14 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
     quitte tout de suite.
 
+- **CLI de la plateforme** (`docs/sdk/CLI.md`) : `project list|show`, `env list|show|validate`,
+  `scenario list|promote`, `run start|list|results|status|cancel`, `overview`, `doctor`, sur le
+  client du SDK.
+  - Deux modes : local (`--workspace`) ou distant (`--endpoint`, jeton par variable).
+  - Sortie `--json`, et JUnit XML d'un run (`--junit`).
+  - Codes de sortie : `0`, `1`, `2`, `3` et `130` (Ctrl+C annule).
+  - Le client accepte `selfId` pour vérifier un environnement existant.
+
 - **SDK dans un programme Node** : `openQaCrawler({ workspace })` démarre le service sur 127.0.0.1
   (port libre, jeton jamais affiché) et rend le client ; `close()` annule ce qui tourne. Exemple
   exécutable `examples/sdk-node/replay.mjs` (codes de sortie selon le verdict), testé avec le vrai

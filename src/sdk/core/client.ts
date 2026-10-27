@@ -146,10 +146,11 @@ export interface QaCrawlerClient {
   /** Les environnements d'un projet (dev, test, certification, préproduction) : les cibles d'une exécution. */
   environments: {
     list(projectId: string): Promise<Environment[]>;
+    /** `selfId` : vérifier un environnement existant (son propre nom n'est pas un doublon). */
     check(
       projectId: string,
       input: EnvironmentInput,
-      options?: { reach?: boolean },
+      options?: { reach?: boolean; selfId?: string },
     ): Promise<EnvironmentCheck>;
     create(projectId: string, input: EnvironmentInput): Promise<Environment>;
     update(projectId: string, id: string, input: EnvironmentInput): Promise<Environment>;
