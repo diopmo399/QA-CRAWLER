@@ -19,6 +19,11 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   est ramenée à 4.6.7 par `overrides`. Ce réglage ne vaut que dans ce dépôt : un projet qui installe
   `@qa-crawler/core` avec le conseiller Copilot doit poser le même `overrides`.
 - `source-map-js` 1.2.2 et `vite` 7.3.7 : mises à jour correctives (`npm audit fix`).
+- **vitest 4.1.12** (outil de développement, au lieu de 3.2) : corrige GHSA-82fw-gwwq-j7x9 et
+  GHSA-qxg6-89mg-rqv8 (`@vitest/mocker`), et retire `tinypool` (GHSA-5gmw-xhrv-c9v3,
+  GHSA-85c8-ppgw-ccpr). Les tests ne changent que pour remplacer des formes dépréciées
+  (`toThrowError` → `toThrow`, `it.sequential` → `{ concurrent: false }`). La 4.1.12 suffit : la 5
+  demanderait Node 22.12 pour développer.
 - **Non corrigé, en attente de l'amont :** `@azure/msal-node` (GHSA-xcx6-jx8p-x3h5), tiré par `mssql`
   via `@azure/identity`. Aucune version publiée d'`@azure/identity` n'accepte encore la version
   corrigée de msal-node (7.1). La faille touche le flux OAuth « authorization code », que

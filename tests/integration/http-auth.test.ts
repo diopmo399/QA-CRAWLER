@@ -297,16 +297,16 @@ flows:
       mission(name, `auth:\n  type: http\n  checkUrl: /secure/\n${extra}`);
     await expect(
       runMission(login('login-wrong'), { env: { QA_USERNAME: USER, QA_PASSWORD: 'nope' } }),
-    ).rejects.toThrowError(/HTTP authentication AUTH_FAILED/);
+    ).rejects.toThrow(/HTTP authentication AUTH_FAILED/);
     const missing = runMission(login('login-missing'), { env: {} });
     await expect(missing).rejects.toBeInstanceOf(AuthError);
-    await expect(runMission(login('login-missing-2'), { env: {} })).rejects.toThrowError(
+    await expect(runMission(login('login-missing-2'), { env: {} })).rejects.toThrow(
       /AUTH_REQUIRED.*QA_USERNAME, QA_PASSWORD/,
     );
     authorizations = [];
     await expect(
       runMission(login('login-origin', '  origin: https://sso.example.com\n'), { env }),
-    ).rejects.toThrowError(/CREDENTIALS_NOT_ALLOWED.*auth\.origin/);
+    ).rejects.toThrow(/CREDENTIALS_NOT_ALLOWED.*auth\.origin/);
     expect(authorizations).toEqual([]);
   });
 

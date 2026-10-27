@@ -295,8 +295,9 @@ ${FLOW(RECORDED)}`,
     expect(fill?.effect?.execution).not.toBe('EXECUTED');
   }, 90_000);
 
-  it.sequential(
+  it(
     'REAL BUG, HYBRID: the advisor is triggered by the contradictory evidence (not only by an ambiguity), receives evidence ids, contradictions, known facts and constraints, picks the recorded-locator candidate — validated, re-resolved at runtime, VALUE_CHANGED confirmed, the flow passes; DEBUG writes the sanitized resolution artifact',
+    { concurrent: false, timeout: 90_000 },
     async () => {
       const provider = advisor(recordedCandidate);
       const report = await replay('shadowLoose', {
@@ -350,7 +351,6 @@ ${FLOW(RECORDED)}`,
       });
       expect(artifact).not.toContain('alpha');
     },
-    90_000,
   );
 
   it('REAL BUG, HYBRID: an invented candidate (T99) — AI_PROPOSAL_INVALID_CANDIDATE, nothing is executed', async () => {

@@ -80,22 +80,22 @@ describe('flows schema', () => {
   });
 
   it('rejects ambiguous or incomplete steps with a clear message', () => {
-    expect(() => steps('      - click: { role: button }\n        goto: /x\n')).toThrowError(
+    expect(() => steps('      - click: { role: button }\n        goto: /x\n')).toThrow(
       /exactly one of goto, click/,
     );
-    expect(() => steps('      - click: { role: button, text: OK }\n')).toThrowError(
+    expect(() => steps('      - click: { role: button, text: OK }\n')).toThrow(
       /exactly one of testId, role, label, text, css/,
     );
-    expect(() => steps('      - click: { label: Titre, name: x }\n')).toThrowError(
+    expect(() => steps('      - click: { label: Titre, name: x }\n')).toThrow(
       /"name" is only valid with "role"/,
     );
-    expect(() => steps('      - expect: {}\n')).toThrowError(/expect needs at least one/);
-    expect(() => steps('      - click: { role: button }\n        allow: DELETE\n')).toThrowError(/allow/);
-    expect(() => steps('      - fill: { label: Titre }\n')).toThrowError(/value/);
-    expect(() => flows('  - name: f\n    steps: []\n')).toThrowError(/steps/);
+    expect(() => steps('      - expect: {}\n')).toThrow(/expect needs at least one/);
+    expect(() => steps('      - click: { role: button }\n        allow: DELETE\n')).toThrow(/allow/);
+    expect(() => steps('      - fill: { label: Titre }\n')).toThrow(/value/);
+    expect(() => flows('  - name: f\n    steps: []\n')).toThrow(/steps/);
     expect(() =>
       flows('  - name: f\n    steps: [{ goto: / }]\n  - name: f\n    steps: [{ goto: / }]\n'),
-    ).toThrowError(/duplicate flow name "f"/);
+    ).toThrow(/duplicate flow name "f"/);
   });
 
   it('warns about steps that may modify data, and defaults to autonomous exploration', () => {

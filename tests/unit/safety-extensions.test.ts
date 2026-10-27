@@ -199,16 +199,16 @@ describe('actors configuration', () => {
         {},
         {},
       ),
-    ).toThrowError(/Invalid scenario/);
+    ).toThrow(/Invalid scenario/);
     expect(() =>
       parseConfig(
         `${base}actors:\n${reader}authorization:\n  rules: [{ actor: nobody, path: /admin, expect: denied }]\n`,
         {},
         {},
       ),
-    ).toThrowError(/unknown actor "nobody"/);
-    expect(() => parseConfig(`${base}actors:\n${reader}${reader}`, {}, {})).toThrowError(/unique/);
-    expect(() => parseConfig(`${base}actors:\n${reader.replace('reader', 'primary')}`, {}, {})).toThrowError(
+    ).toThrow(/unknown actor "nobody"/);
+    expect(() => parseConfig(`${base}actors:\n${reader}${reader}`, {}, {})).toThrow(/unique/);
+    expect(() => parseConfig(`${base}actors:\n${reader.replace('reader', 'primary')}`, {}, {})).toThrow(
       /unique/,
     );
   });
