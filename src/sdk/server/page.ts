@@ -1,3 +1,5 @@
+import { recorderFontFaces } from '../../recording/recorder-fonts.js';
+
 /**
  * LA PAGE AUTONOME du serveur SDK : l'assistant en pleine page (mode `standalone`), avec le jeton
  * de la session passé à l'élément. Les modules viennent du même serveur (/sdk/ui/index.js).
@@ -116,8 +118,8 @@ export function dashboardPage(options: { token: string; nonce: string; language:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QA-CRAWLER — Dashboard</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
-<style>html,body{margin:0}body{background:#ECEEF6;padding:16px;box-sizing:border-box;min-height:100vh}@media (prefers-color-scheme:dark){body{background:#080A14}}</style>
+<style>${recorderFontFaces()}
+html,body{margin:0}body{background:#E9ECF5;padding:16px;box-sizing:border-box;min-height:100vh}@media (max-width:600px){body{padding:8px}}@media (prefers-color-scheme:dark){body{background:#080A14}}</style>
 </head>
 <body>
 <qa-crawler-dashboard endpoint="/api" locale="${options.language}"></qa-crawler-dashboard>

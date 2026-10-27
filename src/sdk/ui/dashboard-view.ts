@@ -1,4 +1,7 @@
 import type {
+  Capabilities,
+  Environment,
+  EnvironmentCheck,
   ExecutionDetail,
   ExecutionRecord,
   ExplorationEvent,
@@ -17,10 +20,14 @@ import { esc } from './view.js';
  * du SDK tel quel ; un taux dit son numérateur, son dénominateur et son périmètre ; une valeur saisie
  * ou un secret n'apparaît jamais (le SDK ne les renvoie pas, et rien n'est reconstitué ici).
  */
+export const PROJECT_TABS = ['launch', 'environments', 'scenarios', 'executions', 'security'] as const;
+export type ProjectTab = (typeof PROJECT_TABS)[number];
+
 export type DashboardRoute =
   | { view: 'overview' }
   | { view: 'projects' }
-  | { view: 'project'; projectId: string }
+  | { view: 'project'; projectId: string; tab?: ProjectTab }
+  | { view: 'executions'; projectId: string }
   | { view: 'execution'; projectId: string; run: string; explorationId?: string };
 
 export interface LiveStep {
@@ -32,6 +39,14 @@ export interface LiveStep {
   reason?: string;
 }
 
+export interface LaunchState {
+  kind: 'REPLAY' | 'EXPLORATION';
+  environmentId: string;
+  scenarios: string[];
+  busy: boolean;
+  error?: string;
+}
+
 export interface DashboardState {
   t: DashboardStrings;
   phase: 'idle' | 'loading' | 'ready' | 'error';
@@ -41,9 +56,20 @@ export interface DashboardState {
   overview?: OverviewView;
   projects?: ProjectSummary[];
   showArchived: boolean;
+  /** Les projets actifs du sélecteur du menu. */
+  catalog?: ProjectSummary[];
+  /** Le projet choisi dans le menu ('' : tous les projets). */
+  projectId: string;
+  /** Le menu replié (écran étroit) est-il ouvert ? */
+  menuOpen: boolean;
+  capabilities?: Capabilities;
   project?: ProjectDetail;
   executions?: ExecutionRecord[];
-  launch: { environmentId: string; scenarios: string[]; busy: boolean; error?: string };
+  launch: LaunchState;
+  /** Les vérifications d'environnement du projet affiché, par identifiant. */
+  checks: Record<string, EnvironmentCheck>;
+  /** L'environnement dont la vérification (avec l'URL) est en cours. */
+  checking?: string;
   /** Une action à confirmer dans la page (jamais une boîte de dialogue du navigateur). */
   confirm?: 'archive' | 'cancel';
   /** L'exécution suivie en direct (son instantané, ses étapes, la dernière phase annoncée). */
@@ -61,9 +87,11 @@ const TONE: Record<string, string> = {
   PASS: 'ok',
   COMPLETED: 'ok',
   ACTIVE: 'ok',
+  READY: 'ok',
   FAILED: 'ko',
   FAIL: 'ko',
-  CANCELLED: 'warn',
+  NOT_READY: 'ko',
+  CANCELLED: 'mu',
   INCOMPLETE: 'warn',
   BLOCKED: 'warn',
   INCONCLUSIVE: 'warn',
@@ -72,6 +100,7 @@ const TONE: Record<string, string> = {
   SKIPPED: 'mu',
   NO_FLOW: 'mu',
   ARCHIVED: 'mu',
+  UNKNOWN: 'mu',
 };
 
 export const pill = (raw: string, text = raw): string =>
@@ -79,13 +108,18 @@ export const pill = (raw: string, text = raw): string =>
 
 const ICONS: Record<string, string> = {
   overview:
-    '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+    '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   projects: '<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',
-  back: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
-  play: '<path d="M7 5l12 7-12 7z"/>',
+  executions: '<circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l6-3.5z"/>',
+  back: '<path d="M15 6l-6 6 6 6"/>',
+  play: '<path d="M8 5v14l11-7z"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
   refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
-  alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
+  alert: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  check: '<path d="M5 12l5 5 9-10"/>',
+  cross: '<path d="M6 6l12 12M18 6L6 18"/>',
 };
 
 const icon = (name: string): string =>
@@ -97,17 +131,51 @@ export function formatDate(iso: string, locale: 'fr' | 'en'): string {
   return date.toLocaleString(locale === 'fr' ? 'fr-FR' : 'en-GB', { dateStyle: 'short', timeStyle: 'short' });
 }
 
+// ── La coquille : menu par sections, sélecteur de projet, menu repliable sur écran étroit ───────────
+
+type NavView = 'overview' | 'projects' | 'executions';
+type NavSection = keyof DashboardStrings['sections'];
+
+/** Les entrées du menu : seulement les écrans que le Dashboard sait afficher. */
+const NAV: { section: NavSection; items: NavView[] }[] = [
+  { section: 'pilot', items: ['overview', 'projects', 'executions'] },
+];
+
+/** L'entrée du menu qui correspond à la vue affichée. */
+export function activeNav(route: DashboardRoute): NavView {
+  if (route.view === 'project' || route.view === 'projects') return 'projects';
+  if (route.view === 'execution' || route.view === 'executions') return 'executions';
+  return 'overview';
+}
+
 export function renderDashboard(state: DashboardState): string {
   const t = state.t;
-  const active = state.route.view === 'overview' ? 'overview' : 'projects';
-  const nav = (['overview', 'projects'] as const)
+  const active = activeNav(state.route);
+  const sections = NAV.map(
+    ({ section, items }) =>
+      `<div class="sec"><div class="sec-t">${esc(t.sections[section])}</div>${items
+        .map(
+          (view) =>
+            `<a href="#" data-action="nav" data-view="${view}" ${active === view ? 'aria-current="page"' : ''}>${icon(view)}<span>${esc(t.nav[view])}</span></a>`,
+        )
+        .join('')}</div>`,
+  ).join('');
+  const catalog = state.catalog ?? [];
+  const context = `<label class="ctx"><span>${esc(t.projectContext)}</span><select data-action="project-context"><option value="">${esc(t.allProjects)}</option>${catalog
     .map(
-      (view) =>
-        `<a href="#" data-action="nav" data-view="${view}" ${active === view ? 'aria-current="page"' : ''}>${icon(view)}<span>${esc(t.nav[view])}</span></a>`,
+      (project) =>
+        `<option value="${esc(project.id)}" ${project.id === state.projectId ? 'selected' : ''}>${esc(project.name)}</option>`,
     )
-    .join('');
-  return `<div class="dash">
-<nav class="side" aria-label="${esc(t.tag)}"><div class="brand"><span class="logo" aria-hidden="true"><i></i></span><span><b>${esc(t.product)}</b><small>${esc(t.tag)}</small></span></div>${nav}</nav>
+    .join('')}</select></label>`;
+  const caps = state.capabilities;
+  const foot = caps
+    ? `<div class="foot"><span><i class="on" aria-hidden="true"></i>${esc(t.service(caps.apiVersion))}</span><span>${esc(t.engine(caps.engineVersion, caps.cancellation))}</span></div>`
+    : '';
+  return `<div class="dash" data-menu="${state.menuOpen ? 'open' : 'closed'}">
+<nav class="side" aria-label="${esc(t.tag)}">
+<div class="top"><div class="brand"><span class="logo" aria-hidden="true">Q</span><span><b>${esc(t.product)}</b><small>${esc(t.tag)}</small></span></div><button class="menu-btn" data-action="menu" aria-expanded="${state.menuOpen ? 'true' : 'false'}" aria-controls="qa-drawer">${icon(state.menuOpen ? 'close' : 'menu')}<span>${esc(state.menuOpen ? t.menuClose : t.menu)}</span></button></div>
+<div class="drawer" id="qa-drawer">${context}${sections}${foot}</div>
+</nav>
 <main class="main">${state.notice ? `<p class="notice" role="status">${esc(state.notice)}</p>` : ''}${body(state)}</main>
 </div>`;
 }
@@ -126,14 +194,25 @@ function body(state: DashboardState): string {
       return projectsView(state);
     case 'project':
       return projectView(state);
+    case 'executions':
+      return executionsView(state);
     case 'execution':
       return executionView(state);
   }
 }
 
-/** `title` est déjà échappé (il porte des pastilles). */
-function header(t: DashboardStrings, title: string, extra = '', back?: string): string {
-  return `<header class="hd">${back ? `<button class="btn ghost" data-action="back" data-to="${esc(back)}">${icon('back')}<span>${esc(t.back)}</span></button>` : ''}<h1>${title}</h1><span class="sp"></span><div class="acts">${extra}</div></header>`;
+/**
+ * L'en-tête d'un écran. `title` est déjà échappé (il porte des pastilles) ; `back` : le retour
+ * (`data-to`) et son libellé.
+ */
+function header(
+  title: string,
+  options: { sub?: string; actions?: string; back?: [string, string] } = {},
+): string {
+  const back = options.back
+    ? `<button class="back" data-action="back" data-to="${esc(options.back[0])}">${icon('back')}<span>${esc(options.back[1])}</span></button>`
+    : '';
+  return `<header class="hd"><div class="hd-t">${back}<h1>${title}</h1>${options.sub ? `<p class="sub">${options.sub}</p>` : ''}</div><div class="acts">${options.actions ?? ''}</div></header>`;
 }
 
 // ── Vue d'ensemble ──────────────────────────────────────────────────────────────────────────────
@@ -141,41 +220,39 @@ function header(t: DashboardStrings, title: string, extra = '', back?: string): 
 function overviewView(state: DashboardState): string {
   const t = state.t;
   const o = state.overview;
-  const periods = `<label class="pick">${esc(t.period)} <select data-action="period">${PERIODS.map((days) => `<option value="${String(days)}" ${days === state.days ? 'selected' : ''}>${esc(t.days(days))}</option>`).join('')}</select></label><button class="btn ghost" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button>`;
-  if (!o) return header(t, esc(t.nav.overview), periods);
+  const actions = `<label class="pick">${esc(t.period)} <select data-action="period">${PERIODS.map((days) => `<option value="${String(days)}" ${days === state.days ? 'selected' : ''}>${esc(t.days(days))}</option>`).join('')}</select></label><button class="btn icon-only" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button><button class="btn primary" data-action="launch-shortcut">${icon('play')}<span>${esc(t.launchReplay)}</span></button>`;
+  if (!o) return header(esc(t.nav.overview), { actions });
   const rate =
     o.replays.passRate === undefined
       ? `<b class="big">—</b><small>${esc(t.kpi.passRateNone)}</small>`
       : `<b class="big">${String(Math.round(o.replays.passRate * 100))} %</b><small>${esc(t.kpi.passRateFraction(o.replays.passed, o.replays.finished))}</small>`;
   const kpis = `<section class="kpis" aria-label="${esc(t.nav.overview)}">
-<article class="kpi"><span>${esc(t.kpi.projects)}</span><b class="big">${String(o.projects.active)}</b><small>${esc(t.kpi.projectsSub(o.projects.archived))}</small></article>
-<article class="kpi"><span>${esc(t.kpi.scenarios)}</span><b class="big">${String(o.scenarios)}</b><small>${esc(t.kpi.scenariosSub(o.recordings))}</small></article>
-<article class="kpi"><span>${esc(t.kpi.executions)}</span><b class="big">${String(o.executions.total)}</b><small>${esc(t.kpi.executionsSub(o.executions.byKind.REPLAY, o.executions.byKind.EXPLORATION))}</small></article>
 <article class="kpi accent"><span>${esc(t.kpi.passRate)}</span>${rate}${scopeOf(t, o.replays.definition)}</article>
+<article class="kpi"><span>${esc(t.kpi.executions)}</span><b class="big">${String(o.executions.total)}</b><small>${esc(t.kpi.executionsSub(o.executions.byKind.REPLAY, o.executions.byKind.EXPLORATION))}</small></article>
+<article class="kpi"><span>${esc(t.kpi.issues)}</span><b class="big">${String(o.issues.CRITICAL + o.issues.ERROR + o.issues.WARNING + o.issues.INFO)}</b><small>${esc(t.kpi.issuesSub(o.issues.CRITICAL, o.issues.ERROR))}</small></article>
+<article class="kpi"><span>${esc(t.kpi.projects)}</span><b class="big">${String(o.projects.active)}</b><small>${esc(t.kpi.projectsSub(o.projects.archived))} · ${esc(t.kpi.scenariosSub(o.recordings))}</small><small>${esc(t.kpi.scenarios)} : ${String(o.scenarios)}</small></article>
 </section>`;
   const max = Math.max(1, ...o.trend.map((day) => day.passed + day.failed));
-  const trend = `<section class="card"><h2>${esc(t.trend)}</h2><div class="bars">${o.trend
+  const trend = `<section class="card"><div class="card-h"><h2>${esc(t.trend)}</h2><p class="legend"><i class="p"></i>${esc(t.trendLegend.passed)} <i class="f"></i>${esc(t.trendLegend.failed)}</p></div><div class="bars">${o.trend
     .map((day) => {
       const label = `${day.day} : ${String(day.passed)} ${t.trendLegend.passed}, ${String(day.failed)} ${t.trendLegend.failed}`;
-      return `<div class="bar" role="img" aria-label="${esc(label)}" title="${esc(label)}"><span class="f" style="height:${String(Math.round((day.failed / max) * 100))}%"></span><span class="p" style="height:${String(Math.round((day.passed / max) * 100))}%"></span><small>${esc(day.day.slice(5))}</small></div>`;
+      return `<div class="bar" role="img" aria-label="${esc(label)}" title="${esc(label)}"><span class="p" style="height:${String(Math.round((day.passed / max) * 100))}%"></span><span class="f" style="height:${String(Math.round((day.failed / max) * 100))}%"></span><small>${esc(day.day.slice(8))}/${esc(day.day.slice(5, 7))}</small></div>`;
     })
-    .join(
-      '',
-    )}</div><p class="legend"><i class="p"></i>${esc(t.trendLegend.passed)} <i class="f"></i>${esc(t.trendLegend.failed)}</p></section>`;
+    .join('')}</div></section>`;
   const alerts = `<section class="card"><h2>${esc(t.alerts)}</h2>${
     o.alerts.length === 0
       ? `<p class="mu">${esc(t.noAlert)}</p>`
       : `<ul class="alerts">${o.alerts
           .map(
             (alert) =>
-              `<li>${icon('alert')}<span>${esc(alert.message)}</span>${alert.projectId && alert.run ? `<button class="lnk" data-action="open-run" data-project="${esc(alert.projectId)}" data-run="${esc(alert.run)}">${esc(alert.run)}</button>` : ''}</li>`,
+              `<li class="${alert.kind === 'SECRET_MISSING' ? 'warn' : 'ko'}"><span class="tag">${esc(t.alertKinds[alert.kind] ?? alert.kind)}</span><span class="txt"><strong>${esc(alert.projectName)}</strong> · ${esc(alert.message)}</span>${alert.projectId && alert.run ? `<button class="lnk" data-action="open-run" data-project="${esc(alert.projectId)}" data-run="${esc(alert.run)}">${esc(t.col.run)}</button>` : ''}</li>`,
           )
           .join('')}</ul>`
   }</section>`;
   const recent = `<section class="card wide"><h2>${esc(t.recent)}</h2>${
     o.recent.length === 0 ? `<p class="mu">${esc(t.noExecution)}</p>` : executionTable(state, o.recent, true)
   }</section>`;
-  return `${header(t, esc(t.nav.overview), periods)}${kpis}<div class="grid">${trend}${alerts}</div>${recent}`;
+  return `${header(esc(t.nav.overview), { sub: esc(t.overviewSub(formatDate(o.generatedAt, t.locale))), actions })}${kpis}<div class="grid">${trend}${alerts}</div>${recent}`;
 }
 
 function executionTable(
@@ -189,13 +266,14 @@ function executionTable(
     t.col.kind,
     t.col.verdict,
     t.col.flows,
+    t.col.issues,
     t.col.environment,
     t.col.date,
   ];
   return `<div class="tw"><table class="tbl"><thead><tr>${head.map((cell) => `<th scope="col">${esc(cell)}</th>`).join('')}</tr></thead><tbody>${rows
     .map(
       (row) =>
-        `<tr>${withProject ? `<td>${esc(row.projectName ?? row.projectId)}</td>` : ''}<td>${esc(t.kinds[row.kind] ?? row.kind)}</td><td>${pill(row.verdict, t.verdicts[row.verdict] ?? row.verdict)}</td><td>${String(row.flows.passed)}/${String(row.flows.total)}</td><td>${esc(row.environment?.name ?? '—')}</td><td><button class="lnk" data-action="open-run" data-project="${esc(row.projectId)}" data-run="${esc(row.run)}">${esc(formatDate(row.createdAt, t.locale))}</button></td></tr>`,
+        `<tr>${withProject ? `<td>${esc(row.projectName ?? row.projectId)}</td>` : ''}<td>${esc(t.kinds[row.kind] ?? row.kind)}</td><td>${pill(row.verdict, t.verdicts[row.verdict] ?? row.verdict)}</td><td>${String(row.flows.passed)}/${String(row.flows.total)}</td><td>${String(row.issues)}</td><td>${esc(row.environment?.name ?? '—')}</td><td><button class="lnk" data-action="open-run" data-project="${esc(row.projectId)}" data-run="${esc(row.run)}">${esc(formatDate(row.createdAt, t.locale))}</button></td></tr>`,
     )
     .join('')}</tbody></table></div>`;
 }
@@ -215,41 +293,212 @@ function projectsView(state: DashboardState): string {
               `<li><button class="pcard" data-action="open-project" data-project="${esc(project.id)}"><span class="pt"><b>${esc(project.name)}</b>${pill(project.state, t.states[project.state] ?? project.state)}</span><span class="mu url">${esc(project.targetUrl)}</span><span class="mu">${esc(t.counts(project.counts.environments, project.counts.scenarios, project.counts.executions))}</span><span class="last">${esc(t.lastRun)} : ${project.lastExecution ? `${pill(project.lastExecution.verdict, t.verdicts[project.lastExecution.verdict] ?? project.lastExecution.verdict)} <span class="mu">${esc(formatDate(project.lastExecution.createdAt, t.locale))}</span>` : `<span class="mu">${esc(t.never)}</span>`}</span></button></li>`,
           )
           .join('')}</ul>`;
-  return `${header(t, esc(t.projects), toggle)}${list}`;
+  return `${header(esc(t.projects), { actions: toggle })}${list}`;
+}
+
+/** Ce qu'un environnement dit de lui-même une fois vérifié : prêt ou non, et pourquoi. */
+export function readiness(check: EnvironmentCheck | undefined): 'READY' | 'NOT_READY' | 'UNKNOWN' {
+  if (!check) return 'UNKNOWN';
+  const secrets = Object.values(check.secrets).every(Boolean);
+  const url = check.url?.reachable ? check.url.reachable.ok : true;
+  return check.ok && secrets && url ? 'READY' : 'NOT_READY';
+}
+
+function readinessPill(t: DashboardStrings, check: EnvironmentCheck | undefined): string {
+  const status = readiness(check);
+  const text =
+    status === 'READY'
+      ? t.readiness.ready
+      : status === 'NOT_READY'
+        ? t.readiness.notReady
+        : t.readiness.unknown;
+  return pill(status, text);
+}
+
+function checkLines(t: DashboardStrings, check: EnvironmentCheck | undefined): string {
+  if (!check) return '';
+  const lines = [
+    ...check.issues.map((issue) => `<li class="ko">${icon('cross')}<span>${esc(issue.message)}</span></li>`),
+    ...Object.entries(check.secrets).map(([name, present]) =>
+      present
+        ? `<li class="ok">${icon('check')}<span>${esc(t.secretPresent(name))}</span></li>`
+        : `<li class="ko">${icon('cross')}<span>${esc(t.secretMissing(name))}</span></li>`,
+    ),
+    ...(check.url?.reachable
+      ? [
+          check.url.reachable.ok
+            ? `<li class="ok">${icon('check')}<span>${esc(t.urlAnswers)}</span></li>`
+            : `<li class="ko">${icon('cross')}<span>${esc(t.urlDown(check.url.reachable.message ?? String(check.url.reachable.status ?? '')))}</span></li>`,
+        ]
+      : []),
+  ];
+  return lines.length > 0 ? `<ul class="checks">${lines.join('')}</ul>` : '';
+}
+
+function environmentCard(state: DashboardState, environment: Environment, archived: boolean): string {
+  const t = state.t;
+  const check = state.checks[environment.id];
+  const writes = environment.mutations?.enabled
+    ? `${t.col.writes.toLowerCase()} ${t.writesAllowed(environment.mutations.maxPerRun)}`
+    : t.readOnly;
+  return `<article class="env"><div class="env-h"><b>${esc(environment.name)}</b>${readinessPill(t, check)}</div><span class="mu">${esc(t.envKinds[environment.kind] ?? environment.kind)} · ${esc(writes)}</span><code class="url">${esc(environment.baseUrl)}</code>${checkLines(t, check)}${archived ? '' : `<button class="btn small" data-action="check-env" data-env="${esc(environment.id)}" ${state.checking === environment.id ? 'disabled' : ''}>${esc(state.checking === environment.id ? t.checking : t.checkEnvironment)}</button>`}</article>`;
 }
 
 function projectView(state: DashboardState): string {
   const t = state.t;
   const p = state.project;
-  if (!p) return header(t, esc(t.projects), '', 'projects');
+  if (!p) return header(esc(t.projects), { back: ['projects', t.allProjectsBack] });
+  const route = state.route as Extract<DashboardRoute, { view: 'project' }>;
+  const tab = route.tab ?? 'launch';
   const archived = p.state === 'ARCHIVED';
   const actions = archived
     ? `<button class="btn" data-action="restore">${esc(t.restore)}</button>`
     : state.confirm === 'archive'
-      ? `<span class="confirm" role="group"><small class="mu">${esc(t.archiveHint)}</small><button class="btn danger" data-action="archive-confirm">${esc(t.archiveConfirm)}</button><button class="btn ghost" data-action="confirm-cancel">${esc(t.cancelAction)}</button></span>`
+      ? `<span class="confirm" role="group"><small>${esc(t.archiveHint)}</small><button class="btn danger" data-action="archive-confirm">${esc(t.archiveConfirm)}</button><button class="btn ghost" data-action="confirm-cancel">${esc(t.cancelAction)}</button></span>`
       : `<button class="btn" data-action="archive">${esc(t.archive)}</button>`;
   const title = `${esc(p.name)} ${pill(p.state, t.states[p.state] ?? p.state)}`;
-  const environments =
+  const sub = `${esc(p.framework)} · <code>${esc(p.targetUrl)}</code>`;
+  const executions = state.executions ?? [];
+  const labels: Record<ProjectTab, string> = {
+    launch: t.tabs.launch,
+    environments: t.tabs.environments(p.environments.length),
+    scenarios: t.tabs.scenarios(p.scenarios.length),
+    executions: t.tabs.executions(executions.length),
+    security: t.tabs.security,
+  };
+  const tabs = `<div class="tabs" role="tablist" aria-label="${esc(p.name)}">${PROJECT_TABS.map(
+    (name) =>
+      `<button role="tab" data-action="tab" data-tab="${name}" aria-selected="${name === tab ? 'true' : 'false'}">${esc(labels[name])}</button>`,
+  ).join('')}</div>`;
+  const content =
+    tab === 'launch'
+      ? launchTab(state, p, archived)
+      : tab === 'environments'
+        ? environmentsTab(state, p, archived)
+        : tab === 'scenarios'
+          ? scenariosTab(state, p)
+          : tab === 'executions'
+            ? `<section class="card wide">${executions.length === 0 ? `<p class="mu">${esc(t.noExecutionYet)}</p>` : executionTable(state, executions, false)}</section>`
+            : securityTab(state, p);
+  return `${header(title, { sub, actions, back: ['projects', t.allProjectsBack] })}${archived ? `<p class="note">${esc(t.archivedNote)}</p>` : ''}${tabs}<div role="tabpanel">${content}</div>`;
+}
+
+function launchTab(state: DashboardState, p: ProjectDetail, archived: boolean): string {
+  const t = state.t;
+  if (archived) return `<section class="card"><p class="mu">${esc(t.archivedNote)}</p></section>`;
+  const launch = state.launch;
+  const replay = launch.kind === 'REPLAY';
+  const environment = p.environments.find((candidate) => candidate.id === launch.environmentId);
+  const kind = (value: LaunchState['kind'], label: string, hint: string): string =>
+    `<label class="choice ${launch.kind === value ? 'on' : ''}"><input type="radio" name="kind" data-bind="kind" value="${value}" ${launch.kind === value ? 'checked' : ''}><span><b>${esc(label)}</b><small>${esc(hint)}</small></span></label>`;
+  const note = !replay
+    ? t.explorationTarget
+    : environment?.mutations?.enabled
+      ? t.writesNote(environment.mutations.maxPerRun)
+      : t.readOnlyNote;
+  const scenarios = p.scenarios
+    .map(
+      (scenario) =>
+        `<label class="row-chk"><input type="checkbox" data-bind="scenario" value="${esc(scenario.name)}" ${launch.scenarios.includes(scenario.name) ? 'checked' : ''} ${replay ? '' : 'disabled'}><span class="nm">${esc(scenario.name)}</span><small class="mu">${scenario.steps === undefined ? esc(scenario.format) : `${String(scenario.steps)} ${esc(t.col.steps.toLowerCase())}`}</small></label>`,
+    )
+    .join('');
+  const form = `<form class="launch card" data-action="launch"><h2>${esc(t.launch)}</h2>
+<fieldset class="kinds"><legend>${esc(t.launchKind)}</legend>${kind('REPLAY', t.kindReplay, t.kindReplayHint)}${kind('EXPLORATION', t.kindExploration, t.kindExplorationHint)}</fieldset>
+<label class="field">${esc(t.launchEnv)}<select data-bind="environment" ${replay ? '' : 'disabled'}><option value="">${esc(t.projectTarget)}</option>${p.environments.map((env) => `<option value="${esc(env.id)}" ${launch.environmentId === env.id ? 'selected' : ''}>${esc(env.name)} · ${esc(readiness(state.checks[env.id]) === 'NOT_READY' ? t.readiness.notReady : (t.envKinds[env.kind] ?? env.kind))}</option>`).join('')}</select></label>
+<fieldset class="scen"><legend>${esc(t.launchScenarios)}</legend>${scenarios || `<p class="mu">${esc(t.noScenario)}</p>`}${replay && p.scenarios.length > 0 ? `<small class="mu">${esc(t.allScenarios)}</small>` : ''}</fieldset>
+<p class="note">${icon('alert')}<span>${esc(note)}</span></p>
+<div class="form-acts">${replay && environment ? `<button type="button" class="btn" data-action="check-env" data-env="${esc(environment.id)}" ${state.checking === environment.id ? 'disabled' : ''}>${esc(state.checking === environment.id ? t.checking : t.checkEnvironment)}</button>` : ''}<button class="btn primary" type="submit" ${launch.busy || (replay && p.scenarios.length === 0) ? 'disabled' : ''}>${icon('play')}<span>${esc(launch.busy ? t.launching : replay ? t.launchButton : t.launchExploration)}</span></button></div>
+${launch.error ? `<p class="err" role="alert">${esc(launch.error)}</p>` : ''}</form>`;
+  const environments = `<section class="card"><h2>${esc(t.environments)}</h2>${
     p.environments.length === 0
       ? `<p class="mu">${esc(t.noEnvironment)}</p>`
-      : `<div class="tw"><table class="tbl"><thead><tr><th scope="col">${esc(t.col.name)}</th><th scope="col">${esc(t.col.kind)}</th><th scope="col">${esc(t.col.base)}</th><th scope="col">${esc(t.col.writes)}</th><th scope="col">${esc(t.col.secrets)}</th></tr></thead><tbody>${p.environments
-          .map(
-            (environment) =>
-              `<tr><td><b>${esc(environment.name)}</b></td><td>${esc(environment.kind)}</td><td><code>${esc(environment.baseUrl)}</code></td><td>${esc(environment.mutations?.enabled ? t.writesAllowed(environment.mutations.maxPerRun) : t.writesNone)}</td><td>${(environment.secretEnv ?? []).map((name) => `<code>${esc(name)}</code>`).join(' ') || '—'}</td></tr>`,
-          )
-          .join('')}</tbody></table></div>`;
-  const scenarios =
-    p.scenarios.length === 0
-      ? `<p class="mu">${esc(t.noScenario)}</p>`
-      : `<ul class="plain">${p.scenarios.map((scenario) => `<li><b>${esc(scenario.name)}</b> <span class="mu">${esc(scenario.format)}${scenario.steps === undefined ? '' : ` · ${String(scenario.steps)} ${esc(t.col.steps.toLowerCase())}`} · <code>${esc(scenario.file)}</code></span></li>`).join('')}</ul>`;
-  const launch = archived
-    ? `<p class="note">${esc(t.archivedNote)}</p>`
-    : `<form class="launch" data-action="launch"><label class="pick">${esc(t.launchEnv)}<select data-bind="environment"><option value="">${esc(t.projectTarget)}</option>${p.environments.map((environment) => `<option value="${esc(environment.id)}" ${state.launch.environmentId === environment.id ? 'selected' : ''}>${esc(environment.name)} · ${esc(environment.kind)}</option>`).join('')}</select></label><fieldset><legend>${esc(t.launchScenarios)}</legend>${p.scenarios.map((scenario) => `<label class="chk"><input type="checkbox" data-bind="scenario" value="${esc(scenario.name)}" ${state.launch.scenarios.includes(scenario.name) ? 'checked' : ''}> ${esc(scenario.name)}</label>`).join('')}<small class="mu">${esc(t.allScenarios)}</small></fieldset><button class="btn primary" type="submit" ${state.launch.busy || p.scenarios.length === 0 ? 'disabled' : ''}>${icon('play')}<span>${esc(state.launch.busy ? t.launching : t.launchButton)}</span></button>${state.launch.error ? `<p class="err" role="alert">${esc(state.launch.error)}</p>` : ''}</form>`;
+      : p.environments.map((env) => environmentCard(state, env, archived)).join('')
+  }</section>`;
+  return `<div class="split">${form}<div class="col">${environments}</div></div>`;
+}
+
+function environmentsTab(state: DashboardState, p: ProjectDetail, archived: boolean): string {
+  const t = state.t;
+  if (p.environments.length === 0)
+    return `<section class="card"><p class="mu">${esc(t.noEnvironment)}</p></section>`;
+  return `<div class="env-grid">${p.environments.map((env) => environmentCard(state, env, archived)).join('')}</div>
+<section class="card wide"><div class="tw"><table class="tbl"><thead><tr><th scope="col">${esc(t.col.name)}</th><th scope="col">${esc(t.col.kind)}</th><th scope="col">${esc(t.col.base)}</th><th scope="col">${esc(t.col.writes)}</th><th scope="col">${esc(t.col.secrets)}</th></tr></thead><tbody>${p.environments
+    .map(
+      (environment) =>
+        `<tr><td><b>${esc(environment.name)}</b></td><td>${esc(t.envKinds[environment.kind] ?? environment.kind)}</td><td><code>${esc(environment.baseUrl)}</code></td><td>${esc(environment.mutations?.enabled ? t.writesAllowed(environment.mutations.maxPerRun) : t.writesNone)}</td><td>${(environment.secretEnv ?? []).map((name) => `<code>${esc(name)}</code>`).join(' ') || '—'}</td></tr>`,
+    )
+    .join('')}</tbody></table></div></section>`;
+}
+
+function scenariosTab(state: DashboardState, p: ProjectDetail): string {
+  const t = state.t;
+  if (p.scenarios.length === 0)
+    return `<section class="card"><p class="mu">${esc(t.noScenario)}</p></section>`;
+  return `<section class="card wide"><div class="tw"><table class="tbl"><thead><tr><th scope="col">${esc(t.col.name)}</th><th scope="col">${esc(t.col.steps)}</th><th scope="col">${esc(t.col.file)}</th></tr></thead><tbody>${p.scenarios
+    .map(
+      (scenario) =>
+        `<tr><td><b class="mono">${esc(scenario.name)}</b>${scenario.fromRecording ? `<small class="mu block">${esc(t.fromRecording(scenario.fromRecording))}</small>` : ''}</td><td>${scenario.steps === undefined ? '—' : String(scenario.steps)}</td><td><code>${esc(scenario.file)}</code> <small class="mu">${esc(scenario.format)}</small></td></tr>`,
+    )
+    .join('')}</tbody></table></div></section>`;
+}
+
+function securityTab(state: DashboardState, p: ProjectDetail): string {
+  const t = state.t;
+  const blocked = state.capabilities?.safety?.blocked ?? [];
+  const blockedText = blocked.map((risk) => t.security.risks[risk] ?? risk).join(', ') || '—';
+  const ignored = p.draft.exploration.ignoredPaths;
+  const card = (name: string, domains: string, writes: string): string =>
+    `<section class="card"><h2>${esc(t.security.title(name))}</h2><div class="policy">
+<div><b>${esc(t.security.allowed)}</b><span>${esc(t.security.allowedValue)}</span></div>
+<div><b>${esc(t.security.withAgreement)}</b><span>${esc(writes)}</span></div>
+<div><b>${esc(t.security.blocked)}</b><span>${esc(blockedText)}</span></div>
+<div><b>${esc(t.security.domains)}</b><span class="mono">${esc(domains)}</span></div>
+<div><b>${esc(t.security.ignored)}</b><span class="mono">${esc(ignored.join(', ') || '—')}</span></div>
+</div></section>`;
+  const hostOf = (url: string): string => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return url;
+    }
+  };
+  const cards =
+    p.environments.length === 0
+      ? [
+          card(
+            t.security.projectTarget,
+            (p.draft.exploration.allowedHosts.length > 0
+              ? p.draft.exploration.allowedHosts
+              : [hostOf(p.targetUrl)]
+            ).join(', '),
+            t.security.noWrites,
+          ),
+        ]
+      : p.environments.map((environment) =>
+          card(
+            environment.name,
+            ((environment.allowedDomains ?? []).length > 0
+              ? (environment.allowedDomains ?? [])
+              : [hostOf(environment.baseUrl)]
+            ).join(', '),
+            environment.mutations?.enabled
+              ? t.security.writes(environment.mutations.maxPerRun)
+              : t.security.noWrites,
+          ),
+        );
+  return `<div class="grid">${cards.join('')}</div>`;
+}
+
+// ── Exécutions du projet ────────────────────────────────────────────────────────────────────────
+
+function executionsView(state: DashboardState): string {
+  const t = state.t;
+  const p = state.project;
+  if (!p)
+    return `${header(esc(t.nav.executions))}<section class="msg"><p class="mu">${esc(t.pickProject)}</p></section>`;
   const executions = state.executions ?? [];
-  return `${header(t, title, actions, 'projects')}<p class="mu url">${esc(p.targetUrl)}</p>
-<div class="grid"><section class="card"><h2>${esc(t.launch)}</h2>${launch}</section><section class="card"><h2>${esc(t.scenarios)}</h2>${scenarios}</section></div>
-<section class="card wide"><h2>${esc(t.environments)}</h2>${environments}</section>
-<section class="card wide"><h2>${esc(t.executions)}</h2>${executions.length === 0 ? `<p class="mu">${esc(t.noExecution)}</p>` : executionTable(state, executions, false)}</section>`;
+  const actions = `<button class="btn icon-only" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button>${p.state === 'ARCHIVED' ? '' : `<button class="btn primary" data-action="launch-shortcut">${icon('play')}<span>${esc(t.launchReplay)}</span></button>`}`;
+  return `${header(esc(t.nav.executions), { sub: esc(p.name), actions })}<section class="card wide">${executions.length === 0 ? `<p class="mu">${esc(t.noExecutionYet)}</p>` : executionTable(state, executions, false)}</section>`;
 }
 
 // ── Exécution ───────────────────────────────────────────────────────────────────────────────────
@@ -269,9 +518,16 @@ export function liveSteps(steps: LiveStep[], event: ExplorationEvent): LiveStep[
   return next;
 }
 
+function elapsedOf(snapshot: ExplorationSnapshot): number {
+  const start = Date.parse(snapshot.startedAt ?? snapshot.queuedAt);
+  const now = Date.parse(snapshot.serverTime);
+  return Number.isNaN(start) || Number.isNaN(now) ? 0 : now - start;
+}
+
 function executionView(state: DashboardState): string {
   const t = state.t;
   const route = state.route as Extract<DashboardRoute, { view: 'execution' }>;
+  const back: [string, string] = ['project', state.project?.name ?? t.back];
   const live = state.live;
   const running = live !== undefined && !isTerminal(live.snapshot.status);
   if (running) {
@@ -281,11 +537,18 @@ function executionView(state: DashboardState): string {
       : live.cancelRequested
         ? `<small class="mu" role="status">${esc(t.cancelRequested)}</small>`
         : state.confirm === 'cancel'
-          ? `<span class="confirm" role="group"><small class="mu">${esc(t.cancelHint)}</small><button class="btn danger" data-action="cancel-confirm">${esc(t.cancelConfirm)}</button><button class="btn ghost" data-action="confirm-cancel">${esc(t.cancelAction)}</button></span>`
+          ? `<span class="confirm" role="group"><small>${esc(t.cancelHint)}</small><button class="btn danger" data-action="cancel-confirm">${esc(t.cancelConfirm)}</button><button class="btn ghost" data-action="confirm-cancel">${esc(t.cancelAction)}</button></span>`
           : `<button class="btn danger" data-action="cancel">${icon('stop')}<span>${esc(t.cancelRun)}</span></button>`;
     const flows = [...new Set(live.steps.map((step) => step.flow))];
-    return `${header(t, `${esc(t.execution)} <code>${esc(route.run)}</code> ${pill(status, t.statuses[status] ?? status)}`, cancel, 'project')}
-<section class="card wide live" aria-live="polite"><h2><span class="dot" aria-hidden="true"></span>${esc(t.live)}</h2>${live.phase ? `<p class="mu">${esc(enginePhase(live.phase, t.locale))}</p>` : ''}${flows
+    const replay = live.snapshot.kind === 'REPLAY';
+    const planned = replay ? state.launch.scenarios.length || state.project?.scenarios.length : undefined;
+    const counters = live.snapshot.counters;
+    const summary = `<section class="kpis">
+<article class="kpi"><span>${esc(replay ? t.progress : t.explored)}</span><b class="mid">${esc(replay ? t.flowsSeen(flows.length, planned) : t.exploredValue(counters.states, counters.actions))}</b><small>${esc(replay ? '' : t.budget(live.snapshot.budget.maxStates, live.snapshot.budget.maxActions))}</small></article>
+<article class="kpi"><span>${esc(t.phase)}</span><b class="mid">${esc(live.phase ? enginePhase(live.phase, t.locale) : (t.statuses[status] ?? status))}</b></article>
+</section>`;
+    return `${header(`${esc(t.execution)} <code>${esc(route.run)}</code> ${pill(status, t.running(t.elapsed(elapsedOf(live.snapshot))))}`, { actions: cancel, back })}${summary}
+<section class="card wide live" aria-live="polite"><h2><span class="dot" aria-hidden="true"></span>${esc(t.live)}</h2>${flows
       .map((flow) =>
         stepList(
           t,
@@ -297,18 +560,32 @@ function executionView(state: DashboardState): string {
   }
   const detail = state.execution;
   if (!detail)
-    return `${header(t, `${esc(t.execution)} <code>${esc(route.run)}</code>`, '', 'project')}<section class="msg"><span class="spin" aria-hidden="true"></span><p class="mu">${esc(t.waitingResult)}</p></section>`;
-  const summary = `<section class="kpis"><article class="kpi accent"><span>${esc(t.col.verdict)}</span><b class="big">${esc(t.verdicts[detail.verdict] ?? detail.verdict)}</b><small>${esc(t.verdictOf(detail.flows.passed, detail.flows.total))}</small></article><article class="kpi"><span>${esc(t.col.kind)}</span><b class="mid">${esc(t.kinds[detail.kind] ?? detail.kind)}</b><small>${esc(formatDate(detail.createdAt, t.locale))}${detail.durationMs === undefined ? '' : ` · ${esc(t.duration(detail.durationMs))}`}</small></article><article class="kpi"><span>${esc(t.col.environment)}</span><b class="mid">${esc(detail.environment?.name ?? t.projectTarget)}</b><small>${esc((detail.scenarios ?? []).join(', '))}</small></article></section>`;
+    return `${header(`${esc(t.execution)} <code>${esc(route.run)}</code>`, { back })}<section class="msg"><span class="spin" aria-hidden="true"></span><p class="mu">${esc(t.waitingResult)}</p></section>`;
+  const assertions = detail.flowsDetail.flatMap((flow) => flow.assertions);
+  const verified = assertions.filter((assertion) => assertion.status === 'PASS').length;
+  const failedAssertions = assertions.filter((assertion) => assertion.status === 'FAIL').length;
+  const screenshots = detail.flowsDetail.reduce(
+    (count, flow) => count + flow.steps.filter((step) => step.screenshot).length,
+    0,
+  );
+  const summary = `<section class="kpis"><article class="kpi accent"><span>${esc(t.col.verdict)}</span><b class="big">${esc(t.verdicts[detail.verdict] ?? detail.verdict)}</b><small>${esc(t.verdictOf(detail.flows.passed, detail.flows.total))}</small></article><article class="kpi"><span>${esc(t.col.kind)}</span><b class="mid">${esc(t.kinds[detail.kind] ?? detail.kind)}</b><small>${esc(formatDate(detail.createdAt, t.locale))}${detail.durationMs === undefined ? '' : ` · ${esc(t.duration(detail.durationMs))}`}</small></article><article class="kpi"><span>${esc(t.col.environment)}</span><b class="mid">${esc(detail.environment?.name ?? t.projectTarget)}</b><small>${esc((detail.scenarios ?? []).join(', '))}</small></article><article class="kpi"><span>${esc(t.assertions)}</span><b class="mid">${String(assertions.length)}</b><small>${esc(t.assertionsCount(verified, failedAssertions))}</small></article></section>`;
   const flows = detail.flowsDetail
     .map(
       (flow) =>
         `<section class="card wide"><h2 class="fl">${esc(flow.name)} ${pill(flow.status, t.results[flow.status] ?? flow.status)} <small class="mu">${esc(t.duration(flow.durationMs))}</small></h2>${flow.divergence ? `<p class="err">${esc(t.divergence(flow.divergence.stepIndex, flow.divergence.reason))}</p>` : ''}<ol class="steps">${flow.steps.map((step) => `<li>${pill(step.status, t.results[step.status] ?? step.status)}<span>${String(step.index)}. ${esc(step.label)}</span><small class="mu">${esc(t.duration(step.durationMs))}</small>${step.reason ? `<small class="why">${esc(step.reason)}</small>` : ''}</li>`).join('')}</ol><h3>${esc(t.assertions)}</h3>${flow.assertions.length === 0 ? `<p class="mu">${esc(t.noAssertion)}</p>` : `<ul class="plain">${flow.assertions.map((assertion) => `<li>${pill(assertion.status, t.results[assertion.status] ?? assertion.status)} <code>${esc(assertion.id)}</code> ${esc(assertion.description)}</li>`).join('')}</ul>`}${flow.testData.length > 0 ? `<p class="mu">${esc(t.testData)} : ${flow.testData.map((key) => `<code>${esc(key)}</code>`).join(' ')}</p>` : ''}</section>`,
     )
     .join('');
-  const report = detail.reports.html
-    ? `<button class="btn" data-action="report">${esc(t.openReport)}</button>`
-    : '';
-  return `${header(t, `${esc(t.execution)} <code>${esc(detail.run)}</code>`, report, 'project')}${summary}${flows}`;
+  const issues =
+    detail.issuesList.length === 0
+      ? ''
+      : `<section class="card wide"><h2>${esc(t.issuesTitle)}</h2><ul class="plain">${detail.issuesList
+          .map(
+            (issue) =>
+              `<li>${pill(issue.severity === 'CRITICAL' || issue.severity === 'ERROR' ? 'FAILED' : 'INCOMPLETE', t.severities[issue.severity] ?? issue.severity)} ${esc(issue.message)} <small class="mu">${esc(issue.pageUrl)}</small></li>`,
+          )
+          .join('')}</ul></section>`;
+  const side = `<section class="card"><h2>${esc(t.evidence)}</h2><p>${esc(t.evidenceCount(screenshots, detail.issues))}</p><p class="mu">${esc(t.evidenceNote)}</p></section><section class="card"><h2>${esc(t.afterRun)}</h2>${detail.reports.html ? `<button class="btn" data-action="report">${esc(t.openReport)}</button>` : '<p class="mu">—</p>'}</section>`;
+  return `${header(`${esc(t.execution)} <code>${esc(detail.run)}</code>`, { actions: detail.reports.html ? `<button class="btn" data-action="report">${esc(t.openReport)}</button>` : '', back })}${summary}<div class="split"><div class="col">${flows}${issues}</div><div class="col narrow">${side}</div></div>`;
 }
 
 function stepList(t: DashboardStrings, flow: string, steps: LiveStep[]): string {

@@ -129,6 +129,11 @@ export interface Capabilities {
    */
   cancellation: boolean;
   /**
+   * La politique de sécurité commune à toute exécution : les risques toujours bloqués (suppression,
+   * paiement, envoi…), quel que soit l'environnement. Ajouté à la v1 : absent d'un serveur plus ancien.
+   */
+  safety?: { blocked: string[] };
+  /**
    * Les capacités au-delà de la création de projet, chacune branchée sur le module du moteur qui la
    * réalise. `recordings` ouvre un Chromium visible sur la machine du serveur : un humain y joue le
    * parcours.

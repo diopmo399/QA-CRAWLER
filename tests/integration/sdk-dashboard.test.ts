@@ -127,8 +127,50 @@ describe('Dashboard — real engine, in Chromium', () => {
     expect(executions[0]?.verdict).toBe('CANCELLED');
   }, 150_000);
 
+  it('the menu: the project picked in the context opens it, the executions entry lists its runs', async () => {
+    await page.goto(`${server.url}/dashboard`);
+    await dashboard().locator('select[data-action="project-context"]').selectOption(project.id);
+    await dashboard().locator('h1', { hasText: 'Demandes' }).waitFor();
+    await dashboard().locator('[data-action="nav"][data-view="executions"]').click();
+    await dashboard().locator('.tbl tbody tr').first().waitFor();
+    expect(await dashboard().locator('[data-view="executions"]').getAttribute('aria-current')).toBe('page');
+    expect(await dashboard().locator('.tbl tbody tr').count()).toBe(3);
+  }, 60_000);
+
+  it('checks an environment with its URL from the launch tab: ready, secret names only', async () => {
+    await dashboard().locator('[data-action="nav"][data-view="projects"]').click();
+    await dashboard().locator('.pcard', { hasText: 'Demandes' }).click();
+    const card = dashboard().locator('.env', { hasText: 'Recette' });
+    await card.locator('[data-action="check-env"]').click();
+    await card.locator('.checks li', { hasText: 'l’URL répond' }).waitFor({ timeout: 30_000 });
+    expect(await card.locator('.pill').textContent()).toBe('Prêt');
+    await dashboard().locator('[data-action="tab"][data-tab="security"]').click();
+    const policy = (await dashboard().locator('[role="tabpanel"]').textContent()) ?? '';
+    expect(policy).toContain('Politique de sécurité · Recette');
+    expect(policy).toContain('suppression');
+    expect(policy).toContain('création et modification (5 par exécution)');
+  }, 60_000);
+
+  it('on a phone: the menu folds behind a button, the page never scrolls sideways', async () => {
+    const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await phone.goto(`${server.url}/dashboard`);
+    const element = phone.locator('qa-crawler-dashboard');
+    await element.locator('.kpi.accent').waitFor();
+    const menu = element.locator('[data-action="menu"]');
+    expect(await menu.isVisible()).toBe(true);
+    expect(await element.locator('.drawer').isVisible()).toBe(false);
+    await menu.click();
+    expect(await menu.getAttribute('aria-expanded')).toBe('true');
+    await element.locator('[data-action="nav"][data-view="projects"]').click();
+    await element.locator('.pcard').first().waitFor();
+    expect(await element.locator('.drawer').isVisible()).toBe(false);
+    const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    await phone.close();
+  }, 60_000);
+
   it('archives after a confirmation (launch closed), then restores', async () => {
-    await dashboard().locator('[data-action="back"]').click();
+    await dashboard().locator('[data-action="tab"][data-tab="launch"]').click();
     await dashboard().locator('[data-action="archive"]').click();
     expect(await dashboard().locator('.confirm').textContent()).toContain('Rien n’est supprimé');
     await dashboard().locator('[data-action="archive-confirm"]').click();

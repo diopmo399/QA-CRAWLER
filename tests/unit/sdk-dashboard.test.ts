@@ -7,9 +7,12 @@ import type {
 } from '../../src/sdk/core/contracts.js';
 import { PASS_RATE_DEFINITION } from '../../src/sdk/server/platform.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
+import { DASHBOARD_CSS } from '../../src/sdk/ui/dashboard-styles.js';
 import {
+  activeNav,
   KNOWN_PASS_RATE_DEFINITION,
   liveSteps,
+  readiness,
   renderDashboard,
   type DashboardState,
 } from '../../src/sdk/ui/dashboard-view.js';
@@ -28,7 +31,10 @@ const base = (extra: Partial<DashboardState> = {}): DashboardState => ({
   route: { view: 'overview' },
   days: 7,
   showArchived: false,
-  launch: { environmentId: '', scenarios: [], busy: false },
+  launch: { kind: 'REPLAY', environmentId: '', scenarios: [], busy: false },
+  projectId: '',
+  menuOpen: false,
+  checks: {},
   cancellation: true,
   ...extra,
 });
@@ -127,7 +133,10 @@ describe('dashboard rendering', () => {
   it('project: environments show secret names only, archiving is confirmed in the page', () => {
     const route = { view: 'project', projectId: 'prj_a' } as const;
     const html = renderDashboard(base({ route, project, executions: [] }));
-    expect(html).toContain('<code>QA_PASSWORD</code>');
+    const environments = renderDashboard(
+      base({ route: { ...route, tab: 'environments' }, project, executions: [] }),
+    );
+    expect(environments).toContain('<code>QA_PASSWORD</code>');
     expect(html).toContain('permises, 5 au plus par run');
     expect(html).toContain('data-action="archive"');
     expect(html).not.toContain('data-action="archive-confirm"');
@@ -143,7 +152,24 @@ describe('dashboard rendering', () => {
   });
 
   it('a running execution offers cancellation only when the server does, after a confirmation', () => {
-    const snapshot = { id: 'exp_1', status: 'RUNNING' } as ExplorationSnapshot;
+    const snapshot = {
+      id: 'exp_1',
+      projectId: 'prj_a',
+      status: 'RUNNING',
+      kind: 'REPLAY',
+      queuedAt: at,
+      startedAt: at,
+      serverTime: '2026-10-27T10:02:14.000Z',
+      budget: { maxStates: 100, maxActions: 500, maxDurationMinutes: 15, maxDepth: 10 },
+      counters: {
+        states: 0,
+        transitions: 0,
+        actions: 0,
+        blocked: 0,
+        issues: { INFO: 0, WARNING: 0, ERROR: 0, CRITICAL: 0 },
+      },
+      lastSeq: 1,
+    } as ExplorationSnapshot;
     const route = { view: 'execution', projectId: 'prj_a', run: 'run-c', explorationId: 'exp_1' } as const;
     const steps = liveSteps([], {
       seq: 1,
@@ -185,6 +211,9 @@ describe('dashboard rendering', () => {
       environment: { id: 'env_1', name: 'Recette' },
       scenarios: ['checkout'],
       reports: { html: 'index.html' },
+      issuesList: [
+        { id: 'i1', severity: 'ERROR', type: 'console', message: '<script>x</script>', pageUrl: '/a' },
+      ],
       flowsDetail: [
         {
           name: 'checkout',
@@ -214,6 +243,76 @@ describe('dashboard rendering', () => {
     expect(html).toContain('>En échec<');
     expect(html).toContain('<code>item.title</code>');
     expect(html).toContain('data-action="report"');
+    expect(html).toContain('&lt;script&gt;x&lt;/script&gt;');
+    expect(html).not.toContain('<script>x');
+  });
+
+  it('a running execution says how long it has run, and an exploration shows its counters and limits', () => {
+    const snapshot = {
+      id: 'exp_2',
+      projectId: 'prj_a',
+      status: 'RUNNING',
+      kind: 'EXPLORATION',
+      queuedAt: at,
+      startedAt: at,
+      serverTime: '2026-10-27T10:02:14.000Z',
+      budget: { maxStates: 100, maxActions: 500, maxDurationMinutes: 15, maxDepth: 10 },
+      counters: {
+        states: 4,
+        transitions: 6,
+        actions: 9,
+        blocked: 2,
+        issues: { INFO: 0, WARNING: 1, ERROR: 0, CRITICAL: 0 },
+      },
+      lastSeq: 12,
+    } as ExplorationSnapshot;
+    const route = { view: 'execution', projectId: 'prj_a', run: 'run-e', explorationId: 'exp_2' } as const;
+    const html = renderDashboard(base({ route, live: { snapshot, steps: [], cancelRequested: false } }));
+    expect(html).toContain('En cours · 2 min 14 s');
+    expect(html).toContain('4 écran(s) · 9 action(s)');
+    expect(html).toContain('limites : 100 écrans, 500 actions');
+  });
+
+  it('a finished execution lists its issues escaped, counts its assertions and its evidence', () => {
+    const execution = {
+      run: 'run-d',
+      projectId: 'prj_a',
+      kind: 'REPLAY',
+      createdAt: at,
+      verdict: 'PASSED',
+      flows: { total: 1, passed: 1, failed: 0 },
+      issues: 0,
+      reports: {},
+      issuesList: [],
+      flowsDetail: [
+        {
+          name: 'checkout',
+          status: 'PASSED',
+          durationMs: 10,
+          steps: [
+            {
+              index: 1,
+              kind: 'click',
+              label: 'click',
+              status: 'PASSED',
+              durationMs: 5,
+              screenshot: 's1.png',
+            },
+          ],
+          assertions: [
+            { id: 'A1', description: 'ok', status: 'PASS' },
+            { id: 'A2', description: 'ko', status: 'FAIL' },
+          ],
+          testData: [],
+        },
+      ],
+    } as unknown as ExecutionDetail;
+    const html = renderDashboard(
+      base({ route: { view: 'execution', projectId: 'prj_a', run: 'run-d' }, execution }),
+    );
+    expect(html).toContain('1 vérifiée(s) · 1 en échec');
+    expect(html).toContain('1 capture(s) d’étape · 0 anomalie(s)');
+    expect(html).not.toContain('data-action="report"');
   });
 
   it('English strings, and an error state that says the server is unreachable', () => {
@@ -223,5 +322,128 @@ describe('dashboard rendering', () => {
     const error = renderDashboard(base({ phase: 'error', error: 'connect ECONNREFUSED' }));
     expect(error).toContain('Serveur QA-CRAWLER injoignable');
     expect(error).toContain('data-action="retry"');
+  });
+});
+
+describe('dashboard shell, project tabs and readiness', () => {
+  const catalog = [
+    { ...project, draft: undefined, environments: undefined, scenarios: undefined },
+  ] as unknown as DashboardState['catalog'];
+
+  it('the menu groups its entries by section, marks the current one and offers the project context', () => {
+    const html = renderDashboard(base({ overview, catalog, projectId: 'prj_a' }));
+    expect(html).toContain('>Piloter<');
+    expect(html).toContain('data-action="nav" data-view="overview" aria-current="page"');
+    expect(html).toContain('data-view="executions"');
+    expect(html).toContain('<option value="prj_a" selected>Shop</option>');
+    expect(html).toContain('data-action="menu" aria-expanded="false"');
+    expect(html).toContain('data-menu="closed"');
+    const open = renderDashboard(base({ overview, menuOpen: true }));
+    expect(open).toContain('aria-expanded="true"');
+    expect(open).toContain('Fermer le menu');
+    expect(activeNav({ view: 'execution', projectId: 'p', run: 'r' })).toBe('executions');
+    expect(activeNav({ view: 'project', projectId: 'p' })).toBe('projects');
+  });
+
+  it('the menu says the service and engine versions from the capabilities', () => {
+    const capabilities = {
+      apiVersion: 1,
+      engineVersion: '0.2.0',
+      cancellation: true,
+    } as DashboardState['capabilities'];
+    expect(renderDashboard(base({ overview, capabilities }))).toContain(
+      'Moteur 0.2.0 · annulation prise en charge',
+    );
+  });
+
+  it('launch tab: replay or exploration, the writes of the chosen environment, readiness from the checks', () => {
+    const route = { view: 'project', projectId: 'prj_a', tab: 'launch' } as const;
+    const ready = renderDashboard(
+      base({
+        route,
+        project,
+        executions: [],
+        launch: { kind: 'REPLAY', environmentId: 'env_1', scenarios: [], busy: false },
+        checks: { env_1: { ok: true, issues: [], secrets: { QA_PASSWORD: true } } },
+      }),
+    );
+    expect(ready).toContain('Cet environnement permet au plus 5 écriture(s) par exécution');
+    expect(ready).toContain('>Prêt<');
+    expect(ready).toContain('QA_PASSWORD défini sur le serveur');
+    expect(ready).toContain('data-action="check-env" data-env="env_1"');
+    const missing = renderDashboard(
+      base({
+        route,
+        project,
+        executions: [],
+        checks: { env_1: { ok: true, issues: [], secrets: { QA_PASSWORD: false } } },
+      }),
+    );
+    expect(missing).toContain('>Pas prêt<');
+    expect(missing).toContain('QA_PASSWORD absent du serveur');
+    const exploration = renderDashboard(
+      base({
+        route,
+        project,
+        executions: [],
+        launch: { kind: 'EXPLORATION', environmentId: '', scenarios: [], busy: false },
+      }),
+    );
+    expect(exploration).toContain('L’exploration vise la cible du projet');
+    expect(exploration).toContain('<select data-bind="environment" disabled>');
+    expect(exploration).toContain('Lancer l’exploration');
+  });
+
+  it('readiness: ready only when the rules, every secret and a reached URL agree', () => {
+    expect(readiness(undefined)).toBe('UNKNOWN');
+    expect(readiness({ ok: true, issues: [], secrets: { A: true } })).toBe('READY');
+    expect(readiness({ ok: true, issues: [], secrets: { A: false } })).toBe('NOT_READY');
+    expect(readiness({ ok: false, issues: [{ field: 'name', message: 'x' }], secrets: {} })).toBe(
+      'NOT_READY',
+    );
+    expect(
+      readiness({
+        ok: true,
+        issues: [],
+        secrets: {},
+        url: { format: { ok: true }, reachable: { ok: false, durationMs: 1 } },
+      }),
+    ).toBe('NOT_READY');
+  });
+
+  it('safety tab: the risks the engine always blocks, the domains and the paths never visited', () => {
+    const capabilities = {
+      apiVersion: 1,
+      engineVersion: '0.2.0',
+      cancellation: true,
+      safety: { blocked: ['delete', 'payment', 'external-navigation'] },
+    } as DashboardState['capabilities'];
+    const withDraft = {
+      ...project,
+      draft: {
+        exploration: { ignoredPaths: ['/logout'], allowedHosts: [] },
+      } as unknown as ProjectDetail['draft'],
+    };
+    const html = renderDashboard(
+      base({
+        route: { view: 'project', projectId: 'prj_a', tab: 'security' },
+        project: withDraft,
+        executions: [],
+        capabilities,
+      }),
+    );
+    expect(html).toContain('Politique de sécurité · Recette');
+    expect(html).toContain('suppression, paiement, navigation externe');
+    expect(html).toContain('création et modification (5 par exécution)');
+    expect(html).toContain('127.0.0.2');
+    expect(html).toContain('/logout');
+  });
+
+  it('executions without a project asks to pick one; the styles fold the menu and stack on narrow screens', () => {
+    const html = renderDashboard(base({ route: { view: 'executions', projectId: '' } }));
+    expect(html).toContain('Choisissez un projet dans le menu');
+    expect(DASHBOARD_CSS).toContain('@container (max-width:960px)');
+    expect(DASHBOARD_CSS).toContain('.dash[data-menu="closed"] .drawer{display:none}');
+    expect(DASHBOARD_CSS).toContain('@container (max-width:600px)');
   });
 });

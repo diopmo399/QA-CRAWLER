@@ -61,6 +61,14 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
     quitte tout de suite.
 
+- **Dashboard selon la maquette, responsive** : menu par sections avec le projet choisi et les
+  versions du service et du moteur ; écran Projet en onglets (Lancer, Environnements, Scénarios,
+  Exécutions, Sécurité) ; lancement d'un rejeu ou d'une exploration ; environnements « prêts » ou
+  non (règles, secrets présents sur le serveur, URL jointe sur demande) ; politique de sécurité
+  (risques toujours bloqués, écritures, domaines) ; écran Exécutions du projet ; exécution avec
+  durée, compteurs d'exploration, assertions, anomalies et preuves. Sous 960 px le menu se replie
+  derrière un bouton ; sous 600 px tout passe sur une colonne. IBM Plex Sans servi par le serveur.
+  `capabilities.safety.blocked` : les risques que le moteur bloque toujours (ajout à la v1).
 - **Dashboard** (`<qa-crawler-dashboard>`, page `/dashboard`, `docs/sdk/README.md`) : vue
   d'ensemble, projets, lancement d'un rejeu, suivi en direct, annulation et archivage confirmés
   dans la page, détail d'une exécution. Il est construit sur le client du SDK, en thème clair
