@@ -14,6 +14,10 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
     quitte tout de suite.
 
+- **Audit et plan du SDK central** (`docs/sdk/MASTER-PLAN.md`) et décision d'architecture
+  (`docs/sdk/adr/0001-sdk-central.md`) : un service local, un client, une façade Node ; la CLI et le
+  Dashboard en sont des clients.
+
 - **CLI de la plateforme** (`docs/sdk/CLI.md`) : `project list|show`, `env list|show|validate`,
   `scenario list|promote`, `run start|list|results|status|cancel`, `overview`, `doctor`, sur le
   client du SDK.

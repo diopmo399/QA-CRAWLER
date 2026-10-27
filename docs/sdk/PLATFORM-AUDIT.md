@@ -168,3 +168,6 @@ au moteur (`RunOptions.signal`, `stopReason: cancelled`) ; les branches conditio
 | Annuler une exécution (ajouté ensuite, voir ci-dessous)               | `EXISTANT_ET_TESTÉ`     | `explorations.cancel` → signal du moteur ; unitaire, intégration (vrai moteur, SDK et CLI Ctrl+C → 130).          |
 | Authentification propre à un environnement                            | `ABSENT`                | l'environnement change la cible, pas l'authentification du projet.                                                |
 | Dashboard                                                             | `ABSENT`                | phase 2.                                                                                                          |
+
+La suite (SDK central, CLI, Dashboard, traçabilité métier, génération) : [MASTER-PLAN.md](MASTER-PLAN.md)
+et [adr/0001-sdk-central.md](adr/0001-sdk-central.md).
