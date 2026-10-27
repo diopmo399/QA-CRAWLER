@@ -306,6 +306,30 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 .bar .none{height:2px;background:var(--qa-color-border)}
 .bar .v{font-size:11px;font-weight:600;text-align:center;color:var(--qa-color-muted);white-space:nowrap}
 
+/* Accès : connexion, droits, membres, jeton affiché une fois, journal. */
+.signin{max-width:460px;margin:8vh auto 0;width:100%}
+.signin h1{margin:0;font-size:24px}
+.signin form{display:flex;flex-direction:column;gap:12px}
+.signin form .btn{align-self:flex-start}
+.rights th[scope="row"]{font-weight:400;min-width:220px}
+.rights td{text-align:center;position:relative}
+.rights td.yes{color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text));font-weight:600}
+.rights td.no{color:var(--qa-color-faint)}
+.members{display:flex;flex-direction:column;gap:10px}
+.member{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 0;border-top:1px solid var(--qa-color-border)}
+.member:first-child{border-top:0}
+.member.off{opacity:.6}
+.avatar{width:36px;height:36px;border-radius:999px;background:var(--qa-color-primary);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex:none}
+.m-name{flex:1 1 160px;min-width:0;overflow-wrap:anywhere}
+.member-form{gap:12px;margin-top:8px}
+.member-form select,.member select{min-height:40px;border-radius:10px;border:1px solid var(--qa-color-border-strong);background:var(--qa-color-surface);color:var(--qa-color-text);padding:0 8px}
+.token-box{display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:12px;background:var(--qa-color-warning-soft);margin-bottom:12px}
+.token-box p{margin:0}
+.tok{display:block;overflow-wrap:anywhere;user-select:all;font-size:13px;padding:8px 10px;border-radius:8px;background:var(--qa-color-surface)}
+.path code{overflow-wrap:anywhere}
+.foot .who{color:#fff;font-weight:600}
+.foot .out{color:#C7C5F4;align-self:flex-start;min-height:32px}
+
 /* Responsive : 1 100 px, 960 px (menu replié), 600 px (une colonne). */
 @container (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @container (max-width:960px){

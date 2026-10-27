@@ -24,6 +24,9 @@ Options:
       --token-env <NAME>       Read the API token from this environment variable (default: generated and printed)
       --language <fr|en>       Language of the standalone page and of the engine reports (default: en)
       --concurrency <n>        Explorations running at the same time (default: 1)
+      --access <single|named>  single (default): one service token, carried by the served pages;
+                               named: personal tokens with roles and a journal (the pages carry no
+                               token; sign in with yours; the service token stays administrator)
       --quiet                  Only the URL
   -h, --help                   This help
 
@@ -41,6 +44,7 @@ interface SdkServerArgs {
   tokenEnv?: string;
   language: 'fr' | 'en';
   concurrency: number;
+  access: 'single' | 'named';
   quiet: boolean;
   help: boolean;
 }
@@ -59,6 +63,7 @@ export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
         'token-env': { type: 'string' },
         language: { type: 'string' },
         concurrency: { type: 'string' },
+        access: { type: 'string' },
         quiet: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
       },
@@ -78,6 +83,8 @@ export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
   };
   const language = values.language ?? 'en';
   if (language !== 'fr' && language !== 'en') throw new UsageError('--language must be fr or en');
+  const access = values.access ?? 'single';
+  if (access !== 'single' && access !== 'named') throw new UsageError('--access must be single or named');
   const origins = values['allow-origin'] ?? [];
   for (const origin of origins)
     if (!/^https?:\/\//i.test(origin) || !URL.canParse(origin))
@@ -91,6 +98,7 @@ export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
     ...(values['token-env'] !== undefined ? { tokenEnv: values['token-env'] } : {}),
     language,
     concurrency: integer('concurrency', values.concurrency, 1, 1),
+    access,
     quiet: values.quiet ?? false,
     help: values.help ?? false,
   };
@@ -143,6 +151,7 @@ export async function runSdkServerCli(argv: string[], runtime: SdkServerRuntime 
       allowedSourceRoots: args.sourceRoots,
       language: args.language,
       concurrency: args.concurrency,
+      access: args.access,
       env,
       ...(token ? { token } : {}),
       ...(runtime.run ? { run: runtime.run } : {}),
@@ -165,6 +174,9 @@ export async function runSdkServerCli(argv: string[], runtime: SdkServerRuntime 
       `  Sources   : ${args.sourceRoots.length > 0 ? args.sourceRoots.join(', ') : 'static analysis refused'}`,
     );
     logger.info(`  Token     : ${args.tokenEnv ? `from ${args.tokenEnv}` : running.token}`);
+    logger.info(
+      `  Access    : ${args.access === 'named' ? 'named tokens (the service token is the administrator)' : 'single service token'}`,
+    );
     logger.info(`  Module    : ${running.url}/sdk/ui/index.js`);
     logger.info(`  API       : ${running.url}/api`);
     logger.info('');

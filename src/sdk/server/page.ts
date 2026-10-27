@@ -1,10 +1,21 @@
 import { recorderFontFaces } from '../../recording/recorder-fonts.js';
 
 /**
+ * En mode nominatif, une page ne porte aucun jeton : celui de la personne, saisi dans le Dashboard,
+ * est gardé pour l'onglet (sessionStorage) et lu par les autres pages de la même origine.
+ */
+const SIGNED_IN_TOKEN =
+  "(() => { try { return sessionStorage.getItem('qa-crawler-token') ?? undefined; } catch { return undefined; } })()";
+
+/**
  * LA PAGE AUTONOME du serveur SDK : l'assistant en pleine page (mode `standalone`), avec le jeton
  * de la session passé à l'élément. Les modules viennent du même serveur (/sdk/ui/index.js).
  */
-export function sdkStandalonePage(options: { token: string; nonce: string; language: 'fr' | 'en' }): string {
+export function sdkStandalonePage(options: {
+  token: string | null;
+  nonce: string;
+  language: 'fr' | 'en';
+}): string {
   const title = options.language === 'fr' ? 'QA-CRAWLER — Nouveau projet' : 'QA-CRAWLER — New project';
   return `<!doctype html>
 <html lang="${options.language}">
@@ -19,7 +30,7 @@ export function sdkStandalonePage(options: { token: string; nonce: string; langu
 <script type="module" nonce="${options.nonce}">
 import '/sdk/ui/index.js';
 const wizard = document.querySelector('qa-crawler-project-wizard');
-wizard.token = ${JSON.stringify(options.token)};
+wizard.token = ${options.token === null ? SIGNED_IN_TOKEN : JSON.stringify(options.token)};
 </script>
 </body>
 </html>
@@ -30,7 +41,11 @@ wizard.token = ${JSON.stringify(options.token)};
  * LE FLOW STUDIO en pleine page : `/studio?project=<id>&recording=<nom>`. Le projet et
  * l'enregistrement sont lus dans l'adresse par le script de la page (jamais recopiés dans le HTML).
  */
-export function flowStudioHtml(options: { token: string; nonce: string; language: 'fr' | 'en' }): string {
+export function flowStudioHtml(options: {
+  token: string | null;
+  nonce: string;
+  language: 'fr' | 'en';
+}): string {
   return `<!doctype html>
 <html lang="${options.language}">
 <head>
@@ -49,7 +64,7 @@ for (const name of ['project', 'recording', 'theme']) {
   const value = query.get(name);
   if (value) studio.setAttribute(name, value);
 }
-studio.token = ${JSON.stringify(options.token)};
+studio.token = ${options.token === null ? SIGNED_IN_TOKEN : JSON.stringify(options.token)};
 </script>
 </body>
 </html>
@@ -57,7 +72,11 @@ studio.token = ${JSON.stringify(options.token)};
 }
 
 /** La page autonome de <qa-crawler-run-compare> : `/runs?project=…&base=run-…&head=run-…`. */
-export function runComparePage(options: { token: string; nonce: string; language: 'fr' | 'en' }): string {
+export function runComparePage(options: {
+  token: string | null;
+  nonce: string;
+  language: 'fr' | 'en';
+}): string {
   return `<!doctype html>
 <html lang="${options.language}">
 <head>
@@ -76,7 +95,7 @@ for (const name of ['project', 'base', 'head', 'theme']) {
   const value = query.get(name);
   if (value) runs.setAttribute(name, value);
 }
-runs.token = ${JSON.stringify(options.token)};
+runs.token = ${options.token === null ? SIGNED_IN_TOKEN : JSON.stringify(options.token)};
 </script>
 </body>
 </html>
@@ -84,7 +103,11 @@ runs.token = ${JSON.stringify(options.token)};
 }
 
 /** La page autonome de <qa-crawler-run-monitor> : `/monitor?exploration=…`. */
-export function runMonitorPage(options: { token: string; nonce: string; language: 'fr' | 'en' }): string {
+export function runMonitorPage(options: {
+  token: string | null;
+  nonce: string;
+  language: 'fr' | 'en';
+}): string {
   return `<!doctype html>
 <html lang="${options.language}">
 <head>
@@ -103,7 +126,7 @@ for (const name of ['exploration', 'theme']) {
   const value = query.get(name);
   if (value) monitor.setAttribute(name, value);
 }
-monitor.token = ${JSON.stringify(options.token)};
+monitor.token = ${options.token === null ? SIGNED_IN_TOKEN : JSON.stringify(options.token)};
 </script>
 </body>
 </html>
@@ -111,7 +134,11 @@ monitor.token = ${JSON.stringify(options.token)};
 }
 
 /** La page autonome du Dashboard : `/dashboard` (`?theme=dark|auto`, `?days=1|7|30`). */
-export function dashboardPage(options: { token: string; nonce: string; language: 'fr' | 'en' }): string {
+export function dashboardPage(options: {
+  token: string | null;
+  nonce: string;
+  language: 'fr' | 'en';
+}): string {
   return `<!doctype html>
 <html lang="${options.language}">
 <head>
@@ -131,7 +158,7 @@ for (const name of ['theme', 'days']) {
   const value = query.get(name);
   if (value) dashboard.setAttribute(name, value);
 }
-dashboard.token = ${JSON.stringify(options.token)};
+${options.token === null ? "dashboard.setAttribute('sign-in', '');\n" : ''}dashboard.token = ${options.token === null ? SIGNED_IN_TOKEN : JSON.stringify(options.token)};
 </script>
 </body>
 </html>

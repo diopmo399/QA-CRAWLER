@@ -1209,3 +1209,81 @@ export interface TrendWeek {
   /** Couverture des exigences par un test à la fin de la semaine ; absente avant le premier élément publié. */
   coverage?: Ratio;
 }
+
+// ── Accès : rôles, droits, membres, journal ────────────────────────────────────────────────────
+
+/** Les rôles, du plus restreint au plus large. */
+export const ROLES = ['READER', 'ANALYST', 'PILOT', 'ADMIN'] as const;
+export type Role = (typeof ROLES)[number];
+
+export const RIGHTS = [
+  'VIEW',
+  'RUN',
+  'RUN_WRITES',
+  'DECIDE',
+  'PUBLISH',
+  'MANAGE_ENVIRONMENTS',
+  'MANAGE_PROJECTS',
+  'MANAGE_ACCESS',
+] as const;
+export type Right = (typeof RIGHTS)[number];
+
+/**
+ * LES DROITS DE CHAQUE RÔLE. Le serveur les vérifie à chaque appel ; l'écran ne fait que masquer ce
+ * qui serait refusé (un bouton masqué ne protège rien à lui seul).
+ */
+export const ROLE_RIGHTS: Record<Role, readonly Right[]> = {
+  READER: ['VIEW'],
+  ANALYST: ['VIEW', 'RUN', 'DECIDE'],
+  PILOT: ['VIEW', 'RUN', 'RUN_WRITES', 'DECIDE', 'PUBLISH'],
+  ADMIN: RIGHTS,
+};
+
+/** Qui appelle : le jeton du service (administrateur) ou le jeton nominatif d'un membre. */
+export interface AccessMe {
+  id: string;
+  name: string;
+  kind: 'SERVICE' | 'MEMBER';
+  /** Le rôle dans l'espace ; `projectRole` le remplace dans le projet demandé. */
+  role: Role;
+  projectRole?: Role;
+  /** Les droits effectifs (dans le projet demandé s'il y en a un). */
+  rights: Right[];
+  /** `single` : un seul jeton de service ; `named` : des jetons nominatifs. */
+  mode: 'single' | 'named';
+}
+
+export interface MemberView {
+  id: string;
+  name: string;
+  role: Role;
+  /** Un rôle propre à un projet, qui remplace celui de l'espace. */
+  projects: Record<string, Role>;
+  createdAt: string;
+  revokedAt?: string;
+}
+
+/** Un membre créé : son jeton n'est rendu qu'une fois, ici, et n'est jamais conservé en clair. */
+export interface MemberCreated {
+  member: MemberView;
+  token: string;
+}
+
+export const JOURNAL_KINDS = ['RUN', 'REQUIREMENTS', 'CONFIGURATION', 'ACCESS', 'OTHER'] as const;
+export type JournalKind = (typeof JOURNAL_KINDS)[number];
+
+/** UNE LIGNE DU JOURNAL : qui, quoi, où, avec quel résultat. Ni corps de requête, ni valeur, ni jeton. */
+export interface JournalEntry {
+  at: string;
+  who: { id: string; name: string };
+  role: Role;
+  method: string;
+  /** L'action, d'après la route (projects.executions, projects.requirements.imports.publish…). */
+  action: string;
+  kind: JournalKind;
+  /** Le chemin appelé, sans la chaîne de requête. */
+  path: string;
+  projectId?: string;
+  status: number;
+  outcome: 'OK' | 'DENIED' | 'FAILED';
+}

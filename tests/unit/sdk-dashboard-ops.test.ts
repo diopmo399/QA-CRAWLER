@@ -13,6 +13,7 @@ import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
 import { environmentForm, environmentInputOf, scenarioTag } from '../../src/sdk/ui/dashboard-ops.js';
 import { activeNav, renderDashboard, type DashboardState } from '../../src/sdk/ui/dashboard-view.js';
 
+import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
 /**
  * LES ÉCRANS D'EXPLOITATION DU DASHBOARD (fonctions pures) : historique et comparaison, scénarios
@@ -89,6 +90,8 @@ const base = (extra: Partial<DashboardState> = {}): DashboardState => ({
   picked: [],
   severity: 'ALL',
   req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8 },
+  signIn: false,
+  access: emptyAccessUi(),
   project,
   executions,
   ...extra,

@@ -13,6 +13,7 @@ import type {
   TrendsView,
 } from '../core/contracts.js';
 import type { DashboardState } from './dashboard-view.js';
+import { can } from './dashboard-access.js';
 import { formatDate, header, icon, pill } from './dashboard-parts.js';
 import { esc } from './view.js';
 
@@ -164,9 +165,10 @@ export function sourcesView(state: DashboardState): string {
 ${field('userEnv', r.userEnv, form.userEnv, 'class="mono" autocomplete="off" spellcheck="false" placeholder="QA_…"')}
 <p class="note">${icon('alert')}<span>${esc(r.secretNote)}</span></p>`
       : `<label class="field">${esc(r.file)}<input type="file" data-req="file" accept=".docx,.xlsx,.pdf"></label>${form.fileName ? `<p class="mu"><code>${esc(form.fileName)}</code></p>` : ''}<small class="mu">${esc(r.fileNote)}</small>`;
-  const importCard = archived
-    ? ''
-    : `<section class="card"><h2>${esc(r.newImport)}</h2><form class="col req-form" data-action="import-form">
+  const importCard =
+    archived || !can(state, 'DECIDE')
+      ? ''
+      : `<section class="card"><h2>${esc(r.newImport)}</h2><form class="col req-form" data-action="import-form">
 <label class="field">${esc(r.sourceKind)}<select data-req="source"><option value="FILE" ${form.source === 'FILE' ? 'selected' : ''}>${esc(r.fileOption)}</option><option value="CONFLUENCE" ${form.source === 'CONFLUENCE' ? 'selected' : ''}>${esc(r.confluenceOption)}</option></select></label>
 ${specific}${profileSelect}
 <div class="form-acts start"><button type="button" class="btn primary" data-action="import" ${ui.busy ? 'disabled' : ''}>${icon('sources')}<span>${esc(ui.busy ? r.importing : r.importAction)}</span></button></div>
@@ -226,6 +228,10 @@ function candidate(state: DashboardState, item: ExtractedItem, batch: ImportBatc
   if (item.published)
     actions = `<p class="ok-t">${esc(r.publishedAs(item.published.entityId, item.published.version))}</p>`;
   else if (item.duplicate.status === 'UNCHANGED') actions = '';
+  else if (!can(state, 'DECIDE'))
+    actions = item.decision
+      ? `<p class="mu">${esc(r.decisionShown(r.decisions[item.decision.action] ?? item.decision.action))}</p>`
+      : '';
   else {
     const decided = item.decision
       ? `<p class="mu">${esc(r.decisionShown(r.decisions[item.decision.action] ?? item.decision.action))}</p>`
@@ -259,10 +265,11 @@ export function importView(state: DashboardState): string {
   const open = candidates.filter((item) => !item.published && item.duplicate.status !== 'UNCHANGED');
   const decided = open.filter((item) => item.decision).length;
   const archived = state.project.state === 'ARCHIVED';
+  const mayPublish = can(state, 'PUBLISH');
   const toPublish = open.filter((item) => item.decision).length;
   const partial = batch.completeness === 'PARTIAL';
   const publish =
-    archived || toPublish === 0
+    archived || toPublish === 0 || !mayPublish
       ? ''
       : partial
         ? state.confirm === 'publish-partial'
@@ -309,9 +316,9 @@ function linkLine(state: DashboardState, cell: MatrixLinkCell, withActions: bool
   const r = state.t.req;
   const archived = state.project?.state === 'ARCHIVED';
   const actions =
-    withActions && !archived && cell.validation === 'PROPOSED'
+    withActions && !archived && can(state, 'PUBLISH') && cell.validation === 'PROPOSED'
       ? `<span class="row-acts"><button class="btn" data-action="link-decide" data-link="${esc(cell.linkId)}" data-decision="CONFIRM">${esc(r.confirmLink)}</button><button class="btn ghost" data-action="link-decide" data-link="${esc(cell.linkId)}" data-decision="REJECT">${esc(r.rejectLink)}</button></span>`
-      : withActions && !archived && cell.validation === 'CONFIRMED'
+      : withActions && !archived && can(state, 'PUBLISH') && cell.validation === 'CONFIRMED'
         ? `<span class="row-acts"><button class="btn ghost" data-action="link-decide" data-link="${esc(cell.linkId)}" data-decision="REJECT">${esc(r.rejectLink)}</button></span>`
         : '';
   const target = cell.label ?? labelOf(state, cell.target.id);
@@ -353,7 +360,7 @@ function entityDetail(state: DashboardState, entity: CanonicalEntity, withLinks:
   const archived = state.project?.state === 'ARCHIVED';
   const form = state.req.linkForm;
   const addLink =
-    !withLinks || archived
+    !withLinks || archived || !can(state, 'PUBLISH')
       ? ''
       : form
         ? `<form class="col link-form" data-action="link-form"><div class="fields"><label class="field">${esc(r.linkType)}<select data-link-field="type">${ADDABLE_LINKS.map((type) => `<option value="${type}" ${form.type === type ? 'selected' : ''}>${esc(r.linkTypes[type] ?? type)}</option>`).join('')}</select></label><label class="field">${esc(r.targetKind)}<select data-link-field="targetKind">${TARGET_KINDS.map((kind) => `<option value="${kind}" ${form.targetKind === kind ? 'selected' : ''}>${esc(r.targetKinds[kind] ?? kind)}</option>`).join('')}</select></label></div><label class="field">${esc(r.targetId)}<input data-link-field="targetId" class="mono" value="${esc(form.targetId)}"></label><label class="field">${esc(r.justificationField)}<textarea data-link-field="justification" rows="2">${esc(form.justification)}</textarea></label><div class="form-acts start"><button type="button" class="btn primary" data-action="link-add">${esc(r.addLinkSave)}</button><button type="button" class="btn ghost" data-action="link-cancel">${esc(t.cancelAction)}</button></div>${state.req.error ? `<p class="err" role="alert">${esc(state.req.error)}</p>` : ''}</form>`
