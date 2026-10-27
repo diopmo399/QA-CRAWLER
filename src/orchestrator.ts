@@ -129,6 +129,11 @@ export interface RunOptions {
   intelligenceProvider?: FlowExplorerOptions['intelligenceProvider'];
   /** La progression après le dernier flow (autres acteurs, régression, mémoire, rapports). */
   onProgress?: ProgressSink;
+  /**
+   * L'ANNULATION CONTRÔLÉE : une fois le signal levé, le moteur s'arrête à la prochaine vérification de
+   * ses limites (stopReason `cancelled`), saute les flows restants, ferme le navigateur et écrit son rapport.
+   */
+  signal?: AbortSignal;
 }
 
 /** Les phases après le dernier flow, dans l'ordre. */
@@ -266,6 +271,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
     knowledge,
     memory,
     ...(options.decisionEngine ? { decisionEngine: options.decisionEngine } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
     ...(options.testData ? { testData: options.testData } : {}),
     ...(options.observer ? { observer: options.observer } : {}),
     ...(options.dryRun ? { dryRun: options.dryRun } : {}),

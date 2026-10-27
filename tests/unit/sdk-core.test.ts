@@ -25,15 +25,16 @@ function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
 }
 
 describe('SDK lifecycle', () => {
-  it('follows QUEUED → RUNNING → COMPLETED | FAILED; CANCELLED is never reachable', () => {
+  it('follows QUEUED → RUNNING → COMPLETED | FAILED, and CANCELLED from QUEUED or RUNNING only', () => {
     expect(canTransition('QUEUED', 'RUNNING')).toBe(true);
     expect(canTransition('RUNNING', 'COMPLETED')).toBe(true);
     expect(canTransition('RUNNING', 'FAILED')).toBe(true);
     expect(canTransition('QUEUED', 'COMPLETED')).toBe(false);
     expect(canTransition('COMPLETED', 'RUNNING')).toBe(false);
-    for (const from of ['QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'] as const)
-      expect(canTransition(from, 'CANCELLED')).toBe(false);
+    for (const from of ['QUEUED', 'RUNNING'] as const) expect(canTransition(from, 'CANCELLED')).toBe(true);
+    for (const from of ['COMPLETED', 'FAILED'] as const) expect(canTransition(from, 'CANCELLED')).toBe(false);
     expect(isTerminal('COMPLETED')).toBe(true);
+    expect(isTerminal('CANCELLED')).toBe(true);
     expect(isTerminal('RUNNING')).toBe(false);
   });
 

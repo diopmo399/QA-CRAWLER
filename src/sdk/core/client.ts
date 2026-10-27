@@ -181,6 +181,8 @@ export interface QaCrawlerClient {
       options?: SubscribeOptions,
     ): Subscription;
     reportLink(id: string): Promise<ReportLink>;
+    /** Annule une exploration ou un rejeu (`capabilities.cancellation`) : CANCELLED quand le moteur s'est arrêté. */
+    cancel(id: string): Promise<ExplorationSnapshot>;
   };
   /** Un humain joue le parcours dans le Chromium ouvert par le serveur ; le moteur en fait un flow. */
   recordings: {
@@ -471,6 +473,7 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           subscribeOptions,
         ),
       reportLink: (id) => request('POST', `/explorations/${encodeURIComponent(id)}/report-links`, {}),
+      cancel: (id) => request('POST', `/explorations/${encodeURIComponent(id)}/cancel`, {}),
     },
     recordings: {
       start: (projectId, input) => request('POST', `${project(projectId)}/recordings`, input),

@@ -56,6 +56,8 @@ export class Exploration {
   error?: string;
   summary?: ExplorationSummary;
   private seq = 0;
+  /** L'annulation : passée au moteur (RunOptions.signal). */
+  readonly abort = new AbortController();
   private readonly events: ExplorationEvent[] = [];
   private readonly listeners = new Set<Listener>();
   private readonly seenStates = new Set<string>();
@@ -260,6 +262,27 @@ export class ExplorationManager {
     return this.explorations.get(id);
   }
 
+  /**
+   * L'ANNULATION : en file, l'exploration n'est jamais lancée (CANCELLED tout de suite) ; en cours, le
+   * moteur reçoit le signal et s'arrête à la prochaine vérification de ses limites, puis CANCELLED
+   * quand il a rendu son résultat. Une exploration terminée ne s'annule plus (`false`).
+   */
+  cancel(id: string): boolean {
+    const exploration = this.explorations.get(id);
+    if (!exploration || exploration.terminal) return false;
+    const queued = this.queue.indexOf(exploration);
+    if (queued >= 0) {
+      this.queue.splice(queued, 1);
+      exploration.transition('CANCELLED', 'cancelled before it started');
+      return true;
+    }
+    if (!exploration.abort.signal.aborted) {
+      exploration.abort.abort();
+      exploration.emit({ type: 'phase', phase: 'cancellation requested' });
+    }
+    return true;
+  }
+
   start(request: ExplorationRequest): Exploration {
     const exploration = new Exploration({
       ...request,
@@ -278,9 +301,24 @@ export class ExplorationManager {
     return exploration;
   }
 
-  /** Attend la fin de toutes les explorations (arrêt du serveur, tests). */
-  async idle(): Promise<void> {
-    while (this.running > 0 || this.queue.length > 0) await new Promise((resolve) => setTimeout(resolve, 50));
+  /** Annule tout ce qui n'est pas terminé (arrêt du serveur) ; le nombre d'explorations annulées. */
+  cancelAll(): number {
+    let cancelled = 0;
+    for (const exploration of this.explorations.values()) if (this.cancel(exploration.id)) cancelled += 1;
+    return cancelled;
+  }
+
+  /**
+   * Attend la fin de toutes les explorations (arrêt du serveur, tests). `timeoutMs` : n'attend pas
+   * plus longtemps ; `false` si des explorations tournent encore à l'échéance.
+   */
+  async idle(timeoutMs = Number.POSITIVE_INFINITY): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.running > 0 || this.queue.length > 0) {
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return true;
   }
 
   private pump(): void {
@@ -302,6 +340,7 @@ export class ExplorationManager {
       const outcome = await this.options.run(exploration.request.config, {
         listener: exploration.listener(),
         env: exploration.request.env ?? this.options.env,
+        signal: exploration.abort.signal,
         onWarning: (message) => this.options.onWarning?.(redactText(message)),
         onProgress: (update) => {
           // Une phase est annoncée une fois, quand elle commence (pas à chaque détail).
@@ -312,7 +351,8 @@ export class ExplorationManager {
       });
       exploration.summary = summarize(outcome, exploration.request.config.output.reportsDir);
       exploration.emit({ type: 'completed', summary: exploration.summary });
-      exploration.transition('COMPLETED');
+      // Annulée en cours : le moteur s'est arrêté et a écrit son rapport (stopReason `cancelled`).
+      exploration.transition(outcome.result.stopReason === 'cancelled' ? 'CANCELLED' : 'COMPLETED');
     } catch (error) {
       exploration.error = redactText(error instanceof Error ? error.message : String(error));
       exploration.emit({ type: 'failed', error: exploration.error });

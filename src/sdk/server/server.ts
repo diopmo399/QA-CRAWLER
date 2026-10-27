@@ -53,6 +53,7 @@ import {
   RECORDING_NAME_PATTERN,
   SDK_API_VERSION,
 } from '../core/contracts.js';
+import { isTerminal } from '../core/lifecycle.js';
 import { ExplorationManager, type MissionRunner } from './explorations.js';
 import {
   RecordingBusyError,
@@ -140,6 +141,11 @@ export interface SdkServerOptions {
   reportLinkTtlMs?: number;
   /** Délai de la vérification d'accès à une URL (défaut 10 s). */
   urlCheckTimeoutMs?: number;
+  /**
+   * À l'arrêt du serveur, les explorations en cours sont annulées : combien de temps attendre que le
+   * moteur se soit arrêté et ait écrit son rapport (défaut 30 s).
+   */
+  closeGraceMs?: number;
   onWarning?: (message: string) => void;
 }
 
@@ -235,15 +241,21 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     server,
     explorations,
     recordings,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    close: async () => {
+      // Arrêt contrôlé : rien n'est laissé tourner, les rapports des explorations arrêtées sont écrits.
+      if (explorations.cancelAll() > 0) {
+        const settled = await explorations.idle(options.closeGraceMs ?? 30_000);
+        if (!settled) options.onWarning?.('an exploration was still stopping when the server closed');
+      }
+      await new Promise<void>((resolve, reject) => {
         for (const client of sseClients) client.end();
         server.close((error) => {
           if (error) reject(error);
           else resolve();
         });
         server.closeAllConnections();
-      }),
+      });
+    },
   };
 }
 
@@ -410,6 +422,13 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     if (!ID_PATTERN.test(id)) throw new HttpError(404, 'NOT_FOUND', 'exploration not found');
     const exploration = ctx.explorations.get(id);
     if (!exploration) throw new HttpError(404, 'NOT_FOUND', 'exploration not found');
+    if (sub === 'cancel' && method === 'POST') {
+      // L'annulation contrôlée : jamais lancée si elle attend, arrêt du moteur sinon (rapport écrit).
+      if (!ctx.explorations.cancel(id))
+        throw new HttpError(409, 'NOT_CANCELLABLE', `the exploration is already ${exploration.status}`);
+      json(exploration.snapshot(), 202);
+      return;
+    }
     if (sub === undefined && method === 'GET') {
       json(exploration.snapshot());
       return;
@@ -1131,7 +1150,7 @@ function capabilities(ctx: Context): Capabilities {
     authTypes: AUTH_TYPES,
     defaults: engineDefaults(),
     staticAnalysis: ctx.rules.allowedSourceRoots.length > 0,
-    cancellation: false,
+    cancellation: true,
     extensions: Object.fromEntries(EXTENSION_NAMES.map((name) => [name, true])) as Capabilities['extensions'],
   };
 }
@@ -1540,8 +1559,7 @@ function streamEvents(
     exploration,
     after,
     response,
-    (event: ExplorationEvent) =>
-      event.type === 'status' && (event.status === 'COMPLETED' || event.status === 'FAILED'),
+    (event: ExplorationEvent) => event.type === 'status' && isTerminal(event.status),
   );
 }
 

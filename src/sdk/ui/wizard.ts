@@ -625,7 +625,7 @@ export class QaCrawlerProjectWizard extends Base {
     if (event.type === 'status') {
       run.snapshot = { ...run.snapshot, status: event.status };
       if (event.status === 'RUNNING') run.startedAtMs = local;
-      if (event.status === 'COMPLETED' || event.status === 'FAILED') {
+      if (event.status === 'COMPLETED' || event.status === 'FAILED' || event.status === 'CANCELLED') {
         run.finishedAtMs = local;
         if (this.ticker) clearInterval(this.ticker);
       }

@@ -188,6 +188,7 @@ const link = await qa.explorations.reportLink(started.id); // lien valable 10 mi
 | `explorations.result(id)`                 | `GET /api/explorations/:id/result`              |
 | `explorations.subscribe(id, cb, {after})` | `GET /api/explorations/:id/events` (SSE)        |
 | `explorations.reportLink(id)`             | `POST /api/explorations/:id/report-links`       |
+| `explorations.cancel(id)`                 | `POST /api/explorations/:id/cancel`             |
 
 Une erreur est une `QaCrawlerError { status, code, message, issues }` ; un serveur absent donne
 `status: 0, code: 'UNREACHABLE'`. `subscribe` lit le flux avec `fetch` (le jeton part en en-tête,
@@ -202,6 +203,31 @@ Un refus (4xx : jeton, origine, exploration inconnue) n'est pas réessayé. Quan
 
 **Version du contrat** : `connect()` rend les capacités et refuse (`API_VERSION_MISMATCH`) un
 serveur qui ne parle pas la version du client ; l'assistant l'utilise au chargement.
+
+### Dans un programme Node : `openQaCrawler`
+
+Pour un script, une CI ou un outil interne, la façade démarre le service dans le programme même
+(127.0.0.1, port libre, jeton aléatoire jamais affiché) et rend le client. C'est le même contrat
+HTTP que l'assistant et le Dashboard : aucun second moteur.
+
+```js
+import { openQaCrawler } from '@qa-crawler/core/sdk/server';
+
+const qa = await openQaCrawler({ workspace: './qa-workspace', language: 'fr' });
+try {
+  const [project] = await qa.client.projects.list();
+  const started = await qa.client.executions.start(project.id);
+  // … suivre par qa.client.explorations.subscribe, puis lire qa.client.executions.get
+} finally {
+  await qa.close(); // annule ce qui tourne encore (rapport écrit), puis ferme le service
+}
+```
+
+Les options sont celles de `startSdkServer`, sans hôte, port, jeton ni origines : le service n'est
+joignable que depuis la machine. L'exemple exécutable
+[`examples/sdk-node/replay.mjs`](../../examples/sdk-node/README.md) rejoue un projet dans un
+environnement, suit les étapes, et sort avec le code de son verdict (`0`, `1`, `130` annulé par
+Ctrl+C).
 
 ## Enregistrements, assertions, groupes, génération, graphe, rapports
 
@@ -542,11 +568,24 @@ ni `100` par défaut.
 
 ```
 QUEUED ──▶ RUNNING ──▶ COMPLETED
-                  └──▶ FAILED
+   │              ├──▶ FAILED
+   └──────────────┴──▶ CANCELLED
 ```
 
-`CANCELLED` existe dans le contrat mais n'est jamais atteint : le moteur n'offre pas d'annulation
-(`capabilities().cancellation === false`), l'assistant n'affiche donc pas de bouton « Annuler ».
+**Annulation contrôlée** (`capabilities().cancellation === true`) : `client.explorations.cancel(id)`
+(`POST /api/explorations/:id/cancel`).
+
+- En file (`QUEUED`) : l'exploration n'est jamais lancée, `CANCELLED` tout de suite.
+- En cours (`RUNNING`) : le moteur reçoit le signal (`RunOptions.signal`) et s'arrête à la prochaine
+  vérification de ses limites — avant l'action ou l'étape suivante, jamais au milieu d'une action.
+  Les étapes restantes sont `SKIPPED`, le navigateur est fermé, le résultat est écrit avec
+  `stopReason: 'cancelled'`, puis l'exploration passe `CANCELLED`. L'événement
+  `phase: 'cancellation requested'` est émis à la demande.
+- Terminée : refus `409 NOT_CANCELLABLE`.
+
+Les composants d'interface n'offrent pas encore de bouton « Annuler » (prévu avec le Dashboard).
+Une exécution annulée a le verdict `CANCELLED` : elle n'est ni une réussite ni un échec, et n'entre
+ni dans le taux de réussite ni dans les alertes de la vue d'ensemble.
 
 Chaque événement porte `seq` (croissant) et `at` (horodatage serveur) :
 
@@ -601,8 +640,11 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 
 ## Limites actuelles
 
-- Pas d'annulation d'une exploration ni d'un rejeu (le moteur ne l'offre pas). Un enregistrement, lui,
-  s'arrête.
+- L'annulation attend la prochaine vérification des limites du moteur : une action déjà lancée
+  (un clic, une attente de transition) va jusqu'à son délai. Pas de suspension ni de reprise.
+- Un flow coupé par une limite de mission (annulation comprise) garde le statut de ses étapes
+  jouées : il peut être `PASSED` avec des étapes `SKIPPED`. Le verdict de l'exécution, lui, est
+  `CANCELLED`.
 - Les environnements changent la cible, les domaines, les délais, les limites, les variables et les
   écritures. Ils ne changent pas l'authentification du projet : une page de connexion écrite en
   absolu reste celle du projet.
@@ -626,6 +668,17 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 
 ## Tests
 
+- `tests/unit/sdk-cancellation.test.ts` : transitions vers `CANCELLED`, exécution en file jamais
+  lancée, exécution en cours arrêtée par le signal du moteur, refus `409 NOT_CANCELLABLE`, exclusion
+  du taux de réussite ; `openQaCrawler` dont la fermeture annule ce qui tourne. Moteur **simulé**.
+- `tests/integration/sdk-cancellation.test.ts` : le **vrai** moteur, annulé par le SDK après la
+  première étape : étapes suivantes `SKIPPED`, aucune écriture, `stopReason: cancelled`, verdict
+  `CANCELLED`.
+- `tests/integration/cli-cancellation.test.ts` : la CLI et le **vrai** moteur, Ctrl+C après la
+  première étape : code de sortie `130`, rapport écrit, aucune écriture.
+- `tests/integration/sdk-node-example.test.ts` : `openQaCrawler` prépare un projet, puis
+  `examples/sdk-node/replay.mjs` est lancé comme un programme à part avec le **vrai** moteur :
+  `0` et verdict JSON, `1` sur une assertion en échec, `130` sur Ctrl+C, `2` sur un projet inconnu.
 - `tests/unit/sdk-core.test.ts` : cycle de vie, client, flux SSE découpé, reprise, reconnexion
   après coupure sans doublon, refus non réessayé, abandon pendant l'attente, version du contrat.
 - `tests/unit/sdk-platform.test.ts` : cycle de vie des projets (modifier, dupliquer, archiver,

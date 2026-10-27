@@ -70,7 +70,8 @@ Statuts :
 | ------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------- |
 | Lancer, suivre (SSE avec reprise), résultat | `EXISTANT_ET_TESTÉ`       | `ExplorationManager`, `sdk-wizard.test.ts`, `sdk-monitor.test.ts`.                |
 | Écrans, anomalies, graphe, rapports         | `EXISTANT_ET_TESTÉ`       | `summary`, `graph.exploration`, `reports.link`.                                   |
-| Suspendre, reprendre, arrêter               | `ABSENT`                  | le moteur n'a pas d'arrêt à la demande (`capabilities.cancellation: false`).      |
+| Arrêter (annulation contrôlée)              | `EXISTANT_ET_TESTÉ`       | ajouté depuis l'audit : `explorations.cancel`, signal du moteur.                  |
+| Suspendre, reprendre                        | `ABSENT`                  | le moteur ne suspend pas une mission.                                             |
 | Suivi après redémarrage du serveur          | `EXISTANT_MAIS_INCOMPLET` | l'état vivant est en mémoire ; les résultats restent sur disque (`reports.list`). |
 
 ### 3.4 Enregistrements et Flow Studio
@@ -91,7 +92,7 @@ Statuts :
 | Rejouer les flows d'un projet      | `EXISTANT_ET_TESTÉ`       | moteur : `qa-crawler replay` = `loadProjectMission({ command: 'replay' })` + `runMission`. |
 | Lancer un rejeu depuis le SDK      | `ABSENT`                  | le SDK ne rejoue qu'en enregistrant (`validate`).                                          |
 | Lister et consulter les exécutions | `EXISTANT_MAIS_INCOMPLET` | `reports.list` (runs) ; pas de vue des flows, étapes, assertions et preuves d'un run.      |
-| Annuler                            | `ABSENT`                  | comme l'exploration.                                                                       |
+| Annuler                            | `EXISTANT_ET_TESTÉ`       | ajouté depuis l'audit, comme l'exploration.                                                |
 | Comparer deux exécutions           | `EXISTANT_ET_TESTÉ`       | `reports.compare` (`sdk-runs.test.ts`).                                                    |
 
 ### 3.6 Données, assertions, traçabilité, régressions
@@ -149,9 +150,10 @@ Statuts :
 | 6     | Exemple hôte mis à jour (dashboard embarqué), documentation d'intégration.                                                                                                                |
 | 7     | Stabilisation : bout en bout, accessibilité, performance, bilan.                                                                                                                          |
 
-Hors d'atteinte sans travail moteur : l'**annulation** d'une mission (le moteur n'a pas d'arrêt à la
-demande) et les **branches conditionnelles** dans les flows. Elles restent `ABSENT` et sont dites
-comme telles dans les capacités du serveur.
+Hors d'atteinte sans travail moteur : l'**annulation** d'une mission (le moteur n'avait pas d'arrêt
+à la demande) et les **branches conditionnelles** dans les flows. L'annulation a depuis été ajoutée
+au moteur (`RunOptions.signal`, `stopReason: cancelled`) ; les branches conditionnelles restent
+`ABSENT`.
 
 ## 6. Phase 1 — livré
 
@@ -163,6 +165,6 @@ comme telles dans les capacités du serveur.
 | Scénarios du projet, promotion d'un enregistrement                    | `EXISTANT_ET_TESTÉ`     | unitaire (fichiers copiés, origine gardée).                                                                       |
 | Lancer un rejeu, le suivre, lire son détail                           | `EXISTANT_ET_TESTÉ`     | intégration : vrai moteur, événements `flow` / `flow-step`, verdict, assertion `PASS` puis `FAIL`.                |
 | Vue d'ensemble calculée                                               | `EXISTANT_ET_TESTÉ`     | unitaire (périmètre du taux, alertes) ; intégration (2 rejeux, 50 %).                                             |
-| Annuler une exécution                                                 | `ABSENT`                | le moteur n'a pas d'arrêt à la demande ; `capabilities.cancellation: false`.                                      |
+| Annuler une exécution (ajouté ensuite, voir ci-dessous)               | `EXISTANT_ET_TESTÉ`     | `explorations.cancel` → signal du moteur ; unitaire, intégration (vrai moteur, SDK et CLI Ctrl+C → 130).          |
 | Authentification propre à un environnement                            | `ABSENT`                | l'environnement change la cible, pas l'authentification du projet.                                                |
 | Dashboard                                                             | `ABSENT`                | phase 2.                                                                                                          |
