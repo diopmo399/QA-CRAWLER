@@ -181,6 +181,36 @@ jamais supprimé.
 - **Validation :** contre un serveur **simulé** seulement. La validation contre un Confluence réel
   reste à faire (Q2).
 
+## PDF
+
+```ts
+await importSource(
+  store,
+  new PdfConnector(),
+  { file: 'specification.pdf' },
+  { now: new Date(), env: process.env },
+);
+```
+
+- **Lus :** le texte de chaque page, reconstruit en blocs avec le numéro de page :
+  - titres, d'après la taille de la police ;
+  - paragraphes, d'après l'écart vertical ;
+  - listes : puces et numéros.
+- **Non lus, et signalés :**
+  - une page sans couche texte (scan) : `PAGE_WITHOUT_TEXT` ; la lecture devient `PARTIAL` ;
+  - un document surtout scanné : `SCANNED_DOCUMENT` ;
+  - les pages au-delà de la limite : `PAGES_NOT_READ`.
+- **Refusés :** un fichier qui n'est pas un PDF ou qui est corrompu (`CORRUPTED`), trop grand
+  (`TOO_LARGE`), trop long à lire (`TIMEOUT`), ou protégé par mot de passe (`UNSUPPORTED`).
+- **Limites :**
+  - les tableaux sont lus comme des lignes de texte ;
+  - aucun OCR ;
+  - les titres sont devinés d'après la police, donc jamais au-delà d'une confiance moyenne sans
+    identifiant.
+- **Sécurité :** voir la décision D3 (worker isolé, `isEvalSupported: false`, aucun accès réseau).
+- **Bornes par défaut :** 25 Mo, 500 pages, 60 s, 512 Mo de mémoire pour le worker. Toutes se
+  règlent dans l'entrée.
+
 ## Persistance
 
 `<dossier>/repository.json` contient le référentiel ; `<dossier>/imports/<lot>.json` contient un lot.
@@ -199,3 +229,11 @@ n'est supprimé.
   signalés, balisage réparé, formes d'adresse, validation de l'entrée, Cloud et Data Center (identifiant, `/display/`, espace et titre, lien court, sous-chemin, Basic des anciens serveurs ; titre, espace ou lien court introuvable ; lien court vers un autre hôte refusé),
   erreurs 401, 403, 404, redirection, réponse non JSON, délai, limitation 429, taille, réseau,
   annulation, import complet sans secret stocké. Serveur **simulé**.
+- `tests/unit/requirements-pdf.test.ts` : options sûres de pdf.js ; de vrais PDF générés par le test
+  et lus par pdf.js. Il couvre :
+  - titres, paragraphes, listes, page de chaque bloc, accents ;
+  - page scannée et document surtout scanné ;
+  - limite de pages ;
+  - document protégé, faux PDF, PDF cassé, trop grand, délai dépassé, fichier absent, dossier ;
+  - import complet avec la page dans la provenance ;
+  - en dessous de Node 22.13, l'import se dit indisponible.

@@ -137,16 +137,25 @@ Un `.docx` et un `.xlsx` sont des archives ZIP de XML.
 - **Option B.** `mammoth` et `exceljs` : des dépendances lourdes, qui perdent une partie de la
   provenance (cellules).
 
-### D3 — PDF : décision reportée à la phase 4 (`À_CLARIFIER`, Q4)
+### D3 — PDF : `pdfjs-dist`, dépendance facultative et durcie (décidé)
 
 Extraire le texte d'un PDF de façon fiable demande une bibliothèque : polices, encodages, flux
-compressés.
+compressés. Un analyseur maison serait peu fiable.
 
-- **Option A.** `pdfjs-dist`, sous licence Apache-2.0 : une dépendance de plusieurs mégaoctets.
-- **Option B.** Pas de PDF.
-
-Un analyseur maison serait peu fiable : écarté. L'OCR suppose un moteur externe (Tesseract). Il est
-`ABSENT` : une page sans texte est signalée, jamais inventée.
+- **Retenu :** `pdfjs-dist` **6.4.299** (Apache-2.0, publiée le 3 octobre 2026). Elle est installée en
+  dépendance **facultative**, comme `pg` et `mssql`, à version **exacte**.
+  - `npm audit` sur cette version seule : **0 vulnérabilité connue**.
+  - Elle exige Node 22.13 ou plus. En dessous, l'import PDF se déclare indisponible (`UNSUPPORTED`)
+    au lieu d'échouer. Node 20 est en fin de vie depuis avril 2026.
+- **Durcissement :**
+  - lecture dans un worker thread à part, avec mémoire bornée, délai et nombre de pages bornés ;
+  - `isEvalSupported: false`, qui écarte la classe de failles de CVE-2024-4367 (exécution de code
+    par une police piégée, corrigée depuis la 4.2.67) ;
+  - aucune police chargée, aucun accès réseau, XFA désactivé ;
+  - fichier résolu, ordinaire, en-tête `%PDF-` vérifié, taille bornée avant lecture.
+- **Dépendance indirecte :** `@napi-rs/canvas`, facultative, un module natif de rendu graphique.
+  L'extraction de texte ne s'en sert pas.
+- **OCR :** `ABSENT`. Une page sans couche texte est signalée, jamais inventée.
 
 ### D4 — Confluence : API REST officielles, Cloud et Data Center
 
@@ -224,4 +233,17 @@ avec ses statuts existants : aucune règle n'est réécrite.
   que les tests simulés ne remplacent pas.
 - **Q3 — Préfixes d'identifiants.** Les préfixes reconnus par défaut sont listés dans
   `classify.ts`. Les conventions maison se règlent par un profil d'importation.
-- **Q4 — PDF.** Faut-il ajouter `pdfjs-dist` (D3) ? Faut-il un OCR ?
+- **Q4 — PDF.** Réponse : accepté, sans CVE (D3). Un OCR reste à décider.
+
+## 7. Dépendances et vulnérabilités connues (relevé du 27 octobre 2026)
+
+`npm audit` ne signale rien pour `pdfjs-dist`. Il signale des vulnérabilités **déjà présentes avant
+ce chantier**. Elles ne sont pas corrigées dans ce lot, pour ne pas élargir son périmètre.
+
+| Paquet                                         | Gravité            | Origine                                                                  | Correction                     |
+| ---------------------------------------------- | ------------------ | ------------------------------------------------------------------------ | ------------------------------ |
+| `zod` 3.x                                      | élevée             | dépendance directe (épuisement mémoire sur des collections très grandes) | `zod` 4 : changement majeur    |
+| `@azure/msal-node`, `@azure/identity`          | élevée             | via `mssql` (facultative)                                                | mise à jour mineure disponible |
+| `@github/copilot-sdk`                          | élevée             | facultative, via `zod`                                                   | suit `zod`                     |
+| `source-map-js`                                | élevée             | indirecte                                                                | mise à jour mineure disponible |
+| `vitest`, `vite`, `tinypool`, `@vitest/mocker` | critique à modérée | outils de **développement** seulement                                    | `vitest` 5 : changement majeur |

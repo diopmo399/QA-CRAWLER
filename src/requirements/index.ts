@@ -42,3 +42,13 @@ export {
   type ConfluenceVariant,
 } from './connectors/confluence.js';
 export { storageToBlocks, type StorageResult } from './connectors/confluence-storage.js';
+export {
+  PdfConnector,
+  PDFJS_SAFE_OPTIONS,
+  pdfToBlocks,
+  pdfjsModule,
+  type PdfInput,
+  type PdfPage,
+  type PdfRaw,
+  type PdfTextItem,
+} from './connectors/pdf.js';

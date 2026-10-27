@@ -15,7 +15,10 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
     proposés ou confirmés, persistance en fichiers JSON.
   - Connecteur Confluence Cloud et Data Center (API REST officielles), testé contre un serveur
     **simulé** seulement.
-  - Word, Excel, PDF, la corrélation et les interfaces (SDK, CLI, Dashboard) restent à venir.
+  - Connecteur PDF : `pdfjs-dist` 6.4.299, dépendance facultative à version exacte, sans
+    vulnérabilité connue. La lecture est durcie (worker isolé, `isEvalSupported: false`, aucun accès
+    réseau) ; la page de chaque bloc est gardée ; une page sans texte est signalée ; aucun OCR.
+  - Word, Excel, la corrélation et les interfaces (SDK, CLI, Dashboard) restent à venir.
 
 - **Annulation contrôlée** d'une exploration ou d'un rejeu (`docs/sdk/README.md`, « Statuts »).
   - Moteur : `RunOptions.signal` ; il s'arrête avant l'action ou l'étape suivante, ferme le
