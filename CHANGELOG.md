@@ -32,6 +32,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Démonstration du référentiel d'exigences** (`examples/requirements-demo`) : quatre documents
+  d'une médiathèque fictive (Word v1 et v2, Excel, PDF) importés de bout en bout. Elle montre les
+  candidats et leurs raisons, un profil d'importation, un conflit d'identifiant, un doublon probable
+  fusionné, la publication, puis la réimportation (inchangé, modifié, nouveau, retiré). Les décisions
+  y sont celles de la démonstration, déclarées comme telles.
+- Export `@qa-crawler/core/requirements` : le module d'exigences depuis Node.
 - **Référentiel d'exigences : socle et connecteur Confluence** (`docs/requirements/`).
   - Audit et conception : ce qui existe, ce qui manque, les décisions, le plan.
   - Modèle canonique (exigence, règle d'affaires, critère d'acceptation, provenance, lien de
@@ -427,6 +433,16 @@ defaults`). Test d'intégration : flows passés, panne détectée, écritures bl
 
 ### Corrigé
 
+- **Exigences : le parent proposé reste dans sa section.** Un titre neutre (une autre section, une
+  autre feuille Excel) ne remettait pas à zéro le parent proposé : un critère pouvait être rattaché
+  à l'exigence d'une section voisine. Le parent est maintenant cherché dans la section courante puis
+  dans les sections englobantes seulement.
+- **Exigences : une cellule qui ne contient qu'un identifiant est une référence.** Dans un tableau
+  de critères, une colonne « Exigence » (`CA-5 | REQ-5 | …`) devenait le texte du critère ; elle en
+  donne maintenant le parent, comme une colonne « Exigence liée ». Ce lien, écrit dans la source,
+  est proposé avec la confiance ÉLEVÉ et sa justification cite la ligne du tableau.
+- **PDF : une ligne qui commence par un identifiant ouvre un paragraphe.** Deux exigences sur des
+  lignes consécutives (`ENF-02 …`, `ENF-03 …`) n'en faisaient qu'une.
 - **Recorder : une vérification acceptée rejoint le groupe de son action.** Accepter une proposition
   (ou ajouter une vérification de groupe) après avoir créé des groupes laissait l'étape `expect` hors du
   groupe de l'action vérifiée ; les groupes sont renormalisés à chaque décision.

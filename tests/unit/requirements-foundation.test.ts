@@ -196,6 +196,7 @@ describe('requirements — normalisation', () => {
       kind: 'BUSINESS_RULE',
       confidence: 'MEDIUM',
       parentExternalId: 'REQ-10',
+      parentBasis: 'TABLE_ROW',
     });
     expect(found[2]).toMatchObject({ title: 'Archiver', confidence: 'MEDIUM' });
     expect(found.at(-1)).toMatchObject({ kind: 'UNCLASSIFIED', confidence: 'LOW' });
@@ -231,6 +232,68 @@ describe('requirements — normalisation', () => {
       at(0).toISOString(),
     );
     expect(problems.map((problem) => problem.code)).toEqual(['DUPLICATE_ID_IN_SOURCE']);
+  });
+
+  it('proposes a parent from the current section or an enclosing one, never from a neighbour section', () => {
+    const { items: found } = classify(
+      doc([
+        { type: 'heading', level: 2, text: 'REQ-1 Réserver', location: loc(0) },
+        { type: 'heading', level: 3, text: 'Critères d’acceptation', location: loc(1) },
+        {
+          type: 'paragraph',
+          text: 'CA-1 Étant donné un document, quand on le réserve, alors il est réservé.',
+          location: loc(2),
+        },
+        { type: 'heading', level: 2, text: 'Rendre', location: loc(3) },
+        {
+          type: 'paragraph',
+          text: 'CA-2 Étant donné un prêt, quand on le rend, alors il est clos.',
+          location: loc(4),
+        },
+        { type: 'paragraph', text: 'RG-3 Un retard se compte en jours.', location: loc(5) },
+      ]),
+      at(0).toISOString(),
+    );
+    const byId = new Map(found.map((item) => [item.externalId, item]));
+    expect(byId.get('CA-1')).toMatchObject({ parentExternalId: 'REQ-1', parentBasis: 'SECTION' });
+    expect(byId.get('CA-2')?.parentExternalId).toBeUndefined();
+    expect(byId.get('RG-3')?.parentExternalId).toBeUndefined();
+  });
+
+  it('a cell holding only an identifier is a reference to the parent, not a text', () => {
+    const { items: found } = classify(
+      doc([
+        {
+          type: 'table',
+          header: ['ID', 'Exigence', 'Critère'],
+          rows: [
+            ['CA-5', 'REQ-5', 'Étant donné un catalogue, quand on cherche, alors des titres sont listés.'],
+          ],
+          location: loc(0),
+        },
+        {
+          type: 'table',
+          header: ['ID', 'Exigence liée', 'Règle'],
+          rows: [
+            ['RG-6', 'REQ-6.', 'Un abonné a au plus cinq prêts.'],
+            ['RG-7', 'voir la page 3', 'Un prêt dure trois semaines.'],
+          ],
+          location: loc(1),
+        },
+      ]),
+      at(0).toISOString(),
+    );
+    expect(found[0]).toMatchObject({
+      externalId: 'CA-5',
+      kind: 'ACCEPTANCE_CRITERION',
+      parentExternalId: 'REQ-5',
+      parentBasis: 'TABLE_ROW',
+      description: 'Étant donné un catalogue, quand on cherche, alors des titres sont listés.',
+    });
+    expect(found[0]?.reasons).toContain('parent REQ-5 lu dans la colonne « Exigence »');
+    expect(found[1]).toMatchObject({ externalId: 'RG-6', parentExternalId: 'REQ-6' });
+    expect(found[2]).toMatchObject({ externalId: 'RG-7', attributes: { parent: 'voir la page 3' } });
+    expect(found[2]?.parentExternalId).toBeUndefined();
   });
 });
 

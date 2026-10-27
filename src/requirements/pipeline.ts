@@ -494,6 +494,8 @@ function parentLink(
     return undefined;
   }
   const confirmed = decision.parent !== undefined;
+  const fromRow = !confirmed && item.parentBasis === 'TABLE_ROW';
+  const where = item.source.location.row !== undefined ? ` (row ${String(item.source.location.row)})` : '';
   return upsertLink(repository, {
     type: entity.kind === 'BUSINESS_RULE' ? 'HAS_RULE' : 'HAS_CRITERION',
     from: { kind: parent.kind, id: parent.id, version: String(parent.version) },
@@ -501,10 +503,12 @@ function parentLink(
     origin: 'IMPORT',
     justification: confirmed
       ? [`parent given by a person when publishing ${batch.id}`]
-      : [
-          `follows ${key} in the same section of « ${item.source.title} » (block ${String(item.source.location.block)})`,
-        ],
-    confidence: confirmed ? 'HIGH' : 'MEDIUM',
+      : fromRow
+        ? [`given by the same table row of « ${item.source.title} »${where}`]
+        : [
+            `follows ${key} in the same section of « ${item.source.title} » (block ${String(item.source.location.block)})`,
+          ],
+    confidence: confirmed || fromRow ? 'HIGH' : 'MEDIUM',
     at,
     ...(confirmed ? { confirmBy: by ?? '' } : {}),
   });

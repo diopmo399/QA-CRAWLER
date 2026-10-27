@@ -43,6 +43,17 @@ export const TABLE_FIELDS = {
   priority: ['priorite', 'priority', 'criticite', 'criticality', 'importance'],
   status: ['statut', 'status', 'etat', 'state'],
   rule: ['regle', 'regle metier', 'regle d affaires', 'regle de gestion', 'business rule', 'rule'],
+  parent: [
+    'parent',
+    'exigence liee',
+    'exigence parente',
+    'exigence associee',
+    'id exigence',
+    'ref exigence',
+    'parent requirement',
+    'related requirement',
+    'requirement id',
+  ],
   criterion: [
     'critere',
     'critere d acceptation',
@@ -99,8 +110,12 @@ interface Context {
   options: ClassifyOptions;
   items: ExtractedItem[];
   issues: ImportIssue[];
-  /** Le dernier identifiant vu par type, dans la section courante (parent proposé). */
-  lastId: Partial<Record<ClassifiableKind, string>>;
+  /**
+   * Les derniers identifiants vus par type, une portée par niveau de titre (la première : avant tout
+   * titre). Le parent proposé est cherché de la section courante vers les sections englobantes : rien
+   * ne passe d'une section à sa voisine.
+   */
+  scopes: Partial<Record<ClassifiableKind, string>>[];
   sectionKind?: { kind: ClassifiableKind; label: string; nonFunctional: boolean };
   /** Les titres qui englobent le bloc courant (section des lieux). */
   path: string[];
@@ -131,7 +146,7 @@ export function classify(
     options,
     items: [],
     issues: [],
-    lastId: {},
+    scopes: [{}],
     path: [],
     levels: [],
     stopped: false,
@@ -161,9 +176,11 @@ function heading(context: Context, blocks: Block[], index: number): number {
   while (context.levels.length > 0 && (context.levels.at(-1) ?? 0) >= block.level) {
     context.levels.pop();
     context.path.pop();
+    context.scopes.pop();
   }
   context.levels.push(block.level);
   context.path.push(text);
+  context.scopes.push({});
   const id = idOf(context, text);
   const detected = SECTION_KINDS.find(([pattern]) => pattern.test(plain(text)));
   if (detected) {
@@ -172,7 +189,6 @@ function heading(context: Context, blocks: Block[], index: number): number {
       label: detected[2],
       nonFunctional: NON_FUNCTIONAL.test(plain(text)),
     };
-    context.lastId = {};
   } else if (!id) {
     // Un titre neutre referme la section typée de même niveau ou plus haut (rien n'est deviné au-delà).
     context.sectionKind = undefined;
@@ -312,10 +328,24 @@ function table(context: Context, block: Extract<Block, { type: 'table' }>): void
     // Une colonne « règle » ou « critère » sur une ligne qui EST une règle ou un critère : c'est son texte.
     const ownField =
       kind === 'BUSINESS_RULE' ? 'rule' : kind === 'ACCEPTANCE_CRITERION' ? 'criterion' : undefined;
-    const description = cell('description') || (ownField ? cell(ownField) : '') || cell('title') || text;
+    // Une cellule qui ne contient qu'un identifiant est une référence, pas un texte : la colonne
+    // « exigence liée », ou une colonne « exigence » d'un tableau de critères (CA-1 | REQ-3 | …).
+    const descriptionRef = referenceOf(context, cell('description'));
+    const fromParent = referenceOf(context, cell('parent'));
+    const parentRef = fromParent ?? (kind === 'REQUIREMENT' ? undefined : descriptionRef);
+    if (parentRef)
+      reasons.push(
+        `parent ${parentRef} lu dans la colonne « ${block.header[mapping[fromParent ? 'parent' : 'description'] ?? 0] ?? ''} »`,
+      );
+    const description =
+      (descriptionRef ? '' : cell('description')) ||
+      (ownField ? cell(ownField) : '') ||
+      cell('title') ||
+      text;
     const attributes: Record<string, string> = {};
     for (const field of ['priority', 'status', 'type'] as const)
       if (cell(field)) attributes[field] = cell(field);
+    if (cell('parent') && !parentRef) attributes.parent = cell('parent');
     push(context, {
       kind,
       confidence,
@@ -326,6 +356,7 @@ function table(context: Context, block: Extract<Block, { type: 'table' }>): void
       attributes,
       location,
       text,
+      ...(parentRef ? { parent: parentRef } : {}),
       nonFunctional:
         /non fonctionnel|non functional|nfr/.test(typeText) || (context.sectionKind?.nonFunctional ?? false),
     });
@@ -435,13 +466,7 @@ function push(context: Context, draft: Draft): void {
   const attributes = { ...draft.attributes };
   if (draft.kind === 'REQUIREMENT' && draft.nonFunctional && !attributes.type)
     attributes.type = 'NON_FUNCTIONAL';
-  const parent =
-    draft.parent ??
-    (draft.kind === 'BUSINESS_RULE'
-      ? context.lastId.REQUIREMENT
-      : draft.kind === 'ACCEPTANCE_CRITERION'
-        ? (context.lastId.BUSINESS_RULE ?? context.lastId.REQUIREMENT)
-        : undefined);
+  const parent = draft.parent ?? proposedParent(context, draft.kind);
   const item: ExtractedItem = {
     id: `itm_${String(context.items.length + 1).padStart(4, '0')}`,
     kind: draft.kind,
@@ -452,15 +477,32 @@ function push(context: Context, draft: Draft): void {
     description,
     attributes,
     ...(draft.kind === 'ACCEPTANCE_CRITERION' ? { criterion: criterionOf(draft.text) } : {}),
-    ...(parent && parent !== draft.externalId ? { parentExternalId: parent } : {}),
+    ...(parent && parent !== draft.externalId
+      ? { parentExternalId: parent, parentBasis: draft.parent ? 'TABLE_ROW' : 'SECTION' }
+      : {}),
     source,
     duplicate: { status: 'NEW' },
   };
   context.items.push(item);
   if (draft.externalId && (draft.kind === 'REQUIREMENT' || draft.kind === 'BUSINESS_RULE')) {
-    context.lastId[draft.kind] = draft.externalId;
-    if (draft.kind === 'REQUIREMENT') delete context.lastId.BUSINESS_RULE;
+    const scope = context.scopes.at(-1) ?? {};
+    scope[draft.kind] = draft.externalId;
+    if (draft.kind === 'REQUIREMENT') delete scope.BUSINESS_RULE;
   }
+}
+
+/**
+ * Le parent proposé d'une règle (l'exigence) ou d'un critère (la règle, sinon l'exigence) : dans la
+ * section la plus proche qui en a un, de la section courante vers les sections englobantes.
+ */
+function proposedParent(context: Context, kind: ItemKind): string | undefined {
+  if (kind !== 'BUSINESS_RULE' && kind !== 'ACCEPTANCE_CRITERION') return undefined;
+  for (let index = context.scopes.length - 1; index >= 0; index -= 1) {
+    const scope = context.scopes[index] ?? {};
+    const found = kind === 'BUSINESS_RULE' ? scope.REQUIREMENT : (scope.BUSINESS_RULE ?? scope.REQUIREMENT);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 /** Un identifiant dans le texte, et le type que son préfixe désigne. */
@@ -472,6 +514,12 @@ function idOf(context: Context, text: string): { raw: string; kind: Classifiable
     context.prefixes[name].map((value) => value.replace(/[^A-Za-z0-9]/g, '')).includes(prefix),
   );
   return kind ? { raw: match[0], kind } : undefined;
+}
+
+/** L'identifiant d'une cellule qui ne contient que lui (REQ-3, « REQ-3. »), sinon rien. */
+function referenceOf(context: Context, value: string): string | undefined {
+  const found = value ? idOf(context, value) : undefined;
+  return found && !stripId(value, found.raw).replace(/[.;:,]/g, '') ? found.raw : undefined;
 }
 
 function stripId(text: string, id: string): string {
