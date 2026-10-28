@@ -18,6 +18,15 @@ import { isTerminal } from '../core/lifecycle.js';
 import type { DashboardStrings } from './dashboard-i18n.js';
 import { environmentsView, explorationsView, historyView, scenariosView } from './dashboard-ops.js';
 import {
+  importView,
+  indicatorsView,
+  requirementsView,
+  sourcesView,
+  traceabilityView,
+  trendsView,
+  type RequirementsUi,
+} from './dashboard-requirements.js';
+import {
   checkLines,
   executionTable,
   formatDate,
@@ -50,7 +59,14 @@ export type DashboardRoute =
   | { view: 'scenarios'; projectId: string; scenario?: string }
   /** `environmentId: 'new'` : la création d'un environnement. */
   | { view: 'environments'; projectId: string; environmentId?: string }
-  | { view: 'explorations'; projectId: string; run?: string };
+  | { view: 'explorations'; projectId: string; run?: string }
+  | { view: 'sources'; projectId: string }
+  | { view: 'import'; projectId: string; batchId: string }
+  | { view: 'requirements'; projectId: string; entityId?: string }
+  | { view: 'traceability'; projectId: string; entityId?: string }
+  | { view: 'indicators'; projectId: string }
+  /** Sans projet : tous les projets actifs. */
+  | { view: 'trends'; projectId?: string };
 
 /** Le formulaire d'un environnement, tel que saisi (converti en EnvironmentInput à l'envoi). */
 export interface EnvironmentForm {
@@ -110,7 +126,7 @@ export interface DashboardState {
   /** L'environnement dont la vérification (avec l'URL) est en cours. */
   checking?: string;
   /** Une action à confirmer dans la page (jamais une boîte de dialogue du navigateur). */
-  confirm?: 'archive' | 'cancel' | 'remove-env';
+  confirm?: 'archive' | 'cancel' | 'remove-env' | 'publish-partial';
   /** Historique : les deux exécutions cochées (la plus ancienne d'abord) et leur comparaison. */
   picked: string[];
   comparison?: RunComparisonView;
@@ -128,6 +144,8 @@ export interface DashboardState {
   explored?: ExecutionDetail;
   graph?: GraphView;
   severity: string;
+  /** Exigences : connecteurs, imports, lot ouvert, référentiel, matrice, indicateurs, tendances. */
+  req: RequirementsUi;
   /** L'exécution suivie en direct (son instantané, ses étapes, la dernière phase annoncée). */
   live?: { snapshot: ExplorationSnapshot; steps: LiveStep[]; phase?: string; cancelRequested: boolean };
   execution?: ExecutionDetail;
@@ -146,6 +164,8 @@ type NavSection = keyof DashboardStrings['sections'];
 /** Les entrées du menu : seulement les écrans que le Dashboard sait afficher. */
 const NAV: { section: NavSection; items: NavView[] }[] = [
   { section: 'pilot', items: ['overview', 'projects', 'executions', 'history', 'scenarios', 'explorations'] },
+  { section: 'requirements', items: ['requirements', 'traceability', 'sources'] },
+  { section: 'measure', items: ['indicators', 'trends'] },
   { section: 'admin', items: ['environments'] },
 ];
 
@@ -156,6 +176,14 @@ export function activeNav(route: DashboardRoute): NavView {
   if (route.view === 'history' || route.view === 'scenarios' || route.view === 'environments')
     return route.view;
   if (route.view === 'explorations') return 'explorations';
+  if (route.view === 'sources' || route.view === 'import') return 'sources';
+  if (
+    route.view === 'requirements' ||
+    route.view === 'traceability' ||
+    route.view === 'indicators' ||
+    route.view === 'trends'
+  )
+    return route.view;
   return 'overview';
 }
 
@@ -167,7 +195,7 @@ export function renderDashboard(state: DashboardState): string {
       `<div class="sec"><div class="sec-t">${esc(t.sections[section])}</div>${items
         .map(
           (view) =>
-            `<a href="#" data-action="nav" data-view="${view}" ${active === view ? 'aria-current="page"' : ''}>${icon(view)}<span>${esc(t.nav[view])}</span></a>`,
+            `<a href="#" data-action="nav" data-view="${view}" ${active === view ? 'aria-current="page"' : ''}>${icon(view)}<span>${esc(t.nav[view])}</span>${view === 'requirements' && state.req.repository && state.req.repository.pending > 0 ? `<span class="badge" aria-label="${esc(t.req.repoSub(state.req.repository.entities.length, state.req.repository.pending))}">${String(state.req.repository.pending)}</span>` : ''}</a>`,
         )
         .join('')}</div>`,
   ).join('');
@@ -217,6 +245,18 @@ function body(state: DashboardState): string {
       return environmentsView(state);
     case 'explorations':
       return explorationsView(state);
+    case 'sources':
+      return sourcesView(state);
+    case 'import':
+      return importView(state);
+    case 'requirements':
+      return requirementsView(state);
+    case 'traceability':
+      return traceabilityView(state);
+    case 'indicators':
+      return indicatorsView(state);
+    case 'trends':
+      return trendsView(state);
   }
 }
 

@@ -41,6 +41,20 @@ import type {
   ProjectSummary,
   ScenarioHistoryView,
   ScenarioView,
+  ConfluenceImportInput,
+  FileImportInput,
+  ImportBatch,
+  ImportProfile,
+  ImportSummary,
+  TraceabilityLink,
+  LinkAddInput,
+  MatrixRow,
+  RequirementConnectorView,
+  RequirementDecisionInput,
+  RequirementsIndicators,
+  RequirementsPublishResult,
+  RequirementsView,
+  TrendsView,
 } from './contracts.js';
 import { SDK_API_VERSION } from './contracts.js';
 
@@ -175,6 +189,44 @@ export interface QaCrawlerClient {
   overview: {
     get(options?: { days?: number }): Promise<OverviewView>;
   };
+  /**
+   * Le référentiel d'exigences d'un projet. Rien n'y entre sans décision humaine : un import produit
+   * des candidats, une personne décide, la publication écrit le référentiel.
+   */
+  requirements: {
+    get(projectId: string): Promise<RequirementsView>;
+    connectors(projectId: string): Promise<RequirementConnectorView[]>;
+    profiles(projectId: string): Promise<ImportProfile[]>;
+    imports(projectId: string): Promise<ImportSummary[]>;
+    importBatch(projectId: string, batchId: string): Promise<ImportBatch>;
+    /** Une page Confluence, lue par le serveur avec les variables nommées (jamais une valeur de secret). */
+    importConfluence(projectId: string, input: ConfluenceImportInput): Promise<ImportBatch>;
+    /** Un fichier Word, Excel ou PDF, envoyé tel quel (25 Mo au plus). */
+    importFile(projectId: string, input: FileImportInput): Promise<ImportBatch>;
+    decide(projectId: string, batchId: string, decisions: RequirementDecisionInput[]): Promise<ImportBatch>;
+    /** Une lecture partielle n'est publiée qu'avec `acknowledgePartial: true`. */
+    publish(
+      projectId: string,
+      batchId: string,
+      options?: { acknowledgePartial?: boolean },
+    ): Promise<RequirementsPublishResult>;
+    matrix(projectId: string): Promise<MatrixRow[]>;
+    /** La matrice en CSV (cellules protégées contre l'interprétation en formule). */
+    matrixCsv(projectId: string): Promise<string>;
+    indicators(projectId: string, options?: { days?: number }): Promise<RequirementsIndicators>;
+    /** Un lien ajouté à la main est confirmé ; il demande une justification. */
+    addLink(projectId: string, input: LinkAddInput): Promise<TraceabilityLink>;
+    decideLink(
+      projectId: string,
+      linkId: string,
+      action: 'CONFIRM' | 'REJECT',
+      options?: { note?: string },
+    ): Promise<TraceabilityLink>;
+  };
+  /** Les tendances par semaine ISO : rejeux, anomalies, durée médiane, couverture, scénarios instables. */
+  trends: {
+    get(options?: { weeks?: number; projectId?: string }): Promise<TrendsView>;
+  };
   explorations: {
     start(projectId: string): Promise<ExplorationSnapshot>;
     status(id: string): Promise<ExplorationSnapshot>;
@@ -268,14 +320,23 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
   });
 
   async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const text = await send(method, path, {
+      headers: headers(body !== undefined),
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    try {
+      return (text ? JSON.parse(text) : undefined) as T;
+    } catch {
+      return undefined as T;
+    }
+  }
+
+  /** Une requête : son corps en texte, ou l'erreur de l'API (code, message, détails). */
+  async function send(method: string, path: string, init: RequestInit): Promise<string> {
     if (disposed) throw new QaCrawlerError({ error: 'client disposed', status: 0, code: 'DISPOSED' });
     let response: Response;
     try {
-      response = await doFetch(`${endpoint}${path}`, {
-        method,
-        headers: headers(body !== undefined),
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      });
+      response = await doFetch(`${endpoint}${path}`, { method, ...init });
     } catch (error) {
       throw new QaCrawlerError({
         error: `QA-CRAWLER server unreachable: ${error instanceof Error ? error.message : String(error)}`,
@@ -284,13 +345,13 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       });
     }
     const text = await response.text();
-    let parsed: unknown;
-    try {
-      parsed = text ? JSON.parse(text) : undefined;
-    } catch {
-      parsed = undefined;
-    }
     if (!response.ok) {
+      let parsed: unknown;
+      try {
+        parsed = text ? JSON.parse(text) : undefined;
+      } catch {
+        parsed = undefined;
+      }
       const errorBody = (parsed ?? {}) as Partial<ErrorBody>;
       throw new QaCrawlerError({
         error: errorBody.error ?? `HTTP ${String(response.status)}`,
@@ -300,7 +361,7 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         ...(errorBody.issues ? { issues: errorBody.issues } : {}),
       });
     }
-    return parsed as T;
+    return text;
   }
 
   function stream(
@@ -468,6 +529,68 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
     overview: {
       get: (overviewOptions = {}) =>
         request('GET', `/overview${overviewOptions.days ? `?days=${String(overviewOptions.days)}` : ''}`),
+    },
+    requirements: {
+      get: (projectId) => request('GET', `${project(projectId)}/requirements`),
+      connectors: (projectId) => request('GET', `${project(projectId)}/requirements/connectors`),
+      profiles: (projectId) => request('GET', `${project(projectId)}/requirements/profiles`),
+      imports: (projectId) => request('GET', `${project(projectId)}/requirements/imports`),
+      importBatch: (projectId, batchId) =>
+        request('GET', `${project(projectId)}/requirements/imports/${encodeURIComponent(batchId)}`),
+      importConfluence: (projectId, input) =>
+        request('POST', `${project(projectId)}/requirements/imports`, input),
+      importFile: async (projectId, input) => {
+        const query = new URLSearchParams({ connector: input.connector, name: input.name });
+        if (input.profile) query.set('profile', input.profile);
+        const text = await send(
+          'POST',
+          `${project(projectId)}/requirements/imports/file?${query.toString()}`,
+          {
+            headers: { ...headers(false), 'content-type': 'application/octet-stream' },
+            body: input.data as BodyInit,
+          },
+        );
+        return JSON.parse(text) as ImportBatch;
+      },
+      decide: (projectId, batchId, decisions) =>
+        request(
+          'POST',
+          `${project(projectId)}/requirements/imports/${encodeURIComponent(batchId)}/decisions`,
+          {
+            decisions,
+          },
+        ),
+      publish: (projectId, batchId, publishOptions = {}) =>
+        request(
+          'POST',
+          `${project(projectId)}/requirements/imports/${encodeURIComponent(batchId)}/publish`,
+          publishOptions,
+        ),
+      matrix: (projectId) => request('GET', `${project(projectId)}/requirements/matrix`),
+      matrixCsv: (projectId) =>
+        send('GET', `${project(projectId)}/requirements/matrix?format=csv`, {
+          headers: { ...headers(false), accept: 'text/csv' },
+        }),
+      indicators: (projectId, indicatorOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/requirements/indicators${indicatorOptions.days ? `?days=${String(indicatorOptions.days)}` : ''}`,
+        ),
+      addLink: (projectId, input) => request('POST', `${project(projectId)}/requirements/links`, input),
+      decideLink: (projectId, linkId, action, linkOptions = {}) =>
+        request('POST', `${project(projectId)}/requirements/links/${encodeURIComponent(linkId)}`, {
+          action,
+          ...linkOptions,
+        }),
+    },
+    trends: {
+      get: (trendOptions = {}) => {
+        const query = new URLSearchParams();
+        if (trendOptions.weeks) query.set('weeks', String(trendOptions.weeks));
+        if (trendOptions.projectId) query.set('projectId', trendOptions.projectId);
+        const suffix = query.toString();
+        return request('GET', `/trends${suffix ? `?${suffix}` : ''}`);
+      },
     },
     explorations: {
       start: (projectId) => request('POST', `/projects/${encodeURIComponent(projectId)}/explorations`, {}),

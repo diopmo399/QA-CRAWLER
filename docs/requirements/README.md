@@ -4,14 +4,15 @@ Le module `src/requirements/` construit un référentiel d'exigences à partir d
 Chaque élément garde sa provenance. Rien n'entre dans le référentiel sans décision humaine.
 L'audit, l'architecture et les décisions sont dans [AUDIT-ET-CONCEPTION.md](AUDIT-ET-CONCEPTION.md).
 
-| Capacité                                                                              | État                                                                    |
-| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Modèle canonique, normalisation, doublons, décisions, publication, liens, persistance | disponible, testé (`requirements-foundation.test.ts`)                   |
-| Connecteur Confluence (Cloud, Data Center)                                            | disponible, testé contre un serveur **simulé** seulement                |
-| Connecteurs Word, Excel                                                               | disponibles, testés sur de vrais fichiers générés                       |
-| Connecteur PDF                                                                        | disponible (dépendance facultative `pdfjs-dist`, Node 22.13 ou plus)    |
-| Corrélation avec le code, les tests, les preuves                                      | non disponible (phase 5)                                                |
-| SDK, CLI, Dashboard                                                                   | non disponibles (phase 6) : le module s'utilise aujourd'hui depuis Node |
+| Capacité                                                                              | État                                                                                                     |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Modèle canonique, normalisation, doublons, décisions, publication, liens, persistance | disponible, testé (`requirements-foundation.test.ts`)                                                    |
+| Connecteur Confluence (Cloud, Data Center)                                            | disponible, testé contre un serveur **simulé** seulement                                                 |
+| Connecteurs Word, Excel                                                               | disponibles, testés sur de vrais fichiers générés                                                        |
+| Connecteur PDF                                                                        | disponible (dépendance facultative `pdfjs-dist`, Node 22.13 ou plus) : couche texte seulement, aucun OCR |
+| SDK (API et client) et Dashboard                                                      | disponibles ([docs/sdk](../sdk/README.md#exigences))                                                     |
+| CLI                                                                                   | non disponible                                                                                           |
+| Corrélation avec le code, les tests, les preuves                                      | non disponible (phase 5)                                                                                 |
 
 ## Parcours
 

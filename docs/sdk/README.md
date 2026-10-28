@@ -573,6 +573,74 @@ terminées dans la période (le moteur a écrit leur résultat), réussies quand
 `PASSED`. Les explorations n'y entrent pas. Sans rejeu terminé, `passRate` est absent : jamais `0`
 ni `100` par défaut.
 
+## Exigences
+
+Le référentiel d'exigences d'un projet (`<projet>/requirements/`, voir
+[docs/requirements](../requirements/README.md)) est servi par l'API. Rien n'y entre sans décision
+humaine : un import produit des **candidats** ; une personne décide ; la publication écrit le
+référentiel.
+
+| Client                                                                | Route                                                                            |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `requirements.get(projectId)`                                         | `GET /api/projects/:id/requirements` (éléments, liens, candidats en attente)     |
+| `requirements.connectors(projectId)`                                  | `GET …/requirements/connectors` (formats, taille maximale, capacités, limites)   |
+| `requirements.profiles(projectId)`                                    | `GET …/requirements/profiles`                                                    |
+| `requirements.imports(projectId)`                                     | `GET …/requirements/imports` (lots résumés, du plus récent au plus ancien)       |
+| `requirements.importBatch(projectId, batchId)`                        | `GET …/requirements/imports/:batch`                                              |
+| `requirements.importFile(projectId, { connector, name, data })`       | `POST …/requirements/imports/file?connector=WORD\|EXCEL\|PDF&name=…[&profile=…]` |
+| `requirements.importConfluence(projectId, input)`                     | `POST …/requirements/imports`                                                    |
+| `requirements.decide(projectId, batchId, decisions)`                  | `POST …/requirements/imports/:batch/decisions`                                   |
+| `requirements.publish(projectId, batchId, { acknowledgePartial? })`   | `POST …/requirements/imports/:batch/publish`                                     |
+| `requirements.matrix(projectId)`, `requirements.matrixCsv(projectId)` | `GET …/requirements/matrix[?format=csv]`                                         |
+| `requirements.addLink(projectId, input)`                              | `POST …/requirements/links`                                                      |
+| `requirements.decideLink(projectId, linkId, 'CONFIRM'\|'REJECT')`     | `POST …/requirements/links/:link`                                                |
+| `requirements.indicators(projectId, { days? })`                       | `GET …/requirements/indicators[?days=]`                                          |
+| `trends.get({ weeks?, projectId? })`                                  | `GET /api/trends[?weeks=8&projectId=]`                                           |
+
+- **Fichiers** (Word, Excel, PDF) : le contenu est envoyé tel quel (`application/octet-stream`),
+  borné à la taille maximale du connecteur (25 Mo) **avant** d'être lu en entier. Il est lu en
+  mémoire, jamais écrit sur le disque.
+- **Confluence** : l'entrée donne l'adresse du site, la page, la variante et les **noms** des
+  variables du jeton et du courriel. Le serveur refuse un nom qu'il ne lit pas (`QA_*` par défaut,
+  `ENV_NAME_REFUSED`). Une variable absente fait échouer l'import (`FAILED`, problème
+  `AUTHENTICATION`), sans requête vers Confluence.
+- **Décisions** : `ACCEPT` (avec `kind` pour un candidat non classé), `REJECT`, `MERGE` (avec
+  `mergeInto`). Un conflit d'identifiant venu d'une autre source ne s'accepte pas : il se fusionne
+  ou se refuse (`409 CONFLICT_REQUIRES_MERGE`). L'auteur n'est pas enregistré : un `by` envoyé est
+  ignoré tant que l'identité des personnes n'est pas définie.
+- **Publication** : une lecture partielle n'est publiée qu'avec `acknowledgePartial: true`
+  (`409 PARTIAL_NOT_ACKNOWLEDGED` sinon).
+- **Liens** : un lien ajouté à la main est confirmé et demande une justification
+  (`422 INVALID_DECISION` sinon). Un lien rejeté n'est jamais réactivé par une proposition
+  automatique.
+- **CSV** : chaque cellule est entre guillemets ; une cellule qui commence par `=`, `+`, `-` ou `@`
+  est préfixée d'une apostrophe, pour qu'un tableur ne la lise jamais comme une formule.
+- **Projet archivé** : toute écriture est refusée (`409 PROJECT_ARCHIVED`) ; la lecture reste
+  possible.
+
+**Indicateurs.** Chaque valeur est rendue avec son numérateur et son dénominateur ; sans
+dénominateur, aucune valeur.
+
+| Indicateur       | Formule                                                                                       |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| `coverage`       | éléments avec au moins un lien `TESTED_BY` ou `VERIFIED_BY` confirmé ÷ éléments publiés       |
+| `replays`        | rejeux dont chaque flow est `PASSED` ÷ rejeux terminés avec un verdict, dans la période       |
+| `links`          | liens `CONFIRMED` ÷ liens non rejetés                                                         |
+| `gaps`           | éléments sans lien d'implémentation, sans lien de test ; liens périmés ; candidats en attente |
+| `recentEvidence` | toujours `available: false` : il demande la corrélation avec les runs (phase 5)               |
+
+**Tendances** : par semaine ISO (lundi, UTC), sur un projet ou sur tous les projets actifs. Elles
+donnent :
+
+- le taux de réussite des rejeux (même formule) ;
+- les anomalies par gravité ;
+- la durée médiane d'un rejeu terminé ;
+- la couverture à la fin de chaque semaine. Elle est recalculée en rejouant les décisions de
+  chaque lien de test, et elle est absente avant la première publication ;
+- les scénarios qui ont basculé sur leurs 10 derniers runs.
+
+Une semaine sans donnée n'a pas de valeur.
+
 ## Dashboard
 
 `<qa-crawler-dashboard>` pilote un espace de travail. La page autonome est servie par le serveur
@@ -589,7 +657,13 @@ comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 | Historique     | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                  |
 | Scénarios      | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                           |
 | Environnements | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                           |
-| Explorations   | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies filtrées par gravité                                                                                                      |
+| Explorations   | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                      |
+| Référentiel    | les éléments publiés, par type et par source ; pour l'un d'eux : provenance (source, section, page, feuille, cellule), historique des versions, liens avec leur justification et leur confiance, liens proposés à confirmer ou rejeter, lien ajouté à la main ; le menu compte les candidats en attente                                                         |
+| Traçabilité    | la matrice : règles et critères, implémentation, vérification, autres liens, chacun avec son état ; export CSV ; la corrélation automatique est dite non disponible                                                                                                                                                                                             |
+| Sources        | les connecteurs (formats, taille, limites) ; un import de fichier (.docx, .xlsx, .pdf) ou d'une page Confluence (noms des variables seulement), avec un profil ; l'historique des imports                                                                                                                                                                       |
+| Validation     | les candidats d'un lot : type, identifiant, confiance (une classe), doublon, raisons, lieu ; accepter, refuser, fusionner (un conflit d'identifiant se fusionne ou se refuse) ; publication, avec accord explicite pour une lecture partielle ; problèmes signalés ; éléments absents de la source                                                              |
+| Indicateurs    | couverture par un test, taux de réussite des rejeux, liens confirmés : chacun avec sa formule, son dénominateur, ses exclusions et ses limites ; la vérification par une preuve récente est dite non disponible ; écarts à traiter                                                                                                                              |
+| Tendances      | par semaine : taux de réussite des rejeux (sur 0 à 100 %), anomalies, durée médiane, couverture ; scénarios les plus instables ; un projet ou tous                                                                                                                                                                                                              |
 
 Le menu range les écrans par section et porte le projet choisi (« Tous les projets » par défaut) ; il
 dit la version de l'API et du moteur. Sous 960 px de large (requête de conteneur), il se replie
@@ -704,6 +778,10 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Le Run Monitor suit les flows et les étapes, pas les groupes métier (absents des événements
   d'exploration).
 - La comparaison ne compare pas les captures d'écran de deux exécutions.
+- Exigences : la corrélation automatique avec le code, les tests et les preuves n'existe pas encore
+  (phase 5) ; seuls les liens issus de l'import et ceux ajoutés à la main comptent. L'auteur d'une
+  décision n'est pas enregistré. Un profil d'importation se crée dans le dossier du projet (aucune
+  route pour l'écrire).
 - Accessibilité : clavier, annonces et contraste testés composant par composant ; aucun audit axe
   automatique.
 - Rien n'est publié sur un registre : le SDK fait partie de `@qa-crawler/core`.
@@ -717,6 +795,17 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/unit/sdk-dashboard-ops.test.ts` : historique et comparaison (écarts échappés), stabilité
   des scénarios et enregistrements à promouvoir, formulaire d'environnement (aller-retour, variable
   invalide refusée, suppression confirmée), carte d'une exploration et sélection par gravité.
+- `tests/unit/sdk-requirements.test.ts` : les exigences par le client et le vrai serveur, avec de
+  vrais `.docx` et `.xlsx` (fictifs) : import, décisions, publication, matrice et CSV protégé, lien
+  ajouté puis rejeté, indicateurs, tendances, refus (taille, profil d'un autre connecteur, variable
+  non lue, secret absent, projet archivé) ; semaines ISO, couverture à une date, tendances lues sur
+  des runs écrits sur disque.
+- `tests/unit/sdk-dashboard-requirements.test.ts` : rendu des écrans d'exigences (échappement,
+  secrets par leur nom, conflit à fusionner, lecture partielle, formules, taux sur 0 à 100 %).
+- `tests/integration/sdk-dashboard-requirements.test.ts` : dans Chromium, un `.docx` choisi dans
+  le champ fichier est importé, décidé et publié ; un lien est ajouté ; la matrice, son CSV
+  téléchargé, les indicateurs et les tendances en tiennent compte ; un import Confluence sans
+  jeton échoue en le disant ; sur téléphone, aucun défilement horizontal.
 - `tests/integration/sdk-dashboard.test.ts` : `/dashboard` dans Chromium avec le **vrai** moteur.
   Il couvre :
   - la vue d'ensemble ;

@@ -85,6 +85,31 @@ import {
   writeEnvironments,
   writeExecutionMeta,
 } from './platform.js';
+import {
+  addLink,
+  decide,
+  decideLink,
+  PipelineError,
+  publish,
+  type DecisionInput,
+} from '../../requirements/pipeline.js';
+import { DECISION_ACTIONS, LINK_TYPES, type LinkType } from '../../requirements/model.js';
+import {
+  computeIndicators,
+  computeTrends,
+  connectorViews,
+  FILE_CONNECTORS,
+  importConfluence,
+  importFile,
+  matrixCsv,
+  matrixOf,
+  maxFileBytes,
+  pendingCandidates,
+  RequirementsInputError,
+  storeOf,
+  summaryOf,
+  type FileConnectorKind,
+} from './requirements.js';
 import { dashboardPage, flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
 import {
   ALWAYS_BLOCKED_RISKS,
@@ -419,6 +444,39 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
       env: missionEnv(ctx, environment),
     });
     json(exploration.snapshot(), 202);
+    return;
+  }
+  if (resource === 'projects' && id && sub === 'requirements') {
+    await handleRequirements(
+      ctx,
+      await projectOf(ctx, id),
+      segments.slice(4),
+      method,
+      request,
+      url,
+      response,
+    );
+    return;
+  }
+  if (resource === 'trends' && id === undefined && method === 'GET') {
+    const projectId = url.searchParams.get('projectId') ?? undefined;
+    const projects = projectId
+      ? [await projectOf(ctx, projectId)]
+      : (await workspaceProjects(ctx)).filter((project) => project.state !== 'ARCHIVED');
+    const inputs = await Promise.all(
+      projects.map(async (project) => ({
+        id: project.id,
+        name: project.name,
+        reportsDir: path.join(project.dir, REPORTS_DIR),
+        repository: await storeOf(project.dir).readRepository(),
+      })),
+    );
+    json(
+      await computeTrends(inputs, {
+        weeks: Number(url.searchParams.get('weeks') ?? '8'),
+        ...(projectId ? { projectId } : {}),
+      }),
+    );
     return;
   }
   if (resource === 'projects' && id && sub === 'recordings') {
@@ -1682,6 +1740,239 @@ function authorize(ctx: Context, request: IncomingMessage): void {
   const b = Buffer.from(ctx.token);
   if (a.length !== b.length || !timingSafeEqual(a, b))
     throw new HttpError(401, 'UNAUTHORIZED', 'missing or invalid token');
+}
+
+/** Le corps brut d'un envoi de fichier, borné AVANT d'être lu en entier. */
+async function readBytes(request: IncomingMessage, maxBytes: number): Promise<Uint8Array> {
+  const declared = Number(request.headers['content-length'] ?? '0');
+  if (declared > maxBytes)
+    throw new HttpError(413, 'TOO_LARGE', `the file is larger than ${String(maxBytes)} bytes`);
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length;
+    if (size > maxBytes)
+      throw new HttpError(413, 'TOO_LARGE', `the file is larger than ${String(maxBytes)} bytes`);
+    chunks.push(chunk as Buffer);
+  }
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
+const PIPELINE_STATUS: Record<PipelineError['code'], number> = {
+  NOT_FOUND: 404,
+  INVALID_DECISION: 422,
+  ALREADY_PUBLISHED: 409,
+  CONFLICT_REQUIRES_MERGE: 409,
+  PARTIAL_NOT_ACKNOWLEDGED: 409,
+  NOTHING_TO_PUBLISH: 409,
+};
+
+/** Une erreur du pipeline ou une entrée refusée devient une réponse dite, jamais une erreur interne. */
+async function requirementsCall<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof PipelineError)
+      throw new HttpError(PIPELINE_STATUS[error.code], error.code, error.message);
+    if (error instanceof RequirementsInputError) throw new HttpError(400, error.code, error.message);
+    throw error;
+  }
+}
+
+const BATCH_PATTERN = /^imp_[A-Za-z0-9_-]{6,64}$/;
+const LINK_PATTERN = /^lnk_[A-Za-z0-9_-]{6,64}$/;
+const LINK_ENDS = /^[A-Z_]{2,40}$/;
+
+/**
+ * LES EXIGENCES D'UN PROJET (`/api/projects/:id/requirements/…`). Toute écriture est refusée sur un
+ * projet archivé ; une décision n'est jamais prise par le serveur ; l'auteur n'est pas enregistré
+ * tant que l'identité des personnes n'est pas définie (Q1).
+ */
+async function handleRequirements(
+  ctx: Context,
+  project: StoredProject,
+  rest: string[],
+  method: string,
+  request: IncomingMessage,
+  url: URL,
+  response: ServerResponse,
+): Promise<void> {
+  const [part, item, action] = rest;
+  const store = storeOf(project.dir);
+  const json = (body: unknown, status = 200): void => {
+    response.writeHead(status, { 'content-type': JSON_TYPE });
+    response.end(JSON.stringify(body));
+  };
+  const write = (): void => {
+    refuseArchived(project);
+  };
+  if (part === undefined && method === 'GET') {
+    const repository = await store.readRepository();
+    json({ entities: repository.entities, links: repository.links, pending: await pendingCandidates(store) });
+    return;
+  }
+  if (part === 'connectors' && item === undefined && method === 'GET') {
+    json(connectorViews());
+    return;
+  }
+  if (part === 'profiles' && item === undefined && method === 'GET') {
+    json(await store.listProfiles());
+    return;
+  }
+  if (part === 'matrix' && item === undefined && method === 'GET') {
+    const rows = matrixOf(await store.readRepository());
+    if (url.searchParams.get('format') === 'csv') {
+      response.writeHead(200, {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="traceability-${project.id}.csv"`,
+      });
+      response.end(matrixCsv(rows));
+      return;
+    }
+    json(rows);
+    return;
+  }
+  if (part === 'indicators' && item === undefined && method === 'GET') {
+    json(
+      await computeIndicators(
+        await store.readRepository(),
+        await store.listBatches(),
+        path.join(project.dir, REPORTS_DIR),
+        project.id,
+        { days: Number(url.searchParams.get('days') ?? '30') },
+      ),
+    );
+    return;
+  }
+  if (part === 'imports' && item === undefined && method === 'GET') {
+    json((await store.listBatches()).map(summaryOf));
+    return;
+  }
+  if (part === 'imports' && item === undefined && method === 'POST') {
+    write();
+    const body = await readJson(request);
+    json(
+      await requirementsCall(() =>
+        importConfluence(store, body, { env: ctx.env, envNames: ctx.envNames, now: new Date() }),
+      ),
+      201,
+    );
+    return;
+  }
+  if (part === 'imports' && item === 'file' && action === undefined && method === 'POST') {
+    write();
+    const kind = url.searchParams.get('connector') ?? '';
+    if (!(FILE_CONNECTORS as readonly string[]).includes(kind))
+      throw new HttpError(400, 'INVALID_INPUT', `connector must be one of ${FILE_CONNECTORS.join(', ')}`);
+    const type = (request.headers['content-type'] ?? '').toLowerCase();
+    if (!type.startsWith('application/octet-stream'))
+      throw new HttpError(415, 'UNSUPPORTED_MEDIA_TYPE', 'expected application/octet-stream');
+    const data = await readBytes(request, maxFileBytes(kind as FileConnectorKind));
+    const profile = url.searchParams.get('profile') ?? undefined;
+    json(
+      await requirementsCall(() =>
+        importFile(store, kind as FileConnectorKind, url.searchParams.get('name') ?? '', data, {
+          ...(profile ? { profile } : {}),
+          env: ctx.env,
+          now: new Date(),
+        }),
+      ),
+      201,
+    );
+    return;
+  }
+  if (part === 'imports' && item) {
+    if (!BATCH_PATTERN.test(item)) throw new HttpError(404, 'NOT_FOUND', 'import not found');
+    if (action === undefined && method === 'GET') {
+      const batch = await store.readBatch(item);
+      if (!batch) throw new HttpError(404, 'NOT_FOUND', 'import not found');
+      json(batch);
+      return;
+    }
+    if (action === 'decisions' && method === 'POST') {
+      write();
+      const body = await readJson(request);
+      const decisions = Array.isArray(body.decisions) ? (body.decisions as DecisionInput[]) : [];
+      if (decisions.length === 0 || decisions.length > 500)
+        throw new HttpError(400, 'INVALID_INPUT', 'between 1 and 500 decisions');
+      for (const entry of decisions) {
+        const decision = (entry as Partial<DecisionInput>).decision;
+        if (
+          typeof entry !== 'object' ||
+          typeof entry.itemId !== 'string' ||
+          !decision ||
+          !(DECISION_ACTIONS as readonly string[]).includes(decision.action)
+        )
+          throw new HttpError(400, 'INVALID_INPUT', 'each decision needs an itemId and an action');
+        // L'auteur n'est pas déclaré par l'appelant tant que l'identité n'est pas définie (Q1).
+        delete (decision as { by?: string }).by;
+      }
+      json(await requirementsCall(() => decide(store, item, decisions, new Date())));
+      return;
+    }
+    if (action === 'publish' && method === 'POST') {
+      write();
+      const body = await readJson(request);
+      const result = await requirementsCall(() =>
+        publish(store, item, new Date(), { acknowledgePartial: body.acknowledgePartial === true }),
+      );
+      json({ created: result.created, updated: result.updated, merged: result.merged, links: result.links });
+      return;
+    }
+  }
+  if (part === 'links' && item === undefined && method === 'POST') {
+    write();
+    const body = await readJson(request);
+    const end = (value: unknown, field: string): { kind: string; id: string } => {
+      const candidate = (value ?? {}) as Record<string, unknown>;
+      if (
+        typeof candidate.kind !== 'string' ||
+        !LINK_ENDS.test(candidate.kind) ||
+        typeof candidate.id !== 'string' ||
+        candidate.id.trim() === '' ||
+        candidate.id.length > 300
+      )
+        throw new HttpError(400, 'INVALID_INPUT', `${field} needs a kind and an id`);
+      return { kind: candidate.kind, id: candidate.id.trim() };
+    };
+    if (!(LINK_TYPES as readonly string[]).includes(String(body.type)))
+      throw new HttpError(400, 'INVALID_INPUT', `type must be one of ${LINK_TYPES.join(', ')}`);
+    const justification = Array.isArray(body.justification)
+      ? body.justification.filter((line): line is string => typeof line === 'string' && line.trim() !== '')
+      : [];
+    json(
+      await requirementsCall(() =>
+        addLink(
+          store,
+          {
+            type: body.type as LinkType,
+            from: end(body.from, 'from'),
+            to: end(body.to, 'to'),
+            justification,
+          },
+          new Date(),
+        ),
+      ),
+      201,
+    );
+    return;
+  }
+  if (part === 'links' && item && action === undefined && method === 'POST') {
+    write();
+    if (!LINK_PATTERN.test(item)) throw new HttpError(404, 'NOT_FOUND', 'link not found');
+    const body = await readJson(request);
+    if (body.action !== 'CONFIRM' && body.action !== 'REJECT')
+      throw new HttpError(400, 'INVALID_INPUT', 'action must be CONFIRM or REJECT');
+    const note =
+      typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 500) : undefined;
+    json(
+      await requirementsCall(() =>
+        decideLink(store, item, body.action as 'CONFIRM' | 'REJECT', new Date(), note ? { note } : {}),
+      ),
+    );
+    return;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'not found');
 }
 
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
