@@ -8,6 +8,7 @@ import {
 import type { DashboardRoute, DashboardState, EnvironmentForm } from './dashboard-view.js';
 import { checkLines, formatDate, header, icon, pill, readinessPill } from './dashboard-parts.js';
 import { can } from './dashboard-access.js';
+import { insertBlockForm, runnableScenarios, scenarioDrift } from './dashboard-library.js';
 import { esc } from './view.js';
 
 /**
@@ -112,11 +113,13 @@ export function scenariosView(state: DashboardState): string {
       recording.summary !== undefined &&
       !promoted.has(recording.name),
   );
-  const selected = p.scenarios.find((scenario) => scenario.name === route.scenario) ?? p.scenarios[0];
+  const runnable = runnableScenarios(p.scenarios);
+  const blocks = p.scenarios.length - runnable.length;
+  const selected = runnable.find((scenario) => scenario.name === route.scenario) ?? runnable[0];
   const cards =
-    p.scenarios.length === 0
+    runnable.length === 0
       ? `<section class="card"><p class="mu">${esc(t.noScenario)}</p></section>`
-      : p.scenarios
+      : runnable
           .map((scenario) => {
             const history = histories.get(scenario.name);
             const decided = (history?.passed ?? 0) + (history?.failed ?? 0);
@@ -135,16 +138,25 @@ export function scenariosView(state: DashboardState): string {
   const history = selected ? histories.get(selected.name) : undefined;
   const detail = selected
     ? `<aside class="card" aria-label="${esc(selected.name)}"><div class="row"><b class="mono big-name">${esc(selected.name)}</b>${tagPill(state, scenarioTag(history))}</div>
-<p class="mu">${esc(o.origin)} : ${esc(selected.fromRecording ? t.fromRecording(selected.fromRecording) : o.written)} · <code>${esc(selected.file)}</code></p>
+<p class="mu">${esc(o.origin)} : ${esc(selected.fromRecording ? t.fromRecording(selected.fromRecording) : selected.file.startsWith('composed/') ? t.lib.composedOrigin : o.written)} · <code>${esc(selected.file)}</code></p>
 ${history && history.flips >= 2 ? `<p class="note">${icon('alert')}<span>${esc(o.flakyNote(history.flips, history.runs.length))}</span></p>` : ''}
 <h3>${esc(o.lastRuns)}</h3>${
         history && history.runs.length > 0
           ? `<ul class="plain">${history.runs.map((run) => `<li class="row">${pill(run.status, t.results[run.status] ?? run.status)}<button class="lnk" data-action="open-run" data-project="${esc(p.id)}" data-run="${esc(run.run)}">${esc(formatDate(run.at, t.locale))}</button><span class="mu push">${esc(t.duration(run.durationMs))}</span></li>`).join('')}</ul>`
           : `<p class="mu">${esc(o.neverRun)}</p>`
       }
-${p.state === 'ARCHIVED' || !can(state, 'RUN') ? '' : `<div class="form-acts start"><button class="btn primary" data-action="replay-scenario" data-name="${esc(selected.name)}">${icon('play')}<span>${esc(o.replay)}</span></button></div>`}</aside>`
+${p.state === 'ARCHIVED' || !can(state, 'RUN') ? '' : `<div class="form-acts start"><button class="btn primary" data-action="replay-scenario" data-name="${esc(selected.name)}">${icon('play')}<span>${esc(o.replay)}</span></button></div>`}
+${selected.uses && selected.uses.length > 0 ? `<p class="mu">${esc(t.lib.uses(selected.uses.join(', ')))}</p>` : ''}
+${scenarioDrift(state, selected)}
+${state.lib.error ? `<div class="err" role="alert"><p>${esc(state.lib.error)}</p>${(state.lib.details ?? []).length > 1 ? `<ul class="plain tight">${(state.lib.details ?? []).map((detail) => `<li>${esc(detail)}</li>`).join('')}</ul>` : ''}</div>` : ''}${state.lib.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(state.lib.notice)}</span></p>` : ''}
+${insertBlockForm(state, selected)}
+${p.state === 'ARCHIVED' || !can(state, 'PUBLISH') || selected.format !== 'yaml' ? '' : `<div class="form-acts start"><button class="btn ghost" data-action="lib-from-scenario" data-name="${esc(selected.name)}">${icon('library')}<span>${esc(t.lib.add)}</span></button></div>`}</aside>`
     : '';
-  return `${header(esc(t.nav.scenarios), { sub: esc(o.scenariosSub(p.name, p.scenarios.length, pending.length)) })}<div class="split"><div class="col">${cards}<section class="card"><h2>${esc(o.recordingsTitle)}</h2>${recordings}</section></div><div class="col narrow">${detail}</div></div>`;
+  const library =
+    blocks > 0
+      ? `<p class="mu">${esc(t.lib.blocksNote(blocks))} <button class="lnk" data-action="nav" data-view="library">${esc(t.lib.openLibrary)}</button></p>`
+      : '';
+  return `${header(esc(t.nav.scenarios), { sub: esc(o.scenariosSub(p.name, runnable.length, pending.length)) })}${library}<div class="split"><div class="col">${cards}<section class="card"><h2>${esc(o.recordingsTitle)}</h2>${recordings}</section></div><div class="col narrow">${detail}</div></div>`;
 }
 
 // ── Environnements ──────────────────────────────────────────────────────────────────────────────

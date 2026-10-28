@@ -1,7 +1,7 @@
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { parseTestDataSet, testDataSetDocument } from '../data/test-data-set.js';
+import { isSensitiveKey, parseTestDataSet, testDataSetDocument } from '../data/test-data-set.js';
 import {
   planGeneration,
   planSummary,
@@ -10,14 +10,46 @@ import {
   type GeneratedArtifact,
   type GenerationFormat,
 } from '../platform/generation-plan.js';
-import { HUMAN_REVIEW_FILE, type HumanReviewLedger } from './application/human-review.js';
-import { decideProposal, proposalSummary, type ProposalDecision } from './assertion-proposals.js';
-import type { RecordedFlow } from './model.js';
+import {
+  applyHumanReview,
+  emptyLedger,
+  HUMAN_REVIEW_FILE,
+  recordIntentDecision,
+  REVIEWABLE_INTENTS,
+  type HumanDecisionType,
+  type HumanReviewLedger,
+} from './application/human-review.js';
+import type { ApplicationInteractionModel } from './application/model.js';
+import { describeFlowStep } from './panel-state.js';
+import {
+  correctFlowTarget,
+  describeTarget,
+  editFlowRow,
+  hasTarget,
+  proposeCorrection,
+  recordedRowCells,
+  restoreFlowTarget,
+  useOfStep,
+  type CorrectionProposal,
+  type KnownValue,
+  type PickedElement,
+  type RowBinding,
+  type RowColumnChoice,
+} from './target-correction.js';
+import {
+  addDataCheck,
+  decideProposal,
+  proposalSummary,
+  type ProposalDecision,
+} from './assertion-proposals.js';
+import type { RawRecordedEvent, RecordedFlow } from './model.js';
 import { TEST_DATA_FILE } from './process-recording.js';
 import { generateFlowFiles, type GeneratedFiles } from './recorded-flow.js';
 import {
   BINDING_GENERATORS,
+  addRowVariables,
   applyTestDataBinding,
+  availableVariables,
   dataLineage,
   stepDataBinding,
   type BindingContext,
@@ -27,9 +59,15 @@ import {
   type TestDataBindingInput,
 } from './test-data-binding.js';
 import {
+  acceptGroupProposals,
   applyGroupCommand,
+  groupCheckSuggestions,
   groupViews,
+  proposeGroups,
   stepDependencies,
+  type BusinessStepRef,
+  type GroupCheckSuggestion,
+  type GroupProposal,
   type GroupCommand,
   type GroupOutcome,
   type GroupView,
@@ -327,6 +365,16 @@ export async function bindStoredTestData(
   const context = await bindingContextOf(recording);
   const outcome = applyTestDataBinding(context, input, () => undefined);
   if ('error' in outcome) return outcome;
+  await persistContext(recording, context, language);
+  return outcome;
+}
+
+/** Le jeu de test, le flow et le registre des décisions, réécrits après une décision. */
+async function persistContext(
+  recording: StoredRecording,
+  context: BindingContext,
+  language: 'fr' | 'en',
+): Promise<void> {
   const write = writerOf(recording.directory);
   if (context.testData) {
     const yaml = stringifyYaml(context.testData.document, { lineWidth: 0 });
@@ -335,5 +383,344 @@ export async function bindStoredTestData(
   }
   await rewrite(recording, language);
   if (context.humanReview) await write(HUMAN_REVIEW_FILE, json(context.humanReview));
+}
+
+// ── Retirer une étape, groupes proposés, vérification de groupe ───────────────────────────────
+
+/**
+ * RETIRER UNE ÉTAPE d'action du flow, avec les vérifications qui la suivent (celles de la même
+ * action). Une vérification ne se retire pas ainsi : elle se refuse ou se désactive (propositions).
+ */
+export function dropFlowStep(flow: RecordedFlow, stepId: string): boolean {
+  const target = flow.steps.find((item) => item.id === stepId);
+  if (!target || target.step.kind === 'expect') return false;
+  const actionIds = new Set(target.actionIds);
+  flow.steps = flow.steps.filter(
+    (item) =>
+      item !== target && !(item.step.kind === 'expect' && item.actionIds.some((id) => actionIds.has(id))),
+  );
+  return true;
+}
+
+/** Retire une étape d'un enregistrement écrit et réécrit le flow. */
+export async function removeStoredStep(
+  recording: StoredRecording,
+  stepId: string,
+  language: 'fr' | 'en',
+): Promise<{ ok: true } | { error: string }> {
+  if (!dropFlowStep(recording.flow, stepId)) return { error: `no action step ${stepId}` };
+  await rewrite(recording, language);
+  return { ok: true };
+}
+
+/** Les étapes métier reconnues à l'enregistrement (business-flow.json), base des groupes proposés. */
+async function businessStepsOf(recording: StoredRecording): Promise<BusinessStepRef[]> {
+  const text = await readFile(path.join(recording.directory, 'business-flow.json'), 'utf8').catch(
+    () => undefined,
+  );
+  if (!text) return [];
+  const steps = (JSON.parse(text) as { steps?: unknown }).steps;
+  return Array.isArray(steps) ? (steps as BusinessStepRef[]) : [];
+}
+
+/** Les groupes proposés d'après les étapes métier (aucun quand le flow a déjà des groupes). */
+export async function storedGroupProposals(
+  recording: StoredRecording,
+  language: 'fr' | 'en',
+): Promise<GroupProposal[]> {
+  return proposeGroups(recording.flow, await businessStepsOf(recording), language);
+}
+
+/** Crée d'un coup les groupes proposés, sur décision humaine, et réécrit le flow. */
+export async function acceptStoredGroupProposals(
+  recording: StoredRecording,
+  language: 'fr' | 'en',
+): Promise<GroupOutcome> {
+  const outcome = acceptGroupProposals(recording.flow, await storedGroupProposals(recording, language));
+  if ('error' in outcome) return outcome;
+  await rewrite(recording, language);
   return outcome;
+}
+
+export function storedGroupChecks(recording: StoredRecording): GroupCheckSuggestion[] {
+  return groupCheckSuggestions(recording.flow);
+}
+
+/**
+ * LA VÉRIFICATION D'UN GROUPE : la donnée de test reçue est visible après la dernière action du
+ * groupe ; une proposition EXPLICIT acceptée, retirable comme les autres.
+ */
+export function addGroupCheck(
+  flow: RecordedFlow,
+  input: { groupId: string; key: string },
+): { ok: true; proposalId: string; groupName: string } | { error: string } {
+  const view = groupViews(flow).find((entry) => entry.id === input.groupId);
+  if (!view) return { error: `unknown group ${input.groupId}` };
+  const last = [...flow.steps]
+    .reverse()
+    .find((item) => view.stepIds.includes(item.id) && item.step.kind !== 'expect');
+  if (!last) return { error: `group ${input.groupId} has no action` };
+  const outcome = addDataCheck(flow, { afterStepId: last.id, key: input.key, groupName: view.name });
+  if ('error' in outcome) return outcome;
+  return { ...outcome, groupName: view.name };
+}
+
+export async function addStoredGroupCheck(
+  recording: StoredRecording,
+  input: { groupId: string; key: string },
+  language: 'fr' | 'en',
+): Promise<{ ok: true; proposalId: string; groupName: string } | { error: string }> {
+  const outcome = addGroupCheck(recording.flow, input);
+  if ('error' in outcome) return outcome;
+  await rewrite(recording, language);
+  return outcome;
+}
+
+// ── La cible d'une étape : corriger, restaurer, redéfinir la ligne ────────────────────────────
+
+/** Les événements bruts de l'enregistrement (raw-recording.json) : aucune saisie en clair. */
+async function rawEventsOf(recording: StoredRecording): Promise<RawRecordedEvent[]> {
+  const text = await readFile(path.join(recording.directory, 'raw-recording.json'), 'utf8').catch(
+    () => undefined,
+  );
+  if (!text) return [];
+  const events = (JSON.parse(text) as { rawEvents?: unknown }).rawEvents;
+  return Array.isArray(events) ? (events as RawRecordedEvent[]) : [];
+}
+
+/** Les données du jeu de test citables avant cette étape (jamais une donnée sensible), avec leur valeur. */
+function rowVariablesOf(context: BindingContext, stepId: string): { key: string; value: string }[] {
+  const set = context.testData?.set;
+  if (!set) return [];
+  return availableVariables(context, stepId)
+    .filter((variable) => !isSensitiveKey(variable.key))
+    .map((variable) => ({ key: variable.key, value: set.values[variable.key]?.value ?? '' }));
+}
+
+export interface StoredRowSource {
+  /** La cible actuelle de l'étape, dite en mots. */
+  target: string;
+  cells: { column: string; value: string }[];
+  variables: { key: string; value: string }[];
+}
+
+/** La ligne de tableau visée par une étape : ses cellules enregistrées et les données citables. */
+export async function storedRowSource(
+  recording: StoredRecording,
+  stepId: string,
+): Promise<StoredRowSource | { error: string }> {
+  const item = recording.flow.steps.find((entry) => entry.id === stepId);
+  if (!item) return { error: `step ${stepId} not found` };
+  if (!hasTarget(item.step)) return { error: `step ${stepId} has no target` };
+  const context = await bindingContextOf(recording);
+  return {
+    target: describeTarget(item.step.target),
+    cells: recordedRowCells(await rawEventsOf(recording), item.rawEventIds),
+    variables: rowVariablesOf(context, stepId),
+  };
+}
+
+/** REVUE, SANS NAVIGATEUR : la ligne visée est redéfinie colonne par colonne (une nouvelle donnée rejoint le jeu). */
+export async function editStoredRow(
+  recording: StoredRecording,
+  input: { stepId: string; columns: readonly RowColumnChoice[] },
+  language: 'fr' | 'en',
+): Promise<{ ok: true; added: string[] } | { error: string }> {
+  const item = recording.flow.steps.find((entry) => entry.id === input.stepId);
+  if (!item) return { error: `step ${input.stepId} not found` };
+  const context = await bindingContextOf(recording);
+  const set = context.testData?.set;
+  const outcome = editFlowRow(
+    recording.flow,
+    input.stepId,
+    recordedRowCells(await rawEventsOf(recording), item.rawEventIds),
+    rowVariablesOf(context, input.stepId),
+    input.columns,
+    Date.now(),
+    set ? { taken: Object.keys(set.values) } : undefined,
+  );
+  if ('error' in outcome) return outcome;
+  const added = addRowVariables(context, outcome.created, input.stepId);
+  if ('error' in added) return added;
+  await persistContext(recording, context, language);
+  return { ok: true, added: added.added };
+}
+
+/** « Restaurer l'original » : la cible redevient celle de l'enregistrement ; l'historique reste. */
+export async function restoreStoredTarget(
+  recording: StoredRecording,
+  stepId: string,
+  language: 'fr' | 'en',
+): Promise<{ ok: true } | { error: string }> {
+  const outcome = restoreFlowTarget(recording.flow, stepId, Date.now());
+  if ('error' in outcome) return outcome;
+  await rewrite(recording, language);
+  return { ok: true };
+}
+
+/** Ce que deviendrait la cible de l'étape avec l'élément désigné (sans rien écrire). */
+export function storedCorrectionProposal(
+  recording: StoredRecording,
+  stepId: string,
+  picked: PickedElement,
+  known: readonly KnownValue[],
+  language: 'fr' | 'en',
+): CorrectionProposal | { error: string } {
+  const item = recording.flow.steps.find((entry) => entry.id === stepId);
+  if (!item) return { error: `step ${stepId} not found` };
+  if (!hasTarget(item.step)) return { error: `step ${stepId} has no target to correct` };
+  return proposeCorrection(
+    picked.element,
+    useOfStep(item.step.kind),
+    language,
+    { known, previous: item.step.target },
+    picked.rowCells ?? [],
+  );
+}
+
+/** La cible de l'étape remplacée par l'élément désigné (option de ligne, liaison d'une colonne). */
+export async function correctStoredTarget(
+  recording: StoredRecording,
+  input: {
+    stepId: string;
+    picked: PickedElement;
+    known: readonly KnownValue[];
+    option?: string;
+    binding?: RowBinding;
+  },
+  language: 'fr' | 'en',
+): Promise<{ ok: true; previous: string; next: string } | { error: string }> {
+  const context = await bindingContextOf(recording);
+  const set = context.testData?.set;
+  const outcome = correctFlowTarget(
+    recording.flow,
+    input.stepId,
+    input.picked,
+    Date.now(),
+    language,
+    { known: input.known, ...(set ? { newVariables: { taken: Object.keys(set.values) } } : {}) },
+    input.option,
+    input.binding,
+  );
+  if ('error' in outcome) return outcome;
+  const added = addRowVariables(context, outcome.created, input.stepId);
+  if ('error' in added) return added;
+  await persistContext(recording, context, language);
+  return {
+    ok: true,
+    previous: describeTarget(outcome.correction.previous),
+    next: describeTarget(outcome.correction.next),
+  };
+}
+
+// ── La revue des intentions (application-model.json, human-review.json) ────────────────────────
+
+export interface StoredIntentRow {
+  actionId: string;
+  kind: string;
+  label: string;
+  /** L'intention finale (décision humaine, sinon l'interprétation automatique). */
+  intent: string;
+  status: string;
+  source: 'HUMAN' | 'SYSTEM';
+  confidence?: number;
+  original?: string;
+  reason?: string;
+}
+
+async function applicationOf(recording: StoredRecording): Promise<ApplicationInteractionModel | undefined> {
+  const text = await readFile(path.join(recording.directory, 'application-model.json'), 'utf8').catch(
+    () => undefined,
+  );
+  return text ? (JSON.parse(text) as ApplicationInteractionModel) : undefined;
+}
+
+async function ledgerOf(recording: StoredRecording): Promise<HumanReviewLedger> {
+  const text = await readFile(path.join(recording.directory, HUMAN_REVIEW_FILE), 'utf8').catch(
+    () => undefined,
+  );
+  return text ? (JSON.parse(text) as HumanReviewLedger) : emptyLedger(recording.flow.recordingSessionId);
+}
+
+/** Chaque action du modèle : son intention finale et sa provenance (rien sans modèle d'application). */
+export async function storedIntents(
+  recording: StoredRecording,
+  language: 'fr' | 'en',
+): Promise<{ choices: string[]; rows: StoredIntentRow[] }> {
+  const model = await applicationOf(recording);
+  const labels = new Map(
+    recording.flow.steps.map((item) => [item.id, describeFlowStep(item.step, language)]),
+  );
+  return {
+    choices: [...REVIEWABLE_INTENTS],
+    rows: (model?.actions ?? []).map((view) => {
+      const review = view.review;
+      const human = review?.source === 'HUMAN' ? review : undefined;
+      return {
+        actionId: view.actionId,
+        kind: view.type,
+        label:
+          view.stepIds.map((id) => labels.get(id)).find((label) => label !== undefined) ??
+          (view.label
+            ? `${view.type} "${view.label}"`
+            : view.type === 'NAVIGATE'
+              ? language === 'fr'
+                ? 'Ouvrir la page'
+                : 'Open the page'
+              : view.type),
+        intent: human ? human.finalIntent : view.interpretation.join(' + '),
+        status: review?.status ?? 'INFERRED',
+        source: human ? 'HUMAN' : 'SYSTEM',
+        ...(view.confidence !== undefined ? { confidence: view.confidence } : {}),
+        ...(human ? { original: human.originalIntent.join(' + ') } : {}),
+        ...(human?.correction?.reason ? { reason: human.correction.reason } : {}),
+      };
+    }),
+  };
+}
+
+/**
+ * LA REVUE D'UNE INTENTION : corriger, confirmer, réinitialiser. Une décision de plus au registre ;
+ * ni l'action, ni le flow, ni le rejeu ne changent. Le modèle d'application est réécrit.
+ */
+export async function reviewStoredIntent(
+  recording: StoredRecording,
+  input: { actionId: string; type: HumanDecisionType; intent?: string; reason?: string },
+): Promise<{ ok: true } | { error: string }> {
+  const model = await applicationOf(recording);
+  if (!model) return { error: 'no application model to review' };
+  const ledger = await ledgerOf(recording);
+  const view = model.actions.find((action) => action.actionId === input.actionId);
+  const item = recording.flow.steps.find((entry) => view?.stepIds.includes(entry.id));
+  const raw = (await rawEventsOf(recording)).find((event) => event.id === item?.rawEventIds.at(-1));
+  const element = raw?.element;
+  const business = (await businessStepsOf(recording)).find((step) =>
+    step.recordedActions.some((id) => view?.stepIds.includes(id)),
+  );
+  let page: string | undefined;
+  try {
+    page = raw ? new URL(raw.url).pathname : undefined;
+  } catch {
+    page = undefined;
+  }
+  const outcome = recordIntentDecision(ledger, model, {
+    ...input,
+    context: {
+      ...(page ? { page } : {}),
+      ...(element
+        ? {
+            element: `${element.role || element.tag} "${element.name || element.label || element.text || ''}"`,
+          }
+        : {}),
+      ...(element?.role ? { role: element.role } : {}),
+      ...(element?.label ? { label: element.label } : {}),
+      ...(business ? { businessStep: `${business.action} ${business.entity ?? ''}`.trim() } : {}),
+    },
+  });
+  if ('error' in outcome) return outcome;
+  applyHumanReview(model, ledger);
+  const write = writerOf(recording.directory);
+  await write('application-model.json', json(model));
+  await write(HUMAN_REVIEW_FILE, json(ledger));
+  return { ok: true };
 }

@@ -277,6 +277,29 @@ const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisate
 | `recordings.subscribe(projectId, name, cb)`     | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
 | `recordings.flow(projectId, name)`              | `GET /api/projects/:id/recordings/:name/flow`                    |
 | `recordings.studio(projectId, name)`            | `GET /api/projects/:id/recordings/:name/studio`                  |
+| `recordings.pause/resume/undo(projectId, name)` | `POST /api/projects/:id/recordings/:name/{pause,resume,undo}`    |
+| `recordings.checkpoint(projectId, name, label)` | `POST /api/projects/:id/recordings/:name/checkpoint`             |
+| `recordings.resolve/ignore(projectId, name, …)` | `POST /api/projects/:id/recordings/:name/{resolve,ignore}`       |
+| `recordings.removeStep(projectId, name, step)`  | `POST /api/projects/:id/recordings/:name/steps/remove`           |
+| `recordings.replay(projectId, name)`            | `POST /api/projects/:id/recordings/:name/replay` (202)           |
+| `recordings.replayStatus(projectId, name)`      | `GET /api/projects/:id/recordings/:name/replay`                  |
+| `groups.proposals/acceptProposals(…)`           | `GET`/`POST /api/projects/:id/recordings/:name/groups/proposals` |
+| `groups.checks/addCheck(…)`                     | `GET`/`POST /api/projects/:id/recordings/:name/groups/checks`    |
+| `recordings.intents/reviewIntent(…)`            | `GET`/`POST /api/projects/:id/recordings/:name/intents`          |
+| `recordings.rowSource/editRow(…)`               | `GET`/`POST /api/projects/:id/recordings/:name/steps/row`        |
+| `recordings.restoreTarget(…)`                   | `POST /api/projects/:id/recordings/:name/steps/restore`          |
+| `corrections.start/get(projectId, name, …)`     | `POST`/`GET /api/projects/:id/recordings/:name/correction`       |
+| `corrections.pick/apply/resume/close(…)`        | `POST /api/projects/:id/recordings/:name/correction/<action>`    |
+| `library.list/add(projectId, …)`                | `GET`/`POST /api/projects/:id/library`                           |
+| `library.remove(projectId, name)`               | `POST /api/projects/:id/library/:name/remove`                    |
+| `library.preview(projectId, scenario)`          | `GET /api/projects/:id/library/preview?scenario=…`               |
+| `library.declareContract(projectId, name, c)`   | `PUT /api/projects/:id/library/:name/contract`                   |
+| `library.validateVersion(projectId, name)`      | `POST /api/projects/:id/library/:name/version`                   |
+| `library.drift(projectId)`                      | `GET /api/projects/:id/library/drift`                            |
+| `scenarios.checkComposition(projectId, input)`  | `POST /api/projects/:id/scenarios/compose/check` (`VIEW`)        |
+| `scenarios.compose(projectId, input)`           | `POST /api/projects/:id/scenarios/compose` (201)                 |
+| `scenarios.insert(projectId, scenario, input)`  | `POST /api/projects/:id/scenarios/:name/insert`                  |
+| `scenarios.acceptBlocks(projectId, scenario)`   | `POST /api/projects/:id/scenarios/:name/accept`                  |
 | `assertions.list(projectId, name)`              | `GET /api/projects/:id/recordings/:name/assertions`              |
 | `data.get(projectId, name)`                     | `GET /api/projects/:id/recordings/:name/data`                    |
 | `data.bind(projectId, name, input)`             | `POST /api/projects/:id/recordings/:name/data/bindings`          |
@@ -295,6 +318,69 @@ devient le dossier du moteur (`recordings/<nom>/`, en minuscules, les chiffres r
 Le flux relaie les événements du recorder (sauf les traces brutes, une par événement clavier ou
 souris), les phases après l'arrêt, puis le résumé : étapes, raison de l'arrêt, rejeu de validation
 (si demandé avec `validate: true`), propositions, groupes, fichiers.
+
+Pendant l'enregistrement, le flux porte aussi la **timeline** (`type: 'timeline'`) : les gestes en
+phrases, leur statut, les éléments candidats d'une cible ambiguë, la pause, les vérifications posées.
+Seul son dernier état est gardé : un abonné qui arrive le reçoit, jamais tout l'historique. Les
+commandes de la barre d'enregistrement (`pause`, `resume`, `undo`, `checkpoint`, `resolve`,
+`ignore`) demandent le droit `RUN` et ne valent qu'en `RECORDING` (409 sinon).
+
+Après l'arrêt, la revue se fait sur l'enregistrement écrit, comme dans la fenêtre du recorder :
+retirer une étape d'action (ses vérifications partent avec elle ; une vérification seule se refuse
+par sa proposition), créer les groupes proposés d'après les étapes métier (jamais quand des groupes
+existent), ajouter la vérification d'un groupe, et lancer le **rejeu de validation**. Le rejeu tourne
+sans fenêtre sur la machine du serveur, avec la mission du projet et sa politique de sécurité ; un
+seul à la fois par enregistrement ; `replayStatus` donne sa progression puis son résultat
+(`REPLAY_CONFIRMED` ou `REPLAY_FAILED`, statut du dry run, raison) et le dernier rejeu écrit sur
+disque (`last`, `stale` quand le flow a changé depuis).
+
+**Correction d'une cible** (`corrections`) : comme dans la fenêtre du recorder, le moteur de rejeu suit
+le même chemin (étapes 1 à N-1) dans un navigateur **visible sur la machine du serveur** ; la page reste
+tenue devant l'étape et la personne y clique l'élément voulu (mode sélection : le clic n'atteint pas
+l'application, Échap annule). `get` suit la session : `REPLAYING`, `PICKING`, `HELD` (rien désigné),
+`PICKED` (la proposition : cible actuelle et nouvelle, ordre d'essai, ambiguïté, façons de retrouver une
+ligne de tableau), `APPLIED`, `RESUMING`, `RESUMED`, `UNREACHABLE` (le chemin s'est arrêté avant
+l'étape) ou `FAILED`. Rien n'est écrit avant `apply` ; `resume` reprend le rejeu à l'étape corrigée
+dans la même session. Une session à la fois (et pas pendant un enregistrement) ; une session inactive
+se ferme au bout de 10 minutes. Ouvrir et reprendre demandent `RUN` (le parcours est rejoué), valider
+demande `DECIDE`. Une ligne de tableau se redéfinit aussi sans navigateur (`editRow`), à partir des
+cellules enregistrées ; une nouvelle donnée n'y est possible que si l'enregistrement a un jeu de test.
+
+**Bibliothèque de scénarios** (`library`, `scenarios.compose`, `scenarios.insert`) : un bloc est un
+flow `reusable: true`, jamais exécuté seul, que d'autres scénarios rejouent par une étape
+`run: <bloc>` (le moteur recopie ses étapes à cet endroit). Un bloc vient d'un scénario
+(`from: 'scenario'`) ou d'un groupe métier d'un enregistrement (`from: 'recording'`, `groupId`) ; ses
+étapes et ses données de test sont recopiées sous `<flows>/library/<bloc>/`, son origine notée dans
+`sdk-library.json`. `compose` crée un scénario fait de blocs (`<flows>/composed/<nom>/`) ; `insert`
+ajoute `run: <bloc>` au début ou à la fin d'un scénario. Les données des blocs rejoignent le jeu du
+scénario ; une donnée définie autrement des deux côtés est refusée (409), jamais écrasée. Un bloc
+rejoué par un scénario ne se retire pas (409, `details` nomme les scénarios) et ne se lance pas seul
+(422 `REUSABLE_BLOCK`). Quand on rejoue des scénarios choisis, le moteur charge toujours les blocs.
+Écrire demande `PUBLISH` ; vérifier un parcours, `VIEW`.
+
+- **Contrat** : sans déclaration, il est dérivé du contenu (sorties : les clés que le bloc saisit à
+  partir de son propre jeu ; entrées obligatoires : celles qu'il saisit ou cite sans les définir).
+  `declareContract` déclare entrées (obligatoires ou facultatives), sorties, préconditions et
+  postconditions ; un contrat que le contenu contredit rend le bloc `INVALID`.
+- **Vérification** (`checkComposition`, rien n'est écrit ni exécuté) : ordre, étapes, dépendances (une
+  sortie consommée par un bloc suivant), entrées manquantes, entrée produite trop tard, conflits de
+  données (valeur fixe face à une valeur générée au rejeu comprise), données partagées à l'identique,
+  données résolues au rejeu, erreurs de structure, avertissements. `compose` et `insert` la refont
+  et refusent (409 pour un conflit, 422 sinon) avec chaque raison dans `details`.
+- **Écritures** : une opération à la fois par projet ; ses fichiers sont écrits ensemble ou pas du tout.
+  `insert` accepte `revision` (celle de `ScenarioView`) : un scénario modifié depuis sa lecture → 409.
+- **Versions** : `sdk-library.json` (version 2) garde pour chaque bloc un identifiant stable, sa version
+  validée, l'empreinte de son contenu, l'historique, l'origine et le contrat ; pour chaque parcours
+  composé (ou bloc inséré), la version de chaque bloc rejoué. Un bloc dont le fichier change devient
+  `CHANGED` ; `validateVersion` en fait la version suivante. Un parcours suivi dont un bloc a changé
+  n'est pas rejoué (`executions.start` → 409 `BLOCK_VERSION_CHANGED`) tant que `acceptBlocks` ne l'a
+  pas vérifié et accepté. Le format de `run:` ne change pas ; l'ancien `sdk-library.json` (origines
+  seules) est repris : version 1, historique « repris ».
+
+**Intentions** (`intents`) : l'intention que l'analyse prête à chaque action (créer, rechercher,
+ouvrir…). Confirmer, corriger (avec une raison) ou réinitialiser ajoute une décision au registre
+(`human-review.json`) ; ni l'action, ni le flow, ni le rejeu ne changent. La mémoire de connaissance
+de la mission n'apprend pas ces décisions depuis le SDK (seule la fenêtre du recorder le fait).
 
 Règles :
 
@@ -693,29 +779,32 @@ administrateur : c'est par lui qu'on crée les premiers membres.
 SDK sur `/dashboard` (`?theme=dark|auto`, `?days=1|7|30`). Le composant peut aussi être embarqué
 comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 
-| Vue              | Contenu                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Vue d'ensemble   | taux de réussite des rejeux avec numérateur, dénominateur et exclusions ; exécutions, anomalies, projets et scénarios de la période ; rejeux par jour ; alertes ; exécutions récentes                                                                                                                                                                           |
-| Projets          | cartes (état, comptes, dernière exécution), archivés sur demande                                                                                                                                                                                                                                                                                                |
-| Projet           | onglets : Lancer (rejeu dans un environnement ou exploration de la cible), Environnements (prêt ou non : règles, secrets présents sur le serveur, URL jointe sur demande ; noms des secrets seulement), Scénarios, Exécutions, Sécurité (risques toujours bloqués, écritures, domaines, chemins jamais visités) ; archivage confirmé dans la page, restauration |
-| Exécutions       | les exécutions du projet choisi dans le menu                                                                                                                                                                                                                                                                                                                    |
-| Exécution        | suivi en direct (étapes, phase du moteur, durée ; écrans et actions pour une exploration), annulation confirmée dans la page ; puis verdict, étapes, assertions vérifiées ou en échec, clés de données, anomalies, preuves, lien vers le rapport                                                                                                                |
-| Historique       | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                  |
-| Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                           |
-| Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                           |
-| Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                      |
-| Référentiel      | les éléments publiés, par type et par source ; pour l'un d'eux : provenance (source, section, page, feuille, cellule), historique des versions, liens avec leur justification et leur confiance, liens proposés à confirmer ou rejeter, lien ajouté à la main ; le menu compte les candidats en attente                                                         |
-| Traçabilité      | la matrice : règles et critères, implémentation, vérification, autres liens, chacun avec son état ; export CSV ; la corrélation automatique est dite non disponible                                                                                                                                                                                             |
-| Sources          | les connecteurs (formats, taille, limites) ; un import de fichier (.docx, .xlsx, .pdf) ou d'une page Confluence (noms des variables seulement), avec un profil ; l'historique des imports                                                                                                                                                                       |
-| Validation       | les candidats d'un lot : type, identifiant, confiance (une classe), doublon, raisons, lieu ; accepter, refuser, fusionner (un conflit d'identifiant se fusionne ou se refuse) ; publication, avec accord explicite pour une lecture partielle ; problèmes signalés ; éléments absents de la source                                                              |
-| Indicateurs      | couverture par un test, taux de réussite des rejeux, liens confirmés : chacun avec sa formule, son dénominateur, ses exclusions et ses limites ; la vérification par une preuve récente est dite non disponible ; écarts à traiter                                                                                                                              |
-| Tendances        | par semaine : taux de réussite des rejeux (sur 0 à 100 %), anomalies, durée médiane, couverture ; scénarios les plus instables ; un projet ou tous                                                                                                                                                                                                              |
-| Accès et journal | qui est connecté ; la matrice des rôles et des droits ; pour l'administration : membres (rôle de l'espace, rôle dans le projet choisi, jeton montré une fois à la création, révocation confirmée) et journal par nature d'action ; en mode nominatif, connexion par jeton personnel et déconnexion                                                              |
+| Vue              | Contenu                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vue d'ensemble   | taux de réussite des rejeux avec numérateur, dénominateur et exclusions ; exécutions, anomalies, projets et scénarios de la période ; rejeux par jour ; alertes ; exécutions récentes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Projets          | cartes (état, comptes, dernière exécution), archivés sur demande                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Projet           | onglets : Lancer (rejeu dans un environnement ou exploration de la cible), Environnements (prêt ou non : règles, secrets présents sur le serveur, URL jointe sur demande ; noms des secrets seulement), Scénarios, Exécutions, Sécurité (risques toujours bloqués, écritures, domaines, chemins jamais visités) ; archivage confirmé dans la page, restauration                                                                                                                                                                                                                                                                                                               |
+| Exécutions       | les exécutions du projet choisi dans le menu                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Exécution        | suivi en direct (étapes, phase du moteur, durée ; écrans et actions pour une exploration), annulation confirmée dans la page ; puis verdict, étapes, assertions vérifiées ou en échec, clés de données, anomalies, preuves, lien vers le rapport                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Historique       | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Enregistrements  | démarrer l'enregistrement d'un parcours (nom, chemin de départ, rejeu de validation ; un seul à la fois) ; pendant la session, la barre d'enregistrement : gestes en phrases et leur statut, pause, annulation du dernier geste, vérification posée, choix de l'élément d'une cible ambiguë, arrêt ; après l'arrêt, les phases en mots ; la liste du projet, la revue, le lien vers le Flow Studio et la promotion en scénario                                                                                                                                                                                                                                                |
+| Bibliothèque     | catalogue des blocs (version, provenance, entrées et sorties, état du contrat, utilisation ; recherche, origine, contrat, utilisation, tri) ; détails (historique, contrat, scénarios dépendants, valider une nouvelle version, déclarer le contrat) ; compositeur (ordre, d'où vient chaque entrée, vérification du serveur, création) ; ajout d'un bloc dans un panneau, avec l'aperçu de la source ; depuis Scénarios, insérer un bloc, accepter la nouvelle version d'un bloc ; depuis la revue, ajouter un groupe                                                                                                                                                        |
+| Revue            | d'un enregistrement terminé : rejeu de validation suivi étape par étape ; parcours en groupes (découpage proposé, vérifications suggérées, créer, renommer, déplacer, supprimer un groupe, cocher des étapes, monter, descendre, détacher, retirer une étape avec confirmation) ; assertions (recommandées, à décider, faibles, décidées ; une à une ou en lot) ; source de chaque saisie ; intentions (confirmer, corriger, réinitialiser) ; correction d'une cible dans le navigateur ouvert par le serveur, puis reprise du rejeu ; ligne de tableau redéfinie colonne par colonne ; restauration de la cible d'origine ; génération des tests et statut de chaque fichier |
+| Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Référentiel      | les éléments publiés, par type et par source ; pour l'un d'eux : provenance (source, section, page, feuille, cellule), historique des versions, liens avec leur justification et leur confiance, liens proposés à confirmer ou rejeter, lien ajouté à la main ; le menu compte les candidats en attente                                                                                                                                                                                                                                                                                                                                                                       |
+| Traçabilité      | la matrice : règles et critères, implémentation, vérification, autres liens, chacun avec son état ; export CSV ; la corrélation automatique est dite non disponible                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Sources          | les connecteurs (formats, taille, limites) ; un import de fichier (.docx, .xlsx, .pdf) ou d'une page Confluence (noms des variables seulement), avec un profil ; l'historique des imports                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Validation       | les candidats d'un lot : type, identifiant, confiance (une classe), doublon, raisons, lieu ; accepter, refuser, fusionner (un conflit d'identifiant se fusionne ou se refuse) ; publication, avec accord explicite pour une lecture partielle ; problèmes signalés ; éléments absents de la source                                                                                                                                                                                                                                                                                                                                                                            |
+| Indicateurs      | couverture par un test, taux de réussite des rejeux, liens confirmés : chacun avec sa formule, son dénominateur, ses exclusions et ses limites ; la vérification par une preuve récente est dite non disponible ; écarts à traiter                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Tendances        | par semaine : taux de réussite des rejeux (sur 0 à 100 %), anomalies, durée médiane, couverture ; scénarios les plus instables ; un projet ou tous                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Accès et journal | qui est connecté ; la matrice des rôles et des droits ; pour l'administration : membres (rôle de l'espace, rôle dans le projet choisi, jeton montré une fois à la création, révocation confirmée) et journal par nature d'action ; en mode nominatif, connexion par jeton personnel et déconnexion                                                                                                                                                                                                                                                                                                                                                                            |
 
 Le menu range les écrans par section et porte le projet choisi (« Tous les projets » par défaut) ; il
 dit la version de l'API et du moteur. Sous 960 px de large (requête de conteneur), il se replie
 derrière un bouton « Menu » (`aria-expanded`, Échap le referme) ; sous 600 px tout passe sur une
-colonne et les tableaux défilent dans leur cadre, sans défilement horizontal de la page. La page
+colonne et les tableaux défilent dans leur cadre, sans défilement horizontal de la page. Les contrôles font 36 px de haut avec une souris, 44 px sur écran tactile ; les listes déroulantes ont une seule apparence, qui suit le thème. La page
 `/dashboard` charge IBM Plex Sans depuis le serveur (aucune police externe).
 
 Le Dashboard n'appelle que le client du SDK : chaque règle est vérifiée par le serveur. Un bouton ne
@@ -866,6 +955,17 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/integration/sdk-dashboard-access.test.ts` : dans Chromium, en mode nominatif : jeton
   inconnu refusé, lecteur sans action, déconnexion, membre créé (jeton montré une fois), rôle de
   projet, révocation, journal ; téléphone sans défilement horizontal.
+- `tests/unit/sdk-dashboard-recordings.test.ts`, `tests/unit/sdk-dashboard-review.test.ts` et
+  `tests/integration/sdk-dashboard-recordings.test.ts` : l'écran Enregistrements et la revue. Dans
+  Chromium, une personne simulée joue le parcours avec le **vrai** recorder pendant que le Dashboard le
+  met en pause, le reprend, y pose une vérification et annule un geste ; puis la revue crée et renomme
+  un groupe, accepte une assertion, génère les tests, lance un **vrai** rejeu de validation (conforme) et
+  retire une étape ; une vraie correction de cible (rejeu jusqu'à l'étape, élément désigné à la souris,
+  validation, reprise du rejeu réussie, restauration) ; la revue des intentions ; téléphone sans
+  défilement horizontal.
+- `tests/unit/recording-workspace-review.test.ts` : retirer une étape, groupes proposés, vérification
+  de groupe, ligne redéfinie, restauration, correction appliquée et revue des intentions sur un
+  enregistrement écrit.
 - `tests/integration/sdk-dashboard.test.ts` : `/dashboard` dans Chromium avec le **vrai** moteur.
   Il couvre :
   - la vue d'ensemble ;

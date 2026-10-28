@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -239,10 +239,12 @@ export async function listScenarios(projectDir: string): Promise<ScenarioView[]>
       scenarios.push({ name: relative, file: relative, format: 'gherkin' });
       continue;
     }
-    if (!/\.ya?ml$/.test(file) || path.basename(file).startsWith('test-data')) continue;
+    if (!/\.ya?ml$/.test(file) || path.basename(file).includes('test-data')) continue;
     let parsed: unknown;
+    let text = '';
     try {
-      parsed = parseYaml(await readFile(file, 'utf8'));
+      text = await readFile(file, 'utf8');
+      parsed = parseYaml(text);
     } catch {
       continue;
     }
@@ -256,17 +258,30 @@ export async function listScenarios(projectDir: string): Promise<ScenarioView[]>
     for (const flow of flows) {
       if (typeof flow.name !== 'string') continue;
       const from = origin[relative];
+      const runs = Array.isArray(flow.steps)
+        ? (flow.steps as unknown[])
+            .map((step) => (step && typeof step === 'object' ? (step as { run?: unknown }).run : undefined))
+            .filter((run): run is string => typeof run === 'string')
+        : [];
       scenarios.push({
         name: flow.name,
         file: relative,
         format: 'yaml',
         ...(Array.isArray(flow.steps) ? { steps: flow.steps.length } : {}),
         ...(from ? { fromRecording: from } : {}),
+        ...(typeof flow.description === 'string' ? { description: flow.description } : {}),
+        ...(flow.reusable === true ? { reusable: true } : {}),
+        ...(runs.length > 0 ? { uses: runs } : {}),
+        revision: revisionOf(text),
       });
     }
   }
   return scenarios;
 }
+
+/** L'empreinte d'un fichier de scénario : une modification ne s'écrit que sur la version lue (sinon 409). */
+export const revisionOf = (text: string): string =>
+  createHash('sha256').update(text).digest('hex').slice(0, 12);
 
 const PROMOTED_FILE = 'sdk-scenarios.json';
 

@@ -1,3 +1,4 @@
+import { emptyLibraryUi } from '../../src/sdk/ui/dashboard-library.js';
 import { describe, expect, it } from 'vitest';
 import type {
   Environment,
@@ -13,6 +14,7 @@ import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
 import { environmentForm, environmentInputOf, scenarioTag } from '../../src/sdk/ui/dashboard-ops.js';
 import { activeNav, renderDashboard, type DashboardState } from '../../src/sdk/ui/dashboard-view.js';
 
+import { emptyRecordingsUi } from '../../src/sdk/ui/dashboard-recordings.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
 /**
@@ -92,6 +94,8 @@ const base = (extra: Partial<DashboardState> = {}): DashboardState => ({
   req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8 },
   signIn: false,
   access: emptyAccessUi(),
+  recs: emptyRecordingsUi(),
+  lib: emptyLibraryUi(),
   project,
   executions,
   ...extra,

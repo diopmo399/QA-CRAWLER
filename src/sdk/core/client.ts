@@ -16,7 +16,22 @@ import type {
   GenerationResult,
   GraphView,
   GroupCommandInput,
+  ComposeScenarioInput,
+  CorrectionView,
+  CompositionCheck,
+  CompositionDrift,
+  DeclaredContract,
+  LibraryAddInput,
+  LibraryBlockView,
+  LibrarySourcePreview,
+  GroupCheckView,
   GroupEditResult,
+  IntentDecisionInput,
+  IntentReviewView,
+  RowColumnInput,
+  RowSourceView,
+  GroupProposalView,
+  RecordingReplayView,
   GroupViewDto,
   Project,
   ProjectDraft,
@@ -184,6 +199,40 @@ export interface QaCrawlerClient {
     promote(projectId: string, recording: string): Promise<ScenarioView>;
     /** La stabilité des scénarios : leurs statuts dans les derniers runs (10 par défaut, 50 au plus). */
     history(projectId: string, options?: { limit?: number }): Promise<ScenarioHistoryView[]>;
+    /** Un nouveau scénario fait de blocs de la bibliothèque, rejoués dans l'ordre par `run:` (vérifié d'abord). */
+    compose(projectId: string, input: ComposeScenarioInput): Promise<ScenarioView>;
+    /** Vérifie un parcours sans rien écrire ni exécuter : ordre, dépendances, données, erreurs. */
+    checkComposition(projectId: string, input: ComposeScenarioInput): Promise<CompositionCheck>;
+    /**
+     * Insère un bloc de la bibliothèque au début ou à la fin d'un scénario (ses données suivent).
+     * Avec `revision` (celle de ScenarioView), refusé (409) si le scénario a changé depuis sa lecture.
+     */
+    insert(
+      projectId: string,
+      scenario: string,
+      input: { block: string; at: 'start' | 'end'; revision?: string },
+    ): Promise<ScenarioView>;
+    /** Accepte la version actuelle des blocs d'un parcours suivi, après l'avoir vérifié de nouveau. */
+    acceptBlocks(projectId: string, scenario: string): Promise<CompositionCheck>;
+  };
+  /** La bibliothèque : des blocs réutilisables (`reusable: true`), rejoués par d'autres scénarios. */
+  library: {
+    list(projectId: string): Promise<LibraryBlockView[]>;
+    add(projectId: string, input: LibraryAddInput): Promise<LibraryBlockView>;
+    /** Retire un bloc (refusé tant qu'un scénario le rejoue ; `details` nomme ces scénarios). */
+    remove(projectId: string, name: string): Promise<{ removed: string }>;
+    /** Ce qu'un scénario deviendrait en bloc (étapes, données sans valeur, contrat dérivé). */
+    preview(projectId: string, scenario: string): Promise<LibrarySourcePreview>;
+    /** Déclare le contrat d'un bloc (null : de nouveau dérivé de son contenu). */
+    declareContract(
+      projectId: string,
+      name: string,
+      contract: DeclaredContract | null,
+    ): Promise<LibraryBlockView>;
+    /** Valide le contenu modifié d'un bloc : il devient sa version suivante. */
+    validateVersion(projectId: string, name: string): Promise<LibraryBlockView>;
+    /** Les parcours suivis dont un bloc a changé depuis leur composition. */
+    drift(projectId: string): Promise<CompositionDrift[]>;
   };
   /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
   executions: {
@@ -267,6 +316,16 @@ export interface QaCrawlerClient {
     get(projectId: string, name: string): Promise<RecordingSnapshot>;
     /** Arrête la session en cours (comme le bouton de la barre d'enregistrement). */
     stop(projectId: string, name: string): Promise<RecordingSnapshot>;
+    /** Met la session en pause (les gestes ne sont plus enregistrés) ; `resume` la reprend. */
+    pause(projectId: string, name: string): Promise<RecordingSnapshot>;
+    resume(projectId: string, name: string): Promise<RecordingSnapshot>;
+    /** Retire le dernier geste de l'enregistrement (l'application n'est pas remise en arrière). */
+    undo(projectId: string, name: string): Promise<RecordingSnapshot>;
+    /** Pose un point de contrôle « vérifier ici » sur l'écran courant. */
+    checkpoint(projectId: string, name: string, label?: string): Promise<RecordingSnapshot>;
+    /** Cible ambiguë : confirme l'élément voulu parmi ceux qui correspondent, ou laisse l'ambiguïté. */
+    resolve(projectId: string, name: string, actionId: string, candidate: number): Promise<RecordingSnapshot>;
+    ignore(projectId: string, name: string, actionId: string): Promise<RecordingSnapshot>;
     subscribe(
       projectId: string,
       name: string,
@@ -276,6 +335,40 @@ export interface QaCrawlerClient {
     flow(projectId: string, name: string): Promise<FlowView>;
     /** Le Flow Studio : étapes, données produites et citées, dépendances, groupes, dernier rejeu. */
     studio(projectId: string, name: string): Promise<FlowStudioView>;
+    /** Retire une étape d'action (et ses vérifications) du flow ; rend la vue à jour. */
+    removeStep(projectId: string, name: string, stepId: string): Promise<FlowStudioView>;
+    /** Le rejeu de validation : le lancer (dry run, sans fenêtre), puis le suivre. */
+    replay(projectId: string, name: string): Promise<RecordingReplayView>;
+    replayStatus(projectId: string, name: string): Promise<RecordingReplayView>;
+    /** La revue des intentions : chaque action, son intention et sa provenance ; corriger, confirmer, réinitialiser. */
+    intents(projectId: string, name: string): Promise<IntentReviewView>;
+    reviewIntent(projectId: string, name: string, input: IntentDecisionInput): Promise<IntentReviewView>;
+    /** La ligne visée par une étape (cellules enregistrées) ; la redéfinir colonne par colonne, sans navigateur. */
+    rowSource(projectId: string, name: string, stepId: string): Promise<RowSourceView>;
+    editRow(
+      projectId: string,
+      name: string,
+      stepId: string,
+      columns: RowColumnInput[],
+    ): Promise<FlowStudioView>;
+    /** « Restaurer l'original » : la cible redevient celle de l'enregistrement. */
+    restoreTarget(projectId: string, name: string, stepId: string): Promise<FlowStudioView>;
+  };
+  /**
+   * La correction d'une cible : le serveur rejoue jusqu'à l'étape dans un navigateur ouvert sur sa
+   * machine ; l'humain y désigne l'élément ; la cible n'est remplacée qu'à `apply`. Une à la fois.
+   */
+  corrections: {
+    start(projectId: string, recording: string, stepId: string): Promise<CorrectionView>;
+    get(projectId: string, recording: string): Promise<CorrectionView>;
+    pick(projectId: string, recording: string): Promise<CorrectionView>;
+    apply(
+      projectId: string,
+      recording: string,
+      choice?: { option?: string; binding?: { column: string; key: string } },
+    ): Promise<CorrectionView>;
+    resume(projectId: string, recording: string): Promise<CorrectionView>;
+    close(projectId: string, recording: string): Promise<{ closed: true }>;
   };
   /** Les propositions d'assertions d'un enregistrement et les décisions humaines. */
   assertions: {
@@ -302,6 +395,16 @@ export interface QaCrawlerClient {
       command: GroupCommandInput,
       options?: { force?: boolean },
     ): Promise<GroupEditResult>;
+    /** Les groupes proposés d'après les étapes métier ; `acceptProposals` les crée tous d'un coup. */
+    proposals(projectId: string, recording: string): Promise<GroupProposalView[]>;
+    acceptProposals(projectId: string, recording: string): Promise<GroupEditResult>;
+    /** Les vérifications suggérées par groupe ; `addCheck` en ajoute une (proposition acceptée). */
+    checks(projectId: string, recording: string): Promise<GroupCheckView[]>;
+    addCheck(
+      projectId: string,
+      recording: string,
+      input: { groupId: string; key: string },
+    ): Promise<AssertionProposalView[]>;
   };
   /** Les tests générés depuis un enregistrement (YAML, Gherkin, Playwright TypeScript, Java). */
   generation: {
@@ -540,6 +643,26 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           'GET',
           `${project(projectId)}/scenarios/history${historyOptions.limit ? `?limit=${String(historyOptions.limit)}` : ''}`,
         ),
+      compose: (projectId, input) => request('POST', `${project(projectId)}/scenarios/compose`, input),
+      checkComposition: (projectId, input) =>
+        request('POST', `${project(projectId)}/scenarios/compose/check`, input),
+      insert: (projectId, scenario, input) =>
+        request('POST', `${project(projectId)}/scenarios/${encodeURIComponent(scenario)}/insert`, input),
+      acceptBlocks: (projectId, scenario) =>
+        request('POST', `${project(projectId)}/scenarios/${encodeURIComponent(scenario)}/accept`, {}),
+    },
+    library: {
+      list: (projectId) => request('GET', `${project(projectId)}/library`),
+      add: (projectId, input) => request('POST', `${project(projectId)}/library`, input),
+      remove: (projectId, name) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/remove`, {}),
+      preview: (projectId, scenario) =>
+        request('GET', `${project(projectId)}/library/preview?scenario=${encodeURIComponent(scenario)}`),
+      declareContract: (projectId, name, contract) =>
+        request('PUT', `${project(projectId)}/library/${encodeURIComponent(name)}/contract`, { contract }),
+      validateVersion: (projectId, name) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/version`, {}),
+      drift: (projectId) => request('GET', `${project(projectId)}/library/drift`),
     },
     executions: {
       start: (projectId, input = {}) => request('POST', `${project(projectId)}/executions`, input),
@@ -655,6 +778,15 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       list: (projectId) => request('GET', `${project(projectId)}/recordings`),
       get: (projectId, name) => request('GET', recording(projectId, name)),
       stop: (projectId, name) => request('POST', `${recording(projectId, name)}/stop`, {}),
+      pause: (projectId, name) => request('POST', `${recording(projectId, name)}/pause`, {}),
+      resume: (projectId, name) => request('POST', `${recording(projectId, name)}/resume`, {}),
+      undo: (projectId, name) => request('POST', `${recording(projectId, name)}/undo`, {}),
+      checkpoint: (projectId, name, label) =>
+        request('POST', `${recording(projectId, name)}/checkpoint`, label ? { label } : {}),
+      resolve: (projectId, name, actionId, candidate) =>
+        request('POST', `${recording(projectId, name)}/resolve`, { actionId, candidate }),
+      ignore: (projectId, name, actionId) =>
+        request('POST', `${recording(projectId, name)}/ignore`, { actionId }),
       subscribe: (projectId, name, onEvent, subscribeOptions) =>
         stream(
           `${recording(projectId, name)}/events`,
@@ -665,6 +797,29 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         ),
       flow: (projectId, name) => request('GET', `${recording(projectId, name)}/flow`),
       studio: (projectId, name) => request('GET', `${recording(projectId, name)}/studio`),
+      removeStep: (projectId, name, stepId) =>
+        request('POST', `${recording(projectId, name)}/steps/remove`, { stepId }),
+      replay: (projectId, name) => request('POST', `${recording(projectId, name)}/replay`, {}),
+      replayStatus: (projectId, name) => request('GET', `${recording(projectId, name)}/replay`),
+      intents: (projectId, name) => request('GET', `${recording(projectId, name)}/intents`),
+      reviewIntent: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/intents`, input),
+      rowSource: (projectId, name, stepId) =>
+        request('GET', `${recording(projectId, name)}/steps/row?stepId=${encodeURIComponent(stepId)}`),
+      editRow: (projectId, name, stepId, columns) =>
+        request('POST', `${recording(projectId, name)}/steps/row`, { stepId, columns }),
+      restoreTarget: (projectId, name, stepId) =>
+        request('POST', `${recording(projectId, name)}/steps/restore`, { stepId }),
+    },
+    corrections: {
+      start: (projectId, name, stepId) =>
+        request('POST', `${recording(projectId, name)}/correction`, { stepId }),
+      get: (projectId, name) => request('GET', `${recording(projectId, name)}/correction`),
+      pick: (projectId, name) => request('POST', `${recording(projectId, name)}/correction/pick`, {}),
+      apply: (projectId, name, choice = {}) =>
+        request('POST', `${recording(projectId, name)}/correction/apply`, choice),
+      resume: (projectId, name) => request('POST', `${recording(projectId, name)}/correction/resume`, {}),
+      close: (projectId, name) => request('POST', `${recording(projectId, name)}/correction/close`, {}),
     },
     assertions: {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/assertions`),
@@ -679,6 +834,12 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/groups`),
       edit: (projectId, name, command, editOptions = {}) =>
         request('POST', `${recording(projectId, name)}/groups`, { command, ...editOptions }),
+      proposals: (projectId, name) => request('GET', `${recording(projectId, name)}/groups/proposals`),
+      acceptProposals: (projectId, name) =>
+        request('POST', `${recording(projectId, name)}/groups/proposals`, {}),
+      checks: (projectId, name) => request('GET', `${recording(projectId, name)}/groups/checks`),
+      addCheck: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/groups/checks`, input),
     },
     generation: {
       run: (projectId, name, input) => request('POST', `${recording(projectId, name)}/generation`, input),

@@ -366,11 +366,44 @@ export interface RecordingSnapshot {
   error?: string;
 }
 
+/**
+ * UN GESTE ENREGISTRÉ, en direct : sa phrase (« Cliquer sur "Valider" »), la page, son statut de
+ * validation dit en mots simples, et, quand la cible est ambiguë, les éléments qui correspondent. Jamais
+ * une valeur saisie : une saisie se dit « Saisir dans "Titre" ».
+ */
+export interface LiveStepView {
+  id: string;
+  index: number;
+  kind: string;
+  description: string;
+  detail?: string;
+  page: string;
+  /** PENDING, CONFIRMED, AMBIGUOUS, FAILED, UNVERIFIED… */
+  status: string;
+  statusText: string;
+  candidates?: { index: number; label: string; original: boolean }[];
+  resolution?: 'RESOLVED' | 'IGNORED' | 'CORRECTED';
+}
+
+/** La timeline en direct d'un enregistrement : les gestes, la pause, les vérifications posées. */
+export interface LiveTimelineView {
+  paused: boolean;
+  steps: LiveStepView[];
+  checkpoints: string[];
+}
+
+/** Les commandes d'un enregistrement en cours (les boutons de la barre d'enregistrement). */
+export const RECORDING_CONTROLS = ['pause', 'resume', 'undo', 'checkpoint', 'resolve', 'ignore'] as const;
+export type RecordingControl = (typeof RECORDING_CONTROLS)[number];
+
 /** Ce que le moteur signale pendant un enregistrement (événements du recorder, phases après l'arrêt). */
 export type RecordingStreamEvent = { seq: number; at: string } & (
   | { type: 'status'; status: RecordingStatus }
   | { type: 'recorder'; event: string; message: string }
-  | { type: 'phase'; phase: string }
+  /** Après l'arrêt : la phase en cours, son rang (1…total) et le détail du moment. */
+  | { type: 'phase'; phase: string; step?: number; total?: number; detail?: string }
+  /** Seul le dernier état est gardé : un abonné qui arrive le reçoit, jamais tout l'historique. */
+  | ({ type: 'timeline' } & LiveTimelineView)
   | { type: 'completed'; summary: RecordingSummary }
   | { type: 'failed'; error: string }
 );
@@ -495,6 +528,12 @@ export interface StudioStep {
   produces: string[];
   /** Absent : l'étape n'a pas été rejouée (aucun rejeu, ou étape ajoutée depuis). */
   replay?: { outcome: StepReplayOutcome; reasons: string[] };
+  /** L'étape vise un élément : sa cible peut être corrigée. */
+  targeted?: boolean;
+  /** La cible a été corrigée par un humain (l'original se restaure). */
+  corrected?: boolean;
+  /** La cible est une ligne de tableau dont les cellules ont été enregistrées (la ligne se redéfinit). */
+  row?: boolean;
 }
 
 /** Une donnée produite par une étape et citée par une autre. */
@@ -615,6 +654,132 @@ export type GroupCommandInput =
 export interface GroupEditResult {
   groups: GroupViewDto[];
   warnings: string[];
+}
+
+/** Un découpage proposé d'après les étapes métier reconnues : jamais créé sans décision humaine. */
+export interface GroupProposalView {
+  name: string;
+  stepIds: string[];
+  /** Numéros (1…n) de la première et de la dernière action. */
+  from: number;
+  to: number;
+  action: string;
+  confidence: number;
+}
+
+/** Une vérification suggérée : la donnée reçue d'un autre groupe est visible à la fin de celui-ci. */
+export interface GroupCheckView {
+  groupId: string;
+  groupName: string;
+  key: string;
+  afterStepId: string;
+}
+
+/** Le rejeu de validation d'un enregistrement écrit (dry run, mémoire isolée), lancé depuis le SDK. */
+export interface RecordingReplayView {
+  status: 'NONE' | 'RUNNING' | 'REPLAY_CONFIRMED' | 'REPLAY_FAILED';
+  executed?: number;
+  total?: number;
+  /** Le statut du dry run (FULLY_MATCHED…). */
+  dryRunStatus?: string;
+  reason?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  /** Le dernier rejeu écrit sur disque ; stale : le flow a changé depuis. */
+  last?: { status: string; at: string; stale: boolean };
+}
+
+/** L'intention d'une action enregistrée (créer, rechercher, ouvrir…) : automatique, puis revue par un humain. */
+export interface IntentRowView {
+  actionId: string;
+  kind: string;
+  label: string;
+  /** L'intention finale : la décision humaine en vigueur, sinon l'interprétation automatique. */
+  intent: string;
+  /** INFERRED, HUMAN_CORRECTED, HUMAN_CONFIRMED. */
+  status: string;
+  source: 'HUMAN' | 'SYSTEM';
+  confidence?: number;
+  original?: string;
+  reason?: string;
+}
+
+export interface IntentReviewView {
+  /** Les intentions qu'un humain peut choisir. */
+  choices: string[];
+  rows: IntentRowView[];
+}
+
+export interface IntentDecisionInput {
+  actionId: string;
+  type: 'CORRECT' | 'CONFIRM' | 'RESET';
+  intent?: string;
+  reason?: string;
+}
+
+/** La ligne de tableau visée par une étape : sa cible, ses cellules enregistrées, les données citables. */
+export interface RowSourceView {
+  target: string;
+  cells: { column: string; value: string }[];
+  /** Les données du jeu de test citables avant l'étape (jamais une donnée sensible). */
+  variables: { key: string; value: string }[];
+}
+
+/** Une colonne de la ligne et la source de sa valeur au rejeu. */
+export interface RowColumnInput {
+  column: string;
+  source: 'recorded' | 'value' | 'variable' | 'new-variable';
+  value?: string;
+  key?: string;
+  match?: 'exact' | 'contains';
+}
+
+/**
+ * UNE SESSION DE CORRECTION DE CIBLE : le serveur rejoue les étapes précédentes dans un navigateur
+ * ouvert sur sa machine, la page reste tenue devant l'étape, l'humain y désigne l'élément voulu.
+ */
+export interface CorrectionView {
+  stepId: string;
+  label: string;
+  /**
+   * REPLAYING (étapes précédentes), PICKING (désigner l'élément), HELD (page tenue, rien désigné),
+   * PICKED (proposition à valider), APPLIED (cible remplacée), RESUMING, RESUMED, UNREACHABLE (le
+   * chemin s'est arrêté avant l'étape), FAILED.
+   */
+  status: string;
+  executed: number;
+  total: number;
+  stoppedAt?: { index: number; label: string; reason: string };
+  proposal?: {
+    label: string;
+    current: string;
+    next: string;
+    order: string[];
+    ambiguous: boolean;
+    traits: {
+      role: string;
+      name?: string;
+      label?: string;
+      text?: string;
+      testId?: string;
+      tag: string;
+      section?: string;
+    };
+    rowOptions?: { id: string; row: Record<string, string>; via?: string; match?: string; fixed?: boolean }[];
+    rowCells?: { column: string; value: string }[];
+    /** Les données du run auxquelles une colonne peut être liée (leurs clés). */
+    variables?: string[];
+  };
+  applied?: { previous: string; next: string };
+  /** La reprise du rejeu à l'étape corrigée (même session, mêmes données). */
+  resumable?: boolean;
+  resume?: {
+    status: 'PASSED' | 'FAILED' | 'MANUAL_RECOVERY';
+    from: number;
+    strategy: string;
+    reasons: string[];
+  };
+  error?: string;
 }
 
 export const GENERATION_FORMATS = ['yaml', 'gherkin', 'playwright', 'java'] as const;
@@ -948,6 +1113,139 @@ export interface ScenarioView {
   steps?: number;
   /** L'enregistrement d'où il vient, quand le SDK l'a promu. */
   fromRecording?: string;
+  description?: string;
+  /** Un bloc de la bibliothèque : jamais exécuté seul, rejoué par d'autres scénarios (`run:`). */
+  reusable?: boolean;
+  /** Les blocs (ou scénarios) que ce scénario rejoue par `run:`, dans l'ordre. */
+  uses?: string[];
+  /** L'empreinte du fichier : une modification ne s'écrit que sur la version lue (sinon 409). */
+  revision?: string;
+}
+
+/** VALID : contenu identique à sa version, contrat tenu ; CHANGED : fichier modifié depuis ; INVALID : contrat contredit. */
+export type BlockState = 'VALID' | 'CHANGED' | 'INVALID';
+
+/** Le contrat déclaré d'un bloc (persisté avec lui, versionné). */
+export interface DeclaredContract {
+  inputs: { key: string; required: boolean }[];
+  outputs: string[];
+  preconditions: string[];
+  postconditions: string[];
+}
+
+/** Le contrat effectif : déclaré, ou dérivé de ce que le bloc saisit et cite. */
+export interface BlockContract {
+  source: 'DECLARED' | 'DERIVED';
+  inputs: { key: string; required: boolean }[];
+  /** Les données que le bloc saisit à partir de son propre jeu ; dynamic : résolue au rejeu. */
+  outputs: { key: string; dynamic: boolean }[];
+  preconditions: string[];
+  postconditions: string[];
+}
+
+/**
+ * UN BLOC DE LA BIBLIOTHÈQUE : un parcours réutilisable (`reusable: true`), rejoué par d'autres
+ * scénarios avec une étape `run: <nom>`. Ses données de test suivent quand on l'insère.
+ */
+export interface LibraryBlockView {
+  /** Identifiant stable (ne change pas avec les versions). */
+  id: string;
+  name: string;
+  /** Le fichier, relatif au dossier des flows. */
+  file: string;
+  steps: number;
+  startAt?: string;
+  description?: string;
+  /** D'où il vient : un scénario, ou un groupe d'un enregistrement. */
+  origin?: { kind: 'scenario' | 'recording'; name: string; group?: string };
+  /** La version validée, son empreinte (contenu exécutable) et ses dates. */
+  version: number;
+  hash: string;
+  createdAt?: string;
+  updatedAt?: string;
+  /** Les changements pertinents, du plus ancien au plus récent. */
+  history: { version: number; at?: string; change: string }[];
+  state: BlockState;
+  /** Ce qui rend le bloc INVALID ou CHANGED, en mots. */
+  problems: string[];
+  contract: BlockContract;
+  /** Les données que le bloc définit (jamais leur valeur) ; dynamic : résolue au rejeu. */
+  data: { key: string; dynamic: boolean }[];
+  /** Les assertions métier déclarées dans le flow (vérifiées au rejeu, jamais supposées). */
+  assertions: number;
+  /** Les données qu'il saisit ({ testData: clé }) et celles qu'il cite (${testData:clé}). */
+  inputs: string[];
+  citations: string[];
+  /** Les scénarios qui le rejouent ; pour les parcours suivis, la version qu'ils référencent. */
+  usedBy: string[];
+  pinnedBy: { scenario: string; version: number; current: boolean }[];
+}
+
+export type LibraryAddInput =
+  | { from: 'scenario'; scenario: string; name: string; description?: string }
+  | { from: 'recording'; recording: string; groupId: string; name: string; description?: string };
+
+/** Ce qu'un scénario deviendrait en bloc, avant de l'ajouter (aucune valeur de donnée). */
+export interface LibrarySourcePreview {
+  scenario: string;
+  file: string;
+  steps: number;
+  startAt?: string;
+  description?: string;
+  fromRecording?: string;
+  data: { key: string; dynamic: boolean }[];
+  contract: BlockContract;
+  reusable: boolean;
+}
+
+/** Un nouveau scénario fait de blocs de la bibliothèque, rejoués dans l'ordre. */
+export interface ComposeScenarioInput {
+  name: string;
+  parts: string[];
+  description?: string;
+}
+
+/** Un bloc dans la vérification d'un parcours. */
+export interface CompositionCheckBlock {
+  position: number;
+  block: string;
+  version?: number;
+  state?: BlockState;
+  steps: number;
+  inputs: { key: string; required: boolean }[];
+  outputs: { key: string; dynamic: boolean }[];
+  /** D'où vient chaque entrée : un bloc précédent (#n), le jeu de données, ou le scénario qui reçoit le bloc. */
+  satisfied: { key: string; from: number | 'data' | 'scenario' }[];
+  missing: string[];
+}
+
+/** LA VÉRIFICATION D'UN PARCOURS (dry run de composition : rien n'est exécuté dans le navigateur). */
+export interface CompositionCheck {
+  ok: boolean;
+  name: string;
+  blocks: number;
+  steps: number;
+  order: CompositionCheckBlock[];
+  /** Une sortie d'un bloc consommée par un bloc suivant. */
+  dependencies: { key: string; from: number; to: number }[];
+  missing: { key: string; block: string; position: number }[];
+  conflicts: { key: string; blocks: string[]; detail: string }[];
+  /** Une donnée définie à l'identique par plusieurs blocs. */
+  shared: { key: string; blocks: string[] }[];
+  /** Les données résolues au rejeu (générées, modèles, références, secrets). */
+  dynamic: string[];
+  errors: string[];
+  warnings: string[];
+}
+
+/** Un parcours suivi dont un bloc a changé depuis sa composition. */
+export interface CompositionDrift {
+  scenario: string;
+  block: string;
+  pinned: number;
+  current: number;
+  /** Le fichier du bloc a changé sans qu'une nouvelle version soit validée. */
+  unvalidated: boolean;
 }
 
 /** Le statut du flow d'un scénario dans un run. */

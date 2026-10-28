@@ -1,8 +1,22 @@
-import { createQaCrawler, type QaCrawlerClient, type Subscription } from '../core/client.js';
+import { createQaCrawler, QaCrawlerError, type QaCrawlerClient, type Subscription } from '../core/client.js';
 import { DASHBOARD_EVENTS, type Environment, type Role } from '../core/contracts.js';
 import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
+import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashboard-recordings.js';
+import { compositionKey, emptyLibraryUi, runnableScenarios, type LibraryUi } from './dashboard-library.js';
+import {
+  assertionBuckets,
+  bindFormOf,
+  correctionWaiting,
+  emptyReviewUi,
+  REVIEW_TABS,
+  rowColumnsOf,
+  type RowChoice,
+  type BindForm,
+  type ReviewTab,
+  type ReviewUi,
+} from './dashboard-review.js';
 import { environmentForm, environmentInputOf } from './dashboard-ops.js';
 import {
   connectorOfFile,
@@ -43,6 +57,8 @@ const Base: typeof HTMLElement =
   'HTMLElement' in globalThis ? globalThis.HTMLElement : (Object as unknown as typeof HTMLElement);
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+/** Les raisons détaillées d'un refus du serveur (une par ligne). */
+const detailsOf = (error: unknown): string[] => (error instanceof QaCrawlerError ? error.details : []);
 
 /** Le formulaire ouvert : l'identifiant de l'environnement, ou « new » pour une création. */
 const formKey = (form: EnvironmentForm | undefined): string | undefined =>
@@ -66,6 +82,10 @@ export class QaCrawlerDashboard extends Base {
   private tokenValue?: string;
   private connected = false;
   private subscription?: Subscription;
+  /** Le suivi en direct d'un enregistrement (indépendant de celui d'une exécution). */
+  private recSubscription?: Subscription;
+  private replayTimer?: ReturnType<typeof setTimeout>;
+  private correctionTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
   private generation = 0;
   /** Le fichier choisi pour un import (jamais dans l'état rendu). */
@@ -90,6 +110,8 @@ export class QaCrawlerDashboard extends Base {
       req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8 },
       signIn: false,
       access: emptyAccessUi(),
+      recs: emptyRecordingsUi(),
+      lib: emptyLibraryUi(),
     };
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
@@ -103,6 +125,9 @@ export class QaCrawlerDashboard extends Base {
       if (form === 'launch') void this.launch();
       if (form === 'sign-in')
         this.signInWith(this.root.querySelector<HTMLInputElement>('[data-bind="token"]')?.value ?? '');
+      if (form === 'rec-checkpoint') void this.recordingControl('checkpoint');
+      if (form?.startsWith('review-')) this.reviewSubmit(event.target as HTMLFormElement);
+      if (form?.startsWith('lib-')) this.librarySubmit(event.target as HTMLFormElement);
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
@@ -110,6 +135,44 @@ export class QaCrawlerDashboard extends Base {
       const reqField = target.dataset.req as keyof ImportForm | undefined;
       if (reqField && reqField !== 'source' && target.type !== 'file') {
         (this.state.req.form as unknown as Record<string, string>)[reqField] = target.value;
+        return;
+      }
+      const recField = target.dataset.rec;
+      if ((recField === 'name' || recField === 'startPath') && target.type !== 'checkbox') {
+        this.state.recs.form[recField] = target.value;
+        return;
+      }
+      if (recField === 'checkpoint' && this.state.recs.live) {
+        this.state.recs.live.checkpointLabel = target.value;
+        return;
+      }
+      if (target.dataset.lib) {
+        this.libraryField(target.dataset.lib, target.value);
+        return;
+      }
+      const review = this.state.review;
+      const reviewField = target.dataset.review;
+      if (review && reviewField) {
+        if (reviewField === 'newGroup') review.newGroup = target.value;
+        else if (reviewField === 'rename' && review.renaming) review.renaming.name = target.value;
+        else if (reviewField === 'modify' && review.editing) review.editing.description = target.value;
+        return;
+      }
+      if (
+        review &&
+        target.dataset.rowColumn &&
+        (target.dataset.rowField === 'value' || target.dataset.rowField === 'key')
+      ) {
+        this.rowChoice(target.dataset.rowColumn)[target.dataset.rowField] = target.value;
+        return;
+      }
+      if (review?.intentEdit && target.dataset.intentField === 'reason') {
+        review.intentEdit.reason = target.value;
+        return;
+      }
+      if (review && target.dataset.bindStep && target.type !== 'radio') {
+        this.bindForm(target.dataset.bindStep)[target.dataset.bindField as 'value' | 'variable'] =
+          target.value;
         return;
       }
       if (target.dataset.memberField === 'name') {
@@ -126,6 +189,10 @@ export class QaCrawlerDashboard extends Base {
       (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
     });
     this.root.addEventListener('keydown', (event) => {
+      if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
+        this.closePanel();
+        return;
+      }
       if ((event as KeyboardEvent).key === 'Escape' && this.state.menuOpen) {
         this.state.menuOpen = false;
         this.paint();
@@ -159,6 +226,7 @@ export class QaCrawlerDashboard extends Base {
   connectedCallback(): void {
     this.connected = true;
     this.state.signIn = this.hasAttribute('sign-in');
+    this.state.studioUrl = this.studioUrl();
     const days = Number(this.getAttribute('days'));
     if ((PERIODS as readonly number[]).includes(days)) this.state.days = days;
     void this.load();
@@ -167,6 +235,11 @@ export class QaCrawlerDashboard extends Base {
   disconnectedCallback(): void {
     this.connected = false;
     this.unsubscribe();
+    this.unfollowRecording();
+    if (this.replayTimer) clearTimeout(this.replayTimer);
+    this.replayTimer = undefined;
+    if (this.correctionTimer) clearTimeout(this.correctionTimer);
+    this.correctionTimer = undefined;
     this.ownClient?.dispose();
     this.ownClient = undefined;
   }
@@ -187,7 +260,10 @@ export class QaCrawlerDashboard extends Base {
       const days = Number(next);
       if ((PERIODS as readonly number[]).includes(days)) this.state.days = days;
     }
-    if (name === 'endpoint') this.resetClient();
+    if (name === 'endpoint') {
+      this.resetClient();
+      this.state.studioUrl = this.studioUrl();
+    }
     if (this.connected) void this.load();
   }
 
@@ -201,8 +277,24 @@ export class QaCrawlerDashboard extends Base {
     return this.ownClient;
   }
 
+  /** Le Flow Studio est servi par le même serveur que l'API (`…/api` → `…/studio`). */
+  private studioUrl(): string {
+    const endpoint = this.getAttribute('endpoint') ?? '/api';
+    try {
+      const url = new URL(
+        endpoint,
+        'location' in globalThis ? globalThis.location.href : 'http://localhost/',
+      );
+      url.pathname = url.pathname.replace(/\/api\/?$/, '') + '/studio';
+      return endpoint.startsWith('/') ? url.pathname : url.toString().replace(/[?#].*$/, '');
+    } catch {
+      return '/studio';
+    }
+  }
+
   private resetClient(): void {
     this.unsubscribe();
+    this.unfollowRecording();
     this.ownClient?.dispose();
     this.ownClient = undefined;
   }
@@ -212,12 +304,923 @@ export class QaCrawlerDashboard extends Base {
     this.subscription = undefined;
   }
 
+  private unfollowRecording(): void {
+    this.recSubscription?.close();
+    this.recSubscription = undefined;
+  }
+
+  /**
+   * Suivre une session d'enregistrement : ses gestes (la timeline), les moments qui comptent, les
+   * phases du traitement, sa fin (puis la liste est relue). Le statut suit aussi la ligne de la liste.
+   */
+  private followRecording(api: QaCrawlerClient, projectId: string, name: string, status: string): void {
+    this.unfollowRecording();
+    const live: LiveRecording = newLiveRecording(name, status);
+    this.state.recs.live = live;
+    const notes = this.state.t.rec.notes;
+    this.recSubscription = api.recordings.subscribe(projectId, name, (event) => {
+      if (this.state.recs.live !== live) return;
+      if (event.type === 'status') {
+        live.status = event.status;
+        const row = this.state.recordings?.find((recording) => recording.name === name);
+        if (row) row.status = event.status;
+      } else if (event.type === 'timeline') {
+        const { seq: _seq, at: _at, type: _type, ...view } = event;
+        live.timeline = view;
+      } else if (event.type === 'recorder') {
+        live.technical.push({ at: event.at, text: event.message });
+        if (live.technical.length > 200) live.technical.splice(0, live.technical.length - 200);
+        const note = notes[event.event];
+        if (note) live.notes.push({ at: event.at, text: note });
+      } else if (event.type === 'phase') {
+        const last = live.phases.at(-1);
+        const phase = {
+          label: event.phase,
+          ...(event.step !== undefined ? { step: event.step } : {}),
+          ...(event.total !== undefined ? { total: event.total } : {}),
+          ...(event.detail ? { detail: event.detail } : {}),
+        };
+        if (last?.label === event.phase) live.phases[live.phases.length - 1] = phase;
+        else live.phases.push(phase);
+      } else if (event.type === 'failed') live.technical.push({ at: event.at, text: event.error });
+      if (event.type === 'completed' || event.type === 'failed') {
+        live.status = event.type === 'completed' ? 'COMPLETED' : 'FAILED';
+        this.unfollowRecording();
+        this.state.recs.live = undefined;
+        if (event.type === 'failed') this.state.recs.error = event.error;
+        void this.load();
+        return;
+      }
+      if (this.state.route.view === 'recordings') this.paint();
+    });
+  }
+
+  /** Une commande de la barre d'enregistrement : le serveur la transmet au recorder, la timeline suit. */
+  private async recordingControl(
+    control: string,
+    target?: { stepId?: string; candidate?: number },
+  ): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const live = this.state.recs.live;
+    if (!api || !project || !live || live.control) return;
+    live.control = control;
+    live.error = undefined;
+    this.paint();
+    try {
+      const name = live.name;
+      if (control === 'pause') await api.recordings.pause(project.id, name);
+      else if (control === 'resume') await api.recordings.resume(project.id, name);
+      else if (control === 'undo') await api.recordings.undo(project.id, name);
+      else if (control === 'checkpoint') {
+        await api.recordings.checkpoint(project.id, name, live.checkpointLabel.trim() || undefined);
+        live.checkpointLabel = '';
+      } else if (control === 'resolve' && target?.stepId && target.candidate !== undefined)
+        await api.recordings.resolve(project.id, name, target.stepId, target.candidate);
+      else if (control === 'ignore' && target?.stepId)
+        await api.recordings.ignore(project.id, name, target.stepId);
+    } catch (error) {
+      live.error = message(error);
+    }
+    live.control = undefined;
+    if (this.state.recs.live === live) this.paint();
+  }
+
+  /** La revue : le flow (vue du Studio), les assertions, les données, les propositions, le rejeu. */
+  private async loadReview(
+    api: QaCrawlerClient,
+    projectId: string,
+    name: string,
+    generation = this.generation,
+  ): Promise<void> {
+    const [studio, assertions, data, groupProposals, checks, replay, intents, correction] = await Promise.all(
+      [
+        api.recordings.studio(projectId, name),
+        api.assertions.list(projectId, name),
+        api.data.get(projectId, name).catch(() => undefined),
+        api.groups.proposals(projectId, name).catch(() => []),
+        api.groups.checks(projectId, name).catch(() => []),
+        api.recordings.replayStatus(projectId, name).catch(() => undefined),
+        api.recordings.intents(projectId, name).catch(() => undefined),
+        api.corrections.get(projectId, name).catch(() => undefined),
+      ],
+    );
+    const review = this.state.review;
+    if (generation !== this.generation || review?.name !== name) return;
+    review.studio = studio;
+    review.assertions = assertions;
+    review.data = data;
+    review.groupProposals = groupProposals;
+    review.checks = checks;
+    review.replay = replay;
+    review.intents = intents;
+    review.correction = correction;
+    if (correctionWaiting(correction)) this.pollCorrection(api, projectId, name);
+    // Les choix de source enregistrés : le brouillon de la page est vidé.
+    review.binds = {};
+    review.selected = review.selected.filter((id) => studio.steps.some((step) => step.id === id));
+    if (replay?.status === 'RUNNING') this.pollReplay(api, projectId, name);
+  }
+
+  /** Le rejeu suit sa progression (une requête par seconde), puis la revue est relue. */
+  private pollReplay(api: QaCrawlerClient, projectId: string, name: string): void {
+    if (this.replayTimer) return;
+    this.replayTimer = setTimeout(() => {
+      this.replayTimer = undefined;
+      const route = this.state.route;
+      if (route.view !== 'recording' || route.name !== name) return;
+      void api.recordings
+        .replayStatus(projectId, name)
+        .then(async (replay) => {
+          const review = this.state.review;
+          if (review?.name !== name) return;
+          review.replay = replay;
+          if (replay.status === 'RUNNING') this.pollReplay(api, projectId, name);
+          else await this.loadReview(api, projectId, name);
+          this.paint();
+        })
+        .catch(() => undefined);
+    }, 1000);
+  }
+
+  /** La correction suit sa session (une requête par seconde) tant que le serveur travaille. */
+  private pollCorrection(api: QaCrawlerClient, projectId: string, name: string): void {
+    if (this.correctionTimer) return;
+    this.correctionTimer = setTimeout(() => {
+      this.correctionTimer = undefined;
+      const route = this.state.route;
+      if (route.view !== 'recording' || route.name !== name) return;
+      void api.corrections
+        .get(projectId, name)
+        .catch(() => undefined)
+        .then((view) => {
+          const review = this.state.review;
+          if (review?.name !== name) return;
+          review.correction = view;
+          if (correctionWaiting(view)) this.pollCorrection(api, projectId, name);
+          this.paint();
+        });
+    }, 1000);
+  }
+
+  private rowChoice(column: string): RowChoice {
+    const edit = this.state.review?.rowEdit;
+    const cell = edit?.source?.cells.find((entry) => entry.column === column);
+    const fallback: RowChoice = {
+      on: false,
+      source: 'recorded',
+      value: cell?.value ?? '',
+      key: '',
+      contains: false,
+    };
+    if (!edit) return fallback;
+    edit.columns[column] ??= fallback;
+    return edit.columns[column];
+  }
+
+  private bindForm(stepId: string): BindForm {
+    const review = this.state.review;
+    const input = review?.data?.inputs.find((entry) => entry.stepId === stepId);
+    if (!review || !input) return { source: 'FIXED', variable: '', generator: '', reference: '', value: '' };
+    review.binds[stepId] ??= bindFormOf(review, input, review.data?.generators ?? []);
+    return review.binds[stepId];
+  }
+
+  /**
+   * Une opération de la revue : envoyée au serveur (qui réécrit le flow), puis la revue est relue.
+   * Les boutons sont désactivés pendant l'envoi ; une erreur s'affiche au-dessus de l'onglet.
+   */
+  private async reviewOp(
+    label: string,
+    run: (api: QaCrawlerClient, projectId: string, name: string, review: ReviewUi) => Promise<void>,
+  ): Promise<void> {
+    const api = this.api;
+    const route = this.state.route;
+    const review = this.state.review;
+    if (!api || route.view !== 'recording' || !review || review.busy) return;
+    review.busy = label;
+    review.error = undefined;
+    review.warnings = undefined;
+    this.paint();
+    try {
+      await run(api, route.projectId, route.name, review);
+      await this.loadReview(api, route.projectId, route.name);
+    } catch (error) {
+      review.error = message(error);
+    }
+    review.busy = undefined;
+    if (this.state.review === review) this.paint();
+  }
+
+  private groupEdit(label: string, command: Parameters<QaCrawlerClient['groups']['edit']>[2]): void {
+    void this.reviewOp(label, async (api, projectId, name, review) => {
+      const result = await api.groups.edit(projectId, name, command);
+      if (result.warnings.length > 0) review.warnings = result.warnings;
+    });
+  }
+
+  private reviewClick(action: string, target: HTMLElement): boolean {
+    const review = this.state.review;
+    const route = this.state.route;
+    if (!review || route.view !== 'recording') return false;
+    const step = target.dataset.step ?? '';
+    const group = target.dataset.group ?? '';
+    const direction = target.dataset.direction === 'down' ? 'down' : 'up';
+    switch (action) {
+      case 'review-tab': {
+        const tab = target.dataset.tab as ReviewTab | undefined;
+        if (tab && (REVIEW_TABS as readonly string[]).includes(tab)) {
+          this.state.route = { ...route, tab };
+          this.paint();
+          this.root.querySelector<HTMLElement>(`[data-action="review-tab"][data-tab="${tab}"]`)?.focus();
+        }
+        return true;
+      }
+      case 'review-replay':
+        void this.reviewOp('replay', async (api, projectId, name, ui) => {
+          ui.replay = await api.recordings.replay(projectId, name);
+          this.pollReplay(api, projectId, name);
+        });
+        return true;
+      case 'review-move':
+        this.groupEdit('move', { op: 'move-step', stepId: step, direction });
+        return true;
+      case 'review-detach':
+        this.groupEdit('detach', { op: 'detach', stepIds: [step] });
+        return true;
+      case 'review-detach-selected':
+        this.groupEdit('detach', { op: 'detach', stepIds: [...review.selected] });
+        review.selected = [];
+        return true;
+      case 'review-clear':
+        review.selected = [];
+        this.paint();
+        return true;
+      case 'review-remove':
+        review.confirmRemove = step;
+        this.paint();
+        return true;
+      case 'review-remove-no':
+        review.confirmRemove = undefined;
+        this.paint();
+        return true;
+      case 'review-remove-yes':
+        review.confirmRemove = undefined;
+        void this.reviewOp('remove', async (api, projectId, name) => {
+          await api.recordings.removeStep(projectId, name, step);
+        });
+        return true;
+      case 'review-rename-open': {
+        const current = review.studio?.groups.find((entry) => entry.id === group);
+        if (current) review.renaming = { id: group, name: current.name };
+        this.paint();
+        this.root.querySelector<HTMLInputElement>('[data-review="rename"]')?.focus();
+        return true;
+      }
+      case 'review-rename-cancel':
+        review.renaming = undefined;
+        this.paint();
+        return true;
+      case 'review-move-group':
+        this.groupEdit('move', { op: 'move-group', groupId: group, direction });
+        return true;
+      case 'review-delete-group':
+        this.groupEdit('delete', { op: 'delete', groupId: group, keepSteps: true });
+        return true;
+      case 'review-accept-groups':
+        void this.reviewOp('groups', async (api, projectId, name, ui) => {
+          const result = await api.groups.acceptProposals(projectId, name);
+          if (result.warnings.length > 0) ui.warnings = result.warnings;
+        });
+        return true;
+      case 'review-add-check':
+        void this.reviewOp('check', async (api, projectId, name) => {
+          await api.groups.addCheck(projectId, name, { groupId: group, key: target.dataset.key ?? '' });
+        });
+        return true;
+      case 'review-decide': {
+        const decision = target.dataset.decision as 'ACCEPT' | 'REJECT' | 'DISABLE' | 'RESET';
+        const id = target.dataset.assertion ?? '';
+        void this.reviewOp('decide', async (api, projectId, name) => {
+          await api.assertions.decide(projectId, name, id, { decision });
+        });
+        return true;
+      }
+      case 'review-decide-all': {
+        const decision = target.dataset.decision === 'REJECT' ? 'REJECT' : 'ACCEPT';
+        const buckets = assertionBuckets(review.assertions ?? []);
+        const ids = (target.dataset.bucket === 'weak' ? buckets.weak : buckets.recommended).map(
+          (proposal) => proposal.id,
+        );
+        void this.reviewOp('decide', async (api, projectId, name) => {
+          for (const id of ids) await api.assertions.decide(projectId, name, id, { decision });
+        });
+        return true;
+      }
+      case 'review-correct':
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          ui.correctionChoice = {};
+          ui.correction = await api.corrections.start(projectId, name, step);
+          this.pollCorrection(api, projectId, name);
+        });
+        return true;
+      case 'review-correction-pick':
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          ui.correctionChoice = {};
+          ui.correction = await api.corrections.pick(projectId, name);
+          this.pollCorrection(api, projectId, name);
+        });
+        return true;
+      case 'review-correction-apply': {
+        const choice = review.correctionChoice;
+        const options = review.correction?.proposal?.rowOptions;
+        const option = choice.option ?? options?.[0]?.id;
+        const cells = review.correction?.proposal?.rowCells ?? [];
+        const keys = review.correction?.proposal?.variables ?? [];
+        const binding =
+          option === 'manual'
+            ? { column: choice.column ?? cells[0]?.column ?? '', key: choice.key ?? keys[0] ?? '' }
+            : undefined;
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          ui.correction = await api.corrections.apply(projectId, name, {
+            ...(option ? { option } : {}),
+            ...(binding ? { binding } : {}),
+          });
+        });
+        return true;
+      }
+      case 'review-correction-resume':
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          ui.correction = await api.corrections.resume(projectId, name);
+          this.pollCorrection(api, projectId, name);
+        });
+        return true;
+      case 'review-correction-close':
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          await api.corrections.close(projectId, name);
+          ui.correction = undefined;
+        });
+        return true;
+      case 'review-restore':
+        void this.reviewOp('restore', async (api, projectId, name) => {
+          await api.recordings.restoreTarget(projectId, name, step);
+        });
+        return true;
+      case 'review-row-open': {
+        const api = this.api;
+        review.rowEdit = { stepId: step, columns: {} };
+        this.paint();
+        if (api)
+          void api.recordings
+            .rowSource(route.projectId, route.name, step)
+            .then((source) => {
+              if (review.rowEdit?.stepId !== step) return;
+              review.rowEdit.source = source;
+              this.paint();
+            })
+            .catch((error: unknown) => {
+              review.rowEdit = undefined;
+              review.error = message(error);
+              this.paint();
+            });
+        return true;
+      }
+      case 'review-row-cancel':
+        review.rowEdit = undefined;
+        this.paint();
+        return true;
+      case 'review-intent': {
+        const actionId = target.dataset.intentAction ?? '';
+        const type = target.dataset.type === 'RESET' ? 'RESET' : 'CONFIRM';
+        void this.reviewOp('intent', async (api, projectId, name, ui) => {
+          ui.intents = await api.recordings.reviewIntent(projectId, name, { actionId, type });
+        });
+        return true;
+      }
+      case 'review-intent-open': {
+        const actionId = target.dataset.intentAction ?? '';
+        const row = review.intents?.rows.find((entry) => entry.actionId === actionId);
+        const choices = review.intents?.choices ?? [];
+        review.intentEdit = {
+          actionId,
+          intent: choices.includes(row?.intent ?? '') ? (row?.intent ?? '') : (choices[0] ?? ''),
+          reason: '',
+        };
+        this.paint();
+        return true;
+      }
+      case 'review-intent-cancel':
+        review.intentEdit = undefined;
+        this.paint();
+        return true;
+      case 'review-modify-open': {
+        const proposal = review.assertions?.find((entry) => entry.id === target.dataset.assertion);
+        if (proposal) review.editing = { id: proposal.id, description: proposal.description };
+        this.paint();
+        this.root.querySelector<HTMLTextAreaElement>('[data-review="modify"]')?.focus();
+        return true;
+      }
+      case 'review-modify-cancel':
+        review.editing = undefined;
+        this.paint();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private reviewSubmit(form: HTMLFormElement): void {
+    const review = this.state.review;
+    if (!review) return;
+    switch (form.dataset.action) {
+      case 'review-rename': {
+        const renaming = review.renaming;
+        if (!renaming?.name.trim()) return;
+        review.renaming = undefined;
+        this.groupEdit('rename', { op: 'rename', groupId: renaming.id, name: renaming.name.trim() });
+        return;
+      }
+      case 'review-create-group': {
+        const name = review.newGroup.trim();
+        if (!name || review.selected.length === 0) return;
+        const stepIds = [...review.selected];
+        review.selected = [];
+        review.newGroup = '';
+        this.groupEdit('create', { op: 'create', name, stepIds });
+        return;
+      }
+      case 'review-modify': {
+        const editing = review.editing;
+        if (!editing?.description.trim()) return;
+        review.editing = undefined;
+        void this.reviewOp('decide', async (api, projectId, name) => {
+          await api.assertions.decide(projectId, name, editing.id, {
+            decision: 'MODIFY',
+            description: editing.description.trim(),
+          });
+        });
+        return;
+      }
+      case 'review-bind': {
+        const stepId = form.dataset.step ?? '';
+        const choice = this.bindForm(stepId);
+        void this.reviewOp('bind', async (api, projectId, name) => {
+          await api.data.bind(projectId, name, {
+            stepId,
+            source: choice.source,
+            ...(choice.source === 'FIXED' ? { value: choice.value } : {}),
+            ...(choice.source === 'GENERATED'
+              ? { variable: choice.variable.trim(), generator: choice.generator }
+              : {}),
+            ...(choice.source === 'REFERENCE' ? { variable: choice.reference } : {}),
+          });
+        });
+        return;
+      }
+      case 'review-row-save': {
+        const edit = review.rowEdit;
+        if (!edit) return;
+        const columns = rowColumnsOf(review);
+        void this.reviewOp('row', async (api, projectId, name, ui) => {
+          await api.recordings.editRow(projectId, name, edit.stepId, columns);
+          ui.rowEdit = undefined;
+        });
+        return;
+      }
+      case 'review-intent-save': {
+        const edit = review.intentEdit;
+        if (!edit?.intent) return;
+        void this.reviewOp('intent', async (api, projectId, name, ui) => {
+          ui.intents = await api.recordings.reviewIntent(projectId, name, {
+            actionId: edit.actionId,
+            type: 'CORRECT',
+            intent: edit.intent,
+            ...(edit.reason.trim() ? { reason: edit.reason.trim() } : {}),
+          });
+          ui.intentEdit = undefined;
+        });
+        return;
+      }
+      case 'review-generate': {
+        const formats = [...review.formats];
+        const groupIds = [...review.genGroups];
+        void this.reviewOp('generate', async (api, projectId, name, ui) => {
+          ui.generation = await api.generation.run(projectId, name, {
+            formats: formats as Parameters<QaCrawlerClient['generation']['run']>[2]['formats'],
+            ...(groupIds.length > 0 ? { groupIds } : {}),
+          });
+        });
+        return;
+      }
+    }
+  }
+
+  /** Une opération de la bibliothèque : envoyée au serveur, puis l'écran est relu (message ou erreur détaillée). */
+  private async libraryOp(
+    run: (api: QaCrawlerClient, projectId: string, lib: LibraryUi) => Promise<string | undefined>,
+  ): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const lib = this.state.lib;
+    if (!api || !project || lib.busy) return;
+    lib.busy = true;
+    lib.error = undefined;
+    lib.details = undefined;
+    lib.notice = undefined;
+    this.paint();
+    try {
+      lib.notice = await run(api, project.id, lib);
+      await this.load();
+    } catch (error) {
+      lib.error = message(error);
+      lib.details = detailsOf(error);
+    }
+    lib.busy = false;
+    this.paint();
+  }
+
+  private checkSequence = 0;
+
+  /** VÉRIFIER LE PARCOURS (dry run de composition, sur le serveur) : ordre, dépendances, données. */
+  private async checkJourney(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const lib = this.state.lib;
+    if (!api || !project) return;
+    if (lib.compose.parts.length === 0) {
+      lib.check = undefined;
+      lib.checkedFor = undefined;
+      this.paint();
+      return;
+    }
+    const sequence = ++this.checkSequence;
+    const key = compositionKey(lib.compose);
+    const input = { name: lib.compose.name, parts: [...lib.compose.parts] };
+    lib.checking = true;
+    this.paint();
+    try {
+      const check = await api.scenarios.checkComposition(project.id, input);
+      if (sequence !== this.checkSequence) return;
+      lib.check = check;
+      lib.checkedFor = key;
+    } catch (error) {
+      if (sequence !== this.checkSequence) return;
+      lib.error = message(error);
+      lib.details = detailsOf(error);
+    }
+    lib.checking = false;
+    this.paint();
+  }
+
+  private openPanel(scenario?: string): void {
+    const sources = runnableScenarios(this.state.project?.scenarios ?? []).filter(
+      (entry) => entry.format === 'yaml',
+    );
+    const chosen =
+      scenario && sources.some((entry) => entry.name === scenario) ? scenario : (sources[0]?.name ?? '');
+    this.state.lib.panel = { scenario: chosen, name: '', description: '' };
+    this.paint();
+    this.root.querySelector<HTMLElement>('[data-lib="panel.scenario"]')?.focus();
+    void this.loadPreview();
+  }
+
+  private closePanel(): void {
+    this.state.lib.panel = undefined;
+    this.paint();
+    this.root.querySelector<HTMLElement>('.hd [data-action="lib-panel-open"]')?.focus();
+  }
+
+  /** L'aperçu du scénario source (étapes, données sans valeur, contrat dérivé), avant d'en faire un bloc. */
+  private async loadPreview(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const panel = this.state.lib.panel;
+    if (!api || !project || !panel?.scenario) return;
+    const scenario = panel.scenario;
+    panel.loading = true;
+    this.paint();
+    try {
+      const preview = await api.library.preview(project.id, scenario);
+      if (this.state.lib.panel?.scenario !== scenario) return;
+      panel.preview = preview;
+      panel.previewFor = scenario;
+    } catch (error) {
+      panel.error = message(error);
+    }
+    panel.loading = false;
+    this.paint();
+  }
+
+  private libraryClick(action: string, target: HTMLElement): boolean {
+    const lib = this.state.lib;
+    const route = this.state.route;
+    const index = Number(target.dataset.index);
+    const block = target.dataset.block ?? '';
+    switch (action) {
+      case 'lib-panel-open':
+        this.openPanel();
+        return true;
+      case 'lib-panel-close':
+        this.closePanel();
+        return true;
+      case 'lib-open':
+        lib.open = lib.open === block ? undefined : block;
+        this.paint();
+        return true;
+      case 'lib-clear':
+        Object.assign(lib, { query: '', origin: 'ALL', state: 'ALL', usage: 'ALL' });
+        this.paint();
+        return true;
+      case 'lib-jump':
+        this.root.querySelector('#lib-composer')?.scrollIntoView({ block: 'start' });
+        this.root.querySelector<HTMLElement>('[data-lib="compose.name"]')?.focus();
+        return true;
+      case 'lib-open-scenario': {
+        const name = target.dataset.name ?? '';
+        if ('projectId' in route && route.projectId)
+          this.navigate({ view: 'scenarios', projectId: route.projectId, scenario: name });
+        return true;
+      }
+      case 'lib-remove':
+        lib.confirmRemove = block;
+        this.paint();
+        return true;
+      case 'lib-remove-no':
+        lib.confirmRemove = undefined;
+        this.paint();
+        return true;
+      case 'lib-remove-yes':
+        lib.confirmRemove = undefined;
+        void this.libraryOp(async (api, projectId) => {
+          await api.library.remove(projectId, block);
+          return undefined;
+        });
+        return true;
+      case 'lib-part-add':
+        if (block) lib.compose.parts = [...lib.compose.parts, block];
+        void this.checkJourney();
+        return true;
+      case 'lib-part-remove':
+        // Retirer du parcours en cours, jamais de la bibliothèque.
+        lib.compose.parts = lib.compose.parts.filter((_, at) => at !== index);
+        void this.checkJourney();
+        return true;
+      case 'lib-part-move': {
+        const to = target.dataset.direction === 'down' ? index + 1 : index - 1;
+        const parts = [...lib.compose.parts];
+        const [moved] = parts.splice(index, 1);
+        if (moved !== undefined && to >= 0 && to <= parts.length) {
+          parts.splice(to, 0, moved);
+          lib.compose.parts = parts;
+        }
+        void this.checkJourney();
+        return true;
+      }
+      case 'lib-check':
+        void this.checkJourney();
+        return true;
+      case 'lib-contract-edit': {
+        const view = lib.blocks?.find((entry) => entry.name === block);
+        if (view) {
+          const contract = view.contract;
+          lib.contract = {
+            block,
+            required: contract.inputs
+              .filter((input) => input.required)
+              .map((input) => input.key)
+              .join(', '),
+            optional: contract.inputs
+              .filter((input) => !input.required)
+              .map((input) => input.key)
+              .join(', '),
+            outputs: contract.outputs.map((output) => output.key).join(', '),
+            pre: contract.preconditions.join('\n'),
+            post: contract.postconditions.join('\n'),
+          };
+        }
+        this.paint();
+        this.root.querySelector<HTMLElement>('[data-lib="contract.required"]')?.focus();
+        return true;
+      }
+      case 'lib-contract-cancel':
+        lib.contract = undefined;
+        this.paint();
+        return true;
+      case 'lib-contract-reset':
+        void this.libraryOp(async (api, projectId, ui) => {
+          await api.library.declareContract(projectId, block, null);
+          ui.contract = undefined;
+          return this.state.t.lib.contractSaved(block);
+        });
+        return true;
+      case 'lib-validate-version':
+        void this.libraryOp(async (api, projectId) => {
+          const view = await api.library.validateVersion(projectId, block);
+          return this.state.t.lib.versionValidated(view.name, view.version);
+        });
+        return true;
+      case 'lib-accept': {
+        const name = target.dataset.name ?? '';
+        void this.libraryOp(async (api, projectId) => {
+          await api.scenarios.acceptBlocks(projectId, name);
+          return this.state.t.lib.accepted(name);
+        });
+        return true;
+      }
+      case 'lib-from-scenario': {
+        const name = target.dataset.name ?? '';
+        if ('projectId' in route && route.projectId) {
+          this.navigate({ view: 'library', projectId: route.projectId });
+          // Le panneau s'ouvre une fois l'écran chargé, sur ce scénario.
+          this.pendingPanel = name;
+        }
+        return true;
+      }
+      case 'lib-group': {
+        const group = this.state.review?.studio?.groups.find((entry) => entry.id === target.dataset.group);
+        if (group) lib.group = { id: group.id, name: group.name };
+        this.paint();
+        this.root.querySelector<HTMLInputElement>('[data-lib="group.name"]')?.focus();
+        return true;
+      }
+      case 'lib-group-cancel':
+        lib.group = undefined;
+        this.paint();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private pendingPanel: string | undefined;
+
+  private librarySubmit(form: HTMLFormElement): void {
+    const lib = this.state.lib;
+    const keyList = (text: string): string[] =>
+      text
+        .split(/[,\s]+/)
+        .map((key) => key.trim())
+        .filter(Boolean);
+    const lines = (text: string): string[] =>
+      text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    switch (form.dataset.action) {
+      case 'lib-add': {
+        const panel = lib.panel;
+        const api = this.api;
+        const project = this.state.project;
+        if (!panel || panel.busy || !api || !project) return;
+        // Une seule soumission à la fois ; en cas d'erreur, la saisie reste.
+        panel.busy = true;
+        panel.error = undefined;
+        this.paint();
+        void (async () => {
+          try {
+            const block = await api.library.add(project.id, {
+              from: 'scenario',
+              scenario: panel.scenario,
+              name: panel.name,
+              ...(panel.description.trim() ? { description: panel.description.trim() } : {}),
+            });
+            lib.panel = undefined;
+            lib.notice = this.state.t.lib.added(block.name);
+            await this.load();
+          } catch (error) {
+            panel.error = [message(error), ...detailsOf(error).slice(1)].join(' · ');
+            panel.busy = false;
+          }
+          this.paint();
+        })();
+        return;
+      }
+      case 'lib-compose': {
+        const api = this.api;
+        const project = this.state.project;
+        if (!api || !project || lib.creating || lib.busy) return;
+        const input = { name: lib.compose.name, parts: [...lib.compose.parts] };
+        lib.creating = true;
+        lib.error = undefined;
+        lib.details = undefined;
+        lib.notice = undefined;
+        this.paint();
+        void (async () => {
+          try {
+            const scenario = await api.scenarios.compose(project.id, input);
+            lib.compose = { name: '', parts: [] };
+            lib.check = undefined;
+            lib.checkedFor = undefined;
+            lib.notice = this.state.t.lib.composed(scenario.name);
+            await this.load();
+          } catch (error) {
+            // La composition reste telle quelle ; la vérification dit pourquoi.
+            lib.error = message(error);
+            lib.details = detailsOf(error);
+          }
+          lib.creating = false;
+          this.paint();
+          if (lib.error) void this.checkJourney();
+        })();
+        return;
+      }
+      case 'lib-insert': {
+        const scenario = form.dataset.scenario ?? '';
+        const revision = form.dataset.revision;
+        const block = lib.insert.block || lib.blocks?.find((entry) => entry.name !== scenario)?.name || '';
+        const at = lib.insert.at;
+        void this.libraryOp(async (api, projectId) => {
+          await api.scenarios.insert(projectId, scenario, { block, at, ...(revision ? { revision } : {}) });
+          return this.state.t.lib.inserted(block);
+        });
+        return;
+      }
+      case 'lib-contract': {
+        const draft = lib.contract;
+        const name = form.dataset.block ?? '';
+        if (!draft) return;
+        const contract = {
+          inputs: [
+            ...keyList(draft.required).map((key) => ({ key, required: true })),
+            ...keyList(draft.optional).map((key) => ({ key, required: false })),
+          ],
+          outputs: keyList(draft.outputs),
+          preconditions: lines(draft.pre),
+          postconditions: lines(draft.post),
+        };
+        void this.libraryOp(async (api, projectId, ui) => {
+          await api.library.declareContract(projectId, name, contract);
+          ui.contract = undefined;
+          return this.state.t.lib.contractSaved(name);
+        });
+        return;
+      }
+      case 'lib-group': {
+        const group = lib.group;
+        const route = this.state.route;
+        if (!group || route.view !== 'recording') return;
+        void this.libraryOp(async (api, projectId, ui) => {
+          const block = await api.library.add(projectId, {
+            from: 'recording',
+            recording: route.name,
+            groupId: group.id,
+            name: group.name,
+          });
+          ui.group = undefined;
+          return this.state.t.lib.added(block.name);
+        });
+        return;
+      }
+    }
+  }
+
+  private async startRecording(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const ui = this.state.recs;
+    if (!api || !project || ui.busy) return;
+    const name = ui.form.name.trim();
+    if (!name) {
+      ui.error = this.state.t.rec.noName;
+      this.paint();
+      return;
+    }
+    ui.busy = true;
+    ui.error = undefined;
+    this.paint();
+    try {
+      const snapshot = await api.recordings.start(project.id, {
+        name,
+        ...(ui.form.startPath.trim() ? { startPath: ui.form.startPath.trim() } : {}),
+        validate: ui.form.validate,
+      });
+      ui.busy = false;
+      ui.form = { ...ui.form, name: '', startPath: '' };
+      this.followRecording(api, project.id, snapshot.name, snapshot.status);
+      await this.load();
+    } catch (error) {
+      ui.busy = false;
+      ui.error = message(error);
+      this.paint();
+    }
+  }
+
   private emit(type: string, detail: unknown): void {
     this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
   }
 
   private navigate(route: DashboardRoute): void {
     if (route.view !== 'execution') this.unsubscribe();
+    if (route.view !== 'recordings') {
+      this.unfollowRecording();
+      this.state.recs.live = undefined;
+    }
+    if (route.view !== 'recording') {
+      if (this.replayTimer) clearTimeout(this.replayTimer);
+      this.replayTimer = undefined;
+      if (this.correctionTimer) clearTimeout(this.correctionTimer);
+      this.correctionTimer = undefined;
+    }
     if ('projectId' in route && route.projectId !== undefined && route.projectId !== this.state.projectId) {
       this.state.projectId = route.projectId;
       this.state.checks = {};
@@ -285,13 +1288,32 @@ export class QaCrawlerDashboard extends Base {
         await this.loadProject(api, route.projectId, generation);
       } else if (route.view === 'scenarios') {
         await this.loadProject(api, route.projectId, generation);
-        const [history, recordings] = await Promise.all([
+        const [history, recordings, blocks] = await Promise.all([
           api.scenarios.history(route.projectId),
           api.recordings.list(route.projectId).catch(() => []),
+          api.library.list(route.projectId).catch(() => []),
         ]);
         if (generation !== this.generation) return;
         this.state.scenarioHistory = history;
         this.state.recordings = recordings;
+        this.state.lib.blocks = blocks;
+      } else if (route.view === 'library') {
+        await this.loadProject(api, route.projectId, generation);
+        const blocks = await api.library.list(route.projectId);
+        if (generation !== this.generation) return;
+        this.state.lib.blocks = blocks;
+        const panel = this.state.lib.panel;
+        const scenarios = runnableScenarios(this.state.project?.scenarios ?? []).filter(
+          (scenario) => scenario.format === 'yaml',
+        );
+        if (panel && !scenarios.some((scenario) => scenario.name === panel.scenario))
+          panel.scenario = scenarios[0]?.name ?? '';
+        // « Ajouter à la bibliothèque » depuis l'écran Scénarios : le panneau s'ouvre sur ce scénario.
+        if (this.pendingPanel !== undefined) {
+          const scenario = this.pendingPanel;
+          this.pendingPanel = undefined;
+          this.openPanel(scenario);
+        }
       } else if (route.view === 'environments') {
         await this.loadProject(api, route.projectId, generation);
         if (generation !== this.generation) return;
@@ -316,6 +1338,20 @@ export class QaCrawlerDashboard extends Base {
         if (this.state.project?.id !== route.projectId)
           await this.loadProject(api, route.projectId, generation);
         await this.loadExecution(api, route, generation);
+      } else if (route.view === 'recordings') {
+        await this.loadProject(api, route.projectId, generation);
+        const recordings = await api.recordings.list(route.projectId);
+        if (generation !== this.generation) return;
+        this.state.recordings = recordings;
+        const running = recordings.find(
+          (entry) => entry.status === 'RECORDING' || entry.status === 'PROCESSING',
+        );
+        if (running && this.state.recs.live?.name !== running.name)
+          this.followRecording(api, route.projectId, running.name, running.status);
+      } else if (route.view === 'recording') {
+        await this.loadProject(api, route.projectId, generation);
+        if (this.state.review?.name !== route.name) this.state.review = emptyReviewUi(route.name);
+        await this.loadReview(api, route.projectId, route.name, generation);
       } else if (route.view === 'access') {
         if (this.state.me?.rights.includes('MANAGE_ACCESS')) {
           const kind = this.state.access.journalKind;
@@ -900,6 +1936,8 @@ export class QaCrawlerDashboard extends Base {
     const action = target.dataset.action;
     const api = this.api;
     if (target.tagName === 'A') event.preventDefault();
+    if (action?.startsWith('review-') && this.reviewClick(action, target)) return;
+    if (action?.startsWith('lib-') && this.libraryClick(action, target)) return;
     switch (action) {
       case 'menu':
         this.state.menuOpen = !this.state.menuOpen;
@@ -919,6 +1957,8 @@ export class QaCrawlerDashboard extends Base {
           view === 'executions' ||
           view === 'history' ||
           view === 'scenarios' ||
+          view === 'recordings' ||
+          view === 'library' ||
           view === 'explorations' ||
           view === 'environments' ||
           view === 'sources' ||
@@ -934,6 +1974,40 @@ export class QaCrawlerDashboard extends Base {
       case 'import':
         void this.importSource();
         return;
+      case 'start-recording':
+        void this.startRecording();
+        return;
+      case 'open-review': {
+        const project = this.state.project;
+        const name = target.dataset.recording;
+        if (project && name) this.navigate({ view: 'recording', projectId: project.id, name });
+        return;
+      }
+      case 'rec-control':
+        void this.recordingControl(target.dataset.control ?? '');
+        return;
+      case 'rec-resolve':
+        void this.recordingControl('resolve', {
+          stepId: target.dataset.step ?? '',
+          candidate: Number(target.dataset.candidate),
+        });
+        return;
+      case 'rec-ignore':
+        void this.recordingControl('ignore', { stepId: target.dataset.step ?? '' });
+        return;
+      case 'stop-recording': {
+        const project = this.state.project;
+        const live = this.state.recs.live;
+        if (!api || !project || !live) return;
+        live.stopping = true;
+        this.paint();
+        api.recordings.stop(project.id, live.name).catch((error: unknown) => {
+          live.stopping = false;
+          this.state.recs.error = message(error);
+          this.paint();
+        });
+        return;
+      }
       case 'sign-out':
         this.signOut();
         return;
@@ -1136,6 +2210,8 @@ export class QaCrawlerDashboard extends Base {
           this.navigate({ view: 'explorations', projectId: route.projectId });
         else if (target.dataset.to === 'sources' && route.view === 'import')
           this.navigate({ view: 'sources', projectId: route.projectId });
+        else if (target.dataset.to === 'recordings' && route.view === 'recording')
+          this.navigate({ view: 'recordings', projectId: route.projectId });
         else this.navigate({ view: 'projects' });
         return;
       }
@@ -1205,8 +2281,123 @@ export class QaCrawlerDashboard extends Base {
     }
   }
 
+  /** Un champ de la bibliothèque (« add.name », « compose.pick », « insert.at »…), gardé sans redessiner. */
+  private libraryField(field: string, value: string): void {
+    const lib = this.state.lib;
+    const [part, key] = field.split('.');
+    if (part === 'query') lib.query = value;
+    else if (part === 'origin' && ['ALL', 'scenario', 'recording', 'none'].includes(value))
+      lib.origin = value as LibraryUi['origin'];
+    else if (part === 'state' && ['ALL', 'VALID', 'CHANGED', 'INVALID'].includes(value))
+      lib.state = value as LibraryUi['state'];
+    else if (part === 'usage' && ['ALL', 'used', 'free'].includes(value))
+      lib.usage = value as LibraryUi['usage'];
+    else if (part === 'sort' && ['name', 'steps', 'usage', 'updated'].includes(value))
+      lib.sort = value as LibraryUi['sort'];
+    else if (part === 'compose' && key === 'name') {
+      lib.compose.name = value;
+      return;
+    } else if (part === 'panel' && lib.panel && (key === 'name' || key === 'description'))
+      lib.panel[key] = value;
+    else if (part === 'panel' && lib.panel && key === 'scenario') {
+      lib.panel.scenario = value;
+      lib.panel.error = undefined;
+      void this.loadPreview();
+      return;
+    } else if (part === 'contract' && lib.contract && key && key in lib.contract && key !== 'block')
+      lib.contract[key as 'required' | 'optional' | 'outputs' | 'pre' | 'post'] = value;
+    else if (part === 'insert' && key === 'block') lib.insert.block = value;
+    else if (part === 'insert' && key === 'at') lib.insert.at = value === 'end' ? 'end' : 'start';
+    else if (part === 'group' && key === 'name' && lib.group) lib.group.name = value;
+    else return;
+    // La recherche, les critères et le nom du bloc (sa validation) se voient tout de suite.
+    if (['query', 'origin', 'state', 'usage', 'sort'].includes(part) || (part === 'panel' && key === 'name'))
+      this.paint();
+  }
+
   private onChange(event: Event): void {
     const target = event.target as HTMLInputElement | HTMLSelectElement;
+    if (target.dataset.lib) {
+      this.libraryField(target.dataset.lib, target.value);
+      return;
+    }
+    const review = this.state.review;
+    if (review && this.state.route.view === 'recording') {
+      const pick = target.dataset.reviewPick;
+      if (pick) {
+        const checked = (target as HTMLInputElement).checked;
+        review.selected = checked
+          ? [...review.selected.filter((id) => id !== pick), pick]
+          : review.selected.filter((id) => id !== pick);
+        this.paint();
+        // Redessinée, la page garde le focus sur la case (clavier).
+        this.root.querySelector<HTMLInputElement>(`[data-review-pick="${CSS.escape(pick)}"]`)?.focus();
+        return;
+      }
+      const format = target.dataset.reviewFormat;
+      if (format) {
+        const checked = (target as HTMLInputElement).checked;
+        review.formats = checked
+          ? [...review.formats.filter((entry) => entry !== format), format]
+          : review.formats.filter((entry) => entry !== format);
+        this.paint();
+        this.root.querySelector<HTMLInputElement>(`[data-review-format="${CSS.escape(format)}"]`)?.focus();
+        return;
+      }
+      const genGroup = target.dataset.reviewGenGroup;
+      if (genGroup) {
+        const checked = (target as HTMLInputElement).checked;
+        review.genGroups = checked
+          ? [...review.genGroups.filter((entry) => entry !== genGroup), genGroup]
+          : review.genGroups.filter((entry) => entry !== genGroup);
+        return;
+      }
+      if (target.dataset.action === 'review-assign' && target.value) {
+        const stepIds = [...review.selected];
+        review.selected = [];
+        this.groupEdit('assign', { op: 'assign', groupId: target.value, stepIds });
+        return;
+      }
+      const correctionOption = target.dataset.correctionOption;
+      if (correctionOption) {
+        review.correctionChoice.option = correctionOption;
+        this.paint();
+        return;
+      }
+      const correctionField = target.dataset.correctionField;
+      if (correctionField === 'column' || correctionField === 'key') {
+        review.correctionChoice[correctionField] = target.value;
+        return;
+      }
+      const rowColumn = target.dataset.rowColumn;
+      if (rowColumn) {
+        const choice = this.rowChoice(rowColumn);
+        const field = target.dataset.rowField;
+        if (field === 'on' || field === 'contains') {
+          choice[field] = (target as HTMLInputElement).checked;
+          this.paint();
+        } else if (field === 'source') {
+          choice.source = target.value as RowChoice['source'];
+          if (choice.source === 'variable') choice.key = review.rowEdit?.source?.variables[0]?.key ?? '';
+          this.paint();
+        } else if (field === 'key' || field === 'value') choice[field] = target.value;
+        return;
+      }
+      if (review.intentEdit && target.dataset.intentField === 'intent') {
+        review.intentEdit.intent = target.value;
+        return;
+      }
+      const bindStep = target.dataset.bindStep;
+      if (bindStep) {
+        const field = target.dataset.bindField as keyof BindForm;
+        const form = this.bindForm(bindStep);
+        if (field === 'source') {
+          form.source = target.value as BindForm['source'];
+          this.paint();
+        } else form[field] = target.value;
+        return;
+      }
+    }
     if (target.dataset.action === 'period') {
       const days = Number(target.value);
       if ((PERIODS as readonly number[]).includes(days)) this.state.days = days;
@@ -1235,6 +2426,8 @@ export class QaCrawlerDashboard extends Base {
         route.view === 'executions' ||
         route.view === 'history' ||
         route.view === 'scenarios' ||
+        route.view === 'recordings' ||
+        route.view === 'library' ||
         route.view === 'explorations' ||
         route.view === 'environments' ||
         route.view === 'sources' ||
@@ -1244,7 +2437,12 @@ export class QaCrawlerDashboard extends Base {
       )
         this.navigate({ view: route.view, projectId });
       else if (route.view === 'import') this.navigate({ view: 'sources', projectId });
+      else if (route.view === 'recording') this.navigate({ view: 'recordings', projectId });
       else this.navigate({ view: 'project', projectId });
+      return;
+    }
+    if (target.dataset.rec === 'validate') {
+      this.state.recs.form.validate = (target as HTMLInputElement).checked;
       return;
     }
     if (target.dataset.memberField === 'role') {
@@ -1347,17 +2545,35 @@ export class QaCrawlerDashboard extends Base {
     if (!this.connected) return;
     const focused = this.root.activeElement as HTMLElement | null;
     const focusKey =
-      focused?.dataset.action ?? focused?.dataset.bind ?? focused?.dataset.field ?? focused?.dataset.req;
+      focused?.dataset.action ??
+      focused?.dataset.bind ??
+      focused?.dataset.field ??
+      focused?.dataset.req ??
+      focused?.dataset.lib;
     const focusValue = (focused as HTMLInputElement | null)?.value;
+    // Le même bouton d'une liste (même bloc, même rang), et le curseur d'un champ texte, retrouvés.
+    const focusTwin = `${focused?.dataset.block ?? ''}|${focused?.dataset.index ?? ''}|${focused?.dataset.direction ?? ''}`;
+    const caret =
+      focused instanceof HTMLInputElement && ['text', 'search'].includes(focused.type)
+        ? focused.selectionStart
+        : null;
     this.root.innerHTML = `<style>${DASHBOARD_CSS}</style>${renderDashboard(this.state)}`;
     if (focusKey) {
+      const key = CSS.escape(focusKey);
       const candidates = [
         ...this.root.querySelectorAll<HTMLElement>(
-          `[data-action="${focusKey}"],[data-bind="${focusKey}"],[data-field="${focusKey}"],[data-req="${focusKey}"]`,
+          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"]`,
         ),
       ];
+      const twin = candidates.find(
+        (element) =>
+          `${element.dataset.block ?? ''}|${element.dataset.index ?? ''}|${element.dataset.direction ?? ''}` ===
+          focusTwin,
+      );
       const same = candidates.find((element) => (element as HTMLInputElement).value === focusValue);
-      (same ?? candidates[0])?.focus();
+      const target = (focusTwin !== '||' ? twin : undefined) ?? same ?? candidates[0];
+      target?.focus();
+      if (caret !== null && target instanceof HTMLInputElement) target.setSelectionRange(caret, caret);
     }
   }
 }

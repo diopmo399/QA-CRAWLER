@@ -62,6 +62,88 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
     quitte tout de suite.
 
+- **Dashboard, écran Enregistrements et finitions** :
+  - démarrer, suivre en direct et arrêter l'enregistrement d'un parcours ; liste des enregistrements
+    du projet, lien vers le Flow Studio, promotion en scénario ;
+  - contrôles compacts (36 px à la souris, 44 px au doigt), listes déroulantes et choix de fichier
+    au style du Dashboard, champs numériques à leur largeur, boutons qui ne s'étirent plus ;
+  - la note « auteur non enregistré » ne s'affiche plus qu'en mode à jeton unique ; une description
+    qui ne fait que répéter le titre n'est plus affichée.
+- **Dashboard, tout le recorder** : ce que fait la fenêtre du recorder se fait aussi dans le Dashboard.
+  - Pendant l'enregistrement : les gestes en phrases avec leur statut (les messages bruts du recorder
+    sont repliés dans un journal technique), pause et reprise, annulation du dernier geste,
+    vérification posée sur l'écran courant, choix de l'élément touché quand la cible est ambiguë ;
+    après l'arrêt, les phases du traitement en mots avec leur progression.
+  - Revue d'un enregistrement terminé (bouton « Revoir ») :
+    - parcours en groupes : découpage proposé d'après les étapes métier, créé sur décision ;
+      vérifications de groupe suggérées ; cocher des étapes pour créer un groupe, y ajouter ou en
+      détacher ; renommer, déplacer, supprimer un groupe ; monter ou descendre une étape ; retirer
+      une étape, confirmé dans la page ;
+    - assertions rangées comme dans le recorder (recommandées, à décider, faibles, décidées) :
+      accepter, refuser, désactiver, modifier, réinitialiser, une à une ou en lot ;
+    - source de chaque saisie (fixe, générée, reprise d'une étape antérieure) ; un secret ne se lie pas ;
+    - génération des tests (YAML, Gherkin, Playwright, Java) et ce qu'est chaque fichier produit ;
+    - rejeu de validation sans fenêtre sur le serveur, suivi étape par étape ;
+    - correction d'une cible : le serveur rejoue les étapes précédentes dans un navigateur ouvert sur sa
+      machine, la personne y clique l'élément voulu, le Dashboard montre la proposition (cible actuelle et
+      nouvelle, ordre d'essai, façon de retrouver une ligne de tableau) ; la cible n'est remplacée qu'à la
+      validation ; le rejeu reprend ensuite à l'étape corrigée ; l'original se restaure ;
+    - ligne de tableau redéfinie colonne par colonne à partir des cellules enregistrées, sans navigateur ;
+    - revue des intentions : confirmer, corriger avec une raison, réinitialiser (registre des décisions).
+  - SDK : `recordings.pause/resume/undo/checkpoint/resolve/ignore` (droit `RUN`),
+    `recordings.removeStep`, `recordings.replay/replayStatus` (droit `RUN`),
+    `groups.proposals/acceptProposals/checks/addCheck`, `recordings.intents/reviewIntent`,
+    `recordings.rowSource/editRow/restoreTarget`, `corrections.start/get/pick/apply/resume/close` (une
+    session à la fois ; ouvrir et reprendre demandent `RUN`, valider `DECIDE`) ; événement `timeline`
+    (seul le dernier état est gardé) ; les phases portent leur rang et leur détail.
+  - Les étapes du Studio et du flow sont dites dans la langue du serveur (« Vérifier : "À propos" »
+    au lieu de « the link … ») ; le dernier rejeu du Studio est dit en mots (« conforme »).
+  - Moteur : le rejeu de validation (`replayRecordedFlow`), le retrait d'une étape et la vérification
+    de groupe sont partagés entre la fenêtre du recorder et le SDK.
+- **Bibliothèque de scénarios** : des blocs réutilisables (`reusable: true`), jamais exécutés seuls,
+  que d'autres scénarios rejouent par une étape `run: <bloc>`.
+  - Un scénario, ou un groupe métier d'un enregistrement (depuis la revue), devient un bloc ; ses
+    étapes et ses données de test sont recopiées sous `<flows>/library/<bloc>/`.
+  - Composer un parcours à partir de blocs (écran Bibliothèque) : un nouveau scénario sous
+    `<flows>/composed/`, rejouable comme les autres ; insérer un bloc au début ou à la fin d'un
+    scénario existant (écran Scénarios). Les données des blocs rejoignent le jeu du scénario ; une
+    donnée définie autrement des deux côtés est refusée, jamais écrasée.
+  - Un bloc rejoué par un scénario ne se retire pas ; un bloc ne se lance pas seul (`REUSABLE_BLOCK`).
+  - Moteur : quand on rejoue des scénarios choisis, les blocs suivent toujours (un `run:` les trouve).
+- **Bibliothèque de scénarios, contrats et versions** :
+  - Contrat de chaque bloc : dérivé de son contenu, ou déclaré (entrées obligatoires ou facultatives,
+    sorties, préconditions, postconditions) et confronté à ce contenu.
+  - Vérification d'un parcours avant sa création (dry run de composition, rien n'est exécuté) :
+    dépendances entre blocs, entrées manquantes ou produites trop tard, conflits de données (une valeur
+    fixe face à une valeur générée au rejeu comprise), données partagées, erreurs de structure.
+  - Insertion et composition atomiques (tous les fichiers ou aucun), une opération à la fois par projet,
+    révision du scénario vérifiée (409 si modifié depuis sa lecture) ; les refus détaillent leurs raisons.
+  - Versions : `sdk-library.json` passe en version 2 (identifiant, version, empreinte, historique,
+    origine, contrat ; version de chaque bloc rejoué par un parcours). Un bloc modifié devient une
+    nouvelle version seulement quand on la valide ; un parcours suivi n'est pas rejoué avec ce bloc
+    (409 `BLOCK_VERSION_CHANGED`) tant que la nouvelle version n'est pas acceptée. L'ancien registre est repris.
+  - Dashboard : catalogue avec recherche, origine, contrat, utilisation et tri ; cartes compactes et
+    détails (provenance, historique, contrat, dépendants) ; compositeur fixe à droite avec la
+    vérification du serveur ; ajout d'un bloc dans un panneau latéral, avec l'aperçu de la source.
+- **Carte des écrans visités** (rapport `index.html` et `flow-graph.html`) : refaite pour rester lisible
+  avec de nombreux écrans et branches, sans dépendance nouvelle.
+  - Disposition en couches qui tient compte de la taille réelle des cartes : de haut en bas pour un
+    parcours qui tient dans la largeur du rapport, de gauche à droite sinon. Les branches alternatives
+    prennent des colonnes distinctes, séparées par un espace supplémentaire.
+  - Flèches orthogonales : chacune part d'un bord et arrive sur un bord, ne traverse aucune carte et
+    a sa propre piste (aucun trajet partagé). Les retours, raccourcis et cycles passent par les côtés,
+    en tirets, avec leur pointe. L'action est posée sur sa flèche, dans une bande réservée hors des cartes.
+  - Cartes : titre et adresse sur deux lignes au plus, statut (validé, échec, avertissement, non jugé :
+    jamais validé sans vérification réussie à l'arrivée), nombre d'actions et de vérifications.
+  - Cliquer un écran montre ses actions, ses arrivées, les vérifications, les anomalies et la capture ;
+    mise en avant par statut, zoom, ajustement à la fenêtre (refait quand le cadre change de taille),
+    déplacement à la souris. Sans JavaScript, la carte se lit et les détails s'ouvrent par ancre.
+  - SDK : `library.list/add/remove`, `scenarios.compose/insert` (droit `PUBLISH`) ; `ScenarioView`
+    porte `reusable`, `uses` et `description`.
+- **Flow Studio** : un onglet Tests génère les tests (formats, groupes) et dit ce qu'est chaque fichier ;
+  les phrases du moteur (assertions, raisons du rejeu et de la reprise) s'affichent en français dans le
+  Studio et le Dashboard ; Monter et Descendre au lieu d'Avancer et Reculer ; la recherche garde un
+  texte d'aide court ; une étape rejouée ne montre plus de raison inutile.
 - **Accès nominatifs** (`sdk-server --access named`, `startSdkServer({ access: 'named' })`) :
   - jetons par personne ou robot, conservés par leur seule empreinte et montrés une fois ;
   - quatre rôles (Lecteur, Analyste, Pilote QA, Administrateur), un rôle possible par projet ;

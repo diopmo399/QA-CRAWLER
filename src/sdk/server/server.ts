@@ -9,18 +9,53 @@ import { slug } from '../../knowledge/signatures.js';
 import { loadProjectMission, projectConfigSchema } from '../../project/project-config.js';
 import { runMission } from '../../orchestrator.js';
 import { inFlow } from '../../recording/assertion-proposals.js';
-import { runRecording } from '../../recording/record-orchestrator.js';
 import {
+  replayRecordedFlow,
+  runRecording,
+  type RecordedFlowReplay,
+} from '../../recording/record-orchestrator.js';
+import type { ReplayOutcome } from '../../recording/recording-report.js';
+import { loadConfigFile } from '../../config/config-loader.js';
+import { CorrectionBusyError, CorrectionManager, type CorrectionRuntime } from './corrections.js';
+import {
+  acceptBlocks,
+  addGroupToLibrary,
+  addScenarioToLibrary,
+  checkCompositionOf,
+  composeScenario,
+  compositionDrift,
+  declareContract,
+  declaredContractOf,
+  insertBlock,
+  LibraryError,
+  listLibrary,
+  previewSource,
+  removeFromLibrary,
+  validateVersion,
+} from './library.js';
+import { TestDataSetError } from '../../data/test-data-set.js';
+import {
+  acceptStoredGroupProposals,
+  addStoredGroupCheck,
   bindStoredTestData,
+  editStoredRow,
+  restoreStoredTarget,
+  reviewStoredIntent,
+  storedIntents,
+  storedRowSource,
   decideStoredProposal,
   editStoredGroups,
+  FLOW_FILES,
   generateStoredTests,
   loadStoredRecording,
+  removeStoredStep,
+  storedGroupChecks,
+  storedGroupProposals,
   storedGroups,
   storedTestData,
   type StoredRecording,
 } from '../../recording/recording-workspace.js';
-import type { GroupCommand } from '../../recording/step-groups.js';
+import type { GroupCommand, GroupProposal } from '../../recording/step-groups.js';
 import { redactText } from '../../security/redactor.js';
 import { readCoreVersion } from '../../tool-identity.js';
 import type {
@@ -30,6 +65,9 @@ import type {
   ErrorBody,
   ExplorationEvent,
   GenerationResult,
+  GroupProposalView,
+  RecordingReplayView,
+  RowColumnInput,
   DataBindingResult,
   GroupViewDto,
   Project,
@@ -54,6 +92,7 @@ import {
   EXTENSION_NAMES,
   FRAMEWORKS,
   GENERATION_FORMATS,
+  RECORDING_CONTROLS,
   RECORDING_NAME_PATTERN,
   SDK_API_VERSION,
 } from '../core/contracts.js';
@@ -167,6 +206,10 @@ export interface SdkServerOptions {
   run?: MissionRunner;
   /** Le recorder ; `runRecording` par défaut (remplaçable seulement pour les tests, qui y jouent l'humain). */
   record?: RecordRunner;
+  /** La correction de cible : navigateur visible par défaut ; les tests la pilotent sans fenêtre. */
+  correction?: CorrectionRuntime;
+  /** Le rejeu de validation d'un enregistrement ; `replayRecordedFlow` par défaut (remplaçable pour les tests). */
+  replayRecording?: (input: RecordedFlowReplay) => Promise<ReplayOutcome>;
   /** Explorations simultanées (défaut 1). */
   concurrency?: number;
   /**
@@ -238,6 +281,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     record: options.record ?? runRecording,
     ...(options.onWarning ? { onWarning: options.onWarning } : {}),
   });
+  const corrections = new CorrectionManager(options.correction);
   const engineVersion = await readCoreVersion();
   const sseClients = new Set<ServerResponse>();
 
@@ -253,6 +297,8 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     explorations,
     recordings,
     edits: new Map(),
+    replays: new Map(),
+    corrections,
     engineVersion,
     options,
     sseClients,
@@ -281,6 +327,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     explorations,
     recordings,
     close: async () => {
+      corrections.closeAll();
       // Arrêt contrôlé : rien n'est laissé tourner, les rapports des explorations arrêtées sont écrits.
       if (explorations.cancelAll() > 0) {
         const settled = await explorations.idle(options.closeGraceMs ?? 30_000);
@@ -311,6 +358,10 @@ interface Context {
   recordings: RecordingManager;
   /** Une modification à la fois par enregistrement (décisions, groupes, génération écrivent les mêmes fichiers). */
   edits: Map<string, Promise<unknown>>;
+  /** Les rejeux de validation lancés depuis le SDK, par enregistrement (projet/nom). */
+  replays: Map<string, RecordingReplayView>;
+  /** La session de correction de cible ouverte (une à la fois). */
+  corrections: CorrectionManager;
   engineVersion: string;
   options: SdkServerOptions;
   sseClients: Set<ServerResponse>;
@@ -714,6 +765,44 @@ async function handleRecordings(
     sendJson(response, live.snapshot(), 202);
     return;
   }
+  if (
+    action !== undefined &&
+    (RECORDING_CONTROLS as readonly string[]).includes(action) &&
+    method === 'POST'
+  ) {
+    if (live?.status !== 'RECORDING')
+      throw new HttpError(409, 'NOT_RECORDING', `the recording ${name} is not in progress`);
+    const body = await readOptionalJson(request);
+    const actionId = (): string => {
+      const value = textOf(body.actionId, 80);
+      if (!value) throw new HttpError(400, 'BAD_REQUEST', 'actionId is required');
+      return value;
+    };
+    const command =
+      action === 'checkpoint'
+        ? {
+            type: 'checkpoint' as const,
+            ...(textOf(body.label, 80) ? { label: textOf(body.label, 80) } : {}),
+          }
+        : action === 'resolve'
+          ? {
+              type: 'resolve' as const,
+              actionId: actionId(),
+              candidate: Number.isInteger(body.candidate)
+                ? (body.candidate as number)
+                : (() => {
+                    throw new HttpError(400, 'BAD_REQUEST', 'candidate must be an integer');
+                  })(),
+            }
+          : action === 'ignore'
+            ? { type: 'ignore' as const, actionId: actionId() }
+            : { type: action as 'pause' | 'resume' | 'undo' };
+    const outcome = await ctx.recordings.control(live, command);
+    if ('error' in outcome)
+      throw new HttpError(409, outcome.error, `the recorder refused ${action}: ${outcome.error}`);
+    sendJson(response, live.snapshot());
+    return;
+  }
   if (action === 'events' && method === 'GET') {
     if (!live)
       throw new HttpError(
@@ -733,7 +822,7 @@ async function handleRecordings(
   }
   const language = ctx.rules.reportLanguage;
   if (action === 'flow' && method === 'GET') {
-    sendJson(response, await flowView(await storedRecordingOf(ctx, project, name)));
+    sendJson(response, await flowView(await storedRecordingOf(ctx, project, name), language));
     return;
   }
   if (action === 'assertions' && itemId === undefined && method === 'GET') {
@@ -828,8 +917,131 @@ async function handleRecordings(
   }
   if (action === 'studio' && itemId === undefined && method === 'GET') {
     const stored = await storedRecordingOf(ctx, project, name);
-    sendJson(response, await studioView(stored, groupDtos(stored)));
+    sendJson(response, await studioView(stored, groupDtos(stored), language));
     return;
+  }
+  if (action === 'intents' && itemId === undefined) {
+    if (method === 'GET') {
+      sendJson(response, await storedIntents(await storedRecordingOf(ctx, project, name), language));
+      return;
+    }
+    if (method === 'POST') {
+      const body = await readJson(request);
+      const actionId = textOf(body.actionId, 80);
+      const type = body.type;
+      if (!actionId || (type !== 'CORRECT' && type !== 'CONFIRM' && type !== 'RESET'))
+        throw new HttpError(400, 'BAD_REQUEST', 'actionId and type (CORRECT, CONFIRM, RESET) are required');
+      const intent = textOf(body.intent, 40);
+      const reason = textOf(body.reason, 500);
+      const view = await editRecording(ctx, project, name, async (stored) => {
+        const outcome = await reviewStoredIntent(stored, {
+          actionId,
+          type,
+          ...(intent ? { intent } : {}),
+          ...(reason ? { reason } : {}),
+        });
+        if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+        return storedIntents(stored, language);
+      });
+      sendJson(response, view);
+      return;
+    }
+  }
+  if (action === 'steps' && itemId === 'row') {
+    if (method === 'GET') {
+      const stepId = textOf(url.searchParams.get('stepId'), 80);
+      if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+      const source = await storedRowSource(await storedRecordingOf(ctx, project, name), stepId);
+      if ('error' in source) throw new HttpError(422, 'REFUSED', source.error);
+      sendJson(response, source);
+      return;
+    }
+    if (method === 'POST') {
+      const body = await readJson(request);
+      const stepId = textOf(body.stepId, 80);
+      if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+      const columns = rowColumnsOf(body.columns);
+      const view = await editRecording(ctx, project, name, async (stored) => {
+        const outcome = await editStoredRow(stored, { stepId, columns }, language);
+        if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+        return studioView(stored, groupDtos(stored), language);
+      });
+      sendJson(response, view);
+      return;
+    }
+  }
+  if (action === 'steps' && itemId === 'restore' && method === 'POST') {
+    const stepId = textOf((await readJson(request)).stepId, 80);
+    if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+    const view = await editRecording(ctx, project, name, async (stored) => {
+      const outcome = await restoreStoredTarget(stored, stepId, language);
+      if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+      return studioView(stored, groupDtos(stored), language);
+    });
+    sendJson(response, view);
+    return;
+  }
+  if (action === 'correction') {
+    await handleCorrection(ctx, project, name, itemId, method, request, response);
+    return;
+  }
+  if (action === 'steps' && itemId === 'remove' && method === 'POST') {
+    const body = await readJson(request);
+    const stepId = textOf(body.stepId, 80);
+    if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+    const view = await editRecording(ctx, project, name, async (stored) => {
+      const outcome = await removeStoredStep(stored, stepId, language);
+      if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+      return studioView(stored, groupDtos(stored), language);
+    });
+    sendJson(response, view);
+    return;
+  }
+  if (action === 'groups' && itemId === 'proposals') {
+    if (method === 'GET') {
+      const stored = await storedRecordingOf(ctx, project, name);
+      sendJson(response, (await storedGroupProposals(stored, language)).map(groupProposalView));
+      return;
+    }
+    if (method === 'POST') {
+      const result = await editRecording(ctx, project, name, async (stored) => {
+        const outcome = await acceptStoredGroupProposals(stored, language);
+        if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+        return { groups: groupDtos(stored), warnings: outcome.warnings };
+      });
+      sendJson(response, result);
+      return;
+    }
+  }
+  if (action === 'groups' && itemId === 'checks') {
+    if (method === 'GET') {
+      sendJson(response, storedGroupChecks(await storedRecordingOf(ctx, project, name)));
+      return;
+    }
+    if (method === 'POST') {
+      const body = await readJson(request);
+      const groupId = textOf(body.groupId, 80);
+      const key = textOf(body.key, 80);
+      if (!groupId || !key) throw new HttpError(400, 'BAD_REQUEST', 'groupId and key are required');
+      const views = await editRecording(ctx, project, name, async (stored) => {
+        const outcome = await addStoredGroupCheck(stored, { groupId, key }, language);
+        if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+        return await proposalViews(stored);
+      });
+      sendJson(response, views);
+      return;
+    }
+  }
+  if (action === 'replay' && itemId === undefined) {
+    if (method === 'GET') {
+      sendJson(response, await replayView(ctx, project, name));
+      return;
+    }
+    if (method === 'POST') {
+      refuseArchived(project);
+      sendJson(response, await startReplay(ctx, project, name), 202);
+      return;
+    }
   }
   if (action === 'groups' && itemId === undefined && method === 'GET') {
     sendJson(response, groupDtos(await storedRecordingOf(ctx, project, name)));
@@ -886,6 +1098,20 @@ async function handleRecordings(
   throw new HttpError(404, 'NOT_FOUND', 'not found');
 }
 
+/** La mission du projet écrite en fichier (le recorder et son rejeu la lisent comme la CLI). */
+async function recordMission(ctx: Context, project: StoredProject): Promise<string> {
+  const loaded = await projectMission(ctx, project, 'record');
+  const derived = path.join(project.dir, '.derived');
+  await mkdir(derived, { recursive: true });
+  const missionFile = path.join(derived, 'record.mission.yaml');
+  await writeFile(
+    missionFile,
+    `# Derived by the SDK server from ${PROJECT_FILE} — regenerated at each recording.\n${loaded.missionYaml}`,
+    'utf8',
+  );
+  return missionFile;
+}
+
 async function startRecording(
   ctx: Context,
   project: StoredProject,
@@ -913,16 +1139,7 @@ async function startRecording(
     ctx.recordings.get(project.id, name)?.status === 'COMPLETED';
   if (taken)
     throw new HttpError(409, 'NAME_TAKEN', `a recording named ${name} already exists in this project`);
-  const loaded = await projectMission(ctx, project, 'record');
-  // La CLI rejoue la mission depuis un fichier : le recorder la lit de la même façon.
-  const derived = path.join(project.dir, '.derived');
-  await mkdir(derived, { recursive: true });
-  const missionFile = path.join(derived, 'record.mission.yaml');
-  await writeFile(
-    missionFile,
-    `# Derived by the SDK server from ${PROJECT_FILE} — regenerated at each recording.\n${loaded.missionYaml}`,
-    'utf8',
-  );
+  const missionFile = await recordMission(ctx, project);
   try {
     const session = ctx.recordings.start({
       projectId: project.id,
@@ -1074,6 +1291,307 @@ async function dataView(stored: StoredRecording): Promise<TestDataView> {
     })),
     generators: data.generators,
   };
+}
+
+/** Une opération de la bibliothèque : ses refus deviennent des réponses HTTP, expliquées. */
+async function libraryCall<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof LibraryError)
+      throw new HttpError(
+        error.status,
+        error.status === 409 ? 'CONFLICT' : error.status === 404 ? 'NOT_FOUND' : 'REFUSED',
+        error.message,
+        error.details.length > 0 ? { details: error.details } : {},
+      );
+    if (error instanceof TestDataSetError) throw new HttpError(422, 'REFUSED', error.message);
+    throw error;
+  }
+}
+
+/**
+ * LA BIBLIOTHÈQUE : lister les blocs ; ajouter un scénario ou un groupe d'un enregistrement ; retirer
+ * un bloc qu'aucun scénario ne rejoue.
+ */
+async function handleLibrary(
+  ctx: Context,
+  project: StoredProject,
+  item: string | undefined,
+  action: string | undefined,
+  method: string,
+  request: IncomingMessage,
+  json: (value: unknown, status?: number) => void,
+): Promise<void> {
+  if (item === undefined && method === 'GET') {
+    json(await listLibrary(project.dir));
+    return;
+  }
+  if (item === 'preview' && action === undefined && method === 'GET') {
+    const scenario = new URL(request.url ?? '/', 'http://localhost').searchParams.get('scenario') ?? '';
+    if (!scenario) throw new HttpError(400, 'BAD_REQUEST', 'scenario is required');
+    json(await libraryCall(() => previewSource(project.dir, scenario.slice(0, 120))));
+    return;
+  }
+  if (item === 'drift' && action === undefined && method === 'GET') {
+    json(await compositionDrift(project.dir));
+    return;
+  }
+  refuseArchived(project);
+  if (item === undefined && method === 'POST') {
+    const body = await readJson(request);
+    const name = typeof body.name === 'string' ? body.name : '';
+    const description = textOf(body.description, 500);
+    if (body.from === 'scenario') {
+      const scenario = textOf(body.scenario, 120);
+      if (!scenario) throw new HttpError(400, 'BAD_REQUEST', 'scenario is required');
+      json(
+        await libraryCall(() =>
+          addScenarioToLibrary(project.dir, { scenario, name, ...(description ? { description } : {}) }),
+        ),
+        201,
+      );
+      return;
+    }
+    if (body.from === 'recording') {
+      const recordingName = textOf(body.recording, 80);
+      const groupId = textOf(body.groupId, 80);
+      if (!recordingName || !RECORDING_NAME_PATTERN.test(recordingName) || !groupId)
+        throw new HttpError(400, 'BAD_REQUEST', 'recording and groupId are required');
+      const stored = await storedRecordingOf(ctx, project, recordingName);
+      const group = storedGroups(stored).find((entry) => entry.id === groupId);
+      json(
+        await libraryCall(() =>
+          addGroupToLibrary(
+            project.dir,
+            { directory: stored.directory, name: recordingName },
+            {
+              groupId,
+              name,
+              ...(group ? { startAt: group.startAt } : {}),
+              ...(description ? { description } : {}),
+            },
+          ),
+        ),
+        201,
+      );
+      return;
+    }
+    throw new HttpError(400, 'BAD_REQUEST', 'from must be scenario or recording');
+  }
+  if (item !== undefined && action === 'remove' && method === 'POST') {
+    const name = decodeURIComponent(item);
+    await libraryCall(() => removeFromLibrary(project.dir, name));
+    json({ removed: name });
+    return;
+  }
+  if (item !== undefined && action === 'contract' && method === 'PUT') {
+    const name = decodeURIComponent(item);
+    const body = await readJson(request);
+    json(
+      await libraryCall(() =>
+        declareContract(project.dir, name, body.contract === null ? null : declaredContractOf(body.contract)),
+      ),
+    );
+    return;
+  }
+  if (item !== undefined && action === 'version' && method === 'POST') {
+    const name = decodeURIComponent(item);
+    json(await libraryCall(() => validateVersion(project.dir, name)));
+    return;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'unknown library route');
+}
+
+/** Les colonnes d'une ligne, vérifiées champ par champ (le moteur vérifie ensuite les cellules et les données). */
+function rowColumnsOf(raw: unknown): RowColumnInput[] {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 20)
+    throw new HttpError(400, 'BAD_REQUEST', 'columns must be a list of 1 to 20 columns');
+  return raw.map((entry: unknown) => {
+    const value = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+    const column = textOf(value.column, 120);
+    const source = value.source;
+    if (
+      !column ||
+      (source !== 'recorded' && source !== 'value' && source !== 'variable' && source !== 'new-variable')
+    )
+      throw new HttpError(400, 'BAD_REQUEST', 'each column needs a name and a source');
+    const text = textOf(value.value, 200);
+    const key = textOf(value.key, 120);
+    return {
+      column,
+      source,
+      ...(text !== undefined ? { value: text } : {}),
+      ...(key ? { key } : {}),
+      ...(value.match === 'contains' || value.match === 'exact' ? { match: value.match } : {}),
+    };
+  });
+}
+
+/**
+ * LA CORRECTION D'UNE CIBLE : ouvrir (le serveur rejoue jusqu'à l'étape dans un navigateur sur sa
+ * machine), suivre, désigner à nouveau, valider, reprendre le rejeu, fermer. Rien n'est écrit avant
+ * la validation.
+ */
+async function handleCorrection(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  sub: string | undefined,
+  method: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const key = `${project.id}/${name}`;
+  const language = ctx.rules.reportLanguage;
+  const refuse = (error: unknown): never => {
+    throw new HttpError(409, 'CORRECTION_REFUSED', error instanceof Error ? error.message : String(error));
+  };
+  if (sub === undefined && method === 'GET') {
+    const view = ctx.corrections.view(key);
+    if (!view) throw new HttpError(404, 'NOT_FOUND', 'no correction is open for this recording');
+    sendJson(response, view);
+    return;
+  }
+  if (sub === undefined && method === 'POST') {
+    refuseArchived(project);
+    const stepId = textOf((await readJson(request)).stepId, 80);
+    if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+    if (ctx.recordings.active())
+      throw new HttpError(409, 'RECORDING_ACTIVE', 'a recording is in progress: one browser at a time');
+    const recording = await storedRecordingOf(ctx, project, name);
+    const missionFile = await recordMission(ctx, project);
+    const overrides = { reportsDir: reportsDirOf(project) };
+    const { config } = await loadConfigFile(missionFile, overrides, ctx.env);
+    try {
+      sendJson(
+        response,
+        ctx.corrections.start({
+          key,
+          recording,
+          stepId,
+          missionFile,
+          overrides,
+          env: ctx.env,
+          language,
+          config,
+        }),
+        202,
+      );
+    } catch (error) {
+      if (error instanceof CorrectionBusyError) throw new HttpError(409, 'CORRECTION_ACTIVE', error.message);
+      throw new HttpError(422, 'REFUSED', error instanceof Error ? error.message : String(error));
+    }
+    return;
+  }
+  if (method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
+  if (sub === 'pick') {
+    const recording = await storedRecordingOf(ctx, project, name);
+    sendJson(
+      response,
+      await Promise.resolve()
+        .then(() => ctx.corrections.pickAgain(key, recording))
+        .catch(refuse),
+    );
+    return;
+  }
+  if (sub === 'apply') {
+    const body = await readJson(request);
+    const option = textOf(body.option, 20);
+    const raw = body.binding as Record<string, unknown> | undefined;
+    const column = raw && typeof raw === 'object' ? textOf(raw.column, 120) : undefined;
+    const bound = raw && typeof raw === 'object' ? textOf(raw.key, 120) : undefined;
+    const view = await editRecording(ctx, project, name, (stored) =>
+      ctx.corrections
+        .apply(key, stored, {
+          ...(option ? { option } : {}),
+          ...(column && bound ? { binding: { column, key: bound } } : {}),
+        })
+        .catch(refuse),
+    );
+    sendJson(response, view);
+    return;
+  }
+  if (sub === 'resume') {
+    sendJson(response, await ctx.corrections.resume(key).catch(refuse));
+    return;
+  }
+  if (sub === 'close') {
+    ctx.corrections.close(key);
+    sendJson(response, { closed: true });
+    return;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'unknown correction action');
+}
+
+function groupProposalView(proposal: GroupProposal): GroupProposalView {
+  return {
+    name: proposal.name,
+    stepIds: proposal.stepIds,
+    from: proposal.from,
+    to: proposal.to,
+    action: proposal.action,
+    confidence: proposal.confidence,
+  };
+}
+
+/** Le rejeu en cours ou le dernier de cette session, et le dernier écrit sur disque. */
+async function replayView(ctx: Context, project: StoredProject, name: string): Promise<RecordingReplayView> {
+  const stored = await storedRecordingOf(ctx, project, name);
+  const job = ctx.replays.get(`${project.id}/${name}`);
+  const last = (await studioView(stored, [], ctx.rules.reportLanguage)).replay;
+  return { ...(job ?? { status: 'NONE' as const }), ...(last ? { last } : {}) };
+}
+
+/**
+ * LE REJEU DE VALIDATION d'un enregistrement écrit : le flow généré est rejoué (dry run, sans fenêtre,
+ * mémoire isolée) avec la mission du projet ; la politique de sécurité s'applique. Un seul à la fois
+ * par enregistrement ; la page suit sa progression par GET.
+ */
+async function startReplay(ctx: Context, project: StoredProject, name: string): Promise<RecordingReplayView> {
+  const key = `${project.id}/${name}`;
+  if (ctx.replays.get(key)?.status === 'RUNNING')
+    throw new HttpError(409, 'REPLAY_RUNNING', `the recording ${name} is already being replayed`);
+  const stored = await storedRecordingOf(ctx, project, name);
+  const yaml = await readFile(path.join(stored.directory, FLOW_FILES.yaml), 'utf8').catch(() => undefined);
+  if (yaml === undefined)
+    throw new HttpError(422, 'REFUSED', `recording "${name}" has no generated flow (YAML) to replay`);
+  const missionFile = await recordMission(ctx, project);
+  const total = stored.flow.steps.filter((item) => item.step.kind !== 'expect').length;
+  const job: RecordingReplayView = {
+    status: 'RUNNING',
+    executed: 0,
+    total,
+    startedAt: new Date().toISOString(),
+  };
+  ctx.replays.set(key, job);
+  const replay = ctx.options.replayRecording ?? replayRecordedFlow;
+  void replay({
+    directory: stored.directory,
+    flow: stored.flow,
+    yaml,
+    missionFile,
+    overrides: { reportsDir: reportsDirOf(project) },
+    env: ctx.env,
+    headless: true,
+    onStep: (executed, steps) => {
+      job.executed = executed;
+      job.total = steps;
+    },
+  })
+    .then((outcome) => {
+      job.status = outcome.status === 'REPLAY_CONFIRMED' ? 'REPLAY_CONFIRMED' : 'REPLAY_FAILED';
+      if (outcome.dryRunStatus) job.dryRunStatus = outcome.dryRunStatus;
+      if (outcome.reason) job.reason = redactText(outcome.reason);
+    })
+    .catch((error: unknown) => {
+      job.status = 'REPLAY_FAILED';
+      job.reason = redactText(error instanceof Error ? error.message : String(error));
+    })
+    .finally(() => {
+      job.finishedAt = new Date().toISOString();
+    });
+  return { ...job };
 }
 
 function groupDtos(stored: StoredRecording): GroupViewDto[] {
@@ -1532,6 +2050,74 @@ async function handlePlatform(
     }
     return false;
   }
+  if (sub === 'library') {
+    const project = await projectOf(ctx, id);
+    await handleLibrary(ctx, project, item, action, method, request, json);
+    return true;
+  }
+  if (sub === 'scenarios' && item === 'compose' && action === 'check' && method === 'POST') {
+    // Vérifier un parcours sans rien écrire ni exécuter (dry run de composition).
+    const project = await projectOf(ctx, id);
+    const body = await readJson(request);
+    const parts = Array.isArray(body.parts)
+      ? body.parts.filter((part): part is string => typeof part === 'string').slice(0, 31)
+      : [];
+    json(
+      await checkCompositionOf(project.dir, {
+        name: typeof body.name === 'string' ? body.name.slice(0, 200) : '',
+        parts,
+      }),
+    );
+    return true;
+  }
+  if (sub === 'scenarios' && item === 'compose' && action === undefined && method === 'POST') {
+    const project = await projectOf(ctx, id);
+    refuseArchived(project);
+    const body = await readJson(request);
+    const parts = Array.isArray(body.parts)
+      ? body.parts.filter((part): part is string => typeof part === 'string')
+      : [];
+    const description = textOf(body.description, 500);
+    const file = await libraryCall(() =>
+      composeScenario(project.dir, {
+        name: typeof body.name === 'string' ? body.name : '',
+        parts,
+        ...(description ? { description } : {}),
+      }),
+    );
+    const scenario = (await listScenarios(project.dir)).find((entry) => entry.file === file);
+    if (!scenario) throw new HttpError(422, 'REFUSED', 'the composed scenario could not be read back');
+    json(scenario, 201);
+    return true;
+  }
+  if (sub === 'scenarios' && item !== undefined && action === 'insert' && method === 'POST') {
+    const project = await projectOf(ctx, id);
+    refuseArchived(project);
+    const body = await readJson(request);
+    const block = textOf(body.block, 120);
+    if (!block || (body.at !== 'start' && body.at !== 'end'))
+      throw new HttpError(400, 'BAD_REQUEST', 'block and at (start or end) are required');
+    const scenario = decodeURIComponent(item);
+    const revision = textOf(body.revision, 40);
+    await libraryCall(() =>
+      insertBlock(project.dir, scenario, {
+        block,
+        at: body.at as 'start' | 'end',
+        ...(revision ? { revision } : {}),
+      }),
+    );
+    const view = (await listScenarios(project.dir)).find((entry) => entry.name === scenario);
+    json(view ?? { name: scenario });
+    return true;
+  }
+  if (sub === 'scenarios' && item !== undefined && action === 'accept' && method === 'POST') {
+    // Accepter explicitement la version actuelle des blocs d'un parcours suivi (vérifié de nouveau).
+    const project = await projectOf(ctx, id);
+    refuseArchived(project);
+    const scenario = decodeURIComponent(item);
+    json(await libraryCall(() => acceptBlocks(project.dir, scenario)));
+    return true;
+  }
   if (sub === 'scenarios' && item === 'history' && method === 'GET') {
     const project = await projectOf(ctx, id);
     const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') ?? 10) || 10));
@@ -1591,6 +2177,29 @@ async function handlePlatform(
       const unknown = (wanted ?? []).filter((name) => !known.some((scenario) => scenario.name === name));
       if (unknown.length > 0)
         throw new HttpError(404, 'NOT_FOUND', `unknown scenario(s): ${unknown.join(', ')}`);
+      const blocks = (wanted ?? []).filter((name) =>
+        known.some((scenario) => scenario.name === name && scenario.reusable),
+      );
+      if (blocks.length > 0)
+        throw new HttpError(
+          422,
+          'REUSABLE_BLOCK',
+          `${blocks.join(', ')}: a block of the library runs only through a scenario (run:)`,
+        );
+      // Un parcours suivi n'est jamais rejoué avec un bloc qui a changé depuis sa composition, sans décision.
+      const drift = await compositionDrift(project.dir, wanted);
+      if (drift.length > 0)
+        throw new HttpError(
+          409,
+          'BLOCK_VERSION_CHANGED',
+          `${[...new Set(drift.map((entry) => entry.scenario))].join(', ')}: a block changed since the journey was composed; accept its new version first`,
+          {
+            details: drift.map(
+              (entry) =>
+                `${entry.scenario}: ${entry.block} v${String(entry.pinned)} → ${entry.unvalidated ? 'modified, not validated' : `v${String(entry.current)}`}`,
+            ),
+          },
+        );
       const flowsDir = await flowsDirOf(project.dir);
       const selected = wanted ? known.filter((scenario) => wanted.includes(scenario.name)) : undefined;
       const loaded = await projectMission(ctx, project, 'replay', {

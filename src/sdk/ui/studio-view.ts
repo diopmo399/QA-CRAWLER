@@ -2,14 +2,21 @@ import type {
   AssertionProposalView,
   DataInputView,
   FlowStudioView,
+  GenerationResult,
   GroupViewDto,
   StudioStep,
   StudioViolation,
   TestDataView,
 } from '../core/contracts.js';
+import { GENERATION_FORMATS } from '../core/contracts.js';
 import { NODE_HEIGHT, NODE_WIDTH, type LaidEdge, type StudioLayout, type Viewport } from './studio-layout.js';
 import type { StudioStrings } from './studio-i18n.js';
+import { enginePhrase } from './engine-phrases.js';
 import { esc, icon } from './view.js';
+
+/** Une phrase du moteur dans la langue du Studio (la tournure inconnue reste telle quelle). */
+const phrase = (t: StudioStrings, text: string): string =>
+  enginePhrase(text, t.dateLocale.startsWith('fr') ? 'fr' : 'en');
 
 /**
  * LE RENDU DU FLOW STUDIO, en fonctions pures (testables sans navigateur). Le composant
@@ -40,7 +47,9 @@ export interface StudioState {
   moved: boolean;
   /** La suppression d'un groupe attend une confirmation (deuxième clic). */
   confirmDelete?: string;
-  tab: 'flow' | 'data' | 'assertions';
+  tab: 'flow' | 'data' | 'assertions' | 'tests';
+  /** La dernière génération de tests (fichiers produits et leur statut). */
+  generation?: GenerationResult;
   /** Les données de test (absentes tant qu'elles ne sont pas chargées) ; dataError si elles ne le sont pas. */
   data?: TestDataView;
   dataError?: string;
@@ -200,7 +209,7 @@ function noticeHtml(state: StudioState): string {
 function overviewPanel(state: StudioState, view: FlowStudioView): string {
   const t = state.t;
   const replay = view.replay
-    ? `<p>${esc(t.replayAt(view.replay.status, new Date(view.replay.at).toLocaleString(t.dateLocale)))}</p>${view.replay.stale ? `<p class="warn">${esc(t.replayStale)}</p>` : ''}`
+    ? `<p>${esc(t.replayAt(t.replayStatuses[view.replay.status] ?? view.replay.status, new Date(view.replay.at).toLocaleString(t.dateLocale)))}</p>${view.replay.stale ? `<p class="warn">${esc(t.replayStale)}</p>` : ''}`
     : `<p class="mu">${esc(t.replayNone)}</p>`;
   return `<h2>${esc(t.overview)}</h2>
 <p class="nm">${esc(view.name)}</p>
@@ -256,9 +265,9 @@ function stepPanel(state: StudioState, view: FlowStudioView): string {
 <dt>${esc(t.group)}</dt><dd>${group ? `<button class="lnk" data-select-group="${esc(group.id)}">${esc(group.name)}</button>` : `<span class="mu">${esc(t.noGroup)}</span>`}</dd>
 <dt>${esc(t.produces)}</dt><dd>${list(step.produces, t)}</dd>
 <dt>${esc(t.consumes)}</dt><dd>${list(step.consumes, t)}</dd>
-<dt>${esc(t.replay)}</dt><dd><span class="pill ${replayClass(step)}">${esc(t.outcome(step.replay?.outcome))}</span>${step.replay?.reasons.length ? `<ul class="reasons">${step.replay.reasons.map((reason) => `<li>${esc(reason)}</li>`).join('')}</ul>` : ''}</dd>
+<dt>${esc(t.replay)}</dt><dd><span class="pill ${replayClass(step)}">${esc(t.outcome(step.replay?.outcome))}</span>${step.replay && step.replay.outcome !== 'MATCHED' && step.replay.reasons.length > 0 ? `<ul class="reasons">${step.replay.reasons.map((reason) => `<li>${esc(phrase(t, reason))}</li>`).join('')}</ul>` : ''}</dd>
 </dl>
-<div class="row"><button class="btn" data-cmd="move-step-up"${disabled}>${icon('arrowL')}${esc(t.moveUp)}</button><button class="btn" data-cmd="move-step-down"${disabled}>${esc(t.moveDown)}${icon('arrowR')}</button></div>
+<div class="row"><button class="btn" data-cmd="move-step-up"${disabled}>${icon('arrowU')}${esc(t.moveUp)}</button><button class="btn" data-cmd="move-step-down"${disabled}>${icon('arrowD')}${esc(t.moveDown)}</button></div>
 ${group ? `<div class="row"><button class="btn" data-cmd="detach"${disabled}>${esc(t.detach)}</button></div>` : ''}
 <div class="row"><label for="qa-assign-one">${esc(t.assignTo)}</label><select id="qa-assign-one" data-assign="one"${disabled}>${groupOptions(view, group?.id, t)}</select></div>
 <form class="col" data-form="create"><label class="sr" for="qa-new-group">${esc(t.groupName)}</label><input id="qa-new-group" name="name" required maxlength="80" placeholder="${esc(t.groupName)}"><div class="row"><button class="btn pri"${disabled}>${esc(t.createGroup)}</button></div></form>
@@ -321,7 +330,9 @@ function stepAssertions(state: StudioState, stepId: string): string {
   );
   if (own.length === 0) return '';
   return `<h3>${esc(state.t.stepAssertions)}</h3><ul class="asserts">${own
-    .map((proposal) => `<li>${verdictPill(state, proposal)} ${esc(proposal.description)}</li>`)
+    .map(
+      (proposal) => `<li>${verdictPill(state, proposal)} ${esc(phrase(state.t, proposal.description))}</li>`,
+    )
     .join('')}</ul>`;
 }
 
@@ -370,10 +381,10 @@ function assertionsPanel(state: StudioState): string {
       const editing = state.editingAssertion === proposal.id;
       return `<li class="assert" data-assertion="${esc(proposal.id)}">
 <p class="row">${verdictPill(state, proposal)} <span class="pill r-none">${esc(t.statuses[proposal.status] ?? proposal.status)}</span> <span class="mu">${esc(t.methods[proposal.verificationMethod])} · ${esc(proposal.inFlow ? t.inFlowYes : t.inFlowNo)}</span></p>
-<p class="nm2">${esc(proposal.description)}</p>
-<p class="mu">${esc(t.why)} : ${esc(proposal.why)}${proposal.evidence.length > 0 ? ` · ${esc(t.evidenceCount(proposal.evidence.length))}` : ''}${proposal.needsConfirmation ? ` · ${esc(t.confirmNeeded)}` : ''}</p>
+<p class="nm2">${esc(phrase(t, proposal.description))}</p>
+<p class="mu">${esc(t.why)} : ${esc(phrase(t, proposal.why))}${proposal.evidence.length > 0 ? ` · ${esc(t.evidenceCount(proposal.evidence.length))}` : ''}${proposal.needsConfirmation ? ` · ${esc(t.confirmNeeded)}` : ''}</p>
 ${proposal.verdict.observed ? `<p class="mu">${esc(t.observed)} : ${esc(proposal.verdict.observed)}</p>` : ''}
-${proposal.verdict.reasons.length > 0 && proposal.verdict.status !== 'NOT_EXECUTED' ? `<ul class="reasons">${proposal.verdict.reasons.map((reason) => `<li>${esc(reason)}</li>`).join('')}</ul>` : ''}
+${proposal.verdict.reasons.length > 0 && proposal.verdict.status !== 'NOT_EXECUTED' && proposal.verdict.status !== 'VERIFIED_PASS' ? `<ul class="reasons">${proposal.verdict.reasons.map((reason) => `<li>${esc(phrase(t, reason))}</li>`).join('')}</ul>` : ''}
 ${
   editing
     ? `<form class="col" data-form="modify" data-assertion="${esc(proposal.id)}"><label for="qa-modify-${esc(proposal.id)}">${esc(t.description)}</label><textarea id="qa-modify-${esc(proposal.id)}" name="description" maxlength="500" rows="3" required>${esc(proposal.description)}</textarea><div class="row"><button class="btn pri"${disabled}>${esc(t.save)}</button></div></form>`
@@ -409,7 +420,7 @@ function groupPanel(state: StudioState, view: FlowStudioView, group: GroupViewDt
   return `<h2>${esc(t.group)}</h2>
 <form class="col" data-form="rename"><label for="qa-group-name">${esc(t.groupName)}</label><div class="row"><input id="qa-group-name" name="name" required maxlength="80" value="${esc(group.name)}"><button class="btn"${disabled}>${esc(t.rename)}</button></div></form>
 <form class="col" data-form="describe"><label for="qa-group-desc">${esc(t.description)}</label><textarea id="qa-group-desc" name="description" maxlength="400" rows="3">${esc(group.description ?? '')}</textarea><div class="row"><button class="btn"${disabled}>${esc(t.save)}</button></div></form>
-<div class="row"><button class="btn" data-cmd="move-group-up"${disabled}>${icon('arrowL')}${esc(t.moveUp)}</button><button class="btn" data-cmd="move-group-down"${disabled}>${esc(t.moveDown)}${icon('arrowR')}</button><button class="btn" data-collapse="${esc(group.id)}"${disabled}>${esc(group.collapsed ? t.expand : t.collapse)}</button></div>
+<div class="row"><button class="btn" data-cmd="move-group-up"${disabled}>${icon('arrowU')}${esc(t.moveUp)}</button><button class="btn" data-cmd="move-group-down"${disabled}>${icon('arrowD')}${esc(t.moveDown)}</button><button class="btn" data-collapse="${esc(group.id)}"${disabled}>${esc(group.collapsed ? t.expand : t.collapse)}</button></div>
 <dl>
 <dt>${esc(t.startAt)}</dt><dd><code>${esc(group.startAt)}</code></dd>
 <dt>${esc(t.steps)}</dt><dd>${String(group.stepIds.length)}</dd>
@@ -422,10 +433,56 @@ function groupPanel(state: StudioState, view: FlowStudioView, group: GroupViewDt
 <div class="row"><button class="btn danger" data-cmd="delete-group"${disabled}>${esc(state.confirmDelete === group.id ? t.confirmDelete : t.deleteGroup)}</button></div>`;
 }
 
+const FILE_CLASS: Record<string, string> = {
+  STATICALLY_VALIDATED: 'r-ok',
+  PASSED: 'r-ok',
+  FAILED: 'r-ko',
+  NOT_VALIDATED: 'r-warn',
+  BLOCKED: 'r-warn',
+  INCONCLUSIVE: 'r-warn',
+};
+
+/** LA GÉNÉRATION : formats, groupes (aucun : tout le parcours), puis les fichiers et ce qu'ils sont. */
+function testsPanel(state: StudioState, view: FlowStudioView): string {
+  const t = state.t;
+  const disabled = state.busy ? ' disabled' : '';
+  const chosen = new Set(state.selectedGroup ? [state.selectedGroup] : []);
+  const formats = GENERATION_FORMATS.map(
+    (format) =>
+      `<label class="opt"><input type="checkbox" name="format" value="${format}"${format === 'yaml' || format === 'gherkin' ? ' checked' : ''}> ${esc(t.formats[format] ?? format)}</label>`,
+  ).join('');
+  const groups = view.groups
+    .map(
+      (group) =>
+        `<label class="opt"><input type="checkbox" name="group" value="${esc(group.id)}"${chosen.has(group.id) ? ' checked' : ''}> ${esc(group.name)}</label>`,
+    )
+    .join('');
+  const result = state.generation;
+  const files = result
+    ? `<h3>${esc(t.filesTitle)}</h3>${result.warnings.length > 0 ? `<ul class="reasons">${result.warnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul>` : ''}<ul class="files">${result.files
+        .map(
+          (file) =>
+            `<li data-file="${esc(file.path)}"><p class="row"><span class="pill ${FILE_CLASS[file.status] ?? 'r-none'}">${esc(t.fileStatuses[file.status] ?? file.status)}</span> <b>${esc(t.formats[file.format] ?? file.format)}</b></p><p><code>${esc(file.path)}</code></p>${
+              file.validation
+                ? `<p class="${file.validation.ok ? 'mu' : 'warn'}">${esc(phrase(t, file.validation.method))}${file.validation.messages.length > 0 ? ` — ${esc(file.validation.messages.map((message) => phrase(t, message)).join(' · '))}` : ''}</p>`
+                : ''
+            }${file.assertions.length > 0 ? `<ul class="asserts">${file.assertions.map((assertion) => `<li>${esc(phrase(t, assertion.description))} <span class="mu">(${esc(t.support[assertion.support] ?? assertion.support)})</span></li>`).join('')}</ul>` : ''}${file.limits.length > 0 ? `<p class="mu">${esc(t.limitsLabel)} : ${esc(file.limits.join(' · '))}</p>` : ''}<details><summary>${esc(t.showContent)}</summary><pre class="code">${esc(file.content)}</pre></details></li>`,
+        )
+        .join('')}</ul>`
+    : '';
+  return `<h2>${esc(t.testsTitle)}</h2>
+<form class="col gen" data-form="generate">
+<fieldset class="col"><legend>${esc(t.formatsLabel)}</legend>${formats}</fieldset>
+${groups ? `<fieldset class="col"><legend>${esc(t.groupsLabel)}</legend>${groups}</fieldset>` : ''}
+<p class="warn">${esc(t.generationNote)}</p>
+<div class="row"><button type="submit" class="btn pri"${disabled}>${esc(t.generate)}</button></div>
+</form>${files}`;
+}
+
 function tabsHtml(state: StudioState): string {
   const t = state.t;
   return `<div class="tabs" role="tablist" aria-label="${esc(t.title)}">${(
-    ['flow', 'data', 'assertions'] as const
+    ['flow', 'data', 'assertions', 'tests'] as const
   )
     .map(
       (tab) =>
@@ -443,13 +500,15 @@ export function renderPanel(state: StudioState): string {
   const body =
     state.tab === 'data'
       ? dataPanel(state)
-      : state.tab === 'assertions'
-        ? assertionsPanel(state)
-        : group
-          ? groupPanel(state, view, group)
-          : state.selected.length > 0
-            ? stepPanel(state, view)
-            : overviewPanel(state, view);
+      : state.tab === 'tests'
+        ? testsPanel(state, view)
+        : state.tab === 'assertions'
+          ? assertionsPanel(state)
+          : group
+            ? groupPanel(state, view, group)
+            : state.selected.length > 0
+              ? stepPanel(state, view)
+              : overviewPanel(state, view);
   return `${tabsHtml(state)}<div class="tabpanel" role="tabpanel" aria-labelledby="qa-tab-${state.tab}">${noticeHtml(state)}${body}</div>`;
 }
 
@@ -469,7 +528,7 @@ export function renderStudio(state: StudioState): string {
 <header class="tb">
 <b class="ttl">${esc(t.title)}</b><span class="mu nm">${esc(view.name)}</span>
 <span class="sp"></span>
-<div class="search"><label class="sr" for="qa-search">${esc(t.search)}</label>${icon('target')}<input id="qa-search" type="search" placeholder="${esc(t.search)}" value="${esc(state.query)}" autocomplete="off"><output class="mu" aria-live="polite">${state.query.trim() ? esc(t.matches(total === 0 ? 0 : state.matchIndex + 1, total)) : ''}</output></div>
+<div class="search"><label class="sr" for="qa-search">${esc(t.searchLabel)}</label>${icon('target')}<input id="qa-search" type="search" placeholder="${esc(t.search)}" title="${esc(t.searchLabel)}" value="${esc(state.query)}" autocomplete="off"><output class="mu" aria-live="polite">${state.query.trim() ? esc(t.matches(total === 0 ? 0 : state.matchIndex + 1, total)) : ''}</output></div>
 <div class="zoom" role="group" aria-label="${esc(t.graph)}">
 <button class="ib" data-cmd="zoom-out" aria-label="${esc(t.zoomOut)}" title="${esc(t.zoomOut)}">−</button>
 <output class="zv" aria-live="off">${String(Math.round(state.viewport.k * 100))} %</output>

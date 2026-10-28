@@ -4,7 +4,12 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ScenarioConfig } from '../../src/config/config.js';
 import type { RunOptions, RunOutcome } from '../../src/orchestrator.js';
-import type { RecordOutcome, RecordRequest } from '../../src/recording/record-orchestrator.js';
+import type {
+  RecordedFlowReplay,
+  RecordOutcome,
+  RecordRequest,
+} from '../../src/recording/record-orchestrator.js';
+import type { ReplayOutcome } from '../../src/recording/recording-report.js';
 import { createQaCrawler, type ExplorationEvent, type ProjectDraft } from '../../src/sdk/core/index.js';
 import { engineDefaults } from '../../src/sdk/server/project.js';
 import { startSdkServer, type RunningSdkServer } from '../../src/sdk/server/server.js';
@@ -106,6 +111,17 @@ async function fakeRun(config: ScenarioConfig, options: RunOptions): Promise<Run
  * tests/integration/sdk-extensions.test.ts.
  */
 const records: RecordRequest[] = [];
+/** Le rejeu de validation, sans navigateur : il annonce ses étapes puis confirme. */
+const replays: RecordedFlowReplay[] = [];
+let releaseReplay: () => void = () => undefined;
+async function fakeReplay(input: RecordedFlowReplay): Promise<ReplayOutcome> {
+  replays.push(input);
+  input.onStep?.(1, 2);
+  await new Promise<void>((resolve) => {
+    releaseReplay = resolve;
+  });
+  return { status: 'REPLAY_CONFIRMED', dryRunStatus: 'FULLY_MATCHED', reason: 'every step was found' };
+}
 async function fakeRecord(request: RecordRequest): Promise<RecordOutcome> {
   records.push(request);
   const at = new Date().toISOString();
@@ -115,11 +131,57 @@ async function fakeRecord(request: RecordRequest): Promise<RecordOutcome> {
   });
   request.onEvent?.({ type: 'RECORDING_STARTED', at, message: 'recording started' } as never);
   request.onEvent?.({ type: 'RAW_EVENT_CAPTURED', at, message: 'click r1' } as never);
+  // La barre d'enregistrement : une timeline (un geste ambigu), la pause, les vérifications, l'annulation.
+  const actions: Record<string, unknown>[] = [
+    {
+      id: 'a1',
+      index: 1,
+      kind: 'click',
+      description: 'Cliquer sur "Ouvrir"',
+      page: '/users',
+      status: 'AMBIGUOUS',
+      statusText: '2 éléments correspondent',
+      candidates: [
+        { index: 0, label: 'Ouvrir — ligne 1', original: true },
+        { index: 1, label: 'Ouvrir — ligne 2', original: false },
+      ],
+      technical: { selector: 'never sent' },
+    },
+  ];
+  const checkpoints: { label: string }[] = [];
+  let paused = false;
   request.control?.({
     requestStop: (reason: string) => {
       stop(reason);
     },
     stopped,
+    get isPaused() {
+      return paused;
+    },
+    timeline: { actions },
+    session: { checkpoints },
+    pause: () => {
+      paused = true;
+      request.onTimeline?.();
+      return Promise.resolve();
+    },
+    resume: () => {
+      paused = false;
+      request.onTimeline?.();
+      return Promise.resolve();
+    },
+    checkpoint: (label?: string) => {
+      checkpoints.push({ label: label ?? 'checkpoint 1' });
+      return Promise.resolve();
+    },
+    undo: () => actions.pop(),
+    resolveAmbiguity: (id: string, candidate: number) => {
+      const action = actions.find((entry) => entry.id === id);
+      if (!action) return { error: 'NOT_FOUND' };
+      action.resolution = 'RESOLVED';
+      return { action, candidate };
+    },
+    ignoreAmbiguity: () => undefined,
   } as never);
   const reason = await stopped;
   request.onEvent?.({ type: 'RECORDING_STOPPED', at, message: 'stopped (api)' } as never);
@@ -187,6 +249,7 @@ beforeAll(async () => {
     workspace,
     run: fakeRun,
     record: fakeRecord,
+    replayRecording: fakeReplay,
     allowedOrigins: ['https://portal.example.test'],
     env: { QA_USERNAME: 'jane', QA_PASSWORD: 'secret-value', AWS_SECRET_ACCESS_KEY: 'x' },
   });
@@ -445,9 +508,52 @@ describe('SDK server — recordings and reports', () => {
       events.push(event),
     );
     await expect.poll(() => events.length).toBeGreaterThan(1);
+    // La barre d'enregistrement, depuis le SDK : la timeline suit chaque commande (son dernier état seul).
+    const timelines = (): {
+      paused: boolean;
+      steps: { id: string; resolution?: string }[];
+      checkpoints: string[];
+    }[] => events.filter((event) => event.type === 'timeline') as never;
+    await expect.poll(() => timelines().length).toBeGreaterThan(0);
+    expect(timelines().at(-1)).toMatchObject({
+      paused: false,
+      checkpoints: [],
+      steps: [{ id: 'a1', description: 'Cliquer sur "Ouvrir"', status: 'AMBIGUOUS', candidates: [{}, {}] }],
+    });
+    expect(JSON.stringify(timelines())).not.toContain('never sent');
+    expect((await client.recordings.pause(project.id, 'parcours-test')).status).toBe('RECORDING');
+    await expect.poll(() => timelines().at(-1)?.paused).toBe(true);
+    await client.recordings.resume(project.id, 'parcours-test');
+    await expect.poll(() => timelines().at(-1)?.paused).toBe(false);
+    await client.recordings.checkpoint(project.id, 'parcours-test', 'La liste s’affiche');
+    await expect.poll(() => timelines().at(-1)?.checkpoints).toEqual(['La liste s’affiche']);
+    await client.recordings.resolve(project.id, 'parcours-test', 'a1', 1);
+    await expect.poll(() => timelines().at(-1)?.steps[0]?.resolution).toBe('RESOLVED');
+    await expect(client.recordings.resolve(project.id, 'parcours-test', 'a9', 0)).rejects.toMatchObject({
+      status: 409,
+      code: 'NOT_FOUND',
+    });
+    await expect(client.recordings.ignore(project.id, 'parcours-test', 'a9')).rejects.toMatchObject({
+      status: 409,
+    });
+    const bad = await call(`/api/projects/${project.id}/recordings/parcours-test/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ actionId: 'a1', candidate: 'x' }),
+    });
+    expect(bad.status).toBe(400);
+    await client.recordings.undo(project.id, 'parcours-test');
+    await expect.poll(() => timelines().at(-1)?.steps).toEqual([]);
+    await expect(client.recordings.undo(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 409,
+      code: 'NOTHING_TO_UNDO',
+    });
     expect((await client.recordings.stop(project.id, 'parcours-test')).name).toBe('parcours-test');
     await subscription.done;
-    expect(events.map((event) => event.type)).toEqual([
+    // Un nouvel abonné ne reçoit que le dernier état de la timeline, jamais tout son historique.
+    const replayed: { type: string }[] = [];
+    await client.recordings.subscribe(project.id, 'parcours-test', (event) => replayed.push(event)).done;
+    expect(replayed.filter((event) => event.type === 'timeline')).toHaveLength(1);
+    expect(events.filter((event) => event.type !== 'timeline').map((event) => event.type)).toEqual([
       'status',
       'recorder',
       'recorder',
@@ -512,6 +618,82 @@ describe('SDK server — recordings and reports', () => {
     await expect(client.recordings.stop(project.id, 'parcours-test')).rejects.toMatchObject({
       status: 409,
       code: 'NOT_RECORDING',
+    });
+    await expect(client.recordings.pause(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 409,
+      code: 'NOT_RECORDING',
+    });
+
+    // La revue sans la fenêtre du recorder : retirer une étape, groupes proposés, vérifications, rejeu.
+    await expect(client.recordings.removeStep(project.id, 'parcours-test', 'nope')).rejects.toMatchObject({
+      status: 422,
+    });
+    expect(await client.groups.proposals(project.id, 'parcours-test')).toEqual([]);
+    await expect(client.groups.acceptProposals(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 422,
+    });
+    expect(await client.groups.checks(project.id, 'parcours-test')).toEqual([]);
+    const missing = await call(`/api/projects/${project.id}/recordings/parcours-test/groups/checks`, {
+      method: 'POST',
+      body: JSON.stringify({ groupId: 'g1' }),
+    });
+    expect(missing.status).toBe(400);
+    expect(await client.recordings.replayStatus(project.id, 'parcours-test')).toEqual({ status: 'NONE' });
+    expect(await client.recordings.replay(project.id, 'parcours-test')).toMatchObject({
+      status: 'RUNNING',
+      startedAt: expect.any(String) as string,
+    });
+    await expect.poll(() => replays.length).toBe(1);
+    expect(replays[0]?.missionFile).toContain(path.join(project.id, '.derived'));
+    expect(replays[0]?.headless).toBe(true);
+    expect(replays[0]?.yaml).toContain('parcours test');
+    await expect(client.recordings.replay(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 409,
+      code: 'REPLAY_RUNNING',
+    });
+    expect(await client.recordings.replayStatus(project.id, 'parcours-test')).toMatchObject({
+      status: 'RUNNING',
+      executed: 1,
+      total: 2,
+    });
+    releaseReplay();
+    await expect
+      .poll(async () => (await client.recordings.replayStatus(project.id, 'parcours-test')).status)
+      .toBe('REPLAY_CONFIRMED');
+    // Intentions, ligne, restauration, correction : refusées proprement sur un flow sans étape ni modèle.
+    expect(await client.recordings.intents(project.id, 'parcours-test')).toMatchObject({ rows: [] });
+    await expect(
+      client.recordings.reviewIntent(project.id, 'parcours-test', { actionId: 'a1', type: 'CONFIRM' }),
+    ).rejects.toMatchObject({ status: 422 });
+    const badIntent = await call(`/api/projects/${project.id}/recordings/parcours-test/intents`, {
+      method: 'POST',
+      body: JSON.stringify({ actionId: 'a1', type: 'GUESS' }),
+    });
+    expect(badIntent.status).toBe(400);
+    await expect(client.recordings.rowSource(project.id, 'parcours-test', 's1')).rejects.toMatchObject({
+      status: 422,
+    });
+    const noColumns = await call(`/api/projects/${project.id}/recordings/parcours-test/steps/row`, {
+      method: 'POST',
+      body: JSON.stringify({ stepId: 's1', columns: [] }),
+    });
+    expect(noColumns.status).toBe(400);
+    await expect(client.recordings.restoreTarget(project.id, 'parcours-test', 's1')).rejects.toMatchObject({
+      status: 422,
+    });
+    await expect(client.corrections.get(project.id, 'parcours-test')).rejects.toMatchObject({ status: 404 });
+    await expect(client.corrections.start(project.id, 'parcours-test', 's1')).rejects.toMatchObject({
+      status: 422,
+    });
+    await expect(client.corrections.apply(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 409,
+      code: 'CORRECTION_REFUSED',
+    });
+    expect(await client.corrections.close(project.id, 'parcours-test')).toEqual({ closed: true });
+    expect(await client.recordings.replayStatus(project.id, 'parcours-test')).toMatchObject({
+      dryRunStatus: 'FULLY_MATCHED',
+      reason: 'every step was found',
+      finishedAt: expect.any(String) as string,
     });
 
     const reports = await client.reports.list(project.id);

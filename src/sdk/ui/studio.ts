@@ -696,7 +696,7 @@ export class QaCrawlerFlowStudio extends Base {
     }
     if (target.closest('.canvas')) return;
     const tab = target.closest('[data-tab]')?.getAttribute('data-tab');
-    if (tab === 'flow' || tab === 'data' || tab === 'assertions') {
+    if (tab === 'flow' || tab === 'data' || tab === 'assertions' || tab === 'tests') {
       this.state.tab = tab;
       this.state.notice = undefined;
       this.paintParts();
@@ -825,6 +825,20 @@ export class QaCrawlerFlowStudio extends Base {
         void this.bind({ stepId, source, variable: text('reference') });
       return;
     }
+    if (kind === 'generate') {
+      const formats = data.getAll('format').filter((value): value is string => typeof value === 'string');
+      const groupIds = data.getAll('group').filter((value): value is string => typeof value === 'string');
+      if (formats.length === 0) return;
+      void this.mutate({ generate: formats, groupIds }, async (api, ids) => {
+        const result = await api.generation.run(ids.project, ids.recording, {
+          formats: formats as Parameters<QaCrawlerClient['generation']['run']>[2]['formats'],
+          ...(groupIds.length > 0 ? { groupIds } : {}),
+        });
+        this.state.generation = result;
+        return result.warnings;
+      });
+      return;
+    }
     if (kind === 'modify') {
       const proposalId = form.getAttribute('data-assertion');
       if (proposalId && text('description')) void this.decide(proposalId, 'MODIFY', text('description'));
@@ -854,7 +868,7 @@ export class QaCrawlerFlowStudio extends Base {
     }
     const tab = target.closest('[data-tab]');
     if (tab && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
-      const order = ['flow', 'data', 'assertions'] as const;
+      const order = ['flow', 'data', 'assertions', 'tests'] as const;
       const index = order.indexOf(this.state.tab);
       const next =
         order[(index + (event.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length] ?? 'flow';

@@ -8,9 +8,14 @@ import {
 } from './application/human-review.js';
 import { generateFlowFiles } from './recorded-flow.js';
 import { addRowVariables, applyTestDataBinding } from './test-data-binding.js';
-import { addDataCheck, decideProposal } from './assertion-proposals.js';
-import { acceptGroupProposals, applyGroupCommand, groupViews, proposeGroups } from './step-groups.js';
-import { generateRecordingTests, proposalsFile, writeFlowFiles } from './recording-workspace.js';
+import { decideProposal } from './assertion-proposals.js';
+import { acceptGroupProposals, applyGroupCommand, proposeGroups } from './step-groups.js';
+import {
+  addGroupCheck,
+  generateRecordingTests,
+  proposalsFile,
+  writeFlowFiles,
+} from './recording-workspace.js';
 import { observationSummary } from './observations.js';
 import {
   PROPOSABLE_OPERATIONS,
@@ -48,7 +53,7 @@ import { summarize as summarizeIntents } from '../intent/resolve-recording.js';
 import { slug } from '../knowledge/signatures.js';
 import { EngineEventLog } from '../logging/engine-log.js';
 import { HumanFlowRecorder, type StopReason } from './human-flow-recorder.js';
-import type { RecordedIntent, RecordingEvent, TechnicalIntentRecord } from './model.js';
+import type { RecordedFlow, RecordedIntent, RecordingEvent, TechnicalIntentRecord } from './model.js';
 import type { IntelligenceProvider } from '../ai/provider.js';
 import {
   describeFieldIdentity,
@@ -132,6 +137,8 @@ export interface RecordRequest {
   intelligenceProvider?: IntelligenceProvider;
   /** Le terminal : Entrée pour arrêter, « c » pour un point de contrôle… ; renvoie de quoi se détacher. */
   control?: (recorder: HumanFlowRecorder) => () => void;
+  /** La timeline en direct a changé (geste ajouté, confirmé, annulé ; pause) : le SDK la relaie. */
+  onTimeline?: () => void;
   /** La progression après l'arrêt (finalisation, flow, audits, rejeu, rapport) : le système travaille. */
   onProgress?: ProgressSink;
 }
@@ -267,6 +274,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     // La timeline en direct : la fenêtre se redessine tout de suite (jamais après une analyse).
     onTimeline: () => {
       consoleUi?.timelineChanged();
+      request.onTimeline?.();
     },
     // L'analyse HTTP en direct : des compteurs provisoires dans l'en-tête de la fenêtre.
     onLiveAnalysis: (analysis) => {
@@ -1050,23 +1058,13 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
         // LA VÉRIFICATION D'UN GROUPE : la donnée de test reçue (ou produite) est visible après sa dernière
         // action ; une proposition EXPLICIT acceptée, retirable comme les autres.
         addGroupCheck: async (input) => {
-          const view = groupViews(result.flow).find((entry) => entry.id === input.groupId);
-          if (!view) return { error: `unknown group ${input.groupId}` };
-          const last = [...result.flow.steps]
-            .reverse()
-            .find((item) => view.stepIds.includes(item.id) && item.step.kind !== 'expect');
-          if (!last) return { error: `group ${input.groupId} has no action` };
-          const outcome = addDataCheck(result.flow, {
-            afterStepId: last.id,
-            key: input.key,
-            groupName: view.name,
-          });
+          const outcome = addGroupCheck(result.flow, input);
           if ('error' in outcome) return outcome;
           await rewriteFlow();
           onEvent({
             type: 'RECORDING_ASSERTION_DECIDED',
             at: new Date().toISOString(),
-            message: `${outcome.proposalId} ADDED: testData.${input.key} is displayed at the end of group ${view.name}`,
+            message: `${outcome.proposalId} ADDED: testData.${input.key} is displayed at the end of group ${outcome.groupName}`,
           });
           return { ok: true };
         },
@@ -1817,19 +1815,53 @@ async function validateReplay(
   env: NodeJS.ProcessEnv,
   options: { headless?: boolean; onStep?: (executed: number, total: number) => void } = {},
 ): Promise<ReplayOutcome> {
-  const total = result.flow.steps.filter((item) => item.step.kind !== 'expect').length;
+  return replayRecordedFlow({
+    directory,
+    flow: result.flow,
+    yaml: result.files.yaml,
+    startUrl: result.session.startUrl,
+    ...(request.missionFile ? { missionFile: request.missionFile } : {}),
+    ...(request.overrides ? { overrides: request.overrides } : {}),
+    env,
+    ...options,
+  });
+}
+
+export interface RecordedFlowReplay {
+  /** Le dossier de l'enregistrement : le rejeu s'écrit sous `replay/` (là où la revue le relit). */
+  directory: string;
+  flow: Pick<RecordedFlow, 'steps'>;
+  /** Le flow tel qu'il sera rejoué (generated.flow.yaml). */
+  yaml: string;
+  /** Sans mission : l'origine de cette adresse sert de base. */
+  startUrl?: string;
+  missionFile?: string;
+  overrides?: ConfigOverrides;
+  env: NodeJS.ProcessEnv;
+  headless?: boolean;
+  onStep?: (executed: number, total: number) => void;
+}
+
+/**
+ * LE REJEU DE VALIDATION d'un flow enregistré (dry run, mémoire isolée) : celui de la fin de
+ * l'enregistrement, de la revue, et du SDK sur un enregistrement déjà écrit. La politique de sécurité
+ * de la mission s'applique ; le flow n'est jamais modifié.
+ */
+export async function replayRecordedFlow(input: RecordedFlowReplay): Promise<ReplayOutcome> {
+  const { directory, flow: recorded, env } = input;
+  const total = recorded.steps.filter((item) => item.step.kind !== 'expect').length;
   let executed = 0;
   const scenarioFile = path.join(directory, 'replay.flow.yaml');
-  await writeFile(scenarioFile, result.files.yaml, 'utf8');
+  await writeFile(scenarioFile, input.yaml, 'utf8');
   try {
     const outcome = await runDryRun({
       scenarioFile,
-      ...(request.missionFile ? { missionFile: request.missionFile } : {}),
+      ...(input.missionFile ? { missionFile: input.missionFile } : {}),
       overrides: {
-        ...request.overrides,
-        ...(request.missionFile ? {} : { baseUrl: new URL(result.session.startUrl).origin }),
+        ...input.overrides,
+        ...(input.missionFile || !input.startUrl ? {} : { baseUrl: new URL(input.startUrl).origin }),
         reportsDir: path.join(directory, 'replay'),
-        headless: options.headless ?? true,
+        headless: input.headless ?? true,
       },
       env,
       useHistory: false,
@@ -1839,9 +1871,9 @@ async function validateReplay(
       onEvent: (event) => {
         if (event.type !== 'INTENT_MATCHED') return;
         const position = Number(event.intentId?.split('#').pop());
-        if (result.flow.steps[position - 1]?.step.kind === 'expect') return;
+        if (recorded.steps[position - 1]?.step.kind === 'expect') return;
         executed += 1;
-        options.onStep?.(Math.min(executed, total), total);
+        input.onStep?.(Math.min(executed, total), total);
       },
     });
     const flow = outcome.flows[0];

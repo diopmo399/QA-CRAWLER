@@ -323,9 +323,9 @@ describe('Flow Studio — rendering', () => {
     expect(html).toContain('search &lt;b&gt;the title&lt;/b&gt;');
     expect(html).toMatch(/data-node="s3"[^>]*aria-label="Étape 3 : save the item[^"]*Rejeu : introuvable/);
     // Sans libellé, l'étape est décrite par ce qu'elle fait.
-    expect(view.steps.find((entry) => entry.id === 's4')?.description).toBe('goto /items');
+    expect(view.steps.find((entry) => entry.id === 's4')?.description).toBe('Go to /items');
     expect(html).toContain('role="button"');
-    expect(html).toContain('Dernier rejeu : PARTIALLY_MATCHED');
+    expect(html).toContain('Dernier rejeu : partiellement conforme');
   });
 
   it('shows the step panel with the data it produces and uses, and the replay reason', () => {
@@ -364,5 +364,73 @@ describe('Flow Studio — rendering', () => {
     expect(renderStudio(state({ phase: 'error', error: 'recording <x> not found' }))).toContain(
       'recording &lt;x&gt; not found',
     );
+  });
+});
+
+describe('Flow Studio — tests tab and wording', () => {
+  const state = (patch: Partial<StudioState> = {}): StudioState => ({
+    t: studioStrings('fr'),
+    phase: 'ready',
+    view,
+    layout: layoutStudio(view),
+    viewport: { x: 0, y: 0, k: 1 },
+    selected: [],
+    query: '',
+    matches: [],
+    matchIndex: 0,
+    busy: false,
+    moved: false,
+    tab: 'flow',
+    ...patch,
+  });
+
+  it('generates the tests: formats, groups (the chosen one ticked), files and what they are', () => {
+    const group = view.groups[0]?.id ?? '';
+    const empty = renderStudio(state({ tab: 'tests', selectedGroup: group }));
+    expect(empty).toContain('data-form="generate"');
+    expect(empty).toContain('name="format" value="yaml" checked');
+    expect(empty).toContain('name="format" value="java">');
+    expect(empty).toContain(`name="group" value="${group}" checked`);
+    expect(empty).toContain('Générer n’exécute rien');
+    const done = renderStudio(
+      state({
+        tab: 'tests',
+        generation: {
+          warnings: [],
+          files: [
+            {
+              format: 'gherkin',
+              path: 'create.feature',
+              status: 'STATICALLY_VALIDATED',
+              validation: { method: 'gherkin dictionary', ok: true, messages: [] },
+              assertions: [
+                {
+                  id: 'p1',
+                  description: 'the page /items is displayed',
+                  support: 'NATIVE',
+                  status: 'APPROVED',
+                },
+              ],
+              limits: [],
+              content: 'Fonctionnalité: <x>',
+            },
+          ],
+        },
+      }),
+    );
+    expect(done).toContain('validé (analyse statique)');
+    expect(done).toContain('la page /items est affichée');
+    expect(done).toContain('Fonctionnalité: &lt;x&gt;');
+  });
+
+  it('moves say up and down; the search keeps a short placeholder; a replayed step shows no reason', () => {
+    const html = renderStudio(state({ selected: ['s1'] }));
+    expect(html).toContain('Monter');
+    expect(html).toContain('Descendre');
+    expect(html).not.toContain('Avancer');
+    expect(html).toContain('placeholder="Rechercher…"');
+    expect(html).toContain('title="Rechercher une étape, une donnée, un groupe"');
+    const failed = renderStudio(state({ selected: ['s3'] }));
+    expect(failed).toContain('no button named Save');
   });
 });

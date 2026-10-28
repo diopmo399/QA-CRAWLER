@@ -6,6 +6,7 @@ import { parseConfig } from '../../src/config/config-loader.js';
 import type { FlowGraphData } from '../../src/model/flow.js';
 import type { ExplorationResult } from '../../src/model/exploration-result.js';
 import { runMission } from '../../src/orchestrator.js';
+import { FLOW_MAP_SCRIPT } from '../../src/reporting/flow-diagram.js';
 import { startFlowApp, type FlowApp } from '../fixtures/flow-app.js';
 
 /**
@@ -158,15 +159,18 @@ output:
     const html = await readFile(path.join(reports, 'flow-graph.html'), 'utf8');
     expect(html).toContain('Nouveau dossier');
     // Rapport principal : sommaire avec ancres, résultats avant l'analyse détaillée (repliée). Les seuls
-    // scripts sont ceux du thème clair / sombre (choix gardé en local, aucun réseau, aucune donnée du run).
+    // scripts sont ceux du thème clair / sombre (choix gardé en local) et celui de la carte des écrans,
+    // tel qu'écrit dans le code (zoom, sélection) : aucun réseau, aucune donnée du run.
     const index = await readFile(path.join(reports, 'index.html'), 'utf8');
     expect(index).toContain('<nav class="toc"');
     for (const [, id] of index.matchAll(/<a href="#(section-\d+)">/g)) expect(index).toContain(`id="${id}"`);
     expect(index.indexOf('HTTP')).toBeLessThan(index.indexOf('<details><summary><h2>'));
     const scripts = [...index.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1] ?? '');
-    expect(scripts).toHaveLength(2);
+    expect(scripts).toHaveLength(3);
+    const map = FLOW_MAP_SCRIPT.replace(/^<script>|<\/script>$/g, '');
+    expect(scripts.filter((script) => script === map)).toHaveLength(1);
     for (const script of scripts) {
-      expect(script).toContain('qa-crawler-theme');
+      if (script !== map) expect(script).toContain('qa-crawler-theme');
       expect(script).not.toMatch(/fetch\(|XMLHttpRequest|https?:/);
     }
     const shots = await readdir(path.join(outputDir, 'screenshots'));

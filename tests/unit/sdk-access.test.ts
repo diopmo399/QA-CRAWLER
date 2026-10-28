@@ -221,6 +221,18 @@ describe('access — rights per route', () => {
     expect(right('POST', '/api/projects/prj_abcd/scenarios')).toBe('PUBLISH');
     expect(right('POST', '/api/projects/prj_abcd/recordings')).toBe('RUN');
     expect(right('POST', '/api/projects/prj_abcd/recordings/demo/groups')).toBe('DECIDE');
+    // La barre d'enregistrement pilote une session : le droit de lancer.
+    expect(right('POST', '/api/projects/prj_abcd/recordings/demo/replay')).toBe('RUN');
+    expect(right('POST', '/api/projects/prj_abcd/recordings/demo/correction')).toBe('RUN');
+    expect(right('POST', '/api/projects/prj_abcd/recordings/demo/correction/resume')).toBe('RUN');
+    expect(right('POST', '/api/projects/prj_abcd/recordings/demo/correction/apply')).toBe('DECIDE');
+    expect(right('POST', '/api/projects/prj_abcd/recordings/demo/intents')).toBe('DECIDE');
+    expect(right('POST', '/api/projects/prj_abcd/recordings/demo/steps/row')).toBe('DECIDE');
+    for (const control of ['stop', 'pause', 'resume', 'undo', 'checkpoint', 'resolve', 'ignore'])
+      expect(right('POST', `/api/projects/prj_abcd/recordings/demo/${control}`)).toBe('RUN');
+    expect(actionOf(['api', 'projects', 'prj_abcd', 'recordings', 'demo', 'pause']).action).toBe(
+      'projects.recordings.pause',
+    );
     expect(right('POST', '/api/explorations/exp_1/report-links')).toBe('VIEW');
     expect(right('POST', '/api/something-new')).toBe('MANAGE_ACCESS');
     expect(right('POST', '/api/projects/prj_abcd/something-new')).toBe('MANAGE_ACCESS');

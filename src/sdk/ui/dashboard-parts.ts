@@ -32,6 +32,7 @@ const TONE: Record<string, string> = {
   CONFIRMED: 'ok',
   PROPOSED: 'warn',
   REJECTED: 'mu',
+  PAUSED: 'warn',
 };
 
 export const pill = (raw: string, text = raw): string =>
@@ -45,10 +46,14 @@ const ICONS: Record<string, string> = {
   back: '<path d="M15 6l-6 6 6 6"/>',
   play: '<path d="M8 5v14l11-7z"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  pause:
+    '<rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/>',
   refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
   alert: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
   check: '<path d="M5 12l5 5 9-10"/>',
   history: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   requirements: '<path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M5 17a3 3 0 013-3h11M9 8h6"/>',
@@ -57,8 +62,11 @@ const ICONS: Record<string, string> = {
   sources: '<path d="M12 15V4M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/>',
   indicators: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   trends: '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+  recordings:
+    '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/>',
   access: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
   download: '<path d="M12 4v11M8 11l4 4 4-4"/><path d="M4 17v1a2 2 0 002 2h12a2 2 0 002-2v-1"/>',
+  library: '<path d="M4 4h4v16H4zM10 4h4v16h-4z"/><path d="M16.5 4.5l3.5 1-4 15-3.5-1z"/>',
   scenarios:
     '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
   explorations: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
@@ -69,6 +77,13 @@ const ICONS: Record<string, string> = {
 
 export const icon = (name: string): string =>
   `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] ?? ''}</svg>`;
+
+/** L'heure seule, à la seconde : le fil d'une session en cours. */
+export function formatTime(iso: string, locale: 'fr' | 'en'): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleTimeString(locale === 'fr' ? 'fr-FR' : 'en-GB', { timeStyle: 'medium' });
+}
 
 export function formatDate(iso: string, locale: 'fr' | 'en'): string {
   const date = new Date(iso);

@@ -638,6 +638,9 @@ function describeExpectation(step: Extract<FlowStep, { kind: 'expect' }>): strin
     parts.push(`${response.method ?? ''} ${response.url ?? ''} → ${response.status ?? ''}`.trim());
   if (typeof expect.text === 'string') parts.push(`"${expect.text}"`);
   if (typeof expect.visible === 'string') parts.push(`"${expect.visible}"`);
+  // Un élément visible désigné par son rôle et son nom (« le lien "À propos" »).
+  if (expect.visible && typeof expect.visible === 'object')
+    parts.push(`"${targetName(expect.visible as FlowTarget)}"`);
   return parts.join(', ') || Object.keys(expect).join(', ');
 }
 

@@ -19,6 +19,9 @@ import { isTerminal } from '../core/lifecycle.js';
 import type { DashboardStrings } from './dashboard-i18n.js';
 import { environmentsView, explorationsView, historyView, scenariosView } from './dashboard-ops.js';
 import { accessView, can, signInView, type AccessUi } from './dashboard-access.js';
+import { recordingsView, type RecordingsUi } from './dashboard-recordings.js';
+import { reviewView, type ReviewTab, type ReviewUi } from './dashboard-review.js';
+import { libraryView, runnableScenarios, type LibraryUi } from './dashboard-library.js';
 import {
   importView,
   indicatorsView,
@@ -59,6 +62,11 @@ export type DashboardRoute =
   | { view: 'execution'; projectId: string; run: string; explorationId?: string }
   | { view: 'history'; projectId: string }
   | { view: 'scenarios'; projectId: string; scenario?: string }
+  | { view: 'recordings'; projectId: string }
+  /** La bibliothèque de scénarios : des blocs réutilisables. */
+  | { view: 'library'; projectId: string }
+  /** La revue d'un enregistrement écrit (ce que fait la fenêtre du recorder après l'arrêt). */
+  | { view: 'recording'; projectId: string; name: string; tab?: ReviewTab }
   /** `environmentId: 'new'` : la création d'un environnement. */
   | { view: 'environments'; projectId: string; environmentId?: string }
   | { view: 'explorations'; projectId: string; run?: string }
@@ -154,6 +162,14 @@ export interface DashboardState {
   /** La page demande un jeton nominatif (mode `named`). */
   signIn: boolean;
   access: AccessUi;
+  /** Enregistrements : le formulaire et la session suivie en direct. */
+  recs: RecordingsUi;
+  /** L'adresse du Flow Studio (même serveur que l'API). */
+  studioUrl?: string;
+  /** La revue de l'enregistrement ouvert. */
+  review?: ReviewUi;
+  /** La bibliothèque de scénarios (blocs, ajout, composition, insertion). */
+  lib: LibraryUi;
   /** L'exécution suivie en direct (son instantané, ses étapes, la dernière phase annoncée). */
   live?: { snapshot: ExplorationSnapshot; steps: LiveStep[]; phase?: string; cancelRequested: boolean };
   execution?: ExecutionDetail;
@@ -171,7 +187,19 @@ type NavSection = keyof DashboardStrings['sections'];
 
 /** Les entrées du menu : seulement les écrans que le Dashboard sait afficher. */
 const NAV: { section: NavSection; items: NavView[] }[] = [
-  { section: 'pilot', items: ['overview', 'projects', 'executions', 'history', 'scenarios', 'explorations'] },
+  {
+    section: 'pilot',
+    items: [
+      'overview',
+      'projects',
+      'executions',
+      'history',
+      'scenarios',
+      'library',
+      'recordings',
+      'explorations',
+    ],
+  },
   { section: 'requirements', items: ['requirements', 'traceability', 'sources'] },
   { section: 'measure', items: ['indicators', 'trends'] },
   { section: 'admin', items: ['environments', 'access'] },
@@ -186,6 +214,8 @@ export function activeNav(route: DashboardRoute): NavView {
   if (route.view === 'explorations') return 'explorations';
   if (route.view === 'sources' || route.view === 'import') return 'sources';
   if (route.view === 'access') return 'access';
+  if (route.view === 'recordings' || route.view === 'recording') return 'recordings';
+  if (route.view === 'library') return 'library';
   if (
     route.view === 'requirements' ||
     route.view === 'traceability' ||
@@ -277,6 +307,12 @@ function body(state: DashboardState): string {
       return trendsView(state);
     case 'access':
       return accessView(state);
+    case 'recordings':
+      return recordingsView(state);
+    case 'recording':
+      return reviewView(state);
+    case 'library':
+      return libraryView(state);
   }
 }
 
@@ -405,7 +441,7 @@ function launchTab(state: DashboardState, p: ProjectDetail, archived: boolean): 
     : environment?.mutations?.enabled
       ? t.writesNote(environment.mutations.maxPerRun)
       : t.readOnlyNote;
-  const scenarios = p.scenarios
+  const scenarios = runnableScenarios(p.scenarios)
     .map(
       (scenario) =>
         `<label class="row-chk"><input type="checkbox" data-bind="scenario" value="${esc(scenario.name)}" ${launch.scenarios.includes(scenario.name) ? 'checked' : ''} ${replay ? '' : 'disabled'}><span class="nm">${esc(scenario.name)}</span><small class="mu">${scenario.steps === undefined ? esc(scenario.format) : `${String(scenario.steps)} ${esc(t.col.steps.toLowerCase())}`}</small></label>`,
@@ -414,9 +450,9 @@ function launchTab(state: DashboardState, p: ProjectDetail, archived: boolean): 
   const form = `<form class="launch card" data-action="launch"><h2>${esc(t.launch)}</h2>
 <fieldset class="kinds"><legend>${esc(t.launchKind)}</legend>${kind('REPLAY', t.kindReplay, t.kindReplayHint)}${kind('EXPLORATION', t.kindExploration, t.kindExplorationHint)}</fieldset>
 <label class="field">${esc(t.launchEnv)}<select data-bind="environment" ${replay ? '' : 'disabled'}><option value="">${esc(t.projectTarget)}</option>${p.environments.map((env) => `<option value="${esc(env.id)}" ${launch.environmentId === env.id ? 'selected' : ''}>${esc(env.name)} · ${esc(readiness(state.checks[env.id]) === 'NOT_READY' ? t.readiness.notReady : (t.envKinds[env.kind] ?? env.kind))}</option>`).join('')}</select></label>
-<fieldset class="scen"><legend>${esc(t.launchScenarios)}</legend>${scenarios || `<p class="mu">${esc(t.noScenario)}</p>`}${replay && p.scenarios.length > 0 ? `<small class="mu">${esc(t.allScenarios)}</small>` : ''}</fieldset>
+<fieldset class="scen"><legend>${esc(t.launchScenarios)}</legend>${scenarios || `<p class="mu">${esc(t.noScenario)}</p>`}${replay && runnableScenarios(p.scenarios).length > 0 ? `<small class="mu">${esc(t.allScenarios)}</small>` : ''}</fieldset>
 <p class="note">${icon('alert')}<span>${esc(note)}</span></p>${replay && environment?.mutations?.enabled && !can(state, 'RUN_WRITES') ? `<p class="note warn">${icon('alert')}<span>${esc(t.access.noWritesRight)}</span></p>` : ''}
-<div class="form-acts">${replay && environment ? `<button type="button" class="btn" data-action="check-env" data-env="${esc(environment.id)}" ${state.checking === environment.id ? 'disabled' : ''}>${esc(state.checking === environment.id ? t.checking : t.checkEnvironment)}</button>` : ''}<button class="btn primary" type="submit" ${launch.busy || (replay && p.scenarios.length === 0) ? 'disabled' : ''}>${icon('play')}<span>${esc(launch.busy ? t.launching : replay ? t.launchButton : t.launchExploration)}</span></button></div>
+<div class="form-acts">${replay && environment ? `<button type="button" class="btn" data-action="check-env" data-env="${esc(environment.id)}" ${state.checking === environment.id ? 'disabled' : ''}>${esc(state.checking === environment.id ? t.checking : t.checkEnvironment)}</button>` : ''}<button class="btn primary" type="submit" ${launch.busy || (replay && runnableScenarios(p.scenarios).length === 0) ? 'disabled' : ''}>${icon('play')}<span>${esc(launch.busy ? t.launching : replay ? t.launchButton : t.launchExploration)}</span></button></div>
 ${launch.error ? `<p class="err" role="alert">${esc(launch.error)}</p>` : ''}</form>`;
   const environments = `<section class="card"><h2>${esc(t.environments)}</h2>${
     p.environments.length === 0
@@ -446,7 +482,7 @@ function scenariosTab(state: DashboardState, p: ProjectDetail): string {
   return `<section class="card wide"><div class="tw"><table class="tbl"><thead><tr><th scope="col">${esc(t.col.name)}</th><th scope="col">${esc(t.col.steps)}</th><th scope="col">${esc(t.col.file)}</th></tr></thead><tbody>${p.scenarios
     .map(
       (scenario) =>
-        `<tr><td><b class="mono">${esc(scenario.name)}</b>${scenario.fromRecording ? `<small class="mu block">${esc(t.fromRecording(scenario.fromRecording))}</small>` : ''}</td><td>${scenario.steps === undefined ? '—' : String(scenario.steps)}</td><td><code>${esc(scenario.file)}</code> <small class="mu">${esc(scenario.format)}</small></td></tr>`,
+        `<tr><td><b class="mono">${esc(scenario.name)}</b>${scenario.reusable ? ` <span class="pill mu">${esc(t.nav.library)}</span>` : ''}${scenario.fromRecording ? `<small class="mu block">${esc(t.fromRecording(scenario.fromRecording))}</small>` : ''}</td><td>${scenario.steps === undefined ? '—' : String(scenario.steps)}</td><td><code>${esc(scenario.file)}</code> <small class="mu">${esc(scenario.format)}</small></td></tr>`,
     )
     .join('')}</tbody></table></div></section>`;
 }

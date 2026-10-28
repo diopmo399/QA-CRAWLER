@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { JournalEntry, JournalKind, MemberView, Right, Role } from '../core/contracts.js';
-import { ROLE_RIGHTS, ROLES } from '../core/contracts.js';
+import { RECORDING_CONTROLS, ROLE_RIGHTS, ROLES } from '../core/contracts.js';
 
 /**
  * LES ACCÈS, côté serveur : des jetons nominatifs (un par personne ou par robot), leurs rôles dans
@@ -243,12 +243,22 @@ export function rightFor(segments: readonly string[], method: string): Right {
     case 'environments':
       return item === 'check' ? 'RUN' : 'MANAGE_ENVIRONMENTS';
     case 'scenarios':
+    case 'library':
+      // Vérifier un parcours ne change rien : le voir suffit. Promouvoir, composer, insérer un bloc,
+      // enrichir la bibliothèque, déclarer un contrat, valider une version : publier des scénarios.
+      if (sub === 'scenarios' && item === 'compose' && action === 'check') return 'VIEW';
       return 'PUBLISH';
     case 'executions':
     case 'explorations':
       return 'RUN';
     case 'recordings':
-      return item === undefined || action === 'stop' ? 'RUN' : 'DECIDE';
+      // Démarrer, arrêter, et les commandes de la barre d'enregistrement : piloter une session.
+      // Rejouer joue l'application, comme une exécution ; ouvrir une correction aussi (le chemin est
+      // rejoué jusqu'à l'étape). Valider la correction est une décision.
+      if (action === 'correction') return segments[6] === 'apply' ? 'DECIDE' : 'RUN';
+      return item === undefined || action === 'stop' || action === 'replay' || LIVE_CONTROLS.has(action ?? '')
+        ? 'RUN'
+        : 'DECIDE';
     case 'reports':
       return 'VIEW';
     case 'requirements':
@@ -259,7 +269,10 @@ export function rightFor(segments: readonly string[], method: string): Right {
   }
 }
 
+const LIVE_CONTROLS = new Set<string>(RECORDING_CONTROLS);
+
 const KEYWORDS = new Set([
+  ...RECORDING_CONTROLS,
   'access',
   'me',
   'members',
@@ -278,6 +291,14 @@ const KEYWORDS = new Set([
   'check',
   'remove',
   'scenarios',
+  'library',
+  'compose',
+  'insert',
+  'preview',
+  'drift',
+  'contract',
+  'version',
+  'accept',
   'executions',
   'explorations',
   'cancel',
@@ -289,6 +310,16 @@ const KEYWORDS = new Set([
   'bindings',
   'groups',
   'generation',
+  'steps',
+  'proposals',
+  'checks',
+  'replay',
+  'intents',
+  'row',
+  'correction',
+  'apply',
+  'resume',
+  'close',
   'reports',
   'links',
   'requirements',

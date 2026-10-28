@@ -1,3 +1,4 @@
+import { emptyLibraryUi } from '../../src/sdk/ui/dashboard-library.js';
 import { describe, expect, it } from 'vitest';
 import type {
   ImportSummary,
@@ -10,6 +11,7 @@ import type {
 } from '../../src/sdk/core/contracts.js';
 import type { ImportBatch } from '../../src/requirements/model.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
+import { emptyRecordingsUi } from '../../src/sdk/ui/dashboard-recordings.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { connectorOfFile, emptyImportForm, emptyLinkForm } from '../../src/sdk/ui/dashboard-requirements.js';
 import { activeNav, renderDashboard, type DashboardState } from '../../src/sdk/ui/dashboard-view.js';
@@ -57,6 +59,8 @@ const base = (
   req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8, ...req },
   signIn: false,
   access: emptyAccessUi(),
+  recs: emptyRecordingsUi(),
+  lib: emptyLibraryUi(),
   ...extra,
 });
 
@@ -226,7 +230,16 @@ describe('dashboard — requirements screens', () => {
     expect(html).toContain('Image non lue');
     expect(html).toContain('page 4');
     expect(html).toContain('<code>req_old</code>');
-    expect(html).toContain('L’auteur des décisions n’est pas enregistré');
+    expect(html).toContain('Mode à jeton unique : l’auteur des décisions n’est pas enregistré');
+    // En mode nominatif, la décision est signée : la note disparaît.
+    expect(
+      renderDashboard(
+        base(
+          { route, me: { id: 'm', name: 'N', kind: 'MEMBER', role: 'ADMIN', rights: [], mode: 'named' } },
+          { batch },
+        ),
+      ),
+    ).not.toContain('Mode à jeton unique');
   });
 
   const entity = {

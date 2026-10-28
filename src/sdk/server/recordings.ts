@@ -2,6 +2,8 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { RecordOutcome, RecordRequest } from '../../recording/record-orchestrator.js';
 import { inFlow } from '../../recording/assertion-proposals.js';
+import { describeFlowStep } from '../../recording/panel-state.js';
+import { hasTarget } from '../../recording/target-correction.js';
 import type { HumanFlowRecorder } from '../../recording/human-flow-recorder.js';
 import type { RecordedFlow, RecordingEvent } from '../../recording/model.js';
 import { dependencyViolations, stepDependencies } from '../../recording/step-groups.js';
@@ -18,6 +20,7 @@ import {
   type FlowView,
   type GraphView,
   type GroupViewDto,
+  type LiveTimelineView,
   type StepReplayOutcome,
   type StudioStep,
   type RecordingSnapshot,
@@ -60,6 +63,9 @@ export class RecordingSession {
   private seq = 0;
   private readonly events: RecordingStreamEvent[] = [];
   private readonly listeners = new Set<Listener>();
+  /** La timeline : seul son dernier état est gardé (relayée au plus toutes les 150 ms). */
+  private timeline?: RecordingStreamEvent;
+  private timelineTimer?: NodeJS.Timeout;
 
   constructor(
     readonly projectId: string,
@@ -75,9 +81,32 @@ export class RecordingSession {
   emit(event: DistributiveOmit<RecordingStreamEvent, 'seq' | 'at'>): void {
     this.seq += 1;
     const full: RecordingStreamEvent = { ...event, seq: this.seq, at: new Date().toISOString() };
-    this.events.push(full);
-    if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
+    if (full.type === 'timeline') this.timeline = full;
+    else {
+      this.events.push(full);
+      if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
+    }
     for (const listener of this.listeners) listener(full);
+  }
+
+  /** La timeline du recorder a changé : relayée une fois la rafale passée (un geste en produit plusieurs). */
+  timelineChanged(): void {
+    if (this.timelineTimer) return;
+    this.timelineTimer = setTimeout(() => {
+      delete this.timelineTimer;
+      this.flushTimeline();
+    }, 150);
+    this.timelineTimer.unref();
+  }
+
+  /** Relaie la timeline tout de suite (après une commande, à l'arrêt). */
+  flushTimeline(): void {
+    if (this.timelineTimer) {
+      clearTimeout(this.timelineTimer);
+      delete this.timelineTimer;
+    }
+    const view = this.recorder ? liveTimelineOf(this.recorder) : undefined;
+    if (view) this.emit({ type: 'timeline', ...view });
   }
 
   transition(status: RecordingStatus): void {
@@ -87,7 +116,10 @@ export class RecordingSession {
   }
 
   eventsAfter(after: number): RecordingStreamEvent[] {
-    return this.events.filter((event) => event.seq > after);
+    const events = this.events.filter((event) => event.seq > after);
+    const timeline = this.timeline;
+    if (!timeline || timeline.seq <= after) return events;
+    return [...events, timeline].sort((a, b) => a.seq - b.seq);
   }
 
   subscribe(listener: Listener): () => void {
@@ -148,6 +180,46 @@ export class RecordingManager {
     return session;
   }
 
+  /**
+   * Une commande de la barre d'enregistrement, depuis le SDK : pause, reprise, annulation du dernier
+   * geste, point de contrôle, choix d'un élément ambigu. Refusée hors de l'enregistrement.
+   */
+  async control(
+    session: RecordingSession,
+    command:
+      | { type: 'pause' | 'resume' | 'undo' }
+      | { type: 'checkpoint'; label?: string }
+      | { type: 'resolve'; actionId: string; candidate: number }
+      | { type: 'ignore'; actionId: string },
+  ): Promise<{ ok: true } | { error: string }> {
+    const recorder = session.recorder;
+    if (session.status !== 'RECORDING' || !recorder) return { error: 'NOT_RECORDING' };
+    switch (command.type) {
+      case 'pause':
+        await recorder.pause();
+        break;
+      case 'resume':
+        await recorder.resume();
+        break;
+      case 'undo':
+        if (!recorder.undo()) return { error: 'NOTHING_TO_UNDO' };
+        break;
+      case 'checkpoint':
+        await recorder.checkpoint(command.label);
+        break;
+      case 'resolve': {
+        const outcome = recorder.resolveAmbiguity(command.actionId, command.candidate);
+        if ('error' in outcome) return { error: outcome.error };
+        break;
+      }
+      case 'ignore':
+        if (!recorder.ignoreAmbiguity(command.actionId)) return { error: 'NOT_FOUND' };
+        break;
+    }
+    session.flushTimeline();
+    return { ok: true };
+  }
+
   /** Arrête la session (comme le bouton de la barre d'enregistrement) ; sans effet après l'arrêt. */
   stop(session: RecordingSession): void {
     session.stopRequested = true;
@@ -164,14 +236,28 @@ export class RecordingManager {
           if (event.type === 'RECORDING_STOPPED' && session.status === 'RECORDING')
             session.transition('PROCESSING');
         },
+        onTimeline: () => {
+          session.timelineChanged();
+        },
         onProgress: (update) => {
-          if (session.status === 'RECORDING') session.transition('PROCESSING');
-          session.emit({ type: 'phase', phase: update.label });
+          if (session.status === 'RECORDING') {
+            session.flushTimeline();
+            session.transition('PROCESSING');
+          }
+          session.emit({
+            type: 'phase',
+            phase: update.label,
+            step: update.step,
+            total: update.total,
+            ...(update.detail ? { detail: redactText(update.detail) } : {}),
+          });
         },
         control: (recorder) => {
           session.recorder = recorder;
           if (session.stopRequested) recorder.requestStop('api');
+          session.flushTimeline();
           return () => {
+            session.flushTimeline();
             delete session.recorder;
           };
         },
@@ -187,6 +273,34 @@ export class RecordingManager {
       session.transition('FAILED');
     }
   }
+}
+
+/** La timeline en direct du recorder, telle que le SDK la montre : des phrases, jamais une valeur saisie. */
+export function liveTimelineOf(recorder: HumanFlowRecorder): LiveTimelineView {
+  return {
+    paused: recorder.isPaused,
+    steps: recorder.timeline.actions.slice(-200).map((action) => ({
+      id: action.id,
+      index: action.index,
+      kind: action.kind,
+      description: redactText(action.description),
+      ...(action.detail ? { detail: redactText(action.detail) } : {}),
+      page: redactText(action.page),
+      status: action.status,
+      statusText: redactText(action.statusText),
+      ...(action.candidates
+        ? {
+            candidates: action.candidates.map((candidate) => ({
+              index: candidate.index,
+              label: redactText(candidate.label),
+              original: candidate.original,
+            })),
+          }
+        : {}),
+      ...(action.resolution ? { resolution: action.resolution } : {}),
+    })),
+    checkpoints: recorder.session.checkpoints.map((checkpoint) => redactText(checkpoint.label)),
+  };
 }
 
 function proposalCounts(flow: RecordedFlow): RecordingSummary['proposals'] {
@@ -240,7 +354,7 @@ export async function storedRecordingNames(reportsDir: string): Promise<string[]
 }
 
 /** La vue du flow : les étapes du flow enregistré et les fichiers générés (YAML, .feature). */
-export async function flowView(recording: StoredRecording): Promise<FlowView> {
+export async function flowView(recording: StoredRecording, language: 'fr' | 'en' = 'en'): Promise<FlowView> {
   const groupOf = new Map<string, string>();
   for (const group of recording.flow.groups ?? [])
     for (const stepId of group.stepIds) groupOf.set(stepId, group.id);
@@ -253,7 +367,7 @@ export async function flowView(recording: StoredRecording): Promise<FlowView> {
     steps: recording.flow.steps.map((item) => ({
       id: item.id,
       kind: item.step.kind,
-      description: describeStep(item.step),
+      description: stepDescription(item, language),
       ...(groupOf.has(item.id) ? { groupId: groupOf.get(item.id) } : {}),
     })),
     ...(yaml !== undefined ? { yaml } : {}),
@@ -424,6 +538,7 @@ export async function assertionVerdicts(
 export async function studioView(
   recording: StoredRecording,
   groups: GroupViewDto[],
+  language: 'fr' | 'en' = 'en',
 ): Promise<FlowStudioView> {
   const steps = recording.flow.steps;
   const roles = stepDependencies(recording.flow);
@@ -445,9 +560,11 @@ export async function studioView(
       id: item.id,
       position: index + 1,
       kind: item.step.kind,
-      // Le libellé que le moteur a donné à l'étape (« saisir le titre »), sinon sa cible.
-      description: item.label.trim() || describeStep(item.step),
+      description: stepDescription(item, language),
       ...(groupOf.has(item.id) ? { groupId: groupOf.get(item.id) } : {}),
+      ...(hasTarget(item.step) ? { targeted: true } : {}),
+      ...(item.userDecision === 'TARGET_CORRECTED_BY_USER' ? { corrected: true } : {}),
+      ...(hasTarget(item.step) && item.step.target.row ? { row: true } : {}),
       consumes: role?.consumes ?? [],
       produces: role?.produces ?? [],
       ...(replayed ? { replay: replayed } : {}),
@@ -472,19 +589,20 @@ export async function studioView(
   };
 }
 
-function describeStep(step: RecordedFlow['steps'][number]['step']): string {
-  const target = (step as { target?: unknown }).target;
-  const label =
-    target && typeof target === 'object'
-      ? Object.values(target as Record<string, unknown>)
-          .filter((value): value is string => typeof value === 'string')
-          .slice(0, 2)
-          .join(' ')
-      : typeof target === 'string'
-        ? target
-        : '';
-  const url = (step as { url?: unknown }).url;
-  return [step.kind, label || (typeof url === 'string' ? url : '')].filter(Boolean).join(' ');
+/**
+ * Une étape dite en langage courant, dans la langue du serveur. Le libellé du moteur (« saisir le
+ * titre ») est gardé ; un libellé vide ou qui ne fait que répéter la cible devient une phrase
+ * (« Cliquer sur "Valider" ») ; une vérification se dit toujours (« Vérifier : "À propos" »).
+ */
+export function stepDescription(item: RecordedFlow['steps'][number], language: 'fr' | 'en'): string {
+  const step = item.step;
+  if (step.kind === 'expect') return describeFlowStep(step, language);
+  const label = item.label.trim();
+  const target = (step as { target?: { name?: string; value?: string } }).target;
+  const bare = [target?.name, target?.value].some(
+    (name) => name !== undefined && name.trim().toLowerCase() === label.toLowerCase(),
+  );
+  return label && !bare ? label : describeFlowStep(step, language);
 }
 
 interface FlowGraphFile {
