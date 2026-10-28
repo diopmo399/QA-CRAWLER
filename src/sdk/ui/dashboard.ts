@@ -161,6 +161,10 @@ export class QaCrawlerDashboard extends Base {
         this.libraryField(target.dataset.lib, target.value);
         return;
       }
+      if (target.dataset.tst === 'edit') {
+        if (this.state.tst.edit) this.state.tst.edit.content = target.value;
+        return;
+      }
       const review = this.state.review;
       const reviewField = target.dataset.review;
       if (review && reviewField) {
@@ -200,6 +204,13 @@ export class QaCrawlerDashboard extends Base {
       (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
     });
     this.root.addEventListener('keydown', (event) => {
+      const key = event as KeyboardEvent;
+      // Dans l'éditeur d'un fichier généré : Ctrl+S (ou ⌘S) vérifie et enregistre.
+      if ((key.ctrlKey || key.metaKey) && key.key.toLowerCase() === 's' && this.state.tst.edit) {
+        event.preventDefault();
+        void this.testsSave();
+        return;
+      }
       if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
         this.closePanel();
         return;
@@ -874,6 +885,9 @@ export class QaCrawlerDashboard extends Base {
       ui.error = undefined;
       ui.details = undefined;
       ui.notice = undefined;
+      ui.edit = undefined;
+      ui.confirmRestore = undefined;
+      ui.overwrite = undefined;
     }
     ui.recording = name;
     if (!name) return;
@@ -915,6 +929,10 @@ export class QaCrawlerDashboard extends Base {
     const route = this.state.route;
     if (field === 'recording' && route.view === 'tests') {
       this.navigate({ view: 'tests', projectId: route.projectId, recording: target.value });
+      return;
+    }
+    if (field === 'edit') {
+      if (ui.edit) ui.edit.content = target.value;
       return;
     }
     if (field === 'environment') {
@@ -961,13 +979,64 @@ export class QaCrawlerDashboard extends Base {
     this.paint();
   }
 
-  private async testsGenerate(): Promise<void> {
+  /** Générer ; une régénération qui remplacerait des fichiers modifiés à la main attend une confirmation. */
+  private async testsGenerate(overwriteManual = false): Promise<void> {
     const ui = this.state.tst;
     if (ui.formats.length === 0) return;
     await this.testsOp('generate', async (api, projectId, name) => {
-      const result = await api.generation.run(projectId, name, { formats: [...ui.formats] });
-      return this.state.t.tst.generated(result.files.length);
+      try {
+        const result = await api.generation.run(projectId, name, {
+          formats: [...ui.formats],
+          ...(overwriteManual ? { overwriteManual: true } : {}),
+        });
+        ui.overwrite = undefined;
+        ui.edit = undefined;
+        return this.state.t.tst.generated(result.files.length);
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'MANUAL_EDITS') throw error;
+        ui.overwrite = detailsOf(error);
+        return undefined;
+      }
     });
+  }
+
+  /** Enregistrer le brouillon du fichier ouvert : refusé, l'éditeur reste ouvert avec les raisons. */
+  private async testsSave(): Promise<void> {
+    const api = this.api;
+    const route = this.state.route;
+    const ui = this.state.tst;
+    const edit = ui.edit;
+    const name = ui.recording;
+    if (!api || route.view !== 'tests' || !name || !edit || edit.busy) return;
+    const draft = this.root.querySelector<HTMLTextAreaElement>('[data-tst="edit"]');
+    if (draft) edit.content = draft.value;
+    edit.busy = true;
+    edit.error = undefined;
+    edit.details = undefined;
+    ui.notice = undefined;
+    this.paint();
+    try {
+      const saved = await api.generation.editFile(route.projectId, name, {
+        path: edit.path,
+        content: edit.content,
+        revision: edit.revision,
+      });
+      ui.edit = undefined;
+      ui.file = saved.path;
+      ui.notice = this.state.t.tst.saved(saved.path);
+      const view = await api.generation.view(route.projectId, name);
+      if (ui.recording === name) ui.view = view;
+    } catch (error) {
+      edit.busy = false;
+      edit.error = message(error);
+      edit.details = detailsOf(error);
+    }
+    this.paint();
+    if (ui.edit) this.root.querySelector<HTMLTextAreaElement>('[data-tst="edit"]')?.focus();
+    else
+      this.root
+        .querySelector<HTMLElement>(`[data-action="tst-file"][data-path="${CSS.escape(ui.file ?? '')}"]`)
+        ?.focus();
   }
 
   private testsClick(action: string, target: HTMLElement): boolean {
@@ -996,6 +1065,54 @@ export class QaCrawlerDashboard extends Base {
         });
         return true;
       }
+      case 'tst-edit': {
+        const file = ui.view?.files.find((entry) => entry.path === target.dataset.path);
+        if (!file?.revision) return true;
+        ui.edit = { path: file.path, content: file.content, revision: file.revision };
+        ui.confirmRestore = undefined;
+        this.paint();
+        this.root.querySelector<HTMLTextAreaElement>('[data-tst="edit"]')?.focus();
+        return true;
+      }
+      case 'tst-edit-cancel': {
+        const path = ui.edit?.path;
+        ui.edit = undefined;
+        this.paint();
+        this.root
+          .querySelector<HTMLElement>(`[data-action="tst-edit"][data-path="${CSS.escape(path ?? '')}"]`)
+          ?.focus();
+        return true;
+      }
+      case 'tst-save':
+        void this.testsSave();
+        return true;
+      case 'tst-restore':
+        ui.confirmRestore = target.dataset.path;
+        this.paint();
+        this.root.querySelector<HTMLElement>('[data-action="tst-restore-confirm"]')?.focus();
+        return true;
+      case 'tst-restore-cancel':
+        ui.confirmRestore = undefined;
+        this.paint();
+        return true;
+      case 'tst-restore-confirm': {
+        const file = ui.view?.files.find((entry) => entry.path === target.dataset.path);
+        if (!file?.revision) return true;
+        const revision = file.revision;
+        ui.confirmRestore = undefined;
+        void this.testsOp('restore', async (api, projectId, name) => {
+          await api.generation.restoreFile(projectId, name, { path: file.path, revision });
+          return t.restored(file.path);
+        });
+        return true;
+      }
+      case 'tst-overwrite':
+        void this.testsGenerate(true);
+        return true;
+      case 'tst-overwrite-cancel':
+        ui.overwrite = undefined;
+        this.paint();
+        return true;
       case 'tst-file': {
         const file = target.dataset.path;
         ui.file = ui.file === file ? undefined : file;
@@ -2767,7 +2884,21 @@ export class QaCrawlerDashboard extends Base {
       focused instanceof HTMLInputElement && ['text', 'search'].includes(focused.type)
         ? focused.selectionStart
         : null;
+    // L'éditeur d'un fichier généré : le suivi d'une exécution redessine l'écran, la saisie continue.
+    const area =
+      focused instanceof HTMLTextAreaElement && focused.dataset.tst === 'edit'
+        ? { start: focused.selectionStart, end: focused.selectionEnd, scroll: focused.scrollTop }
+        : undefined;
     this.root.innerHTML = `<style>${DASHBOARD_CSS}</style>${renderDashboard(this.state)}`;
+    if (area) {
+      const editor = this.root.querySelector<HTMLTextAreaElement>('[data-tst="edit"]');
+      if (editor) {
+        editor.focus();
+        editor.setSelectionRange(area.start, area.end);
+        editor.scrollTop = area.scroll;
+      }
+      return;
+    }
     if (focusKey) {
       const key = CSS.escape(focusKey);
       const candidates = [

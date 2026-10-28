@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -47,6 +47,7 @@ import {
   editStoredGroups,
   FLOW_FILES,
   generateStoredTests,
+  editGeneratedFile,
   generationManifest,
   loadStoredRecording,
   removeStoredStep,
@@ -1101,6 +1102,17 @@ async function handleRecordings(
       ? body.groupIds.filter((groupId): groupId is string => typeof groupId === 'string')
       : undefined;
     const result = await editRecording(ctx, project, name, async (stored): Promise<GenerationResult> => {
+      // Une modification à la main n'est jamais écrasée sans le dire.
+      const edited = ((await generationManifest(stored.directory))?.artifacts ?? []).filter(
+        (artifact) => artifact.editedAt && formats.includes(artifact.format),
+      );
+      if (edited.length > 0 && body.overwriteManual !== true)
+        throw new HttpError(
+          409,
+          'MANUAL_EDITS',
+          'files edited by hand would be replaced: confirm to regenerate them',
+          { details: edited.map((artifact) => artifact.path) },
+        );
       const outcome = await generateStoredTests(
         stored,
         { formats, ...(groupIds ? { groupIds } : {}), ...(body.force === true ? { force: true } : {}) },
@@ -1117,10 +1129,18 @@ async function handleRecordings(
           assertions: artifact.assertions,
           limits: artifact.limits,
           content: artifact.content,
+          revision: revisionOf(artifact.content),
         })),
       };
     });
     sendJson(response, result);
+    return;
+  }
+  if (action === 'generation' && (itemId === 'file' || itemId === 'restore')) {
+    if ((itemId === 'file' && method !== 'PUT') || (itemId === 'restore' && method !== 'POST'))
+      throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
+    refuseArchived(project);
+    sendJson(response, await editGenerated(ctx, project, name, itemId === 'restore', request));
     return;
   }
   if (action === 'generation' && itemId === undefined && method === 'GET') {
@@ -1174,6 +1194,7 @@ async function generatedTestsView(
     );
     // Décrit mais absent du disque : rien à montrer ni à jouer.
     if (content === undefined) continue;
+    const truncated = content.length > MAX_GENERATED_FILE;
     files.push({
       format: artifact.format,
       path: artifact.path,
@@ -1181,7 +1202,10 @@ async function generatedTestsView(
       ...(artifact.validation ? { validation: artifact.validation } : {}),
       assertions: artifact.assertions,
       limits: artifact.limits,
-      content: content.length > MAX_GENERATED_FILE ? `${content.slice(0, MAX_GENERATED_FILE)}\n…` : content,
+      content: truncated ? `${content.slice(0, MAX_GENERATED_FILE)}\n…` : content,
+      ...(artifact.editedAt ? { editedAt: artifact.editedAt } : {}),
+      // Montré tronqué, un fichier ne se modifie pas : il n'a pas de version de départ.
+      ...(truncated ? {} : { revision: revisionOf(content) }),
     });
   }
   return {
@@ -1192,6 +1216,78 @@ async function generatedTestsView(
     runners: await testRunners(ctx),
     runs: await listTestRuns(stored.directory, (id) => ctx.testRuns.get(id)),
   };
+}
+
+/** L'empreinte d'un contenu : la version d'où part une modification. */
+const revisionOf = (content: string): string =>
+  createHash('sha256').update(content).digest('hex').slice(0, 12);
+
+/**
+ * MODIFIER À LA MAIN un fichier généré, ou revenir à sa version générée. La modification part de la
+ * version lue (`revision`, sinon 409 FILE_CHANGED) et n'est écrite que si elle passe la vérification
+ * de son format (422 avec les raisons). Un test Playwright ou Java tourne sans la SafetyPolicy : le
+ * modifier demande aussi RUN_WRITES.
+ */
+async function editGenerated(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  restore: boolean,
+  request: IncomingMessage,
+): Promise<GeneratedFileView> {
+  const body = await readJson(request);
+  const relative = textOf(body.path, 300);
+  const revision = textOf(body.revision, 64);
+  if (!relative || !revision) throw new HttpError(400, 'BAD_REQUEST', 'path and revision are required');
+  if (!restore && typeof body.content !== 'string')
+    throw new HttpError(400, 'BAD_REQUEST', 'content must be a string');
+  const content = restore ? undefined : (body.content as string);
+  if (content !== undefined && content.length > MAX_GENERATED_FILE)
+    throw new HttpError(
+      413,
+      'TOO_LARGE',
+      `a generated file is limited to ${String(MAX_GENERATED_FILE)} characters`,
+    );
+  return editRecording(ctx, project, name, async (stored) => {
+    const artifact = (await generationManifest(stored.directory))?.artifacts.find(
+      (entry) => entry.path === relative,
+    );
+    if (!artifact) throw new HttpError(404, 'NOT_FOUND', `${relative} is not a generated file of ${name}`);
+    if (artifact.format === 'playwright' || artifact.format === 'java') {
+      const identity = identityOf(request);
+      if (!can(identity, 'RUN_WRITES', project.id))
+        throw new HttpError(
+          403,
+          'FORBIDDEN',
+          `the role ${roleIn(identity, project.id)} does not allow editing a ${artifact.format} test: it drives the application without the QA-CRAWLER safety policy (RUN_WRITES required)`,
+        );
+    }
+    const current = await readFile(generatedPath(stored.directory, relative), 'utf8').catch(() => undefined);
+    if (current === undefined || revisionOf(current) !== revision)
+      throw new HttpError(
+        409,
+        'FILE_CHANGED',
+        `${relative} changed since it was read: reload it before editing`,
+      );
+    const outcome = await editGeneratedFile(
+      stored.directory,
+      relative,
+      content === undefined ? { restore: true } : { content },
+    );
+    if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error, { details: outcome.messages });
+    const saved = outcome.artifact;
+    return {
+      format: saved.format,
+      path: saved.path,
+      status: saved.status,
+      ...(saved.validation ? { validation: saved.validation } : {}),
+      assertions: saved.assertions,
+      limits: saved.limits,
+      content: outcome.content,
+      ...(saved.editedAt ? { editedAt: saved.editedAt } : {}),
+      revision: revisionOf(outcome.content),
+    };
+  });
 }
 
 async function handleTestRuns(
@@ -1304,7 +1400,12 @@ async function startTestRun(
         path.join(stored.directory, 'generated', TEST_DATA_FILE),
         path.join(sources, TEST_DATA_FILE),
       ).catch(() => undefined);
-    return { directory, sources, artifacts: artifacts.map((artifact) => artifact.path) };
+    return {
+      directory,
+      sources,
+      artifacts: artifacts.map((artifact) => artifact.path),
+      edited: artifacts.filter((artifact) => artifact.editedAt).map((artifact) => artifact.path),
+    };
   });
   const origin = new URL(project.targetUrl).origin;
   const base: Omit<TestRunTask, 'tool' | 'target' | 'execute'> = {
@@ -1314,6 +1415,7 @@ async function startTestRun(
     kind: engine ? 'ENGINE' : 'EXTERNAL',
     directory: prepared.directory,
     ...(environment ? { environment: { id: environment.id, name: environment.name } } : {}),
+    ...(prepared.edited.length > 0 ? { edited: prepared.edited } : {}),
   };
   if (engine) {
     const file = prepared.artifacts.find((entry) =>

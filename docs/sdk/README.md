@@ -268,54 +268,56 @@ const reports = await qa.reports.list(project.id);
 const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisateur');
 ```
 
-| Méthode                                         | Route                                                            |
-| ----------------------------------------------- | ---------------------------------------------------------------- |
-| `recordings.start(projectId, input)`            | `POST /api/projects/:id/recordings` (202)                        |
-| `recordings.list(projectId)`                    | `GET /api/projects/:id/recordings`                               |
-| `recordings.get(projectId, name)`               | `GET /api/projects/:id/recordings/:name`                         |
-| `recordings.stop(projectId, name)`              | `POST /api/projects/:id/recordings/:name/stop`                   |
-| `recordings.subscribe(projectId, name, cb)`     | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
-| `recordings.flow(projectId, name)`              | `GET /api/projects/:id/recordings/:name/flow`                    |
-| `recordings.studio(projectId, name)`            | `GET /api/projects/:id/recordings/:name/studio`                  |
-| `recordings.pause/resume/undo(projectId, name)` | `POST /api/projects/:id/recordings/:name/{pause,resume,undo}`    |
-| `recordings.checkpoint(projectId, name, label)` | `POST /api/projects/:id/recordings/:name/checkpoint`             |
-| `recordings.resolve/ignore(projectId, name, …)` | `POST /api/projects/:id/recordings/:name/{resolve,ignore}`       |
-| `recordings.removeStep(projectId, name, step)`  | `POST /api/projects/:id/recordings/:name/steps/remove`           |
-| `recordings.replay(projectId, name)`            | `POST /api/projects/:id/recordings/:name/replay` (202)           |
-| `recordings.replayStatus(projectId, name)`      | `GET /api/projects/:id/recordings/:name/replay`                  |
-| `groups.proposals/acceptProposals(…)`           | `GET`/`POST /api/projects/:id/recordings/:name/groups/proposals` |
-| `groups.checks/addCheck(…)`                     | `GET`/`POST /api/projects/:id/recordings/:name/groups/checks`    |
-| `recordings.intents/reviewIntent(…)`            | `GET`/`POST /api/projects/:id/recordings/:name/intents`          |
-| `recordings.rowSource/editRow(…)`               | `GET`/`POST /api/projects/:id/recordings/:name/steps/row`        |
-| `recordings.restoreTarget(…)`                   | `POST /api/projects/:id/recordings/:name/steps/restore`          |
-| `corrections.start/get(projectId, name, …)`     | `POST`/`GET /api/projects/:id/recordings/:name/correction`       |
-| `corrections.pick/apply/resume/close(…)`        | `POST /api/projects/:id/recordings/:name/correction/<action>`    |
-| `library.list/add(projectId, …)`                | `GET`/`POST /api/projects/:id/library`                           |
-| `library.remove(projectId, name)`               | `POST /api/projects/:id/library/:name/remove`                    |
-| `library.preview(projectId, scenario)`          | `GET /api/projects/:id/library/preview?scenario=…`               |
-| `library.declareContract(projectId, name, c)`   | `PUT /api/projects/:id/library/:name/contract`                   |
-| `library.validateVersion(projectId, name)`      | `POST /api/projects/:id/library/:name/version`                   |
-| `library.drift(projectId)`                      | `GET /api/projects/:id/library/drift`                            |
-| `scenarios.checkComposition(projectId, input)`  | `POST /api/projects/:id/scenarios/compose/check` (`VIEW`)        |
-| `scenarios.compose(projectId, input)`           | `POST /api/projects/:id/scenarios/compose` (201)                 |
-| `scenarios.insert(projectId, scenario, input)`  | `POST /api/projects/:id/scenarios/:name/insert`                  |
-| `scenarios.acceptBlocks(projectId, scenario)`   | `POST /api/projects/:id/scenarios/:name/accept`                  |
-| `assertions.list(projectId, name)`              | `GET /api/projects/:id/recordings/:name/assertions`              |
-| `data.get(projectId, name)`                     | `GET /api/projects/:id/recordings/:name/data`                    |
-| `data.bind(projectId, name, input)`             | `POST /api/projects/:id/recordings/:name/data/bindings`          |
-| `assertions.decide(projectId, name, id, input)` | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
-| `groups.list(projectId, name)`                  | `GET /api/projects/:id/recordings/:name/groups`                  |
-| `groups.edit(projectId, name, command)`         | `POST /api/projects/:id/recordings/:name/groups`                 |
-| `generation.run(projectId, name, input)`        | `POST /api/projects/:id/recordings/:name/generation`             |
-| `generation.view(projectId, name)`              | `GET /api/projects/:id/recordings/:name/generation`              |
-| `generation.execute(projectId, name, input)`    | `POST /api/projects/:id/recordings/:name/test-runs` (202)        |
-| `generation.runOf(projectId, name, runId)`      | `GET /api/projects/:id/recordings/:name/test-runs/:runId`        |
-| `generation.cancel(projectId, name, runId)`     | `POST …/test-runs/:runId/cancel` (409 une fois terminée)         |
-| `generation.reportLink(projectId, name, runId)` | `POST …/test-runs/:runId/report-links` (rejeu YAML, Gherkin)     |
-| `graph.exploration(id)`                         | `GET /api/explorations/:id/graph` (409 avant la fin)             |
-| `graph.of(projectId, kind, name)`               | `GET /api/projects/:id/reports/:kind/:name/graph`                |
-| `reports.list(projectId)`                       | `GET /api/projects/:id/reports`                                  |
-| `reports.link(projectId, kind, name)`           | `POST /api/projects/:id/reports/:kind/:name/links`               |
+| Méthode                                          | Route                                                            |
+| ------------------------------------------------ | ---------------------------------------------------------------- |
+| `recordings.start(projectId, input)`             | `POST /api/projects/:id/recordings` (202)                        |
+| `recordings.list(projectId)`                     | `GET /api/projects/:id/recordings`                               |
+| `recordings.get(projectId, name)`                | `GET /api/projects/:id/recordings/:name`                         |
+| `recordings.stop(projectId, name)`               | `POST /api/projects/:id/recordings/:name/stop`                   |
+| `recordings.subscribe(projectId, name, cb)`      | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
+| `recordings.flow(projectId, name)`               | `GET /api/projects/:id/recordings/:name/flow`                    |
+| `recordings.studio(projectId, name)`             | `GET /api/projects/:id/recordings/:name/studio`                  |
+| `recordings.pause/resume/undo(projectId, name)`  | `POST /api/projects/:id/recordings/:name/{pause,resume,undo}`    |
+| `recordings.checkpoint(projectId, name, label)`  | `POST /api/projects/:id/recordings/:name/checkpoint`             |
+| `recordings.resolve/ignore(projectId, name, …)`  | `POST /api/projects/:id/recordings/:name/{resolve,ignore}`       |
+| `recordings.removeStep(projectId, name, step)`   | `POST /api/projects/:id/recordings/:name/steps/remove`           |
+| `recordings.replay(projectId, name)`             | `POST /api/projects/:id/recordings/:name/replay` (202)           |
+| `recordings.replayStatus(projectId, name)`       | `GET /api/projects/:id/recordings/:name/replay`                  |
+| `groups.proposals/acceptProposals(…)`            | `GET`/`POST /api/projects/:id/recordings/:name/groups/proposals` |
+| `groups.checks/addCheck(…)`                      | `GET`/`POST /api/projects/:id/recordings/:name/groups/checks`    |
+| `recordings.intents/reviewIntent(…)`             | `GET`/`POST /api/projects/:id/recordings/:name/intents`          |
+| `recordings.rowSource/editRow(…)`                | `GET`/`POST /api/projects/:id/recordings/:name/steps/row`        |
+| `recordings.restoreTarget(…)`                    | `POST /api/projects/:id/recordings/:name/steps/restore`          |
+| `corrections.start/get(projectId, name, …)`      | `POST`/`GET /api/projects/:id/recordings/:name/correction`       |
+| `corrections.pick/apply/resume/close(…)`         | `POST /api/projects/:id/recordings/:name/correction/<action>`    |
+| `library.list/add(projectId, …)`                 | `GET`/`POST /api/projects/:id/library`                           |
+| `library.remove(projectId, name)`                | `POST /api/projects/:id/library/:name/remove`                    |
+| `library.preview(projectId, scenario)`           | `GET /api/projects/:id/library/preview?scenario=…`               |
+| `library.declareContract(projectId, name, c)`    | `PUT /api/projects/:id/library/:name/contract`                   |
+| `library.validateVersion(projectId, name)`       | `POST /api/projects/:id/library/:name/version`                   |
+| `library.drift(projectId)`                       | `GET /api/projects/:id/library/drift`                            |
+| `scenarios.checkComposition(projectId, input)`   | `POST /api/projects/:id/scenarios/compose/check` (`VIEW`)        |
+| `scenarios.compose(projectId, input)`            | `POST /api/projects/:id/scenarios/compose` (201)                 |
+| `scenarios.insert(projectId, scenario, input)`   | `POST /api/projects/:id/scenarios/:name/insert`                  |
+| `scenarios.acceptBlocks(projectId, scenario)`    | `POST /api/projects/:id/scenarios/:name/accept`                  |
+| `assertions.list(projectId, name)`               | `GET /api/projects/:id/recordings/:name/assertions`              |
+| `data.get(projectId, name)`                      | `GET /api/projects/:id/recordings/:name/data`                    |
+| `data.bind(projectId, name, input)`              | `POST /api/projects/:id/recordings/:name/data/bindings`          |
+| `assertions.decide(projectId, name, id, input)`  | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
+| `groups.list(projectId, name)`                   | `GET /api/projects/:id/recordings/:name/groups`                  |
+| `groups.edit(projectId, name, command)`          | `POST /api/projects/:id/recordings/:name/groups`                 |
+| `generation.run(projectId, name, input)`         | `POST /api/projects/:id/recordings/:name/generation`             |
+| `generation.view(projectId, name)`               | `GET /api/projects/:id/recordings/:name/generation`              |
+| `generation.execute(projectId, name, input)`     | `POST /api/projects/:id/recordings/:name/test-runs` (202)        |
+| `generation.runOf(projectId, name, runId)`       | `GET /api/projects/:id/recordings/:name/test-runs/:runId`        |
+| `generation.cancel(projectId, name, runId)`      | `POST …/test-runs/:runId/cancel` (409 une fois terminée)         |
+| `generation.reportLink(projectId, name, runId)`  | `POST …/test-runs/:runId/report-links` (rejeu YAML, Gherkin)     |
+| `generation.editFile(projectId, name, input)`    | `PUT /api/projects/:id/recordings/:name/generation/file`         |
+| `generation.restoreFile(projectId, name, input)` | `POST /api/projects/:id/recordings/:name/generation/restore`     |
+| `graph.exploration(id)`                          | `GET /api/explorations/:id/graph` (409 avant la fin)             |
+| `graph.of(projectId, kind, name)`                | `GET /api/projects/:id/reports/:kind/:name/graph`                |
+| `reports.list(projectId)`                        | `GET /api/projects/:id/reports`                                  |
+| `reports.link(projectId, kind, name)`            | `POST /api/projects/:id/reports/:kind/:name/links`               |
 
 **Enregistrement** : `RECORDING → PROCESSING → COMPLETED | FAILED` ; `STORED` désigne un
 enregistrement lu sur disque (écrit par la CLI, ou avant le démarrage du serveur). Le nom donné
@@ -448,6 +450,28 @@ pendant l'exécution ne change pas ce qui est joué.
 - Une exécution à la fois ; les suivantes attendent en `QUEUED`. `run.json` est écrit à chaque
   changement : une exécution restée en cours à l'arrêt du serveur se relit `ERROR` (« interrupted »).
 - La sortie de l'outil (12 000 derniers caractères) et les messages d'échec sont masqués et tronqués.
+
+### Modifier un fichier généré à la main
+
+`generation.editFile(projectId, name, { path, content, revision })` remplace le contenu d'un fichier
+décrit par `generation.json` :
+
+- **Vérifié avant d'être écrit**, avec l'outil de la génération, sur une copie des fichiers du format :
+  schéma du flow, dictionnaire Gherkin et chargeur de mission, syntaxe TypeScript, `mvn test-compile`.
+  Un échec, ou un autre fichier du format jusque-là vérifié qui échoue à cause de la modification :
+  422 avec les raisons, rien n'est écrit. Un outil absent n'est pas un échec : le fichier est
+  enregistré `NOT_VALIDATED`.
+- `revision` est l'empreinte du contenu lu (`GeneratedFileView.revision`) : un fichier changé depuis
+  donne 409 `FILE_CHANGED`. Un fichier montré tronqué (plus de 256 Ko) n'a pas de `revision` et ne se
+  modifie pas.
+- Le fichier porte `editedAt` ; la version générée est gardée (`generated-originals/`) à la première
+  modification. `generation.restoreFile` la remet et retire la marque.
+- Régénérer un format dont un fichier a été modifié à la main : 409 `MANUAL_EDITS` (les fichiers dans
+  `details`), sauf avec `overwriteManual: true`.
+- Une exécution dit les fichiers joués qui avaient été modifiés (`TestRunView.edited`).
+- Droits : `DECIDE`, comme la génération ; un test Playwright ou Java demande en plus `RUN_WRITES`.
+- La modification ne change pas l'enregistrement : pour une correction durable (cible, assertion,
+  donnée), passer par la revue puis régénérer.
 
 ### Données de test
 
@@ -820,7 +844,7 @@ comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 | Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Enregistrements  | démarrer l'enregistrement d'un parcours (nom, chemin de départ, rejeu de validation ; un seul à la fois) ; pendant la session, la barre d'enregistrement : gestes en phrases et leur statut, pause, annulation du dernier geste, vérification posée, choix de l'élément d'une cible ambiguë, arrêt ; après l'arrêt, les phases en mots ; la liste du projet, la revue, le lien vers le Flow Studio et la promotion en scénario                                                                                                                                                                                                                                                |
 | Bibliothèque     | catalogue des blocs (version, provenance, entrées et sorties, état du contrat, utilisation ; recherche, origine, contrat, utilisation, tri) ; détails (historique, contrat, scénarios dépendants, valider une nouvelle version, déclarer le contrat) ; compositeur (ordre, d'où vient chaque entrée, vérification du serveur, création) ; ajout d'un bloc dans un panneau, avec l'aperçu de la source ; depuis Scénarios, insérer un bloc, accepter la nouvelle version d'un bloc ; depuis la revue, ajouter un groupe                                                                                                                                                        |
-| Tests générés    | pour un enregistrement terminé : générer les formats choisis ; par format, l'outil du serveur, sa présence et ce qu'il garantit (SafetyPolicy pour le rejeu du moteur, aucune pour Playwright et Java), le statut des fichiers, la dernière exécution ; exécuter (environnement au choix pour le rejeu du moteur), suivre en direct, annuler ; les exécutions avec leurs cas, messages d'échec, sortie de l'outil et rapport QA-CRAWLER ; le contenu de chaque fichier généré                                                                                                                                                                                                 |
+| Tests générés    | pour un enregistrement terminé : générer les formats choisis ; par format, l'outil du serveur, sa présence et ce qu'il garantit (SafetyPolicy pour le rejeu du moteur, aucune pour Playwright et Java), le statut des fichiers, la dernière exécution ; exécuter (environnement au choix pour le rejeu du moteur), suivre en direct, annuler ; les exécutions avec leurs cas, messages d'échec, sortie de l'outil et rapport QA-CRAWLER ; le contenu de chaque fichier généré, modifiable à la main (vérifié avant d'être enregistré, Ctrl+S, marque « Modifié à la main », retour à la version générée, régénération confirmée)                                              |
 | Revue            | d'un enregistrement terminé : rejeu de validation suivi étape par étape ; parcours en groupes (découpage proposé, vérifications suggérées, créer, renommer, déplacer, supprimer un groupe, cocher des étapes, monter, descendre, détacher, retirer une étape avec confirmation) ; assertions (recommandées, à décider, faibles, décidées ; une à une ou en lot) ; source de chaque saisie ; intentions (confirmer, corriger, réinitialiser) ; correction d'une cible dans le navigateur ouvert par le serveur, puis reprise du rejeu ; ligne de tableau redéfinie colonne par colonne ; restauration de la cible d'origine ; génération des tests et statut de chaque fichier |
 | Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -998,6 +1022,8 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   retire une étape ; une vraie correction de cible (rejeu jusqu'à l'étape, élément désigné à la souris,
   validation, reprise du rejeu réussie, restauration) ; la revue des intentions ; téléphone sans
   défilement horizontal.
+- `tests/unit/generated-file-edit.test.ts` : modifier un fichier généré (vérifié, refusé sans écriture,
+  version générée gardée puis remise, aucun chemin hors de `generated/`).
 - `tests/unit/sdk-test-runs.test.ts` : lecture du JUnit XML (Playwright Test, Surefire), verdict jamais
   réussi sans cas, file d'exécution (une à la fois, annulation en file et en cours), `run.json` relu
   après un arrêt. `tests/unit/sdk-dashboard-tests.test.ts` : rendu de l'écran Tests générés (outil et

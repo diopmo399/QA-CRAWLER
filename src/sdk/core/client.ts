@@ -15,6 +15,9 @@ import type {
   TraceabilityView,
   GenerationResult,
   GeneratedTestsView,
+  GeneratedFileEditInput,
+  GeneratedFileRestoreInput,
+  GeneratedFileView,
   TestRunInput,
   TestRunView,
   GraphView,
@@ -420,6 +423,14 @@ export interface QaCrawlerClient {
     cancel(projectId: string, recording: string, runId: string): Promise<TestRunView>;
     /** Le rapport QA-CRAWLER d'un rejeu (YAML, Gherkin). */
     reportLink(projectId: string, recording: string, runId: string): Promise<ReportLink>;
+    /** Modifie un fichier généré, vérifié avant d'être écrit (422 avec les raisons sinon). */
+    editFile(projectId: string, recording: string, input: GeneratedFileEditInput): Promise<GeneratedFileView>;
+    /** Revient à la version générée d'un fichier modifié à la main. */
+    restoreFile(
+      projectId: string,
+      recording: string,
+      input: GeneratedFileRestoreInput,
+    ): Promise<GeneratedFileView>;
   };
   /** Le graphe des écrans et transitions, d'une exploration ou d'un enregistrement. */
   graph: {
@@ -855,6 +866,10 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
     generation: {
       run: (projectId, name, input) => request('POST', `${recording(projectId, name)}/generation`, input),
       view: (projectId, name) => request('GET', `${recording(projectId, name)}/generation`),
+      editFile: (projectId, name, input) =>
+        request('PUT', `${recording(projectId, name)}/generation/file`, input),
+      restoreFile: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/generation/restore`, input),
       execute: (projectId, name, input) => request('POST', `${recording(projectId, name)}/test-runs`, input),
       runOf: (projectId, name, runId) =>
         request('GET', `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}`),

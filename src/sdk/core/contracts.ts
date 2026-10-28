@@ -790,6 +790,8 @@ export interface GenerationInput {
   groupIds?: string[];
   /** Générer malgré une entrée produite hors des groupes choisis. */
   force?: boolean;
+  /** Régénérer un format dont des fichiers ont été modifiés à la main (sinon 409 MANUAL_EDITS). */
+  overwriteManual?: boolean;
 }
 
 export interface GeneratedFileView {
@@ -802,6 +804,23 @@ export interface GeneratedFileView {
   assertions: { id: string; description: string; support: 'NATIVE' | 'REPLAY_ONLY'; status: string }[];
   limits: string[];
   content: string;
+  /** Modifié à la main depuis sa génération (le statut est celui de la vérification de la modification). */
+  editedAt?: string;
+  /** L'empreinte du contenu : une modification part de cette version, sinon 409 FILE_CHANGED. */
+  revision?: string;
+}
+
+/** Modifier un fichier généré : son chemin, le nouveau contenu, la version d'où part la modification. */
+export interface GeneratedFileEditInput {
+  path: string;
+  content: string;
+  revision: string;
+}
+
+/** Revenir à la version générée d'un fichier modifié à la main. */
+export interface GeneratedFileRestoreInput {
+  path: string;
+  revision: string;
 }
 
 export interface GenerationResult {
@@ -872,6 +891,8 @@ export interface TestRunView {
   output: string;
   /** Le rapport QA-CRAWLER d'un rejeu (chemin relatif au dossier de l'exécution). */
   report?: string;
+  /** Les fichiers joués qui avaient été modifiés à la main. */
+  edited?: string[];
 }
 
 /** Les tests générés d'un enregistrement : leurs fichiers, leurs exécutions, les outils du serveur. */

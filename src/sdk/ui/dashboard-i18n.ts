@@ -1269,6 +1269,23 @@ const fr = {
     cancelling: 'Annulation demandée',
     started$: (format: string) => `Exécution ${format} lancée.`,
     refresh: 'Actualiser',
+    edit: 'Modifier',
+    editLabel: (file: string) => `Contenu de ${file}`,
+    editHint: (method: string) =>
+      `Vérifié avant d’être enregistré (${method}). Un fichier qui ne passe pas la vérification n’est pas écrit. Cette modification ne change pas l’enregistrement : une régénération la remplacerait.`,
+    save: 'Vérifier et enregistrer',
+    saving: 'Vérification…',
+    cancelEdit: 'Annuler',
+    saved: (file: string) => `${file} est enregistré.`,
+    editedByHand: 'Modifié à la main',
+    editedNote: (date: string) => `Modifié à la main le ${date}. La version générée est gardée.`,
+    restore: 'Revenir à la version générée',
+    restoreConfirm: 'La version générée remplacera vos modifications de ce fichier.',
+    restored: (file: string) => `${file} est revenu à sa version générée.`,
+    overwriteWarn:
+      'Ces fichiers ont été modifiés à la main : la régénération les remplacera par une nouvelle version générée.',
+    overwrite: 'Régénérer et remplacer',
+    playedEdited: (files: string) => `Joué avec des fichiers modifiés à la main : ${files}.`,
   },
 
   severities: { CRITICAL: 'Critique', ERROR: 'Erreur', WARNING: 'Avertissement', INFO: 'Info' } as Record<
@@ -2454,6 +2471,23 @@ const en: DashboardStrings = {
     cancelling: 'Cancellation requested',
     started$: (format) => `${format} run started.`,
     refresh: 'Refresh',
+    edit: 'Edit',
+    editLabel: (file) => `Content of ${file}`,
+    editHint: (method) =>
+      `Checked before it is saved (${method}). A file that fails the check is not written. This change does not alter the recording: a regeneration would replace it.`,
+    save: 'Check and save',
+    saving: 'Checking…',
+    cancelEdit: 'Cancel',
+    saved: (file) => `${file} is saved.`,
+    editedByHand: 'Edited by hand',
+    editedNote: (date) => `Edited by hand on ${date}. The generated version is kept.`,
+    restore: 'Back to the generated version',
+    restoreConfirm: 'The generated version will replace your changes to this file.',
+    restored: (file) => `${file} is back to its generated version.`,
+    overwriteWarn:
+      'These files were edited by hand: regenerating replaces them with a new generated version.',
+    overwrite: 'Regenerate and replace',
+    playedEdited: (files) => `Played with files edited by hand: ${files}.`,
   },
 
   severities: { CRITICAL: 'Critical', ERROR: 'Error', WARNING: 'Warning', INFO: 'Info' },

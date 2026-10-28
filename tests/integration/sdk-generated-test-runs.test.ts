@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -145,30 +145,78 @@ describe('generated tests, run from the SDK', () => {
     expect(persisted.status).toBe('PASSED');
   }, 240_000);
 
-  it('reports a broken Playwright test as FAILED, with the failing case and its message', async () => {
-    const spec = path.join(
-      workspace,
-      project.id,
-      'qa-reports',
-      'recordings',
-      NAME,
-      'generated',
-      'playwright',
-      `${NAME}.spec.ts`,
+  it('edits the Playwright test by hand through the SDK: checked, run as edited (FAILED), protected, restored', async () => {
+    const specPath = `playwright/${NAME}.spec.ts`;
+    const file = (await client.generation.view(project.id, NAME)).files.find(
+      (entry) => entry.path === specPath,
     );
-    const original = await readFile(spec, 'utf8');
-    expect(original).toContain('Utilisateur 1');
-    // Le test vise un lien qui n'existe pas : Playwright Test doit le dire, et le SDK le rapporter.
-    await writeFile(spec, original.replaceAll('Utilisateur 1', 'Utilisateur 999'));
-    try {
-      const run = await finished(await client.generation.execute(project.id, NAME, { format: 'playwright' }));
-      expect(run.status, run.output).toBe('FAILED');
-      expect(run.counts).toMatchObject({ failed: 1, total: 1 });
-      expect(run.cases[0]?.message).toBeTruthy();
-    } finally {
-      await writeFile(spec, original);
-    }
-  }, 240_000);
+    if (!file?.revision) throw new Error('no editable spec');
+    expect(file.content).toContain('Utilisateur 1');
+    // Une modification qui ne compile pas : refusée avec les raisons, rien n'est écrit.
+    await expect(
+      client.generation.editFile(project.id, NAME, {
+        path: specPath,
+        content: `${file.content}\nconst = ;\n`,
+        revision: file.revision,
+      }),
+    ).rejects.toMatchObject({ status: 422, code: 'REFUSED' });
+    // Le test vise un lien qui n'existe pas : vérifié, enregistré, marqué.
+    const edited = await client.generation.editFile(project.id, NAME, {
+      path: specPath,
+      content: file.content.replaceAll('Utilisateur 1', 'Utilisateur 999'),
+      revision: file.revision,
+    });
+    expect(edited.status).toBe('STATICALLY_VALIDATED');
+    expect(edited.editedAt).toBeDefined();
+    // Partie d'une version dépassée : refusée.
+    await expect(
+      client.generation.editFile(project.id, NAME, {
+        path: specPath,
+        content: file.content,
+        revision: file.revision,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'FILE_CHANGED' });
+    // Playwright Test le joue tel que modifié, et le SDK le dit.
+    const run = await finished(await client.generation.execute(project.id, NAME, { format: 'playwright' }));
+    expect(run.status, run.output).toBe('FAILED');
+    expect(run.edited).toEqual([specPath]);
+    expect(run.counts).toMatchObject({ failed: 1, total: 1 });
+    expect(run.cases[0]?.message).toMatch(/Error/);
+    // Régénérer ne remplace pas une modification à la main sans le dire.
+    await expect(client.generation.run(project.id, NAME, { formats: ['playwright'] })).rejects.toMatchObject({
+      status: 409,
+      code: 'MANUAL_EDITS',
+      details: [specPath],
+    });
+    // Retour à la version générée : le test passe de nouveau.
+    const restored = await client.generation.restoreFile(project.id, NAME, {
+      path: specPath,
+      revision: edited.revision ?? '',
+    });
+    expect(restored.editedAt).toBeUndefined();
+    expect(restored.content).toBe(file.content);
+    const again = await finished(await client.generation.execute(project.id, NAME, { format: 'playwright' }));
+    expect(again.status, again.output).toBe('PASSED');
+    expect(again.edited).toBeUndefined();
+  }, 480_000);
+
+  it('regenerates over a hand edit only when asked to, and the mark goes away', async () => {
+    const yaml = `${NAME}.flow.yaml`;
+    const file = (await client.generation.view(project.id, NAME)).files.find((entry) => entry.path === yaml);
+    if (!file?.revision) throw new Error('no editable flow');
+    await client.generation.editFile(project.id, NAME, {
+      path: yaml,
+      content: `${file.content}# relu à la main\n`,
+      revision: file.revision,
+    });
+    const result = await client.generation.run(project.id, NAME, {
+      formats: ['yaml'],
+      overwriteManual: true,
+    });
+    expect(result.files.find((entry) => entry.path === yaml)?.content).not.toContain('# relu à la main');
+    const after = (await client.generation.view(project.id, NAME)).files.find((entry) => entry.path === yaml);
+    expect(after?.editedAt).toBeUndefined();
+  });
 
   it('lists the runs, most recent first, and refuses to cancel a finished run', async () => {
     const view = await client.generation.view(project.id, NAME);

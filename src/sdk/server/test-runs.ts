@@ -49,6 +49,8 @@ export interface TestRunTask {
   tool: string;
   target: string;
   environment?: { id: string; name: string };
+  /** Les fichiers joués qui avaient été modifiés à la main. */
+  edited?: string[];
   /** Le dossier de l'exécution (la copie des fichiers, la sortie, run.json). */
   directory: string;
   execute(context: { signal: AbortSignal; log: (text: string) => void }): Promise<TestRunOutcome>;
@@ -102,6 +104,7 @@ export class TestRun {
       ...(this.message ? { message: this.message } : {}),
       output: this.output,
       ...(this.report ? { report: this.report } : {}),
+      ...(this.task.edited ? { edited: this.task.edited } : {}),
     };
   }
 }

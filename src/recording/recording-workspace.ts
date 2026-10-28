@@ -1,4 +1,5 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { access, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { isSensitiveKey, parseTestDataSet, testDataSetDocument } from '../data/test-data-set.js';
@@ -180,9 +181,12 @@ export async function generateRecordingTests(
     await writeFile(path.join(generatedDir, TEST_DATA_FILE), context.testData.yaml);
   const validated = await validateArtifacts(plan.artifacts, { directory: generatedDir });
   // Les fichiers des formats non régénérés restent sous generated/ : leur description aussi.
-  const kept = (await generationManifest(context.directory))?.artifacts.filter(
-    (artifact) => !formats.includes(artifact.format),
-  );
+  const previous = await generationManifest(context.directory);
+  const kept = previous?.artifacts.filter((artifact) => !formats.includes(artifact.format));
+  // Régénérés : leurs versions modifiées à la main sont remplacées, leurs sauvegardes n'ont plus d'objet.
+  for (const artifact of previous?.artifacts ?? [])
+    if (formats.includes(artifact.format) && artifact.editedAt)
+      await rm(path.join(context.directory, ORIGINALS_DIR, artifact.path), { force: true });
   await context.write(
     FLOW_FILES.generation,
     json({
@@ -197,13 +201,19 @@ export async function generateRecordingTests(
   return { directory: generatedDir, warnings: plan.warnings, artifacts: validated, name: plan.name, formats };
 }
 
+/** Un fichier décrit par generation.json ; `editedAt` : modifié à la main depuis sa génération. */
+export type ManifestArtifact = Omit<GeneratedArtifact, 'content'> & { editedAt?: string };
+
 /** Ce que generation.json décrit : chaque fichier sous generated/, sans son contenu. */
 export interface GenerationManifest {
   generatedAt?: string;
   flow?: string;
   warnings: string[];
-  artifacts: Omit<GeneratedArtifact, 'content'>[];
+  artifacts: ManifestArtifact[];
 }
+
+/** La version générée d'un fichier modifié à la main, gardée pour y revenir. */
+export const ORIGINALS_DIR = 'generated-originals';
 
 /** generation.json d'un enregistrement ; undefined quand rien n'a été généré (ou fichier illisible). */
 export async function generationManifest(directory: string): Promise<GenerationManifest | undefined> {
@@ -226,6 +236,127 @@ export async function generationManifest(directory: string): Promise<GenerationM
   } catch {
     return undefined;
   }
+}
+
+// ── Modifier un fichier généré à la main ───────────────────────────────────────────────────
+
+export type GeneratedFileEdit =
+  { artifact: ManifestArtifact; content: string } | { error: string; messages: string[] };
+
+/** Un chemin sous `root` ; undefined s'il en sort. */
+function inside(root: string, relative: string): string | undefined {
+  const base = path.resolve(root);
+  const target = path.resolve(base, relative);
+  return target.startsWith(`${base}${path.sep}`) ? target : undefined;
+}
+
+async function writeAtomic(file: string, content: string): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${randomBytes(4).toString('hex')}.tmp`;
+  await writeFile(temporary, content, 'utf8');
+  await rename(temporary, file);
+}
+
+/**
+ * MODIFIER (ou RESTAURER) UN FICHIER GÉNÉRÉ. Le nouveau contenu est vérifié avec l'outil de la
+ * génération (schéma, dictionnaire Gherkin et chargeur de mission, syntaxe TypeScript, `mvn
+ * test-compile`) sur une COPIE des fichiers de son format : s'il échoue, ou s'il fait échouer un autre
+ * fichier du format jusque-là vérifié, rien n'est écrit. Un outil absent n'est pas un échec : le
+ * fichier est enregistré « non vérifié », dit tel quel. La première modification garde la version
+ * générée (generated-originals/) ; `restore` la remet et retire la marque « modifié à la main ».
+ */
+export async function editGeneratedFile(
+  directory: string,
+  relative: string,
+  change: { content: string } | { restore: true },
+): Promise<GeneratedFileEdit> {
+  const manifestFile = path.join(directory, FLOW_FILES.generation);
+  const text = await readFile(manifestFile, 'utf8').catch(() => undefined);
+  if (text === undefined) return { error: 'nothing has been generated for this recording', messages: [] };
+  const document = JSON.parse(text) as Record<string, unknown> & { artifacts?: ManifestArtifact[] };
+  const artifacts = Array.isArray(document.artifacts) ? document.artifacts : [];
+  const index = artifacts.findIndex((artifact) => artifact.path === relative);
+  const artifact = artifacts[index];
+  const generatedDir = path.join(directory, 'generated');
+  const target = inside(generatedDir, relative);
+  const original = inside(path.join(directory, ORIGINALS_DIR), relative);
+  if (!artifact || !target || !original)
+    return { error: `${relative} is not a generated file`, messages: [] };
+  let content: string;
+  if ('restore' in change) {
+    if (!artifact.editedAt) return { error: `${relative} has not been edited`, messages: [] };
+    const saved = await readFile(original, 'utf8').catch(() => undefined);
+    if (saved === undefined)
+      return { error: `the generated version of ${relative} is missing`, messages: [] };
+    content = saved;
+  } else content = change.content;
+
+  // La vérification, sur une copie des fichiers du format (le chargeur de mission lit le .feature).
+  const siblings = artifacts.filter((entry) => entry.format === artifact.format);
+  const workspace = await mkdtemp(path.join(directory, '.edit-'));
+  let checked: GeneratedArtifact[];
+  try {
+    const copies: GeneratedArtifact[] = [];
+    for (const entry of siblings) {
+      const source = inside(generatedDir, entry.path);
+      const body =
+        entry.path === relative
+          ? content
+          : source
+            ? await readFile(source, 'utf8').catch(() => undefined)
+            : undefined;
+      if (body === undefined) continue;
+      copies.push({ ...entry, content: body });
+    }
+    await writeArtifacts(copies, workspace);
+    await cp(path.join(generatedDir, TEST_DATA_FILE), path.join(workspace, TEST_DATA_FILE)).catch(
+      () => undefined,
+    );
+    checked = await validateArtifacts(copies, { directory: workspace });
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+  const own = checked.find((entry) => entry.path === relative);
+  if (!own?.validation) return { error: `${relative} could not be checked`, messages: [] };
+  const unavailable = (validation: GeneratedArtifact['validation']): boolean =>
+    validation?.messages.some((message) => message.endsWith('not validated')) ?? false;
+  const broken = checked.filter(
+    (entry) =>
+      entry.path !== relative &&
+      siblings.find((sibling) => sibling.path === entry.path)?.status === 'STATICALLY_VALIDATED' &&
+      entry.validation &&
+      !entry.validation.ok &&
+      !unavailable(entry.validation),
+  );
+  if ((!own.validation.ok && !unavailable(own.validation)) || broken.length > 0)
+    return {
+      error: `${relative} does not pass its check (${own.validation.method}): nothing was saved`,
+      messages: [
+        ...own.validation.messages,
+        ...broken.flatMap((entry) =>
+          (entry.validation?.messages ?? []).map((message) => `${entry.path}: ${message}`),
+        ),
+      ].slice(0, 30),
+    };
+
+  if ('restore' in change) {
+    await writeAtomic(target, content);
+    await rm(original, { force: true });
+  } else {
+    // La version générée est gardée une seule fois : celle d'avant la première modification.
+    if (!artifact.editedAt) await writeAtomic(original, await readFile(target, 'utf8'));
+    await writeAtomic(target, content);
+  }
+  const { editedAt: _editedAt, ...rest } = artifact;
+  const updated: ManifestArtifact = {
+    ...rest,
+    status: own.status,
+    validation: own.validation,
+    ...('restore' in change ? {} : { editedAt: new Date().toISOString() }),
+  };
+  artifacts[index] = updated;
+  await writeAtomic(manifestFile, json({ ...document, artifacts }));
+  return { artifact: updated, content };
 }
 
 // ── Un enregistrement déjà écrit sur disque ───────────────────────────────────────────────────

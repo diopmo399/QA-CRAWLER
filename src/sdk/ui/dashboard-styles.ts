@@ -588,6 +588,14 @@ details.tech[open] summary{margin-bottom:6px}
 .tst-case-n{overflow-wrap:anywhere;min-width:0}
 .tst-case-m{flex-basis:100%;margin:0;font-size:13px;color:var(--qa-color-danger);overflow-wrap:anywhere}
 .tst-code{margin:0;max-height:360px;overflow:auto;font-family:var(--qa-font-family-mono);font-size:12px;line-height:1.5;background:var(--qa-color-background);color:var(--qa-color-text);border:1px solid var(--qa-color-border);border-radius:8px;padding:10px 12px;white-space:pre}
+.tst-editor{display:flex;flex-direction:column;gap:8px;min-width:0}
+.tst-editor label{font-size:13px}
+.tst-area{width:100%;box-sizing:border-box;resize:vertical;min-height:200px;white-space:pre;tab-size:2}
+.tst-area:focus{outline:2px solid var(--qa-color-primary);outline-offset:1px}
+.tst-confirm{display:flex;flex-direction:column;gap:8px;border:1px solid var(--qa-color-warning);background:var(--qa-color-warning-soft);border-radius:10px;padding:10px 12px}
+.tst-confirm p{margin:0}
+.tst-pills{display:flex;flex-wrap:wrap;gap:6px}
+.tst-file.edited{border-color:color-mix(in srgb,var(--qa-color-warning) 55%,var(--qa-color-border))}
 .tst-out summary{cursor:pointer;font-size:13px;color:var(--qa-color-muted)}
 .tst-out[open] summary{margin-bottom:6px}
 @container (max-width:600px){

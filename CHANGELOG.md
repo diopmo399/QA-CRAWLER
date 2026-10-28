@@ -43,6 +43,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   et montre les cas, les messages d'échec et la sortie de l'outil. Playwright et Java, qui pilotent
   l'application sans la SafetyPolicy, demandent le droit `RUN_WRITES`.
 
+- **Modifier un fichier généré à la main**, depuis l'écran Tests générés (ou `generation.editFile`). Le
+  contenu est vérifié avec l'outil de son format avant d'être écrit ; refusé, rien ne change et les
+  raisons s'affichent. Le fichier est marqué « Modifié à la main », sa version générée est gardée
+  (« Revenir à la version générée »), une régénération qui le remplacerait demande une confirmation, et
+  une exécution dit qu'elle a joué des fichiers modifiés. Modifier un test Playwright ou Java demande
+  `RUN_WRITES`.
 - SDK : `generation.view`, `generation.execute`, `generation.runOf`, `generation.cancel`,
   `generation.reportLink` ; routes `GET …/recordings/:name/generation` et `…/recordings/:name/test-runs`.
   `generation.json` garde désormais les fichiers des formats non régénérés.
