@@ -32,7 +32,7 @@ import {
   qualityTexts,
   recoverySection,
 } from './quality-sections.js';
-import { renderFlowMap, renderFlowSteps } from './flow-diagram.js';
+import { FLOW_MAP_SCRIPT, renderFlowMap, renderFlowSteps } from './flow-diagram.js';
 import { flowAnalysisBlocks } from './flow-analysis-section.js';
 import { runAnalysisSection } from './run-analysis-section.js';
 import { platformSection } from './platform-section.js';
@@ -172,7 +172,7 @@ export function renderHtml(
           `<section>
     <h2>${esc(t.discoveredFlow)}</h2>
     <p class="muted">${esc(t.discoveredFlowHint)}</p>
-    ${renderFlowMap(result, language)}
+    ${renderFlowMap(result, language, { href })}
     ${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}
   </section>`,
           `<section>
@@ -306,6 +306,7 @@ ${layout.toc}
   <p class="muted report-footer">${esc(t.generatedBy)} · ${esc(formatDate(result.finishedAt))}</p>
 </main>
 </div>
+${FLOW_MAP_SCRIPT}
 ${REPORT_THEME_SCRIPT}
 </body>
 </html>

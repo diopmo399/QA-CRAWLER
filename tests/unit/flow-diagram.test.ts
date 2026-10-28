@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ExplorationResult } from '../../src/model/exploration-result.js';
 import type { FlowRunReport } from '../../src/model/flow-run.js';
-import { renderFlowMap, renderFlowSteps } from '../../src/reporting/flow-diagram.js';
+import { FLOW_MAP_SCRIPT, renderFlowMap, renderFlowSteps } from '../../src/reporting/flow-diagram.js';
+import { renderFlowGraphHtml } from '../../src/reporting/flow-graph-html-reporter.js';
+import { renderHtml } from '../../src/reporting/html-reporter.js';
+import { branching } from '../fixtures/flow-map.js';
 
 const node = (id: string, heading: string) => ({
   id,
@@ -44,6 +47,81 @@ describe('flow diagrams (SVG)', () => {
     expect(svg).toContain('Users &lt;b&gt;');
     expect(svg).not.toContain('Users <b>');
     expect(svg).not.toMatch(/<script/i);
+  });
+
+  it('flow map: every screen has its details (actions, checks, issues, screenshot); the fragment holds no script', () => {
+    const html = renderFlowMap(branching(), 'fr', { href: (file) => `../${file}` });
+    expect(html).not.toMatch(/<script/i);
+    // Une carte par écran, un panneau de détails par écran, reliés par une ancre (lisible sans JavaScript).
+    expect(html.match(/class="fm-node[ "]/g)).toHaveLength(11);
+    expect(html.match(/class="fm-detail"/g)).toHaveLength(11);
+    expect(html).toContain('href="#fm-d-0"');
+    expect(html).toContain('id="fm-d-0"');
+    // La fiche : actions depuis l'écran (avec leur verdict), arrivées, vérifications, anomalies, capture.
+    const index = /href="#fm-d-(\d+)"[^>]*aria-label="Fiche de l’élément/.exec(html)?.[1] ?? '';
+    const from = html.indexOf(`id="fm-d-${index}"`);
+    const item = html.slice(from, html.indexOf('</section>', from));
+    expect(item).toContain('Fiche de l’élément');
+    expect(item).toContain('clic « Modifier » → <b>Modifier l’élément</b>');
+    expect(item).toContain('vérification en échec');
+    expect(item).toContain('✓ no HTTP 5xx');
+    expect(item).toContain('href="../screenshots/item.png"');
+    expect(html).toContain('PUT /api/items/42 → 500');
+    // Les statuts proposés : seulement ceux qui existent, avec leur nombre.
+    expect(html).toContain('data-fm-filter="FAIL"');
+    expect(html).toMatch(/Échec \(1\)/);
+    expect(html).toMatch(/data-status="FAIL"[^>]*aria-label="Modifier l’élément — Échec"/);
+    // Les retours en tirets, avec une pointe ; l'étiquette de l'action reste à l'écart des cartes.
+    expect(html).toMatch(/class="fm-edge fm-link"[^]*?marker-end="url\(#fm-a-/);
+    expect(html).toContain('class="fm-label"');
+  });
+
+  it('both report pages carry the map behaviour once', () => {
+    const page = renderFlowGraphHtml(branching(), 'fr');
+    expect(page.split(FLOW_MAP_SCRIPT).length - 1).toBe(1);
+    expect(page).toContain('class="fm"');
+    const journey = branching();
+    const report = renderHtml(
+      {
+        ...journey,
+        // Le rapport complet lit aussi le détail des actions de chaque écran.
+        states: journey.states.map((state) => ({ ...state, actionsDetail: [], forms: [] })),
+        mode: 'explore',
+        runId: 'run1',
+        target: { baseUrl: 'http://app.test', startUrl: 'http://app.test/' },
+        startedAt: '2026-10-28T10:00:00.000Z',
+        finishedAt: '2026-10-28T10:01:00.000Z',
+        durationMs: 60_000,
+        flows: [],
+        browserInteractions: [],
+        stopReason: 'budget',
+        decisionEngine: 'rules',
+        settings: {},
+        artifacts: {},
+        stats: {
+          states: journey.states.length,
+          actionsExecuted: journey.transitions.length,
+          actionsSucceeded: journey.transitions.length,
+          actionsFailed: 0,
+          actionsBlocked: 1,
+          transitions: journey.transitions.length,
+          backtracks: 0,
+          maxDepth: 3,
+          flowsPassed: 0,
+          flowsFailed: 0,
+          issuesBySeverity: { INFO: 0, WARNING: 1, ERROR: 1, CRITICAL: 0 },
+          issuesByType: {},
+          actionsByClassification: {},
+          formsFound: 0,
+          interactionsByType: {},
+          interactionsByStatus: {},
+        },
+      } as unknown as ExplorationResult,
+      (file) => file,
+      'fr',
+    );
+    expect(report).toContain('class="fm"');
+    expect(report.split(FLOW_MAP_SCRIPT).length - 1).toBe(1);
   });
 
   it('no screen, no map', () => {

@@ -110,6 +110,19 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
     donnée définie autrement des deux côtés est refusée, jamais écrasée.
   - Un bloc rejoué par un scénario ne se retire pas ; un bloc ne se lance pas seul (`REUSABLE_BLOCK`).
   - Moteur : quand on rejoue des scénarios choisis, les blocs suivent toujours (un `run:` les trouve).
+- **Carte des écrans visités** (rapport `index.html` et `flow-graph.html`) : refaite pour rester lisible
+  avec de nombreux écrans et branches, sans dépendance nouvelle.
+  - Disposition en couches qui tient compte de la taille réelle des cartes : de haut en bas pour un
+    parcours qui tient dans la largeur du rapport, de gauche à droite sinon. Les branches alternatives
+    prennent des colonnes distinctes, séparées par un espace supplémentaire.
+  - Flèches orthogonales : chacune part d'un bord et arrive sur un bord, ne traverse aucune carte et
+    a sa propre piste (aucun trajet partagé). Les retours, raccourcis et cycles passent par les côtés,
+    en tirets, avec leur pointe. L'action est posée sur sa flèche, dans une bande réservée hors des cartes.
+  - Cartes : titre et adresse sur deux lignes au plus, statut (validé, échec, avertissement, non jugé :
+    jamais validé sans vérification réussie à l'arrivée), nombre d'actions et de vérifications.
+  - Cliquer un écran montre ses actions, ses arrivées, les vérifications, les anomalies et la capture ;
+    mise en avant par statut, zoom, ajustement à la fenêtre (refait quand le cadre change de taille),
+    déplacement à la souris. Sans JavaScript, la carte se lit et les détails s'ouvrent par ancre.
   - SDK : `library.list/add/remove`, `scenarios.compose/insert` (droit `PUBLISH`) ; `ScenarioView`
     porte `reusable`, `uses` et `description`.
 - **Flow Studio** : un onglet Tests génère les tests (formats, groupes) et dit ce qu'est chaque fichier ;

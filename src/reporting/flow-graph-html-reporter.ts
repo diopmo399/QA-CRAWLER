@@ -14,7 +14,8 @@ import {
 } from './html-common.js';
 import { reportTexts, translateReason, valueLabel, type ReportLanguage } from './i18n.js';
 import type { Reporter } from './reporter.js';
-import { renderFlowMap } from './flow-diagram.js';
+import { FLOW_MAP_SCRIPT, renderFlowMap } from './flow-diagram.js';
+import { relativeTo } from './html-reporter.js';
 
 /** reports/flow-graph.html — la carte fonctionnelle : arbre, états et chaque transition. */
 export class FlowGraphHtmlReporter implements Reporter {
@@ -28,12 +29,20 @@ export class FlowGraphHtmlReporter implements Reporter {
 
   async write(result: ExplorationResult): Promise<string> {
     const target = path.join(this.directory, this.fileName);
-    await writeFile(target, renderFlowGraphHtml(result, this.language), 'utf8');
+    await writeFile(
+      target,
+      renderFlowGraphHtml(result, this.language, (file) => relativeTo(this.directory, file)),
+      'utf8',
+    );
     return target;
   }
 }
 
-export function renderFlowGraphHtml(result: ExplorationResult, language: ReportLanguage = 'en'): string {
+export function renderFlowGraphHtml(
+  result: ExplorationResult,
+  language: ReportLanguage = 'en',
+  href: (file: string) => string = (file) => file,
+): string {
   const t = reportTexts(language);
   const c = t.columns;
   const tree = buildFlowTree(result.states, result.transitions, result.states[0]?.id);
@@ -72,7 +81,7 @@ ${REPORT_THEME_HEAD}
     ${card(t.cards.failed, result.stats.actionsFailed)}
     ${card(t.cards.maxDepth, result.stats.maxDepth)}
   </div>
-  <section><h2>${esc(t.applicationMap)}</h2>${renderFlowMap(result, t.lang)}${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}</section>
+  <section><h2>${esc(t.applicationMap)}</h2>${renderFlowMap(result, t.lang, { href })}${renderTreeHtml(tree, (stateId) => result.issues.filter((issue) => issue.states.includes(stateId)).length, t)}</section>
   <section><h2>${esc(t.textView)}</h2><pre class="tree-text">${esc(renderTextTree(tree))}</pre></section>
   <section><h2>${esc(t.movesTitle)} (${moves.length})</h2>
     <table>${head}<tbody>${moves.map(edgeRow).join('')}</tbody></table>
@@ -82,6 +91,7 @@ ${REPORT_THEME_HEAD}
     <table>${head}<tbody>${others.map(edgeRow).join('')}</tbody></table>
   </section>
 </main>
+${FLOW_MAP_SCRIPT}
 ${REPORT_THEME_SCRIPT}
 </body>
 </html>
