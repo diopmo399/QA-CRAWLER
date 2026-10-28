@@ -130,6 +130,11 @@ export const ALWAYS_IGNORED_PATHS: readonly string[] = scenarioSchema.parse({
   target: { baseUrl: 'http://localhost/' },
 }).safety.ignoredPaths;
 
+/** Les risques que le moteur bloque toujours (safety.block par défaut), quelle que soit la classe de l'action. */
+export const ALWAYS_BLOCKED_RISKS: readonly string[] = scenarioSchema.parse({
+  target: { baseUrl: 'http://localhost/' },
+}).safety.block;
+
 /** Les valeurs par défaut du moteur, pour pré-remplir l'assistant. */
 export function engineDefaults(): ProjectDraft {
   const defaults: ScenarioConfig = scenarioSchema.parse({ target: { baseUrl: 'http://localhost/' } });

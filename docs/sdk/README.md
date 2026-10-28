@@ -573,12 +573,19 @@ ni `100` par défaut.
 SDK sur `/dashboard` (`?theme=dark|auto`, `?days=1|7|30`). Le composant peut aussi être embarqué
 comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 
-| Vue            | Contenu                                                                                                                                                                  |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Vue d'ensemble | projets, scénarios, exécutions de la période ; taux de réussite des rejeux avec numérateur, dénominateur et exclusions ; rejeux par jour ; alertes ; exécutions récentes |
-| Projets        | cartes (état, comptes, dernière exécution), archivés sur demande                                                                                                         |
-| Projet         | lancement d'un rejeu (environnement, scénarios), scénarios, environnements (noms des secrets seulement), exécutions ; archivage confirmé dans la page, restauration      |
-| Exécution      | suivi en direct (étapes, phase du moteur), annulation confirmée dans la page ; puis verdict, étapes, assertions, clés de données, lien vers le rapport                   |
+| Vue            | Contenu                                                                                                                                                                                                                                                                                                                                                         |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vue d'ensemble | taux de réussite des rejeux avec numérateur, dénominateur et exclusions ; exécutions, anomalies, projets et scénarios de la période ; rejeux par jour ; alertes ; exécutions récentes                                                                                                                                                                           |
+| Projets        | cartes (état, comptes, dernière exécution), archivés sur demande                                                                                                                                                                                                                                                                                                |
+| Projet         | onglets : Lancer (rejeu dans un environnement ou exploration de la cible), Environnements (prêt ou non : règles, secrets présents sur le serveur, URL jointe sur demande ; noms des secrets seulement), Scénarios, Exécutions, Sécurité (risques toujours bloqués, écritures, domaines, chemins jamais visités) ; archivage confirmé dans la page, restauration |
+| Exécutions     | les exécutions du projet choisi dans le menu                                                                                                                                                                                                                                                                                                                    |
+| Exécution      | suivi en direct (étapes, phase du moteur, durée ; écrans et actions pour une exploration), annulation confirmée dans la page ; puis verdict, étapes, assertions vérifiées ou en échec, clés de données, anomalies, preuves, lien vers le rapport                                                                                                                |
+
+Le menu range les écrans par section et porte le projet choisi (« Tous les projets » par défaut) ; il
+dit la version de l'API et du moteur. Sous 960 px de large (requête de conteneur), il se replie
+derrière un bouton « Menu » (`aria-expanded`, Échap le referme) ; sous 600 px tout passe sur une
+colonne et les tableaux défilent dans leur cadre, sans défilement horizontal de la page. La page
+`/dashboard` charge IBM Plex Sans depuis le serveur (aucune police externe).
 
 Le Dashboard n'appelle que le client du SDK : chaque règle est vérifiée par le serveur. Un bouton ne
 donne aucun droit que l'API refuse : archivage, écritures par environnement, annulation. Une action

@@ -86,6 +86,7 @@ import {
 } from './platform.js';
 import { dashboardPage, flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
 import {
+  ALWAYS_BLOCKED_RISKS,
   PROJECT_FILE,
   REPORTS_DIR,
   engineDefaults,
@@ -299,7 +300,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     const nonce = randomBytes(16).toString('base64');
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
-      'content-security-policy': `default-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:; connect-src 'self'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'`,
+      'content-security-policy': `default-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src data:; connect-src 'self'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'`,
     });
     response.end(
       method === 'HEAD'
@@ -1160,6 +1161,7 @@ function capabilities(ctx: Context): Capabilities {
     defaults: engineDefaults(),
     staticAnalysis: ctx.rules.allowedSourceRoots.length > 0,
     cancellation: true,
+    safety: { blocked: [...ALWAYS_BLOCKED_RISKS] },
     extensions: Object.fromEntries(EXTENSION_NAMES.map((name) => [name, true])) as Capabilities['extensions'],
   };
 }
