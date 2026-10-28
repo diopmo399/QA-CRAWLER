@@ -641,29 +641,76 @@ donnent :
 
 Une semaine sans donnée n'a pas de valeur.
 
+## Accès : jetons nominatifs, rôles, journal
+
+Par défaut (`access: 'single'`), un seul jeton de service ouvre toute l'API, et les pages servies le
+portent. Avec `access: 'named'` (`qa-crawler sdk-server --access named`), chaque personne ou robot
+a son propre jeton, un rôle, et ses actions sont journalisées. Le jeton du service reste
+administrateur : c'est par lui qu'on crée les premiers membres.
+
+| Droit                                                          | Lecteur | Analyste | Pilote QA | Administrateur |
+| -------------------------------------------------------------- | :-----: | :------: | :-------: | :------------: |
+| `VIEW` : voir                                                  |    ✓    |    ✓     |     ✓     |       ✓        |
+| `RUN` : rejeu ou exploration en lecture seule                  |    —    |    ✓     |     ✓     |       ✓        |
+| `RUN_WRITES` : lancer avec écritures permises                  |    —    |    —     |     ✓     |       ✓        |
+| `DECIDE` : décider les candidats d'un import                   |    —    |    ✓     |     ✓     |       ✓        |
+| `PUBLISH` : publier, confirmer un lien, promouvoir un scénario |    —    |    —     |     ✓     |       ✓        |
+| `MANAGE_ENVIRONMENTS` : environnements et noms de secrets      |    —    |    —     |     —     |       ✓        |
+| `MANAGE_PROJECTS` : créer, modifier, archiver un projet        |    —    |    —     |     —     |       ✓        |
+| `MANAGE_ACCESS` : membres, jetons, journal                     |    —    |    —     |     —     |       ✓        |
+
+| Client                                             | Route                                 |
+| -------------------------------------------------- | ------------------------------------- |
+| `access.me({ projectId? })`                        | `GET /api/access/me[?projectId=]`     |
+| `access.members()`                                 | `GET /api/access/members`             |
+| `access.createMember({ name, role })`              | `POST /api/access/members`            |
+| `access.setRole(id, role \| null, { projectId? })` | `POST /api/access/members/:id`        |
+| `access.revoke(id)`                                | `POST /api/access/members/:id/revoke` |
+| `access.journal({ projectId?, kind?, limit? })`    | `GET /api/access/journal`             |
+
+- **Vérifié par le serveur** : chaque route demande un droit (une lecture demande `VIEW`, une
+  écriture inconnue le droit le plus large). Un rejeu ou une exploration dans un environnement qui
+  permet les écritures demande en plus `RUN_WRITES`. Un refus rend `403 FORBIDDEN`. Le Dashboard
+  masque ce que le rôle ne permet pas, mais un bouton masqué ne protège rien à lui seul.
+- **Rôle par projet** : un membre peut avoir dans un projet un rôle qui remplace celui de l'espace.
+- **Jetons** : `qa_` suivi de 32 octets aléatoires. Seule l'empreinte SHA-256 est conservée
+  (`<espace>/.qa-access/members.json`, droits `0600`). Le jeton n'est rendu qu'à la création. La
+  comparaison se fait en temps constant. Une révocation vaut tout de suite ; le membre reste dans le
+  journal.
+- **Auteur** : la décision sur un candidat, la publication et les liens sont signés du nom lié au
+  jeton, jamais de ce que l'appelant déclare. Le jeton du service ne signe rien (ce n'est personne).
+- **Journal** (`<espace>/.qa-access/journal.jsonl`, ajout seulement) : chaque écriture et chaque
+  refus. Une entrée dit quand, qui (et son rôle), l'action (d'après la route), le chemin sans sa
+  chaîne de requête, le projet, le code et le résultat (`OK`, `DENIED`, `FAILED`). Jamais un corps
+  de requête, une valeur saisie, un secret ou un jeton.
+- **Pages** : en mode nominatif, aucune page ne porte de jeton. Le Dashboard demande le jeton
+  personnel (champ masqué) et le garde pour l'onglet (`sessionStorage`). Les autres pages de la même
+  origine (Flow Studio, Run Monitor, comparaison) le lisent de là.
+
 ## Dashboard
 
 `<qa-crawler-dashboard>` pilote un espace de travail. La page autonome est servie par le serveur
 SDK sur `/dashboard` (`?theme=dark|auto`, `?days=1|7|30`). Le composant peut aussi être embarqué
 comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 
-| Vue            | Contenu                                                                                                                                                                                                                                                                                                                                                         |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Vue d'ensemble | taux de réussite des rejeux avec numérateur, dénominateur et exclusions ; exécutions, anomalies, projets et scénarios de la période ; rejeux par jour ; alertes ; exécutions récentes                                                                                                                                                                           |
-| Projets        | cartes (état, comptes, dernière exécution), archivés sur demande                                                                                                                                                                                                                                                                                                |
-| Projet         | onglets : Lancer (rejeu dans un environnement ou exploration de la cible), Environnements (prêt ou non : règles, secrets présents sur le serveur, URL jointe sur demande ; noms des secrets seulement), Scénarios, Exécutions, Sécurité (risques toujours bloqués, écritures, domaines, chemins jamais visités) ; archivage confirmé dans la page, restauration |
-| Exécutions     | les exécutions du projet choisi dans le menu                                                                                                                                                                                                                                                                                                                    |
-| Exécution      | suivi en direct (étapes, phase du moteur, durée ; écrans et actions pour une exploration), annulation confirmée dans la page ; puis verdict, étapes, assertions vérifiées ou en échec, clés de données, anomalies, preuves, lien vers le rapport                                                                                                                |
-| Historique     | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                  |
-| Scénarios      | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                           |
-| Environnements | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                           |
-| Explorations   | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                      |
-| Référentiel    | les éléments publiés, par type et par source ; pour l'un d'eux : provenance (source, section, page, feuille, cellule), historique des versions, liens avec leur justification et leur confiance, liens proposés à confirmer ou rejeter, lien ajouté à la main ; le menu compte les candidats en attente                                                         |
-| Traçabilité    | la matrice : règles et critères, implémentation, vérification, autres liens, chacun avec son état ; export CSV ; la corrélation automatique est dite non disponible                                                                                                                                                                                             |
-| Sources        | les connecteurs (formats, taille, limites) ; un import de fichier (.docx, .xlsx, .pdf) ou d'une page Confluence (noms des variables seulement), avec un profil ; l'historique des imports                                                                                                                                                                       |
-| Validation     | les candidats d'un lot : type, identifiant, confiance (une classe), doublon, raisons, lieu ; accepter, refuser, fusionner (un conflit d'identifiant se fusionne ou se refuse) ; publication, avec accord explicite pour une lecture partielle ; problèmes signalés ; éléments absents de la source                                                              |
-| Indicateurs    | couverture par un test, taux de réussite des rejeux, liens confirmés : chacun avec sa formule, son dénominateur, ses exclusions et ses limites ; la vérification par une preuve récente est dite non disponible ; écarts à traiter                                                                                                                              |
-| Tendances      | par semaine : taux de réussite des rejeux (sur 0 à 100 %), anomalies, durée médiane, couverture ; scénarios les plus instables ; un projet ou tous                                                                                                                                                                                                              |
+| Vue              | Contenu                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vue d'ensemble   | taux de réussite des rejeux avec numérateur, dénominateur et exclusions ; exécutions, anomalies, projets et scénarios de la période ; rejeux par jour ; alertes ; exécutions récentes                                                                                                                                                                           |
+| Projets          | cartes (état, comptes, dernière exécution), archivés sur demande                                                                                                                                                                                                                                                                                                |
+| Projet           | onglets : Lancer (rejeu dans un environnement ou exploration de la cible), Environnements (prêt ou non : règles, secrets présents sur le serveur, URL jointe sur demande ; noms des secrets seulement), Scénarios, Exécutions, Sécurité (risques toujours bloqués, écritures, domaines, chemins jamais visités) ; archivage confirmé dans la page, restauration |
+| Exécutions       | les exécutions du projet choisi dans le menu                                                                                                                                                                                                                                                                                                                    |
+| Exécution        | suivi en direct (étapes, phase du moteur, durée ; écrans et actions pour une exploration), annulation confirmée dans la page ; puis verdict, étapes, assertions vérifiées ou en échec, clés de données, anomalies, preuves, lien vers le rapport                                                                                                                |
+| Historique       | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                  |
+| Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                           |
+| Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                           |
+| Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                      |
+| Référentiel      | les éléments publiés, par type et par source ; pour l'un d'eux : provenance (source, section, page, feuille, cellule), historique des versions, liens avec leur justification et leur confiance, liens proposés à confirmer ou rejeter, lien ajouté à la main ; le menu compte les candidats en attente                                                         |
+| Traçabilité      | la matrice : règles et critères, implémentation, vérification, autres liens, chacun avec son état ; export CSV ; la corrélation automatique est dite non disponible                                                                                                                                                                                             |
+| Sources          | les connecteurs (formats, taille, limites) ; un import de fichier (.docx, .xlsx, .pdf) ou d'une page Confluence (noms des variables seulement), avec un profil ; l'historique des imports                                                                                                                                                                       |
+| Validation       | les candidats d'un lot : type, identifiant, confiance (une classe), doublon, raisons, lieu ; accepter, refuser, fusionner (un conflit d'identifiant se fusionne ou se refuse) ; publication, avec accord explicite pour une lecture partielle ; problèmes signalés ; éléments absents de la source                                                              |
+| Indicateurs      | couverture par un test, taux de réussite des rejeux, liens confirmés : chacun avec sa formule, son dénominateur, ses exclusions et ses limites ; la vérification par une preuve récente est dite non disponible ; écarts à traiter                                                                                                                              |
+| Tendances        | par semaine : taux de réussite des rejeux (sur 0 à 100 %), anomalies, durée médiane, couverture ; scénarios les plus instables ; un projet ou tous                                                                                                                                                                                                              |
+| Accès et journal | qui est connecté ; la matrice des rôles et des droits ; pour l'administration : membres (rôle de l'espace, rôle dans le projet choisi, jeton montré une fois à la création, révocation confirmée) et journal par nature d'action ; en mode nominatif, connexion par jeton personnel et déconnexion                                                              |
 
 Le menu range les écrans par section et porte le projet choisi (« Tous les projets » par défaut) ; il
 dit la version de l'API et du moteur. Sous 960 px de large (requête de conteneur), il se replie
@@ -753,6 +800,8 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   un chemin de départ d'enregistrement reste dans l'application.
 - **Page autonome** : CSP stricte avec nonce, `frame-ancestors 'none'`.
 - **Textes** : tout texte venant du serveur ou de l'utilisateur est échappé avant affichage.
+- **Accès nominatifs** (option) : rôles vérifiés à chaque appel, jetons conservés par leur empreinte
+  seulement, journal sans valeur ni jeton (voir « Accès »).
 
 ## Limites actuelles
 
@@ -780,8 +829,10 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - La comparaison ne compare pas les captures d'écran de deux exécutions.
 - Exigences : la corrélation automatique avec le code, les tests et les preuves n'existe pas encore
   (phase 5) ; seuls les liens issus de l'import et ceux ajoutés à la main comptent. L'auteur d'une
-  décision n'est pas enregistré. Un profil d'importation se crée dans le dossier du projet (aucune
-  route pour l'écrire).
+  décision n'est enregistré en mode nominatif seulement. Un profil d'importation se crée dans le
+  dossier du projet (aucune route pour l'écrire).
+- Accès : pas d'annuaire ni de SSO ; les jetons nominatifs sont créés par l'administration. Le
+  journal grandit sans rotation.
 - Accessibilité : clavier, annonces et contraste testés composant par composant ; aucun audit axe
   automatique.
 - Rien n'est publié sur un registre : le SDK fait partie de `@qa-crawler/core`.
@@ -806,6 +857,15 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   le champ fichier est importé, décidé et publié ; un lien est ajouté ; la matrice, son CSV
   téléchargé, les indicateurs et les tendances en tiennent compte ; un import Confluence sans
   jeton échoue en le disant ; sur téléphone, aucun défilement horizontal.
+- `tests/unit/sdk-access.test.ts` : jetons nominatifs par le vrai serveur (empreinte seulement),
+  droits de chaque rôle, rejeu avec écritures refusé à un analyste, auteur tiré du jeton, rôle par
+  projet, révocation, journal sans corps ni jeton, page sans jeton en mode nominatif ; droit et
+  action de chaque route.
+- `tests/unit/sdk-dashboard-access.test.ts` : rendu de l'écran Accès et journal, de la connexion,
+  et des actions masquées selon le rôle.
+- `tests/integration/sdk-dashboard-access.test.ts` : dans Chromium, en mode nominatif : jeton
+  inconnu refusé, lecteur sans action, déconnexion, membre créé (jeton montré une fois), rôle de
+  projet, révocation, journal ; téléphone sans défilement horizontal.
 - `tests/integration/sdk-dashboard.test.ts` : `/dashboard` dans Chromium avec le **vrai** moteur.
   Il couvre :
   - la vue d'ensemble ;

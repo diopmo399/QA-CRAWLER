@@ -1,7 +1,8 @@
 import { createQaCrawler, type QaCrawlerClient, type Subscription } from '../core/client.js';
-import { DASHBOARD_EVENTS, type Environment } from '../core/contracts.js';
+import { DASHBOARD_EVENTS, type Environment, type Role } from '../core/contracts.js';
 import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
+import { emptyAccessUi } from './dashboard-access.js';
 import { environmentForm, environmentInputOf } from './dashboard-ops.js';
 import {
   connectorOfFile,
@@ -30,7 +31,8 @@ import {
  * règle (archivage, écritures par environnement, annulation) est vérifiée par le serveur, jamais par
  * l'écran seul. Une action qui change l'état se confirme dans la page.
  *
- * Attributs : endpoint (API du serveur SDK), locale (fr | en), theme (light | dark | auto),
+ * Attributs : endpoint (API du serveur SDK), locale (fr | en), theme (light | dark | auto), sign-in
+ * (mode nominatif : demander le jeton personnel, gardé pour l'onglet),
  * days (période de la vue d'ensemble : 1, 7 ou 30). Propriétés : token (jamais en attribut dans une
  * page publique), client (un client déjà construit). Méthode : open(route).
  *
@@ -54,7 +56,7 @@ const inputOf = (environment: Environment) => {
 
 export class QaCrawlerDashboard extends Base {
   static get observedAttributes(): string[] {
-    return ['endpoint', 'locale', 'days'];
+    return ['endpoint', 'locale', 'days', 'sign-in'];
   }
 
   private root!: ShadowRoot;
@@ -86,6 +88,8 @@ export class QaCrawlerDashboard extends Base {
       picked: [],
       severity: 'ALL',
       req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8 },
+      signIn: false,
+      access: emptyAccessUi(),
     };
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
@@ -95,7 +99,10 @@ export class QaCrawlerDashboard extends Base {
     });
     this.root.addEventListener('submit', (event) => {
       event.preventDefault();
-      if ((event.target as HTMLElement).dataset.action === 'launch') void this.launch();
+      const form = (event.target as HTMLElement).dataset.action;
+      if (form === 'launch') void this.launch();
+      if (form === 'sign-in')
+        this.signInWith(this.root.querySelector<HTMLInputElement>('[data-bind="token"]')?.value ?? '');
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
@@ -103,6 +110,10 @@ export class QaCrawlerDashboard extends Base {
       const reqField = target.dataset.req as keyof ImportForm | undefined;
       if (reqField && reqField !== 'source' && target.type !== 'file') {
         (this.state.req.form as unknown as Record<string, string>)[reqField] = target.value;
+        return;
+      }
+      if (target.dataset.memberField === 'name') {
+        this.state.access.newMember.name = target.value;
         return;
       }
       const linkField = target.dataset.linkField as keyof LinkForm | undefined;
@@ -147,6 +158,7 @@ export class QaCrawlerDashboard extends Base {
 
   connectedCallback(): void {
     this.connected = true;
+    this.state.signIn = this.hasAttribute('sign-in');
     const days = Number(this.getAttribute('days'));
     if ((PERIODS as readonly number[]).includes(days)) this.state.days = days;
     void this.load();
@@ -161,6 +173,11 @@ export class QaCrawlerDashboard extends Base {
 
   attributeChangedCallback(name: string, previous: string | null, next: string | null): void {
     if (previous === next) return;
+    if (name === 'sign-in') {
+      this.state.signIn = next !== null;
+      this.paint();
+      return;
+    }
     if (name === 'locale') {
       this.state.t = dashboardStrings(next);
       this.paint();
@@ -256,6 +273,8 @@ export class QaCrawlerDashboard extends Base {
       this.state.capabilities = capabilities;
       this.state.cancellation = capabilities.cancellation;
       this.state.catalog = catalog.filter((project) => project.state === 'ACTIVE');
+      const scope = 'projectId' in route && route.projectId ? route.projectId : this.state.projectId;
+      this.state.me = await api.access.me(scope ? { projectId: scope } : {}).catch(() => undefined);
       if (route.view === 'overview') {
         this.state.overview = await api.overview.get({ days: this.state.days });
       } else if (route.view === 'projects') {
@@ -297,6 +316,18 @@ export class QaCrawlerDashboard extends Base {
         if (this.state.project?.id !== route.projectId)
           await this.loadProject(api, route.projectId, generation);
         await this.loadExecution(api, route, generation);
+      } else if (route.view === 'access') {
+        if (this.state.me?.rights.includes('MANAGE_ACCESS')) {
+          const kind = this.state.access.journalKind;
+          const [members, journal] = await Promise.all([
+            api.access.members(),
+            // Le journal de tout l'espace : une action d'accès ne vise aucun projet.
+            api.access.journal(kind !== 'ALL' ? { kind: kind as 'RUN' } : {}),
+          ]);
+          if (generation !== this.generation) return;
+          this.state.access.members = members;
+          this.state.access.journal = journal;
+        }
       } else {
         await this.loadRequirements(api, route, generation);
       }
@@ -310,6 +341,66 @@ export class QaCrawlerDashboard extends Base {
     this.paint();
     if (generation === this.generation && (route.view === 'project' || route.view === 'environments'))
       this.checkAll(api, generation);
+  }
+
+  /** Connexion par jeton nominatif : gardé pour l'onglet seulement, jamais affiché. */
+  private signInWith(value: string): void {
+    const token = value.trim();
+    if (!token) return;
+    this.state.access.signInError = undefined;
+    try {
+      sessionStorage.setItem('qa-crawler-token', token);
+    } catch {
+      // Stockage refusé : la connexion vaut pour cette page seulement.
+    }
+    this.token = token;
+  }
+
+  private signOut(): void {
+    try {
+      sessionStorage.removeItem('qa-crawler-token');
+    } catch {
+      // Rien à retirer.
+    }
+    this.state.me = undefined;
+    this.state.menuOpen = false;
+    this.state.access = emptyAccessUi();
+    this.token = undefined;
+    this.state.phase = 'idle';
+    this.paint();
+  }
+
+  private async createMember(): Promise<void> {
+    const api = this.api;
+    const ui = this.state.access;
+    if (!api) return;
+    ui.error = undefined;
+    try {
+      ui.created = await api.access.createMember({ name: ui.newMember.name.trim(), role: ui.newMember.role });
+      ui.copyNote = undefined;
+      ui.newMember = { name: '', role: ui.newMember.role };
+      await this.load();
+    } catch (error) {
+      ui.error = message(error);
+      this.paint();
+    }
+  }
+
+  private copyToken(): void {
+    const token = this.state.access.created?.token;
+    if (!token) return;
+    const note = (text: string): void => {
+      this.state.access.copyNote = text;
+      this.paint();
+    };
+    navigator.clipboard
+      .writeText(token)
+      .then(() => {
+        note(this.state.t.access.copied);
+      })
+      .catch(() => {
+        note(this.state.t.access.copyFailed);
+      });
   }
 
   /** Les écrans des exigences : le référentiel sert aussi au compteur du menu. */
@@ -653,6 +744,12 @@ export class QaCrawlerDashboard extends Base {
 
   private fail(error: unknown): void {
     const code = (error as { code?: string }).code;
+    if (code === 'UNAUTHORIZED' && this.state.signIn) {
+      this.signOut();
+      this.state.access.signInError = this.state.t.access.refused;
+      this.paint();
+      return;
+    }
     this.emit('qa-error', { code: code ?? 'ERROR', message: message(error) });
     // Un refus du serveur (projet introuvable, archivé…) se dit dans la vue ; un serveur absent la remplace.
     if (code === 'UNREACHABLE' || this.state.phase !== 'ready') {
@@ -812,6 +909,7 @@ export class QaCrawlerDashboard extends Base {
         const view = target.dataset.view;
         const projectId = this.contextProject();
         if (view === 'projects') this.navigate({ view: 'projects' });
+        else if (view === 'access') this.navigate({ view: 'access' });
         else if (view === 'trends')
           this.navigate({
             view: 'trends',
@@ -836,6 +934,36 @@ export class QaCrawlerDashboard extends Base {
       case 'import':
         void this.importSource();
         return;
+      case 'sign-out':
+        this.signOut();
+        return;
+      case 'create-member':
+        void this.createMember();
+        return;
+      case 'copy-token':
+        this.copyToken();
+        return;
+      case 'hide-token':
+        this.state.access.created = undefined;
+        this.state.access.copyNote = undefined;
+        this.paint();
+        return;
+      case 'journal-kind':
+        this.state.access.journalKind = target.dataset.kind ?? 'ALL';
+        void this.load();
+        return;
+      case 'revoke':
+        if (target.dataset.member) {
+          this.state.confirm = `revoke:${target.dataset.member}`;
+          this.paint();
+        }
+        return;
+      case 'revoke-confirm': {
+        const member = target.dataset.member;
+        if (!api || !member) return;
+        void this.act(() => api.access.revoke(member));
+        return;
+      }
       case 'open-import': {
         const project = this.state.project;
         if (project && target.dataset.batch)
@@ -1117,6 +1245,24 @@ export class QaCrawlerDashboard extends Base {
         this.navigate({ view: route.view, projectId });
       else if (route.view === 'import') this.navigate({ view: 'sources', projectId });
       else this.navigate({ view: 'project', projectId });
+      return;
+    }
+    if (target.dataset.memberField === 'role') {
+      this.state.access.newMember.role = target.value as Role;
+      return;
+    }
+    if (target.dataset.memberRole || target.dataset.memberProjectRole) {
+      const api = this.api;
+      const member = target.dataset.memberRole ?? target.dataset.memberProjectRole ?? '';
+      const projectId = target.dataset.memberProjectRole ? this.state.projectId : undefined;
+      if (!api) return;
+      void this.act(() =>
+        api.access.setRole(
+          member,
+          target.value ? (target.value as Role) : null,
+          projectId ? { projectId } : {},
+        ),
+      );
       return;
     }
     if (target.dataset.action === 'req-kind' || target.dataset.action === 'req-source') {

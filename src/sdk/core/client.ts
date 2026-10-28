@@ -41,8 +41,14 @@ import type {
   ProjectSummary,
   ScenarioHistoryView,
   ScenarioView,
+  AccessMe,
   ConfluenceImportInput,
   FileImportInput,
+  JournalEntry,
+  JournalKind,
+  MemberCreated,
+  MemberView,
+  Role,
   ImportBatch,
   ImportProfile,
   ImportSummary,
@@ -222,6 +228,20 @@ export interface QaCrawlerClient {
       action: 'CONFIRM' | 'REJECT',
       options?: { note?: string },
     ): Promise<TraceabilityLink>;
+  };
+  /**
+   * Les accès : qui appelle et ses droits ; les membres (jetons nominatifs, rôles par projet) et le
+   * journal, réservés à l'administration (MANAGE_ACCESS).
+   */
+  access: {
+    me(options?: { projectId?: string }): Promise<AccessMe>;
+    members(): Promise<MemberView[]>;
+    /** Le jeton du membre n'est rendu qu'ici, une seule fois. */
+    createMember(input: { name: string; role: Role }): Promise<MemberCreated>;
+    /** Avec `projectId`, un rôle propre au projet (`null` le retire). */
+    setRole(memberId: string, role: Role | null, options?: { projectId?: string }): Promise<MemberView>;
+    revoke(memberId: string): Promise<MemberView>;
+    journal(options?: { projectId?: string; kind?: JournalKind; limit?: number }): Promise<JournalEntry[]>;
   };
   /** Les tendances par semaine ISO : rejeux, anomalies, durée médiane, couverture, scénarios instables. */
   trends: {
@@ -582,6 +602,29 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           action,
           ...linkOptions,
         }),
+    },
+    access: {
+      me: (meOptions = {}) =>
+        request(
+          'GET',
+          `/access/me${meOptions.projectId ? `?projectId=${encodeURIComponent(meOptions.projectId)}` : ''}`,
+        ),
+      members: () => request('GET', '/access/members'),
+      createMember: (input) => request('POST', '/access/members', input),
+      setRole: (memberId, role, roleOptions = {}) =>
+        request('POST', `/access/members/${encodeURIComponent(memberId)}`, {
+          role,
+          ...(roleOptions.projectId ? { projectId: roleOptions.projectId } : {}),
+        }),
+      revoke: (memberId) => request('POST', `/access/members/${encodeURIComponent(memberId)}/revoke`, {}),
+      journal: (journalOptions = {}) => {
+        const query = new URLSearchParams();
+        if (journalOptions.projectId) query.set('projectId', journalOptions.projectId);
+        if (journalOptions.kind) query.set('kind', journalOptions.kind);
+        if (journalOptions.limit) query.set('limit', String(journalOptions.limit));
+        const suffix = query.toString();
+        return request('GET', `/access/journal${suffix ? `?${suffix}` : ''}`);
+      },
     },
     trends: {
       get: (trendOptions = {}) => {

@@ -62,6 +62,16 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
     quitte tout de suite.
 
+- **Accès nominatifs** (`sdk-server --access named`, `startSdkServer({ access: 'named' })`) :
+  - jetons par personne ou robot, conservés par leur seule empreinte et montrés une fois ;
+  - quatre rôles (Lecteur, Analyste, Pilote QA, Administrateur), un rôle possible par projet ;
+  - droits vérifiés par le serveur à chaque appel ; un rejeu avec écritures demande `RUN_WRITES` ;
+  - auteur des décisions tiré du jeton ;
+  - journal de chaque écriture et de chaque refus, sans valeur ni jeton ;
+  - écran Accès et journal, et connexion par jeton personnel dans le Dashboard.
+
+  Le mode à jeton unique reste le défaut et ne change pas.
+
 - **Exigences dans le SDK et le Dashboard** :
   - API `requirements.*` : connecteurs, import d'un fichier Word, Excel ou PDF (envoyé tel quel,
     25 Mo au plus) ou d'une page Confluence (noms des variables seulement), lots, décisions,

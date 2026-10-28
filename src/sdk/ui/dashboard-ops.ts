@@ -7,6 +7,7 @@ import {
 } from '../core/contracts.js';
 import type { DashboardRoute, DashboardState, EnvironmentForm } from './dashboard-view.js';
 import { checkLines, formatDate, header, icon, pill, readinessPill } from './dashboard-parts.js';
+import { can } from './dashboard-access.js';
 import { esc } from './view.js';
 
 /**
@@ -69,7 +70,7 @@ function comparisonCard(state: DashboardState): string {
   const requirements =
     s.requirementsChanged > 0 ? `<p class="mu">${esc(o.requirementsChanged(s.requirementsChanged))}</p>` : '';
   const failing = s.newlyFailing.length > 0 && state.project?.state !== 'ARCHIVED';
-  return `<section class="card wide">${title}${tiles}<div class="tw"><table class="tbl"><thead><tr><th scope="col">${esc(o.flowCol)}</th><th scope="col">${esc(o.before)}</th><th scope="col">${esc(o.now)}</th><th scope="col">${esc(o.changes)}</th><th scope="col">${esc(t.col.duration)}</th></tr></thead><tbody>${flows}</tbody></table></div>${requirements}<div class="form-acts start">${failing ? `<button class="btn primary" data-action="replay-failed">${icon('play')}<span>${esc(t.ops.replay)} : ${esc(s.newlyFailing.join(', '))}</span></button>` : ''}<button class="btn" data-action="open-run" data-project="${esc(state.project?.id ?? '')}" data-run="${esc(c.head.run)}">${esc(t.col.run)} ${esc(c.head.run)}</button></div></section>`;
+  return `<section class="card wide">${title}${tiles}<div class="tw"><table class="tbl"><thead><tr><th scope="col">${esc(o.flowCol)}</th><th scope="col">${esc(o.before)}</th><th scope="col">${esc(o.now)}</th><th scope="col">${esc(o.changes)}</th><th scope="col">${esc(t.col.duration)}</th></tr></thead><tbody>${flows}</tbody></table></div>${requirements}<div class="form-acts start">${failing && can(state, 'RUN') ? `<button class="btn primary" data-action="replay-failed">${icon('play')}<span>${esc(t.ops.replay)} : ${esc(s.newlyFailing.join(', '))}</span></button>` : ''}<button class="btn" data-action="open-run" data-project="${esc(state.project?.id ?? '')}" data-run="${esc(c.head.run)}">${esc(t.col.run)} ${esc(c.head.run)}</button></div></section>`;
 }
 
 // ── Scénarios ───────────────────────────────────────────────────────────────────────────────────
@@ -128,7 +129,7 @@ export function scenariosView(state: DashboardState): string {
       : pending
           .map(
             (recording) =>
-              `<div class="rec"><span class="mono">${esc(recording.name)}</span>${pill('UNKNOWN', o.toPromote)}<span class="mu push">${esc(o.recordingSteps(recording.summary?.steps ?? 0))}</span>${p.state === 'ARCHIVED' ? '' : `<button class="btn small" data-action="promote" data-recording="${esc(recording.name)}" ${state.promoting ? 'disabled' : ''}>${esc(state.promoting === recording.name ? o.promoting : o.promote)}</button>`}</div>`,
+              `<div class="rec"><span class="mono">${esc(recording.name)}</span>${pill('UNKNOWN', o.toPromote)}<span class="mu push">${esc(o.recordingSteps(recording.summary?.steps ?? 0))}</span>${p.state === 'ARCHIVED' || !can(state, 'PUBLISH') ? '' : `<button class="btn small" data-action="promote" data-recording="${esc(recording.name)}" ${state.promoting ? 'disabled' : ''}>${esc(state.promoting === recording.name ? o.promoting : o.promote)}</button>`}</div>`,
           )
           .join('');
   const history = selected ? histories.get(selected.name) : undefined;
@@ -141,7 +142,7 @@ ${history && history.flips >= 2 ? `<p class="note">${icon('alert')}<span>${esc(o
           ? `<ul class="plain">${history.runs.map((run) => `<li class="row">${pill(run.status, t.results[run.status] ?? run.status)}<button class="lnk" data-action="open-run" data-project="${esc(p.id)}" data-run="${esc(run.run)}">${esc(formatDate(run.at, t.locale))}</button><span class="mu push">${esc(t.duration(run.durationMs))}</span></li>`).join('')}</ul>`
           : `<p class="mu">${esc(o.neverRun)}</p>`
       }
-${p.state === 'ARCHIVED' ? '' : `<div class="form-acts start"><button class="btn primary" data-action="replay-scenario" data-name="${esc(selected.name)}">${icon('play')}<span>${esc(o.replay)}</span></button></div>`}</aside>`
+${p.state === 'ARCHIVED' || !can(state, 'RUN') ? '' : `<div class="form-acts start"><button class="btn primary" data-action="replay-scenario" data-name="${esc(selected.name)}">${icon('play')}<span>${esc(o.replay)}</span></button></div>`}</aside>`
     : '';
   return `${header(esc(t.nav.scenarios), { sub: esc(o.scenariosSub(p.name, p.scenarios.length, pending.length)) })}<div class="split"><div class="col">${cards}<section class="card"><h2>${esc(o.recordingsTitle)}</h2>${recordings}</section></div><div class="col narrow">${detail}</div></div>`;
 }
@@ -245,17 +246,18 @@ export function environmentsView(state: DashboardState): string {
       const writes = environment.mutations?.enabled
         ? `${t.col.writes.toLowerCase()} ${t.writesAllowed(environment.mutations.maxPerRun)}`
         : t.readOnly;
-      return `<article class="env ${route.environmentId === environment.id ? 'on' : ''}"><div class="env-h"><b>${esc(environment.name)}</b>${readinessPill(t, state.checks[environment.id])}</div><span class="mu">${esc(t.envKinds[environment.kind] ?? environment.kind)} · ${esc(writes)}</span><code class="url">${esc(environment.baseUrl)}</code><span class="mu">${esc(t.col.secrets)} : ${(environment.secretEnv ?? []).map((name) => `<code>${esc(name)}</code>`).join(' ') || '—'}</span>${archived ? '' : `<button class="btn small" data-action="edit-env" data-env="${esc(environment.id)}">${esc(o.edit)}</button>`}</article>`;
+      return `<article class="env ${route.environmentId === environment.id ? 'on' : ''}"><div class="env-h"><b>${esc(environment.name)}</b>${readinessPill(t, state.checks[environment.id])}</div><span class="mu">${esc(t.envKinds[environment.kind] ?? environment.kind)} · ${esc(writes)}</span><code class="url">${esc(environment.baseUrl)}</code><span class="mu">${esc(t.col.secrets)} : ${(environment.secretEnv ?? []).map((name) => `<code>${esc(name)}</code>`).join(' ') || '—'}</span>${archived || !can(state, 'MANAGE_ENVIRONMENTS') ? '' : `<button class="btn small" data-action="edit-env" data-env="${esc(environment.id)}">${esc(o.edit)}</button>`}</article>`;
     })
     .join('');
-  const actions = archived
-    ? ''
-    : `<button class="btn primary" data-action="edit-env" data-env="new">${esc(o.newEnvironment)}</button>`;
+  const actions =
+    archived || !can(state, 'MANAGE_ENVIRONMENTS')
+      ? ''
+      : `<button class="btn primary" data-action="edit-env" data-env="new">${esc(o.newEnvironment)}</button>`;
   const list =
     p.environments.length === 0
       ? `<section class="card"><p class="mu">${esc(t.noEnvironment)}</p></section>`
       : `<div class="env-grid">${cards}</div>`;
-  return `${header(esc(t.nav.environments), { sub: esc(o.environmentsSub(p.name)), actions })}${list}${state.envForm && !archived ? environmentEditor(state) : ''}`;
+  return `${header(esc(t.nav.environments), { sub: esc(o.environmentsSub(p.name)), actions })}${list}${state.envForm && !archived && can(state, 'MANAGE_ENVIRONMENTS') ? environmentEditor(state) : ''}`;
 }
 
 function environmentEditor(state: DashboardState): string {

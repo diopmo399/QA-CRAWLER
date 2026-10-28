@@ -1,4 +1,5 @@
 import type {
+  AccessMe,
   Capabilities,
   Environment,
   EnvironmentCheck,
@@ -17,6 +18,7 @@ import type {
 import { isTerminal } from '../core/lifecycle.js';
 import type { DashboardStrings } from './dashboard-i18n.js';
 import { environmentsView, explorationsView, historyView, scenariosView } from './dashboard-ops.js';
+import { accessView, can, signInView, type AccessUi } from './dashboard-access.js';
 import {
   importView,
   indicatorsView,
@@ -66,7 +68,8 @@ export type DashboardRoute =
   | { view: 'traceability'; projectId: string; entityId?: string }
   | { view: 'indicators'; projectId: string }
   /** Sans projet : tous les projets actifs. */
-  | { view: 'trends'; projectId?: string };
+  | { view: 'trends'; projectId?: string }
+  | { view: 'access' };
 
 /** Le formulaire d'un environnement, tel que saisi (converti en EnvironmentInput à l'envoi). */
 export interface EnvironmentForm {
@@ -126,7 +129,7 @@ export interface DashboardState {
   /** L'environnement dont la vérification (avec l'URL) est en cours. */
   checking?: string;
   /** Une action à confirmer dans la page (jamais une boîte de dialogue du navigateur). */
-  confirm?: 'archive' | 'cancel' | 'remove-env' | 'publish-partial';
+  confirm?: 'archive' | 'cancel' | 'remove-env' | 'publish-partial' | `revoke:${string}`;
   /** Historique : les deux exécutions cochées (la plus ancienne d'abord) et leur comparaison. */
   picked: string[];
   comparison?: RunComparisonView;
@@ -146,6 +149,11 @@ export interface DashboardState {
   severity: string;
   /** Exigences : connecteurs, imports, lot ouvert, référentiel, matrice, indicateurs, tendances. */
   req: RequirementsUi;
+  /** Qui est connecté et ses droits (`access.me`) ; absent : le serveur ne le dit pas. */
+  me?: AccessMe;
+  /** La page demande un jeton nominatif (mode `named`). */
+  signIn: boolean;
+  access: AccessUi;
   /** L'exécution suivie en direct (son instantané, ses étapes, la dernière phase annoncée). */
   live?: { snapshot: ExplorationSnapshot; steps: LiveStep[]; phase?: string; cancelRequested: boolean };
   execution?: ExecutionDetail;
@@ -166,7 +174,7 @@ const NAV: { section: NavSection; items: NavView[] }[] = [
   { section: 'pilot', items: ['overview', 'projects', 'executions', 'history', 'scenarios', 'explorations'] },
   { section: 'requirements', items: ['requirements', 'traceability', 'sources'] },
   { section: 'measure', items: ['indicators', 'trends'] },
-  { section: 'admin', items: ['environments'] },
+  { section: 'admin', items: ['environments', 'access'] },
 ];
 
 /** L'entrée du menu qui correspond à la vue affichée. */
@@ -177,6 +185,7 @@ export function activeNav(route: DashboardRoute): NavView {
     return route.view;
   if (route.view === 'explorations') return 'explorations';
   if (route.view === 'sources' || route.view === 'import') return 'sources';
+  if (route.view === 'access') return 'access';
   if (
     route.view === 'requirements' ||
     route.view === 'traceability' ||
@@ -207,9 +216,15 @@ export function renderDashboard(state: DashboardState): string {
     )
     .join('')}</select></label>`;
   const caps = state.capabilities;
-  const foot = caps
-    ? `<div class="foot"><span><i class="on" aria-hidden="true"></i>${esc(t.service(caps.apiVersion))}</span><span>${esc(t.engine(caps.engineVersion, caps.cancellation))}</span></div>`
-    : '';
+  const me = state.me;
+  const who =
+    me && me.kind === 'MEMBER'
+      ? `<span class="who">${esc(t.access.signedAs(me.name, t.access.roles[me.projectRole ?? me.role] ?? me.role))}</span>${state.signIn ? `<button class="lnk out" data-action="sign-out">${esc(t.access.signOut)}</button>` : ''}`
+      : '';
+  const foot =
+    caps || who
+      ? `<div class="foot">${who}${caps ? `<span><i class="on" aria-hidden="true"></i>${esc(t.service(caps.apiVersion))}</span><span>${esc(t.engine(caps.engineVersion, caps.cancellation))}</span>` : ''}</div>`
+      : '';
   return `<div class="dash" data-menu="${state.menuOpen ? 'open' : 'closed'}">
 <nav class="side" aria-label="${esc(t.tag)}">
 <div class="top"><div class="brand"><span class="logo" aria-hidden="true">Q</span><span><b>${esc(t.product)}</b><small>${esc(t.tag)}</small></span></div><button class="menu-btn" data-action="menu" aria-expanded="${state.menuOpen ? 'true' : 'false'}" aria-controls="qa-drawer">${icon(state.menuOpen ? 'close' : 'menu')}<span>${esc(state.menuOpen ? t.menuClose : t.menu)}</span></button></div>
@@ -221,7 +236,10 @@ export function renderDashboard(state: DashboardState): string {
 
 function body(state: DashboardState): string {
   const t = state.t;
-  if (state.phase === 'idle') return `<section class="msg"><p class="mu">${esc(t.noToken)}</p></section>`;
+  if (state.phase === 'idle')
+    return state.signIn
+      ? signInView(state)
+      : `<section class="msg"><p class="mu">${esc(t.noToken)}</p></section>`;
   if (state.phase === 'loading')
     return `<section class="msg" aria-busy="true"><span class="spin" aria-hidden="true"></span><p class="mu">${esc(t.loading)}</p></section>`;
   if (state.phase === 'error')
@@ -257,6 +275,8 @@ function body(state: DashboardState): string {
       return indicatorsView(state);
     case 'trends':
       return trendsView(state);
+    case 'access':
+      return accessView(state);
   }
 }
 
@@ -265,7 +285,7 @@ function body(state: DashboardState): string {
 function overviewView(state: DashboardState): string {
   const t = state.t;
   const o = state.overview;
-  const actions = `<label class="pick">${esc(t.period)} <select data-action="period">${PERIODS.map((days) => `<option value="${String(days)}" ${days === state.days ? 'selected' : ''}>${esc(t.days(days))}</option>`).join('')}</select></label><button class="btn icon-only" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button><button class="btn primary" data-action="launch-shortcut">${icon('play')}<span>${esc(t.launchReplay)}</span></button>`;
+  const actions = `<label class="pick">${esc(t.period)} <select data-action="period">${PERIODS.map((days) => `<option value="${String(days)}" ${days === state.days ? 'selected' : ''}>${esc(t.days(days))}</option>`).join('')}</select></label><button class="btn icon-only" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button>${can(state, 'RUN') ? `<button class="btn primary" data-action="launch-shortcut">${icon('play')}<span>${esc(t.launchReplay)}</span></button>` : ''}`;
   if (!o) return header(esc(t.nav.overview), { actions });
   const rate =
     o.replays.passRate === undefined
@@ -336,11 +356,13 @@ function projectView(state: DashboardState): string {
   const route = state.route as Extract<DashboardRoute, { view: 'project' }>;
   const tab = route.tab ?? 'launch';
   const archived = p.state === 'ARCHIVED';
-  const actions = archived
-    ? `<button class="btn" data-action="restore">${esc(t.restore)}</button>`
-    : state.confirm === 'archive'
-      ? `<span class="confirm" role="group"><small>${esc(t.archiveHint)}</small><button class="btn danger" data-action="archive-confirm">${esc(t.archiveConfirm)}</button><button class="btn ghost" data-action="confirm-cancel">${esc(t.cancelAction)}</button></span>`
-      : `<button class="btn" data-action="archive">${esc(t.archive)}</button>`;
+  const actions = !can(state, 'MANAGE_PROJECTS')
+    ? ''
+    : archived
+      ? `<button class="btn" data-action="restore">${esc(t.restore)}</button>`
+      : state.confirm === 'archive'
+        ? `<span class="confirm" role="group"><small>${esc(t.archiveHint)}</small><button class="btn danger" data-action="archive-confirm">${esc(t.archiveConfirm)}</button><button class="btn ghost" data-action="confirm-cancel">${esc(t.cancelAction)}</button></span>`
+        : `<button class="btn" data-action="archive">${esc(t.archive)}</button>`;
   const title = `${esc(p.name)} ${pill(p.state, t.states[p.state] ?? p.state)}`;
   const sub = `${esc(p.framework)} · <code>${esc(p.targetUrl)}</code>`;
   const executions = state.executions ?? [];
@@ -371,6 +393,8 @@ function projectView(state: DashboardState): string {
 function launchTab(state: DashboardState, p: ProjectDetail, archived: boolean): string {
   const t = state.t;
   if (archived) return `<section class="card"><p class="mu">${esc(t.archivedNote)}</p></section>`;
+  if (!can(state, 'RUN'))
+    return `<section class="card"><p class="mu">${esc(t.access.noRunRight)}</p></section>`;
   const launch = state.launch;
   const replay = launch.kind === 'REPLAY';
   const environment = p.environments.find((candidate) => candidate.id === launch.environmentId);
@@ -391,7 +415,7 @@ function launchTab(state: DashboardState, p: ProjectDetail, archived: boolean): 
 <fieldset class="kinds"><legend>${esc(t.launchKind)}</legend>${kind('REPLAY', t.kindReplay, t.kindReplayHint)}${kind('EXPLORATION', t.kindExploration, t.kindExplorationHint)}</fieldset>
 <label class="field">${esc(t.launchEnv)}<select data-bind="environment" ${replay ? '' : 'disabled'}><option value="">${esc(t.projectTarget)}</option>${p.environments.map((env) => `<option value="${esc(env.id)}" ${launch.environmentId === env.id ? 'selected' : ''}>${esc(env.name)} · ${esc(readiness(state.checks[env.id]) === 'NOT_READY' ? t.readiness.notReady : (t.envKinds[env.kind] ?? env.kind))}</option>`).join('')}</select></label>
 <fieldset class="scen"><legend>${esc(t.launchScenarios)}</legend>${scenarios || `<p class="mu">${esc(t.noScenario)}</p>`}${replay && p.scenarios.length > 0 ? `<small class="mu">${esc(t.allScenarios)}</small>` : ''}</fieldset>
-<p class="note">${icon('alert')}<span>${esc(note)}</span></p>
+<p class="note">${icon('alert')}<span>${esc(note)}</span></p>${replay && environment?.mutations?.enabled && !can(state, 'RUN_WRITES') ? `<p class="note warn">${icon('alert')}<span>${esc(t.access.noWritesRight)}</span></p>` : ''}
 <div class="form-acts">${replay && environment ? `<button type="button" class="btn" data-action="check-env" data-env="${esc(environment.id)}" ${state.checking === environment.id ? 'disabled' : ''}>${esc(state.checking === environment.id ? t.checking : t.checkEnvironment)}</button>` : ''}<button class="btn primary" type="submit" ${launch.busy || (replay && p.scenarios.length === 0) ? 'disabled' : ''}>${icon('play')}<span>${esc(launch.busy ? t.launching : replay ? t.launchButton : t.launchExploration)}</span></button></div>
 ${launch.error ? `<p class="err" role="alert">${esc(launch.error)}</p>` : ''}</form>`;
   const environments = `<section class="card"><h2>${esc(t.environments)}</h2>${
@@ -482,7 +506,7 @@ function executionsView(state: DashboardState): string {
   if (!p)
     return `${header(esc(t.nav.executions))}<section class="msg"><p class="mu">${esc(t.pickProject)}</p></section>`;
   const executions = state.executions ?? [];
-  const actions = `<button class="btn icon-only" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button>${p.state === 'ARCHIVED' ? '' : `<button class="btn primary" data-action="launch-shortcut">${icon('play')}<span>${esc(t.launchReplay)}</span></button>`}`;
+  const actions = `<button class="btn icon-only" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button>${p.state === 'ARCHIVED' || !can(state, 'RUN') ? '' : `<button class="btn primary" data-action="launch-shortcut">${icon('play')}<span>${esc(t.launchReplay)}</span></button>`}`;
   return `${header(esc(t.nav.executions), { sub: esc(p.name), actions })}<section class="card wide">${executions.length === 0 ? `<p class="mu">${esc(t.noExecutionYet)}</p>` : executionTable(state.t, executions, false)}</section>`;
 }
 
@@ -523,7 +547,9 @@ function executionView(state: DashboardState): string {
         ? `<small class="mu" role="status">${esc(t.cancelRequested)}</small>`
         : state.confirm === 'cancel'
           ? `<span class="confirm" role="group"><small>${esc(t.cancelHint)}</small><button class="btn danger" data-action="cancel-confirm">${esc(t.cancelConfirm)}</button><button class="btn ghost" data-action="confirm-cancel">${esc(t.cancelAction)}</button></span>`
-          : `<button class="btn danger" data-action="cancel">${icon('stop')}<span>${esc(t.cancelRun)}</span></button>`;
+          : can(state, 'RUN')
+            ? `<button class="btn danger" data-action="cancel">${icon('stop')}<span>${esc(t.cancelRun)}</span></button>`
+            : '';
     const flows = [...new Set(live.steps.map((step) => step.flow))];
     const replay = live.snapshot.kind === 'REPLAY';
     const planned = replay ? state.launch.scenarios.length || state.project?.scenarios.length : undefined;

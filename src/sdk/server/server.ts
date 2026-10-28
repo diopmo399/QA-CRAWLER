@@ -43,8 +43,12 @@ import type {
   Environment,
   ProjectDetail,
   ProjectSummary,
+  AccessMe,
+  JournalKind,
 } from '../core/contracts.js';
 import {
+  JOURNAL_KINDS,
+  ROLE_RIGHTS,
   AUTH_TYPES,
   DATA_SOURCES,
   EXTENSION_NAMES,
@@ -110,6 +114,7 @@ import {
   summaryOf,
   type FileConnectorKind,
 } from './requirements.js';
+import { AccessError, AccessStore, actionOf, can, rightFor, roleIn, type Identity } from './access.js';
 import { dashboardPage, flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
 import {
   ALWAYS_BLOCKED_RISKS,
@@ -164,6 +169,11 @@ export interface SdkServerOptions {
   record?: RecordRunner;
   /** Explorations simultanées (défaut 1). */
   concurrency?: number;
+  /**
+   * `single` (défaut) : le jeton du service, que les pages servies portent. `named` : des jetons
+   * nominatifs (rôles, journal) ; les pages ne portent aucun jeton, chacun se connecte avec le sien.
+   */
+  access?: 'single' | 'named';
   /** Durée de vie d'un lien vers les rapports (défaut 10 min). */
   reportLinkTtlMs?: number;
   /** Délai de la vérification d'accès à une URL (défaut 10 s). */
@@ -246,6 +256,8 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     engineVersion,
     options,
     sseClients,
+    access: new AccessStore(workspace),
+    mode: options.access ?? 'single',
   };
 
   const server = createServer((request, response) => {
@@ -302,6 +314,8 @@ interface Context {
   engineVersion: string;
   options: SdkServerOptions;
   sseClients: Set<ServerResponse>;
+  access: AccessStore;
+  mode: 'single' | 'named';
 }
 
 async function handle(ctx: Context, request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -340,7 +354,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
                 : dashboard
                   ? dashboardPage
                   : sdkStandalonePage)({
-            token: ctx.token,
+            token: ctx.mode === 'named' ? null : ctx.token,
             nonce,
             language: ctx.options.language ?? 'en',
           }),
@@ -359,8 +373,10 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     response.end();
     return;
   }
-  authorize(ctx, request);
+  const identity = await authorize(ctx, request);
+  IDENTITIES.set(request, identity);
   const [, resource, id, sub] = segments;
+  checkRight(ctx, identity, segments, method, response);
   const json = (body: unknown, status = 200): void => {
     response.writeHead(status, { 'content-type': JSON_TYPE });
     response.end(JSON.stringify(body));
@@ -368,6 +384,10 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
 
   if (resource === 'capabilities' && method === 'GET') {
     json(capabilities(ctx));
+    return;
+  }
+  if (resource === 'access') {
+    await handleAccess(ctx, identity, segments, method, request, url, json);
     return;
   }
   if (resource === 'checks' && id === 'url' && method === 'POST') {
@@ -425,6 +445,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     refuseArchived(project);
     const body = await readOptionalJson(request);
     const environment = await environmentOf(project, body.environmentId);
+    requireWrites(request, project.id, environment);
     const loaded = await projectMission(ctx, project, 'explore', { ...(environment ? { environment } : {}) });
     const reportsDir = path.join(
       project.dir,
@@ -1558,6 +1579,7 @@ async function handlePlatform(
       refuseArchived(project);
       const body = await readOptionalJson(request);
       const environment = await environmentOf(project, body.environmentId);
+      requireWrites(request, project.id, environment);
       const wanted = stringList(body.scenarios, 'scenarios', 50);
       const known = await listScenarios(project.dir);
       if (known.length === 0)
@@ -1733,13 +1755,168 @@ function checkOrigin(ctx: Context, request: IncomingMessage, response: ServerRes
   throw new HttpError(403, 'ORIGIN_REFUSED', 'origin not allowed');
 }
 
-function authorize(ctx: Context, request: IncomingMessage): void {
+/** Les identités des requêtes en cours (posées par `authorize`). */
+const IDENTITIES = new WeakMap<IncomingMessage, Identity>();
+
+const SERVICE: Identity = { id: 'service', name: 'service', kind: 'SERVICE', role: 'ADMIN', projects: {} };
+
+/** Qui appelle : le jeton du service (administrateur) ou un jeton nominatif non révoqué. */
+async function authorize(ctx: Context, request: IncomingMessage): Promise<Identity> {
   const header = request.headers.authorization ?? '';
   const given = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
   const a = Buffer.from(given);
   const b = Buffer.from(ctx.token);
-  if (a.length !== b.length || !timingSafeEqual(a, b))
-    throw new HttpError(401, 'UNAUTHORIZED', 'missing or invalid token');
+  if (a.length === b.length && timingSafeEqual(a, b)) return SERVICE;
+  const member = given ? await ctx.access.resolve(given) : undefined;
+  if (!member) throw new HttpError(401, 'UNAUTHORIZED', 'missing or invalid token');
+  return member;
+}
+
+function identityOf(request: IncomingMessage): Identity {
+  return IDENTITIES.get(request) ?? SERVICE;
+}
+
+/** L'auteur d'une décision : le nom d'un membre ; rien pour le jeton du service (ce n'est personne). */
+function authorOf(request: IncomingMessage): { by?: string } {
+  const identity = identityOf(request);
+  return identity.kind === 'MEMBER' ? { by: identity.name } : {};
+}
+
+/** Le projet que la requête touche (ses rôles propres s'y appliquent). */
+function projectScope(ctx: Context, segments: readonly string[]): string | undefined {
+  const [, resource, id] = segments;
+  if (resource === 'projects' && id && id !== 'validate' && ID_PATTERN.test(id)) return id;
+  if (resource === 'explorations' && id) return ctx.explorations.get(id)?.projectId;
+  return undefined;
+}
+
+/**
+ * Le droit de la route, vérifié à chaque appel. Une écriture et un refus vont au journal : qui, quoi,
+ * où, résultat ; jamais un corps, une valeur ou un jeton.
+ */
+function checkRight(
+  ctx: Context,
+  identity: Identity,
+  segments: readonly string[],
+  method: string,
+  response: ServerResponse,
+): void {
+  const projectId = projectScope(ctx, segments);
+  const right = rightFor(segments, method);
+  const { action, kind } = actionOf(segments);
+  const record = (status: number): void => {
+    ctx.access
+      .record({
+        at: new Date().toISOString(),
+        who: { id: identity.id, name: identity.name },
+        role: roleIn(identity, projectId),
+        method,
+        action,
+        kind,
+        path: `/${segments.join('/')}`,
+        ...(projectId ? { projectId } : {}),
+        status,
+        outcome: status === 401 || status === 403 ? 'DENIED' : status < 400 ? 'OK' : 'FAILED',
+      })
+      .catch(() => undefined);
+  };
+  if (!can(identity, right, projectId)) {
+    record(403);
+    throw new HttpError(403, 'FORBIDDEN', `the role ${roleIn(identity, projectId)} does not allow ${right}`);
+  }
+  if (method !== 'GET' && method !== 'HEAD')
+    response.once('finish', () => {
+      record(response.statusCode);
+    });
+}
+
+/** Une exécution qui permet les écritures demande le droit de les permettre (RUN_WRITES). */
+function requireWrites(
+  request: IncomingMessage,
+  projectId: string,
+  environment: Environment | undefined,
+): void {
+  if (!environment?.mutations?.enabled) return;
+  const identity = identityOf(request);
+  if (!can(identity, 'RUN_WRITES', projectId))
+    throw new HttpError(
+      403,
+      'FORBIDDEN',
+      `the role ${roleIn(identity, projectId)} does not allow a run with writes (environment ${environment.name})`,
+    );
+}
+
+/** LES ACCÈS (`/api/access/…`) : qui je suis ; les membres, leurs rôles, leurs jetons ; le journal. */
+async function handleAccess(
+  ctx: Context,
+  identity: Identity,
+  segments: readonly string[],
+  method: string,
+  request: IncomingMessage,
+  url: URL,
+  json: (body: unknown, status?: number) => void,
+): Promise<void> {
+  const [, , part, id, action] = segments;
+  const call = async <T>(run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof AccessError)
+        throw new HttpError(error.code === 'NOT_FOUND' ? 404 : 400, error.code, error.message);
+      throw error;
+    }
+  };
+  if (part === 'me' && id === undefined && method === 'GET') {
+    const projectId = url.searchParams.get('projectId') ?? undefined;
+    if (projectId) await projectOf(ctx, projectId);
+    const override = projectId ? identity.projects[projectId] : undefined;
+    const me: AccessMe = {
+      id: identity.id,
+      name: identity.name,
+      kind: identity.kind,
+      role: identity.role,
+      ...(override ? { projectRole: override } : {}),
+      rights: [...ROLE_RIGHTS[roleIn(identity, projectId)]],
+      mode: ctx.mode,
+    };
+    json(me);
+    return;
+  }
+  if (part === 'members' && id === undefined && method === 'GET') {
+    json(await ctx.access.list());
+    return;
+  }
+  if (part === 'members' && id === undefined && method === 'POST') {
+    const body = await readJson(request);
+    json(await call(() => ctx.access.create({ name: body.name, role: body.role })), 201);
+    return;
+  }
+  if (part === 'members' && id && action === undefined && method === 'POST') {
+    const body = await readJson(request);
+    const projectId = typeof body.projectId === 'string' ? body.projectId : undefined;
+    if (projectId) await projectOf(ctx, projectId);
+    json(await call(() => ctx.access.setRole(id, body.role, projectId)));
+    return;
+  }
+  if (part === 'members' && id && action === 'revoke' && method === 'POST') {
+    json(await call(() => ctx.access.revoke(id)));
+    return;
+  }
+  if (part === 'journal' && id === undefined && method === 'GET') {
+    const kind = url.searchParams.get('kind') ?? undefined;
+    if (kind !== undefined && !(JOURNAL_KINDS as readonly string[]).includes(kind))
+      throw new HttpError(400, 'INVALID_INPUT', `kind must be one of ${JOURNAL_KINDS.join(', ')}`);
+    const projectId = url.searchParams.get('projectId') ?? undefined;
+    json(
+      await ctx.access.journal({
+        ...(projectId ? { projectId } : {}),
+        ...(kind ? { kind: kind as JournalKind } : {}),
+        limit: Number(url.searchParams.get('limit') ?? '200'),
+      }),
+    );
+    return;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'not found');
 }
 
 /** Le corps brut d'un envoi de fichier, borné AVANT d'être lu en entier. */
@@ -1904,8 +2081,9 @@ async function handleRequirements(
           !(DECISION_ACTIONS as readonly string[]).includes(decision.action)
         )
           throw new HttpError(400, 'INVALID_INPUT', 'each decision needs an itemId and an action');
-        // L'auteur n'est pas déclaré par l'appelant tant que l'identité n'est pas définie (Q1).
+        // L'auteur est celui du jeton, jamais ce que l'appelant déclare.
         delete (decision as { by?: string }).by;
+        Object.assign(decision, authorOf(request));
       }
       json(await requirementsCall(() => decide(store, item, decisions, new Date())));
       return;
@@ -1914,7 +2092,10 @@ async function handleRequirements(
       write();
       const body = await readJson(request);
       const result = await requirementsCall(() =>
-        publish(store, item, new Date(), { acknowledgePartial: body.acknowledgePartial === true }),
+        publish(store, item, new Date(), {
+          acknowledgePartial: body.acknowledgePartial === true,
+          ...authorOf(request),
+        }),
       );
       json({ created: result.created, updated: result.updated, merged: result.merged, links: result.links });
       return;
@@ -1949,6 +2130,7 @@ async function handleRequirements(
             from: end(body.from, 'from'),
             to: end(body.to, 'to'),
             justification,
+            ...authorOf(request),
           },
           new Date(),
         ),
@@ -1967,7 +2149,10 @@ async function handleRequirements(
       typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 500) : undefined;
     json(
       await requirementsCall(() =>
-        decideLink(store, item, body.action as 'CONFIRM' | 'REJECT', new Date(), note ? { note } : {}),
+        decideLink(store, item, body.action as 'CONFIRM' | 'REJECT', new Date(), {
+          ...(note ? { note } : {}),
+          ...authorOf(request),
+        }),
       ),
     );
     return;

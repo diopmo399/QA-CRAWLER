@@ -10,6 +10,7 @@ import type {
 } from '../../src/sdk/core/contracts.js';
 import type { ImportBatch } from '../../src/requirements/model.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
+import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { connectorOfFile, emptyImportForm, emptyLinkForm } from '../../src/sdk/ui/dashboard-requirements.js';
 import { activeNav, renderDashboard, type DashboardState } from '../../src/sdk/ui/dashboard-view.js';
 
@@ -54,6 +55,8 @@ const base = (
   severity: 'ALL',
   project,
   req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8, ...req },
+  signIn: false,
+  access: emptyAccessUi(),
   ...extra,
 });
 

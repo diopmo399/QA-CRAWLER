@@ -17,6 +17,7 @@ import {
   type DashboardState,
 } from '../../src/sdk/ui/dashboard-view.js';
 
+import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
 /**
  * LE RENDU DU DASHBOARD (fonctions pures) : chiffres du SDK tels quels, taux avec numérateur,
@@ -40,6 +41,8 @@ const base = (extra: Partial<DashboardState> = {}): DashboardState => ({
   picked: [],
   severity: 'ALL',
   req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8 },
+  signIn: false,
+  access: emptyAccessUi(),
   ...extra,
 });
 
