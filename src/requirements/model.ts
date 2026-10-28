@@ -162,6 +162,8 @@ export interface ExtractedItem {
   criterion?: CriterionStructure;
   /** Le parent proposé (identifiant externe de l'exigence ou de la règle précédente dans la section). */
   parentExternalId?: string;
+  /** D'où vient ce parent : la section (ce qui précède), ou la ligne même d'un tableau (une colonne). */
+  parentBasis?: 'SECTION' | 'TABLE_ROW';
   source: SourceReference;
   duplicate: DuplicateCheck;
   decision?: ItemDecision;
@@ -316,11 +318,14 @@ export interface ImportProfile {
   classify: {
     idPrefixes?: Partial<Record<'REQUIREMENT' | 'BUSINESS_RULE' | 'ACCEPTANCE_CRITERION', string[]>>;
     columns?: Partial<
-      Record<'id' | 'title' | 'description' | 'type' | 'priority' | 'status' | 'rule' | 'criterion', string>
+      Record<
+        'id' | 'title' | 'description' | 'type' | 'priority' | 'status' | 'rule' | 'criterion' | 'parent',
+        string
+      >
     >;
   };
-  /** Réglages du connecteur, sans secret ni contenu (ex. Excel : `{ sheets, headerRow }`). */
-  options: Record<string, string | number | boolean | string[]>;
+  /** Réglages du connecteur, sans secret ni contenu (ex. Excel : `{ sheets, headerRow: { Exigences: 2 } }`). */
+  options: Record<string, string | number | boolean | string[] | Record<string, number>>;
   createdAt: string;
   updatedAt: string;
 }

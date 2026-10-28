@@ -27,6 +27,10 @@
       "types": "./dist/sdk/server/index.d.ts",
       "default": "./dist/sdk/server/index.js"
     },
+    "./requirements": {
+      "types": "./dist/requirements/index.d.ts",
+      "default": "./dist/requirements/index.js"
+    },
     "./package.json": "./package.json",
     "./dist/*": "./dist/*"
   },
