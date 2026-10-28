@@ -88,6 +88,8 @@ const ICONS: Record<string, string> = {
   play: '<path d="M7 5l12 7-12 7z"/>',
   arrowR: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   arrowL: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  arrowU: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  arrowD: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
   atom: '<circle cx="12" cy="12" r="1.6"/><ellipse cx="12" cy="12" rx="9" ry="3.6"/><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(120 12 12)"/>',
   vee: '<path d="M3 5h4l5 9 5-9h4l-9 15z"/>',

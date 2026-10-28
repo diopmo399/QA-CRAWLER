@@ -318,4 +318,17 @@ describe('Flow Studio — data and assertions of a journey with a typed value', 
         .status,
     ).toBe('NOT_EXECUTED');
   });
+
+  it('the tests tab generates the tests with the engine and says what each file is', async () => {
+    await inStudio('[data-tab="tests"]').click();
+    await inStudio('input[name="format"][value="playwright"]').check();
+    await inStudio('form[data-form="generate"] button').click();
+    const files = inStudio('.files > li');
+    await expect.poll(() => files.count(), { timeout: 60_000 }).toBeGreaterThanOrEqual(3);
+    const text = (await inStudio('.files').textContent()) ?? '';
+    for (const label of ['Flow YAML', 'Gherkin (.feature)', 'Playwright TypeScript'])
+      expect(text).toContain(label);
+    expect(text).toContain('validé (analyse statique)');
+    expect(text).not.toMatch(/réussi/);
+  }, 90_000);
 });

@@ -18,6 +18,7 @@ import { can } from './dashboard-access.js';
 import { formatDate, header, icon, pill } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { studioLink } from './dashboard-recordings.js';
+import { enginePhrase } from './engine-phrases.js';
 import { esc } from './view.js';
 
 /**
@@ -27,6 +28,9 @@ import { esc } from './view.js';
  * de chaque saisie, la génération des tests et le rejeu de validation. Chaque décision passe par le
  * serveur, qui réécrit le flow : la page ne décide rien seule. Des fonctions pures.
  */
+/** Une phrase du moteur dans la langue du Dashboard (la tournure inconnue reste telle quelle). */
+const phrase = (state: DashboardState, text: string): string => enginePhrase(text, state.t.locale);
+
 export const REVIEW_TABS = ['flow', 'assertions', 'data', 'intents', 'tests'] as const;
 export type ReviewTab = (typeof REVIEW_TABS)[number];
 
@@ -256,7 +260,7 @@ function stepRow(
     decide && !isCheck
       ? `<input type="checkbox" class="pickbox" data-review-pick="${esc(step.id)}" ${chosen ? 'checked' : ''} aria-label="${esc(r.choose(step.description))}">`
       : '<span class="pickbox" aria-hidden="true"></span>'
-  }<span class="n" aria-hidden="true">${isCheck ? '✓' : String(number ?? '')}</span><span class="rv-main"><span class="rv-desc">${isCheck ? `<small class="mu">${esc(r.check)}</small> ` : ''}${esc(step.description)}${step.corrected ? ` ${pill('CONFIRMED', r.corrected)}` : ''}</span>${data ? `<span class="tags">${data}</span>` : ''}${violation ? `<small class="err">${esc(r.violation(violation.key))}</small>` : ''}${step.replay && step.replay.outcome !== 'MATCHED' && step.replay.reasons.length > 0 ? `<small class="mu">${esc(step.replay.reasons.join(' · '))}</small>` : ''}${targetLinks(state, ui, step, decide)}</span><span class="rv-side">${outcome}${actions}</span></li>`;
+  }<span class="n" aria-hidden="true">${isCheck ? '✓' : String(number ?? '')}</span><span class="rv-main"><span class="rv-desc">${isCheck ? `<small class="mu">${esc(r.check)}</small> ` : ''}${esc(step.description)}${step.corrected ? ` ${pill('CONFIRMED', r.corrected)}` : ''}</span>${data ? `<span class="tags">${data}</span>` : ''}${violation ? `<small class="err">${esc(r.violation(violation.key))}</small>` : ''}${step.replay && step.replay.outcome !== 'MATCHED' && step.replay.reasons.length > 0 ? `<small class="mu">${esc(step.replay.reasons.map((reason) => phrase(state, reason)).join(' · '))}</small>` : ''}${targetLinks(state, ui, step, decide)}</span><span class="rv-side">${outcome}${actions}</span></li>`;
 }
 
 /** Corriger la cible (navigateur sur le serveur), redéfinir la ligne, restaurer l'original. */
@@ -357,7 +361,7 @@ function correctionCard(state: DashboardState, ui: ReviewUi): string {
   else if (view.status === 'RESUMED' && view.resume)
     body = `<p class="row-line">${pill(view.resume.status === 'PASSED' ? 'PASSED' : view.resume.status === 'FAILED' ? 'FAILED' : 'INCOMPLETE', r.resumeStatuses[view.resume.status] ?? view.resume.status)}<small class="mu">${esc(r.strategy(view.resume.strategy))}</small></p>${
       view.resume.reasons.length > 0
-        ? `<small class="mu block">${esc(view.resume.reasons.join(' · '))}</small>`
+        ? `<small class="mu block">${esc(view.resume.reasons.map((reason) => phrase(state, reason)).join(' · '))}</small>`
         : ''
     }<div class="form-acts start">${close}</div>`;
   else if (view.status === 'UNREACHABLE' && view.stoppedAt)
@@ -562,11 +566,11 @@ function proposalItem(
             ? `<button class="btn small ghost" data-action="review-decide" data-decision="RESET" data-assertion="${esc(proposal.id)}" ${disabled}>${esc(r.reset)}</button>`
             : ''
         }</div>`;
-  return `<li class="rv-assert"><div class="row-line">${pill(proposal.status === 'PROPOSED' ? 'PROPOSED' : proposal.status === 'REJECTED' || proposal.status === 'DISABLED' ? 'REJECTED' : 'CONFIRMED', r.statuses[proposal.status] ?? proposal.status)}${pill(VERDICT_TONE[proposal.verdict.status] ?? 'UNKNOWN', r.verdicts[proposal.verdict.status] ?? proposal.verdict.status)}<small class="mu">${esc(r.methods[proposal.verificationMethod] ?? proposal.verificationMethod)} · ${esc(r.confidence(Math.round(proposal.confidence * 100)))} · ${esc(proposal.inFlow ? r.inFlow : r.notInFlow)}</small></div><p class="rv-what">${esc(proposal.description)}</p><small class="mu">${esc(r.why)} : ${esc(proposal.why)}</small>${
+  return `<li class="rv-assert"><div class="row-line">${pill(proposal.status === 'PROPOSED' ? 'PROPOSED' : proposal.status === 'REJECTED' || proposal.status === 'DISABLED' ? 'REJECTED' : 'CONFIRMED', r.statuses[proposal.status] ?? proposal.status)}${pill(VERDICT_TONE[proposal.verdict.status] ?? 'UNKNOWN', r.verdicts[proposal.verdict.status] ?? proposal.verdict.status)}<small class="mu">${esc(r.methods[proposal.verificationMethod] ?? proposal.verificationMethod)} · ${esc(r.confidence(Math.round(proposal.confidence * 100)))} · ${esc(proposal.inFlow ? r.inFlow : r.notInFlow)}</small></div><p class="rv-what">${esc(phrase(state, proposal.description))}</p><small class="mu">${esc(r.why)} : ${esc(phrase(state, proposal.why))}</small>${
     proposal.verdict.status !== 'NOT_EXECUTED' &&
     proposal.verdict.status !== 'VERIFIED_PASS' &&
     proposal.verdict.reasons.length > 0
-      ? `<small class="mu block">${esc(proposal.verdict.reasons.join(' · '))}</small>`
+      ? `<small class="mu block">${esc(proposal.verdict.reasons.map((reason) => phrase(state, reason)).join(' · '))}</small>`
       : ''
   }${decideButtons}</li>`;
 }

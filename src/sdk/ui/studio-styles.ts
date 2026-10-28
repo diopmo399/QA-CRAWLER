@@ -92,6 +92,12 @@ code{font-family:var(--qa-font-family-mono);font-size:.86em;background:var(--qa-
 .tabpanel{display:flex;flex-direction:column;gap:10px}
 fieldset{border:0;margin:0;padding:0}
 .opt{display:flex;gap:8px;align-items:center;font-size:13px}
+.gen fieldset{border:0;padding:0;margin:0;gap:6px}
+.gen legend{font-weight:600;margin-bottom:4px}
+.files{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.files>li{border:1px solid var(--qa-color-border);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.files p{margin:0;overflow-wrap:anywhere}
+pre.code{margin:6px 0 0;max-height:260px;overflow:auto;padding:8px 10px;border-radius:8px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre}
 .sub{padding-left:24px}
 .bind input[type="radio"]{flex:none}
 .asserts,.vars{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
