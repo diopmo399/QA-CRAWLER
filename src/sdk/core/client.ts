@@ -16,7 +16,10 @@ import type {
   GenerationResult,
   GraphView,
   GroupCommandInput,
+  ComposeScenarioInput,
   CorrectionView,
+  LibraryAddInput,
+  LibraryBlockView,
   GroupCheckView,
   GroupEditResult,
   IntentDecisionInput,
@@ -192,6 +195,21 @@ export interface QaCrawlerClient {
     promote(projectId: string, recording: string): Promise<ScenarioView>;
     /** La stabilité des scénarios : leurs statuts dans les derniers runs (10 par défaut, 50 au plus). */
     history(projectId: string, options?: { limit?: number }): Promise<ScenarioHistoryView[]>;
+    /** Un nouveau scénario fait de blocs de la bibliothèque, rejoués dans l'ordre par `run:`. */
+    compose(projectId: string, input: ComposeScenarioInput): Promise<ScenarioView>;
+    /** Insère un bloc de la bibliothèque au début ou à la fin d'un scénario (ses données suivent). */
+    insert(
+      projectId: string,
+      scenario: string,
+      input: { block: string; at: 'start' | 'end' },
+    ): Promise<ScenarioView>;
+  };
+  /** La bibliothèque : des blocs réutilisables (`reusable: true`), rejoués par d'autres scénarios. */
+  library: {
+    list(projectId: string): Promise<LibraryBlockView[]>;
+    add(projectId: string, input: LibraryAddInput): Promise<LibraryBlockView>;
+    /** Retire un bloc (refusé tant qu'un scénario le rejoue). */
+    remove(projectId: string, name: string): Promise<{ removed: string }>;
   };
   /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
   executions: {
@@ -602,6 +620,15 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           'GET',
           `${project(projectId)}/scenarios/history${historyOptions.limit ? `?limit=${String(historyOptions.limit)}` : ''}`,
         ),
+      compose: (projectId, input) => request('POST', `${project(projectId)}/scenarios/compose`, input),
+      insert: (projectId, scenario, input) =>
+        request('POST', `${project(projectId)}/scenarios/${encodeURIComponent(scenario)}/insert`, input),
+    },
+    library: {
+      list: (projectId) => request('GET', `${project(projectId)}/library`),
+      add: (projectId, input) => request('POST', `${project(projectId)}/library`, input),
+      remove: (projectId, name) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/remove`, {}),
     },
     executions: {
       start: (projectId, input = {}) => request('POST', `${project(projectId)}/executions`, input),

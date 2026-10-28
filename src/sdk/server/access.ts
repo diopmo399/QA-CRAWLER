@@ -243,6 +243,8 @@ export function rightFor(segments: readonly string[], method: string): Right {
     case 'environments':
       return item === 'check' ? 'RUN' : 'MANAGE_ENVIRONMENTS';
     case 'scenarios':
+    case 'library':
+      // Promouvoir, composer, insérer un bloc, enrichir la bibliothèque : publier des scénarios.
       return 'PUBLISH';
     case 'executions':
     case 'explorations':
@@ -287,6 +289,9 @@ const KEYWORDS = new Set([
   'check',
   'remove',
   'scenarios',
+  'library',
+  'compose',
+  'insert',
   'executions',
   'explorations',
   'cancel',

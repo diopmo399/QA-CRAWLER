@@ -334,6 +334,61 @@ describe('Dashboard — recordings, in Chromium', () => {
       .toMatchObject({ intent: 'NAVIGATE', status: 'HUMAN_CORRECTED', reason: 'ouvre la liste' });
   }, 300_000);
 
+  it('puts a group in the library, composes a journey from blocks, and the engine replays it for real', async () => {
+    const name = 'consulter-un-utilisateur';
+    await dashboard().locator('[data-action="review-tab"][data-tab="flow"]').click();
+    const [group] = await client.groups.list(project.id, name);
+    expect(group).toBeDefined();
+    await dashboard()
+      .locator(`[data-action="lib-group"][data-group="${group?.id ?? ''}"]`)
+      .click();
+    await dashboard().locator('input[data-lib="group.name"]').fill('Bloc consultation');
+    await dashboard().locator('form[data-action="lib-group"] button[type="submit"]').click();
+    await dashboard()
+      .locator('.notice', { hasText: 'Le bloc « Bloc consultation » est dans la bibliothèque.' })
+      .waitFor({
+        timeout: 15_000,
+      });
+    expect((await client.library.list(project.id))[0]).toMatchObject({
+      name: 'Bloc consultation',
+      origin: { kind: 'recording', name, group: group?.name },
+      usedBy: [],
+    });
+
+    // La bibliothèque : composer un parcours qui rejoue le bloc deux fois.
+    await dashboard().locator('.drawer [data-action="nav"][data-view="library"]').click();
+    await dashboard().locator('h1', { hasText: 'Bibliothèque' }).waitFor({ timeout: 15_000 });
+    await dashboard().locator('input[data-lib="compose.name"]').fill('Consulter deux fois');
+    await dashboard().locator('[data-action="lib-part-add"]').click();
+    await dashboard().locator('[data-action="lib-part-add"]').click();
+    expect(await dashboard().locator('.lib-parts li').count()).toBe(2);
+    await dashboard().locator('form[data-action="lib-compose"] button[type="submit"]').click();
+    await dashboard()
+      .locator('.notice', { hasText: 'Le parcours « Consulter deux fois » est créé' })
+      .waitFor({
+        timeout: 15_000,
+      });
+    const composed = (await client.scenarios.list(project.id)).find(
+      (entry) => entry.name === 'Consulter deux fois',
+    );
+    expect(composed?.uses).toEqual(['Bloc consultation', 'Bloc consultation']);
+    await dashboard().locator('.lib-block', { hasText: 'Rejoué par : Consulter deux fois' }).waitFor();
+
+    // Le moteur rejoue le parcours composé : les étapes du bloc à la place de chaque `run:`.
+    const started = await client.executions.start(project.id, { scenarios: ['Consulter deux fois'] });
+    await expect
+      .poll(async () => (await client.explorations.status(started.id)).status, {
+        timeout: 120_000,
+        interval: 1000,
+      })
+      .toBe('COMPLETED');
+    const detail = await client.executions.get(project.id, started.run ?? '');
+    expect(detail.verdict).toBe('PASSED');
+    const steps = detail.flowsDetail[0]?.steps ?? [];
+    expect(steps.length).toBeGreaterThanOrEqual(2);
+    expect(steps.every((step) => step.label.includes('run Bloc consultation'))).toBe(true);
+  }, 300_000);
+
   it('on a phone: the review never scrolls sideways', async () => {
     const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await phone.goto(`${server.url}/dashboard`);

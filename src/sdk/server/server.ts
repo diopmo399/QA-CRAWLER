@@ -18,6 +18,16 @@ import type { ReplayOutcome } from '../../recording/recording-report.js';
 import { loadConfigFile } from '../../config/config-loader.js';
 import { CorrectionBusyError, CorrectionManager, type CorrectionRuntime } from './corrections.js';
 import {
+  addGroupToLibrary,
+  addScenarioToLibrary,
+  composeScenario,
+  insertBlock,
+  LibraryError,
+  listLibrary,
+  removeFromLibrary,
+} from './library.js';
+import { TestDataSetError } from '../../data/test-data-set.js';
+import {
   acceptStoredGroupProposals,
   addStoredGroupCheck,
   bindStoredTestData,
@@ -1276,6 +1286,86 @@ async function dataView(stored: StoredRecording): Promise<TestDataView> {
   };
 }
 
+/** Une opération de la bibliothèque : ses refus deviennent des réponses HTTP, expliquées. */
+async function libraryCall<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof LibraryError)
+      throw new HttpError(error.status, error.status === 409 ? 'CONFLICT' : 'REFUSED', error.message);
+    if (error instanceof TestDataSetError) throw new HttpError(422, 'REFUSED', error.message);
+    throw error;
+  }
+}
+
+/**
+ * LA BIBLIOTHÈQUE : lister les blocs ; ajouter un scénario ou un groupe d'un enregistrement ; retirer
+ * un bloc qu'aucun scénario ne rejoue.
+ */
+async function handleLibrary(
+  ctx: Context,
+  project: StoredProject,
+  item: string | undefined,
+  action: string | undefined,
+  method: string,
+  request: IncomingMessage,
+  json: (value: unknown, status?: number) => void,
+): Promise<void> {
+  if (item === undefined && method === 'GET') {
+    json(await listLibrary(project.dir));
+    return;
+  }
+  refuseArchived(project);
+  if (item === undefined && method === 'POST') {
+    const body = await readJson(request);
+    const name = typeof body.name === 'string' ? body.name : '';
+    const description = textOf(body.description, 500);
+    if (body.from === 'scenario') {
+      const scenario = textOf(body.scenario, 120);
+      if (!scenario) throw new HttpError(400, 'BAD_REQUEST', 'scenario is required');
+      json(
+        await libraryCall(() =>
+          addScenarioToLibrary(project.dir, { scenario, name, ...(description ? { description } : {}) }),
+        ),
+        201,
+      );
+      return;
+    }
+    if (body.from === 'recording') {
+      const recordingName = textOf(body.recording, 80);
+      const groupId = textOf(body.groupId, 80);
+      if (!recordingName || !RECORDING_NAME_PATTERN.test(recordingName) || !groupId)
+        throw new HttpError(400, 'BAD_REQUEST', 'recording and groupId are required');
+      const stored = await storedRecordingOf(ctx, project, recordingName);
+      const group = storedGroups(stored).find((entry) => entry.id === groupId);
+      json(
+        await libraryCall(() =>
+          addGroupToLibrary(
+            project.dir,
+            { directory: stored.directory, name: recordingName },
+            {
+              groupId,
+              name,
+              ...(group ? { startAt: group.startAt } : {}),
+              ...(description ? { description } : {}),
+            },
+          ),
+        ),
+        201,
+      );
+      return;
+    }
+    throw new HttpError(400, 'BAD_REQUEST', 'from must be scenario or recording');
+  }
+  if (item !== undefined && action === 'remove' && method === 'POST') {
+    const name = decodeURIComponent(item);
+    await libraryCall(() => removeFromLibrary(project.dir, name));
+    json({ removed: name });
+    return;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'unknown library route');
+}
+
 /** Les colonnes d'une ligne, vérifiées champ par champ (le moteur vérifie ensuite les cellules et les données). */
 function rowColumnsOf(raw: unknown): RowColumnInput[] {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > 20)
@@ -1923,6 +2013,44 @@ async function handlePlatform(
     }
     return false;
   }
+  if (sub === 'library') {
+    const project = await projectOf(ctx, id);
+    await handleLibrary(ctx, project, item, action, method, request, json);
+    return true;
+  }
+  if (sub === 'scenarios' && item === 'compose' && method === 'POST') {
+    const project = await projectOf(ctx, id);
+    refuseArchived(project);
+    const body = await readJson(request);
+    const parts = Array.isArray(body.parts)
+      ? body.parts.filter((part): part is string => typeof part === 'string')
+      : [];
+    const description = textOf(body.description, 500);
+    const file = await libraryCall(() =>
+      composeScenario(project.dir, {
+        name: typeof body.name === 'string' ? body.name : '',
+        parts,
+        ...(description ? { description } : {}),
+      }),
+    );
+    const scenario = (await listScenarios(project.dir)).find((entry) => entry.file === file);
+    if (!scenario) throw new HttpError(422, 'REFUSED', 'the composed scenario could not be read back');
+    json(scenario, 201);
+    return true;
+  }
+  if (sub === 'scenarios' && item !== undefined && action === 'insert' && method === 'POST') {
+    const project = await projectOf(ctx, id);
+    refuseArchived(project);
+    const body = await readJson(request);
+    const block = textOf(body.block, 120);
+    if (!block || (body.at !== 'start' && body.at !== 'end'))
+      throw new HttpError(400, 'BAD_REQUEST', 'block and at (start or end) are required');
+    const scenario = decodeURIComponent(item);
+    await libraryCall(() => insertBlock(project.dir, scenario, { block, at: body.at as 'start' | 'end' }));
+    const view = (await listScenarios(project.dir)).find((entry) => entry.name === scenario);
+    json(view ?? { name: scenario });
+    return true;
+  }
   if (sub === 'scenarios' && item === 'history' && method === 'GET') {
     const project = await projectOf(ctx, id);
     const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') ?? 10) || 10));
@@ -1982,6 +2110,15 @@ async function handlePlatform(
       const unknown = (wanted ?? []).filter((name) => !known.some((scenario) => scenario.name === name));
       if (unknown.length > 0)
         throw new HttpError(404, 'NOT_FOUND', `unknown scenario(s): ${unknown.join(', ')}`);
+      const blocks = (wanted ?? []).filter((name) =>
+        known.some((scenario) => scenario.name === name && scenario.reusable),
+      );
+      if (blocks.length > 0)
+        throw new HttpError(
+          422,
+          'REUSABLE_BLOCK',
+          `${blocks.join(', ')}: a block of the library runs only through a scenario (run:)`,
+        );
       const flowsDir = await flowsDirOf(project.dir);
       const selected = wanted ? known.filter((scenario) => wanted.includes(scenario.name)) : undefined;
       const loaded = await projectMission(ctx, project, 'replay', {

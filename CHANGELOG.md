@@ -100,6 +100,22 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
     au lieu de « the link … ») ; le dernier rejeu du Studio est dit en mots (« conforme »).
   - Moteur : le rejeu de validation (`replayRecordedFlow`), le retrait d'une étape et la vérification
     de groupe sont partagés entre la fenêtre du recorder et le SDK.
+- **Bibliothèque de scénarios** : des blocs réutilisables (`reusable: true`), jamais exécutés seuls,
+  que d'autres scénarios rejouent par une étape `run: <bloc>`.
+  - Un scénario, ou un groupe métier d'un enregistrement (depuis la revue), devient un bloc ; ses
+    étapes et ses données de test sont recopiées sous `<flows>/library/<bloc>/`.
+  - Composer un parcours à partir de blocs (écran Bibliothèque) : un nouveau scénario sous
+    `<flows>/composed/`, rejouable comme les autres ; insérer un bloc au début ou à la fin d'un
+    scénario existant (écran Scénarios). Les données des blocs rejoignent le jeu du scénario ; une
+    donnée définie autrement des deux côtés est refusée, jamais écrasée.
+  - Un bloc rejoué par un scénario ne se retire pas ; un bloc ne se lance pas seul (`REUSABLE_BLOCK`).
+  - Moteur : quand on rejoue des scénarios choisis, les blocs suivent toujours (un `run:` les trouve).
+  - SDK : `library.list/add/remove`, `scenarios.compose/insert` (droit `PUBLISH`) ; `ScenarioView`
+    porte `reusable`, `uses` et `description`.
+- **Flow Studio** : un onglet Tests génère les tests (formats, groupes) et dit ce qu'est chaque fichier ;
+  les phrases du moteur (assertions, raisons du rejeu et de la reprise) s'affichent en français dans le
+  Studio et le Dashboard ; Monter et Descendre au lieu d'Avancer et Reculer ; la recherche garde un
+  texte d'aide court ; une étape rejouée ne montre plus de raison inutile.
 - **Accès nominatifs** (`sdk-server --access named`, `startSdkServer({ access: 'named' })`) :
   - jetons par personne ou robot, conservés par leur seule empreinte et montrés une fois ;
   - quatre rôles (Lecteur, Analyste, Pilote QA, Administrateur), un rôle possible par projet ;

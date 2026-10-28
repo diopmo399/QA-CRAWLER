@@ -445,6 +445,19 @@ pre.code{margin:6px 0 0;max-height:320px;overflow:auto;padding:10px 12px;border-
 .correction-card dl.kv dt{color:var(--qa-color-muted)}
 .correction-card dl.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .rv-intent .fields{max-width:640px}
+.lib-blocks{display:flex;flex-direction:column}
+.lib-block{display:flex;flex-direction:column;gap:6px;padding:12px 0;border-top:1px solid var(--qa-color-border)}
+.lib-block:first-child{border-top:0;padding-top:4px}
+.lib-block p{margin:0}
+.small-code{font-size:11px;align-self:flex-start}
+.lib-pick{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
+.lib-pick .field{flex:1 1 200px;min-width:0}
+.lib-parts{display:flex;flex-direction:column;gap:6px}
+.lib-parts li{padding:6px 10px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface)}
+.lib-parts .n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:600;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border)}
+.lib-parts .push{margin-left:auto;display:flex;gap:2px}
+.rv-lib{flex-basis:100%}
+.lib-insert{border-top:1px solid var(--qa-color-border);padding-top:12px}
 details.tech summary{cursor:pointer;color:var(--qa-color-muted);font-size:13px}
 details.tech[open] summary{margin-bottom:6px}
 

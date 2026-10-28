@@ -294,8 +294,13 @@ export async function projectMission(
   const { config, root } = project;
   const at = (relative: string): string => path.resolve(root, relative);
   const { flows: discovered, files } = await discoverFlows(at(config.paths.flows));
+  // Les blocs réutilisables (`reusable: true`) suivent toujours : un flow choisi peut les rejouer par
+  // `run:` ; jamais exécutés seuls, ils sont retirés une fois leurs étapes recopiées.
   const selected = options.flows
-    ? discovered.filter((flow) => typeof flow.name === 'string' && options.flows?.includes(flow.name))
+    ? discovered.filter(
+        (flow) =>
+          flow.reusable === true || (typeof flow.name === 'string' && options.flows?.includes(flow.name)),
+      )
     : discovered;
   if (options.flows)
     for (const name of options.flows)

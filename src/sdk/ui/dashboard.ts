@@ -4,6 +4,7 @@ import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
 import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashboard-recordings.js';
+import { emptyLibraryUi, runnableScenarios, type LibraryUi } from './dashboard-library.js';
 import {
   assertionBuckets,
   bindFormOf,
@@ -108,6 +109,7 @@ export class QaCrawlerDashboard extends Base {
       signIn: false,
       access: emptyAccessUi(),
       recs: emptyRecordingsUi(),
+      lib: emptyLibraryUi(),
     };
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
@@ -123,6 +125,7 @@ export class QaCrawlerDashboard extends Base {
         this.signInWith(this.root.querySelector<HTMLInputElement>('[data-bind="token"]')?.value ?? '');
       if (form === 'rec-checkpoint') void this.recordingControl('checkpoint');
       if (form?.startsWith('review-')) this.reviewSubmit(event.target as HTMLFormElement);
+      if (form?.startsWith('lib-')) this.librarySubmit(event.target as HTMLFormElement);
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
@@ -139,6 +142,10 @@ export class QaCrawlerDashboard extends Base {
       }
       if (recField === 'checkpoint' && this.state.recs.live) {
         this.state.recs.live.checkpointLabel = target.value;
+        return;
+      }
+      if (target.dataset.lib) {
+        this.libraryField(target.dataset.lib, target.value);
         return;
       }
       const review = this.state.review;
@@ -802,6 +809,149 @@ export class QaCrawlerDashboard extends Base {
     }
   }
 
+  /** Une opération de la bibliothèque : envoyée au serveur, puis l'écran est relu (message ou erreur). */
+  private async libraryOp(
+    run: (api: QaCrawlerClient, projectId: string, lib: LibraryUi) => Promise<string | undefined>,
+  ): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const lib = this.state.lib;
+    if (!api || !project || lib.busy) return;
+    lib.busy = true;
+    lib.error = undefined;
+    lib.notice = undefined;
+    this.paint();
+    try {
+      lib.notice = await run(api, project.id, lib);
+      await this.load();
+    } catch (error) {
+      lib.error = message(error);
+    }
+    lib.busy = false;
+    this.paint();
+  }
+
+  private libraryClick(action: string, target: HTMLElement): boolean {
+    const lib = this.state.lib;
+    const route = this.state.route;
+    const index = Number(target.dataset.index);
+    switch (action) {
+      case 'lib-remove':
+        lib.confirmRemove = target.dataset.block;
+        this.paint();
+        return true;
+      case 'lib-remove-no':
+        lib.confirmRemove = undefined;
+        this.paint();
+        return true;
+      case 'lib-remove-yes': {
+        const name = target.dataset.block ?? '';
+        lib.confirmRemove = undefined;
+        void this.libraryOp(async (api, projectId) => {
+          await api.library.remove(projectId, name);
+          return undefined;
+        });
+        return true;
+      }
+      case 'lib-part-add': {
+        const pick = lib.compose.pick || lib.blocks?.[0]?.name;
+        if (pick) lib.compose.parts = [...lib.compose.parts, pick];
+        this.paint();
+        return true;
+      }
+      case 'lib-part-remove':
+        lib.compose.parts = lib.compose.parts.filter((_, at) => at !== index);
+        this.paint();
+        return true;
+      case 'lib-part-move': {
+        const to = target.dataset.direction === 'down' ? index + 1 : index - 1;
+        const parts = [...lib.compose.parts];
+        const [moved] = parts.splice(index, 1);
+        if (moved !== undefined && to >= 0 && to <= parts.length) {
+          parts.splice(to, 0, moved);
+          lib.compose.parts = parts;
+        }
+        this.paint();
+        return true;
+      }
+      case 'lib-from-scenario': {
+        const name = target.dataset.name ?? '';
+        lib.add = { scenario: name, name: '', description: '' };
+        if ('projectId' in route && route.projectId)
+          this.navigate({ view: 'library', projectId: route.projectId });
+        return true;
+      }
+      case 'lib-group': {
+        const group = this.state.review?.studio?.groups.find((entry) => entry.id === target.dataset.group);
+        if (group) lib.group = { id: group.id, name: group.name };
+        this.paint();
+        this.root.querySelector<HTMLInputElement>('[data-lib="group.name"]')?.focus();
+        return true;
+      }
+      case 'lib-group-cancel':
+        lib.group = undefined;
+        this.paint();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private librarySubmit(form: HTMLFormElement): void {
+    const lib = this.state.lib;
+    switch (form.dataset.action) {
+      case 'lib-add': {
+        const input = { ...lib.add };
+        void this.libraryOp(async (api, projectId, ui) => {
+          const block = await api.library.add(projectId, {
+            from: 'scenario',
+            scenario: input.scenario,
+            name: input.name,
+            ...(input.description.trim() ? { description: input.description.trim() } : {}),
+          });
+          ui.add = { scenario: input.scenario, name: '', description: '' };
+          return this.state.t.lib.added(block.name);
+        });
+        return;
+      }
+      case 'lib-compose': {
+        const input = { ...lib.compose };
+        void this.libraryOp(async (api, projectId, ui) => {
+          const scenario = await api.scenarios.compose(projectId, { name: input.name, parts: input.parts });
+          ui.compose = { name: '', parts: [], pick: input.pick };
+          return this.state.t.lib.composed(scenario.name);
+        });
+        return;
+      }
+      case 'lib-insert': {
+        const scenario = form.dataset.scenario ?? '';
+        const block = lib.insert.block || lib.blocks?.find((entry) => entry.name !== scenario)?.name || '';
+        const at = lib.insert.at;
+        void this.libraryOp(async (api, projectId) => {
+          await api.scenarios.insert(projectId, scenario, { block, at });
+          return this.state.t.lib.inserted(block);
+        });
+        return;
+      }
+      case 'lib-group': {
+        const group = lib.group;
+        const route = this.state.route;
+        if (!group || route.view !== 'recording') return;
+        void this.libraryOp(async (api, projectId, ui) => {
+          const block = await api.library.add(projectId, {
+            from: 'recording',
+            recording: route.name,
+            groupId: group.id,
+            name: group.name,
+          });
+          ui.group = undefined;
+          return this.state.t.lib.added(block.name);
+        });
+        return;
+      }
+    }
+  }
+
   private async startRecording(): Promise<void> {
     const api = this.api;
     const project = this.state.project;
@@ -916,13 +1066,24 @@ export class QaCrawlerDashboard extends Base {
         await this.loadProject(api, route.projectId, generation);
       } else if (route.view === 'scenarios') {
         await this.loadProject(api, route.projectId, generation);
-        const [history, recordings] = await Promise.all([
+        const [history, recordings, blocks] = await Promise.all([
           api.scenarios.history(route.projectId),
           api.recordings.list(route.projectId).catch(() => []),
+          api.library.list(route.projectId).catch(() => []),
         ]);
         if (generation !== this.generation) return;
         this.state.scenarioHistory = history;
         this.state.recordings = recordings;
+        this.state.lib.blocks = blocks;
+      } else if (route.view === 'library') {
+        await this.loadProject(api, route.projectId, generation);
+        const blocks = await api.library.list(route.projectId);
+        if (generation !== this.generation) return;
+        this.state.lib.blocks = blocks;
+        const lib = this.state.lib;
+        const scenarios = runnableScenarios(this.state.project?.scenarios ?? []);
+        if (!scenarios.some((scenario) => scenario.name === lib.add.scenario))
+          lib.add.scenario = scenarios[0]?.name ?? '';
       } else if (route.view === 'environments') {
         await this.loadProject(api, route.projectId, generation);
         if (generation !== this.generation) return;
@@ -1546,6 +1707,7 @@ export class QaCrawlerDashboard extends Base {
     const api = this.api;
     if (target.tagName === 'A') event.preventDefault();
     if (action?.startsWith('review-') && this.reviewClick(action, target)) return;
+    if (action?.startsWith('lib-') && this.libraryClick(action, target)) return;
     switch (action) {
       case 'menu':
         this.state.menuOpen = !this.state.menuOpen;
@@ -1566,6 +1728,7 @@ export class QaCrawlerDashboard extends Base {
           view === 'history' ||
           view === 'scenarios' ||
           view === 'recordings' ||
+          view === 'library' ||
           view === 'explorations' ||
           view === 'environments' ||
           view === 'sources' ||
@@ -1888,8 +2051,24 @@ export class QaCrawlerDashboard extends Base {
     }
   }
 
+  /** Un champ de la bibliothèque (« add.name », « compose.pick », « insert.at »…), gardé sans redessiner. */
+  private libraryField(field: string, value: string): void {
+    const lib = this.state.lib;
+    const [part, key] = field.split('.');
+    if (part === 'add' && (key === 'scenario' || key === 'name' || key === 'description'))
+      lib.add[key] = value;
+    else if (part === 'compose' && (key === 'name' || key === 'pick')) lib.compose[key] = value;
+    else if (part === 'insert' && key === 'block') lib.insert.block = value;
+    else if (part === 'insert' && key === 'at') lib.insert.at = value === 'end' ? 'end' : 'start';
+    else if (part === 'group' && key === 'name' && lib.group) lib.group.name = value;
+  }
+
   private onChange(event: Event): void {
     const target = event.target as HTMLInputElement | HTMLSelectElement;
+    if (target.dataset.lib) {
+      this.libraryField(target.dataset.lib, target.value);
+      return;
+    }
     const review = this.state.review;
     if (review && this.state.route.view === 'recording') {
       const pick = target.dataset.reviewPick;
@@ -1996,6 +2175,7 @@ export class QaCrawlerDashboard extends Base {
         route.view === 'history' ||
         route.view === 'scenarios' ||
         route.view === 'recordings' ||
+        route.view === 'library' ||
         route.view === 'explorations' ||
         route.view === 'environments' ||
         route.view === 'sources' ||

@@ -239,7 +239,7 @@ export async function listScenarios(projectDir: string): Promise<ScenarioView[]>
       scenarios.push({ name: relative, file: relative, format: 'gherkin' });
       continue;
     }
-    if (!/\.ya?ml$/.test(file) || path.basename(file).startsWith('test-data')) continue;
+    if (!/\.ya?ml$/.test(file) || path.basename(file).includes('test-data')) continue;
     let parsed: unknown;
     try {
       parsed = parseYaml(await readFile(file, 'utf8'));
@@ -256,12 +256,20 @@ export async function listScenarios(projectDir: string): Promise<ScenarioView[]>
     for (const flow of flows) {
       if (typeof flow.name !== 'string') continue;
       const from = origin[relative];
+      const runs = Array.isArray(flow.steps)
+        ? (flow.steps as unknown[])
+            .map((step) => (step && typeof step === 'object' ? (step as { run?: unknown }).run : undefined))
+            .filter((run): run is string => typeof run === 'string')
+        : [];
       scenarios.push({
         name: flow.name,
         file: relative,
         format: 'yaml',
         ...(Array.isArray(flow.steps) ? { steps: flow.steps.length } : {}),
         ...(from ? { fromRecording: from } : {}),
+        ...(typeof flow.description === 'string' ? { description: flow.description } : {}),
+        ...(flow.reusable === true ? { reusable: true } : {}),
+        ...(runs.length > 0 ? { uses: runs } : {}),
       });
     }
   }

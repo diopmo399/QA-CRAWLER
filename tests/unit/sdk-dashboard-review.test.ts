@@ -1,3 +1,4 @@
+import { emptyLibraryUi } from '../../src/sdk/ui/dashboard-library.js';
 import { describe, expect, it } from 'vitest';
 import type {
   AssertionProposalView,
@@ -192,6 +193,7 @@ const base = (tab: ReviewTab, extra: Partial<DashboardState> = {}): DashboardSta
   signIn: false,
   access: emptyAccessUi(),
   recs: emptyRecordingsUi(),
+  lib: emptyLibraryUi(),
   studioUrl: '/studio',
   review: review(),
   ...extra,

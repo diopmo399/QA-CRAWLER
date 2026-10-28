@@ -1,3 +1,4 @@
+import { emptyLibraryUi } from '../../src/sdk/ui/dashboard-library.js';
 import { describe, expect, it } from 'vitest';
 import type { ProjectDetail, RecordingSnapshot } from '../../src/sdk/core/contracts.js';
 import { ROLE_RIGHTS } from '../../src/sdk/core/contracts.js';
@@ -76,6 +77,7 @@ const base = (
   signIn: false,
   access: emptyAccessUi(),
   recs: { ...emptyRecordingsUi(), ...recs },
+  lib: emptyLibraryUi(),
   studioUrl: '/studio',
   ...extra,
 });

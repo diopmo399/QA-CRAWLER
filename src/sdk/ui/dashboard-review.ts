@@ -473,9 +473,18 @@ function groupHeader(state: DashboardState, ui: ReviewUi, group: GroupViewDto, d
     : `<b>${esc(group.name)}</b>`;
   const actions =
     decide && !renaming
-      ? `<span class="row-acts"><button class="btn small ghost" data-action="review-rename-open" data-group="${esc(group.id)}" ${disabled}>${esc(r.rename)}</button><button class="btn small ghost icon-only" data-action="review-move-group" data-group="${esc(group.id)}" data-direction="up" title="${esc(r.moveUp)}" aria-label="${esc(r.moveUp)}" ${disabled}>↑</button><button class="btn small ghost icon-only" data-action="review-move-group" data-group="${esc(group.id)}" data-direction="down" title="${esc(r.moveDown)}" aria-label="${esc(r.moveDown)}" ${disabled}>↓</button><button class="btn small ghost" data-action="review-delete-group" data-group="${esc(group.id)}" ${disabled}>${esc(r.deleteGroup)}</button></span>`
+      ? `<span class="row-acts"><button class="btn small ghost" data-action="review-rename-open" data-group="${esc(group.id)}" ${disabled}>${esc(r.rename)}</button><button class="btn small ghost icon-only" data-action="review-move-group" data-group="${esc(group.id)}" data-direction="up" title="${esc(r.moveUp)}" aria-label="${esc(r.moveUp)}" ${disabled}>↑</button><button class="btn small ghost icon-only" data-action="review-move-group" data-group="${esc(group.id)}" data-direction="down" title="${esc(r.moveDown)}" aria-label="${esc(r.moveDown)}" ${disabled}>↓</button><button class="btn small ghost" data-action="review-delete-group" data-group="${esc(group.id)}" ${disabled}>${esc(r.deleteGroup)}</button>${
+          can(state, 'PUBLISH')
+            ? `<button class="btn small ghost" data-action="lib-group" data-group="${esc(group.id)}" ${disabled}>${esc(state.t.lib.groupToLibrary)}</button>`
+            : ''
+        }</span>`
       : '';
-  return `<div class="rv-group-h">${title}<small class="mu">${esc(r.stepsCount(members.length - checks))}${checks > 0 ? ` · ${esc(r.checksCount(checks))}` : ''} · <code>${esc(group.startAt)}</code></small>${runnable}${actions}</div>`;
+  const lib = state.lib;
+  const toLibrary =
+    lib.group?.id === group.id
+      ? `<form class="rv-rename rv-lib" data-action="lib-group"><label class="sr" for="rv-lib-${esc(group.id)}">${esc(state.t.lib.blockName)}</label><input id="rv-lib-${esc(group.id)}" data-lib="group.name" value="${esc(lib.group.name)}" maxlength="80" required placeholder="${esc(state.t.lib.blockName)}"><button type="submit" class="btn small primary" ${lib.busy ? 'disabled' : ''}>${esc(state.t.lib.add)}</button><button type="button" class="btn small ghost" data-action="lib-group-cancel">${esc(r.cancel)}</button>${lib.error ? `<small class="err">${esc(lib.error)}</small>` : ''}</form>`
+      : '';
+  return `<div class="rv-group-h">${title}<small class="mu">${esc(r.stepsCount(members.length - checks))}${checks > 0 ? ` · ${esc(r.checksCount(checks))}` : ''} · <code>${esc(group.startAt)}</code></small>${runnable}${actions}${toLibrary}</div>`;
 }
 
 function flowTab(state: DashboardState, ui: ReviewUi, decide: boolean): string {
@@ -747,7 +756,7 @@ export function reviewView(state: DashboardState): string {
           : tab === 'intents'
             ? intentsTab(state, ui, decide)
             : testsTab(state, ui, decide);
-  const messages = `${ui.error ? `<p class="err" role="alert">${esc(ui.error)}</p>` : ''}${
+  const messages = `${state.lib.notice ? `<p class="notice" role="status">${icon('check')} ${esc(state.lib.notice)}</p>` : ''}${ui.error ? `<p class="err" role="alert">${esc(ui.error)}</p>` : ''}${
     ui.warnings && ui.warnings.length > 0
       ? `<div class="notice" role="status"><b>${esc(r.warnings)}</b><ul class="plain tight">${ui.warnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul></div>`
       : ''

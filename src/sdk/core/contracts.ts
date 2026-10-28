@@ -1113,6 +1113,42 @@ export interface ScenarioView {
   steps?: number;
   /** L'enregistrement d'où il vient, quand le SDK l'a promu. */
   fromRecording?: string;
+  description?: string;
+  /** Un bloc de la bibliothèque : jamais exécuté seul, rejoué par d'autres scénarios (`run:`). */
+  reusable?: boolean;
+  /** Les blocs (ou scénarios) que ce scénario rejoue par `run:`, dans l'ordre. */
+  uses?: string[];
+}
+
+/**
+ * UN BLOC DE LA BIBLIOTHÈQUE : un parcours réutilisable (`reusable: true`), rejoué par d'autres
+ * scénarios avec une étape `run: <nom>`. Ses données de test suivent quand on l'insère.
+ */
+export interface LibraryBlockView {
+  name: string;
+  /** Le fichier, relatif au dossier des flows. */
+  file: string;
+  steps: number;
+  startAt?: string;
+  description?: string;
+  /** D'où il vient : un scénario, ou un groupe d'un enregistrement. */
+  origin?: { kind: 'scenario' | 'recording'; name: string; group?: string };
+  /** Les données qu'il saisit ({ testData: clé }) et celles qu'il cite (${testData:clé}). */
+  inputs: string[];
+  citations: string[];
+  /** Les scénarios qui le rejouent. */
+  usedBy: string[];
+}
+
+export type LibraryAddInput =
+  | { from: 'scenario'; scenario: string; name: string; description?: string }
+  | { from: 'recording'; recording: string; groupId: string; name: string; description?: string };
+
+/** Un nouveau scénario fait de blocs de la bibliothèque, rejoués dans l'ordre. */
+export interface ComposeScenarioInput {
+  name: string;
+  parts: string[];
+  description?: string;
 }
 
 /** Le statut du flow d'un scénario dans un run. */
