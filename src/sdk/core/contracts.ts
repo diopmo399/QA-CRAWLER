@@ -935,6 +935,27 @@ export interface ScenarioView {
   fromRecording?: string;
 }
 
+/** Le statut du flow d'un scénario dans un run. */
+export interface ScenarioRunStatus {
+  run: string;
+  at: string;
+  /** PASSED, FAILED, SKIPPED, BLOCKED… tel que le moteur l'a écrit. */
+  status: string;
+  durationMs: number;
+}
+
+/**
+ * La stabilité d'un scénario sur ses derniers runs : ses statuts (du plus récent au plus ancien), les
+ * réussites et échecs parmi eux, et ses bascules (PASSED ↔ FAILED entre deux runs consécutifs).
+ */
+export interface ScenarioHistoryView {
+  name: string;
+  runs: ScenarioRunStatus[];
+  passed: number;
+  failed: number;
+  flips: number;
+}
+
 export const EXECUTION_KINDS = ['EXPLORATION', 'REPLAY'] as const;
 export type ExecutionKind = (typeof EXECUTION_KINDS)[number];
 

@@ -2,6 +2,7 @@ import { createQaCrawler, type QaCrawlerClient, type Subscription } from '../cor
 import { DASHBOARD_EVENTS, type Environment } from '../core/contracts.js';
 import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
+import { environmentForm, environmentInputOf } from './dashboard-ops.js';
 import { DASHBOARD_CSS } from './dashboard-styles.js';
 import {
   liveSteps,
@@ -10,6 +11,7 @@ import {
   renderDashboard,
   type DashboardRoute,
   type DashboardState,
+  type EnvironmentForm,
   type ProjectTab,
 } from './dashboard-view.js';
 
@@ -31,6 +33,10 @@ const Base: typeof HTMLElement =
   'HTMLElement' in globalThis ? globalThis.HTMLElement : (Object as unknown as typeof HTMLElement);
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** Le formulaire ouvert : l'identifiant de l'environnement, ou « new » pour une création. */
+const formKey = (form: EnvironmentForm | undefined): string | undefined =>
+  form ? (form.id ?? 'new') : undefined;
 
 /** Un environnement tel qu'on le soumet à la vérification (sans ses champs de stockage). */
 const inputOf = (environment: Environment) => {
@@ -67,6 +73,8 @@ export class QaCrawlerDashboard extends Base {
       launch: { kind: 'REPLAY', environmentId: '', scenarios: [], busy: false },
       checks: {},
       cancellation: false,
+      picked: [],
+      severity: 'ALL',
     };
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
@@ -76,7 +84,14 @@ export class QaCrawlerDashboard extends Base {
     });
     this.root.addEventListener('submit', (event) => {
       event.preventDefault();
-      void this.launch();
+      if ((event.target as HTMLElement).dataset.action === 'launch') void this.launch();
+    });
+    // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
+    this.root.addEventListener('input', (event) => {
+      const target = event.target as HTMLInputElement | HTMLTextAreaElement;
+      const name = target.dataset.field as keyof EnvironmentForm | undefined;
+      if (!name || !this.state.envForm || name === 'writes') return;
+      (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
     });
     this.root.addEventListener('keydown', (event) => {
       if ((event as KeyboardEvent).key === 'Escape' && this.state.menuOpen) {
@@ -168,6 +183,18 @@ export class QaCrawlerDashboard extends Base {
     if ('projectId' in route && route.projectId !== this.state.projectId) {
       this.state.projectId = route.projectId;
       this.state.checks = {};
+      this.state.picked = [];
+      this.state.comparison = undefined;
+    }
+    if (route.view !== 'environments' || route.environmentId !== formKey(this.state.envForm)) {
+      this.state.envForm = undefined;
+      this.state.envCheck = undefined;
+      this.state.envError = undefined;
+    }
+    if (route.view !== 'explorations' || route.run !== this.state.explored?.run) {
+      this.state.explored = undefined;
+      this.state.graph = undefined;
+      this.state.severity = 'ALL';
     }
     this.state.route = route;
     this.state.confirm = undefined;
@@ -208,6 +235,37 @@ export class QaCrawlerDashboard extends Base {
         this.state.projects = this.state.showArchived ? await api.projects.list({ archived: true }) : catalog;
       } else if (route.view === 'project' || route.view === 'executions') {
         await this.loadProject(api, route.projectId, generation);
+      } else if (route.view === 'history') {
+        await this.loadProject(api, route.projectId, generation);
+      } else if (route.view === 'scenarios') {
+        await this.loadProject(api, route.projectId, generation);
+        const [history, recordings] = await Promise.all([
+          api.scenarios.history(route.projectId),
+          api.recordings.list(route.projectId).catch(() => []),
+        ]);
+        if (generation !== this.generation) return;
+        this.state.scenarioHistory = history;
+        this.state.recordings = recordings;
+      } else if (route.view === 'environments') {
+        await this.loadProject(api, route.projectId, generation);
+        if (generation !== this.generation) return;
+        if (route.environmentId && formKey(this.state.envForm) !== route.environmentId) {
+          const existing = this.state.project?.environments.find((env) => env.id === route.environmentId);
+          this.state.envForm = environmentForm(route.environmentId === 'new' ? undefined : existing);
+          this.state.envCheck = undefined;
+        }
+      } else if (route.view === 'explorations') {
+        await this.loadProject(api, route.projectId, generation);
+        if (route.run) {
+          const run = route.run;
+          const [detail, graph] = await Promise.all([
+            api.executions.get(route.projectId, run),
+            api.graph.of(route.projectId, 'exploration', run).catch(() => undefined),
+          ]);
+          if (generation !== this.generation) return;
+          this.state.explored = detail;
+          this.state.graph = graph;
+        }
       } else {
         if (this.state.project?.id !== route.projectId)
           await this.loadProject(api, route.projectId, generation);
@@ -221,7 +279,8 @@ export class QaCrawlerDashboard extends Base {
       this.fail(error);
     }
     this.paint();
-    if (generation === this.generation && route.view === 'project') this.checkAll(api, generation);
+    if (generation === this.generation && (route.view === 'project' || route.view === 'environments'))
+      this.checkAll(api, generation);
   }
 
   private async loadProject(api: QaCrawlerClient, projectId: string, generation: number): Promise<void> {
@@ -389,6 +448,95 @@ export class QaCrawlerDashboard extends Base {
     }
   }
 
+  /** Compare les deux exécutions cochées : la plus ancienne est la base, la plus récente la tête. */
+  private async compare(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    if (!api || !project || this.state.picked.length !== 2) return;
+    const records = (this.state.executions ?? []).filter((row) => this.state.picked.includes(row.run));
+    const [head, base] = records;
+    if (!head || !base) return;
+    this.state.comparing = true;
+    this.state.comparison = undefined;
+    this.paint();
+    try {
+      this.state.comparison = await api.reports.compare(project.id, base.run, head.run);
+    } catch (error) {
+      this.fail(error);
+    }
+    this.state.comparing = false;
+    this.paint();
+  }
+
+  /** Lance un rejeu de ces scénarios, dans l'environnement de l'exécution de référence s'il y en a un. */
+  private async replay(scenarios: string[], environmentId?: string): Promise<void> {
+    const project = this.state.project;
+    if (!project) return;
+    this.state.launch = {
+      kind: 'REPLAY',
+      environmentId: environmentId ?? '',
+      scenarios,
+      busy: false,
+    };
+    await this.launch();
+  }
+
+  private async saveEnvironment(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const form = this.state.envForm;
+    if (!api || !project || !form || this.state.envBusy) return;
+    const converted = environmentInputOf(form, this.state.t);
+    if ('error' in converted) {
+      this.state.envError = converted.error;
+      this.paint();
+      return;
+    }
+    this.state.envBusy = true;
+    this.state.envError = undefined;
+    this.paint();
+    try {
+      const saved = form.id
+        ? await api.environments.update(project.id, form.id, converted.input)
+        : await api.environments.create(project.id, converted.input);
+      this.state.envBusy = false;
+      this.state.envForm = undefined;
+      this.state.checks = {};
+      this.navigate({ view: 'environments', projectId: project.id, environmentId: saved.id });
+      this.state.notice = this.state.t.ops.saved;
+    } catch (error) {
+      this.state.envBusy = false;
+      this.state.envError = message(error);
+      this.paint();
+    }
+  }
+
+  private async verifyEnvironment(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const form = this.state.envForm;
+    if (!api || !project || !form || this.state.envBusy) return;
+    const converted = environmentInputOf(form, this.state.t);
+    if ('error' in converted) {
+      this.state.envError = converted.error;
+      this.paint();
+      return;
+    }
+    this.state.envBusy = true;
+    this.state.envError = undefined;
+    this.paint();
+    try {
+      this.state.envCheck = await api.environments.check(project.id, converted.input, {
+        reach: true,
+        ...(form.id ? { selfId: form.id } : {}),
+      });
+    } catch (error) {
+      this.state.envError = message(error);
+    }
+    this.state.envBusy = false;
+    this.paint();
+  }
+
   private async act(action: () => Promise<unknown>): Promise<void> {
     try {
       await action();
@@ -415,14 +563,94 @@ export class QaCrawlerDashboard extends Base {
         return;
       case 'nav': {
         const view = target.dataset.view;
+        const projectId = this.contextProject();
         if (view === 'projects') this.navigate({ view: 'projects' });
-        else if (view === 'executions') {
-          const projectId = this.contextProject();
-          if (projectId) this.navigate({ view: 'executions', projectId });
+        else if (
+          view === 'executions' ||
+          view === 'history' ||
+          view === 'scenarios' ||
+          view === 'explorations' ||
+          view === 'environments'
+        ) {
+          if (projectId) this.navigate({ view, projectId });
           else this.navigate({ view: 'projects' });
         } else this.navigate({ view: 'overview' });
         return;
       }
+      case 'pick-scenario': {
+        const route = this.state.route;
+        if (route.view === 'scenarios' && target.dataset.name) {
+          this.state.route = { ...route, scenario: target.dataset.name };
+          this.paint();
+        }
+        return;
+      }
+      case 'promote': {
+        const recording = target.dataset.recording;
+        const project = this.state.project;
+        if (!api || !project || !recording) return;
+        this.state.promoting = recording;
+        this.paint();
+        api.scenarios
+          .promote(project.id, recording)
+          .then((scenario) => {
+            this.state.promoting = undefined;
+            this.navigate({ view: 'scenarios', projectId: project.id, scenario: scenario.name });
+          })
+          .catch((error: unknown) => {
+            this.state.promoting = undefined;
+            this.fail(error);
+            this.paint();
+          });
+        return;
+      }
+      case 'replay-scenario':
+        if (target.dataset.name) void this.replay([target.dataset.name]);
+        return;
+      case 'replay-failed': {
+        const comparison = this.state.comparison;
+        if (!comparison) return;
+        const head = (this.state.executions ?? []).find((row) => row.run === comparison.head.run);
+        void this.replay(comparison.summary.newlyFailing, head?.environment?.id);
+        return;
+      }
+      case 'edit-env': {
+        const project = this.state.project;
+        if (project && target.dataset.env)
+          this.navigate({ view: 'environments', projectId: project.id, environmentId: target.dataset.env });
+        return;
+      }
+      case 'env-verify':
+        void this.verifyEnvironment();
+        return;
+      case 'env-save':
+        void this.saveEnvironment();
+        return;
+      case 'env-remove':
+        this.state.confirm = 'remove-env';
+        this.paint();
+        return;
+      case 'env-remove-confirm': {
+        const project = this.state.project;
+        const id = this.state.envForm?.id;
+        if (!api || !project || !id) return;
+        void this.act(async () => {
+          await api.environments.remove(project.id, id, { confirm: true });
+          this.state.envForm = undefined;
+          this.state.route = { view: 'environments', projectId: project.id };
+        });
+        return;
+      }
+      case 'open-exploration': {
+        const project = this.state.project;
+        if (project && target.dataset.run)
+          this.navigate({ view: 'explorations', projectId: project.id, run: target.dataset.run });
+        return;
+      }
+      case 'severity':
+        this.state.severity = target.dataset.level ?? 'ALL';
+        this.paint();
+        return;
       case 'launch-shortcut': {
         const projectId = this.contextProject();
         if (projectId) this.navigate({ view: 'project', projectId, tab: 'launch' });
@@ -454,6 +682,8 @@ export class QaCrawlerDashboard extends Base {
         const route = this.state.route;
         if (target.dataset.to === 'project' && 'projectId' in route)
           this.navigate({ view: 'project', projectId: route.projectId });
+        else if (target.dataset.to === 'explorations' && 'projectId' in route)
+          this.navigate({ view: 'explorations', projectId: route.projectId });
         else this.navigate({ view: 'projects' });
         return;
       }
@@ -503,9 +733,11 @@ export class QaCrawlerDashboard extends Base {
       }
       case 'report': {
         const route = this.state.route;
-        if (!api || route.view !== 'execution') return;
+        const run =
+          route.view === 'execution' ? route.run : route.view === 'explorations' ? route.run : undefined;
+        if (!api || !run || !('projectId' in route)) return;
         api.reports
-          .link(route.projectId, 'exploration', route.run)
+          .link(route.projectId, 'exploration', run)
           .then((link) => {
             globalThis.open(link.url, '_blank', 'noopener');
           })
@@ -546,6 +778,29 @@ export class QaCrawlerDashboard extends Base {
       else this.navigate({ view: 'project', projectId });
       return;
     }
+    if (target.dataset.bind === 'pick') {
+      const run = target.value;
+      const checked = (target as HTMLInputElement).checked;
+      const picked = this.state.picked.filter((entry) => entry !== run);
+      this.state.picked = checked ? [...picked, run].slice(-2) : picked;
+      this.state.comparison = undefined;
+      if (this.state.picked.length === 2) void this.compare();
+      else this.paint();
+      return;
+    }
+    if (target.dataset.field && this.state.envForm) {
+      // Un champ texte est déjà gardé à chaque frappe (écouteur input) : ne rien redessiner ici, sinon
+      // le champ qui prend le focus serait remplacé pendant la saisie. Seules les écritures changent
+      // la page (le plafond se grise).
+      const form = this.state.envForm as unknown as Record<string, string | boolean>;
+      if (target.dataset.field !== 'writes') {
+        form[target.dataset.field] = target.value;
+        return;
+      }
+      form.writes = (target as HTMLInputElement).checked;
+      this.paint();
+      return;
+    }
     if (target.dataset.bind === 'kind') {
       this.state.launch.kind = target.value === 'EXPLORATION' ? 'EXPLORATION' : 'REPLAY';
       this.paint();
@@ -568,12 +823,14 @@ export class QaCrawlerDashboard extends Base {
   private paint(): void {
     if (!this.connected) return;
     const focused = this.root.activeElement as HTMLElement | null;
-    const focusKey = focused?.dataset.action ?? focused?.dataset.bind;
+    const focusKey = focused?.dataset.action ?? focused?.dataset.bind ?? focused?.dataset.field;
     const focusValue = (focused as HTMLInputElement | null)?.value;
     this.root.innerHTML = `<style>${DASHBOARD_CSS}</style>${renderDashboard(this.state)}`;
     if (focusKey) {
       const candidates = [
-        ...this.root.querySelectorAll<HTMLElement>(`[data-action="${focusKey}"],[data-bind="${focusKey}"]`),
+        ...this.root.querySelectorAll<HTMLElement>(
+          `[data-action="${focusKey}"],[data-bind="${focusKey}"],[data-field="${focusKey}"]`,
+        ),
       ];
       const same = candidates.find((element) => (element as HTMLInputElement).value === focusValue);
       (same ?? candidates[0])?.focus();

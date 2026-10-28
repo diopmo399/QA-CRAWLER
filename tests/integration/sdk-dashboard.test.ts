@@ -169,7 +169,106 @@ describe('Dashboard — real engine, in Chromium', () => {
     await phone.close();
   }, 60_000);
 
+  it('history: two ticked replays are compared by the server, flow by flow', async () => {
+    await page.goto(`${server.url}/dashboard`);
+    await dashboard().locator('select[data-action="project-context"]').selectOption(project.id);
+    await dashboard().locator('[data-action="nav"][data-view="history"]').click();
+    const rows = dashboard().locator('.tbl tbody tr');
+    await rows.first().waitFor();
+    const passed = (await client.executions.list(project.id)).filter((run) => run.verdict === 'PASSED');
+    expect(passed.length).toBeGreaterThanOrEqual(2);
+    for (const run of passed.slice(0, 2))
+      await dashboard().locator(`input[data-bind="pick"][value="${run.run}"]`).check();
+    const card = dashboard().locator('.card:has(.tiles)');
+    await card.waitFor({ timeout: 30_000 });
+    const text = (await card.textContent()) ?? '';
+    expect(text).toContain(`${passed[1]?.run ?? '@'} (avant) → ${passed[0]?.run ?? '@'} (maintenant)`);
+    expect(text).toContain('create-request');
+    expect(await card.locator('[data-action="replay-failed"]').count()).toBe(0);
+  }, 60_000);
+
+  it('scenarios: the scenario with its last runs, read from the runs on disk', async () => {
+    await dashboard().locator('[data-action="nav"][data-view="scenarios"]').click();
+    const scenario = dashboard().locator('[data-action="pick-scenario"]', { hasText: 'create-request' });
+    await scenario.waitFor();
+    const history = (await client.scenarios.history(project.id)).find(
+      (entry) => entry.name === 'create-request',
+    );
+    expect(history?.passed).toBeGreaterThanOrEqual(2);
+    expect(await scenario.textContent()).toContain(`${String(history?.passed)} réussi(s) sur`);
+    await scenario.click();
+    await dashboard().locator('[data-action="replay-scenario"][data-name="create-request"]').waitFor();
+  }, 60_000);
+
+  it('environments: an invalid variable is refused, then a new one is created, checked and removed', async () => {
+    await dashboard().locator('[data-action="nav"][data-view="environments"]').click();
+    await dashboard().locator('[data-action="edit-env"][data-env="new"]').click();
+    const form = dashboard().locator('form.env-form');
+    await form.locator('input[data-field="name"]').fill('Bac à sable');
+    expect(
+      await form
+        .locator('input[data-field="name"]')
+        .evaluate((input) => (input.getRootNode() as ShadowRoot).activeElement === input),
+    ).toBe(true);
+    await form.locator('input[data-field="baseUrl"]').fill(app.url);
+    await form.locator('input[data-field="secrets"]').fill('QA_SANDBOX_PASSWORD');
+    await form.locator('textarea[data-field="variables"]').fill('NOPE');
+    await form.locator('[data-action="env-save"]').click();
+    expect(await form.locator('[role="alert"]').textContent()).toContain('Ligne de variable invalide : NOPE');
+    expect((await client.environments.list(project.id)).map((env) => env.name)).toEqual(['Recette']);
+    await form.locator('textarea[data-field="variables"]').fill('QA_LOCALE=fr');
+    await form.locator('[data-action="env-verify"]').click();
+    await dashboard()
+      .locator('aside .checks li', { hasText: 'QA_SANDBOX_PASSWORD' })
+      .waitFor({ timeout: 30_000 });
+    await form.locator('[data-action="env-save"]').click();
+    await dashboard()
+      .locator('h2.section-t', { hasText: 'Modifier « Bac à sable »' })
+      .waitFor({ timeout: 30_000 });
+    const created = (await client.environments.list(project.id)).find((env) => env.name === 'Bac à sable');
+    expect(created).toMatchObject({ secretEnv: ['QA_SANDBOX_PASSWORD'], variables: { QA_LOCALE: 'fr' } });
+    await dashboard().locator('[data-action="env-remove"]').click();
+    await dashboard().locator('[data-action="env-remove-confirm"]').click();
+    await expect
+      .poll(async () => (await client.environments.list(project.id)).map((env) => env.name))
+      .toEqual(['Recette']);
+  }, 60_000);
+
+  it('explorations: one run opened, its map drawn from the graph the engine wrote', async () => {
+    const draft = engineDefaults();
+    const mapped = await client.projects.create({
+      ...draft,
+      project: { name: 'Carte', targetUrl: `${app.url}/`, framework: 'other' },
+      exploration: { ...draft.exploration, maxStates: 4, maxActions: 12, maxDurationMinutes: 1 },
+    });
+    const started = await client.explorations.start(mapped.id);
+    await client.explorations.subscribe(started.id, () => undefined).done;
+    const run = started.run ?? '';
+    const graph = await client.graph.of(mapped.id, 'exploration', run);
+    expect(graph.nodes.length).toBeGreaterThan(0);
+
+    await page.goto(`${server.url}/dashboard`);
+    await dashboard().locator('select[data-action="project-context"]').selectOption(mapped.id);
+    await dashboard().locator('[data-action="nav"][data-view="explorations"]').click();
+    await dashboard().locator(`[data-action="open-exploration"][data-run="${run}"]`).click();
+    const map = dashboard().locator('.map');
+    await map.waitFor({ timeout: 30_000 });
+    expect(await map.locator('.node').count()).toBe(graph.nodes.length);
+    expect(await map.locator('.node.root .tag-s').textContent()).toBe('Départ');
+    const detail = await client.executions.get(mapped.id, run);
+    const all = dashboard().locator('[data-action="severity"][data-level="ALL"]');
+    expect(await all.textContent()).toBe(`Toutes (${String(detail.issuesList.length)})`);
+    const critical = dashboard().locator('[data-action="severity"][data-level="CRITICAL"]');
+    await critical.click();
+    expect(await critical.getAttribute('aria-pressed')).toBe('true');
+    expect(await dashboard().locator('.issue').count()).toBe(
+      detail.issuesList.filter((issue) => issue.severity === 'CRITICAL').length,
+    );
+  }, 150_000);
+
   it('archives after a confirmation (launch closed), then restores', async () => {
+    await dashboard().locator('[data-action="nav"][data-view="projects"]').click();
+    await dashboard().locator('.pcard', { hasText: 'Demandes' }).click();
     await dashboard().locator('[data-action="tab"][data-tab="launch"]').click();
     await dashboard().locator('[data-action="archive"]').click();
     expect(await dashboard().locator('.confirm').textContent()).toContain('Rien n’est supprimé');

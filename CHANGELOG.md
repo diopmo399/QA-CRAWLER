@@ -62,6 +62,18 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
     quitte tout de suite.
 
+- **Dashboard, écrans d'exploitation** :
+  - Historique : deux exécutions cochées sont comparées par le serveur (régressions, corrections,
+    écarts par flow et par étape, durée), et les flows qui échouent maintenant se rejouent.
+  - Scénarios : stabilité sur les derniers runs, avec « instable » à partir de deux bascules ;
+    rejeu d'un scénario ; promotion des enregistrements terminés.
+  - Environnements : création, modification, vérification avec l'URL jointe, suppression confirmée
+    dans la page.
+  - Explorations : carte des écrans tirée du graphe du run, actions bloquées, anomalies par écran
+    et sélection par gravité.
+  - Nouveau point d'API `scenarios.history(projectId, { limit? })`
+    (`GET …/scenarios/history`), ajouté à la v1.
+
 - **Dashboard selon la maquette, responsive** : menu par sections avec le projet choisi et les
   versions du service et du moteur ; écran Projet en onglets (Lancer, Environnements, Scénarios,
   Exécutions, Sécurité) ; lancement d'un rejeu ou d'une exploration ; environnements « prêts » ou
