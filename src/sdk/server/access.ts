@@ -249,7 +249,9 @@ export function rightFor(segments: readonly string[], method: string): Right {
       return 'RUN';
     case 'recordings':
       // Démarrer, arrêter, et les commandes de la barre d'enregistrement : piloter une session.
-      // Rejouer joue l'application, comme une exécution.
+      // Rejouer joue l'application, comme une exécution ; ouvrir une correction aussi (le chemin est
+      // rejoué jusqu'à l'étape). Valider la correction est une décision.
+      if (action === 'correction') return segments[6] === 'apply' ? 'DECIDE' : 'RUN';
       return item === undefined || action === 'stop' || action === 'replay' || LIVE_CONTROLS.has(action ?? '')
         ? 'RUN'
         : 'DECIDE';
@@ -300,6 +302,12 @@ const KEYWORDS = new Set([
   'proposals',
   'checks',
   'replay',
+  'intents',
+  'row',
+  'correction',
+  'apply',
+  'resume',
+  'close',
   'reports',
   'links',
   'requirements',

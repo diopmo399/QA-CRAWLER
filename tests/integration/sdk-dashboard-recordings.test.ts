@@ -67,6 +67,25 @@ beforeAll(async () => {
     language: 'fr',
     record: (request) =>
       runRecording({ ...request, overrides: { ...request.overrides, headless: true }, drive: human }),
+    // La correction de cible : sans fenêtre ; « l'humain » désigne le lien dans la page tenue, à la souris.
+    correction: {
+      headless: true,
+      drive: async (held) => {
+        await held.waitForFunction(
+          () => document.documentElement.getAttribute('data-qa-crawler-overlay-picking') === 'true',
+          undefined,
+          { timeout: 15_000 },
+        );
+        const box = await held.getByRole('link', { name: 'Utilisateurs' }).boundingBox();
+        if (!box) throw new Error('no box for the link');
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        await held.mouse.move(x - 20, y - 5);
+        await held.mouse.move(x, y, { steps: 4 });
+        await held.waitForTimeout(150);
+        await held.mouse.click(x, y);
+      },
+    },
   });
   client = createQaCrawler({ endpoint: `${server.url}/api`, token: server.token });
   project = await client.projects.create({
@@ -253,6 +272,66 @@ describe('Dashboard — recordings, in Chromium', () => {
     const flow = await client.recordings.flow(project.id, name);
     expect(flow.steps.some((step) => step.id === stepId)).toBe(false);
     expect(flow.yaml).not.toContain('name: Utilisateur 1');
+  }, 300_000);
+
+  it('corrects a target in the browser the server opens, resumes the replay, restores; reviews the intents', async () => {
+    const name = 'consulter-un-utilisateur';
+    const studio = await client.recordings.studio(project.id, name);
+    const target = studio.steps.find((step) => step.targeted && step.description.includes('Utilisateurs'));
+    expect(target).toBeDefined();
+    const stepId = target?.id ?? '';
+    await dashboard().locator(`[data-action="review-correct"][data-step="${stepId}"]`).click();
+    const card = dashboard().locator('.correction-card');
+    await card.waitFor({ timeout: 30_000 });
+    await card.locator('[data-action="review-correction-apply"]').waitFor({ timeout: 90_000 });
+    expect(await card.textContent()).toContain('Nouvelle cible');
+    expect((await client.corrections.get(project.id, name)).proposal?.next).toContain('Utilisateurs');
+    await card.locator('[data-action="review-correction-apply"]').click();
+    await card.locator('[data-action="review-correction-resume"]').waitFor({ timeout: 30_000 });
+    expect(await card.textContent()).toContain('Cible remplacée');
+    await card.locator('[data-action="review-correction-resume"]').click();
+    await expect
+      .poll(async () => (await client.corrections.get(project.id, name)).status, {
+        timeout: 90_000,
+        interval: 1000,
+      })
+      .toBe('RESUMED');
+    expect((await client.corrections.get(project.id, name)).resume?.status).toBe('PASSED');
+    await card.locator('.pill', { hasText: 'Reprise réussie' }).waitFor({ timeout: 15_000 });
+    await card.locator('[data-action="review-correction-close"]').click();
+    await card.waitFor({ state: 'detached', timeout: 15_000 });
+    await expect(client.corrections.get(project.id, name)).rejects.toMatchObject({ status: 404 });
+
+    // La cible corrigée se restaure.
+    const restore = dashboard().locator(`[data-action="review-restore"][data-step="${stepId}"]`);
+    await restore.waitFor({ timeout: 15_000 });
+    expect(
+      (await client.recordings.studio(project.id, name)).steps.find((step) => step.id === stepId)?.corrected,
+    ).toBe(true);
+    await restore.click();
+    await restore.waitFor({ state: 'detached', timeout: 15_000 });
+    expect(
+      (await client.recordings.studio(project.id, name)).steps.find((step) => step.id === stepId)?.corrected,
+    ).toBeUndefined();
+
+    // Les intentions : confirmer la première, corriger la suivante avec une raison.
+    await dashboard().locator('[data-action="review-tab"][data-tab="intents"]').click();
+    const before = await client.recordings.intents(project.id, name);
+    expect(before.rows.length).toBeGreaterThan(0);
+    const first = before.rows[0]?.actionId ?? '';
+    await dashboard()
+      .locator(`[data-action="review-intent"][data-type="CONFIRM"][data-intent-action="${first}"]`)
+      .click();
+    await expect
+      .poll(async () => (await client.recordings.intents(project.id, name)).rows[0]?.status)
+      .toBe('HUMAN_CONFIRMED');
+    await dashboard().locator(`[data-action="review-intent-open"][data-intent-action="${first}"]`).click();
+    await dashboard().locator('select[data-intent-field="intent"]').selectOption('NAVIGATE');
+    await dashboard().locator('input[data-intent-field="reason"]').fill('ouvre la liste');
+    await dashboard().locator('form[data-action="review-intent-save"] button[type="submit"]').click();
+    await expect
+      .poll(async () => (await client.recordings.intents(project.id, name)).rows[0])
+      .toMatchObject({ intent: 'NAVIGATE', status: 'HUMAN_CORRECTED', reason: 'ouvre la liste' });
   }, 300_000);
 
   it('on a phone: the review never scrolls sideways', async () => {

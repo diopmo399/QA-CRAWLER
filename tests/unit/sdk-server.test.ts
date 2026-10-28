@@ -660,6 +660,36 @@ describe('SDK server — recordings and reports', () => {
     await expect
       .poll(async () => (await client.recordings.replayStatus(project.id, 'parcours-test')).status)
       .toBe('REPLAY_CONFIRMED');
+    // Intentions, ligne, restauration, correction : refusées proprement sur un flow sans étape ni modèle.
+    expect(await client.recordings.intents(project.id, 'parcours-test')).toMatchObject({ rows: [] });
+    await expect(
+      client.recordings.reviewIntent(project.id, 'parcours-test', { actionId: 'a1', type: 'CONFIRM' }),
+    ).rejects.toMatchObject({ status: 422 });
+    const badIntent = await call(`/api/projects/${project.id}/recordings/parcours-test/intents`, {
+      method: 'POST',
+      body: JSON.stringify({ actionId: 'a1', type: 'GUESS' }),
+    });
+    expect(badIntent.status).toBe(400);
+    await expect(client.recordings.rowSource(project.id, 'parcours-test', 's1')).rejects.toMatchObject({
+      status: 422,
+    });
+    const noColumns = await call(`/api/projects/${project.id}/recordings/parcours-test/steps/row`, {
+      method: 'POST',
+      body: JSON.stringify({ stepId: 's1', columns: [] }),
+    });
+    expect(noColumns.status).toBe(400);
+    await expect(client.recordings.restoreTarget(project.id, 'parcours-test', 's1')).rejects.toMatchObject({
+      status: 422,
+    });
+    await expect(client.corrections.get(project.id, 'parcours-test')).rejects.toMatchObject({ status: 404 });
+    await expect(client.corrections.start(project.id, 'parcours-test', 's1')).rejects.toMatchObject({
+      status: 422,
+    });
+    await expect(client.corrections.apply(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 409,
+      code: 'CORRECTION_REFUSED',
+    });
+    expect(await client.corrections.close(project.id, 'parcours-test')).toEqual({ closed: true });
     expect(await client.recordings.replayStatus(project.id, 'parcours-test')).toMatchObject({
       dryRunStatus: 'FULLY_MATCHED',
       reason: 'every step was found',

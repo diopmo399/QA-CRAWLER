@@ -10,7 +10,13 @@ import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
 import { emptyRecordingsUi } from '../../src/sdk/ui/dashboard-recordings.js';
 import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
-import { assertionBuckets, emptyReviewUi, type ReviewUi } from '../../src/sdk/ui/dashboard-review.js';
+import {
+  assertionBuckets,
+  emptyReviewUi,
+  REVIEW_TABS,
+  type ReviewTab,
+  type ReviewUi,
+} from '../../src/sdk/ui/dashboard-review.js';
 import { activeNav, renderDashboard, type DashboardState } from '../../src/sdk/ui/dashboard-view.js';
 
 /**
@@ -168,10 +174,7 @@ const review = (extra: Partial<ReviewUi> = {}): ReviewUi => ({
   ...extra,
 });
 
-const base = (
-  tab: 'flow' | 'assertions' | 'data' | 'tests',
-  extra: Partial<DashboardState> = {},
-): DashboardState => ({
+const base = (tab: ReviewTab, extra: Partial<DashboardState> = {}): DashboardState => ({
   t,
   phase: 'ready',
   route: { view: 'recording', projectId: 'prj_a', name: 'creer-puis-chercher', tab },
@@ -336,13 +339,203 @@ describe('dashboard — recording review', () => {
   });
 
   it('a reader sees the whole review, never an action', () => {
-    for (const tab of ['flow', 'assertions', 'data', 'tests'] as const) {
+    for (const tab of REVIEW_TABS) {
       const html = renderDashboard(base(tab, reader));
       expect(html).not.toMatch(
-        /data-action="review-(remove|move|detach|decide|decide-all|bind|add-check|accept-groups|replay|generate|rename-open|delete-group)"/,
+        /data-action="review-(remove|move|detach|decide|decide-all|bind|add-check|accept-groups|replay|generate|rename-open|delete-group|correct|restore|row-open|intent|intent-open)"/,
       );
       expect(html).not.toContain('data-review-pick');
     }
     expect(renderDashboard(base('tests', reader))).not.toContain('rv-gen');
+  });
+});
+
+describe('dashboard — recording review: targets and intents', () => {
+  const targeted = {
+    ...studio,
+    steps: studio.steps.map((step) =>
+      step.id === 's1'
+        ? { ...step, targeted: true, corrected: true }
+        : step.id === 's4'
+          ? { ...step, targeted: true, row: true }
+          : step,
+    ),
+  };
+
+  it('an action with a target offers: correct it, edit its row, restore the original', () => {
+    const html = renderDashboard(base('flow', { review: review({ studio: targeted }) }));
+    expect(html).toContain('data-action="review-correct" data-step="s1"');
+    expect(html).toContain('data-action="review-restore" data-step="s1"');
+    expect(html).toContain('>Cible corrigée<');
+    expect(html).toContain('data-action="review-row-open" data-step="s4"');
+    expect(html).not.toContain('data-action="review-row-open" data-step="s1"');
+    expect(html).not.toContain('data-action="review-correct" data-step="s3"');
+    expect(renderDashboard(base('flow', { ...reader, review: review({ studio: targeted }) }))).not.toContain(
+      'data-action="review-correct"',
+    );
+  });
+
+  it('the correction session: replaying, picking in the server browser, the proposal, applied, resumed', () => {
+    const at = (correction: ReviewUi['correction']): string =>
+      renderDashboard(base('flow', { review: review({ studio: targeted, correction }) }));
+    const common = { stepId: 's4', label: 'Saisir dans "Recherche"', executed: 2, total: 3 };
+    expect(at({ ...common, status: 'REPLAYING' })).toContain('rejoue les étapes précédentes (2 sur 3)');
+    expect(at({ ...common, status: 'PICKING' })).toContain('cliquez l’élément que cette étape doit viser');
+    // Pendant une session, aucune autre correction ne s'ouvre.
+    expect(at({ ...common, status: 'PICKING' })).toMatch(
+      /data-action="review-correct" data-step="s1"\s+disabled/,
+    );
+    const picked = at({
+      ...common,
+      status: 'PICKED',
+      proposal: {
+        label: 'Recherche',
+        current: 'label "Search"',
+        next: 'label "Recherche"',
+        order: ['libellé', 'rôle + nom'],
+        ambiguous: true,
+        traits: { role: 'textbox', tag: 'input', label: 'Recherche', section: 'Liste' },
+        rowOptions: [
+          { id: 'bound', row: { Titre: '${testData:item.title}' }, via: 'item.title' },
+          { id: 'manual', row: {} },
+        ],
+        rowCells: [{ column: 'Titre', value: 'Demo' }],
+        variables: ['item.title'],
+      },
+    });
+    expect(picked).toContain('<code>label &quot;Search&quot;</code>');
+    expect(picked).toContain('libellé → rôle + nom');
+    expect(picked).toContain('le rejeu refusera de choisir au hasard');
+    expect(picked).toContain('Par une donnée du run (item.title)');
+    expect(picked).toMatch(/data-correction-option="bound" checked/);
+    expect(picked).toContain('data-action="review-correction-apply"');
+    const manual = renderDashboard(
+      base('flow', {
+        review: review({
+          studio: targeted,
+          correctionChoice: { option: 'manual' },
+          correction: {
+            ...common,
+            status: 'PICKED',
+            proposal: {
+              label: 'x',
+              current: 'a',
+              next: 'b',
+              order: [],
+              ambiguous: false,
+              traits: { role: 'link', tag: 'a' },
+              rowOptions: [{ id: 'manual', row: {} }],
+              rowCells: [{ column: 'Titre', value: 'Demo' }],
+              variables: ['item.title'],
+            },
+          },
+        }),
+      }),
+    );
+    expect(manual).toContain('<option value="Titre" >Titre — Demo</option>');
+    expect(manual).toContain('<option value="item.title" >item.title</option>');
+    const applied = at({
+      ...common,
+      status: 'APPLIED',
+      applied: { previous: 'a', next: 'b' },
+      resumable: true,
+    });
+    expect(applied).toContain('Cible remplacée : a → b');
+    expect(applied).toContain('data-action="review-correction-resume"');
+    const resumed = at({
+      ...common,
+      status: 'RESUMED',
+      resume: { status: 'PASSED', from: 4, strategy: 'REVALIDATE', reasons: [] },
+    });
+    expect(resumed).toContain('>Reprise réussie<');
+    expect(resumed).toContain('Contexte : REVALIDATE');
+    expect(
+      at({
+        ...common,
+        status: 'UNREACHABLE',
+        stoppedAt: { index: 2, label: 'Titre', reason: 'introuvable' },
+      }),
+    ).toContain('Le chemin s’est arrêté à l’étape 2 (Titre) : introuvable');
+  });
+
+  it('the row editor: recorded cells, one source per chosen column', () => {
+    const source = {
+      target: 'link "Open" [row Reference=R-1]',
+      cells: [
+        { column: 'Reference', value: 'R-3027' },
+        { column: 'Client', value: '<Ba>' },
+      ],
+      variables: [{ key: 'client.name', value: 'Ba' }],
+    };
+    const html = renderDashboard(
+      base('flow', {
+        review: review({
+          rowEdit: {
+            stepId: 's4',
+            source,
+            columns: {
+              Client: { on: true, source: 'variable', value: '', key: 'client.name', contains: true },
+            },
+          },
+        }),
+      }),
+    );
+    expect(html).toContain('Redéfinir la ligne');
+    expect(html).toContain('&lt;Ba&gt;');
+    expect(html).toContain('<option value="client.name" selected>client.name</option>');
+    expect(html).toMatch(/data-row-column="Reference" data-row-field="source" disabled/);
+    expect(html).toMatch(/data-action="review-row-save"[^]*type="submit" class="btn primary" >/);
+    const empty = renderDashboard(
+      base('flow', {
+        review: review({ rowEdit: { stepId: 's4', source: { ...source, cells: [] }, columns: {} } }),
+      }),
+    );
+    expect(empty).toContain('Les cellules de cette ligne n’ont pas été enregistrées');
+  });
+
+  it('intents: inferred or reviewed, confirm, correct with a reason, reset', () => {
+    const intents = {
+      choices: ['CREATE', 'SAVE', 'UNKNOWN'],
+      rows: [
+        {
+          actionId: 'a1',
+          kind: 'CLICK',
+          label: 'Cliquer sur "Nouveau"',
+          intent: 'CREATE',
+          status: 'INFERRED',
+          source: 'SYSTEM' as const,
+          confidence: 0.8,
+        },
+        {
+          actionId: 'a2',
+          kind: 'CLICK',
+          label: 'Cliquer sur "<Save>"',
+          intent: 'SAVE',
+          status: 'HUMAN_CORRECTED',
+          source: 'HUMAN' as const,
+          original: 'UNKNOWN',
+          reason: 'enregistre',
+        },
+      ],
+    };
+    const html = renderDashboard(base('intents', { review: review({ intents }) }));
+    expect(html).toContain('Intentions · 2');
+    expect(html).toContain('>Déduite<');
+    expect(html).toContain('>Corrigée<');
+    expect(html).toContain('Cliquer sur &quot;&lt;Save&gt;&quot;');
+    expect(html).toContain('Déduite : UNKNOWN');
+    expect(html).toContain('data-action="review-intent" data-type="CONFIRM" data-intent-action="a1"');
+    expect(html).toContain('data-action="review-intent" data-type="RESET" data-intent-action="a2"');
+    expect(html).not.toContain('data-type="RESET" data-intent-action="a1"');
+    const editing = renderDashboard(
+      base('intents', {
+        review: review({ intents, intentEdit: { actionId: 'a1', intent: 'SAVE', reason: '' } }),
+      }),
+    );
+    expect(editing).toContain('data-action="review-intent-save" data-intent-action="a1"');
+    expect(editing).toContain('<option value="SAVE" selected>SAVE</option>');
+    expect(renderDashboard(base('intents', { ...reader, review: review({ intents }) }))).not.toContain(
+      'data-action="review-intent',
+    );
   });
 });

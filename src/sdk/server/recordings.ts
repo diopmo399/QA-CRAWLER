@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { RecordOutcome, RecordRequest } from '../../recording/record-orchestrator.js';
 import { inFlow } from '../../recording/assertion-proposals.js';
 import { describeFlowStep } from '../../recording/panel-state.js';
+import { hasTarget } from '../../recording/target-correction.js';
 import type { HumanFlowRecorder } from '../../recording/human-flow-recorder.js';
 import type { RecordedFlow, RecordingEvent } from '../../recording/model.js';
 import { dependencyViolations, stepDependencies } from '../../recording/step-groups.js';
@@ -561,6 +562,9 @@ export async function studioView(
       kind: item.step.kind,
       description: stepDescription(item, language),
       ...(groupOf.has(item.id) ? { groupId: groupOf.get(item.id) } : {}),
+      ...(hasTarget(item.step) ? { targeted: true } : {}),
+      ...(item.userDecision === 'TARGET_CORRECTED_BY_USER' ? { corrected: true } : {}),
+      ...(hasTarget(item.step) && item.step.target.row ? { row: true } : {}),
       consumes: role?.consumes ?? [],
       produces: role?.produces ?? [],
       ...(replayed ? { replay: replayed } : {}),

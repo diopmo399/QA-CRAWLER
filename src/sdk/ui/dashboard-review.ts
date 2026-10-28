@@ -1,6 +1,9 @@
 import type {
   AssertionProposalView,
+  CorrectionView,
   DataInputView,
+  IntentReviewView,
+  RowSourceView,
   FlowStudioView,
   GenerationResult,
   GroupCheckView,
@@ -24,7 +27,7 @@ import { esc } from './view.js';
  * de chaque saisie, la génération des tests et le rejeu de validation. Chaque décision passe par le
  * serveur, qui réécrit le flow : la page ne décide rien seule. Des fonctions pures.
  */
-export const REVIEW_TABS = ['flow', 'assertions', 'data', 'tests'] as const;
+export const REVIEW_TABS = ['flow', 'assertions', 'data', 'intents', 'tests'] as const;
 export type ReviewTab = (typeof REVIEW_TABS)[number];
 
 /** Le choix de source d'une saisie, tel que saisi avant l'envoi. */
@@ -55,10 +58,27 @@ export interface ReviewUi {
   formats: string[];
   genGroups: string[];
   binds: Record<string, BindForm>;
+  intents?: IntentReviewView;
+  /** La correction d'une intention en cours de saisie. */
+  intentEdit?: { actionId: string; intent: string; reason: string };
+  /** La session de correction de cible ouverte pour cet enregistrement, et le choix de ligne. */
+  correction?: CorrectionView;
+  correctionChoice: { option?: string; column?: string; key?: string };
+  /** La ligne en cours de redéfinition : ses cellules et le choix colonne par colonne. */
+  rowEdit?: { stepId: string; source?: RowSourceView; columns: Record<string, RowChoice> };
   /** L'opération en cours d'envoi : les boutons sont désactivés. */
   busy?: string;
   error?: string;
   warnings?: string[];
+}
+
+/** Une colonne de la ligne, telle que choisie avant l'envoi. */
+export interface RowChoice {
+  on: boolean;
+  source: 'recorded' | 'value' | 'variable' | 'new-variable';
+  value: string;
+  key: string;
+  contains: boolean;
 }
 
 export const emptyReviewUi = (name: string): ReviewUi => ({
@@ -68,7 +88,31 @@ export const emptyReviewUi = (name: string): ReviewUi => ({
   formats: ['yaml', 'gherkin'],
   genGroups: [],
   binds: {},
+  correctionChoice: {},
 });
+
+/** Les colonnes choisies, prêtes à envoyer (seules celles cochées). */
+export function rowColumnsOf(ui: ReviewUi): {
+  column: string;
+  source: RowChoice['source'];
+  value?: string;
+  key?: string;
+  match?: 'exact' | 'contains';
+}[] {
+  return Object.entries(ui.rowEdit?.columns ?? {})
+    .filter(([, choice]) => choice.on)
+    .map(([column, choice]) => ({
+      column,
+      source: choice.source,
+      ...(choice.source === 'value' || choice.source === 'new-variable' ? { value: choice.value } : {}),
+      ...(choice.source === 'variable' || choice.source === 'new-variable' ? { key: choice.key.trim() } : {}),
+      match: choice.contains ? 'contains' : 'exact',
+    }));
+}
+
+/** Une session de correction attend-elle le serveur (rejeu, désignation, reprise) ? */
+export const correctionWaiting = (view: CorrectionView | undefined): boolean =>
+  view !== undefined && ['REPLAYING', 'PICKING', 'RESUMING'].includes(view.status);
 
 /** Les propositions encore à décider, rangées comme dans la fenêtre du recorder. */
 export function assertionBuckets(list: readonly AssertionProposalView[]): {
@@ -212,7 +256,203 @@ function stepRow(
     decide && !isCheck
       ? `<input type="checkbox" class="pickbox" data-review-pick="${esc(step.id)}" ${chosen ? 'checked' : ''} aria-label="${esc(r.choose(step.description))}">`
       : '<span class="pickbox" aria-hidden="true"></span>'
-  }<span class="n" aria-hidden="true">${isCheck ? '✓' : String(number ?? '')}</span><span class="rv-main"><span class="rv-desc">${isCheck ? `<small class="mu">${esc(r.check)}</small> ` : ''}${esc(step.description)}</span>${data ? `<span class="tags">${data}</span>` : ''}${violation ? `<small class="err">${esc(r.violation(violation.key))}</small>` : ''}${step.replay && step.replay.outcome !== 'MATCHED' && step.replay.reasons.length > 0 ? `<small class="mu">${esc(step.replay.reasons.join(' · '))}</small>` : ''}</span><span class="rv-side">${outcome}${actions}</span></li>`;
+  }<span class="n" aria-hidden="true">${isCheck ? '✓' : String(number ?? '')}</span><span class="rv-main"><span class="rv-desc">${isCheck ? `<small class="mu">${esc(r.check)}</small> ` : ''}${esc(step.description)}${step.corrected ? ` ${pill('CONFIRMED', r.corrected)}` : ''}</span>${data ? `<span class="tags">${data}</span>` : ''}${violation ? `<small class="err">${esc(r.violation(violation.key))}</small>` : ''}${step.replay && step.replay.outcome !== 'MATCHED' && step.replay.reasons.length > 0 ? `<small class="mu">${esc(step.replay.reasons.join(' · '))}</small>` : ''}${targetLinks(state, ui, step, decide)}</span><span class="rv-side">${outcome}${actions}</span></li>`;
+}
+
+/** Corriger la cible (navigateur sur le serveur), redéfinir la ligne, restaurer l'original. */
+function targetLinks(state: DashboardState, ui: ReviewUi, step: StudioStep, decide: boolean): string {
+  if (!decide || !step.targeted || step.kind === 'expect') return '';
+  const r = state.t.review;
+  const disabled = ui.busy || ui.correction ? 'disabled' : '';
+  const links = [
+    can(state, 'RUN')
+      ? `<button class="lnk" data-action="review-correct" data-step="${esc(step.id)}" ${disabled}>${esc(r.correctTarget)}</button>`
+      : '',
+    step.row
+      ? `<button class="lnk" data-action="review-row-open" data-step="${esc(step.id)}" ${disabled}>${esc(r.editRow)}</button>`
+      : '',
+    step.corrected
+      ? `<button class="lnk" data-action="review-restore" data-step="${esc(step.id)}" ${disabled}>${esc(r.restoreTarget)}</button>`
+      : '',
+  ].filter(Boolean);
+  return links.length > 0
+    ? `<span class="rv-links">${links.join('<span aria-hidden="true">·</span>')}</span>`
+    : '';
+}
+
+/** La session de correction : rejeu jusqu'à l'étape, désignation, proposition, validation, reprise. */
+function correctionCard(state: DashboardState, ui: ReviewUi): string {
+  const view = ui.correction;
+  if (!view) return '';
+  const r = state.t.review;
+  const disabled = ui.busy ? 'disabled' : '';
+  const close = `<button class="btn ghost" data-action="review-correction-close" ${disabled}>${esc(r.close)}</button>`;
+  const pickAgain = `<button class="btn" data-action="review-correction-pick" ${disabled}>${esc(r.pickAgain)}</button>`;
+  let body = '';
+  if (view.status === 'REPLAYING')
+    body = `<p class="row-line"><span class="spin" aria-hidden="true"></span><span>${esc(r.correction.REPLAYING(view.executed, view.total))}</span></p><div class="form-acts start">${close}</div>`;
+  else if (view.status === 'PICKING')
+    body = `<p class="note">${icon('alert')}<span>${esc(r.correction.PICKING)}</span></p><div class="form-acts start">${close}</div>`;
+  else if (view.status === 'HELD')
+    body = `<p class="mu">${esc(r.correction.HELD)}</p><div class="form-acts start">${pickAgain}${close}</div>`;
+  else if (view.status === 'PICKED' && view.proposal) {
+    const proposal = view.proposal;
+    const traits = [
+      proposal.traits.role || proposal.traits.tag,
+      proposal.traits.name ?? proposal.traits.label ?? proposal.traits.text,
+      proposal.traits.testId ? `testId ${proposal.traits.testId}` : undefined,
+      proposal.traits.section,
+    ].filter((part): part is string => Boolean(part));
+    const choice = ui.correctionChoice;
+    const rows =
+      proposal.rowOptions && proposal.rowOptions.length > 0
+        ? `<fieldset class="rv-src col"><legend>${esc(r.rowWay)}</legend>${proposal.rowOptions
+            .map((option, index) => {
+              const checked =
+                (choice.option ?? proposal.rowOptions?.[0]?.id) === option.id ||
+                (!choice.option && index === 0);
+              const text =
+                option.id === 'bound'
+                  ? r.rowOptions.bound(option.via ?? '')
+                  : option.id === 'key'
+                    ? r.rowOptions.key
+                    : r.rowOptions.manual;
+              const row = Object.entries(option.row)
+                .map(([column, value]) => `${column} = ${value}`)
+                .join(', ');
+              return `<label class="chk"><input type="radio" name="rv-row-option" data-correction-option="${esc(option.id)}" ${checked ? 'checked' : ''}> ${esc(text)} <small class="mu">${esc(row)}${option.fixed ? ` · ${esc(r.fixedRow)}` : ''}</small></label>`;
+            })
+            .join('')}${
+            choice.option === 'manual' &&
+            proposal.rowCells &&
+            proposal.variables &&
+            proposal.variables.length > 0
+              ? `<div class="fields"><label class="field">${esc(r.bindColumn)}<select data-correction-field="column">${proposal.rowCells
+                  .map(
+                    (cell) =>
+                      `<option value="${esc(cell.column)}" ${choice.column === cell.column ? 'selected' : ''}>${esc(cell.column)} — ${esc(cell.value)}</option>`,
+                  )
+                  .join(
+                    '',
+                  )}</select></label><label class="field">${esc(r.bindKey)}<select data-correction-field="key">${proposal.variables
+                  .map(
+                    (key) =>
+                      `<option value="${esc(key)}" ${choice.key === key ? 'selected' : ''}>${esc(key)}</option>`,
+                  )
+                  .join('')}</select></label></div>`
+              : ''
+          }</fieldset>`
+        : '';
+    body = `<dl class="kv"><dt>${esc(r.current)}</dt><dd><code>${esc(proposal.current)}</code></dd><dt>${esc(r.next)}</dt><dd><code>${esc(proposal.next)}</code></dd><dt>${esc(r.traitsTitle)}</dt><dd>${esc(traits.join(' · '))}</dd><dt>${esc(r.order)}</dt><dd>${esc(proposal.order.join(' → '))}</dd></dl>${
+      proposal.ambiguous ? `<p class="note">${icon('alert')}<span>${esc(r.ambiguousTarget)}</span></p>` : ''
+    }${rows}<div class="form-acts start"><button class="btn primary" data-action="review-correction-apply" ${disabled}>${esc(r.validate)}</button>${pickAgain}${close}</div>`;
+  } else if (view.status === 'APPLIED' && view.applied)
+    body = `<p>${pill('CONFIRMED', r.corrected)} ${esc(r.appliedText(view.applied.previous, view.applied.next))}</p><div class="form-acts start">${
+      view.resumable && can(state, 'RUN')
+        ? `<button class="btn primary" data-action="review-correction-resume" ${disabled}>${icon('play')}<span>${esc(r.resume)}</span></button>`
+        : ''
+    }${close}</div>`;
+  else if (view.status === 'RESUMING')
+    body = `<p class="row-line"><span class="spin" aria-hidden="true"></span><span>${esc(r.correction.RESUMING(view.executed, view.total))}</span></p>`;
+  else if (view.status === 'RESUMED' && view.resume)
+    body = `<p class="row-line">${pill(view.resume.status === 'PASSED' ? 'PASSED' : view.resume.status === 'FAILED' ? 'FAILED' : 'INCOMPLETE', r.resumeStatuses[view.resume.status] ?? view.resume.status)}<small class="mu">${esc(r.strategy(view.resume.strategy))}</small></p>${
+      view.resume.reasons.length > 0
+        ? `<small class="mu block">${esc(view.resume.reasons.join(' · '))}</small>`
+        : ''
+    }<div class="form-acts start">${close}</div>`;
+  else if (view.status === 'UNREACHABLE' && view.stoppedAt)
+    body = `<p class="err">${esc(r.unreachable(view.stoppedAt.index, view.stoppedAt.label, view.stoppedAt.reason))}</p><div class="form-acts start">${close}</div>`;
+  else
+    body = `${view.error ? `<p class="err">${esc(view.error)}</p>` : ''}<div class="form-acts start">${close}</div>`;
+  return `<section class="card correction-card" aria-live="polite"><h2>${esc(r.correctionTitle(view.label))}</h2>${body}</section>`;
+}
+
+/** La ligne redéfinie colonne par colonne, à partir des cellules enregistrées (sans navigateur). */
+function rowCard(state: DashboardState, ui: ReviewUi): string {
+  const edit = ui.rowEdit;
+  if (!edit) return '';
+  const r = state.t.review;
+  const disabled = ui.busy ? 'disabled' : '';
+  const source = edit.source;
+  const cancel = `<button type="button" class="btn ghost" data-action="review-row-cancel">${esc(r.cancel)}</button>`;
+  if (!source)
+    return `<section class="card"><h2>${esc(r.rowTitle)}</h2><p class="mu">${esc(state.t.loading)}</p></section>`;
+  if (source.cells.length === 0)
+    return `<section class="card"><h2>${esc(r.rowTitle)}</h2><p class="mu">${esc(r.rowNoCells)}</p><div class="form-acts start">${cancel}</div></section>`;
+  const rows = source.cells
+    .map((cell) => {
+      const choice = edit.columns[cell.column] ?? {
+        on: false,
+        source: 'recorded',
+        value: cell.value,
+        key: '',
+        contains: false,
+      };
+      const name = esc(cell.column);
+      const detail =
+        choice.source === 'value'
+          ? `<input data-row-column="${name}" data-row-field="value" value="${esc(choice.value)}" maxlength="200" aria-label="${esc(r.rowSources.value ?? '')}">`
+          : choice.source === 'variable'
+            ? `<select data-row-column="${name}" data-row-field="key" aria-label="${esc(r.rowSources.variable ?? '')}">${source.variables
+                .map(
+                  (variable) =>
+                    `<option value="${esc(variable.key)}" ${choice.key === variable.key ? 'selected' : ''}>${esc(variable.key)}</option>`,
+                )
+                .join('')}</select>`
+            : choice.source === 'new-variable'
+              ? `<input data-row-column="${name}" data-row-field="key" value="${esc(choice.key)}" placeholder="${esc(r.variable)}" maxlength="120" class="mono" aria-label="${esc(r.variable)}">`
+              : '';
+      return `<tr><td><label class="chk"><input type="checkbox" data-row-column="${name}" data-row-field="on" ${choice.on ? 'checked' : ''}> <b>${name}</b></label></td><td>${esc(cell.value)}</td><td><select data-row-column="${name}" data-row-field="source" ${choice.on ? '' : 'disabled'}>${(
+        ['recorded', 'value', 'variable', 'new-variable'] as const
+      )
+        .filter((option) => option !== 'variable' || source.variables.length > 0)
+        .map(
+          (option) =>
+            `<option value="${option}" ${choice.source === option ? 'selected' : ''}>${esc(r.rowSources[option] ?? option)}</option>`,
+        )
+        .join(
+          '',
+        )}</select> ${choice.on ? detail : ''}</td><td><label class="chk"><input type="checkbox" data-row-column="${name}" data-row-field="contains" ${choice.contains ? 'checked' : ''} ${choice.on ? '' : 'disabled'}> <small>${esc(r.rowMatch)}</small></label></td></tr>`;
+    })
+    .join('');
+  const any = Object.values(edit.columns).some((choice) => choice.on);
+  return `<section class="card wide"><h2>${esc(r.rowTitle)}</h2><p class="mu">${esc(r.rowNote)} <code>${esc(source.target)}</code></p><form class="col" data-action="review-row-save"><div class="tw"><table class="tbl"><thead><tr><th scope="col">${esc(r.rowColumn)}</th><th scope="col">${esc(r.rowRecorded)}</th><th scope="col">${esc(r.rowUse)}</th><th scope="col"></th></tr></thead><tbody>${rows}</tbody></table></div><div class="form-acts start"><button type="submit" class="btn primary" ${disabled || !any ? 'disabled' : ''}>${esc(r.rowSave)}</button>${cancel}</div></form></section>`;
+}
+
+/** Les intentions : déduites par l'analyse, confirmées ou corrigées par un humain. */
+function intentsTab(state: DashboardState, ui: ReviewUi, decide: boolean): string {
+  const r = state.t.review;
+  const view = ui.intents;
+  if (!view) return `<p class="mu">${esc(state.t.loading)}</p>`;
+  if (view.rows.length === 0) return `<section class="card"><p class="mu">${esc(r.noIntent)}</p></section>`;
+  const disabled = ui.busy ? 'disabled' : '';
+  const items = view.rows
+    .map((row) => {
+      const editing = ui.intentEdit?.actionId === row.actionId;
+      const actions = !decide
+        ? ''
+        : editing
+          ? `<form class="col rv-intent" data-action="review-intent-save" data-intent-action="${esc(row.actionId)}"><div class="fields"><label class="field">${esc(r.newIntent)}<select data-intent-field="intent">${view.choices
+              .map(
+                (choice) =>
+                  `<option value="${esc(choice)}" ${ui.intentEdit?.intent === choice ? 'selected' : ''}>${esc(choice)}</option>`,
+              )
+              .join(
+                '',
+              )}</select></label><label class="field">${esc(r.reasonField)}<input data-intent-field="reason" value="${esc(ui.intentEdit?.reason ?? '')}" maxlength="500" autocomplete="off"></label></div><div class="row-acts"><button type="submit" class="btn small primary" ${disabled}>${esc(r.save)}</button><button type="button" class="btn small ghost" data-action="review-intent-cancel">${esc(r.cancel)}</button></div></form>`
+          : `<div class="row-acts"><button class="btn small" data-action="review-intent" data-type="CONFIRM" data-intent-action="${esc(row.actionId)}" ${disabled}>${esc(r.confirmIntent)}</button><button class="btn small ghost" data-action="review-intent-open" data-intent-action="${esc(row.actionId)}" ${disabled}>${esc(r.correctIntent)}</button>${
+              row.source === 'HUMAN'
+                ? `<button class="btn small ghost" data-action="review-intent" data-type="RESET" data-intent-action="${esc(row.actionId)}" ${disabled}>${esc(r.resetIntent)}</button>`
+                : ''
+            }</div>`;
+      return `<li class="rv-assert"><div class="row-line"><b>${esc(row.label)}</b>${pill(row.source === 'HUMAN' ? 'CONFIRMED' : 'UNKNOWN', r.intentStatuses[row.status] ?? row.status)}<code>${esc(row.intent)}</code>${
+        row.confidence !== undefined
+          ? `<small class="mu">${esc(r.confidence(Math.round(row.confidence * 100)))}</small>`
+          : ''
+      }</div>${row.original ? `<small class="mu">${esc(r.wasIntent(row.original))}</small>` : ''}${row.reason ? `<small class="mu">${esc(r.why)} : ${esc(row.reason)}</small>` : ''}${actions}</li>`;
+    })
+    .join('');
+  return `<section class="card"><p class="mu">${esc(r.intentsNote)}</p><ul class="plain rv-asserts">${items}</ul></section>`;
 }
 
 function groupHeader(state: DashboardState, ui: ReviewUi, group: GroupViewDto, decide: boolean): string {
@@ -294,7 +534,7 @@ function flowTab(state: DashboardState, ui: ReviewUi, decide: boolean): string {
             : ''
         }<button class="btn small ghost" data-action="review-detach-selected" ${disabled}>${esc(r.detach)}</button><button class="btn small ghost" data-action="review-clear">${esc(r.clear)}</button></div>`
       : '';
-  return `${proposalCard}${checkCard}<section class="card wide rv-flow">${blocks.join('')}${selection}</section>`;
+  return `${correctionCard(state, ui)}${rowCard(state, ui)}${proposalCard}${checkCard}<section class="card wide rv-flow">${blocks.join('')}${selection}</section>`;
 }
 
 function proposalItem(
@@ -486,6 +726,7 @@ export function reviewView(state: DashboardState): string {
     flow: r.tabs.flow(actions, view?.groups.length ?? 0),
     assertions: r.tabs.assertions(pending),
     data: r.tabs.data(ui.data?.inputs.length ?? 0),
+    intents: r.intentsTab(ui.intents?.rows.length ?? 0),
     tests: r.tabs.tests,
   };
   const tabs = `<div class="tabs" role="tablist" aria-label="${esc(r.title)}">${REVIEW_TABS.map(
@@ -499,7 +740,9 @@ export function reviewView(state: DashboardState): string {
         ? assertionsTab(state, ui, decide)
         : tab === 'data'
           ? dataTab(state, ui, decide)
-          : testsTab(state, ui, decide);
+          : tab === 'intents'
+            ? intentsTab(state, ui, decide)
+            : testsTab(state, ui, decide);
   const messages = `${ui.error ? `<p class="err" role="alert">${esc(ui.error)}</p>` : ''}${
     ui.warnings && ui.warnings.length > 0
       ? `<div class="notice" role="status"><b>${esc(r.warnings)}</b><ul class="plain tight">${ui.warnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul></div>`

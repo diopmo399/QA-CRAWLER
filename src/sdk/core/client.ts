@@ -16,8 +16,13 @@ import type {
   GenerationResult,
   GraphView,
   GroupCommandInput,
+  CorrectionView,
   GroupCheckView,
   GroupEditResult,
+  IntentDecisionInput,
+  IntentReviewView,
+  RowColumnInput,
+  RowSourceView,
   GroupProposalView,
   RecordingReplayView,
   GroupViewDto,
@@ -294,6 +299,35 @@ export interface QaCrawlerClient {
     /** Le rejeu de validation : le lancer (dry run, sans fenêtre), puis le suivre. */
     replay(projectId: string, name: string): Promise<RecordingReplayView>;
     replayStatus(projectId: string, name: string): Promise<RecordingReplayView>;
+    /** La revue des intentions : chaque action, son intention et sa provenance ; corriger, confirmer, réinitialiser. */
+    intents(projectId: string, name: string): Promise<IntentReviewView>;
+    reviewIntent(projectId: string, name: string, input: IntentDecisionInput): Promise<IntentReviewView>;
+    /** La ligne visée par une étape (cellules enregistrées) ; la redéfinir colonne par colonne, sans navigateur. */
+    rowSource(projectId: string, name: string, stepId: string): Promise<RowSourceView>;
+    editRow(
+      projectId: string,
+      name: string,
+      stepId: string,
+      columns: RowColumnInput[],
+    ): Promise<FlowStudioView>;
+    /** « Restaurer l'original » : la cible redevient celle de l'enregistrement. */
+    restoreTarget(projectId: string, name: string, stepId: string): Promise<FlowStudioView>;
+  };
+  /**
+   * La correction d'une cible : le serveur rejoue jusqu'à l'étape dans un navigateur ouvert sur sa
+   * machine ; l'humain y désigne l'élément ; la cible n'est remplacée qu'à `apply`. Une à la fois.
+   */
+  corrections: {
+    start(projectId: string, recording: string, stepId: string): Promise<CorrectionView>;
+    get(projectId: string, recording: string): Promise<CorrectionView>;
+    pick(projectId: string, recording: string): Promise<CorrectionView>;
+    apply(
+      projectId: string,
+      recording: string,
+      choice?: { option?: string; binding?: { column: string; key: string } },
+    ): Promise<CorrectionView>;
+    resume(projectId: string, recording: string): Promise<CorrectionView>;
+    close(projectId: string, recording: string): Promise<{ closed: true }>;
   };
   /** Les propositions d'assertions d'un enregistrement et les décisions humaines. */
   assertions: {
@@ -706,6 +740,25 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request('POST', `${recording(projectId, name)}/steps/remove`, { stepId }),
       replay: (projectId, name) => request('POST', `${recording(projectId, name)}/replay`, {}),
       replayStatus: (projectId, name) => request('GET', `${recording(projectId, name)}/replay`),
+      intents: (projectId, name) => request('GET', `${recording(projectId, name)}/intents`),
+      reviewIntent: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/intents`, input),
+      rowSource: (projectId, name, stepId) =>
+        request('GET', `${recording(projectId, name)}/steps/row?stepId=${encodeURIComponent(stepId)}`),
+      editRow: (projectId, name, stepId, columns) =>
+        request('POST', `${recording(projectId, name)}/steps/row`, { stepId, columns }),
+      restoreTarget: (projectId, name, stepId) =>
+        request('POST', `${recording(projectId, name)}/steps/restore`, { stepId }),
+    },
+    corrections: {
+      start: (projectId, name, stepId) =>
+        request('POST', `${recording(projectId, name)}/correction`, { stepId }),
+      get: (projectId, name) => request('GET', `${recording(projectId, name)}/correction`),
+      pick: (projectId, name) => request('POST', `${recording(projectId, name)}/correction/pick`, {}),
+      apply: (projectId, name, choice = {}) =>
+        request('POST', `${recording(projectId, name)}/correction/apply`, choice),
+      resume: (projectId, name) => request('POST', `${recording(projectId, name)}/correction/resume`, {}),
+      close: (projectId, name) => request('POST', `${recording(projectId, name)}/correction/close`, {}),
     },
     assertions: {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/assertions`),

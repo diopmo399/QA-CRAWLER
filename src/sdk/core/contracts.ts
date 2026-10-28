@@ -528,6 +528,12 @@ export interface StudioStep {
   produces: string[];
   /** Absent : l'étape n'a pas été rejouée (aucun rejeu, ou étape ajoutée depuis). */
   replay?: { outcome: StepReplayOutcome; reasons: string[] };
+  /** L'étape vise un élément : sa cible peut être corrigée. */
+  targeted?: boolean;
+  /** La cible a été corrigée par un humain (l'original se restaure). */
+  corrected?: boolean;
+  /** La cible est une ligne de tableau dont les cellules ont été enregistrées (la ligne se redéfinit). */
+  row?: boolean;
 }
 
 /** Une donnée produite par une étape et citée par une autre. */
@@ -681,6 +687,99 @@ export interface RecordingReplayView {
   finishedAt?: string;
   /** Le dernier rejeu écrit sur disque ; stale : le flow a changé depuis. */
   last?: { status: string; at: string; stale: boolean };
+}
+
+/** L'intention d'une action enregistrée (créer, rechercher, ouvrir…) : automatique, puis revue par un humain. */
+export interface IntentRowView {
+  actionId: string;
+  kind: string;
+  label: string;
+  /** L'intention finale : la décision humaine en vigueur, sinon l'interprétation automatique. */
+  intent: string;
+  /** INFERRED, HUMAN_CORRECTED, HUMAN_CONFIRMED. */
+  status: string;
+  source: 'HUMAN' | 'SYSTEM';
+  confidence?: number;
+  original?: string;
+  reason?: string;
+}
+
+export interface IntentReviewView {
+  /** Les intentions qu'un humain peut choisir. */
+  choices: string[];
+  rows: IntentRowView[];
+}
+
+export interface IntentDecisionInput {
+  actionId: string;
+  type: 'CORRECT' | 'CONFIRM' | 'RESET';
+  intent?: string;
+  reason?: string;
+}
+
+/** La ligne de tableau visée par une étape : sa cible, ses cellules enregistrées, les données citables. */
+export interface RowSourceView {
+  target: string;
+  cells: { column: string; value: string }[];
+  /** Les données du jeu de test citables avant l'étape (jamais une donnée sensible). */
+  variables: { key: string; value: string }[];
+}
+
+/** Une colonne de la ligne et la source de sa valeur au rejeu. */
+export interface RowColumnInput {
+  column: string;
+  source: 'recorded' | 'value' | 'variable' | 'new-variable';
+  value?: string;
+  key?: string;
+  match?: 'exact' | 'contains';
+}
+
+/**
+ * UNE SESSION DE CORRECTION DE CIBLE : le serveur rejoue les étapes précédentes dans un navigateur
+ * ouvert sur sa machine, la page reste tenue devant l'étape, l'humain y désigne l'élément voulu.
+ */
+export interface CorrectionView {
+  stepId: string;
+  label: string;
+  /**
+   * REPLAYING (étapes précédentes), PICKING (désigner l'élément), HELD (page tenue, rien désigné),
+   * PICKED (proposition à valider), APPLIED (cible remplacée), RESUMING, RESUMED, UNREACHABLE (le
+   * chemin s'est arrêté avant l'étape), FAILED.
+   */
+  status: string;
+  executed: number;
+  total: number;
+  stoppedAt?: { index: number; label: string; reason: string };
+  proposal?: {
+    label: string;
+    current: string;
+    next: string;
+    order: string[];
+    ambiguous: boolean;
+    traits: {
+      role: string;
+      name?: string;
+      label?: string;
+      text?: string;
+      testId?: string;
+      tag: string;
+      section?: string;
+    };
+    rowOptions?: { id: string; row: Record<string, string>; via?: string; match?: string; fixed?: boolean }[];
+    rowCells?: { column: string; value: string }[];
+    /** Les données du run auxquelles une colonne peut être liée (leurs clés). */
+    variables?: string[];
+  };
+  applied?: { previous: string; next: string };
+  /** La reprise du rejeu à l'étape corrigée (même session, mêmes données). */
+  resumable?: boolean;
+  resume?: {
+    status: 'PASSED' | 'FAILED' | 'MANUAL_RECOVERY';
+    from: number;
+    strategy: string;
+    reasons: string[];
+  };
+  error?: string;
 }
 
 export const GENERATION_FORMATS = ['yaml', 'gherkin', 'playwright', 'java'] as const;

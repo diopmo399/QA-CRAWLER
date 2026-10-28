@@ -437,11 +437,19 @@ a.btn{text-decoration:none}
 .rv-gen legend{font-weight:600;margin-bottom:4px}
 pre.code{margin:6px 0 0;max-height:320px;overflow:auto;padding:10px 12px;border-radius:10px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre}
 .warn-card{border-color:color-mix(in srgb,var(--qa-color-warning) 45%,var(--qa-color-border));background:var(--qa-color-warning-soft)}
+.rv-links{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;font-size:13px}
+.rv-links .lnk{min-height:24px;font-size:13px}
+.rv-links>span{color:var(--qa-color-faint)}
+.correction-card{border-color:color-mix(in srgb,var(--qa-color-primary) 45%,var(--qa-color-border))}
+.correction-card dl.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 14px;margin:0}
+.correction-card dl.kv dt{color:var(--qa-color-muted)}
+.correction-card dl.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.rv-intent .fields{max-width:640px}
 details.tech summary{cursor:pointer;color:var(--qa-color-muted);font-size:13px}
 details.tech[open] summary{margin-bottom:6px}
 
 /* Responsive : 1 100 px, 960 px (menu replié), 600 px (une colonne). */
-@container (max-width:600px){.rv-step{grid-template-columns:22px 26px minmax(0,1fr)}.rv-side{grid-column:3;justify-content:flex-start}.rv-group-h .row-acts{margin-left:0}}
+@container (max-width:600px){.correction-card dl.kv{grid-template-columns:minmax(0,1fr)}.rv-step{grid-template-columns:22px 26px minmax(0,1fr)}.rv-side{grid-column:3;justify-content:flex-start}.rv-group-h .row-acts{margin-left:0}}
 @container (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @container (max-width:960px){
   .dash{grid-template-columns:minmax(0,1fr);gap:12px}

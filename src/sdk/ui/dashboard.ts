@@ -7,8 +7,11 @@ import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashb
 import {
   assertionBuckets,
   bindFormOf,
+  correctionWaiting,
   emptyReviewUi,
   REVIEW_TABS,
+  rowColumnsOf,
+  type RowChoice,
   type BindForm,
   type ReviewTab,
   type ReviewUi,
@@ -79,6 +82,7 @@ export class QaCrawlerDashboard extends Base {
   /** Le suivi en direct d'un enregistrement (indépendant de celui d'une exécution). */
   private recSubscription?: Subscription;
   private replayTimer?: ReturnType<typeof setTimeout>;
+  private correctionTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
   private generation = 0;
   /** Le fichier choisi pour un import (jamais dans l'état rendu). */
@@ -145,6 +149,18 @@ export class QaCrawlerDashboard extends Base {
         else if (reviewField === 'modify' && review.editing) review.editing.description = target.value;
         return;
       }
+      if (
+        review &&
+        target.dataset.rowColumn &&
+        (target.dataset.rowField === 'value' || target.dataset.rowField === 'key')
+      ) {
+        this.rowChoice(target.dataset.rowColumn)[target.dataset.rowField] = target.value;
+        return;
+      }
+      if (review?.intentEdit && target.dataset.intentField === 'reason') {
+        review.intentEdit.reason = target.value;
+        return;
+      }
       if (review && target.dataset.bindStep && target.type !== 'radio') {
         this.bindForm(target.dataset.bindStep)[target.dataset.bindField as 'value' | 'variable'] =
           target.value;
@@ -209,6 +225,8 @@ export class QaCrawlerDashboard extends Base {
     this.unfollowRecording();
     if (this.replayTimer) clearTimeout(this.replayTimer);
     this.replayTimer = undefined;
+    if (this.correctionTimer) clearTimeout(this.correctionTimer);
+    this.correctionTimer = undefined;
     this.ownClient?.dispose();
     this.ownClient = undefined;
   }
@@ -362,14 +380,18 @@ export class QaCrawlerDashboard extends Base {
     name: string,
     generation = this.generation,
   ): Promise<void> {
-    const [studio, assertions, data, groupProposals, checks, replay] = await Promise.all([
-      api.recordings.studio(projectId, name),
-      api.assertions.list(projectId, name),
-      api.data.get(projectId, name).catch(() => undefined),
-      api.groups.proposals(projectId, name).catch(() => []),
-      api.groups.checks(projectId, name).catch(() => []),
-      api.recordings.replayStatus(projectId, name).catch(() => undefined),
-    ]);
+    const [studio, assertions, data, groupProposals, checks, replay, intents, correction] = await Promise.all(
+      [
+        api.recordings.studio(projectId, name),
+        api.assertions.list(projectId, name),
+        api.data.get(projectId, name).catch(() => undefined),
+        api.groups.proposals(projectId, name).catch(() => []),
+        api.groups.checks(projectId, name).catch(() => []),
+        api.recordings.replayStatus(projectId, name).catch(() => undefined),
+        api.recordings.intents(projectId, name).catch(() => undefined),
+        api.corrections.get(projectId, name).catch(() => undefined),
+      ],
+    );
     const review = this.state.review;
     if (generation !== this.generation || review?.name !== name) return;
     review.studio = studio;
@@ -378,6 +400,9 @@ export class QaCrawlerDashboard extends Base {
     review.groupProposals = groupProposals;
     review.checks = checks;
     review.replay = replay;
+    review.intents = intents;
+    review.correction = correction;
+    if (correctionWaiting(correction)) this.pollCorrection(api, projectId, name);
     // Les choix de source enregistrés : le brouillon de la page est vidé.
     review.binds = {};
     review.selected = review.selected.filter((id) => studio.steps.some((step) => step.id === id));
@@ -403,6 +428,41 @@ export class QaCrawlerDashboard extends Base {
         })
         .catch(() => undefined);
     }, 1000);
+  }
+
+  /** La correction suit sa session (une requête par seconde) tant que le serveur travaille. */
+  private pollCorrection(api: QaCrawlerClient, projectId: string, name: string): void {
+    if (this.correctionTimer) return;
+    this.correctionTimer = setTimeout(() => {
+      this.correctionTimer = undefined;
+      const route = this.state.route;
+      if (route.view !== 'recording' || route.name !== name) return;
+      void api.corrections
+        .get(projectId, name)
+        .catch(() => undefined)
+        .then((view) => {
+          const review = this.state.review;
+          if (review?.name !== name) return;
+          review.correction = view;
+          if (correctionWaiting(view)) this.pollCorrection(api, projectId, name);
+          this.paint();
+        });
+    }, 1000);
+  }
+
+  private rowChoice(column: string): RowChoice {
+    const edit = this.state.review?.rowEdit;
+    const cell = edit?.source?.cells.find((entry) => entry.column === column);
+    const fallback: RowChoice = {
+      on: false,
+      source: 'recorded',
+      value: cell?.value ?? '',
+      key: '',
+      contains: false,
+    };
+    if (!edit) return fallback;
+    edit.columns[column] ??= fallback;
+    return edit.columns[column];
   }
 
   private bindForm(stepId: string): BindForm {
@@ -544,6 +604,102 @@ export class QaCrawlerDashboard extends Base {
         });
         return true;
       }
+      case 'review-correct':
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          ui.correctionChoice = {};
+          ui.correction = await api.corrections.start(projectId, name, step);
+          this.pollCorrection(api, projectId, name);
+        });
+        return true;
+      case 'review-correction-pick':
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          ui.correctionChoice = {};
+          ui.correction = await api.corrections.pick(projectId, name);
+          this.pollCorrection(api, projectId, name);
+        });
+        return true;
+      case 'review-correction-apply': {
+        const choice = review.correctionChoice;
+        const options = review.correction?.proposal?.rowOptions;
+        const option = choice.option ?? options?.[0]?.id;
+        const cells = review.correction?.proposal?.rowCells ?? [];
+        const keys = review.correction?.proposal?.variables ?? [];
+        const binding =
+          option === 'manual'
+            ? { column: choice.column ?? cells[0]?.column ?? '', key: choice.key ?? keys[0] ?? '' }
+            : undefined;
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          ui.correction = await api.corrections.apply(projectId, name, {
+            ...(option ? { option } : {}),
+            ...(binding ? { binding } : {}),
+          });
+        });
+        return true;
+      }
+      case 'review-correction-resume':
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          ui.correction = await api.corrections.resume(projectId, name);
+          this.pollCorrection(api, projectId, name);
+        });
+        return true;
+      case 'review-correction-close':
+        void this.reviewOp('correct', async (api, projectId, name, ui) => {
+          await api.corrections.close(projectId, name);
+          ui.correction = undefined;
+        });
+        return true;
+      case 'review-restore':
+        void this.reviewOp('restore', async (api, projectId, name) => {
+          await api.recordings.restoreTarget(projectId, name, step);
+        });
+        return true;
+      case 'review-row-open': {
+        const api = this.api;
+        review.rowEdit = { stepId: step, columns: {} };
+        this.paint();
+        if (api)
+          void api.recordings
+            .rowSource(route.projectId, route.name, step)
+            .then((source) => {
+              if (review.rowEdit?.stepId !== step) return;
+              review.rowEdit.source = source;
+              this.paint();
+            })
+            .catch((error: unknown) => {
+              review.rowEdit = undefined;
+              review.error = message(error);
+              this.paint();
+            });
+        return true;
+      }
+      case 'review-row-cancel':
+        review.rowEdit = undefined;
+        this.paint();
+        return true;
+      case 'review-intent': {
+        const actionId = target.dataset.intentAction ?? '';
+        const type = target.dataset.type === 'RESET' ? 'RESET' : 'CONFIRM';
+        void this.reviewOp('intent', async (api, projectId, name, ui) => {
+          ui.intents = await api.recordings.reviewIntent(projectId, name, { actionId, type });
+        });
+        return true;
+      }
+      case 'review-intent-open': {
+        const actionId = target.dataset.intentAction ?? '';
+        const row = review.intents?.rows.find((entry) => entry.actionId === actionId);
+        const choices = review.intents?.choices ?? [];
+        review.intentEdit = {
+          actionId,
+          intent: choices.includes(row?.intent ?? '') ? (row?.intent ?? '') : (choices[0] ?? ''),
+          reason: '',
+        };
+        this.paint();
+        return true;
+      }
+      case 'review-intent-cancel':
+        review.intentEdit = undefined;
+        this.paint();
+        return true;
       case 'review-modify-open': {
         const proposal = review.assertions?.find((entry) => entry.id === target.dataset.assertion);
         if (proposal) review.editing = { id: proposal.id, description: proposal.description };
@@ -608,6 +764,30 @@ export class QaCrawlerDashboard extends Base {
         });
         return;
       }
+      case 'review-row-save': {
+        const edit = review.rowEdit;
+        if (!edit) return;
+        const columns = rowColumnsOf(review);
+        void this.reviewOp('row', async (api, projectId, name, ui) => {
+          await api.recordings.editRow(projectId, name, edit.stepId, columns);
+          ui.rowEdit = undefined;
+        });
+        return;
+      }
+      case 'review-intent-save': {
+        const edit = review.intentEdit;
+        if (!edit?.intent) return;
+        void this.reviewOp('intent', async (api, projectId, name, ui) => {
+          ui.intents = await api.recordings.reviewIntent(projectId, name, {
+            actionId: edit.actionId,
+            type: 'CORRECT',
+            intent: edit.intent,
+            ...(edit.reason.trim() ? { reason: edit.reason.trim() } : {}),
+          });
+          ui.intentEdit = undefined;
+        });
+        return;
+      }
       case 'review-generate': {
         const formats = [...review.formats];
         const groupIds = [...review.genGroups];
@@ -666,6 +846,8 @@ export class QaCrawlerDashboard extends Base {
     if (route.view !== 'recording') {
       if (this.replayTimer) clearTimeout(this.replayTimer);
       this.replayTimer = undefined;
+      if (this.correctionTimer) clearTimeout(this.correctionTimer);
+      this.correctionTimer = undefined;
     }
     if ('projectId' in route && route.projectId !== undefined && route.projectId !== this.state.projectId) {
       this.state.projectId = route.projectId;
@@ -1743,6 +1925,35 @@ export class QaCrawlerDashboard extends Base {
         const stepIds = [...review.selected];
         review.selected = [];
         this.groupEdit('assign', { op: 'assign', groupId: target.value, stepIds });
+        return;
+      }
+      const correctionOption = target.dataset.correctionOption;
+      if (correctionOption) {
+        review.correctionChoice.option = correctionOption;
+        this.paint();
+        return;
+      }
+      const correctionField = target.dataset.correctionField;
+      if (correctionField === 'column' || correctionField === 'key') {
+        review.correctionChoice[correctionField] = target.value;
+        return;
+      }
+      const rowColumn = target.dataset.rowColumn;
+      if (rowColumn) {
+        const choice = this.rowChoice(rowColumn);
+        const field = target.dataset.rowField;
+        if (field === 'on' || field === 'contains') {
+          choice[field] = (target as HTMLInputElement).checked;
+          this.paint();
+        } else if (field === 'source') {
+          choice.source = target.value as RowChoice['source'];
+          if (choice.source === 'variable') choice.key = review.rowEdit?.source?.variables[0]?.key ?? '';
+          this.paint();
+        } else if (field === 'key' || field === 'value') choice[field] = target.value;
+        return;
+      }
+      if (review.intentEdit && target.dataset.intentField === 'intent') {
+        review.intentEdit.intent = target.value;
         return;
       }
       const bindStep = target.dataset.bindStep;

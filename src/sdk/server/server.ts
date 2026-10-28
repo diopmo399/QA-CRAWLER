@@ -15,10 +15,17 @@ import {
   type RecordedFlowReplay,
 } from '../../recording/record-orchestrator.js';
 import type { ReplayOutcome } from '../../recording/recording-report.js';
+import { loadConfigFile } from '../../config/config-loader.js';
+import { CorrectionBusyError, CorrectionManager, type CorrectionRuntime } from './corrections.js';
 import {
   acceptStoredGroupProposals,
   addStoredGroupCheck,
   bindStoredTestData,
+  editStoredRow,
+  restoreStoredTarget,
+  reviewStoredIntent,
+  storedIntents,
+  storedRowSource,
   decideStoredProposal,
   editStoredGroups,
   FLOW_FILES,
@@ -43,6 +50,7 @@ import type {
   GenerationResult,
   GroupProposalView,
   RecordingReplayView,
+  RowColumnInput,
   DataBindingResult,
   GroupViewDto,
   Project,
@@ -181,6 +189,8 @@ export interface SdkServerOptions {
   run?: MissionRunner;
   /** Le recorder ; `runRecording` par défaut (remplaçable seulement pour les tests, qui y jouent l'humain). */
   record?: RecordRunner;
+  /** La correction de cible : navigateur visible par défaut ; les tests la pilotent sans fenêtre. */
+  correction?: CorrectionRuntime;
   /** Le rejeu de validation d'un enregistrement ; `replayRecordedFlow` par défaut (remplaçable pour les tests). */
   replayRecording?: (input: RecordedFlowReplay) => Promise<ReplayOutcome>;
   /** Explorations simultanées (défaut 1). */
@@ -254,6 +264,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     record: options.record ?? runRecording,
     ...(options.onWarning ? { onWarning: options.onWarning } : {}),
   });
+  const corrections = new CorrectionManager(options.correction);
   const engineVersion = await readCoreVersion();
   const sseClients = new Set<ServerResponse>();
 
@@ -270,6 +281,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     recordings,
     edits: new Map(),
     replays: new Map(),
+    corrections,
     engineVersion,
     options,
     sseClients,
@@ -298,6 +310,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     explorations,
     recordings,
     close: async () => {
+      corrections.closeAll();
       // Arrêt contrôlé : rien n'est laissé tourner, les rapports des explorations arrêtées sont écrits.
       if (explorations.cancelAll() > 0) {
         const settled = await explorations.idle(options.closeGraceMs ?? 30_000);
@@ -330,6 +343,8 @@ interface Context {
   edits: Map<string, Promise<unknown>>;
   /** Les rejeux de validation lancés depuis le SDK, par enregistrement (projet/nom). */
   replays: Map<string, RecordingReplayView>;
+  /** La session de correction de cible ouverte (une à la fois). */
+  corrections: CorrectionManager;
   engineVersion: string;
   options: SdkServerOptions;
   sseClients: Set<ServerResponse>;
@@ -888,6 +903,71 @@ async function handleRecordings(
     sendJson(response, await studioView(stored, groupDtos(stored), language));
     return;
   }
+  if (action === 'intents' && itemId === undefined) {
+    if (method === 'GET') {
+      sendJson(response, await storedIntents(await storedRecordingOf(ctx, project, name), language));
+      return;
+    }
+    if (method === 'POST') {
+      const body = await readJson(request);
+      const actionId = textOf(body.actionId, 80);
+      const type = body.type;
+      if (!actionId || (type !== 'CORRECT' && type !== 'CONFIRM' && type !== 'RESET'))
+        throw new HttpError(400, 'BAD_REQUEST', 'actionId and type (CORRECT, CONFIRM, RESET) are required');
+      const intent = textOf(body.intent, 40);
+      const reason = textOf(body.reason, 500);
+      const view = await editRecording(ctx, project, name, async (stored) => {
+        const outcome = await reviewStoredIntent(stored, {
+          actionId,
+          type,
+          ...(intent ? { intent } : {}),
+          ...(reason ? { reason } : {}),
+        });
+        if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+        return storedIntents(stored, language);
+      });
+      sendJson(response, view);
+      return;
+    }
+  }
+  if (action === 'steps' && itemId === 'row') {
+    if (method === 'GET') {
+      const stepId = textOf(url.searchParams.get('stepId'), 80);
+      if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+      const source = await storedRowSource(await storedRecordingOf(ctx, project, name), stepId);
+      if ('error' in source) throw new HttpError(422, 'REFUSED', source.error);
+      sendJson(response, source);
+      return;
+    }
+    if (method === 'POST') {
+      const body = await readJson(request);
+      const stepId = textOf(body.stepId, 80);
+      if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+      const columns = rowColumnsOf(body.columns);
+      const view = await editRecording(ctx, project, name, async (stored) => {
+        const outcome = await editStoredRow(stored, { stepId, columns }, language);
+        if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+        return studioView(stored, groupDtos(stored), language);
+      });
+      sendJson(response, view);
+      return;
+    }
+  }
+  if (action === 'steps' && itemId === 'restore' && method === 'POST') {
+    const stepId = textOf((await readJson(request)).stepId, 80);
+    if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+    const view = await editRecording(ctx, project, name, async (stored) => {
+      const outcome = await restoreStoredTarget(stored, stepId, language);
+      if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+      return studioView(stored, groupDtos(stored), language);
+    });
+    sendJson(response, view);
+    return;
+  }
+  if (action === 'correction') {
+    await handleCorrection(ctx, project, name, itemId, method, request, response);
+    return;
+  }
   if (action === 'steps' && itemId === 'remove' && method === 'POST') {
     const body = await readJson(request);
     const stepId = textOf(body.stepId, 80);
@@ -1194,6 +1274,127 @@ async function dataView(stored: StoredRecording): Promise<TestDataView> {
     })),
     generators: data.generators,
   };
+}
+
+/** Les colonnes d'une ligne, vérifiées champ par champ (le moteur vérifie ensuite les cellules et les données). */
+function rowColumnsOf(raw: unknown): RowColumnInput[] {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 20)
+    throw new HttpError(400, 'BAD_REQUEST', 'columns must be a list of 1 to 20 columns');
+  return raw.map((entry: unknown) => {
+    const value = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+    const column = textOf(value.column, 120);
+    const source = value.source;
+    if (
+      !column ||
+      (source !== 'recorded' && source !== 'value' && source !== 'variable' && source !== 'new-variable')
+    )
+      throw new HttpError(400, 'BAD_REQUEST', 'each column needs a name and a source');
+    const text = textOf(value.value, 200);
+    const key = textOf(value.key, 120);
+    return {
+      column,
+      source,
+      ...(text !== undefined ? { value: text } : {}),
+      ...(key ? { key } : {}),
+      ...(value.match === 'contains' || value.match === 'exact' ? { match: value.match } : {}),
+    };
+  });
+}
+
+/**
+ * LA CORRECTION D'UNE CIBLE : ouvrir (le serveur rejoue jusqu'à l'étape dans un navigateur sur sa
+ * machine), suivre, désigner à nouveau, valider, reprendre le rejeu, fermer. Rien n'est écrit avant
+ * la validation.
+ */
+async function handleCorrection(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  sub: string | undefined,
+  method: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const key = `${project.id}/${name}`;
+  const language = ctx.rules.reportLanguage;
+  const refuse = (error: unknown): never => {
+    throw new HttpError(409, 'CORRECTION_REFUSED', error instanceof Error ? error.message : String(error));
+  };
+  if (sub === undefined && method === 'GET') {
+    const view = ctx.corrections.view(key);
+    if (!view) throw new HttpError(404, 'NOT_FOUND', 'no correction is open for this recording');
+    sendJson(response, view);
+    return;
+  }
+  if (sub === undefined && method === 'POST') {
+    refuseArchived(project);
+    const stepId = textOf((await readJson(request)).stepId, 80);
+    if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+    if (ctx.recordings.active())
+      throw new HttpError(409, 'RECORDING_ACTIVE', 'a recording is in progress: one browser at a time');
+    const recording = await storedRecordingOf(ctx, project, name);
+    const missionFile = await recordMission(ctx, project);
+    const overrides = { reportsDir: reportsDirOf(project) };
+    const { config } = await loadConfigFile(missionFile, overrides, ctx.env);
+    try {
+      sendJson(
+        response,
+        ctx.corrections.start({
+          key,
+          recording,
+          stepId,
+          missionFile,
+          overrides,
+          env: ctx.env,
+          language,
+          config,
+        }),
+        202,
+      );
+    } catch (error) {
+      if (error instanceof CorrectionBusyError) throw new HttpError(409, 'CORRECTION_ACTIVE', error.message);
+      throw new HttpError(422, 'REFUSED', error instanceof Error ? error.message : String(error));
+    }
+    return;
+  }
+  if (method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
+  if (sub === 'pick') {
+    const recording = await storedRecordingOf(ctx, project, name);
+    sendJson(
+      response,
+      await Promise.resolve()
+        .then(() => ctx.corrections.pickAgain(key, recording))
+        .catch(refuse),
+    );
+    return;
+  }
+  if (sub === 'apply') {
+    const body = await readJson(request);
+    const option = textOf(body.option, 20);
+    const raw = body.binding as Record<string, unknown> | undefined;
+    const column = raw && typeof raw === 'object' ? textOf(raw.column, 120) : undefined;
+    const bound = raw && typeof raw === 'object' ? textOf(raw.key, 120) : undefined;
+    const view = await editRecording(ctx, project, name, (stored) =>
+      ctx.corrections
+        .apply(key, stored, {
+          ...(option ? { option } : {}),
+          ...(column && bound ? { binding: { column, key: bound } } : {}),
+        })
+        .catch(refuse),
+    );
+    sendJson(response, view);
+    return;
+  }
+  if (sub === 'resume') {
+    sendJson(response, await ctx.corrections.resume(key).catch(refuse));
+    return;
+  }
+  if (sub === 'close') {
+    ctx.corrections.close(key);
+    sendJson(response, { closed: true });
+    return;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'unknown correction action');
 }
 
 function groupProposalView(proposal: GroupProposal): GroupProposalView {

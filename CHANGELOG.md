@@ -83,11 +83,19 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
       accepter, refuser, désactiver, modifier, réinitialiser, une à une ou en lot ;
     - source de chaque saisie (fixe, générée, reprise d'une étape antérieure) ; un secret ne se lie pas ;
     - génération des tests (YAML, Gherkin, Playwright, Java) et ce qu'est chaque fichier produit ;
-    - rejeu de validation sans fenêtre sur le serveur, suivi étape par étape.
+    - rejeu de validation sans fenêtre sur le serveur, suivi étape par étape ;
+    - correction d'une cible : le serveur rejoue les étapes précédentes dans un navigateur ouvert sur sa
+      machine, la personne y clique l'élément voulu, le Dashboard montre la proposition (cible actuelle et
+      nouvelle, ordre d'essai, façon de retrouver une ligne de tableau) ; la cible n'est remplacée qu'à la
+      validation ; le rejeu reprend ensuite à l'étape corrigée ; l'original se restaure ;
+    - ligne de tableau redéfinie colonne par colonne à partir des cellules enregistrées, sans navigateur ;
+    - revue des intentions : confirmer, corriger avec une raison, réinitialiser (registre des décisions).
   - SDK : `recordings.pause/resume/undo/checkpoint/resolve/ignore` (droit `RUN`),
     `recordings.removeStep`, `recordings.replay/replayStatus` (droit `RUN`),
-    `groups.proposals/acceptProposals/checks/addCheck` ; événement `timeline` (seul le dernier état est
-    gardé) ; les phases portent leur rang et leur détail.
+    `groups.proposals/acceptProposals/checks/addCheck`, `recordings.intents/reviewIntent`,
+    `recordings.rowSource/editRow/restoreTarget`, `corrections.start/get/pick/apply/resume/close` (une
+    session à la fois ; ouvrir et reprendre demandent `RUN`, valider `DECIDE`) ; événement `timeline`
+    (seul le dernier état est gardé) ; les phases portent leur rang et leur détail.
   - Les étapes du Studio et du flow sont dites dans la langue du serveur (« Vérifier : "À propos" »
     au lieu de « the link … ») ; le dernier rejeu du Studio est dit en mots (« conforme »).
   - Moteur : le rejeu de validation (`replayRecordedFlow`), le retrait d'une étape et la vérification

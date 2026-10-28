@@ -3,13 +3,20 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FlowStep } from '../../src/config/flow-schema.js';
-import type { RecordedFlow, RecordedFlowStep } from '../../src/recording/model.js';
+import type { RecordedElement, RecordedFlow, RecordedFlowStep } from '../../src/recording/model.js';
 import { emptyQuality } from '../../src/recording/model.js';
 import {
   acceptStoredGroupProposals,
   addStoredGroupCheck,
+  correctStoredTarget,
   dropFlowStep,
+  editStoredRow,
   removeStoredStep,
+  restoreStoredTarget,
+  reviewStoredIntent,
+  storedCorrectionProposal,
+  storedIntents,
+  storedRowSource,
   storedGroupChecks,
   storedGroupProposals,
   type StoredRecording,
@@ -149,5 +156,170 @@ describe('review of a stored recording', () => {
     expect(last?.step).toMatchObject({ kind: 'expect', expect: { text: '${testData:item.title}' } });
     expect(recording.flow.proposals?.at(-1)).toMatchObject({ origin: 'EXPLICIT', status: 'APPROVED' });
     expect(storedGroupChecks(recording)).toEqual([]);
+  });
+});
+
+describe('review of a stored recording — targets and intents', () => {
+  const link: RecordedElement = {
+    tag: 'a',
+    role: 'link',
+    name: 'Open',
+    css: 'table a',
+    cssStable: false,
+    inForm: false,
+    isSubmit: false,
+    inNavigation: false,
+    inDialog: false,
+    sameRoleName: 3,
+    roleNameIndex: 1,
+    sameLabel: 0,
+  };
+  const cells = [
+    { column: 'Reference', value: 'R-3027' },
+    { column: 'Status', value: 'Nouvelle' },
+  ];
+  const rowFlow = (): RecordedFlow => ({
+    ...fixture(),
+    steps: [
+      {
+        ...step('s1', 'a1', {
+          ...C,
+          kind: 'click',
+          target: { strategy: 'role', role: 'link', name: 'Open', row: { Reference: 'R-3024' } },
+        }),
+        rawEventIds: ['r1'],
+      },
+      step('s2', 'a2', { ...C, kind: 'click', target: { strategy: 'role', role: 'button', name: 'Save' } }),
+    ],
+  });
+
+  it('redefines the row from the recorded cells, then restores the original target', async () => {
+    recording.flow = rowFlow();
+    await writeFile(
+      path.join(dir, 'raw-recording.json'),
+      JSON.stringify({
+        startedAt: '2026-10-28T10:00:00.000Z',
+        rawEvents: [{ id: 'r1', element: { ...link, rowCells: cells } }],
+      }),
+    );
+    const source = await storedRowSource(recording, 's1');
+    expect(source).toMatchObject({ cells, variables: [] });
+    expect(await storedRowSource(recording, 'nope')).toEqual({ error: 'step nope not found' });
+    const edited = await editStoredRow(
+      recording,
+      { stepId: 's1', columns: [{ column: 'Reference', source: 'value', value: 'R-3027' }] },
+      'fr',
+    );
+    expect(edited).toEqual({ ok: true, added: [] });
+    expect(recording.flow.steps[0]?.step).toMatchObject({ target: { row: { Reference: 'R-3027' } } });
+    expect(recording.flow.steps[0]?.userDecision).toBe('TARGET_CORRECTED_BY_USER');
+    // Une nouvelle donnée demande un jeu de test : refusée sans lui, rien n'est écrit.
+    expect(
+      await editStoredRow(
+        recording,
+        {
+          stepId: 's1',
+          columns: [{ column: 'Status', source: 'new-variable', key: 'case.status', value: 'Nouvelle' }],
+        },
+        'fr',
+      ),
+    ).toEqual({ error: 'a new variable is created during the review only' });
+    expect(await restoreStoredTarget(recording, 's1', 'fr')).toEqual({ ok: true });
+    expect(recording.flow.steps[0]?.step).toMatchObject({ target: { row: { Reference: 'R-3024' } } });
+    expect(recording.flow.steps[0]?.userDecision).toBeUndefined();
+    expect(await restoreStoredTarget(recording, 's2', 'fr')).toEqual({
+      error: 'step s2 has no correction to restore',
+    });
+  });
+
+  it('proposes then applies the element picked in the browser: only the target changes', async () => {
+    recording.flow = rowFlow();
+    const picked = {
+      element: { ...link, tag: 'button', role: 'button', name: 'Enregistrer', css: 'form button' },
+    };
+    const proposal = storedCorrectionProposal(recording, 's2', picked, [], 'fr');
+    expect(proposal).toMatchObject({ target: { role: 'button', name: 'Enregistrer' } });
+    expect(recording.flow.steps[1]?.step).toMatchObject({ target: { name: 'Save' } });
+    const applied = await correctStoredTarget(recording, { stepId: 's2', picked, known: [] }, 'fr');
+    expect(applied).toMatchObject({ ok: true });
+    expect(recording.flow.steps[1]?.step).toMatchObject({ kind: 'click', target: { name: 'Enregistrer' } });
+    expect(await readFile(path.join(dir, 'generated.flow.yaml'), 'utf8')).toContain('Enregistrer');
+    expect(await correctStoredTarget(recording, { stepId: 'nope', picked, known: [] }, 'fr')).toEqual({
+      error: 'step nope not found',
+    });
+  });
+
+  it('reviews an intent: confirm, correct with a reason, reset; the ledger keeps everything', async () => {
+    expect((await storedIntents(recording, 'fr')).rows).toEqual([]);
+    expect(await reviewStoredIntent(recording, { actionId: 'a1', type: 'CONFIRM' })).toEqual({
+      error: 'no application model to review',
+    });
+    await writeFile(
+      path.join(dir, 'application-model.json'),
+      JSON.stringify({
+        actions: [
+          {
+            actionId: 'a1',
+            type: 'CLICK',
+            label: 'New item',
+            stepIds: ['s1'],
+            recorded: true,
+            validation: 'VALIDATED',
+            interpretation: ['CREATE'],
+            confidence: 0.8,
+          },
+          {
+            actionId: 'a3',
+            type: 'CLICK',
+            label: 'Save',
+            stepIds: ['s3'],
+            recorded: true,
+            validation: 'VALIDATED',
+            interpretation: ['UNKNOWN'],
+          },
+        ],
+        evidence: [],
+        summary: { actions: { recorded: 2, validated: 2, interpreted: 1 } },
+      }),
+    );
+    const before = await storedIntents(recording, 'fr');
+    expect(before.choices).toContain('SAVE');
+    expect(before.rows[0]).toMatchObject({
+      actionId: 'a1',
+      label: 'Cliquer sur "New item"',
+      intent: 'CREATE',
+      status: 'INFERRED',
+      source: 'SYSTEM',
+      confidence: 0.8,
+    });
+    expect(await reviewStoredIntent(recording, { actionId: 'a1', type: 'CONFIRM' })).toEqual({ ok: true });
+    expect(
+      await reviewStoredIntent(recording, {
+        actionId: 'a3',
+        type: 'CORRECT',
+        intent: 'SAVE',
+        reason: 'le bouton enregistre',
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      await reviewStoredIntent(recording, { actionId: 'a3', type: 'CORRECT', intent: 'DANCE' }),
+    ).toMatchObject({
+      error: expect.stringContaining('unknown intent DANCE') as string,
+    });
+    const after = await storedIntents(recording, 'fr');
+    expect(after.rows.map((row) => [row.actionId, row.intent, row.status, row.source])).toEqual([
+      ['a1', 'CREATE', 'HUMAN_CONFIRMED', 'HUMAN'],
+      ['a3', 'SAVE', 'HUMAN_CORRECTED', 'HUMAN'],
+    ]);
+    expect(after.rows[1]).toMatchObject({ original: 'UNKNOWN', reason: 'le bouton enregistre' });
+    expect(await reviewStoredIntent(recording, { actionId: 'a3', type: 'RESET' })).toEqual({ ok: true });
+    expect((await storedIntents(recording, 'fr')).rows[1]).toMatchObject({
+      intent: 'UNKNOWN',
+      status: 'INFERRED',
+    });
+    const ledger = JSON.parse(await readFile(path.join(dir, 'human-review.json'), 'utf8')) as {
+      decisions: unknown[];
+    };
+    expect(ledger.decisions).toHaveLength(3);
   });
 });
