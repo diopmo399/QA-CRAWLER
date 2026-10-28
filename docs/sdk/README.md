@@ -702,6 +702,7 @@ comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 | Exécution        | suivi en direct (étapes, phase du moteur, durée ; écrans et actions pour une exploration), annulation confirmée dans la page ; puis verdict, étapes, assertions vérifiées ou en échec, clés de données, anomalies, preuves, lien vers le rapport                                                                                                                |
 | Historique       | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                  |
 | Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                           |
+| Enregistrements  | démarrer l'enregistrement d'un parcours (nom, chemin de départ, rejeu de validation ; un seul à la fois), le suivre en direct (gestes et phases, jamais une valeur saisie) et l'arrêter ; la liste du projet (statut, étapes, assertions à décider, rejeu de validation), le lien vers le Flow Studio et la promotion en scénario                               |
 | Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                           |
 | Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                      |
 | Référentiel      | les éléments publiés, par type et par source ; pour l'un d'eux : provenance (source, section, page, feuille, cellule), historique des versions, liens avec leur justification et leur confiance, liens proposés à confirmer ou rejeter, lien ajouté à la main ; le menu compte les candidats en attente                                                         |
@@ -715,7 +716,7 @@ comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 Le menu range les écrans par section et porte le projet choisi (« Tous les projets » par défaut) ; il
 dit la version de l'API et du moteur. Sous 960 px de large (requête de conteneur), il se replie
 derrière un bouton « Menu » (`aria-expanded`, Échap le referme) ; sous 600 px tout passe sur une
-colonne et les tableaux défilent dans leur cadre, sans défilement horizontal de la page. La page
+colonne et les tableaux défilent dans leur cadre, sans défilement horizontal de la page. Les contrôles font 36 px de haut avec une souris, 44 px sur écran tactile ; les listes déroulantes ont une seule apparence, qui suit le thème. La page
 `/dashboard` charge IBM Plex Sans depuis le serveur (aucune police externe).
 
 Le Dashboard n'appelle que le client du SDK : chaque règle est vérifiée par le serveur. Un bouton ne
@@ -866,6 +867,10 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - `tests/integration/sdk-dashboard-access.test.ts` : dans Chromium, en mode nominatif : jeton
   inconnu refusé, lecteur sans action, déconnexion, membre créé (jeton montré une fois), rôle de
   projet, révocation, journal ; téléphone sans défilement horizontal.
+- `tests/unit/sdk-dashboard-recordings.test.ts` et `tests/integration/sdk-dashboard-recordings.test.ts` :
+  l'écran Enregistrements ; dans Chromium, le Dashboard démarre un enregistrement que joue une personne
+  simulée avec le **vrai** recorder, le suit en direct, le liste, donne le lien vers le Flow Studio et
+  le promeut.
 - `tests/integration/sdk-dashboard.test.ts` : `/dashboard` dans Chromium avec le **vrai** moteur.
   Il couvre :
   - la vue d'ensemble ;

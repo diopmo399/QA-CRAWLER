@@ -57,6 +57,8 @@ const ICONS: Record<string, string> = {
   sources: '<path d="M12 15V4M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/>',
   indicators: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   trends: '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+  recordings:
+    '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/>',
   access: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
   download: '<path d="M12 4v11M8 11l4 4 4-4"/><path d="M4 17v1a2 2 0 002 2h12a2 2 0 002-2v-1"/>',
   scenarios:

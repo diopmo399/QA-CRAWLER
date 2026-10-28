@@ -330,6 +330,52 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 .foot .who{color:#fff;font-weight:600}
 .foot .out{color:#C7C5F4;align-self:flex-start;min-height:32px}
 
+/*
+ * Densité et contrôles. Sur ordinateur, des contrôles compacts (36 px, 30 px pour les petits) ;
+ * sur écran tactile (pointeur grossier), 44 px, la taille d'une cible au doigt. Une seule
+ * apparence pour toutes les listes déroulantes : bordure, rayon, flèche dessinée avec les jetons
+ * (elle suit donc le thème clair ou sombre).
+ */
+:host{--qa-control:36px;--qa-control-sm:30px}
+@media (pointer:coarse){:host{--qa-control:44px;--qa-control-sm:40px}}
+.btn{min-height:var(--qa-control);padding:0 14px;border-radius:8px;font-size:14px;line-height:1.2;white-space:nowrap}
+.btn .ico{width:16px;height:16px}
+.btn.small{min-height:var(--qa-control-sm);padding:0 10px;font-size:13px}
+.btn.icon-only{width:var(--qa-control);min-width:var(--qa-control)}
+.btn.ghost:hover{background:var(--qa-color-surface-2);color:var(--qa-color-text)}
+.btn:focus-visible,.chip:focus-visible,.tabs button:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
+.card>.btn,.card>form>.btn,.signin form .btn{align-self:flex-start}
+.chip{min-height:var(--qa-control-sm);padding:0 12px}
+.tabs button{min-height:40px}
+.chk,.row-chk{min-height:var(--qa-control)}
+.field{font-size:13px}
+.field input,.field textarea{min-height:var(--qa-control);padding:6px 10px;border-radius:8px;font-size:14px}
+.field input:focus-visible,.field textarea:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px;border-color:var(--qa-color-primary)}
+.dash select{-webkit-appearance:none;appearance:none;min-height:var(--qa-control);padding:0 32px 0 10px;border:1px solid var(--qa-color-border-strong);border-radius:8px;background-color:var(--qa-color-surface);color:var(--qa-color-text);font-size:14px;font-weight:400;cursor:pointer;max-width:100%;background-image:linear-gradient(45deg,transparent 50%,var(--qa-color-muted) 50%),linear-gradient(135deg,var(--qa-color-muted) 50%,transparent 50%);background-position:calc(100% - 16px) 50%,calc(100% - 11px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.dash select:hover{border-color:var(--qa-color-primary)}
+.dash select:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px}
+.dash select[disabled]{opacity:.55;cursor:not-allowed}
+.dash .ctx select{background-color:#2A2765;border-color:#3F3C85;color:#fff;background-image:linear-gradient(45deg,transparent 50%,#C7C8EE 50%),linear-gradient(135deg,#C7C8EE 50%,transparent 50%)}
+.dash .ctx select:hover{border-color:#8B8BFF}
+.pick{font-size:13px}
+.pick select{min-width:150px}
+.inline select,.member select{min-height:var(--qa-control-sm);font-size:13px}
+.lk .row-acts{margin-left:auto}
+.lk .row-acts .btn{min-height:var(--qa-control-sm);padding:0 8px;font-size:13px}
+
+/* Choix d'un fichier : un bouton du Dashboard, le champ natif reste accessible (clavier, lecteur d'écran). */
+.file-pick{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-weight:400}
+.file-pick label{position:relative;overflow:hidden}
+.file-pick input[type="file"]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
+.file-pick label:focus-within{outline:2px solid var(--qa-color-primary);outline-offset:2px}
+.field input[inputmode="numeric"]{max-width:180px}
+
+/* Enregistrements : formulaire, session en direct. */
+.rec-form{gap:12px}
+.live-rec{border-color:color-mix(in srgb,var(--qa-color-primary) 45%,var(--qa-color-border))}
+.rec-events{display:flex;flex-direction:column;gap:4px;font-size:13px;overflow-wrap:anywhere}
+.row-acts a.btn{text-decoration:none}
+
 /* Responsive : 1 100 px, 960 px (menu replié), 600 px (une colonne). */
 @container (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @container (max-width:960px){

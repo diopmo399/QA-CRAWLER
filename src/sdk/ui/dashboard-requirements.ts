@@ -113,6 +113,16 @@ function labelOf(state: DashboardState, id: string): string {
   return state.req.repository?.entities.find((entity) => entity.id === id)?.externalId ?? id;
 }
 
+/** La description n'apporte rien quand elle ne fait que répéter le titre (à la ponctuation près). */
+function adds(title: string, description: string): boolean {
+  const plain = (text: string): string =>
+    text
+      .trim()
+      .replace(/[\s.;:!?…]+$/u, '')
+      .toLowerCase();
+  return description.trim() !== '' && plain(description) !== plain(title);
+}
+
 const percent = (ratio: Ratio): string =>
   ratio.value === undefined ? '—' : `${String(Math.round(ratio.value * 100))} %`;
 
@@ -164,7 +174,7 @@ export function sourcesView(state: DashboardState): string {
 <div class="fields"><label class="field">${esc(r.variant)}<select data-req="variant"><option value="" ${form.variant === '' ? 'selected' : ''}>${esc(r.variantAuto)}</option><option value="cloud" ${form.variant === 'cloud' ? 'selected' : ''}>${esc(r.variantCloud)}</option><option value="datacenter" ${form.variant === 'datacenter' ? 'selected' : ''}>${esc(r.variantDc)}</option></select></label>${field('tokenEnv', r.tokenEnv, form.tokenEnv, 'class="mono" autocomplete="off" spellcheck="false" placeholder="QA_…"')}</div>
 ${field('userEnv', r.userEnv, form.userEnv, 'class="mono" autocomplete="off" spellcheck="false" placeholder="QA_…"')}
 <p class="note">${icon('alert')}<span>${esc(r.secretNote)}</span></p>`
-      : `<label class="field">${esc(r.file)}<input type="file" data-req="file" accept=".docx,.xlsx,.pdf"></label>${form.fileName ? `<p class="mu"><code>${esc(form.fileName)}</code></p>` : ''}<small class="mu">${esc(r.fileNote)}</small>`;
+      : `<div class="field">${esc(r.file)}<div class="file-pick"><label class="btn small">${icon('sources')}<span>${esc(r.chooseFile)}</span><input type="file" data-req="file" accept=".docx,.xlsx,.pdf"></label><span class="${form.fileName ? 'mono' : 'mu'}">${esc(form.fileName || r.noFileChosen)}</span></div></div><small class="mu">${esc(r.fileNote)}</small>`;
   const importCard =
     archived || !can(state, 'DECIDE')
       ? ''
@@ -251,7 +261,7 @@ function candidate(state: DashboardState, item: ExtractedItem, batch: ImportBatc
     actions = `${decided}<div class="row-acts">${accept}${merge}<button class="btn ghost" data-action="decide" data-item="${esc(item.id)}" data-decision="REJECT" ${item.decision?.action === 'REJECT' ? 'aria-pressed="true"' : ''} ${disabled}>${esc(r.reject)}</button></div>`;
   }
   const state_ = item.decision ? `data-decided="${esc(item.decision.action)}"` : '';
-  return `<article class="cand" ${state_}><div class="cand-h">${kind}${id}<span class="mu">${esc(r.confidence(item.confidence))}</span>${duplicate}${similarity}</div><b class="cand-t">${esc(item.title)}</b>${item.description && item.description !== item.title ? `<p class="mu">${esc(item.description)}</p>` : ''}${parent}<small class="mu block">${esc(r.why)} : ${esc(item.reasons.join(' ; ') || '—')}${where ? ` · ${esc(where)}` : ''}</small>${actions}</article>`;
+  return `<article class="cand" ${state_}><div class="cand-h">${kind}${id}<span class="mu">${esc(r.confidence(item.confidence))}</span>${duplicate}${similarity}</div><b class="cand-t">${esc(item.title)}</b>${adds(item.title, item.description) ? `<p class="mu">${esc(item.description)}</p>` : ''}${parent}<small class="mu block">${esc(r.why)} : ${esc(item.reasons.join(' ; ') || '—')}${where ? ` · ${esc(where)}` : ''}</small>${actions}</article>`;
 }
 
 export function importView(state: DashboardState): string {
@@ -290,7 +300,7 @@ export function importView(state: DashboardState): string {
           .join('')}</ul>`
   }</section>`;
   const missing = `<section class="card"><h2>${esc(r.missingTitle)}</h2><p class="mu">${esc(batch.missingFromSource.length > 0 ? r.missing(batch.missingFromSource.length) : r.noMissing)}</p>${batch.missingFromSource.length > 0 ? `<p>${batch.missingFromSource.map((id) => `<code>${esc(id)}</code>`).join(' ')}</p>` : ''}</section>`;
-  const note = `<p class="note">${icon('alert')}<span>${esc(r.decisionNote)} ${esc(r.authorNote)}</span></p>${partial ? `<p class="note warn">${icon('alert')}<span>${esc(r.partialNote)}</span></p>` : ''}`;
+  const note = `<p class="note">${icon('alert')}<span>${esc(r.decisionNote)}${state.me?.mode === 'named' ? '' : ` ${esc(r.authorNote)}`}</span></p>${partial ? `<p class="note warn">${icon('alert')}<span>${esc(r.partialNote)}</span></p>` : ''}`;
   const information = batch.items.filter((item) => item.kind === 'INFORMATION');
   const informationList =
     information.length === 0
@@ -365,7 +375,7 @@ function entityDetail(state: DashboardState, entity: CanonicalEntity, withLinks:
       : form
         ? `<form class="col link-form" data-action="link-form"><div class="fields"><label class="field">${esc(r.linkType)}<select data-link-field="type">${ADDABLE_LINKS.map((type) => `<option value="${type}" ${form.type === type ? 'selected' : ''}>${esc(r.linkTypes[type] ?? type)}</option>`).join('')}</select></label><label class="field">${esc(r.targetKind)}<select data-link-field="targetKind">${TARGET_KINDS.map((kind) => `<option value="${kind}" ${form.targetKind === kind ? 'selected' : ''}>${esc(r.targetKinds[kind] ?? kind)}</option>`).join('')}</select></label></div><label class="field">${esc(r.targetId)}<input data-link-field="targetId" class="mono" value="${esc(form.targetId)}"></label><label class="field">${esc(r.justificationField)}<textarea data-link-field="justification" rows="2">${esc(form.justification)}</textarea></label><div class="form-acts start"><button type="button" class="btn primary" data-action="link-add">${esc(r.addLinkSave)}</button><button type="button" class="btn ghost" data-action="link-cancel">${esc(t.cancelAction)}</button></div>${state.req.error ? `<p class="err" role="alert">${esc(state.req.error)}</p>` : ''}</form>`
         : `<button class="btn" data-action="link-open">${esc(r.addLink)}</button>`;
-  return `<section class="card"><div class="card-h"><h2>${entity.externalId ? `<code>${esc(entity.externalId)}</code> ` : ''}${esc(r.kinds[entity.kind] ?? entity.kind)}</h2><span class="mu">${esc(r.version(entity.version))}</span></div><p class="big-name">${esc(entity.title)}</p>${entity.description && entity.description !== entity.title ? `<p>${esc(entity.description)}</p>` : ''}
+  return `<section class="card"><div class="card-h"><h2>${entity.externalId ? `<code>${esc(entity.externalId)}</code> ` : ''}${esc(r.kinds[entity.kind] ?? entity.kind)}</h2><span class="mu">${esc(r.version(entity.version))}</span></div><p class="big-name">${esc(entity.title)}</p>${adds(entity.title, entity.description) ? `<p>${esc(entity.description)}</p>` : ''}
 <h3 class="section-t">${esc(r.linksTitle)}</h3>${links.length === 0 ? `<p class="mu">${esc(r.noLink)}</p>` : `<ul class="plain">${linkItems}</ul>`}${addLink}
 <h3 class="section-t">${esc(r.provenance)}</h3><ul class="plain">${sources}</ul>
 <h3 class="section-t">${esc(r.historyTitle)}</h3><ul class="plain tight">${history}</ul></section>`;

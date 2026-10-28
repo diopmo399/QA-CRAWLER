@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseSdkServerArgs } from '../../src/cli/sdk-server-command.js';
 import type { AccessMe, JournalEntry, MemberView, ProjectDetail } from '../../src/sdk/core/contracts.js';
 import { ROLE_RIGHTS } from '../../src/sdk/core/contracts.js';
+import { emptyRecordingsUi } from '../../src/sdk/ui/dashboard-recordings.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
 import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
@@ -69,6 +70,7 @@ const base = (
   req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8 },
   signIn: true,
   access: { ...emptyAccessUi(), ...access },
+  recs: emptyRecordingsUi(),
   ...extra,
 });
 

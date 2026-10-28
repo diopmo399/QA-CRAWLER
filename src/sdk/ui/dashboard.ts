@@ -3,6 +3,7 @@ import { DASHBOARD_EVENTS, type Environment, type Role } from '../core/contracts
 import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
+import { emptyRecordingsUi } from './dashboard-recordings.js';
 import { environmentForm, environmentInputOf } from './dashboard-ops.js';
 import {
   connectorOfFile,
@@ -66,6 +67,8 @@ export class QaCrawlerDashboard extends Base {
   private tokenValue?: string;
   private connected = false;
   private subscription?: Subscription;
+  /** Le suivi en direct d'un enregistrement (indépendant de celui d'une exécution). */
+  private recSubscription?: Subscription;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
   private generation = 0;
   /** Le fichier choisi pour un import (jamais dans l'état rendu). */
@@ -90,6 +93,7 @@ export class QaCrawlerDashboard extends Base {
       req: { form: emptyImportForm(), kind: 'ALL', source: 'ALL', weeks: 8 },
       signIn: false,
       access: emptyAccessUi(),
+      recs: emptyRecordingsUi(),
     };
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
@@ -110,6 +114,11 @@ export class QaCrawlerDashboard extends Base {
       const reqField = target.dataset.req as keyof ImportForm | undefined;
       if (reqField && reqField !== 'source' && target.type !== 'file') {
         (this.state.req.form as unknown as Record<string, string>)[reqField] = target.value;
+        return;
+      }
+      const recField = target.dataset.rec;
+      if ((recField === 'name' || recField === 'startPath') && target.type !== 'checkbox') {
+        this.state.recs.form[recField] = target.value;
         return;
       }
       if (target.dataset.memberField === 'name') {
@@ -159,6 +168,7 @@ export class QaCrawlerDashboard extends Base {
   connectedCallback(): void {
     this.connected = true;
     this.state.signIn = this.hasAttribute('sign-in');
+    this.state.studioUrl = this.studioUrl();
     const days = Number(this.getAttribute('days'));
     if ((PERIODS as readonly number[]).includes(days)) this.state.days = days;
     void this.load();
@@ -167,6 +177,7 @@ export class QaCrawlerDashboard extends Base {
   disconnectedCallback(): void {
     this.connected = false;
     this.unsubscribe();
+    this.unfollowRecording();
     this.ownClient?.dispose();
     this.ownClient = undefined;
   }
@@ -187,7 +198,10 @@ export class QaCrawlerDashboard extends Base {
       const days = Number(next);
       if ((PERIODS as readonly number[]).includes(days)) this.state.days = days;
     }
-    if (name === 'endpoint') this.resetClient();
+    if (name === 'endpoint') {
+      this.resetClient();
+      this.state.studioUrl = this.studioUrl();
+    }
     if (this.connected) void this.load();
   }
 
@@ -201,8 +215,24 @@ export class QaCrawlerDashboard extends Base {
     return this.ownClient;
   }
 
+  /** Le Flow Studio est servi par le même serveur que l'API (`…/api` → `…/studio`). */
+  private studioUrl(): string {
+    const endpoint = this.getAttribute('endpoint') ?? '/api';
+    try {
+      const url = new URL(
+        endpoint,
+        'location' in globalThis ? globalThis.location.href : 'http://localhost/',
+      );
+      url.pathname = url.pathname.replace(/\/api\/?$/, '') + '/studio';
+      return endpoint.startsWith('/') ? url.pathname : url.toString().replace(/[?#].*$/, '');
+    } catch {
+      return '/studio';
+    }
+  }
+
   private resetClient(): void {
     this.unsubscribe();
+    this.unfollowRecording();
     this.ownClient?.dispose();
     this.ownClient = undefined;
   }
@@ -212,12 +242,75 @@ export class QaCrawlerDashboard extends Base {
     this.subscription = undefined;
   }
 
+  private unfollowRecording(): void {
+    this.recSubscription?.close();
+    this.recSubscription = undefined;
+  }
+
+  /** Suivre une session d'enregistrement : ses gestes, ses phases, sa fin (puis la liste est relue). */
+  private followRecording(api: QaCrawlerClient, projectId: string, name: string, status: string): void {
+    this.unfollowRecording();
+    const live = { name, status, events: [] as { at: string; text: string }[] };
+    this.state.recs.live = live;
+    this.recSubscription = api.recordings.subscribe(projectId, name, (event) => {
+      if (this.state.recs.live !== live) return;
+      if (event.type === 'status') live.status = event.status;
+      else if (event.type === 'recorder') live.events.push({ at: event.at, text: event.message });
+      else if (event.type === 'phase') live.events.push({ at: event.at, text: event.phase });
+      else if (event.type === 'failed') live.events.push({ at: event.at, text: event.error });
+      if (event.type === 'completed' || event.type === 'failed') {
+        live.status = event.type === 'completed' ? 'COMPLETED' : 'FAILED';
+        this.unfollowRecording();
+        this.state.recs.live = undefined;
+        if (event.type === 'failed') this.state.recs.error = event.error;
+        void this.load();
+        return;
+      }
+      if (this.state.route.view === 'recordings') this.paint();
+    });
+  }
+
+  private async startRecording(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const ui = this.state.recs;
+    if (!api || !project || ui.busy) return;
+    const name = ui.form.name.trim();
+    if (!name) {
+      ui.error = this.state.t.rec.noName;
+      this.paint();
+      return;
+    }
+    ui.busy = true;
+    ui.error = undefined;
+    this.paint();
+    try {
+      const snapshot = await api.recordings.start(project.id, {
+        name,
+        ...(ui.form.startPath.trim() ? { startPath: ui.form.startPath.trim() } : {}),
+        validate: ui.form.validate,
+      });
+      ui.busy = false;
+      ui.form = { ...ui.form, name: '', startPath: '' };
+      this.followRecording(api, project.id, snapshot.name, snapshot.status);
+      await this.load();
+    } catch (error) {
+      ui.busy = false;
+      ui.error = message(error);
+      this.paint();
+    }
+  }
+
   private emit(type: string, detail: unknown): void {
     this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
   }
 
   private navigate(route: DashboardRoute): void {
     if (route.view !== 'execution') this.unsubscribe();
+    if (route.view !== 'recordings') {
+      this.unfollowRecording();
+      this.state.recs.live = undefined;
+    }
     if ('projectId' in route && route.projectId !== undefined && route.projectId !== this.state.projectId) {
       this.state.projectId = route.projectId;
       this.state.checks = {};
@@ -316,6 +409,16 @@ export class QaCrawlerDashboard extends Base {
         if (this.state.project?.id !== route.projectId)
           await this.loadProject(api, route.projectId, generation);
         await this.loadExecution(api, route, generation);
+      } else if (route.view === 'recordings') {
+        await this.loadProject(api, route.projectId, generation);
+        const recordings = await api.recordings.list(route.projectId);
+        if (generation !== this.generation) return;
+        this.state.recordings = recordings;
+        const running = recordings.find(
+          (entry) => entry.status === 'RECORDING' || entry.status === 'PROCESSING',
+        );
+        if (running && this.state.recs.live?.name !== running.name)
+          this.followRecording(api, route.projectId, running.name, running.status);
       } else if (route.view === 'access') {
         if (this.state.me?.rights.includes('MANAGE_ACCESS')) {
           const kind = this.state.access.journalKind;
@@ -919,6 +1022,7 @@ export class QaCrawlerDashboard extends Base {
           view === 'executions' ||
           view === 'history' ||
           view === 'scenarios' ||
+          view === 'recordings' ||
           view === 'explorations' ||
           view === 'environments' ||
           view === 'sources' ||
@@ -934,6 +1038,22 @@ export class QaCrawlerDashboard extends Base {
       case 'import':
         void this.importSource();
         return;
+      case 'start-recording':
+        void this.startRecording();
+        return;
+      case 'stop-recording': {
+        const project = this.state.project;
+        const live = this.state.recs.live;
+        if (!api || !project || !live) return;
+        live.stopping = true;
+        this.paint();
+        api.recordings.stop(project.id, live.name).catch((error: unknown) => {
+          live.stopping = false;
+          this.state.recs.error = message(error);
+          this.paint();
+        });
+        return;
+      }
       case 'sign-out':
         this.signOut();
         return;
@@ -1235,6 +1355,7 @@ export class QaCrawlerDashboard extends Base {
         route.view === 'executions' ||
         route.view === 'history' ||
         route.view === 'scenarios' ||
+        route.view === 'recordings' ||
         route.view === 'explorations' ||
         route.view === 'environments' ||
         route.view === 'sources' ||
@@ -1245,6 +1366,10 @@ export class QaCrawlerDashboard extends Base {
         this.navigate({ view: route.view, projectId });
       else if (route.view === 'import') this.navigate({ view: 'sources', projectId });
       else this.navigate({ view: 'project', projectId });
+      return;
+    }
+    if (target.dataset.rec === 'validate') {
+      this.state.recs.form.validate = (target as HTMLInputElement).checked;
       return;
     }
     if (target.dataset.memberField === 'role') {

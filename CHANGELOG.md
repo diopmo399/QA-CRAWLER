@@ -62,6 +62,13 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   - CLI : le premier Ctrl+C demande cet arrêt, avec le code de sortie `130` ; un second Ctrl+C
     quitte tout de suite.
 
+- **Dashboard, écran Enregistrements et finitions** :
+  - démarrer, suivre en direct et arrêter l'enregistrement d'un parcours ; liste des enregistrements
+    du projet, lien vers le Flow Studio, promotion en scénario ;
+  - contrôles compacts (36 px à la souris, 44 px au doigt), listes déroulantes et choix de fichier
+    au style du Dashboard, champs numériques à leur largeur, boutons qui ne s'étirent plus ;
+  - la note « auteur non enregistré » ne s'affiche plus qu'en mode à jeton unique ; une description
+    qui ne fait que répéter le titre n'est plus affichée.
 - **Accès nominatifs** (`sdk-server --access named`, `startSdkServer({ access: 'named' })`) :
   - jetons par personne ou robot, conservés par leur seule empreinte et montrés une fois ;
   - quatre rôles (Lecteur, Analyste, Pilote QA, Administrateur), un rôle possible par projet ;
