@@ -244,7 +244,9 @@ export function rightFor(segments: readonly string[], method: string): Right {
       return item === 'check' ? 'RUN' : 'MANAGE_ENVIRONMENTS';
     case 'scenarios':
     case 'library':
-      // Promouvoir, composer, insérer un bloc, enrichir la bibliothèque : publier des scénarios.
+      // Vérifier un parcours ne change rien : le voir suffit. Promouvoir, composer, insérer un bloc,
+      // enrichir la bibliothèque, déclarer un contrat, valider une version : publier des scénarios.
+      if (sub === 'scenarios' && item === 'compose' && action === 'check') return 'VIEW';
       return 'PUBLISH';
     case 'executions':
     case 'explorations':
@@ -292,6 +294,11 @@ const KEYWORDS = new Set([
   'library',
   'compose',
   'insert',
+  'preview',
+  'drift',
+  'contract',
+  'version',
+  'accept',
   'executions',
   'explorations',
   'cancel',

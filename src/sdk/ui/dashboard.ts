@@ -1,10 +1,10 @@
-import { createQaCrawler, type QaCrawlerClient, type Subscription } from '../core/client.js';
+import { createQaCrawler, QaCrawlerError, type QaCrawlerClient, type Subscription } from '../core/client.js';
 import { DASHBOARD_EVENTS, type Environment, type Role } from '../core/contracts.js';
 import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
 import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashboard-recordings.js';
-import { emptyLibraryUi, runnableScenarios, type LibraryUi } from './dashboard-library.js';
+import { compositionKey, emptyLibraryUi, runnableScenarios, type LibraryUi } from './dashboard-library.js';
 import {
   assertionBuckets,
   bindFormOf,
@@ -57,6 +57,8 @@ const Base: typeof HTMLElement =
   'HTMLElement' in globalThis ? globalThis.HTMLElement : (Object as unknown as typeof HTMLElement);
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+/** Les raisons détaillées d'un refus du serveur (une par ligne). */
+const detailsOf = (error: unknown): string[] => (error instanceof QaCrawlerError ? error.details : []);
 
 /** Le formulaire ouvert : l'identifiant de l'environnement, ou « new » pour une création. */
 const formKey = (form: EnvironmentForm | undefined): string | undefined =>
@@ -187,6 +189,10 @@ export class QaCrawlerDashboard extends Base {
       (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
     });
     this.root.addEventListener('keydown', (event) => {
+      if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
+        this.closePanel();
+        return;
+      }
       if ((event as KeyboardEvent).key === 'Escape' && this.state.menuOpen) {
         this.state.menuOpen = false;
         this.paint();
@@ -809,7 +815,7 @@ export class QaCrawlerDashboard extends Base {
     }
   }
 
-  /** Une opération de la bibliothèque : envoyée au serveur, puis l'écran est relu (message ou erreur). */
+  /** Une opération de la bibliothèque : envoyée au serveur, puis l'écran est relu (message ou erreur détaillée). */
   private async libraryOp(
     run: (api: QaCrawlerClient, projectId: string, lib: LibraryUi) => Promise<string | undefined>,
   ): Promise<void> {
@@ -819,6 +825,7 @@ export class QaCrawlerDashboard extends Base {
     if (!api || !project || lib.busy) return;
     lib.busy = true;
     lib.error = undefined;
+    lib.details = undefined;
     lib.notice = undefined;
     this.paint();
     try {
@@ -826,8 +833,81 @@ export class QaCrawlerDashboard extends Base {
       await this.load();
     } catch (error) {
       lib.error = message(error);
+      lib.details = detailsOf(error);
     }
     lib.busy = false;
+    this.paint();
+  }
+
+  private checkSequence = 0;
+
+  /** VÉRIFIER LE PARCOURS (dry run de composition, sur le serveur) : ordre, dépendances, données. */
+  private async checkJourney(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const lib = this.state.lib;
+    if (!api || !project) return;
+    if (lib.compose.parts.length === 0) {
+      lib.check = undefined;
+      lib.checkedFor = undefined;
+      this.paint();
+      return;
+    }
+    const sequence = ++this.checkSequence;
+    const key = compositionKey(lib.compose);
+    const input = { name: lib.compose.name, parts: [...lib.compose.parts] };
+    lib.checking = true;
+    this.paint();
+    try {
+      const check = await api.scenarios.checkComposition(project.id, input);
+      if (sequence !== this.checkSequence) return;
+      lib.check = check;
+      lib.checkedFor = key;
+    } catch (error) {
+      if (sequence !== this.checkSequence) return;
+      lib.error = message(error);
+      lib.details = detailsOf(error);
+    }
+    lib.checking = false;
+    this.paint();
+  }
+
+  private openPanel(scenario?: string): void {
+    const sources = runnableScenarios(this.state.project?.scenarios ?? []).filter(
+      (entry) => entry.format === 'yaml',
+    );
+    const chosen =
+      scenario && sources.some((entry) => entry.name === scenario) ? scenario : (sources[0]?.name ?? '');
+    this.state.lib.panel = { scenario: chosen, name: '', description: '' };
+    this.paint();
+    this.root.querySelector<HTMLElement>('[data-lib="panel.scenario"]')?.focus();
+    void this.loadPreview();
+  }
+
+  private closePanel(): void {
+    this.state.lib.panel = undefined;
+    this.paint();
+    this.root.querySelector<HTMLElement>('.hd [data-action="lib-panel-open"]')?.focus();
+  }
+
+  /** L'aperçu du scénario source (étapes, données sans valeur, contrat dérivé), avant d'en faire un bloc. */
+  private async loadPreview(): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const panel = this.state.lib.panel;
+    if (!api || !project || !panel?.scenario) return;
+    const scenario = panel.scenario;
+    panel.loading = true;
+    this.paint();
+    try {
+      const preview = await api.library.preview(project.id, scenario);
+      if (this.state.lib.panel?.scenario !== scenario) return;
+      panel.preview = preview;
+      panel.previewFor = scenario;
+    } catch (error) {
+      panel.error = message(error);
+    }
+    panel.loading = false;
     this.paint();
   }
 
@@ -835,33 +915,55 @@ export class QaCrawlerDashboard extends Base {
     const lib = this.state.lib;
     const route = this.state.route;
     const index = Number(target.dataset.index);
+    const block = target.dataset.block ?? '';
     switch (action) {
+      case 'lib-panel-open':
+        this.openPanel();
+        return true;
+      case 'lib-panel-close':
+        this.closePanel();
+        return true;
+      case 'lib-open':
+        lib.open = lib.open === block ? undefined : block;
+        this.paint();
+        return true;
+      case 'lib-clear':
+        Object.assign(lib, { query: '', origin: 'ALL', state: 'ALL', usage: 'ALL' });
+        this.paint();
+        return true;
+      case 'lib-jump':
+        this.root.querySelector('#lib-composer')?.scrollIntoView({ block: 'start' });
+        this.root.querySelector<HTMLElement>('[data-lib="compose.name"]')?.focus();
+        return true;
+      case 'lib-open-scenario': {
+        const name = target.dataset.name ?? '';
+        if ('projectId' in route && route.projectId)
+          this.navigate({ view: 'scenarios', projectId: route.projectId, scenario: name });
+        return true;
+      }
       case 'lib-remove':
-        lib.confirmRemove = target.dataset.block;
+        lib.confirmRemove = block;
         this.paint();
         return true;
       case 'lib-remove-no':
         lib.confirmRemove = undefined;
         this.paint();
         return true;
-      case 'lib-remove-yes': {
-        const name = target.dataset.block ?? '';
+      case 'lib-remove-yes':
         lib.confirmRemove = undefined;
         void this.libraryOp(async (api, projectId) => {
-          await api.library.remove(projectId, name);
+          await api.library.remove(projectId, block);
           return undefined;
         });
         return true;
-      }
-      case 'lib-part-add': {
-        const pick = lib.compose.pick || lib.blocks?.[0]?.name;
-        if (pick) lib.compose.parts = [...lib.compose.parts, pick];
-        this.paint();
+      case 'lib-part-add':
+        if (block) lib.compose.parts = [...lib.compose.parts, block];
+        void this.checkJourney();
         return true;
-      }
       case 'lib-part-remove':
+        // Retirer du parcours en cours, jamais de la bibliothèque.
         lib.compose.parts = lib.compose.parts.filter((_, at) => at !== index);
-        this.paint();
+        void this.checkJourney();
         return true;
       case 'lib-part-move': {
         const to = target.dataset.direction === 'down' ? index + 1 : index - 1;
@@ -871,14 +973,67 @@ export class QaCrawlerDashboard extends Base {
           parts.splice(to, 0, moved);
           lib.compose.parts = parts;
         }
+        void this.checkJourney();
+        return true;
+      }
+      case 'lib-check':
+        void this.checkJourney();
+        return true;
+      case 'lib-contract-edit': {
+        const view = lib.blocks?.find((entry) => entry.name === block);
+        if (view) {
+          const contract = view.contract;
+          lib.contract = {
+            block,
+            required: contract.inputs
+              .filter((input) => input.required)
+              .map((input) => input.key)
+              .join(', '),
+            optional: contract.inputs
+              .filter((input) => !input.required)
+              .map((input) => input.key)
+              .join(', '),
+            outputs: contract.outputs.map((output) => output.key).join(', '),
+            pre: contract.preconditions.join('\n'),
+            post: contract.postconditions.join('\n'),
+          };
+        }
         this.paint();
+        this.root.querySelector<HTMLElement>('[data-lib="contract.required"]')?.focus();
+        return true;
+      }
+      case 'lib-contract-cancel':
+        lib.contract = undefined;
+        this.paint();
+        return true;
+      case 'lib-contract-reset':
+        void this.libraryOp(async (api, projectId, ui) => {
+          await api.library.declareContract(projectId, block, null);
+          ui.contract = undefined;
+          return this.state.t.lib.contractSaved(block);
+        });
+        return true;
+      case 'lib-validate-version':
+        void this.libraryOp(async (api, projectId) => {
+          const view = await api.library.validateVersion(projectId, block);
+          return this.state.t.lib.versionValidated(view.name, view.version);
+        });
+        return true;
+      case 'lib-accept': {
+        const name = target.dataset.name ?? '';
+        void this.libraryOp(async (api, projectId) => {
+          await api.scenarios.acceptBlocks(projectId, name);
+          return this.state.t.lib.accepted(name);
+        });
         return true;
       }
       case 'lib-from-scenario': {
         const name = target.dataset.name ?? '';
-        lib.add = { scenario: name, name: '', description: '' };
-        if ('projectId' in route && route.projectId)
+        if ('projectId' in route && route.projectId) {
           this.navigate({ view: 'library', projectId: route.projectId });
+          // Le panneau s'ouvre une fois l'écran chargé, sur ce scénario.
+          this.pendingPanel = name;
+        }
         return true;
       }
       case 'lib-group': {
@@ -897,39 +1052,106 @@ export class QaCrawlerDashboard extends Base {
     }
   }
 
+  private pendingPanel: string | undefined;
+
   private librarySubmit(form: HTMLFormElement): void {
     const lib = this.state.lib;
+    const keyList = (text: string): string[] =>
+      text
+        .split(/[,\s]+/)
+        .map((key) => key.trim())
+        .filter(Boolean);
+    const lines = (text: string): string[] =>
+      text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
     switch (form.dataset.action) {
       case 'lib-add': {
-        const input = { ...lib.add };
-        void this.libraryOp(async (api, projectId, ui) => {
-          const block = await api.library.add(projectId, {
-            from: 'scenario',
-            scenario: input.scenario,
-            name: input.name,
-            ...(input.description.trim() ? { description: input.description.trim() } : {}),
-          });
-          ui.add = { scenario: input.scenario, name: '', description: '' };
-          return this.state.t.lib.added(block.name);
-        });
+        const panel = lib.panel;
+        const api = this.api;
+        const project = this.state.project;
+        if (!panel || panel.busy || !api || !project) return;
+        // Une seule soumission à la fois ; en cas d'erreur, la saisie reste.
+        panel.busy = true;
+        panel.error = undefined;
+        this.paint();
+        void (async () => {
+          try {
+            const block = await api.library.add(project.id, {
+              from: 'scenario',
+              scenario: panel.scenario,
+              name: panel.name,
+              ...(panel.description.trim() ? { description: panel.description.trim() } : {}),
+            });
+            lib.panel = undefined;
+            lib.notice = this.state.t.lib.added(block.name);
+            await this.load();
+          } catch (error) {
+            panel.error = [message(error), ...detailsOf(error).slice(1)].join(' · ');
+            panel.busy = false;
+          }
+          this.paint();
+        })();
         return;
       }
       case 'lib-compose': {
-        const input = { ...lib.compose };
-        void this.libraryOp(async (api, projectId, ui) => {
-          const scenario = await api.scenarios.compose(projectId, { name: input.name, parts: input.parts });
-          ui.compose = { name: '', parts: [], pick: input.pick };
-          return this.state.t.lib.composed(scenario.name);
-        });
+        const api = this.api;
+        const project = this.state.project;
+        if (!api || !project || lib.creating || lib.busy) return;
+        const input = { name: lib.compose.name, parts: [...lib.compose.parts] };
+        lib.creating = true;
+        lib.error = undefined;
+        lib.details = undefined;
+        lib.notice = undefined;
+        this.paint();
+        void (async () => {
+          try {
+            const scenario = await api.scenarios.compose(project.id, input);
+            lib.compose = { name: '', parts: [] };
+            lib.check = undefined;
+            lib.checkedFor = undefined;
+            lib.notice = this.state.t.lib.composed(scenario.name);
+            await this.load();
+          } catch (error) {
+            // La composition reste telle quelle ; la vérification dit pourquoi.
+            lib.error = message(error);
+            lib.details = detailsOf(error);
+          }
+          lib.creating = false;
+          this.paint();
+          if (lib.error) void this.checkJourney();
+        })();
         return;
       }
       case 'lib-insert': {
         const scenario = form.dataset.scenario ?? '';
+        const revision = form.dataset.revision;
         const block = lib.insert.block || lib.blocks?.find((entry) => entry.name !== scenario)?.name || '';
         const at = lib.insert.at;
         void this.libraryOp(async (api, projectId) => {
-          await api.scenarios.insert(projectId, scenario, { block, at });
+          await api.scenarios.insert(projectId, scenario, { block, at, ...(revision ? { revision } : {}) });
           return this.state.t.lib.inserted(block);
+        });
+        return;
+      }
+      case 'lib-contract': {
+        const draft = lib.contract;
+        const name = form.dataset.block ?? '';
+        if (!draft) return;
+        const contract = {
+          inputs: [
+            ...keyList(draft.required).map((key) => ({ key, required: true })),
+            ...keyList(draft.optional).map((key) => ({ key, required: false })),
+          ],
+          outputs: keyList(draft.outputs),
+          preconditions: lines(draft.pre),
+          postconditions: lines(draft.post),
+        };
+        void this.libraryOp(async (api, projectId, ui) => {
+          await api.library.declareContract(projectId, name, contract);
+          ui.contract = undefined;
+          return this.state.t.lib.contractSaved(name);
         });
         return;
       }
@@ -1080,10 +1302,18 @@ export class QaCrawlerDashboard extends Base {
         const blocks = await api.library.list(route.projectId);
         if (generation !== this.generation) return;
         this.state.lib.blocks = blocks;
-        const lib = this.state.lib;
-        const scenarios = runnableScenarios(this.state.project?.scenarios ?? []);
-        if (!scenarios.some((scenario) => scenario.name === lib.add.scenario))
-          lib.add.scenario = scenarios[0]?.name ?? '';
+        const panel = this.state.lib.panel;
+        const scenarios = runnableScenarios(this.state.project?.scenarios ?? []).filter(
+          (scenario) => scenario.format === 'yaml',
+        );
+        if (panel && !scenarios.some((scenario) => scenario.name === panel.scenario))
+          panel.scenario = scenarios[0]?.name ?? '';
+        // « Ajouter à la bibliothèque » depuis l'écran Scénarios : le panneau s'ouvre sur ce scénario.
+        if (this.pendingPanel !== undefined) {
+          const scenario = this.pendingPanel;
+          this.pendingPanel = undefined;
+          this.openPanel(scenario);
+        }
       } else if (route.view === 'environments') {
         await this.loadProject(api, route.projectId, generation);
         if (generation !== this.generation) return;
@@ -2055,12 +2285,34 @@ export class QaCrawlerDashboard extends Base {
   private libraryField(field: string, value: string): void {
     const lib = this.state.lib;
     const [part, key] = field.split('.');
-    if (part === 'add' && (key === 'scenario' || key === 'name' || key === 'description'))
-      lib.add[key] = value;
-    else if (part === 'compose' && (key === 'name' || key === 'pick')) lib.compose[key] = value;
+    if (part === 'query') lib.query = value;
+    else if (part === 'origin' && ['ALL', 'scenario', 'recording', 'none'].includes(value))
+      lib.origin = value as LibraryUi['origin'];
+    else if (part === 'state' && ['ALL', 'VALID', 'CHANGED', 'INVALID'].includes(value))
+      lib.state = value as LibraryUi['state'];
+    else if (part === 'usage' && ['ALL', 'used', 'free'].includes(value))
+      lib.usage = value as LibraryUi['usage'];
+    else if (part === 'sort' && ['name', 'steps', 'usage', 'updated'].includes(value))
+      lib.sort = value as LibraryUi['sort'];
+    else if (part === 'compose' && key === 'name') {
+      lib.compose.name = value;
+      return;
+    } else if (part === 'panel' && lib.panel && (key === 'name' || key === 'description'))
+      lib.panel[key] = value;
+    else if (part === 'panel' && lib.panel && key === 'scenario') {
+      lib.panel.scenario = value;
+      lib.panel.error = undefined;
+      void this.loadPreview();
+      return;
+    } else if (part === 'contract' && lib.contract && key && key in lib.contract && key !== 'block')
+      lib.contract[key as 'required' | 'optional' | 'outputs' | 'pre' | 'post'] = value;
     else if (part === 'insert' && key === 'block') lib.insert.block = value;
     else if (part === 'insert' && key === 'at') lib.insert.at = value === 'end' ? 'end' : 'start';
     else if (part === 'group' && key === 'name' && lib.group) lib.group.name = value;
+    else return;
+    // La recherche, les critères et le nom du bloc (sa validation) se voient tout de suite.
+    if (['query', 'origin', 'state', 'usage', 'sort'].includes(part) || (part === 'panel' && key === 'name'))
+      this.paint();
   }
 
   private onChange(event: Event): void {
@@ -2293,17 +2545,35 @@ export class QaCrawlerDashboard extends Base {
     if (!this.connected) return;
     const focused = this.root.activeElement as HTMLElement | null;
     const focusKey =
-      focused?.dataset.action ?? focused?.dataset.bind ?? focused?.dataset.field ?? focused?.dataset.req;
+      focused?.dataset.action ??
+      focused?.dataset.bind ??
+      focused?.dataset.field ??
+      focused?.dataset.req ??
+      focused?.dataset.lib;
     const focusValue = (focused as HTMLInputElement | null)?.value;
+    // Le même bouton d'une liste (même bloc, même rang), et le curseur d'un champ texte, retrouvés.
+    const focusTwin = `${focused?.dataset.block ?? ''}|${focused?.dataset.index ?? ''}|${focused?.dataset.direction ?? ''}`;
+    const caret =
+      focused instanceof HTMLInputElement && ['text', 'search'].includes(focused.type)
+        ? focused.selectionStart
+        : null;
     this.root.innerHTML = `<style>${DASHBOARD_CSS}</style>${renderDashboard(this.state)}`;
     if (focusKey) {
+      const key = CSS.escape(focusKey);
       const candidates = [
         ...this.root.querySelectorAll<HTMLElement>(
-          `[data-action="${focusKey}"],[data-bind="${focusKey}"],[data-field="${focusKey}"],[data-req="${focusKey}"]`,
+          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"]`,
         ),
       ];
+      const twin = candidates.find(
+        (element) =>
+          `${element.dataset.block ?? ''}|${element.dataset.index ?? ''}|${element.dataset.direction ?? ''}` ===
+          focusTwin,
+      );
       const same = candidates.find((element) => (element as HTMLInputElement).value === focusValue);
-      (same ?? candidates[0])?.focus();
+      const target = (focusTwin !== '||' ? twin : undefined) ?? same ?? candidates[0];
+      target?.focus();
+      if (caret !== null && target instanceof HTMLInputElement) target.setSelectionRange(caret, caret);
     }
   }
 }

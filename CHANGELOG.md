@@ -110,6 +110,21 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
     donnée définie autrement des deux côtés est refusée, jamais écrasée.
   - Un bloc rejoué par un scénario ne se retire pas ; un bloc ne se lance pas seul (`REUSABLE_BLOCK`).
   - Moteur : quand on rejoue des scénarios choisis, les blocs suivent toujours (un `run:` les trouve).
+- **Bibliothèque de scénarios, contrats et versions** :
+  - Contrat de chaque bloc : dérivé de son contenu, ou déclaré (entrées obligatoires ou facultatives,
+    sorties, préconditions, postconditions) et confronté à ce contenu.
+  - Vérification d'un parcours avant sa création (dry run de composition, rien n'est exécuté) :
+    dépendances entre blocs, entrées manquantes ou produites trop tard, conflits de données (une valeur
+    fixe face à une valeur générée au rejeu comprise), données partagées, erreurs de structure.
+  - Insertion et composition atomiques (tous les fichiers ou aucun), une opération à la fois par projet,
+    révision du scénario vérifiée (409 si modifié depuis sa lecture) ; les refus détaillent leurs raisons.
+  - Versions : `sdk-library.json` passe en version 2 (identifiant, version, empreinte, historique,
+    origine, contrat ; version de chaque bloc rejoué par un parcours). Un bloc modifié devient une
+    nouvelle version seulement quand on la valide ; un parcours suivi n'est pas rejoué avec ce bloc
+    (409 `BLOCK_VERSION_CHANGED`) tant que la nouvelle version n'est pas acceptée. L'ancien registre est repris.
+  - Dashboard : catalogue avec recherche, origine, contrat, utilisation et tri ; cartes compactes et
+    détails (provenance, historique, contrat, dépendants) ; compositeur fixe à droite avec la
+    vérification du serveur ; ajout d'un bloc dans un panneau latéral, avec l'aperçu de la source.
 - **Carte des écrans visités** (rapport `index.html` et `flow-graph.html`) : refaite pour rester lisible
   avec de nombreux écrans et branches, sans dépendance nouvelle.
   - Disposition en couches qui tient compte de la taille réelle des cartes : de haut en bas pour un

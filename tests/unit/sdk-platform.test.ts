@@ -366,6 +366,8 @@ describe('SDK platform — scenarios and executions', () => {
       format: 'yaml',
       steps: 1,
       fromRecording: 'create-item',
+      // L'empreinte du fichier : une modification ne s'écrit que sur la version lue.
+      revision: expect.stringMatching(/^[0-9a-f]{12}$/) as string,
     });
     expect(
       (await readdir(path.join(workspace, project.id, 'qa-crawler', 'flows', 'create-item'))).sort(),

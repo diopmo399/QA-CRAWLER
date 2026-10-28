@@ -18,8 +18,12 @@ import type {
   GroupCommandInput,
   ComposeScenarioInput,
   CorrectionView,
+  CompositionCheck,
+  CompositionDrift,
+  DeclaredContract,
   LibraryAddInput,
   LibraryBlockView,
+  LibrarySourcePreview,
   GroupCheckView,
   GroupEditResult,
   IntentDecisionInput,
@@ -195,21 +199,40 @@ export interface QaCrawlerClient {
     promote(projectId: string, recording: string): Promise<ScenarioView>;
     /** La stabilité des scénarios : leurs statuts dans les derniers runs (10 par défaut, 50 au plus). */
     history(projectId: string, options?: { limit?: number }): Promise<ScenarioHistoryView[]>;
-    /** Un nouveau scénario fait de blocs de la bibliothèque, rejoués dans l'ordre par `run:`. */
+    /** Un nouveau scénario fait de blocs de la bibliothèque, rejoués dans l'ordre par `run:` (vérifié d'abord). */
     compose(projectId: string, input: ComposeScenarioInput): Promise<ScenarioView>;
-    /** Insère un bloc de la bibliothèque au début ou à la fin d'un scénario (ses données suivent). */
+    /** Vérifie un parcours sans rien écrire ni exécuter : ordre, dépendances, données, erreurs. */
+    checkComposition(projectId: string, input: ComposeScenarioInput): Promise<CompositionCheck>;
+    /**
+     * Insère un bloc de la bibliothèque au début ou à la fin d'un scénario (ses données suivent).
+     * Avec `revision` (celle de ScenarioView), refusé (409) si le scénario a changé depuis sa lecture.
+     */
     insert(
       projectId: string,
       scenario: string,
-      input: { block: string; at: 'start' | 'end' },
+      input: { block: string; at: 'start' | 'end'; revision?: string },
     ): Promise<ScenarioView>;
+    /** Accepte la version actuelle des blocs d'un parcours suivi, après l'avoir vérifié de nouveau. */
+    acceptBlocks(projectId: string, scenario: string): Promise<CompositionCheck>;
   };
   /** La bibliothèque : des blocs réutilisables (`reusable: true`), rejoués par d'autres scénarios. */
   library: {
     list(projectId: string): Promise<LibraryBlockView[]>;
     add(projectId: string, input: LibraryAddInput): Promise<LibraryBlockView>;
-    /** Retire un bloc (refusé tant qu'un scénario le rejoue). */
+    /** Retire un bloc (refusé tant qu'un scénario le rejoue ; `details` nomme ces scénarios). */
     remove(projectId: string, name: string): Promise<{ removed: string }>;
+    /** Ce qu'un scénario deviendrait en bloc (étapes, données sans valeur, contrat dérivé). */
+    preview(projectId: string, scenario: string): Promise<LibrarySourcePreview>;
+    /** Déclare le contrat d'un bloc (null : de nouveau dérivé de son contenu). */
+    declareContract(
+      projectId: string,
+      name: string,
+      contract: DeclaredContract | null,
+    ): Promise<LibraryBlockView>;
+    /** Valide le contenu modifié d'un bloc : il devient sa version suivante. */
+    validateVersion(projectId: string, name: string): Promise<LibraryBlockView>;
+    /** Les parcours suivis dont un bloc a changé depuis leur composition. */
+    drift(projectId: string): Promise<CompositionDrift[]>;
   };
   /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
   executions: {
@@ -621,14 +644,25 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           `${project(projectId)}/scenarios/history${historyOptions.limit ? `?limit=${String(historyOptions.limit)}` : ''}`,
         ),
       compose: (projectId, input) => request('POST', `${project(projectId)}/scenarios/compose`, input),
+      checkComposition: (projectId, input) =>
+        request('POST', `${project(projectId)}/scenarios/compose/check`, input),
       insert: (projectId, scenario, input) =>
         request('POST', `${project(projectId)}/scenarios/${encodeURIComponent(scenario)}/insert`, input),
+      acceptBlocks: (projectId, scenario) =>
+        request('POST', `${project(projectId)}/scenarios/${encodeURIComponent(scenario)}/accept`, {}),
     },
     library: {
       list: (projectId) => request('GET', `${project(projectId)}/library`),
       add: (projectId, input) => request('POST', `${project(projectId)}/library`, input),
       remove: (projectId, name) =>
         request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/remove`, {}),
+      preview: (projectId, scenario) =>
+        request('GET', `${project(projectId)}/library/preview?scenario=${encodeURIComponent(scenario)}`),
+      declareContract: (projectId, name, contract) =>
+        request('PUT', `${project(projectId)}/library/${encodeURIComponent(name)}/contract`, { contract }),
+      validateVersion: (projectId, name) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/version`, {}),
+      drift: (projectId) => request('GET', `${project(projectId)}/library/drift`),
     },
     executions: {
       start: (projectId, input = {}) => request('POST', `${project(projectId)}/executions`, input),

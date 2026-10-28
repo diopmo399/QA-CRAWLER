@@ -1118,6 +1118,29 @@ export interface ScenarioView {
   reusable?: boolean;
   /** Les blocs (ou scénarios) que ce scénario rejoue par `run:`, dans l'ordre. */
   uses?: string[];
+  /** L'empreinte du fichier : une modification ne s'écrit que sur la version lue (sinon 409). */
+  revision?: string;
+}
+
+/** VALID : contenu identique à sa version, contrat tenu ; CHANGED : fichier modifié depuis ; INVALID : contrat contredit. */
+export type BlockState = 'VALID' | 'CHANGED' | 'INVALID';
+
+/** Le contrat déclaré d'un bloc (persisté avec lui, versionné). */
+export interface DeclaredContract {
+  inputs: { key: string; required: boolean }[];
+  outputs: string[];
+  preconditions: string[];
+  postconditions: string[];
+}
+
+/** Le contrat effectif : déclaré, ou dérivé de ce que le bloc saisit et cite. */
+export interface BlockContract {
+  source: 'DECLARED' | 'DERIVED';
+  inputs: { key: string; required: boolean }[];
+  /** Les données que le bloc saisit à partir de son propre jeu ; dynamic : résolue au rejeu. */
+  outputs: { key: string; dynamic: boolean }[];
+  preconditions: string[];
+  postconditions: string[];
 }
 
 /**
@@ -1125,6 +1148,8 @@ export interface ScenarioView {
  * scénarios avec une étape `run: <nom>`. Ses données de test suivent quand on l'insère.
  */
 export interface LibraryBlockView {
+  /** Identifiant stable (ne change pas avec les versions). */
+  id: string;
   name: string;
   /** Le fichier, relatif au dossier des flows. */
   file: string;
@@ -1133,22 +1158,94 @@ export interface LibraryBlockView {
   description?: string;
   /** D'où il vient : un scénario, ou un groupe d'un enregistrement. */
   origin?: { kind: 'scenario' | 'recording'; name: string; group?: string };
+  /** La version validée, son empreinte (contenu exécutable) et ses dates. */
+  version: number;
+  hash: string;
+  createdAt?: string;
+  updatedAt?: string;
+  /** Les changements pertinents, du plus ancien au plus récent. */
+  history: { version: number; at?: string; change: string }[];
+  state: BlockState;
+  /** Ce qui rend le bloc INVALID ou CHANGED, en mots. */
+  problems: string[];
+  contract: BlockContract;
+  /** Les données que le bloc définit (jamais leur valeur) ; dynamic : résolue au rejeu. */
+  data: { key: string; dynamic: boolean }[];
+  /** Les assertions métier déclarées dans le flow (vérifiées au rejeu, jamais supposées). */
+  assertions: number;
   /** Les données qu'il saisit ({ testData: clé }) et celles qu'il cite (${testData:clé}). */
   inputs: string[];
   citations: string[];
-  /** Les scénarios qui le rejouent. */
+  /** Les scénarios qui le rejouent ; pour les parcours suivis, la version qu'ils référencent. */
   usedBy: string[];
+  pinnedBy: { scenario: string; version: number; current: boolean }[];
 }
 
 export type LibraryAddInput =
   | { from: 'scenario'; scenario: string; name: string; description?: string }
   | { from: 'recording'; recording: string; groupId: string; name: string; description?: string };
 
+/** Ce qu'un scénario deviendrait en bloc, avant de l'ajouter (aucune valeur de donnée). */
+export interface LibrarySourcePreview {
+  scenario: string;
+  file: string;
+  steps: number;
+  startAt?: string;
+  description?: string;
+  fromRecording?: string;
+  data: { key: string; dynamic: boolean }[];
+  contract: BlockContract;
+  reusable: boolean;
+}
+
 /** Un nouveau scénario fait de blocs de la bibliothèque, rejoués dans l'ordre. */
 export interface ComposeScenarioInput {
   name: string;
   parts: string[];
   description?: string;
+}
+
+/** Un bloc dans la vérification d'un parcours. */
+export interface CompositionCheckBlock {
+  position: number;
+  block: string;
+  version?: number;
+  state?: BlockState;
+  steps: number;
+  inputs: { key: string; required: boolean }[];
+  outputs: { key: string; dynamic: boolean }[];
+  /** D'où vient chaque entrée : un bloc précédent (#n), le jeu de données, ou le scénario qui reçoit le bloc. */
+  satisfied: { key: string; from: number | 'data' | 'scenario' }[];
+  missing: string[];
+}
+
+/** LA VÉRIFICATION D'UN PARCOURS (dry run de composition : rien n'est exécuté dans le navigateur). */
+export interface CompositionCheck {
+  ok: boolean;
+  name: string;
+  blocks: number;
+  steps: number;
+  order: CompositionCheckBlock[];
+  /** Une sortie d'un bloc consommée par un bloc suivant. */
+  dependencies: { key: string; from: number; to: number }[];
+  missing: { key: string; block: string; position: number }[];
+  conflicts: { key: string; blocks: string[]; detail: string }[];
+  /** Une donnée définie à l'identique par plusieurs blocs. */
+  shared: { key: string; blocks: string[] }[];
+  /** Les données résolues au rejeu (générées, modèles, références, secrets). */
+  dynamic: string[];
+  errors: string[];
+  warnings: string[];
+}
+
+/** Un parcours suivi dont un bloc a changé depuis sa composition. */
+export interface CompositionDrift {
+  scenario: string;
+  block: string;
+  pinned: number;
+  current: number;
+  /** Le fichier du bloc a changé sans qu'une nouvelle version soit validée. */
+  unvalidated: boolean;
 }
 
 /** Le statut du flow d'un scénario dans un run. */

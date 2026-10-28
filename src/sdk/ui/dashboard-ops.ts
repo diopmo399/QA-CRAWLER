@@ -8,7 +8,7 @@ import {
 import type { DashboardRoute, DashboardState, EnvironmentForm } from './dashboard-view.js';
 import { checkLines, formatDate, header, icon, pill, readinessPill } from './dashboard-parts.js';
 import { can } from './dashboard-access.js';
-import { insertBlockForm, runnableScenarios } from './dashboard-library.js';
+import { insertBlockForm, runnableScenarios, scenarioDrift } from './dashboard-library.js';
 import { esc } from './view.js';
 
 /**
@@ -147,7 +147,8 @@ ${history && history.flips >= 2 ? `<p class="note">${icon('alert')}<span>${esc(o
       }
 ${p.state === 'ARCHIVED' || !can(state, 'RUN') ? '' : `<div class="form-acts start"><button class="btn primary" data-action="replay-scenario" data-name="${esc(selected.name)}">${icon('play')}<span>${esc(o.replay)}</span></button></div>`}
 ${selected.uses && selected.uses.length > 0 ? `<p class="mu">${esc(t.lib.uses(selected.uses.join(', ')))}</p>` : ''}
-${state.lib.error ? `<p class="err" role="alert">${esc(state.lib.error)}</p>` : ''}${state.lib.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(state.lib.notice)}</span></p>` : ''}
+${scenarioDrift(state, selected)}
+${state.lib.error ? `<div class="err" role="alert"><p>${esc(state.lib.error)}</p>${(state.lib.details ?? []).length > 1 ? `<ul class="plain tight">${(state.lib.details ?? []).map((detail) => `<li>${esc(detail)}</li>`).join('')}</ul>` : ''}</div>` : ''}${state.lib.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(state.lib.notice)}</span></p>` : ''}
 ${insertBlockForm(state, selected)}
 ${p.state === 'ARCHIVED' || !can(state, 'PUBLISH') || selected.format !== 'yaml' ? '' : `<div class="form-acts start"><button class="btn ghost" data-action="lib-from-scenario" data-name="${esc(selected.name)}">${icon('library')}<span>${esc(t.lib.add)}</span></button></div>`}</aside>`
     : '';

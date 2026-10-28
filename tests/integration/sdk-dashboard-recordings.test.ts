@@ -359,9 +359,12 @@ describe('Dashboard — recordings, in Chromium', () => {
     await dashboard().locator('.drawer [data-action="nav"][data-view="library"]').click();
     await dashboard().locator('h1', { hasText: 'Bibliothèque' }).waitFor({ timeout: 15_000 });
     await dashboard().locator('input[data-lib="compose.name"]').fill('Consulter deux fois');
-    await dashboard().locator('[data-action="lib-part-add"]').click();
-    await dashboard().locator('[data-action="lib-part-add"]').click();
-    expect(await dashboard().locator('.lib-parts li').count()).toBe(2);
+    const add = dashboard().locator('[data-action="lib-part-add"][data-block="Bloc consultation"]');
+    await add.click();
+    await add.click();
+    expect(await dashboard().locator('.lib-steps > li').count()).toBe(2);
+    // Vérifié par le serveur avant la création (dry run de composition, rien n'est exécuté).
+    await dashboard().locator('.lib-check.ok', { hasText: 'Parcours vérifié' }).waitFor({ timeout: 15_000 });
     await dashboard().locator('form[data-action="lib-compose"] button[type="submit"]').click();
     await dashboard()
       .locator('.notice', { hasText: 'Le parcours « Consulter deux fois » est créé' })
@@ -372,7 +375,7 @@ describe('Dashboard — recordings, in Chromium', () => {
       (entry) => entry.name === 'Consulter deux fois',
     );
     expect(composed?.uses).toEqual(['Bloc consultation', 'Bloc consultation']);
-    await dashboard().locator('.lib-block', { hasText: 'Rejoué par : Consulter deux fois' }).waitFor();
+    await dashboard().locator('.lib-card', { hasText: 'Utilisé dans 1 scénario(s)' }).waitFor();
 
     // Le moteur rejoue le parcours composé : les étapes du bloc à la place de chaque `run:`.
     const started = await client.executions.start(project.id, { scenarios: ['Consulter deux fois'] });

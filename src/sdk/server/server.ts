@@ -18,13 +18,20 @@ import type { ReplayOutcome } from '../../recording/recording-report.js';
 import { loadConfigFile } from '../../config/config-loader.js';
 import { CorrectionBusyError, CorrectionManager, type CorrectionRuntime } from './corrections.js';
 import {
+  acceptBlocks,
   addGroupToLibrary,
   addScenarioToLibrary,
+  checkCompositionOf,
   composeScenario,
+  compositionDrift,
+  declareContract,
+  declaredContractOf,
   insertBlock,
   LibraryError,
   listLibrary,
+  previewSource,
   removeFromLibrary,
+  validateVersion,
 } from './library.js';
 import { TestDataSetError } from '../../data/test-data-set.js';
 import {
@@ -1292,7 +1299,12 @@ async function libraryCall<T>(run: () => Promise<T>): Promise<T> {
     return await run();
   } catch (error) {
     if (error instanceof LibraryError)
-      throw new HttpError(error.status, error.status === 409 ? 'CONFLICT' : 'REFUSED', error.message);
+      throw new HttpError(
+        error.status,
+        error.status === 409 ? 'CONFLICT' : error.status === 404 ? 'NOT_FOUND' : 'REFUSED',
+        error.message,
+        error.details.length > 0 ? { details: error.details } : {},
+      );
     if (error instanceof TestDataSetError) throw new HttpError(422, 'REFUSED', error.message);
     throw error;
   }
@@ -1313,6 +1325,16 @@ async function handleLibrary(
 ): Promise<void> {
   if (item === undefined && method === 'GET') {
     json(await listLibrary(project.dir));
+    return;
+  }
+  if (item === 'preview' && action === undefined && method === 'GET') {
+    const scenario = new URL(request.url ?? '/', 'http://localhost').searchParams.get('scenario') ?? '';
+    if (!scenario) throw new HttpError(400, 'BAD_REQUEST', 'scenario is required');
+    json(await libraryCall(() => previewSource(project.dir, scenario.slice(0, 120))));
+    return;
+  }
+  if (item === 'drift' && action === undefined && method === 'GET') {
+    json(await compositionDrift(project.dir));
     return;
   }
   refuseArchived(project);
@@ -1361,6 +1383,21 @@ async function handleLibrary(
     const name = decodeURIComponent(item);
     await libraryCall(() => removeFromLibrary(project.dir, name));
     json({ removed: name });
+    return;
+  }
+  if (item !== undefined && action === 'contract' && method === 'PUT') {
+    const name = decodeURIComponent(item);
+    const body = await readJson(request);
+    json(
+      await libraryCall(() =>
+        declareContract(project.dir, name, body.contract === null ? null : declaredContractOf(body.contract)),
+      ),
+    );
+    return;
+  }
+  if (item !== undefined && action === 'version' && method === 'POST') {
+    const name = decodeURIComponent(item);
+    json(await libraryCall(() => validateVersion(project.dir, name)));
     return;
   }
   throw new HttpError(404, 'NOT_FOUND', 'unknown library route');
@@ -2018,7 +2055,22 @@ async function handlePlatform(
     await handleLibrary(ctx, project, item, action, method, request, json);
     return true;
   }
-  if (sub === 'scenarios' && item === 'compose' && method === 'POST') {
+  if (sub === 'scenarios' && item === 'compose' && action === 'check' && method === 'POST') {
+    // Vérifier un parcours sans rien écrire ni exécuter (dry run de composition).
+    const project = await projectOf(ctx, id);
+    const body = await readJson(request);
+    const parts = Array.isArray(body.parts)
+      ? body.parts.filter((part): part is string => typeof part === 'string').slice(0, 31)
+      : [];
+    json(
+      await checkCompositionOf(project.dir, {
+        name: typeof body.name === 'string' ? body.name.slice(0, 200) : '',
+        parts,
+      }),
+    );
+    return true;
+  }
+  if (sub === 'scenarios' && item === 'compose' && action === undefined && method === 'POST') {
     const project = await projectOf(ctx, id);
     refuseArchived(project);
     const body = await readJson(request);
@@ -2046,9 +2098,24 @@ async function handlePlatform(
     if (!block || (body.at !== 'start' && body.at !== 'end'))
       throw new HttpError(400, 'BAD_REQUEST', 'block and at (start or end) are required');
     const scenario = decodeURIComponent(item);
-    await libraryCall(() => insertBlock(project.dir, scenario, { block, at: body.at as 'start' | 'end' }));
+    const revision = textOf(body.revision, 40);
+    await libraryCall(() =>
+      insertBlock(project.dir, scenario, {
+        block,
+        at: body.at as 'start' | 'end',
+        ...(revision ? { revision } : {}),
+      }),
+    );
     const view = (await listScenarios(project.dir)).find((entry) => entry.name === scenario);
     json(view ?? { name: scenario });
+    return true;
+  }
+  if (sub === 'scenarios' && item !== undefined && action === 'accept' && method === 'POST') {
+    // Accepter explicitement la version actuelle des blocs d'un parcours suivi (vérifié de nouveau).
+    const project = await projectOf(ctx, id);
+    refuseArchived(project);
+    const scenario = decodeURIComponent(item);
+    json(await libraryCall(() => acceptBlocks(project.dir, scenario)));
     return true;
   }
   if (sub === 'scenarios' && item === 'history' && method === 'GET') {
@@ -2118,6 +2185,20 @@ async function handlePlatform(
           422,
           'REUSABLE_BLOCK',
           `${blocks.join(', ')}: a block of the library runs only through a scenario (run:)`,
+        );
+      // Un parcours suivi n'est jamais rejoué avec un bloc qui a changé depuis sa composition, sans décision.
+      const drift = await compositionDrift(project.dir, wanted);
+      if (drift.length > 0)
+        throw new HttpError(
+          409,
+          'BLOCK_VERSION_CHANGED',
+          `${[...new Set(drift.map((entry) => entry.scenario))].join(', ')}: a block changed since the journey was composed; accept its new version first`,
+          {
+            details: drift.map(
+              (entry) =>
+                `${entry.scenario}: ${entry.block} v${String(entry.pinned)} → ${entry.unvalidated ? 'modified, not validated' : `v${String(entry.current)}`}`,
+            ),
+          },
         );
       const flowsDir = await flowsDirOf(project.dir);
       const selected = wanted ? known.filter((scenario) => wanted.includes(scenario.name)) : undefined;

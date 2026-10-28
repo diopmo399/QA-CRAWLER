@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -241,8 +241,10 @@ export async function listScenarios(projectDir: string): Promise<ScenarioView[]>
     }
     if (!/\.ya?ml$/.test(file) || path.basename(file).includes('test-data')) continue;
     let parsed: unknown;
+    let text = '';
     try {
-      parsed = parseYaml(await readFile(file, 'utf8'));
+      text = await readFile(file, 'utf8');
+      parsed = parseYaml(text);
     } catch {
       continue;
     }
@@ -270,11 +272,16 @@ export async function listScenarios(projectDir: string): Promise<ScenarioView[]>
         ...(typeof flow.description === 'string' ? { description: flow.description } : {}),
         ...(flow.reusable === true ? { reusable: true } : {}),
         ...(runs.length > 0 ? { uses: runs } : {}),
+        revision: revisionOf(text),
       });
     }
   }
   return scenarios;
 }
+
+/** L'empreinte d'un fichier de scénario : une modification ne s'écrit que sur la version lue (sinon 409). */
+export const revisionOf = (text: string): string =>
+  createHash('sha256').update(text).digest('hex').slice(0, 12);
 
 const PROMOTED_FILE = 'sdk-scenarios.json';
 

@@ -292,8 +292,14 @@ const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisate
 | `corrections.pick/apply/resume/close(…)`        | `POST /api/projects/:id/recordings/:name/correction/<action>`    |
 | `library.list/add(projectId, …)`                | `GET`/`POST /api/projects/:id/library`                           |
 | `library.remove(projectId, name)`               | `POST /api/projects/:id/library/:name/remove`                    |
+| `library.preview(projectId, scenario)`          | `GET /api/projects/:id/library/preview?scenario=…`               |
+| `library.declareContract(projectId, name, c)`   | `PUT /api/projects/:id/library/:name/contract`                   |
+| `library.validateVersion(projectId, name)`      | `POST /api/projects/:id/library/:name/version`                   |
+| `library.drift(projectId)`                      | `GET /api/projects/:id/library/drift`                            |
+| `scenarios.checkComposition(projectId, input)`  | `POST /api/projects/:id/scenarios/compose/check` (`VIEW`)        |
 | `scenarios.compose(projectId, input)`           | `POST /api/projects/:id/scenarios/compose` (201)                 |
 | `scenarios.insert(projectId, scenario, input)`  | `POST /api/projects/:id/scenarios/:name/insert`                  |
+| `scenarios.acceptBlocks(projectId, scenario)`   | `POST /api/projects/:id/scenarios/:name/accept`                  |
 | `assertions.list(projectId, name)`              | `GET /api/projects/:id/recordings/:name/assertions`              |
 | `data.get(projectId, name)`                     | `GET /api/projects/:id/recordings/:name/data`                    |
 | `data.bind(projectId, name, input)`             | `POST /api/projects/:id/recordings/:name/data/bindings`          |
@@ -348,8 +354,28 @@ flow `reusable: true`, jamais exécuté seul, que d'autres scénarios rejouent p
 `sdk-library.json`. `compose` crée un scénario fait de blocs (`<flows>/composed/<nom>/`) ; `insert`
 ajoute `run: <bloc>` au début ou à la fin d'un scénario. Les données des blocs rejoignent le jeu du
 scénario ; une donnée définie autrement des deux côtés est refusée (409), jamais écrasée. Un bloc
-rejoué par un scénario ne se retire pas (409) et ne se lance pas seul (422 `REUSABLE_BLOCK`). Quand
-on rejoue des scénarios choisis, le moteur charge toujours les blocs. Écrire demande `PUBLISH`.
+rejoué par un scénario ne se retire pas (409, `details` nomme les scénarios) et ne se lance pas seul
+(422 `REUSABLE_BLOCK`). Quand on rejoue des scénarios choisis, le moteur charge toujours les blocs.
+Écrire demande `PUBLISH` ; vérifier un parcours, `VIEW`.
+
+- **Contrat** : sans déclaration, il est dérivé du contenu (sorties : les clés que le bloc saisit à
+  partir de son propre jeu ; entrées obligatoires : celles qu'il saisit ou cite sans les définir).
+  `declareContract` déclare entrées (obligatoires ou facultatives), sorties, préconditions et
+  postconditions ; un contrat que le contenu contredit rend le bloc `INVALID`.
+- **Vérification** (`checkComposition`, rien n'est écrit ni exécuté) : ordre, étapes, dépendances (une
+  sortie consommée par un bloc suivant), entrées manquantes, entrée produite trop tard, conflits de
+  données (valeur fixe face à une valeur générée au rejeu comprise), données partagées à l'identique,
+  données résolues au rejeu, erreurs de structure, avertissements. `compose` et `insert` la refont
+  et refusent (409 pour un conflit, 422 sinon) avec chaque raison dans `details`.
+- **Écritures** : une opération à la fois par projet ; ses fichiers sont écrits ensemble ou pas du tout.
+  `insert` accepte `revision` (celle de `ScenarioView`) : un scénario modifié depuis sa lecture → 409.
+- **Versions** : `sdk-library.json` (version 2) garde pour chaque bloc un identifiant stable, sa version
+  validée, l'empreinte de son contenu, l'historique, l'origine et le contrat ; pour chaque parcours
+  composé (ou bloc inséré), la version de chaque bloc rejoué. Un bloc dont le fichier change devient
+  `CHANGED` ; `validateVersion` en fait la version suivante. Un parcours suivi dont un bloc a changé
+  n'est pas rejoué (`executions.start` → 409 `BLOCK_VERSION_CHANGED`) tant que `acceptBlocks` ne l'a
+  pas vérifié et accepté. Le format de `run:` ne change pas ; l'ancien `sdk-library.json` (origines
+  seules) est repris : version 1, historique « repris ».
 
 **Intentions** (`intents`) : l'intention que l'analyse prête à chaque action (créer, rechercher,
 ouvrir…). Confirmer, corriger (avec une raison) ou réinitialiser ajoute une décision au registre
@@ -763,7 +789,7 @@ comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 | Historique       | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Enregistrements  | démarrer l'enregistrement d'un parcours (nom, chemin de départ, rejeu de validation ; un seul à la fois) ; pendant la session, la barre d'enregistrement : gestes en phrases et leur statut, pause, annulation du dernier geste, vérification posée, choix de l'élément d'une cible ambiguë, arrêt ; après l'arrêt, les phases en mots ; la liste du projet, la revue, le lien vers le Flow Studio et la promotion en scénario                                                                                                                                                                                                                                                |
-| Bibliothèque     | les blocs réutilisables (origine, données saisies et citées, scénarios qui les rejouent) ; ajouter un scénario ; composer un parcours à partir de blocs, dans l'ordre ; retirer un bloc qu'aucun scénario ne rejoue ; depuis Scénarios, insérer un bloc dans un scénario ; depuis la revue, ajouter un groupe                                                                                                                                                                                                                                                                                                                                                                 |
+| Bibliothèque     | catalogue des blocs (version, provenance, entrées et sorties, état du contrat, utilisation ; recherche, origine, contrat, utilisation, tri) ; détails (historique, contrat, scénarios dépendants, valider une nouvelle version, déclarer le contrat) ; compositeur (ordre, d'où vient chaque entrée, vérification du serveur, création) ; ajout d'un bloc dans un panneau, avec l'aperçu de la source ; depuis Scénarios, insérer un bloc, accepter la nouvelle version d'un bloc ; depuis la revue, ajouter un groupe                                                                                                                                                        |
 | Revue            | d'un enregistrement terminé : rejeu de validation suivi étape par étape ; parcours en groupes (découpage proposé, vérifications suggérées, créer, renommer, déplacer, supprimer un groupe, cocher des étapes, monter, descendre, détacher, retirer une étape avec confirmation) ; assertions (recommandées, à décider, faibles, décidées ; une à une ou en lot) ; source de chaque saisie ; intentions (confirmer, corriger, réinitialiser) ; correction d'une cible dans le navigateur ouvert par le serveur, puis reprise du rejeu ; ligne de tableau redéfinie colonne par colonne ; restauration de la cible d'origine ; génération des tests et statut de chaque fichier |
 | Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                                                                                                                                                                                                                                                                                                                                    |
