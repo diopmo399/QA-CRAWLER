@@ -158,7 +158,8 @@ export class PdfConnector implements SourceConnector<PdfInput> {
 
 /**
  * Les pages vers des blocs. Une ligne = les fragments jusqu'à une fin de ligne ; un écart vertical
- * plus grand que la ligne précédente sépare deux paragraphes ; une ligne nettement plus grande que le
+ * plus grand que la ligne précédente sépare deux paragraphes ; une ligne qui commence par un identifiant
+ * (`ENF-03 …`) ouvre aussi un paragraphe, même sans écart ; une ligne nettement plus grande que le
  * corps du texte est un titre ; une ligne qui commence par une puce ou un numéro est un élément de liste.
  */
 export function pdfToBlocks(raw: PdfRaw): { blocks: Block[]; issues: ImportIssue[] } {
@@ -229,7 +230,12 @@ export function pdfToBlocks(raw: PdfRaw): { blocks: Block[]; issues: ImportIssue
         // Suite d'un élément de liste sur la ligne suivante.
         list[list.length - 1] = cleanText(`${list[list.length - 1] ?? ''} ${line.text}`);
       } else {
-        if (list.length > 0 || (previousY !== undefined && gap > previousHeight * 1.6)) flush();
+        if (
+          list.length > 0 ||
+          (previousY !== undefined && gap > previousHeight * 1.6) ||
+          IDENTIFIER_START.test(line.text)
+        )
+          flush();
         paragraph.push(line.text);
       }
       previousY = line.y;
@@ -251,6 +257,9 @@ export function pdfToBlocks(raw: PdfRaw): { blocks: Block[]; issues: ImportIssue
     });
   return { blocks, issues };
 }
+
+/** Un identifiant en début de ligne : lettres (et chiffres), tiret, numéro (REQ-12, ENF-03, CA-1.2). */
+const IDENTIFIER_START = /^[A-Z][A-Z0-9]{0,9}-\d+(?:\.\d+)*(?=[\s:.)\]]|$)/;
 
 function linesOf(items: PdfTextItem[]): { text: string; y: number; height: number }[] {
   const lines: { text: string; y: number; height: number }[] = [];

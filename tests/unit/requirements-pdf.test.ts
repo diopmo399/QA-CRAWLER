@@ -215,4 +215,26 @@ describe('PDF blocks — reconstruction rules', () => {
     ]);
     expect(issues.map((issue) => issue.code)).toEqual(['PAGES_NOT_READ']);
   });
+
+  it('starts a new paragraph at a line that opens with an identifier, even without a gap', () => {
+    const { blocks } = pdfToBlocks({
+      numPages: 1,
+      pages: [
+        {
+          number: 1,
+          hasImages: false,
+          items: [
+            { str: 'ENF-02 La recherche répond en moins de deux secondes', y: 700, height: 11, eol: true },
+            { str: 'pour 95 % des requêtes.', y: 686, height: 11, eol: true },
+            { str: 'ENF-03 Le portail reste disponible.', y: 672, height: 11, eol: true },
+            { str: 'AB-CD et 12-3 ne sont pas des identifiants.', y: 658, height: 11, eol: true },
+          ],
+        },
+      ],
+    });
+    expect(summary(blocks)).toEqual([
+      'p1 ENF-02 La recherche répond en moins de deux secondes pour 95 % des requêtes.',
+      'p1 ENF-03 Le portail reste disponible. AB-CD et 12-3 ne sont pas des identifiants.',
+    ]);
+  });
 });

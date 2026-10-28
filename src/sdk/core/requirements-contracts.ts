@@ -208,10 +208,13 @@ export interface ImportProfile {
   classify: {
     idPrefixes?: Partial<Record<'REQUIREMENT' | 'BUSINESS_RULE' | 'ACCEPTANCE_CRITERION', string[]>>;
     columns?: Partial<
-      Record<'id' | 'title' | 'description' | 'type' | 'priority' | 'status' | 'rule' | 'criterion', string>
+      Record<
+        'id' | 'title' | 'description' | 'type' | 'priority' | 'status' | 'rule' | 'criterion' | 'parent',
+        string
+      >
     >;
   };
-  options: Record<string, string | number | boolean | string[]>;
+  options: Record<string, string | number | boolean | string[] | Record<string, number>>;
   createdAt: string;
   updatedAt: string;
 }

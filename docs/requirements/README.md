@@ -4,27 +4,27 @@ Le module `src/requirements/` construit un référentiel d'exigences à partir d
 Chaque élément garde sa provenance. Rien n'entre dans le référentiel sans décision humaine.
 L'audit, l'architecture et les décisions sont dans [AUDIT-ET-CONCEPTION.md](AUDIT-ET-CONCEPTION.md).
 
-| Capacité                                                                              | État                                                      |
-| ------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Modèle canonique, normalisation, doublons, décisions, publication, liens, persistance | disponible, testé (`requirements-foundation.test.ts`)     |
-| Connecteur Confluence (Cloud, Data Center)                                            | disponible, testé contre un serveur **simulé** seulement  |
-| Connecteurs Word, Excel                                                               | disponibles, testés sur des fichiers écrits par les tests |
-| Connecteur PDF                                                                        | disponible : couche texte seulement, aucun OCR            |
-| SDK (API et client) et Dashboard                                                      | disponibles ([docs/sdk](../sdk/README.md#exigences))      |
-| CLI                                                                                   | non disponible                                            |
-| Corrélation avec le code, les tests, les preuves                                      | non disponible (phase 5)                                  |
+| Capacité                                                                              | État                                                                                                     |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Modèle canonique, normalisation, doublons, décisions, publication, liens, persistance | disponible, testé (`requirements-foundation.test.ts`)                                                    |
+| Connecteur Confluence (Cloud, Data Center)                                            | disponible, testé contre un serveur **simulé** seulement                                                 |
+| Connecteurs Word, Excel                                                               | disponibles, testés sur de vrais fichiers générés                                                        |
+| Connecteur PDF                                                                        | disponible (dépendance facultative `pdfjs-dist`, Node 22.13 ou plus) : couche texte seulement, aucun OCR |
+| SDK (API et client) et Dashboard                                                      | disponibles ([docs/sdk](../sdk/README.md#exigences))                                                     |
+| CLI                                                                                   | non disponible                                                                                           |
+| Corrélation avec le code, les tests, les preuves                                      | non disponible (phase 5)                                                                                 |
 
 ## Parcours
 
 ```ts
-// Depuis le dépôt : l'export public (@qa-crawler/core) viendra avec les interfaces, en phase 6.
+// Le module en Node (les interfaces SDK, CLI et Dashboard viendront en phase 6).
 import {
   ConfluenceConnector,
   decide,
   importSource,
   publish,
   RequirementsStore,
-} from './src/requirements/index.js';
+} from '@qa-crawler/core/requirements';
 
 const store = new RequirementsStore('<projet>/requirements');
 const batch = await importSource(
@@ -113,7 +113,16 @@ la correspondance des colonnes d'un tableau (`classify.columns`).
 
 Un titre qui porte un identifiant ouvre un candidat dont le corps est le texte qui suit. Une règle
 proposée est rattachée à la dernière exigence de sa section, un critère à la dernière règle ou
-exigence : le lien est **proposé**, il n'est confirmé que si la personne donne le parent.
+exigence. Le parent est cherché dans la section courante, puis dans les sections qui l'englobent
+(un critère sous « REQ-12 › Critères d'acceptation » revient à `REQ-12`), jamais dans une section
+voisine ni dans une autre feuille. Le lien est **proposé** (confiance MOYEN) ; il n'est confirmé
+que si la personne donne le parent.
+
+Dans un tableau, le parent peut être écrit sur la ligne même : une colonne « Exigence liée »
+(« Exigence parente », « Parent »…), ou une colonne « Exigence » qui ne contient qu'un identifiant
+(`CA-5 | REQ-5 | Étant donné…`). Une cellule qui ne contient qu'un identifiant est une référence,
+jamais le texte de la ligne. Ce lien vient de la source : il est proposé avec la confiance ÉLEVÉ.
+Une colonne « parent » qui ne contient pas d'identifiant est gardée telle quelle dans les attributs.
 
 ## Doublons et conflits
 
@@ -252,7 +261,8 @@ await importSource(
 
 - **Lus :** le texte de chaque page, reconstruit en blocs avec le numéro de page :
   - titres, d'après la taille de la police ;
-  - paragraphes, d'après l'écart vertical ;
+  - paragraphes, d'après l'écart vertical ; une ligne qui commence par un identifiant (`ENF-03 …`)
+    ouvre aussi un paragraphe, même sans écart ;
   - listes : puces et numéros.
 - **Non lus, et signalés :**
   - une page sans couche texte (scan) : `PAGE_WITHOUT_TEXT` ; la lecture devient `PARTIAL` ;
