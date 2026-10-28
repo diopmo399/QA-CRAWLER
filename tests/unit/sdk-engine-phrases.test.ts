@@ -11,7 +11,8 @@ import { enginePhrase, TRANSLATED_ENGINE_PHRASES } from '../../src/sdk/ui/engine
 async function sources(directory: string): Promise<string> {
   const entries = await readdir(directory, { withFileTypes: true, recursive: true });
   const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+    // Le fichier des traductions lui-même ne compte pas : il cite chaque phrase.
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.ts') && entry.name !== 'engine-phrases.ts')
     .map((entry) => path.join(entry.parentPath, entry.name));
   return (await Promise.all(files.map((file) => readFile(file, 'utf8')))).join('\n');
 }
@@ -25,6 +26,7 @@ describe('engine phrases', () => {
 
   it('keeps the cited values; leaves an unknown phrase and the English as they are', () => {
     expect(enginePhrase('the page /users is displayed', 'fr')).toBe('la page /users est affichée');
+    expect(enginePhrase('flow schema', 'fr')).toBe('schéma des flows');
     expect(enginePhrase('the link "À propos (lien relatif)" of / is displayed', 'fr')).toBe(
       'le lien « À propos (lien relatif) » de / est affiché',
     );

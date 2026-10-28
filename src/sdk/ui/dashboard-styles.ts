@@ -445,6 +445,8 @@ pre.code{margin:6px 0 0;max-height:320px;overflow:auto;padding:10px 12px;border-
 .correction-card dl.kv dt{color:var(--qa-color-muted)}
 .correction-card dl.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .rv-intent .fields{max-width:640px}
+.notice.ok{display:flex;gap:8px;align-items:flex-start}
+form.col[data-action^="lib-"]{display:flex;flex-direction:column;gap:12px}
 .lib-blocks{display:flex;flex-direction:column}
 .lib-block{display:flex;flex-direction:column;gap:6px;padding:12px 0;border-top:1px solid var(--qa-color-border)}
 .lib-block:first-child{border-top:0;padding-top:4px}

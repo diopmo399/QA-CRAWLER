@@ -62,6 +62,18 @@ const EXACT: Record<string, string> = {
   'sign in again, then resume': 'reconnectez-vous, puis reprenez',
   'already executed in this run (creation or change): not repeated without a decision':
     'déjà fait dans ce run (création ou modification) : jamais répété sans décision',
+  // La validation statique des tests générés (generation-plan).
+  'flow schema': 'schéma des flows',
+  'gherkin dictionary (every sentence has a step definition)':
+    'dictionnaire Gherkin (chaque phrase a une définition d’étape)',
+  'mission loader': 'chargeur de missions',
+  'mission loader (schema, .feature file, every sentence has a step definition)':
+    'chargeur de missions (schéma, fichier .feature, chaque phrase a une définition d’étape)',
+  'typescript syntax (transpileModule; types are not checked without @playwright/test)':
+    'syntaxe TypeScript (transpileModule ; les types ne sont pas vérifiés sans @playwright/test)',
+  'typescript is not installed: not validated': 'typescript n’est pas installé : non validé',
+  'not written to disk: not validated': 'non écrit sur le disque : non validé',
+  'Maven is not available: not validated': 'Maven n’est pas disponible : non validé',
 };
 
 const ROLES: Record<string, string> = {

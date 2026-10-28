@@ -67,8 +67,11 @@ const intrusiveAi = (): FakeIntelligenceProvider =>
     confidence: 0.99,
   }));
 
+// La pause après une frappe (300 ms) reste loin du délai de la saisie : chaque champ donne une seule
+// valeur, validée par le clic suivant, quelle que soit la vitesse de la machine (pas de course).
 const MISSION = (url: string, extra: string): string => `mission: { name: deterministic-recording }
 target: { baseUrl: ${url}, startAt: /form }
+recording: { inputDebounceMs: 2000 }
 ${extra}
 flows:
   - name: Existing flow with an intent

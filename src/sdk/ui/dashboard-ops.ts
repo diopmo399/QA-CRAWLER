@@ -138,7 +138,7 @@ export function scenariosView(state: DashboardState): string {
   const history = selected ? histories.get(selected.name) : undefined;
   const detail = selected
     ? `<aside class="card" aria-label="${esc(selected.name)}"><div class="row"><b class="mono big-name">${esc(selected.name)}</b>${tagPill(state, scenarioTag(history))}</div>
-<p class="mu">${esc(o.origin)} : ${esc(selected.fromRecording ? t.fromRecording(selected.fromRecording) : o.written)} · <code>${esc(selected.file)}</code></p>
+<p class="mu">${esc(o.origin)} : ${esc(selected.fromRecording ? t.fromRecording(selected.fromRecording) : selected.file.startsWith('composed/') ? t.lib.composedOrigin : o.written)} · <code>${esc(selected.file)}</code></p>
 ${history && history.flips >= 2 ? `<p class="note">${icon('alert')}<span>${esc(o.flakyNote(history.flips, history.runs.length))}</span></p>` : ''}
 <h3>${esc(o.lastRuns)}</h3>${
         history && history.runs.length > 0
@@ -147,7 +147,7 @@ ${history && history.flips >= 2 ? `<p class="note">${icon('alert')}<span>${esc(o
       }
 ${p.state === 'ARCHIVED' || !can(state, 'RUN') ? '' : `<div class="form-acts start"><button class="btn primary" data-action="replay-scenario" data-name="${esc(selected.name)}">${icon('play')}<span>${esc(o.replay)}</span></button></div>`}
 ${selected.uses && selected.uses.length > 0 ? `<p class="mu">${esc(t.lib.uses(selected.uses.join(', ')))}</p>` : ''}
-${state.lib.error ? `<p class="err" role="alert">${esc(state.lib.error)}</p>` : ''}${state.lib.notice ? `<p class="notice" role="status">${icon('check')} ${esc(state.lib.notice)}</p>` : ''}
+${state.lib.error ? `<p class="err" role="alert">${esc(state.lib.error)}</p>` : ''}${state.lib.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(state.lib.notice)}</span></p>` : ''}
 ${insertBlockForm(state, selected)}
 ${p.state === 'ARCHIVED' || !can(state, 'PUBLISH') || selected.format !== 'yaml' ? '' : `<div class="form-acts start"><button class="btn ghost" data-action="lib-from-scenario" data-name="${esc(selected.name)}">${icon('library')}<span>${esc(t.lib.add)}</span></button></div>`}</aside>`
     : '';

@@ -464,7 +464,7 @@ function testsPanel(state: StudioState, view: FlowStudioView): string {
           (file) =>
             `<li data-file="${esc(file.path)}"><p class="row"><span class="pill ${FILE_CLASS[file.status] ?? 'r-none'}">${esc(t.fileStatuses[file.status] ?? file.status)}</span> <b>${esc(t.formats[file.format] ?? file.format)}</b></p><p><code>${esc(file.path)}</code></p>${
               file.validation
-                ? `<p class="${file.validation.ok ? 'mu' : 'warn'}">${esc(file.validation.method)}${file.validation.messages.length > 0 ? ` — ${esc(file.validation.messages.join(' · '))}` : ''}</p>`
+                ? `<p class="${file.validation.ok ? 'mu' : 'warn'}">${esc(phrase(t, file.validation.method))}${file.validation.messages.length > 0 ? ` — ${esc(file.validation.messages.map((message) => phrase(t, message)).join(' · '))}` : ''}</p>`
                 : ''
             }${file.assertions.length > 0 ? `<ul class="asserts">${file.assertions.map((assertion) => `<li>${esc(phrase(t, assertion.description))} <span class="mu">(${esc(t.support[assertion.support] ?? assertion.support)})</span></li>`).join('')}</ul>` : ''}${file.limits.length > 0 ? `<p class="mu">${esc(t.limitsLabel)} : ${esc(file.limits.join(' · '))}</p>` : ''}<details><summary>${esc(t.showContent)}</summary><pre class="code">${esc(file.content)}</pre></details></li>`,
         )
@@ -475,7 +475,7 @@ function testsPanel(state: StudioState, view: FlowStudioView): string {
 <fieldset class="col"><legend>${esc(t.formatsLabel)}</legend>${formats}</fieldset>
 ${groups ? `<fieldset class="col"><legend>${esc(t.groupsLabel)}</legend>${groups}</fieldset>` : ''}
 <p class="warn">${esc(t.generationNote)}</p>
-<div class="row"><button class="btn pri"${disabled}>${esc(t.generate)}</button></div>
+<div class="row"><button type="submit" class="btn pri"${disabled}>${esc(t.generate)}</button></div>
 </form>${files}`;
 }
 

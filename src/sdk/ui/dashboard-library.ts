@@ -108,7 +108,7 @@ export function libraryView(state: DashboardState): string {
           parts ? `<ol class="plain lib-parts">${parts}</ol>` : `<p class="mu">${esc(l.noPart)}</p>`
         }<div class="form-acts start"><button type="submit" class="btn primary" ${disabled || ui.compose.parts.length === 0 ? 'disabled' : ''}>${esc(l.compose)}</button></div></form></section>`
       : '';
-  const messages = `${ui.error ? `<p class="err" role="alert">${esc(ui.error)}</p>` : ''}${ui.notice ? `<p class="notice" role="status">${icon('check')} ${esc(ui.notice)}</p>` : ''}`;
+  const messages = `${ui.error ? `<p class="err" role="alert">${esc(ui.error)}</p>` : ''}${ui.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(ui.notice)}</span></p>` : ''}`;
   return `${header(esc(t.nav.library), { sub: esc(l.sub(p.name, blocks.length)) })}<p class="mu">${esc(l.intro)}</p>${messages}<div class="split"><div class="col"><section class="card"><h2>${esc(l.blocksTitle)}</h2>${list}</section></div><div class="col narrow">${compose}${add}</div></div>`;
 }
 

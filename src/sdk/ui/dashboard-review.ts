@@ -708,7 +708,7 @@ function testsTab(state: DashboardState, ui: ReviewUi, decide: boolean): string 
           (file) =>
             `<li><div class="row-line">${pill(FILE_TONE[file.status] ?? 'UNKNOWN', r.fileStatuses[file.status] ?? file.status)}<b>${esc(r.formats[file.format] ?? file.format)}</b><code>${esc(file.path)}</code></div>${
               file.validation
-                ? `<small class="${file.validation.ok ? 'mu' : 'err'} block">${esc(file.validation.method)}${file.validation.messages.length > 0 ? ` — ${esc(file.validation.messages.join(' · '))}` : ''}</small>`
+                ? `<small class="${file.validation.ok ? 'mu' : 'err'} block">${esc(phrase(state, file.validation.method))}${file.validation.messages.length > 0 ? ` — ${esc(file.validation.messages.map((message) => phrase(state, message)).join(' · '))}` : ''}</small>`
                 : ''
             }${
               file.assertions.length > 0
@@ -756,7 +756,7 @@ export function reviewView(state: DashboardState): string {
           : tab === 'intents'
             ? intentsTab(state, ui, decide)
             : testsTab(state, ui, decide);
-  const messages = `${state.lib.notice ? `<p class="notice" role="status">${icon('check')} ${esc(state.lib.notice)}</p>` : ''}${ui.error ? `<p class="err" role="alert">${esc(ui.error)}</p>` : ''}${
+  const messages = `${state.lib.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(state.lib.notice)}</span></p>` : ''}${ui.error ? `<p class="err" role="alert">${esc(ui.error)}</p>` : ''}${
     ui.warnings && ui.warnings.length > 0
       ? `<div class="notice" role="status"><b>${esc(r.warnings)}</b><ul class="plain tight">${ui.warnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul></div>`
       : ''

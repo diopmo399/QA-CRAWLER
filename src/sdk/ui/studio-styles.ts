@@ -99,7 +99,7 @@ fieldset{border:0;margin:0;padding:0}
 .files p{margin:0;overflow-wrap:anywhere}
 pre.code{margin:6px 0 0;max-height:260px;overflow:auto;padding:8px 10px;border-radius:8px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre}
 .sub{padding-left:24px}
-.bind input[type="radio"]{flex:none}
+.side input[type="checkbox"],.side input[type="radio"]{flex:none;padding:0;border:0;margin:0;accent-color:var(--qa-color-primary)}
 .asserts,.vars{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
 .assert,.vars>li{border:1px solid var(--qa-color-border);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px}
 .vars ul{margin:0;padding-left:18px;font-size:12.5px}

@@ -152,6 +152,7 @@ describe('dashboard — scenario library', () => {
     expect(html).not.toContain('data-name="Bloc connexion"');
     expect(html).toContain('1 bloc(s) réutilisable(s) sont dans la bibliothèque.');
     expect(html).toContain('Rejoue : Bloc connexion, Bloc &lt;x&gt;');
+    expect(html).toContain('composé à partir de la bibliothèque');
     expect(html).toContain('data-action="lib-insert" data-scenario="Composé"');
     expect(html).toContain('data-action="lib-from-scenario" data-name="Composé"');
   });
