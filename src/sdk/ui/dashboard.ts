@@ -4,6 +4,15 @@ import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
 import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashboard-recordings.js';
+import {
+  assertionBuckets,
+  bindFormOf,
+  emptyReviewUi,
+  REVIEW_TABS,
+  type BindForm,
+  type ReviewTab,
+  type ReviewUi,
+} from './dashboard-review.js';
 import { environmentForm, environmentInputOf } from './dashboard-ops.js';
 import {
   connectorOfFile,
@@ -69,6 +78,7 @@ export class QaCrawlerDashboard extends Base {
   private subscription?: Subscription;
   /** Le suivi en direct d'un enregistrement (indépendant de celui d'une exécution). */
   private recSubscription?: Subscription;
+  private replayTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
   private generation = 0;
   /** Le fichier choisi pour un import (jamais dans l'état rendu). */
@@ -108,6 +118,7 @@ export class QaCrawlerDashboard extends Base {
       if (form === 'sign-in')
         this.signInWith(this.root.querySelector<HTMLInputElement>('[data-bind="token"]')?.value ?? '');
       if (form === 'rec-checkpoint') void this.recordingControl('checkpoint');
+      if (form?.startsWith('review-')) this.reviewSubmit(event.target as HTMLFormElement);
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
@@ -124,6 +135,19 @@ export class QaCrawlerDashboard extends Base {
       }
       if (recField === 'checkpoint' && this.state.recs.live) {
         this.state.recs.live.checkpointLabel = target.value;
+        return;
+      }
+      const review = this.state.review;
+      const reviewField = target.dataset.review;
+      if (review && reviewField) {
+        if (reviewField === 'newGroup') review.newGroup = target.value;
+        else if (reviewField === 'rename' && review.renaming) review.renaming.name = target.value;
+        else if (reviewField === 'modify' && review.editing) review.editing.description = target.value;
+        return;
+      }
+      if (review && target.dataset.bindStep && target.type !== 'radio') {
+        this.bindForm(target.dataset.bindStep)[target.dataset.bindField as 'value' | 'variable'] =
+          target.value;
         return;
       }
       if (target.dataset.memberField === 'name') {
@@ -183,6 +207,8 @@ export class QaCrawlerDashboard extends Base {
     this.connected = false;
     this.unsubscribe();
     this.unfollowRecording();
+    if (this.replayTimer) clearTimeout(this.replayTimer);
+    this.replayTimer = undefined;
     this.ownClient?.dispose();
     this.ownClient = undefined;
   }
@@ -329,6 +355,273 @@ export class QaCrawlerDashboard extends Base {
     if (this.state.recs.live === live) this.paint();
   }
 
+  /** La revue : le flow (vue du Studio), les assertions, les données, les propositions, le rejeu. */
+  private async loadReview(
+    api: QaCrawlerClient,
+    projectId: string,
+    name: string,
+    generation = this.generation,
+  ): Promise<void> {
+    const [studio, assertions, data, groupProposals, checks, replay] = await Promise.all([
+      api.recordings.studio(projectId, name),
+      api.assertions.list(projectId, name),
+      api.data.get(projectId, name).catch(() => undefined),
+      api.groups.proposals(projectId, name).catch(() => []),
+      api.groups.checks(projectId, name).catch(() => []),
+      api.recordings.replayStatus(projectId, name).catch(() => undefined),
+    ]);
+    const review = this.state.review;
+    if (generation !== this.generation || review?.name !== name) return;
+    review.studio = studio;
+    review.assertions = assertions;
+    review.data = data;
+    review.groupProposals = groupProposals;
+    review.checks = checks;
+    review.replay = replay;
+    // Les choix de source enregistrés : le brouillon de la page est vidé.
+    review.binds = {};
+    review.selected = review.selected.filter((id) => studio.steps.some((step) => step.id === id));
+    if (replay?.status === 'RUNNING') this.pollReplay(api, projectId, name);
+  }
+
+  /** Le rejeu suit sa progression (une requête par seconde), puis la revue est relue. */
+  private pollReplay(api: QaCrawlerClient, projectId: string, name: string): void {
+    if (this.replayTimer) return;
+    this.replayTimer = setTimeout(() => {
+      this.replayTimer = undefined;
+      const route = this.state.route;
+      if (route.view !== 'recording' || route.name !== name) return;
+      void api.recordings
+        .replayStatus(projectId, name)
+        .then(async (replay) => {
+          const review = this.state.review;
+          if (review?.name !== name) return;
+          review.replay = replay;
+          if (replay.status === 'RUNNING') this.pollReplay(api, projectId, name);
+          else await this.loadReview(api, projectId, name);
+          this.paint();
+        })
+        .catch(() => undefined);
+    }, 1000);
+  }
+
+  private bindForm(stepId: string): BindForm {
+    const review = this.state.review;
+    const input = review?.data?.inputs.find((entry) => entry.stepId === stepId);
+    if (!review || !input) return { source: 'FIXED', variable: '', generator: '', reference: '', value: '' };
+    review.binds[stepId] ??= bindFormOf(review, input, review.data?.generators ?? []);
+    return review.binds[stepId];
+  }
+
+  /**
+   * Une opération de la revue : envoyée au serveur (qui réécrit le flow), puis la revue est relue.
+   * Les boutons sont désactivés pendant l'envoi ; une erreur s'affiche au-dessus de l'onglet.
+   */
+  private async reviewOp(
+    label: string,
+    run: (api: QaCrawlerClient, projectId: string, name: string, review: ReviewUi) => Promise<void>,
+  ): Promise<void> {
+    const api = this.api;
+    const route = this.state.route;
+    const review = this.state.review;
+    if (!api || route.view !== 'recording' || !review || review.busy) return;
+    review.busy = label;
+    review.error = undefined;
+    review.warnings = undefined;
+    this.paint();
+    try {
+      await run(api, route.projectId, route.name, review);
+      await this.loadReview(api, route.projectId, route.name);
+    } catch (error) {
+      review.error = message(error);
+    }
+    review.busy = undefined;
+    if (this.state.review === review) this.paint();
+  }
+
+  private groupEdit(label: string, command: Parameters<QaCrawlerClient['groups']['edit']>[2]): void {
+    void this.reviewOp(label, async (api, projectId, name, review) => {
+      const result = await api.groups.edit(projectId, name, command);
+      if (result.warnings.length > 0) review.warnings = result.warnings;
+    });
+  }
+
+  private reviewClick(action: string, target: HTMLElement): boolean {
+    const review = this.state.review;
+    const route = this.state.route;
+    if (!review || route.view !== 'recording') return false;
+    const step = target.dataset.step ?? '';
+    const group = target.dataset.group ?? '';
+    const direction = target.dataset.direction === 'down' ? 'down' : 'up';
+    switch (action) {
+      case 'review-tab': {
+        const tab = target.dataset.tab as ReviewTab | undefined;
+        if (tab && (REVIEW_TABS as readonly string[]).includes(tab)) {
+          this.state.route = { ...route, tab };
+          this.paint();
+          this.root.querySelector<HTMLElement>(`[data-action="review-tab"][data-tab="${tab}"]`)?.focus();
+        }
+        return true;
+      }
+      case 'review-replay':
+        void this.reviewOp('replay', async (api, projectId, name, ui) => {
+          ui.replay = await api.recordings.replay(projectId, name);
+          this.pollReplay(api, projectId, name);
+        });
+        return true;
+      case 'review-move':
+        this.groupEdit('move', { op: 'move-step', stepId: step, direction });
+        return true;
+      case 'review-detach':
+        this.groupEdit('detach', { op: 'detach', stepIds: [step] });
+        return true;
+      case 'review-detach-selected':
+        this.groupEdit('detach', { op: 'detach', stepIds: [...review.selected] });
+        review.selected = [];
+        return true;
+      case 'review-clear':
+        review.selected = [];
+        this.paint();
+        return true;
+      case 'review-remove':
+        review.confirmRemove = step;
+        this.paint();
+        return true;
+      case 'review-remove-no':
+        review.confirmRemove = undefined;
+        this.paint();
+        return true;
+      case 'review-remove-yes':
+        review.confirmRemove = undefined;
+        void this.reviewOp('remove', async (api, projectId, name) => {
+          await api.recordings.removeStep(projectId, name, step);
+        });
+        return true;
+      case 'review-rename-open': {
+        const current = review.studio?.groups.find((entry) => entry.id === group);
+        if (current) review.renaming = { id: group, name: current.name };
+        this.paint();
+        this.root.querySelector<HTMLInputElement>('[data-review="rename"]')?.focus();
+        return true;
+      }
+      case 'review-rename-cancel':
+        review.renaming = undefined;
+        this.paint();
+        return true;
+      case 'review-move-group':
+        this.groupEdit('move', { op: 'move-group', groupId: group, direction });
+        return true;
+      case 'review-delete-group':
+        this.groupEdit('delete', { op: 'delete', groupId: group, keepSteps: true });
+        return true;
+      case 'review-accept-groups':
+        void this.reviewOp('groups', async (api, projectId, name, ui) => {
+          const result = await api.groups.acceptProposals(projectId, name);
+          if (result.warnings.length > 0) ui.warnings = result.warnings;
+        });
+        return true;
+      case 'review-add-check':
+        void this.reviewOp('check', async (api, projectId, name) => {
+          await api.groups.addCheck(projectId, name, { groupId: group, key: target.dataset.key ?? '' });
+        });
+        return true;
+      case 'review-decide': {
+        const decision = target.dataset.decision as 'ACCEPT' | 'REJECT' | 'DISABLE' | 'RESET';
+        const id = target.dataset.assertion ?? '';
+        void this.reviewOp('decide', async (api, projectId, name) => {
+          await api.assertions.decide(projectId, name, id, { decision });
+        });
+        return true;
+      }
+      case 'review-decide-all': {
+        const decision = target.dataset.decision === 'REJECT' ? 'REJECT' : 'ACCEPT';
+        const buckets = assertionBuckets(review.assertions ?? []);
+        const ids = (target.dataset.bucket === 'weak' ? buckets.weak : buckets.recommended).map(
+          (proposal) => proposal.id,
+        );
+        void this.reviewOp('decide', async (api, projectId, name) => {
+          for (const id of ids) await api.assertions.decide(projectId, name, id, { decision });
+        });
+        return true;
+      }
+      case 'review-modify-open': {
+        const proposal = review.assertions?.find((entry) => entry.id === target.dataset.assertion);
+        if (proposal) review.editing = { id: proposal.id, description: proposal.description };
+        this.paint();
+        this.root.querySelector<HTMLTextAreaElement>('[data-review="modify"]')?.focus();
+        return true;
+      }
+      case 'review-modify-cancel':
+        review.editing = undefined;
+        this.paint();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private reviewSubmit(form: HTMLFormElement): void {
+    const review = this.state.review;
+    if (!review) return;
+    switch (form.dataset.action) {
+      case 'review-rename': {
+        const renaming = review.renaming;
+        if (!renaming?.name.trim()) return;
+        review.renaming = undefined;
+        this.groupEdit('rename', { op: 'rename', groupId: renaming.id, name: renaming.name.trim() });
+        return;
+      }
+      case 'review-create-group': {
+        const name = review.newGroup.trim();
+        if (!name || review.selected.length === 0) return;
+        const stepIds = [...review.selected];
+        review.selected = [];
+        review.newGroup = '';
+        this.groupEdit('create', { op: 'create', name, stepIds });
+        return;
+      }
+      case 'review-modify': {
+        const editing = review.editing;
+        if (!editing?.description.trim()) return;
+        review.editing = undefined;
+        void this.reviewOp('decide', async (api, projectId, name) => {
+          await api.assertions.decide(projectId, name, editing.id, {
+            decision: 'MODIFY',
+            description: editing.description.trim(),
+          });
+        });
+        return;
+      }
+      case 'review-bind': {
+        const stepId = form.dataset.step ?? '';
+        const choice = this.bindForm(stepId);
+        void this.reviewOp('bind', async (api, projectId, name) => {
+          await api.data.bind(projectId, name, {
+            stepId,
+            source: choice.source,
+            ...(choice.source === 'FIXED' ? { value: choice.value } : {}),
+            ...(choice.source === 'GENERATED'
+              ? { variable: choice.variable.trim(), generator: choice.generator }
+              : {}),
+            ...(choice.source === 'REFERENCE' ? { variable: choice.reference } : {}),
+          });
+        });
+        return;
+      }
+      case 'review-generate': {
+        const formats = [...review.formats];
+        const groupIds = [...review.genGroups];
+        void this.reviewOp('generate', async (api, projectId, name, ui) => {
+          ui.generation = await api.generation.run(projectId, name, {
+            formats: formats as Parameters<QaCrawlerClient['generation']['run']>[2]['formats'],
+            ...(groupIds.length > 0 ? { groupIds } : {}),
+          });
+        });
+        return;
+      }
+    }
+  }
+
   private async startRecording(): Promise<void> {
     const api = this.api;
     const project = this.state.project;
@@ -369,6 +662,10 @@ export class QaCrawlerDashboard extends Base {
     if (route.view !== 'recordings') {
       this.unfollowRecording();
       this.state.recs.live = undefined;
+    }
+    if (route.view !== 'recording') {
+      if (this.replayTimer) clearTimeout(this.replayTimer);
+      this.replayTimer = undefined;
     }
     if ('projectId' in route && route.projectId !== undefined && route.projectId !== this.state.projectId) {
       this.state.projectId = route.projectId;
@@ -478,6 +775,10 @@ export class QaCrawlerDashboard extends Base {
         );
         if (running && this.state.recs.live?.name !== running.name)
           this.followRecording(api, route.projectId, running.name, running.status);
+      } else if (route.view === 'recording') {
+        await this.loadProject(api, route.projectId, generation);
+        if (this.state.review?.name !== route.name) this.state.review = emptyReviewUi(route.name);
+        await this.loadReview(api, route.projectId, route.name, generation);
       } else if (route.view === 'access') {
         if (this.state.me?.rights.includes('MANAGE_ACCESS')) {
           const kind = this.state.access.journalKind;
@@ -1062,6 +1363,7 @@ export class QaCrawlerDashboard extends Base {
     const action = target.dataset.action;
     const api = this.api;
     if (target.tagName === 'A') event.preventDefault();
+    if (action?.startsWith('review-') && this.reviewClick(action, target)) return;
     switch (action) {
       case 'menu':
         this.state.menuOpen = !this.state.menuOpen;
@@ -1100,6 +1402,12 @@ export class QaCrawlerDashboard extends Base {
       case 'start-recording':
         void this.startRecording();
         return;
+      case 'open-review': {
+        const project = this.state.project;
+        const name = target.dataset.recording;
+        if (project && name) this.navigate({ view: 'recording', projectId: project.id, name });
+        return;
+      }
       case 'rec-control':
         void this.recordingControl(target.dataset.control ?? '');
         return;
@@ -1327,6 +1635,8 @@ export class QaCrawlerDashboard extends Base {
           this.navigate({ view: 'explorations', projectId: route.projectId });
         else if (target.dataset.to === 'sources' && route.view === 'import')
           this.navigate({ view: 'sources', projectId: route.projectId });
+        else if (target.dataset.to === 'recordings' && route.view === 'recording')
+          this.navigate({ view: 'recordings', projectId: route.projectId });
         else this.navigate({ view: 'projects' });
         return;
       }
@@ -1398,6 +1708,54 @@ export class QaCrawlerDashboard extends Base {
 
   private onChange(event: Event): void {
     const target = event.target as HTMLInputElement | HTMLSelectElement;
+    const review = this.state.review;
+    if (review && this.state.route.view === 'recording') {
+      const pick = target.dataset.reviewPick;
+      if (pick) {
+        const checked = (target as HTMLInputElement).checked;
+        review.selected = checked
+          ? [...review.selected.filter((id) => id !== pick), pick]
+          : review.selected.filter((id) => id !== pick);
+        this.paint();
+        // Redessinée, la page garde le focus sur la case (clavier).
+        this.root.querySelector<HTMLInputElement>(`[data-review-pick="${CSS.escape(pick)}"]`)?.focus();
+        return;
+      }
+      const format = target.dataset.reviewFormat;
+      if (format) {
+        const checked = (target as HTMLInputElement).checked;
+        review.formats = checked
+          ? [...review.formats.filter((entry) => entry !== format), format]
+          : review.formats.filter((entry) => entry !== format);
+        this.paint();
+        this.root.querySelector<HTMLInputElement>(`[data-review-format="${CSS.escape(format)}"]`)?.focus();
+        return;
+      }
+      const genGroup = target.dataset.reviewGenGroup;
+      if (genGroup) {
+        const checked = (target as HTMLInputElement).checked;
+        review.genGroups = checked
+          ? [...review.genGroups.filter((entry) => entry !== genGroup), genGroup]
+          : review.genGroups.filter((entry) => entry !== genGroup);
+        return;
+      }
+      if (target.dataset.action === 'review-assign' && target.value) {
+        const stepIds = [...review.selected];
+        review.selected = [];
+        this.groupEdit('assign', { op: 'assign', groupId: target.value, stepIds });
+        return;
+      }
+      const bindStep = target.dataset.bindStep;
+      if (bindStep) {
+        const field = target.dataset.bindField as keyof BindForm;
+        const form = this.bindForm(bindStep);
+        if (field === 'source') {
+          form.source = target.value as BindForm['source'];
+          this.paint();
+        } else form[field] = target.value;
+        return;
+      }
+    }
     if (target.dataset.action === 'period') {
       const days = Number(target.value);
       if ((PERIODS as readonly number[]).includes(days)) this.state.days = days;
@@ -1436,6 +1794,7 @@ export class QaCrawlerDashboard extends Base {
       )
         this.navigate({ view: route.view, projectId });
       else if (route.view === 'import') this.navigate({ view: 'sources', projectId });
+      else if (route.view === 'recording') this.navigate({ view: 'recordings', projectId });
       else this.navigate({ view: 'project', projectId });
       return;
     }

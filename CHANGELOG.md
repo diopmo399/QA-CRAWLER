@@ -69,6 +69,29 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
     au style du Dashboard, champs numériques à leur largeur, boutons qui ne s'étirent plus ;
   - la note « auteur non enregistré » ne s'affiche plus qu'en mode à jeton unique ; une description
     qui ne fait que répéter le titre n'est plus affichée.
+- **Dashboard, tout le recorder** : ce que fait la fenêtre du recorder se fait aussi dans le Dashboard.
+  - Pendant l'enregistrement : les gestes en phrases avec leur statut (les messages bruts du recorder
+    sont repliés dans un journal technique), pause et reprise, annulation du dernier geste,
+    vérification posée sur l'écran courant, choix de l'élément touché quand la cible est ambiguë ;
+    après l'arrêt, les phases du traitement en mots avec leur progression.
+  - Revue d'un enregistrement terminé (bouton « Revoir ») :
+    - parcours en groupes : découpage proposé d'après les étapes métier, créé sur décision ;
+      vérifications de groupe suggérées ; cocher des étapes pour créer un groupe, y ajouter ou en
+      détacher ; renommer, déplacer, supprimer un groupe ; monter ou descendre une étape ; retirer
+      une étape, confirmé dans la page ;
+    - assertions rangées comme dans le recorder (recommandées, à décider, faibles, décidées) :
+      accepter, refuser, désactiver, modifier, réinitialiser, une à une ou en lot ;
+    - source de chaque saisie (fixe, générée, reprise d'une étape antérieure) ; un secret ne se lie pas ;
+    - génération des tests (YAML, Gherkin, Playwright, Java) et ce qu'est chaque fichier produit ;
+    - rejeu de validation sans fenêtre sur le serveur, suivi étape par étape.
+  - SDK : `recordings.pause/resume/undo/checkpoint/resolve/ignore` (droit `RUN`),
+    `recordings.removeStep`, `recordings.replay/replayStatus` (droit `RUN`),
+    `groups.proposals/acceptProposals/checks/addCheck` ; événement `timeline` (seul le dernier état est
+    gardé) ; les phases portent leur rang et leur détail.
+  - Les étapes du Studio et du flow sont dites dans la langue du serveur (« Vérifier : "À propos" »
+    au lieu de « the link … ») ; le dernier rejeu du Studio est dit en mots (« conforme »).
+  - Moteur : le rejeu de validation (`replayRecordedFlow`), le retrait d'une étape et la vérification
+    de groupe sont partagés entre la fenêtre du recorder et le SDK.
 - **Accès nominatifs** (`sdk-server --access named`, `startSdkServer({ access: 'named' })`) :
   - jetons par personne ou robot, conservés par leur seule empreinte et montrés une fois ;
   - quatre rôles (Lecteur, Analyste, Pilote QA, Administrateur), un rôle possible par projet ;

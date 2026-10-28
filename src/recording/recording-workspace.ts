@@ -11,7 +11,12 @@ import {
   type GenerationFormat,
 } from '../platform/generation-plan.js';
 import { HUMAN_REVIEW_FILE, type HumanReviewLedger } from './application/human-review.js';
-import { decideProposal, proposalSummary, type ProposalDecision } from './assertion-proposals.js';
+import {
+  addDataCheck,
+  decideProposal,
+  proposalSummary,
+  type ProposalDecision,
+} from './assertion-proposals.js';
 import type { RecordedFlow } from './model.js';
 import { TEST_DATA_FILE } from './process-recording.js';
 import { generateFlowFiles, type GeneratedFiles } from './recorded-flow.js';
@@ -27,9 +32,15 @@ import {
   type TestDataBindingInput,
 } from './test-data-binding.js';
 import {
+  acceptGroupProposals,
   applyGroupCommand,
+  groupCheckSuggestions,
   groupViews,
+  proposeGroups,
   stepDependencies,
+  type BusinessStepRef,
+  type GroupCheckSuggestion,
+  type GroupProposal,
   type GroupCommand,
   type GroupOutcome,
   type GroupView,
@@ -335,5 +346,96 @@ export async function bindStoredTestData(
   }
   await rewrite(recording, language);
   if (context.humanReview) await write(HUMAN_REVIEW_FILE, json(context.humanReview));
+  return outcome;
+}
+
+// ── Retirer une étape, groupes proposés, vérification de groupe ───────────────────────────────
+
+/**
+ * RETIRER UNE ÉTAPE d'action du flow, avec les vérifications qui la suivent (celles de la même
+ * action). Une vérification ne se retire pas ainsi : elle se refuse ou se désactive (propositions).
+ */
+export function dropFlowStep(flow: RecordedFlow, stepId: string): boolean {
+  const target = flow.steps.find((item) => item.id === stepId);
+  if (!target || target.step.kind === 'expect') return false;
+  const actionIds = new Set(target.actionIds);
+  flow.steps = flow.steps.filter(
+    (item) =>
+      item !== target && !(item.step.kind === 'expect' && item.actionIds.some((id) => actionIds.has(id))),
+  );
+  return true;
+}
+
+/** Retire une étape d'un enregistrement écrit et réécrit le flow. */
+export async function removeStoredStep(
+  recording: StoredRecording,
+  stepId: string,
+  language: 'fr' | 'en',
+): Promise<{ ok: true } | { error: string }> {
+  if (!dropFlowStep(recording.flow, stepId)) return { error: `no action step ${stepId}` };
+  await rewrite(recording, language);
+  return { ok: true };
+}
+
+/** Les étapes métier reconnues à l'enregistrement (business-flow.json), base des groupes proposés. */
+async function businessStepsOf(recording: StoredRecording): Promise<BusinessStepRef[]> {
+  const text = await readFile(path.join(recording.directory, 'business-flow.json'), 'utf8').catch(
+    () => undefined,
+  );
+  if (!text) return [];
+  const steps = (JSON.parse(text) as { steps?: unknown }).steps;
+  return Array.isArray(steps) ? (steps as BusinessStepRef[]) : [];
+}
+
+/** Les groupes proposés d'après les étapes métier (aucun quand le flow a déjà des groupes). */
+export async function storedGroupProposals(
+  recording: StoredRecording,
+  language: 'fr' | 'en',
+): Promise<GroupProposal[]> {
+  return proposeGroups(recording.flow, await businessStepsOf(recording), language);
+}
+
+/** Crée d'un coup les groupes proposés, sur décision humaine, et réécrit le flow. */
+export async function acceptStoredGroupProposals(
+  recording: StoredRecording,
+  language: 'fr' | 'en',
+): Promise<GroupOutcome> {
+  const outcome = acceptGroupProposals(recording.flow, await storedGroupProposals(recording, language));
+  if ('error' in outcome) return outcome;
+  await rewrite(recording, language);
+  return outcome;
+}
+
+export function storedGroupChecks(recording: StoredRecording): GroupCheckSuggestion[] {
+  return groupCheckSuggestions(recording.flow);
+}
+
+/**
+ * LA VÉRIFICATION D'UN GROUPE : la donnée de test reçue est visible après la dernière action du
+ * groupe ; une proposition EXPLICIT acceptée, retirable comme les autres.
+ */
+export function addGroupCheck(
+  flow: RecordedFlow,
+  input: { groupId: string; key: string },
+): { ok: true; proposalId: string; groupName: string } | { error: string } {
+  const view = groupViews(flow).find((entry) => entry.id === input.groupId);
+  if (!view) return { error: `unknown group ${input.groupId}` };
+  const last = [...flow.steps]
+    .reverse()
+    .find((item) => view.stepIds.includes(item.id) && item.step.kind !== 'expect');
+  if (!last) return { error: `group ${input.groupId} has no action` };
+  const outcome = addDataCheck(flow, { afterStepId: last.id, key: input.key, groupName: view.name });
+  if ('error' in outcome) return outcome;
+  return { ...outcome, groupName: view.name };
+}
+
+export async function addStoredGroupCheck(
+  recording: StoredRecording,
+  input: { groupId: string; key: string },
+  language: 'fr' | 'en',
+): Promise<{ ok: true; proposalId: string; groupName: string } | { error: string }> {
+  const outcome = addGroupCheck(recording.flow, input);
+  if ('error' in outcome) return outcome;
+  await rewrite(recording, language);
   return outcome;
 }

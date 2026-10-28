@@ -650,6 +650,39 @@ export interface GroupEditResult {
   warnings: string[];
 }
 
+/** Un découpage proposé d'après les étapes métier reconnues : jamais créé sans décision humaine. */
+export interface GroupProposalView {
+  name: string;
+  stepIds: string[];
+  /** Numéros (1…n) de la première et de la dernière action. */
+  from: number;
+  to: number;
+  action: string;
+  confidence: number;
+}
+
+/** Une vérification suggérée : la donnée reçue d'un autre groupe est visible à la fin de celui-ci. */
+export interface GroupCheckView {
+  groupId: string;
+  groupName: string;
+  key: string;
+  afterStepId: string;
+}
+
+/** Le rejeu de validation d'un enregistrement écrit (dry run, mémoire isolée), lancé depuis le SDK. */
+export interface RecordingReplayView {
+  status: 'NONE' | 'RUNNING' | 'REPLAY_CONFIRMED' | 'REPLAY_FAILED';
+  executed?: number;
+  total?: number;
+  /** Le statut du dry run (FULLY_MATCHED…). */
+  dryRunStatus?: string;
+  reason?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  /** Le dernier rejeu écrit sur disque ; stale : le flow a changé depuis. */
+  last?: { status: string; at: string; stale: boolean };
+}
+
 export const GENERATION_FORMATS = ['yaml', 'gherkin', 'playwright', 'java'] as const;
 export type GenerationFormatName = (typeof GENERATION_FORMATS)[number];
 

@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { RecordOutcome, RecordRequest } from '../../recording/record-orchestrator.js';
 import { inFlow } from '../../recording/assertion-proposals.js';
+import { describeFlowStep } from '../../recording/panel-state.js';
 import type { HumanFlowRecorder } from '../../recording/human-flow-recorder.js';
 import type { RecordedFlow, RecordingEvent } from '../../recording/model.js';
 import { dependencyViolations, stepDependencies } from '../../recording/step-groups.js';
@@ -352,7 +353,7 @@ export async function storedRecordingNames(reportsDir: string): Promise<string[]
 }
 
 /** La vue du flow : les étapes du flow enregistré et les fichiers générés (YAML, .feature). */
-export async function flowView(recording: StoredRecording): Promise<FlowView> {
+export async function flowView(recording: StoredRecording, language: 'fr' | 'en' = 'en'): Promise<FlowView> {
   const groupOf = new Map<string, string>();
   for (const group of recording.flow.groups ?? [])
     for (const stepId of group.stepIds) groupOf.set(stepId, group.id);
@@ -365,7 +366,7 @@ export async function flowView(recording: StoredRecording): Promise<FlowView> {
     steps: recording.flow.steps.map((item) => ({
       id: item.id,
       kind: item.step.kind,
-      description: describeStep(item.step),
+      description: stepDescription(item, language),
       ...(groupOf.has(item.id) ? { groupId: groupOf.get(item.id) } : {}),
     })),
     ...(yaml !== undefined ? { yaml } : {}),
@@ -536,6 +537,7 @@ export async function assertionVerdicts(
 export async function studioView(
   recording: StoredRecording,
   groups: GroupViewDto[],
+  language: 'fr' | 'en' = 'en',
 ): Promise<FlowStudioView> {
   const steps = recording.flow.steps;
   const roles = stepDependencies(recording.flow);
@@ -557,8 +559,7 @@ export async function studioView(
       id: item.id,
       position: index + 1,
       kind: item.step.kind,
-      // Le libellé que le moteur a donné à l'étape (« saisir le titre »), sinon sa cible.
-      description: item.label.trim() || describeStep(item.step),
+      description: stepDescription(item, language),
       ...(groupOf.has(item.id) ? { groupId: groupOf.get(item.id) } : {}),
       consumes: role?.consumes ?? [],
       produces: role?.produces ?? [],
@@ -584,19 +585,20 @@ export async function studioView(
   };
 }
 
-function describeStep(step: RecordedFlow['steps'][number]['step']): string {
-  const target = (step as { target?: unknown }).target;
-  const label =
-    target && typeof target === 'object'
-      ? Object.values(target as Record<string, unknown>)
-          .filter((value): value is string => typeof value === 'string')
-          .slice(0, 2)
-          .join(' ')
-      : typeof target === 'string'
-        ? target
-        : '';
-  const url = (step as { url?: unknown }).url;
-  return [step.kind, label || (typeof url === 'string' ? url : '')].filter(Boolean).join(' ');
+/**
+ * Une étape dite en langage courant, dans la langue du serveur. Le libellé du moteur (« saisir le
+ * titre ») est gardé ; un libellé vide ou qui ne fait que répéter la cible devient une phrase
+ * (« Cliquer sur "Valider" ») ; une vérification se dit toujours (« Vérifier : "À propos" »).
+ */
+export function stepDescription(item: RecordedFlow['steps'][number], language: 'fr' | 'en'): string {
+  const step = item.step;
+  if (step.kind === 'expect') return describeFlowStep(step, language);
+  const label = item.label.trim();
+  const target = (step as { target?: { name?: string; value?: string } }).target;
+  const bare = [target?.name, target?.value].some(
+    (name) => name !== undefined && name.trim().toLowerCase() === label.toLowerCase(),
+  );
+  return label && !bare ? label : describeFlowStep(step, language);
 }
 
 interface FlowGraphFile {

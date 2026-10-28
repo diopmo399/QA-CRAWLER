@@ -85,6 +85,13 @@ const fr = {
   replayNone:
     'Jamais rejoué : le chemin exécuté apparaîtra après un rejeu (enregistrement avec « validate »).',
   replayAt: (status: string, at: string) => `Dernier rejeu : ${status}, ${at}`,
+  replayStatuses: {
+    FULLY_MATCHED: 'conforme',
+    PARTIALLY_MATCHED: 'partiellement conforme',
+    DIVERGED: 'divergent',
+    BLOCKED: 'bloqué',
+    INCONCLUSIVE: 'non concluant',
+  } as Record<string, string>,
   replayStale: 'Le parcours a changé depuis ce rejeu : les résultats peuvent ne plus correspondre.',
   legend: 'Légende',
   legendSequence: 'ordre des étapes',
@@ -237,6 +244,13 @@ const en: StudioStrings = {
   violationsWord: 'used before produced',
   replayNone: 'Never replayed: the executed path shows after a replay (record with “validate”).',
   replayAt: (status, at) => `Last replay: ${status}, ${at}`,
+  replayStatuses: {
+    FULLY_MATCHED: 'fully matched',
+    PARTIALLY_MATCHED: 'partially matched',
+    DIVERGED: 'diverged',
+    BLOCKED: 'blocked',
+    INCONCLUSIVE: 'inconclusive',
+  },
   replayStale: 'The journey changed since this replay: results may no longer match.',
   legend: 'Legend',
   legendSequence: 'step order',

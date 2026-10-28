@@ -16,7 +16,10 @@ import type {
   GenerationResult,
   GraphView,
   GroupCommandInput,
+  GroupCheckView,
   GroupEditResult,
+  GroupProposalView,
+  RecordingReplayView,
   GroupViewDto,
   Project,
   ProjectDraft,
@@ -286,6 +289,11 @@ export interface QaCrawlerClient {
     flow(projectId: string, name: string): Promise<FlowView>;
     /** Le Flow Studio : étapes, données produites et citées, dépendances, groupes, dernier rejeu. */
     studio(projectId: string, name: string): Promise<FlowStudioView>;
+    /** Retire une étape d'action (et ses vérifications) du flow ; rend la vue à jour. */
+    removeStep(projectId: string, name: string, stepId: string): Promise<FlowStudioView>;
+    /** Le rejeu de validation : le lancer (dry run, sans fenêtre), puis le suivre. */
+    replay(projectId: string, name: string): Promise<RecordingReplayView>;
+    replayStatus(projectId: string, name: string): Promise<RecordingReplayView>;
   };
   /** Les propositions d'assertions d'un enregistrement et les décisions humaines. */
   assertions: {
@@ -312,6 +320,16 @@ export interface QaCrawlerClient {
       command: GroupCommandInput,
       options?: { force?: boolean },
     ): Promise<GroupEditResult>;
+    /** Les groupes proposés d'après les étapes métier ; `acceptProposals` les crée tous d'un coup. */
+    proposals(projectId: string, recording: string): Promise<GroupProposalView[]>;
+    acceptProposals(projectId: string, recording: string): Promise<GroupEditResult>;
+    /** Les vérifications suggérées par groupe ; `addCheck` en ajoute une (proposition acceptée). */
+    checks(projectId: string, recording: string): Promise<GroupCheckView[]>;
+    addCheck(
+      projectId: string,
+      recording: string,
+      input: { groupId: string; key: string },
+    ): Promise<AssertionProposalView[]>;
   };
   /** Les tests générés depuis un enregistrement (YAML, Gherkin, Playwright TypeScript, Java). */
   generation: {
@@ -684,6 +702,10 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         ),
       flow: (projectId, name) => request('GET', `${recording(projectId, name)}/flow`),
       studio: (projectId, name) => request('GET', `${recording(projectId, name)}/studio`),
+      removeStep: (projectId, name, stepId) =>
+        request('POST', `${recording(projectId, name)}/steps/remove`, { stepId }),
+      replay: (projectId, name) => request('POST', `${recording(projectId, name)}/replay`, {}),
+      replayStatus: (projectId, name) => request('GET', `${recording(projectId, name)}/replay`),
     },
     assertions: {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/assertions`),
@@ -698,6 +720,12 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       list: (projectId, name) => request('GET', `${recording(projectId, name)}/groups`),
       edit: (projectId, name, command, editOptions = {}) =>
         request('POST', `${recording(projectId, name)}/groups`, { command, ...editOptions }),
+      proposals: (projectId, name) => request('GET', `${recording(projectId, name)}/groups/proposals`),
+      acceptProposals: (projectId, name) =>
+        request('POST', `${recording(projectId, name)}/groups/proposals`, {}),
+      checks: (projectId, name) => request('GET', `${recording(projectId, name)}/groups/checks`),
+      addCheck: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/groups/checks`, input),
     },
     generation: {
       run: (projectId, name, input) => request('POST', `${recording(projectId, name)}/generation`, input),

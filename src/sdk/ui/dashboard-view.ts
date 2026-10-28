@@ -20,6 +20,7 @@ import type { DashboardStrings } from './dashboard-i18n.js';
 import { environmentsView, explorationsView, historyView, scenariosView } from './dashboard-ops.js';
 import { accessView, can, signInView, type AccessUi } from './dashboard-access.js';
 import { recordingsView, type RecordingsUi } from './dashboard-recordings.js';
+import { reviewView, type ReviewTab, type ReviewUi } from './dashboard-review.js';
 import {
   importView,
   indicatorsView,
@@ -61,6 +62,8 @@ export type DashboardRoute =
   | { view: 'history'; projectId: string }
   | { view: 'scenarios'; projectId: string; scenario?: string }
   | { view: 'recordings'; projectId: string }
+  /** La revue d'un enregistrement écrit (ce que fait la fenêtre du recorder après l'arrêt). */
+  | { view: 'recording'; projectId: string; name: string; tab?: ReviewTab }
   /** `environmentId: 'new'` : la création d'un environnement. */
   | { view: 'environments'; projectId: string; environmentId?: string }
   | { view: 'explorations'; projectId: string; run?: string }
@@ -160,6 +163,8 @@ export interface DashboardState {
   recs: RecordingsUi;
   /** L'adresse du Flow Studio (même serveur que l'API). */
   studioUrl?: string;
+  /** La revue de l'enregistrement ouvert. */
+  review?: ReviewUi;
   /** L'exécution suivie en direct (son instantané, ses étapes, la dernière phase annoncée). */
   live?: { snapshot: ExplorationSnapshot; steps: LiveStep[]; phase?: string; cancelRequested: boolean };
   execution?: ExecutionDetail;
@@ -195,7 +200,7 @@ export function activeNav(route: DashboardRoute): NavView {
   if (route.view === 'explorations') return 'explorations';
   if (route.view === 'sources' || route.view === 'import') return 'sources';
   if (route.view === 'access') return 'access';
-  if (route.view === 'recordings') return 'recordings';
+  if (route.view === 'recordings' || route.view === 'recording') return 'recordings';
   if (
     route.view === 'requirements' ||
     route.view === 'traceability' ||
@@ -289,6 +294,8 @@ function body(state: DashboardState): string {
       return accessView(state);
     case 'recordings':
       return recordingsView(state);
+    case 'recording':
+      return reviewView(state);
   }
 }
 

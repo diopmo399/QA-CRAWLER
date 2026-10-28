@@ -89,6 +89,9 @@ function row(state: DashboardState, recording: RecordingSnapshot, promoted: Set<
   const archived = state.project?.state === 'ARCHIVED';
   const actions = [
     done
+      ? `<button class="btn small primary" data-action="open-review" data-recording="${esc(recording.name)}">${esc(t.review.open)}</button>`
+      : '',
+    done
       ? `<a class="btn small" href="${esc(studioLink(state, recording.name))}" target="_blank" rel="noopener">${esc(r.openStudio)}</a>`
       : '',
     done && !isPromoted && !archived && can(state, 'PUBLISH') && summary

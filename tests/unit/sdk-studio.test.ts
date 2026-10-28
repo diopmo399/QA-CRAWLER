@@ -323,9 +323,9 @@ describe('Flow Studio — rendering', () => {
     expect(html).toContain('search &lt;b&gt;the title&lt;/b&gt;');
     expect(html).toMatch(/data-node="s3"[^>]*aria-label="Étape 3 : save the item[^"]*Rejeu : introuvable/);
     // Sans libellé, l'étape est décrite par ce qu'elle fait.
-    expect(view.steps.find((entry) => entry.id === 's4')?.description).toBe('goto /items');
+    expect(view.steps.find((entry) => entry.id === 's4')?.description).toBe('Go to /items');
     expect(html).toContain('role="button"');
-    expect(html).toContain('Dernier rejeu : PARTIALLY_MATCHED');
+    expect(html).toContain('Dernier rejeu : partiellement conforme');
   });
 
   it('shows the step panel with the data it produces and uses, and the replay reason', () => {

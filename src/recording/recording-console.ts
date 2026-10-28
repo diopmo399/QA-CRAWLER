@@ -58,6 +58,7 @@ import { isSensitiveKey } from '../data/test-data-set.js';
 import type { RecordingIntelligence } from './recording-intelligence.js';
 import type { RecordingResult } from './process-recording.js';
 import { TEST_DATA_FILE } from './process-recording.js';
+import { dropFlowStep } from './recording-workspace.js';
 
 /** Ce que la revue sait faire (fourni par l'orchestrateur) : rejouer, retirer une étape, sauvegarder. */
 export interface ReviewActions {
@@ -1533,13 +1534,7 @@ export function regenerateFlowFiles(result: RecordingResult, language: 'fr' | 'e
 }
 
 export function removeFlowStep(result: RecordingResult, stepId: string, language: 'fr' | 'en'): boolean {
-  const target = result.flow.steps.find((item) => item.id === stepId);
-  if (!target || target.step.kind === 'expect') return false;
-  const actionIds = new Set(target.actionIds);
-  result.flow.steps = result.flow.steps.filter(
-    (item) =>
-      item !== target && !(item.step.kind === 'expect' && item.actionIds.some((id) => actionIds.has(id))),
-  );
+  if (!dropFlowStep(result.flow, stepId)) return false;
   regenerateFlowFiles(result, language);
   return true;
 }

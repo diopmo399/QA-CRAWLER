@@ -166,4 +166,113 @@ describe('Dashboard — recordings, in Chromium', () => {
     ).toBeLessThanOrEqual(0);
     await phone.close();
   }, 60_000);
+
+  it('reviews it in the Dashboard: group, rename, decide, generate, replay for real, remove a step', async () => {
+    const name = 'consulter-un-utilisateur';
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto(`${server.url}/dashboard`);
+    await dashboard().locator('select[data-action="project-context"]').selectOption(project.id);
+    await dashboard().locator('.drawer [data-action="nav"][data-view="recordings"]').click();
+    await dashboard().locator(`[data-action="open-review"][data-recording="${name}"]`).click();
+    await dashboard().locator('h1', { hasText: 'Revue de l’enregistrement' }).waitFor({ timeout: 30_000 });
+    const tab = (key: string): Locator =>
+      dashboard().locator(`[data-action="review-tab"][data-tab="${key}"]`);
+    await expect
+      .poll(async () => tab('flow').textContent())
+      .toMatch(/^1\. Parcours · 2 étapes · 0 groupe\(s\)$/);
+
+    // Les deux gestes cochés deviennent un groupe, renommé ensuite.
+    const picks = dashboard().locator('[data-review-pick]');
+    expect(await picks.count()).toBe(2);
+    await picks.nth(0).check();
+    await picks.nth(1).check();
+    await dashboard().locator('input[data-review="newGroup"]').fill('Consultation');
+    await dashboard().locator('form[data-action="review-create-group"] button[type="submit"]').click();
+    await dashboard().locator('.rv-group-h b', { hasText: 'Consultation' }).waitFor({ timeout: 15_000 });
+    const [group] = await client.groups.list(project.id, name);
+    expect(group?.name).toBe('Consultation');
+    await dashboard()
+      .locator(`[data-action="review-rename-open"][data-group="${group?.id ?? ''}"]`)
+      .click();
+    await dashboard().locator('input[data-review="rename"]').fill('Consulter la fiche');
+    await dashboard().locator('form[data-action="review-rename"] button[type="submit"]').click();
+    await dashboard()
+      .locator('.rv-group-h b', { hasText: 'Consulter la fiche' })
+      .waitFor({ timeout: 15_000 });
+    expect((await client.groups.list(project.id, name))[0]?.name).toBe('Consulter la fiche');
+
+    // Une assertion proposée, acceptée.
+    const before = await client.assertions.list(project.id, name);
+    const pending = before.filter((proposal) => proposal.status === 'PROPOSED');
+    expect(pending.length).toBeGreaterThan(0);
+    await tab('assertions').click();
+    const first = pending[0]?.id ?? '';
+    await dashboard()
+      .locator(`[data-action="review-decide"][data-decision="ACCEPT"][data-assertion="${first}"]`)
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (await client.assertions.list(project.id, name)).find((entry) => entry.id === first)?.status,
+      )
+      .toBe('APPROVED');
+
+    // Aucune saisie dans ce parcours.
+    await tab('data').click();
+    await dashboard().locator('p', { hasText: 'Aucune saisie dans ce parcours.' }).waitFor();
+
+    // Les tests générés : YAML, Gherkin et Playwright, avec ce qu'ils sont.
+    await tab('tests').click();
+    await dashboard().locator('[data-review-format="playwright"]').check();
+    await dashboard().locator('form[data-action="review-generate"] button[type="submit"]').click();
+    const files = dashboard().locator('.rv-files > li');
+    await expect.poll(() => files.count(), { timeout: 60_000 }).toBeGreaterThanOrEqual(3);
+    const listed = (await dashboard().locator('.rv-files').textContent()) ?? '';
+    for (const format of ['Flow YAML', 'Gherkin (.feature)', 'Playwright TypeScript'])
+      expect(listed).toContain(format);
+
+    // Le rejeu de validation, pour de vrai (sans fenêtre), depuis le Dashboard.
+    await dashboard().locator('[data-action="review-replay"]').click();
+    const replayPill = dashboard().locator('.replay-card .pill').first();
+    await expect
+      .poll(async () => replayPill.textContent(), { timeout: 180_000, interval: 1000 })
+      .toMatch(/^(Confirmé|Échoué)$/);
+    const replay = await client.recordings.replayStatus(project.id, name);
+    expect(replay).toMatchObject({ status: 'REPLAY_CONFIRMED', dryRunStatus: 'FULLY_MATCHED' });
+    expect(replay.last).toMatchObject({ status: 'FULLY_MATCHED', stale: false });
+
+    // Retirer une étape : la page demande d'abord.
+    await tab('flow').click();
+    const steps = dashboard().locator('.rv-step');
+    const count = await steps.count();
+    const removable = dashboard().locator('[data-action="review-remove"]').last();
+    const stepId = (await removable.getAttribute('data-step')) ?? '';
+    await removable.click();
+    await dashboard().locator(`[data-action="review-remove-yes"][data-step="${stepId}"]`).click();
+    await expect.poll(() => steps.count(), { timeout: 15_000 }).toBeLessThan(count);
+    const flow = await client.recordings.flow(project.id, name);
+    expect(flow.steps.some((step) => step.id === stepId)).toBe(false);
+    expect(flow.yaml).not.toContain('name: Utilisateur 1');
+  }, 300_000);
+
+  it('on a phone: the review never scrolls sideways', async () => {
+    const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await phone.goto(`${server.url}/dashboard`);
+    const element = phone.locator('qa-crawler-dashboard');
+    await element.locator('.kpis').waitFor();
+    await element.locator('[data-action="menu"]').click();
+    await element.locator('select[data-action="project-context"]').selectOption(project.id);
+    await element.locator('h1', { hasText: 'Site de démo' }).waitFor();
+    await element.locator('[data-action="menu"]').click();
+    await element.locator('.drawer [data-action="nav"][data-view="recordings"]').click();
+    await element.locator('[data-action="open-review"]').first().click();
+    await element.locator('.rv-flow').waitFor({ timeout: 30_000 });
+    for (const key of ['flow', 'assertions', 'tests']) {
+      await element.locator(`[data-action="review-tab"][data-tab="${key}"]`).click();
+      expect(
+        await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
+      ).toBeLessThanOrEqual(0);
+    }
+    await phone.close();
+  }, 60_000);
 });

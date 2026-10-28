@@ -200,7 +200,7 @@ function noticeHtml(state: StudioState): string {
 function overviewPanel(state: StudioState, view: FlowStudioView): string {
   const t = state.t;
   const replay = view.replay
-    ? `<p>${esc(t.replayAt(view.replay.status, new Date(view.replay.at).toLocaleString(t.dateLocale)))}</p>${view.replay.stale ? `<p class="warn">${esc(t.replayStale)}</p>` : ''}`
+    ? `<p>${esc(t.replayAt(t.replayStatuses[view.replay.status] ?? view.replay.status, new Date(view.replay.at).toLocaleString(t.dateLocale)))}</p>${view.replay.stale ? `<p class="warn">${esc(t.replayStale)}</p>` : ''}`
     : `<p class="mu">${esc(t.replayNone)}</p>`;
   return `<h2>${esc(t.overview)}</h2>
 <p class="nm">${esc(view.name)}</p>

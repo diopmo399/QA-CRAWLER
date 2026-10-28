@@ -9,18 +9,29 @@ import { slug } from '../../knowledge/signatures.js';
 import { loadProjectMission, projectConfigSchema } from '../../project/project-config.js';
 import { runMission } from '../../orchestrator.js';
 import { inFlow } from '../../recording/assertion-proposals.js';
-import { runRecording } from '../../recording/record-orchestrator.js';
 import {
+  replayRecordedFlow,
+  runRecording,
+  type RecordedFlowReplay,
+} from '../../recording/record-orchestrator.js';
+import type { ReplayOutcome } from '../../recording/recording-report.js';
+import {
+  acceptStoredGroupProposals,
+  addStoredGroupCheck,
   bindStoredTestData,
   decideStoredProposal,
   editStoredGroups,
+  FLOW_FILES,
   generateStoredTests,
   loadStoredRecording,
+  removeStoredStep,
+  storedGroupChecks,
+  storedGroupProposals,
   storedGroups,
   storedTestData,
   type StoredRecording,
 } from '../../recording/recording-workspace.js';
-import type { GroupCommand } from '../../recording/step-groups.js';
+import type { GroupCommand, GroupProposal } from '../../recording/step-groups.js';
 import { redactText } from '../../security/redactor.js';
 import { readCoreVersion } from '../../tool-identity.js';
 import type {
@@ -30,6 +41,8 @@ import type {
   ErrorBody,
   ExplorationEvent,
   GenerationResult,
+  GroupProposalView,
+  RecordingReplayView,
   DataBindingResult,
   GroupViewDto,
   Project,
@@ -168,6 +181,8 @@ export interface SdkServerOptions {
   run?: MissionRunner;
   /** Le recorder ; `runRecording` par défaut (remplaçable seulement pour les tests, qui y jouent l'humain). */
   record?: RecordRunner;
+  /** Le rejeu de validation d'un enregistrement ; `replayRecordedFlow` par défaut (remplaçable pour les tests). */
+  replayRecording?: (input: RecordedFlowReplay) => Promise<ReplayOutcome>;
   /** Explorations simultanées (défaut 1). */
   concurrency?: number;
   /**
@@ -254,6 +269,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     explorations,
     recordings,
     edits: new Map(),
+    replays: new Map(),
     engineVersion,
     options,
     sseClients,
@@ -312,6 +328,8 @@ interface Context {
   recordings: RecordingManager;
   /** Une modification à la fois par enregistrement (décisions, groupes, génération écrivent les mêmes fichiers). */
   edits: Map<string, Promise<unknown>>;
+  /** Les rejeux de validation lancés depuis le SDK, par enregistrement (projet/nom). */
+  replays: Map<string, RecordingReplayView>;
   engineVersion: string;
   options: SdkServerOptions;
   sseClients: Set<ServerResponse>;
@@ -772,7 +790,7 @@ async function handleRecordings(
   }
   const language = ctx.rules.reportLanguage;
   if (action === 'flow' && method === 'GET') {
-    sendJson(response, await flowView(await storedRecordingOf(ctx, project, name)));
+    sendJson(response, await flowView(await storedRecordingOf(ctx, project, name), language));
     return;
   }
   if (action === 'assertions' && itemId === undefined && method === 'GET') {
@@ -867,8 +885,66 @@ async function handleRecordings(
   }
   if (action === 'studio' && itemId === undefined && method === 'GET') {
     const stored = await storedRecordingOf(ctx, project, name);
-    sendJson(response, await studioView(stored, groupDtos(stored)));
+    sendJson(response, await studioView(stored, groupDtos(stored), language));
     return;
+  }
+  if (action === 'steps' && itemId === 'remove' && method === 'POST') {
+    const body = await readJson(request);
+    const stepId = textOf(body.stepId, 80);
+    if (!stepId) throw new HttpError(400, 'BAD_REQUEST', 'stepId is required');
+    const view = await editRecording(ctx, project, name, async (stored) => {
+      const outcome = await removeStoredStep(stored, stepId, language);
+      if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+      return studioView(stored, groupDtos(stored), language);
+    });
+    sendJson(response, view);
+    return;
+  }
+  if (action === 'groups' && itemId === 'proposals') {
+    if (method === 'GET') {
+      const stored = await storedRecordingOf(ctx, project, name);
+      sendJson(response, (await storedGroupProposals(stored, language)).map(groupProposalView));
+      return;
+    }
+    if (method === 'POST') {
+      const result = await editRecording(ctx, project, name, async (stored) => {
+        const outcome = await acceptStoredGroupProposals(stored, language);
+        if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+        return { groups: groupDtos(stored), warnings: outcome.warnings };
+      });
+      sendJson(response, result);
+      return;
+    }
+  }
+  if (action === 'groups' && itemId === 'checks') {
+    if (method === 'GET') {
+      sendJson(response, storedGroupChecks(await storedRecordingOf(ctx, project, name)));
+      return;
+    }
+    if (method === 'POST') {
+      const body = await readJson(request);
+      const groupId = textOf(body.groupId, 80);
+      const key = textOf(body.key, 80);
+      if (!groupId || !key) throw new HttpError(400, 'BAD_REQUEST', 'groupId and key are required');
+      const views = await editRecording(ctx, project, name, async (stored) => {
+        const outcome = await addStoredGroupCheck(stored, { groupId, key }, language);
+        if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+        return await proposalViews(stored);
+      });
+      sendJson(response, views);
+      return;
+    }
+  }
+  if (action === 'replay' && itemId === undefined) {
+    if (method === 'GET') {
+      sendJson(response, await replayView(ctx, project, name));
+      return;
+    }
+    if (method === 'POST') {
+      refuseArchived(project);
+      sendJson(response, await startReplay(ctx, project, name), 202);
+      return;
+    }
   }
   if (action === 'groups' && itemId === undefined && method === 'GET') {
     sendJson(response, groupDtos(await storedRecordingOf(ctx, project, name)));
@@ -925,6 +1001,20 @@ async function handleRecordings(
   throw new HttpError(404, 'NOT_FOUND', 'not found');
 }
 
+/** La mission du projet écrite en fichier (le recorder et son rejeu la lisent comme la CLI). */
+async function recordMission(ctx: Context, project: StoredProject): Promise<string> {
+  const loaded = await projectMission(ctx, project, 'record');
+  const derived = path.join(project.dir, '.derived');
+  await mkdir(derived, { recursive: true });
+  const missionFile = path.join(derived, 'record.mission.yaml');
+  await writeFile(
+    missionFile,
+    `# Derived by the SDK server from ${PROJECT_FILE} — regenerated at each recording.\n${loaded.missionYaml}`,
+    'utf8',
+  );
+  return missionFile;
+}
+
 async function startRecording(
   ctx: Context,
   project: StoredProject,
@@ -952,16 +1042,7 @@ async function startRecording(
     ctx.recordings.get(project.id, name)?.status === 'COMPLETED';
   if (taken)
     throw new HttpError(409, 'NAME_TAKEN', `a recording named ${name} already exists in this project`);
-  const loaded = await projectMission(ctx, project, 'record');
-  // La CLI rejoue la mission depuis un fichier : le recorder la lit de la même façon.
-  const derived = path.join(project.dir, '.derived');
-  await mkdir(derived, { recursive: true });
-  const missionFile = path.join(derived, 'record.mission.yaml');
-  await writeFile(
-    missionFile,
-    `# Derived by the SDK server from ${PROJECT_FILE} — regenerated at each recording.\n${loaded.missionYaml}`,
-    'utf8',
-  );
+  const missionFile = await recordMission(ctx, project);
   try {
     const session = ctx.recordings.start({
       projectId: project.id,
@@ -1113,6 +1194,76 @@ async function dataView(stored: StoredRecording): Promise<TestDataView> {
     })),
     generators: data.generators,
   };
+}
+
+function groupProposalView(proposal: GroupProposal): GroupProposalView {
+  return {
+    name: proposal.name,
+    stepIds: proposal.stepIds,
+    from: proposal.from,
+    to: proposal.to,
+    action: proposal.action,
+    confidence: proposal.confidence,
+  };
+}
+
+/** Le rejeu en cours ou le dernier de cette session, et le dernier écrit sur disque. */
+async function replayView(ctx: Context, project: StoredProject, name: string): Promise<RecordingReplayView> {
+  const stored = await storedRecordingOf(ctx, project, name);
+  const job = ctx.replays.get(`${project.id}/${name}`);
+  const last = (await studioView(stored, [], ctx.rules.reportLanguage)).replay;
+  return { ...(job ?? { status: 'NONE' as const }), ...(last ? { last } : {}) };
+}
+
+/**
+ * LE REJEU DE VALIDATION d'un enregistrement écrit : le flow généré est rejoué (dry run, sans fenêtre,
+ * mémoire isolée) avec la mission du projet ; la politique de sécurité s'applique. Un seul à la fois
+ * par enregistrement ; la page suit sa progression par GET.
+ */
+async function startReplay(ctx: Context, project: StoredProject, name: string): Promise<RecordingReplayView> {
+  const key = `${project.id}/${name}`;
+  if (ctx.replays.get(key)?.status === 'RUNNING')
+    throw new HttpError(409, 'REPLAY_RUNNING', `the recording ${name} is already being replayed`);
+  const stored = await storedRecordingOf(ctx, project, name);
+  const yaml = await readFile(path.join(stored.directory, FLOW_FILES.yaml), 'utf8').catch(() => undefined);
+  if (yaml === undefined)
+    throw new HttpError(422, 'REFUSED', `recording "${name}" has no generated flow (YAML) to replay`);
+  const missionFile = await recordMission(ctx, project);
+  const total = stored.flow.steps.filter((item) => item.step.kind !== 'expect').length;
+  const job: RecordingReplayView = {
+    status: 'RUNNING',
+    executed: 0,
+    total,
+    startedAt: new Date().toISOString(),
+  };
+  ctx.replays.set(key, job);
+  const replay = ctx.options.replayRecording ?? replayRecordedFlow;
+  void replay({
+    directory: stored.directory,
+    flow: stored.flow,
+    yaml,
+    missionFile,
+    overrides: { reportsDir: reportsDirOf(project) },
+    env: ctx.env,
+    headless: true,
+    onStep: (executed, steps) => {
+      job.executed = executed;
+      job.total = steps;
+    },
+  })
+    .then((outcome) => {
+      job.status = outcome.status === 'REPLAY_CONFIRMED' ? 'REPLAY_CONFIRMED' : 'REPLAY_FAILED';
+      if (outcome.dryRunStatus) job.dryRunStatus = outcome.dryRunStatus;
+      if (outcome.reason) job.reason = redactText(outcome.reason);
+    })
+    .catch((error: unknown) => {
+      job.status = 'REPLAY_FAILED';
+      job.reason = redactText(error instanceof Error ? error.message : String(error));
+    })
+    .finally(() => {
+      job.finishedAt = new Date().toISOString();
+    });
+  return { ...job };
 }
 
 function groupDtos(stored: StoredRecording): GroupViewDto[] {

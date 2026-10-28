@@ -91,7 +91,9 @@ describe('dashboard — recordings', () => {
       'href="/studio?project=prj_a&amp;recording=create-request" target="_blank" rel="noopener"',
     );
     expect(html).toContain('data-action="promote" data-recording="create-request"');
-    expect(html).not.toContain('data-recording="search"');
+    expect(html).not.toContain('data-action="promote" data-recording="search"');
+    expect(html).toContain('data-action="open-review" data-recording="search"');
+    expect(html).not.toContain('data-action="open-review" data-recording="a&lt;b&gt;"');
     expect(html).toContain('Promu en scénario');
     expect(html).toContain('a&lt;b&gt;');
     expect(html).toContain('>Échoué<');
