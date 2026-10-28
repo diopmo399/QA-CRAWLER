@@ -549,8 +549,10 @@ details.tech[open] summary{margin-bottom:6px}
 .tst-bar{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
 .tst-pick,.tst-env{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--qa-color-muted);min-width:0}
 .tst-pick select{min-width:min(320px,100%)}
-.tst-gen form{display:flex;flex-direction:column;gap:16px;margin:0}
-.tst-gen form>.tst-go{padding-top:16px;border-top:1px solid var(--qa-color-border)}
+.tst-gen form{display:flex;flex-direction:column;gap:24px;margin:0}
+.tst-gen form>.tst-go{padding-top:20px;border-top:1px solid var(--qa-color-border)}
+.tst-gen .tst-confirm{margin-top:8px}
+.tst-fmt .tst-go{padding-top:8px}
 .tst-gen fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;min-width:0}
 .tst-gen legend{padding:0;margin-bottom:8px;font-size:13px}
 .tst-checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
