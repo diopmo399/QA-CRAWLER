@@ -1,10 +1,17 @@
 import { createQaCrawler, QaCrawlerError, type QaCrawlerClient, type Subscription } from '../core/client.js';
-import { DASHBOARD_EVENTS, type Environment, type Role } from '../core/contracts.js';
+import {
+  DASHBOARD_EVENTS,
+  GENERATION_FORMATS,
+  type Environment,
+  type GenerationFormatName,
+  type Role,
+} from '../core/contracts.js';
 import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
 import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashboard-recordings.js';
 import { compositionKey, emptyLibraryUi, runnableScenarios, type LibraryUi } from './dashboard-library.js';
+import { activeRuns, emptyTestsUi, finishedRecordings } from './dashboard-tests.js';
 import {
   assertionBuckets,
   bindFormOf,
@@ -86,6 +93,8 @@ export class QaCrawlerDashboard extends Base {
   private recSubscription?: Subscription;
   private replayTimer?: ReturnType<typeof setTimeout>;
   private correctionTimer?: ReturnType<typeof setTimeout>;
+  /** Le suivi des exécutions de tests générés en cours (écran Tests). */
+  private testsTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
   private generation = 0;
   /** Le fichier choisi pour un import (jamais dans l'état rendu). */
@@ -112,6 +121,7 @@ export class QaCrawlerDashboard extends Base {
       access: emptyAccessUi(),
       recs: emptyRecordingsUi(),
       lib: emptyLibraryUi(),
+      tst: emptyTestsUi(),
     };
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
@@ -128,6 +138,7 @@ export class QaCrawlerDashboard extends Base {
       if (form === 'rec-checkpoint') void this.recordingControl('checkpoint');
       if (form?.startsWith('review-')) this.reviewSubmit(event.target as HTMLFormElement);
       if (form?.startsWith('lib-')) this.librarySubmit(event.target as HTMLFormElement);
+      if (form === 'tst-generate') void this.testsGenerate();
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
@@ -240,6 +251,7 @@ export class QaCrawlerDashboard extends Base {
     this.replayTimer = undefined;
     if (this.correctionTimer) clearTimeout(this.correctionTimer);
     this.correctionTimer = undefined;
+    this.stopTestsPolling();
     this.ownClient?.dispose();
     this.ownClient = undefined;
   }
@@ -839,6 +851,190 @@ export class QaCrawlerDashboard extends Base {
     this.paint();
   }
 
+  // ── Tests générés ────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * L'enregistrement affiché (celui de la route, le précédent, sinon le premier terminé), sa vue :
+   * fichiers générés, outils du serveur, exécutions. Une exécution en cours est suivie.
+   */
+  private async loadTests(
+    api: QaCrawlerClient,
+    projectId: string,
+    wanted: string | undefined,
+    generation: number,
+  ): Promise<void> {
+    const ui = this.state.tst;
+    const names = finishedRecordings(this.state);
+    const name =
+      [wanted, ui.recording].find((entry) => entry !== undefined && names.includes(entry)) ?? names[0];
+    if (name !== ui.recording) {
+      ui.view = undefined;
+      ui.file = undefined;
+      ui.run = undefined;
+      ui.error = undefined;
+      ui.details = undefined;
+      ui.notice = undefined;
+    }
+    ui.recording = name;
+    if (!name) return;
+    const view = await api.generation.view(projectId, name);
+    if (generation !== this.generation) return;
+    ui.view = view;
+    if (activeRuns(view).length > 0) this.pollTests(api, projectId, name);
+  }
+
+  private stopTestsPolling(): void {
+    if (this.testsTimer) clearTimeout(this.testsTimer);
+    this.testsTimer = undefined;
+  }
+
+  /** Les exécutions en cours : la vue est relue chaque seconde et demie, jusqu'à leur fin. */
+  private pollTests(api: QaCrawlerClient, projectId: string, name: string): void {
+    if (this.testsTimer) return;
+    this.testsTimer = setTimeout(() => {
+      this.testsTimer = undefined;
+      const route = this.state.route;
+      if (route.view !== 'tests' || this.state.tst.recording !== name) return;
+      void api.generation
+        .view(projectId, name)
+        .then((view) => {
+          if (this.state.tst.recording !== name) return;
+          this.state.tst.view = view;
+          if (activeRuns(view).length > 0) this.pollTests(api, projectId, name);
+          this.paint();
+        })
+        .catch(() => {
+          // Une lecture manquée n'arrête pas le suivi : la suivante réessaie.
+          this.pollTests(api, projectId, name);
+        });
+    }, 1500);
+  }
+
+  private testsField(field: string, target: HTMLInputElement | HTMLSelectElement): void {
+    const ui = this.state.tst;
+    const route = this.state.route;
+    if (field === 'recording' && route.view === 'tests') {
+      this.navigate({ view: 'tests', projectId: route.projectId, recording: target.value });
+      return;
+    }
+    if (field === 'environment') {
+      ui.environment = target.value;
+      return;
+    }
+    if (field === 'format') {
+      const format = target.value as GenerationFormatName;
+      ui.formats = (target as HTMLInputElement).checked
+        ? GENERATION_FORMATS.filter((entry) => entry === format || ui.formats.includes(entry))
+        : ui.formats.filter((entry) => entry !== format);
+      this.paint();
+      this.root
+        .querySelector<HTMLInputElement>(`[data-tst="format"][value="${CSS.escape(format)}"]`)
+        ?.focus();
+    }
+  }
+
+  /** Une opération de l'écran Tests : une à la fois, son erreur (et ses raisons) dite dans l'écran. */
+  private async testsOp(
+    busy: string,
+    run: (api: QaCrawlerClient, projectId: string, name: string) => Promise<string | undefined>,
+  ): Promise<void> {
+    const api = this.api;
+    const route = this.state.route;
+    const ui = this.state.tst;
+    const name = ui.recording;
+    if (!api || route.view !== 'tests' || !name || ui.busy !== undefined) return;
+    ui.busy = busy;
+    ui.error = undefined;
+    ui.details = undefined;
+    ui.notice = undefined;
+    this.paint();
+    try {
+      ui.notice = await run(api, route.projectId, name);
+      const view = await api.generation.view(route.projectId, name);
+      if (ui.recording === name) ui.view = view;
+      if (activeRuns(view).length > 0) this.pollTests(api, route.projectId, name);
+    } catch (error) {
+      ui.error = message(error);
+      ui.details = detailsOf(error);
+    }
+    ui.busy = undefined;
+    this.paint();
+  }
+
+  private async testsGenerate(): Promise<void> {
+    const ui = this.state.tst;
+    if (ui.formats.length === 0) return;
+    await this.testsOp('generate', async (api, projectId, name) => {
+      const result = await api.generation.run(projectId, name, { formats: [...ui.formats] });
+      return this.state.t.tst.generated(result.files.length);
+    });
+  }
+
+  private testsClick(action: string, target: HTMLElement): boolean {
+    const ui = this.state.tst;
+    const t = this.state.t.tst;
+    switch (action) {
+      case 'tst-run': {
+        const format = target.dataset.format as GenerationFormatName | undefined;
+        if (!format) return true;
+        const engine = ui.view?.runners.find((runner) => runner.format === format)?.kind === 'ENGINE';
+        void this.testsOp(format, async (api, projectId, name) => {
+          const run = await api.generation.execute(projectId, name, {
+            format,
+            ...(engine && ui.environment ? { environmentId: ui.environment } : {}),
+          });
+          ui.run = run.id;
+          return t.started$(t.formats[format] ?? format);
+        });
+        return true;
+      }
+      case 'tst-cancel': {
+        const id = target.dataset.run ?? '';
+        void this.testsOp('cancel', async (api, projectId, name) => {
+          await api.generation.cancel(projectId, name, id);
+          return t.cancelling;
+        });
+        return true;
+      }
+      case 'tst-file': {
+        const file = target.dataset.path;
+        ui.file = ui.file === file ? undefined : file;
+        this.paint();
+        this.root
+          .querySelector<HTMLElement>(`[data-action="tst-file"][data-path="${CSS.escape(file ?? '')}"]`)
+          ?.focus();
+        return true;
+      }
+      case 'tst-open-run': {
+        const id = target.dataset.run;
+        ui.run = ui.run === id ? undefined : id;
+        this.paint();
+        this.root
+          .querySelector<HTMLElement>(`[data-action="tst-open-run"][data-run="${CSS.escape(id ?? '')}"]`)
+          ?.focus();
+        return true;
+      }
+      case 'tst-report': {
+        const api = this.api;
+        const route = this.state.route;
+        const id = target.dataset.run;
+        if (!api || route.view !== 'tests' || !ui.recording || !id) return true;
+        api.generation
+          .reportLink(route.projectId, ui.recording, id)
+          .then((link) => {
+            globalThis.open(link.url, '_blank', 'noopener');
+          })
+          .catch((error: unknown) => {
+            ui.error = message(error);
+            this.paint();
+          });
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
   private checkSequence = 0;
 
   /** VÉRIFIER LE PARCOURS (dry run de composition, sur le serveur) : ordre, dépendances, données. */
@@ -1215,6 +1411,7 @@ export class QaCrawlerDashboard extends Base {
       this.unfollowRecording();
       this.state.recs.live = undefined;
     }
+    if (route.view !== 'tests') this.stopTestsPolling();
     if (route.view !== 'recording') {
       if (this.replayTimer) clearTimeout(this.replayTimer);
       this.replayTimer = undefined;
@@ -1314,6 +1511,12 @@ export class QaCrawlerDashboard extends Base {
           this.pendingPanel = undefined;
           this.openPanel(scenario);
         }
+      } else if (route.view === 'tests') {
+        await this.loadProject(api, route.projectId, generation);
+        const recordings = await api.recordings.list(route.projectId);
+        if (generation !== this.generation) return;
+        this.state.recordings = recordings;
+        await this.loadTests(api, route.projectId, route.recording, generation);
       } else if (route.view === 'environments') {
         await this.loadProject(api, route.projectId, generation);
         if (generation !== this.generation) return;
@@ -1938,6 +2141,7 @@ export class QaCrawlerDashboard extends Base {
     if (target.tagName === 'A') event.preventDefault();
     if (action?.startsWith('review-') && this.reviewClick(action, target)) return;
     if (action?.startsWith('lib-') && this.libraryClick(action, target)) return;
+    if (action?.startsWith('tst-') && this.testsClick(action, target)) return;
     switch (action) {
       case 'menu':
         this.state.menuOpen = !this.state.menuOpen;
@@ -1959,6 +2163,7 @@ export class QaCrawlerDashboard extends Base {
           view === 'scenarios' ||
           view === 'recordings' ||
           view === 'library' ||
+          view === 'tests' ||
           view === 'explorations' ||
           view === 'environments' ||
           view === 'sources' ||
@@ -2321,6 +2526,10 @@ export class QaCrawlerDashboard extends Base {
       this.libraryField(target.dataset.lib, target.value);
       return;
     }
+    if (target.dataset.tst) {
+      this.testsField(target.dataset.tst, target);
+      return;
+    }
     const review = this.state.review;
     if (review && this.state.route.view === 'recording') {
       const pick = target.dataset.reviewPick;
@@ -2428,6 +2637,7 @@ export class QaCrawlerDashboard extends Base {
         route.view === 'scenarios' ||
         route.view === 'recordings' ||
         route.view === 'library' ||
+        route.view === 'tests' ||
         route.view === 'explorations' ||
         route.view === 'environments' ||
         route.view === 'sources' ||

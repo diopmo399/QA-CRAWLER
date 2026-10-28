@@ -32,6 +32,21 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Dashboard : écran « Tests générés »** (menu Piloter). Pour un enregistrement terminé : générer les
+  formats choisis, lire chaque fichier et son statut de génération, puis **exécuter pour de vrai** :
+  - le flow YAML et le `.feature` rejoués par le moteur avec la mission du projet (SafetyPolicy,
+    authentification, environnement au choix), avec le rapport QA-CRAWLER ;
+  - le test Playwright lancé par Playwright Test (JUnit XML lu) ;
+  - le projet Java lancé par `mvn test` (rapports Surefire lus).
+
+  Chaque format dit l'outil du serveur et s'il est présent ; l'exécution se suit en direct, s'annule,
+  et montre les cas, les messages d'échec et la sortie de l'outil. Playwright et Java, qui pilotent
+  l'application sans la SafetyPolicy, demandent le droit `RUN_WRITES`.
+
+- SDK : `generation.view`, `generation.execute`, `generation.runOf`, `generation.cancel`,
+  `generation.reportLink` ; routes `GET …/recordings/:name/generation` et `…/recordings/:name/test-runs`.
+  `generation.json` garde désormais les fichiers des formats non régénérés.
+
 - Export `@qa-crawler/core/requirements` : le module d'exigences depuis Node.
 - **Référentiel d'exigences : socle et connecteur Confluence** (`docs/requirements/`).
   - Audit et conception : ce qui existe, ce qui manque, les décisions, le plan.

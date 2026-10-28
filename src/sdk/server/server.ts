@@ -47,12 +47,14 @@ import {
   editStoredGroups,
   FLOW_FILES,
   generateStoredTests,
+  generationManifest,
   loadStoredRecording,
   removeStoredStep,
   storedGroupChecks,
   storedGroupProposals,
   storedGroups,
   storedTestData,
+  TEST_DATA_FILE,
   type StoredRecording,
 } from '../../recording/recording-workspace.js';
 import type { GroupCommand, GroupProposal } from '../../recording/step-groups.js';
@@ -65,6 +67,10 @@ import type {
   ErrorBody,
   ExplorationEvent,
   GenerationResult,
+  GeneratedFileView,
+  GeneratedTestsView,
+  GenerationFormatName,
+  TestRunView,
   GroupProposalView,
   RecordingReplayView,
   RowColumnInput,
@@ -97,7 +103,19 @@ import {
   SDK_API_VERSION,
 } from '../core/contracts.js';
 import { isTerminal } from '../core/lifecycle.js';
-import { ExplorationManager, type MissionRunner } from './explorations.js';
+import { ExplorationManager, stepReason, type MissionRunner } from './explorations.js';
+import {
+  externalRunners,
+  listTestRuns,
+  readTestRun,
+  runDirectory,
+  runMavenTests,
+  runPlaywrightTests,
+  TEST_RUN_ID,
+  TestRunManager,
+  type TestRunOutcome,
+  type TestRunTask,
+} from './test-runs.js';
 import {
   RecordingBusyError,
   RecordingManager,
@@ -235,6 +253,8 @@ export interface RunningSdkServer {
   server: Server;
   explorations: ExplorationManager;
   recordings: RecordingManager;
+  /** Les exécutions des tests générés (YAML, Gherkin, Playwright, Java). */
+  testRuns: TestRunManager;
   close(): Promise<void>;
 }
 
@@ -282,6 +302,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     ...(options.onWarning ? { onWarning: options.onWarning } : {}),
   });
   const corrections = new CorrectionManager(options.correction);
+  const testRuns = new TestRunManager();
   const engineVersion = await readCoreVersion();
   const sseClients = new Set<ServerResponse>();
 
@@ -296,6 +317,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     tickets,
     explorations,
     recordings,
+    testRuns,
     edits: new Map(),
     replays: new Map(),
     corrections,
@@ -326,8 +348,13 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     server,
     explorations,
     recordings,
+    testRuns,
     close: async () => {
       corrections.closeAll();
+      if (testRuns.cancelAll() > 0) {
+        const settled = await testRuns.idle(options.closeGraceMs ?? 30_000);
+        if (!settled) options.onWarning?.('a generated test run was still stopping when the server closed');
+      }
       // Arrêt contrôlé : rien n'est laissé tourner, les rapports des explorations arrêtées sont écrits.
       if (explorations.cancelAll() > 0) {
         const settled = await explorations.idle(options.closeGraceMs ?? 30_000);
@@ -356,6 +383,7 @@ interface Context {
   tickets: Map<string, ReportTicket>;
   explorations: ExplorationManager;
   recordings: RecordingManager;
+  testRuns: TestRunManager;
   /** Une modification à la fois par enregistrement (décisions, groupes, génération écrivent les mêmes fichiers). */
   edits: Map<string, Promise<unknown>>;
   /** Les rejeux de validation lancés depuis le SDK, par enregistrement (projet/nom). */
@@ -746,7 +774,7 @@ async function handleRecordings(
     throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
   }
   const name = decodeURIComponent(rawName);
-  if (!RECORDING_NAME_PATTERN.test(name) || extra !== undefined)
+  if (!RECORDING_NAME_PATTERN.test(name) || (extra !== undefined && action !== 'test-runs'))
     throw new HttpError(404, 'NOT_FOUND', 'recording not found');
   const live = ctx.recordings.get(project.id, name);
   if (action === undefined && method === 'GET') {
@@ -1095,7 +1123,305 @@ async function handleRecordings(
     sendJson(response, result);
     return;
   }
+  if (action === 'generation' && itemId === undefined && method === 'GET') {
+    sendJson(response, await generatedTestsView(ctx, project, name));
+    return;
+  }
+  if (action === 'test-runs') {
+    await handleTestRuns(ctx, project, name, itemId, extra, method, request, response);
+    return;
+  }
   throw new HttpError(404, 'NOT_FOUND', 'not found');
+}
+
+// ── Les tests générés : la vue, les exécutions ────────────────────────────────────────────────
+
+const MAX_GENERATED_FILE = 256 * 1024;
+
+const recordingDirOf = (project: StoredProject, name: string): string =>
+  path.join(recordingsDir(reportsDirOf(project)), name);
+
+/** Un chemin de generation.json, sous generated/ (jamais au-dessus). */
+function generatedPath(recordingDir: string, relative: string): string {
+  const root = path.resolve(recordingDir, 'generated');
+  const target = path.resolve(root, relative);
+  if (target !== root && !target.startsWith(`${root}${path.sep}`))
+    throw new HttpError(422, 'REFUSED', `generated path outside generated/: ${relative}`);
+  return target;
+}
+
+/** Les moteurs des formats : le rejeu QA-CRAWLER (YAML, Gherkin) toujours, les outils externes s'ils sont là. */
+async function testRunners(ctx: Context): Promise<GeneratedTestsView['runners']> {
+  const engine = `QA-CRAWLER ${ctx.engineVersion}`;
+  return [
+    { format: 'yaml', kind: 'ENGINE', tool: engine, available: true },
+    { format: 'gherkin', kind: 'ENGINE', tool: engine, available: true },
+    ...(await externalRunners(ctx.env)),
+  ];
+}
+
+async function generatedTestsView(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+): Promise<GeneratedTestsView> {
+  const stored = await storedRecordingOf(ctx, project, name);
+  const manifest = await generationManifest(stored.directory);
+  const files: GeneratedFileView[] = [];
+  for (const artifact of manifest?.artifacts ?? []) {
+    const content = await readFile(generatedPath(stored.directory, artifact.path), 'utf8').catch(
+      () => undefined,
+    );
+    // Décrit mais absent du disque : rien à montrer ni à jouer.
+    if (content === undefined) continue;
+    files.push({
+      format: artifact.format,
+      path: artifact.path,
+      status: artifact.status,
+      ...(artifact.validation ? { validation: artifact.validation } : {}),
+      assertions: artifact.assertions,
+      limits: artifact.limits,
+      content: content.length > MAX_GENERATED_FILE ? `${content.slice(0, MAX_GENERATED_FILE)}\n…` : content,
+    });
+  }
+  return {
+    recording: name,
+    ...(manifest?.generatedAt ? { generatedAt: manifest.generatedAt } : {}),
+    files,
+    warnings: manifest?.warnings ?? [],
+    runners: await testRunners(ctx),
+    runs: await listTestRuns(stored.directory, (id) => ctx.testRuns.get(id)),
+  };
+}
+
+async function handleTestRuns(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  runId: string | undefined,
+  sub: string | undefined,
+  method: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  if (runId === undefined) {
+    if (method === 'POST') {
+      refuseArchived(project);
+      sendJson(response, await startTestRun(ctx, project, name, request), 202);
+      return;
+    }
+    if (method === 'GET') {
+      await storedRecordingOf(ctx, project, name);
+      sendJson(response, await listTestRuns(recordingDirOf(project, name), (id) => ctx.testRuns.get(id)));
+      return;
+    }
+    throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
+  }
+  const id = decodeURIComponent(runId);
+  if (!TEST_RUN_ID.test(id)) throw new HttpError(404, 'NOT_FOUND', 'test run not found');
+  const directory = recordingDirOf(project, name);
+  const view = await readTestRun(directory, id, (key) => ctx.testRuns.get(key));
+  if (!view) throw new HttpError(404, 'NOT_FOUND', 'test run not found');
+  if (sub === undefined && method === 'GET') {
+    sendJson(response, view);
+    return;
+  }
+  if (sub === 'cancel' && method === 'POST') {
+    const live = ctx.testRuns.get(id);
+    if (!live || !ctx.testRuns.cancel(id))
+      throw new HttpError(409, 'NOT_RUNNING', `the test run is ${view.status}: nothing to cancel`);
+    sendJson(response, live.view(), 202);
+    return;
+  }
+  if (sub === 'report-links' && method === 'POST') {
+    if (!view.report)
+      throw new HttpError(
+        409,
+        'NO_REPORT',
+        'this run has no QA-CRAWLER report (only replays of YAML and Gherkin have one)',
+      );
+    sendJson(
+      response,
+      reportLink(ctx, request, path.join(directory, 'test-runs', id, 'report'), view.report),
+      201,
+    );
+    return;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'not found');
+}
+
+/**
+ * LANCER LES TESTS GÉNÉRÉS D'UN FORMAT. Les fichiers décrits par generation.json sont copiés dans le
+ * dossier de l'exécution (une modification de l'enregistrement à la fois : jamais une génération à moitié écrite).
+ * YAML et Gherkin passent par la mission du projet (SafetyPolicy, authentification, environnement) ;
+ * Playwright et Java pilotent l'application SANS la SafetyPolicy : ils demandent RUN_WRITES.
+ */
+async function startTestRun(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  request: IncomingMessage,
+): Promise<TestRunView> {
+  const body = await readJson(request);
+  const format = body.format;
+  if (typeof format !== 'string' || !(GENERATION_FORMATS as readonly string[]).includes(format))
+    throw new HttpError(400, 'BAD_REQUEST', `format must be one of ${GENERATION_FORMATS.join(', ')}`);
+  const engine = format === 'yaml' || format === 'gherkin';
+  if (!engine && body.environmentId !== undefined && body.environmentId !== null && body.environmentId !== '')
+    throw new HttpError(
+      422,
+      'REFUSED',
+      `a generated ${format} test runs against the URL it was generated for: choose no environment`,
+    );
+  const environment = engine ? await environmentOf(project, body.environmentId) : undefined;
+  if (engine) requireWrites(request, project.id, environment);
+  else {
+    const identity = identityOf(request);
+    if (!can(identity, 'RUN_WRITES', project.id))
+      throw new HttpError(
+        403,
+        'FORBIDDEN',
+        `the role ${roleIn(identity, project.id)} does not allow a generated ${format} test: it drives the application without the QA-CRAWLER safety policy (RUN_WRITES required)`,
+      );
+    const runner = (await externalRunners(ctx.env)).find((entry) => entry.format === format);
+    if (!runner?.available)
+      throw new HttpError(409, 'TOOL_UNAVAILABLE', runner?.reason ?? `no runner for ${format}`);
+  }
+  const prepared = await editRecording(ctx, project, name, async (stored) => {
+    const manifest = await generationManifest(stored.directory);
+    const artifacts = manifest?.artifacts.filter((artifact) => artifact.format === format) ?? [];
+    if (artifacts.length === 0)
+      throw new HttpError(409, 'NOT_GENERATED', `no ${format} test generated for ${name}: generate it first`);
+    const directory = runDirectory(stored.directory);
+    const sources = path.join(directory, engine ? 'sources' : '');
+    for (const artifact of artifacts) {
+      const target = path.join(sources, artifact.path);
+      await mkdir(path.dirname(target), { recursive: true });
+      await cp(generatedPath(stored.directory, artifact.path), target);
+    }
+    if (engine)
+      await cp(
+        path.join(stored.directory, 'generated', TEST_DATA_FILE),
+        path.join(sources, TEST_DATA_FILE),
+      ).catch(() => undefined);
+    return { directory, sources, artifacts: artifacts.map((artifact) => artifact.path) };
+  });
+  const origin = new URL(project.targetUrl).origin;
+  const base: Omit<TestRunTask, 'tool' | 'target' | 'execute'> = {
+    projectId: project.id,
+    recording: name,
+    format: format as GenerationFormatName,
+    kind: engine ? 'ENGINE' : 'EXTERNAL',
+    directory: prepared.directory,
+    ...(environment ? { environment: { id: environment.id, name: environment.name } } : {}),
+  };
+  if (engine) {
+    const file = prepared.artifacts.find((entry) =>
+      format === 'yaml' ? entry.endsWith('.flow.yaml') : entry.endsWith('.feature'),
+    );
+    if (!file)
+      throw new HttpError(409, 'NOT_GENERATED', `no ${format} test generated for ${name}: generate it first`);
+    const flow = await engineFlow(path.join(prepared.sources, file), format);
+    const loaded = await projectMission(ctx, project, 'replay', {
+      flows: [],
+      extraFlows: [flow],
+      ...(environment ? { environment } : {}),
+    });
+    const reportsDir = path.join(prepared.directory, 'report');
+    const config = {
+      ...loaded.config,
+      output: { ...loaded.config.output, reportsDir, screenshotsDir: path.join(reportsDir, 'screenshots') },
+    };
+    const run = ctx.options.run ?? runMission;
+    const run$ = await ctx.testRuns.start({
+      ...base,
+      tool: `QA-CRAWLER ${ctx.engineVersion}`,
+      target: environment?.baseUrl ?? project.targetUrl,
+      execute: async ({ signal, log }): Promise<TestRunOutcome> => {
+        let phase = '';
+        const outcome = await run(config, {
+          env: missionEnv(ctx, environment),
+          signal,
+          onWarning: (message) => {
+            log(`warning: ${message}\n`);
+          },
+          onProgress: (update) => {
+            if (update.state !== 'RUNNING' || update.label === phase) return;
+            phase = update.label;
+            log(`${update.label}\n`);
+          },
+        });
+        const result = outcome.result;
+        const cases = result.flows.map((flow) => {
+          const failing = flow.steps.find((step) => step.status === 'FAILED' || step.status === 'BLOCKED');
+          const reason = failing ? stepReason(failing) : undefined;
+          return {
+            name: redactText(flow.name),
+            status: flow.status,
+            durationMs: flow.durationMs,
+            ...(failing
+              ? { message: `step ${String(failing.index)}${reason ? `: ${reason}` : ` (${failing.status})`}` }
+              : {}),
+          };
+        });
+        const html = result.artifacts.html;
+        const relative =
+          typeof html === 'string'
+            ? path.relative(reportsDir, path.resolve(html)).split(path.sep).join('/')
+            : undefined;
+        const report = relative && !relative.startsWith('..') ? relative : undefined;
+        if (result.stopReason === 'cancelled')
+          return { status: 'CANCELLED', cases, message: 'cancelled', ...(report ? { report } : {}) };
+        const verdict =
+          cases.length === 0
+            ? 'ERROR'
+            : cases.some((entry) => entry.status === 'FAILED' || entry.status === 'BLOCKED')
+              ? 'FAILED'
+              : 'PASSED';
+        return {
+          status: verdict,
+          cases,
+          ...(verdict === 'ERROR' ? { message: 'the engine replayed no flow' } : {}),
+          ...(report ? { report } : {}),
+        };
+      },
+    });
+    return run$.view();
+  }
+  if (format === 'playwright') {
+    const spec = prepared.artifacts.find((entry) => entry.endsWith('.spec.ts'));
+    const content = spec ? await readFile(path.join(prepared.directory, spec), 'utf8').catch(() => '') : '';
+    const target = /['"`](https?:\/\/[^'"`\s]+)['"`]/.exec(content)?.[1] ?? origin;
+    const run = await ctx.testRuns.start({
+      ...base,
+      tool:
+        (await externalRunners(ctx.env)).find((entry) => entry.format === 'playwright')?.tool ??
+        'Playwright Test',
+      target,
+      execute: ({ signal, log }) => runPlaywrightTests(prepared.directory, { signal, log, env: ctx.env }),
+    });
+    return run.view();
+  }
+  const run = await ctx.testRuns.start({
+    ...base,
+    tool: (await externalRunners(ctx.env)).find((entry) => entry.format === 'java')?.tool ?? 'Apache Maven',
+    target: origin,
+    execute: ({ signal, log }) =>
+      runMavenTests(prepared.directory, { signal, log, env: ctx.env, baseUrl: origin }),
+  });
+  return run.view();
+}
+
+/** Le flow à rejouer : le YAML généré (ses données relues à côté de lui), ou le .feature. */
+async function engineFlow(file: string, format: 'yaml' | 'gherkin'): Promise<Record<string, unknown>> {
+  if (format === 'gherkin') return { gherkin: file };
+  const document = parseYaml(await readFile(file, 'utf8')) as unknown;
+  if (!document || typeof document !== 'object' || Array.isArray(document))
+    throw new HttpError(422, 'REFUSED', 'the generated flow YAML is not a flow');
+  const flow = document as Record<string, unknown>;
+  return typeof flow.testData === 'string' && !path.isAbsolute(flow.testData)
+    ? { ...flow, testData: path.join(path.dirname(file), flow.testData) }
+    : flow;
 }
 
 /** La mission du projet écrite en fichier (le recorder et son rejeu la lisent comme la CLI). */

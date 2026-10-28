@@ -256,6 +256,9 @@ export function rightFor(segments: readonly string[], method: string): Right {
       // Rejouer joue l'application, comme une exécution ; ouvrir une correction aussi (le chemin est
       // rejoué jusqu'à l'étape). Valider la correction est une décision.
       if (action === 'correction') return segments[6] === 'apply' ? 'DECIDE' : 'RUN';
+      // Jouer un test généré joue l'application ; un lien vers son rapport est une lecture. RUN_WRITES
+      // est vérifié en plus par la route (Playwright et Java pilotent sans la SafetyPolicy).
+      if (action === 'test-runs') return segments[7] === 'report-links' ? 'VIEW' : 'RUN';
       return item === undefined || action === 'stop' || action === 'replay' || LIVE_CONTROLS.has(action ?? '')
         ? 'RUN'
         : 'DECIDE';
@@ -310,6 +313,7 @@ const KEYWORDS = new Set([
   'bindings',
   'groups',
   'generation',
+  'test-runs',
   'steps',
   'proposals',
   'checks',
@@ -337,7 +341,9 @@ export function actionOf(segments: readonly string[]): { action: string; kind: J
     ? 'ACCESS'
     : words.includes('requirements')
       ? 'REQUIREMENTS'
-      : words.some((word) => ['executions', 'explorations', 'recordings', 'checks', 'check'].includes(word))
+      : words.some((word) =>
+            ['executions', 'explorations', 'recordings', 'test-runs', 'checks', 'check'].includes(word),
+          )
         ? 'RUN'
         : words.some((word) =>
               ['environments', 'config', 'duplicate', 'archive', 'restore', 'scenarios'].includes(word),

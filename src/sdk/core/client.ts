@@ -14,6 +14,9 @@ import type {
   RunComparisonView,
   TraceabilityView,
   GenerationResult,
+  GeneratedTestsView,
+  TestRunInput,
+  TestRunView,
   GraphView,
   GroupCommandInput,
   ComposeScenarioInput,
@@ -409,6 +412,14 @@ export interface QaCrawlerClient {
   /** Les tests générés depuis un enregistrement (YAML, Gherkin, Playwright TypeScript, Java). */
   generation: {
     run(projectId: string, recording: string, input: GenerationInput): Promise<GenerationResult>;
+    /** Les fichiers générés sur disque, les exécutions passées et les outils disponibles. */
+    view(projectId: string, recording: string): Promise<GeneratedTestsView>;
+    /** Exécute pour de vrai les tests générés d'un format (202 : en file). */
+    execute(projectId: string, recording: string, input: TestRunInput): Promise<TestRunView>;
+    runOf(projectId: string, recording: string, runId: string): Promise<TestRunView>;
+    cancel(projectId: string, recording: string, runId: string): Promise<TestRunView>;
+    /** Le rapport QA-CRAWLER d'un rejeu (YAML, Gherkin). */
+    reportLink(projectId: string, recording: string, runId: string): Promise<ReportLink>;
   };
   /** Le graphe des écrans et transitions, d'une exploration ou d'un enregistrement. */
   graph: {
@@ -843,6 +854,18 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
     },
     generation: {
       run: (projectId, name, input) => request('POST', `${recording(projectId, name)}/generation`, input),
+      view: (projectId, name) => request('GET', `${recording(projectId, name)}/generation`),
+      execute: (projectId, name, input) => request('POST', `${recording(projectId, name)}/test-runs`, input),
+      runOf: (projectId, name, runId) =>
+        request('GET', `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}`),
+      cancel: (projectId, name, runId) =>
+        request('POST', `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}/cancel`, {}),
+      reportLink: (projectId, name, runId) =>
+        request(
+          'POST',
+          `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}/report-links`,
+          {},
+        ),
     },
     graph: {
       exploration: (id) => request('GET', `/explorations/${encodeURIComponent(id)}/graph`),

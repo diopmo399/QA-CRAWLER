@@ -179,6 +179,10 @@ export async function generateRecordingTests(
   if (context.testData && (formats.includes('yaml') || formats.includes('gherkin')))
     await writeFile(path.join(generatedDir, TEST_DATA_FILE), context.testData.yaml);
   const validated = await validateArtifacts(plan.artifacts, { directory: generatedDir });
+  // Les fichiers des formats non régénérés restent sous generated/ : leur description aussi.
+  const kept = (await generationManifest(context.directory))?.artifacts.filter(
+    (artifact) => !formats.includes(artifact.format),
+  );
   await context.write(
     FLOW_FILES.generation,
     json({
@@ -187,10 +191,41 @@ export async function generateRecordingTests(
       flow: plan.name,
       summary: planSummary({ ...plan, artifacts: validated }),
       warnings: plan.warnings,
-      artifacts: validated.map(({ content: _content, ...artifact }) => artifact),
+      artifacts: [...(kept ?? []), ...validated.map(({ content: _content, ...artifact }) => artifact)],
     }),
   );
   return { directory: generatedDir, warnings: plan.warnings, artifacts: validated, name: plan.name, formats };
+}
+
+/** Ce que generation.json décrit : chaque fichier sous generated/, sans son contenu. */
+export interface GenerationManifest {
+  generatedAt?: string;
+  flow?: string;
+  warnings: string[];
+  artifacts: Omit<GeneratedArtifact, 'content'>[];
+}
+
+/** generation.json d'un enregistrement ; undefined quand rien n'a été généré (ou fichier illisible). */
+export async function generationManifest(directory: string): Promise<GenerationManifest | undefined> {
+  const text = await readFile(path.join(directory, FLOW_FILES.generation), 'utf8').catch(() => undefined);
+  if (text === undefined) return undefined;
+  try {
+    const raw = JSON.parse(text) as Partial<GenerationManifest>;
+    if (!Array.isArray(raw.artifacts)) return undefined;
+    return {
+      ...(typeof raw.generatedAt === 'string' ? { generatedAt: raw.generatedAt } : {}),
+      ...(typeof raw.flow === 'string' ? { flow: raw.flow } : {}),
+      warnings: Array.isArray(raw.warnings) ? raw.warnings.filter((entry) => typeof entry === 'string') : [],
+      artifacts: raw.artifacts.filter(
+        (artifact) =>
+          typeof artifact === 'object' &&
+          (FORMATS as readonly string[]).includes(artifact.format) &&
+          typeof artifact.path === 'string',
+      ),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 // ── Un enregistrement déjà écrit sur disque ───────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import { emptyLibraryUi } from '../../src/sdk/ui/dashboard-library.js';
+import { emptyTestsUi } from '../../src/sdk/ui/dashboard-tests.js';
 import { describe, expect, it } from 'vitest';
 import type {
   ImportSummary,
@@ -61,6 +62,7 @@ const base = (
   access: emptyAccessUi(),
   recs: emptyRecordingsUi(),
   lib: emptyLibraryUi(),
+  tst: emptyTestsUi(),
   ...extra,
 });
 

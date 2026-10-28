@@ -307,6 +307,11 @@ const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisate
 | `groups.list(projectId, name)`                  | `GET /api/projects/:id/recordings/:name/groups`                  |
 | `groups.edit(projectId, name, command)`         | `POST /api/projects/:id/recordings/:name/groups`                 |
 | `generation.run(projectId, name, input)`        | `POST /api/projects/:id/recordings/:name/generation`             |
+| `generation.view(projectId, name)`              | `GET /api/projects/:id/recordings/:name/generation`              |
+| `generation.execute(projectId, name, input)`    | `POST /api/projects/:id/recordings/:name/test-runs` (202)        |
+| `generation.runOf(projectId, name, runId)`      | `GET /api/projects/:id/recordings/:name/test-runs/:runId`        |
+| `generation.cancel(projectId, name, runId)`     | `POST …/test-runs/:runId/cancel` (409 une fois terminée)         |
+| `generation.reportLink(projectId, name, runId)` | `POST …/test-runs/:runId/report-links` (rejeu YAML, Gherkin)     |
 | `graph.exploration(id)`                         | `GET /api/explorations/:id/graph` (409 avant la fin)             |
 | `graph.of(projectId, kind, name)`               | `GET /api/projects/:id/reports/:kind/:name/graph`                |
 | `reports.list(projectId)`                       | `GET /api/projects/:id/reports`                                  |
@@ -416,8 +421,33 @@ Chaque format arrive avec ce qu'il faut pour le lancer :
 - Les tests générés jouent les actions comme le moteur : sans position enregistrée, la première
   correspondance d'un rôle, d'un libellé ou d'un texte (`.first()`) ; un gabarit de route
   (`/users/{id}`) se lit comme un segment quelconque.
-- La génération ne lance rien : c'est `tests/integration/sdk-generated-execution.test.ts` qui joue
-  la sortie (voir Tests).
+- La génération ne lance rien : ses fichiers gardent leur statut de génération (`GENERATED`,
+  `STATICALLY_VALIDATED`, `NOT_VALIDATED`).
+
+### Exécuter les tests générés
+
+`generation.execute(projectId, name, { format })` joue pour de vrai les fichiers d'un format décrits
+par `generation.json`, sur une copie (`recordings/<nom>/test-runs/<id>/`) : une nouvelle génération
+pendant l'exécution ne change pas ce qui est joué.
+
+| Format        | Outil                                                       | Résultats lus                                | Droits                 |
+| ------------- | ----------------------------------------------------------- | -------------------------------------------- | ---------------------- |
+| YAML, Gherkin | rejeu du moteur avec la mission du projet (`environmentId`) | les flows du résultat du moteur, son rapport | `RUN` (+ `RUN_WRITES`) |
+| Playwright TS | Playwright Test installé à côté de QA-CRAWLER               | `test-results/junit.xml`                     | `RUN` + `RUN_WRITES`   |
+| Java JUnit 5  | `mvn -q -B test`, `QA_BASE_URL` = l'origine du projet       | `target/surefire-reports/TEST-*.xml`         | `RUN` + `RUN_WRITES`   |
+
+- Le rejeu du moteur applique la SafetyPolicy, l'authentification et l'environnement du projet ;
+  `RUN_WRITES` n'est demandé que si l'environnement permet des écritures, comme pour une exécution.
+- Playwright et Java pilotent l'application sans la SafetyPolicy : ils demandent toujours
+  `RUN_WRITES`, n'acceptent pas d'environnement et visent l'adresse pour laquelle ils ont été
+  générés.
+- Statuts : `QUEUED`, `RUNNING`, puis `PASSED` ou `FAILED` d'après les cas rapportés par l'outil ;
+  `ERROR` quand l'outil ne rapporte aucun cas exploitable (ou sort en erreur sans cas en échec) ;
+  `CANCELLED` ; `UNAVAILABLE` quand l'outil manque. Un format dont l'outil manque est refusé (409
+  `TOOL_UNAVAILABLE`) ; `generation.view` dit pour chaque format l'outil, sa version et sa présence.
+- Une exécution à la fois ; les suivantes attendent en `QUEUED`. `run.json` est écrit à chaque
+  changement : une exécution restée en cours à l'arrêt du serveur se relit `ERROR` (« interrupted »).
+- La sortie de l'outil (12 000 derniers caractères) et les messages d'échec sont masqués et tronqués.
 
 ### Données de test
 
@@ -790,6 +820,7 @@ comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 | Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Enregistrements  | démarrer l'enregistrement d'un parcours (nom, chemin de départ, rejeu de validation ; un seul à la fois) ; pendant la session, la barre d'enregistrement : gestes en phrases et leur statut, pause, annulation du dernier geste, vérification posée, choix de l'élément d'une cible ambiguë, arrêt ; après l'arrêt, les phases en mots ; la liste du projet, la revue, le lien vers le Flow Studio et la promotion en scénario                                                                                                                                                                                                                                                |
 | Bibliothèque     | catalogue des blocs (version, provenance, entrées et sorties, état du contrat, utilisation ; recherche, origine, contrat, utilisation, tri) ; détails (historique, contrat, scénarios dépendants, valider une nouvelle version, déclarer le contrat) ; compositeur (ordre, d'où vient chaque entrée, vérification du serveur, création) ; ajout d'un bloc dans un panneau, avec l'aperçu de la source ; depuis Scénarios, insérer un bloc, accepter la nouvelle version d'un bloc ; depuis la revue, ajouter un groupe                                                                                                                                                        |
+| Tests générés    | pour un enregistrement terminé : générer les formats choisis ; par format, l'outil du serveur, sa présence et ce qu'il garantit (SafetyPolicy pour le rejeu du moteur, aucune pour Playwright et Java), le statut des fichiers, la dernière exécution ; exécuter (environnement au choix pour le rejeu du moteur), suivre en direct, annuler ; les exécutions avec leurs cas, messages d'échec, sortie de l'outil et rapport QA-CRAWLER ; le contenu de chaque fichier généré                                                                                                                                                                                                 |
 | Revue            | d'un enregistrement terminé : rejeu de validation suivi étape par étape ; parcours en groupes (découpage proposé, vérifications suggérées, créer, renommer, déplacer, supprimer un groupe, cocher des étapes, monter, descendre, détacher, retirer une étape avec confirmation) ; assertions (recommandées, à décider, faibles, décidées ; une à une ou en lot) ; source de chaque saisie ; intentions (confirmer, corriger, réinitialiser) ; correction d'une cible dans le navigateur ouvert par le serveur, puis reprise du rejeu ; ligne de tableau redéfinie colonne par colonne ; restauration de la cible d'origine ; génération des tests et statut de chaque fichier |
 | Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -912,6 +943,10 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Une exploration à la fois par défaut (`--concurrency`).
 - Chromium seulement.
 - Pas de définitions de steps pour un exécuteur Gherkin externe : le `.feature` se joue avec QA-CRAWLER.
+- Tests générés : Playwright Test doit être installé à côté de QA-CRAWLER (`@playwright/test`), Maven
+  et Java sur le serveur ; Maven résout ses dépendances depuis son dépôt (sans accès : `ERROR`). Le
+  test Playwright vise l'adresse écrite à la génération, aucun environnement ne la change. L'écran
+  génère tous les groupes ; un sous-ensemble se choisit dans la revue.
 - Le Flow Studio ne rejoue pas un groupe seul.
 - Le Run Monitor suit les flows et les étapes, pas les groupes métier (absents des événements
   d'exploration).
@@ -963,6 +998,15 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   retire une étape ; une vraie correction de cible (rejeu jusqu'à l'étape, élément désigné à la souris,
   validation, reprise du rejeu réussie, restauration) ; la revue des intentions ; téléphone sans
   défilement horizontal.
+- `tests/unit/sdk-test-runs.test.ts` : lecture du JUnit XML (Playwright Test, Surefire), verdict jamais
+  réussi sans cas, file d'exécution (une à la fois, annulation en file et en cours), `run.json` relu
+  après un arrêt. `tests/unit/sdk-dashboard-tests.test.ts` : rendu de l'écran Tests générés (outil et
+  garantie de chaque format, exécution refusée et pourquoi, droits par rôle, échappement).
+- `tests/integration/sdk-generated-test-runs.test.ts` : par le client, un parcours du **vrai** recorder
+  généré puis exécuté : YAML et `.feature` rejoués par le moteur (`PASSED`, rapport servi), test
+  Playwright par Playwright Test (`PASSED`, puis `FAILED` une fois la cible cassée), annulation, refus ;
+  Java par `mvn test` quand Maven est là. `tests/integration/sdk-dashboard-tests.test.ts` : le même
+  parcours depuis l'écran, dans Chromium, téléphone compris.
 - `tests/unit/recording-workspace-review.test.ts` : retirer une étape, groupes proposés, vérification
   de groupe, ligne redéfinie, restauration, correction appliquée et revue des intentions sur un
   enregistrement écrit.

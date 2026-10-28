@@ -809,6 +809,87 @@ export interface GenerationResult {
   warnings: string[];
 }
 
+/**
+ * L'EXÉCUTION D'UN TEST GÉNÉRÉ : jouée pour de vrai, jamais déduite de la génération.
+ *   QUEUED, RUNNING      en file, en cours ;
+ *   PASSED, FAILED       d'après les cas rapportés par l'outil (rejeu du moteur, JUnit XML) ;
+ *   ERROR                l'outil n'a rapporté aucun cas exploitable (sortie à l'appui) ;
+ *   CANCELLED            annulée ;
+ *   UNAVAILABLE          l'outil manque sur le serveur (Playwright Test, Maven) : rien n'a été joué.
+ */
+export const TEST_RUN_STATUSES = [
+  'QUEUED',
+  'RUNNING',
+  'PASSED',
+  'FAILED',
+  'ERROR',
+  'CANCELLED',
+  'UNAVAILABLE',
+] as const;
+export type TestRunStatus = (typeof TEST_RUN_STATUSES)[number];
+
+/** Un cas joué : un flow (rejeu du moteur) ou un test (JUnit XML). */
+export interface TestCaseView {
+  name: string;
+  status: 'PASSED' | 'FAILED' | 'BLOCKED' | 'SKIPPED' | 'MANUAL';
+  durationMs?: number;
+  /** La raison d'un échec, d'un blocage ou d'un saut (masquée, tronquée ; jamais une valeur saisie). */
+  message?: string;
+}
+
+/** Comment un format s'exécute sur ce serveur, et s'il le peut. */
+export interface TestRunnerView {
+  format: GenerationFormatName;
+  /** ENGINE : le rejeu QA-CRAWLER (SafetyPolicy appliquée) ; EXTERNAL : Playwright Test ou Maven. */
+  kind: 'ENGINE' | 'EXTERNAL';
+  /** L'outil (« QA-CRAWLER engine », « Playwright Test 1.56.1 », « Apache Maven 3.9.9 »). */
+  tool: string;
+  available: boolean;
+  /** Pourquoi l'outil manque. */
+  reason?: string;
+}
+
+export interface TestRunView {
+  id: string;
+  recording: string;
+  format: GenerationFormatName;
+  status: TestRunStatus;
+  /** L'outil qui a joué le test. */
+  tool: string;
+  kind: 'ENGINE' | 'EXTERNAL';
+  /** L'application visée. */
+  target: string;
+  environment?: { id: string; name: string };
+  queuedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  cases: TestCaseView[];
+  counts: { passed: number; failed: number; skipped: number; total: number };
+  /** Ce qui explique ERROR, CANCELLED ou UNAVAILABLE. */
+  message?: string;
+  /** La fin de la sortie de l'outil (masquée). */
+  output: string;
+  /** Le rapport QA-CRAWLER d'un rejeu (chemin relatif au dossier de l'exécution). */
+  report?: string;
+}
+
+/** Les tests générés d'un enregistrement : leurs fichiers, leurs exécutions, les outils du serveur. */
+export interface GeneratedTestsView {
+  recording: string;
+  generatedAt?: string;
+  files: GeneratedFileView[];
+  warnings: string[];
+  runners: TestRunnerView[];
+  runs: TestRunView[];
+}
+
+export interface TestRunInput {
+  format: GenerationFormatName;
+  /** Rejeu par le moteur seulement (YAML, Gherkin) : l'environnement du projet à viser. */
+  environmentId?: string;
+}
+
 export interface GraphView {
   rootId?: string;
   nodes: { id: string; label: string; route: string; title: string; depth: number }[];

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { emptyTestsUi } from '../../src/sdk/ui/dashboard-tests.js';
 import type { CompositionCheck, LibraryBlockView, ProjectDetail } from '../../src/sdk/core/contracts.js';
 import { ROLE_RIGHTS } from '../../src/sdk/core/contracts.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
@@ -183,6 +184,7 @@ const base = (
   access: emptyAccessUi(),
   recs: emptyRecordingsUi(),
   lib: { ...emptyLibraryUi(), blocks, ...lib },
+  tst: emptyTestsUi(),
   ...extra,
 });
 
