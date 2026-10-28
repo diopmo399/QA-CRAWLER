@@ -267,6 +267,16 @@ export interface QaCrawlerClient {
     get(projectId: string, name: string): Promise<RecordingSnapshot>;
     /** Arrête la session en cours (comme le bouton de la barre d'enregistrement). */
     stop(projectId: string, name: string): Promise<RecordingSnapshot>;
+    /** Met la session en pause (les gestes ne sont plus enregistrés) ; `resume` la reprend. */
+    pause(projectId: string, name: string): Promise<RecordingSnapshot>;
+    resume(projectId: string, name: string): Promise<RecordingSnapshot>;
+    /** Retire le dernier geste de l'enregistrement (l'application n'est pas remise en arrière). */
+    undo(projectId: string, name: string): Promise<RecordingSnapshot>;
+    /** Pose un point de contrôle « vérifier ici » sur l'écran courant. */
+    checkpoint(projectId: string, name: string, label?: string): Promise<RecordingSnapshot>;
+    /** Cible ambiguë : confirme l'élément voulu parmi ceux qui correspondent, ou laisse l'ambiguïté. */
+    resolve(projectId: string, name: string, actionId: string, candidate: number): Promise<RecordingSnapshot>;
+    ignore(projectId: string, name: string, actionId: string): Promise<RecordingSnapshot>;
     subscribe(
       projectId: string,
       name: string,
@@ -655,6 +665,15 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       list: (projectId) => request('GET', `${project(projectId)}/recordings`),
       get: (projectId, name) => request('GET', recording(projectId, name)),
       stop: (projectId, name) => request('POST', `${recording(projectId, name)}/stop`, {}),
+      pause: (projectId, name) => request('POST', `${recording(projectId, name)}/pause`, {}),
+      resume: (projectId, name) => request('POST', `${recording(projectId, name)}/resume`, {}),
+      undo: (projectId, name) => request('POST', `${recording(projectId, name)}/undo`, {}),
+      checkpoint: (projectId, name, label) =>
+        request('POST', `${recording(projectId, name)}/checkpoint`, label ? { label } : {}),
+      resolve: (projectId, name, actionId, candidate) =>
+        request('POST', `${recording(projectId, name)}/resolve`, { actionId, candidate }),
+      ignore: (projectId, name, actionId) =>
+        request('POST', `${recording(projectId, name)}/ignore`, { actionId }),
       subscribe: (projectId, name, onEvent, subscribeOptions) =>
         stream(
           `${recording(projectId, name)}/events`,

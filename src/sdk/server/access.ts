@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { JournalEntry, JournalKind, MemberView, Right, Role } from '../core/contracts.js';
-import { ROLE_RIGHTS, ROLES } from '../core/contracts.js';
+import { RECORDING_CONTROLS, ROLE_RIGHTS, ROLES } from '../core/contracts.js';
 
 /**
  * LES ACCÈS, côté serveur : des jetons nominatifs (un par personne ou par robot), leurs rôles dans
@@ -248,7 +248,8 @@ export function rightFor(segments: readonly string[], method: string): Right {
     case 'explorations':
       return 'RUN';
     case 'recordings':
-      return item === undefined || action === 'stop' ? 'RUN' : 'DECIDE';
+      // Démarrer, arrêter, et les commandes de la barre d'enregistrement : piloter une session.
+      return item === undefined || action === 'stop' || LIVE_CONTROLS.has(action ?? '') ? 'RUN' : 'DECIDE';
     case 'reports':
       return 'VIEW';
     case 'requirements':
@@ -259,7 +260,10 @@ export function rightFor(segments: readonly string[], method: string): Right {
   }
 }
 
+const LIVE_CONTROLS = new Set<string>(RECORDING_CONTROLS);
+
 const KEYWORDS = new Set([
+  ...RECORDING_CONTROLS,
   'access',
   'me',
   'members',

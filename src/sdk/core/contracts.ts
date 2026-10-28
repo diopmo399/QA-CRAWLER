@@ -366,11 +366,44 @@ export interface RecordingSnapshot {
   error?: string;
 }
 
+/**
+ * UN GESTE ENREGISTRÉ, en direct : sa phrase (« Cliquer sur "Valider" »), la page, son statut de
+ * validation dit en mots simples, et, quand la cible est ambiguë, les éléments qui correspondent. Jamais
+ * une valeur saisie : une saisie se dit « Saisir dans "Titre" ».
+ */
+export interface LiveStepView {
+  id: string;
+  index: number;
+  kind: string;
+  description: string;
+  detail?: string;
+  page: string;
+  /** PENDING, CONFIRMED, AMBIGUOUS, FAILED, UNVERIFIED… */
+  status: string;
+  statusText: string;
+  candidates?: { index: number; label: string; original: boolean }[];
+  resolution?: 'RESOLVED' | 'IGNORED' | 'CORRECTED';
+}
+
+/** La timeline en direct d'un enregistrement : les gestes, la pause, les vérifications posées. */
+export interface LiveTimelineView {
+  paused: boolean;
+  steps: LiveStepView[];
+  checkpoints: string[];
+}
+
+/** Les commandes d'un enregistrement en cours (les boutons de la barre d'enregistrement). */
+export const RECORDING_CONTROLS = ['pause', 'resume', 'undo', 'checkpoint', 'resolve', 'ignore'] as const;
+export type RecordingControl = (typeof RECORDING_CONTROLS)[number];
+
 /** Ce que le moteur signale pendant un enregistrement (événements du recorder, phases après l'arrêt). */
 export type RecordingStreamEvent = { seq: number; at: string } & (
   | { type: 'status'; status: RecordingStatus }
   | { type: 'recorder'; event: string; message: string }
-  | { type: 'phase'; phase: string }
+  /** Après l'arrêt : la phase en cours, son rang (1…total) et le détail du moment. */
+  | { type: 'phase'; phase: string; step?: number; total?: number; detail?: string }
+  /** Seul le dernier état est gardé : un abonné qui arrive le reçoit, jamais tout l'historique. */
+  | ({ type: 'timeline' } & LiveTimelineView)
   | { type: 'completed'; summary: RecordingSummary }
   | { type: 'failed'; error: string }
 );

@@ -18,6 +18,7 @@ import {
   type FlowView,
   type GraphView,
   type GroupViewDto,
+  type LiveTimelineView,
   type StepReplayOutcome,
   type StudioStep,
   type RecordingSnapshot,
@@ -60,6 +61,9 @@ export class RecordingSession {
   private seq = 0;
   private readonly events: RecordingStreamEvent[] = [];
   private readonly listeners = new Set<Listener>();
+  /** La timeline : seul son dernier état est gardé (relayée au plus toutes les 150 ms). */
+  private timeline?: RecordingStreamEvent;
+  private timelineTimer?: NodeJS.Timeout;
 
   constructor(
     readonly projectId: string,
@@ -75,9 +79,32 @@ export class RecordingSession {
   emit(event: DistributiveOmit<RecordingStreamEvent, 'seq' | 'at'>): void {
     this.seq += 1;
     const full: RecordingStreamEvent = { ...event, seq: this.seq, at: new Date().toISOString() };
-    this.events.push(full);
-    if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
+    if (full.type === 'timeline') this.timeline = full;
+    else {
+      this.events.push(full);
+      if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
+    }
     for (const listener of this.listeners) listener(full);
+  }
+
+  /** La timeline du recorder a changé : relayée une fois la rafale passée (un geste en produit plusieurs). */
+  timelineChanged(): void {
+    if (this.timelineTimer) return;
+    this.timelineTimer = setTimeout(() => {
+      delete this.timelineTimer;
+      this.flushTimeline();
+    }, 150);
+    this.timelineTimer.unref();
+  }
+
+  /** Relaie la timeline tout de suite (après une commande, à l'arrêt). */
+  flushTimeline(): void {
+    if (this.timelineTimer) {
+      clearTimeout(this.timelineTimer);
+      delete this.timelineTimer;
+    }
+    const view = this.recorder ? liveTimelineOf(this.recorder) : undefined;
+    if (view) this.emit({ type: 'timeline', ...view });
   }
 
   transition(status: RecordingStatus): void {
@@ -87,7 +114,10 @@ export class RecordingSession {
   }
 
   eventsAfter(after: number): RecordingStreamEvent[] {
-    return this.events.filter((event) => event.seq > after);
+    const events = this.events.filter((event) => event.seq > after);
+    const timeline = this.timeline;
+    if (!timeline || timeline.seq <= after) return events;
+    return [...events, timeline].sort((a, b) => a.seq - b.seq);
   }
 
   subscribe(listener: Listener): () => void {
@@ -148,6 +178,46 @@ export class RecordingManager {
     return session;
   }
 
+  /**
+   * Une commande de la barre d'enregistrement, depuis le SDK : pause, reprise, annulation du dernier
+   * geste, point de contrôle, choix d'un élément ambigu. Refusée hors de l'enregistrement.
+   */
+  async control(
+    session: RecordingSession,
+    command:
+      | { type: 'pause' | 'resume' | 'undo' }
+      | { type: 'checkpoint'; label?: string }
+      | { type: 'resolve'; actionId: string; candidate: number }
+      | { type: 'ignore'; actionId: string },
+  ): Promise<{ ok: true } | { error: string }> {
+    const recorder = session.recorder;
+    if (session.status !== 'RECORDING' || !recorder) return { error: 'NOT_RECORDING' };
+    switch (command.type) {
+      case 'pause':
+        await recorder.pause();
+        break;
+      case 'resume':
+        await recorder.resume();
+        break;
+      case 'undo':
+        if (!recorder.undo()) return { error: 'NOTHING_TO_UNDO' };
+        break;
+      case 'checkpoint':
+        await recorder.checkpoint(command.label);
+        break;
+      case 'resolve': {
+        const outcome = recorder.resolveAmbiguity(command.actionId, command.candidate);
+        if ('error' in outcome) return { error: outcome.error };
+        break;
+      }
+      case 'ignore':
+        if (!recorder.ignoreAmbiguity(command.actionId)) return { error: 'NOT_FOUND' };
+        break;
+    }
+    session.flushTimeline();
+    return { ok: true };
+  }
+
   /** Arrête la session (comme le bouton de la barre d'enregistrement) ; sans effet après l'arrêt. */
   stop(session: RecordingSession): void {
     session.stopRequested = true;
@@ -164,14 +234,28 @@ export class RecordingManager {
           if (event.type === 'RECORDING_STOPPED' && session.status === 'RECORDING')
             session.transition('PROCESSING');
         },
+        onTimeline: () => {
+          session.timelineChanged();
+        },
         onProgress: (update) => {
-          if (session.status === 'RECORDING') session.transition('PROCESSING');
-          session.emit({ type: 'phase', phase: update.label });
+          if (session.status === 'RECORDING') {
+            session.flushTimeline();
+            session.transition('PROCESSING');
+          }
+          session.emit({
+            type: 'phase',
+            phase: update.label,
+            step: update.step,
+            total: update.total,
+            ...(update.detail ? { detail: redactText(update.detail) } : {}),
+          });
         },
         control: (recorder) => {
           session.recorder = recorder;
           if (session.stopRequested) recorder.requestStop('api');
+          session.flushTimeline();
           return () => {
+            session.flushTimeline();
             delete session.recorder;
           };
         },
@@ -187,6 +271,34 @@ export class RecordingManager {
       session.transition('FAILED');
     }
   }
+}
+
+/** La timeline en direct du recorder, telle que le SDK la montre : des phrases, jamais une valeur saisie. */
+export function liveTimelineOf(recorder: HumanFlowRecorder): LiveTimelineView {
+  return {
+    paused: recorder.isPaused,
+    steps: recorder.timeline.actions.slice(-200).map((action) => ({
+      id: action.id,
+      index: action.index,
+      kind: action.kind,
+      description: redactText(action.description),
+      ...(action.detail ? { detail: redactText(action.detail) } : {}),
+      page: redactText(action.page),
+      status: action.status,
+      statusText: redactText(action.statusText),
+      ...(action.candidates
+        ? {
+            candidates: action.candidates.map((candidate) => ({
+              index: candidate.index,
+              label: redactText(candidate.label),
+              original: candidate.original,
+            })),
+          }
+        : {}),
+      ...(action.resolution ? { resolution: action.resolution } : {}),
+    })),
+    checkpoints: recorder.session.checkpoints.map((checkpoint) => redactText(checkpoint.label)),
+  };
 }
 
 function proposalCounts(flow: RecordedFlow): RecordingSummary['proposals'] {

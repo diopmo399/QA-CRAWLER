@@ -54,6 +54,7 @@ import {
   EXTENSION_NAMES,
   FRAMEWORKS,
   GENERATION_FORMATS,
+  RECORDING_CONTROLS,
   RECORDING_NAME_PATTERN,
   SDK_API_VERSION,
 } from '../core/contracts.js';
@@ -712,6 +713,44 @@ async function handleRecordings(
       throw new HttpError(409, 'NOT_RECORDING', `the recording ${name} is not in progress`);
     ctx.recordings.stop(live);
     sendJson(response, live.snapshot(), 202);
+    return;
+  }
+  if (
+    action !== undefined &&
+    (RECORDING_CONTROLS as readonly string[]).includes(action) &&
+    method === 'POST'
+  ) {
+    if (live?.status !== 'RECORDING')
+      throw new HttpError(409, 'NOT_RECORDING', `the recording ${name} is not in progress`);
+    const body = await readOptionalJson(request);
+    const actionId = (): string => {
+      const value = textOf(body.actionId, 80);
+      if (!value) throw new HttpError(400, 'BAD_REQUEST', 'actionId is required');
+      return value;
+    };
+    const command =
+      action === 'checkpoint'
+        ? {
+            type: 'checkpoint' as const,
+            ...(textOf(body.label, 80) ? { label: textOf(body.label, 80) } : {}),
+          }
+        : action === 'resolve'
+          ? {
+              type: 'resolve' as const,
+              actionId: actionId(),
+              candidate: Number.isInteger(body.candidate)
+                ? (body.candidate as number)
+                : (() => {
+                    throw new HttpError(400, 'BAD_REQUEST', 'candidate must be an integer');
+                  })(),
+            }
+          : action === 'ignore'
+            ? { type: 'ignore' as const, actionId: actionId() }
+            : { type: action as 'pause' | 'resume' | 'undo' };
+    const outcome = await ctx.recordings.control(live, command);
+    if ('error' in outcome)
+      throw new HttpError(409, outcome.error, `the recorder refused ${action}: ${outcome.error}`);
+    sendJson(response, live.snapshot());
     return;
   }
   if (action === 'events' && method === 'GET') {

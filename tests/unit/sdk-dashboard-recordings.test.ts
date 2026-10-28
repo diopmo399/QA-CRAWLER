@@ -3,7 +3,7 @@ import type { ProjectDetail, RecordingSnapshot } from '../../src/sdk/core/contra
 import { ROLE_RIGHTS } from '../../src/sdk/core/contracts.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
-import { emptyRecordingsUi, studioLink } from '../../src/sdk/ui/dashboard-recordings.js';
+import { emptyRecordingsUi, newLiveRecording, studioLink } from '../../src/sdk/ui/dashboard-recordings.js';
 import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
 import { activeNav, renderDashboard, type DashboardState } from '../../src/sdk/ui/dashboard-view.js';
 
@@ -100,19 +100,114 @@ describe('dashboard — recordings', () => {
     );
   });
 
-  it('a session in progress: its gestures, the stop button; one recording at a time', () => {
+  it('a session in progress: readable gestures, the recording bar, checks; one recording at a time', () => {
     const live = {
-      name: 'create-request',
-      status: 'RECORDING',
-      events: [{ at, text: 'HUMAN_INTERACTION_CAPTURED i1 click "Save"' }],
+      ...newLiveRecording('create-request', 'RECORDING'),
+      timeline: {
+        paused: false,
+        steps: [
+          {
+            id: 'a1',
+            index: 1,
+            kind: 'click',
+            description: 'Cliquer sur "Nouvelle demande"',
+            page: '/',
+            status: 'CONFIRMED',
+            statusText: 'Cible unique, effet observé',
+          },
+          {
+            id: 'a2',
+            index: 2,
+            kind: 'fill',
+            description: 'Saisir dans "Titre"',
+            detail: 'Champ du formulaire',
+            page: '/new',
+            status: 'PENDING',
+            statusText: 'Validation en cours',
+          },
+        ],
+        checkpoints: ['La demande <apparaît>'],
+      },
+      notes: [{ at, text: 'Enregistrement démarré' }],
+      technical: [{ at, text: 'HUMAN_INTERACTION_CAPTURED i1 click "Save"' }],
     };
     const html = renderDashboard(
       base({ recordings: [{ ...recordings[0], status: 'RECORDING' } as RecordingSnapshot] }, { live }),
     );
-    expect(html).toContain('click &quot;Save&quot;');
+    expect(html).toContain('Cliquer sur &quot;Nouvelle demande&quot;');
+    expect(html).toContain('Gestes enregistrés · 2');
+    expect(html).toContain('>En validation<');
+    expect(html).toContain('data-action="rec-control" data-control="pause"');
+    expect(html).toContain('data-action="rec-control" data-control="undo"');
+    expect(html).toContain('<form class="rec-check" data-action="rec-checkpoint">');
+    expect(html).toContain('La demande &lt;apparaît&gt;');
+    expect(html).toContain('Enregistrement démarré');
+    // Les messages bruts du recorder restent repliés dans le journal technique.
+    expect(html).toMatch(
+      /<details class="tech"><summary>Journal technique · 1<\/summary>[^]*click &quot;Save&quot;/,
+    );
     expect(html).toContain('data-action="stop-recording"');
     expect(html).toMatch(/data-action="start-recording"[^>]*disabled/);
     expect(html).toContain('Un seul enregistrement à la fois sur ce serveur.');
+  });
+
+  it('paused, then an ambiguous target: resume, choose the element touched or leave it', () => {
+    const ambiguous = {
+      id: 'a3',
+      index: 1,
+      kind: 'click',
+      description: 'Cliquer sur "Ouvrir"',
+      page: '/list',
+      status: 'AMBIGUOUS',
+      statusText: '2 éléments correspondent',
+      candidates: [
+        { index: 0, label: 'Ouvrir — ligne 1', original: true },
+        { index: 1, label: 'Ouvrir — ligne 2', original: false },
+      ],
+    };
+    const live = {
+      ...newLiveRecording('create-request', 'RECORDING'),
+      timeline: { paused: true, steps: [ambiguous], checkpoints: [] },
+    };
+    const html = renderDashboard(base({}, { live }));
+    expect(html).toContain('>En pause<');
+    expect(html).toContain('data-control="resume"');
+    expect(html).not.toContain('data-control="pause"');
+    expect(html).toContain('Plusieurs éléments correspondent : lequel avez-vous touché ?');
+    expect(html).toContain('data-action="rec-resolve" data-step="a3" data-candidate="0"');
+    expect(html).toContain('(touché)');
+    expect(html).toContain('data-action="rec-ignore" data-step="a3"');
+    const resolved = renderDashboard(
+      base(
+        {},
+        {
+          live: {
+            ...live,
+            timeline: { ...live.timeline, steps: [{ ...ambiguous, resolution: 'RESOLVED' as const }] },
+          },
+        },
+      ),
+    );
+    expect(resolved).not.toContain('data-action="rec-resolve"');
+    expect(resolved).toContain('Élément confirmé');
+  });
+
+  it('after the stop: the processing phases in words, with their progress; no recording bar', () => {
+    const live = {
+      ...newLiveRecording('create-request', 'PROCESSING'),
+      phases: [
+        { label: 'Finishing the capture', step: 1, total: 7 },
+        { label: 'Building the flow', step: 3, total: 7 },
+        { label: 'Validating by replay', step: 6, total: 7, detail: 'step 2/4' },
+      ],
+    };
+    const html = renderDashboard(base({}, { live }));
+    expect(html).toContain('Traitement après l’arrêt · Étape 6 sur 7');
+    expect(html).toContain('Fin de la capture');
+    expect(html).toContain('Rejeu de validation <small class="mu">step 2/4</small>');
+    expect(html).toContain('style="width:86%"');
+    expect(html).not.toContain('data-action="rec-control"');
+    expect(html).not.toContain('data-action="stop-recording"');
   });
 
   it('a reader sees the list, never the actions', () => {
@@ -129,6 +224,24 @@ describe('dashboard — recordings', () => {
       }),
     );
     expect(reader).not.toContain('data-action="start-recording"');
+    const watching = renderDashboard(
+      base(
+        {
+          me: {
+            id: 'm',
+            name: 'N',
+            kind: 'MEMBER',
+            role: 'READER',
+            rights: [...ROLE_RIGHTS.READER],
+            mode: 'named',
+          },
+        },
+        { live: newLiveRecording('create-request', 'RECORDING') },
+      ),
+    );
+    expect(watching).toContain('En attente des premiers gestes…');
+    expect(watching).not.toContain('data-action="rec-control"');
+    expect(watching).not.toContain('data-action="stop-recording"');
     expect(reader).not.toContain('data-action="promote"');
     expect(reader).toContain('Ouvrir dans le Flow Studio');
   });

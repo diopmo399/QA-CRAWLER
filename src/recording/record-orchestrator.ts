@@ -132,6 +132,8 @@ export interface RecordRequest {
   intelligenceProvider?: IntelligenceProvider;
   /** Le terminal : Entrée pour arrêter, « c » pour un point de contrôle… ; renvoie de quoi se détacher. */
   control?: (recorder: HumanFlowRecorder) => () => void;
+  /** La timeline en direct a changé (geste ajouté, confirmé, annulé ; pause) : le SDK la relaie. */
+  onTimeline?: () => void;
   /** La progression après l'arrêt (finalisation, flow, audits, rejeu, rapport) : le système travaille. */
   onProgress?: ProgressSink;
 }
@@ -267,6 +269,7 @@ export async function runRecording(request: RecordRequest): Promise<RecordOutcom
     // La timeline en direct : la fenêtre se redessine tout de suite (jamais après une analyse).
     onTimeline: () => {
       consoleUi?.timelineChanged();
+      request.onTimeline?.();
     },
     // L'analyse HTTP en direct : des compteurs provisoires dans l'en-tête de la fenêtre.
     onLiveAnalysis: (analysis) => {

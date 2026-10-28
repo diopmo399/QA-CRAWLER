@@ -3,7 +3,7 @@ import { DASHBOARD_EVENTS, type Environment, type Role } from '../core/contracts
 import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
-import { emptyRecordingsUi } from './dashboard-recordings.js';
+import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashboard-recordings.js';
 import { environmentForm, environmentInputOf } from './dashboard-ops.js';
 import {
   connectorOfFile,
@@ -107,6 +107,7 @@ export class QaCrawlerDashboard extends Base {
       if (form === 'launch') void this.launch();
       if (form === 'sign-in')
         this.signInWith(this.root.querySelector<HTMLInputElement>('[data-bind="token"]')?.value ?? '');
+      if (form === 'rec-checkpoint') void this.recordingControl('checkpoint');
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
@@ -119,6 +120,10 @@ export class QaCrawlerDashboard extends Base {
       const recField = target.dataset.rec;
       if ((recField === 'name' || recField === 'startPath') && target.type !== 'checkbox') {
         this.state.recs.form[recField] = target.value;
+        return;
+      }
+      if (recField === 'checkpoint' && this.state.recs.live) {
+        this.state.recs.live.checkpointLabel = target.value;
         return;
       }
       if (target.dataset.memberField === 'name') {
@@ -247,17 +252,40 @@ export class QaCrawlerDashboard extends Base {
     this.recSubscription = undefined;
   }
 
-  /** Suivre une session d'enregistrement : ses gestes, ses phases, sa fin (puis la liste est relue). */
+  /**
+   * Suivre une session d'enregistrement : ses gestes (la timeline), les moments qui comptent, les
+   * phases du traitement, sa fin (puis la liste est relue). Le statut suit aussi la ligne de la liste.
+   */
   private followRecording(api: QaCrawlerClient, projectId: string, name: string, status: string): void {
     this.unfollowRecording();
-    const live = { name, status, events: [] as { at: string; text: string }[] };
+    const live: LiveRecording = newLiveRecording(name, status);
     this.state.recs.live = live;
+    const notes = this.state.t.rec.notes;
     this.recSubscription = api.recordings.subscribe(projectId, name, (event) => {
       if (this.state.recs.live !== live) return;
-      if (event.type === 'status') live.status = event.status;
-      else if (event.type === 'recorder') live.events.push({ at: event.at, text: event.message });
-      else if (event.type === 'phase') live.events.push({ at: event.at, text: event.phase });
-      else if (event.type === 'failed') live.events.push({ at: event.at, text: event.error });
+      if (event.type === 'status') {
+        live.status = event.status;
+        const row = this.state.recordings?.find((recording) => recording.name === name);
+        if (row) row.status = event.status;
+      } else if (event.type === 'timeline') {
+        const { seq: _seq, at: _at, type: _type, ...view } = event;
+        live.timeline = view;
+      } else if (event.type === 'recorder') {
+        live.technical.push({ at: event.at, text: event.message });
+        if (live.technical.length > 200) live.technical.splice(0, live.technical.length - 200);
+        const note = notes[event.event];
+        if (note) live.notes.push({ at: event.at, text: note });
+      } else if (event.type === 'phase') {
+        const last = live.phases.at(-1);
+        const phase = {
+          label: event.phase,
+          ...(event.step !== undefined ? { step: event.step } : {}),
+          ...(event.total !== undefined ? { total: event.total } : {}),
+          ...(event.detail ? { detail: event.detail } : {}),
+        };
+        if (last?.label === event.phase) live.phases[live.phases.length - 1] = phase;
+        else live.phases.push(phase);
+      } else if (event.type === 'failed') live.technical.push({ at: event.at, text: event.error });
       if (event.type === 'completed' || event.type === 'failed') {
         live.status = event.type === 'completed' ? 'COMPLETED' : 'FAILED';
         this.unfollowRecording();
@@ -268,6 +296,37 @@ export class QaCrawlerDashboard extends Base {
       }
       if (this.state.route.view === 'recordings') this.paint();
     });
+  }
+
+  /** Une commande de la barre d'enregistrement : le serveur la transmet au recorder, la timeline suit. */
+  private async recordingControl(
+    control: string,
+    target?: { stepId?: string; candidate?: number },
+  ): Promise<void> {
+    const api = this.api;
+    const project = this.state.project;
+    const live = this.state.recs.live;
+    if (!api || !project || !live || live.control) return;
+    live.control = control;
+    live.error = undefined;
+    this.paint();
+    try {
+      const name = live.name;
+      if (control === 'pause') await api.recordings.pause(project.id, name);
+      else if (control === 'resume') await api.recordings.resume(project.id, name);
+      else if (control === 'undo') await api.recordings.undo(project.id, name);
+      else if (control === 'checkpoint') {
+        await api.recordings.checkpoint(project.id, name, live.checkpointLabel.trim() || undefined);
+        live.checkpointLabel = '';
+      } else if (control === 'resolve' && target?.stepId && target.candidate !== undefined)
+        await api.recordings.resolve(project.id, name, target.stepId, target.candidate);
+      else if (control === 'ignore' && target?.stepId)
+        await api.recordings.ignore(project.id, name, target.stepId);
+    } catch (error) {
+      live.error = message(error);
+    }
+    live.control = undefined;
+    if (this.state.recs.live === live) this.paint();
   }
 
   private async startRecording(): Promise<void> {
@@ -1040,6 +1099,18 @@ export class QaCrawlerDashboard extends Base {
         return;
       case 'start-recording':
         void this.startRecording();
+        return;
+      case 'rec-control':
+        void this.recordingControl(target.dataset.control ?? '');
+        return;
+      case 'rec-resolve':
+        void this.recordingControl('resolve', {
+          stepId: target.dataset.step ?? '',
+          candidate: Number(target.dataset.candidate),
+        });
+        return;
+      case 'rec-ignore':
+        void this.recordingControl('ignore', { stepId: target.dataset.step ?? '' });
         return;
       case 'stop-recording': {
         const project = this.state.project;

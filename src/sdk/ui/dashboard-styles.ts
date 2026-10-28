@@ -375,6 +375,28 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 .live-rec{border-color:color-mix(in srgb,var(--qa-color-primary) 45%,var(--qa-color-border))}
 .rec-events{display:flex;flex-direction:column;gap:4px;font-size:13px;overflow-wrap:anywhere}
 .row-acts a.btn{text-decoration:none}
+.rec-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.rec-bar .danger{margin-left:auto}
+.rec-check{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
+.rec-check .field{flex:1 1 260px;min-width:0}
+.live-steps{display:flex;flex-direction:column;gap:0;border:1px solid var(--qa-color-border);border-radius:12px;overflow:hidden}
+.live-step{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 12px;border-top:1px solid var(--qa-color-border);background:var(--qa-color-surface)}
+.live-step:first-child{border-top:0}
+.live-step .n{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:600;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);color:var(--qa-color-muted)}
+.live-step .ls-main{min-width:0;overflow-wrap:anywhere}
+.live-step .ls-main b{font-weight:600}
+.amb{margin-top:8px;padding:8px 10px;border-radius:10px;background:var(--qa-color-warning-soft);display:flex;flex-direction:column;gap:6px}
+.amb .row-acts{display:flex;flex-wrap:wrap;gap:6px}
+.rec-phases{display:flex;flex-direction:column;gap:8px}
+.rec-phases li{display:flex;align-items:center;gap:8px}
+.rec-phases li.done{color:var(--qa-color-muted)}
+.rec-phases li.done .ico{color:var(--qa-color-success)}
+.rec-phases li .spin{width:14px;height:14px;border-width:2px}
+.prog{height:6px;border-radius:999px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);overflow:hidden}
+.prog span{display:block;height:100%;background:var(--qa-color-primary);transition:width .3s}
+.rec-notes{font-size:13px}
+details.tech summary{cursor:pointer;color:var(--qa-color-muted);font-size:13px}
+details.tech[open] summary{margin-bottom:6px}
 
 /* Responsive : 1 100 px, 960 px (menu replié), 600 px (une colonne). */
 @container (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}

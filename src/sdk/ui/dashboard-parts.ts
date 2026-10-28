@@ -32,6 +32,7 @@ const TONE: Record<string, string> = {
   CONFIRMED: 'ok',
   PROPOSED: 'warn',
   REJECTED: 'mu',
+  PAUSED: 'warn',
 };
 
 export const pill = (raw: string, text = raw): string =>
@@ -45,6 +46,9 @@ const ICONS: Record<string, string> = {
   back: '<path d="M15 6l-6 6 6 6"/>',
   play: '<path d="M8 5v14l11-7z"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  pause:
+    '<rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/>',
   refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
   alert: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
@@ -71,6 +75,13 @@ const ICONS: Record<string, string> = {
 
 export const icon = (name: string): string =>
   `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] ?? ''}</svg>`;
+
+/** L'heure seule, à la seconde : le fil d'une session en cours. */
+export function formatTime(iso: string, locale: 'fr' | 'en'): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleTimeString(locale === 'fr' ? 'fr-FR' : 'en-GB', { timeStyle: 'medium' });
+}
 
 export function formatDate(iso: string, locale: 'fr' | 'en'): string {
   const date = new Date(iso);

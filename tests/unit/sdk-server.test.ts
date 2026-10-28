@@ -115,11 +115,57 @@ async function fakeRecord(request: RecordRequest): Promise<RecordOutcome> {
   });
   request.onEvent?.({ type: 'RECORDING_STARTED', at, message: 'recording started' } as never);
   request.onEvent?.({ type: 'RAW_EVENT_CAPTURED', at, message: 'click r1' } as never);
+  // La barre d'enregistrement : une timeline (un geste ambigu), la pause, les vérifications, l'annulation.
+  const actions: Record<string, unknown>[] = [
+    {
+      id: 'a1',
+      index: 1,
+      kind: 'click',
+      description: 'Cliquer sur "Ouvrir"',
+      page: '/users',
+      status: 'AMBIGUOUS',
+      statusText: '2 éléments correspondent',
+      candidates: [
+        { index: 0, label: 'Ouvrir — ligne 1', original: true },
+        { index: 1, label: 'Ouvrir — ligne 2', original: false },
+      ],
+      technical: { selector: 'never sent' },
+    },
+  ];
+  const checkpoints: { label: string }[] = [];
+  let paused = false;
   request.control?.({
     requestStop: (reason: string) => {
       stop(reason);
     },
     stopped,
+    get isPaused() {
+      return paused;
+    },
+    timeline: { actions },
+    session: { checkpoints },
+    pause: () => {
+      paused = true;
+      request.onTimeline?.();
+      return Promise.resolve();
+    },
+    resume: () => {
+      paused = false;
+      request.onTimeline?.();
+      return Promise.resolve();
+    },
+    checkpoint: (label?: string) => {
+      checkpoints.push({ label: label ?? 'checkpoint 1' });
+      return Promise.resolve();
+    },
+    undo: () => actions.pop(),
+    resolveAmbiguity: (id: string, candidate: number) => {
+      const action = actions.find((entry) => entry.id === id);
+      if (!action) return { error: 'NOT_FOUND' };
+      action.resolution = 'RESOLVED';
+      return { action, candidate };
+    },
+    ignoreAmbiguity: () => undefined,
   } as never);
   const reason = await stopped;
   request.onEvent?.({ type: 'RECORDING_STOPPED', at, message: 'stopped (api)' } as never);
@@ -445,9 +491,52 @@ describe('SDK server — recordings and reports', () => {
       events.push(event),
     );
     await expect.poll(() => events.length).toBeGreaterThan(1);
+    // La barre d'enregistrement, depuis le SDK : la timeline suit chaque commande (son dernier état seul).
+    const timelines = (): {
+      paused: boolean;
+      steps: { id: string; resolution?: string }[];
+      checkpoints: string[];
+    }[] => events.filter((event) => event.type === 'timeline') as never;
+    await expect.poll(() => timelines().length).toBeGreaterThan(0);
+    expect(timelines().at(-1)).toMatchObject({
+      paused: false,
+      checkpoints: [],
+      steps: [{ id: 'a1', description: 'Cliquer sur "Ouvrir"', status: 'AMBIGUOUS', candidates: [{}, {}] }],
+    });
+    expect(JSON.stringify(timelines())).not.toContain('never sent');
+    expect((await client.recordings.pause(project.id, 'parcours-test')).status).toBe('RECORDING');
+    await expect.poll(() => timelines().at(-1)?.paused).toBe(true);
+    await client.recordings.resume(project.id, 'parcours-test');
+    await expect.poll(() => timelines().at(-1)?.paused).toBe(false);
+    await client.recordings.checkpoint(project.id, 'parcours-test', 'La liste s’affiche');
+    await expect.poll(() => timelines().at(-1)?.checkpoints).toEqual(['La liste s’affiche']);
+    await client.recordings.resolve(project.id, 'parcours-test', 'a1', 1);
+    await expect.poll(() => timelines().at(-1)?.steps[0]?.resolution).toBe('RESOLVED');
+    await expect(client.recordings.resolve(project.id, 'parcours-test', 'a9', 0)).rejects.toMatchObject({
+      status: 409,
+      code: 'NOT_FOUND',
+    });
+    await expect(client.recordings.ignore(project.id, 'parcours-test', 'a9')).rejects.toMatchObject({
+      status: 409,
+    });
+    const bad = await call(`/api/projects/${project.id}/recordings/parcours-test/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ actionId: 'a1', candidate: 'x' }),
+    });
+    expect(bad.status).toBe(400);
+    await client.recordings.undo(project.id, 'parcours-test');
+    await expect.poll(() => timelines().at(-1)?.steps).toEqual([]);
+    await expect(client.recordings.undo(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 409,
+      code: 'NOTHING_TO_UNDO',
+    });
     expect((await client.recordings.stop(project.id, 'parcours-test')).name).toBe('parcours-test');
     await subscription.done;
-    expect(events.map((event) => event.type)).toEqual([
+    // Un nouvel abonné ne reçoit que le dernier état de la timeline, jamais tout son historique.
+    const replayed: { type: string }[] = [];
+    await client.recordings.subscribe(project.id, 'parcours-test', (event) => replayed.push(event)).done;
+    expect(replayed.filter((event) => event.type === 'timeline')).toHaveLength(1);
+    expect(events.filter((event) => event.type !== 'timeline').map((event) => event.type)).toEqual([
       'status',
       'recorder',
       'recorder',
@@ -510,6 +599,10 @@ describe('SDK server — recordings and reports', () => {
       status: 400,
     });
     await expect(client.recordings.stop(project.id, 'parcours-test')).rejects.toMatchObject({
+      status: 409,
+      code: 'NOT_RECORDING',
+    });
+    await expect(client.recordings.pause(project.id, 'parcours-test')).rejects.toMatchObject({
       status: 409,
       code: 'NOT_RECORDING',
     });

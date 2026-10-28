@@ -23,18 +23,38 @@ let project: Project;
 let browser: Browser;
 let page: Page;
 
+/**
+ * La personne joue le parcours ; le test, côté Dashboard, pose une pause, une vérification et annule un
+ * geste pendant ce temps. Les deux se donnent la main par ces signaux.
+ */
+const signal = (): { wait: Promise<void>; go: () => void } => {
+  let go: () => void = () => undefined;
+  const wait = new Promise<void>((resolve) => {
+    go = resolve;
+  });
+  return { wait, go };
+};
+const firstClickDone = signal();
+const dashboardChecked = signal();
+const lastClickDone = signal();
+const undoDone = signal();
+
 const human: NonNullable<RecordRequest['drive']> = async ({ page: app }) => {
   const pause = (): Promise<void> => app.waitForTimeout(700);
   await app.waitForTimeout(2500);
   await app.getByRole('link', { name: 'Utilisateurs' }).click();
   await app.waitForURL('**/users');
   await pause();
+  firstClickDone.go();
+  await dashboardChecked.wait;
   await app.getByRole('link', { name: 'Utilisateur 1', exact: true }).click();
   await app.waitForURL('**/users/1');
   await pause();
   await app.getByRole('link', { name: 'Accueil' }).click();
   await app.waitForURL((url) => url.pathname === '/');
   await pause();
+  lastClickDone.go();
+  await undoDone.wait;
 };
 
 const dashboard = (): Locator => page.locator('qa-crawler-dashboard');
@@ -66,7 +86,7 @@ afterAll(async () => {
 });
 
 describe('Dashboard — recordings, in Chromium', () => {
-  it('starts a recording, follows the gestures live, then lists it with its validation replay', async () => {
+  it('starts a recording, drives it from the recording bar, then lists it with its validation replay', async () => {
     await page.goto(`${server.url}/dashboard`);
     await dashboard().locator('select[data-action="project-context"]').selectOption(project.id);
     await dashboard().locator('.drawer [data-action="nav"][data-view="recordings"]').click();
@@ -79,8 +99,33 @@ describe('Dashboard — recordings, in Chromium', () => {
     const live = dashboard().locator('.live-rec');
     await live.waitFor({ timeout: 30_000 });
     expect(await live.textContent()).toContain('consulter-un-utilisateur');
-    await live.locator('[data-action="stop-recording"]').waitFor();
-    await live.locator('.rec-events li').first().waitFor({ timeout: 60_000 });
+    await firstClickDone.wait;
+    // Les gestes en phrases, jamais les messages bruts du recorder (repliés dans le journal technique).
+    const steps = live.locator('.live-step');
+    await expect.poll(() => steps.count(), { timeout: 30_000 }).toBeGreaterThan(0);
+    expect(await steps.last().locator('b').textContent()).toContain('Utilisateurs');
+    expect(await live.locator('details.tech').getAttribute('open')).toBeNull();
+    // Pause puis reprise, depuis le Dashboard.
+    await live.locator('[data-control="pause"]').click();
+    await live.locator('.pill', { hasText: 'En pause' }).waitFor({ timeout: 15_000 });
+    await live.locator('[data-control="resume"]').click();
+    await live.locator('[data-control="pause"]').waitFor({ timeout: 15_000 });
+    // Une vérification posée sur l'écran courant.
+    await live.locator('input[data-rec="checkpoint"]').fill('La liste des utilisateurs est affichée');
+    await live.locator('form.rec-check button[type="submit"]').click();
+    await live
+      .locator('.rec-checks li', { hasText: 'La liste des utilisateurs est affichée' })
+      .waitFor({ timeout: 15_000 });
+    dashboardChecked.go();
+    await lastClickDone.wait;
+    await expect.poll(() => steps.count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(3);
+    const before = await steps.count();
+    expect(await steps.last().locator('b').textContent()).toContain('Accueil');
+    // Le dernier geste (Accueil) retiré de l'enregistrement.
+    await live.locator('[data-control="undo"]').click();
+    await expect.poll(() => steps.count(), { timeout: 15_000 }).toBe(before - 1);
+    expect(await steps.last().locator('b').textContent()).not.toContain('Accueil');
+    undoDone.go();
     await live.waitFor({ state: 'detached', timeout: 180_000 });
     const row = dashboard().locator('.tbl tbody tr', { hasText: 'consulter-un-utilisateur' });
     await row.waitFor();
@@ -91,6 +136,10 @@ describe('Dashboard — recordings, in Chromium', () => {
     expect(await row.locator('a', { hasText: 'Ouvrir dans le Flow Studio' }).getAttribute('href')).toBe(
       `/studio?project=${project.id}&recording=consulter-un-utilisateur`,
     );
+    // Le geste annulé n'est pas dans le flow ; la vérification posée y est (une attente sur l'écran).
+    const flow = await client.recordings.flow(project.id, 'consulter-un-utilisateur');
+    expect(flow.yaml).not.toContain('name: Accueil');
+    expect(flow.yaml).toContain('# MANUAL_CHECKPOINT');
   }, 300_000);
 
   it('promotes it to a scenario', async () => {
