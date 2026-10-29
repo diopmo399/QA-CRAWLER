@@ -339,8 +339,12 @@ export async function checkGeneratedFile(
   if (!own?.validation) return { error: `${relative} could not be checked` };
   const unavailable = (validation: GeneratedArtifact['validation']): boolean =>
     validation?.messages.some((message) => message.endsWith('not validated')) ?? false;
+  // Java : un seul `mvn test-compile` pour tout le projet ; ses erreurs disent déjà leur fichier. Les
+  // autres fichiers du format portent le même résultat : ils ne sont pas comptés une seconde fois.
+  const shared = entry.artifact.format === 'java';
   const broken = checked.filter(
     (artifact) =>
+      !shared &&
       artifact.path !== relative &&
       siblings.find((sibling) => sibling.path === artifact.path)?.status === 'STATICALLY_VALIDATED' &&
       artifact.validation &&

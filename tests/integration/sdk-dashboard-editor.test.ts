@@ -290,6 +290,43 @@ describe('Dashboard — generated test editor in Chromium', () => {
     },
   );
 
+  it.skipIf(!mavenAvailable)(
+    'Java: a compilation error is one diagnostic, on its line, in this file only; saving is refused',
+    async () => {
+      const javaPath = await editor()
+        .locator('.ed-tree [data-action="ed-open"]', { hasText: 'OuvrirUneFicheTest.java' })
+        .getAttribute('data-path');
+      const saved = await savedContent(javaPath ?? '');
+      const line = saved.split('\n').findIndex((text) => text.includes('.click()')) + 1;
+      expect(line).toBeGreaterThan(0);
+      await editor().locator('.cm-content').click();
+      await page.keyboard.press('Control+a');
+      await page.keyboard.insertText(saved.replace('.click()', '.clique()'));
+      await chip('Modifications non enregistrées').waitFor();
+      await editor().locator('.ed-top [data-action="ed-check"]').click();
+      const problems = editor().locator('.ed-panel .ed-dcat button');
+      await problems.first().waitFor({ timeout: 300_000 });
+      // Un seul diagnostic : ni recopié sur les autres fichiers du projet, ni une ligne par phrase de Maven.
+      expect(await problems.count()).toBe(1);
+      const text = (await problems.first().textContent()) ?? '';
+      expect(text).toContain('clique()');
+      expect(text).toContain(`ligne ${String(line)}`);
+      expect(text).not.toMatch(/Env\.java|pom\.xml|Help 1/);
+      await problems.first().click();
+      await expect
+        .poll(() => editor().locator('.cm-lineNumbers .cm-activeLineGutter').textContent())
+        .toBe(String(line));
+      await editor().locator('.ed-top [data-action="ed-save"]').click();
+      await editor()
+        .locator('.ed-note.err', { hasText: 'ne passe pas sa vérification' })
+        .waitFor({ timeout: 300_000 });
+      expect(await savedContent(javaPath ?? '')).toBe(saved);
+      await editor().locator('.ed-top [data-action="ed-compare"]').click();
+      await editor().locator('[data-action="ed-discard"]').click();
+      await editor().locator('[data-action="ed-discard-confirm"]').click();
+    },
+  );
+
   it('on a phone: one column, nothing overflows the page, the actions stay reachable', async () => {
     const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await phone.goto(`${server.url}/dashboard`);

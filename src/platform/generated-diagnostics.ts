@@ -116,26 +116,67 @@ export async function typescriptDiagnostics(content: string): Promise<GeneratedF
   });
 }
 
-/** `[ERROR] /…/java/src/test/java/qa/X.java:[12,5] cannot find symbol` → fichier, ligne, colonne. */
+/** Les lignes de Maven qui ne disent rien du problème (aide, rappels, séparateurs). */
+const MAVEN_NOISE =
+  /^(COMPILATION ERROR\b|-> \[Help|\[Help \d|To see the full|Re-run Maven|For more information|BUILD FAILURE|-+$|\d+ errors?$)/;
+
+/**
+ * La sortie de `mvn test-compile` → un diagnostic par erreur du compilateur, avec son fichier, sa ligne
+ * et sa colonne (`/…/X.java:[12,5] cannot find symbol`). Maven répète chaque erreur (liste du compilateur,
+ * puis résumé de l'échec) : elle n'est dite qu'une fois. Les lignes de détail qui suivent (`symbol:`,
+ * `location:`…) complètent son message. Sans erreur positionnée (dépendance introuvable…), les lignes
+ * restantes sont rendues telles quelles.
+ */
 export function mavenDiagnostics(messages: readonly string[]): GeneratedFileDiagnostic[] {
-  return messages
-    .filter(
-      (message) =>
-        message.trim() !== '' &&
-        !/^\[ERROR\]\s*(-|Failed to execute|To see|Re-run|For more|$)/.test(message.trim()),
-    )
-    .map((message) => {
-      const match = /([^\s[]+\.java):\[(\d+),(\d+)\]\s*(.*)$/.exec(message);
-      const file = match?.[1] ? match[1].replace(/\\/g, '/').replace(/^.*?\/(java\/src\/)/, '$1') : undefined;
-      return {
-        severity: 'error' as const,
-        category: 'compilation' as const,
-        message: (match?.[4] ?? message.replace(/^\[ERROR\]\s*/, '')).trim(),
-        source: 'mvn test-compile',
-        ...(file ? { file } : {}),
-        ...(match?.[2] ? { line: Number(match[2]), column: Number(match[3]) } : {}),
-      };
-    });
+  const located: GeneratedFileDiagnostic[] = [];
+  const others: string[] = [];
+  let last: GeneratedFileDiagnostic | undefined;
+  for (const raw of messages) {
+    const text = raw.replace(/^\s*\[ERROR\]\s?/, '').trim();
+    if (text === '') continue;
+    const match = /([^\s[]+\.java):\[(\d+),(\d+)\]\s*(.*)$/.exec(text);
+    if (match?.[1]) {
+      const file = match[1].replace(/\\/g, '/').replace(/^.*?\/(java\/src\/)/, '$1');
+      const line = Number(match[2]);
+      const column = Number(match[3]);
+      const message = (match[4] ?? '').trim();
+      last = located.find(
+        (diagnostic) =>
+          diagnostic.file === file &&
+          diagnostic.line === line &&
+          diagnostic.column === column &&
+          diagnostic.message.startsWith(message),
+      );
+      if (!last) {
+        last = {
+          severity: 'error',
+          category: 'compilation',
+          message,
+          source: 'mvn test-compile',
+          file,
+          line,
+          column,
+        };
+        located.push(last);
+      }
+      continue;
+    }
+    const detail = /^(symbol|location|required|found|reason)\s*:\s*(.*)$/.exec(text);
+    if (detail && last) {
+      const part = `${detail[1] ?? ''}: ${(detail[2] ?? '').replace(/\s+/g, ' ')}`;
+      if (!last.message.includes(part)) last.message += ` — ${part}`;
+      continue;
+    }
+    last = undefined;
+    if (!MAVEN_NOISE.test(text) && !others.includes(text)) others.push(text);
+  }
+  if (located.length > 0) return located;
+  return others.slice(0, 5).map((message) => ({
+    severity: 'error',
+    category: /resolve|dependenc|artifact/i.test(message) ? 'dependencies' : 'compilation',
+    message,
+    source: 'mvn test-compile',
+  }));
 }
 
 /**

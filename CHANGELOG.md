@@ -47,6 +47,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   `generation.preview` (ce qu'une régénération écrirait) et le Dry Run des tests générés
   (`generation.execute` avec `mode: 'DRY_RUN'`). Les refus et vérifications portent des diagnostics
   positionnés (`GeneratedFileDiagnostic` : famille, outil, ligne, colonne, étape).
+- Java : une erreur de `mvn test-compile` donne un seul diagnostic, sur son fichier et sa ligne, avec son
+  détail (`symbol`, `location`). Elle n'est plus répétée sur chaque fichier du projet Java, et les lignes
+  d'aide de Maven ne comptent plus comme des erreurs.
 - Dépendances de développement : CodeMirror 6 et esbuild, versions fixées ; le kit de l'éditeur est
   regroupé au build (`dist/sdk/ui/editor-kit.js`, licences à côté) et chargé à la demande.
 

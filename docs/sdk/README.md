@@ -1111,7 +1111,8 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   `tests/integration/sdk-dashboard-editor.test.ts`, dans Chromium, sur un enregistrement réel : vue
   visuelle et inspecteur synchronisés avec la source, déplacement au clavier, Ctrl+S, comparaison,
   source cassée refusée et diagnostic qui mène à sa ligne, annulation et restauration, phrase Gherkin
-  inconnue, plan Playwright et Java, Dry Run réel, arbre au clavier, confirmation avant de quitter,
+  inconnue, plan Playwright et Java, erreur de compilation Java (un seul diagnostic, sur sa ligne,
+  enregistrement refusé), Dry Run réel, arbre au clavier, confirmation avant de quitter,
   téléphone sans défilement horizontal.
 - `tests/unit/recording-workspace-review.test.ts` : retirer une étape, groupes proposés, vérification
   de groupe, ligne redéfinie, restauration, correction appliquée et revue des intentions sur un

@@ -60,4 +60,42 @@ describe('generated file diagnostics', () => {
       },
     ]);
   });
+
+  it('Maven: an error repeated by the failure summary is said once, with its symbol and location', () => {
+    const file = '/tmp/.edit-x/java/src/test/java/qa/generated/OuvrirUneFicheTest.java';
+    const diagnostics = mavenDiagnostics([
+      '[ERROR] COMPILATION ERROR : ',
+      `[ERROR] ${file}:[29,61] cannot find symbol`,
+      '[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:testCompile: Compilation failure',
+      `[ERROR] ${file}:[29,61] cannot find symbol`,
+      '[ERROR]   symbol:   method clique()',
+      '[ERROR]   location: interface com.microsoft.playwright.Locator',
+      '[ERROR] -> [Help 1]',
+      '[ERROR] ',
+      '[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.',
+      '[ERROR] Re-run Maven using the -X switch to enable full debug logging.',
+      '[ERROR] For more information about the errors and possible solutions, please read the following articles:',
+      '[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException',
+    ]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        message:
+          'cannot find symbol — symbol: method clique() — location: interface com.microsoft.playwright.Locator',
+        file: 'java/src/test/java/qa/generated/OuvrirUneFicheTest.java',
+        line: 29,
+        column: 61,
+      }),
+    ]);
+  });
+
+  it('Maven: without a located error, the meaningful lines only (a missing dependency)', () => {
+    const diagnostics = mavenDiagnostics([
+      '[ERROR] Failed to execute goal on project generated: Could not resolve dependencies for project qa:generated:jar:1.0',
+      '[ERROR] -> [Help 1]',
+      '[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/DependencyResolutionException',
+    ]);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({ category: 'dependencies', source: 'mvn test-compile' });
+    expect(diagnostics[0]?.line).toBeUndefined();
+  });
 });

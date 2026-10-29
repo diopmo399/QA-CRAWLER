@@ -200,6 +200,7 @@ export class EditorController {
       buffer.revision = file.revision;
       buffer.status = file.status;
       buffer.editedAt = file.editedAt;
+      buffer.savedDiagnostics = file.diagnostics;
       if (pristine) this.setDraft(buffer, file.content);
     }
   }
@@ -238,7 +239,7 @@ export class EditorController {
         status: file.status,
         ...(file.validation ? { validationMethod: file.validation.method } : {}),
         diagnostics: file.diagnostics ?? [],
-        ...(file.diagnostics ? { checkedFor: file.content } : {}),
+        ...(file.diagnostics ? { checkedFor: file.content, savedDiagnostics: file.diagnostics } : {}),
       };
       ui.buffers[path] = buffer;
     }
@@ -503,6 +504,7 @@ export class EditorController {
       buffer.status = saved.status;
       buffer.editedAt = saved.editedAt;
       buffer.diagnostics = saved.diagnostics ?? [];
+      buffer.savedDiagnostics = buffer.diagnostics;
       buffer.checkedFor = saved.content;
       buffer.checkedStatus = saved.status;
       if (buffer.draft === content && saved.content !== content) this.setDraft(buffer, saved.content);
@@ -614,6 +616,7 @@ export class EditorController {
       buffer.status = restored.status;
       buffer.editedAt = undefined;
       buffer.diagnostics = restored.diagnostics ?? [];
+      buffer.savedDiagnostics = buffer.diagnostics;
       buffer.checkedFor = restored.content;
       this.setDraft(buffer, restored.content);
       this.notice('ok', this.t.restoredNotice);

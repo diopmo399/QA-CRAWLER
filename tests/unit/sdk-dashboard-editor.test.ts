@@ -217,6 +217,26 @@ describe('dashboard — generated test editor', () => {
     expect(html).not.toMatch(/data-action="ed-save" disabled/);
   });
 
+  it('back to the saved content (changes discarded): the saved state and its diagnostics count again', () => {
+    const broken = FLOW.replace('name: Utilisateurs', 'label: Utilisateurs');
+    const problem = {
+      severity: 'error' as const,
+      category: 'schema' as const,
+      message: 'exactly one of testId, role, label',
+      source: 'flow schema',
+      line: 9,
+    };
+    const state = base({
+      buffers: {
+        [YAML]: buffer(YAML, FLOW, { checkedFor: broken, diagnostics: [problem], savedDiagnostics: [] }),
+      },
+    });
+    const html = renderDashboard(state);
+    expect(html).not.toContain(t.ed.notCheckedSince);
+    expect(html).not.toContain('exactly one of');
+    expect(zone(html, 'class="ed-top"')).toContain(t.tst.fileStatuses.STATICALLY_VALIDATED);
+  });
+
   it('the visual view of the flow YAML: groups, numbered steps, action, tools; the source keeps the other views', () => {
     const html = renderDashboard(base());
     expect(modeOf(base().ed, YAML)).toBe('visual');

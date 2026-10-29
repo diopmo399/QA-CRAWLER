@@ -50,6 +50,9 @@ export interface EditorBuffer {
   checkedFor?: string;
   /** Le statut de la dernière vérification (celle du contenu `checkedFor`). */
   checkedStatus?: string;
+  /** Les diagnostics du contenu enregistré, quand le serveur les a donnés : ils valent de nouveau dès que
+   *  le brouillon revient au contenu enregistré (annulation, retour en arrière à la main). */
+  savedDiagnostics?: GeneratedFileDiagnostic[];
   outline?: EditorOutline;
 }
 
@@ -171,7 +174,12 @@ export function diagnosticsOf(ui: EditorUi, path: string): GeneratedFileDiagnost
     !buffer.outline.parse.ok
       ? buffer.outline.parse.diagnostics
       : [];
-  const checked = buffer.checkedFor === buffer.draft ? buffer.diagnostics : [];
+  const checked =
+    buffer.checkedFor === buffer.draft
+      ? buffer.diagnostics
+      : !isDirty(buffer)
+        ? (buffer.savedDiagnostics ?? [])
+        : [];
   return [
     ...parseErrors,
     ...checked.filter((entry) => !parseErrors.some((error) => error.message === entry.message)),
@@ -274,7 +282,7 @@ function validationChip(
     (entry) => entry.severity === 'error' && entry.category !== 'execution',
   ).length;
   if (errors > 0) return `<span class="ed-chip ko">${icon('cross')}${esc(t.errors(errors))}</span>`;
-  if (buffer.checkedFor !== undefined && buffer.checkedFor !== buffer.draft)
+  if (buffer.checkedFor !== undefined && buffer.checkedFor !== buffer.draft && isDirty(buffer))
     return `<span class="ed-chip mu">${esc(t.notCheckedSince)}</span>`;
   if (buffer.checkedFor === undefined && isDirty(buffer))
     return `<span class="ed-chip mu">${esc(t.notCheckedSince)}</span>`;
@@ -918,9 +926,7 @@ function diagnosticsPanel(state: DashboardState, buffer: EditorBuffer): string {
   const list = diagnosticsOf(state.ed, buffer.path);
   if (list.length === 0) {
     const atGeneration =
-      buffer.checkedFor === undefined &&
-      buffer.draft === buffer.saved &&
-      buffer.status === 'STATICALLY_VALIDATED';
+      buffer.checkedFor !== buffer.draft && !isDirty(buffer) && buffer.status === 'STATICALLY_VALIDATED';
     return `<p class="mu ed-empty">${esc(buffer.checkedFor === buffer.draft ? t.noDiagnostics : atGeneration ? t.noDiagnosticsGenerated : t.noDiagnosticsYet)}</p>`;
   }
   return DIAGNOSTIC_CATEGORIES.filter((category) => list.some((entry) => entry.category === category))
