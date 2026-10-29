@@ -11,7 +11,8 @@ import type { CodeOutlineEntry } from '../editor/code-outline.js';
 import type { FlowGroupNode, FlowParse, FlowStepNode } from '../editor/flow-document.js';
 import type { GherkinParse, GherkinStepNode } from '../editor/gherkin-document.js';
 import { can } from './dashboard-access.js';
-import { formatDate, icon, pill } from './dashboard-parts.js';
+import { consolePanel, emptyConsoleUi, stepRows, type ConsoleUi } from './dashboard-console.js';
+import { formatDate, icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
 
@@ -81,7 +82,6 @@ export interface EditorUi {
   collapsed: string[];
   explorer: boolean;
   inspector: boolean;
-  panel: 'diagnostics' | 'results';
   compare?: {
     path: string;
     left: CompareSide;
@@ -103,6 +103,8 @@ export interface EditorUi {
   adding?: EditorAddForm;
   kit: 'idle' | 'loading' | 'ready' | 'error';
   kitError?: string;
+  /** La console d'exécution (panneau inférieur). */
+  console: ConsoleUi;
 }
 
 export const emptyEditorUi = (): EditorUi => ({
@@ -113,8 +115,8 @@ export const emptyEditorUi = (): EditorUi => ({
   collapsed: [],
   explorer: true,
   inspector: true,
-  panel: 'diagnostics',
   kit: 'idle',
+  console: emptyConsoleUi(),
 });
 
 // ── Les formats ──────────────────────────────────────────────────────────────────────────────
@@ -239,6 +241,16 @@ function stepResult(
   path: string,
   match: { step?: number; line?: number },
 ): { status: string; detail?: string } | undefined {
+  // L'exécution suivie dans la console (en cours ou finie) : l'état de l'étape tel que l'outil l'a dit.
+  const followed = ui.console.run;
+  if (followed && ui.buffers[path]?.format === followed.format) {
+    const row = stepRows(ui.console.events).find(
+      (entry) =>
+        (match.step !== undefined && entry.step === match.step) ||
+        (match.line !== undefined && entry.line === match.line),
+    );
+    if (row) return { status: `LOG_${row.status}`, detail: row.message };
+  }
   for (const mode of ['DRY_RUN', 'RUN'] as const) {
     const run = lastRun(ui, path, mode);
     const found = run?.cases.find(
@@ -550,7 +562,27 @@ function viewBar(state: DashboardState, buffer: EditorBuffer): string {
 
 // ── Vue visuelle : flow YAML ──────────────────────────────────────────────────────────────────
 
-const RESULT_TONE: Record<string, string> = { PASSED: 'ok', FAILED: 'ko', BLOCKED: 'warn', SKIPPED: 'mu' };
+/** Le libellé d'un résultat d'étape : un cas rapporté par l'outil, ou l'état dit par le journal (LOG_…). */
+function resultLabel(state: DashboardState, status: string): string {
+  return status.startsWith('LOG_')
+    ? (state.t.ed.con.statuses[status.slice(4)] ?? status.slice(4))
+    : (state.t.tst.caseStatuses[status] ?? status);
+}
+
+const RESULT_TONE: Record<string, string> = {
+  LOG_CONFIRMED: 'ok',
+  LOG_EXECUTED: 'ok',
+  LOG_FAILED: 'ko',
+  LOG_BLOCKED: 'warn',
+  LOG_UNFINISHED: 'warn',
+  LOG_RUNNING: 'live',
+  LOG_REQUESTED: 'live',
+  PASSED: 'ok',
+  FAILED: 'ko',
+  BLOCKED: 'warn',
+  SKIPPED: 'mu',
+  RUNNING: 'live',
+};
 
 function stepRow(
   state: DashboardState,
@@ -572,7 +604,7 @@ function stepRow(
   const status = problems.some((entry) => entry.severity === 'error')
     ? `<span class="ed-st ko">${icon('cross')}${esc(t.invalid)}</span>`
     : result
-      ? `<span class="ed-st ${RESULT_TONE[result.status] ?? 'mu'}" title="${esc(result.detail ?? '')}">${esc(state.t.tst.caseStatuses[result.status] ?? result.status)}</span>`
+      ? `<span class="ed-st ${RESULT_TONE[result.status] ?? 'mu'}" title="${esc(result.detail ?? '')}">${esc(resultLabel(state, result.status))}</span>`
       : '';
   const edit = can(state, 'DECIDE');
   const tools = edit
@@ -689,7 +721,7 @@ function featureVisual(state: DashboardState, buffer: EditorBuffer): string {
           const status = problems.some((entry) => entry.severity === 'error')
             ? `<span class="ed-st ko">${icon('cross')}${esc(problems[0]?.category === 'references' ? t.unknownSentence : t.invalid)}</span>`
             : result
-              ? `<span class="ed-st ${RESULT_TONE[result.status] ?? 'mu'}" title="${esc(result.detail ?? '')}">${esc(state.t.tst.caseStatuses[result.status] ?? result.status)}</span>`
+              ? `<span class="ed-st ${RESULT_TONE[result.status] ?? 'mu'}" title="${esc(result.detail ?? '')}">${esc(resultLabel(state, result.status))}</span>`
               : '';
           const tools = edit
             ? `<span class="ed-tools">${iconButton('ed-move', t.moveUp, 'up', `data-scenario="${String(scenarioIndex)}" data-index="${String(step.index)}" data-to="${String(step.index - 1)}" ${step.index === 0 ? 'disabled' : ''}`)}${iconButton('ed-move', t.moveDown, 'down', `data-scenario="${String(scenarioIndex)}" data-index="${String(step.index)}" data-to="${String(step.index + 1)}" ${step.index === scenario.steps.length - 1 ? 'disabled' : ''}`)}${iconButton('ed-duplicate', t.duplicate, 'copy', `data-scenario="${String(scenarioIndex)}" data-index="${String(step.index)}"`)}${iconButton('ed-remove', t.remove, 'trash', `data-scenario="${String(scenarioIndex)}" data-index="${String(step.index)}"`)}</span>`
@@ -752,6 +784,27 @@ function selectedFlowStep(state: DashboardState, buffer: EditorBuffer): FlowStep
     return undefined;
   const index = Number(key.slice(buffer.path.length + 1));
   return buffer.outline.parse.outline.steps[index];
+}
+
+/**
+ * Depuis une étape : ses seuls événements dans la console, quand l'exécution suivie en a (rattachés par
+ * la position de l'étape, ou par la ligne de la phrase Gherkin).
+ */
+function stepLogLink(
+  state: DashboardState,
+  buffer: EditorBuffer,
+  match: { step?: number; line?: number },
+): string {
+  const run = state.ed.console.run;
+  if (!run || run.format !== buffer.format) return '';
+  const row = stepRows(state.ed.console.events).find(
+    (entry) =>
+      (match.step !== undefined && entry.step === match.step) ||
+      (match.line !== undefined && entry.line === match.line),
+  );
+  return row
+    ? `<button class="lnk" data-action="ed-con-step-events" data-step="${String(row.step)}">${icon('search')}<span>${esc(state.t.ed.con.stepLog(row.events))}</span></button>`
+    : '';
 }
 
 function flowInspector(state: DashboardState, buffer: EditorBuffer, step: FlowStepNode): string {
@@ -841,7 +894,7 @@ function flowInspector(state: DashboardState, buffer: EditorBuffer, step: FlowSt
         : ''
     }<dt>${esc(t.effects)}</dt><dd>${esc(step.hasEffects ? t.present : t.absent)}</dd><dt>${esc(t.fingerprint)}</dt><dd>${esc(step.hasFingerprint ? t.present : t.absent)}</dd></dl><p class="mu">${esc(t.metaHint)}</p></details>`,
   );
-  return `<div class="ed-ih"><h3>${esc(t.stepTitle(step.position))}</h3><p class="mu">${esc(step.label)}</p></div>${sections.join('')}`;
+  return `<div class="ed-ih"><h3>${esc(t.stepTitle(step.position))}</h3><p class="mu">${esc(step.label)}</p>${stepLogLink(state, buffer, { step: step.position })}</div>${sections.join('')}`;
 }
 
 function featureInspector(
@@ -867,7 +920,7 @@ function featureInspector(
   const diag = diagnosticsOf(state.ed, buffer.path).filter(
     (entry) => entry.line !== undefined && entry.line >= step.line && entry.line <= step.endLine,
   );
-  return `<div class="ed-ih"><h3>${esc(t.stepTitle(index + 1))}</h3><p class="mu">${esc(parse.scenarios[scenarioIndex]?.name ?? '')}</p></div>
+  return `<div class="ed-ih"><h3>${esc(t.stepTitle(index + 1))}</h3><p class="mu">${esc(parse.scenarios[scenarioIndex]?.name ?? '')}</p>${stepLogLink(state, buffer, { line: step.line })}</div>
 <details open><summary>${esc(t.sec.action)}</summary>${field(t.keyword, `<select data-ed-field="keyword" ${at} ${ro}>${[...new Set([step.keyword, ...keywords])].map((keyword) => `<option value="${esc(keyword)}" ${keyword === step.keyword ? 'selected' : ''}>${esc(keyword.trim())}</option>`).join('')}</select>`)}${field(t.sentence, `<input type="text" data-ed-field="sentence" ${at} value="${esc(step.text)}" ${ro}>`, t.sentenceHint)}${
     step.argument ? `<p class="mu">${esc(step.argument === 'table' ? t.withTable : t.withDocString)}</p>` : ''
   }</details>
@@ -937,49 +990,15 @@ function diagnosticsPanel(state: DashboardState, buffer: EditorBuffer): string {
     .join('');
 }
 
-function runBlock(
-  state: DashboardState,
-  run: TestRunView | undefined,
-  buffer: EditorBuffer,
-  title: string,
-): string {
-  const t = state.t.ed;
-  if (!run)
-    return `<section class="ed-res"><h4>${esc(title)}</h4><p class="mu">${esc(t.noResult)}</p></section>`;
-  const active = run.status === 'QUEUED' || run.status === 'RUNNING';
-  const verdict = run.dryRunStatus
-    ? `<span class="mu">${esc(t.dryRunStatuses[run.dryRunStatus] ?? run.dryRunStatus)}</span>`
-    : '';
-  const cases = run.cases
-    .map(
-      (entry) =>
-        `<li><button data-action="ed-diag" data-path="${esc(buffer.path)}" ${entry.line !== undefined ? `data-line="${String(entry.line)}"` : ''} ${entry.step !== undefined ? `data-step="${String(entry.step)}"` : ''}>${pill(entry.status === 'BLOCKED' ? 'BLOCKED' : entry.status, state.t.tst.caseStatuses[entry.status] ?? entry.status)}<span class="ed-msg">${esc(entry.name)}</span><span class="ed-where">${esc([entry.detail, entry.message].filter(Boolean).join(' · '))}</span></button></li>`,
-    )
-    .join('');
-  return `<section class="ed-res"><h4>${esc(title)}</h4><p class="ed-row">${pill(run.status === 'ERROR' ? 'FAILED' : run.status === 'UNAVAILABLE' ? 'SKIPPED' : run.status, state.t.tst.statuses[run.status] ?? run.status)}${verdict}<span class="mu">${esc(formatDate(run.startedAt ?? run.queuedAt, state.t.locale))} · ${esc(run.tool)}</span>${run.draft ? `<span class="ed-chip mu">${esc(t.fromDraft)}</span>` : ''}${
-    active
-      ? `<button class="btn" data-action="ed-cancel-run" data-run="${esc(run.id)}">${icon('stop')}<span>${esc(state.t.tst.cancel)}</span></button>`
-      : ''
-  }${run.report ? `<button class="btn" data-action="ed-report" data-run="${esc(run.id)}">${esc(state.t.tst.report)}</button>` : ''}</p>${run.message ? `<p class="${run.status === 'CANCELLED' ? 'mu' : 'err'}">${esc(run.message)}</p>` : ''}${cases ? `<ul class="ed-dlist">${cases}</ul>` : ''}${
-    run.output
-      ? `<details><summary>${esc(state.t.tst.output)}</summary><pre class="tst-code" tabindex="0">${esc(run.output)}</pre></details>`
-      : ''
-  }</section>`;
-}
-
 function bottomPanel(state: DashboardState, buffer: EditorBuffer): string {
-  const t = state.t.ed;
   const ui = state.ed;
-  const count = diagnosticsOf(ui, buffer.path).length;
-  const runs = ui.view?.runs ?? [];
-  const latest = (mode: 'RUN' | 'DRY_RUN'): TestRunView | undefined =>
-    runs.find((run) => run.format === buffer.format && (run.mode ?? 'RUN') === mode);
-  const kind = kindOf(buffer.path);
-  const body =
-    ui.panel === 'diagnostics'
-      ? diagnosticsPanel(state, buffer)
-      : `${kind === 'flow' || kind === 'feature' ? runBlock(state, latest('DRY_RUN'), buffer, t.lastDryRun) : ''}${runBlock(state, latest('RUN'), buffer, t.lastRun)}<p class="mu">${esc(t.staticOnly)}</p>`;
-  return `<section class="ed-panel" aria-label="${esc(t.panel)}"><div class="ed-ptabs" role="tablist"><button role="tab" aria-selected="${ui.panel === 'diagnostics' ? 'true' : 'false'}" data-action="ed-panel" data-panel="diagnostics">${esc(t.diagnostics)} <span class="ed-count">${String(count)}</span></button><button role="tab" aria-selected="${ui.panel === 'results' ? 'true' : 'false'}" data-action="ed-panel" data-panel="results">${esc(t.results)}</button></div><div class="ed-pbody" role="tabpanel">${body}</div></section>`;
+  const runs = (ui.view?.runs ?? []).filter((run) => run.format === buffer.format);
+  return consolePanel(state, buffer.path, {
+    diagnostics: diagnosticsPanel(state, buffer),
+    diagnosticsCount: diagnosticsOf(ui, buffer.path).length,
+    canRun: can(state, 'RUN'),
+    runs,
+  });
 }
 
 // ── L'écran ──────────────────────────────────────────────────────────────────────────────────

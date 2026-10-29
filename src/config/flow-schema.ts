@@ -387,6 +387,8 @@ const stepSchema = z
     optional: z.boolean().default(false),
     /** Délai de cette étape (par défaut : exploration.actionTimeoutMs). */
     timeoutMs: z.number().int().positive().optional(),
+    /** La ligne de la phrase d'origine (posée par le chargeur Gherkin) : relie le journal du run au fichier. */
+    sourceLine: z.number().int().positive().optional(),
   })
   .strict()
   .superRefine((step, ctx) => {
@@ -407,6 +409,7 @@ const stepSchema = z
       allow: step.allow,
       optional: step.optional,
       ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
+      ...(step.sourceLine !== undefined ? { sourceLine: step.sourceLine } : {}),
     };
     if (step.goto !== undefined) return { ...common, kind: 'goto', url: step.goto };
     if (step.fill !== undefined) {
@@ -675,6 +678,8 @@ export interface StepCommon {
   allow: FlowAllowance[];
   optional: boolean;
   timeoutMs?: number;
+  /** La ligne de la phrase Gherkin d'origine. */
+  sourceLine?: number;
 }
 
 export type FlowStep = StepCommon &

@@ -32,6 +32,25 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Console d'exécution dans l'éditeur** : le journal réel d'une exécution (Dry Run ou Rejouer), en
+  direct, pour les quatre formats :
+  - le moteur (YAML, `.feature`) : début et fin de chaque étape avec sa ligne, effet exécuté ou
+    confirmé, requêtes de l'étape, résolutions de cible, réparations proposées, anomalies ;
+  - le Dry Run : intentions et verdict de chaque étape attendue ;
+  - Playwright Test : un reporter donne chaque geste et vérification avec sa ligne et son étape ;
+  - Java : Maven et le journal du pilote Playwright (`DEBUG=pw:api`).
+
+  Onglets Console, Étapes, Erreurs, Réseau, Navigateur, Résumé et Diagnostics ; critères d'affichage (niveau,
+  catégorie, étape, type, statut, période, texte) ; suivi en bas et pause ; copie ; téléchargement JSON
+  ou texte ; arrêt (demandé puis confirmé) et relance ; une ligne mène à son étape et à sa ligne.
+
+- SDK : `generation.runEvents` (flux SSE du journal, reprise après une coupure sans doublon) et
+  `generation.runLogs` (export) ; contrat `RunLogEvent` ; `TestRunView.logs` (en direct, conservé,
+  indisponible). Le journal est écrit dans `events.jsonl` et masqué (secrets du run compris).
+- Moteur : `RunOptions.onLog` (le journal structuré en direct), `ExplorationListener.onFlowStepStart`
+  (début d'une étape) et `sourceLine` sur une étape venue d'une phrase Gherkin.
+- Client du SDK : après `close()`, un flux ne transmet plus les événements déjà lus du même paquet.
+
 - **Dashboard : Éditeur des tests générés** (menu Piloter, ou « Ouvrir dans l'éditeur » depuis les Tests
   générés). Un seul écran pour le flow YAML, le `.feature`, le test Playwright et le projet Java :
   - explorateur des fichiers, onglets, inspecteur de l'étape, diagnostics et résultats ;

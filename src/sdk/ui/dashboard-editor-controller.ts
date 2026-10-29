@@ -20,6 +20,7 @@ import { can } from './dashboard-access.js';
 import { finishedRecordings } from './dashboard-tests.js';
 import type { DashboardRoute, DashboardState } from './dashboard-view.js';
 import type * as Kit from './editor-kit.js';
+import { RunConsole } from './dashboard-console-controller.js';
 
 /**
  * LE CONTRÔLEUR DE L'ÉDITEUR : il relie l'écran aux services réels — le SDK pour lire, vérifier,
@@ -56,7 +57,27 @@ export class EditorController {
     event.preventDefault();
   };
 
+  /** La console d'exécution (panneau inférieur). */
+  private readonly console: RunConsole;
+
   constructor(private readonly host: EditorHost) {
+    this.console = new RunConsole({
+      get state() {
+        return host.state;
+      },
+      root: host.root,
+      api: () => host.api(),
+      paint: () => {
+        host.paint();
+      },
+      context: () => this.context(),
+      notice: (tone, text) => {
+        this.notice(tone, text);
+      },
+      refresh: () => this.refreshView(),
+      activePath: () => this.ui.active ?? '',
+      rerun: (run) => this.execute(run.mode ?? 'RUN'),
+    });
     globalThis.addEventListener('beforeunload', this.beforeUnload);
     const root = host.root;
     root.addEventListener('dragstart', (event) => {
@@ -86,8 +107,9 @@ export class EditorController {
     this.reset();
   }
 
-  /** Tout ce que l'écran tenait : éditeurs, comparaison, minuteries. */
+  /** Tout ce que l'écran tenait : éditeurs, comparaison, minuteries, flux de la console. */
   private reset(): void {
+    this.console.dispose();
     for (const editor of this.editors.values()) editor.destroy();
     this.editors.clear();
     this.diff?.handle.destroy();
@@ -252,6 +274,7 @@ export class EditorController {
       ui.active = path;
       ui.adding = undefined;
       if (!ui.selected?.startsWith(`${path}#`)) ui.selected = undefined;
+      this.syncConsole();
     }
   }
 
@@ -452,7 +475,23 @@ export class EditorController {
     if (this.ui.recording !== context.recording) return;
     this.ui.view = view;
     this.syncSaved(view.files);
+    this.syncConsole();
     if (view.runs.some((run) => ACTIVE.has(run.status))) this.poll();
+  }
+
+  /**
+   * La console suit l'exécution choisie ; sinon, la dernière du format du fichier ouvert (son journal
+   * conservé se relit). Changer de format change d'exécution : jamais deux journaux mêlés.
+   */
+  private syncConsole(): void {
+    const ui = this.ui;
+    const buffer = this.active();
+    const runs = ui.view?.runs ?? [];
+    const followed = ui.console.runId ? runs.find((run) => run.id === ui.console.runId) : undefined;
+    if (followed) ui.console.run = followed;
+    if (!buffer) return;
+    if (ui.console.run?.format === buffer.format) return;
+    this.console.follow(runs.find((run) => run.format === buffer.format));
   }
 
   async check(): Promise<void> {
@@ -476,7 +515,10 @@ export class EditorController {
         errors > 0 || result.blocking ? 'err' : 'ok',
         errors > 0 || result.blocking ? this.t.checkedErrors(Math.max(errors, 1)) : this.t.checkedOk,
       );
-      if (errors > 0) this.ui.panel = 'diagnostics';
+      if (errors > 0) {
+        this.ui.console.tab = 'diagnostics';
+        this.ui.console.open = true;
+      }
     } catch (error) {
       this.notice('err', message(error));
     }
@@ -524,7 +566,8 @@ export class EditorController {
           this.t.refusedNotice(buffer.path),
           error.diagnostics.length > 0 ? undefined : error.details,
         );
-        this.ui.panel = 'diagnostics';
+        this.ui.console.tab = 'diagnostics';
+        this.ui.console.open = true;
       } else this.notice('err', message(error));
     }
     this.host.paint();
@@ -542,15 +585,16 @@ export class EditorController {
     } else this.host.paint();
   }
 
-  private async execute(mode: 'RUN' | 'DRY_RUN'): Promise<void> {
+  private async execute(mode: 'RUN' | 'DRY_RUN'): Promise<TestRunView | undefined> {
     const context = this.context();
     const buffer = this.active();
-    if (!context || !buffer || this.ui.busy) return;
+    if (!context || !buffer || this.ui.busy) return undefined;
     this.ui.busy = mode === 'RUN' ? 'run' : 'dry-run';
     this.ui.notice = undefined;
     this.host.paint();
+    let started: TestRunView | undefined;
     try {
-      await context.api.generation.execute(context.projectId, context.recording, {
+      started = await context.api.generation.execute(context.projectId, context.recording, {
         format: buffer.format,
         ...(mode === 'DRY_RUN'
           ? {
@@ -561,7 +605,10 @@ export class EditorController {
           : {}),
       });
       this.notice('info', mode === 'RUN' ? this.t.runStarted : this.t.dryRunStarted);
-      this.ui.panel = 'results';
+      // La console suit CE run (un nouveau run : son propre journal, rien de l'ancien).
+      this.ui.console.tab = 'console';
+      this.ui.console.open = true;
+      this.console.follow(started);
       this.ui.busy = undefined;
       await this.refreshView();
     } catch (error) {
@@ -569,6 +616,7 @@ export class EditorController {
       this.notice('err', message(error), error instanceof QaCrawlerError ? error.details : undefined);
     }
     this.host.paint();
+    return started;
   }
 
   /** Les exécutions en cours se suivent ; à leur fin, l'écran dit leur verdict. */
@@ -705,6 +753,7 @@ export class EditorController {
   // ── Événements ────────────────────────────────────────────────────────────────────────────
 
   click(action: string, target: HTMLElement): boolean {
+    if (action.startsWith('ed-con-')) return this.console.click(action, target);
     const ui = this.ui;
     const buffer = this.active();
     const index = Number(target.dataset.index);
@@ -820,10 +869,6 @@ export class EditorController {
         return true;
       case 'ed-toggle-inspector':
         ui.inspector = !ui.inspector;
-        this.host.paint();
-        return true;
-      case 'ed-panel':
-        ui.panel = target.dataset.panel === 'results' ? 'results' : 'diagnostics';
         this.host.paint();
         return true;
       case 'ed-notice-close':
@@ -1066,6 +1111,7 @@ export class EditorController {
   }
 
   change(target: HTMLInputElement | HTMLSelectElement): boolean {
+    if (this.console.change(target)) return true;
     const ui = this.ui;
     if (target.dataset.edField) {
       this.fieldChanged(target);
@@ -1096,6 +1142,7 @@ export class EditorController {
   }
 
   input(target: HTMLInputElement): boolean {
+    if (this.console.input(target)) return true;
     if (target.dataset.ed === 'query') {
       this.ui.query = target.value;
       this.host.paint();
@@ -1220,12 +1267,15 @@ export class EditorController {
   // ── Le rendu : l'éditeur de code et la comparaison dans la page redessinée ───────────────────
 
   beforePaint(): void {
+    this.console.beforePaint();
     const buffer = this.active();
     this.editorHadFocus = buffer ? (this.editors.get(buffer.path)?.hasFocus() ?? false) : false;
   }
 
   afterPaint(): void {
-    if (this.host.state.route.view !== 'editor' || !this.kit) return;
+    if (this.host.state.route.view !== 'editor') return;
+    this.console.afterPaint();
+    if (!this.kit) return;
     const ui = this.ui;
     const buffer = this.active();
     if (!buffer) return;

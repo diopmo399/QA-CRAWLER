@@ -63,7 +63,7 @@ import {
 } from './platform/api-testing.js';
 import { redactText, redactUrl } from './security/redactor.js';
 import { ManualCleanup, type TestDataCleanup } from './data/created-data.js';
-import { combineListeners, EngineEventLog } from './logging/engine-log.js';
+import { combineListeners, EngineEventLog, type EngineLogEntry } from './logging/engine-log.js';
 import {
   baselineOf,
   compareToBaseline,
@@ -134,6 +134,8 @@ export interface RunOptions {
    * ses limites (stopReason `cancelled`), saute les flows restants, ferme le navigateur et écrit son rapport.
    */
   signal?: AbortSignal;
+  /** Chaque ligne du journal structuré du moteur, au moment où elle est écrite (console en direct). */
+  onLog?: (entry: EngineLogEntry) => void;
 }
 
 /** Les phases après le dernier flow, dans l'ordre. */
@@ -177,7 +179,7 @@ export async function runMission(config: ScenarioConfig, options: RunOptions = {
   const memory =
     options.memory ??
     new JsonFlowMemory(config.memory.file ?? path.join(config.output.reportsDir, 'flow-graph.json'));
-  const engineLog = new EngineEventLog(config.logging.level);
+  const engineLog = new EngineEventLog(config.logging.level, options.onLog);
   // Vocabulaire et packs de domaine ; ce que le crawler a appris des runs précédents.
   const semantics = await loadSemantics(config);
   // PERSISTANCE (où enregistrer) et MÉMOIRE (l'historique influence-t-il ce run ?) : indépendantes.

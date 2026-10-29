@@ -414,6 +414,14 @@ export interface ExplorationListener {
   /** Un objectif de la mission est atteint (preuve observable). */
   onGoal?(goal: GoalState): void;
   onFlowStart?(flow: FlowConfig): void;
+  /**
+   * Une étape va être exécutée (avant toute action) : sa position, son genre, sa description (celle des
+   * rapports) et, pour une phrase Gherkin, la ligne d'origine. Sa fin est `onFlowStep`.
+   */
+  onFlowStepStart?(
+    flow: FlowConfig,
+    step: { index: number; kind: string; description: string; optional: boolean; sourceLine?: number },
+  ): void;
   onFlowStep?(flow: FlowConfig, step: FlowStepReport): void;
   onFlowEnd?(report: FlowRunReport): void;
   /** Une interaction du navigateur hors du DOM a été traitée (ou refusée). */
@@ -2999,6 +3007,13 @@ export class FlowExplorer {
         );
       }
       this.currentStepReplay = undefined;
+      this.listener.onFlowStepStart?.(flow, {
+        index,
+        kind: step.kind,
+        description: describeStep(step),
+        optional: step.optional,
+        ...(step.sourceLine !== undefined ? { sourceLine: step.sourceLine } : {}),
+      });
       const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
       this.enrichStepReport(step, index, outcome.report, this.flowNetwork.slice(networkMark));
       if (this.replayMachine)

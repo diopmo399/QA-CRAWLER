@@ -6,11 +6,21 @@ import path from 'node:path';
 import { redactText } from '../../security/redactor.js';
 import type {
   GenerationFormatName,
+  RunLogLevel,
   TestCaseView,
   TestRunStatus,
   TestRunView,
   TestRunnerView,
 } from '../core/contracts.js';
+import { EVENTS_FILE, RunEventLog, type RunLogInput } from './run-events.js';
+import {
+  mavenOutput,
+  playwrightOutput,
+  REPORTER_FILE,
+  REPORTER_SOURCE,
+  RUN_CONFIG_FILE,
+  RUN_CONFIG_SOURCE,
+} from './run-log-sources.js';
 
 /**
  * LES EXÉCUTIONS DES TESTS GÉNÉRÉS : un test généré n'est déclaré réussi que si un outil réel l'a joué
@@ -56,9 +66,18 @@ export interface TestRunTask {
   mode?: 'RUN' | 'DRY_RUN';
   /** Joué depuis un brouillon non enregistré (Dry Run seulement). */
   draft?: boolean;
-  /** Le dossier de l'exécution (la copie des fichiers, la sortie, run.json). */
+  /** Le dossier de l'exécution (la copie des fichiers, la sortie, run.json, events.jsonl). */
   directory: string;
-  execute(context: { signal: AbortSignal; log: (text: string) => void }): Promise<TestRunOutcome>;
+  /** Les valeurs secrètes connues de ce run (identifiants de la mission) : masquées dans le journal. */
+  secrets?: string[];
+  execute(context: TestRunContext): Promise<TestRunOutcome>;
+}
+
+/** Ce qu'un lanceur reçoit : l'arrêt, la sortie brute de l'outil, et le journal structuré. */
+export interface TestRunContext {
+  signal: AbortSignal;
+  log: (text: string) => void;
+  emit: (event: RunLogInput) => void;
 }
 
 export class TestRun {
@@ -73,12 +92,19 @@ export class TestRun {
   dryRunStatus?: string;
   output = '';
   readonly abort = new AbortController();
+  /** Le journal structuré (console de l'éditeur), écrit dans events.jsonl. */
+  readonly events: RunEventLog;
 
   constructor(
     readonly task: TestRunTask,
     id = newRunId(),
   ) {
     this.id = id;
+    this.events = new RunEventLog(id, path.join(task.directory, EVENTS_FILE), task.secrets ?? []);
+  }
+
+  emit(event: RunLogInput): void {
+    this.events.emit(event);
   }
 
   get terminal(): boolean {
@@ -114,6 +140,7 @@ export class TestRun {
       mode: this.task.mode ?? 'RUN',
       ...(this.dryRunStatus ? { dryRunStatus: this.dryRunStatus } : {}),
       ...(this.task.draft ? { draft: true } : {}),
+      logs: this.events.info(),
     };
   }
 }
@@ -178,6 +205,20 @@ export class TestRunManager {
     const run = new TestRun(task, path.basename(task.directory));
     this.runs.set(run.id, run);
     await persist(run);
+    run.emit({
+      level: 'INFO',
+      category: 'SYSTEM',
+      type: 'RUN_CREATED',
+      status: 'REQUESTED',
+      source: 'server',
+      message: `run ${run.id} created: ${task.format}${task.mode === 'DRY_RUN' ? ' Dry Run' : ''} with ${task.tool}, queued`,
+      data: {
+        format: task.format,
+        mode: task.mode ?? 'RUN',
+        tool: task.tool,
+        target: redactText(task.target),
+      },
+    });
     this.queue.push(run);
     this.pump();
     return run;
@@ -193,12 +234,28 @@ export class TestRunManager {
       run.status = 'CANCELLED';
       run.message = 'cancelled before it started';
       run.finishedAt = new Date().toISOString();
-      void persist(run);
+      run.emit({
+        level: 'WARN',
+        category: 'SYSTEM',
+        type: 'CANCEL_CONFIRMED',
+        status: 'NOT_RUN',
+        source: 'server',
+        message: 'stop requested while queued: the run was never started',
+      });
+      void finish(run);
       return true;
     }
     if (!run.abort.signal.aborted) {
       run.abort.abort();
       run.log('\n[qa-crawler] cancellation requested\n');
+      run.emit({
+        level: 'WARN',
+        category: 'SYSTEM',
+        type: 'CANCEL_REQUESTED',
+        status: 'REQUESTED',
+        source: 'server',
+        message: `stop requested: ${run.task.tool} is asked to stop (it stops before its next action or step)`,
+      });
     }
     return true;
   }
@@ -234,26 +291,104 @@ export class TestRunManager {
     run.status = 'RUNNING';
     run.startedAt = new Date().toISOString();
     await persist(run);
+    run.emit({
+      level: 'INFO',
+      category: 'SYSTEM',
+      type: 'RUN_STARTED',
+      status: 'RUNNING',
+      source: 'server',
+      message: `${run.task.tool} started on ${redactText(run.task.target)}`,
+    });
+    let toolStatus: TestRunOutcome['status'] | undefined;
     try {
       const outcome = await run.task.execute({
         signal: run.abort.signal,
         log: (text) => {
           run.log(text);
         },
+        emit: (event) => {
+          run.emit(event);
+        },
       });
+      toolStatus = outcome.status;
       run.cases = outcome.cases;
       run.status =
         run.abort.signal.aborted && outcome.status !== 'UNAVAILABLE' ? 'CANCELLED' : outcome.status;
       if (outcome.message) run.message = shortMessage(outcome.message);
       if (outcome.report) run.report = outcome.report;
       if (outcome.dryRunStatus) run.dryRunStatus = outcome.dryRunStatus;
+      if (outcome.report)
+        run.emit({
+          level: 'INFO',
+          category: 'SYSTEM',
+          type: 'REPORT_WRITTEN',
+          source: 'server',
+          message: 'QA-CRAWLER report written',
+          evidence: { report: outcome.report },
+        });
     } catch (error) {
       run.status = run.abort.signal.aborted ? 'CANCELLED' : 'ERROR';
       run.message = shortMessage(error instanceof Error ? error.message : String(error));
+      run.emit({
+        level: 'ERROR',
+        category: 'SYSTEM',
+        type: 'RUN_ERROR',
+        status: 'FAILED',
+        source: 'server',
+        errorKind: 'INFRASTRUCTURE',
+        message: run.message,
+      });
     }
+    if (run.abort.signal.aborted)
+      run.emit(
+        toolStatus === 'CANCELLED' || toolStatus === undefined
+          ? {
+              level: 'WARN',
+              category: 'SYSTEM',
+              type: 'CANCEL_CONFIRMED',
+              status: 'NOT_RUN',
+              source: 'server',
+              message: `${run.task.tool} stopped`,
+            }
+          : {
+              level: 'WARN',
+              category: 'SYSTEM',
+              type: 'CANCEL_UNCONFIRMED',
+              source: 'server',
+              message: `${run.task.tool} returned its result (${toolStatus}) after the stop request: the run is recorded CANCELLED, its results are not trusted as a verdict`,
+            },
+      );
     run.finishedAt = new Date().toISOString();
-    await persist(run);
+    await finish(run);
   }
+}
+
+const FINAL_LEVEL: Record<TestRunStatus, RunLogLevel> = {
+  QUEUED: 'INFO',
+  RUNNING: 'INFO',
+  PASSED: 'INFO',
+  FAILED: 'ERROR',
+  ERROR: 'ERROR',
+  CANCELLED: 'WARN',
+  UNAVAILABLE: 'ERROR',
+};
+
+/** La fin d'un run : l'événement final, le journal fermé (tout écrit), run.json à jour. */
+async function finish(run: TestRun): Promise<void> {
+  const counts = countsOf(run.cases);
+  run.emit({
+    level: FINAL_LEVEL[run.status],
+    category: 'SYSTEM',
+    type: 'RUN_FINISHED',
+    source: 'server',
+    message: `run finished: ${run.status}${counts.total > 0 ? ` · ${String(counts.total)} case(s): ${String(counts.passed)} passed, ${String(counts.failed)} failed, ${String(counts.skipped)} skipped` : ''}${run.message ? ` · ${run.message}` : ''}`,
+    ...(run.startedAt && run.finishedAt
+      ? { durationMs: Date.parse(run.finishedAt) - Date.parse(run.startedAt) }
+      : {}),
+    data: { status: run.status, ...counts },
+  });
+  await run.events.close();
+  await persist(run);
 }
 
 /** run.json, écrit d'un bloc (fichier temporaire puis renommage). */
@@ -298,9 +433,18 @@ export async function readTestRun(
   if (text === undefined) return undefined;
   try {
     const view = JSON.parse(text) as TestRunView;
+    // Le journal : écrit au fil de l'eau (relu du disque) ; absent d'une exécution antérieure à la console.
+    const logs: TestRunView['logs'] = view.logs
+      ? { ...view.logs, state: 'STORED' }
+      : { state: 'UNAVAILABLE', count: 0 };
     if (view.status === 'QUEUED' || view.status === 'RUNNING')
-      return { ...view, status: 'ERROR', message: 'interrupted: the server stopped during the run' };
-    return view;
+      return {
+        ...view,
+        status: 'ERROR',
+        message: 'interrupted: the server stopped during the run',
+        logs,
+      };
+    return { ...view, logs };
   } catch {
     return undefined;
   }
@@ -521,9 +665,22 @@ export async function copyGenerated(from: string, to: string): Promise<void> {
  * Playwright Test sur la copie du dossier `playwright/` : le test importe `@playwright/test`, résolu
  * par un lien vers le node_modules de QA-CRAWLER (comme un projet de l'équipe qui l'aurait installé).
  */
+/** Le test joué, pour le journal : son chemin sous generated/ et son contenu (repères « step N »). */
+export interface PlayedFile {
+  file: string;
+  source: string;
+}
+
 export async function runPlaywrightTests(
   directory: string,
-  context: { signal: AbortSignal; log: (text: string) => void; env: NodeJS.ProcessEnv; timeoutMs?: number },
+  context: {
+    signal: AbortSignal;
+    log: (text: string) => void;
+    emit?: (event: RunLogInput) => void;
+    played?: PlayedFile;
+    env: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+  },
 ): Promise<TestRunOutcome> {
   const tool = await playwrightTestTool();
   if ('reason' in tool) return { status: 'UNAVAILABLE', cases: [], message: tool.reason };
@@ -533,13 +690,23 @@ export async function runPlaywrightTests(
     path.join(cwd, 'node_modules'),
     process.platform === 'win32' ? 'junction' : 'dir',
   );
-  const result = await runProcess(process.execPath, [tool.cli, 'test', '--config', 'playwright.config.ts'], {
+  // Le journal de l'exécution : un reporter ajouté à la configuration du projet (copie de ce run seulement).
+  await writeFile(path.join(cwd, REPORTER_FILE), REPORTER_SOURCE, 'utf8');
+  await writeFile(path.join(cwd, RUN_CONFIG_FILE), RUN_CONFIG_SOURCE, 'utf8');
+  const output = playwrightOutput({
+    emit: context.emit ?? (() => undefined),
+    file: context.played?.file ?? '',
+    source: context.played?.source ?? '',
+    output: context.log,
+  });
+  const result = await runProcess(process.execPath, [tool.cli, 'test', '--config', RUN_CONFIG_FILE], {
     cwd,
     env: { ...context.env, CI: '1', FORCE_COLOR: '0' },
     signal: context.signal,
-    log: context.log,
+    log: output.write,
     ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
   });
+  output.end();
   const xml = await readFile(path.join(cwd, 'test-results', 'junit.xml'), 'utf8').catch(() => undefined);
   return outcomeOf(result, xml === undefined ? [] : junitCases(xml), context.signal, 'Playwright Test');
 }
@@ -550,6 +717,8 @@ export async function runMavenTests(
   context: {
     signal: AbortSignal;
     log: (text: string) => void;
+    emit?: (event: RunLogInput) => void;
+    played?: PlayedFile;
     env: NodeJS.ProcessEnv;
     baseUrl: string;
     timeoutMs?: number;
@@ -558,13 +727,29 @@ export async function runMavenTests(
   const tool = await mavenTool(context.env);
   if ('reason' in tool) return { status: 'UNAVAILABLE', cases: [], message: tool.reason };
   const cwd = path.join(directory, 'java');
-  const result = await runProcess('mvn', ['-q', '-B', 'test'], {
+  const output = mavenOutput({
+    emit: context.emit ?? (() => undefined),
+    file: context.played?.file ?? '',
+    source: context.played?.source ?? '',
+    output: context.log,
+  });
+  // Sans -q : Maven dit chaque test commencé et fini ; DEBUG=pw:api : le pilote dit chaque geste.
+  const result = await runProcess('mvn', ['-B', '-ntp', 'test'], {
     cwd,
-    env: { ...context.env, QA_BASE_URL: context.baseUrl, QA_HEADLESS: 'true' },
+    env: {
+      ...context.env,
+      QA_BASE_URL: context.baseUrl,
+      QA_HEADLESS: 'true',
+      DEBUG: 'pw:api',
+      // Les messages du pilote (accents compris) lus en UTF-8.
+      LANG: 'C.UTF-8',
+      LC_ALL: 'C.UTF-8',
+    },
     signal: context.signal,
-    log: context.log,
+    log: output.write,
     ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
   });
+  output.end();
   if (result.missing)
     return { status: 'UNAVAILABLE', cases: [], message: 'Maven (mvn) is not available on this server' };
   const reports = path.join(cwd, 'target', 'surefire-reports');

@@ -50,6 +50,7 @@ import type {
   ReportEntry,
   ReportEntryKind,
   ReportLink,
+  RunLogEvent,
   TestDataView,
   UrlCheck,
   ValidationReport,
@@ -148,7 +149,12 @@ function isEndEvent(event: unknown): boolean {
   if (!event || typeof event !== 'object') return false;
   const { type, status } = event as { type?: unknown; status?: unknown };
   return (
-    type === 'completed' || type === 'failed' || (type === 'status' && TERMINAL_STATUSES.has(String(status)))
+    type === 'completed' ||
+    type === 'failed' ||
+    // Le journal d'une exécution de test : sa fin, ou l'absence de journal conservé.
+    type === 'RUN_FINISHED' ||
+    type === 'UNAVAILABLE' ||
+    (type === 'status' && TERMINAL_STATUSES.has(String(status)))
   );
 }
 
@@ -425,6 +431,24 @@ export interface QaCrawlerClient {
     /** Exécute pour de vrai les tests générés d'un format (202 : en file). */
     execute(projectId: string, recording: string, input: TestRunInput): Promise<TestRunView>;
     runOf(projectId: string, recording: string, runId: string): Promise<TestRunView>;
+    /**
+     * Le journal d'une exécution (console) : les événements conservés, puis, en cours, ceux qui
+     * arrivent jusqu'à RUN_FINISHED. Une coupure est reprise après le dernier `seq` reçu, sans doublon.
+     */
+    runEvents(
+      projectId: string,
+      recording: string,
+      runId: string,
+      onEvent: (event: RunLogEvent) => void,
+      options?: SubscribeOptions,
+    ): Subscription;
+    /** Le journal d'une exécution en fichier (masqué comme à l'écran) : JSON ou texte. */
+    runLogs(
+      projectId: string,
+      recording: string,
+      runId: string,
+      format: 'json' | 'text',
+    ): Promise<{ name: string; type: string; content: string }>;
     cancel(projectId: string, recording: string, runId: string): Promise<TestRunView>;
     /** Le rapport QA-CRAWLER d'un rejeu (YAML, Gherkin). */
     reportLink(projectId: string, recording: string, runId: string): Promise<ReportLink>;
@@ -576,6 +600,8 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       }
       try {
         for await (const event of readEventStream<unknown>(response.body)) {
+          // Écoute fermée : les événements déjà lus du même paquet ne sont plus transmis.
+          if (controller.signal.aborted) break;
           const seq = (event as { seq?: unknown }).seq;
           if (typeof seq === 'number') {
             if (seq <= lastSeq) continue;
@@ -895,6 +921,23 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       execute: (projectId, name, input) => request('POST', `${recording(projectId, name)}/test-runs`, input),
       runOf: (projectId, name, runId) =>
         request('GET', `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}`),
+      runEvents: (projectId, name, runId, onEvent, subscribeOptions) =>
+        stream(
+          `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}/events`,
+          (event) => {
+            onEvent(event as RunLogEvent);
+          },
+          subscribeOptions,
+        ),
+      runLogs: async (projectId, name, runId, format) => ({
+        name: `qa-crawler-${runId}.${format === 'text' ? 'log' : 'json'}`,
+        type: format === 'text' ? 'text/plain' : 'application/json',
+        content: await send(
+          'GET',
+          `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}/logs?format=${format}`,
+          { headers: headers(false) },
+        ),
+      }),
       cancel: (projectId, name, runId) =>
         request('POST', `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}/cancel`, {}),
       reportLink: (projectId, name, runId) =>

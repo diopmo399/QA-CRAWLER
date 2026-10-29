@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type {
+  RunLogEvent,
   AccessMe,
   GeneratedFileView,
   GeneratedTestsView,
@@ -14,6 +15,18 @@ import { codeOutline } from '../../src/sdk/editor/code-outline.js';
 import { parseFlow } from '../../src/sdk/editor/flow-document.js';
 import { parseFeature } from '../../src/sdk/editor/gherkin-document.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
+import {
+  consoleSources,
+  currentStep,
+  emptyConsoleUi,
+  emptyFilters,
+  errorEvents,
+  lineHtml,
+  matches,
+  shownEvents,
+  stepRows,
+  summaryOf,
+} from '../../src/sdk/ui/dashboard-console.js';
 import {
   diagnosticsOf,
   emptyEditorUi,
@@ -258,10 +271,13 @@ describe('dashboard — generated test editor', () => {
     expect(code).toContain('data-cm-host');
     const broken = 'name: x\nsteps:\n  - click: { role: link\n';
     const html = renderDashboard(
-      base({ buffers: { [YAML]: buffer(YAML, broken), [FEATURE]: buffer(FEATURE) } }),
+      base({
+        buffers: { [YAML]: buffer(YAML, broken), [FEATURE]: buffer(FEATURE) },
+        console: { ...emptyConsoleUi(), tab: 'diagnostics' },
+      }),
     );
     expect(html).toMatch(/data-mode="visual" disabled title="Le fichier ne se lit pas/);
-    expect(zone(html, 'class="ed-panel"')).toContain('Syntaxe');
+    expect(zone(html, 'class="ed-panel')).toContain('Syntaxe');
   });
 
   it('the inspector of a flow step: sections, target, permissions, group; read only for a reader', () => {
@@ -303,7 +319,7 @@ describe('dashboard — generated test editor', () => {
   });
 
   it('diagnostics grouped by family, with the place; a step in error is marked on its row', () => {
-    const state = base();
+    const state = base({ console: { ...emptyConsoleUi(), tab: 'diagnostics' } });
     const yaml = state.ed.buffers[YAML];
     if (!yaml) throw new Error('no buffer');
     yaml.diagnostics = [
@@ -325,7 +341,7 @@ describe('dashboard — generated test editor', () => {
     ];
     yaml.checkedFor = yaml.draft;
     const html = renderDashboard(state);
-    const panel = zone(html, 'class="ed-panel"');
+    const panel = zone(html, 'class="ed-panel');
     expect(panel).toContain('Schéma');
     expect(panel).toContain('Références');
     expect(panel).toContain('ligne 8 · étape 1 · flow schema');
@@ -359,10 +375,13 @@ describe('dashboard — generated test editor', () => {
         { name: 'Ouvrir une fiche', status: 'FAILED', message: 'Error at ouvrir-une-fiche.spec.ts:20:5' },
       ],
     });
-    const state = base({ view: view([dry, played]), panel: 'results' });
+    const state = base({
+      view: view([dry, played]),
+      console: { ...emptyConsoleUi(), tab: 'summary', runId: dry.id, run: dry, connection: 'ended' },
+    });
     const html = renderDashboard(state);
-    const panel = zone(html, 'class="ed-panel"');
-    expect(panel).toContain('Dernier Dry Run');
+    const panel = zone(html, 'class="ed-panel');
+    expect(panel).toContain(t.ed.con.dryRunVerdict);
     expect(panel).toContain('Partiellement retrouvé');
     expect(panel).toContain('MISSING');
     expect(zone(html, 'class="ed-visual"')).toContain('class="ed-st ok"');
@@ -427,7 +446,7 @@ describe('dashboard — generated test editor', () => {
   });
 
   it('escapes the content of the files and of the diagnostics', () => {
-    const state = base();
+    const state = base({ console: { ...emptyConsoleUi(), tab: 'diagnostics' } });
     const yaml = state.ed.buffers[YAML];
     if (!yaml) throw new Error('no buffer');
     yaml.diagnostics = [
@@ -442,5 +461,262 @@ describe('dashboard — generated test editor', () => {
   it('English strings exist for every French one', () => {
     expect(Object.keys(dashboardStrings('en').ed).sort()).toEqual(Object.keys(t.ed).sort());
     expect(dashboardStrings('en').nav.editor).toBe('Editor');
+  });
+});
+
+describe('dashboard — execution console', () => {
+  let seq = 0;
+  const event = (extra: Partial<RunLogEvent>): RunLogEvent => {
+    seq += 1;
+    return {
+      seq,
+      at: `2026-10-29T10:00:${String(seq % 60).padStart(2, '0')}.000Z`,
+      runId: 'tr-2026-10-29T10-00-00-000Z-abc123',
+      level: 'INFO',
+      category: 'ENGINE',
+      type: 'PHASE',
+      message: 'phase',
+      source: 'engine',
+      ...extra,
+    };
+  };
+  const live = run({ status: 'RUNNING', mode: 'RUN', tool: 'QA-CRAWLER 0.2.0', finishedAt: undefined });
+  const story = (): RunLogEvent[] => {
+    seq = 0;
+    return [
+      event({ category: 'SYSTEM', type: 'RUN_CREATED', status: 'REQUESTED', message: 'run created' }),
+      event({
+        category: 'ACTION',
+        type: 'STEP_STARTED',
+        status: 'RUNNING',
+        step: 1,
+        line: 8,
+        message: 'step 1: click',
+      }),
+      event({
+        category: 'NETWORK',
+        type: 'HTTP_REQUEST',
+        step: 1,
+        line: 8,
+        message: 'GET /users → 200',
+        level: 'DEBUG',
+      }),
+      event({
+        category: 'ACTION',
+        type: 'STEP_FINISHED',
+        status: 'CONFIRMED',
+        step: 1,
+        line: 8,
+        durationMs: 120,
+        message: 'step 1 PASSED',
+      }),
+      event({
+        category: 'ACTION',
+        type: 'STEP_STARTED',
+        status: 'RUNNING',
+        step: 2,
+        line: 25,
+        message: 'step 2: click <b>Utilisateur 1</b>',
+      }),
+    ];
+  };
+
+  it('filters by level, category, step, type, status, text and period; the reset shows everything again', () => {
+    const events = story();
+    const all = { ...emptyFilters(), levels: ['DEBUG', 'INFO', 'WARN', 'ERROR'] as RunLogEvent['level'][] };
+    expect(events.filter((entry) => matches(entry, emptyFilters())).length).toBe(4);
+    expect(events.filter((entry) => matches(entry, all)).length).toBe(5);
+    expect(events.filter((entry) => matches(entry, { ...all, category: 'NETWORK' })).length).toBe(1);
+    expect(events.filter((entry) => matches(entry, { ...all, step: '2' })).length).toBe(1);
+    expect(events.filter((entry) => matches(entry, { ...all, type: 'STEP_FINISHED' })).length).toBe(1);
+    expect(events.filter((entry) => matches(entry, { ...all, status: 'RUNNING' })).length).toBe(2);
+    expect(events.filter((entry) => matches(entry, { ...all, text: 'utilisateur 1' })).length).toBe(1);
+    const time = (iso: string): string => {
+      const date = new Date(iso);
+      return [date.getHours(), date.getMinutes(), date.getSeconds()]
+        .map((part) => String(part).padStart(2, '0'))
+        .join(':');
+    };
+    const from = time(events[2]?.at ?? '');
+    expect(events.filter((entry) => matches(entry, { ...all, from })).length).toBe(3);
+  });
+
+  it('step progress as the tool says it: running, confirmed, a failure wins, no end reported once the run is over', () => {
+    const events = story();
+    expect(stepRows(events).map((row) => [row.step, row.status, row.line])).toEqual([
+      [1, 'CONFIRMED', 8],
+      [2, 'RUNNING', 25],
+    ]);
+    expect(currentStep(events)?.step).toBe(2);
+    const failed = [
+      ...events,
+      event({
+        category: 'ACTION',
+        type: 'STEP_FINISHED',
+        status: 'FAILED',
+        step: 2,
+        level: 'ERROR',
+        errorKind: 'SELECTOR',
+        message: 'not found',
+      }),
+    ];
+    expect(stepRows(failed)[1]).toMatchObject({ status: 'FAILED', errors: 1 });
+    expect(errorEvents(failed).map((entry) => entry.errorKind)).toEqual(['SELECTOR']);
+    // Fini sans fin rapportée pour l'étape 2 : jamais « confirmée » par défaut.
+    const ended = [
+      ...events,
+      event({
+        category: 'SYSTEM',
+        type: 'RUN_FINISHED',
+        message: 'run finished: ERROR',
+        level: 'ERROR',
+        data: { status: 'ERROR' },
+      }),
+    ];
+    expect(stepRows(ended)[1]?.status).toBe('UNFINISHED');
+    expect(currentStep(ended)).toBeUndefined();
+    expect(summaryOf(ended)).toMatchObject({ total: 6, steps: { CONFIRMED: 1, UNFINISHED: 1 } });
+  });
+
+  it('a line: time, level, category, a status in words (not only a color), its step and line, escaped', () => {
+    const events = story();
+    const html = lineHtml(base(), events[4] as RunLogEvent, YAML, false);
+    expect(html).toContain('lv-INFO');
+    expect(html).toContain(t.ed.con.statuses.RUNNING);
+    expect(html).toContain('data-action="ed-diag"');
+    expect(html).toContain('data-step="2"');
+    expect(html).toContain('data-line="25"');
+    expect(html).toContain('&lt;b&gt;Utilisateur 1&lt;/b&gt;');
+    expect(html).not.toContain('<b>Utilisateur 1</b>');
+  });
+
+  it('the panel: tabs by source (no network nor browser tab for Playwright Test), state of the log, current step', () => {
+    const events = story();
+    const engine = renderDashboard(
+      base({ console: { ...emptyConsoleUi(), runId: live.id, run: live, events, connection: 'live' } }),
+    );
+    const tabs = zone(engine, 'class="ed-ptabs"');
+    for (const label of ['Console', 'Étapes', 'Erreurs', 'Réseau', 'Navigateur', 'Résumé', 'Diagnostics'])
+      expect(tabs).toContain(label);
+    expect(engine).toContain('data-log-host');
+    expect(engine).toContain(t.ed.con.connections.live);
+    expect(engine).toContain(`${t.ed.con.currentStep} · ${t.ed.step(2)}`);
+    expect(engine).toContain('data-action="ed-con-stop"');
+    expect(consoleSources(run({ kind: 'EXTERNAL', format: 'playwright' }))).toEqual({
+      network: false,
+      browser: false,
+    });
+    expect(consoleSources(run({ kind: 'EXTERNAL', format: 'java' }))).toEqual({
+      network: false,
+      browser: true,
+    });
+    const external = run({ kind: 'EXTERNAL', format: 'playwright', tool: 'Playwright Test 1.56.1' });
+    const html = renderDashboard(
+      base({
+        active: SPEC,
+        console: { ...emptyConsoleUi(), runId: external.id, run: external, connection: 'ended' },
+      }),
+    );
+    expect(zone(html, 'class="ed-ptabs"')).not.toContain('Réseau');
+    expect(zone(html, 'class="ed-ptabs"')).not.toContain('Navigateur');
+  });
+
+  it('says when no log was kept, when the stream was cut (with a way to resume), and what was cleared locally', () => {
+    const old = run({ logs: { state: 'UNAVAILABLE', count: 0 } });
+    expect(
+      renderDashboard(
+        base({ console: { ...emptyConsoleUi(), runId: old.id, run: old, connection: 'unavailable' } }),
+      ),
+    ).toContain(t.ed.con.logsUnavailable);
+    const events = story();
+    const cut = renderDashboard(
+      base({
+        console: {
+          ...emptyConsoleUi(),
+          runId: live.id,
+          run: live,
+          events,
+          connection: 'interrupted',
+          cleared: 2,
+        },
+      }),
+    );
+    expect(cut).toContain('data-action="ed-con-resume"');
+    expect(cut).toContain(t.ed.con.clearedNote);
+    expect(shownEvents({ ...emptyConsoleUi(), events, cleared: 2 }).map((entry) => entry.seq)).toEqual([
+      4, 5,
+    ]);
+    const stored = run({ logs: { state: 'STORED', count: 97 } });
+    expect(
+      renderDashboard(
+        base({
+          console: { ...emptyConsoleUi(), runId: stored.id, run: stored, events, connection: 'ended' },
+        }),
+      ),
+    ).toContain(t.ed.con.logsStored(97));
+  });
+
+  it('the steps tab marks the current and failed steps; errors are grouped with their family and a diagnostic hint', () => {
+    const events = [
+      ...story(),
+      event({
+        category: 'ACTION',
+        type: 'STEP_FINISHED',
+        status: 'FAILED',
+        step: 2,
+        line: 25,
+        level: 'ERROR',
+        errorKind: 'SELECTOR',
+        message: 'not found',
+        data: { suggestions: '- click: { name: Fiche 1 }' },
+      }),
+    ];
+    const steps = renderDashboard(
+      base({
+        console: { ...emptyConsoleUi(), tab: 'steps', runId: live.id, run: live, events, connection: 'live' },
+      }),
+    );
+    expect(zone(steps, 'class="ed-con-table"')).toContain('class="ko"');
+    const errors = renderDashboard(
+      base({
+        console: {
+          ...emptyConsoleUi(),
+          tab: 'errors',
+          runId: live.id,
+          run: live,
+          events,
+          connection: 'live',
+        },
+      }),
+    );
+    const list = zone(errors, 'class="ed-con-errors"');
+    expect(list).toContain(t.ed.con.errorKinds.SELECTOR);
+    expect(list).toContain(t.ed.con.hints.SELECTOR);
+    expect(list).toContain('Fiche 1');
+    expect(list).toContain('data-action="ed-con-step-events" data-step="2"');
+  });
+
+  it('a large log stays fast to filter and to sum up', () => {
+    seq = 0;
+    const events = Array.from({ length: 20_000 }, (_, index) =>
+      event({
+        level: index % 10 === 0 ? 'DEBUG' : 'INFO',
+        step: (index % 30) + 1,
+        status: index % 2 ? 'RUNNING' : 'CONFIRMED',
+        message: `event ${String(index)}`,
+      }),
+    );
+    const started = performance.now();
+    const shown = shownEvents({
+      ...emptyConsoleUi(),
+      events,
+      filters: { ...emptyFilters(), text: 'event 19' },
+    });
+    const rows = stepRows(events);
+    const summary = summaryOf(events);
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(rows.length).toBe(30);
+    expect(summary.total).toBe(20_000);
   });
 });

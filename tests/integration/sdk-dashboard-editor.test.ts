@@ -245,7 +245,10 @@ describe('Dashboard — generated test editor in Chromium', () => {
     await editor().locator('.ed-top [data-action="ed-dry-run"]').click();
     await editor().locator('.ed-note', { hasText: 'Dry Run' }).waitFor({ timeout: 15_000 });
     await editor().locator('.ed-note.ok', { hasText: 'Tout retrouvé' }).waitFor({ timeout: 240_000 });
-    expect(await editor().locator('.ed-panel .ed-res').first().textContent()).toContain('Tout retrouvé');
+    // Le Résumé de la console : le verdict du Dry Run, tel que le moteur le rend.
+    await editor().locator('[data-action="ed-con-tab"][data-tab="summary"]').click();
+    expect(await editor().locator('.ed-con-stats').textContent()).toContain('Tout retrouvé');
+    await editor().locator('[data-action="ed-con-tab"][data-tab="console"]').click();
     expect(await steps().locator('.ed-st.ok').count()).toBe(3);
   }, 300_000);
 

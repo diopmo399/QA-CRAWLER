@@ -954,6 +954,97 @@ export interface TestRunView {
   dryRunStatus?: string;
   /** Joué depuis un brouillon non enregistré (Dry Run seulement). */
   draft?: boolean;
+  /** Le journal de l'exécution (console) : en direct, conservé ou indisponible. */
+  logs?: RunLogsInfo;
+}
+
+/**
+ * LE JOURNAL D'UNE EXÉCUTION DE TEST GÉNÉRÉ : des événements réels, produits par le moteur (son journal
+ * structuré `EngineLogEntry` et ses écouteurs), par le reporter de Playwright Test, par Maven et le
+ * pilote Playwright Java, ou par le serveur (création, arrêt, fin). Numérotés (`seq`) et horodatés par
+ * le serveur à leur réception, comme les événements d'une exploration. Aucun n'est inventé : un
+ * événement absent reste absent, jamais un succès supposé.
+ */
+export const RUN_LOG_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'] as const;
+export type RunLogLevel = (typeof RUN_LOG_LEVELS)[number];
+
+export const RUN_LOG_CATEGORIES = [
+  'SYSTEM',
+  'ENGINE',
+  'ACTION',
+  'ASSERTION',
+  'NETWORK',
+  'BROWSER',
+  'OUTPUT',
+] as const;
+export type RunLogCategory = (typeof RUN_LOG_CATEGORIES)[number];
+
+/**
+ * L'état d'une opération, tel que la source le dit : demandée, en cours, exécutée (l'outil a fini le
+ * geste, l'effet n'est pas vérifié), confirmée (l'effet attendu est observé), échouée, bloquée
+ * (SafetyPolicy), ignorée, non exécutée (le scénario s'est arrêté avant).
+ */
+export const RUN_LOG_STATUSES = [
+  'REQUESTED',
+  'RUNNING',
+  'EXECUTED',
+  'CONFIRMED',
+  'FAILED',
+  'BLOCKED',
+  'SKIPPED',
+  'NOT_RUN',
+] as const;
+export type RunLogStatus = (typeof RUN_LOG_STATUSES)[number];
+
+/** La famille d'un échec, quand la source permet de la dire. */
+export const RUN_ERROR_KINDS = [
+  'INFRASTRUCTURE',
+  'BROWSER',
+  'SELECTOR',
+  'ASSERTION',
+  'SCENARIO',
+  'POLICY',
+] as const;
+export type RunErrorKind = (typeof RUN_ERROR_KINDS)[number];
+
+export interface RunLogEvent {
+  seq: number;
+  /** Horodatage du serveur à la réception (ou de la source quand elle le donne : reporter, pilote). */
+  at: string;
+  runId: string;
+  level: RunLogLevel;
+  category: RunLogCategory;
+  /** Le type de l'événement (STEP_STARTED, SEMANTIC_RESOLUTION_SUCCEEDED, HTTP_REQUEST, RUN_FINISHED…). */
+  type: string;
+  status?: RunLogStatus;
+  /** Lisible, masqué ; jamais une valeur saisie. */
+  message: string;
+  /** Le composant qui l'a produit : engine, dry-run, playwright-test, maven, playwright-java, server. */
+  source: string;
+  /** Le scénario : le flow joué, ou le test (titre, méthode). */
+  scenario?: string;
+  /** L'étape (1…) du flow, ou celle du code généré (repère « step N »). */
+  step?: number;
+  /** La ligne du fichier joué, quand la source la donne. */
+  line?: number;
+  /** Le fichier joué (chemin sous generated/). */
+  file?: string;
+  durationMs?: number;
+  errorKind?: RunErrorKind;
+  /** Les preuves : capture (chemin dans le rapport), rapport QA-CRAWLER. */
+  evidence?: { screenshot?: string; report?: string };
+  /** Métadonnées autorisées (jamais une valeur saisie, un en-tête, un cookie). */
+  data?: Record<string, string | number | boolean>;
+}
+
+/** Ce que l'on sait des journaux d'une exécution. */
+export interface RunLogsInfo {
+  /** LIVE : en cours, en mémoire et écrits au fil de l'eau ; STORED : relus du disque ; UNAVAILABLE : aucun journal conservé (exécution antérieure à la console). */
+  state: 'LIVE' | 'STORED' | 'UNAVAILABLE';
+  /** Le nombre d'événements conservés. */
+  count: number;
+  /** Événements écartés au-delà de la limite de conservation. */
+  dropped?: number;
 }
 
 /** Les tests générés d'un enregistrement : leurs fichiers, leurs exécutions, les outils du serveur. */

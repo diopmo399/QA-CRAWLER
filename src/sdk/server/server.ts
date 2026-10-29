@@ -80,6 +80,7 @@ import type {
   GenerationFormatName,
   TestCaseView,
   TestRunView,
+  RunLogEvent,
   GroupProposalView,
   RecordingReplayView,
   RowColumnInput,
@@ -121,10 +122,15 @@ import {
   runMavenTests,
   runPlaywrightTests,
   TEST_RUN_ID,
+  TEST_RUNS_DIR,
   TestRunManager,
+  type TestRun,
   type TestRunOutcome,
   type TestRunTask,
 } from './test-runs.js';
+import { EVENTS_FILE, eventLine, readStoredEvents } from './run-events.js';
+import { engineSource, referencedEnvNames, secretValues } from './run-log-sources.js';
+import { parseFlow } from '../editor/flow-document.js';
 import {
   RecordingBusyError,
   RecordingManager,
@@ -1417,6 +1423,29 @@ async function handleTestRuns(
     sendJson(response, live.view(), 202);
     return;
   }
+  if (sub === 'events' && method === 'GET') {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    await streamRunEvents(
+      ctx,
+      ctx.testRuns.get(id),
+      path.join(directory, TEST_RUNS_DIR, id),
+      view,
+      afterOf(url, request),
+      response,
+    );
+    return;
+  }
+  if (sub === 'logs' && method === 'GET') {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    await sendRunLogs(
+      ctx,
+      path.join(directory, TEST_RUNS_DIR, id),
+      view,
+      url.searchParams.get('format'),
+      response,
+    );
+    return;
+  }
   if (sub === 'report-links' && method === 'POST') {
     if (!view.report)
       throw new HttpError(
@@ -1522,6 +1551,7 @@ async function startTestRun(
     );
     if (!file)
       throw new HttpError(409, 'NOT_GENERATED', `no ${format} test generated for ${name}: generate it first`);
+    const played = await readFile(path.join(prepared.sources, file), 'utf8');
     const flow = await engineFlow(path.join(prepared.sources, file), format);
     const loaded = await projectMission(ctx, project, 'replay', {
       flows: [],
@@ -1534,22 +1564,38 @@ async function startTestRun(
       output: { ...loaded.config.output, reportsDir, screenshotsDir: path.join(reportsDir, 'screenshots') },
     };
     const run = ctx.options.run ?? runMission;
+    const runEnv = missionEnv(ctx, environment);
     const run$ = await ctx.testRuns.start({
       ...base,
       tool: `QA-CRAWLER ${ctx.engineVersion}`,
       target: environment?.baseUrl ?? project.targetUrl,
-      execute: async ({ signal, log }): Promise<TestRunOutcome> => {
+      secrets: secretValues(runEnv, [
+        ...referencedEnvNames([played, loaded.missionYaml]),
+        ...(environment?.secretEnv ?? []),
+      ]),
+      execute: async ({ signal, log, emit }): Promise<TestRunOutcome> => {
         let phase = '';
+        const live = engineSource({
+          emit,
+          format,
+          file,
+          stepLines: format === 'yaml' ? flowStepLines(played) : undefined,
+          reportsDir,
+        });
         const outcome = await run(config, {
-          env: missionEnv(ctx, environment),
+          env: runEnv,
           signal,
+          listener: live.listener,
+          onLog: live.onLog,
           onWarning: (message) => {
             log(`warning: ${message}\n`);
+            emit({ level: 'WARN', category: 'ENGINE', type: 'WARNING', source: 'engine', message });
           },
           onProgress: (update) => {
             if (update.state !== 'RUNNING' || update.label === phase) return;
             phase = update.label;
             log(`${update.label}\n`);
+            live.onPhase(update.label);
           },
         });
         const result = outcome.result;
@@ -1599,16 +1645,41 @@ async function startTestRun(
         (await externalRunners(ctx.env)).find((entry) => entry.format === 'playwright')?.tool ??
         'Playwright Test',
       target,
-      execute: ({ signal, log }) => runPlaywrightTests(prepared.directory, { signal, log, env: ctx.env }),
+      secrets: secretValues(ctx.env, referencedEnvNames([content])),
+      execute: ({ signal, log, emit }) =>
+        runPlaywrightTests(prepared.directory, {
+          signal,
+          log,
+          emit,
+          ...(spec ? { played: { file: spec, source: content } } : {}),
+          env: ctx.env,
+        }),
     });
     return run.view();
   }
+  // Le test principal (les classes de support n'ont pas de repères d'étape) et tout le code, pour les secrets.
+  const javaFiles = prepared.artifacts.filter((entry) => entry.endsWith('.java'));
+  const javaSources = await Promise.all(
+    javaFiles.map(async (entry) => ({
+      file: entry,
+      source: await readFile(path.join(prepared.directory, entry), 'utf8').catch(() => ''),
+    })),
+  );
+  const main = javaSources.find((entry) => /\/\/\s*step\s+\d+/.test(entry.source)) ?? javaSources[0];
   const run = await ctx.testRuns.start({
     ...base,
     tool: (await externalRunners(ctx.env)).find((entry) => entry.format === 'java')?.tool ?? 'Apache Maven',
     target: origin,
-    execute: ({ signal, log }) =>
-      runMavenTests(prepared.directory, { signal, log, env: ctx.env, baseUrl: origin }),
+    secrets: secretValues(ctx.env, referencedEnvNames(javaSources.map((entry) => entry.source))),
+    execute: ({ signal, log, emit }) =>
+      runMavenTests(prepared.directory, {
+        signal,
+        log,
+        emit,
+        ...(main ? { played: main } : {}),
+        env: ctx.env,
+        baseUrl: origin,
+      }),
   });
   return run.view();
 }
@@ -1699,8 +1770,18 @@ async function startDryRun(
     directory: prepared.directory,
     ...(prepared.edited.length > 0 ? { edited: prepared.edited } : {}),
     ...(draft !== undefined ? { draft: true } : {}),
-    execute: async ({ signal, log }): Promise<TestRunOutcome> => {
+    execute: async ({ signal, log, emit }): Promise<TestRunOutcome> => {
       try {
+        const played = await readFile(prepared.scenario, 'utf8').catch(() => '');
+        const stepLines = format === 'yaml' ? flowStepLines(played) : undefined;
+        const live = engineSource({
+          emit,
+          format,
+          file: relative,
+          ...(stepLines ? { stepLines } : {}),
+          reportsDir,
+          source: 'dry-run',
+        });
         const result = await runDryRun({
           scenarioFile: prepared.scenario,
           missionFile,
@@ -1708,9 +1789,27 @@ async function startDryRun(
           env: missionEnv(ctx, undefined),
           onEvent: (event) => {
             log(`${event.type}: ${event.message}\n`);
+            // « <flow>#<position> » : la position de l'étape attendue dans le scénario.
+            const position = Number(/#(\d+)$/.exec(event.intentId ?? '')?.[1]);
+            const step = Number.isInteger(position) && position > 0 ? position : undefined;
+            const line = step !== undefined ? stepLines?.get(step) : undefined;
+            emit({
+              at: event.at,
+              level: /MISMATCH|MISSING|UNREACHABLE|BLOCKED/.test(event.type) ? 'WARN' : 'INFO',
+              category: /INTENT_|MATCH|MISSING|RECONCIL/.test(event.type) ? 'ASSERTION' : 'ENGINE',
+              type: event.type,
+              source: 'dry-run',
+              message: event.message,
+              scenario: event.flow,
+              file: relative,
+              ...(step !== undefined ? { step } : {}),
+              ...(line !== undefined ? { line } : {}),
+            });
           },
           run: {
             signal,
+            listener: live.listener,
+            onLog: live.onLog,
             onWarning: (message) => {
               log(`warning: ${message}\n`);
             },
@@ -1731,6 +1830,44 @@ async function startDryRun(
               ]
             : [],
         );
+        const lineOfIntent = (intent: { index: number; line?: number }): number | undefined =>
+          intent.line ?? stepLines?.get(intent.index);
+        // Le verdict de chaque étape attendue, avec sa position et sa ligne (réconciliation du Dry Run).
+        for (const entry of flow?.reconciliation.entries ?? []) {
+          if (!entry.expectedIntent) continue;
+          const status = DRY_RUN_CASE[entry.status] ?? 'SKIPPED';
+          emit({
+            level:
+              status === 'FAILED' || status === 'BLOCKED' ? 'ERROR' : status === 'PASSED' ? 'INFO' : 'WARN',
+            category: 'ASSERTION',
+            type: 'STEP_RECONCILED',
+            status:
+              status === 'PASSED'
+                ? 'CONFIRMED'
+                : status === 'FAILED'
+                  ? 'FAILED'
+                  : status === 'BLOCKED'
+                    ? 'BLOCKED'
+                    : 'SKIPPED',
+            source: 'dry-run',
+            message: `${entry.status}: ${entry.expectedIntent.text || entry.expectedIntent.label}${entry.reasons[0] ? ` · ${entry.reasons[0]}` : ''}`,
+            file: relative,
+            ...(flow ? { scenario: flow.graph.name } : {}),
+            ...(format === 'yaml' ? { step: entry.expectedIntent.index } : {}),
+            // La ligne : celle donnée par le Dry Run (phrase Gherkin), sinon celle de l'étape dans le YAML joué.
+            ...(lineOfIntent(entry.expectedIntent) !== undefined
+              ? { line: lineOfIntent(entry.expectedIntent) }
+              : {}),
+            ...(status === 'FAILED'
+              ? {
+                  errorKind:
+                    entry.status === 'ASSERTION_MISMATCH' ? ('ASSERTION' as const) : ('SCENARIO' as const),
+                }
+              : status === 'BLOCKED'
+                ? { errorKind: 'POLICY' as const }
+                : {}),
+          });
+        }
         const html = path.join(result.directory, 'index.html');
         const report = path.relative(reportsDir, html).split(path.sep).join('/');
         if (signal.aborted)
@@ -1756,6 +1893,12 @@ async function startDryRun(
     },
   });
   return run.view();
+}
+
+/** YAML : la ligne de chaque étape (position 1… → ligne), pour relier le journal au fichier joué. */
+function flowStepLines(text: string): Map<number, number> {
+  const parsed = parseFlow(text);
+  return new Map(parsed.ok ? parsed.outline.steps.map((step) => [step.position, step.line]) : []);
 }
 
 /** Le flow à rejouer : le YAML généré (ses données relues à côté de lui), ou le .feature. */
@@ -2982,6 +3125,115 @@ function streamSse<T extends { seq: number; type: string }>(
     unsubscribe();
     ctx.sseClients.delete(response);
   });
+}
+
+/**
+ * LE FLUX DU JOURNAL D'UNE EXÉCUTION (console de l'éditeur) : les événements conservés après `after`
+ * (relus sur le disque), puis, si le run est en cours, ceux qui arrivent, jusqu'à RUN_FINISHED. Les
+ * événements arrivés pendant la relecture sont tenus à part puis envoyés sans doublon (par `seq`).
+ */
+async function streamRunEvents(
+  ctx: Context,
+  live: TestRun | undefined,
+  runDir: string,
+  view: TestRunView,
+  after: number,
+  response: ServerResponse,
+): Promise<void> {
+  const active = live && !live.events.closed ? live : undefined;
+  const held: RunLogEvent[] = [];
+  let lastSeq = after;
+  let streaming = false;
+  let unsubscribe = (): void => undefined;
+  const write = (event: RunLogEvent): void => {
+    if (event.seq <= lastSeq) return;
+    lastSeq = event.seq;
+    response.write(`id: ${String(event.seq)}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  };
+  const heartbeat = setInterval(() => response.write(': keep-alive\n\n'), 15_000);
+  const end = (): void => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    ctx.sseClients.delete(response);
+    response.end();
+  };
+  if (active)
+    unsubscribe = active.events.subscribe((event) => {
+      if (!streaming) {
+        held.push(event);
+        return;
+      }
+      write(event);
+      if (event.type === 'RUN_FINISHED') end();
+    });
+  response.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  ctx.sseClients.add(response);
+  response.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    ctx.sseClients.delete(response);
+  });
+  // Ce qui n'est plus en mémoire est relu sur le disque (écrit dans l'ordre, avant la relecture).
+  if (active) await active.events.flush();
+  if (!active || after < active.events.firstInMemory - 1 || active.events.firstInMemory === 0) {
+    for (const event of (await readStoredEvents(path.join(runDir, EVENTS_FILE), { after })) ?? [])
+      write(event);
+  }
+  if (active) for (const event of active.events.eventsAfter(lastSeq)) write(event);
+  for (const event of held) write(event);
+  streaming = true;
+  const finished = !active || active.events.closed || held.some((event) => event.type === 'RUN_FINISHED');
+  if (finished) {
+    // Un run terminé sans journal (antérieur à la console) : le flux le dit et se ferme.
+    if (lastSeq === 0 && view.logs?.state === 'UNAVAILABLE')
+      response.write(
+        `event: unavailable\ndata: ${JSON.stringify({ type: 'UNAVAILABLE', runId: view.id })}\n\n`,
+      );
+    end();
+  }
+}
+
+/** Le journal d'une exécution, téléchargé : JSON (la vue et les événements) ou texte, masqué comme à l'écran. */
+async function sendRunLogs(
+  ctx: Context,
+  runDir: string,
+  view: TestRunView,
+  format: string | null,
+  response: ServerResponse,
+): Promise<void> {
+  const live = ctx.testRuns.get(view.id);
+  if (live && !live.events.closed) await live.events.flush();
+  const events = (await readStoredEvents(path.join(runDir, EVENTS_FILE))) ?? [];
+  if (events.length === 0 && view.logs?.state === 'UNAVAILABLE')
+    throw new HttpError(404, 'NO_LOGS', 'this run kept no log (it ran before the console existed)');
+  const name = `qa-crawler-${view.id}`;
+  if (format === 'text') {
+    response.writeHead(200, {
+      'content-type': 'text/plain; charset=utf-8',
+      'content-disposition': `attachment; filename="${name}.log"`,
+      'cache-control': 'no-store',
+    });
+    response.end(
+      [
+        `# QA-CRAWLER run ${view.id} · ${view.format}${view.mode === 'DRY_RUN' ? ' Dry Run' : ''} · ${view.tool} · ${view.status}`,
+        ...events.map((event) => eventLine(event)),
+        '',
+      ].join('\n'),
+    );
+    return;
+  }
+  response.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-disposition': `attachment; filename="${name}.json"`,
+    'cache-control': 'no-store',
+  });
+  const { output: _output, ...run } = view;
+  response.end(`${JSON.stringify({ run, events }, null, 2)}\n`);
 }
 
 async function checkUrl(raw: string, timeoutMs: number): Promise<UrlCheck> {
