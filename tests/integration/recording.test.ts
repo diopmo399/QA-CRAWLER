@@ -166,6 +166,7 @@ describe('Human flow recorder (E2E)', () => {
     const shape = (steps: typeof yaml.steps): unknown[] =>
       steps.map((step) => {
         // Effets appris et empreinte : dans le YAML seulement (le .feature se vérifie à l'exécution).
+        // La ligne d'une phrase : une position dans le .feature, sans équivalent dans le YAML.
         const {
           allow: _allow,
           optional: _optional,
@@ -173,6 +174,7 @@ describe('Human flow recorder (E2E)', () => {
           effects: _effects,
           fingerprint: _fp,
           functionalIntent: _intent,
+          sourceLine: _line,
           ...rest
         } = step;
         return rest;

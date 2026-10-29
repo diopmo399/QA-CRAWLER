@@ -48,6 +48,8 @@ export class EditorController {
   private diff?: { key: string; handle: Kit.DiffHandle };
   private outlineTimer?: ReturnType<typeof setTimeout>;
   private pollTimer?: ReturnType<typeof setTimeout>;
+  /** Les exécutions vues en cours : leur fin se dit une fois, quel que soit le rafraîchissement qui la voit. */
+  private readonly activeRuns = new Set<string>();
   private pendingGoTo?: { path: string; line: number; column?: number };
   private editorHadFocus = false;
   private pendingLeave?: DashboardRoute;
@@ -118,6 +120,7 @@ export class EditorController {
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.outlineTimer = undefined;
     this.pollTimer = undefined;
+    this.activeRuns.clear();
   }
 
   // ── Navigation ────────────────────────────────────────────────────────────────────────────
@@ -476,7 +479,25 @@ export class EditorController {
     this.ui.view = view;
     this.syncSaved(view.files);
     this.syncConsole();
+    this.announceFinished(view.runs);
     if (view.runs.some((run) => ACTIVE.has(run.status))) this.poll();
+  }
+
+  /** À leur fin, l'écran dit le verdict des exécutions qu'il a vues en cours. */
+  private announceFinished(runs: TestRunView[]): void {
+    for (const run of runs) {
+      if (ACTIVE.has(run.status)) {
+        this.activeRuns.add(run.id);
+        continue;
+      }
+      if (!this.activeRuns.delete(run.id)) continue;
+      this.notice(
+        run.status === 'PASSED' ? 'ok' : run.status === 'CANCELLED' ? 'info' : 'err',
+        this.t.finished(
+          `${run.mode === 'DRY_RUN' ? this.t.dryRun : this.t.run} · ${this.host.state.t.tst.statuses[run.status] ?? run.status}${run.dryRunStatus ? ` (${this.t.dryRunStatuses[run.dryRunStatus] ?? run.dryRunStatus})` : ''}`,
+        ),
+      );
+    }
   }
 
   /**
@@ -605,6 +626,7 @@ export class EditorController {
           : {}),
       });
       this.notice('info', mode === 'RUN' ? this.t.runStarted : this.t.dryRunStarted);
+      this.activeRuns.add(started.id);
       // La console suit CE run (un nouveau run : son propre journal, rien de l'ancien).
       this.ui.console.tab = 'console';
       this.ui.console.open = true;
@@ -619,27 +641,14 @@ export class EditorController {
     return started;
   }
 
-  /** Les exécutions en cours se suivent ; à leur fin, l'écran dit leur verdict. */
+  /** Les exécutions en cours se suivent ; à leur fin, l'écran dit leur verdict (`announceFinished`). */
   private poll(): void {
     if (this.pollTimer) return;
     this.pollTimer = setTimeout(() => {
       this.pollTimer = undefined;
       if (this.host.state.route.view !== 'editor') return;
-      const before = new Set(
-        (this.ui.view?.runs ?? []).filter((run) => ACTIVE.has(run.status)).map((run) => run.id),
-      );
       void this.refreshView()
         .then(() => {
-          const done = (this.ui.view?.runs ?? []).filter(
-            (run: TestRunView) => before.has(run.id) && !ACTIVE.has(run.status),
-          );
-          for (const run of done)
-            this.notice(
-              run.status === 'PASSED' ? 'ok' : run.status === 'CANCELLED' ? 'info' : 'err',
-              this.t.finished(
-                `${run.mode === 'DRY_RUN' ? this.t.dryRun : this.t.run} · ${this.host.state.t.tst.statuses[run.status] ?? run.status}${run.dryRunStatus ? ` (${this.t.dryRunStatuses[run.dryRunStatus] ?? run.dryRunStatus})` : ''}`,
-              ),
-            );
           this.host.paint();
         })
         .catch(() => {
