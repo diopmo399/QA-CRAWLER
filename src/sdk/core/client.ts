@@ -18,6 +18,9 @@ import type {
   GeneratedFileEditInput,
   GeneratedFileRestoreInput,
   GeneratedFileView,
+  GeneratedFileCheckView,
+  GeneratedFileDiagnostic,
+  GenerationPreview,
   TestRunInput,
   TestRunView,
   GraphView,
@@ -104,6 +107,7 @@ export class QaCrawlerError extends Error {
   readonly code: string;
   readonly details: string[];
   readonly issues: DraftIssue[];
+  readonly diagnostics: GeneratedFileDiagnostic[];
 
   constructor(body: ErrorBody) {
     super(body.error);
@@ -112,6 +116,7 @@ export class QaCrawlerError extends Error {
     this.code = body.code;
     this.details = body.details ?? [];
     this.issues = body.issues ?? [];
+    this.diagnostics = body.diagnostics ?? [];
   }
 }
 
@@ -431,6 +436,16 @@ export interface QaCrawlerClient {
       recording: string,
       input: GeneratedFileRestoreInput,
     ): Promise<GeneratedFileView>;
+    /** Vérifie un contenu sans l'écrire (diagnostics positionnés). */
+    checkFile(
+      projectId: string,
+      recording: string,
+      input: { path: string; content: string },
+    ): Promise<GeneratedFileCheckView>;
+    /** La version générée d'un fichier (sa sauvegarde s'il a été modifié à la main). */
+    original(projectId: string, recording: string, path: string): Promise<{ path: string; content: string }>;
+    /** Ce qu'une régénération écrirait, sans rien écrire. */
+    preview(projectId: string, recording: string, input: GenerationInput): Promise<GenerationPreview>;
   };
   /** Le graphe des écrans et transitions, d'une exploration ou d'un enregistrement. */
   graph: {
@@ -503,6 +518,7 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         status: response.status,
         code: errorBody.code ?? 'HTTP_ERROR',
         ...(errorBody.details ? { details: errorBody.details } : {}),
+        ...(errorBody.diagnostics ? { diagnostics: errorBody.diagnostics } : {}),
         ...(errorBody.issues ? { issues: errorBody.issues } : {}),
       });
     }
@@ -870,6 +886,12 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request('PUT', `${recording(projectId, name)}/generation/file`, input),
       restoreFile: (projectId, name, input) =>
         request('POST', `${recording(projectId, name)}/generation/restore`, input),
+      checkFile: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/generation/check`, input),
+      original: (projectId, name, file) =>
+        request('GET', `${recording(projectId, name)}/generation/original?path=${encodeURIComponent(file)}`),
+      preview: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/generation/preview`, input),
       execute: (projectId, name, input) => request('POST', `${recording(projectId, name)}/test-runs`, input),
       runOf: (projectId, name, runId) =>
         request('GET', `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}`),

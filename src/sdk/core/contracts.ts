@@ -796,6 +796,8 @@ export interface GenerationInput {
 
 export interface GeneratedFileView {
   format: GenerationFormatName;
+  /** Les diagnostics positionnés de la dernière vérification (après un enregistrement). */
+  diagnostics?: GeneratedFileDiagnostic[];
   /** Chemin relatif au dossier `generated/` de l'enregistrement. */
   path: string;
   /** GENERATED, STATICALLY_VALIDATED, NOT_VALIDATED… : jamais « exécuté » ici. */
@@ -810,11 +812,56 @@ export interface GeneratedFileView {
   revision?: string;
 }
 
+/** Les familles de diagnostics d'un fichier de test (chacune vient d'un outil réel, jamais déduite). */
+export const DIAGNOSTIC_CATEGORIES = [
+  'syntax',
+  'schema',
+  'references',
+  'dependencies',
+  'static',
+  'compilation',
+  'execution',
+  'assertions',
+  'evidence',
+] as const;
+export type DiagnosticCategory = (typeof DIAGNOSTIC_CATEGORIES)[number];
+
+/** Un problème d'un fichier : sa gravité, sa famille, l'outil qui l'a dit, et où (ligne, étape). */
+export interface GeneratedFileDiagnostic {
+  severity: 'error' | 'warning' | 'info';
+  category: DiagnosticCategory;
+  message: string;
+  /** L'outil (schéma du flow, dictionnaire Gherkin, TypeScript, Maven, Playwright Test, Dry Run…). */
+  source: string;
+  /** Le fichier (chemin sous generated/), quand le problème est dans un autre fichier que celui vérifié. */
+  file?: string;
+  line?: number;
+  column?: number;
+  /** La position de l'étape (1…) dans le flow, quand l'outil la donne. */
+  step?: number;
+}
+
 /** Modifier un fichier généré : son chemin, le nouveau contenu, la version d'où part la modification. */
 export interface GeneratedFileEditInput {
   path: string;
   content: string;
   revision: string;
+}
+
+/** La vérification d'un contenu sans l'écrire : statut, diagnostics positionnés, et s'il serait refusé. */
+export interface GeneratedFileCheckView {
+  path: string;
+  status: string;
+  validation?: { method: string; ok: boolean; messages: string[] };
+  diagnostics: GeneratedFileDiagnostic[];
+  /** true : l'enregistrement de ce contenu serait refusé. */
+  blocking: boolean;
+}
+
+/** Ce qu'une régénération écrirait (sans rien écrire), pour comparer avant de remplacer. */
+export interface GenerationPreview {
+  files: { format: GenerationFormatName; path: string; content: string }[];
+  warnings: string[];
 }
 
 /** Revenir à la version générée d'un fichier modifié à la main. */
@@ -854,6 +901,12 @@ export interface TestCaseView {
   durationMs?: number;
   /** La raison d'un échec, d'un blocage ou d'un saut (masquée, tronquée ; jamais une valeur saisie). */
   message?: string;
+  /** La ligne du fichier joué (Dry Run, ou position donnée par l'outil). */
+  line?: number;
+  /** L'étape du flow (1…) en échec. */
+  step?: number;
+  /** Le statut propre à l'outil (Dry Run : MATCHED, MISSING, REORDERED…). */
+  detail?: string;
 }
 
 /** Comment un format s'exécute sur ce serveur, et s'il le peut. */
@@ -893,6 +946,14 @@ export interface TestRunView {
   report?: string;
   /** Les fichiers joués qui avaient été modifiés à la main. */
   edited?: string[];
+  /**
+   * RUN : l'exécution du test ; DRY_RUN : le Dry Run du moteur (le scénario confronté à l'application,
+   * SafetyPolicy appliquée, rien n'est modifié ; `dryRunStatus` est son verdict).
+   */
+  mode?: 'RUN' | 'DRY_RUN';
+  dryRunStatus?: string;
+  /** Joué depuis un brouillon non enregistré (Dry Run seulement). */
+  draft?: boolean;
 }
 
 /** Les tests générés d'un enregistrement : leurs fichiers, leurs exécutions, les outils du serveur. */
@@ -907,6 +968,11 @@ export interface GeneratedTestsView {
 
 export interface TestRunInput {
   format: GenerationFormatName;
+  /** DRY_RUN : le Dry Run du moteur (YAML et Gherkin) ; RUN par défaut. */
+  mode?: 'RUN' | 'DRY_RUN';
+  /** Dry Run : le fichier à confronter (chemin sous generated/) et, s'il n'est pas enregistré, son contenu. */
+  path?: string;
+  content?: string;
   /** Rejeu par le moteur seulement (YAML, Gherkin) : l'environnement du projet à viser. */
   environmentId?: string;
 }
@@ -1096,6 +1162,8 @@ export interface ErrorBody {
   code: string;
   details?: string[];
   issues?: DraftIssue[];
+  /** Les diagnostics positionnés d'un fichier refusé (éditeur des tests générés). */
+  diagnostics?: GeneratedFileDiagnostic[];
 }
 
 /** Les événements DOM émis par l'assistant (bubbles + composed). */

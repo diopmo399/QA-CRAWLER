@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { emptyEditorUi } from '../../src/sdk/ui/dashboard-editor.js';
 import type {
   AccessMe,
   GeneratedTestsView,
@@ -143,6 +144,7 @@ const base = (tst: Partial<TestsUi> = {}, extra: Partial<DashboardState> = {}): 
   recs: emptyRecordingsUi(),
   lib: emptyLibraryUi(),
   tst: { ...emptyTestsUi(), recording: 'ouvrir-une-fiche', view: view(), ...tst },
+  ed: emptyEditorUi(),
   ...extra,
 });
 
@@ -261,28 +263,12 @@ describe('dashboard — generated tests', () => {
     expect(html).toMatch(/type="submit" disabled/);
   });
 
-  it('edits a generated file: editor with its check, refusal kept open with the reasons, edited mark', () => {
+  it('a file opens in the editor; an edited file is marked and its generated version can be restored', () => {
     let html = renderDashboard(base({ file: 'ouvrir-une-fiche.flow.yaml' }));
-    expect(html).toContain('data-action="tst-edit" data-path="ouvrir-une-fiche.flow.yaml"');
+    expect(html).toContain('data-action="tst-open-editor" data-path="ouvrir-une-fiche.flow.yaml"');
     expect(html).not.toContain('data-action="tst-restore"');
-    html = renderDashboard(
-      base({
-        edit: {
-          path: 'ouvrir-une-fiche.flow.yaml',
-          content: 'name: x\nsteps: <12>\n',
-          revision: 'aaaaaaaaaaaa',
-          error: 'ouvrir-une-fiche.flow.yaml does not pass its check (flow schema): nothing was saved',
-          details: ['steps: Invalid input'],
-        },
-      }),
-    );
-    expect(html).toContain('data-tst="edit"');
-    expect(html).toContain('spellcheck="false"');
-    expect(html).toContain('name: x\nsteps: &lt;12&gt;');
-    expect(html).toContain('Vérifié avant d’être enregistré (flow schema)');
-    expect(html).toContain('role="alert"');
-    expect(html).toContain('steps: Invalid input');
-    expect(html).toContain('data-action="tst-save"');
+    // L'en-tête mène aussi à l'éditeur.
+    expect(html).toContain('<button class="btn" data-action="tst-open-editor">');
     const edited = view({
       files: view().files.map((file) =>
         file.format === 'yaml' ? { ...file, editedAt: '2026-10-28T11:00:00.000Z' } : file,
@@ -307,6 +293,7 @@ describe('dashboard — generated tests', () => {
     const html = renderDashboard(base({ overwrite: ['ouvrir-une-fiche.flow.yaml'] }));
     expect(html).toContain(t.tst.overwriteWarn);
     expect(html).toContain('data-action="tst-overwrite"');
+    expect(html).toContain('data-action="tst-overwrite-compare"');
     expect(html).toContain('<code>ouvrir-une-fiche.flow.yaml</code>');
   });
 
@@ -318,18 +305,21 @@ describe('dashboard — generated tests', () => {
     );
   });
 
-  it('rights to edit: an analyst edits the flow YAML, not the Playwright test; a reader nothing; a truncated file never', () => {
-    const yaml = 'data-action="tst-edit" data-path="ouvrir-une-fiche.flow.yaml"';
-    const spec = 'data-action="tst-edit" data-path="playwright/ouvrir-une-fiche.spec.ts"';
+  it('rights: anyone who sees a file can open it; restoring a Playwright test needs RUN_WRITES', () => {
+    const edited = view({
+      files: view().files.map((file) => ({ ...file, editedAt: '2026-10-28T11:00:00.000Z' })),
+    });
     const open = (file: string, role?: AccessMe['role']): string =>
-      renderDashboard(base({ file }, role ? { me: me(role) } : {}));
-    expect(open('ouvrir-une-fiche.flow.yaml', 'ANALYST')).toContain(yaml);
-    expect(open('playwright/ouvrir-une-fiche.spec.ts', 'ANALYST')).not.toContain(spec);
-    expect(open('playwright/ouvrir-une-fiche.spec.ts', 'PILOT')).toContain(spec);
-    expect(open('ouvrir-une-fiche.flow.yaml', 'READER')).not.toContain(yaml);
-    const truncated = view({ files: view().files.map(({ revision: _revision, ...file }) => file) });
-    expect(renderDashboard(base({ view: truncated, file: 'ouvrir-une-fiche.flow.yaml' }))).not.toContain(
-      yaml,
+      renderDashboard(base({ view: edited, file }, role ? { me: me(role) } : {}));
+    const restore = (file: string): string => `data-action="tst-restore" data-path="${file}"`;
+    expect(open('ouvrir-une-fiche.flow.yaml', 'READER')).toContain('data-action="tst-open-editor"');
+    expect(open('ouvrir-une-fiche.flow.yaml', 'READER')).not.toContain(restore('ouvrir-une-fiche.flow.yaml'));
+    expect(open('ouvrir-une-fiche.flow.yaml', 'ANALYST')).toContain(restore('ouvrir-une-fiche.flow.yaml'));
+    expect(open('playwright/ouvrir-une-fiche.spec.ts', 'ANALYST')).not.toContain(
+      restore('playwright/ouvrir-une-fiche.spec.ts'),
+    );
+    expect(open('playwright/ouvrir-une-fiche.spec.ts', 'PILOT')).toContain(
+      restore('playwright/ouvrir-une-fiche.spec.ts'),
     );
   });
 

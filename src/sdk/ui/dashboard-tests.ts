@@ -34,15 +34,6 @@ export interface TestsUi {
   error?: string;
   details?: string[];
   notice?: string;
-  /** Le fichier en cours de modification : son brouillon, la version d'où il part, le refus du serveur. */
-  edit?: {
-    path: string;
-    content: string;
-    revision: string;
-    busy?: boolean;
-    error?: string;
-    details?: string[];
-  };
   /** Le fichier dont le retour à la version générée attend sa confirmation. */
   confirmRestore?: string;
   /** Une régénération qui remplacerait des fichiers modifiés à la main : ces fichiers, à confirmer. */
@@ -129,29 +120,9 @@ export function canEdit(state: DashboardState, file: GeneratedFileView): boolean
   return file.format === 'yaml' || file.format === 'gherkin' || can(state, 'RUN_WRITES');
 }
 
-function editor(state: DashboardState, file: GeneratedFileView): string {
-  const t = state.t.tst;
-  const edit = state.tst.edit;
-  if (!edit) return '';
-  const rows = Math.min(30, Math.max(8, edit.content.split('\n').length + 1));
-  const id = `tst-edit-${file.path.replace(/[^a-z0-9]/gi, '-')}`;
-  return `<div class="tst-editor">
-<label for="${esc(id)}" class="mu">${esc(t.editLabel(file.path))}</label>
-<textarea id="${esc(id)}" class="tst-code tst-area" data-tst="edit" rows="${String(rows)}" spellcheck="false" autocapitalize="off" autocomplete="off" ${edit.busy ? 'readonly' : ''} aria-describedby="${esc(id)}-hint">${esc(edit.content)}</textarea>
-<p class="mu" id="${esc(id)}-hint">${esc(t.editHint(file.validation?.method ?? t.formats[file.format] ?? file.format))}</p>
-${
-  edit.error
-    ? `<div class="err" role="alert"><p>${esc(edit.error)}</p>${edit.details && edit.details.length > 0 ? `<ul class="tst-msgs">${edit.details.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>` : ''}</div>`
-    : ''
-}
-<div class="tst-go"><button class="btn primary" data-action="tst-save" ${edit.busy ? 'disabled' : ''}>${icon('check')}<span>${esc(edit.busy ? t.saving : t.save)}</span></button><button class="btn" data-action="tst-edit-cancel" ${edit.busy ? 'disabled' : ''}>${esc(t.cancelEdit)}</button></div>
-</div>`;
-}
-
 function fileRow(state: DashboardState, file: GeneratedFileView): string {
   const t = state.t.tst;
-  const editing = state.tst.edit?.path === file.path;
-  const open = state.tst.file === file.path || editing;
+  const open = state.tst.file === file.path;
   const validation = file.validation
     ? `<p class="mu">${esc(t.validation)} : ${esc(file.validation.method)}</p>${
         file.validation.messages.length > 0
@@ -176,23 +147,21 @@ function fileRow(state: DashboardState, file: GeneratedFileView): string {
     ? `<span class="pill warn" title="${esc(formatDate(file.editedAt, state.t.locale))}">${esc(t.editedByHand)}</span>`
     : '';
   const restoring = state.tst.confirmRestore === file.path;
-  const actions =
-    open && !editing && canEdit(state, file)
-      ? `<div class="tst-go"><button class="btn" data-action="tst-edit" data-path="${esc(file.path)}">${icon('edit')}<span>${esc(t.edit)}</span></button>${
-          file.editedAt && !restoring
-            ? `<button class="btn" data-action="tst-restore" data-path="${esc(file.path)}">${icon('undo')}<span>${esc(t.restore)}</span></button>`
-            : ''
-        }</div>${
-          restoring
-            ? `<div class="tst-confirm" role="group" aria-label="${esc(t.restore)}"><p>${esc(t.restoreConfirm)}</p><div class="tst-go"><button class="btn danger" data-action="tst-restore-confirm" data-path="${esc(file.path)}">${esc(t.restore)}</button><button class="btn" data-action="tst-restore-cancel">${esc(t.cancelEdit)}</button></div></div>`
-            : ''
-        }`
-      : '';
-  const body = editing
-    ? `${validation}${editor(state, file)}`
-    : `${file.editedAt ? `<p class="mu">${esc(t.editedNote(formatDate(file.editedAt, state.t.locale)))}</p>` : ''}${validation}${assertions}${limits}${actions}<pre class="tst-code" tabindex="0">${esc(file.content)}</pre>`;
+  // Modifier se fait dans l'éditeur (vue visuelle, source, diagnostics, comparaison) ; ici, la lecture.
+  const actions = open
+    ? `<div class="tst-go"><button class="btn" data-action="tst-open-editor" data-path="${esc(file.path)}">${icon('editor')}<span>${esc(state.t.ed.open)}</span></button>${
+        canEdit(state, file) && file.editedAt && !restoring
+          ? `<button class="btn" data-action="tst-restore" data-path="${esc(file.path)}">${icon('undo')}<span>${esc(t.restore)}</span></button>`
+          : ''
+      }</div>${
+        restoring
+          ? `<div class="tst-confirm" role="group" aria-label="${esc(t.restore)}"><p>${esc(t.restoreConfirm)}</p><div class="tst-go"><button class="btn danger" data-action="tst-restore-confirm" data-path="${esc(file.path)}">${esc(t.restore)}</button><button class="btn" data-action="tst-restore-cancel">${esc(t.cancelEdit)}</button></div></div>`
+          : ''
+      }`
+    : '';
+  const body = `${file.editedAt ? `<p class="mu">${esc(t.editedNote(formatDate(file.editedAt, state.t.locale)))}</p>` : ''}${validation}${assertions}${limits}${actions}<pre class="tst-code" tabindex="0">${esc(file.content)}</pre>`;
   return `<li class="tst-file${file.editedAt ? ' edited' : ''}">
-<div class="tst-file-h"><span class="pill mu">${esc(file.format)}</span><code>${esc(file.path)}</code>${pill(FILE_TONE[file.status] ?? file.status, t.fileStatuses[file.status] ?? file.status)}${edited}<button class="lnk" data-action="tst-file" data-path="${esc(file.path)}" aria-expanded="${open ? 'true' : 'false'}" ${editing ? 'disabled' : ''}>${esc(open ? t.hide : t.show)}</button></div>
+<div class="tst-file-h"><span class="pill mu">${esc(file.format)}</span><code>${esc(file.path)}</code>${pill(FILE_TONE[file.status] ?? file.status, t.fileStatuses[file.status] ?? file.status)}${edited}<button class="lnk" data-action="tst-file" data-path="${esc(file.path)}" aria-expanded="${open ? 'true' : 'false'}">${esc(open ? t.hide : t.show)}</button></div>
 ${open ? `<div class="tst-file-b">${body}</div>` : ''}
 </li>`;
 }
@@ -231,7 +200,7 @@ export function testsView(state: DashboardState): string {
   const ui = state.tst;
   const recordings = finishedRecordings(state);
   const project = state.project?.name ?? '';
-  const actions = `<button class="btn icon-only" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button>`;
+  const actions = `${ui.view && ui.view.files.length > 0 ? `<button class="btn" data-action="tst-open-editor">${icon('editor')}<span>${esc(state.t.ed.open)}</span></button>` : ''}<button class="btn icon-only" data-action="refresh" aria-label="${esc(t.refresh)}">${icon('refresh')}</button>`;
   const head = header(esc(t.title), { sub: esc(t.sub(project, recordings.length)), actions });
   if (recordings.length === 0)
     return `${head}<p class="mu tst-intro">${esc(t.intro)}</p><section class="card"><p class="mu">${esc(t.noRecording)}</p></section>`;
@@ -256,7 +225,7 @@ export function testsView(state: DashboardState): string {
 <div class="tst-go"><button class="btn primary" type="submit" ${!decide || ui.busy !== undefined || ui.formats.length === 0 ? 'disabled' : ''}>${icon('plus')}<span>${esc(ui.busy === 'generate' ? t.generating : t.generate)}</span></button>${ui.formats.length === 0 ? `<small class="mu">${esc(t.pickFormat)}</small>` : ''}${decide ? '' : `<small class="mu">${esc(t.noRight)}</small>`}</div></form>
 ${
   ui.overwrite
-    ? `<div class="tst-confirm" role="alert"><p>${esc(t.overwriteWarn)}</p><ul class="tst-msgs warn">${ui.overwrite.map((file) => `<li><code>${esc(file)}</code></li>`).join('')}</ul><div class="tst-go"><button class="btn danger" data-action="tst-overwrite" ${ui.busy !== undefined ? 'disabled' : ''}>${esc(t.overwrite)}</button><button class="btn" data-action="tst-overwrite-cancel">${esc(t.cancelEdit)}</button></div></div>`
+    ? `<div class="tst-confirm" role="alert"><p>${esc(t.overwriteWarn)}</p><ul class="tst-msgs warn">${ui.overwrite.map((file) => `<li><code>${esc(file)}</code></li>`).join('')}</ul><div class="tst-go"><button class="btn" data-action="tst-overwrite-compare">${icon('history')}<span>${esc(t.compareFirst)}</span></button><button class="btn danger" data-action="tst-overwrite" ${ui.busy !== undefined ? 'disabled' : ''}>${esc(t.overwrite)}</button><button class="btn" data-action="tst-overwrite-cancel">${esc(t.cancelEdit)}</button></div></div>`
     : ''
 }
 ${view && view.warnings.length > 0 ? `<ul class="tst-msgs warn">${view.warnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul>` : ''}

@@ -314,6 +314,9 @@ const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisate
 | `generation.reportLink(projectId, name, runId)`  | `POST …/test-runs/:runId/report-links` (rejeu YAML, Gherkin)     |
 | `generation.editFile(projectId, name, input)`    | `PUT /api/projects/:id/recordings/:name/generation/file`         |
 | `generation.restoreFile(projectId, name, input)` | `POST /api/projects/:id/recordings/:name/generation/restore`     |
+| `generation.checkFile(projectId, name, input)`   | `POST /api/projects/:id/recordings/:name/generation/check`       |
+| `generation.original(projectId, name, path)`     | `GET /api/projects/:id/recordings/:name/generation/original`     |
+| `generation.preview(projectId, name, input)`     | `POST /api/projects/:id/recordings/:name/generation/preview`     |
 | `graph.exploration(id)`                          | `GET /api/explorations/:id/graph` (409 avant la fin)             |
 | `graph.of(projectId, kind, name)`                | `GET /api/projects/:id/reports/:kind/:name/graph`                |
 | `reports.list(projectId)`                        | `GET /api/projects/:id/reports`                                  |
@@ -472,6 +475,28 @@ décrit par `generation.json` :
 - Droits : `DECIDE`, comme la génération ; un test Playwright ou Java demande en plus `RUN_WRITES`.
 - La modification ne change pas l'enregistrement : pour une correction durable (cible, assertion,
   donnée), passer par la revue puis régénérer.
+- Un refus (422) porte `diagnostics` : les problèmes positionnés (voir plus bas).
+
+### Vérifier, comparer, Dry Run
+
+- `generation.checkFile(projectId, name, { path, content })` vérifie un contenu **sans l'écrire**, avec
+  les mêmes outils que l'enregistrement. Il rend `GeneratedFileCheckView` : le statut qu'aurait le
+  fichier, `blocking` (l'enregistrement serait refusé) et `diagnostics`.
+- `GeneratedFileDiagnostic` : gravité, famille (`syntax`, `schema`, `references`, `dependencies`,
+  `static`, `compilation`, `execution`, `assertions`, `evidence`), l'outil qui l'a dit (schéma du flow,
+  dictionnaire Gherkin, TypeScript, Maven, Dry Run…) et, quand l'outil le donne, la ligne, la colonne et
+  la position de l'étape. Rien n'est positionné par devinette : sans position, le diagnostic vaut pour
+  le fichier.
+- `generation.original(projectId, name, path)` : la version générée d'un fichier (sa sauvegarde s'il a
+  été modifié à la main, sinon le fichier lui-même). Droit : `READ`.
+- `generation.preview(projectId, name, { formats })` : ce qu'une régénération écrirait, sans rien écrire,
+  pour comparer avant de remplacer un fichier modifié à la main. Droit : `DECIDE`.
+- `generation.execute(projectId, name, { format, mode: 'DRY_RUN', path, content? })` : le **Dry Run du
+  moteur** pour le flow YAML ou le `.feature`. Le scénario est confronté à l'application avec la
+  mission du projet (SafetyPolicy appliquée, aucune action qui modifie) ; `content` permet de jouer un
+  brouillon non enregistré (`TestRunView.draft`). Le verdict du moteur est dans `dryRunStatus`
+  (`FULLY_MATCHED`, `PARTIAL_MATCH`…), chaque étape dans `cases` avec sa position (`step`, `line`). Le
+  Dry Run vise la cible du projet : un environnement est refusé, comme les formats Playwright et Java.
 
 ### Données de test
 
@@ -844,7 +869,8 @@ comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 | Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Enregistrements  | démarrer l'enregistrement d'un parcours (nom, chemin de départ, rejeu de validation ; un seul à la fois) ; pendant la session, la barre d'enregistrement : gestes en phrases et leur statut, pause, annulation du dernier geste, vérification posée, choix de l'élément d'une cible ambiguë, arrêt ; après l'arrêt, les phases en mots ; la liste du projet, la revue, le lien vers le Flow Studio et la promotion en scénario                                                                                                                                                                                                                                                |
 | Bibliothèque     | catalogue des blocs (version, provenance, entrées et sorties, état du contrat, utilisation ; recherche, origine, contrat, utilisation, tri) ; détails (historique, contrat, scénarios dépendants, valider une nouvelle version, déclarer le contrat) ; compositeur (ordre, d'où vient chaque entrée, vérification du serveur, création) ; ajout d'un bloc dans un panneau, avec l'aperçu de la source ; depuis Scénarios, insérer un bloc, accepter la nouvelle version d'un bloc ; depuis la revue, ajouter un groupe                                                                                                                                                        |
-| Tests générés    | pour un enregistrement terminé : générer les formats choisis ; par format, l'outil du serveur, sa présence et ce qu'il garantit (SafetyPolicy pour le rejeu du moteur, aucune pour Playwright et Java), le statut des fichiers, la dernière exécution ; exécuter (environnement au choix pour le rejeu du moteur), suivre en direct, annuler ; les exécutions avec leurs cas, messages d'échec, sortie de l'outil et rapport QA-CRAWLER ; le contenu de chaque fichier généré, modifiable à la main (vérifié avant d'être enregistré, Ctrl+S, marque « Modifié à la main », retour à la version générée, régénération confirmée)                                              |
+| Tests générés    | pour un enregistrement terminé : générer les formats choisis ; par format, l'outil du serveur, sa présence et ce qu'il garantit (SafetyPolicy pour le rejeu du moteur, aucune pour Playwright et Java), le statut des fichiers, la dernière exécution ; exécuter (environnement au choix pour le rejeu du moteur), suivre en direct, annuler ; les exécutions avec leurs cas, messages d'échec, sortie de l'outil et rapport QA-CRAWLER ; le contenu de chaque fichier généré, ouvert dans l'éditeur pour le modifier (marque « Modifié à la main », régénération confirmée après comparaison)                                                                                |
+| Éditeur          | les fichiers générés d'un enregistrement, en vue visuelle (flow YAML, `.feature`), source (CodeMirror) ou comparaison ; inspecteur de l'étape, diagnostics positionnés, Valider, Dry Run, Rejouer, Comparer, Enregistrer (voir plus bas)                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Revue            | d'un enregistrement terminé : rejeu de validation suivi étape par étape ; parcours en groupes (découpage proposé, vérifications suggérées, créer, renommer, déplacer, supprimer un groupe, cocher des étapes, monter, descendre, détacher, retirer une étape avec confirmation) ; assertions (recommandées, à décider, faibles, décidées ; une à une ou en lot) ; source de chaque saisie ; intentions (confirmer, corriger, réinitialiser) ; correction d'une cible dans le navigateur ouvert par le serveur, puis reprise du rejeu ; ligne de tableau redéfinie colonne par colonne ; restauration de la cible d'origine ; génération des tests et statut de chaque fichier |
 | Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -870,6 +896,40 @@ L'annulation n'est proposée que si le serveur l'offre (`capabilities.cancellati
 Événements (bubbles, composed) : `qa-dashboard-navigate` `{ route }`, `qa-execution-started`
 `{ projectId, exploration }`, `qa-error` `{ code, message }`. La méthode `open(route)` ouvre une vue
 depuis l'hôte.
+
+### Éditeur des tests générés
+
+Le menu Piloter ouvre l'**Éditeur** (`#/projects/:id/editor`), aussi atteint par « Ouvrir dans
+l'éditeur » depuis les Tests générés. Quatre zones :
+
+- **la barre** : le fichier ouvert, son format, son état (enregistré, brouillon, vérifié, modifié à la
+  main) et les actions **Valider**, **Dry Run**, **Rejouer**, **Comparer**, **Enregistrer**. Une action
+  indisponible dit pourquoi (droit manquant, brouillon à enregistrer d'abord, outil absent) ;
+- **l'explorateur** : les enregistrements terminés et leurs fichiers générés, en arbre navigable au
+  clavier ;
+- **le centre** : un onglet par fichier ouvert et trois vues :
+  - **Visuel** pour le flow YAML et le `.feature` : la liste des étapes, groupes compris, avec ajout,
+    duplication, suppression confirmée et déplacement (glisser-déposer, Alt+↑/↓). Chaque geste modifie
+    le texte source à l'endroit voulu : le reste du fichier, commentaires compris, ne bouge pas, et les
+    références (groupes, assertions) suivent les positions ;
+  - **Source** : CodeMirror 6, avec coloration par langage (YAML, Gherkin, TypeScript, Java, XML),
+    numéros de ligne, repli, recherche et remplacement, annulation, diagnostics dans la marge,
+    Ctrl+S. Pour le TypeScript et le Java, un plan (suites, tests, étapes) mène à la ligne ;
+  - **Comparer** : côte à côte, le texte en cours face à la version enregistrée, la version générée ou
+    ce qu'une régénération écrirait ;
+- **l'inspecteur** : l'étape choisie (action, cible, valeur, options, provenance), modifiable champ par
+  champ, et le panneau des diagnostics et des résultats (Dry Run, Rejouer), qui mène chacun à sa ligne.
+
+Trois versions par fichier : **générée**, **enregistrée** et **en cours** (brouillon). Rien n'est écrit
+sans Enregistrer, qui passe par la vérification du serveur ; un fichier changé ailleurs n'est jamais
+écrasé (`FILE_CHANGED`). Quitter l'écran ou le fichier avec un brouillon demande confirmation.
+« Revenir à la version générée » et « Remplacer par une régénération » se comparent d'abord. Une
+vérification réussie n'est pas une exécution : le Dry Run et le Rejouer donnent le résultat réel.
+
+Le kit de l'éditeur (CodeMirror, `yaml`, `@cucumber/gherkin` et les modèles de l'éditeur) est regroupé
+au build en un module (`dist/sdk/ui/editor-kit.js`, environ 800 Ko, licences dans
+`editor-kit.licenses.txt`), chargé seulement à l'ouverture de l'éditeur. Sans build, le serveur de
+développement le regroupe à la volée.
 
 ## Statuts et événements
 
@@ -972,6 +1032,14 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   test Playwright vise l'adresse écrite à la génération, aucun environnement ne la change. L'écran
   génère tous les groupes ; un sous-ensemble se choisit dans la revue.
 - Le Flow Studio ne rejoue pas un groupe seul.
+- Éditeur :
+  - pas de fusion automatique à trois voies : on compare, puis on garde ou on remplace ;
+  - pas de vue visuelle pour le TypeScript ni le Java (plan et source seulement) : rien n'est converti
+    d'un format à l'autre ;
+  - la vue visuelle du `.feature` déplace une étape dans son scénario seulement ;
+  - l'ajout visuel au flow YAML propose `click`, `fill`, `select`, `check`, `uncheck`, `expect`,
+    `goto` et `manual` ; les autres actions s'écrivent dans la source ;
+  - le Dry Run vise la cible du projet (pas d'environnement) ; Rejouer joue les fichiers enregistrés.
 - Le Run Monitor suit les flows et les étapes, pas les groupes métier (absents des événements
   d'exploration).
 - La comparaison ne compare pas les captures d'écran de deux exécutions.
@@ -1033,6 +1101,18 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   Playwright par Playwright Test (`PASSED`, puis `FAILED` une fois la cible cassée), annulation, refus ;
   Java par `mvn test` quand Maven est là. `tests/integration/sdk-dashboard-tests.test.ts` : le même
   parcours depuis l'écran, dans Chromium, téléphone compris.
+- Éditeur : `tests/unit/editor-models.test.ts` (modifier le flow YAML et le `.feature` par le modèle :
+  commentaires et texte non touché gardés, groupes et assertions renumérotés, refus motivés ; plan
+  TypeScript et Java), `tests/unit/generated-diagnostics.test.ts` (diagnostics positionnés de chaque
+  outil), `tests/unit/editor-kit.test.ts` (comparaison par lignes), `tests/unit/sdk-dashboard-editor.test.ts`
+  (rendu des quatre zones, raisons des actions indisponibles, droits, échappement).
+  `tests/integration/sdk-generated-test-runs.test.ts` couvre la vérification sans écriture, la version
+  générée, l'aperçu de régénération et le **vrai** Dry Run d'un brouillon.
+  `tests/integration/sdk-dashboard-editor.test.ts`, dans Chromium, sur un enregistrement réel : vue
+  visuelle et inspecteur synchronisés avec la source, déplacement au clavier, Ctrl+S, comparaison,
+  source cassée refusée et diagnostic qui mène à sa ligne, annulation et restauration, phrase Gherkin
+  inconnue, plan Playwright et Java, Dry Run réel, arbre au clavier, confirmation avant de quitter,
+  téléphone sans défilement horizontal.
 - `tests/unit/recording-workspace-review.test.ts` : retirer une étape, groupes proposés, vérification
   de groupe, ligne redéfinie, restauration, correction appliquée et revue des intentions sur un
   enregistrement écrit.

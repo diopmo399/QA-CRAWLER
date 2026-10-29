@@ -152,47 +152,37 @@ describe('Dashboard — generated tests in Chromium', () => {
     expect(await dashboard().locator('.tst-run').count()).toBe(2);
   });
 
-  it('edits a generated file by hand: refused with the reasons, saved once valid, protected, restored', async () => {
+  it('a file opens in the editor; a hand edit is marked here, and a regeneration compares before replacing it', async () => {
     const yaml = `${NAME}.flow.yaml`;
     const row = dashboard().locator('.tst-file', { has: page.locator(`[data-path="${yaml}"]`) });
     await row.locator('[data-action="tst-file"]').click();
-    await row.locator(`[data-action="tst-edit"][data-path="${yaml}"]`).click();
-    const area = row.locator('textarea[data-tst="edit"]');
-    await area.waitFor();
-    // Le focus est dans l'éditeur, avec le contenu généré.
-    expect(
-      await area.evaluate((element) => element === (element.getRootNode() as ShadowRoot).activeElement),
-    ).toBe(true);
-    const original = await area.inputValue();
-    expect(original).toContain('steps:');
-    await area.fill('name: Ouvrir une fiche\nsteps: 12\n');
-    await row.locator('[data-action="tst-save"]').click();
-    await row
-      .locator('.tst-editor [role="alert"]', { hasText: 'nothing was saved' })
-      .waitFor({ timeout: 30_000 });
-    // Refusé : l'éditeur reste ouvert avec la saisie.
-    expect(await area.inputValue()).toBe('name: Ouvrir une fiche\nsteps: 12\n');
-    await area.fill(`${original}# relu à la main\n`);
+    await row.locator(`[data-action="tst-open-editor"][data-path="${yaml}"]`).click();
+    const editor = dashboard().locator('.ed');
+    await editor.locator('.ed-tab.on', { hasText: yaml }).waitFor({ timeout: 30_000 });
+    await editor.locator('[data-action="ed-mode"][data-mode="source"]').click();
+    await editor.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.insertText('# relu à la main\n');
     await page.keyboard.press('Control+s');
-    await dashboard()
-      .locator('p.ok', { hasText: `${yaml} est enregistré` })
-      .waitFor({ timeout: 30_000 });
-    expect(await row.locator('.pill', { hasText: 'Modifié à la main' }).count()).toBe(1);
+    await editor.locator('.ed-note.ok', { hasText: 'enregistré et vérifié' }).waitFor({ timeout: 30_000 });
+    await editor.locator('[data-action="ed-back"]').first().click();
+    await row.locator('.pill', { hasText: 'Modifié à la main' }).waitFor({ timeout: 15_000 });
     expect(await card('yaml').textContent()).toContain('Modifié à la main');
-    expect(await row.locator('.tst-code').textContent()).toContain('# relu à la main');
-    // Une régénération ne la remplace pas sans confirmation.
+    // Une régénération ne la remplace pas sans le dire : elle se compare d'abord.
     await dashboard().locator('form[data-action="tst-generate"] button[type="submit"]').click();
     await dashboard().locator('.tst-confirm', { hasText: 'modifiés à la main' }).waitFor({ timeout: 30_000 });
     expect(await dashboard().locator('.tst-confirm code').allTextContents()).toEqual([yaml]);
-    await dashboard().locator('[data-action="tst-overwrite-cancel"]').click();
-    // Retour à la version générée, confirmé dans la page.
-    await row.locator(`[data-action="tst-restore"][data-path="${yaml}"]`).click();
-    await row.locator('[data-action="tst-restore-confirm"]').click();
-    await dashboard()
-      .locator('p.ok', { hasText: 'revenu à sa version générée' })
-      .waitFor({ timeout: 30_000 });
-    expect(await row.locator('.pill', { hasText: 'Modifié à la main' }).count()).toBe(0);
-    expect(await row.locator('.tst-code').textContent()).not.toContain('# relu à la main');
+    await dashboard().locator('[data-action="tst-overwrite-compare"]').click();
+    await editor.locator('.ed-diff .cm-mergeView').waitFor({ timeout: 30_000 });
+    expect(await editor.locator('select[data-ed="compare-left"]').inputValue()).toBe('preview');
+    expect(await editor.locator('.ed-sum').textContent()).toContain('+1');
+    await editor.locator('[data-action="ed-overwrite"]').click();
+    await editor.locator('.ed-note.ok', { hasText: 'fichier(s) générés' }).waitFor({ timeout: 60_000 });
+    expect(await editor.locator('.ed-top .ed-chip', { hasText: 'Modifié à la main' }).count()).toBe(0);
+    const view = await client.generation.view(project.id, NAME);
+    expect(view.files.find((file) => file.path === yaml)?.content).not.toContain('# relu à la main');
+    await editor.locator('[data-action="ed-back"]').first().click();
+    await row.waitFor({ timeout: 15_000 });
   });
 
   it('Java: run by Maven when it is on the machine, otherwise refused with the reason', async () => {

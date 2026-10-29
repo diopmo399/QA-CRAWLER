@@ -1,9 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { slug } from '../../knowledge/signatures.js';
 import { loadProjectMission, projectConfigSchema } from '../../project/project-config.js';
@@ -16,6 +16,7 @@ import {
 } from '../../recording/record-orchestrator.js';
 import type { ReplayOutcome } from '../../recording/recording-report.js';
 import { loadConfigFile } from '../../config/config-loader.js';
+import { runDryRun } from '../../dry-run/dry-run-orchestrator.js';
 import { CorrectionBusyError, CorrectionManager, type CorrectionRuntime } from './corrections.js';
 import {
   acceptBlocks,
@@ -47,8 +48,11 @@ import {
   editStoredGroups,
   FLOW_FILES,
   generateStoredTests,
+  checkGeneratedFile,
   editGeneratedFile,
+  generatedVersion,
   generationManifest,
+  previewStoredTests,
   loadStoredRecording,
   removeStoredStep,
   storedGroupChecks,
@@ -69,8 +73,12 @@ import type {
   ExplorationEvent,
   GenerationResult,
   GeneratedFileView,
+  GeneratedFileCheckView,
+  GeneratedFileDiagnostic,
+  GenerationPreview,
   GeneratedTestsView,
   GenerationFormatName,
+  TestCaseView,
   TestRunView,
   GroupProposalView,
   RecordingReplayView,
@@ -268,7 +276,11 @@ class HttpError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
-    readonly extra: { details?: string[]; issues?: DraftIssue[] } = {},
+    readonly extra: {
+      details?: string[];
+      issues?: DraftIssue[];
+      diagnostics?: GeneratedFileDiagnostic[];
+    } = {},
   ) {
     super(message);
     this.name = 'HttpError';
@@ -1136,6 +1148,47 @@ async function handleRecordings(
     sendJson(response, result);
     return;
   }
+  if (action === 'generation' && itemId === 'check' && method === 'POST') {
+    sendJson(response, await checkGenerated(ctx, project, name, request));
+    return;
+  }
+  if (action === 'generation' && itemId === 'original' && method === 'GET') {
+    const relative = textOf(url.searchParams.get('path') ?? undefined, 300);
+    if (!relative) throw new HttpError(400, 'BAD_REQUEST', 'path is required');
+    const stored = await storedRecordingOf(ctx, project, name);
+    const content = await generatedVersion(stored.directory, relative);
+    if (typeof content !== 'string') throw new HttpError(404, 'NOT_FOUND', content.error);
+    sendJson(response, { path: relative, content });
+    return;
+  }
+  if (action === 'generation' && itemId === 'preview' && method === 'POST') {
+    const body = await readJson(request);
+    const formats = Array.isArray(body.formats)
+      ? body.formats.filter((format): format is string => typeof format === 'string')
+      : [];
+    if (
+      formats.length === 0 ||
+      formats.some((format) => !(GENERATION_FORMATS as readonly string[]).includes(format))
+    )
+      throw new HttpError(400, 'BAD_REQUEST', `formats must be among ${GENERATION_FORMATS.join(', ')}`);
+    const stored = await storedRecordingOf(ctx, project, name);
+    const outcome = previewStoredTests(
+      stored,
+      { formats, ...(body.force === true ? { force: true } : {}) },
+      { baseUrl: new URL(project.targetUrl).origin, language },
+    );
+    if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+    const preview: GenerationPreview = {
+      warnings: outcome.warnings,
+      files: outcome.artifacts.map((artifact) => ({
+        format: artifact.format,
+        path: artifact.path,
+        content: artifact.content,
+      })),
+    };
+    sendJson(response, preview);
+    return;
+  }
   if (action === 'generation' && (itemId === 'file' || itemId === 'restore')) {
     if ((itemId === 'file' && method !== 'PUT') || (itemId === 'restore' && method !== 'POST'))
       throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
@@ -1274,7 +1327,11 @@ async function editGenerated(
       relative,
       content === undefined ? { restore: true } : { content },
     );
-    if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error, { details: outcome.messages });
+    if ('error' in outcome)
+      throw new HttpError(422, 'REFUSED', outcome.error, {
+        details: outcome.messages,
+        ...(outcome.diagnostics ? { diagnostics: outcome.diagnostics } : {}),
+      });
     const saved = outcome.artifact;
     return {
       format: saved.format,
@@ -1286,8 +1343,39 @@ async function editGenerated(
       content: outcome.content,
       ...(saved.editedAt ? { editedAt: saved.editedAt } : {}),
       revision: revisionOf(outcome.content),
+      diagnostics: outcome.diagnostics,
     };
   });
+}
+
+/** VÉRIFIER un contenu sans l'écrire : mêmes outils et mêmes droits que l'enregistrement. */
+async function checkGenerated(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  request: IncomingMessage,
+): Promise<GeneratedFileCheckView> {
+  const body = await readJson(request);
+  const relative = textOf(body.path, 300);
+  if (!relative || typeof body.content !== 'string')
+    throw new HttpError(400, 'BAD_REQUEST', 'path and content are required');
+  if (body.content.length > MAX_GENERATED_FILE)
+    throw new HttpError(
+      413,
+      'TOO_LARGE',
+      `a generated file is limited to ${String(MAX_GENERATED_FILE)} characters`,
+    );
+  const content = body.content;
+  const stored = await storedRecordingOf(ctx, project, name);
+  const check = await checkGeneratedFile(stored.directory, relative, content);
+  if ('error' in check) throw new HttpError(404, 'NOT_FOUND', check.error);
+  return {
+    path: relative,
+    status: check.artifact.status,
+    ...(check.artifact.validation ? { validation: check.artifact.validation } : {}),
+    diagnostics: check.diagnostics,
+    blocking: check.blocking,
+  };
 }
 
 async function handleTestRuns(
@@ -1369,6 +1457,17 @@ async function startTestRun(
       'REFUSED',
       `a generated ${format} test runs against the URL it was generated for: choose no environment`,
     );
+  if (body.mode === 'DRY_RUN') {
+    if (!engine)
+      throw new HttpError(422, 'REFUSED', 'a Dry Run plays a flow YAML or a .feature with the engine');
+    if (body.environmentId !== undefined && body.environmentId !== null && body.environmentId !== '')
+      throw new HttpError(
+        422,
+        'REFUSED',
+        'a Dry Run targets the application of the project: choose no environment',
+      );
+    return startDryRun(ctx, project, name, format, body);
+  }
   const environment = engine ? await environmentOf(project, body.environmentId) : undefined;
   if (engine) requireWrites(request, project.id, environment);
   else {
@@ -1510,6 +1609,151 @@ async function startTestRun(
     target: origin,
     execute: ({ signal, log }) =>
       runMavenTests(prepared.directory, { signal, log, env: ctx.env, baseUrl: origin }),
+  });
+  return run.view();
+}
+
+/** Une étape attendue retrouvée par le Dry Run (y compris sous une autre forme), non vérifiée, ou manquante. */
+const DRY_RUN_CASE: Record<string, TestCaseView['status']> = {
+  MATCHED: 'PASSED',
+  MATCHED_SEMANTICALLY: 'PASSED',
+  MATCHED_WITH_TARGET_CHANGE: 'PASSED',
+  MATCHED_WITH_CONTEXT_CHANGE: 'PASSED',
+  MATCHED_AFTER_INSERTION: 'PASSED',
+  REORDERED: 'PASSED',
+  ALTERNATIVE: 'PASSED',
+  MISSING: 'FAILED',
+  UNREACHABLE: 'FAILED',
+  ASSERTION_MISMATCH: 'FAILED',
+  BLOCKED_BY_POLICY: 'BLOCKED',
+  AMBIGUOUS: 'SKIPPED',
+  NOT_VERIFIED: 'SKIPPED',
+  POSSIBLY_OBSOLETE: 'SKIPPED',
+  DUPLICATE_CANDIDATE: 'SKIPPED',
+};
+
+/**
+ * LE DRY RUN D'UN TEST GÉNÉRÉ : le moteur confronte le scénario (flow YAML ou .feature, enregistré ou
+ * brouillon) à l'application, avec la mission du projet (cible, connexion, SafetyPolicy) ; le fichier
+ * n'est jamais modifié. Chaque étape attendue devient un cas avec sa ligne et le statut de la
+ * réconciliation ; le verdict du Dry Run est gardé tel quel.
+ */
+async function startDryRun(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  format: 'yaml' | 'gherkin',
+  body: Record<string, unknown>,
+): Promise<TestRunView> {
+  const relative = textOf(body.path, 300);
+  if (!relative) throw new HttpError(400, 'BAD_REQUEST', 'path is required for a Dry Run');
+  if (!(format === 'yaml' ? relative.endsWith('.flow.yaml') : relative.endsWith('.feature')))
+    throw new HttpError(
+      422,
+      'REFUSED',
+      `a Dry Run plays the ${format === 'yaml' ? 'flow YAML' : '.feature'} itself`,
+    );
+  const draft = typeof body.content === 'string' ? body.content : undefined;
+  if (draft !== undefined && draft.length > MAX_GENERATED_FILE)
+    throw new HttpError(
+      413,
+      'TOO_LARGE',
+      `a generated file is limited to ${String(MAX_GENERATED_FILE)} characters`,
+    );
+  const prepared = await editRecording(ctx, project, name, async (stored) => {
+    const artifact = (await generationManifest(stored.directory))?.artifacts.find(
+      (entry) => entry.path === relative,
+    );
+    if (artifact?.format !== format)
+      throw new HttpError(409, 'NOT_GENERATED', `${relative} is not a generated ${format} file of ${name}`);
+    const directory = runDirectory(stored.directory);
+    const scenario = path.join(directory, 'sources', path.basename(relative));
+    await mkdir(path.dirname(scenario), { recursive: true });
+    if (draft !== undefined) await writeFile(scenario, draft, 'utf8');
+    else await cp(generatedPath(stored.directory, relative), scenario);
+    await cp(
+      path.join(stored.directory, 'generated', TEST_DATA_FILE),
+      path.join(directory, 'sources', TEST_DATA_FILE),
+    ).catch(() => undefined);
+    return { directory, scenario, edited: artifact.editedAt ? [relative] : [] };
+  });
+  // La mission du projet, écrite à côté du projet (ses chemins relatifs s'y résolvent), sans ses flows.
+  const loaded = await projectMission(ctx, project, 'replay', { flows: [] });
+  const derived = path.join(project.dir, '.derived');
+  await mkdir(derived, { recursive: true });
+  const missionFile = path.join(derived, `dry-run-${path.basename(prepared.directory)}.mission.yaml`);
+  await writeFile(
+    missionFile,
+    `# Derived by the SDK server for a Dry Run of ${relative}.\n${loaded.missionYaml}`,
+    'utf8',
+  );
+  const reportsDir = path.join(prepared.directory, 'report');
+  const run = await ctx.testRuns.start({
+    projectId: project.id,
+    recording: name,
+    format,
+    kind: 'ENGINE',
+    mode: 'DRY_RUN',
+    tool: `QA-CRAWLER ${ctx.engineVersion} (Dry Run)`,
+    target: project.targetUrl,
+    directory: prepared.directory,
+    ...(prepared.edited.length > 0 ? { edited: prepared.edited } : {}),
+    ...(draft !== undefined ? { draft: true } : {}),
+    execute: async ({ signal, log }): Promise<TestRunOutcome> => {
+      try {
+        const result = await runDryRun({
+          scenarioFile: prepared.scenario,
+          missionFile,
+          overrides: { reportsDir },
+          env: missionEnv(ctx, undefined),
+          onEvent: (event) => {
+            log(`${event.type}: ${event.message}\n`);
+          },
+          run: {
+            signal,
+            onWarning: (message) => {
+              log(`warning: ${message}\n`);
+            },
+          },
+        });
+        const flow = result.flows[0];
+        const cases: TestCaseView[] = (flow?.reconciliation.entries ?? []).flatMap((entry) =>
+          entry.expectedIntent
+            ? [
+                {
+                  name: redactText(entry.expectedIntent.text || entry.expectedIntent.label),
+                  status: DRY_RUN_CASE[entry.status] ?? 'SKIPPED',
+                  detail: entry.status,
+                  ...(entry.expectedIntent.line ? { line: entry.expectedIntent.line } : {}),
+                  ...(format === 'yaml' ? { step: entry.expectedIntent.index } : {}),
+                  ...(entry.reasons[0] ? { message: redactText(entry.reasons[0]).slice(0, 300) } : {}),
+                },
+              ]
+            : [],
+        );
+        const html = path.join(result.directory, 'index.html');
+        const report = path.relative(reportsDir, html).split(path.sep).join('/');
+        if (signal.aborted)
+          return { status: 'CANCELLED', cases, message: 'cancelled', dryRunStatus: result.status, report };
+        const status =
+          cases.length === 0
+            ? 'ERROR'
+            : result.status === 'FULLY_MATCHED'
+              ? 'PASSED'
+              : result.status === 'INCONCLUSIVE'
+                ? 'ERROR'
+                : 'FAILED';
+        return {
+          status,
+          cases,
+          dryRunStatus: result.status,
+          report,
+          ...(status === 'ERROR' ? { message: `the Dry Run is ${result.status}` } : {}),
+        };
+      } finally {
+        await rm(missionFile, { force: true });
+      }
+    },
   });
   return run.view();
 }
@@ -3222,6 +3466,25 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 const SDK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MODULE_CACHE = new Map<string, string>();
 
+const EDITOR_KIT_MARKER = '/* qa-crawler editor kit: bundled */';
+
+/**
+ * Le kit de l'éditeur est un module REGROUPÉ (CodeMirror et les modèles par format) : celui du build ;
+ * en développement (sources TypeScript), regroupé une fois à la demande par esbuild.
+ */
+async function editorKitModule(): Promise<string> {
+  const compiled = path.join(SDK_ROOT, 'ui', 'editor-kit.js');
+  const built = await readFile(compiled, 'utf8').catch(() => undefined);
+  if (built?.startsWith(EDITOR_KIT_MARKER)) return built;
+  const script = path.resolve(SDK_ROOT, '..', '..', 'scripts', 'editor-kit-bundle.mjs');
+  if (!(await exists(script)))
+    throw new HttpError(404, 'NOT_FOUND', 'the editor kit is not built (npm run build)');
+  const bundler = (await import(pathToFileURL(script).href)) as {
+    bundleEditorKit: (root: string) => Promise<{ code: string }>;
+  };
+  return (await bundler.bundleEditorKit(path.resolve(SDK_ROOT, '..', '..'))).code;
+}
+
 /** Les modules navigateur du SDK (core/*, ui/*) : le .js compilé, ou le .ts transpilé à la volée en développement. */
 async function serveModule(parts: string[], method: string, response: ServerResponse): Promise<void> {
   if (method !== 'GET' && method !== 'HEAD')
@@ -3231,6 +3494,10 @@ async function serveModule(parts: string[], method: string, response: ServerResp
     throw new HttpError(404, 'NOT_FOUND', 'not found');
   const key = `${folder}/${file}`;
   let code = MODULE_CACHE.get(key);
+  if (code === undefined && key === 'ui/editor-kit.js') {
+    code = await editorKitModule();
+    MODULE_CACHE.set(key, code);
+  }
   if (code === undefined) {
     const compiled = path.join(SDK_ROOT, folder, file);
     const source = path.join(SDK_ROOT, folder, file.replace(/\.js$/, '.ts'));
@@ -3322,6 +3589,7 @@ function sendError(response: ServerResponse, error: unknown): void {
     code: http?.code ?? 'INTERNAL',
     ...(http?.extra.details ? { details: http.extra.details } : {}),
     ...(http?.extra.issues ? { issues: http.extra.issues } : {}),
+    ...(http?.extra.diagnostics ? { diagnostics: http.extra.diagnostics } : {}),
   };
   if (response.headersSent) {
     response.end();

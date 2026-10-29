@@ -39,6 +39,8 @@ export interface TestRunOutcome {
   cases: TestCaseView[];
   message?: string;
   report?: string;
+  /** Dry Run : le verdict du moteur (FULLY_MATCHED, PARTIALLY_MATCHED…). */
+  dryRunStatus?: string;
 }
 
 export interface TestRunTask {
@@ -51,6 +53,9 @@ export interface TestRunTask {
   environment?: { id: string; name: string };
   /** Les fichiers joués qui avaient été modifiés à la main. */
   edited?: string[];
+  mode?: 'RUN' | 'DRY_RUN';
+  /** Joué depuis un brouillon non enregistré (Dry Run seulement). */
+  draft?: boolean;
   /** Le dossier de l'exécution (la copie des fichiers, la sortie, run.json). */
   directory: string;
   execute(context: { signal: AbortSignal; log: (text: string) => void }): Promise<TestRunOutcome>;
@@ -65,6 +70,7 @@ export class TestRun {
   cases: TestCaseView[] = [];
   message?: string;
   report?: string;
+  dryRunStatus?: string;
   output = '';
   readonly abort = new AbortController();
 
@@ -105,6 +111,9 @@ export class TestRun {
       output: this.output,
       ...(this.report ? { report: this.report } : {}),
       ...(this.task.edited ? { edited: this.task.edited } : {}),
+      mode: this.task.mode ?? 'RUN',
+      ...(this.dryRunStatus ? { dryRunStatus: this.dryRunStatus } : {}),
+      ...(this.task.draft ? { draft: true } : {}),
     };
   }
 }
@@ -237,6 +246,7 @@ export class TestRunManager {
         run.abort.signal.aborted && outcome.status !== 'UNAVAILABLE' ? 'CANCELLED' : outcome.status;
       if (outcome.message) run.message = shortMessage(outcome.message);
       if (outcome.report) run.report = outcome.report;
+      if (outcome.dryRunStatus) run.dryRunStatus = outcome.dryRunStatus;
     } catch (error) {
       run.status = run.abort.signal.aborted ? 'CANCELLED' : 'ERROR';
       run.message = shortMessage(error instanceof Error ? error.message : String(error));

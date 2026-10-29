@@ -314,6 +314,7 @@ const KEYWORDS = new Set([
   'groups',
   'generation',
   'test-runs',
+  'original',
   'steps',
   'proposals',
   'checks',

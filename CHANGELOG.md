@@ -32,6 +32,24 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Dashboard : Éditeur des tests générés** (menu Piloter, ou « Ouvrir dans l'éditeur » depuis les Tests
+  générés). Un seul écran pour le flow YAML, le `.feature`, le test Playwright et le projet Java :
+  - explorateur des fichiers, onglets, inspecteur de l'étape, diagnostics et résultats ;
+  - vue **visuelle** du flow YAML et du `.feature` (ajouter, dupliquer, supprimer après confirmation,
+    déplacer par glisser-déposer ou Alt+↑/↓, groupes) : chaque geste modifie le texte source à sa place,
+    commentaires et reste du fichier gardés, références de groupes et d'assertions renumérotées ;
+  - vue **source** avec CodeMirror 6 (coloration, numéros de ligne, recherche, repli, annulation,
+    diagnostics dans la marge, Ctrl+S) et plan des tests pour TypeScript et Java ;
+  - **comparaison** côte à côte avec la version enregistrée, la version générée ou une régénération ;
+  - actions réelles : Valider (outils du serveur), Dry Run du moteur (brouillon compris), Rejouer,
+    Enregistrer (vérifié, jamais d'écrasement silencieux), revenir à la version générée.
+- SDK : `generation.checkFile` (vérifier sans écrire), `generation.original` (version générée),
+  `generation.preview` (ce qu'une régénération écrirait) et le Dry Run des tests générés
+  (`generation.execute` avec `mode: 'DRY_RUN'`). Les refus et vérifications portent des diagnostics
+  positionnés (`GeneratedFileDiagnostic` : famille, outil, ligne, colonne, étape).
+- Dépendances de développement : CodeMirror 6 et esbuild, versions fixées ; le kit de l'éditeur est
+  regroupé au build (`dist/sdk/ui/editor-kit.js`, licences à côté) et chargé à la demande.
+
 - **Dashboard : écran « Tests générés »** (menu Piloter). Pour un enregistrement terminé : générer les
   formats choisis, lire chaque fichier et son statut de génération, puis **exécuter pour de vrai** :
   - le flow YAML et le `.feature` rejoués par le moteur avec la mission du projet (SafetyPolicy,
@@ -43,7 +61,7 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   et montre les cas, les messages d'échec et la sortie de l'outil. Playwright et Java, qui pilotent
   l'application sans la SafetyPolicy, demandent le droit `RUN_WRITES`.
 
-- **Modifier un fichier généré à la main**, depuis l'écran Tests générés (ou `generation.editFile`). Le
+- **Modifier un fichier généré à la main**, depuis l'Éditeur (ou `generation.editFile`). Le
   contenu est vérifié avec l'outil de son format avant d'être écrit ; refusé, rien ne change et les
   raisons s'affichent. Le fichier est marqué « Modifié à la main », sa version générée est gardée
   (« Revenir à la version générée »), une régénération qui le remplacerait demande une confirmation, et

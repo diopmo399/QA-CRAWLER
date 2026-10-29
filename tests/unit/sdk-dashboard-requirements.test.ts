@@ -1,4 +1,5 @@
 import { emptyLibraryUi } from '../../src/sdk/ui/dashboard-library.js';
+import { emptyEditorUi } from '../../src/sdk/ui/dashboard-editor.js';
 import { emptyTestsUi } from '../../src/sdk/ui/dashboard-tests.js';
 import { describe, expect, it } from 'vitest';
 import type {
@@ -63,6 +64,7 @@ const base = (
   recs: emptyRecordingsUi(),
   lib: emptyLibraryUi(),
   tst: emptyTestsUi(),
+  ed: emptyEditorUi(),
   ...extra,
 });
 

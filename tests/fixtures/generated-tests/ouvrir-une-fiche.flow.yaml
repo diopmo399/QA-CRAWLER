@@ -1,0 +1,93 @@
+# Recorded by QA-CRAWLER (human flow recorder), session rec-20261029051426-a4f064, 2026-10-29T05:14:26.178Z
+# Typed values are never recorded: { testData } is a valid value chosen at replay, secrets come from { env }.
+# Review before use. The safety policy still applies when it is replayed.
+name: Ouvrir une fiche
+startAt: /
+steps:
+  # HUMAN_RECORDED · SEMANTIC · h001 · target VALIDATED_AFTER_RERENDER · functionalIntent NAVIGATE CONFIRMED 0.894 · raw r2
+  - click:
+      role: link
+      name: Utilisateurs
+    functionalIntent:
+      name: NAVIGATE
+      status: CONFIRMED
+      confidence: 0.894
+      ui: NAVIGATE
+      alternatives:
+        - BACK
+        - NEXT
+        - SELECT_TAB
+      context:
+        route: /
+      expectedEffects:
+        - ROUTE_CHANGED
+  # HUMAN_RECORDED · SEMANTIC · h002 · target AMBIGUOUS · REQUIRES_REPLAY_VALIDATION · functionalIntent OPEN_USER PROBABLE 0.832 · raw r4
+  - click:
+      role: link
+      name: Utilisateur 1
+    effects:
+      appears:
+        - link:Retour à la liste
+        - link:Modifier
+      route: /users/{id}
+      provenance:
+        actionId: a3
+        effects:
+          - effect: route /users/{id}
+            causality: DIRECT
+            confidence: 0.97
+          - effect: + link:Retour à la liste
+            causality: STRONGLY_CORRELATED
+            confidence: 0.85
+          - effect: + link:Modifier
+            causality: STRONGLY_CORRELATED
+            confidence: 0.85
+    fingerprint:
+      role: link
+      name: Utilisateur 1
+      tag: a
+      semanticId: utilisateur_1
+      css:
+        fallback:
+          selector: ul > li:nth-of-type(1) > a
+          matchCount: 1
+          confidence: 0.23
+      ambiguity:
+        level: MEDIUM
+        reasons:
+          - STRUCTURAL_ONLY
+    functionalIntent:
+      name: OPEN_USER
+      status: PROBABLE
+      confidence: 0.832
+      ui: OPEN_ITEM
+      operation: OPEN
+      entity: user
+      alternatives:
+        - OPEN_ITEM
+        - NAVIGATE
+        - OPEN_SECTION
+      context:
+        route: /users/:id
+        entity: user
+      expectedEffects:
+        - ROUTE_CHANGED
+        - CONTROLS_APPEARED
+  # INFERRED_OUTCOME · raw r4
+  - expect:
+      url: /users/
+assertions:
+  - id: fiche-ouverte
+    description: La fiche de l'utilisateur est ouverte
+    check: { kind: state, source: ui, expected: OUVERTE }
+    after: 2
+groups:
+  - id: g-liste
+    name: Aller à la liste
+    steps:
+      - 1
+  - id: g-fiche
+    name: Ouvrir la fiche
+    steps:
+      - 2
+      - 3

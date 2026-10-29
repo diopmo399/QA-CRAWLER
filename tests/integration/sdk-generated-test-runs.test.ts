@@ -218,6 +218,64 @@ describe('generated tests, run from the SDK', () => {
     expect(after?.editedAt).toBeUndefined();
   });
 
+  it('checks a content without writing it, with positioned diagnostics; the generated version; a preview', async () => {
+    const yaml = `${NAME}.flow.yaml`;
+    const saved = (await client.generation.view(project.id, NAME)).files.find((file) => file.path === yaml);
+    if (!saved) throw new Error('no flow');
+    const broken = saved.content.replace(
+      '      role: link\n      name: Utilisateurs\n',
+      '      role: link\n      label: Utilisateurs\n',
+    );
+    const check = await client.generation.checkFile(project.id, NAME, { path: yaml, content: broken });
+    expect(check.blocking).toBe(true);
+    expect(check.diagnostics[0]).toMatchObject({ category: 'schema', step: 1 });
+    expect(check.diagnostics[0]?.line).toBeGreaterThan(0);
+    expect(
+      (await client.generation.view(project.id, NAME)).files.find((file) => file.path === yaml)?.content,
+    ).toBe(saved.content);
+    // Refusé à l'enregistrement : les mêmes diagnostics dans l'erreur.
+    const refused = await client.generation
+      .editFile(project.id, NAME, { path: yaml, content: broken, revision: saved.revision ?? '' })
+      .catch((error: unknown) => error as QaCrawlerError);
+    expect(refused).toBeInstanceOf(QaCrawlerError);
+    expect((refused as QaCrawlerError).diagnostics[0]).toMatchObject({ category: 'schema', step: 1 });
+    expect((await client.generation.original(project.id, NAME, yaml)).content).toBe(saved.content);
+    const preview = await client.generation.preview(project.id, NAME, { formats: ['yaml'] });
+    expect(preview.files.map((file) => file.path)).toEqual([yaml]);
+  });
+
+  it('a Dry Run of an unsaved draft with the real engine: per expected step, with its position; nothing written', async () => {
+    const yaml = `${NAME}.flow.yaml`;
+    const saved = (await client.generation.view(project.id, NAME)).files.find((file) => file.path === yaml);
+    if (!saved) throw new Error('no flow');
+    const draft = saved.content.replace('name: Utilisateur 1', 'name: Utilisateur 2');
+    const run = await finished(
+      await client.generation.execute(project.id, NAME, {
+        format: 'yaml',
+        mode: 'DRY_RUN',
+        path: yaml,
+        content: draft,
+      }),
+    );
+    expect(run.mode).toBe('DRY_RUN');
+    expect(run.draft).toBe(true);
+    expect(run.dryRunStatus).toBeDefined();
+    expect(run.cases.length).toBe(3);
+    expect(run.cases.map((entry) => entry.step)).toEqual([1, 2, 3]);
+    expect(run.cases[0]).toMatchObject({ status: 'PASSED', detail: 'MATCHED' });
+    expect(run.report).toBeDefined();
+    expect(
+      (await client.generation.view(project.id, NAME)).files.find((file) => file.path === yaml)?.content,
+    ).toBe(saved.content);
+    await expect(
+      client.generation.execute(project.id, NAME, {
+        format: 'playwright',
+        mode: 'DRY_RUN',
+        path: `playwright/${NAME}.spec.ts`,
+      }),
+    ).rejects.toMatchObject({ status: 422 });
+  }, 300_000);
+
   it('lists the runs, most recent first, and refuses to cancel a finished run', async () => {
     const view = await client.generation.view(project.id, NAME);
     expect(view.runs.length).toBeGreaterThanOrEqual(3);

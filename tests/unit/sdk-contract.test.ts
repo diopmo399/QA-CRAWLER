@@ -160,14 +160,37 @@ describe('SDK browser side', () => {
     for (const part of ['core', 'ui']) {
       const directory = path.join(root, part);
       for (const file of (await readdir(directory)).filter((name) => name.endsWith('.ts'))) {
+        // Le kit de l'éditeur est l'entrée d'un regroupement (esbuild) : il n'est jamais servi tel quel.
+        if (part === 'ui' && file === 'editor-kit.ts') continue;
         const text = await readFile(path.join(directory, file), 'utf8');
-        for (const [, specifier] of text.matchAll(/(?:from|import)\s+'([^']+)'/g)) {
+        // Les imports de types sont effacés à la compilation : seuls les imports réels comptent.
+        const runtime = text.replace(/import\s+type\s[^;]+;/g, '');
+        for (const [, specifier] of runtime.matchAll(/(?:from|import)\s*\(?\s*'([^']+)'/g)) {
           const target = path.resolve(directory, specifier ?? '');
           const inside = ['core', 'ui'].some((allowed) =>
             target.startsWith(path.join(root, allowed) + path.sep),
           );
           expect(inside, `${part}/${file} imports ${String(specifier)}`).toBe(true);
         }
+      }
+    }
+  });
+
+  it('the editor kit and its models import no Node module: they run in the browser bundle', async () => {
+    const root = path.resolve('src/sdk');
+    const files = [
+      path.join(root, 'ui', 'editor-kit.ts'),
+      ...(await readdir(path.join(root, 'editor'))).map((name) => path.join(root, 'editor', name)),
+    ];
+    for (const file of files) {
+      const text = await readFile(file, 'utf8');
+      for (const [, specifier] of text.matchAll(/(?:from|import)\s+'([^']+)'/g)) {
+        const allowed =
+          specifier?.startsWith('.') ||
+          /^(@codemirror\/|@lezer\/|@cucumber\/(gherkin|messages)$|yaml$)/.test(specifier ?? '');
+        expect(allowed, `${path.relative(root, file)} imports ${String(specifier)}`).toBe(true);
+        if (specifier?.startsWith('.'))
+          expect(path.resolve(path.dirname(file), specifier).startsWith(root + path.sep)).toBe(true);
       }
     }
   });
