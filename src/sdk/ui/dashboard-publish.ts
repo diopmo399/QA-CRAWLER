@@ -305,7 +305,7 @@ function previewSheet(state: DashboardState, publish: boolean): string {
 <p class="mu">${esc(ui.mode === 'composite' ? p.modeCompositeHint : p.modeSeparateHint)}</p>
 ${body}
 ${ui.error ? `<div class="err" role="alert"><p>${esc(ui.error)}</p>${(ui.details ?? []).length > 1 ? `<ul class="plain tight">${(ui.details ?? []).map((detail) => `<li>${esc(detail)}</li>`).join('')}</ul>` : ''}</div>` : ''}
-<div class="form-acts start pub-sheet-f"><button class="btn primary" data-action="pub-publish" ${ready ? '' : 'disabled'} aria-busy="${String(Boolean(ui.busy))}">${icon('library')}<span>${esc(ui.busy ? p.publishing : p.publishN(plan?.blocks.length ?? 0))}</span></button><button class="btn ghost" data-action="pub-preview-close">${esc(state.t.review.cancel)}</button>${fresh && plan && !plan.ok ? `<small class="err">${esc(p.fixFirst)}</small>` : ''}${ui.planning ? `<small class="mu">${esc(p.planning)}</small>` : ''}</div>
+<div class="form-acts start pub-sheet-f"><button class="btn primary" data-action="pub-publish" ${ready ? '' : 'disabled'} aria-busy="${String(Boolean(ui.busy))}">${icon('library')}<span>${esc(ui.busy ? p.publishing : p.publishN(plan?.blocks.length ?? 0))}</span></button><button class="btn ghost" data-action="pub-preview-close">${esc(state.t.review.cancel)}</button>${fresh && !plan.ok ? `<small class="err">${esc(p.fixFirst)}</small>` : ''}${ui.planning ? `<small class="mu">${esc(p.planning)}</small>` : ''}</div>
 </aside>`;
 }
 
