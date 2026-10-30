@@ -169,7 +169,12 @@ function readSelection(
   selection: readonly ExtractionSelection[],
 ): { parts: Part[]; errors: string[] } {
   const errors: string[] = [];
-  const views = groupViews(source.flow);
+  // Un groupe ne garde que les étapes présentes dans le flow (un identifiant orphelin est ignoré).
+  const present = new Set(source.flow.steps.map((item) => item.id));
+  const views = groupViews(source.flow).map((view) => ({
+    ...view,
+    stepIds: view.stepIds.filter((id) => present.has(id)),
+  }));
   const seen = new Set<string>();
   const parts: Part[] = [];
   if (selection.length === 0) errors.push('choose at least one group');
@@ -402,6 +407,19 @@ export function planExtraction(
       warnings.push(
         `it starts in the middle of the recording: composed after another block, it plays where that block left off (its start page ${startAt} is not visited)`,
       );
+    // Entre deux groupes internes, une étape de l'enregistrement sautée : le second ne part plus d'où il partait.
+    const gaps = unit.parts.slice(1).flatMap((part, index) => {
+      const previous = unit.parts[index];
+      const last = Math.max(...(previous?.stepIds ?? []).map((id) => position.get(id) ?? 0));
+      const first = Math.min(...part.stepIds.map((id) => position.get(id) ?? 0));
+      return previous && first !== last + 1 && kindOf(yamlSteps[first - 1]) !== 'goto'
+        ? [{ group: part.view.name, after: previous.view.name, startAt: part.view.startAt }]
+        : [];
+    });
+    for (const gap of gaps)
+      warnings.push(
+        `the group "${gap.group}" does not follow "${gap.after}" in the recording: it plays where "${gap.after}" stops (its start page ${gap.startAt} is not visited)`,
+      );
     const recorded = new Map(source.flow.steps.map((item) => [item.id, item]));
     const stepViews: ExtractionStepView[] = [
       ...(navigate ? [{ position: 1, kind: 'goto', label: `goto ${startAt}` }] : []),
@@ -439,6 +457,7 @@ export function planExtraction(
       dependencies,
       transformations,
       midway,
+      gaps,
       validation: { ok: blockErrors.length === 0, errors: blockErrors, warnings },
     };
     return {

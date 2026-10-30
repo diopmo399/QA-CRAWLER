@@ -212,6 +212,9 @@ export interface CompositionPart {
     contract: BlockContract;
     problems: string[];
     data?: TestDataSet;
+    /** Sa page de départ, et s'il commence par y aller (`goto`) : rejoué après un autre, sinon non. */
+    startAt?: string;
+    startsWithGoto?: boolean;
   };
 }
 
@@ -265,6 +268,12 @@ export function checkComposition(input: {
     if (block.state === 'INVALID')
       errors.push(
         `#${String(position)} "${part.name}": its contract does not hold (${block.problems.join('; ')})`,
+      );
+    // Le moteur recopie les étapes d'un bloc, pas sa page de départ : composé après un autre, il joue
+    // là où le précédent s'arrête.
+    if (index > 0 && block.startAt && block.startsWithGoto === false)
+      warnings.push(
+        `#${String(position)} "${part.name}" starts on ${block.startAt} without going there: it plays where #${String(position - 1)} stops`,
       );
     if (block.state === 'CHANGED')
       warnings.push(

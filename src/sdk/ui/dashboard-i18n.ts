@@ -858,6 +858,8 @@ const fr = {
     depProvided: (key: string) => `${key} : valeur fournie à la publication`,
     depOutside: (key: string) => `${key} : produite par une étape hors des groupes — une entrée du bloc`,
     depNowhere: (key: string) => `${key} : rien ne la produit ni ne la définit — une entrée du bloc`,
+    gap: (group: string, after: string, page: string) =>
+      `« ${group} » ne suit pas « ${after} » dans l’enregistrement : il jouera là où « ${after} » s’arrête (sa page de départ ${page} n’est pas visitée).`,
     midway: (page: string) =>
       `Le bloc commence au milieu de l’enregistrement : composé après un autre bloc, il jouera là où celui-ci s’arrête (sa page de départ ${page} n’est pas visitée). Cochez « Commencer par aller à la page de départ » pour l’y conduire.`,
     asInput: 'sinon : une entrée obligatoire',
@@ -2713,6 +2715,8 @@ const en: DashboardStrings = {
     depProvided: (key: string) => `${key}: value provided at publication`,
     depOutside: (key: string) => `${key}: produced by a step outside the groups — an input of the block`,
     depNowhere: (key: string) => `${key}: nothing produces nor defines it — an input of the block`,
+    gap: (group: string, after: string, page: string) =>
+      `“${group}” does not follow “${after}” in the recording: it plays where “${after}” stops (its start page ${page} is not visited).`,
     midway: (page: string) =>
       `The block starts in the middle of the recording: composed after another block, it plays where that block stops (its start page ${page} is not visited). Tick “Start by going to the start page” to take it there.`,
     asInput: 'otherwise: a required input',

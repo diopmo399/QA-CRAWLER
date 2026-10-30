@@ -285,7 +285,7 @@ function blockPreview(state: DashboardState, block: ExtractionBlockPlan, publish
 ${block.dependencies.length > 0 ? `<ul class="plain pub-deps">${dependencyLine(state, block, publish)}</ul>` : ''}
 ${block.transformations.length > 0 ? `<p class="mu small">${esc(p.transformations(block.transformations.join(' · ')))}</p>` : ''}
 ${block.validation.errors.length > 0 ? `<ul class="plain tight pub-diag">${block.validation.errors.map((text) => `<li class="ko">${esc(text)}</li>`).join('')}</ul>` : ''}
-${block.midway ? `<p class="pub-diag warn small">${esc(p.midway(block.startAt))}</p>` : ''}
+${block.midway ? `<p class="pub-diag warn small">${esc(p.midway(block.startAt))}</p>` : ''}${block.gaps.map((gap) => `<p class="pub-diag warn small">${esc(p.gap(gap.group, gap.after, gap.startAt))}</p>`).join('')}
 <details class="pub-more"><summary>${esc(p.showSteps(block.steps.length))}</summary><ol class="plain pub-steps">${block.steps.map((step) => `<li class="pub-step${step.kind === 'expect' ? ' is-check' : ''}"><span class="pub-pos">${String(step.position)}</span><span>${esc(step.label)}</span></li>`).join('')}</ol></details>
 </li>`;
 }

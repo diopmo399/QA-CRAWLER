@@ -66,6 +66,7 @@ import {
   applyGroupCommand,
   groupCheckSuggestions,
   groupViews,
+  normalizeGroups,
   proposeGroups,
   stepDependencies,
   type BusinessStepRef,
@@ -676,6 +677,8 @@ export function dropFlowStep(flow: RecordedFlow, stepId: string): boolean {
     (item) =>
       item !== target && !(item.step.kind === 'expect' && item.actionIds.some((id) => actionIds.has(id))),
   );
+  // Les groupes ne gardent que les étapes qui existent encore.
+  normalizeGroups(flow);
   return true;
 }
 

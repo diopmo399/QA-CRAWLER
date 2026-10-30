@@ -273,6 +273,32 @@ describe('extraction plan — selection and dependencies', () => {
     expect(result.blocks[0]?.midway).toBe(false);
     expect(result.blocks[0]?.steps[1]).toMatchObject({ position: 2, source: 8, stepId: 's8' });
   });
+
+  it('a composite of groups that do not follow each other says where the second one will play', () => {
+    const gapped = plan({ selection: [{ groupId: 'g1' }, { groupId: 'g3' }], mode: 'composite' }).plan
+      .blocks[0];
+    expect(gapped?.gaps).toEqual([{ group: 'Open the item', after: 'Create the item', startAt: '/items' }]);
+    expect(gapped?.validation.warnings.join(' ')).toContain('does not follow "Create the item"');
+    const adjacent = plan({ selection: [{ groupId: 'g2' }, { groupId: 'g3' }], mode: 'composite' }).plan
+      .blocks[0];
+    expect(adjacent?.gaps).toEqual([]);
+  });
+
+  it('a group that still names a step no longer in the flow keeps only its present steps', () => {
+    const flow = recordedFlow();
+    flow.groups = (flow.groups ?? []).map((group) =>
+      group.id === 'g3' ? { ...group, stepIds: ['s-gone', ...group.stepIds] } : group,
+    );
+    const result = plan(
+      { selection: [{ groupId: 'g1' }, { groupId: 'g3' }], mode: 'composite' },
+      sourceOf(flow),
+    ).plan;
+    expect(result.ok).toBe(true);
+    expect(result.blocks[0]?.groups.map((group) => [group.id, group.steps])).toEqual([
+      ['g1', 4],
+      ['g3', 1],
+    ]);
+  });
 });
 
 describe('extraction plan — validation before publication', () => {

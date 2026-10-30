@@ -1559,6 +1559,11 @@ export interface ExtractionBlockPlan {
   transformations: string[];
   /** Le bloc commence au milieu de l'enregistrement sans aller à sa page de départ. */
   midway: boolean;
+  /**
+   * Bloc composé : un groupe interne qui ne suit pas le précédent dans l'enregistrement (une étape
+   * sautée entre eux) et ne commence pas par aller à sa page : il jouera là où le précédent s'arrête.
+   */
+  gaps: { group: string; after: string; startAt: string }[];
   validation: { ok: boolean; errors: string[]; warnings: string[] };
 }
 

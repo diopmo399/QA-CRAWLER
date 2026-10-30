@@ -266,6 +266,8 @@ interface BlockInfo {
   data?: TestDataSet;
   /** L'enregistrement à écrire si le bloc vient d'être repris (pas encore dans le registre). */
   record: BlockRecord;
+  /** Sa première étape va à une page (`goto`) : composé après un autre, il ne dépend pas de sa fin. */
+  startsWithGoto: boolean;
 }
 
 /** Ce qu'est un bloc maintenant : contrat, état (version, contenu), scénarios qui le rejouent. */
@@ -349,7 +351,12 @@ async function describeBlock(
     usedBy: entries.filter((other) => runsOf(other.flow).includes(entry.name)).map((other) => other.name),
     pinnedBy: pinnedBy.filter((pin) => entries.some((other) => other.name === pin.scenario)),
   };
-  return { view, ...(data ? { data } : {}), record };
+  return {
+    view,
+    ...(data ? { data } : {}),
+    record,
+    startsWithGoto: steps[0] !== undefined && 'goto' in steps[0],
+  };
 }
 
 async function blocksOf(entries: readonly FlowEntry[], registry: Registry): Promise<Map<string, BlockInfo>> {
@@ -598,6 +605,8 @@ function partsOf(
           contract: block.view.contract,
           problems: block.view.problems,
           ...(block.data ? { data: block.data } : {}),
+          ...(block.view.startAt ? { startAt: block.view.startAt } : {}),
+          startsWithGoto: block.startsWithGoto,
         },
       };
     const scenario = entries.find((entry) => entry.name === name);

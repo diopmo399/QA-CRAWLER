@@ -121,6 +121,7 @@ const block = (extra: Partial<ExtractionBlockPlan>): ExtractionBlockPlan => ({
   ],
   transformations: [],
   midway: false,
+  gaps: [],
   validation: { ok: true, errors: [], warnings: ['consumes item.title…'] },
   ...extra,
 });

@@ -32,6 +32,23 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Extraire plusieurs groupes métier d'un enregistrement vers la bibliothèque** (ADR 0002) :
+  - un, plusieurs ou tous les groupes du Recorder, ou une partie d'un groupe ; un bloc par groupe ou
+    un bloc composé qui garde ses groupes internes et leurs identifiants ;
+  - plan calculé sans rien écrire : étapes, données restreintes à ce que le bloc utilise, contrat,
+    dépendances (produite par un autre bloc, par un groupe non choisi, ailleurs ou nulle part ; valeur
+    fournie explicitement), départ au milieu de l'enregistrement, groupes internes non consécutifs ;
+  - publication tout ou rien après validation (schéma, données, contrat, noms), en version 1, avec la
+    provenance complète ; comparaison avec la source et mise à jour demandée, à revalider ;
+  - API : `library.planExtraction`, `publishExtraction`, `details`, `compareSource`,
+    `updateFromSource`.
+- **Revue d'un enregistrement, onglet Publier** : faits de l'enregistrement et action principale ;
+  groupes avec leurs données et dépendances, panneau du groupe (étapes à garder), résumé du plan,
+  ajout du producteur manquant ou valeur fournie, aperçu de chaque bloc, publication.
+- **Bibliothèque refondue** : catalogue compact (grille ou liste, type, regroupement par origine,
+  récents), fiche à onglets (étapes, contrat, données, graphe des dépendances, versions, provenance et
+  comparaison avec la source), compositeur en trois colonnes avec le contrat du parcours.
+- La vérification d'un parcours avertit quand un bloc a une page de départ sans y aller.
 - **Console d'exécution dans l'éditeur** : le journal réel d'une exécution (Dry Run ou Rejouer), en
   direct, pour les quatre formats :
   - le moteur (YAML, `.feature`) : début et fin de chaque étape avec sa ligne, effet exécuté ou
@@ -621,6 +638,11 @@ defaults`). Test d'intégration : flows passés, panne détectée, écritures bl
   plus l'intégration). Sur une machine à 4 cœurs : de 1 250 s à environ 600 s.
 
 ### Corrigé
+
+- Un flow invalide n'entre plus dans la bibliothèque (le bloc est `INVALID`) ; un scénario invalide au
+  lancement répond 422 au lieu de 500, et l'écran Scénarios dit le refus de « Rejouer » au lieu de
+  rester muet.
+- Retirer une étape d'un enregistrement retire aussi son identifiant de son groupe métier.
 
 - **Exigences : le parent proposé reste dans sa section.** Un titre neutre (une autre section, une
   autre feuille Excel) ne remettait pas à zéro le parent proposé : un critère pouvait être rattaché

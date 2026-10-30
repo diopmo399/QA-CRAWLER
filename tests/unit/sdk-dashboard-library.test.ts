@@ -623,6 +623,33 @@ describe('dashboard — scenario library', () => {
     expect(html).toContain('data-action="lib-accept" data-name="Composé"');
   });
 
+  it('scenarios: a replay the server refuses is said beside the button, never silently dropped', () => {
+    const html = renderDashboard(
+      base('scenarios', {
+        scenarioHistory: [],
+        recordings: [],
+        launch: {
+          kind: 'REPLAY',
+          environmentId: '',
+          scenarios: ['Composé'],
+          busy: false,
+          error: 'invalid scenario',
+        },
+      }),
+    );
+    expect(html).toMatch(
+      /data-action="replay-scenario" data-name="Composé"[^]*<p class="err" role="alert">invalid scenario<\/p>/,
+    );
+    const busy = renderDashboard(
+      base('scenarios', {
+        scenarioHistory: [],
+        recordings: [],
+        launch: { kind: 'REPLAY', environmentId: '', scenarios: ['Composé'], busy: true },
+      }),
+    );
+    expect(busy).toContain('data-action="replay-scenario" data-name="Composé" disabled aria-busy="true"');
+  });
+
   it('a reader sees the library and the details, never an action', () => {
     const html = renderDashboard(
       base('library', reader, {
