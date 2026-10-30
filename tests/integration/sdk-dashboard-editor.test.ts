@@ -267,21 +267,13 @@ describe('Dashboard — generated test editor in Chromium', () => {
     await steps().nth(0).locator('.ed-sm').click();
     const name = editor().locator('.ed-inspector [data-ed-field="name"]');
     await name.fill('Liste des utilisateurs');
+    // Un redessin venu d'ailleurs (événement du serveur, console) avant la validation garde la saisie.
+    await page.evaluate(() => {
+      (document.querySelector('qa-crawler-dashboard') as unknown as { paint(): void }).paint();
+    });
     expect(await name.inputValue()).toBe('Liste des utilisateurs');
     await name.press('Enter');
-    await chip('Modifications non enregistrées')
-      .waitFor()
-      .catch(async (error: unknown) => {
-        // L'état de l'écran au moment de l'échec, pour en trouver la cause (le test échoue quand même).
-        const state = await editor().evaluate((element) => ({
-          top: element.querySelector('.ed-top')?.textContent,
-          selected: element.querySelector('.ed-step.sel')?.textContent,
-          inspector: element.querySelector('.ed-inspector')?.innerHTML.slice(0, 1500),
-          active: (element.getRootNode() as ShadowRoot).activeElement?.outerHTML.slice(0, 300),
-        }));
-        console.error('EDITOR-STATE', JSON.stringify(state));
-        throw error;
-      });
+    await chip('Modifications non enregistrées').waitFor();
     await dashboard().locator('.drawer [data-action="nav"][data-view="overview"]').click();
     await editor().locator('.ed-confirm', { hasText: 'non enregistrées' }).waitFor();
     await editor().locator('[data-action="ed-confirm-cancel"]').click();

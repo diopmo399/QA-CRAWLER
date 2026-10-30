@@ -2910,6 +2910,14 @@ export class QaCrawlerDashboard extends Base {
       focused?.dataset.edAdd ??
       focused?.dataset.ed;
     const focusValue = (focused as HTMLInputElement | null)?.value;
+    // Les champs validés par « change », sans brouillon dans l'état : leur saisie en cours doit survivre à
+    // un redessin venu d'ailleurs (événement du serveur, console, plan recalculé), sinon elle est perdue.
+    const typed =
+      (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement) &&
+      focused.matches(KEEP_TYPING) &&
+      focused.type !== 'checkbox'
+        ? focused.value
+        : undefined;
     // Le même bouton d'une liste (même bloc, même rang), et le curseur d'un champ texte, retrouvés.
     const focusTwin = `${focused?.dataset.block ?? ''}|${focused?.dataset.index ?? ''}|${focused?.dataset.direction ?? ''}`;
     const caret =
@@ -2936,10 +2944,20 @@ export class QaCrawlerDashboard extends Base {
       const same = candidates.find((element) => (element as HTMLInputElement).value === focusValue);
       const target = (focusTwin !== '||' ? twin : undefined) ?? same ?? candidates[0];
       target?.focus();
+      // Après le focus : le navigateur compare à la valeur au moment du focus, « change » partira.
+      if (
+        typed !== undefined &&
+        (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+        target.value !== typed
+      )
+        target.value = typed;
       if (caret !== null && target instanceof HTMLInputElement) target.setSelectionRange(caret, caret);
     }
   }
 }
+
+/** Les champs dont la saisie en cours est gardée au redessin (voir paint). */
+const KEEP_TYPING = '[data-ed-field],[data-pub="name"],[data-pub="description"]';
 
 export function defineDashboard(name = 'qa-crawler-dashboard'): void {
   if (!('customElements' in globalThis) || customElements.get(name)) return;
