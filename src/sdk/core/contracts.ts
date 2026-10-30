@@ -1557,6 +1557,8 @@ export interface ExtractionBlockPlan {
   contract: BlockContract;
   dependencies: ExtractionDependency[];
   transformations: string[];
+  /** Le bloc commence au milieu de l'enregistrement sans aller à sa page de départ. */
+  midway: boolean;
   validation: { ok: boolean; errors: string[]; warnings: string[] };
 }
 

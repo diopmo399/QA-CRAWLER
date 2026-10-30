@@ -259,6 +259,7 @@ describe('extraction plan — selection and dependencies', () => {
   it('navigation: a block that starts mid-recording says so; asked, it starts with a goto (a noted transformation)', () => {
     const plain = plan({ selection: [{ groupId: 'g3' }], mode: 'separate' }).plan.blocks[0];
     expect(plain?.validation.warnings.join(' ')).toContain('its start page /items is not visited');
+    expect(plain?.midway).toBe(true);
     const { plan: result, drafts } = plan({
       selection: [{ groupId: 'g3' }],
       mode: 'separate',
@@ -269,6 +270,7 @@ describe('extraction plan — selection and dependencies', () => {
     expect(Object.keys(steps[1] ?? {})).toContain('click');
     expect(steps).toHaveLength(2);
     expect(result.blocks[0]?.transformations).toContain('starts with goto /items (its start page)');
+    expect(result.blocks[0]?.midway).toBe(false);
     expect(result.blocks[0]?.steps[1]).toMatchObject({ position: 2, source: 8, stepId: 's8' });
   });
 });

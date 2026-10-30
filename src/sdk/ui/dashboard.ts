@@ -14,6 +14,7 @@ import { compositionKey, emptyLibraryUi, runnableScenarios, type LibraryUi } fro
 import { activeRuns, emptyTestsUi, finishedRecordings } from './dashboard-tests.js';
 import { emptyEditorUi } from './dashboard-editor.js';
 import { EditorController, type EditorHost } from './dashboard-editor-controller.js';
+import { PublishController, type PublishHost } from './dashboard-publish-controller.js';
 import {
   assertionBuckets,
   bindFormOf,
@@ -97,6 +98,7 @@ export class QaCrawlerDashboard extends Base {
   private correctionTimer?: ReturnType<typeof setTimeout>;
   /** L'éditeur des tests générés (écran Éditeur). */
   private readonly editor: EditorController;
+  private readonly publisher: PublishController;
   /** Le suivi des exécutions de tests générés en cours (écran Tests). */
   private testsTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
@@ -141,6 +143,17 @@ export class QaCrawlerDashboard extends Base {
     };
     Object.defineProperty(host, 'state', { get: () => this.state });
     this.editor = new EditorController(host as EditorHost);
+    // La publication de groupes métier (revue) : relit la bibliothèque et le projet après une publication.
+    const publishHost = {
+      root: this.root,
+      api: () => this.api,
+      paint: () => {
+        this.paint();
+      },
+      refresh: () => this.load(),
+    };
+    Object.defineProperty(publishHost, 'state', { get: () => this.state });
+    this.publisher = new PublishController(publishHost as PublishHost);
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
     });
@@ -180,6 +193,7 @@ export class QaCrawlerDashboard extends Base {
         this.libraryField(target.dataset.lib, target.value);
         return;
       }
+      if (target.dataset.pub && this.publisher.input(target as HTMLInputElement)) return;
       if ((target.dataset.ed || target.dataset.edAdd) && this.editor.input(target as HTMLInputElement))
         return;
       const review = this.state.review;
@@ -225,6 +239,7 @@ export class QaCrawlerDashboard extends Base {
     });
     this.root.addEventListener('keydown', (event) => {
       if (this.editor.keydown(event as KeyboardEvent)) return;
+      if (this.publisher.keydown(event as KeyboardEvent)) return;
       if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
         this.closePanel();
         return;
@@ -2232,6 +2247,7 @@ export class QaCrawlerDashboard extends Base {
     if (target.tagName === 'A') event.preventDefault();
     if (action?.startsWith('review-') && this.reviewClick(action, target)) return;
     if (action?.startsWith('lib-') && this.libraryClick(action, target)) return;
+    if (action?.startsWith('pub-') && this.publisher.click(action, target)) return;
     if (action?.startsWith('tst-') && this.testsClick(action, target)) return;
     if (action?.startsWith('ed-') && this.editor.click(action, target)) return;
     switch (action) {
@@ -2619,6 +2635,7 @@ export class QaCrawlerDashboard extends Base {
       this.libraryField(target.dataset.lib, target.value);
       return;
     }
+    if (target.dataset.pub && this.publisher.change(target)) return;
     if (target.dataset.tst) {
       this.testsField(target.dataset.tst, target);
       return;

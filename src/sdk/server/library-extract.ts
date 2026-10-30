@@ -397,7 +397,8 @@ export function planExtraction(
         );
     }
     const firstIndex = positions[0] ?? 1;
-    if (!navigate && firstIndex > 1 && kindOf(steps[0]) !== 'goto')
+    const midway = !navigate && firstIndex > 1 && kindOf(steps[0]) !== 'goto';
+    if (midway)
       warnings.push(
         `it starts in the middle of the recording: composed after another block, it plays where that block left off (its start page ${startAt} is not visited)`,
       );
@@ -437,6 +438,7 @@ export function planExtraction(
       contract,
       dependencies,
       transformations,
+      midway,
       validation: { ok: blockErrors.length === 0, errors: blockErrors, warnings },
     };
     return {
