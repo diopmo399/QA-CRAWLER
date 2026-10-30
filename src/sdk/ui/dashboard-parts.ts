@@ -54,6 +54,7 @@ const ICONS: Record<string, string> = {
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   check: '<path d="M5 12l5 5 9-10"/>',
   history: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   requirements: '<path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M5 17a3 3 0 013-3h11M9 8h6"/>',
@@ -67,12 +68,30 @@ const ICONS: Record<string, string> = {
   access: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
   download: '<path d="M12 4v11M8 11l4 4 4-4"/><path d="M4 17v1a2 2 0 002 2h12a2 2 0 002-2v-1"/>',
   library: '<path d="M4 4h4v16H4zM10 4h4v16h-4z"/><path d="M16.5 4.5l3.5 1-4 15-3.5-1z"/>',
+  editor: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>',
+  tests: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 001.7 3h10.6a2 2 0 001.7-3l-5-9V3"/><path d="M7.5 15h9"/>',
   scenarios:
     '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
   explorations: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   environments:
     '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   cross: '<path d="M6 6l12 12M18 6L6 18"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+  up: '<path d="M6 15l6-6 6 6"/>',
+  down: '<path d="M6 9l6 6 6-6"/>',
+  right: '<path d="M9 6l6 6-6 6"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3"/>',
+  grip: '<circle cx="9" cy="6" r="1.2"/><circle cx="15" cy="6" r="1.2"/><circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/><circle cx="9" cy="18" r="1.2"/><circle cx="15" cy="18" r="1.2"/>',
+  data: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/>',
+  save: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
+  code: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>',
+  sliders:
+    '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  maximize: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
+  minimize: '<path d="M4 14h6v6M20 10h-6V4M10 14l-7 7M14 10l7-7"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
 };
 
 export const icon = (name: string): string =>
@@ -164,4 +183,25 @@ export function checkLines(t: DashboardStrings, check: EnvironmentCheck | undefi
       : []),
   ];
   return lines.length > 0 ? `<ul class="checks">${lines.join('')}</ul>` : '';
+}
+
+/** Les ralentis proposés pour un navigateur visible (ms par geste). */
+export const SLOW_MO_CHOICES = [0, 250, 500, 1000] as const;
+
+/**
+ * « Navigateur visible » et son ralenti : `attr` lie les champs à leur écran (`data-ed` dans l'éditeur,
+ * `data-bind` dans le lancement). Indisponible (désactivé, avec la raison) quand le serveur n'a pas d'écran.
+ */
+export function visibleBrowserControl(
+  t: DashboardStrings['visibleBrowser'],
+  value: { headed: boolean; slowMoMs: number },
+  options: { attr: 'data-ed' | 'data-bind'; available: boolean; disabled?: boolean },
+): string {
+  const off = !options.available || options.disabled === true;
+  const title = options.available ? t.hint : t.noDisplay;
+  const slow =
+    value.headed && options.available
+      ? `<label class="vb-slow"><span class="sr">${esc(t.slowMo)}</span><select ${options.attr}="slow-mo" ${options.disabled ? 'disabled' : ''}>${SLOW_MO_CHOICES.map((ms) => `<option value="${String(ms)}" ${value.slowMoMs === ms ? 'selected' : ''}>${esc(ms === 0 ? t.none : `${t.slowMo} · ${t.ms(ms)}`)}</option>`).join('')}</select></label>`
+      : '';
+  return `<span class="vb" role="group" aria-label="${esc(t.label)}"><label class="vb-tog${off ? ' off' : ''}" title="${esc(title)}"><input type="checkbox" ${options.attr}="headed" ${value.headed && options.available ? 'checked' : ''} ${off ? 'disabled' : ''}>${icon('eye')}<span>${esc(t.label)}</span></label>${slow}</span>`;
 }

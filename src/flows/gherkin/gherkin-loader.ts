@@ -172,6 +172,8 @@ export function gherkinFlows(
           ...checked,
           ...(allow.length > 0 ? { allow } : {}),
           ...(optional ? { optional: true } : {}),
+          // La ligne de la phrase (journal du run) ; une inclusion (`run`) ne prend que son nom.
+          ...(line !== undefined && checked.run === undefined ? { sourceLine: line } : {}),
         });
       });
     }

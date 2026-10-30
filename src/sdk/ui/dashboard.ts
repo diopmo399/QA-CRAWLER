@@ -1,10 +1,21 @@
 import { createQaCrawler, QaCrawlerError, type QaCrawlerClient, type Subscription } from '../core/client.js';
-import { DASHBOARD_EVENTS, type Environment, type Role } from '../core/contracts.js';
+import {
+  DASHBOARD_EVENTS,
+  GENERATION_FORMATS,
+  type Environment,
+  type GenerationFormatName,
+  type Role,
+} from '../core/contracts.js';
 import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
 import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashboard-recordings.js';
 import { compositionKey, emptyLibraryUi, runnableScenarios, type LibraryUi } from './dashboard-library.js';
+import { activeRuns, emptyTestsUi, finishedRecordings } from './dashboard-tests.js';
+import { emptyEditorUi } from './dashboard-editor.js';
+import { EditorController, type EditorHost } from './dashboard-editor-controller.js';
+import { PublishController, type PublishHost } from './dashboard-publish-controller.js';
+import { LibraryController, type LibraryHost } from './dashboard-library-controller.js';
 import {
   assertionBuckets,
   bindFormOf,
@@ -86,6 +97,12 @@ export class QaCrawlerDashboard extends Base {
   private recSubscription?: Subscription;
   private replayTimer?: ReturnType<typeof setTimeout>;
   private correctionTimer?: ReturnType<typeof setTimeout>;
+  /** L'éditeur des tests générés (écran Éditeur). */
+  private readonly editor: EditorController;
+  private readonly publisher: PublishController;
+  private readonly library: LibraryController;
+  /** Le suivi des exécutions de tests générés en cours (écran Tests). */
+  private testsTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
   private generation = 0;
   /** Le fichier choisi pour un import (jamais dans l'état rendu). */
@@ -112,7 +129,47 @@ export class QaCrawlerDashboard extends Base {
       access: emptyAccessUi(),
       recs: emptyRecordingsUi(),
       lib: emptyLibraryUi(),
+      tst: emptyTestsUi(),
+      ed: emptyEditorUi(),
     };
+    // Le contrôleur de l'éditeur voit l'état courant du Dashboard (lu à chaque accès).
+    const host = {
+      root: this.root,
+      api: () => this.api,
+      paint: () => {
+        this.paint();
+      },
+      navigate: (route: DashboardRoute) => {
+        this.navigate(route);
+      },
+    };
+    Object.defineProperty(host, 'state', { get: () => this.state });
+    this.editor = new EditorController(host as EditorHost);
+    // La publication de groupes métier (revue) : relit la bibliothèque et le projet après une publication.
+    const publishHost = {
+      root: this.root,
+      api: () => this.api,
+      paint: () => {
+        this.paint();
+      },
+      refresh: () => this.load(),
+    };
+    Object.defineProperty(publishHost, 'state', { get: () => this.state });
+    this.publisher = new PublishController(publishHost as PublishHost);
+    // La fiche d'un bloc (onglets, détail, comparaison avec la source) et l'affichage du catalogue.
+    const libraryHost = {
+      root: this.root,
+      api: () => this.api,
+      paint: () => {
+        this.paint();
+      },
+      navigate: (route: DashboardRoute) => {
+        this.navigate(route);
+      },
+      refresh: () => this.load(),
+    };
+    Object.defineProperty(libraryHost, 'state', { get: () => this.state });
+    this.library = new LibraryController(libraryHost as LibraryHost);
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
     });
@@ -128,6 +185,8 @@ export class QaCrawlerDashboard extends Base {
       if (form === 'rec-checkpoint') void this.recordingControl('checkpoint');
       if (form?.startsWith('review-')) this.reviewSubmit(event.target as HTMLFormElement);
       if (form?.startsWith('lib-')) this.librarySubmit(event.target as HTMLFormElement);
+      if (form === 'tst-generate') void this.testsGenerate();
+      if (form === 'ed-add-submit') this.editor.submit(event.target as HTMLFormElement);
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
@@ -150,6 +209,9 @@ export class QaCrawlerDashboard extends Base {
         this.libraryField(target.dataset.lib, target.value);
         return;
       }
+      if (target.dataset.pub && this.publisher.input(target as HTMLInputElement)) return;
+      if ((target.dataset.ed || target.dataset.edAdd) && this.editor.input(target as HTMLInputElement))
+        return;
       const review = this.state.review;
       const reviewField = target.dataset.review;
       if (review && reviewField) {
@@ -188,7 +250,13 @@ export class QaCrawlerDashboard extends Base {
       if (!name || !this.state.envForm || name === 'writes') return;
       (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
     });
+    this.root.addEventListener('pointerdown', (event) => {
+      this.editor.pointerDown(event as PointerEvent);
+    });
     this.root.addEventListener('keydown', (event) => {
+      if (this.editor.keydown(event as KeyboardEvent)) return;
+      if (this.publisher.keydown(event as KeyboardEvent)) return;
+      if (this.library.keydown(event as KeyboardEvent)) return;
       if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
         this.closePanel();
         return;
@@ -234,12 +302,14 @@ export class QaCrawlerDashboard extends Base {
 
   disconnectedCallback(): void {
     this.connected = false;
+    this.editor.dispose();
     this.unsubscribe();
     this.unfollowRecording();
     if (this.replayTimer) clearTimeout(this.replayTimer);
     this.replayTimer = undefined;
     if (this.correctionTimer) clearTimeout(this.correctionTimer);
     this.correctionTimer = undefined;
+    this.stopTestsPolling();
     this.ownClient?.dispose();
     this.ownClient = undefined;
   }
@@ -839,6 +909,246 @@ export class QaCrawlerDashboard extends Base {
     this.paint();
   }
 
+  // ── Tests générés ────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * L'enregistrement affiché (celui de la route, le précédent, sinon le premier terminé), sa vue :
+   * fichiers générés, outils du serveur, exécutions. Une exécution en cours est suivie.
+   */
+  private async loadTests(
+    api: QaCrawlerClient,
+    projectId: string,
+    wanted: string | undefined,
+    generation: number,
+  ): Promise<void> {
+    const ui = this.state.tst;
+    const names = finishedRecordings(this.state);
+    const name =
+      [wanted, ui.recording].find((entry) => entry !== undefined && names.includes(entry)) ?? names[0];
+    if (name !== ui.recording) {
+      ui.view = undefined;
+      ui.file = undefined;
+      ui.run = undefined;
+      ui.error = undefined;
+      ui.details = undefined;
+      ui.notice = undefined;
+      ui.confirmRestore = undefined;
+      ui.overwrite = undefined;
+    }
+    ui.recording = name;
+    if (!name) return;
+    const view = await api.generation.view(projectId, name);
+    if (generation !== this.generation) return;
+    ui.view = view;
+    if (activeRuns(view).length > 0) this.pollTests(api, projectId, name);
+  }
+
+  private stopTestsPolling(): void {
+    if (this.testsTimer) clearTimeout(this.testsTimer);
+    this.testsTimer = undefined;
+  }
+
+  /** Les exécutions en cours : la vue est relue chaque seconde et demie, jusqu'à leur fin. */
+  private pollTests(api: QaCrawlerClient, projectId: string, name: string): void {
+    if (this.testsTimer) return;
+    this.testsTimer = setTimeout(() => {
+      this.testsTimer = undefined;
+      const route = this.state.route;
+      if (route.view !== 'tests' || this.state.tst.recording !== name) return;
+      void api.generation
+        .view(projectId, name)
+        .then((view) => {
+          if (this.state.tst.recording !== name) return;
+          this.state.tst.view = view;
+          if (activeRuns(view).length > 0) this.pollTests(api, projectId, name);
+          this.paint();
+        })
+        .catch(() => {
+          // Une lecture manquée n'arrête pas le suivi : la suivante réessaie.
+          this.pollTests(api, projectId, name);
+        });
+    }, 1500);
+  }
+
+  private testsField(field: string, target: HTMLInputElement | HTMLSelectElement): void {
+    const ui = this.state.tst;
+    const route = this.state.route;
+    if (field === 'recording' && route.view === 'tests') {
+      this.navigate({ view: 'tests', projectId: route.projectId, recording: target.value });
+      return;
+    }
+    if (field === 'environment') {
+      ui.environment = target.value;
+      return;
+    }
+    if (field === 'format') {
+      const format = target.value as GenerationFormatName;
+      ui.formats = (target as HTMLInputElement).checked
+        ? GENERATION_FORMATS.filter((entry) => entry === format || ui.formats.includes(entry))
+        : ui.formats.filter((entry) => entry !== format);
+      this.paint();
+      this.root
+        .querySelector<HTMLInputElement>(`[data-tst="format"][value="${CSS.escape(format)}"]`)
+        ?.focus();
+    }
+  }
+
+  /** Une opération de l'écran Tests : une à la fois, son erreur (et ses raisons) dite dans l'écran. */
+  private async testsOp(
+    busy: string,
+    run: (api: QaCrawlerClient, projectId: string, name: string) => Promise<string | undefined>,
+  ): Promise<void> {
+    const api = this.api;
+    const route = this.state.route;
+    const ui = this.state.tst;
+    const name = ui.recording;
+    if (!api || route.view !== 'tests' || !name || ui.busy !== undefined) return;
+    ui.busy = busy;
+    ui.error = undefined;
+    ui.details = undefined;
+    ui.notice = undefined;
+    this.paint();
+    try {
+      ui.notice = await run(api, route.projectId, name);
+      const view = await api.generation.view(route.projectId, name);
+      if (ui.recording === name) ui.view = view;
+      if (activeRuns(view).length > 0) this.pollTests(api, route.projectId, name);
+    } catch (error) {
+      ui.error = message(error);
+      ui.details = detailsOf(error);
+    }
+    ui.busy = undefined;
+    this.paint();
+  }
+
+  /** Générer ; une régénération qui remplacerait des fichiers modifiés à la main attend une confirmation. */
+  private async testsGenerate(overwriteManual = false): Promise<void> {
+    const ui = this.state.tst;
+    if (ui.formats.length === 0) return;
+    await this.testsOp('generate', async (api, projectId, name) => {
+      try {
+        const result = await api.generation.run(projectId, name, {
+          formats: [...ui.formats],
+          ...(overwriteManual ? { overwriteManual: true } : {}),
+        });
+        ui.overwrite = undefined;
+        return this.state.t.tst.generated(result.files.length);
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'MANUAL_EDITS') throw error;
+        ui.overwrite = detailsOf(error);
+        return undefined;
+      }
+    });
+  }
+
+  private testsClick(action: string, target: HTMLElement): boolean {
+    const ui = this.state.tst;
+    const t = this.state.t.tst;
+    switch (action) {
+      case 'tst-run': {
+        const format = target.dataset.format as GenerationFormatName | undefined;
+        if (!format) return true;
+        const engine = ui.view?.runners.find((runner) => runner.format === format)?.kind === 'ENGINE';
+        void this.testsOp(format, async (api, projectId, name) => {
+          const run = await api.generation.execute(projectId, name, {
+            format,
+            ...(engine && ui.environment ? { environmentId: ui.environment } : {}),
+          });
+          ui.run = run.id;
+          return t.started$(t.formats[format] ?? format);
+        });
+        return true;
+      }
+      case 'tst-cancel': {
+        const id = target.dataset.run ?? '';
+        void this.testsOp('cancel', async (api, projectId, name) => {
+          await api.generation.cancel(projectId, name, id);
+          return t.cancelling;
+        });
+        return true;
+      }
+      case 'tst-open-editor':
+      case 'tst-overwrite-compare': {
+        const route = this.state.route;
+        if (route.view !== 'tests' || !ui.recording) return true;
+        const file =
+          target.dataset.path ?? (action === 'tst-overwrite-compare' ? ui.overwrite?.[0] : ui.file);
+        ui.overwrite = undefined;
+        this.navigate({
+          view: 'editor',
+          projectId: route.projectId,
+          recording: ui.recording,
+          ...(file ? { file } : {}),
+          ...(action === 'tst-overwrite-compare' ? { compare: true } : {}),
+        });
+        return true;
+      }
+      case 'tst-restore':
+        ui.confirmRestore = target.dataset.path;
+        this.paint();
+        this.root.querySelector<HTMLElement>('[data-action="tst-restore-confirm"]')?.focus();
+        return true;
+      case 'tst-restore-cancel':
+        ui.confirmRestore = undefined;
+        this.paint();
+        return true;
+      case 'tst-restore-confirm': {
+        const file = ui.view?.files.find((entry) => entry.path === target.dataset.path);
+        if (!file?.revision) return true;
+        const revision = file.revision;
+        ui.confirmRestore = undefined;
+        void this.testsOp('restore', async (api, projectId, name) => {
+          await api.generation.restoreFile(projectId, name, { path: file.path, revision });
+          return t.restored(file.path);
+        });
+        return true;
+      }
+      case 'tst-overwrite':
+        void this.testsGenerate(true);
+        return true;
+      case 'tst-overwrite-cancel':
+        ui.overwrite = undefined;
+        this.paint();
+        return true;
+      case 'tst-file': {
+        const file = target.dataset.path;
+        ui.file = ui.file === file ? undefined : file;
+        this.paint();
+        this.root
+          .querySelector<HTMLElement>(`[data-action="tst-file"][data-path="${CSS.escape(file ?? '')}"]`)
+          ?.focus();
+        return true;
+      }
+      case 'tst-open-run': {
+        const id = target.dataset.run;
+        ui.run = ui.run === id ? undefined : id;
+        this.paint();
+        this.root
+          .querySelector<HTMLElement>(`[data-action="tst-open-run"][data-run="${CSS.escape(id ?? '')}"]`)
+          ?.focus();
+        return true;
+      }
+      case 'tst-report': {
+        const api = this.api;
+        const route = this.state.route;
+        const id = target.dataset.run;
+        if (!api || route.view !== 'tests' || !ui.recording || !id) return true;
+        api.generation
+          .reportLink(route.projectId, ui.recording, id)
+          .then((link) => {
+            globalThis.open(link.url, '_blank', 'noopener');
+          })
+          .catch((error: unknown) => {
+            ui.error = message(error);
+            this.paint();
+          });
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
   private checkSequence = 0;
 
   /** VÉRIFIER LE PARCOURS (dry run de composition, sur le serveur) : ordre, dépendances, données. */
@@ -923,12 +1233,8 @@ export class QaCrawlerDashboard extends Base {
       case 'lib-panel-close':
         this.closePanel();
         return true;
-      case 'lib-open':
-        lib.open = lib.open === block ? undefined : block;
-        this.paint();
-        return true;
       case 'lib-clear':
-        Object.assign(lib, { query: '', origin: 'ALL', state: 'ALL', usage: 'ALL' });
+        Object.assign(lib, { query: '', origin: 'ALL', state: 'ALL', usage: 'ALL', kind: 'ALL' });
         this.paint();
         return true;
       case 'lib-jump':
@@ -1210,11 +1516,14 @@ export class QaCrawlerDashboard extends Base {
   }
 
   private navigate(route: DashboardRoute): void {
+    // L'éditeur garde les modifications non enregistrées : la page le demande avant de partir.
+    if (!this.editor.guard(route)) return;
     if (route.view !== 'execution') this.unsubscribe();
     if (route.view !== 'recordings') {
       this.unfollowRecording();
       this.state.recs.live = undefined;
     }
+    if (route.view !== 'tests') this.stopTestsPolling();
     if (route.view !== 'recording') {
       if (this.replayTimer) clearTimeout(this.replayTimer);
       this.replayTimer = undefined;
@@ -1302,6 +1611,7 @@ export class QaCrawlerDashboard extends Base {
         const blocks = await api.library.list(route.projectId);
         if (generation !== this.generation) return;
         this.state.lib.blocks = blocks;
+        this.library.restore(route.projectId);
         const panel = this.state.lib.panel;
         const scenarios = runnableScenarios(this.state.project?.scenarios ?? []).filter(
           (scenario) => scenario.format === 'yaml',
@@ -1314,6 +1624,15 @@ export class QaCrawlerDashboard extends Base {
           this.pendingPanel = undefined;
           this.openPanel(scenario);
         }
+      } else if (route.view === 'tests') {
+        await this.loadProject(api, route.projectId, generation);
+        const recordings = await api.recordings.list(route.projectId);
+        if (generation !== this.generation) return;
+        this.state.recordings = recordings;
+        await this.loadTests(api, route.projectId, route.recording, generation);
+      } else if (route.view === 'editor') {
+        await this.loadProject(api, route.projectId, generation);
+        await this.editor.load(api, route, () => generation === this.generation);
       } else if (route.view === 'environments') {
         await this.loadProject(api, route.projectId, generation);
         if (generation !== this.generation) return;
@@ -1804,13 +2123,15 @@ export class QaCrawlerDashboard extends Base {
     this.state.launch.error = undefined;
     this.paint();
     try {
-      const { kind, environmentId, scenarios } = this.state.launch;
+      const { kind, environmentId, scenarios, headed, slowMoMs } = this.state.launch;
+      const visible = headed ? { headed: true, slowMoMs: slowMoMs ?? 0 } : {};
       const started =
         kind === 'EXPLORATION'
-          ? await api.explorations.start(project.id)
+          ? await api.explorations.start(project.id, visible)
           : await api.executions.start(project.id, {
               ...(environmentId ? { environmentId } : {}),
               ...(scenarios.length > 0 ? { scenarios } : {}),
+              ...visible,
             });
       this.state.launch.busy = false;
       this.emit(DASHBOARD_EVENTS.executionStarted, { projectId: project.id, exploration: started });
@@ -1853,10 +2174,12 @@ export class QaCrawlerDashboard extends Base {
     const project = this.state.project;
     if (!project) return;
     this.state.launch = {
+      ...this.state.launch,
       kind: 'REPLAY',
       environmentId: environmentId ?? '',
       scenarios,
       busy: false,
+      error: undefined,
     };
     await this.launch();
   }
@@ -1937,7 +2260,16 @@ export class QaCrawlerDashboard extends Base {
     const api = this.api;
     if (target.tagName === 'A') event.preventDefault();
     if (action?.startsWith('review-') && this.reviewClick(action, target)) return;
+    if (
+      action &&
+      (action.startsWith('lib-') || action === 'nav-recording') &&
+      this.library.click(action, target)
+    )
+      return;
     if (action?.startsWith('lib-') && this.libraryClick(action, target)) return;
+    if (action?.startsWith('pub-') && this.publisher.click(action, target)) return;
+    if (action?.startsWith('tst-') && this.testsClick(action, target)) return;
+    if (action?.startsWith('ed-') && this.editor.click(action, target)) return;
     switch (action) {
       case 'menu':
         this.state.menuOpen = !this.state.menuOpen;
@@ -1959,6 +2291,8 @@ export class QaCrawlerDashboard extends Base {
           view === 'scenarios' ||
           view === 'recordings' ||
           view === 'library' ||
+          view === 'tests' ||
+          view === 'editor' ||
           view === 'explorations' ||
           view === 'environments' ||
           view === 'sources' ||
@@ -2294,6 +2628,10 @@ export class QaCrawlerDashboard extends Base {
       lib.usage = value as LibraryUi['usage'];
     else if (part === 'sort' && ['name', 'steps', 'usage', 'updated'].includes(value))
       lib.sort = value as LibraryUi['sort'];
+    else if (part === 'kind' && ['ALL', 'standalone', 'composite'].includes(value))
+      lib.kind = value as LibraryUi['kind'];
+    else if (part === 'groupBy' && ['none', 'origin'].includes(value))
+      lib.groupBy = value as LibraryUi['groupBy'];
     else if (part === 'compose' && key === 'name') {
       lib.compose.name = value;
       return;
@@ -2311,7 +2649,10 @@ export class QaCrawlerDashboard extends Base {
     else if (part === 'group' && key === 'name' && lib.group) lib.group.name = value;
     else return;
     // La recherche, les critères et le nom du bloc (sa validation) se voient tout de suite.
-    if (['query', 'origin', 'state', 'usage', 'sort'].includes(part) || (part === 'panel' && key === 'name'))
+    if (
+      ['query', 'origin', 'state', 'usage', 'sort', 'kind', 'groupBy'].includes(part) ||
+      (part === 'panel' && key === 'name')
+    )
       this.paint();
   }
 
@@ -2321,6 +2662,12 @@ export class QaCrawlerDashboard extends Base {
       this.libraryField(target.dataset.lib, target.value);
       return;
     }
+    if (target.dataset.pub && this.publisher.change(target)) return;
+    if (target.dataset.tst) {
+      this.testsField(target.dataset.tst, target);
+      return;
+    }
+    if (this.state.route.view === 'editor' && this.editor.change(target)) return;
     const review = this.state.review;
     if (review && this.state.route.view === 'recording') {
       const pick = target.dataset.reviewPick;
@@ -2428,6 +2775,8 @@ export class QaCrawlerDashboard extends Base {
         route.view === 'scenarios' ||
         route.view === 'recordings' ||
         route.view === 'library' ||
+        route.view === 'tests' ||
+        route.view === 'editor' ||
         route.view === 'explorations' ||
         route.view === 'environments' ||
         route.view === 'sources' ||
@@ -2532,6 +2881,13 @@ export class QaCrawlerDashboard extends Base {
       this.paint();
       return;
     }
+    if (target.dataset.bind === 'headed' || target.dataset.bind === 'slow-mo') {
+      if (target.dataset.bind === 'headed') this.state.launch.headed = (target as HTMLInputElement).checked;
+      else this.state.launch.slowMoMs = Number(target.value) || 0;
+      this.paint();
+      this.root.querySelector<HTMLElement>(`[data-bind="${target.dataset.bind}"]`)?.focus();
+      return;
+    }
     if (target.dataset.bind === 'scenario') {
       const chosen = new Set(this.state.launch.scenarios);
       if ((target as HTMLInputElement).checked) chosen.add(target.value);
@@ -2549,20 +2905,35 @@ export class QaCrawlerDashboard extends Base {
       focused?.dataset.bind ??
       focused?.dataset.field ??
       focused?.dataset.req ??
-      focused?.dataset.lib;
+      focused?.dataset.lib ??
+      focused?.dataset.edField ??
+      focused?.dataset.edAdd ??
+      focused?.dataset.ed;
     const focusValue = (focused as HTMLInputElement | null)?.value;
+    // Les champs validés par « change », sans brouillon dans l'état : leur saisie en cours doit survivre à
+    // un redessin venu d'ailleurs (événement du serveur, console, plan recalculé), sinon elle est perdue.
+    const typed =
+      (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement) &&
+      focused.matches(KEEP_TYPING) &&
+      focused.type !== 'checkbox'
+        ? focused.value
+        : undefined;
     // Le même bouton d'une liste (même bloc, même rang), et le curseur d'un champ texte, retrouvés.
     const focusTwin = `${focused?.dataset.block ?? ''}|${focused?.dataset.index ?? ''}|${focused?.dataset.direction ?? ''}`;
     const caret =
       focused instanceof HTMLInputElement && ['text', 'search'].includes(focused.type)
         ? focused.selectionStart
         : null;
+    this.editor.beforePaint();
     this.root.innerHTML = `<style>${DASHBOARD_CSS}</style>${renderDashboard(this.state)}`;
+    // L'éditeur de code et la comparaison reviennent dans la page redessinée.
+    this.editor.afterPaint();
+    if (focused?.closest('.cm-editor')) return;
     if (focusKey) {
       const key = CSS.escape(focusKey);
       const candidates = [
         ...this.root.querySelectorAll<HTMLElement>(
-          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"]`,
+          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"],[data-ed-field="${key}"],[data-ed-add="${key}"],[data-ed="${key}"]`,
         ),
       ];
       const twin = candidates.find(
@@ -2573,10 +2944,20 @@ export class QaCrawlerDashboard extends Base {
       const same = candidates.find((element) => (element as HTMLInputElement).value === focusValue);
       const target = (focusTwin !== '||' ? twin : undefined) ?? same ?? candidates[0];
       target?.focus();
+      // Après le focus : le navigateur compare à la valeur au moment du focus, « change » partira.
+      if (
+        typed !== undefined &&
+        (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+        target.value !== typed
+      )
+        target.value = typed;
       if (caret !== null && target instanceof HTMLInputElement) target.setSelectionRange(caret, caret);
     }
   }
 }
+
+/** Les champs dont la saisie en cours est gardée au redessin (voir paint). */
+const KEEP_TYPING = '[data-ed-field],[data-pub="name"],[data-pub="description"]';
 
 export function defineDashboard(name = 'qa-crawler-dashboard'): void {
   if (!('customElements' in globalThis) || customElements.get(name)) return;

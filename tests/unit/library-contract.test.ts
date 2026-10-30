@@ -199,6 +199,33 @@ describe('composition check (dry run, nothing is run)', () => {
     expect(reversed.errors).toContain('#1 "Chercher un élément" needs item.title, produced only later by #2');
   });
 
+  it('a block with a start page that does not go there is told: composed after another, it plays where that one stops', () => {
+    const withStart = (block: CompositionPart, startsWithGoto: boolean): CompositionPart => ({
+      ...block,
+      block: {
+        ...(block.block as NonNullable<CompositionPart['block']>),
+        startAt: '/search',
+        startsWithGoto,
+      },
+    });
+    const told = checkComposition({
+      name: 'Créer puis chercher',
+      parts: [withStart(part(CREATE), false), withStart(part(SEARCH), false)],
+      taken: [],
+    });
+    // Le premier bloc part de la page du scénario : seul le suivant est signalé.
+    expect(told.warnings).toEqual([
+      '#2 "Chercher un élément" starts on /search without going there: it plays where #1 stops',
+    ]);
+    expect(told.ok).toBe(true);
+    const going = checkComposition({
+      name: 'Créer puis chercher',
+      parts: [part(CREATE), withStart(part(SEARCH), true)],
+      taken: [],
+    });
+    expect(going.warnings).toEqual([]);
+  });
+
   it('structure: a name is required and free; an unknown part, a scenario, an empty journey are errors', () => {
     const check = checkComposition({
       name: 'Pris',

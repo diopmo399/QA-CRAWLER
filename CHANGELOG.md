@@ -32,6 +32,96 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Extraire plusieurs groupes métier d'un enregistrement vers la bibliothèque** (ADR 0002) :
+  - un, plusieurs ou tous les groupes du Recorder, ou une partie d'un groupe ; un bloc par groupe ou
+    un bloc composé qui garde ses groupes internes et leurs identifiants ;
+  - plan calculé sans rien écrire : étapes, données restreintes à ce que le bloc utilise, contrat,
+    dépendances (produite par un autre bloc, par un groupe non choisi, ailleurs ou nulle part ; valeur
+    fournie explicitement), départ au milieu de l'enregistrement, groupes internes non consécutifs ;
+  - publication tout ou rien après validation (schéma, données, contrat, noms), en version 1, avec la
+    provenance complète ; comparaison avec la source et mise à jour demandée, à revalider ;
+  - API : `library.planExtraction`, `publishExtraction`, `details`, `compareSource`,
+    `updateFromSource`.
+- **Revue d'un enregistrement, onglet Publier** : faits de l'enregistrement et action principale ;
+  groupes avec leurs données et dépendances, panneau du groupe (étapes à garder), résumé du plan,
+  ajout du producteur manquant ou valeur fournie, aperçu de chaque bloc, publication.
+- **Bibliothèque refondue** : catalogue compact (grille ou liste, type, regroupement par origine,
+  récents), fiche à onglets (étapes, contrat, données, graphe des dépendances, versions, provenance et
+  comparaison avec la source), compositeur en trois colonnes avec le contrat du parcours.
+- La vérification d'un parcours avertit quand un bloc a une page de départ sans y aller.
+- **Console d'exécution dans l'éditeur** : le journal réel d'une exécution (Dry Run ou Rejouer), en
+  direct, pour les quatre formats :
+  - le moteur (YAML, `.feature`) : début et fin de chaque étape avec sa ligne, effet exécuté ou
+    confirmé, requêtes de l'étape, résolutions de cible, réparations proposées, anomalies ;
+  - le Dry Run : intentions et verdict de chaque étape attendue ;
+  - Playwright Test : un reporter donne chaque geste et vérification avec sa ligne et son étape ;
+  - Java : Maven et le journal du pilote Playwright (`DEBUG=pw:api`).
+
+  Onglets Console, Étapes, Erreurs, Réseau, Navigateur, Résumé et Diagnostics ; critères d'affichage (niveau,
+  catégorie, étape, type, statut, période, texte) ; suivi en bas et pause ; copie ; téléchargement JSON
+  ou texte ; arrêt (demandé puis confirmé) et relance ; une ligne mène à son étape et à sa ligne.
+  La console s'étend sous les trois colonnes ; une poignée règle sa hauteur, « Agrandir » lui donne tout
+  l'espace ; une seule barre d'outils, et une barre d'état sous le journal.
+
+- **Navigateur visible** : le Dry Run, Rejouer, Relancer et l'écran Exécutions (rejeu ou exploration)
+  peuvent jouer dans un navigateur visible, sur la machine du serveur, avec un ralenti au choix
+  (250 ms, 500 ms, 1 s par geste). Moteur : `browser.headless: false` ; Playwright Test : `--headed` ;
+  Java : `QA_HEADLESS=false`, `QA_SLOW_MO`. SDK : `headed` et `slowMoMs` dans `generation.execute`,
+  `executions.start` et `explorations.start` ; `capabilities().visibleBrowser`. Sans écran sur le
+  serveur, la demande est refusée (`409 NO_DISPLAY`) et la case du Dashboard dit pourquoi.
+- Dashboard : la liste d'une sélection (projet, exécution, critères) s'ouvre en un menu aux couleurs du
+  Dashboard là où le navigateur le permet (`appearance: base-select`, Chromium 135 et plus) ; ailleurs,
+  la liste du système, comme avant.
+
+- SDK : `generation.runEvents` (flux SSE du journal, reprise après une coupure sans doublon) et
+  `generation.runLogs` (export) ; contrat `RunLogEvent` ; `TestRunView.logs` (en direct, conservé,
+  indisponible). Le journal est écrit dans `events.jsonl` et masqué (secrets du run compris).
+- Moteur : `RunOptions.onLog` (le journal structuré en direct), `ExplorationListener.onFlowStepStart`
+  (début d'une étape) et `sourceLine` sur une étape venue d'une phrase Gherkin.
+- Client du SDK : après `close()`, un flux ne transmet plus les événements déjà lus du même paquet.
+
+- **Dashboard : Éditeur des tests générés** (menu Piloter, ou « Ouvrir dans l'éditeur » depuis les Tests
+  générés). Un seul écran pour le flow YAML, le `.feature`, le test Playwright et le projet Java :
+  - explorateur des fichiers, onglets, inspecteur de l'étape, diagnostics et résultats ;
+  - vue **visuelle** du flow YAML et du `.feature` (ajouter, dupliquer, supprimer après confirmation,
+    déplacer par glisser-déposer ou Alt+↑/↓, groupes) : chaque geste modifie le texte source à sa place,
+    commentaires et reste du fichier gardés, références de groupes et d'assertions renumérotées ;
+  - vue **source** avec CodeMirror 6 (coloration, numéros de ligne, recherche, repli, annulation,
+    diagnostics dans la marge, Ctrl+S) et plan des tests pour TypeScript et Java ;
+  - **comparaison** côte à côte avec la version enregistrée, la version générée ou une régénération ;
+  - actions réelles : Valider (outils du serveur), Dry Run du moteur (brouillon compris), Rejouer,
+    Enregistrer (vérifié, jamais d'écrasement silencieux), revenir à la version générée.
+- SDK : `generation.checkFile` (vérifier sans écrire), `generation.original` (version générée),
+  `generation.preview` (ce qu'une régénération écrirait) et le Dry Run des tests générés
+  (`generation.execute` avec `mode: 'DRY_RUN'`). Les refus et vérifications portent des diagnostics
+  positionnés (`GeneratedFileDiagnostic` : famille, outil, ligne, colonne, étape).
+- Java : une erreur de `mvn test-compile` donne un seul diagnostic, sur son fichier et sa ligne, avec son
+  détail (`symbol`, `location`). Elle n'est plus répétée sur chaque fichier du projet Java, et les lignes
+  d'aide de Maven ne comptent plus comme des erreurs.
+- Dépendances de développement : CodeMirror 6 et esbuild, versions fixées ; le kit de l'éditeur est
+  regroupé au build (`dist/sdk/ui/editor-kit.js`, licences à côté) et chargé à la demande.
+
+- **Dashboard : écran « Tests générés »** (menu Piloter). Pour un enregistrement terminé : générer les
+  formats choisis, lire chaque fichier et son statut de génération, puis **exécuter pour de vrai** :
+  - le flow YAML et le `.feature` rejoués par le moteur avec la mission du projet (SafetyPolicy,
+    authentification, environnement au choix), avec le rapport QA-CRAWLER ;
+  - le test Playwright lancé par Playwright Test (JUnit XML lu) ;
+  - le projet Java lancé par `mvn test` (rapports Surefire lus).
+
+  Chaque format dit l'outil du serveur et s'il est présent ; l'exécution se suit en direct, s'annule,
+  et montre les cas, les messages d'échec et la sortie de l'outil. Playwright et Java, qui pilotent
+  l'application sans la SafetyPolicy, demandent le droit `RUN_WRITES`.
+
+- **Modifier un fichier généré à la main**, depuis l'Éditeur (ou `generation.editFile`). Le
+  contenu est vérifié avec l'outil de son format avant d'être écrit ; refusé, rien ne change et les
+  raisons s'affichent. Le fichier est marqué « Modifié à la main », sa version générée est gardée
+  (« Revenir à la version générée »), une régénération qui le remplacerait demande une confirmation, et
+  une exécution dit qu'elle a joué des fichiers modifiés. Modifier un test Playwright ou Java demande
+  `RUN_WRITES`.
+- SDK : `generation.view`, `generation.execute`, `generation.runOf`, `generation.cancel`,
+  `generation.reportLink` ; routes `GET …/recordings/:name/generation` et `…/recordings/:name/test-runs`.
+  `generation.json` garde désormais les fichiers des formats non régénérés.
+
 - Export `@qa-crawler/core/requirements` : le module d'exigences depuis Node.
 - **Référentiel d'exigences : socle et connecteur Confluence** (`docs/requirements/`).
   - Audit et conception : ce qui existe, ce qui manque, les décisions, le plan.
@@ -548,6 +638,11 @@ defaults`). Test d'intégration : flows passés, panne détectée, écritures bl
   plus l'intégration). Sur une machine à 4 cœurs : de 1 250 s à environ 600 s.
 
 ### Corrigé
+
+- Un flow invalide n'entre plus dans la bibliothèque (le bloc est `INVALID`) ; un scénario invalide au
+  lancement répond 422 au lieu de 500, et l'écran Scénarios dit le refus de « Rejouer » au lieu de
+  rester muet.
+- Retirer une étape d'un enregistrement retire aussi son identifiant de son groupe métier.
 
 - **Exigences : le parent proposé reste dans sa section.** Un titre neutre (une autre section, une
   autre feuille Excel) ne remettait pas à zéro le parent proposé : un critère pouvait être rattaché

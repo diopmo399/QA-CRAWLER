@@ -1,9 +1,9 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { slug } from '../../knowledge/signatures.js';
 import { loadProjectMission, projectConfigSchema } from '../../project/project-config.js';
@@ -15,13 +15,16 @@ import {
   type RecordedFlowReplay,
 } from '../../recording/record-orchestrator.js';
 import type { ReplayOutcome } from '../../recording/recording-report.js';
-import { loadConfigFile } from '../../config/config-loader.js';
+import { ConfigError, loadConfigFile } from '../../config/config-loader.js';
+import { runDryRun } from '../../dry-run/dry-run-orchestrator.js';
 import { CorrectionBusyError, CorrectionManager, type CorrectionRuntime } from './corrections.js';
 import {
   acceptBlocks,
   addGroupToLibrary,
   addScenarioToLibrary,
+  blockDetails,
   checkCompositionOf,
+  compareWithSource,
   composeScenario,
   compositionDrift,
   declareContract,
@@ -29,11 +32,15 @@ import {
   insertBlock,
   LibraryError,
   listLibrary,
+  planGroupExtraction,
   previewSource,
+  publishGroupExtraction,
   removeFromLibrary,
+  updateFromSource,
   validateVersion,
 } from './library.js';
-import { TestDataSetError } from '../../data/test-data-set.js';
+import { revisionOfText, type ExtractionSource } from './library-extract.js';
+import { parseTestDataSet, TestDataSetError } from '../../data/test-data-set.js';
 import {
   acceptStoredGroupProposals,
   addStoredGroupCheck,
@@ -47,12 +54,18 @@ import {
   editStoredGroups,
   FLOW_FILES,
   generateStoredTests,
+  checkGeneratedFile,
+  editGeneratedFile,
+  generatedVersion,
+  generationManifest,
+  previewStoredTests,
   loadStoredRecording,
   removeStoredStep,
   storedGroupChecks,
   storedGroupProposals,
   storedGroups,
   storedTestData,
+  TEST_DATA_FILE,
   type StoredRecording,
 } from '../../recording/recording-workspace.js';
 import type { GroupCommand, GroupProposal } from '../../recording/step-groups.js';
@@ -65,6 +78,15 @@ import type {
   ErrorBody,
   ExplorationEvent,
   GenerationResult,
+  GeneratedFileView,
+  GeneratedFileCheckView,
+  GeneratedFileDiagnostic,
+  GenerationPreview,
+  GeneratedTestsView,
+  GenerationFormatName,
+  TestCaseView,
+  TestRunView,
+  RunLogEvent,
   GroupProposalView,
   RecordingReplayView,
   RowColumnInput,
@@ -82,6 +104,7 @@ import type {
   ProjectDetail,
   ProjectSummary,
   AccessMe,
+  ExtractionInput,
   JournalKind,
 } from '../core/contracts.js';
 import {
@@ -90,14 +113,34 @@ import {
   AUTH_TYPES,
   DATA_SOURCES,
   EXTENSION_NAMES,
+  EXTRACTION_MODES,
   FRAMEWORKS,
   GENERATION_FORMATS,
+  MAX_SLOW_MO_MS,
   RECORDING_CONTROLS,
   RECORDING_NAME_PATTERN,
   SDK_API_VERSION,
 } from '../core/contracts.js';
 import { isTerminal } from '../core/lifecycle.js';
-import { ExplorationManager, type MissionRunner } from './explorations.js';
+import { ExplorationManager, stepReason, type MissionRunner } from './explorations.js';
+import {
+  externalRunners,
+  listTestRuns,
+  readTestRun,
+  runDirectory,
+  runMavenTests,
+  runPlaywrightTests,
+  TEST_RUN_ID,
+  TEST_RUNS_DIR,
+  TestRunManager,
+  type TestRun,
+  type TestRunOutcome,
+  type TestRunTask,
+  type VisibleBrowser,
+} from './test-runs.js';
+import { EVENTS_FILE, eventLine, readStoredEvents } from './run-events.js';
+import { engineSource, referencedEnvNames, secretValues } from './run-log-sources.js';
+import { parseFlow } from '../editor/flow-document.js';
 import {
   RecordingBusyError,
   RecordingManager,
@@ -235,6 +278,8 @@ export interface RunningSdkServer {
   server: Server;
   explorations: ExplorationManager;
   recordings: RecordingManager;
+  /** Les exécutions des tests générés (YAML, Gherkin, Playwright, Java). */
+  testRuns: TestRunManager;
   close(): Promise<void>;
 }
 
@@ -247,7 +292,11 @@ class HttpError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
-    readonly extra: { details?: string[]; issues?: DraftIssue[] } = {},
+    readonly extra: {
+      details?: string[];
+      issues?: DraftIssue[];
+      diagnostics?: GeneratedFileDiagnostic[];
+    } = {},
   ) {
     super(message);
     this.name = 'HttpError';
@@ -282,6 +331,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     ...(options.onWarning ? { onWarning: options.onWarning } : {}),
   });
   const corrections = new CorrectionManager(options.correction);
+  const testRuns = new TestRunManager();
   const engineVersion = await readCoreVersion();
   const sseClients = new Set<ServerResponse>();
 
@@ -296,6 +346,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     tickets,
     explorations,
     recordings,
+    testRuns,
     edits: new Map(),
     replays: new Map(),
     corrections,
@@ -326,8 +377,13 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     server,
     explorations,
     recordings,
+    testRuns,
     close: async () => {
       corrections.closeAll();
+      if (testRuns.cancelAll() > 0) {
+        const settled = await testRuns.idle(options.closeGraceMs ?? 30_000);
+        if (!settled) options.onWarning?.('a generated test run was still stopping when the server closed');
+      }
       // Arrêt contrôlé : rien n'est laissé tourner, les rapports des explorations arrêtées sont écrits.
       if (explorations.cancelAll() > 0) {
         const settled = await explorations.idle(options.closeGraceMs ?? 30_000);
@@ -356,6 +412,7 @@ interface Context {
   tickets: Map<string, ReportTicket>;
   explorations: ExplorationManager;
   recordings: RecordingManager;
+  testRuns: TestRunManager;
   /** Une modification à la fois par enregistrement (décisions, groupes, génération écrivent les mêmes fichiers). */
   edits: Map<string, Promise<unknown>>;
   /** Les rejeux de validation lancés depuis le SDK, par enregistrement (projet/nom). */
@@ -497,6 +554,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     const body = await readOptionalJson(request);
     const environment = await environmentOf(project, body.environmentId);
     requireWrites(request, project.id, environment);
+    const visible = visibleBrowserOf(ctx, body);
     const loaded = await projectMission(ctx, project, 'explore', { ...(environment ? { environment } : {}) });
     const reportsDir = path.join(
       project.dir,
@@ -510,7 +568,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     });
     const exploration = ctx.explorations.start({
       projectId: project.id,
-      config: loaded.config,
+      config: withVisibleBrowser(loaded.config, visible),
       reportsDir,
       kind: 'EXPLORATION',
       env: missionEnv(ctx, environment),
@@ -653,17 +711,30 @@ async function projectMission(
     qaCrawler?: unknown;
   };
   const parsed = projectConfigSchema.parse(document.qaCrawler);
-  const loaded = await loadProjectMission(
-    { file: path.join(project.dir, PROJECT_FILE), root: project.dir, config: parsed },
-    {
-      command,
-      missionName: stored.name,
-      ...(extra.flows ? { flows: extra.flows } : {}),
-      ...(extra.extraFlows ? { extraFlows: extra.extraFlows } : {}),
-    },
-    {},
-    missionEnv(ctx, extra.environment),
-  );
+  let loaded: Awaited<ReturnType<typeof loadProjectMission>>;
+  try {
+    loaded = await loadProjectMission(
+      { file: path.join(project.dir, PROJECT_FILE), root: project.dir, config: parsed },
+      {
+        command,
+        missionName: stored.name,
+        ...(extra.flows ? { flows: extra.flows } : {}),
+        ...(extra.extraFlows ? { extraFlows: extra.extraFlows } : {}),
+      },
+      {},
+      missionEnv(ctx, extra.environment),
+    );
+  } catch (error) {
+    // Un scénario ou un bloc invalide : un refus qui dit lequel et pourquoi, jamais une erreur interne.
+    if (error instanceof ConfigError)
+      throw new HttpError(
+        422,
+        'INVALID_SCENARIO',
+        `a scenario of the project is not valid: ${error.details[0] ?? error.message.split('\n')[0] ?? ''}`,
+        { details: error.details },
+      );
+    throw error;
+  }
   // L'environnement choisi : cible, domaines, délais et limites ; ses variables passent par `env`.
   if (extra.environment) applyEnvironment(loaded.config, extra.environment);
   return loaded;
@@ -746,7 +817,7 @@ async function handleRecordings(
     throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
   }
   const name = decodeURIComponent(rawName);
-  if (!RECORDING_NAME_PATTERN.test(name) || extra !== undefined)
+  if (!RECORDING_NAME_PATTERN.test(name) || (extra !== undefined && action !== 'test-runs'))
     throw new HttpError(404, 'NOT_FOUND', 'recording not found');
   const live = ctx.recordings.get(project.id, name);
   if (action === undefined && method === 'GET') {
@@ -1047,6 +1118,27 @@ async function handleRecordings(
     sendJson(response, groupDtos(await storedRecordingOf(ctx, project, name)));
     return;
   }
+  if (action === 'library' && itemId === 'plan' && method === 'POST') {
+    // Le plan d'une publication de groupes : rien n'est écrit.
+    const input = extractionInputOf(await readJson(request));
+    const source = await extractionSourceOf(ctx, project, name);
+    if (!source) throw new HttpError(422, 'REFUSED', `the recording ${name} has no flow YAML`);
+    sendJson(response, await planGroupExtraction(project.dir, source, input));
+    return;
+  }
+  if (action === 'library' && itemId === undefined && method === 'POST') {
+    refuseArchived(project);
+    const input = extractionInputOf(await readJson(request));
+    const source = await extractionSourceOf(ctx, project, name);
+    if (!source) throw new HttpError(422, 'REFUSED', `the recording ${name} has no flow YAML`);
+    const author = authorOf(request).by;
+    sendJson(
+      response,
+      await libraryCall(() => publishGroupExtraction(project.dir, source, input, author)),
+      201,
+    );
+    return;
+  }
   if (action === 'groups' && itemId === undefined && method === 'POST') {
     const body = await readJson(request);
     const command = groupCommandOf(body.command);
@@ -1073,6 +1165,17 @@ async function handleRecordings(
       ? body.groupIds.filter((groupId): groupId is string => typeof groupId === 'string')
       : undefined;
     const result = await editRecording(ctx, project, name, async (stored): Promise<GenerationResult> => {
+      // Une modification à la main n'est jamais écrasée sans le dire.
+      const edited = ((await generationManifest(stored.directory))?.artifacts ?? []).filter(
+        (artifact) => artifact.editedAt && formats.includes(artifact.format),
+      );
+      if (edited.length > 0 && body.overwriteManual !== true)
+        throw new HttpError(
+          409,
+          'MANUAL_EDITS',
+          'files edited by hand would be replaced: confirm to regenerate them',
+          { details: edited.map((artifact) => artifact.path) },
+        );
       const outcome = await generateStoredTests(
         stored,
         { formats, ...(groupIds ? { groupIds } : {}), ...(body.force === true ? { force: true } : {}) },
@@ -1089,13 +1192,782 @@ async function handleRecordings(
           assertions: artifact.assertions,
           limits: artifact.limits,
           content: artifact.content,
+          revision: revisionOf(artifact.content),
         })),
       };
     });
     sendJson(response, result);
     return;
   }
+  if (action === 'generation' && itemId === 'check' && method === 'POST') {
+    sendJson(response, await checkGenerated(ctx, project, name, request));
+    return;
+  }
+  if (action === 'generation' && itemId === 'original' && method === 'GET') {
+    const relative = textOf(url.searchParams.get('path') ?? undefined, 300);
+    if (!relative) throw new HttpError(400, 'BAD_REQUEST', 'path is required');
+    const stored = await storedRecordingOf(ctx, project, name);
+    const content = await generatedVersion(stored.directory, relative);
+    if (typeof content !== 'string') throw new HttpError(404, 'NOT_FOUND', content.error);
+    sendJson(response, { path: relative, content });
+    return;
+  }
+  if (action === 'generation' && itemId === 'preview' && method === 'POST') {
+    const body = await readJson(request);
+    const formats = Array.isArray(body.formats)
+      ? body.formats.filter((format): format is string => typeof format === 'string')
+      : [];
+    if (
+      formats.length === 0 ||
+      formats.some((format) => !(GENERATION_FORMATS as readonly string[]).includes(format))
+    )
+      throw new HttpError(400, 'BAD_REQUEST', `formats must be among ${GENERATION_FORMATS.join(', ')}`);
+    const stored = await storedRecordingOf(ctx, project, name);
+    const outcome = previewStoredTests(
+      stored,
+      { formats, ...(body.force === true ? { force: true } : {}) },
+      { baseUrl: new URL(project.targetUrl).origin, language },
+    );
+    if ('error' in outcome) throw new HttpError(422, 'REFUSED', outcome.error);
+    const preview: GenerationPreview = {
+      warnings: outcome.warnings,
+      files: outcome.artifacts.map((artifact) => ({
+        format: artifact.format,
+        path: artifact.path,
+        content: artifact.content,
+      })),
+    };
+    sendJson(response, preview);
+    return;
+  }
+  if (action === 'generation' && (itemId === 'file' || itemId === 'restore')) {
+    if ((itemId === 'file' && method !== 'PUT') || (itemId === 'restore' && method !== 'POST'))
+      throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
+    refuseArchived(project);
+    sendJson(response, await editGenerated(ctx, project, name, itemId === 'restore', request));
+    return;
+  }
+  if (action === 'generation' && itemId === undefined && method === 'GET') {
+    sendJson(response, await generatedTestsView(ctx, project, name));
+    return;
+  }
+  if (action === 'test-runs') {
+    await handleTestRuns(ctx, project, name, itemId, extra, method, request, response);
+    return;
+  }
   throw new HttpError(404, 'NOT_FOUND', 'not found');
+}
+
+// ── Les tests générés : la vue, les exécutions ────────────────────────────────────────────────
+
+const MAX_GENERATED_FILE = 256 * 1024;
+
+const recordingDirOf = (project: StoredProject, name: string): string =>
+  path.join(recordingsDir(reportsDirOf(project)), name);
+
+/** Un chemin de generation.json, sous generated/ (jamais au-dessus). */
+function generatedPath(recordingDir: string, relative: string): string {
+  const root = path.resolve(recordingDir, 'generated');
+  const target = path.resolve(root, relative);
+  if (target !== root && !target.startsWith(`${root}${path.sep}`))
+    throw new HttpError(422, 'REFUSED', `generated path outside generated/: ${relative}`);
+  return target;
+}
+
+/** Les moteurs des formats : le rejeu QA-CRAWLER (YAML, Gherkin) toujours, les outils externes s'ils sont là. */
+async function testRunners(ctx: Context): Promise<GeneratedTestsView['runners']> {
+  const engine = `QA-CRAWLER ${ctx.engineVersion}`;
+  return [
+    { format: 'yaml', kind: 'ENGINE', tool: engine, available: true },
+    { format: 'gherkin', kind: 'ENGINE', tool: engine, available: true },
+    ...(await externalRunners(ctx.env)),
+  ];
+}
+
+async function generatedTestsView(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+): Promise<GeneratedTestsView> {
+  const stored = await storedRecordingOf(ctx, project, name);
+  const manifest = await generationManifest(stored.directory);
+  const files: GeneratedFileView[] = [];
+  for (const artifact of manifest?.artifacts ?? []) {
+    const content = await readFile(generatedPath(stored.directory, artifact.path), 'utf8').catch(
+      () => undefined,
+    );
+    // Décrit mais absent du disque : rien à montrer ni à jouer.
+    if (content === undefined) continue;
+    const truncated = content.length > MAX_GENERATED_FILE;
+    files.push({
+      format: artifact.format,
+      path: artifact.path,
+      status: artifact.status,
+      ...(artifact.validation ? { validation: artifact.validation } : {}),
+      assertions: artifact.assertions,
+      limits: artifact.limits,
+      content: truncated ? `${content.slice(0, MAX_GENERATED_FILE)}\n…` : content,
+      ...(artifact.editedAt ? { editedAt: artifact.editedAt } : {}),
+      // Montré tronqué, un fichier ne se modifie pas : il n'a pas de version de départ.
+      ...(truncated ? {} : { revision: revisionOf(content) }),
+    });
+  }
+  return {
+    recording: name,
+    ...(manifest?.generatedAt ? { generatedAt: manifest.generatedAt } : {}),
+    files,
+    warnings: manifest?.warnings ?? [],
+    runners: await testRunners(ctx),
+    runs: await listTestRuns(stored.directory, (id) => ctx.testRuns.get(id)),
+  };
+}
+
+/** L'empreinte d'un contenu : la version d'où part une modification. */
+const revisionOf = (content: string): string =>
+  createHash('sha256').update(content).digest('hex').slice(0, 12);
+
+/**
+ * MODIFIER À LA MAIN un fichier généré, ou revenir à sa version générée. La modification part de la
+ * version lue (`revision`, sinon 409 FILE_CHANGED) et n'est écrite que si elle passe la vérification
+ * de son format (422 avec les raisons). Un test Playwright ou Java tourne sans la SafetyPolicy : le
+ * modifier demande aussi RUN_WRITES.
+ */
+async function editGenerated(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  restore: boolean,
+  request: IncomingMessage,
+): Promise<GeneratedFileView> {
+  const body = await readJson(request);
+  const relative = textOf(body.path, 300);
+  const revision = textOf(body.revision, 64);
+  if (!relative || !revision) throw new HttpError(400, 'BAD_REQUEST', 'path and revision are required');
+  if (!restore && typeof body.content !== 'string')
+    throw new HttpError(400, 'BAD_REQUEST', 'content must be a string');
+  const content = restore ? undefined : (body.content as string);
+  if (content !== undefined && content.length > MAX_GENERATED_FILE)
+    throw new HttpError(
+      413,
+      'TOO_LARGE',
+      `a generated file is limited to ${String(MAX_GENERATED_FILE)} characters`,
+    );
+  return editRecording(ctx, project, name, async (stored) => {
+    const artifact = (await generationManifest(stored.directory))?.artifacts.find(
+      (entry) => entry.path === relative,
+    );
+    if (!artifact) throw new HttpError(404, 'NOT_FOUND', `${relative} is not a generated file of ${name}`);
+    if (artifact.format === 'playwright' || artifact.format === 'java') {
+      const identity = identityOf(request);
+      if (!can(identity, 'RUN_WRITES', project.id))
+        throw new HttpError(
+          403,
+          'FORBIDDEN',
+          `the role ${roleIn(identity, project.id)} does not allow editing a ${artifact.format} test: it drives the application without the QA-CRAWLER safety policy (RUN_WRITES required)`,
+        );
+    }
+    const current = await readFile(generatedPath(stored.directory, relative), 'utf8').catch(() => undefined);
+    if (current === undefined || revisionOf(current) !== revision)
+      throw new HttpError(
+        409,
+        'FILE_CHANGED',
+        `${relative} changed since it was read: reload it before editing`,
+      );
+    const outcome = await editGeneratedFile(
+      stored.directory,
+      relative,
+      content === undefined ? { restore: true } : { content },
+    );
+    if ('error' in outcome)
+      throw new HttpError(422, 'REFUSED', outcome.error, {
+        details: outcome.messages,
+        ...(outcome.diagnostics ? { diagnostics: outcome.diagnostics } : {}),
+      });
+    const saved = outcome.artifact;
+    return {
+      format: saved.format,
+      path: saved.path,
+      status: saved.status,
+      ...(saved.validation ? { validation: saved.validation } : {}),
+      assertions: saved.assertions,
+      limits: saved.limits,
+      content: outcome.content,
+      ...(saved.editedAt ? { editedAt: saved.editedAt } : {}),
+      revision: revisionOf(outcome.content),
+      diagnostics: outcome.diagnostics,
+    };
+  });
+}
+
+/** VÉRIFIER un contenu sans l'écrire : mêmes outils et mêmes droits que l'enregistrement. */
+async function checkGenerated(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  request: IncomingMessage,
+): Promise<GeneratedFileCheckView> {
+  const body = await readJson(request);
+  const relative = textOf(body.path, 300);
+  if (!relative || typeof body.content !== 'string')
+    throw new HttpError(400, 'BAD_REQUEST', 'path and content are required');
+  if (body.content.length > MAX_GENERATED_FILE)
+    throw new HttpError(
+      413,
+      'TOO_LARGE',
+      `a generated file is limited to ${String(MAX_GENERATED_FILE)} characters`,
+    );
+  const content = body.content;
+  const stored = await storedRecordingOf(ctx, project, name);
+  const check = await checkGeneratedFile(stored.directory, relative, content);
+  if ('error' in check) throw new HttpError(404, 'NOT_FOUND', check.error);
+  return {
+    path: relative,
+    status: check.artifact.status,
+    ...(check.artifact.validation ? { validation: check.artifact.validation } : {}),
+    diagnostics: check.diagnostics,
+    blocking: check.blocking,
+  };
+}
+
+async function handleTestRuns(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  runId: string | undefined,
+  sub: string | undefined,
+  method: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  if (runId === undefined) {
+    if (method === 'POST') {
+      refuseArchived(project);
+      sendJson(response, await startTestRun(ctx, project, name, request), 202);
+      return;
+    }
+    if (method === 'GET') {
+      await storedRecordingOf(ctx, project, name);
+      sendJson(response, await listTestRuns(recordingDirOf(project, name), (id) => ctx.testRuns.get(id)));
+      return;
+    }
+    throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
+  }
+  const id = decodeURIComponent(runId);
+  if (!TEST_RUN_ID.test(id)) throw new HttpError(404, 'NOT_FOUND', 'test run not found');
+  const directory = recordingDirOf(project, name);
+  const view = await readTestRun(directory, id, (key) => ctx.testRuns.get(key));
+  if (!view) throw new HttpError(404, 'NOT_FOUND', 'test run not found');
+  if (sub === undefined && method === 'GET') {
+    sendJson(response, view);
+    return;
+  }
+  if (sub === 'cancel' && method === 'POST') {
+    const live = ctx.testRuns.get(id);
+    if (!live || !ctx.testRuns.cancel(id))
+      throw new HttpError(409, 'NOT_RUNNING', `the test run is ${view.status}: nothing to cancel`);
+    sendJson(response, live.view(), 202);
+    return;
+  }
+  if (sub === 'events' && method === 'GET') {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    await streamRunEvents(
+      ctx,
+      ctx.testRuns.get(id),
+      path.join(directory, TEST_RUNS_DIR, id),
+      view,
+      afterOf(url, request),
+      response,
+    );
+    return;
+  }
+  if (sub === 'logs' && method === 'GET') {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    await sendRunLogs(
+      ctx,
+      path.join(directory, TEST_RUNS_DIR, id),
+      view,
+      url.searchParams.get('format'),
+      response,
+    );
+    return;
+  }
+  if (sub === 'report-links' && method === 'POST') {
+    if (!view.report)
+      throw new HttpError(
+        409,
+        'NO_REPORT',
+        'this run has no QA-CRAWLER report (only replays of YAML and Gherkin have one)',
+      );
+    sendJson(
+      response,
+      reportLink(ctx, request, path.join(directory, 'test-runs', id, 'report'), view.report),
+      201,
+    );
+    return;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'not found');
+}
+
+/**
+ * LANCER LES TESTS GÉNÉRÉS D'UN FORMAT. Les fichiers décrits par generation.json sont copiés dans le
+ * dossier de l'exécution (une modification de l'enregistrement à la fois : jamais une génération à moitié écrite).
+ * YAML et Gherkin passent par la mission du projet (SafetyPolicy, authentification, environnement) ;
+ * Playwright et Java pilotent l'application SANS la SafetyPolicy : ils demandent RUN_WRITES.
+ */
+async function startTestRun(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  request: IncomingMessage,
+): Promise<TestRunView> {
+  const body = await readJson(request);
+  const format = body.format;
+  if (typeof format !== 'string' || !(GENERATION_FORMATS as readonly string[]).includes(format))
+    throw new HttpError(400, 'BAD_REQUEST', `format must be one of ${GENERATION_FORMATS.join(', ')}`);
+  const engine = format === 'yaml' || format === 'gherkin';
+  if (!engine && body.environmentId !== undefined && body.environmentId !== null && body.environmentId !== '')
+    throw new HttpError(
+      422,
+      'REFUSED',
+      `a generated ${format} test runs against the URL it was generated for: choose no environment`,
+    );
+  const visible = visibleBrowserOf(ctx, body);
+  if (body.mode === 'DRY_RUN') {
+    if (!engine)
+      throw new HttpError(422, 'REFUSED', 'a Dry Run plays a flow YAML or a .feature with the engine');
+    if (body.environmentId !== undefined && body.environmentId !== null && body.environmentId !== '')
+      throw new HttpError(
+        422,
+        'REFUSED',
+        'a Dry Run targets the application of the project: choose no environment',
+      );
+    return startDryRun(ctx, project, name, format, body, visible);
+  }
+  const environment = engine ? await environmentOf(project, body.environmentId) : undefined;
+  if (engine) requireWrites(request, project.id, environment);
+  else {
+    const identity = identityOf(request);
+    if (!can(identity, 'RUN_WRITES', project.id))
+      throw new HttpError(
+        403,
+        'FORBIDDEN',
+        `the role ${roleIn(identity, project.id)} does not allow a generated ${format} test: it drives the application without the QA-CRAWLER safety policy (RUN_WRITES required)`,
+      );
+    const runner = (await externalRunners(ctx.env)).find((entry) => entry.format === format);
+    if (!runner?.available)
+      throw new HttpError(409, 'TOOL_UNAVAILABLE', runner?.reason ?? `no runner for ${format}`);
+  }
+  const prepared = await editRecording(ctx, project, name, async (stored) => {
+    const manifest = await generationManifest(stored.directory);
+    const artifacts = manifest?.artifacts.filter((artifact) => artifact.format === format) ?? [];
+    if (artifacts.length === 0)
+      throw new HttpError(409, 'NOT_GENERATED', `no ${format} test generated for ${name}: generate it first`);
+    const directory = runDirectory(stored.directory);
+    const sources = path.join(directory, engine ? 'sources' : '');
+    for (const artifact of artifacts) {
+      const target = path.join(sources, artifact.path);
+      await mkdir(path.dirname(target), { recursive: true });
+      await cp(generatedPath(stored.directory, artifact.path), target);
+    }
+    if (engine)
+      await cp(
+        path.join(stored.directory, 'generated', TEST_DATA_FILE),
+        path.join(sources, TEST_DATA_FILE),
+      ).catch(() => undefined);
+    return {
+      directory,
+      sources,
+      artifacts: artifacts.map((artifact) => artifact.path),
+      edited: artifacts.filter((artifact) => artifact.editedAt).map((artifact) => artifact.path),
+    };
+  });
+  const origin = new URL(project.targetUrl).origin;
+  const base: Omit<TestRunTask, 'tool' | 'target' | 'execute'> = {
+    projectId: project.id,
+    recording: name,
+    format: format as GenerationFormatName,
+    kind: engine ? 'ENGINE' : 'EXTERNAL',
+    directory: prepared.directory,
+    ...(environment ? { environment: { id: environment.id, name: environment.name } } : {}),
+    ...(prepared.edited.length > 0 ? { edited: prepared.edited } : {}),
+    ...(visible ? { visible } : {}),
+  };
+  if (engine) {
+    const file = prepared.artifacts.find((entry) =>
+      format === 'yaml' ? entry.endsWith('.flow.yaml') : entry.endsWith('.feature'),
+    );
+    if (!file)
+      throw new HttpError(409, 'NOT_GENERATED', `no ${format} test generated for ${name}: generate it first`);
+    const played = await readFile(path.join(prepared.sources, file), 'utf8');
+    const flow = await engineFlow(path.join(prepared.sources, file), format);
+    const loaded = await projectMission(ctx, project, 'replay', {
+      flows: [],
+      extraFlows: [flow],
+      ...(environment ? { environment } : {}),
+    });
+    const reportsDir = path.join(prepared.directory, 'report');
+    const config = withVisibleBrowser(
+      {
+        ...loaded.config,
+        output: { ...loaded.config.output, reportsDir, screenshotsDir: path.join(reportsDir, 'screenshots') },
+      },
+      visible,
+    );
+    const run = ctx.options.run ?? runMission;
+    const runEnv = missionEnv(ctx, environment);
+    const run$ = await ctx.testRuns.start({
+      ...base,
+      tool: `QA-CRAWLER ${ctx.engineVersion}`,
+      target: environment?.baseUrl ?? project.targetUrl,
+      secrets: secretValues(runEnv, [
+        ...referencedEnvNames([played, loaded.missionYaml]),
+        ...(environment?.secretEnv ?? []),
+      ]),
+      execute: async ({ signal, log, emit }): Promise<TestRunOutcome> => {
+        let phase = '';
+        const live = engineSource({
+          emit,
+          format,
+          file,
+          stepLines: format === 'yaml' ? flowStepLines(played) : undefined,
+          reportsDir,
+        });
+        const outcome = await run(config, {
+          env: runEnv,
+          signal,
+          listener: live.listener,
+          onLog: live.onLog,
+          onWarning: (message) => {
+            log(`warning: ${message}\n`);
+            emit({ level: 'WARN', category: 'ENGINE', type: 'WARNING', source: 'engine', message });
+          },
+          onProgress: (update) => {
+            if (update.state !== 'RUNNING' || update.label === phase) return;
+            phase = update.label;
+            log(`${update.label}\n`);
+            live.onPhase(update.label);
+          },
+        });
+        const result = outcome.result;
+        const cases = result.flows.map((flow) => {
+          const failing = flow.steps.find((step) => step.status === 'FAILED' || step.status === 'BLOCKED');
+          const reason = failing ? stepReason(failing) : undefined;
+          return {
+            name: redactText(flow.name),
+            status: flow.status,
+            durationMs: flow.durationMs,
+            ...(failing
+              ? { message: `step ${String(failing.index)}${reason ? `: ${reason}` : ` (${failing.status})`}` }
+              : {}),
+          };
+        });
+        const html = result.artifacts.html;
+        const relative =
+          typeof html === 'string'
+            ? path.relative(reportsDir, path.resolve(html)).split(path.sep).join('/')
+            : undefined;
+        const report = relative && !relative.startsWith('..') ? relative : undefined;
+        if (result.stopReason === 'cancelled')
+          return { status: 'CANCELLED', cases, message: 'cancelled', ...(report ? { report } : {}) };
+        const verdict =
+          cases.length === 0
+            ? 'ERROR'
+            : cases.some((entry) => entry.status === 'FAILED' || entry.status === 'BLOCKED')
+              ? 'FAILED'
+              : 'PASSED';
+        return {
+          status: verdict,
+          cases,
+          ...(verdict === 'ERROR' ? { message: 'the engine replayed no flow' } : {}),
+          ...(report ? { report } : {}),
+        };
+      },
+    });
+    return run$.view();
+  }
+  if (format === 'playwright') {
+    const spec = prepared.artifacts.find((entry) => entry.endsWith('.spec.ts'));
+    const content = spec ? await readFile(path.join(prepared.directory, spec), 'utf8').catch(() => '') : '';
+    const target = /['"`](https?:\/\/[^'"`\s]+)['"`]/.exec(content)?.[1] ?? origin;
+    const run = await ctx.testRuns.start({
+      ...base,
+      tool:
+        (await externalRunners(ctx.env)).find((entry) => entry.format === 'playwright')?.tool ??
+        'Playwright Test',
+      target,
+      secrets: secretValues(ctx.env, referencedEnvNames([content])),
+      execute: ({ signal, log, emit }) =>
+        runPlaywrightTests(prepared.directory, {
+          signal,
+          log,
+          emit,
+          ...(spec ? { played: { file: spec, source: content } } : {}),
+          env: ctx.env,
+          ...(visible ? { visible } : {}),
+        }),
+    });
+    return run.view();
+  }
+  // Le test principal (les classes de support n'ont pas de repères d'étape) et tout le code, pour les secrets.
+  const javaFiles = prepared.artifacts.filter((entry) => entry.endsWith('.java'));
+  const javaSources = await Promise.all(
+    javaFiles.map(async (entry) => ({
+      file: entry,
+      source: await readFile(path.join(prepared.directory, entry), 'utf8').catch(() => ''),
+    })),
+  );
+  const main = javaSources.find((entry) => /\/\/\s*step\s+\d+/.test(entry.source)) ?? javaSources[0];
+  const run = await ctx.testRuns.start({
+    ...base,
+    tool: (await externalRunners(ctx.env)).find((entry) => entry.format === 'java')?.tool ?? 'Apache Maven',
+    target: origin,
+    secrets: secretValues(ctx.env, referencedEnvNames(javaSources.map((entry) => entry.source))),
+    execute: ({ signal, log, emit }) =>
+      runMavenTests(prepared.directory, {
+        signal,
+        log,
+        emit,
+        ...(main ? { played: main } : {}),
+        env: ctx.env,
+        baseUrl: origin,
+        ...(visible ? { visible } : {}),
+      }),
+  });
+  return run.view();
+}
+
+/** Une étape attendue retrouvée par le Dry Run (y compris sous une autre forme), non vérifiée, ou manquante. */
+const DRY_RUN_CASE: Record<string, TestCaseView['status']> = {
+  MATCHED: 'PASSED',
+  MATCHED_SEMANTICALLY: 'PASSED',
+  MATCHED_WITH_TARGET_CHANGE: 'PASSED',
+  MATCHED_WITH_CONTEXT_CHANGE: 'PASSED',
+  MATCHED_AFTER_INSERTION: 'PASSED',
+  REORDERED: 'PASSED',
+  ALTERNATIVE: 'PASSED',
+  MISSING: 'FAILED',
+  UNREACHABLE: 'FAILED',
+  ASSERTION_MISMATCH: 'FAILED',
+  BLOCKED_BY_POLICY: 'BLOCKED',
+  AMBIGUOUS: 'SKIPPED',
+  NOT_VERIFIED: 'SKIPPED',
+  POSSIBLY_OBSOLETE: 'SKIPPED',
+  DUPLICATE_CANDIDATE: 'SKIPPED',
+};
+
+/**
+ * LE DRY RUN D'UN TEST GÉNÉRÉ : le moteur confronte le scénario (flow YAML ou .feature, enregistré ou
+ * brouillon) à l'application, avec la mission du projet (cible, connexion, SafetyPolicy) ; le fichier
+ * n'est jamais modifié. Chaque étape attendue devient un cas avec sa ligne et le statut de la
+ * réconciliation ; le verdict du Dry Run est gardé tel quel.
+ */
+async function startDryRun(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+  format: 'yaml' | 'gherkin',
+  body: Record<string, unknown>,
+  visible: VisibleBrowser | undefined,
+): Promise<TestRunView> {
+  const relative = textOf(body.path, 300);
+  if (!relative) throw new HttpError(400, 'BAD_REQUEST', 'path is required for a Dry Run');
+  if (!(format === 'yaml' ? relative.endsWith('.flow.yaml') : relative.endsWith('.feature')))
+    throw new HttpError(
+      422,
+      'REFUSED',
+      `a Dry Run plays the ${format === 'yaml' ? 'flow YAML' : '.feature'} itself`,
+    );
+  const draft = typeof body.content === 'string' ? body.content : undefined;
+  if (draft !== undefined && draft.length > MAX_GENERATED_FILE)
+    throw new HttpError(
+      413,
+      'TOO_LARGE',
+      `a generated file is limited to ${String(MAX_GENERATED_FILE)} characters`,
+    );
+  const prepared = await editRecording(ctx, project, name, async (stored) => {
+    const artifact = (await generationManifest(stored.directory))?.artifacts.find(
+      (entry) => entry.path === relative,
+    );
+    if (artifact?.format !== format)
+      throw new HttpError(409, 'NOT_GENERATED', `${relative} is not a generated ${format} file of ${name}`);
+    const directory = runDirectory(stored.directory);
+    const scenario = path.join(directory, 'sources', path.basename(relative));
+    await mkdir(path.dirname(scenario), { recursive: true });
+    if (draft !== undefined) await writeFile(scenario, draft, 'utf8');
+    else await cp(generatedPath(stored.directory, relative), scenario);
+    await cp(
+      path.join(stored.directory, 'generated', TEST_DATA_FILE),
+      path.join(directory, 'sources', TEST_DATA_FILE),
+    ).catch(() => undefined);
+    return { directory, scenario, edited: artifact.editedAt ? [relative] : [] };
+  });
+  // La mission du projet, écrite à côté du projet (ses chemins relatifs s'y résolvent), sans ses flows.
+  const loaded = await projectMission(ctx, project, 'replay', { flows: [] });
+  const derived = path.join(project.dir, '.derived');
+  await mkdir(derived, { recursive: true });
+  const missionFile = path.join(derived, `dry-run-${path.basename(prepared.directory)}.mission.yaml`);
+  await writeFile(
+    missionFile,
+    `# Derived by the SDK server for a Dry Run of ${relative}.\n${loaded.missionYaml}`,
+    'utf8',
+  );
+  const reportsDir = path.join(prepared.directory, 'report');
+  const run = await ctx.testRuns.start({
+    projectId: project.id,
+    recording: name,
+    format,
+    kind: 'ENGINE',
+    mode: 'DRY_RUN',
+    tool: `QA-CRAWLER ${ctx.engineVersion} (Dry Run)`,
+    target: project.targetUrl,
+    directory: prepared.directory,
+    ...(prepared.edited.length > 0 ? { edited: prepared.edited } : {}),
+    ...(draft !== undefined ? { draft: true } : {}),
+    ...(visible ? { visible } : {}),
+    execute: async ({ signal, log, emit }): Promise<TestRunOutcome> => {
+      try {
+        const played = await readFile(prepared.scenario, 'utf8').catch(() => '');
+        const stepLines = format === 'yaml' ? flowStepLines(played) : undefined;
+        const live = engineSource({
+          emit,
+          format,
+          file: relative,
+          ...(stepLines ? { stepLines } : {}),
+          reportsDir,
+          source: 'dry-run',
+        });
+        const result = await runDryRun({
+          scenarioFile: prepared.scenario,
+          missionFile,
+          overrides: {
+            reportsDir,
+            ...(visible ? { headless: false, slowMoMs: visible.slowMoMs } : {}),
+          },
+          env: missionEnv(ctx, undefined),
+          onEvent: (event) => {
+            log(`${event.type}: ${event.message}\n`);
+            // « <flow>#<position> » : la position de l'étape attendue dans le scénario.
+            const position = Number(/#(\d+)$/.exec(event.intentId ?? '')?.[1]);
+            const step = Number.isInteger(position) && position > 0 ? position : undefined;
+            const line = step !== undefined ? stepLines?.get(step) : undefined;
+            emit({
+              at: event.at,
+              level: /MISMATCH|MISSING|UNREACHABLE|BLOCKED/.test(event.type) ? 'WARN' : 'INFO',
+              category: /INTENT_|MATCH|MISSING|RECONCIL/.test(event.type) ? 'ASSERTION' : 'ENGINE',
+              type: event.type,
+              source: 'dry-run',
+              message: event.message,
+              scenario: event.flow,
+              file: relative,
+              ...(step !== undefined ? { step } : {}),
+              ...(line !== undefined ? { line } : {}),
+            });
+          },
+          run: {
+            signal,
+            listener: live.listener,
+            onLog: live.onLog,
+            onWarning: (message) => {
+              log(`warning: ${message}\n`);
+            },
+          },
+        });
+        const flow = result.flows[0];
+        const cases: TestCaseView[] = (flow?.reconciliation.entries ?? []).flatMap((entry) =>
+          entry.expectedIntent
+            ? [
+                {
+                  name: redactText(entry.expectedIntent.text || entry.expectedIntent.label),
+                  status: DRY_RUN_CASE[entry.status] ?? 'SKIPPED',
+                  detail: entry.status,
+                  ...(entry.expectedIntent.line ? { line: entry.expectedIntent.line } : {}),
+                  ...(format === 'yaml' ? { step: entry.expectedIntent.index } : {}),
+                  ...(entry.reasons[0] ? { message: redactText(entry.reasons[0]).slice(0, 300) } : {}),
+                },
+              ]
+            : [],
+        );
+        const lineOfIntent = (intent: { index: number; line?: number }): number | undefined =>
+          intent.line ?? stepLines?.get(intent.index);
+        // Le verdict de chaque étape attendue, avec sa position et sa ligne (réconciliation du Dry Run).
+        for (const entry of flow?.reconciliation.entries ?? []) {
+          if (!entry.expectedIntent) continue;
+          const status = DRY_RUN_CASE[entry.status] ?? 'SKIPPED';
+          emit({
+            level:
+              status === 'FAILED' || status === 'BLOCKED' ? 'ERROR' : status === 'PASSED' ? 'INFO' : 'WARN',
+            category: 'ASSERTION',
+            type: 'STEP_RECONCILED',
+            status:
+              status === 'PASSED'
+                ? 'CONFIRMED'
+                : status === 'FAILED'
+                  ? 'FAILED'
+                  : status === 'BLOCKED'
+                    ? 'BLOCKED'
+                    : 'SKIPPED',
+            source: 'dry-run',
+            message: `${entry.status}: ${entry.expectedIntent.text || entry.expectedIntent.label}${entry.reasons[0] ? ` · ${entry.reasons[0]}` : ''}`,
+            file: relative,
+            ...(flow ? { scenario: flow.graph.name } : {}),
+            ...(format === 'yaml' ? { step: entry.expectedIntent.index } : {}),
+            // La ligne : celle donnée par le Dry Run (phrase Gherkin), sinon celle de l'étape dans le YAML joué.
+            ...(lineOfIntent(entry.expectedIntent) !== undefined
+              ? { line: lineOfIntent(entry.expectedIntent) }
+              : {}),
+            ...(status === 'FAILED'
+              ? {
+                  errorKind:
+                    entry.status === 'ASSERTION_MISMATCH' ? ('ASSERTION' as const) : ('SCENARIO' as const),
+                }
+              : status === 'BLOCKED'
+                ? { errorKind: 'POLICY' as const }
+                : {}),
+          });
+        }
+        const html = path.join(result.directory, 'index.html');
+        const report = path.relative(reportsDir, html).split(path.sep).join('/');
+        if (signal.aborted)
+          return { status: 'CANCELLED', cases, message: 'cancelled', dryRunStatus: result.status, report };
+        const status =
+          cases.length === 0
+            ? 'ERROR'
+            : result.status === 'FULLY_MATCHED'
+              ? 'PASSED'
+              : result.status === 'INCONCLUSIVE'
+                ? 'ERROR'
+                : 'FAILED';
+        return {
+          status,
+          cases,
+          dryRunStatus: result.status,
+          report,
+          ...(status === 'ERROR' ? { message: `the Dry Run is ${result.status}` } : {}),
+        };
+      } finally {
+        await rm(missionFile, { force: true });
+      }
+    },
+  });
+  return run.view();
+}
+
+/** YAML : la ligne de chaque étape (position 1… → ligne), pour relier le journal au fichier joué. */
+function flowStepLines(text: string): Map<number, number> {
+  const parsed = parseFlow(text);
+  return new Map(parsed.ok ? parsed.outline.steps.map((step) => [step.position, step.line]) : []);
+}
+
+/** Le flow à rejouer : le YAML généré (ses données relues à côté de lui), ou le .feature. */
+async function engineFlow(file: string, format: 'yaml' | 'gherkin'): Promise<Record<string, unknown>> {
+  if (format === 'gherkin') return { gherkin: file };
+  const document = parseYaml(await readFile(file, 'utf8')) as unknown;
+  if (!document || typeof document !== 'object' || Array.isArray(document))
+    throw new HttpError(422, 'REFUSED', 'the generated flow YAML is not a flow');
+  const flow = document as Record<string, unknown>;
+  return typeof flow.testData === 'string' && !path.isAbsolute(flow.testData)
+    ? { ...flow, testData: path.join(path.dirname(file), flow.testData) }
+    : flow;
 }
 
 /** La mission du projet écrite en fichier (le recorder et son rejeu la lisent comme la CLI). */
@@ -1314,6 +2186,67 @@ async function libraryCall<T>(run: () => Promise<T>): Promise<T> {
  * LA BIBLIOTHÈQUE : lister les blocs ; ajouter un scénario ou un groupe d'un enregistrement ; retirer
  * un bloc qu'aucun scénario ne rejoue.
  */
+/** L'enregistrement tel que l'extraction le lit : son flow, son YAML, ses données, son empreinte. */
+async function extractionSourceOf(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+): Promise<ExtractionSource | undefined> {
+  const stored = await storedRecordingOf(ctx, project, name);
+  const text = await readFile(path.join(stored.directory, FLOW_FILES.yaml), 'utf8').catch(() => undefined);
+  if (text === undefined) return undefined;
+  const yaml = parseYaml(text) as unknown;
+  if (!yaml || typeof yaml !== 'object' || Array.isArray(yaml)) return undefined;
+  const data = stored.testData ? parseTestDataSet(parseYaml(stored.testData.yaml), name) : undefined;
+  return {
+    name,
+    flow: stored.flow,
+    yaml: yaml as Record<string, unknown>,
+    ...(data ? { data } : {}),
+    revision: revisionOfText(text),
+  };
+}
+
+/** Une sélection de groupes et ses options, vérifiées champ par champ. */
+function extractionInputOf(body: Record<string, unknown>): ExtractionInput {
+  if (!Array.isArray(body.selection) || body.selection.length === 0 || body.selection.length > 50)
+    throw new HttpError(400, 'BAD_REQUEST', 'selection must list 1 to 50 groups');
+  const selection = body.selection.map((raw: unknown) => {
+    const item = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const groupId = textOf(item.groupId, 80);
+    if (!groupId) throw new HttpError(400, 'BAD_REQUEST', 'each chosen group needs its groupId');
+    const stepIds = Array.isArray(item.stepIds)
+      ? item.stepIds.filter((id): id is string => typeof id === 'string' && id.length <= 80).slice(0, 500)
+      : undefined;
+    return { groupId, ...(stepIds && stepIds.length > 0 ? { stepIds } : {}) };
+  });
+  if (body.mode !== undefined && !(EXTRACTION_MODES as readonly unknown[]).includes(body.mode))
+    throw new HttpError(400, 'BAD_REQUEST', `mode must be one of ${EXTRACTION_MODES.join(', ')}`);
+  const names: NonNullable<ExtractionInput['names']> = {};
+  if (body.names && typeof body.names === 'object' && !Array.isArray(body.names))
+    for (const [key, raw] of Object.entries(body.names as Record<string, unknown>).slice(0, 51)) {
+      const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const named = textOf(value.name, 120);
+      const description = textOf(value.description, 500);
+      names[key.slice(0, 80)] = {
+        ...(named ? { name: named } : {}),
+        ...(description ? { description } : {}),
+      };
+    }
+  const provided: Record<string, string> = {};
+  if (body.provided && typeof body.provided === 'object' && !Array.isArray(body.provided))
+    for (const [key, value] of Object.entries(body.provided as Record<string, unknown>).slice(0, 20))
+      if (typeof value === 'string' && value.length <= 200 && /^[A-Za-z_][\w.-]*$/.test(key))
+        provided[key] = value;
+  return {
+    selection,
+    mode: body.mode === 'composite' ? 'composite' : 'separate',
+    ...(Object.keys(names).length > 0 ? { names } : {}),
+    ...(body.navigate === true ? { navigate: true } : {}),
+    ...(Object.keys(provided).length > 0 ? { provided } : {}),
+  };
+}
+
 async function handleLibrary(
   ctx: Context,
   project: StoredProject,
@@ -1335,6 +2268,21 @@ async function handleLibrary(
   }
   if (item === 'drift' && action === undefined && method === 'GET') {
     json(await compositionDrift(project.dir));
+    return;
+  }
+  if (item !== undefined && action === undefined && method === 'GET') {
+    json(await libraryCall(() => blockDetails(project.dir, decodeURIComponent(item))));
+    return;
+  }
+  const loadSource = (recording: string): Promise<ExtractionSource | undefined> =>
+    RECORDING_NAME_PATTERN.test(recording)
+      ? extractionSourceOf(ctx, project, recording).catch((error: unknown) => {
+          if (error instanceof HttpError && error.status === 404) return undefined;
+          throw error;
+        })
+      : Promise.resolve(undefined);
+  if (item !== undefined && action === 'source' && method === 'GET') {
+    json(await libraryCall(() => compareWithSource(project.dir, decodeURIComponent(item), loadSource)));
     return;
   }
   refuseArchived(project);
@@ -1393,6 +2341,10 @@ async function handleLibrary(
         declareContract(project.dir, name, body.contract === null ? null : declaredContractOf(body.contract)),
       ),
     );
+    return;
+  }
+  if (item !== undefined && action === 'source' && method === 'POST') {
+    json(await libraryCall(() => updateFromSource(project.dir, decodeURIComponent(item), loadSource)));
     return;
   }
   if (item !== undefined && action === 'version' && method === 'POST') {
@@ -1761,7 +2713,50 @@ function capabilities(ctx: Context): Capabilities {
     cancellation: true,
     safety: { blocked: [...ALWAYS_BLOCKED_RISKS] },
     extensions: Object.fromEntries(EXTENSION_NAMES.map((name) => [name, true])) as Capabilities['extensions'],
+    visibleBrowser: hasDisplay(ctx.env),
   };
+}
+
+// ── Un navigateur visible : sur la machine du serveur, pour regarder une exécution ─────────────
+
+/** Le serveur a-t-il un écran ? Sous Linux : `DISPLAY` (X11, Xvfb) ou `WAYLAND_DISPLAY`. */
+function hasDisplay(env: NodeJS.ProcessEnv): boolean {
+  if (process.platform !== 'linux') return true;
+  return Boolean(env.DISPLAY?.trim() || env.WAYLAND_DISPLAY?.trim());
+}
+
+/** `headed` et `slowMoMs` d'une requête, validés ; refusés quand le serveur n'a pas d'écran. */
+function visibleBrowserOf(ctx: Context, body: Record<string, unknown>): VisibleBrowser | undefined {
+  if (body.headed !== undefined && typeof body.headed !== 'boolean')
+    throw new HttpError(400, 'BAD_REQUEST', 'headed must be a boolean');
+  const slow = body.slowMoMs;
+  if (
+    slow !== undefined &&
+    (typeof slow !== 'number' || !Number.isInteger(slow) || slow < 0 || slow > MAX_SLOW_MO_MS)
+  )
+    throw new HttpError(
+      400,
+      'BAD_REQUEST',
+      `slowMoMs must be an integer from 0 to ${String(MAX_SLOW_MO_MS)}`,
+    );
+  if (body.headed !== true) return undefined;
+  if (!hasDisplay(ctx.env))
+    throw new HttpError(
+      409,
+      'NO_DISPLAY',
+      'the QA-CRAWLER server has no screen to show a browser on (no DISPLAY nor WAYLAND_DISPLAY): start it in a desktop session, or run without a visible browser',
+    );
+  return { slowMoMs: typeof slow === 'number' ? slow : 0 };
+}
+
+/** La mission jouée dans un navigateur visible : `browser.headless` faux, gestes ralentis. */
+function withVisibleBrowser<T extends { browser: { headless: boolean; slowMoMs: number } }>(
+  config: T,
+  visible: VisibleBrowser | undefined,
+): T {
+  return visible
+    ? { ...config, browser: { ...config.browser, headless: false, slowMoMs: visible.slowMoMs } }
+    : config;
 }
 
 async function validate(ctx: Context, raw: unknown, dir: string): ReturnType<typeof validateDraft> {
@@ -2166,6 +3161,7 @@ async function handlePlatform(
       const body = await readOptionalJson(request);
       const environment = await environmentOf(project, body.environmentId);
       requireWrites(request, project.id, environment);
+      const visible = visibleBrowserOf(ctx, body);
       const wanted = stringList(body.scenarios, 'scenarios', 50);
       const known = await listScenarios(project.dir);
       if (known.length === 0)
@@ -2224,7 +3220,7 @@ async function handlePlatform(
       });
       const execution = ctx.explorations.start({
         projectId: project.id,
-        config: loaded.config,
+        config: withVisibleBrowser(loaded.config, visible),
         reportsDir: runDir,
         kind: 'REPLAY',
         env: missionEnv(ctx, environment),
@@ -2310,6 +3306,115 @@ function streamSse<T extends { seq: number; type: string }>(
     unsubscribe();
     ctx.sseClients.delete(response);
   });
+}
+
+/**
+ * LE FLUX DU JOURNAL D'UNE EXÉCUTION (console de l'éditeur) : les événements conservés après `after`
+ * (relus sur le disque), puis, si le run est en cours, ceux qui arrivent, jusqu'à RUN_FINISHED. Les
+ * événements arrivés pendant la relecture sont tenus à part puis envoyés sans doublon (par `seq`).
+ */
+async function streamRunEvents(
+  ctx: Context,
+  live: TestRun | undefined,
+  runDir: string,
+  view: TestRunView,
+  after: number,
+  response: ServerResponse,
+): Promise<void> {
+  const active = live && !live.events.closed ? live : undefined;
+  const held: RunLogEvent[] = [];
+  let lastSeq = after;
+  let streaming = false;
+  let unsubscribe = (): void => undefined;
+  const write = (event: RunLogEvent): void => {
+    if (event.seq <= lastSeq) return;
+    lastSeq = event.seq;
+    response.write(`id: ${String(event.seq)}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  };
+  const heartbeat = setInterval(() => response.write(': keep-alive\n\n'), 15_000);
+  const end = (): void => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    ctx.sseClients.delete(response);
+    response.end();
+  };
+  if (active)
+    unsubscribe = active.events.subscribe((event) => {
+      if (!streaming) {
+        held.push(event);
+        return;
+      }
+      write(event);
+      if (event.type === 'RUN_FINISHED') end();
+    });
+  response.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  ctx.sseClients.add(response);
+  response.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    ctx.sseClients.delete(response);
+  });
+  // Ce qui n'est plus en mémoire est relu sur le disque (écrit dans l'ordre, avant la relecture).
+  if (active) await active.events.flush();
+  if (!active || after < active.events.firstInMemory - 1 || active.events.firstInMemory === 0) {
+    for (const event of (await readStoredEvents(path.join(runDir, EVENTS_FILE), { after })) ?? [])
+      write(event);
+  }
+  if (active) for (const event of active.events.eventsAfter(lastSeq)) write(event);
+  for (const event of held) write(event);
+  streaming = true;
+  const finished = !active || active.events.closed || held.some((event) => event.type === 'RUN_FINISHED');
+  if (finished) {
+    // Un run terminé sans journal (antérieur à la console) : le flux le dit et se ferme.
+    if (lastSeq === 0 && view.logs?.state === 'UNAVAILABLE')
+      response.write(
+        `event: unavailable\ndata: ${JSON.stringify({ type: 'UNAVAILABLE', runId: view.id })}\n\n`,
+      );
+    end();
+  }
+}
+
+/** Le journal d'une exécution, téléchargé : JSON (la vue et les événements) ou texte, masqué comme à l'écran. */
+async function sendRunLogs(
+  ctx: Context,
+  runDir: string,
+  view: TestRunView,
+  format: string | null,
+  response: ServerResponse,
+): Promise<void> {
+  const live = ctx.testRuns.get(view.id);
+  if (live && !live.events.closed) await live.events.flush();
+  const events = (await readStoredEvents(path.join(runDir, EVENTS_FILE))) ?? [];
+  if (events.length === 0 && view.logs?.state === 'UNAVAILABLE')
+    throw new HttpError(404, 'NO_LOGS', 'this run kept no log (it ran before the console existed)');
+  const name = `qa-crawler-${view.id}`;
+  if (format === 'text') {
+    response.writeHead(200, {
+      'content-type': 'text/plain; charset=utf-8',
+      'content-disposition': `attachment; filename="${name}.log"`,
+      'cache-control': 'no-store',
+    });
+    response.end(
+      [
+        `# QA-CRAWLER run ${view.id} · ${view.format}${view.mode === 'DRY_RUN' ? ' Dry Run' : ''} · ${view.tool} · ${view.status}`,
+        ...events.map((event) => eventLine(event)),
+        '',
+      ].join('\n'),
+    );
+    return;
+  }
+  response.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-disposition': `attachment; filename="${name}.json"`,
+    'cache-control': 'no-store',
+  });
+  const { output: _output, ...run } = view;
+  response.end(`${JSON.stringify({ run, events }, null, 2)}\n`);
 }
 
 async function checkUrl(raw: string, timeoutMs: number): Promise<UrlCheck> {
@@ -2794,6 +3899,25 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 const SDK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MODULE_CACHE = new Map<string, string>();
 
+const EDITOR_KIT_MARKER = '/* qa-crawler editor kit: bundled */';
+
+/**
+ * Le kit de l'éditeur est un module REGROUPÉ (CodeMirror et les modèles par format) : celui du build ;
+ * en développement (sources TypeScript), regroupé une fois à la demande par esbuild.
+ */
+async function editorKitModule(): Promise<string> {
+  const compiled = path.join(SDK_ROOT, 'ui', 'editor-kit.js');
+  const built = await readFile(compiled, 'utf8').catch(() => undefined);
+  if (built?.startsWith(EDITOR_KIT_MARKER)) return built;
+  const script = path.resolve(SDK_ROOT, '..', '..', 'scripts', 'editor-kit-bundle.mjs');
+  if (!(await exists(script)))
+    throw new HttpError(404, 'NOT_FOUND', 'the editor kit is not built (npm run build)');
+  const bundler = (await import(pathToFileURL(script).href)) as {
+    bundleEditorKit: (root: string) => Promise<{ code: string }>;
+  };
+  return (await bundler.bundleEditorKit(path.resolve(SDK_ROOT, '..', '..'))).code;
+}
+
 /** Les modules navigateur du SDK (core/*, ui/*) : le .js compilé, ou le .ts transpilé à la volée en développement. */
 async function serveModule(parts: string[], method: string, response: ServerResponse): Promise<void> {
   if (method !== 'GET' && method !== 'HEAD')
@@ -2803,6 +3927,10 @@ async function serveModule(parts: string[], method: string, response: ServerResp
     throw new HttpError(404, 'NOT_FOUND', 'not found');
   const key = `${folder}/${file}`;
   let code = MODULE_CACHE.get(key);
+  if (code === undefined && key === 'ui/editor-kit.js') {
+    code = await editorKitModule();
+    MODULE_CACHE.set(key, code);
+  }
   if (code === undefined) {
     const compiled = path.join(SDK_ROOT, folder, file);
     const source = path.join(SDK_ROOT, folder, file.replace(/\.js$/, '.ts'));
@@ -2894,6 +4022,7 @@ function sendError(response: ServerResponse, error: unknown): void {
     code: http?.code ?? 'INTERNAL',
     ...(http?.extra.details ? { details: http.extra.details } : {}),
     ...(http?.extra.issues ? { issues: http.extra.issues } : {}),
+    ...(http?.extra.diagnostics ? { diagnostics: http.extra.diagnostics } : {}),
   };
   if (response.headersSent) {
     response.end();

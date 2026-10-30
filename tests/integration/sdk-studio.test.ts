@@ -219,7 +219,10 @@ describe('Flow Studio — real recording, real replay, real engine commands', ()
     await inStudio('#qa-group-name').fill('Consulter la fiche');
     await inStudio('form[data-form="rename"] button').click();
     await expect.poll(async () => (await view()).groups[0]?.name).toBe('Consulter la fiche');
-    expect(await inStudio(`[data-frame="${group.id}"] .fn`).textContent()).toContain('Consulter la fiche');
+    // Le Studio repeint après avoir relu sa vue : l'écran suit le serveur, un instant plus tard.
+    await expect
+      .poll(() => inStudio(`[data-frame="${group.id}"] .fn`).textContent())
+      .toContain('Consulter la fiche');
   });
 
   it('shows a refusal of the engine in words, and nothing changes', async () => {

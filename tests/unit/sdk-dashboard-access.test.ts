@@ -1,4 +1,6 @@
 import { emptyLibraryUi } from '../../src/sdk/ui/dashboard-library.js';
+import { emptyEditorUi } from '../../src/sdk/ui/dashboard-editor.js';
+import { emptyTestsUi } from '../../src/sdk/ui/dashboard-tests.js';
 import { describe, expect, it } from 'vitest';
 import { parseSdkServerArgs } from '../../src/cli/sdk-server-command.js';
 import type { AccessMe, JournalEntry, MemberView, ProjectDetail } from '../../src/sdk/core/contracts.js';
@@ -73,6 +75,8 @@ const base = (
   access: { ...emptyAccessUi(), ...access },
   recs: emptyRecordingsUi(),
   lib: emptyLibraryUi(),
+  tst: emptyTestsUi(),
+  ed: emptyEditorUi(),
   ...extra,
 });
 

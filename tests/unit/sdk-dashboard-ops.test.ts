@@ -1,4 +1,6 @@
 import { emptyLibraryUi } from '../../src/sdk/ui/dashboard-library.js';
+import { emptyEditorUi } from '../../src/sdk/ui/dashboard-editor.js';
+import { emptyTestsUi } from '../../src/sdk/ui/dashboard-tests.js';
 import { describe, expect, it } from 'vitest';
 import type {
   Environment,
@@ -96,6 +98,8 @@ const base = (extra: Partial<DashboardState> = {}): DashboardState => ({
   access: emptyAccessUi(),
   recs: emptyRecordingsUi(),
   lib: emptyLibraryUi(),
+  tst: emptyTestsUi(),
+  ed: emptyEditorUi(),
   project,
   executions,
   ...extra,

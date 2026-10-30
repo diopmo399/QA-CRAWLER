@@ -268,49 +268,66 @@ const reports = await qa.reports.list(project.id);
 const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisateur');
 ```
 
-| Méthode                                         | Route                                                            |
-| ----------------------------------------------- | ---------------------------------------------------------------- |
-| `recordings.start(projectId, input)`            | `POST /api/projects/:id/recordings` (202)                        |
-| `recordings.list(projectId)`                    | `GET /api/projects/:id/recordings`                               |
-| `recordings.get(projectId, name)`               | `GET /api/projects/:id/recordings/:name`                         |
-| `recordings.stop(projectId, name)`              | `POST /api/projects/:id/recordings/:name/stop`                   |
-| `recordings.subscribe(projectId, name, cb)`     | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
-| `recordings.flow(projectId, name)`              | `GET /api/projects/:id/recordings/:name/flow`                    |
-| `recordings.studio(projectId, name)`            | `GET /api/projects/:id/recordings/:name/studio`                  |
-| `recordings.pause/resume/undo(projectId, name)` | `POST /api/projects/:id/recordings/:name/{pause,resume,undo}`    |
-| `recordings.checkpoint(projectId, name, label)` | `POST /api/projects/:id/recordings/:name/checkpoint`             |
-| `recordings.resolve/ignore(projectId, name, …)` | `POST /api/projects/:id/recordings/:name/{resolve,ignore}`       |
-| `recordings.removeStep(projectId, name, step)`  | `POST /api/projects/:id/recordings/:name/steps/remove`           |
-| `recordings.replay(projectId, name)`            | `POST /api/projects/:id/recordings/:name/replay` (202)           |
-| `recordings.replayStatus(projectId, name)`      | `GET /api/projects/:id/recordings/:name/replay`                  |
-| `groups.proposals/acceptProposals(…)`           | `GET`/`POST /api/projects/:id/recordings/:name/groups/proposals` |
-| `groups.checks/addCheck(…)`                     | `GET`/`POST /api/projects/:id/recordings/:name/groups/checks`    |
-| `recordings.intents/reviewIntent(…)`            | `GET`/`POST /api/projects/:id/recordings/:name/intents`          |
-| `recordings.rowSource/editRow(…)`               | `GET`/`POST /api/projects/:id/recordings/:name/steps/row`        |
-| `recordings.restoreTarget(…)`                   | `POST /api/projects/:id/recordings/:name/steps/restore`          |
-| `corrections.start/get(projectId, name, …)`     | `POST`/`GET /api/projects/:id/recordings/:name/correction`       |
-| `corrections.pick/apply/resume/close(…)`        | `POST /api/projects/:id/recordings/:name/correction/<action>`    |
-| `library.list/add(projectId, …)`                | `GET`/`POST /api/projects/:id/library`                           |
-| `library.remove(projectId, name)`               | `POST /api/projects/:id/library/:name/remove`                    |
-| `library.preview(projectId, scenario)`          | `GET /api/projects/:id/library/preview?scenario=…`               |
-| `library.declareContract(projectId, name, c)`   | `PUT /api/projects/:id/library/:name/contract`                   |
-| `library.validateVersion(projectId, name)`      | `POST /api/projects/:id/library/:name/version`                   |
-| `library.drift(projectId)`                      | `GET /api/projects/:id/library/drift`                            |
-| `scenarios.checkComposition(projectId, input)`  | `POST /api/projects/:id/scenarios/compose/check` (`VIEW`)        |
-| `scenarios.compose(projectId, input)`           | `POST /api/projects/:id/scenarios/compose` (201)                 |
-| `scenarios.insert(projectId, scenario, input)`  | `POST /api/projects/:id/scenarios/:name/insert`                  |
-| `scenarios.acceptBlocks(projectId, scenario)`   | `POST /api/projects/:id/scenarios/:name/accept`                  |
-| `assertions.list(projectId, name)`              | `GET /api/projects/:id/recordings/:name/assertions`              |
-| `data.get(projectId, name)`                     | `GET /api/projects/:id/recordings/:name/data`                    |
-| `data.bind(projectId, name, input)`             | `POST /api/projects/:id/recordings/:name/data/bindings`          |
-| `assertions.decide(projectId, name, id, input)` | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
-| `groups.list(projectId, name)`                  | `GET /api/projects/:id/recordings/:name/groups`                  |
-| `groups.edit(projectId, name, command)`         | `POST /api/projects/:id/recordings/:name/groups`                 |
-| `generation.run(projectId, name, input)`        | `POST /api/projects/:id/recordings/:name/generation`             |
-| `graph.exploration(id)`                         | `GET /api/explorations/:id/graph` (409 avant la fin)             |
-| `graph.of(projectId, kind, name)`               | `GET /api/projects/:id/reports/:kind/:name/graph`                |
-| `reports.list(projectId)`                       | `GET /api/projects/:id/reports`                                  |
-| `reports.link(projectId, kind, name)`           | `POST /api/projects/:id/reports/:kind/:name/links`               |
+| Méthode                                            | Route                                                            |
+| -------------------------------------------------- | ---------------------------------------------------------------- |
+| `recordings.start(projectId, input)`               | `POST /api/projects/:id/recordings` (202)                        |
+| `recordings.list(projectId)`                       | `GET /api/projects/:id/recordings`                               |
+| `recordings.get(projectId, name)`                  | `GET /api/projects/:id/recordings/:name`                         |
+| `recordings.stop(projectId, name)`                 | `POST /api/projects/:id/recordings/:name/stop`                   |
+| `recordings.subscribe(projectId, name, cb)`        | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
+| `recordings.flow(projectId, name)`                 | `GET /api/projects/:id/recordings/:name/flow`                    |
+| `recordings.studio(projectId, name)`               | `GET /api/projects/:id/recordings/:name/studio`                  |
+| `recordings.pause/resume/undo(projectId, name)`    | `POST /api/projects/:id/recordings/:name/{pause,resume,undo}`    |
+| `recordings.checkpoint(projectId, name, label)`    | `POST /api/projects/:id/recordings/:name/checkpoint`             |
+| `recordings.resolve/ignore(projectId, name, …)`    | `POST /api/projects/:id/recordings/:name/{resolve,ignore}`       |
+| `recordings.removeStep(projectId, name, step)`     | `POST /api/projects/:id/recordings/:name/steps/remove`           |
+| `recordings.replay(projectId, name)`               | `POST /api/projects/:id/recordings/:name/replay` (202)           |
+| `recordings.replayStatus(projectId, name)`         | `GET /api/projects/:id/recordings/:name/replay`                  |
+| `groups.proposals/acceptProposals(…)`              | `GET`/`POST /api/projects/:id/recordings/:name/groups/proposals` |
+| `groups.checks/addCheck(…)`                        | `GET`/`POST /api/projects/:id/recordings/:name/groups/checks`    |
+| `recordings.intents/reviewIntent(…)`               | `GET`/`POST /api/projects/:id/recordings/:name/intents`          |
+| `recordings.rowSource/editRow(…)`                  | `GET`/`POST /api/projects/:id/recordings/:name/steps/row`        |
+| `recordings.restoreTarget(…)`                      | `POST /api/projects/:id/recordings/:name/steps/restore`          |
+| `corrections.start/get(projectId, name, …)`        | `POST`/`GET /api/projects/:id/recordings/:name/correction`       |
+| `corrections.pick/apply/resume/close(…)`           | `POST /api/projects/:id/recordings/:name/correction/<action>`    |
+| `library.list/add(projectId, …)`                   | `GET`/`POST /api/projects/:id/library`                           |
+| `library.remove(projectId, name)`                  | `POST /api/projects/:id/library/:name/remove`                    |
+| `library.preview(projectId, scenario)`             | `GET /api/projects/:id/library/preview?scenario=…`               |
+| `library.declareContract(projectId, name, c)`      | `PUT /api/projects/:id/library/:name/contract`                   |
+| `library.validateVersion(projectId, name)`         | `POST /api/projects/:id/library/:name/version`                   |
+| `library.drift(projectId)`                         | `GET /api/projects/:id/library/drift`                            |
+| `library.details(projectId, name)`                 | `GET /api/projects/:id/library/:name`                            |
+| `library.planExtraction(projectId, rec, input)`    | `POST /api/projects/:id/recordings/:name/library/plan`           |
+| `library.publishExtraction(projectId, rec, input)` | `POST /api/projects/:id/recordings/:name/library`                |
+| `library.compareSource(projectId, name)`           | `GET /api/projects/:id/library/:name/source`                     |
+| `library.updateFromSource(projectId, name)`        | `POST /api/projects/:id/library/:name/source`                    |
+| `scenarios.checkComposition(projectId, input)`     | `POST /api/projects/:id/scenarios/compose/check` (`VIEW`)        |
+| `scenarios.compose(projectId, input)`              | `POST /api/projects/:id/scenarios/compose` (201)                 |
+| `scenarios.insert(projectId, scenario, input)`     | `POST /api/projects/:id/scenarios/:name/insert`                  |
+| `scenarios.acceptBlocks(projectId, scenario)`      | `POST /api/projects/:id/scenarios/:name/accept`                  |
+| `assertions.list(projectId, name)`                 | `GET /api/projects/:id/recordings/:name/assertions`              |
+| `data.get(projectId, name)`                        | `GET /api/projects/:id/recordings/:name/data`                    |
+| `data.bind(projectId, name, input)`                | `POST /api/projects/:id/recordings/:name/data/bindings`          |
+| `assertions.decide(projectId, name, id, input)`    | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
+| `groups.list(projectId, name)`                     | `GET /api/projects/:id/recordings/:name/groups`                  |
+| `groups.edit(projectId, name, command)`            | `POST /api/projects/:id/recordings/:name/groups`                 |
+| `generation.run(projectId, name, input)`           | `POST /api/projects/:id/recordings/:name/generation`             |
+| `generation.view(projectId, name)`                 | `GET /api/projects/:id/recordings/:name/generation`              |
+| `generation.execute(projectId, name, input)`       | `POST /api/projects/:id/recordings/:name/test-runs` (202)        |
+| `generation.runOf(projectId, name, runId)`         | `GET /api/projects/:id/recordings/:name/test-runs/:runId`        |
+| `generation.cancel(projectId, name, runId)`        | `POST …/test-runs/:runId/cancel` (409 une fois terminée)         |
+| `generation.reportLink(projectId, name, runId)`    | `POST …/test-runs/:runId/report-links` (rejeu YAML, Gherkin)     |
+| `generation.editFile(projectId, name, input)`      | `PUT /api/projects/:id/recordings/:name/generation/file`         |
+| `generation.restoreFile(projectId, name, input)`   | `POST /api/projects/:id/recordings/:name/generation/restore`     |
+| `generation.checkFile(projectId, name, input)`     | `POST /api/projects/:id/recordings/:name/generation/check`       |
+| `generation.original(projectId, name, path)`       | `GET /api/projects/:id/recordings/:name/generation/original`     |
+| `generation.preview(projectId, name, input)`       | `POST /api/projects/:id/recordings/:name/generation/preview`     |
+| `generation.runEvents(projectId, name, runId, …)`  | `GET …/test-runs/:runId/events` (flux SSE, reprise `?after=`)    |
+| `generation.runLogs(projectId, name, runId, fmt)`  | `GET …/test-runs/:runId/logs?format=json` ou `text`              |
+| `graph.exploration(id)`                            | `GET /api/explorations/:id/graph` (409 avant la fin)             |
+| `graph.of(projectId, kind, name)`                  | `GET /api/projects/:id/reports/:kind/:name/graph`                |
+| `reports.list(projectId)`                          | `GET /api/projects/:id/reports`                                  |
+| `reports.link(projectId, kind, name)`              | `POST /api/projects/:id/reports/:kind/:name/links`               |
 
 **Enregistrement** : `RECORDING → PROCESSING → COMPLETED | FAILED` ; `STORED` désigne un
 enregistrement lu sur disque (écrit par la CLI, ou avant le démarrage du serveur). Le nom donné
@@ -377,6 +394,29 @@ rejoué par un scénario ne se retire pas (409, `details` nomme les scénarios) 
   pas vérifié et accepté. Le format de `run:` ne change pas ; l'ancien `sdk-library.json` (origines
   seules) est repris : version 1, historique « repris ».
 
+**Extraire des groupes métier d'un enregistrement** (`library.planExtraction`,
+`library.publishExtraction` ; décision : [ADR 0002](adr/0002-extraction-groupes-bibliotheque.md)) : la
+sélection porte sur les groupes du Recorder (`selection: [{ groupId, stepIds? }]`, une partie d'un
+groupe par ses étapes), en mode `separate` (un bloc par groupe) ou `composite` (un bloc qui garde ses
+groupes internes et leurs identifiants). Le plan (rien n'est écrit, droit `VIEW`) donne pour chaque
+bloc ses étapes, ses données **restreintes** à ce qu'il utilise, son contrat dérivé, ses dépendances
+(`BLOCK` : produite par un autre bloc de la publication ; `UNSELECTED_GROUP`, `OUTSIDE_GROUPS`,
+`NOWHERE` : une entrée obligatoire ; `PROVIDED` : une valeur fixe donnée explicitement dans
+`provided`, jamais pour un secret), `midway` (il commence au milieu de l'enregistrement sans aller à
+sa page), `gaps` (bloc composé : un groupe interne qui ne suit pas le précédent) et son rapport de
+validation (schéma des flows, données, contrat, noms ; erreurs localisées « step 2 (fill) … »).
+`navigate: true` fait commencer chaque bloc par un `goto` vers sa page de départ (transformation
+notée). Publier (droit `PUBLISH`) refait le plan et écrit **tous les blocs ou aucun** (422 avec une
+raison par bloc dans `details`), en version 1, avec la provenance complète (enregistrement, session,
+groupes, étapes, mode, empreinte de l'enregistrement, date, auteur nominatif, transformations, clés
+fournies). `compareSource` refait l'extraction sur l'enregistrement actuel (`SAME`, `DIFFERENT` avec
+les changements, `SOURCE_MISSING`, `NOT_FROM_RECORDING`) sans rien écrire ; `updateFromSource`
+remplace le contenu à la demande : le bloc passe `CHANGED` jusqu'à `validateVersion`. `details` donne
+les étapes en mots, les groupes internes et la stratégie de chaque donnée (jamais une valeur). Un bloc
+dont le flow est invalide est `INVALID` ; un scénario invalide au lancement répond 422
+`INVALID_SCENARIO`. La vérification d'un parcours avertit quand un bloc a une page de départ sans y
+aller : composé après un autre, il joue là où le précédent s'arrête.
+
 **Intentions** (`intents`) : l'intention que l'analyse prête à chaque action (créer, rechercher,
 ouvrir…). Confirmer, corriger (avec une raison) ou réinitialiser ajoute une décision au registre
 (`human-review.json`) ; ni l'action, ni le flow, ni le rejeu ne changent. La mémoire de connaissance
@@ -416,8 +456,77 @@ Chaque format arrive avec ce qu'il faut pour le lancer :
 - Les tests générés jouent les actions comme le moteur : sans position enregistrée, la première
   correspondance d'un rôle, d'un libellé ou d'un texte (`.first()`) ; un gabarit de route
   (`/users/{id}`) se lit comme un segment quelconque.
-- La génération ne lance rien : c'est `tests/integration/sdk-generated-execution.test.ts` qui joue
-  la sortie (voir Tests).
+- La génération ne lance rien : ses fichiers gardent leur statut de génération (`GENERATED`,
+  `STATICALLY_VALIDATED`, `NOT_VALIDATED`).
+
+### Exécuter les tests générés
+
+`generation.execute(projectId, name, { format })` joue pour de vrai les fichiers d'un format décrits
+par `generation.json`, sur une copie (`recordings/<nom>/test-runs/<id>/`) : une nouvelle génération
+pendant l'exécution ne change pas ce qui est joué.
+
+| Format        | Outil                                                       | Résultats lus                                | Droits                 |
+| ------------- | ----------------------------------------------------------- | -------------------------------------------- | ---------------------- |
+| YAML, Gherkin | rejeu du moteur avec la mission du projet (`environmentId`) | les flows du résultat du moteur, son rapport | `RUN` (+ `RUN_WRITES`) |
+| Playwright TS | Playwright Test installé à côté de QA-CRAWLER               | `test-results/junit.xml`                     | `RUN` + `RUN_WRITES`   |
+| Java JUnit 5  | `mvn -q -B test`, `QA_BASE_URL` = l'origine du projet       | `target/surefire-reports/TEST-*.xml`         | `RUN` + `RUN_WRITES`   |
+
+- Le rejeu du moteur applique la SafetyPolicy, l'authentification et l'environnement du projet ;
+  `RUN_WRITES` n'est demandé que si l'environnement permet des écritures, comme pour une exécution.
+- Playwright et Java pilotent l'application sans la SafetyPolicy : ils demandent toujours
+  `RUN_WRITES`, n'acceptent pas d'environnement et visent l'adresse pour laquelle ils ont été
+  générés.
+- Statuts : `QUEUED`, `RUNNING`, puis `PASSED` ou `FAILED` d'après les cas rapportés par l'outil ;
+  `ERROR` quand l'outil ne rapporte aucun cas exploitable (ou sort en erreur sans cas en échec) ;
+  `CANCELLED` ; `UNAVAILABLE` quand l'outil manque. Un format dont l'outil manque est refusé (409
+  `TOOL_UNAVAILABLE`) ; `generation.view` dit pour chaque format l'outil, sa version et sa présence.
+- Une exécution à la fois ; les suivantes attendent en `QUEUED`. `run.json` est écrit à chaque
+  changement : une exécution restée en cours à l'arrêt du serveur se relit `ERROR` (« interrupted »).
+- La sortie de l'outil (12 000 derniers caractères) et les messages d'échec sont masqués et tronqués.
+
+### Modifier un fichier généré à la main
+
+`generation.editFile(projectId, name, { path, content, revision })` remplace le contenu d'un fichier
+décrit par `generation.json` :
+
+- **Vérifié avant d'être écrit**, avec l'outil de la génération, sur une copie des fichiers du format :
+  schéma du flow, dictionnaire Gherkin et chargeur de mission, syntaxe TypeScript, `mvn test-compile`.
+  Un échec, ou un autre fichier du format jusque-là vérifié qui échoue à cause de la modification :
+  422 avec les raisons, rien n'est écrit. Un outil absent n'est pas un échec : le fichier est
+  enregistré `NOT_VALIDATED`.
+- `revision` est l'empreinte du contenu lu (`GeneratedFileView.revision`) : un fichier changé depuis
+  donne 409 `FILE_CHANGED`. Un fichier montré tronqué (plus de 256 Ko) n'a pas de `revision` et ne se
+  modifie pas.
+- Le fichier porte `editedAt` ; la version générée est gardée (`generated-originals/`) à la première
+  modification. `generation.restoreFile` la remet et retire la marque.
+- Régénérer un format dont un fichier a été modifié à la main : 409 `MANUAL_EDITS` (les fichiers dans
+  `details`), sauf avec `overwriteManual: true`.
+- Une exécution dit les fichiers joués qui avaient été modifiés (`TestRunView.edited`).
+- Droits : `DECIDE`, comme la génération ; un test Playwright ou Java demande en plus `RUN_WRITES`.
+- La modification ne change pas l'enregistrement : pour une correction durable (cible, assertion,
+  donnée), passer par la revue puis régénérer.
+- Un refus (422) porte `diagnostics` : les problèmes positionnés (voir plus bas).
+
+### Vérifier, comparer, Dry Run
+
+- `generation.checkFile(projectId, name, { path, content })` vérifie un contenu **sans l'écrire**, avec
+  les mêmes outils que l'enregistrement. Il rend `GeneratedFileCheckView` : le statut qu'aurait le
+  fichier, `blocking` (l'enregistrement serait refusé) et `diagnostics`.
+- `GeneratedFileDiagnostic` : gravité, famille (`syntax`, `schema`, `references`, `dependencies`,
+  `static`, `compilation`, `execution`, `assertions`, `evidence`), l'outil qui l'a dit (schéma du flow,
+  dictionnaire Gherkin, TypeScript, Maven, Dry Run…) et, quand l'outil le donne, la ligne, la colonne et
+  la position de l'étape. Rien n'est positionné par devinette : sans position, le diagnostic vaut pour
+  le fichier.
+- `generation.original(projectId, name, path)` : la version générée d'un fichier (sa sauvegarde s'il a
+  été modifié à la main, sinon le fichier lui-même). Droit : `READ`.
+- `generation.preview(projectId, name, { formats })` : ce qu'une régénération écrirait, sans rien écrire,
+  pour comparer avant de remplacer un fichier modifié à la main. Droit : `DECIDE`.
+- `generation.execute(projectId, name, { format, mode: 'DRY_RUN', path, content? })` : le **Dry Run du
+  moteur** pour le flow YAML ou le `.feature`. Le scénario est confronté à l'application avec la
+  mission du projet (SafetyPolicy appliquée, aucune action qui modifie) ; `content` permet de jouer un
+  brouillon non enregistré (`TestRunView.draft`). Le verdict du moteur est dans `dryRunStatus`
+  (`FULLY_MATCHED`, `PARTIAL_MATCH`…), chaque étape dans `cases` avec sa position (`step`, `line`). Le
+  Dry Run vise la cible du projet : un environnement est refusé, comme les formats Playwright et Java.
 
 ### Données de test
 
@@ -779,27 +888,29 @@ administrateur : c'est par lui qu'on crée les premiers membres.
 SDK sur `/dashboard` (`?theme=dark|auto`, `?days=1|7|30`). Le composant peut aussi être embarqué
 comme les autres, avec `endpoint`, `token` ou `client`, `locale` et `theme`.
 
-| Vue              | Contenu                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Vue d'ensemble   | taux de réussite des rejeux avec numérateur, dénominateur et exclusions ; exécutions, anomalies, projets et scénarios de la période ; rejeux par jour ; alertes ; exécutions récentes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Projets          | cartes (état, comptes, dernière exécution), archivés sur demande                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Projet           | onglets : Lancer (rejeu dans un environnement ou exploration de la cible), Environnements (prêt ou non : règles, secrets présents sur le serveur, URL jointe sur demande ; noms des secrets seulement), Scénarios, Exécutions, Sécurité (risques toujours bloqués, écritures, domaines, chemins jamais visités) ; archivage confirmé dans la page, restauration                                                                                                                                                                                                                                                                                                               |
-| Exécutions       | les exécutions du projet choisi dans le menu                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Exécution        | suivi en direct (étapes, phase du moteur, durée ; écrans et actions pour une exploration), annulation confirmée dans la page ; puis verdict, étapes, assertions vérifiées ou en échec, clés de données, anomalies, preuves, lien vers le rapport                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Historique       | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Enregistrements  | démarrer l'enregistrement d'un parcours (nom, chemin de départ, rejeu de validation ; un seul à la fois) ; pendant la session, la barre d'enregistrement : gestes en phrases et leur statut, pause, annulation du dernier geste, vérification posée, choix de l'élément d'une cible ambiguë, arrêt ; après l'arrêt, les phases en mots ; la liste du projet, la revue, le lien vers le Flow Studio et la promotion en scénario                                                                                                                                                                                                                                                |
-| Bibliothèque     | catalogue des blocs (version, provenance, entrées et sorties, état du contrat, utilisation ; recherche, origine, contrat, utilisation, tri) ; détails (historique, contrat, scénarios dépendants, valider une nouvelle version, déclarer le contrat) ; compositeur (ordre, d'où vient chaque entrée, vérification du serveur, création) ; ajout d'un bloc dans un panneau, avec l'aperçu de la source ; depuis Scénarios, insérer un bloc, accepter la nouvelle version d'un bloc ; depuis la revue, ajouter un groupe                                                                                                                                                        |
-| Revue            | d'un enregistrement terminé : rejeu de validation suivi étape par étape ; parcours en groupes (découpage proposé, vérifications suggérées, créer, renommer, déplacer, supprimer un groupe, cocher des étapes, monter, descendre, détacher, retirer une étape avec confirmation) ; assertions (recommandées, à décider, faibles, décidées ; une à une ou en lot) ; source de chaque saisie ; intentions (confirmer, corriger, réinitialiser) ; correction d'une cible dans le navigateur ouvert par le serveur, puis reprise du rejeu ; ligne de tableau redéfinie colonne par colonne ; restauration de la cible d'origine ; génération des tests et statut de chaque fichier |
-| Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Référentiel      | les éléments publiés, par type et par source ; pour l'un d'eux : provenance (source, section, page, feuille, cellule), historique des versions, liens avec leur justification et leur confiance, liens proposés à confirmer ou rejeter, lien ajouté à la main ; le menu compte les candidats en attente                                                                                                                                                                                                                                                                                                                                                                       |
-| Traçabilité      | la matrice : règles et critères, implémentation, vérification, autres liens, chacun avec son état ; export CSV ; la corrélation automatique est dite non disponible                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Sources          | les connecteurs (formats, taille, limites) ; un import de fichier (.docx, .xlsx, .pdf) ou d'une page Confluence (noms des variables seulement), avec un profil ; l'historique des imports                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Validation       | les candidats d'un lot : type, identifiant, confiance (une classe), doublon, raisons, lieu ; accepter, refuser, fusionner (un conflit d'identifiant se fusionne ou se refuse) ; publication, avec accord explicite pour une lecture partielle ; problèmes signalés ; éléments absents de la source                                                                                                                                                                                                                                                                                                                                                                            |
-| Indicateurs      | couverture par un test, taux de réussite des rejeux, liens confirmés : chacun avec sa formule, son dénominateur, ses exclusions et ses limites ; la vérification par une preuve récente est dite non disponible ; écarts à traiter                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Tendances        | par semaine : taux de réussite des rejeux (sur 0 à 100 %), anomalies, durée médiane, couverture ; scénarios les plus instables ; un projet ou tous                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Accès et journal | qui est connecté ; la matrice des rôles et des droits ; pour l'administration : membres (rôle de l'espace, rôle dans le projet choisi, jeton montré une fois à la création, révocation confirmée) et journal par nature d'action ; en mode nominatif, connexion par jeton personnel et déconnexion                                                                                                                                                                                                                                                                                                                                                                            |
+| Vue              | Contenu                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vue d'ensemble   | taux de réussite des rejeux avec numérateur, dénominateur et exclusions ; exécutions, anomalies, projets et scénarios de la période ; rejeux par jour ; alertes ; exécutions récentes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Projets          | cartes (état, comptes, dernière exécution), archivés sur demande                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Projet           | onglets : Lancer (rejeu dans un environnement ou exploration de la cible), Environnements (prêt ou non : règles, secrets présents sur le serveur, URL jointe sur demande ; noms des secrets seulement), Scénarios, Exécutions, Sécurité (risques toujours bloqués, écritures, domaines, chemins jamais visités) ; archivage confirmé dans la page, restauration                                                                                                                                                                                                                                                                                                                                                                                      |
+| Exécutions       | les exécutions du projet choisi dans le menu                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Exécution        | suivi en direct (étapes, phase du moteur, durée ; écrans et actions pour une exploration), annulation confirmée dans la page ; puis verdict, étapes, assertions vérifiées ou en échec, clés de données, anomalies, preuves, lien vers le rapport                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Historique       | les exécutions du projet ; deux cochées sont comparées (`reports.compare`) : régressions, corrections, écarts flow par flow et étape par étape, écart de durée ; rejeu des seuls flows qui échouent maintenant                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Scénarios        | chaque scénario avec ses derniers runs (`scenarios.history`) : stable, instable (deux bascules ou plus), jamais rejoué ; rejeu d'un scénario ; enregistrements terminés pas encore promus, promotion en un clic (`scenarios.promote`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Enregistrements  | démarrer l'enregistrement d'un parcours (nom, chemin de départ, rejeu de validation ; un seul à la fois) ; pendant la session, la barre d'enregistrement : gestes en phrases et leur statut, pause, annulation du dernier geste, vérification posée, choix de l'élément d'une cible ambiguë, arrêt ; après l'arrêt, les phases en mots ; la liste du projet, la revue, le lien vers le Flow Studio et la promotion en scénario                                                                                                                                                                                                                                                                                                                       |
+| Bibliothèque     | catalogue compact en grille ou liste (version, type autonome ou composé, étapes, origine, date, entrées et sorties, état du contrat, utilisation ; recherche, type, origine, contrat, utilisation, tri, regroupement par origine, récemment ouverts) ; fiche à onglets (vue d'ensemble, étapes par groupe interne, contrat et sa déclaration, données sans valeur, dépendances en graphe, versions, provenance avec comparaison et mise à jour depuis la source) ; compositeur en trois colonnes (catalogue, parcours, contrat du parcours et diagnostics du serveur) ; ajout d'un bloc dans un panneau, avec l'aperçu de la source ; depuis Scénarios, insérer un bloc, accepter la nouvelle version d'un bloc ; depuis la revue, ajouter un groupe |
+| Tests générés    | pour un enregistrement terminé : générer les formats choisis ; par format, l'outil du serveur, sa présence et ce qu'il garantit (SafetyPolicy pour le rejeu du moteur, aucune pour Playwright et Java), le statut des fichiers, la dernière exécution ; exécuter (environnement au choix pour le rejeu du moteur), suivre en direct, annuler ; les exécutions avec leurs cas, messages d'échec, sortie de l'outil et rapport QA-CRAWLER ; le contenu de chaque fichier généré, ouvert dans l'éditeur pour le modifier (marque « Modifié à la main », régénération confirmée après comparaison)                                                                                                                                                       |
+| Éditeur          | les fichiers générés d'un enregistrement, en vue visuelle (flow YAML, `.feature`), source (CodeMirror) ou comparaison ; inspecteur de l'étape, diagnostics positionnés, Valider, Dry Run, Rejouer, Comparer, Enregistrer (voir plus bas)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Revue            | d'un enregistrement terminé : rejeu de validation suivi étape par étape ; parcours en groupes (découpage proposé, vérifications suggérées, créer, renommer, déplacer, supprimer un groupe, cocher des étapes, monter, descendre, détacher, retirer une étape avec confirmation) ; assertions (recommandées, à décider, faibles, décidées ; une à une ou en lot) ; source de chaque saisie ; intentions (confirmer, corriger, réinitialiser) ; correction d'une cible dans le navigateur ouvert par le serveur, puis reprise du rejeu ; ligne de tableau redéfinie colonne par colonne ; restauration de la cible d'origine ; génération des tests et statut de chaque fichier                                                                        |
+| Environnements   | création, modification (URL, domaines, écritures et leur plafond, noms des secrets, variables, limites), vérification par le serveur avec l'URL jointe, suppression confirmée dans la page ; une ligne de variable sans `=` est refusée avant l'envoi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Explorations     | les explorations du projet ; pour l'une d'elles : écrans, actions, actions bloquées, anomalies ; carte des écrans tirée du graphe du run (`graph.of`), anomalies par écran, actions bloquées par la politique de sécurité ; anomalies choisies par gravité                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Référentiel      | les éléments publiés, par type et par source ; pour l'un d'eux : provenance (source, section, page, feuille, cellule), historique des versions, liens avec leur justification et leur confiance, liens proposés à confirmer ou rejeter, lien ajouté à la main ; le menu compte les candidats en attente                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Traçabilité      | la matrice : règles et critères, implémentation, vérification, autres liens, chacun avec son état ; export CSV ; la corrélation automatique est dite non disponible                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Sources          | les connecteurs (formats, taille, limites) ; un import de fichier (.docx, .xlsx, .pdf) ou d'une page Confluence (noms des variables seulement), avec un profil ; l'historique des imports                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Validation       | les candidats d'un lot : type, identifiant, confiance (une classe), doublon, raisons, lieu ; accepter, refuser, fusionner (un conflit d'identifiant se fusionne ou se refuse) ; publication, avec accord explicite pour une lecture partielle ; problèmes signalés ; éléments absents de la source                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Indicateurs      | couverture par un test, taux de réussite des rejeux, liens confirmés : chacun avec sa formule, son dénominateur, ses exclusions et ses limites ; la vérification par une preuve récente est dite non disponible ; écarts à traiter                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Tendances        | par semaine : taux de réussite des rejeux (sur 0 à 100 %), anomalies, durée médiane, couverture ; scénarios les plus instables ; un projet ou tous                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Accès et journal | qui est connecté ; la matrice des rôles et des droits ; pour l'administration : membres (rôle de l'espace, rôle dans le projet choisi, jeton montré une fois à la création, révocation confirmée) et journal par nature d'action ; en mode nominatif, connexion par jeton personnel et déconnexion                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 Le menu range les écrans par section et porte le projet choisi (« Tous les projets » par défaut) ; il
 dit la version de l'API et du moteur. Sous 960 px de large (requête de conteneur), il se replie
@@ -815,6 +926,110 @@ L'annulation n'est proposée que si le serveur l'offre (`capabilities.cancellati
 Événements (bubbles, composed) : `qa-dashboard-navigate` `{ route }`, `qa-execution-started`
 `{ projectId, exploration }`, `qa-error` `{ code, message }`. La méthode `open(route)` ouvre une vue
 depuis l'hôte.
+
+### Éditeur des tests générés
+
+Le menu Piloter ouvre l'**Éditeur** (`#/projects/:id/editor`), aussi atteint par « Ouvrir dans
+l'éditeur » depuis les Tests générés. Quatre zones :
+
+- **la barre** : le fichier ouvert, son format, son état (enregistré, brouillon, vérifié, modifié à la
+  main) et les actions **Valider**, **Dry Run**, **Rejouer**, **Comparer**, **Enregistrer**. Une action
+  indisponible dit pourquoi (droit manquant, brouillon à enregistrer d'abord, outil absent) ;
+- **l'explorateur** : les enregistrements terminés et leurs fichiers générés, en arbre navigable au
+  clavier ;
+- **le centre** : un onglet par fichier ouvert et trois vues :
+  - **Visuel** pour le flow YAML et le `.feature` : la liste des étapes, groupes compris, avec ajout,
+    duplication, suppression confirmée et déplacement (glisser-déposer, Alt+↑/↓). Chaque geste modifie
+    le texte source à l'endroit voulu : le reste du fichier, commentaires compris, ne bouge pas, et les
+    références (groupes, assertions) suivent les positions ;
+  - **Source** : CodeMirror 6, avec coloration par langage (YAML, Gherkin, TypeScript, Java, XML),
+    numéros de ligne, repli, recherche et remplacement, annulation, diagnostics dans la marge,
+    Ctrl+S. Pour le TypeScript et le Java, un plan (suites, tests, étapes) mène à la ligne ;
+  - **Comparer** : côte à côte, le texte en cours face à la version enregistrée, la version générée ou
+    ce qu'une régénération écrirait ;
+- **l'inspecteur** : l'étape choisie (action, cible, valeur, options, provenance), modifiable champ par
+  champ, et le panneau des diagnostics et des résultats (Dry Run, Rejouer), qui mène chacun à sa ligne.
+
+Trois versions par fichier : **générée**, **enregistrée** et **en cours** (brouillon). Rien n'est écrit
+sans Enregistrer, qui passe par la vérification du serveur ; un fichier changé ailleurs n'est jamais
+écrasé (`FILE_CHANGED`). Quitter l'écran ou le fichier avec un brouillon demande confirmation.
+« Revenir à la version générée » et « Remplacer par une régénération » se comparent d'abord. Une
+vérification réussie n'est pas une exécution : le Dry Run et le Rejouer donnent le résultat réel.
+
+Le kit de l'éditeur (CodeMirror, `yaml`, `@cucumber/gherkin` et les modèles de l'éditeur) est regroupé
+au build en un module (`dist/sdk/ui/editor-kit.js`, environ 800 Ko, licences dans
+`editor-kit.licenses.txt`), chargé seulement à l'ouverture de l'éditeur. Sans build, le serveur de
+développement le regroupe à la volée.
+
+### Console d'exécution
+
+Sous l'explorateur, le code et l'inspecteur, sur toute leur largeur, la **console** de l'exécution
+suivie (Dry Run ou Rejouer). Ses onglets : Console, Étapes, Erreurs, Réseau et Navigateur (seulement
+quand l'outil les observe), Résumé, Diagnostics. L'éditeur tient dans la fenêtre : chaque colonne défile
+en elle-même. La poignée au-dessus de la console règle sa hauteur (à la souris, ou ↑/↓ au clavier) ;
+« Agrandir » lui donne tout l'espace de l'éditeur, le temps de lire le journal.
+
+Les événements sont **réels**, produits pendant l'exécution par l'outil qui joue le test :
+
+| Format           | Source                                                                      | Ce qui est dit                                                                                                                                 |
+| ---------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| YAML, `.feature` | le moteur : ses écouteurs et son journal structuré (`EngineLogEntry`)       | chaque étape avec sa position et sa ligne, son effet (exécutée ≠ confirmée), ses requêtes, les résolutions de cible, les réparations proposées |
+| Dry Run          | le Dry Run du moteur                                                        | les intentions cherchées, trouvées ou manquantes, puis le verdict de chaque étape attendue avec sa ligne                                       |
+| Playwright TS    | un reporter de Playwright Test ajouté à la configuration (copie du run)     | chaque geste et vérification, avec sa ligne et l'étape du flow (repères `// step N`)                                                           |
+| Java             | la sortie de `mvn test` et le journal du pilote Playwright (`DEBUG=pw:api`) | le test commencé et fini, chaque attente d'élément, élément trouvé, geste fait ; la ligne d'un échec                                           |
+
+- **Contrat** : `RunLogEvent` (`seq`, `at`, `runId`, `level` DEBUG/INFO/WARN/ERROR, `category`, `type`,
+  `status`, `message`, `source`, et quand la source les donne `scenario`, `step`, `line`, `file`,
+  `durationMs`, `errorKind`, `evidence`, `data`). Les états d'une opération sont distingués : demandée,
+  en cours, exécutée, confirmée, échouée, bloquée, ignorée, non exécutée. Un événement absent reste
+  absent : une étape commencée sans fin rapportée est dite « sans fin rapportée », jamais réussie.
+- **Transport** : le flux SSE numéroté du serveur, comme pour une exploration. Une coupure est reprise
+  après le dernier `seq` reçu (5 tentatives), sans doublon. Le flux se ferme sur `RUN_FINISHED`.
+- **Arrêt** : `CANCEL_REQUESTED` à la demande, `CANCEL_CONFIRMED` quand l'outil s'est arrêté ;
+  `CANCEL_UNCONFIRMED` si l'outil a rendu son résultat après la demande (le run reste `CANCELLED`).
+- **Conservation** : chaque événement est écrit dans `events.jsonl` (dossier de l'exécution), jusqu'à
+  50 000 ; un run fini se relit sans être rejoué. Un run antérieur à la console : « aucun journal
+  conservé » (`TestRunView.logs.state = UNAVAILABLE`).
+- **Export** : JSON (la vue du run et ses événements) ou texte, masqués comme à l'écran.
+- **Sécurité** : chaque message est masqué (règles générales, plus les valeurs des variables
+  d'environnement citées par les fichiers joués et la mission). Une saisie n'écrit jamais sa valeur : le
+  libellé d'un `fill` garde sa cible, le reporter Playwright retire la valeur du titre, et les arguments
+  de saisie du pilote Java sont retirés. Droit : `VIEW`, comme la consultation d'une exécution.
+- **Écran** : les lignes s'ajoutent sans redessiner l'écran ; 1 500 lignes au plus dans la page, 20 000
+  événements en mémoire. Critères d'affichage : niveau, catégorie, étape, type, statut, période, texte. Suivi en bas
+  (remonter l'arrête, un indicateur compte les nouvelles lignes), pause du suivi (le moteur, lui,
+  continue), copie, téléchargement, effacement local (le journal conservé n'est pas touché), arrêt,
+  relance (un nouveau run, son propre journal). Une ligne mène à son étape et à sa ligne ; depuis une
+  étape (inspecteur), ses seuls événements. Une erreur dit sa famille (infrastructure, navigateur,
+  élément, vérification, scénario, SafetyPolicy) et ce que l'outil a relevé. L'onglet Erreurs compte les
+  événements classés ; la sortie brute de l'outil (lignes `[ERROR]` de Maven) reste dans la console.
+
+### Navigateur visible
+
+Par défaut, une exécution se joue dans un navigateur invisible. Pour **regarder** un Dry Run, un
+rejeu (Rejouer, Relancer) ou une exécution lancée depuis l'écran Exécutions, cocher **Navigateur
+visible** (barre de l'éditeur, ou formulaire « Lancer une exécution »), et choisir, si on le souhaite, un
+**ralenti** (250 ms, 500 ms ou 1 s par geste).
+
+Le navigateur s'ouvre **sur la machine du serveur QA-CRAWLER** : quand `qa-crawler sdk-server` tourne
+sur votre poste, il s'ouvre devant vous. Il faut donc un écran à ce serveur :
+
+- Windows et macOS : la session de l'utilisateur qui a lancé le serveur ;
+- Linux : une session de bureau (`DISPLAY` ou `WAYLAND_DISPLAY` défini). Sur un serveur sans écran,
+  la case est désactivée et dit pourquoi ; l'API refuse la demande (`409 NO_DISPLAY`). Xvfb (un
+  écran virtuel) suffit aux outils, pas à un humain : il sert aux tests automatisés.
+
+| Format                    | Ce que fait « Navigateur visible »                                        |
+| ------------------------- | ------------------------------------------------------------------------- |
+| YAML, `.feature`, Dry Run | le moteur joue avec `browser.headless: false` et `browser.slowMoMs`       |
+| Playwright TS             | `playwright test --headed --workers=1` ; ralenti : `launchOptions.slowMo` |
+| Java                      | `QA_HEADLESS=false` et `QA_SLOW_MO` (lus par la classe `Env` générée)     |
+| Exécutions, explorations  | la mission du projet jouée avec `browser.headless: false`                 |
+
+API : `headed: true` et `slowMoMs` (0 à 2 000) dans `generation.execute`, `executions.start` et
+`explorations.start(projectId, input)` ; `capabilities().visibleBrowser` dit si le serveur a un écran.
+Une exécution jouée ainsi porte `headed` et `slowMoMs` (`TestRunView`), et son journal le dit
+(`RUN_CREATED`). La SafetyPolicy et les droits ne changent pas : voir n'est pas un droit de plus.
 
 ## Statuts et événements
 
@@ -912,7 +1127,26 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Une exploration à la fois par défaut (`--concurrency`).
 - Chromium seulement.
 - Pas de définitions de steps pour un exécuteur Gherkin externe : le `.feature` se joue avec QA-CRAWLER.
+- Tests générés : Playwright Test doit être installé à côté de QA-CRAWLER (`@playwright/test`), Maven
+  et Java sur le serveur ; Maven résout ses dépendances depuis son dépôt (sans accès : `ERROR`). Le
+  test Playwright vise l'adresse écrite à la génération, aucun environnement ne la change. L'écran
+  génère tous les groupes ; un sous-ensemble se choisit dans la revue.
 - Le Flow Studio ne rejoue pas un groupe seul.
+- Éditeur :
+  - pas de fusion automatique à trois voies : on compare, puis on garde ou on remplace ;
+  - pas de vue visuelle pour le TypeScript ni le Java (plan et source seulement) : rien n'est converti
+    d'un format à l'autre ;
+  - la vue visuelle du `.feature` déplace une étape dans son scénario seulement ;
+  - l'ajout visuel au flow YAML propose `click`, `fill`, `select`, `check`, `uncheck`, `expect`,
+    `goto` et `manual` ; les autres actions s'écrivent dans la source ;
+  - le Dry Run vise la cible du projet (pas d'environnement) ; Rejouer joue les fichiers enregistrés.
+- Console :
+  - Java : les gestes sont rattachés au test (méthode, nom affiché), pas à une étape : le pilote ne dit
+    pas la ligne d'un geste ; seule la ligne d'un échec (pile d'appels) mène à une étape ;
+  - Playwright TS : pas d'onglet Réseau ni Navigateur (le reporter ne les voit pas) ;
+  - Réseau (moteur) : les requêtes relevées pour chaque étape, dites à sa fin (chemin masqué, sans corps
+    ni en-tête), pas un journal HTTP complet ;
+  - le Dry Run ne rattache à une étape que les événements qui citent une intention attendue.
 - Le Run Monitor suit les flows et les étapes, pas les groupes métier (absents des événements
   d'exploration).
 - La comparaison ne compare pas les captures d'écran de deux exécutions.
@@ -963,6 +1197,42 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
   retire une étape ; une vraie correction de cible (rejeu jusqu'à l'étape, élément désigné à la souris,
   validation, reprise du rejeu réussie, restauration) ; la revue des intentions ; téléphone sans
   défilement horizontal.
+- `tests/unit/generated-file-edit.test.ts` : modifier un fichier généré (vérifié, refusé sans écriture,
+  version générée gardée puis remise, aucun chemin hors de `generated/`).
+- `tests/unit/sdk-test-runs.test.ts` : lecture du JUnit XML (Playwright Test, Surefire), verdict jamais
+  réussi sans cas, file d'exécution (une à la fois, annulation en file et en cours), `run.json` relu
+  après un arrêt. `tests/unit/sdk-dashboard-tests.test.ts` : rendu de l'écran Tests générés (outil et
+  garantie de chaque format, exécution refusée et pourquoi, droits par rôle, échappement).
+- `tests/integration/sdk-generated-test-runs.test.ts` : par le client, un parcours du **vrai** recorder
+  généré puis exécuté : YAML et `.feature` rejoués par le moteur (`PASSED`, rapport servi), test
+  Playwright par Playwright Test (`PASSED`, puis `FAILED` une fois la cible cassée), annulation, refus ;
+  Java par `mvn test` quand Maven est là. `tests/integration/sdk-dashboard-tests.test.ts` : le même
+  parcours depuis l'écran, dans Chromium, téléphone compris.
+- Éditeur : `tests/unit/editor-models.test.ts` (modifier le flow YAML et le `.feature` par le modèle :
+  commentaires et texte non touché gardés, groupes et assertions renumérotés, refus motivés ; plan
+  TypeScript et Java), `tests/unit/generated-diagnostics.test.ts` (diagnostics positionnés de chaque
+  outil), `tests/unit/editor-kit.test.ts` (comparaison par lignes), `tests/unit/sdk-dashboard-editor.test.ts`
+  (rendu des quatre zones, raisons des actions indisponibles, droits, échappement).
+  `tests/integration/sdk-generated-test-runs.test.ts` couvre la vérification sans écriture, la version
+  générée, l'aperçu de régénération et le **vrai** Dry Run d'un brouillon.
+  `tests/integration/sdk-dashboard-editor.test.ts`, dans Chromium, sur un enregistrement réel : vue
+  visuelle et inspecteur synchronisés avec la source, déplacement au clavier, Ctrl+S, comparaison,
+  source cassée refusée et diagnostic qui mène à sa ligne, annulation et restauration, phrase Gherkin
+  inconnue, plan Playwright et Java, erreur de compilation Java (un seul diagnostic, sur sa ligne,
+  enregistrement refusé), Dry Run réel, arbre au clavier, confirmation avant de quitter,
+  téléphone sans défilement horizontal.
+- Console : `tests/unit/run-events.test.ts` (numérotation, masquage, limites, fichier, cycle de vie d'une
+  exécution : créée, démarrée, arrêt demandé puis confirmé, finie ; deux runs jamais mêlés ; run sans
+  journal), `tests/unit/run-log-sources.test.ts` (reporter Playwright, sortie Maven et pilote Java,
+  écouteurs du moteur ; valeurs saisies jamais écrites), `tests/unit/sdk-dashboard-editor.test.ts`
+  (critères d'affichage, progression des étapes, erreurs, onglets selon la source, états du journal, volume).
+  `tests/integration/sdk-run-logs.test.ts` : avec les vrais outils, le journal en direct d'un rejeu YAML
+  (étapes et lignes), une coupure reprise sans perte ni doublon, un arrêt confirmé, deux runs séparés, un
+  secret saisi absent du journal et des téléchargements, un run fini relu, Gherkin (lignes des phrases),
+  Dry Run, Playwright Test (geste, et échec avec famille, ligne et étape), Java, un journal de 20 000
+  événements. `tests/integration/sdk-dashboard-console.test.ts`, dans Chromium : la console en direct,
+  les onglets, les critères d'affichage, le détail et la copie, les téléchargements, la pause, l'arrêt, la relance
+  sans mélange, une erreur qui mène à sa ligne, un run relu après rechargement, le téléphone.
 - `tests/unit/recording-workspace-review.test.ts` : retirer une étape, groupes proposés, vérification
   de groupe, ligne redéfinie, restauration, correction appliquée et revue des intentions sur un
   enregistrement écrit.

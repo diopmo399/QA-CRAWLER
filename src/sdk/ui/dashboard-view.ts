@@ -22,6 +22,8 @@ import { accessView, can, signInView, type AccessUi } from './dashboard-access.j
 import { recordingsView, type RecordingsUi } from './dashboard-recordings.js';
 import { reviewView, type ReviewTab, type ReviewUi } from './dashboard-review.js';
 import { libraryView, runnableScenarios, type LibraryUi } from './dashboard-library.js';
+import { testsView, type TestsUi } from './dashboard-tests.js';
+import { editorView, type EditorUi } from './dashboard-editor.js';
 import {
   importView,
   indicatorsView,
@@ -40,6 +42,7 @@ import {
   pill,
   readiness,
   readinessPill,
+  visibleBrowserControl,
 } from './dashboard-parts.js';
 import { enginePhase } from './engine-phases.js';
 import { esc } from './view.js';
@@ -65,6 +68,10 @@ export type DashboardRoute =
   | { view: 'recordings'; projectId: string }
   /** La bibliothèque de scénarios : des blocs réutilisables. */
   | { view: 'library'; projectId: string }
+  /** Les tests générés d'un enregistrement : génération et exécution réelle. */
+  | { view: 'tests'; projectId: string; recording?: string }
+  /** L'éditeur des tests générés d'un enregistrement (un fichier ouvert, une comparaison). */
+  | { view: 'editor'; projectId: string; recording?: string; file?: string; compare?: boolean }
   /** La revue d'un enregistrement écrit (ce que fait la fenêtre du recorder après l'arrêt). */
   | { view: 'recording'; projectId: string; name: string; tab?: ReviewTab }
   /** `environmentId: 'new'` : la création d'un environnement. */
@@ -109,6 +116,9 @@ export interface LaunchState {
   kind: 'REPLAY' | 'EXPLORATION';
   environmentId: string;
   scenarios: string[];
+  /** Dans un navigateur visible (sur la machine du serveur), ralenti. */
+  headed?: boolean;
+  slowMoMs?: number;
   busy: boolean;
   error?: string;
 }
@@ -170,6 +180,10 @@ export interface DashboardState {
   review?: ReviewUi;
   /** La bibliothèque de scénarios (blocs, ajout, composition, insertion). */
   lib: LibraryUi;
+  /** Les tests générés : l'enregistrement affiché, sa génération, ses exécutions. */
+  tst: TestsUi;
+  /** L'éditeur des tests générés : fichiers ouverts, brouillons, vues, diagnostics. */
+  ed: EditorUi;
   /** L'exécution suivie en direct (son instantané, ses étapes, la dernière phase annoncée). */
   live?: { snapshot: ExplorationSnapshot; steps: LiveStep[]; phase?: string; cancelRequested: boolean };
   execution?: ExecutionDetail;
@@ -197,6 +211,8 @@ const NAV: { section: NavSection; items: NavView[] }[] = [
       'scenarios',
       'library',
       'recordings',
+      'tests',
+      'editor',
       'explorations',
     ],
   },
@@ -216,6 +232,8 @@ export function activeNav(route: DashboardRoute): NavView {
   if (route.view === 'access') return 'access';
   if (route.view === 'recordings' || route.view === 'recording') return 'recordings';
   if (route.view === 'library') return 'library';
+  if (route.view === 'tests') return 'tests';
+  if (route.view === 'editor') return 'editor';
   if (
     route.view === 'requirements' ||
     route.view === 'traceability' ||
@@ -313,6 +331,10 @@ function body(state: DashboardState): string {
       return reviewView(state);
     case 'library':
       return libraryView(state);
+    case 'tests':
+      return testsView(state);
+    case 'editor':
+      return editorView(state);
   }
 }
 
@@ -450,6 +472,7 @@ function launchTab(state: DashboardState, p: ProjectDetail, archived: boolean): 
   const form = `<form class="launch card" data-action="launch"><h2>${esc(t.launch)}</h2>
 <fieldset class="kinds"><legend>${esc(t.launchKind)}</legend>${kind('REPLAY', t.kindReplay, t.kindReplayHint)}${kind('EXPLORATION', t.kindExploration, t.kindExplorationHint)}</fieldset>
 <label class="field">${esc(t.launchEnv)}<select data-bind="environment" ${replay ? '' : 'disabled'}><option value="">${esc(t.projectTarget)}</option>${p.environments.map((env) => `<option value="${esc(env.id)}" ${launch.environmentId === env.id ? 'selected' : ''}>${esc(env.name)} · ${esc(readiness(state.checks[env.id]) === 'NOT_READY' ? t.readiness.notReady : (t.envKinds[env.kind] ?? env.kind))}</option>`).join('')}</select></label>
+<div class="field vb-field">${visibleBrowserControl(t.visibleBrowser, { headed: launch.headed === true, slowMoMs: launch.slowMoMs ?? 0 }, { attr: 'data-bind', available: state.capabilities?.visibleBrowser === true })}</div>
 <fieldset class="scen"><legend>${esc(t.launchScenarios)}</legend>${scenarios || `<p class="mu">${esc(t.noScenario)}</p>`}${replay && runnableScenarios(p.scenarios).length > 0 ? `<small class="mu">${esc(t.allScenarios)}</small>` : ''}</fieldset>
 <p class="note">${icon('alert')}<span>${esc(note)}</span></p>${replay && environment?.mutations?.enabled && !can(state, 'RUN_WRITES') ? `<p class="note warn">${icon('alert')}<span>${esc(t.access.noWritesRight)}</span></p>` : ''}
 <div class="form-acts">${replay && environment ? `<button type="button" class="btn" data-action="check-env" data-env="${esc(environment.id)}" ${state.checking === environment.id ? 'disabled' : ''}>${esc(state.checking === environment.id ? t.checking : t.checkEnvironment)}</button>` : ''}<button class="btn primary" type="submit" ${launch.busy || (replay && runnableScenarios(p.scenarios).length === 0) ? 'disabled' : ''}>${icon('play')}<span>${esc(launch.busy ? t.launching : replay ? t.launchButton : t.launchExploration)}</span></button></div>

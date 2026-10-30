@@ -6,22 +6,32 @@ import type {
   ScenarioView,
 } from '../core/contracts.js';
 import { can } from './dashboard-access.js';
+import { blockSheet, type BlockSheet } from './dashboard-library-sheet.js';
 import { header, icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
 
 /**
  * LA BIBLIOTHÈQUE DE SCÉNARIOS : un catalogue de blocs réutilisables (jamais exécutés seuls) et un
- * compositeur de parcours. Le catalogue se cherche et se trie sur les données réelles des blocs (origine,
- * état du contrat, utilisation) ; chaque carte dit la version, la provenance, les entrées et sorties ; ses
- * détails montrent l'historique, le contrat et les scénarios dépendants. Le compositeur garde l'ordre des
- * blocs, montre d'où vient chaque entrée et la vérification du serveur (dry run de composition) avant la
- * création. L'ajout d'un bloc se fait dans un panneau latéral, avec l'aperçu du scénario source.
- * L'insertion d'un bloc dans un scénario existant reste dans l'écran Scénarios. Des fonctions pures.
+ * compositeur de parcours, en trois colonnes : le catalogue, le parcours, son contrat et ses
+ * diagnostics. Le catalogue (grille ou liste, regroupé par origine, récemment ouverts) se cherche et se
+ * trie sur les données réelles des blocs (type autonome ou composé, origine, état du contrat,
+ * utilisation) ; chaque carte compacte dit la version, les étapes, les groupes internes, les entrées et
+ * sorties, l'origine et la date. La fiche d'un bloc s'ouvre dans un panneau à onglets
+ * (dashboard-library-sheet). Le compositeur garde l'ordre des blocs, montre d'où vient chaque entrée et
+ * la vérification du serveur (dry run de composition) à chaque changement, avant la création. L'ajout
+ * d'un scénario se fait dans un panneau latéral, avec l'aperçu de la source. L'insertion d'un bloc dans
+ * un scénario existant reste dans l'écran Scénarios. Des fonctions pures.
  */
 export type OriginChoice = 'ALL' | 'scenario' | 'recording' | 'none';
 export type UsageChoice = 'ALL' | 'used' | 'free';
 export type SortChoice = 'name' | 'steps' | 'usage' | 'updated';
+export type KindChoice = 'ALL' | 'standalone' | 'composite';
+export type LayoutChoice = 'grid' | 'list';
+export type GroupChoice = 'none' | 'origin';
+
+/** Les blocs ouverts récemment (noms), gardés par le navigateur de chaque personne. */
+export const RECENT_MAX = 5;
 
 export interface LibraryUi {
   blocks?: LibraryBlockView[];
@@ -31,8 +41,12 @@ export interface LibraryUi {
   state: 'ALL' | BlockState;
   usage: UsageChoice;
   sort: SortChoice;
-  /** Le bloc dont les détails sont ouverts. */
-  open?: string;
+  kind: KindChoice;
+  layout: LayoutChoice;
+  groupBy: GroupChoice;
+  recent: string[];
+  /** La fiche ouverte (panneau à onglets). */
+  sheet?: BlockSheet;
   /** Composer un parcours : son nom, les blocs choisis dans l'ordre. */
   compose: { name: string; parts: string[] };
   /** La dernière vérification du serveur, et pour quelle composition (nom et blocs). */
@@ -78,6 +92,10 @@ export const emptyLibraryUi = (): LibraryUi => ({
   state: 'ALL',
   usage: 'ALL',
   sort: 'name',
+  kind: 'ALL',
+  layout: 'grid',
+  groupBy: 'none',
+  recent: [],
   compose: { name: '', parts: [] },
   insert: { block: '', at: 'start' },
 });
@@ -92,6 +110,10 @@ export const runnableScenarios = (scenarios: readonly ScenarioView[]): ScenarioV
 
 const originOf = (block: LibraryBlockView): Exclude<OriginChoice, 'ALL'> => block.origin?.kind ?? 'none';
 
+/** Un bloc composé garde plusieurs groupes métier ; les autres sont autonomes. */
+export const kindOf = (block: LibraryBlockView): Exclude<KindChoice, 'ALL'> =>
+  (block.groups?.length ?? 0) > 1 || block.origin?.mode === 'composite' ? 'composite' : 'standalone';
+
 /** Les blocs du catalogue, cherchés et triés sur leurs données réelles. */
 export function visibleBlocks(ui: LibraryUi): LibraryBlockView[] {
   const query = ui.query.trim().toLowerCase();
@@ -99,7 +121,10 @@ export function visibleBlocks(ui: LibraryUi): LibraryBlockView[] {
     (block) =>
       (!query ||
         block.name.toLowerCase().includes(query) ||
-        (block.description ?? '').toLowerCase().includes(query)) &&
+        (block.description ?? '').toLowerCase().includes(query) ||
+        (block.origin?.name ?? '').toLowerCase().includes(query) ||
+        (block.groups ?? []).some((group) => group.name.toLowerCase().includes(query))) &&
+      (ui.kind === 'ALL' || kindOf(block) === ui.kind) &&
       (ui.origin === 'ALL' || originOf(block) === ui.origin) &&
       (ui.state === 'ALL' || block.state === ui.state) &&
       (ui.usage === 'ALL' || (ui.usage === 'used') === block.usedBy.length > 0),
@@ -115,11 +140,11 @@ export function visibleBlocks(ui: LibraryUi): LibraryBlockView[] {
 
 const STATE_TONE: Record<BlockState, string> = { VALID: 'ok', CHANGED: 'warn', INVALID: 'ko' };
 
-function stateBadge(state: DashboardState, value: BlockState): string {
+export function stateBadge(state: DashboardState, value: BlockState): string {
   return `<span class="lib-state ${STATE_TONE[value]}">${esc(state.t.lib.states[value])}</span>`;
 }
 
-function keys(
+export function keys(
   state: DashboardState,
   label: string,
   items: readonly { key: string; required?: boolean; dynamic?: boolean }[],
@@ -136,83 +161,59 @@ function keys(
   return `<span class="lib-io">${label ? `<span class="lib-io-l">${esc(label)}</span>` : ''}${chips || `<small class="mu">${esc(l.none)}</small>`}${more}</span>`;
 }
 
-function originText(state: DashboardState, block: LibraryBlockView): string {
+export function originText(state: DashboardState, block: LibraryBlockView): string {
   const l = state.t.lib;
   return block.origin
     ? block.origin.kind === 'scenario'
       ? l.fromScenario(block.origin.name)
-      : l.fromRecording(block.origin.name, block.origin.group ?? '')
+      : (block.origin.groups?.length ?? 0) > 1
+        ? l.fromRecordingGroups(block.origin.name, block.origin.groups ?? [])
+        : l.fromRecording(block.origin.name, block.origin.group ?? '')
     : l.unknownOrigin;
 }
 
-function blockDetails(state: DashboardState, block: LibraryBlockView, publish: boolean): string {
-  const l = state.t.lib;
-  const ui = state.lib;
-  const disabled = ui.busy ? 'disabled' : '';
-  const date = (iso?: string): string => (iso ? new Date(iso).toLocaleString(state.t.locale) : '—');
-  const contract = block.contract;
-  const list = (items: readonly string[]): string =>
-    items.length > 0
-      ? `<ul class="plain tight">${items.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>`
-      : `<p class="mu">${esc(l.none)}</p>`;
-  const editing = ui.contract?.block === block.name ? ui.contract : undefined;
-  const contractForm = editing
-    ? `<form class="col lib-contract" data-action="lib-contract" data-block="${esc(block.name)}"><p class="mu">${esc(l.keysHint)}</p><div class="fields"><label class="field">${esc(l.contractRequired)}<input data-lib="contract.required" value="${esc(editing.required)}" autocomplete="off"></label><label class="field">${esc(l.contractOptional)}<input data-lib="contract.optional" value="${esc(editing.optional)}" autocomplete="off"></label><label class="field">${esc(l.contractOutputs)}<input data-lib="contract.outputs" value="${esc(editing.outputs)}" autocomplete="off"></label></div><div class="fields"><label class="field">${esc(l.contractPre)}<textarea data-lib="contract.pre" rows="2">${esc(editing.pre)}</textarea></label><label class="field">${esc(l.contractPost)}<textarea data-lib="contract.post" rows="2">${esc(editing.post)}</textarea></label></div><div class="form-acts start"><button type="submit" class="btn small primary" ${disabled}>${esc(l.saveContract)}</button>${contract.source === 'DECLARED' ? `<button type="button" class="btn small ghost" data-action="lib-contract-reset" data-block="${esc(block.name)}" ${disabled}>${esc(l.resetContract)}</button>` : ''}<button type="button" class="btn small ghost" data-action="lib-contract-cancel">${esc(state.t.review.cancel)}</button></div></form>`
-    : '';
-  const dependents =
-    block.usedBy.length === 0
-      ? `<p class="mu">${esc(l.usedIn(0))}</p>`
-      : `<ul class="plain tight">${block.usedBy
-          .map((scenario) => {
-            const pin = block.pinnedBy.find((entry) => entry.scenario === scenario);
-            return `<li><button class="lnk" data-action="lib-open-scenario" data-name="${esc(scenario)}">${esc(scenario)}</button>${pin ? ` <small class="${pin.current ? 'mu' : 'warn-t'}">${esc(l.pinned(pin.version, pin.current))}</small>` : ` <small class="mu">${esc(l.notPinned)}</small>`}</li>`;
-          })
-          .join('')}</ul>`;
-  return `<div class="lib-details" id="lib-d-${esc(block.id)}">
-<div class="lib-dgrid">
-<section><h4>${esc(l.provenance)}</h4><dl class="lib-dl"><dt>${esc(l.originLabel)}</dt><dd>${esc(originText(state, block))}</dd><dt>${esc(l.file)}</dt><dd><code>${esc(block.file)}</code></dd><dt>${esc(l.id)}</dt><dd><code>${esc(block.id)}</code></dd><dt>${esc(l.versionLabel)}</dt><dd>${esc(l.version(block.version))} · <code title="${esc(l.hashHint)}">${esc(block.hash)}</code></dd><dt>${esc(l.created)}</dt><dd>${esc(date(block.createdAt))}</dd><dt>${esc(l.updated)}</dt><dd>${esc(date(block.updatedAt))}</dd></dl></section>
-<section><h4>${esc(l.contract)} <small class="mu">${esc(contract.source === 'DECLARED' ? l.contractDeclared : l.contractDerived)}</small></h4>${keys(state, l.inputsLabel, contract.inputs)}${keys(state, l.outputsLabel, contract.outputs)}${contract.preconditions.length > 0 ? `<p class="lib-cond"><b>${esc(l.preconditions)}</b> ${esc(contract.preconditions.join(' · '))}</p>` : ''}${contract.postconditions.length > 0 ? `<p class="lib-cond"><b>${esc(l.postconditions)}</b> ${esc(contract.postconditions.join(' · '))}</p>` : ''}<p class="mu">${esc(l.assertions(block.assertions))}</p>${publish && !editing ? `<button class="btn small ghost" data-action="lib-contract-edit" data-block="${esc(block.name)}">${esc(l.declareContract)}</button>` : ''}</section>
-<section><h4>${esc(l.dependents)}</h4>${dependents}</section>
-<section><h4>${esc(l.history)}</h4><ol class="plain tight lib-history">${block.history
-    .map(
-      (entry) =>
-        `<li><b>${esc(l.version(entry.version))}</b> ${esc(l.change(entry.change))}${entry.at ? ` <small class="mu">${esc(date(entry.at))}</small>` : ''}</li>`,
-    )
-    .join(
-      '',
-    )}</ol>${block.data.length > 0 ? `<h4>${esc(l.dataDefined)}</h4>${keys(state, '', block.data)}` : ''}</section>
-</div>${contractForm}${
-    block.problems.length > 0
-      ? `<div class="lib-problems" role="note"><b>${esc(l.problems)}</b>${list(block.problems)}${publish && block.state === 'CHANGED' ? `<button class="btn small" data-action="lib-validate-version" data-block="${esc(block.name)}" ${disabled}>${esc(l.validateVersion)}</button>` : ''}</div>`
-      : ''
-  }</div>`;
-}
-
+/** La carte compacte d'un bloc : de quoi le choisir sans ouvrir sa fiche. */
 function blockCard(state: DashboardState, block: LibraryBlockView, publish: boolean): string {
   const l = state.t.lib;
   const ui = state.lib;
-  const disabled = ui.busy ? 'disabled' : '';
-  const open = ui.open === block.name;
-  const remove = !publish
-    ? ''
-    : block.usedBy.length > 0
-      ? ''
-      : ui.confirmRemove === block.name
-        ? `<span class="confirm" role="group"><small>${esc(l.removeConfirm)}</small><button class="btn small danger" data-action="lib-remove-yes" data-block="${esc(block.name)}" ${disabled}>${esc(l.remove)}</button><button class="btn small ghost" data-action="lib-remove-no">${esc(state.t.review.cancel)}</button></span>`
-        : `<button class="btn small ghost" data-action="lib-remove" data-block="${esc(block.name)}" ${disabled}>${esc(l.remove)}</button>`;
+  const opened = ui.sheet?.block === block.name;
+  const kind = kindOf(block);
+  const when = block.updatedAt ?? block.createdAt;
   const inJourney = ui.compose.parts.filter((part) => part === block.name).length;
-  return `<li class="lib-card${open ? ' open' : ''}" data-block="${esc(block.name)}">
-<div class="lib-card-h"><h3>${esc(block.name)}</h3><span class="lib-ver" title="${esc(l.versionLabel)}">${esc(l.version(block.version))}</span>${stateBadge(state, block.state)}</div>
+  return `<li class="lib-card${opened ? ' open' : ''}" data-block="${esc(block.name)}">
+<div class="lib-card-h"><h3><button class="lib-title" data-action="lib-open" data-block="${esc(block.name)}" aria-haspopup="dialog">${esc(block.name)}</button></h3><span class="lib-ver" title="${esc(l.versionLabel)}">${esc(l.version(block.version))}</span>${stateBadge(state, block.state)}</div>
 ${block.description ? `<p class="lib-desc">${esc(block.description)}</p>` : ''}
-<p class="lib-meta">${esc(l.steps(block.steps))} · ${esc(originText(state, block))} · ${esc(l.usedIn(block.usedBy.length))}</p>
+<p class="lib-meta"><span class="lib-kind ${kind}">${esc(kind === 'composite' ? l.kindComposite(block.groups?.length ?? 0) : l.kindStandalone)}</span><span>${esc(l.steps(block.steps))}</span>${ui.groupBy === 'origin' ? '' : `<span>${esc(originText(state, block))}</span>`}${when ? `<span>${esc(l.updatedOn(new Date(when).toLocaleDateString(state.t.locale)))}</span>` : ''}<span>${esc(l.usedIn(block.usedBy.length))}</span></p>
 <div class="lib-ios">${keys(state, l.inputsLabel, block.contract.inputs)}${keys(state, l.outputsLabel, block.contract.outputs)}</div>
-<div class="lib-card-f"><code class="lib-file" title="${esc(l.file)}">${esc(block.file)}</code><span class="lib-acts">${
+<div class="lib-card-f"><span class="lib-acts">${
     publish
       ? `<button class="btn small primary" data-action="lib-part-add" data-block="${esc(block.name)}">${icon('plus')}<span>${esc(l.addToJourney)}</span>${inJourney > 0 ? `<span class="lib-count" aria-label="${esc(l.inJourney(inJourney))}">${String(inJourney)}</span>` : ''}</button>`
       : ''
-  }<button class="btn small ghost" data-action="lib-open" data-block="${esc(block.name)}" aria-expanded="${String(open)}" aria-controls="lib-d-${esc(block.id)}">${esc(open ? l.hideDetails : l.details)}</button>${remove}</span></div>
-${block.usedBy.length > 0 && publish && open ? `<p class="mu small">${esc(l.usedNote)}</p>` : ''}
-${open ? blockDetails(state, block, publish) : ''}</li>`;
+  }<button class="btn small ghost" data-action="lib-open" data-block="${esc(block.name)}" aria-haspopup="dialog">${esc(l.open)}</button></span></div></li>`;
+}
+
+/** Le catalogue, regroupé par origine si demandé (un enregistrement, un scénario, sans origine). */
+function catalogList(state: DashboardState, shown: readonly LibraryBlockView[], publish: boolean): string {
+  const l = state.t.lib;
+  const ui = state.lib;
+  const list = (blocks: readonly LibraryBlockView[]): string =>
+    `<ul class="plain lib-cards ${ui.layout}">${blocks.map((block) => blockCard(state, block, publish)).join('')}</ul>`;
+  if (ui.groupBy === 'none') return list(shown);
+  const groups = new Map<string, LibraryBlockView[]>();
+  for (const block of shown) {
+    const title = block.origin
+      ? block.origin.kind === 'recording'
+        ? l.originRecording(block.origin.name)
+        : l.originScenario(block.origin.name)
+      : l.unknownOrigin;
+    groups.set(title, [...(groups.get(title) ?? []), block]);
+  }
+  return [...groups.entries()]
+    .map(
+      ([title, blocks]) =>
+        `<section class="lib-bucket"><h3 class="lib-bucket-t">${esc(title)} <small class="mu">${String(blocks.length)}</small></h3>${list(blocks)}</section>`,
+    )
+    .join('');
 }
 
 function checkSummary(state: DashboardState, check: CompositionCheck, stale: boolean): string {
@@ -222,9 +223,10 @@ function checkSummary(state: DashboardState, check: CompositionCheck, stale: boo
       ? `<div class="lib-sum ${tone}"><b>${esc(title)}</b><ul class="plain tight">${items.map((item) => `<li>${item}</li>`).join('')}</ul></div>`
       : '';
   // Les erreurs déjà dites par une section (entrée manquante, conflit) ne sont pas répétées.
-  const structural = check.errors.filter(
-    (error) => !error.includes('no earlier block produces it') && !error.startsWith('test data '),
-  );
+  const structural = check.errors
+    .filter((error) => !error.includes('no earlier block produces it') && !error.startsWith('test data '))
+    // Le nom du parcours se donne dans le formulaire : dit dans la langue du Dashboard.
+    .map((error) => (error === 'a name of 1 to 80 characters is required' ? l.journeyNameRequired : error));
   return `<div class="lib-check ${check.ok ? 'ok' : 'ko'}" role="status">
 <p class="lib-check-h">${icon(check.ok ? 'check' : 'alert')}<b>${esc(check.ok ? l.checkOk : l.checkKo)}</b></p>
 ${stale ? `<p class="warn-t">${esc(l.staleCheck)}</p>` : ''}
@@ -287,14 +289,47 @@ function composerView(state: DashboardState, publish: boolean): string {
   const busy = Boolean(ui.creating) || Boolean(ui.checking);
   const canCreate =
     publish && ui.compose.parts.length > 0 && ui.compose.name.trim() !== '' && !busy && (!fresh || check.ok);
-  return `<aside class="card lib-composer" id="lib-composer" aria-labelledby="lib-composer-t">
+  // Le contrat du parcours : ce qu'il reçoit de l'extérieur (données de test, ou manquant) et ce qu'il produit.
+  const external = fresh
+    ? [
+        ...new Set([
+          ...check.order.flatMap((entry) => [
+            ...entry.satisfied.filter((item) => typeof item.from !== 'number').map((item) => item.key),
+            ...entry.missing,
+          ]),
+          ...check.missing.map((entry) => entry.key),
+        ]),
+      ]
+    : [];
+  const produced = [
+    ...new Set(
+      ui.compose.parts.flatMap(
+        (part) =>
+          blocks.find((entry) => entry.name === part)?.contract.outputs.map((output) => output.key) ?? [],
+      ),
+    ),
+  ];
+  const chips = (items: readonly string[]): string =>
+    items.length > 0
+      ? items.map((key) => `<code class="lib-key">${esc(key)}</code>`).join('')
+      : `<small class="mu">${esc(l.none)}</small>`;
+  const journey = `<section class="card lib-composer" id="lib-composer" aria-labelledby="lib-composer-t">
 <h2 id="lib-composer-t">${esc(l.composeTitle)}</h2>
 <form class="col" data-action="lib-compose">
 <label class="field">${esc(l.composeName)}<input data-lib="compose.name" value="${esc(ui.compose.name)}" maxlength="80" autocomplete="off" ${publish ? '' : 'disabled'}></label>
 ${rows ? `<ol class="plain lib-steps" aria-label="${esc(l.orderLabel)}">${rows}</ol>` : `<p class="mu lib-empty">${esc(l.composeEmpty)}</p>`}
-${ui.checking ? `<p class="mu" role="status"><span class="spin" aria-hidden="true"></span> ${esc(l.checking)}</p>` : check ? checkSummary(state, check, !fresh) : ''}
 ${publish ? `<div class="form-acts start"><button type="button" class="btn" data-action="lib-check" ${ui.compose.parts.length === 0 || busy ? 'disabled' : ''}>${esc(ui.checking ? l.checking : l.check)}</button><button type="submit" class="btn primary" ${canCreate ? '' : 'disabled'} aria-busy="${String(Boolean(ui.creating))}">${esc(ui.creating ? l.creating : l.create)}</button></div>` : ''}
-</form></aside>`;
+</form></section>`;
+  const diagnostics = `<aside class="card lib-diag" aria-labelledby="lib-diag-t" aria-live="polite">
+<h2 id="lib-diag-t">${esc(l.diagTitle)}</h2>
+${
+  ui.compose.parts.length === 0
+    ? `<p class="mu">${esc(l.diagEmpty)}</p>`
+    : `<div class="lib-ios lib-ios-col"><span class="lib-io"><span class="lib-io-l">${esc(l.journeyNeeds)}</span>${fresh ? chips(external) : `<small class="mu">${esc(l.checking)}</small>`}</span><span class="lib-io"><span class="lib-io-l">${esc(l.journeyGives)}</span>${chips(produced)}</span></div>`
+}
+${ui.checking ? `<p class="mu" role="status"><span class="spin" aria-hidden="true"></span> ${esc(l.checking)}</p>` : check ? checkSummary(state, check, !fresh) : ''}
+</aside>`;
+  return `${journey}${diagnostics}`;
 }
 
 function addPanel(state: DashboardState): string {
@@ -367,6 +402,13 @@ export function libraryView(state: DashboardState): string {
   const states = (['VALID', 'CHANGED', 'INVALID'] as const).filter((value) =>
     all.some((block) => block.state === value),
   );
+  const kinds = (['standalone', 'composite'] as const).filter((value) =>
+    all.some((block) => kindOf(block) === value),
+  );
+  const sheetOpen = ui.sheet !== undefined && all.some((block) => block.name === ui.sheet?.block);
+  const recent = ui.recent
+    .map((name) => all.find((block) => block.name === name))
+    .filter((block): block is LibraryBlockView => block !== undefined);
   const toolbar =
     all.length === 0
       ? ''
@@ -378,7 +420,14 @@ export function libraryView(state: DashboardState): string {
         )}${select(l.stateLabel, 'state', ui.state, [
           ['ALL', l.statesAll],
           ...states.map((value) => [value, l.states[value]] as const),
-        ])}${select(l.usageLabel, 'usage', ui.usage, [
+        ])}${
+          kinds.length > 1
+            ? select(l.kindLabel, 'kind', ui.kind, [
+                ['ALL', l.kinds.ALL],
+                ...kinds.map((value) => [value, l.kinds[value]] as const),
+              ])
+            : ''
+        }${select(l.usageLabel, 'usage', ui.usage, [
           ['ALL', l.usages.ALL],
           ['used', l.usages.used],
           ['free', l.usages.free],
@@ -387,13 +436,29 @@ export function libraryView(state: DashboardState): string {
           ['steps', l.sorts.steps],
           ['usage', l.sorts.usage],
           ['updated', l.sorts.updated],
-        ])}<small class="mu lib-shown" role="status">${esc(l.shown(shown.length, all.length))}</small></div>`;
+        ])}${select(l.groupByLabel, 'groupBy', ui.groupBy, [
+          ['none', l.groupBys.none],
+          ['origin', l.groupBys.origin],
+        ])}<span class="ed-seg lib-layouts" role="radiogroup" aria-label="${esc(l.layoutLabel)}">${(
+          ['grid', 'list'] as const
+        )
+          .map(
+            (value) =>
+              `<button role="radio" aria-checked="${String(ui.layout === value)}" data-action="lib-layout" data-layout="${value}">${esc(value === 'grid' ? l.layoutGrid : l.layoutList)}</button>`,
+          )
+          .join(
+            '',
+          )}</span><small class="mu lib-shown" role="status">${esc(l.shown(shown.length, all.length))}</small></div>`;
   const catalog =
     all.length === 0
       ? `<div class="lib-blank"><p>${esc(l.empty)}</p>${publish ? `<button class="btn primary" data-action="lib-panel-open">${icon('plus')}<span>${esc(l.addBlock)}</span></button>` : ''}</div>`
       : shown.length === 0
         ? `<div class="lib-blank"><p class="mu">${esc(l.noMatch)}</p><button class="btn small ghost" data-action="lib-clear">${esc(l.clear)}</button></div>`
-        : `<ul class="plain lib-cards">${shown.map((block) => blockCard(state, block, publish)).join('')}</ul>`;
+        : catalogList(state, shown, publish);
+  const recents =
+    recent.length > 0
+      ? `<nav class="lib-recent" aria-label="${esc(l.recentTitle)}"><span class="lib-io-l">${esc(l.recentTitle)}</span>${recent.map((block) => `<button class="chip" data-action="lib-open" data-block="${esc(block.name)}">${esc(block.name)}</button>`).join('')}</nav>`
+      : '';
   const details = ui.details ?? [];
   const messages = `${ui.error ? `<div class="err" role="alert"><p>${esc(ui.error)}</p>${details.length > 1 ? `<ul class="plain tight">${details.map((detail) => `<li>${esc(detail)}</li>`).join('')}</ul>` : ''}</div>` : ''}${ui.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(ui.notice)}</span></p>` : ''}`;
   const actions = publish
@@ -403,7 +468,7 @@ export function libraryView(state: DashboardState): string {
     ui.compose.parts.length > 0
       ? `<button class="btn small lib-jump" data-action="lib-jump">${esc(l.jump(ui.compose.parts.length))}</button>`
       : '';
-  return `${header(esc(l.title), { sub: esc(l.sub(p.name, all.length)), actions })}<p class="mu lib-intro">${esc(l.intro)}</p>${messages}${toolbar}${jump}<div class="lib-layout"><section class="lib-catalog" aria-label="${esc(l.blocksTitle)}">${catalog}</section>${composerView(state, publish)}</div>${addPanel(state)}`;
+  return `${header(esc(l.title), { sub: esc(l.sub(p.name, all.length)), actions })}<p class="mu lib-intro">${esc(l.intro)}</p>${sheetOpen ? '' : messages}${toolbar}${recents}${jump}<div class="lib-layout"><section class="lib-catalog" aria-label="${esc(l.blocksTitle)}">${catalog}</section>${composerView(state, publish)}</div>${addPanel(state)}${blockSheet(state)}`;
 }
 
 /** L'insertion d'un bloc dans le scénario affiché (écran Scénarios). */

@@ -154,7 +154,24 @@ export interface Capabilities {
    * parcours.
    */
   extensions: Record<ExtensionName, boolean>;
+  /**
+   * Le serveur peut ouvrir un navigateur visible pour une exécution (`headed`) : il a un écran (sous
+   * Linux, `DISPLAY` ou `WAYLAND_DISPLAY`). Absent d'un serveur plus ancien.
+   */
+  visibleBrowser?: boolean;
 }
+
+/**
+ * Jouer dans un navigateur VISIBLE, sur la machine du serveur (pour regarder le test se dérouler) ;
+ * `slowMoMs` ralentit chaque geste (0 à 2 000 ms). Refusé (`409 NO_DISPLAY`) quand le serveur n'a pas
+ * d'écran. Sans `headed`, le navigateur reste invisible, comme avant.
+ */
+export interface VisibleBrowserOptions {
+  headed?: boolean;
+  slowMoMs?: number;
+}
+
+export const MAX_SLOW_MO_MS = 2000;
 
 export const EXTENSION_NAMES = [
   'recordings',
@@ -790,10 +807,14 @@ export interface GenerationInput {
   groupIds?: string[];
   /** Générer malgré une entrée produite hors des groupes choisis. */
   force?: boolean;
+  /** Régénérer un format dont des fichiers ont été modifiés à la main (sinon 409 MANUAL_EDITS). */
+  overwriteManual?: boolean;
 }
 
 export interface GeneratedFileView {
   format: GenerationFormatName;
+  /** Les diagnostics positionnés de la dernière vérification (après un enregistrement). */
+  diagnostics?: GeneratedFileDiagnostic[];
   /** Chemin relatif au dossier `generated/` de l'enregistrement. */
   path: string;
   /** GENERATED, STATICALLY_VALIDATED, NOT_VALIDATED… : jamais « exécuté » ici. */
@@ -802,11 +823,269 @@ export interface GeneratedFileView {
   assertions: { id: string; description: string; support: 'NATIVE' | 'REPLAY_ONLY'; status: string }[];
   limits: string[];
   content: string;
+  /** Modifié à la main depuis sa génération (le statut est celui de la vérification de la modification). */
+  editedAt?: string;
+  /** L'empreinte du contenu : une modification part de cette version, sinon 409 FILE_CHANGED. */
+  revision?: string;
+}
+
+/** Les familles de diagnostics d'un fichier de test (chacune vient d'un outil réel, jamais déduite). */
+export const DIAGNOSTIC_CATEGORIES = [
+  'syntax',
+  'schema',
+  'references',
+  'dependencies',
+  'static',
+  'compilation',
+  'execution',
+  'assertions',
+  'evidence',
+] as const;
+export type DiagnosticCategory = (typeof DIAGNOSTIC_CATEGORIES)[number];
+
+/** Un problème d'un fichier : sa gravité, sa famille, l'outil qui l'a dit, et où (ligne, étape). */
+export interface GeneratedFileDiagnostic {
+  severity: 'error' | 'warning' | 'info';
+  category: DiagnosticCategory;
+  message: string;
+  /** L'outil (schéma du flow, dictionnaire Gherkin, TypeScript, Maven, Playwright Test, Dry Run…). */
+  source: string;
+  /** Le fichier (chemin sous generated/), quand le problème est dans un autre fichier que celui vérifié. */
+  file?: string;
+  line?: number;
+  column?: number;
+  /** La position de l'étape (1…) dans le flow, quand l'outil la donne. */
+  step?: number;
+}
+
+/** Modifier un fichier généré : son chemin, le nouveau contenu, la version d'où part la modification. */
+export interface GeneratedFileEditInput {
+  path: string;
+  content: string;
+  revision: string;
+}
+
+/** La vérification d'un contenu sans l'écrire : statut, diagnostics positionnés, et s'il serait refusé. */
+export interface GeneratedFileCheckView {
+  path: string;
+  status: string;
+  validation?: { method: string; ok: boolean; messages: string[] };
+  diagnostics: GeneratedFileDiagnostic[];
+  /** true : l'enregistrement de ce contenu serait refusé. */
+  blocking: boolean;
+}
+
+/** Ce qu'une régénération écrirait (sans rien écrire), pour comparer avant de remplacer. */
+export interface GenerationPreview {
+  files: { format: GenerationFormatName; path: string; content: string }[];
+  warnings: string[];
+}
+
+/** Revenir à la version générée d'un fichier modifié à la main. */
+export interface GeneratedFileRestoreInput {
+  path: string;
+  revision: string;
 }
 
 export interface GenerationResult {
   files: GeneratedFileView[];
   warnings: string[];
+}
+
+/**
+ * L'EXÉCUTION D'UN TEST GÉNÉRÉ : jouée pour de vrai, jamais déduite de la génération.
+ *   QUEUED, RUNNING      en file, en cours ;
+ *   PASSED, FAILED       d'après les cas rapportés par l'outil (rejeu du moteur, JUnit XML) ;
+ *   ERROR                l'outil n'a rapporté aucun cas exploitable (sortie à l'appui) ;
+ *   CANCELLED            annulée ;
+ *   UNAVAILABLE          l'outil manque sur le serveur (Playwright Test, Maven) : rien n'a été joué.
+ */
+export const TEST_RUN_STATUSES = [
+  'QUEUED',
+  'RUNNING',
+  'PASSED',
+  'FAILED',
+  'ERROR',
+  'CANCELLED',
+  'UNAVAILABLE',
+] as const;
+export type TestRunStatus = (typeof TEST_RUN_STATUSES)[number];
+
+/** Un cas joué : un flow (rejeu du moteur) ou un test (JUnit XML). */
+export interface TestCaseView {
+  name: string;
+  status: 'PASSED' | 'FAILED' | 'BLOCKED' | 'SKIPPED' | 'MANUAL';
+  durationMs?: number;
+  /** La raison d'un échec, d'un blocage ou d'un saut (masquée, tronquée ; jamais une valeur saisie). */
+  message?: string;
+  /** La ligne du fichier joué (Dry Run, ou position donnée par l'outil). */
+  line?: number;
+  /** L'étape du flow (1…) en échec. */
+  step?: number;
+  /** Le statut propre à l'outil (Dry Run : MATCHED, MISSING, REORDERED…). */
+  detail?: string;
+}
+
+/** Comment un format s'exécute sur ce serveur, et s'il le peut. */
+export interface TestRunnerView {
+  format: GenerationFormatName;
+  /** ENGINE : le rejeu QA-CRAWLER (SafetyPolicy appliquée) ; EXTERNAL : Playwright Test ou Maven. */
+  kind: 'ENGINE' | 'EXTERNAL';
+  /** L'outil (« QA-CRAWLER engine », « Playwright Test 1.56.1 », « Apache Maven 3.9.9 »). */
+  tool: string;
+  available: boolean;
+  /** Pourquoi l'outil manque. */
+  reason?: string;
+}
+
+export interface TestRunView {
+  id: string;
+  recording: string;
+  format: GenerationFormatName;
+  status: TestRunStatus;
+  /** L'outil qui a joué le test. */
+  tool: string;
+  kind: 'ENGINE' | 'EXTERNAL';
+  /** L'application visée. */
+  target: string;
+  environment?: { id: string; name: string };
+  queuedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  cases: TestCaseView[];
+  counts: { passed: number; failed: number; skipped: number; total: number };
+  /** Ce qui explique ERROR, CANCELLED ou UNAVAILABLE. */
+  message?: string;
+  /** La fin de la sortie de l'outil (masquée). */
+  output: string;
+  /** Le rapport QA-CRAWLER d'un rejeu (chemin relatif au dossier de l'exécution). */
+  report?: string;
+  /** Les fichiers joués qui avaient été modifiés à la main. */
+  edited?: string[];
+  /**
+   * RUN : l'exécution du test ; DRY_RUN : le Dry Run du moteur (le scénario confronté à l'application,
+   * SafetyPolicy appliquée, rien n'est modifié ; `dryRunStatus` est son verdict).
+   */
+  mode?: 'RUN' | 'DRY_RUN';
+  dryRunStatus?: string;
+  /** Joué depuis un brouillon non enregistré (Dry Run seulement). */
+  draft?: boolean;
+  /** Le journal de l'exécution (console) : en direct, conservé ou indisponible. */
+  logs?: RunLogsInfo;
+  /** Joué dans un navigateur visible (sur la machine du serveur), ralenti de `slowMoMs`. */
+  headed?: boolean;
+  slowMoMs?: number;
+}
+
+/**
+ * LE JOURNAL D'UNE EXÉCUTION DE TEST GÉNÉRÉ : des événements réels, produits par le moteur (son journal
+ * structuré `EngineLogEntry` et ses écouteurs), par le reporter de Playwright Test, par Maven et le
+ * pilote Playwright Java, ou par le serveur (création, arrêt, fin). Numérotés (`seq`) et horodatés par
+ * le serveur à leur réception, comme les événements d'une exploration. Aucun n'est inventé : un
+ * événement absent reste absent, jamais un succès supposé.
+ */
+export const RUN_LOG_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'] as const;
+export type RunLogLevel = (typeof RUN_LOG_LEVELS)[number];
+
+export const RUN_LOG_CATEGORIES = [
+  'SYSTEM',
+  'ENGINE',
+  'ACTION',
+  'ASSERTION',
+  'NETWORK',
+  'BROWSER',
+  'OUTPUT',
+] as const;
+export type RunLogCategory = (typeof RUN_LOG_CATEGORIES)[number];
+
+/**
+ * L'état d'une opération, tel que la source le dit : demandée, en cours, exécutée (l'outil a fini le
+ * geste, l'effet n'est pas vérifié), confirmée (l'effet attendu est observé), échouée, bloquée
+ * (SafetyPolicy), ignorée, non exécutée (le scénario s'est arrêté avant).
+ */
+export const RUN_LOG_STATUSES = [
+  'REQUESTED',
+  'RUNNING',
+  'EXECUTED',
+  'CONFIRMED',
+  'FAILED',
+  'BLOCKED',
+  'SKIPPED',
+  'NOT_RUN',
+] as const;
+export type RunLogStatus = (typeof RUN_LOG_STATUSES)[number];
+
+/** La famille d'un échec, quand la source permet de la dire. */
+export const RUN_ERROR_KINDS = [
+  'INFRASTRUCTURE',
+  'BROWSER',
+  'SELECTOR',
+  'ASSERTION',
+  'SCENARIO',
+  'POLICY',
+] as const;
+export type RunErrorKind = (typeof RUN_ERROR_KINDS)[number];
+
+export interface RunLogEvent {
+  seq: number;
+  /** Horodatage du serveur à la réception (ou de la source quand elle le donne : reporter, pilote). */
+  at: string;
+  runId: string;
+  level: RunLogLevel;
+  category: RunLogCategory;
+  /** Le type de l'événement (STEP_STARTED, SEMANTIC_RESOLUTION_SUCCEEDED, HTTP_REQUEST, RUN_FINISHED…). */
+  type: string;
+  status?: RunLogStatus;
+  /** Lisible, masqué ; jamais une valeur saisie. */
+  message: string;
+  /** Le composant qui l'a produit : engine, dry-run, playwright-test, maven, playwright-java, server. */
+  source: string;
+  /** Le scénario : le flow joué, ou le test (titre, méthode). */
+  scenario?: string;
+  /** L'étape (1…) du flow, ou celle du code généré (repère « step N »). */
+  step?: number;
+  /** La ligne du fichier joué, quand la source la donne. */
+  line?: number;
+  /** Le fichier joué (chemin sous generated/). */
+  file?: string;
+  durationMs?: number;
+  errorKind?: RunErrorKind;
+  /** Les preuves : capture (chemin dans le rapport), rapport QA-CRAWLER. */
+  evidence?: { screenshot?: string; report?: string };
+  /** Métadonnées autorisées (jamais une valeur saisie, un en-tête, un cookie). */
+  data?: Record<string, string | number | boolean>;
+}
+
+/** Ce que l'on sait des journaux d'une exécution. */
+export interface RunLogsInfo {
+  /** LIVE : en cours, en mémoire et écrits au fil de l'eau ; STORED : relus du disque ; UNAVAILABLE : aucun journal conservé (exécution antérieure à la console). */
+  state: 'LIVE' | 'STORED' | 'UNAVAILABLE';
+  /** Le nombre d'événements conservés. */
+  count: number;
+  /** Événements écartés au-delà de la limite de conservation. */
+  dropped?: number;
+}
+
+/** Les tests générés d'un enregistrement : leurs fichiers, leurs exécutions, les outils du serveur. */
+export interface GeneratedTestsView {
+  recording: string;
+  generatedAt?: string;
+  files: GeneratedFileView[];
+  warnings: string[];
+  runners: TestRunnerView[];
+  runs: TestRunView[];
+}
+
+export interface TestRunInput extends VisibleBrowserOptions {
+  format: GenerationFormatName;
+  /** DRY_RUN : le Dry Run du moteur (YAML et Gherkin) ; RUN par défaut. */
+  mode?: 'RUN' | 'DRY_RUN';
+  /** Dry Run : le fichier à confronter (chemin sous generated/) et, s'il n'est pas enregistré, son contenu. */
+  path?: string;
+  content?: string;
+  /** Rejeu par le moteur seulement (YAML, Gherkin) : l'environnement du projet à viser. */
+  environmentId?: string;
 }
 
 export interface GraphView {
@@ -994,6 +1273,8 @@ export interface ErrorBody {
   code: string;
   details?: string[];
   issues?: DraftIssue[];
+  /** Les diagnostics positionnés d'un fichier refusé (éditeur des tests générés). */
+  diagnostics?: GeneratedFileDiagnostic[];
 }
 
 /** Les événements DOM émis par l'assistant (bubbles + composed). */
@@ -1156,8 +1437,10 @@ export interface LibraryBlockView {
   steps: number;
   startAt?: string;
   description?: string;
-  /** D'où il vient : un scénario, ou un groupe d'un enregistrement. */
-  origin?: { kind: 'scenario' | 'recording'; name: string; group?: string };
+  /** D'où il vient : un scénario, ou un (ou plusieurs) groupe(s) métier d'un enregistrement. */
+  origin?: BlockOrigin;
+  /** Bloc composé : les groupes métier qu'il garde (identifiants d'origine, positions dans le bloc). */
+  groups?: { id: string; name: string; steps: number }[];
   /** La version validée, son empreinte (contenu exécutable) et ses dates. */
   version: number;
   hash: string;
@@ -1179,6 +1462,167 @@ export interface LibraryBlockView {
   /** Les scénarios qui le rejouent ; pour les parcours suivis, la version qu'ils référencent. */
   usedBy: string[];
   pinnedBy: { scenario: string; version: number; current: boolean }[];
+}
+
+/**
+ * LA PROVENANCE D'UN BLOC. Depuis un enregistrement : ses groupes et ses étapes d'origine (identifiants
+ * stables du Recorder), la session, l'empreinte du flow de l'enregistrement au moment de l'extraction,
+ * la date, l'auteur (accès nominatif) et les transformations faites (navigation ajoutée, valeur fournie).
+ * Les champs ajoutés sont facultatifs : un bloc plus ancien n'a que `kind`, `name` et `group`.
+ */
+export interface BlockOrigin {
+  kind: 'scenario' | 'recording';
+  name: string;
+  group?: string;
+  groupIds?: string[];
+  groups?: string[];
+  stepIds?: string[];
+  /** La sélection d'origine (une partie d'un groupe : ses étapes choisies). */
+  selection?: ExtractionSelection[];
+  mode?: ExtractionMode;
+  sessionId?: string;
+  revision?: string;
+  extractedAt?: string;
+  author?: string;
+  navigate?: boolean;
+  /** Les clés dont la valeur a été fournie à la publication (jamais la valeur). */
+  provided?: string[];
+  transformations?: string[];
+}
+
+/** UN BLOC PAR GROUPE (separate) ou UN BLOC COMPOSÉ des groupes choisis, qui les garde (composite). */
+export const EXTRACTION_MODES = ['separate', 'composite'] as const;
+export type ExtractionMode = (typeof EXTRACTION_MODES)[number];
+
+/** Un groupe choisi ; `stepIds` : seulement une partie de ses étapes. */
+export interface ExtractionSelection {
+  groupId: string;
+  stepIds?: string[];
+}
+
+export interface ExtractionInput {
+  selection: ExtractionSelection[];
+  mode: ExtractionMode;
+  /** Le nom et la description de chaque bloc : par groupe (separate), ou `composite`. */
+  names?: Record<string, { name?: string; description?: string }>;
+  /** Faire commencer chaque bloc par aller à sa page de départ (`goto`) : une transformation notée. */
+  navigate?: boolean;
+  /**
+   * Des valeurs fixes fournies explicitement pour des données que la sélection consomme sans les
+   * produire. Jamais pour une donnée sensible (secret : une référence d'environnement).
+   */
+  provided?: Record<string, string>;
+}
+
+/** D'où un bloc prévu reçoit une donnée qu'il consomme sans la produire. */
+export interface ExtractionDependency {
+  key: string;
+  /**
+   * BLOCK : un autre bloc de la même publication la produit (le composer après lui) ;
+   * UNSELECTED_GROUP : un groupe non choisi la produit (le bloc ne sera pas autonome) ;
+   * OUTSIDE_GROUPS : une étape hors groupe la produit ; PROVIDED : valeur fournie à la publication ;
+   * NOWHERE : rien ne la produit ni ne la définit.
+   */
+  source: 'BLOCK' | 'UNSELECTED_GROUP' | 'OUTSIDE_GROUPS' | 'PROVIDED' | 'NOWHERE';
+  group?: { id: string; name: string };
+  block?: string;
+}
+
+export interface ExtractionStepView {
+  /** Rang dans le bloc (1…n) et dans l'enregistrement. */
+  position: number;
+  source?: number;
+  stepId?: string;
+  kind: string;
+  label: string;
+  groupId?: string;
+}
+
+export interface ExtractionBlockPlan {
+  /** groupId (separate) ou `composite`. */
+  key: string;
+  name: string;
+  description?: string;
+  composite: boolean;
+  groups: { id: string; name: string; steps: number; partial: boolean }[];
+  startAt: string;
+  steps: ExtractionStepView[];
+  /** Assertions métier recopiées, et vérifications (`expect`) parmi les étapes. */
+  assertions: number;
+  checks: number;
+  /** Les données que le bloc définira (jamais leur valeur). */
+  data: { key: string; dynamic: boolean; provided?: boolean }[];
+  produces: string[];
+  consumes: string[];
+  contract: BlockContract;
+  dependencies: ExtractionDependency[];
+  transformations: string[];
+  /** Le bloc commence au milieu de l'enregistrement sans aller à sa page de départ. */
+  midway: boolean;
+  /**
+   * Bloc composé : un groupe interne qui ne suit pas le précédent dans l'enregistrement (une étape
+   * sautée entre eux) et ne commence pas par aller à sa page : il jouera là où le précédent s'arrête.
+   */
+  gaps: { group: string; after: string; startAt: string }[];
+  validation: { ok: boolean; errors: string[]; warnings: string[] };
+}
+
+/** Un groupe de l'enregistrement, tel que la sélection le montre. */
+export interface ExtractionGroupView {
+  id: string;
+  name: string;
+  description?: string;
+  steps: number;
+  checks: number;
+  assertions: number;
+  startAt: string;
+  /** Les premières actions, en mots. */
+  actions: string[];
+  produces: string[];
+  consumes: { key: string; groupId?: string; groupName?: string }[];
+  runnableAlone: boolean;
+}
+
+/** LE PLAN D'UNE PUBLICATION : calculé sans rien écrire ; publier le refait puis écrit tout ou rien. */
+export interface ExtractionPlan {
+  recording: string;
+  mode: ExtractionMode;
+  ok: boolean;
+  groups: ExtractionGroupView[];
+  blocks: ExtractionBlockPlan[];
+  summary: {
+    groups: number;
+    steps: number;
+    produced: number;
+    consumed: number;
+    /** Les données consommées qu'aucun bloc de la publication ne produit. */
+    external: string[];
+    errors: number;
+    warnings: number;
+  };
+  /** Les erreurs de la sélection elle-même (groupe inconnu, partie incohérente…). */
+  errors: string[];
+}
+
+/** Un bloc confronté à sa source : le même contenu, un contenu différent, ou une source disparue. */
+export interface BlockSourceComparison {
+  block: string;
+  status: 'SAME' | 'DIFFERENT' | 'SOURCE_MISSING' | 'NOT_FROM_RECORDING';
+  recording?: string;
+  revision?: { extracted?: string; current?: string };
+  changes: string[];
+}
+
+/** Le détail d'un bloc : ses étapes en mots, ses groupes internes, ses données (sans valeur sensible). */
+export interface LibraryBlockDetails {
+  block: LibraryBlockView;
+  steps: ExtractionStepView[];
+  groups: { id: string; name: string; positions: number[] }[];
+  /**
+   * `strategy` : le code de la stratégie du jeu de données (RECORDED_LITERAL, GENERATE_AT_REPLAY…) ;
+   * `detail` : le générateur, la clé reprise, ou le nom de la variable d'environnement d'un secret.
+   */
+  data: { key: string; strategy: string; detail?: string; dynamic: boolean }[];
 }
 
 export type LibraryAddInput =
@@ -1273,8 +1717,13 @@ export const EXECUTION_KINDS = ['EXPLORATION', 'REPLAY'] as const;
 export type ExecutionKind = (typeof EXECUTION_KINDS)[number];
 
 /** Lancer une exécution : rejouer des scénarios du projet (tous par défaut) dans un environnement. */
-export interface ExecutionStartInput {
+export interface ExecutionStartInput extends VisibleBrowserOptions {
   scenarios?: string[];
+  environmentId?: string;
+}
+
+/** Une exploration : l'environnement visé, et le navigateur visible si demandé. */
+export interface ExplorationStartInput extends VisibleBrowserOptions {
   environmentId?: string;
 }
 

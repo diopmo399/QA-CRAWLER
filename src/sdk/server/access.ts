@@ -62,6 +62,8 @@ const publicMember = ({ tokenHash: _hash, ...member }: StoredMember): MemberView
 export class AccessStore {
   private members?: StoredMember[];
   private chain: Promise<unknown> = Promise.resolve();
+  /** Les entrées du journal en cours d'écriture : une lecture les attend (aucune écriture invisible). */
+  private readonly writing = new Set<Promise<void>>();
 
   constructor(readonly workspace: string) {}
 
@@ -179,18 +181,28 @@ export class AccessStore {
     return undefined;
   }
 
-  async record(entry: JournalEntry): Promise<void> {
-    await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    await appendFile(path.join(this.dir, JOURNAL_FILE), `${JSON.stringify(entry)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
+  record(entry: JournalEntry): Promise<void> {
+    const write = (async (): Promise<void> => {
+      await mkdir(this.dir, { recursive: true, mode: 0o700 });
+      await appendFile(path.join(this.dir, JOURNAL_FILE), `${JSON.stringify(entry)}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+    })();
+    this.writing.add(write);
+    void write.then(
+      () => this.writing.delete(write),
+      () => this.writing.delete(write),
+    );
+    return write;
   }
 
   /** Le journal, du plus récent au plus ancien. */
   async journal(
     options: { projectId?: string; kind?: JournalKind; limit?: number } = {},
   ): Promise<JournalEntry[]> {
+    // Une action déjà répondue (son entrée s'écrit à la fin de la réponse) se lit dans le journal.
+    await Promise.allSettled([...this.writing]);
     let text: string;
     try {
       text = await readFile(path.join(this.dir, JOURNAL_FILE), 'utf8');
@@ -256,6 +268,11 @@ export function rightFor(segments: readonly string[], method: string): Right {
       // Rejouer joue l'application, comme une exécution ; ouvrir une correction aussi (le chemin est
       // rejoué jusqu'à l'étape). Valider la correction est une décision.
       if (action === 'correction') return segments[6] === 'apply' ? 'DECIDE' : 'RUN';
+      // Jouer un test généré joue l'application ; un lien vers son rapport est une lecture. RUN_WRITES
+      // est vérifié en plus par la route (Playwright et Java pilotent sans la SafetyPolicy).
+      if (action === 'test-runs') return segments[7] === 'report-links' ? 'VIEW' : 'RUN';
+      // Le plan d'une publication de groupes ne change rien ; publier des blocs : publier.
+      if (action === 'library') return segments[6] === 'plan' ? 'VIEW' : 'PUBLISH';
       return item === undefined || action === 'stop' || action === 'replay' || LIVE_CONTROLS.has(action ?? '')
         ? 'RUN'
         : 'DECIDE';
@@ -295,6 +312,8 @@ const KEYWORDS = new Set([
   'compose',
   'insert',
   'preview',
+  'plan',
+  'source',
   'drift',
   'contract',
   'version',
@@ -310,6 +329,10 @@ const KEYWORDS = new Set([
   'bindings',
   'groups',
   'generation',
+  'test-runs',
+  'original',
+  'events',
+  'logs',
   'steps',
   'proposals',
   'checks',
@@ -337,7 +360,9 @@ export function actionOf(segments: readonly string[]): { action: string; kind: J
     ? 'ACCESS'
     : words.includes('requirements')
       ? 'REQUIREMENTS'
-      : words.some((word) => ['executions', 'explorations', 'recordings', 'checks', 'check'].includes(word))
+      : words.some((word) =>
+            ['executions', 'explorations', 'recordings', 'test-runs', 'checks', 'check'].includes(word),
+          )
         ? 'RUN'
         : words.some((word) =>
               ['environments', 'config', 'duplicate', 'archive', 'restore', 'scenarios'].includes(word),

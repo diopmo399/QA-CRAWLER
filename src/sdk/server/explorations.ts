@@ -238,6 +238,12 @@ export function stepLabel(step: Pick<FlowStepReport, 'kind' | 'description'>): s
   return redactText(step.description).slice(0, 200);
 }
 
+/** La raison publiable d'une étape : jamais celle d'une saisie ou d'une phrase libre (elle peut citer une valeur). */
+export function stepReason(step: Pick<FlowStepReport, 'kind' | 'reason'>): string | undefined {
+  if (!step.reason || VALUE_KINDS.has(step.kind) || FREE_TEXT_KINDS.has(step.kind)) return undefined;
+  return redactText(step.reason).slice(0, 300);
+}
+
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 export interface ExplorationManagerOptions {

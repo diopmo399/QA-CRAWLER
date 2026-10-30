@@ -145,7 +145,7 @@ ${history && history.flips >= 2 ? `<p class="note">${icon('alert')}<span>${esc(o
           ? `<ul class="plain">${history.runs.map((run) => `<li class="row">${pill(run.status, t.results[run.status] ?? run.status)}<button class="lnk" data-action="open-run" data-project="${esc(p.id)}" data-run="${esc(run.run)}">${esc(formatDate(run.at, t.locale))}</button><span class="mu push">${esc(t.duration(run.durationMs))}</span></li>`).join('')}</ul>`
           : `<p class="mu">${esc(o.neverRun)}</p>`
       }
-${p.state === 'ARCHIVED' || !can(state, 'RUN') ? '' : `<div class="form-acts start"><button class="btn primary" data-action="replay-scenario" data-name="${esc(selected.name)}">${icon('play')}<span>${esc(o.replay)}</span></button></div>`}
+${p.state === 'ARCHIVED' || !can(state, 'RUN') ? '' : `<div class="form-acts start"><button class="btn primary" data-action="replay-scenario" data-name="${esc(selected.name)}" ${state.launch.busy ? 'disabled' : ''} aria-busy="${String(state.launch.busy)}">${icon('play')}<span>${esc(o.replay)}</span></button></div>${state.launch.error && state.launch.scenarios.includes(selected.name) ? `<p class="err" role="alert">${esc(state.launch.error)}</p>` : ''}`}
 ${selected.uses && selected.uses.length > 0 ? `<p class="mu">${esc(t.lib.uses(selected.uses.join(', ')))}</p>` : ''}
 ${scenarioDrift(state, selected)}
 ${state.lib.error ? `<div class="err" role="alert"><p>${esc(state.lib.error)}</p>${(state.lib.details ?? []).length > 1 ? `<ul class="plain tight">${(state.lib.details ?? []).map((detail) => `<li>${esc(detail)}</li>`).join('')}</ul>` : ''}</div>` : ''}${state.lib.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(state.lib.notice)}</span></p>` : ''}

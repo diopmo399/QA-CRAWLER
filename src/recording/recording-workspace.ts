@@ -1,4 +1,5 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { access, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { isSensitiveKey, parseTestDataSet, testDataSetDocument } from '../data/test-data-set.js';
@@ -44,6 +45,8 @@ import {
 } from './assertion-proposals.js';
 import type { RawRecordedEvent, RecordedFlow } from './model.js';
 import { TEST_DATA_FILE } from './process-recording.js';
+import { artifactDiagnostics } from '../platform/generated-diagnostics.js';
+import type { GeneratedFileDiagnostic } from '../sdk/core/contracts.js';
 import { generateFlowFiles, type GeneratedFiles } from './recorded-flow.js';
 import {
   BINDING_GENERATORS,
@@ -63,6 +66,7 @@ import {
   applyGroupCommand,
   groupCheckSuggestions,
   groupViews,
+  normalizeGroups,
   proposeGroups,
   stepDependencies,
   type BusinessStepRef,
@@ -179,6 +183,13 @@ export async function generateRecordingTests(
   if (context.testData && (formats.includes('yaml') || formats.includes('gherkin')))
     await writeFile(path.join(generatedDir, TEST_DATA_FILE), context.testData.yaml);
   const validated = await validateArtifacts(plan.artifacts, { directory: generatedDir });
+  // Les fichiers des formats non régénérés restent sous generated/ : leur description aussi.
+  const previous = await generationManifest(context.directory);
+  const kept = previous?.artifacts.filter((artifact) => !formats.includes(artifact.format));
+  // Régénérés : leurs versions modifiées à la main sont remplacées, leurs sauvegardes n'ont plus d'objet.
+  for (const artifact of previous?.artifacts ?? [])
+    if (formats.includes(artifact.format) && artifact.editedAt)
+      await rm(path.join(context.directory, ORIGINALS_DIR, artifact.path), { force: true });
   await context.write(
     FLOW_FILES.generation,
     json({
@@ -187,10 +198,249 @@ export async function generateRecordingTests(
       flow: plan.name,
       summary: planSummary({ ...plan, artifacts: validated }),
       warnings: plan.warnings,
-      artifacts: validated.map(({ content: _content, ...artifact }) => artifact),
+      artifacts: [...(kept ?? []), ...validated.map(({ content: _content, ...artifact }) => artifact)],
     }),
   );
   return { directory: generatedDir, warnings: plan.warnings, artifacts: validated, name: plan.name, formats };
+}
+
+/** Un fichier décrit par generation.json ; `editedAt` : modifié à la main depuis sa génération. */
+export type ManifestArtifact = Omit<GeneratedArtifact, 'content'> & { editedAt?: string };
+
+/** Ce que generation.json décrit : chaque fichier sous generated/, sans son contenu. */
+export interface GenerationManifest {
+  generatedAt?: string;
+  flow?: string;
+  warnings: string[];
+  artifacts: ManifestArtifact[];
+}
+
+/** La version générée d'un fichier modifié à la main, gardée pour y revenir. */
+export const ORIGINALS_DIR = 'generated-originals';
+
+/** generation.json d'un enregistrement ; undefined quand rien n'a été généré (ou fichier illisible). */
+export async function generationManifest(directory: string): Promise<GenerationManifest | undefined> {
+  const text = await readFile(path.join(directory, FLOW_FILES.generation), 'utf8').catch(() => undefined);
+  if (text === undefined) return undefined;
+  try {
+    const raw = JSON.parse(text) as Partial<GenerationManifest>;
+    if (!Array.isArray(raw.artifacts)) return undefined;
+    return {
+      ...(typeof raw.generatedAt === 'string' ? { generatedAt: raw.generatedAt } : {}),
+      ...(typeof raw.flow === 'string' ? { flow: raw.flow } : {}),
+      warnings: Array.isArray(raw.warnings) ? raw.warnings.filter((entry) => typeof entry === 'string') : [],
+      artifacts: raw.artifacts.filter(
+        (artifact) =>
+          typeof artifact === 'object' &&
+          (FORMATS as readonly string[]).includes(artifact.format) &&
+          typeof artifact.path === 'string',
+      ),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+// ── Modifier un fichier généré à la main ───────────────────────────────────────────────────
+
+export type GeneratedFileEdit =
+  | { artifact: ManifestArtifact; content: string; diagnostics: GeneratedFileDiagnostic[] }
+  | { error: string; messages: string[]; diagnostics?: GeneratedFileDiagnostic[] };
+
+/** La vérification d'un contenu, sans rien écrire : le statut, les diagnostics positionnés, et si elle bloque. */
+export type GeneratedFileCheck =
+  | {
+      artifact: ManifestArtifact;
+      diagnostics: GeneratedFileDiagnostic[];
+      /** Le contenu échoue, ou fait échouer un autre fichier du format jusque-là vérifié. */
+      blocking: boolean;
+      messages: string[];
+    }
+  | { error: string };
+
+/** Un chemin sous `root` ; undefined s'il en sort. */
+function inside(root: string, relative: string): string | undefined {
+  const base = path.resolve(root);
+  const target = path.resolve(base, relative);
+  return target.startsWith(`${base}${path.sep}`) ? target : undefined;
+}
+
+async function writeAtomic(file: string, content: string): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${randomBytes(4).toString('hex')}.tmp`;
+  await writeFile(temporary, content, 'utf8');
+  await rename(temporary, file);
+}
+
+interface LoadedManifest {
+  file: string;
+  document: Record<string, unknown>;
+  artifacts: ManifestArtifact[];
+  index: number;
+  artifact: ManifestArtifact;
+  target: string;
+  original: string;
+}
+
+async function manifestEntry(
+  directory: string,
+  relative: string,
+): Promise<LoadedManifest | { error: string }> {
+  const file = path.join(directory, FLOW_FILES.generation);
+  const text = await readFile(file, 'utf8').catch(() => undefined);
+  if (text === undefined) return { error: 'nothing has been generated for this recording' };
+  const document = JSON.parse(text) as Record<string, unknown> & { artifacts?: ManifestArtifact[] };
+  const artifacts = Array.isArray(document.artifacts) ? document.artifacts : [];
+  const index = artifacts.findIndex((artifact) => artifact.path === relative);
+  const artifact = artifacts[index];
+  const target = inside(path.join(directory, 'generated'), relative);
+  const original = inside(path.join(directory, ORIGINALS_DIR), relative);
+  if (!artifact || !target || !original) return { error: `${relative} is not a generated file` };
+  return { file, document, artifacts, index, artifact, target, original };
+}
+
+/**
+ * VÉRIFIER UN CONTENU avec l'outil de la génération (schéma, dictionnaire Gherkin et chargeur de
+ * mission, syntaxe TypeScript, `mvn test-compile`), sur une COPIE des fichiers de son format : rien
+ * n'est écrit. Les diagnostics disent où (ligne, colonne, étape) quand l'outil le dit.
+ */
+export async function checkGeneratedFile(
+  directory: string,
+  relative: string,
+  content: string,
+): Promise<GeneratedFileCheck> {
+  const entry = await manifestEntry(directory, relative);
+  if ('error' in entry) return entry;
+  const generatedDir = path.join(directory, 'generated');
+  const siblings = entry.artifacts.filter((artifact) => artifact.format === entry.artifact.format);
+  const workspace = await mkdtemp(path.join(directory, '.edit-'));
+  let checked: GeneratedArtifact[];
+  try {
+    const copies: GeneratedArtifact[] = [];
+    for (const sibling of siblings) {
+      const source = inside(generatedDir, sibling.path);
+      const body =
+        sibling.path === relative
+          ? content
+          : source
+            ? await readFile(source, 'utf8').catch(() => undefined)
+            : undefined;
+      if (body === undefined) continue;
+      copies.push({ ...sibling, content: body });
+    }
+    await writeArtifacts(copies, workspace);
+    await cp(path.join(generatedDir, TEST_DATA_FILE), path.join(workspace, TEST_DATA_FILE)).catch(
+      () => undefined,
+    );
+    checked = await validateArtifacts(copies, { directory: workspace });
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+  const own = checked.find((artifact) => artifact.path === relative);
+  if (!own?.validation) return { error: `${relative} could not be checked` };
+  const unavailable = (validation: GeneratedArtifact['validation']): boolean =>
+    validation?.messages.some((message) => message.endsWith('not validated')) ?? false;
+  // Java : un seul `mvn test-compile` pour tout le projet ; ses erreurs disent déjà leur fichier. Les
+  // autres fichiers du format portent le même résultat : ils ne sont pas comptés une seconde fois.
+  const shared = entry.artifact.format === 'java';
+  const broken = checked.filter(
+    (artifact) =>
+      !shared &&
+      artifact.path !== relative &&
+      siblings.find((sibling) => sibling.path === artifact.path)?.status === 'STATICALLY_VALIDATED' &&
+      artifact.validation &&
+      !artifact.validation.ok &&
+      !unavailable(artifact.validation),
+  );
+  const diagnostics = [
+    ...(await artifactDiagnostics(own)),
+    ...(
+      await Promise.all(
+        broken.map(async (artifact) =>
+          (await artifactDiagnostics(artifact)).map((diagnostic) => ({
+            ...diagnostic,
+            file: diagnostic.file ?? artifact.path,
+          })),
+        ),
+      )
+    ).flat(),
+  ];
+  // Java : le compilateur dit le fichier ; un problème d'un autre fichier n'est pas de celui-ci.
+  const scoped = diagnostics.map((diagnostic) =>
+    diagnostic.file !== undefined && relative.endsWith(diagnostic.file.replace(/^.*?(src\/)/, '$1'))
+      ? (({ file: _file, ...rest }) => rest)(diagnostic)
+      : diagnostic,
+  );
+  const { editedAt: _editedAt, ...rest } = entry.artifact;
+  return {
+    artifact: { ...rest, status: own.status, validation: own.validation },
+    diagnostics: scoped,
+    blocking: (!own.validation.ok && !unavailable(own.validation)) || broken.length > 0,
+    messages: [
+      ...own.validation.messages,
+      ...broken.flatMap((artifact) =>
+        (artifact.validation?.messages ?? []).map((message) => `${artifact.path}: ${message}`),
+      ),
+    ].slice(0, 30),
+  };
+}
+
+/**
+ * MODIFIER (ou RESTAURER) UN FICHIER GÉNÉRÉ. Le nouveau contenu passe `checkGeneratedFile` : s'il
+ * bloque, rien n'est écrit. Un outil absent n'est pas un échec : le fichier est enregistré « non
+ * vérifié », dit tel quel. La première modification garde la version générée (generated-originals/) ;
+ * `restore` la remet et retire la marque « modifié à la main ».
+ */
+export async function editGeneratedFile(
+  directory: string,
+  relative: string,
+  change: { content: string } | { restore: true },
+): Promise<GeneratedFileEdit> {
+  const entry = await manifestEntry(directory, relative);
+  if ('error' in entry) return { error: entry.error, messages: [] };
+  let content: string;
+  if ('restore' in change) {
+    if (!entry.artifact.editedAt) return { error: `${relative} has not been edited`, messages: [] };
+    const saved = await readFile(entry.original, 'utf8').catch(() => undefined);
+    if (saved === undefined)
+      return { error: `the generated version of ${relative} is missing`, messages: [] };
+    content = saved;
+  } else content = change.content;
+  const check = await checkGeneratedFile(directory, relative, content);
+  if ('error' in check) return { error: check.error, messages: [] };
+  if (check.blocking)
+    return {
+      error: `${relative} does not pass its check (${check.artifact.validation?.method ?? 'check'}): nothing was saved`,
+      messages: check.messages,
+      diagnostics: check.diagnostics,
+    };
+  if ('restore' in change) {
+    await writeAtomic(entry.target, content);
+    await rm(entry.original, { force: true });
+  } else {
+    // La version générée est gardée une seule fois : celle d'avant la première modification.
+    if (!entry.artifact.editedAt) await writeAtomic(entry.original, await readFile(entry.target, 'utf8'));
+    await writeAtomic(entry.target, content);
+  }
+  const updated: ManifestArtifact = {
+    ...check.artifact,
+    ...('restore' in change ? {} : { editedAt: new Date().toISOString() }),
+  };
+  entry.artifacts[entry.index] = updated;
+  await writeAtomic(entry.file, json({ ...entry.document, artifacts: entry.artifacts }));
+  return { artifact: updated, content, diagnostics: check.diagnostics };
+}
+
+/** La version générée d'un fichier : sa sauvegarde s'il a été modifié à la main, sinon le fichier. */
+export async function generatedVersion(
+  directory: string,
+  relative: string,
+): Promise<string | { error: string }> {
+  const entry = await manifestEntry(directory, relative);
+  if ('error' in entry) return entry;
+  const source = entry.artifact.editedAt ? entry.original : entry.target;
+  const text = await readFile(source, 'utf8').catch(() => undefined);
+  return text ?? { error: `the generated version of ${relative} is missing` };
 }
 
 // ── Un enregistrement déjà écrit sur disque ───────────────────────────────────────────────────
@@ -304,6 +554,34 @@ export function generateStoredTests(
   );
 }
 
+/**
+ * Ce qu'une génération écrirait, SANS RIEN ÉCRIRE ni vérifier : le même plan que `generateStoredTests`,
+ * pour comparer une nouvelle version générée avec un fichier modifié à la main avant de le remplacer.
+ */
+export function previewStoredTests(
+  recording: StoredRecording,
+  request: TestGenerationRequest,
+  options: { baseUrl: string; language: 'fr' | 'en'; javaPackage?: string },
+): { artifacts: GeneratedArtifact[]; warnings: string[] } | { error: string } {
+  const formats = request.formats.filter((entry): entry is GenerationFormat =>
+    (FORMATS as readonly string[]).includes(entry),
+  );
+  if (formats.length === 0) return { error: 'no format selected' };
+  const plan = planGeneration({
+    flow: recording.flow,
+    formats,
+    baseUrl: options.baseUrl,
+    language: options.language,
+    ...(request.groupIds ? { groupIds: request.groupIds } : {}),
+    ...(request.force ? { force: true } : {}),
+    recordedAt: recording.startedAt,
+    ...(recording.testData?.hasValues ? { testDataFile: TEST_DATA_FILE } : {}),
+    ...(options.javaPackage ? { java: { packageName: options.javaPackage } } : {}),
+  });
+  if ('error' in plan) return plan;
+  return { artifacts: plan.artifacts, warnings: plan.warnings };
+}
+
 // ── Les données de test d'un enregistrement écrit ─────────────────────────────────────────────
 
 /** Le contexte de liaison : le flow, le jeu relu dans test-data.yaml, le registre human-review.json. */
@@ -399,6 +677,8 @@ export function dropFlowStep(flow: RecordedFlow, stepId: string): boolean {
     (item) =>
       item !== target && !(item.step.kind === 'expect' && item.actionIds.some((id) => actionIds.has(id))),
   );
+  // Les groupes ne gardent que les étapes qui existent encore.
+  normalizeGroups(flow);
   return true;
 }
 

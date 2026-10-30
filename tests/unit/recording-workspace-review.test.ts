@@ -92,6 +92,11 @@ describe('review of a stored recording', () => {
     expect(dropFlowStep(flow, 'nope')).toBe(false);
     expect(dropFlowStep(flow, 's3')).toBe(true);
     expect(flow.steps.map((item) => item.id)).toEqual(['s1', 's2', 's5', 's6']);
+    // Un groupe ne garde jamais une étape retirée (ni la vérification partie avec elle).
+    const grouped = fixture();
+    grouped.groups = [{ id: 'g1', name: 'Tout', stepIds: ['s1', 's2', 's3', 's4'] }];
+    expect(dropFlowStep(grouped, 's3')).toBe(true);
+    expect(grouped.groups[0]?.stepIds).toEqual(['s1', 's2']);
 
     expect(await removeStoredStep(recording, 's4', 'fr')).toEqual({ error: 'no action step s4' });
     expect(await removeStoredStep(recording, 's6', 'fr')).toEqual({ ok: true });

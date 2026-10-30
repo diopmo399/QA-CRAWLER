@@ -18,6 +18,7 @@ import { can } from './dashboard-access.js';
 import { formatDate, header, icon, pill } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { studioLink } from './dashboard-recordings.js';
+import { publishTab, reviewFacts, type PublishUi } from './dashboard-publish.js';
 import { enginePhrase } from './engine-phrases.js';
 import { esc } from './view.js';
 
@@ -31,7 +32,7 @@ import { esc } from './view.js';
 /** Une phrase du moteur dans la langue du Dashboard (la tournure inconnue reste telle quelle). */
 const phrase = (state: DashboardState, text: string): string => enginePhrase(text, state.t.locale);
 
-export const REVIEW_TABS = ['flow', 'assertions', 'data', 'intents', 'tests'] as const;
+export const REVIEW_TABS = ['flow', 'assertions', 'data', 'intents', 'tests', 'publish'] as const;
 export type ReviewTab = (typeof REVIEW_TABS)[number];
 
 /** Le choix de source d'une saisie, tel que saisi avant l'envoi. */
@@ -74,6 +75,8 @@ export interface ReviewUi {
   busy?: string;
   error?: string;
   warnings?: string[];
+  /** La publication de groupes métier dans la bibliothèque (onglet Publier). */
+  publish?: PublishUi;
 }
 
 /** Une colonne de la ligne, telle que choisie avant l'envoi. */
@@ -741,6 +744,7 @@ export function reviewView(state: DashboardState): string {
     data: r.tabs.data(ui.data?.inputs.length ?? 0),
     intents: r.intentsTab(ui.intents?.rows.length ?? 0),
     tests: r.tabs.tests,
+    publish: t.pub.tab,
   };
   const tabs = `<div class="tabs" role="tablist" aria-label="${esc(r.title)}">${REVIEW_TABS.map(
     (key) =>
@@ -755,7 +759,9 @@ export function reviewView(state: DashboardState): string {
           ? dataTab(state, ui, decide)
           : tab === 'intents'
             ? intentsTab(state, ui, decide)
-            : testsTab(state, ui, decide);
+            : tab === 'publish'
+              ? publishTab(state)
+              : testsTab(state, ui, decide);
   const messages = `${state.lib.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(state.lib.notice)}</span></p>` : ''}${ui.error ? `<p class="err" role="alert">${esc(ui.error)}</p>` : ''}${
     ui.warnings && ui.warnings.length > 0
       ? `<div class="notice" role="status"><b>${esc(r.warnings)}</b><ul class="plain tight">${ui.warnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul></div>`
@@ -765,5 +771,5 @@ export function reviewView(state: DashboardState): string {
     back,
     sub: esc(r.sub),
     actions: `<a class="btn" href="${esc(studioLink(state, name))}" target="_blank" rel="noopener">${esc(r.openStudio)}</a>`,
-  })}${replayCard(state, ui)}${tabs}${messages}${body}`;
+  })}${reviewFacts(state)}${tab === 'publish' ? '' : replayCard(state, ui)}${tabs}${messages}${body}`;
 }

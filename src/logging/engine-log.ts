@@ -100,7 +100,11 @@ export class EngineEventLog {
   private dropped = 0;
   private readonly threshold: number;
 
-  constructor(level: LogLevel = 'INFO') {
+  /** `sink` : reçoit chaque ligne gardée, au moment où elle est écrite (journal en direct d'un run). */
+  constructor(
+    level: LogLevel = 'INFO',
+    private readonly sink?: (entry: EngineLogEntry) => void,
+  ) {
     this.threshold = LOG_LEVELS.indexOf(level);
   }
 
@@ -116,7 +120,19 @@ export class EngineEventLog {
       return;
     }
     // Les messages citent des pages et des erreurs : quoi qu'ils contiennent, aucun secret ne sort.
-    this.lines.push({ at: new Date().toISOString(), level, event, message: redactText(message), ...extra });
+    const entry: EngineLogEntry = {
+      at: new Date().toISOString(),
+      level,
+      event,
+      message: redactText(message),
+      ...extra,
+    };
+    this.lines.push(entry);
+    try {
+      this.sink?.(entry);
+    } catch {
+      // un lecteur en direct défaillant n'arrête pas le moteur
+    }
   }
 
   entries(): EngineLogEntry[] {

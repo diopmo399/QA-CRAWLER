@@ -1,5 +1,6 @@
 // `npm pack --dry-run` des deux packages : le tarball ne contient que le runtime (dist, domain-packs, assets, bin, README, package.json).
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,11 +20,21 @@ for (const directory of ['packages/core', 'packages/cli']) {
         'domain-packs/generic.yaml',
         'assets/fonts/ibm-plex-sans-latin-400-normal.woff2',
         'assets/fonts/OFL.txt',
+        'dist/sdk/ui/editor-kit.js',
+        'dist/sdk/ui/editor-kit.licenses.txt',
         'package.json',
       ]
     : ['bin/qa-crawler.js', 'package.json'];
   for (const file of required)
     if (!files.includes(file)) throw new Error(`${info.name}: ${file} missing from the tarball`);
+  // Le kit de l'éditeur est servi tel quel au navigateur : regroupé (aucun import de paquet à résoudre).
+  if (directory.endsWith('core')) {
+    const kit = readFileSync(path.join(root, directory, 'dist', 'sdk', 'ui', 'editor-kit.js'), 'utf8');
+    if (!kit.startsWith('/* qa-crawler editor kit: bundled */'))
+      throw new Error(
+        `${info.name}: dist/sdk/ui/editor-kit.js is not the bundled editor kit (npm run build)`,
+      );
+  }
   console.log(
     `${info.name}@${info.version}: ${files.length} file(s), ${Math.round(info.size / 1024)} kB packed`,
   );

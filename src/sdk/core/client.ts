@@ -14,6 +14,15 @@ import type {
   RunComparisonView,
   TraceabilityView,
   GenerationResult,
+  GeneratedTestsView,
+  GeneratedFileEditInput,
+  GeneratedFileRestoreInput,
+  GeneratedFileView,
+  GeneratedFileCheckView,
+  GeneratedFileDiagnostic,
+  GenerationPreview,
+  TestRunInput,
+  TestRunView,
   GraphView,
   GroupCommandInput,
   ComposeScenarioInput,
@@ -41,6 +50,7 @@ import type {
   ReportEntry,
   ReportEntryKind,
   ReportLink,
+  RunLogEvent,
   TestDataView,
   UrlCheck,
   ValidationReport,
@@ -51,6 +61,11 @@ import type {
   ExecutionDetail,
   ExecutionRecord,
   ExecutionStartInput,
+  ExplorationStartInput,
+  BlockSourceComparison,
+  ExtractionInput,
+  ExtractionPlan,
+  LibraryBlockDetails,
   OverviewView,
   ProjectDetail,
   ProjectSummary,
@@ -98,6 +113,7 @@ export class QaCrawlerError extends Error {
   readonly code: string;
   readonly details: string[];
   readonly issues: DraftIssue[];
+  readonly diagnostics: GeneratedFileDiagnostic[];
 
   constructor(body: ErrorBody) {
     super(body.error);
@@ -106,6 +122,7 @@ export class QaCrawlerError extends Error {
     this.code = body.code;
     this.details = body.details ?? [];
     this.issues = body.issues ?? [];
+    this.diagnostics = body.diagnostics ?? [];
   }
 }
 
@@ -137,7 +154,12 @@ function isEndEvent(event: unknown): boolean {
   if (!event || typeof event !== 'object') return false;
   const { type, status } = event as { type?: unknown; status?: unknown };
   return (
-    type === 'completed' || type === 'failed' || (type === 'status' && TERMINAL_STATUSES.has(String(status)))
+    type === 'completed' ||
+    type === 'failed' ||
+    // Le journal d'une exécution de test : sa fin, ou l'absence de journal conservé.
+    type === 'RUN_FINISHED' ||
+    type === 'UNAVAILABLE' ||
+    (type === 'status' && TERMINAL_STATUSES.has(String(status)))
   );
 }
 
@@ -233,6 +255,23 @@ export interface QaCrawlerClient {
     validateVersion(projectId: string, name: string): Promise<LibraryBlockView>;
     /** Les parcours suivis dont un bloc a changé depuis leur composition. */
     drift(projectId: string): Promise<CompositionDrift[]>;
+    /** Le détail d'un bloc : ses étapes en mots, ses groupes internes, ses données (sans valeur). */
+    details(projectId: string, name: string): Promise<LibraryBlockDetails>;
+    /**
+     * LE PLAN d'une publication de groupes métier d'un enregistrement (un bloc par groupe, ou un bloc
+     * composé) : étapes, données, dépendances, contrat, validation. Rien n'est écrit.
+     */
+    planExtraction(projectId: string, recording: string, input: ExtractionInput): Promise<ExtractionPlan>;
+    /** Publie les blocs du plan, tous ensemble ou aucun (422 : `details` dit ce qui ne va pas, bloc par bloc). */
+    publishExtraction(
+      projectId: string,
+      recording: string,
+      input: ExtractionInput,
+    ): Promise<LibraryBlockView[]>;
+    /** Un bloc extrait confronté à ce que son enregistrement donne aujourd'hui. */
+    compareSource(projectId: string, name: string): Promise<BlockSourceComparison>;
+    /** Reprend le contenu de la source : le bloc devient CHANGED (une nouvelle version à valider). */
+    updateFromSource(projectId: string, name: string): Promise<LibraryBlockView>;
   };
   /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
   executions: {
@@ -297,7 +336,7 @@ export interface QaCrawlerClient {
     get(options?: { weeks?: number; projectId?: string }): Promise<TrendsView>;
   };
   explorations: {
-    start(projectId: string): Promise<ExplorationSnapshot>;
+    start(projectId: string, input?: ExplorationStartInput): Promise<ExplorationSnapshot>;
     status(id: string): Promise<ExplorationSnapshot>;
     result(id: string): Promise<ExplorationSummary>;
     subscribe(
@@ -409,6 +448,50 @@ export interface QaCrawlerClient {
   /** Les tests générés depuis un enregistrement (YAML, Gherkin, Playwright TypeScript, Java). */
   generation: {
     run(projectId: string, recording: string, input: GenerationInput): Promise<GenerationResult>;
+    /** Les fichiers générés sur disque, les exécutions passées et les outils disponibles. */
+    view(projectId: string, recording: string): Promise<GeneratedTestsView>;
+    /** Exécute pour de vrai les tests générés d'un format (202 : en file). */
+    execute(projectId: string, recording: string, input: TestRunInput): Promise<TestRunView>;
+    runOf(projectId: string, recording: string, runId: string): Promise<TestRunView>;
+    /**
+     * Le journal d'une exécution (console) : les événements conservés, puis, en cours, ceux qui
+     * arrivent jusqu'à RUN_FINISHED. Une coupure est reprise après le dernier `seq` reçu, sans doublon.
+     */
+    runEvents(
+      projectId: string,
+      recording: string,
+      runId: string,
+      onEvent: (event: RunLogEvent) => void,
+      options?: SubscribeOptions,
+    ): Subscription;
+    /** Le journal d'une exécution en fichier (masqué comme à l'écran) : JSON ou texte. */
+    runLogs(
+      projectId: string,
+      recording: string,
+      runId: string,
+      format: 'json' | 'text',
+    ): Promise<{ name: string; type: string; content: string }>;
+    cancel(projectId: string, recording: string, runId: string): Promise<TestRunView>;
+    /** Le rapport QA-CRAWLER d'un rejeu (YAML, Gherkin). */
+    reportLink(projectId: string, recording: string, runId: string): Promise<ReportLink>;
+    /** Modifie un fichier généré, vérifié avant d'être écrit (422 avec les raisons sinon). */
+    editFile(projectId: string, recording: string, input: GeneratedFileEditInput): Promise<GeneratedFileView>;
+    /** Revient à la version générée d'un fichier modifié à la main. */
+    restoreFile(
+      projectId: string,
+      recording: string,
+      input: GeneratedFileRestoreInput,
+    ): Promise<GeneratedFileView>;
+    /** Vérifie un contenu sans l'écrire (diagnostics positionnés). */
+    checkFile(
+      projectId: string,
+      recording: string,
+      input: { path: string; content: string },
+    ): Promise<GeneratedFileCheckView>;
+    /** La version générée d'un fichier (sa sauvegarde s'il a été modifié à la main). */
+    original(projectId: string, recording: string, path: string): Promise<{ path: string; content: string }>;
+    /** Ce qu'une régénération écrirait, sans rien écrire. */
+    preview(projectId: string, recording: string, input: GenerationInput): Promise<GenerationPreview>;
   };
   /** Le graphe des écrans et transitions, d'une exploration ou d'un enregistrement. */
   graph: {
@@ -481,6 +564,7 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         status: response.status,
         code: errorBody.code ?? 'HTTP_ERROR',
         ...(errorBody.details ? { details: errorBody.details } : {}),
+        ...(errorBody.diagnostics ? { diagnostics: errorBody.diagnostics } : {}),
         ...(errorBody.issues ? { issues: errorBody.issues } : {}),
       });
     }
@@ -538,6 +622,8 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       }
       try {
         for await (const event of readEventStream<unknown>(response.body)) {
+          // Écoute fermée : les événements déjà lus du même paquet ne sont plus transmis.
+          if (controller.signal.aborted) break;
           const seq = (event as { seq?: unknown }).seq;
           if (typeof seq === 'number') {
             if (seq <= lastSeq) continue;
@@ -663,6 +749,16 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       validateVersion: (projectId, name) =>
         request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/version`, {}),
       drift: (projectId) => request('GET', `${project(projectId)}/library/drift`),
+      details: (projectId, name) =>
+        request('GET', `${project(projectId)}/library/${encodeURIComponent(name)}`),
+      planExtraction: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/library/plan`, input),
+      publishExtraction: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/library`, input),
+      compareSource: (projectId, name) =>
+        request('GET', `${project(projectId)}/library/${encodeURIComponent(name)}/source`),
+      updateFromSource: (projectId, name) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/source`, {}),
     },
     executions: {
       start: (projectId, input = {}) => request('POST', `${project(projectId)}/executions`, input),
@@ -759,7 +855,8 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       },
     },
     explorations: {
-      start: (projectId) => request('POST', `/projects/${encodeURIComponent(projectId)}/explorations`, {}),
+      start: (projectId, input = {}) =>
+        request('POST', `/projects/${encodeURIComponent(projectId)}/explorations`, input),
       status: (id) => request('GET', `/explorations/${encodeURIComponent(id)}`),
       result: (id) => request('GET', `/explorations/${encodeURIComponent(id)}/result`),
       subscribe: (id, onEvent, subscribeOptions) =>
@@ -843,6 +940,45 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
     },
     generation: {
       run: (projectId, name, input) => request('POST', `${recording(projectId, name)}/generation`, input),
+      view: (projectId, name) => request('GET', `${recording(projectId, name)}/generation`),
+      editFile: (projectId, name, input) =>
+        request('PUT', `${recording(projectId, name)}/generation/file`, input),
+      restoreFile: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/generation/restore`, input),
+      checkFile: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/generation/check`, input),
+      original: (projectId, name, file) =>
+        request('GET', `${recording(projectId, name)}/generation/original?path=${encodeURIComponent(file)}`),
+      preview: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/generation/preview`, input),
+      execute: (projectId, name, input) => request('POST', `${recording(projectId, name)}/test-runs`, input),
+      runOf: (projectId, name, runId) =>
+        request('GET', `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}`),
+      runEvents: (projectId, name, runId, onEvent, subscribeOptions) =>
+        stream(
+          `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}/events`,
+          (event) => {
+            onEvent(event as RunLogEvent);
+          },
+          subscribeOptions,
+        ),
+      runLogs: async (projectId, name, runId, format) => ({
+        name: `qa-crawler-${runId}.${format === 'text' ? 'log' : 'json'}`,
+        type: format === 'text' ? 'text/plain' : 'application/json',
+        content: await send(
+          'GET',
+          `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}/logs?format=${format}`,
+          { headers: headers(false) },
+        ),
+      }),
+      cancel: (projectId, name, runId) =>
+        request('POST', `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}/cancel`, {}),
+      reportLink: (projectId, name, runId) =>
+        request(
+          'POST',
+          `${recording(projectId, name)}/test-runs/${encodeURIComponent(runId)}/report-links`,
+          {},
+        ),
     },
     graph: {
       exploration: (id) => request('GET', `/explorations/${encodeURIComponent(id)}/graph`),

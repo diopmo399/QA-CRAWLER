@@ -27,6 +27,8 @@ export default tseslint.config(
       parserOptions: {
         projectService: {
           allowDefaultProject: ['eslint.config.js', 'scripts/*.mjs', 'packages/cli/bin/*.js'],
+          // Les scripts hors projet TypeScript dépassent la limite par défaut (8).
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 16,
         },
         tsconfigRootDir: import.meta.dirname,
       },

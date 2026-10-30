@@ -224,9 +224,11 @@ describe('group checks', () => {
     const [scenario] = gherkinFlows({ gherkin: 'flow.feature' }, dir) as {
       steps: Record<string, unknown>[];
     }[];
+    // La phrase garde sa ligne dans le .feature (relie le journal d'un run au fichier).
     expect(scenario?.steps).toContainEqual({
       name: 'Alors je vois "${testData:item.title}"',
       expect: { text: '${testData:item.title}' },
+      sourceLine: expect.any(Number) as number,
     });
   });
 

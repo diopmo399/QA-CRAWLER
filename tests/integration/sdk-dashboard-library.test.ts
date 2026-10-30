@@ -109,16 +109,26 @@ describe('Dashboard — scenario library in Chromium', () => {
     await search.fill('');
     await dashboard().locator('input[data-lib="query"]').dispatchEvent('input');
     await expect.poll(() => dashboard().locator('.lib-card').count()).toBe(2);
-    await dashboard().locator('[data-action="lib-open"][data-block="Bloc création"]').click();
-    const details = dashboard().locator('.lib-details');
-    await details.waitFor();
-    expect(await details.textContent()).toContain('créé à partir du scénario « Créer un élément »');
-    expect(await details.textContent()).toContain('bloc-creation');
+    await dashboard().locator('.lib-title[data-block="Bloc création"]').click();
+    // La fiche à onglets : le détail vient du serveur (étapes), la provenance et l'historique.
+    const sheet = dashboard().locator('.lib-fiche');
+    await sheet.waitFor();
+    await dashboard().locator('[data-action="lib-sheet-tab"][data-tab="steps"]').click();
+    await sheet.locator('.lib-fsteps').waitFor({ timeout: 15_000 });
+    await dashboard().locator('[data-action="lib-sheet-tab"][data-tab="versions"]').click();
+    expect(await sheet.textContent()).toContain('créé à partir du scénario « Créer un élément »');
+    // Au clavier : la flèche passe à l'onglet suivant.
+    await page.keyboard.press('ArrowRight');
     expect(
       await dashboard()
-        .locator('[data-action="lib-open"][data-block="Bloc création"]')
-        .getAttribute('aria-expanded'),
+        .locator('[data-action="lib-sheet-tab"][data-tab="provenance"]')
+        .getAttribute('aria-selected'),
     ).toBe('true');
+    expect(await sheet.textContent()).toContain('bloc-creation');
+    // Échap ferme la fiche ; le bloc reste dans les récents.
+    await page.keyboard.press('Escape');
+    await expect.poll(() => dashboard().locator('.lib-fiche').count()).toBe(0);
+    expect(await dashboard().locator('.lib-recent').textContent()).toContain('Bloc création');
   });
 
   it('composes: the server check shows a missing input, then the dependency once the order is right', async () => {
