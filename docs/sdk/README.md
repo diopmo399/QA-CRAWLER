@@ -980,7 +980,7 @@ Les événements sont **réels**, produits pendant l'exécution par l'outil qui 
 
 Par défaut, une exécution se joue dans un navigateur invisible. Pour **regarder** un Dry Run, un
 rejeu (Rejouer, Relancer) ou une exécution lancée depuis l'écran Exécutions, cocher **Navigateur
-visible** (barre de l'éditeur, ou formulaire « Lancer une exécution »), et choisir au besoin un
+visible** (barre de l'éditeur, ou formulaire « Lancer une exécution »), et choisir, si on le souhaite, un
 **ralenti** (250 ms, 500 ms ou 1 s par geste).
 
 Le navigateur s'ouvre **sur la machine du serveur QA-CRAWLER** : quand `qa-crawler sdk-server` tourne

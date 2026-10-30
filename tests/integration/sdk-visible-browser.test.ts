@@ -24,7 +24,7 @@ import { startTestSite, type TestSite } from '../fixtures/test-site.js';
  * LE NAVIGATEUR VISIBLE : un Dry Run ou un rejeu lancé depuis le Dashboard peut se jouer dans un
  * navigateur visible, sur la machine du serveur. Sans écran, la demande est refusée (409 NO_DISPLAY) ;
  * avec un écran (ici Xvfb, un écran X virtuel), le vrai moteur, Playwright Test et Maven ouvrent un
- * Chromium SANS `--headless` : la liste des processus de la machine le montre pendant l'exécution.
+ * Chromium SANS `--headless` : les programmes en cours sur la machine (`ps`) le montrent pendant l'exécution.
  */
 const NAME = 'ouvrir-une-fiche';
 const exec = promisify(execFile);
@@ -52,7 +52,7 @@ const human: NonNullable<RecordRequest['drive']> = async ({ page }) => {
 const clientOf = (server: RunningSdkServer): QaCrawlerClient =>
   createQaCrawler({ endpoint: `${server.url}/api`, token: server.token });
 
-/** Les processus principaux de Chromium (pas ses sous-processus) de la machine, à cet instant. */
+/** Les Chromium lancés sur la machine (le programme principal, sans ses auxiliaires), à cet instant. */
 async function chromiumProcesses(): Promise<string[]> {
   const { stdout } = await exec('ps', ['-eo', 'args=']);
   return stdout
@@ -117,7 +117,7 @@ beforeAll(async () => {
   });
   client.dispose();
   if (!XVFB) return;
-  // Un écran X virtuel, puis un serveur qui le voit (le moteur, dans ce processus, et ses outils).
+  // Un écran X virtuel, puis un serveur qui le voit (le moteur, qui tourne ici, et ses outils).
   const display = `:${String(90 + (process.pid % 9))}`;
   xvfb = spawn(XVFB, [display, '-screen', '0', '1366x900x24', '-nolisten', 'tcp'], { stdio: 'ignore' });
   await new Promise((resolve) => setTimeout(resolve, 1000));
