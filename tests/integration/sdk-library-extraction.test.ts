@@ -353,8 +353,14 @@ describe('library — extracting business groups from a real recording', () => {
       const last = await finished(started);
       expect(last.status).toBe('COMPLETED');
       const detail = await client.executions.get(project.id, started.run ?? '');
-      expect(detail.flows).toMatchObject({ total: 1, passed: 1, failed: 0 });
       const flow = detail.flowsDetail[0];
+      // En cas d'échec, le message dit quel scénario, quelle étape et pourquoi (jamais une valeur saisie).
+      const why = JSON.stringify({
+        scenario,
+        divergence: flow?.divergence,
+        steps: flow?.steps.map((step) => `${String(step.index)} ${step.status} ${step.label}`),
+      });
+      expect(detail.flows, why).toMatchObject({ total: 1, passed: 1, failed: 0 });
       expect(flow?.testData).toContain('q');
       expect(flow?.steps.length).toBeGreaterThanOrEqual(minimum);
       expect(flow?.steps.every((step) => step.status === 'PASSED')).toBe(true);
