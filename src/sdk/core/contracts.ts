@@ -154,7 +154,24 @@ export interface Capabilities {
    * parcours.
    */
   extensions: Record<ExtensionName, boolean>;
+  /**
+   * Le serveur peut ouvrir un navigateur visible pour une exécution (`headed`) : il a un écran (sous
+   * Linux, `DISPLAY` ou `WAYLAND_DISPLAY`). Absent d'un serveur plus ancien.
+   */
+  visibleBrowser?: boolean;
 }
+
+/**
+ * Jouer dans un navigateur VISIBLE, sur la machine du serveur (pour regarder le test se dérouler) ;
+ * `slowMoMs` ralentit chaque geste (0 à 2 000 ms). Refusé (`409 NO_DISPLAY`) quand le serveur n'a pas
+ * d'écran. Sans `headed`, le navigateur reste invisible, comme avant.
+ */
+export interface VisibleBrowserOptions {
+  headed?: boolean;
+  slowMoMs?: number;
+}
+
+export const MAX_SLOW_MO_MS = 2000;
 
 export const EXTENSION_NAMES = [
   'recordings',
@@ -956,6 +973,9 @@ export interface TestRunView {
   draft?: boolean;
   /** Le journal de l'exécution (console) : en direct, conservé ou indisponible. */
   logs?: RunLogsInfo;
+  /** Joué dans un navigateur visible (sur la machine du serveur), ralenti de `slowMoMs`. */
+  headed?: boolean;
+  slowMoMs?: number;
 }
 
 /**
@@ -1057,7 +1077,7 @@ export interface GeneratedTestsView {
   runs: TestRunView[];
 }
 
-export interface TestRunInput {
+export interface TestRunInput extends VisibleBrowserOptions {
   format: GenerationFormatName;
   /** DRY_RUN : le Dry Run du moteur (YAML et Gherkin) ; RUN par défaut. */
   mode?: 'RUN' | 'DRY_RUN';
@@ -1534,8 +1554,13 @@ export const EXECUTION_KINDS = ['EXPLORATION', 'REPLAY'] as const;
 export type ExecutionKind = (typeof EXECUTION_KINDS)[number];
 
 /** Lancer une exécution : rejouer des scénarios du projet (tous par défaut) dans un environnement. */
-export interface ExecutionStartInput {
+export interface ExecutionStartInput extends VisibleBrowserOptions {
   scenarios?: string[];
+  environmentId?: string;
+}
+
+/** Une exploration : l'environnement visé, et le navigateur visible si demandé. */
+export interface ExplorationStartInput extends VisibleBrowserOptions {
   environmentId?: string;
 }
 

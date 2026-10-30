@@ -19,7 +19,7 @@ import {
   REPORTER_FILE,
   REPORTER_SOURCE,
   RUN_CONFIG_FILE,
-  RUN_CONFIG_SOURCE,
+  runConfigSource,
 } from './run-log-sources.js';
 
 /**
@@ -66,11 +66,18 @@ export interface TestRunTask {
   mode?: 'RUN' | 'DRY_RUN';
   /** Joué depuis un brouillon non enregistré (Dry Run seulement). */
   draft?: boolean;
+  /** Un navigateur visible, sur la machine du serveur, ralenti de `slowMoMs`. */
+  visible?: VisibleBrowser;
   /** Le dossier de l'exécution (la copie des fichiers, la sortie, run.json, events.jsonl). */
   directory: string;
   /** Les valeurs secrètes connues de ce run (identifiants de la mission) : masquées dans le journal. */
   secrets?: string[];
   execute(context: TestRunContext): Promise<TestRunOutcome>;
+}
+
+/** Un navigateur visible (sur la machine du serveur) : chaque geste ralenti de `slowMoMs`. */
+export interface VisibleBrowser {
+  slowMoMs: number;
 }
 
 /** Ce qu'un lanceur reçoit : l'arrêt, la sortie brute de l'outil, et le journal structuré. */
@@ -140,6 +147,7 @@ export class TestRun {
       mode: this.task.mode ?? 'RUN',
       ...(this.dryRunStatus ? { dryRunStatus: this.dryRunStatus } : {}),
       ...(this.task.draft ? { draft: true } : {}),
+      ...(this.task.visible ? { headed: true, slowMoMs: this.task.visible.slowMoMs } : {}),
       logs: this.events.info(),
     };
   }
@@ -211,10 +219,11 @@ export class TestRunManager {
       type: 'RUN_CREATED',
       status: 'REQUESTED',
       source: 'server',
-      message: `run ${run.id} created: ${task.format}${task.mode === 'DRY_RUN' ? ' Dry Run' : ''} with ${task.tool}, queued`,
+      message: `run ${run.id} created: ${task.format}${task.mode === 'DRY_RUN' ? ' Dry Run' : ''} with ${task.tool}${task.visible ? `, visible browser${task.visible.slowMoMs > 0 ? ` (slow motion ${String(task.visible.slowMoMs)} ms)` : ''}` : ''}, queued`,
       data: {
         format: task.format,
         mode: task.mode ?? 'RUN',
+        ...(task.visible ? { headed: true, slowMoMs: task.visible.slowMoMs } : {}),
         tool: task.tool,
         target: redactText(task.target),
       },
@@ -680,6 +689,7 @@ export async function runPlaywrightTests(
     played?: PlayedFile;
     env: NodeJS.ProcessEnv;
     timeoutMs?: number;
+    visible?: VisibleBrowser;
   },
 ): Promise<TestRunOutcome> {
   const tool = await playwrightTestTool();
@@ -692,14 +702,22 @@ export async function runPlaywrightTests(
   );
   // Le journal de l'exécution : un reporter ajouté à la configuration du projet (copie de ce run seulement).
   await writeFile(path.join(cwd, REPORTER_FILE), REPORTER_SOURCE, 'utf8');
-  await writeFile(path.join(cwd, RUN_CONFIG_FILE), RUN_CONFIG_SOURCE, 'utf8');
+  await writeFile(path.join(cwd, RUN_CONFIG_FILE), runConfigSource(context.visible), 'utf8');
   const output = playwrightOutput({
     emit: context.emit ?? (() => undefined),
     file: context.played?.file ?? '',
     source: context.played?.source ?? '',
     output: context.log,
   });
-  const result = await runProcess(process.execPath, [tool.cli, 'test', '--config', RUN_CONFIG_FILE], {
+  // Visible : --headed (la configuration générée dit headless), un seul navigateur à la fois.
+  const args = [
+    tool.cli,
+    'test',
+    '--config',
+    RUN_CONFIG_FILE,
+    ...(context.visible ? ['--headed', '--workers=1'] : []),
+  ];
+  const result = await runProcess(process.execPath, args, {
     cwd,
     env: { ...context.env, CI: '1', FORCE_COLOR: '0' },
     signal: context.signal,
@@ -722,6 +740,7 @@ export async function runMavenTests(
     env: NodeJS.ProcessEnv;
     baseUrl: string;
     timeoutMs?: number;
+    visible?: VisibleBrowser;
   },
 ): Promise<TestRunOutcome> {
   const tool = await mavenTool(context.env);
@@ -739,7 +758,9 @@ export async function runMavenTests(
     env: {
       ...context.env,
       QA_BASE_URL: context.baseUrl,
-      QA_HEADLESS: 'true',
+      // Les tests Java lisent QA_HEADLESS et QA_SLOW_MO (classe Env générée).
+      QA_HEADLESS: context.visible ? 'false' : 'true',
+      ...(context.visible ? { QA_SLOW_MO: String(context.visible.slowMoMs) } : {}),
       DEBUG: 'pw:api',
       // Les messages du pilote (accents compris) lus en UTF-8.
       LANG: 'C.UTF-8',

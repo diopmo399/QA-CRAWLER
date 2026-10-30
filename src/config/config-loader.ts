@@ -24,6 +24,8 @@ export interface ConfigOverrides {
   maxStates?: number;
   maxActions?: number;
   headless?: boolean;
+  /** Chaque geste ralenti (ms) : pour regarder un navigateur visible. */
+  slowMoMs?: number;
   reportsDir?: string;
   screenshotsDir?: string;
   /** --junit : active report.junit (le fichier et `required` restent ceux de la mission). */
@@ -344,6 +346,7 @@ function applyOverrides(
   if (overrides.maxStates !== undefined) section('exploration').maxStates = overrides.maxStates;
   if (overrides.maxActions !== undefined) section('exploration').maxActions = overrides.maxActions;
   if (overrides.headless !== undefined) section('browser').headless = overrides.headless;
+  if (overrides.slowMoMs !== undefined) section('browser').slowMoMs = overrides.slowMoMs;
   if (overrides.reportsDir !== undefined) section('output').reportsDir = overrides.reportsDir;
   if (overrides.screenshotsDir !== undefined) section('output').screenshotsDir = overrides.screenshotsDir;
   if (overrides.junit !== undefined) {

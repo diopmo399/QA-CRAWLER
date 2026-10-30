@@ -91,6 +91,7 @@ const ICONS: Record<string, string> = {
     '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
   maximize: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
   minimize: '<path d="M4 14h6v6M20 10h-6V4M10 14l-7 7M14 10l7-7"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
 };
 
 export const icon = (name: string): string =>
@@ -182,4 +183,25 @@ export function checkLines(t: DashboardStrings, check: EnvironmentCheck | undefi
       : []),
   ];
   return lines.length > 0 ? `<ul class="checks">${lines.join('')}</ul>` : '';
+}
+
+/** Les ralentis proposés pour un navigateur visible (ms par geste). */
+export const SLOW_MO_CHOICES = [0, 250, 500, 1000] as const;
+
+/**
+ * « Navigateur visible » et son ralenti : `attr` lie les champs à leur écran (`data-ed` dans l'éditeur,
+ * `data-bind` dans le lancement). Indisponible (désactivé, avec la raison) quand le serveur n'a pas d'écran.
+ */
+export function visibleBrowserControl(
+  t: DashboardStrings['visibleBrowser'],
+  value: { headed: boolean; slowMoMs: number },
+  options: { attr: 'data-ed' | 'data-bind'; available: boolean; disabled?: boolean },
+): string {
+  const off = !options.available || options.disabled === true;
+  const title = options.available ? t.hint : t.noDisplay;
+  const slow =
+    value.headed && options.available
+      ? `<label class="vb-slow"><span class="sr">${esc(t.slowMo)}</span><select ${options.attr}="slow-mo" ${options.disabled ? 'disabled' : ''}>${SLOW_MO_CHOICES.map((ms) => `<option value="${String(ms)}" ${value.slowMoMs === ms ? 'selected' : ''}>${esc(ms === 0 ? t.none : `${t.slowMo} · ${t.ms(ms)}`)}</option>`).join('')}</select></label>`
+      : '';
+  return `<span class="vb" role="group" aria-label="${esc(t.label)}"><label class="vb-tog${off ? ' off' : ''}" title="${esc(title)}"><input type="checkbox" ${options.attr}="headed" ${value.headed && options.available ? 'checked' : ''} ${off ? 'disabled' : ''}>${icon('eye')}<span>${esc(t.label)}</span></label>${slow}</span>`;
 }

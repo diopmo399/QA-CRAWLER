@@ -407,6 +407,28 @@ describe('dashboard shell, project tabs and readiness', () => {
     expect(exploration).toContain('L’exploration vise la cible du projet');
     expect(exploration).toContain('<select data-bind="environment" disabled>');
     expect(exploration).toContain('Lancer l’exploration');
+    // Le navigateur visible : proposé quand le serveur a un écran ; coché, avec son ralenti.
+    expect(exploration).toMatch(/data-bind="headed"\s+disabled/);
+    const visible = renderDashboard(
+      base({
+        route,
+        project,
+        executions: [],
+        capabilities: { visibleBrowser: true } as DashboardState['capabilities'],
+        launch: {
+          kind: 'REPLAY',
+          environmentId: '',
+          scenarios: [],
+          headed: true,
+          slowMoMs: 250,
+          busy: false,
+        },
+      }),
+    );
+    expect(visible).toMatch(/data-bind="headed" checked/);
+    expect(visible).toMatch(
+      /<select data-bind="slow-mo"[^>]*><option value="0" >Sans ralenti<\/option><option value="250" selected>/,
+    );
   });
 
   it('readiness: ready only when the rules, every secret and a reached URL agree', () => {

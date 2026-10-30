@@ -2094,13 +2094,15 @@ export class QaCrawlerDashboard extends Base {
     this.state.launch.error = undefined;
     this.paint();
     try {
-      const { kind, environmentId, scenarios } = this.state.launch;
+      const { kind, environmentId, scenarios, headed, slowMoMs } = this.state.launch;
+      const visible = headed ? { headed: true, slowMoMs: slowMoMs ?? 0 } : {};
       const started =
         kind === 'EXPLORATION'
-          ? await api.explorations.start(project.id)
+          ? await api.explorations.start(project.id, visible)
           : await api.executions.start(project.id, {
               ...(environmentId ? { environmentId } : {}),
               ...(scenarios.length > 0 ? { scenarios } : {}),
+              ...visible,
             });
       this.state.launch.busy = false;
       this.emit(DASHBOARD_EVENTS.executionStarted, { projectId: project.id, exploration: started });
@@ -2143,10 +2145,12 @@ export class QaCrawlerDashboard extends Base {
     const project = this.state.project;
     if (!project) return;
     this.state.launch = {
+      ...this.state.launch,
       kind: 'REPLAY',
       environmentId: environmentId ?? '',
       scenarios,
       busy: false,
+      error: undefined,
     };
     await this.launch();
   }
@@ -2831,6 +2835,13 @@ export class QaCrawlerDashboard extends Base {
     if (target.dataset.bind === 'environment') {
       this.state.launch.environmentId = target.value;
       this.paint();
+      return;
+    }
+    if (target.dataset.bind === 'headed' || target.dataset.bind === 'slow-mo') {
+      if (target.dataset.bind === 'headed') this.state.launch.headed = (target as HTMLInputElement).checked;
+      else this.state.launch.slowMoMs = Number(target.value) || 0;
+      this.paint();
+      this.root.querySelector<HTMLElement>(`[data-bind="${target.dataset.bind}"]`)?.focus();
       return;
     }
     if (target.dataset.bind === 'scenario') {

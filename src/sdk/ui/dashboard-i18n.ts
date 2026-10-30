@@ -170,6 +170,16 @@ const fr = {
   kindExplorationHint: 'Découvre écrans, formulaires et parcours de la cible du projet.',
   explorationTarget: 'L’exploration vise la cible du projet, avec les limites du projet.',
   launchEnv: 'Environnement',
+  visibleBrowser: {
+    label: 'Navigateur visible',
+    hint: 'Ouvre le navigateur sur la machine du serveur QA-CRAWLER : le test s’y déroule sous vos yeux (sur cette machine si le serveur tourne sur votre poste).',
+    noDisplay:
+      'Le serveur QA-CRAWLER n’a pas d’écran (aucun DISPLAY) : il ne peut pas montrer de navigateur. Lancez-le dans une session de bureau.',
+    slowMo: 'Ralenti',
+    none: 'Sans ralenti',
+    ms: (ms: number) => (ms >= 1000 ? `${String(ms / 1000)} s par geste` : `${String(ms)} ms par geste`),
+    shown: 'navigateur visible',
+  },
   projectTarget: 'Cible du projet',
   launchScenarios: 'Scénarios',
   allScenarios: 'Aucun coché : tous les scénarios sont rejoués.',
@@ -1841,6 +1851,16 @@ const en: DashboardStrings = {
   kindExplorationHint: 'Discovers the screens, forms and journeys of the project target.',
   explorationTarget: 'The exploration targets the project, with the limits of the project.',
   launchEnv: 'Environment',
+  visibleBrowser: {
+    label: 'Visible browser',
+    hint: 'Opens the browser on the machine of the QA-CRAWLER server: the test plays before your eyes (on this machine when the server runs on your computer).',
+    noDisplay:
+      'The QA-CRAWLER server has no screen (no DISPLAY): it cannot show a browser. Start it in a desktop session.',
+    slowMo: 'Slow motion',
+    none: 'No slow motion',
+    ms: (ms: number) => (ms >= 1000 ? `${String(ms / 1000)} s per action` : `${String(ms)} ms per action`),
+    shown: 'visible browser',
+  },
   projectTarget: 'Project target',
   launchScenarios: 'Scenarios',
   allScenarios: 'None checked: every scenario is replayed.',

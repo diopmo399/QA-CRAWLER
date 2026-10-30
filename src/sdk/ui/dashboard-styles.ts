@@ -641,6 +641,18 @@ details.tech[open] summary{margin-bottom:6px}
 .ed-chip.add{color:color-mix(in srgb,var(--qa-color-success) 80%,var(--qa-color-text))}
 .ed-chip.del{color:color-mix(in srgb,var(--qa-color-danger) 80%,var(--qa-color-text))}
 .ed-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+/* « Navigateur visible » : un interrupteur (la case couvre l'étiquette) et, coché, le ralenti. */
+.vb{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.vb-tog{position:relative;display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:0 12px;border:1px solid var(--qa-color-border-strong);border-radius:8px;background:var(--qa-color-surface);color:var(--qa-color-text);font-size:13px;font-weight:500;cursor:pointer;user-select:none}
+.vb-tog input{-webkit-appearance:none;appearance:none;position:absolute;inset:0;margin:0;border-radius:8px;cursor:pointer;background:none}
+.vb-tog .ico{width:16px;height:16px;position:relative;pointer-events:none}
+.vb-tog span{position:relative;pointer-events:none}
+.vb-tog:hover:not(.off){border-color:var(--qa-color-primary)}
+.vb-tog:has(input:checked){color:var(--qa-color-primary);border-color:color-mix(in srgb,var(--qa-color-primary) 55%,transparent);background:color-mix(in srgb,var(--qa-color-primary) 9%,var(--qa-color-surface));font-weight:600}
+.vb-tog:has(input:focus-visible){outline:2px solid var(--qa-color-primary);outline-offset:2px}
+.vb-tog.off{opacity:.55;cursor:not-allowed}
+.vb-tog.off input{cursor:not-allowed}
+.dash .vb-slow select{min-height:34px;font-size:13px}
 .ed-actions .btn{min-height:34px;padding:0 12px;font-size:13px}
 .ed-actions kbd{font:500 10px/1 var(--qa-font-family-mono);padding:3px 4px;border-radius:4px;background:color-mix(in srgb,currentColor 18%,transparent)}
 .ed-note,.ed-confirm{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;border-radius:10px;padding:8px 12px;border:1px solid var(--qa-color-border);background:var(--qa-color-surface);font-size:13px}
@@ -798,7 +810,7 @@ details.tech[open] summary{margin-bottom:6px}
 .ed-con-now{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:var(--qa-color-primary)}
 .ed-con-now .ico{width:12px;height:12px}
 .ed-con-run select,.ed-con-f select,.ed-con-f input{font:inherit;font-size:12px;min-height:28px;padding:0 6px;border:1px solid var(--qa-color-border-strong);border-radius:6px;background:var(--qa-color-surface);color:var(--qa-color-text);max-width:100%}
-.ed-con-run select{max-width:260px}
+.ed-con-run select{max-width:360px}
 .btn.btn-s{min-height:30px;padding:0 10px;font-size:12px;border-radius:7px;gap:6px}
 .btn.btn-s .ico{width:14px;height:14px}
 .ed-con-tools{display:flex;flex-wrap:wrap;gap:2px;align-items:center}

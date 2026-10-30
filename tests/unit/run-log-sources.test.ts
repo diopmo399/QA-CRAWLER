@@ -13,6 +13,7 @@ import {
   REPORTER_PREFIX,
   REPORTER_SOURCE,
   referencedEnvNames,
+  runConfigSource,
   secretValues,
   stepErrorKind,
   stepOfLine,
@@ -62,6 +63,15 @@ describe('Playwright Test reporter', () => {
   it('the reporter written for the run never writes the value of a fill', () => {
     expect(REPORTER_SOURCE).toContain('Fill|Type|Press sequentially');
     expect(REPORTER_SOURCE).toContain(REPORTER_PREFIX.trim().slice(1, 5));
+  });
+
+  it('the run configuration: the generated one plus the reporter; slowed down only in a visible browser', () => {
+    expect(runConfigSource()).toContain("import base from './playwright.config';");
+    expect(runConfigSource()).not.toContain('slowMo');
+    expect(runConfigSource({ slowMoMs: 0 })).not.toContain('slowMo');
+    expect(runConfigSource({ slowMoMs: 500 })).toContain(
+      'launchOptions: { ...base.use?.launchOptions, slowMo: 500 }',
+    );
   });
 
   it('turns the runner steps into events tied to the test line and to its flow step; other lines stay output', () => {

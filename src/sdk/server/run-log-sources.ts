@@ -426,11 +426,18 @@ export default class QaCrawlerEvents {
 `;
 
 /** La configuration de l'exécution : celle du projet généré (éventuellement modifiée), plus le reporter. */
-export const RUN_CONFIG_SOURCE = `// Written by QA-CRAWLER for this run: the generated configuration, plus the events reporter.
+/** La configuration du run : celle générée, plus le reporter ; dans un navigateur visible, le ralenti. */
+export function runConfigSource(visible?: { slowMoMs: number }): string {
+  const slow =
+    visible && visible.slowMoMs > 0
+      ? `, use: { ...base.use, launchOptions: { ...base.use?.launchOptions, slowMo: ${String(visible.slowMoMs)} } }`
+      : '';
+  return `// Written by QA-CRAWLER for this run: the generated configuration, plus the events reporter.
 import base from './playwright.config';
 const reporters = Array.isArray(base.reporter) ? base.reporter : base.reporter ? [[base.reporter]] : [];
-export default { ...base, reporter: [...reporters, ['./${REPORTER_FILE}']] };
+export default { ...base, reporter: [...reporters, ['./${REPORTER_FILE}']]${slow} };
 `;
+}
 
 interface ReporterLine {
   at?: string;

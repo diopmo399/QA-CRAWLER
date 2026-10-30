@@ -976,6 +976,33 @@ Les événements sont **réels**, produits pendant l'exécution par l'outil qui 
   élément, vérification, scénario, SafetyPolicy) et ce que l'outil a relevé. L'onglet Erreurs compte les
   événements classés ; la sortie brute de l'outil (lignes `[ERROR]` de Maven) reste dans la console.
 
+### Navigateur visible
+
+Par défaut, une exécution se joue dans un navigateur invisible. Pour **regarder** un Dry Run, un
+rejeu (Rejouer, Relancer) ou une exécution lancée depuis l'écran Exécutions, cocher **Navigateur
+visible** (barre de l'éditeur, ou formulaire « Lancer une exécution »), et choisir au besoin un
+**ralenti** (250 ms, 500 ms ou 1 s par geste).
+
+Le navigateur s'ouvre **sur la machine du serveur QA-CRAWLER** : quand `qa-crawler sdk-server` tourne
+sur votre poste, il s'ouvre devant vous. Il faut donc un écran à ce serveur :
+
+- Windows et macOS : la session de l'utilisateur qui a lancé le serveur ;
+- Linux : une session de bureau (`DISPLAY` ou `WAYLAND_DISPLAY` défini). Sur un serveur sans écran,
+  la case est désactivée et dit pourquoi ; l'API refuse la demande (`409 NO_DISPLAY`). Xvfb (un
+  écran virtuel) suffit aux outils, pas à un humain : il sert aux tests automatisés.
+
+| Format                    | Ce que fait « Navigateur visible »                                        |
+| ------------------------- | ------------------------------------------------------------------------- |
+| YAML, `.feature`, Dry Run | le moteur joue avec `browser.headless: false` et `browser.slowMoMs`       |
+| Playwright TS             | `playwright test --headed --workers=1` ; ralenti : `launchOptions.slowMo` |
+| Java                      | `QA_HEADLESS=false` et `QA_SLOW_MO` (lus par la classe `Env` générée)     |
+| Exécutions, explorations  | la mission du projet jouée avec `browser.headless: false`                 |
+
+API : `headed: true` et `slowMoMs` (0 à 2 000) dans `generation.execute`, `executions.start` et
+`explorations.start(projectId, input)` ; `capabilities().visibleBrowser` dit si le serveur a un écran.
+Une exécution jouée ainsi porte `headed` et `slowMoMs` (`TestRunView`), et son journal le dit
+(`RUN_CREATED`). La SafetyPolicy et les droits ne changent pas : voir n'est pas un droit de plus.
+
 ## Statuts et événements
 
 ```

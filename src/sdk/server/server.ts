@@ -108,6 +108,7 @@ import {
   EXTENSION_NAMES,
   FRAMEWORKS,
   GENERATION_FORMATS,
+  MAX_SLOW_MO_MS,
   RECORDING_CONTROLS,
   RECORDING_NAME_PATTERN,
   SDK_API_VERSION,
@@ -127,6 +128,7 @@ import {
   type TestRun,
   type TestRunOutcome,
   type TestRunTask,
+  type VisibleBrowser,
 } from './test-runs.js';
 import { EVENTS_FILE, eventLine, readStoredEvents } from './run-events.js';
 import { engineSource, referencedEnvNames, secretValues } from './run-log-sources.js';
@@ -544,6 +546,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     const body = await readOptionalJson(request);
     const environment = await environmentOf(project, body.environmentId);
     requireWrites(request, project.id, environment);
+    const visible = visibleBrowserOf(ctx, body);
     const loaded = await projectMission(ctx, project, 'explore', { ...(environment ? { environment } : {}) });
     const reportsDir = path.join(
       project.dir,
@@ -557,7 +560,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     });
     const exploration = ctx.explorations.start({
       projectId: project.id,
-      config: loaded.config,
+      config: withVisibleBrowser(loaded.config, visible),
       reportsDir,
       kind: 'EXPLORATION',
       env: missionEnv(ctx, environment),
@@ -1486,6 +1489,7 @@ async function startTestRun(
       'REFUSED',
       `a generated ${format} test runs against the URL it was generated for: choose no environment`,
     );
+  const visible = visibleBrowserOf(ctx, body);
   if (body.mode === 'DRY_RUN') {
     if (!engine)
       throw new HttpError(422, 'REFUSED', 'a Dry Run plays a flow YAML or a .feature with the engine');
@@ -1495,7 +1499,7 @@ async function startTestRun(
         'REFUSED',
         'a Dry Run targets the application of the project: choose no environment',
       );
-    return startDryRun(ctx, project, name, format, body);
+    return startDryRun(ctx, project, name, format, body, visible);
   }
   const environment = engine ? await environmentOf(project, body.environmentId) : undefined;
   if (engine) requireWrites(request, project.id, environment);
@@ -1544,6 +1548,7 @@ async function startTestRun(
     directory: prepared.directory,
     ...(environment ? { environment: { id: environment.id, name: environment.name } } : {}),
     ...(prepared.edited.length > 0 ? { edited: prepared.edited } : {}),
+    ...(visible ? { visible } : {}),
   };
   if (engine) {
     const file = prepared.artifacts.find((entry) =>
@@ -1559,10 +1564,13 @@ async function startTestRun(
       ...(environment ? { environment } : {}),
     });
     const reportsDir = path.join(prepared.directory, 'report');
-    const config = {
-      ...loaded.config,
-      output: { ...loaded.config.output, reportsDir, screenshotsDir: path.join(reportsDir, 'screenshots') },
-    };
+    const config = withVisibleBrowser(
+      {
+        ...loaded.config,
+        output: { ...loaded.config.output, reportsDir, screenshotsDir: path.join(reportsDir, 'screenshots') },
+      },
+      visible,
+    );
     const run = ctx.options.run ?? runMission;
     const runEnv = missionEnv(ctx, environment);
     const run$ = await ctx.testRuns.start({
@@ -1653,6 +1661,7 @@ async function startTestRun(
           emit,
           ...(spec ? { played: { file: spec, source: content } } : {}),
           env: ctx.env,
+          ...(visible ? { visible } : {}),
         }),
     });
     return run.view();
@@ -1679,6 +1688,7 @@ async function startTestRun(
         ...(main ? { played: main } : {}),
         env: ctx.env,
         baseUrl: origin,
+        ...(visible ? { visible } : {}),
       }),
   });
   return run.view();
@@ -1715,6 +1725,7 @@ async function startDryRun(
   name: string,
   format: 'yaml' | 'gherkin',
   body: Record<string, unknown>,
+  visible: VisibleBrowser | undefined,
 ): Promise<TestRunView> {
   const relative = textOf(body.path, 300);
   if (!relative) throw new HttpError(400, 'BAD_REQUEST', 'path is required for a Dry Run');
@@ -1770,6 +1781,7 @@ async function startDryRun(
     directory: prepared.directory,
     ...(prepared.edited.length > 0 ? { edited: prepared.edited } : {}),
     ...(draft !== undefined ? { draft: true } : {}),
+    ...(visible ? { visible } : {}),
     execute: async ({ signal, log, emit }): Promise<TestRunOutcome> => {
       try {
         const played = await readFile(prepared.scenario, 'utf8').catch(() => '');
@@ -1785,7 +1797,10 @@ async function startDryRun(
         const result = await runDryRun({
           scenarioFile: prepared.scenario,
           missionFile,
-          overrides: { reportsDir },
+          overrides: {
+            reportsDir,
+            ...(visible ? { headless: false, slowMoMs: visible.slowMoMs } : {}),
+          },
           env: missionEnv(ctx, undefined),
           onEvent: (event) => {
             log(`${event.type}: ${event.message}\n`);
@@ -2576,7 +2591,50 @@ function capabilities(ctx: Context): Capabilities {
     cancellation: true,
     safety: { blocked: [...ALWAYS_BLOCKED_RISKS] },
     extensions: Object.fromEntries(EXTENSION_NAMES.map((name) => [name, true])) as Capabilities['extensions'],
+    visibleBrowser: hasDisplay(ctx.env),
   };
+}
+
+// ── Un navigateur visible : sur la machine du serveur, pour regarder une exécution ─────────────
+
+/** Le serveur a-t-il un écran ? Sous Linux : `DISPLAY` (X11, Xvfb) ou `WAYLAND_DISPLAY`. */
+function hasDisplay(env: NodeJS.ProcessEnv): boolean {
+  if (process.platform !== 'linux') return true;
+  return Boolean(env.DISPLAY?.trim() || env.WAYLAND_DISPLAY?.trim());
+}
+
+/** `headed` et `slowMoMs` d'une requête, validés ; refusés quand le serveur n'a pas d'écran. */
+function visibleBrowserOf(ctx: Context, body: Record<string, unknown>): VisibleBrowser | undefined {
+  if (body.headed !== undefined && typeof body.headed !== 'boolean')
+    throw new HttpError(400, 'BAD_REQUEST', 'headed must be a boolean');
+  const slow = body.slowMoMs;
+  if (
+    slow !== undefined &&
+    (typeof slow !== 'number' || !Number.isInteger(slow) || slow < 0 || slow > MAX_SLOW_MO_MS)
+  )
+    throw new HttpError(
+      400,
+      'BAD_REQUEST',
+      `slowMoMs must be an integer from 0 to ${String(MAX_SLOW_MO_MS)}`,
+    );
+  if (body.headed !== true) return undefined;
+  if (!hasDisplay(ctx.env))
+    throw new HttpError(
+      409,
+      'NO_DISPLAY',
+      'the QA-CRAWLER server has no screen to show a browser on (no DISPLAY nor WAYLAND_DISPLAY): start it in a desktop session, or run without a visible browser',
+    );
+  return { slowMoMs: typeof slow === 'number' ? slow : 0 };
+}
+
+/** La mission jouée dans un navigateur visible : `browser.headless` faux, gestes ralentis. */
+function withVisibleBrowser<T extends { browser: { headless: boolean; slowMoMs: number } }>(
+  config: T,
+  visible: VisibleBrowser | undefined,
+): T {
+  return visible
+    ? { ...config, browser: { ...config.browser, headless: false, slowMoMs: visible.slowMoMs } }
+    : config;
 }
 
 async function validate(ctx: Context, raw: unknown, dir: string): ReturnType<typeof validateDraft> {
@@ -2981,6 +3039,7 @@ async function handlePlatform(
       const body = await readOptionalJson(request);
       const environment = await environmentOf(project, body.environmentId);
       requireWrites(request, project.id, environment);
+      const visible = visibleBrowserOf(ctx, body);
       const wanted = stringList(body.scenarios, 'scenarios', 50);
       const known = await listScenarios(project.dir);
       if (known.length === 0)
@@ -3039,7 +3098,7 @@ async function handlePlatform(
       });
       const execution = ctx.explorations.start({
         projectId: project.id,
-        config: loaded.config,
+        config: withVisibleBrowser(loaded.config, visible),
         reportsDir: runDir,
         kind: 'REPLAY',
         env: missionEnv(ctx, environment),

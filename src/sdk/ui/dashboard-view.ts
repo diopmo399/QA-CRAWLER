@@ -42,6 +42,7 @@ import {
   pill,
   readiness,
   readinessPill,
+  visibleBrowserControl,
 } from './dashboard-parts.js';
 import { enginePhase } from './engine-phases.js';
 import { esc } from './view.js';
@@ -115,6 +116,9 @@ export interface LaunchState {
   kind: 'REPLAY' | 'EXPLORATION';
   environmentId: string;
   scenarios: string[];
+  /** Dans un navigateur visible (sur la machine du serveur), ralenti. */
+  headed?: boolean;
+  slowMoMs?: number;
   busy: boolean;
   error?: string;
 }
@@ -468,6 +472,7 @@ function launchTab(state: DashboardState, p: ProjectDetail, archived: boolean): 
   const form = `<form class="launch card" data-action="launch"><h2>${esc(t.launch)}</h2>
 <fieldset class="kinds"><legend>${esc(t.launchKind)}</legend>${kind('REPLAY', t.kindReplay, t.kindReplayHint)}${kind('EXPLORATION', t.kindExploration, t.kindExplorationHint)}</fieldset>
 <label class="field">${esc(t.launchEnv)}<select data-bind="environment" ${replay ? '' : 'disabled'}><option value="">${esc(t.projectTarget)}</option>${p.environments.map((env) => `<option value="${esc(env.id)}" ${launch.environmentId === env.id ? 'selected' : ''}>${esc(env.name)} · ${esc(readiness(state.checks[env.id]) === 'NOT_READY' ? t.readiness.notReady : (t.envKinds[env.kind] ?? env.kind))}</option>`).join('')}</select></label>
+<div class="field vb-field">${visibleBrowserControl(t.visibleBrowser, { headed: launch.headed === true, slowMoMs: launch.slowMoMs ?? 0 }, { attr: 'data-bind', available: state.capabilities?.visibleBrowser === true })}</div>
 <fieldset class="scen"><legend>${esc(t.launchScenarios)}</legend>${scenarios || `<p class="mu">${esc(t.noScenario)}</p>`}${replay && runnableScenarios(p.scenarios).length > 0 ? `<small class="mu">${esc(t.allScenarios)}</small>` : ''}</fieldset>
 <p class="note">${icon('alert')}<span>${esc(note)}</span></p>${replay && environment?.mutations?.enabled && !can(state, 'RUN_WRITES') ? `<p class="note warn">${icon('alert')}<span>${esc(t.access.noWritesRight)}</span></p>` : ''}
 <div class="form-acts">${replay && environment ? `<button type="button" class="btn" data-action="check-env" data-env="${esc(environment.id)}" ${state.checking === environment.id ? 'disabled' : ''}>${esc(state.checking === environment.id ? t.checking : t.checkEnvironment)}</button>` : ''}<button class="btn primary" type="submit" ${launch.busy || (replay && runnableScenarios(p.scenarios).length === 0) ? 'disabled' : ''}>${icon('play')}<span>${esc(launch.busy ? t.launching : replay ? t.launchButton : t.launchExploration)}</span></button></div>

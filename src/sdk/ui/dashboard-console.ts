@@ -533,7 +533,7 @@ export function consolePanel(
           .map((run) =>
             option(
               run.id,
-              `${run.mode === 'DRY_RUN' ? t.dryRun : t.run} · ${state.t.tst.statuses[run.status] ?? run.status} · ${clock(run.startedAt ?? run.queuedAt)}`,
+              `${run.mode === 'DRY_RUN' ? t.dryRun : t.run} · ${state.t.tst.statuses[run.status] ?? run.status} · ${clock(run.startedAt ?? run.queuedAt)}${run.headed ? ` · ${state.t.visibleBrowser.shown}` : ''}`,
               ui.runId ?? '',
             ),
           )

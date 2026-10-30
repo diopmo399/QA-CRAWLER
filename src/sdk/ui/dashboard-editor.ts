@@ -12,7 +12,7 @@ import type { FlowGroupNode, FlowParse, FlowStepNode } from '../editor/flow-docu
 import type { GherkinParse, GherkinStepNode } from '../editor/gherkin-document.js';
 import { can } from './dashboard-access.js';
 import { consolePanel, emptyConsoleUi, stepRows, type ConsoleUi } from './dashboard-console.js';
-import { formatDate, icon } from './dashboard-parts.js';
+import { formatDate, icon, visibleBrowserControl } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
 
@@ -105,6 +105,8 @@ export interface EditorUi {
   kitError?: string;
   /** La console d'exécution (panneau inférieur). */
   console: ConsoleUi;
+  /** Dry Run et Rejouer dans un navigateur visible (sur la machine du serveur), ralenti. */
+  visible: { headed: boolean; slowMoMs: number };
 }
 
 export const emptyEditorUi = (): EditorUi => ({
@@ -117,6 +119,7 @@ export const emptyEditorUi = (): EditorUi => ({
   inspector: true,
   kit: 'idle',
   console: emptyConsoleUi(),
+  visible: { headed: false, slowMoMs: 0 },
 });
 
 // ── Les formats ──────────────────────────────────────────────────────────────────────────────
@@ -338,6 +341,12 @@ function topBar(state: DashboardState, buffer: EditorBuffer | undefined): string
       ? `<button class="btn" data-action="ed-dry-run" ${busy || dryWhy ? 'disabled' : ''} ${why(dryWhy ?? t.dryRunHint)}>${icon('explorations')}<span>${esc(ui.busy === 'dry-run' ? t.dryRunning : t.dryRun)}</span></button>`
       : '',
     `<button class="btn" data-action="ed-run" ${busy || runWhy ? 'disabled' : ''} ${why(runWhy ?? t.runHint)}>${icon('play')}<span>${esc(ui.busy === 'run' ? t.running : t.run)}</span></button>`,
+    // Le Dry Run et Rejouer : dans un navigateur visible si on le demande (le serveur doit avoir un écran).
+    visibleBrowserControl(state.t.visibleBrowser, ui.visible, {
+      attr: 'data-ed',
+      available: state.capabilities?.visibleBrowser === true,
+      disabled: busy,
+    }),
     `<button class="btn" data-action="ed-compare" aria-pressed="${modeOf(ui, buffer.path) === 'compare' ? 'true' : 'false'}">${icon('history')}<span>${esc(t.compare)}</span></button>`,
     `<button class="btn primary" data-action="ed-save" ${busy || saveWhy ? 'disabled' : ''} ${why(saveWhy ?? t.saveHint)}>${icon('download')}<span>${esc(t.save)}</span><kbd>Ctrl S</kbd></button>`,
   ].join('');

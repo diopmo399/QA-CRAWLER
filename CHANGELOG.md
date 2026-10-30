@@ -46,6 +46,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   La console s'étend sous les trois colonnes ; une poignée règle sa hauteur, « Agrandir » lui donne tout
   l'espace ; une seule barre d'outils, et une barre d'état sous le journal.
 
+- **Navigateur visible** : le Dry Run, Rejouer, Relancer et l'écran Exécutions (rejeu ou exploration)
+  peuvent jouer dans un navigateur visible, sur la machine du serveur, avec un ralenti au choix
+  (250 ms, 500 ms, 1 s par geste). Moteur : `browser.headless: false` ; Playwright Test : `--headed` ;
+  Java : `QA_HEADLESS=false`, `QA_SLOW_MO`. SDK : `headed` et `slowMoMs` dans `generation.execute`,
+  `executions.start` et `explorations.start` ; `capabilities().visibleBrowser`. Sans écran sur le
+  serveur, la demande est refusée (`409 NO_DISPLAY`) et la case du Dashboard dit pourquoi.
 - Dashboard : la liste d'une sélection (projet, exécution, critères) s'ouvre en un menu aux couleurs du
   Dashboard là où le navigateur le permet (`appearance: base-select`, Chromium 135 et plus) ; ailleurs,
   la liste du système, comme avant.

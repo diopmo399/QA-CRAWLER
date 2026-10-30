@@ -78,7 +78,12 @@ export class EditorController {
       },
       refresh: () => this.refreshView(),
       activePath: () => this.ui.active ?? '',
-      rerun: (run) => this.execute(run.mode ?? 'RUN'),
+      // Relancer : comme la première fois, navigateur visible compris.
+      rerun: (run) =>
+        this.execute(
+          run.mode ?? 'RUN',
+          run.headed ? { headed: true, slowMoMs: run.slowMoMs ?? 0 } : undefined,
+        ),
     });
     globalThis.addEventListener('beforeunload', this.beforeUnload);
     const root = host.root;
@@ -606,7 +611,12 @@ export class EditorController {
     } else this.host.paint();
   }
 
-  private async execute(mode: 'RUN' | 'DRY_RUN'): Promise<TestRunView | undefined> {
+  private async execute(
+    mode: 'RUN' | 'DRY_RUN',
+    visible: { headed: boolean; slowMoMs: number } | undefined = this.ui.visible.headed
+      ? this.ui.visible
+      : undefined,
+  ): Promise<TestRunView | undefined> {
     const context = this.context();
     const buffer = this.active();
     if (!context || !buffer || this.ui.busy) return undefined;
@@ -617,6 +627,7 @@ export class EditorController {
     try {
       started = await context.api.generation.execute(context.projectId, context.recording, {
         format: buffer.format,
+        ...(visible?.headed ? { headed: true, slowMoMs: visible.slowMoMs } : {}),
         ...(mode === 'DRY_RUN'
           ? {
               mode: 'DRY_RUN' as const,
@@ -1136,6 +1147,13 @@ export class EditorController {
       return true;
     }
     const field = target.dataset.ed;
+    if (field === 'headed' || field === 'slow-mo') {
+      if (field === 'headed') ui.visible.headed = (target as HTMLInputElement).checked;
+      else ui.visible.slowMoMs = Number(target.value) || 0;
+      this.host.paint();
+      this.host.root.querySelector<HTMLElement>(`[data-ed="${field}"]`)?.focus();
+      return true;
+    }
     if (field === 'compare-left' || field === 'compare-right') {
       const compare = ui.compare;
       if (!compare) return true;

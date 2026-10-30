@@ -625,6 +625,35 @@ describe('dashboard — execution console', () => {
     expect(zone(html, 'class="ed-ptabs"')).not.toContain('Navigateur');
   });
 
+  it('a visible browser for the Dry Run and Rejouer: offered when the server has a screen, with its slow motion', () => {
+    const caps = { visibleBrowser: true } as DashboardState['capabilities'];
+    const off = renderDashboard(base({}, { capabilities: caps }));
+    expect(off).toContain('data-ed="headed"');
+    expect(off).not.toContain('data-ed="slow-mo"');
+    const on = renderDashboard(base({ visible: { headed: true, slowMoMs: 500 } }, { capabilities: caps }));
+    expect(on).toMatch(/data-ed="headed" checked/);
+    expect(on).toMatch(/<option value="500" selected>/);
+    // Sans écran sur le serveur : désactivé, et la raison est dite.
+    const blind = renderDashboard(
+      base(
+        { visible: { headed: true, slowMoMs: 0 } },
+        { capabilities: { visibleBrowser: false } as DashboardState['capabilities'] },
+      ),
+    );
+    expect(blind).toMatch(/data-ed="headed"\s+disabled/);
+    expect(blind).toContain(t.visibleBrowser.noDisplay.slice(0, 40));
+    expect(blind).not.toContain('data-ed="slow-mo"');
+    // Une exécution jouée dans un navigateur visible le dit dans le choix de la console.
+    const shown = run({ headed: true, slowMoMs: 250 });
+    const listed = renderDashboard(
+      base(
+        { view: { ...view(), runs: [shown] }, console: { ...emptyConsoleUi(), runId: shown.id, run: shown } },
+        { capabilities: caps },
+      ),
+    );
+    expect(zone(listed, 'data-ed="con-run"')).toContain(t.visibleBrowser.shown);
+  });
+
   it('the console under the three columns, full width: a handle sets its height, a button maximizes it', () => {
     const events = story();
     const open = renderDashboard(

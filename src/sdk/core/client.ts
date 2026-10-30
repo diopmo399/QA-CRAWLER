@@ -61,6 +61,7 @@ import type {
   ExecutionDetail,
   ExecutionRecord,
   ExecutionStartInput,
+  ExplorationStartInput,
   OverviewView,
   ProjectDetail,
   ProjectSummary,
@@ -314,7 +315,7 @@ export interface QaCrawlerClient {
     get(options?: { weeks?: number; projectId?: string }): Promise<TrendsView>;
   };
   explorations: {
-    start(projectId: string): Promise<ExplorationSnapshot>;
+    start(projectId: string, input?: ExplorationStartInput): Promise<ExplorationSnapshot>;
     status(id: string): Promise<ExplorationSnapshot>;
     result(id: string): Promise<ExplorationSummary>;
     subscribe(
@@ -823,7 +824,8 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       },
     },
     explorations: {
-      start: (projectId) => request('POST', `/projects/${encodeURIComponent(projectId)}/explorations`, {}),
+      start: (projectId, input = {}) =>
+        request('POST', `/projects/${encodeURIComponent(projectId)}/explorations`, input),
       status: (id) => request('GET', `/explorations/${encodeURIComponent(id)}`),
       result: (id) => request('GET', `/explorations/${encodeURIComponent(id)}/result`),
       subscribe: (id, onEvent, subscribeOptions) =>
