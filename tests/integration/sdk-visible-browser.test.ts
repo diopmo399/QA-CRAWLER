@@ -271,6 +271,92 @@ describe('a visible browser for the runs started from the Dashboard', () => {
     240_000,
   );
 
+  it.skipIf(!XVFB)(
+    'a journey composed in the library: Rejouer with « Navigateur visible », from the library and from Scénarios',
+    async () => {
+      const server = screen as RunningSdkServer;
+      const client = clientOf(server);
+      // Un bloc tiré de l'enregistrement (toutes ses actions), publié dans la bibliothèque.
+      const steps = (await client.recordings.studio(project.id, NAME)).steps;
+      await client.groups.edit(project.id, NAME, {
+        op: 'create',
+        name: 'Ouvrir la fiche',
+        stepIds: steps.filter((step) => step.kind !== 'expect').map((step) => step.id),
+      });
+      const groupId =
+        (await client.groups.list(project.id, NAME)).find((group) => group.name === 'Ouvrir la fiche')?.id ??
+        '';
+      await client.library.publishExtraction(project.id, NAME, {
+        selection: [{ groupId }],
+        mode: 'separate',
+        navigate: true,
+      });
+      const browser = await chromium.launch();
+      try {
+        const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+        const dash = page.locator('qa-crawler-dashboard');
+        await page.goto(`${server.url}/dashboard`);
+        await dash.locator('select[data-action="project-context"]').selectOption(project.id);
+        await dash.locator('.drawer [data-action="nav"][data-view="library"]').click();
+        // Composer le parcours dans la bibliothèque, puis le rejouer d'ici, navigateur visible et ralenti.
+        await dash.locator('[data-action="lib-part-add"][data-block="Ouvrir la fiche"]').first().click();
+        await dash.locator('input[data-lib="compose.name"]').fill('Fiche visible');
+        await dash.locator('[data-action="lib-check"]').click();
+        await dash.locator('.lib-check.ok').waitFor({ timeout: 30_000 });
+        await dash.locator('form[data-action="lib-compose"] button[type="submit"]').click();
+        const replay = dash.locator('.lib-replay');
+        await replay.waitFor({ timeout: 30_000 });
+        await replay.locator('[data-bind="headed"]').check();
+        await replay.locator('[data-bind="slow-mo"]').selectOption('250');
+        const watch = async (start: () => Promise<void>): Promise<string[]> => {
+          const before = (await client.executions.list(project.id)).length;
+          const seen = new Set<string>();
+          const stop = new AbortController();
+          const sampler = (async () => {
+            while (!stop.signal.aborted) {
+              for (const line of await chromiumProcesses().catch(() => [])) seen.add(line);
+              await new Promise((resolve) => setTimeout(resolve, 150));
+            }
+          })();
+          await start();
+          // Jusqu'à la fin du rejeu : l'exécution est listée dès son départ, ses flows à sa fin.
+          await expect
+            .poll(
+              async () => {
+                const runs = await client.executions.list(project.id);
+                return runs.length > before ? (runs[0]?.flows.total ?? 0) : 0;
+              },
+              { timeout: 180_000, interval: 1000 },
+            )
+            .toBe(1);
+          stop.abort();
+          await sampler;
+          return [...seen];
+        };
+        const fromLibrary = await watch(() => replay.locator('[data-action="replay-scenario"]').click());
+        // Le Chromium de ce test est sans fenêtre ; celui du rejeu, lui, est visible.
+        expect(fromLibrary.some((line) => !line.includes('--headless'))).toBe(true);
+        const [last] = await client.executions.list(project.id);
+        expect(last?.scenarios).toEqual(['Fiche visible']);
+        expect(last?.flows).toMatchObject({ total: 1, passed: 1, failed: 0 });
+        // Depuis Scénarios, le même choix est à côté de « Rejouer ».
+        await dash.locator('.drawer [data-action="nav"][data-view="scenarios"]').click();
+        await dash.locator('[data-action="pick-scenario"][data-name="Fiche visible"]').first().click();
+        const box = dash.locator('aside [data-bind="headed"]');
+        await box.waitFor({ timeout: 15_000 });
+        expect(await box.isChecked()).toBe(true);
+        const fromScenarios = await watch(() =>
+          dash.locator('[data-action="replay-scenario"][data-name="Fiche visible"]').click(),
+        );
+        expect(fromScenarios.some((line) => !line.includes('--headless'))).toBe(true);
+      } finally {
+        await browser.close();
+        client.dispose();
+      }
+    },
+    420_000,
+  );
+
   it.skipIf(!XVFB || !javaAvailable)(
     'with a screen: the Java test (Maven) gets QA_HEADLESS=false',
     async () => {

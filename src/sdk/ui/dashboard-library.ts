@@ -7,7 +7,7 @@ import type {
 } from '../core/contracts.js';
 import { can } from './dashboard-access.js';
 import { blockSheet, type BlockSheet } from './dashboard-library-sheet.js';
-import { header, icon } from './dashboard-parts.js';
+import { header, icon, visibleBrowserControl } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
 
@@ -76,6 +76,8 @@ export interface LibraryUi {
   };
   /** Insérer un bloc dans le scénario affiché (écran Scénarios). */
   insert: { block: string; at: 'start' | 'end' };
+  /** Le dernier parcours créé par le compositeur : il se rejoue d'ici (navigateur visible au choix). */
+  composed?: string;
   /** Le groupe d'un enregistrement en cours d'ajout (revue), et le nom proposé. */
   group?: { id: string; name: string };
   confirmRemove?: string;
@@ -99,6 +101,19 @@ export const emptyLibraryUi = (): LibraryUi => ({
   compose: { name: '', parts: [] },
   insert: { block: '', at: 'start' },
 });
+
+/** « Navigateur visible » et son ralenti, à côté d'un Rejouer (le même choix que le lancement d'une exécution). */
+export function replayVisibility(state: DashboardState): string {
+  return visibleBrowserControl(
+    state.t.visibleBrowser,
+    { headed: state.launch.headed === true, slowMoMs: state.launch.slowMoMs ?? 0 },
+    {
+      attr: 'data-bind',
+      available: state.capabilities?.visibleBrowser === true,
+      disabled: state.launch.busy,
+    },
+  );
+}
 
 /** La composition vérifiée : la vérification ne vaut que pour ce nom et ces blocs, dans cet ordre. */
 export const compositionKey = (compose: LibraryUi['compose']): string =>
@@ -460,7 +475,16 @@ export function libraryView(state: DashboardState): string {
       ? `<nav class="lib-recent" aria-label="${esc(l.recentTitle)}"><span class="lib-io-l">${esc(l.recentTitle)}</span>${recent.map((block) => `<button class="chip" data-action="lib-open" data-block="${esc(block.name)}">${esc(block.name)}</button>`).join('')}</nav>`
       : '';
   const details = ui.details ?? [];
-  const messages = `${ui.error ? `<div class="err" role="alert"><p>${esc(ui.error)}</p>${details.length > 1 ? `<ul class="plain tight">${details.map((detail) => `<li>${esc(detail)}</li>`).join('')}</ul>` : ''}</div>` : ''}${ui.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(ui.notice)}</span></p>` : ''}`;
+  // Le parcours tout juste créé se rejoue d'ici, avec ou sans navigateur visible.
+  const composed =
+    ui.composed && runnableScenarios(p.scenarios).some((scenario) => scenario.name === ui.composed)
+      ? ui.composed
+      : undefined;
+  const replay =
+    composed && can(state, 'RUN') && p.state !== 'ARCHIVED'
+      ? `<div class="form-acts start lib-replay"><button class="btn primary" data-action="replay-scenario" data-name="${esc(composed)}" ${state.launch.busy ? 'disabled' : ''} aria-busy="${String(state.launch.busy)}">${icon('play')}<span>${esc(l.replayComposed(composed))}</span></button>${replayVisibility(state)}</div>${state.launch.error && state.launch.scenarios.includes(composed) ? `<p class="err" role="alert">${esc(state.launch.error)}</p>` : ''}`
+      : '';
+  const messages = `${ui.error ? `<div class="err" role="alert"><p>${esc(ui.error)}</p>${details.length > 1 ? `<ul class="plain tight">${details.map((detail) => `<li>${esc(detail)}</li>`).join('')}</ul>` : ''}</div>` : ''}${ui.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(ui.notice)}</span></p>` : ''}${replay}`;
   const actions = publish
     ? `<button class="btn primary" data-action="lib-panel-open">${icon('plus')}<span>${esc(l.addBlock)}</span></button>`
     : '';

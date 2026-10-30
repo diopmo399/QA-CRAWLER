@@ -650,6 +650,48 @@ describe('dashboard — scenario library', () => {
     expect(busy).toContain('data-action="replay-scenario" data-name="Composé" disabled aria-busy="true"');
   });
 
+  it('replaying a composed journey: « Navigateur visible » beside Rejouer, in Scénarios and in the library', () => {
+    const screen = { capabilities: { visibleBrowser: true } as DashboardState['capabilities'] };
+    const scenarios = renderDashboard(base('scenarios', { ...screen, scenarioHistory: [], recordings: [] }));
+    expect(scenarios).toMatch(
+      /data-action="replay-scenario" data-name="Composé"[^]*<input type="checkbox" data-bind="headed"/,
+    );
+    const headed = renderDashboard(
+      base('scenarios', {
+        ...screen,
+        scenarioHistory: [],
+        recordings: [],
+        launch: {
+          kind: 'REPLAY',
+          environmentId: '',
+          scenarios: [],
+          busy: false,
+          headed: true,
+          slowMoMs: 250,
+        },
+      }),
+    );
+    expect(headed).toContain('data-bind="headed" checked');
+    expect(headed).toContain('<option value="250" selected>');
+    // Sans écran sur le serveur : la case est là, désactivée, avec la raison.
+    const blind = renderDashboard(base('scenarios', { scenarioHistory: [], recordings: [] }));
+    expect(blind).toMatch(/<input type="checkbox" data-bind="headed"\s+disabled>/);
+    // La bibliothèque : le parcours tout juste créé se rejoue d'ici.
+    const library = renderDashboard(
+      base('library', screen, { composed: 'Composé', notice: t.lib.composed('Composé') }),
+    );
+    expect(library).toContain('data-action="replay-scenario" data-name="Composé"');
+    expect(library).toContain('Rejouer « Composé »');
+    expect(library).toMatch(/lib-replay[^]*data-bind="headed"/);
+    // Un nom qui n'est plus un scénario jouable ne propose rien ; un lecteur non plus.
+    expect(renderDashboard(base('library', screen, { composed: 'Bloc connexion' }))).not.toContain(
+      'lib-replay',
+    );
+    expect(renderDashboard(base('library', { ...screen, ...reader }, { composed: 'Composé' }))).not.toContain(
+      'lib-replay',
+    );
+  });
+
   it('a reader sees the library and the details, never an action', () => {
     const html = renderDashboard(
       base('library', reader, {

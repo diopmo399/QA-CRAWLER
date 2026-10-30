@@ -1418,6 +1418,7 @@ export class QaCrawlerDashboard extends Base {
             lib.check = undefined;
             lib.checkedFor = undefined;
             lib.notice = this.state.t.lib.composed(scenario.name);
+            lib.composed = scenario.name;
             await this.load();
           } catch (error) {
             // La composition reste telle quelle ; la vérification dit pourquoi.
