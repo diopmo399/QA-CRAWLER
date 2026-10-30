@@ -62,6 +62,10 @@ import type {
   ExecutionRecord,
   ExecutionStartInput,
   ExplorationStartInput,
+  BlockSourceComparison,
+  ExtractionInput,
+  ExtractionPlan,
+  LibraryBlockDetails,
   OverviewView,
   ProjectDetail,
   ProjectSummary,
@@ -251,6 +255,23 @@ export interface QaCrawlerClient {
     validateVersion(projectId: string, name: string): Promise<LibraryBlockView>;
     /** Les parcours suivis dont un bloc a changé depuis leur composition. */
     drift(projectId: string): Promise<CompositionDrift[]>;
+    /** Le détail d'un bloc : ses étapes en mots, ses groupes internes, ses données (sans valeur). */
+    details(projectId: string, name: string): Promise<LibraryBlockDetails>;
+    /**
+     * LE PLAN d'une publication de groupes métier d'un enregistrement (un bloc par groupe, ou un bloc
+     * composé) : étapes, données, dépendances, contrat, validation. Rien n'est écrit.
+     */
+    planExtraction(projectId: string, recording: string, input: ExtractionInput): Promise<ExtractionPlan>;
+    /** Publie les blocs du plan, tous ensemble ou aucun (422 : `details` dit ce qui ne va pas, bloc par bloc). */
+    publishExtraction(
+      projectId: string,
+      recording: string,
+      input: ExtractionInput,
+    ): Promise<LibraryBlockView[]>;
+    /** Un bloc extrait confronté à ce que son enregistrement donne aujourd'hui. */
+    compareSource(projectId: string, name: string): Promise<BlockSourceComparison>;
+    /** Reprend le contenu de la source : le bloc devient CHANGED (une nouvelle version à valider). */
+    updateFromSource(projectId: string, name: string): Promise<LibraryBlockView>;
   };
   /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
   executions: {
@@ -728,6 +749,16 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       validateVersion: (projectId, name) =>
         request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/version`, {}),
       drift: (projectId) => request('GET', `${project(projectId)}/library/drift`),
+      details: (projectId, name) =>
+        request('GET', `${project(projectId)}/library/${encodeURIComponent(name)}`),
+      planExtraction: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/library/plan`, input),
+      publishExtraction: (projectId, name, input) =>
+        request('POST', `${recording(projectId, name)}/library`, input),
+      compareSource: (projectId, name) =>
+        request('GET', `${project(projectId)}/library/${encodeURIComponent(name)}/source`),
+      updateFromSource: (projectId, name) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/source`, {}),
     },
     executions: {
       start: (projectId, input = {}) => request('POST', `${project(projectId)}/executions`, input),

@@ -1437,8 +1437,10 @@ export interface LibraryBlockView {
   steps: number;
   startAt?: string;
   description?: string;
-  /** D'où il vient : un scénario, ou un groupe d'un enregistrement. */
-  origin?: { kind: 'scenario' | 'recording'; name: string; group?: string };
+  /** D'où il vient : un scénario, ou un (ou plusieurs) groupe(s) métier d'un enregistrement. */
+  origin?: BlockOrigin;
+  /** Bloc composé : les groupes métier qu'il garde (identifiants d'origine, positions dans le bloc). */
+  groups?: { id: string; name: string; steps: number }[];
   /** La version validée, son empreinte (contenu exécutable) et ses dates. */
   version: number;
   hash: string;
@@ -1460,6 +1462,156 @@ export interface LibraryBlockView {
   /** Les scénarios qui le rejouent ; pour les parcours suivis, la version qu'ils référencent. */
   usedBy: string[];
   pinnedBy: { scenario: string; version: number; current: boolean }[];
+}
+
+/**
+ * LA PROVENANCE D'UN BLOC. Depuis un enregistrement : ses groupes et ses étapes d'origine (identifiants
+ * stables du Recorder), la session, l'empreinte du flow de l'enregistrement au moment de l'extraction,
+ * la date, l'auteur (accès nominatif) et les transformations faites (navigation ajoutée, valeur fournie).
+ * Les champs ajoutés sont facultatifs : un bloc plus ancien n'a que `kind`, `name` et `group`.
+ */
+export interface BlockOrigin {
+  kind: 'scenario' | 'recording';
+  name: string;
+  group?: string;
+  groupIds?: string[];
+  groups?: string[];
+  stepIds?: string[];
+  /** La sélection d'origine (une partie d'un groupe : ses étapes choisies). */
+  selection?: ExtractionSelection[];
+  mode?: ExtractionMode;
+  sessionId?: string;
+  revision?: string;
+  extractedAt?: string;
+  author?: string;
+  navigate?: boolean;
+  /** Les clés dont la valeur a été fournie à la publication (jamais la valeur). */
+  provided?: string[];
+  transformations?: string[];
+}
+
+/** UN BLOC PAR GROUPE (separate) ou UN BLOC COMPOSÉ des groupes choisis, qui les garde (composite). */
+export const EXTRACTION_MODES = ['separate', 'composite'] as const;
+export type ExtractionMode = (typeof EXTRACTION_MODES)[number];
+
+/** Un groupe choisi ; `stepIds` : seulement une partie de ses étapes. */
+export interface ExtractionSelection {
+  groupId: string;
+  stepIds?: string[];
+}
+
+export interface ExtractionInput {
+  selection: ExtractionSelection[];
+  mode: ExtractionMode;
+  /** Le nom et la description de chaque bloc : par groupe (separate), ou `composite`. */
+  names?: Record<string, { name?: string; description?: string }>;
+  /** Faire commencer chaque bloc par aller à sa page de départ (`goto`) : une transformation notée. */
+  navigate?: boolean;
+  /**
+   * Des valeurs fixes fournies explicitement pour des données que la sélection consomme sans les
+   * produire. Jamais pour une donnée sensible (secret : une référence d'environnement).
+   */
+  provided?: Record<string, string>;
+}
+
+/** D'où un bloc prévu reçoit une donnée qu'il consomme sans la produire. */
+export interface ExtractionDependency {
+  key: string;
+  /**
+   * BLOCK : un autre bloc de la même publication la produit (le composer après lui) ;
+   * UNSELECTED_GROUP : un groupe non choisi la produit (le bloc ne sera pas autonome) ;
+   * OUTSIDE_GROUPS : une étape hors groupe la produit ; PROVIDED : valeur fournie à la publication ;
+   * NOWHERE : rien ne la produit ni ne la définit.
+   */
+  source: 'BLOCK' | 'UNSELECTED_GROUP' | 'OUTSIDE_GROUPS' | 'PROVIDED' | 'NOWHERE';
+  group?: { id: string; name: string };
+  block?: string;
+}
+
+export interface ExtractionStepView {
+  /** Rang dans le bloc (1…n) et dans l'enregistrement. */
+  position: number;
+  source?: number;
+  stepId?: string;
+  kind: string;
+  label: string;
+  groupId?: string;
+}
+
+export interface ExtractionBlockPlan {
+  /** groupId (separate) ou `composite`. */
+  key: string;
+  name: string;
+  description?: string;
+  composite: boolean;
+  groups: { id: string; name: string; steps: number; partial: boolean }[];
+  startAt: string;
+  steps: ExtractionStepView[];
+  /** Assertions métier recopiées, et vérifications (`expect`) parmi les étapes. */
+  assertions: number;
+  checks: number;
+  /** Les données que le bloc définira (jamais leur valeur). */
+  data: { key: string; dynamic: boolean; provided?: boolean }[];
+  produces: string[];
+  consumes: string[];
+  contract: BlockContract;
+  dependencies: ExtractionDependency[];
+  transformations: string[];
+  validation: { ok: boolean; errors: string[]; warnings: string[] };
+}
+
+/** Un groupe de l'enregistrement, tel que la sélection le montre. */
+export interface ExtractionGroupView {
+  id: string;
+  name: string;
+  description?: string;
+  steps: number;
+  checks: number;
+  assertions: number;
+  startAt: string;
+  /** Les premières actions, en mots. */
+  actions: string[];
+  produces: string[];
+  consumes: { key: string; groupId?: string; groupName?: string }[];
+  runnableAlone: boolean;
+}
+
+/** LE PLAN D'UNE PUBLICATION : calculé sans rien écrire ; publier le refait puis écrit tout ou rien. */
+export interface ExtractionPlan {
+  recording: string;
+  mode: ExtractionMode;
+  ok: boolean;
+  groups: ExtractionGroupView[];
+  blocks: ExtractionBlockPlan[];
+  summary: {
+    groups: number;
+    steps: number;
+    produced: number;
+    consumed: number;
+    /** Les données consommées qu'aucun bloc de la publication ne produit. */
+    external: string[];
+    errors: number;
+    warnings: number;
+  };
+  /** Les erreurs de la sélection elle-même (groupe inconnu, partie incohérente…). */
+  errors: string[];
+}
+
+/** Un bloc confronté à sa source : le même contenu, un contenu différent, ou une source disparue. */
+export interface BlockSourceComparison {
+  block: string;
+  status: 'SAME' | 'DIFFERENT' | 'SOURCE_MISSING' | 'NOT_FROM_RECORDING';
+  recording?: string;
+  revision?: { extracted?: string; current?: string };
+  changes: string[];
+}
+
+/** Le détail d'un bloc : ses étapes en mots, ses groupes internes, ses données (sans valeur sensible). */
+export interface LibraryBlockDetails {
+  block: LibraryBlockView;
+  steps: ExtractionStepView[];
+  groups: { id: string; name: string; positions: number[] }[];
+  data: { key: string; strategy: string; dynamic: boolean }[];
 }
 
 export type LibraryAddInput =

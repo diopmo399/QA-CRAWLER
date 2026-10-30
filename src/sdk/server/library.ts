@@ -5,11 +5,16 @@ import { isMap, isSeq, parse as parseYaml, parseDocument, stringify as stringify
 import { parseTestDataSet, testDataSetDocument, type TestDataSet } from '../../data/test-data-set.js';
 import { slug } from '../../knowledge/signatures.js';
 import type {
+  BlockSourceComparison,
   BlockState,
   ComposeScenarioInput,
   CompositionCheck,
   CompositionDrift,
   DeclaredContract,
+  ExtractionInput,
+  ExtractionPlan,
+  ExtractionStepView,
+  LibraryBlockDetails,
   LibraryBlockView,
   LibrarySourcePreview,
 } from '../core/contracts.js';
@@ -22,6 +27,14 @@ import {
   mergeData,
   type CompositionPart,
 } from './library-contract.js';
+import {
+  contentChanges,
+  planExtraction,
+  validateBlockFlow,
+  type ExtractionDraft,
+  type ExtractionSource,
+} from './library-extract.js';
+import { describeStep, flowSchema } from '../../config/flow-schema.js';
 import { flowsDirOf, revisionOf } from './platform.js';
 
 /**
@@ -270,6 +283,8 @@ async function describeBlock(
   }
   const steps = stepsOf(entry.flow);
   if (steps.length === 0) problems.push('it has no step');
+  // Un bloc dont le flow ne passe pas le schéma ne se compose pas (le rejeu le refuserait).
+  else problems.push(...validateBlockFlow(entry.flow, data));
   for (const run of runsOf(entry.flow))
     if (!entries.some((other) => other.name === run)) problems.push(`run "${run}": no flow has this name`);
   const hash = contentHash({ startAt: entry.flow.startAt, steps }, data);
@@ -308,6 +323,15 @@ async function describeBlock(
     ...(typeof entry.flow.startAt === 'string' ? { startAt: entry.flow.startAt } : {}),
     ...(typeof entry.flow.description === 'string' ? { description: entry.flow.description } : {}),
     ...(record.origin ? { origin: record.origin } : {}),
+    ...(Array.isArray(entry.flow.groups) && entry.flow.groups.length > 0
+      ? {
+          groups: entry.flow.groups.filter(isObject).map((group) => ({
+            id: typeof group.id === 'string' ? group.id : '',
+            name: typeof group.name === 'string' ? group.name : '',
+            steps: Array.isArray(group.steps) ? group.steps.length : 0,
+          })),
+        }
+      : {}),
     version: record.version,
     hash,
     ...(record.createdAt ? { createdAt: record.createdAt } : {}),
@@ -451,6 +475,17 @@ export function addScenarioToLibrary(
     const name = freeName(entries, input.name);
     const steps = stepsOf(source.flow);
     if (steps.length === 0) throw new LibraryError(`"${input.scenario}" has no step`, 422);
+    // Un flow invalide n'entre jamais dans la bibliothèque : chaque erreur dit son étape.
+    const invalid = validateBlockFlow(
+      {
+        name,
+        ...(typeof source.flow.startAt === 'string' ? { startAt: source.flow.startAt } : {}),
+        steps,
+      },
+      await testDataOf(source),
+    );
+    if (invalid.length > 0)
+      throw new LibraryError(`"${input.scenario}" is not a valid flow: ${invalid[0] ?? ''}`, 422, invalid);
     return newBlock(
       projectDir,
       root,
@@ -909,4 +944,324 @@ export function acceptBlocks(projectDir: string, scenario: string): Promise<Comp
     await commitFiles([registryFile(projectDir, next)]);
     return check;
   });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Extraction de groupes métier d'un enregistrement (voir library-extract.ts).
+// ---------------------------------------------------------------------------------------------
+
+/** LE PLAN d'une publication de groupes : rien n'est écrit. */
+export async function planGroupExtraction(
+  projectDir: string,
+  source: ExtractionSource,
+  input: ExtractionInput,
+): Promise<ExtractionPlan> {
+  const { entries } = await flowEntries(projectDir);
+  return planExtraction(source, input, { taken: entries.map((entry) => entry.name) }).plan;
+}
+
+/**
+ * PUBLIER des groupes d'un enregistrement : le plan est refait, puis TOUS les blocs sont écrits
+ * ensemble (avec le registre), ou aucun si l'un ne passe pas sa validation.
+ */
+export function publishGroupExtraction(
+  projectDir: string,
+  source: ExtractionSource,
+  input: ExtractionInput,
+  author?: string,
+): Promise<LibraryBlockView[]> {
+  return withLock(projectDir, async () => {
+    const { root, entries } = await flowEntries(projectDir);
+    const { plan, drafts } = planExtraction(source, input, { taken: entries.map((entry) => entry.name) });
+    if (!plan.ok) {
+      const details = [
+        ...plan.errors,
+        ...plan.blocks.flatMap((block) =>
+          block.validation.errors.map((error) => `"${block.name}": ${error}`),
+        ),
+      ];
+      throw new LibraryError(details[0] ?? 'nothing to publish', 422, details);
+    }
+    const registry = await readRegistry(projectDir);
+    const at = new Date().toISOString();
+    const files: { file: string; content: string }[] = [];
+    const folders = new Set<string>();
+    for (const draft of drafts) {
+      const name = draft.plan.name;
+      const written = await flowFiles(root, 'library', draft.flow, draft.data);
+      if (folders.has(written.relative))
+        throw new LibraryError(`two blocks of this publication would be written to ${written.relative}`, 409);
+      folders.add(written.relative);
+      files.push(...written.files);
+      const groupNames = draft.plan.groups.map((group) => group.name);
+      registry.blocks[name] = {
+        id: slug(name),
+        version: 1,
+        hash: contentHash({ startAt: draft.flow.startAt, steps: stepsOf(draft.flow) }, draft.data),
+        createdAt: at,
+        updatedAt: at,
+        origin: {
+          kind: 'recording',
+          name: source.name,
+          group: groupNames.join(' + '),
+          groupIds: draft.groupIds,
+          groups: groupNames,
+          stepIds: draft.stepIds,
+          selection: draft.selection,
+          mode: plan.mode,
+          ...(source.flow.recordingSessionId ? { sessionId: source.flow.recordingSessionId } : {}),
+          revision: source.revision,
+          extractedAt: at,
+          ...(author ? { author } : {}),
+          ...(input.navigate ? { navigate: true } : {}),
+          ...(draft.plan.data.some((entry) => entry.provided)
+            ? { provided: draft.plan.data.filter((entry) => entry.provided).map((entry) => entry.key) }
+            : {}),
+          ...(draft.plan.transformations.length > 0 ? { transformations: draft.plan.transformations } : {}),
+        },
+        history: [
+          {
+            version: 1,
+            at,
+            change: `extracted from the ${draft.plan.composite ? 'groups' : 'group'} "${groupNames.join('", "')}" of the recording ${source.name}`,
+          },
+        ],
+      };
+    }
+    await commitFiles([...files, registryFile(projectDir, registry)]);
+    const views = await listLibrary(projectDir);
+    return drafts
+      .map((draft) => views.find((view) => view.name === draft.plan.name))
+      .filter((view): view is LibraryBlockView => view !== undefined);
+  });
+}
+
+/** Ce que la source d'un bloc extrait donnerait aujourd'hui (même sélection, même navigation, mêmes valeurs fournies). */
+function redraft(
+  entry: FlowEntry,
+  record: BlockRecord,
+  source: ExtractionSource,
+  data: TestDataSet | undefined,
+): ExtractionDraft | { missing: string } {
+  const origin = record.origin;
+  const selection = origin?.selection ?? (origin?.groupIds ?? []).map((groupId) => ({ groupId }));
+  const groups = new Set((source.flow.groups ?? []).map((group) => group.id));
+  const gone = selection.filter((item) => !groups.has(item.groupId));
+  if (selection.length === 0 || gone.length > 0)
+    return {
+      missing: `the group(s) ${gone.map((item) => item.groupId).join(', ') || '?'} no longer exist in ${source.name}`,
+    };
+  const provided = Object.fromEntries(
+    (origin?.provided ?? []).flatMap((key) => {
+      const value = data?.values[key]?.value;
+      return value !== undefined ? [[key, value]] : [];
+    }),
+  );
+  const description = typeof entry.flow.description === 'string' ? entry.flow.description : undefined;
+  const key = origin?.mode === 'composite' ? 'composite' : (selection[0]?.groupId ?? '');
+  const { drafts } = planExtraction(
+    source,
+    {
+      selection,
+      mode: origin?.mode === 'composite' ? 'composite' : 'separate',
+      names: { [key]: { name: entry.name, ...(description ? { description } : {}) } },
+      ...(origin?.navigate ? { navigate: true } : {}),
+      provided,
+    },
+    { taken: [] },
+  );
+  const draft = drafts[0];
+  return draft ?? { missing: `nothing left to extract from ${source.name}` };
+}
+
+/** COMPARER un bloc extrait d'un enregistrement avec ce que cet enregistrement donne aujourd'hui. */
+export async function compareWithSource(
+  projectDir: string,
+  name: string,
+  loadSource: (recording: string) => Promise<ExtractionSource | undefined>,
+): Promise<BlockSourceComparison> {
+  const { entries } = await flowEntries(projectDir);
+  const entry = entries.find((candidate) => candidate.name === name && candidate.flow.reusable === true);
+  if (!entry) throw new LibraryError(`no block named "${name}"`, 404);
+  const record = (await readRegistry(projectDir)).blocks[name];
+  const origin = record?.origin;
+  if (!record || origin?.kind !== 'recording' || (!origin.groupIds && !origin.selection))
+    return { block: name, status: 'NOT_FROM_RECORDING', changes: [] };
+  const source = await loadSource(origin.name);
+  if (!source)
+    return {
+      block: name,
+      status: 'SOURCE_MISSING',
+      recording: origin.name,
+      ...(origin.revision ? { revision: { extracted: origin.revision } } : {}),
+      changes: [`the recording ${origin.name} no longer exists`],
+    };
+  const data = await testDataOf(entry);
+  const draft = redraft(entry, record, source, data);
+  const revision = { ...(origin.revision ? { extracted: origin.revision } : {}), current: source.revision };
+  if ('missing' in draft)
+    return {
+      block: name,
+      status: 'SOURCE_MISSING',
+      recording: origin.name,
+      revision,
+      changes: [draft.missing],
+    };
+  const { testData: _testData, ...flow } = entry.flow;
+  const changes = contentChanges(
+    { flow, ...(data ? { data } : {}) },
+    { flow: draft.flow, ...(draft.data ? { data: draft.data } : {}) },
+  );
+  return {
+    block: name,
+    status: changes.length === 0 ? 'SAME' : 'DIFFERENT',
+    recording: origin.name,
+    revision,
+    changes,
+  };
+}
+
+/**
+ * METTRE À JOUR un bloc depuis sa source, à la demande : le contenu que l'enregistrement donne
+ * aujourd'hui remplace celui du bloc, qui devient CHANGED (une nouvelle version à valider) ; les
+ * parcours qui le rejouent ne le suivent qu'après cette validation et leur acceptation.
+ */
+export function updateFromSource(
+  projectDir: string,
+  name: string,
+  loadSource: (recording: string) => Promise<ExtractionSource | undefined>,
+): Promise<LibraryBlockView> {
+  return withLock(projectDir, async () => {
+    const { entries } = await flowEntries(projectDir);
+    const entry = entries.find((candidate) => candidate.name === name && candidate.flow.reusable === true);
+    if (!entry || entry.index !== undefined) throw new LibraryError(`no block named "${name}"`, 404);
+    const registry = await readRegistry(projectDir);
+    const record = registry.blocks[name];
+    const origin = record?.origin;
+    if (!record || origin?.kind !== 'recording')
+      throw new LibraryError(`"${name}" was not extracted from a recording`, 409);
+    const source = await loadSource(origin.name);
+    if (!source) throw new LibraryError(`the recording ${origin.name} no longer exists`, 409);
+    const data = await testDataOf(entry);
+    const draft = redraft(entry, record, source, data);
+    if ('missing' in draft) throw new LibraryError(draft.missing, 409);
+    if (!draft.plan.validation.ok)
+      throw new LibraryError(
+        `the content of ${origin.name} would not be a valid block: ${draft.plan.validation.errors[0] ?? ''}`,
+        422,
+        draft.plan.validation.errors,
+      );
+    const { testData: _testData, ...flow } = entry.flow;
+    const changes = contentChanges(
+      { flow, ...(data ? { data } : {}) },
+      { flow: draft.flow, ...(draft.data ? { data: draft.data } : {}) },
+    );
+    if (changes.length === 0) throw new LibraryError(`"${name}" is already the same as its source`, 409);
+    const directory = path.dirname(entry.file);
+    const hasData = draft.data !== undefined && Object.keys(draft.data.values).length > 0;
+    const { steps, ...head } = draft.flow;
+    const files = [
+      {
+        file: entry.file,
+        content: stringifyYaml(
+          { ...head, ...(hasData ? { testData: 'test-data.yaml' } : {}), steps },
+          { lineWidth: 0 },
+        ),
+      },
+      ...(hasData && draft.data
+        ? [
+            {
+              file: path.join(directory, 'test-data.yaml'),
+              content: stringifyYaml(testDataSetDocument(draft.data), { lineWidth: 0 }),
+            },
+          ]
+        : []),
+    ];
+    const at = new Date().toISOString();
+    registry.blocks[name] = {
+      ...record,
+      updatedAt: at,
+      origin: { ...origin, revision: source.revision, stepIds: draft.stepIds, extractedAt: at },
+      history: [
+        ...record.history,
+        {
+          version: record.version,
+          at,
+          change: `content taken again from the recording ${source.name} (${String(changes.length)} change(s)): validate it to make version ${String(record.version + 1)}`,
+        },
+      ],
+    };
+    await commitFiles([...files, registryFile(projectDir, registry)]);
+    if (!hasData) await rm(path.join(directory, 'test-data.yaml'), { force: true });
+    return blockNamed(projectDir, name);
+  });
+}
+
+/** LE DÉTAIL d'un bloc : ses étapes en mots, ses groupes internes, ses données (jamais une valeur sensible). */
+export async function blockDetails(projectDir: string, name: string): Promise<LibraryBlockDetails> {
+  const { entries } = await flowEntries(projectDir);
+  const entry = entries.find((candidate) => candidate.name === name && candidate.flow.reusable === true);
+  if (!entry) throw new LibraryError(`no block named "${name}"`, 404);
+  const block = await blockNamed(projectDir, name);
+  const data = await testDataOf(entry).catch(() => undefined);
+  const groups = (Array.isArray(entry.flow.groups) ? entry.flow.groups : [])
+    .filter(isObject)
+    .map((group) => ({
+      id: typeof group.id === 'string' ? group.id : '',
+      name: typeof group.name === 'string' ? group.name : '',
+      positions: Array.isArray(group.steps)
+        ? group.steps.filter((position): position is number => typeof position === 'number')
+        : [],
+    }));
+  const groupAt = (position: number): string | undefined =>
+    groups.find((group) => group.positions.includes(position))?.id;
+  const stepParser = flowSchema.shape.steps.element;
+  const steps: ExtractionStepView[] = stepsOf(entry.flow).map((step, index) => {
+    const kind =
+      typeof step.run === 'string'
+        ? 'run'
+        : (Object.keys(step).find(
+            (key) =>
+              ![
+                'name',
+                'effects',
+                'fingerprint',
+                'functionalIntent',
+                'allow',
+                'optional',
+                'timeoutMs',
+                'sourceLine',
+              ].includes(key),
+          ) ?? 'unknown');
+    const parsed = typeof step.run === 'string' ? undefined : stepParser.safeParse(step);
+    const label =
+      typeof step.run === 'string'
+        ? `run ${step.run}`
+        : parsed?.success
+          ? describeStep(parsed.data, true)
+          : kind;
+    const group = groupAt(index + 1);
+    return { position: index + 1, kind, label, ...(group ? { groupId: group } : {}) };
+  });
+  return {
+    block,
+    steps,
+    groups,
+    data: Object.values(data?.values ?? {})
+      .map((entry) => ({
+        key: entry.key,
+        strategy:
+          entry.sensitive || entry.strategy === 'CREDENTIAL_REFERENCE'
+            ? `secret (${entry.env ?? 'env'})`
+            : entry.strategy === 'GENERATE_AT_REPLAY'
+              ? `generated at replay (${entry.generator ?? 'value'})`
+              : entry.strategy === 'REFERENCE'
+                ? `reference to ${entry.reference ?? '?'}`
+                : entry.strategy === 'TEMPLATE'
+                  ? 'template'
+                  : 'fixed value',
+        dynamic: isDynamic(entry),
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+  };
 }

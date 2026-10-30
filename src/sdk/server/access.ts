@@ -259,6 +259,8 @@ export function rightFor(segments: readonly string[], method: string): Right {
       // Jouer un test généré joue l'application ; un lien vers son rapport est une lecture. RUN_WRITES
       // est vérifié en plus par la route (Playwright et Java pilotent sans la SafetyPolicy).
       if (action === 'test-runs') return segments[7] === 'report-links' ? 'VIEW' : 'RUN';
+      // Le plan d'une publication de groupes ne change rien ; publier des blocs : publier.
+      if (action === 'library') return segments[6] === 'plan' ? 'VIEW' : 'PUBLISH';
       return item === undefined || action === 'stop' || action === 'replay' || LIVE_CONTROLS.has(action ?? '')
         ? 'RUN'
         : 'DECIDE';
@@ -298,6 +300,8 @@ const KEYWORDS = new Set([
   'compose',
   'insert',
   'preview',
+  'plan',
+  'source',
   'drift',
   'contract',
   'version',

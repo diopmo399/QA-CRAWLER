@@ -15,14 +15,16 @@ import {
   type RecordedFlowReplay,
 } from '../../recording/record-orchestrator.js';
 import type { ReplayOutcome } from '../../recording/recording-report.js';
-import { loadConfigFile } from '../../config/config-loader.js';
+import { ConfigError, loadConfigFile } from '../../config/config-loader.js';
 import { runDryRun } from '../../dry-run/dry-run-orchestrator.js';
 import { CorrectionBusyError, CorrectionManager, type CorrectionRuntime } from './corrections.js';
 import {
   acceptBlocks,
   addGroupToLibrary,
   addScenarioToLibrary,
+  blockDetails,
   checkCompositionOf,
+  compareWithSource,
   composeScenario,
   compositionDrift,
   declareContract,
@@ -30,11 +32,15 @@ import {
   insertBlock,
   LibraryError,
   listLibrary,
+  planGroupExtraction,
   previewSource,
+  publishGroupExtraction,
   removeFromLibrary,
+  updateFromSource,
   validateVersion,
 } from './library.js';
-import { TestDataSetError } from '../../data/test-data-set.js';
+import { revisionOfText, type ExtractionSource } from './library-extract.js';
+import { parseTestDataSet, TestDataSetError } from '../../data/test-data-set.js';
 import {
   acceptStoredGroupProposals,
   addStoredGroupCheck,
@@ -98,6 +104,7 @@ import type {
   ProjectDetail,
   ProjectSummary,
   AccessMe,
+  ExtractionInput,
   JournalKind,
 } from '../core/contracts.js';
 import {
@@ -106,6 +113,7 @@ import {
   AUTH_TYPES,
   DATA_SOURCES,
   EXTENSION_NAMES,
+  EXTRACTION_MODES,
   FRAMEWORKS,
   GENERATION_FORMATS,
   MAX_SLOW_MO_MS,
@@ -703,17 +711,30 @@ async function projectMission(
     qaCrawler?: unknown;
   };
   const parsed = projectConfigSchema.parse(document.qaCrawler);
-  const loaded = await loadProjectMission(
-    { file: path.join(project.dir, PROJECT_FILE), root: project.dir, config: parsed },
-    {
-      command,
-      missionName: stored.name,
-      ...(extra.flows ? { flows: extra.flows } : {}),
-      ...(extra.extraFlows ? { extraFlows: extra.extraFlows } : {}),
-    },
-    {},
-    missionEnv(ctx, extra.environment),
-  );
+  let loaded: Awaited<ReturnType<typeof loadProjectMission>>;
+  try {
+    loaded = await loadProjectMission(
+      { file: path.join(project.dir, PROJECT_FILE), root: project.dir, config: parsed },
+      {
+        command,
+        missionName: stored.name,
+        ...(extra.flows ? { flows: extra.flows } : {}),
+        ...(extra.extraFlows ? { extraFlows: extra.extraFlows } : {}),
+      },
+      {},
+      missionEnv(ctx, extra.environment),
+    );
+  } catch (error) {
+    // Un scénario ou un bloc invalide : un refus qui dit lequel et pourquoi, jamais une erreur interne.
+    if (error instanceof ConfigError)
+      throw new HttpError(
+        422,
+        'INVALID_SCENARIO',
+        `a scenario of the project is not valid: ${error.details[0] ?? error.message.split('\n')[0] ?? ''}`,
+        { details: error.details },
+      );
+    throw error;
+  }
   // L'environnement choisi : cible, domaines, délais et limites ; ses variables passent par `env`.
   if (extra.environment) applyEnvironment(loaded.config, extra.environment);
   return loaded;
@@ -1095,6 +1116,27 @@ async function handleRecordings(
   }
   if (action === 'groups' && itemId === undefined && method === 'GET') {
     sendJson(response, groupDtos(await storedRecordingOf(ctx, project, name)));
+    return;
+  }
+  if (action === 'library' && itemId === 'plan' && method === 'POST') {
+    // Le plan d'une publication de groupes : rien n'est écrit.
+    const input = extractionInputOf(await readJson(request));
+    const source = await extractionSourceOf(ctx, project, name);
+    if (!source) throw new HttpError(422, 'REFUSED', `the recording ${name} has no flow YAML`);
+    sendJson(response, await planGroupExtraction(project.dir, source, input));
+    return;
+  }
+  if (action === 'library' && itemId === undefined && method === 'POST') {
+    refuseArchived(project);
+    const input = extractionInputOf(await readJson(request));
+    const source = await extractionSourceOf(ctx, project, name);
+    if (!source) throw new HttpError(422, 'REFUSED', `the recording ${name} has no flow YAML`);
+    const author = authorOf(request).by;
+    sendJson(
+      response,
+      await libraryCall(() => publishGroupExtraction(project.dir, source, input, author)),
+      201,
+    );
     return;
   }
   if (action === 'groups' && itemId === undefined && method === 'POST') {
@@ -2144,6 +2186,67 @@ async function libraryCall<T>(run: () => Promise<T>): Promise<T> {
  * LA BIBLIOTHÈQUE : lister les blocs ; ajouter un scénario ou un groupe d'un enregistrement ; retirer
  * un bloc qu'aucun scénario ne rejoue.
  */
+/** L'enregistrement tel que l'extraction le lit : son flow, son YAML, ses données, son empreinte. */
+async function extractionSourceOf(
+  ctx: Context,
+  project: StoredProject,
+  name: string,
+): Promise<ExtractionSource | undefined> {
+  const stored = await storedRecordingOf(ctx, project, name);
+  const text = await readFile(path.join(stored.directory, FLOW_FILES.yaml), 'utf8').catch(() => undefined);
+  if (text === undefined) return undefined;
+  const yaml = parseYaml(text) as unknown;
+  if (!yaml || typeof yaml !== 'object' || Array.isArray(yaml)) return undefined;
+  const data = stored.testData ? parseTestDataSet(parseYaml(stored.testData.yaml), name) : undefined;
+  return {
+    name,
+    flow: stored.flow,
+    yaml: yaml as Record<string, unknown>,
+    ...(data ? { data } : {}),
+    revision: revisionOfText(text),
+  };
+}
+
+/** Une sélection de groupes et ses options, vérifiées champ par champ. */
+function extractionInputOf(body: Record<string, unknown>): ExtractionInput {
+  if (!Array.isArray(body.selection) || body.selection.length === 0 || body.selection.length > 50)
+    throw new HttpError(400, 'BAD_REQUEST', 'selection must list 1 to 50 groups');
+  const selection = body.selection.map((raw: unknown) => {
+    const item = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const groupId = textOf(item.groupId, 80);
+    if (!groupId) throw new HttpError(400, 'BAD_REQUEST', 'each chosen group needs its groupId');
+    const stepIds = Array.isArray(item.stepIds)
+      ? item.stepIds.filter((id): id is string => typeof id === 'string' && id.length <= 80).slice(0, 500)
+      : undefined;
+    return { groupId, ...(stepIds && stepIds.length > 0 ? { stepIds } : {}) };
+  });
+  if (body.mode !== undefined && !(EXTRACTION_MODES as readonly unknown[]).includes(body.mode))
+    throw new HttpError(400, 'BAD_REQUEST', `mode must be one of ${EXTRACTION_MODES.join(', ')}`);
+  const names: NonNullable<ExtractionInput['names']> = {};
+  if (body.names && typeof body.names === 'object' && !Array.isArray(body.names))
+    for (const [key, raw] of Object.entries(body.names as Record<string, unknown>).slice(0, 51)) {
+      const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const named = textOf(value.name, 120);
+      const description = textOf(value.description, 500);
+      names[key.slice(0, 80)] = {
+        ...(named ? { name: named } : {}),
+        ...(description ? { description } : {}),
+      };
+    }
+  const provided: Record<string, string> = {};
+  if (body.provided && typeof body.provided === 'object' && !Array.isArray(body.provided))
+    for (const [key, value] of Object.entries(body.provided as Record<string, unknown>).slice(0, 20))
+      if (typeof value === 'string' && value.length <= 200 && /^[A-Za-z_][\w.-]*$/.test(key))
+        provided[key] = value;
+  return {
+    selection,
+    mode: body.mode === 'composite' ? 'composite' : 'separate',
+    ...(Object.keys(names).length > 0 ? { names } : {}),
+    ...(body.navigate === true ? { navigate: true } : {}),
+    ...(Object.keys(provided).length > 0 ? { provided } : {}),
+  };
+}
+
 async function handleLibrary(
   ctx: Context,
   project: StoredProject,
@@ -2165,6 +2268,21 @@ async function handleLibrary(
   }
   if (item === 'drift' && action === undefined && method === 'GET') {
     json(await compositionDrift(project.dir));
+    return;
+  }
+  if (item !== undefined && action === undefined && method === 'GET') {
+    json(await libraryCall(() => blockDetails(project.dir, decodeURIComponent(item))));
+    return;
+  }
+  const loadSource = (recording: string): Promise<ExtractionSource | undefined> =>
+    RECORDING_NAME_PATTERN.test(recording)
+      ? extractionSourceOf(ctx, project, recording).catch((error: unknown) => {
+          if (error instanceof HttpError && error.status === 404) return undefined;
+          throw error;
+        })
+      : Promise.resolve(undefined);
+  if (item !== undefined && action === 'source' && method === 'GET') {
+    json(await libraryCall(() => compareWithSource(project.dir, decodeURIComponent(item), loadSource)));
     return;
   }
   refuseArchived(project);
@@ -2223,6 +2341,10 @@ async function handleLibrary(
         declareContract(project.dir, name, body.contract === null ? null : declaredContractOf(body.contract)),
       ),
     );
+    return;
+  }
+  if (item !== undefined && action === 'source' && method === 'POST') {
+    json(await libraryCall(() => updateFromSource(project.dir, decodeURIComponent(item), loadSource)));
     return;
   }
   if (item !== undefined && action === 'version' && method === 'POST') {
