@@ -294,7 +294,11 @@ export class RunConsole {
     const value = Math.round(Math.min(max, Math.max(min, height)));
     this.ui.height = value;
     panel.closest<HTMLElement>('.ed-body')?.style.setProperty('--con-h', `${String(value)}px`);
-    panel.querySelector('[data-con-split]')?.setAttribute('aria-valuenow', String(value));
+    const handle = panel.querySelector('[data-con-split]');
+    handle?.setAttribute('aria-valuenow', String(value));
+    // Les bornes du séparateur (motif ARIA « window splitter ») : elles dépendent de la place à l'écran.
+    handle?.setAttribute('aria-valuemin', String(min));
+    handle?.setAttribute('aria-valuemax', String(max));
   }
 
   /** Glisser la poignée : la hauteur suit le pointeur, sans redessiner l'écran. */

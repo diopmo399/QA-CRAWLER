@@ -235,9 +235,13 @@ describe('Dashboard — execution console in Chromium', () => {
     const body = editor().locator('.ed-body');
     const explorer = editor().locator('.ed-explorer');
     // Sous les trois colonnes, sur toute leur largeur.
-    const [panelBox, bodyBox] = [await panel.boundingBox(), await body.boundingBox()];
-    expect(Math.abs((panelBox?.width ?? 0) - (bodyBox?.width ?? 0))).toBeLessThanOrEqual(1);
+    const [wide, bodyBox] = [await panel.boundingBox(), await body.boundingBox()];
+    expect(Math.abs((wide?.width ?? 0) - (bodyBox?.width ?? 0))).toBeLessThanOrEqual(1);
     const handle = editor().locator('[data-con-split]');
+    // La hauteur maximale dépend de la place au-dessus de l'éditeur (une note d'un run précédent peut
+    // s'y afficher) : la fenêtre est assez haute pour que la poignée ait 120 px de marge.
+    await page.setViewportSize({ width: 1600, height: 1300 });
+    const panelBox = await panel.boundingBox();
     const box = await handle.boundingBox();
     if (!box || !panelBox) throw new Error('no handle');
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -246,6 +250,13 @@ describe('Dashboard — execution console in Chromium', () => {
     await page.mouse.up();
     const taller = (await panel.boundingBox())?.height ?? 0;
     expect(taller).toBeGreaterThan(panelBox.height + 100);
+    // Le séparateur annonce sa valeur et ses bornes ; la valeur reste dedans.
+    const [now, max] = [
+      await handle.getAttribute('aria-valuenow'),
+      await handle.getAttribute('aria-valuemax'),
+    ];
+    expect(Number(now)).toBeLessThanOrEqual(Number(max));
+    expect(await handle.getAttribute('aria-valuemin')).toBe('150');
     // La hauteur choisie survit au rendu suivant (un autre onglet, puis retour).
     await consoleTab('summary').click();
     await consoleTab('console').click();
@@ -260,6 +271,7 @@ describe('Dashboard — execution console in Chromium', () => {
     expect(await lines().count()).toBeGreaterThan(0);
     await editor().locator('[data-action="ed-con-max"]').click();
     await expect.poll(() => explorer.isVisible()).toBe(true);
+    await page.setViewportSize({ width: 1600, height: 1000 });
     expect(errors).toEqual([]);
   });
 
