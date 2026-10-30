@@ -15,6 +15,7 @@ import { activeRuns, emptyTestsUi, finishedRecordings } from './dashboard-tests.
 import { emptyEditorUi } from './dashboard-editor.js';
 import { EditorController, type EditorHost } from './dashboard-editor-controller.js';
 import { PublishController, type PublishHost } from './dashboard-publish-controller.js';
+import { LibraryController, type LibraryHost } from './dashboard-library-controller.js';
 import {
   assertionBuckets,
   bindFormOf,
@@ -99,6 +100,7 @@ export class QaCrawlerDashboard extends Base {
   /** L'éditeur des tests générés (écran Éditeur). */
   private readonly editor: EditorController;
   private readonly publisher: PublishController;
+  private readonly library: LibraryController;
   /** Le suivi des exécutions de tests générés en cours (écran Tests). */
   private testsTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
@@ -154,6 +156,20 @@ export class QaCrawlerDashboard extends Base {
     };
     Object.defineProperty(publishHost, 'state', { get: () => this.state });
     this.publisher = new PublishController(publishHost as PublishHost);
+    // La fiche d'un bloc (onglets, détail, comparaison avec la source) et l'affichage du catalogue.
+    const libraryHost = {
+      root: this.root,
+      api: () => this.api,
+      paint: () => {
+        this.paint();
+      },
+      navigate: (route: DashboardRoute) => {
+        this.navigate(route);
+      },
+      refresh: () => this.load(),
+    };
+    Object.defineProperty(libraryHost, 'state', { get: () => this.state });
+    this.library = new LibraryController(libraryHost as LibraryHost);
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
     });
@@ -240,6 +256,7 @@ export class QaCrawlerDashboard extends Base {
     this.root.addEventListener('keydown', (event) => {
       if (this.editor.keydown(event as KeyboardEvent)) return;
       if (this.publisher.keydown(event as KeyboardEvent)) return;
+      if (this.library.keydown(event as KeyboardEvent)) return;
       if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
         this.closePanel();
         return;
@@ -1216,12 +1233,8 @@ export class QaCrawlerDashboard extends Base {
       case 'lib-panel-close':
         this.closePanel();
         return true;
-      case 'lib-open':
-        lib.open = lib.open === block ? undefined : block;
-        this.paint();
-        return true;
       case 'lib-clear':
-        Object.assign(lib, { query: '', origin: 'ALL', state: 'ALL', usage: 'ALL' });
+        Object.assign(lib, { query: '', origin: 'ALL', state: 'ALL', usage: 'ALL', kind: 'ALL' });
         this.paint();
         return true;
       case 'lib-jump':
@@ -1598,6 +1611,7 @@ export class QaCrawlerDashboard extends Base {
         const blocks = await api.library.list(route.projectId);
         if (generation !== this.generation) return;
         this.state.lib.blocks = blocks;
+        this.library.restore(route.projectId);
         const panel = this.state.lib.panel;
         const scenarios = runnableScenarios(this.state.project?.scenarios ?? []).filter(
           (scenario) => scenario.format === 'yaml',
@@ -2246,6 +2260,12 @@ export class QaCrawlerDashboard extends Base {
     const api = this.api;
     if (target.tagName === 'A') event.preventDefault();
     if (action?.startsWith('review-') && this.reviewClick(action, target)) return;
+    if (
+      action &&
+      (action.startsWith('lib-') || action === 'nav-recording') &&
+      this.library.click(action, target)
+    )
+      return;
     if (action?.startsWith('lib-') && this.libraryClick(action, target)) return;
     if (action?.startsWith('pub-') && this.publisher.click(action, target)) return;
     if (action?.startsWith('tst-') && this.testsClick(action, target)) return;
@@ -2608,6 +2628,10 @@ export class QaCrawlerDashboard extends Base {
       lib.usage = value as LibraryUi['usage'];
     else if (part === 'sort' && ['name', 'steps', 'usage', 'updated'].includes(value))
       lib.sort = value as LibraryUi['sort'];
+    else if (part === 'kind' && ['ALL', 'standalone', 'composite'].includes(value))
+      lib.kind = value as LibraryUi['kind'];
+    else if (part === 'groupBy' && ['none', 'origin'].includes(value))
+      lib.groupBy = value as LibraryUi['groupBy'];
     else if (part === 'compose' && key === 'name') {
       lib.compose.name = value;
       return;
@@ -2625,7 +2649,10 @@ export class QaCrawlerDashboard extends Base {
     else if (part === 'group' && key === 'name' && lib.group) lib.group.name = value;
     else return;
     // La recherche, les critères et le nom du bloc (sa validation) se voient tout de suite.
-    if (['query', 'origin', 'state', 'usage', 'sort'].includes(part) || (part === 'panel' && key === 'name'))
+    if (
+      ['query', 'origin', 'state', 'usage', 'sort', 'kind', 'groupBy'].includes(part) ||
+      (part === 'panel' && key === 'name')
+    )
       this.paint();
   }
 

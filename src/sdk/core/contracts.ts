@@ -1613,7 +1613,11 @@ export interface LibraryBlockDetails {
   block: LibraryBlockView;
   steps: ExtractionStepView[];
   groups: { id: string; name: string; positions: number[] }[];
-  data: { key: string; strategy: string; dynamic: boolean }[];
+  /**
+   * `strategy` : le code de la stratégie du jeu de données (RECORDED_LITERAL, GENERATE_AT_REPLAY…) ;
+   * `detail` : le générateur, la clé reprise, ou le nom de la variable d'environnement d'un secret.
+   */
+  data: { key: string; strategy: string; detail?: string; dynamic: boolean }[];
 }
 
 export type LibraryAddInput =

@@ -1250,16 +1250,17 @@ export async function blockDetails(projectDir: string, name: string): Promise<Li
     data: Object.values(data?.values ?? {})
       .map((entry) => ({
         key: entry.key,
-        strategy:
-          entry.sensitive || entry.strategy === 'CREDENTIAL_REFERENCE'
-            ? `secret (${entry.env ?? 'env'})`
-            : entry.strategy === 'GENERATE_AT_REPLAY'
-              ? `generated at replay (${entry.generator ?? 'value'})`
-              : entry.strategy === 'REFERENCE'
-                ? `reference to ${entry.reference ?? '?'}`
-                : entry.strategy === 'TEMPLATE'
-                  ? 'template'
-                  : 'fixed value',
+        // Le code de la stratégie (jamais la valeur) ; pour un secret, seulement le nom de sa variable.
+        strategy: entry.sensitive ? 'CREDENTIAL_REFERENCE' : entry.strategy,
+        ...(entry.sensitive || entry.strategy === 'CREDENTIAL_REFERENCE'
+          ? entry.env
+            ? { detail: entry.env }
+            : {}
+          : entry.strategy === 'GENERATE_AT_REPLAY' && entry.generator
+            ? { detail: entry.generator }
+            : entry.strategy === 'REFERENCE' && entry.reference
+              ? { detail: entry.reference }
+              : {}),
         dynamic: isDynamic(entry),
       }))
       .sort((a, b) => a.key.localeCompare(b.key)),
