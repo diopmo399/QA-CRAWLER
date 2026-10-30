@@ -237,10 +237,9 @@ describe('Dashboard — execution console in Chromium', () => {
     // Sous les trois colonnes, sur toute leur largeur.
     const [wide, bodyBox] = [await panel.boundingBox(), await body.boundingBox()];
     expect(Math.abs((wide?.width ?? 0) - (bodyBox?.width ?? 0))).toBeLessThanOrEqual(1);
-    const handle = editor().locator('[data-con-split]');
-    // La hauteur maximale dépend de la place au-dessus de l'éditeur (une note d'un run précédent peut
-    // s'y afficher) : la fenêtre est assez haute pour que la poignée ait 120 px de marge.
+    // Assez de place pour que la poignée ait de la marge (la fenêtre est haute) ; rendue après.
     await page.setViewportSize({ width: 1600, height: 1300 });
+    const handle = editor().locator('[data-con-split]');
     const panelBox = await panel.boundingBox();
     const box = await handle.boundingBox();
     if (!box || !panelBox) throw new Error('no handle');
@@ -249,14 +248,15 @@ describe('Dashboard — execution console in Chromium', () => {
     await page.mouse.move(box.x + box.width / 2, box.y - 120, { steps: 6 });
     await page.mouse.up();
     const taller = (await panel.boundingBox())?.height ?? 0;
-    expect(taller).toBeGreaterThan(panelBox.height + 100);
-    // Le séparateur annonce sa valeur et ses bornes ; la valeur reste dedans.
-    const [now, max] = [
-      await handle.getAttribute('aria-valuenow'),
-      await handle.getAttribute('aria-valuemax'),
-    ];
-    expect(Number(now)).toBeLessThanOrEqual(Number(max));
+    // La hauteur suit le pointeur jusqu'à la borne que le séparateur annonce (elle dépend de la place
+    // au-dessus de l'éditeur, où une note d'un run précédent peut s'afficher).
+    const max = Number(await handle.getAttribute('aria-valuemax'));
     expect(await handle.getAttribute('aria-valuemin')).toBe('150');
+    expect(max).toBeGreaterThan(panelBox.height);
+    // Le pointeur part du milieu de la poignée : il monte de 120 px plus la moitié de sa hauteur.
+    const moved = 120 + box.height / 2;
+    expect(Math.abs(taller - Math.min(panelBox.height + moved, max))).toBeLessThanOrEqual(2);
+    expect(Number(await handle.getAttribute('aria-valuenow'))).toBeLessThanOrEqual(max);
     // La hauteur choisie survit au rendu suivant (un autre onglet, puis retour).
     await consoleTab('summary').click();
     await consoleTab('console').click();
