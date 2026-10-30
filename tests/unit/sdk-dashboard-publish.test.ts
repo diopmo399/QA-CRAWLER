@@ -109,7 +109,13 @@ const block = (extra: Partial<ExtractionBlockPlan>): ExtractionBlockPlan => ({
   data: [],
   produces: [],
   consumes: ['item.title'],
-  contract: { inputs: [{ key: 'item.title', required: true }], outputs: [] },
+  contract: {
+    source: 'DERIVED',
+    inputs: [{ key: 'item.title', required: true }],
+    outputs: [],
+    preconditions: [],
+    postconditions: [],
+  },
   dependencies: [
     { key: 'item.title', source: 'UNSELECTED_GROUP', group: { id: 'g1', name: 'Créer l’article' } },
   ],
@@ -269,7 +275,7 @@ describe('dashboard — publish business groups', () => {
   it('a value provided at publication, and the composite mode', () => {
     const provided = block({
       dependencies: [{ key: 'item.title', source: 'PROVIDED' }],
-      contract: { inputs: [], outputs: [] },
+      contract: { source: 'DERIVED', inputs: [], outputs: [], preconditions: [], postconditions: [] },
     });
     const html = renderDashboard(
       base(
