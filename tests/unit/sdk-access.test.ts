@@ -8,7 +8,7 @@ import {
   type Project,
   type QaCrawlerClient,
 } from '../../src/sdk/core/index.js';
-import { actionOf, rightFor } from '../../src/sdk/server/access.js';
+import { AccessStore, actionOf, rightFor } from '../../src/sdk/server/access.js';
 import { engineDefaults } from '../../src/sdk/server/project.js';
 import { startSdkServer, type RunningSdkServer } from '../../src/sdk/server/server.js';
 import { buildDocx, wp } from '../fixtures/office-builder.js';
@@ -174,6 +174,29 @@ describe('access — named tokens, roles and journal', () => {
     expect(
       (await service.access.members()).find((member) => member.id === readerId)?.revokedAt,
     ).toBeDefined();
+  });
+
+  it('an entry still being written is read by the next read of the journal (none invisible)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'qa-journal-'));
+    try {
+      const store = new AccessStore(dir);
+      const entry = {
+        at: new Date().toISOString(),
+        who: { id: 'm', name: 'Lecteur' },
+        role: 'READER' as const,
+        method: 'POST',
+        action: 'access.members.revoke',
+        kind: 'ACCESS' as const,
+        path: '/api/access/members/m/revoke',
+        status: 200,
+        outcome: 'OK' as const,
+      };
+      // Écrit sans être attendu, comme à la fin d'une réponse, puis lu tout de suite.
+      void store.record(entry);
+      expect((await store.journal()).map((read) => read.action)).toEqual(['access.members.revoke']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('the journal says who did what, where, and the outcome — never a body, a value or a token', async () => {

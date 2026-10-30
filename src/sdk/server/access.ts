@@ -62,6 +62,8 @@ const publicMember = ({ tokenHash: _hash, ...member }: StoredMember): MemberView
 export class AccessStore {
   private members?: StoredMember[];
   private chain: Promise<unknown> = Promise.resolve();
+  /** Les entrées du journal en cours d'écriture : une lecture les attend (aucune écriture invisible). */
+  private readonly writing = new Set<Promise<void>>();
 
   constructor(readonly workspace: string) {}
 
@@ -179,18 +181,28 @@ export class AccessStore {
     return undefined;
   }
 
-  async record(entry: JournalEntry): Promise<void> {
-    await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    await appendFile(path.join(this.dir, JOURNAL_FILE), `${JSON.stringify(entry)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
+  record(entry: JournalEntry): Promise<void> {
+    const write = (async (): Promise<void> => {
+      await mkdir(this.dir, { recursive: true, mode: 0o700 });
+      await appendFile(path.join(this.dir, JOURNAL_FILE), `${JSON.stringify(entry)}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+    })();
+    this.writing.add(write);
+    void write.then(
+      () => this.writing.delete(write),
+      () => this.writing.delete(write),
+    );
+    return write;
   }
 
   /** Le journal, du plus récent au plus ancien. */
   async journal(
     options: { projectId?: string; kind?: JournalKind; limit?: number } = {},
   ): Promise<JournalEntry[]> {
+    // Une action déjà répondue (son entrée s'écrit à la fin de la réponse) se lit dans le journal.
+    await Promise.allSettled([...this.writing]);
     let text: string;
     try {
       text = await readFile(path.join(this.dir, JOURNAL_FILE), 'utf8');
