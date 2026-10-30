@@ -1174,9 +1174,16 @@ export class EditorController {
     return true;
   }
 
+  /** La poignée de la console (sa hauteur). */
+  pointerDown(event: PointerEvent): boolean {
+    if (this.host.state.route.view !== 'editor') return false;
+    return this.console.pointerDown(event);
+  }
+
   /** Clavier : Ctrl+S, déplacement d'étape (Alt+↑/↓), retrait (Suppr), arbre de l'explorateur, Échap. */
   keydown(event: KeyboardEvent): boolean {
     if (this.host.state.route.view !== 'editor') return false;
+    if (this.console.keydown(event)) return true;
     const ui = this.ui;
     const target = event.target as HTMLElement;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {

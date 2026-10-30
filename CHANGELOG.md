@@ -43,6 +43,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   Onglets Console, Étapes, Erreurs, Réseau, Navigateur, Résumé et Diagnostics ; critères d'affichage (niveau,
   catégorie, étape, type, statut, période, texte) ; suivi en bas et pause ; copie ; téléchargement JSON
   ou texte ; arrêt (demandé puis confirmé) et relance ; une ligne mène à son étape et à sa ligne.
+  La console s'étend sous les trois colonnes ; une poignée règle sa hauteur, « Agrandir » lui donne tout
+  l'espace ; une seule barre d'outils, et une barre d'état sous le journal.
+
+- Dashboard : la liste d'une sélection (projet, exécution, critères) s'ouvre en un menu aux couleurs du
+  Dashboard là où le navigateur le permet (`appearance: base-select`, Chromium 135 et plus) ; ailleurs,
+  la liste du système, comme avant.
 
 - SDK : `generation.runEvents` (flux SSE du journal, reprise après une coupure sans doublon) et
   `generation.runLogs` (export) ; contrat `RunLogEvent` ; `TestRunView.logs` (en direct, conservé,

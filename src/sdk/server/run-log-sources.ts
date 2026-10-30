@@ -752,6 +752,8 @@ export function mavenOutput(options: {
     options.output?.(`${driverText(text)}\n`);
     if (text.trim() === '') return;
     const clean = text.replace(/^\[(INFO|WARNING|ERROR)\]\s?/, '');
+    // Maven sépare ses blocs par des lignes `[ERROR]` vides : rien à dire, pas d'événement.
+    if (clean.trim() === '') return;
     const severity = /^\[ERROR\]/.test(text) ? 'ERROR' : /^\[WARNING\]/.test(text) ? 'WARN' : 'DEBUG';
     const running = /^Running (.+)$/.exec(clean);
     if (running?.[1]) {

@@ -274,14 +274,78 @@ export class RunConsole {
     });
   }
 
-  /** Avant un rendu : la hauteur du panneau (redimensionné à la main) et la position dans la liste. */
+  /** Avant un rendu : la position dans la liste. */
   beforePaint(): void {
-    const panel = this.host.root.querySelector<HTMLElement>('[data-con-panel]');
-    if (panel && this.ui.open) {
-      const height = Math.round(panel.getBoundingClientRect().height);
-      if (height >= 120 && Math.abs(height - this.ui.height) > 2) this.ui.height = height;
-    }
     if (this.list) this.scrollTop = this.list.scrollTop;
+  }
+
+  // ── La hauteur : la poignée au-dessus de la console ─────────────────────────────────────────
+
+  /** Les bornes de la hauteur : la console garde 150 px, les colonnes au-dessus d'elle 200 px. */
+  private bounds(panel: HTMLElement): { min: number; max: number } {
+    const body = panel.closest<HTMLElement>('.ed-body');
+    const view = this.host.root.ownerDocument.defaultView?.innerHeight ?? 800;
+    const max = Math.max(150, Math.min((body?.clientHeight ?? view) - 210, view - 160));
+    return { min: 150, max };
+  }
+
+  private setHeight(panel: HTMLElement, height: number): void {
+    const { min, max } = this.bounds(panel);
+    const value = Math.round(Math.min(max, Math.max(min, height)));
+    this.ui.height = value;
+    panel.closest<HTMLElement>('.ed-body')?.style.setProperty('--con-h', `${String(value)}px`);
+    panel.querySelector('[data-con-split]')?.setAttribute('aria-valuenow', String(value));
+  }
+
+  /** Glisser la poignée : la hauteur suit le pointeur, sans redessiner l'écran. */
+  pointerDown(event: PointerEvent): boolean {
+    const handle = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-con-split]');
+    const panel = handle?.closest<HTMLElement>('[data-con-panel]');
+    if (!handle || !panel || event.button !== 0) return false;
+    event.preventDefault();
+    const startY = event.clientY;
+    const start = panel.getBoundingClientRect().height;
+    handle.setPointerCapture(event.pointerId);
+    panel.classList.add('sizing');
+    const move = (moved: PointerEvent): void => {
+      this.setHeight(panel, start + (startY - moved.clientY));
+    };
+    const end = (): void => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+      panel.classList.remove('sizing');
+      if (this.list && this.ui.follow) this.toBottom();
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    return true;
+  }
+
+  /** Au clavier, sur la poignée : ↑/↓ règlent la hauteur, Entrée agrandit. */
+  keydown(event: KeyboardEvent): boolean {
+    const handle = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-con-split]');
+    const panel = handle?.closest<HTMLElement>('[data-con-panel]');
+    if (!handle || !panel) return false;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      this.setHeight(panel, panel.getBoundingClientRect().height + (event.key === 'ArrowUp' ? 40 : -40));
+      return true;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this.toggleMax();
+      return true;
+    }
+    return false;
+  }
+
+  private toggleMax(): void {
+    this.ui.maximized = !this.ui.maximized;
+    this.ui.open = true;
+    this.host.paint();
+    this.host.root.querySelector<HTMLElement>('[data-action="ed-con-max"]')?.focus();
   }
 
   /** Après un rendu : la liste revient dans la page, à sa position (ou en bas, en suivi). */
@@ -365,6 +429,9 @@ export class RunConsole {
           ?.focus();
         return true;
       }
+      case 'ed-con-max':
+        this.toggleMax();
+        return true;
       case 'ed-con-toggle':
         ui.open = !ui.open;
         this.host.paint();

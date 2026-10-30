@@ -45,8 +45,10 @@ export interface ConsoleFilters {
 
 export interface ConsoleUi {
   open: boolean;
-  /** La hauteur du panneau (px), gardée entre deux rendus. */
+  /** La hauteur du panneau (px) choisie avec la poignée ; 0 : la part par défaut de l'éditeur. */
   height: number;
+  /** La console occupe toute la colonne de l'éditeur (le code est masqué, pas fermé). */
+  maximized: boolean;
   tab: ConsoleTab;
   /** L'exécution suivie, et sa vue (format, outil, statut). */
   runId?: string;
@@ -87,7 +89,8 @@ export const emptyFilters = (): ConsoleFilters => ({
 
 export const emptyConsoleUi = (): ConsoleUi => ({
   open: true,
-  height: 360,
+  height: 0,
+  maximized: false,
   tab: 'console',
   events: [],
   connection: 'idle',
@@ -214,11 +217,16 @@ export function currentStep(events: readonly RunLogEvent[]): StepRow | undefined
     .at(-1);
 }
 
-/** Les erreurs : un événement de niveau ERROR, ou une opération échouée ou bloquée. */
+/**
+ * Les erreurs : un événement de niveau ERROR, ou une opération échouée ou bloquée. La sortie brute de
+ * l'outil (lignes `[ERROR]` de Maven, pile d'appels) reste dans la console : un échec s'y dit en
+ * plusieurs lignes, l'onglet Erreurs ne le compte qu'une fois, par ses événements classés.
+ */
 export const errorEvents = (events: readonly RunLogEvent[]): RunLogEvent[] =>
   events.filter(
     (event) =>
       event.type !== 'RUN_FINISHED' &&
+      (event.category !== 'OUTPUT' || event.errorKind !== undefined) &&
       (event.level === 'ERROR' || event.status === 'FAILED' || event.status === 'BLOCKED'),
   );
 
@@ -355,23 +363,28 @@ export function detailHtml(state: DashboardState, event: RunLogEvent, path: stri
 const option = (value: string, label: string, current: string): string =>
   `<option value="${esc(value)}" ${value === current ? 'selected' : ''}>${esc(label)}</option>`;
 
-function filterBar(state: DashboardState, ui: ConsoleUi): string {
+/** Les critères fins (catégorie, étape, type, statut, période), dépliés sous la barre. */
+function moreFilters(state: DashboardState, ui: ConsoleUi): string {
   const c = state.t.ed.con;
   const f = ui.filters;
+  if (!ui.moreFilters) return '';
   const steps = [
     ...new Set(ui.events.flatMap((event) => (event.step !== undefined ? [event.step] : []))),
   ].sort((a, b) => a - b);
   const types = [...new Set(ui.events.map((event) => event.type))].sort();
+  return `<div class="ed-con-more" role="group" aria-label="${esc(c.moreFilters)}"><label class="ed-con-f"><span>${esc(c.category)}</span><select data-ed="con-category">${option('', c.all, f.category)}${RUN_LOG_CATEGORIES.map((category) => option(category, c.categories[category] ?? category, f.category)).join('')}</select></label><label class="ed-con-f"><span>${esc(c.stepFilter)}</span><select data-ed="con-step">${option('', c.all, f.step)}${steps.map((step) => option(String(step), state.t.ed.step(step), f.step)).join('')}</select></label><label class="ed-con-f"><span>${esc(c.typeFilter)}</span><select data-ed="con-type">${option('', c.all, f.type)}${types.map((type) => option(type, type, f.type)).join('')}</select></label><label class="ed-con-f"><span>${esc(c.statusFilter)}</span><select data-ed="con-status">${option('', c.all, f.status)}${RUN_LOG_STATUSES.map((status) => option(status, c.statuses[status] ?? status, f.status)).join('')}</select></label><label class="ed-con-f"><span>${esc(c.from)}</span><input type="time" step="1" data-ed="con-from" value="${esc(f.from)}"></label><label class="ed-con-f"><span>${esc(c.to)}</span><input type="time" step="1" data-ed="con-to" value="${esc(f.to)}"></label></div>`;
+}
+
+function filterBar(state: DashboardState, ui: ConsoleUi): string {
+  const c = state.t.ed.con;
+  const f = ui.filters;
   const levels = RUN_LOG_LEVELS.map(
     (level) =>
-      `<label class="ed-lvl lv-${level}"><input type="checkbox" data-ed="con-level" value="${level}" ${f.levels.includes(level) ? 'checked' : ''}><span>${esc(c.levels[level])}</span></label>`,
+      `<label class="ed-lvl lv-${level}" title="${esc(c.levels[level])}"><input type="checkbox" data-ed="con-level" value="${level}" aria-label="${esc(c.levels[level])}" ${f.levels.includes(level) ? 'checked' : ''}><span aria-hidden="true">${esc(c.levelsShort[level])}</span></label>`,
   ).join('');
-  // Les critères fins (catégorie, étape, type, statut, période) se déplient : la console garde sa hauteur.
+  // Les critères fins se déplient sous la barre : la barre garde sa forme.
   const advanced = [f.category, f.step, f.type, f.status, f.from, f.to].filter(Boolean).length;
-  const more = ui.moreFilters
-    ? `<div class="ed-con-more" role="group" aria-label="${esc(c.moreFilters)}"><label class="ed-con-f"><span>${esc(c.category)}</span><select data-ed="con-category">${option('', c.all, f.category)}${RUN_LOG_CATEGORIES.map((category) => option(category, c.categories[category] ?? category, f.category)).join('')}</select></label><label class="ed-con-f"><span>${esc(c.stepFilter)}</span><select data-ed="con-step">${option('', c.all, f.step)}${steps.map((step) => option(String(step), state.t.ed.step(step), f.step)).join('')}</select></label><label class="ed-con-f"><span>${esc(c.typeFilter)}</span><select data-ed="con-type">${option('', c.all, f.type)}${types.map((type) => option(type, type, f.type)).join('')}</select></label><label class="ed-con-f"><span>${esc(c.statusFilter)}</span><select data-ed="con-status">${option('', c.all, f.status)}${RUN_LOG_STATUSES.map((status) => option(status, c.statuses[status] ?? status, f.status)).join('')}</select></label><label class="ed-con-f"><span>${esc(c.from)}</span><input type="time" step="1" data-ed="con-from" value="${esc(f.from)}"></label><label class="ed-con-f"><span>${esc(c.to)}</span><input type="time" step="1" data-ed="con-to" value="${esc(f.to)}"></label></div>`
-    : '';
-  return `<div class="ed-con-filters" role="group" aria-label="${esc(c.filters)}"><span class="ed-con-levels" role="group" aria-label="${esc(c.levelsLabel)}">${levels}</span><label class="ed-con-search"><span class="sr">${esc(c.search)}</span>${icon('search')}<input type="search" data-ed="con-text" placeholder="${esc(c.search)}" value="${esc(f.text)}"></label><button class="btn btn-s" data-action="ed-con-more" aria-expanded="${ui.moreFilters ? 'true' : 'false'}">${esc(c.moreFilters)}${advanced > 0 ? ` <span class="ed-count">${String(advanced)}</span>` : ''}</button>${filtersActive(f) ? `<button class="lnk" data-action="ed-con-reset">${esc(c.reset)}</button>` : ''}</div>${more}`;
+  return `<div class="ed-con-filters" role="group" aria-label="${esc(c.filters)}"><span class="ed-con-levels" role="group" aria-label="${esc(c.levelsLabel)}">${levels}</span><label class="ed-con-search"><span class="sr">${esc(c.search)}</span>${icon('search')}<input type="search" data-ed="con-text" placeholder="${esc(c.searchShort)}" value="${esc(f.text)}"></label><button class="btn btn-s ed-con-crit" data-action="ed-con-more" title="${esc(c.moreFilters)}" aria-expanded="${ui.moreFilters ? 'true' : 'false'}">${icon('sliders')}<span>${esc(c.moreFilters)}</span>${advanced > 0 ? `<span class="ed-count">${String(advanced)}</span>` : ''}</button>${filtersActive(f) ? `<button class="lnk" data-action="ed-con-reset">${esc(c.reset)}</button>` : ''}</div>`;
 }
 
 function stateLine(state: DashboardState, ui: ConsoleUi): string {
@@ -388,25 +401,31 @@ function stateLine(state: DashboardState, ui: ConsoleUi): string {
           ? c.logsLive
           : '';
   const connection = c.connections[ui.connection] ?? ui.connection;
-  return `<p class="ed-con-state" role="status"><span class="ed-con-conn cn-${ui.connection}">${esc(ui.connection === 'reconnecting' && ui.attempt ? `${connection} (${String(ui.attempt)})` : connection)}</span>${kept ? `<span>${esc(kept)}</span>` : ''}<span>${esc(c.shown(shown, ui.events.filter((event) => event.seq > ui.cleared).length))}</span>${ui.cleared > 0 ? `<span>${esc(c.clearedNote)}</span>` : ''}${ui.dropped > 0 ? `<span>${esc(c.droppedNote(ui.dropped))}</span>` : ''}${ui.connection === 'interrupted' ? `<button class="lnk" data-action="ed-con-resume">${esc(c.resumeStream)}</button>` : ''}${ui.stopping === 'requested' ? `<span class="warn">${esc(c.stopRequested)}</span>` : ''}${ui.stopping === 'failed' ? `<span class="err">${esc(`${c.stopFailed}${ui.stopError ? ` · ${ui.stopError}` : ''}`)}</span>` : ''}</p>`;
+  return `<p class="ed-con-state" role="status" aria-live="polite"><span class="ed-con-conn cn-${ui.connection}">${esc(ui.connection === 'reconnecting' && ui.attempt ? `${connection} (${String(ui.attempt)})` : connection)}</span>${kept ? `<span>${esc(kept)}</span>` : ''}<span>${esc(c.shown(shown, ui.events.filter((event) => event.seq > ui.cleared).length))}</span>${ui.cleared > 0 ? `<span>${esc(c.clearedNote)}</span>` : ''}${ui.dropped > 0 ? `<span>${esc(c.droppedNote(ui.dropped))}</span>` : ''}${ui.connection === 'interrupted' ? `<button class="lnk" data-action="ed-con-resume">${esc(c.resumeStream)}</button>` : ''}${ui.stopping === 'requested' ? `<span class="warn">${esc(c.stopRequested)}</span>` : ''}${ui.stopping === 'failed' ? `<span class="err">${esc(`${c.stopFailed}${ui.stopError ? ` · ${ui.stopError}` : ''}`)}</span>` : ''}</p>`;
 }
 
 function toolbar(state: DashboardState, ui: ConsoleUi, canRun: boolean): string {
   const c = state.t.ed.con;
   const run = ui.run;
   const active = run !== undefined && (run.status === 'QUEUED' || run.status === 'RUNNING');
-  // Des libellés courts (la barre tient sur une ligne) ; le libellé complet pour les lecteurs d'écran.
-  const button = (action: string, label: string, name: string, extra = '', full?: string): string =>
-    `<button class="btn btn-s" data-action="${action}" ${full ? `aria-label="${esc(full)}" title="${esc(full)}"` : ''} ${extra}>${name ? icon(name) : ''}<span>${esc(label)}</span></button>`;
+  // L'action principale (arrêter, relancer) garde son mot ; les autres sont des icônes, nommées par leur
+  // infobulle et pour les lecteurs d'écran : la barre tient sur une ligne, le journal garde la place.
+  const button = (action: string, label: string, name: string, extra = '', tone = ''): string =>
+    `<button class="btn btn-s${tone}" data-action="${action}" ${extra}>${icon(name)}<span>${esc(label)}</span></button>`;
+  const tool = (action: string, label: string, name: string, extra = ''): string =>
+    `<button class="ed-ib" data-action="${action}" aria-label="${esc(label)}" title="${esc(label)}" ${extra}>${icon(name)}</button>`;
   return `<div class="ed-con-tools" role="toolbar" aria-label="${esc(c.tools)}">${
-    active ? button('ed-con-stop', c.stop, 'stop', ui.stopping === 'requested' ? 'disabled' : '') : ''
-  }${run && !active && canRun ? button('ed-con-rerun', c.rerun, 'refresh') : ''}${button('ed-con-pause', ui.paused ? c.resumeShort : c.pauseShort, ui.paused ? 'play' : 'pause', `aria-pressed="${ui.paused ? 'true' : 'false'}"`, ui.paused ? c.resume : c.pause)}<label class="ed-chk" title="${esc(c.follow)}"><input type="checkbox" data-ed="con-follow" ${ui.follow ? 'checked' : ''}><span>${esc(c.followShort)}</span></label><span class="ed-con-sep" aria-hidden="true"></span>${button('ed-con-copy', c.copy, 'copy', run ? '' : 'disabled')}<span class="ed-con-dl" role="group" aria-label="${esc(c.download)}">${icon('download')}${button('ed-con-download', c.downloadJson, '', `data-format="json" aria-label="${esc(`${c.download} ${c.downloadJson}`)}" ${run ? '' : 'disabled'}`)}${button('ed-con-download', c.downloadText, '', `data-format="text" aria-label="${esc(`${c.download} ${c.downloadText}`)}" ${run ? '' : 'disabled'}`)}</span>${button('ed-con-clear', c.clearShort, 'trash', run ? '' : 'disabled', c.clear)}</div>`;
+    active
+      ? button('ed-con-stop', c.stop, 'stop', ui.stopping === 'requested' ? 'disabled' : '', ' danger')
+      : ''
+  }${run && !active && canRun ? button('ed-con-rerun', c.rerun, 'refresh') : ''}${tool('ed-con-pause', ui.paused ? c.resume : c.pause, ui.paused ? 'play' : 'pause', `aria-pressed="${ui.paused ? 'true' : 'false'}"`)}<label class="ed-tog" title="${esc(c.follow)}"><input type="checkbox" data-ed="con-follow" aria-label="${esc(c.follow)}" ${ui.follow ? 'checked' : ''}>${icon('down')}</label>${tool('ed-con-copy', c.copy, 'copy', run ? '' : 'disabled')}<span class="ed-con-dl" role="group" aria-label="${esc(c.download)}" title="${esc(c.download)}">${icon('download')}<button data-action="ed-con-download" data-format="json" aria-label="${esc(`${c.download} ${c.downloadJson}`)}" ${run ? '' : 'disabled'}>${esc(c.downloadJson)}</button><button data-action="ed-con-download" data-format="text" aria-label="${esc(`${c.download} ${c.downloadText}`)}" ${run ? '' : 'disabled'}>${esc(c.downloadText)}</button></span>${tool('ed-con-clear', c.clear, 'trash', run ? '' : 'disabled')}</div>`;
 }
 
 function consoleBody(state: DashboardState, ui: ConsoleUi, canRun: boolean): string {
   const c = state.t.ed.con;
   if (!ui.runId) return `<p class="mu ed-empty">${esc(canRun ? c.noRun : c.noRunReadOnly)}</p>`;
-  return `<div class="ed-con-bar">${toolbar(state, ui, canRun)}${stateLine(state, ui)}</div>${filterBar(state, ui)}<div class="ed-log-host" data-log-host></div><button class="ed-con-new" data-action="ed-con-bottom" data-log-unseen ${ui.unseen > 0 ? '' : 'hidden'}>${icon('down')}<span>${esc(c.newEvents(ui.unseen))}</span></button>`;
+  // Une barre (critères, puis actions), le journal, et sous lui sa barre d'état : rien ne le recouvre.
+  return `<div class="ed-con-bar">${filterBar(state, ui)}${toolbar(state, ui, canRun)}</div>${moreFilters(state, ui)}<div class="ed-log-frame"><div class="ed-log-host" data-log-host></div><div class="ed-con-foot">${stateLine(state, ui)}<button class="ed-con-new" data-action="ed-con-bottom" data-log-unseen ${ui.unseen > 0 ? '' : 'hidden'}>${icon('down')}<span>${esc(c.newEvents(ui.unseen))}</span></button></div></div>`;
 }
 
 function stepsBody(state: DashboardState, ui: ConsoleUi, path: string): string {
@@ -534,12 +553,20 @@ export function consolePanel(
               : tab === 'summary'
                 ? summaryBody(state, ui, path)
                 : options.diagnostics;
-  return `<section class="ed-panel ed-con${ui.open ? '' : ' closed'}" aria-label="${esc(t.panel)}" data-con-panel ${ui.open ? `style="height:${String(ui.height)}px"` : ''}><div class="ed-ptabs"><div role="tablist" aria-label="${esc(t.panel)}">${tabs
+  // La poignée au-dessus de la console : la glisser (ou ↑/↓ au clavier) règle sa hauteur ; Entrée l'agrandit.
+  const split =
+    ui.open && !ui.maximized
+      ? `<div class="ed-con-split" role="separator" aria-orientation="horizontal" tabindex="0" data-con-split aria-label="${esc(c.resize)}" title="${esc(c.resizeHint)}"${ui.height > 0 ? ` aria-valuenow="${String(ui.height)}"` : ''}></div>`
+      : '';
+  const maximize = ui.open
+    ? `<button class="ed-ib" data-action="ed-con-max" aria-pressed="${ui.maximized ? 'true' : 'false'}" aria-label="${esc(ui.maximized ? c.restore : c.maximize)}" title="${esc(ui.maximized ? c.restore : c.maximize)}">${icon(ui.maximized ? 'minimize' : 'maximize')}</button>`
+    : '';
+  return `<section class="ed-panel ed-con${ui.open ? '' : ' closed'}${ui.open && ui.maximized ? ' max' : ''}" aria-label="${esc(t.panel)}" data-con-panel>${split}<div class="ed-ptabs"><div role="tablist" aria-label="${esc(t.panel)}">${tabs
     .map(
       ([id, label, count]) =>
         `<button role="tab" id="ed-tab-${id}" aria-selected="${tab === id ? 'true' : 'false'}" aria-controls="ed-con-body" data-action="ed-con-tab" data-tab="${id}">${esc(label)}${count ? ` <span class="ed-count">${esc(count)}</span>` : ''}</button>`,
     )
     .join(
       '',
-    )}</div><div class="ed-con-head">${current ? `<span class="ed-con-now" title="${esc(c.currentStep)}">${icon('play')}<span>${esc(`${c.currentStep} · ${t.step(current.step)}`)}</span></span>` : ''}${runChoice}<button class="ed-ib" data-action="ed-con-toggle" aria-expanded="${ui.open ? 'true' : 'false'}" aria-label="${esc(ui.open ? c.collapse : c.expand)}" title="${esc(ui.open ? c.collapse : c.expand)}">${icon(ui.open ? 'down' : 'up')}</button></div></div>${ui.open ? `<div class="ed-pbody" id="ed-con-body" role="tabpanel" aria-labelledby="ed-tab-${tab}">${body}</div>` : ''}</section>`;
+    )}</div><div class="ed-con-head">${current ? `<span class="ed-con-now" title="${esc(c.currentStep)}">${icon('play')}<span>${esc(`${c.currentStep} · ${t.step(current.step)}`)}</span></span>` : ''}${runChoice}${maximize}<button class="ed-ib" data-action="ed-con-toggle" aria-expanded="${ui.open ? 'true' : 'false'}" aria-label="${esc(ui.open ? c.collapse : c.expand)}" title="${esc(ui.open ? c.collapse : c.expand)}">${icon(ui.open ? 'down' : 'up')}</button></div></div>${ui.open ? `<div class="ed-pbody" id="ed-con-body" role="tabpanel" aria-labelledby="ed-tab-${tab}">${body}</div>` : ''}</section>`;
 }

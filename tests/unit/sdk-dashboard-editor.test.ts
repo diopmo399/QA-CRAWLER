@@ -435,7 +435,8 @@ describe('dashboard — generated test editor', () => {
 
   it('the explorer is a tree: levels, current file, the outline of the open file, search without loss', () => {
     const html = renderDashboard(base({ selected: `${YAML}#2` }));
-    const tree = zone(html, 'role="tree"');
+    // L'arbre seul (la colonne centrale et la console suivent l'explorateur).
+    const tree = zone(html, 'role="tree"').split('class="ed-center"')[0] ?? '';
     expect(tree).toContain('aria-level="1"');
     expect(tree).toMatch(/aria-level="2"[^>]*aria-current="true"/);
     expect(tree).toContain('3. Vérifier url « /users/ »');
@@ -562,6 +563,9 @@ describe('dashboard — execution console', () => {
     ];
     expect(stepRows(failed)[1]).toMatchObject({ status: 'FAILED', errors: 1 });
     expect(errorEvents(failed).map((entry) => entry.errorKind)).toEqual(['SELECTOR']);
+    // La sortie brute de l'outil (lignes [ERROR] de Maven) reste dans la console, pas dans les Erreurs.
+    const output = event({ category: 'OUTPUT', type: 'OUTPUT', level: 'ERROR', message: 'Tests run: 1' });
+    expect(errorEvents([...failed, output]).map((entry) => entry.errorKind)).toEqual(['SELECTOR']);
     // Fini sans fin rapportée pour l'étape 2 : jamais « confirmée » par défaut.
     const ended = [
       ...events,
@@ -619,6 +623,41 @@ describe('dashboard — execution console', () => {
     );
     expect(zone(html, 'class="ed-ptabs"')).not.toContain('Réseau');
     expect(zone(html, 'class="ed-ptabs"')).not.toContain('Navigateur');
+  });
+
+  it('the console under the three columns, full width: a handle sets its height, a button maximizes it', () => {
+    const events = story();
+    const open = renderDashboard(
+      base({ console: { ...emptyConsoleUi(), runId: live.id, run: live, events, connection: 'live' } }),
+    );
+    expect(open).toContain('class="ed-body" data-con="open"');
+    // Hors de la colonne du code : après l'inspecteur, dans la grille de l'éditeur.
+    expect(open.indexOf('data-con-panel')).toBeGreaterThan(open.indexOf('class="ed-inspector'));
+    expect(open).toMatch(/role="separator" aria-orientation="horizontal" tabindex="0" data-con-split/);
+    expect(open).toContain(`aria-label="${t.ed.con.maximize}"`);
+    expect(open).not.toContain('--con-h');
+    const sized = renderDashboard(
+      base({ console: { ...emptyConsoleUi(), runId: live.id, run: live, events, height: 420 } }),
+    );
+    expect(sized).toContain('data-con="open" style="--con-h:420px"');
+    expect(sized).toContain('aria-valuenow="420"');
+    const max = renderDashboard(
+      base({ console: { ...emptyConsoleUi(), runId: live.id, run: live, events, maximized: true } }),
+    );
+    expect(max).toContain('data-con="max"');
+    expect(max).toContain(`aria-label="${t.ed.con.restore}"`);
+    expect(max).not.toContain('data-con-split');
+    const closed = renderDashboard(base({ console: { ...emptyConsoleUi(), open: false } }));
+    expect(closed).toContain('data-con="closed"');
+    expect(closed).not.toContain('data-con-split');
+    // La barre d'état sous le journal (rien ne le recouvre) ; les critères fins dépliés hors de la barre.
+    expect(open.indexOf('class="ed-con-foot"')).toBeGreaterThan(open.indexOf('data-log-host'));
+    const more = renderDashboard(
+      base({
+        console: { ...emptyConsoleUi(), runId: live.id, run: live, events, moreFilters: true },
+      }),
+    );
+    expect(more.indexOf('class="ed-con-more"')).toBeGreaterThan(more.indexOf('class="ed-con-tools"'));
   });
 
   it('says when no log was kept, when the stream was cut (with a way to resume), and what was cleared locally', () => {

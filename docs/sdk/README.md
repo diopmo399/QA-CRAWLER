@@ -935,8 +935,11 @@ développement le regroupe à la volée.
 
 ### Console d'exécution
 
-Le panneau bas de l'éditeur est la **console** de l'exécution suivie (Dry Run ou Rejouer). Ses onglets :
-Console, Étapes, Erreurs, Réseau et Navigateur (seulement quand l'outil les observe), Résumé, Diagnostics.
+Sous l'explorateur, le code et l'inspecteur, sur toute leur largeur, la **console** de l'exécution
+suivie (Dry Run ou Rejouer). Ses onglets : Console, Étapes, Erreurs, Réseau et Navigateur (seulement
+quand l'outil les observe), Résumé, Diagnostics. L'éditeur tient dans la fenêtre : chaque colonne défile
+en elle-même. La poignée au-dessus de la console règle sa hauteur (à la souris, ou ↑/↓ au clavier) ;
+« Agrandir » lui donne tout l'espace de l'éditeur, le temps de lire le journal.
 
 Les événements sont **réels**, produits pendant l'exécution par l'outil qui joue le test :
 
@@ -970,7 +973,8 @@ Les événements sont **réels**, produits pendant l'exécution par l'outil qui 
   continue), copie, téléchargement, effacement local (le journal conservé n'est pas touché), arrêt,
   relance (un nouveau run, son propre journal). Une ligne mène à son étape et à sa ligne ; depuis une
   étape (inspecteur), ses seuls événements. Une erreur dit sa famille (infrastructure, navigateur,
-  élément, vérification, scénario, SafetyPolicy) et ce que l'outil a relevé.
+  élément, vérification, scénario, SafetyPolicy) et ce que l'outil a relevé. L'onglet Erreurs compte les
+  événements classés ; la sortie brute de l'outil (lignes `[ERROR]` de Maven) reste dans la console.
 
 ## Statuts et événements
 

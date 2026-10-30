@@ -1024,12 +1024,18 @@ export function editorView(state: DashboardState): string {
             ? flowVisual(state, buffer)
             : featureVisual(state, buffer)
           : `<div class="ed-cm" data-cm-host data-path="${esc(buffer.path)}">${ui.kit !== 'ready' ? `<div class="msg" aria-busy="true"><span class="spin" aria-hidden="true"></span><p class="mu">${esc(t.loadingEditor)}</p></div>` : ''}</div>`;
-    stage = `${viewBar(state, buffer)}<div class="ed-stage" data-mode="${mode}">${content}</div>${bottomPanel(state, buffer)}`;
+    stage = `${viewBar(state, buffer)}<div class="ed-stage" data-mode="${mode}">${content}</div>`;
   } else if (ui.active)
     stage = `<div class="msg" aria-busy="true"><span class="spin" aria-hidden="true"></span><p class="mu">${esc(t.loading)}</p></div>`;
+  // La console sous les trois colonnes, sur toute la largeur (les lignes du journal sont longues) ;
+  // sa hauteur, réglée avec sa poignée, est une rangée de la grille.
+  const con = ui.console;
+  const conState =
+    !buffer || ui.kit === 'error' ? 'none' : !con.open ? 'closed' : con.maximized ? 'max' : 'open';
+  const sized = conState === 'open' && con.height > 0 ? ` style="--con-h:${String(con.height)}px"` : '';
   return `<section class="ed" data-explorer="${ui.explorer ? 'open' : 'closed'}" data-inspector="${ui.inspector ? 'open' : 'closed'}" aria-label="${esc(t.title)}">
 ${topBar(state, buffer)}${banners(state)}
-<div class="ed-body">${ui.explorer ? explorer(state) : ''}<div class="ed-center">${tabs(state)}${stage}</div>${ui.inspector && buffer ? inspector(state, buffer) : ''}</div>
+<div class="ed-body" data-con="${conState}"${sized}>${ui.explorer ? explorer(state) : ''}<div class="ed-center">${tabs(state)}${stage}</div>${ui.inspector && buffer ? inspector(state, buffer) : ''}${conState !== 'none' && buffer ? bottomPanel(state, buffer) : ''}</div>
 </section>`;
 }
 

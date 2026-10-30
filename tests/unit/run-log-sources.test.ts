@@ -216,6 +216,14 @@ describe('Maven and the Playwright Java driver', () => {
     expect(output.join('')).not.toContain('pw:api');
     expect(driverText('fill("a)b\\"c") and value="x"')).toBe('fill(…) and value="…"');
   });
+
+  it('the empty [ERROR] lines Maven puts between its blocks say nothing: no event', () => {
+    const { events, emit } = collect();
+    const parser = mavenOutput({ emit, file: 'X.java', source: '' });
+    parser.write('[ERROR] \n[ERROR]\n[ERROR] BUILD FAILURE\n');
+    parser.end();
+    expect(events.map((entry) => entry.message)).toEqual(['BUILD FAILURE']);
+  });
 });
 
 describe('engine listener and log', () => {

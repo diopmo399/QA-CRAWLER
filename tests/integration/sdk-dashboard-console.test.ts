@@ -229,6 +229,40 @@ describe('Dashboard — execution console in Chromium', () => {
     expect(await consoleTab('network').count()).toBe(0);
   }, 180_000);
 
+  it('the console spans the editor: its handle sets its height (mouse and keyboard), it maximizes and comes back', async () => {
+    await consoleTab('console').click();
+    const panel = editor().locator('[data-con-panel]');
+    const body = editor().locator('.ed-body');
+    const explorer = editor().locator('.ed-explorer');
+    // Sous les trois colonnes, sur toute leur largeur.
+    const [panelBox, bodyBox] = [await panel.boundingBox(), await body.boundingBox()];
+    expect(Math.abs((panelBox?.width ?? 0) - (bodyBox?.width ?? 0))).toBeLessThanOrEqual(1);
+    const handle = editor().locator('[data-con-split]');
+    const box = await handle.boundingBox();
+    if (!box || !panelBox) throw new Error('no handle');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2, box.y - 120, { steps: 6 });
+    await page.mouse.up();
+    const taller = (await panel.boundingBox())?.height ?? 0;
+    expect(taller).toBeGreaterThan(panelBox.height + 100);
+    // La hauteur choisie survit au rendu suivant (un autre onglet, puis retour).
+    await consoleTab('summary').click();
+    await consoleTab('console').click();
+    expect(Math.abs(((await panel.boundingBox())?.height ?? 0) - taller)).toBeLessThanOrEqual(2);
+    await handle.focus();
+    await page.keyboard.press('ArrowDown');
+    expect((await panel.boundingBox())?.height ?? 0).toBeLessThan(taller - 30);
+    // Agrandie : les colonnes s'effacent, le journal reste ; réduite : elles reviennent.
+    await editor().locator('[data-action="ed-con-max"]').click();
+    await expect.poll(() => explorer.isVisible()).toBe(false);
+    expect((await panel.boundingBox())?.height ?? 0).toBeGreaterThan(500);
+    expect(await lines().count()).toBeGreaterThan(0);
+    await editor().locator('[data-action="ed-con-max"]').click();
+    await expect.poll(() => explorer.isVisible()).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
   it('a finished run is read back after a reload, without running anything', async () => {
     const runs = (await client.generation.view(project.id, NAME)).runs.length;
     await openEditor(page);

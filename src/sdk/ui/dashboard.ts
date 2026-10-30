@@ -220,6 +220,9 @@ export class QaCrawlerDashboard extends Base {
       if (!name || !this.state.envForm || name === 'writes') return;
       (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
     });
+    this.root.addEventListener('pointerdown', (event) => {
+      this.editor.pointerDown(event as PointerEvent);
+    });
     this.root.addEventListener('keydown', (event) => {
       if (this.editor.keydown(event as KeyboardEvent)) return;
       if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
