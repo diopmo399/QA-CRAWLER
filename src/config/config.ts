@@ -50,6 +50,11 @@ const browserSchema = z
     /** Options Chromium supplémentaires. `--disable-dev-shm-usage` évite les plantages dus au petit /dev/shm des conteneurs. */
     args: z.array(nonEmpty).default(['--disable-dev-shm-usage']),
     slowMoMs: z.number().int().min(0).default(0),
+    /**
+     * Trace Playwright du run (captures et instantanés DOM) : <reportsDir>/trace.zip, à ouvrir avec
+     * `npx playwright show-trace`. Désactivée par défaut (fichier volumineux).
+     */
+    playwrightTrace: z.boolean().default(false),
   })
   .strict();
 
@@ -1264,6 +1269,12 @@ const networkSchema = z
     /** Types de ressources conservés : images, polices et styles n'ajoutent que du bruit. */
     resourceTypes: z.array(nonEmpty).default(['document', 'xhr', 'fetch']),
     maxRequestsPerAction: z.number().int().positive().default(50),
+    /**
+     * Garder aussi l'heure de départ de chaque échange et, pour les réponses en erreur (statut ≥ 400) et
+     * les écritures xhr/fetch, les corps JSON/texte : masqués (clés sensibles, jetons) et tronqués à 8 Kio.
+     * Désactivé par défaut : sans cette option, aucun corps n'est jamais conservé.
+     */
+    captureBodies: z.boolean().default(false),
   })
   .strict();
 

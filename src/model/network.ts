@@ -1,7 +1,9 @@
 /**
  * Un échange HTTP vu pendant une action. Seul ce qui explique la transition est
- * gardé — jamais les en-têtes (Authorization, cookies), les corps, les mots de
- * passe ni les secrets ; l'URL passe par le masquage.
+ * gardé — jamais les en-têtes (Authorization, cookies), les mots de passe ni les
+ * secrets ; l'URL passe par le masquage. Les corps ne sont gardés que sur demande
+ * (`network.captureBodies`, désactivé par défaut) : masqués et tronqués, voir
+ * CapturedNetworkExchange dans observers/network-trace-recorder.ts.
  */
 export interface NetworkExchange {
   method: string;

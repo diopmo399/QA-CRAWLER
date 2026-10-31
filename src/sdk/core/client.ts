@@ -93,6 +93,16 @@ import type {
   TrendsView,
 } from './contracts.js';
 import { SDK_API_VERSION } from './contracts.js';
+import type {
+  EnvironmentCapabilities,
+  ExperimentKind,
+  Incident,
+  IncidentInput,
+  IncidentSummary,
+  InvestigationReport,
+  ProposedVerification,
+  ScopeExtensionKind,
+} from './incident-contracts.js';
 
 /**
  * LE CLIENT DU SDK : les appels à l'API du serveur QA-CRAWLER, depuis le navigateur (ou Node 20+).
@@ -175,6 +185,27 @@ export interface RecordingStartInput {
   startPath?: string;
   /** Rejouer le flow généré tout de suite (REPLAY_CONFIRMED / REPLAY_FAILED). */
   validate?: boolean;
+}
+
+/** La vérification d'un périmètre d'investigation : ce qui ne va pas, champ par champ. */
+export interface IncidentScopeValidation {
+  ok: boolean;
+  issues: { field: string; message: string }[];
+}
+
+/** Une extension du périmètre demandée (retenue seulement après une décision). */
+export interface IncidentExtensionRequest {
+  kind: ScopeExtensionKind;
+  target: string;
+  applicationId?: string;
+  reason: string;
+}
+
+/** Une vérification à planifier (souvent une vérification proposée par une hypothèse). */
+export interface IncidentExperimentInput {
+  kind: ExperimentKind;
+  params: ProposedVerification['params'];
+  hypothesisId?: string;
 }
 
 export interface QaCrawlerClient {
@@ -509,6 +540,64 @@ export interface QaCrawlerClient {
     /** L'analyse de régression d'une exploration, par rapport à l'historique du moteur. */
     regression(projectId: string, run: string): Promise<RegressionView>;
   };
+  /**
+   * LES INCIDENTS : un incident déclaré est délimité, reproduit, relié au code puis diagnostiqué à
+   * partir de preuves. Chaque modification porte la révision lue (409 si elle a changé) ; une
+   * vérification avec effets de bord n'est exécutée qu'avec `approve: true` (et le droit RUN_WRITES).
+   */
+  incidents: {
+    list(projectId: string): Promise<IncidentSummary[]>;
+    create(projectId: string, input: IncidentInput): Promise<Incident>;
+    get(projectId: string, incidentId: string): Promise<Incident>;
+    /** Refusée (409) quand `revision` n'est plus celle du serveur. */
+    update(
+      projectId: string,
+      incidentId: string,
+      revision: number,
+      patch: Partial<IncidentInput>,
+    ): Promise<Incident>;
+    validateScope(projectId: string, incidentId: string): Promise<IncidentScopeValidation>;
+    requestExtension(
+      projectId: string,
+      incidentId: string,
+      input: IncidentExtensionRequest,
+    ): Promise<Incident>;
+    decideExtension(
+      projectId: string,
+      incidentId: string,
+      extensionId: string,
+      approve: boolean,
+    ): Promise<Incident>;
+    /** Ce que la cible d'exécution (LOCAL, REMOTE, ARO) sait faire, sondé par le serveur. */
+    capabilities(projectId: string, incidentId: string): Promise<EnvironmentCapabilities>;
+    /** L'incident passe REPRODUCING : relire `get` jusqu'à ce que l'état change. */
+    reproduce(
+      projectId: string,
+      incidentId: string,
+      options?: { headed?: boolean; slowMoMs?: number },
+    ): Promise<Incident>;
+    /** Index du code, graphe d'investigation et hypothèses. */
+    analyze(projectId: string, incidentId: string): Promise<Incident>;
+    planExperiment(projectId: string, incidentId: string, input: IncidentExperimentInput): Promise<Incident>;
+    runExperiment(
+      projectId: string,
+      incidentId: string,
+      experimentId: string,
+      options?: { approve?: boolean },
+    ): Promise<Incident>;
+    diagnose(projectId: string, incidentId: string): Promise<Incident>;
+    report(projectId: string, incidentId: string): Promise<InvestigationReport>;
+    /** Le rapport en Markdown (le texte seul). */
+    reportMarkdown(projectId: string, incidentId: string): Promise<string>;
+    proposeRegression(projectId: string, incidentId: string): Promise<Incident>;
+    /** Une exécution réelle : son verdict est enregistré dans `regression.execution`. */
+    runRegression(projectId: string, incidentId: string): Promise<Incident>;
+    /** Le test proposé entre dans la bibliothèque (PUBLISH). */
+    acceptRegression(projectId: string, incidentId: string): Promise<Incident>;
+    rejectRegression(projectId: string, incidentId: string): Promise<Incident>;
+    cancel(projectId: string, incidentId: string): Promise<Incident>;
+    resume(projectId: string, incidentId: string): Promise<Incident>;
+  };
   dispose(): void;
 }
 
@@ -680,6 +769,8 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
   const project = (id: string): string => `/projects/${encodeURIComponent(id)}`;
   const recording = (projectId: string, name: string): string =>
     `${project(projectId)}/recordings/${encodeURIComponent(name)}`;
+  const incident = (projectId: string, incidentId: string): string =>
+    `${project(projectId)}/incidents/${encodeURIComponent(incidentId)}`;
 
   return {
     capabilities: () => request('GET', '/capabilities'),
@@ -998,6 +1089,56 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request('GET', `${project(projectId)}/reports/exploration/${encodeURIComponent(run)}/traceability`),
       regression: (projectId, run) =>
         request('GET', `${project(projectId)}/reports/exploration/${encodeURIComponent(run)}/regression`),
+    },
+    incidents: {
+      list: (projectId) => request('GET', `${project(projectId)}/incidents`),
+      create: (projectId, input) => request('POST', `${project(projectId)}/incidents`, input),
+      get: (projectId, incidentId) => request('GET', incident(projectId, incidentId)),
+      update: (projectId, incidentId, revision, patch) =>
+        request('POST', `${incident(projectId, incidentId)}/update`, { revision, patch }),
+      validateScope: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/scope/validate`, {}),
+      requestExtension: (projectId, incidentId, input) =>
+        request('POST', `${incident(projectId, incidentId)}/scope/extensions`, input),
+      decideExtension: (projectId, incidentId, extensionId, approve) =>
+        request(
+          'POST',
+          `${incident(projectId, incidentId)}/scope/extensions/${encodeURIComponent(extensionId)}/decision`,
+          { approve },
+        ),
+      capabilities: (projectId, incidentId) =>
+        request('GET', `${incident(projectId, incidentId)}/capabilities`),
+      reproduce: (projectId, incidentId, reproduceOptions = {}) =>
+        request('POST', `${incident(projectId, incidentId)}/reproduce`, reproduceOptions),
+      analyze: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/analyze`, {}),
+      planExperiment: (projectId, incidentId, input) =>
+        request('POST', `${incident(projectId, incidentId)}/experiments`, input),
+      runExperiment: (projectId, incidentId, experimentId, runOptions = {}) =>
+        request(
+          'POST',
+          `${incident(projectId, incidentId)}/experiments/${encodeURIComponent(experimentId)}/run`,
+          runOptions,
+        ),
+      diagnose: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/diagnose`, {}),
+      report: (projectId, incidentId) =>
+        request('GET', `${incident(projectId, incidentId)}/report?format=json`),
+      reportMarkdown: async (projectId, incidentId) => {
+        const body = await request<{ markdown?: unknown } | undefined>(
+          'GET',
+          `${incident(projectId, incidentId)}/report?format=markdown`,
+        );
+        return typeof body?.markdown === 'string' ? body.markdown : '';
+      },
+      proposeRegression: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/regression`, {}),
+      runRegression: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/regression/run`, {}),
+      acceptRegression: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/regression/accept`, {}),
+      rejectRegression: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/regression/reject`, {}),
+      cancel: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/cancel`, {}),
+      resume: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/resume`, {}),
     },
     dispose() {
       disposed = true;

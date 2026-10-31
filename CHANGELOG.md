@@ -32,6 +32,30 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Incident Reconstruction** (`docs/INCIDENT_RECONSTRUCTION.md`) : diagnostic d'un incident fonctionnel à partir de
+  preuves — déclarer, délimiter, reproduire, observer, inspecter le code, corréler, diagnostiquer, vérifier,
+  rapporter, générer un test.
+  - Incident Manager : création, consultation, modification (révisions), historique, états, annulation et reprise,
+    persistance par projet (`incidents/`), routes `/api/projects/:p/incidents/…`, client `client.incidents`.
+  - Investigation Scope Manager (modes `MANUAL`, `GUIDED` par défaut, `AUTO_WITHIN_SCOPE`) et Scope Policy Engine
+    (refus par défaut) exercé dans les adaptateurs : fichiers (chemins réels, liens symboliques, fichiers
+    sensibles, tailles), réseau (hôtes du périmètre, jamais les adresses de métadonnées), tests et commandes
+    (arguments contrôlés, aucun shell), OpenShift en lecture seule. Toute extension est approuvée (`DECIDE`).
+  - Reproduction par le moteur Playwright (le chemin des exécutions) ; preuves : actions, requêtes rattachées à
+    l'action qui les déclenche, réponses en erreur, erreurs console et JavaScript, captures, trace.
+  - Code Investigation Engine : frontend TypeScript (API du compilateur), BFF Java et backend Spring Boot
+    (routes, DTO et validations, services, clients HTTP, dépôts, `@Query`, transactions, exceptions).
+  - Evidence Correlator (graphe Incident → … → Repository, liens `OBSERVED`, `STATICALLY_RESOLVED`, `INFERRED`,
+    `UNKNOWN`), Hypothesis Engine, Experiment Runner (rejeu, comparaisons, comparaison avec le scénario qui
+    réussit, tests ciblés, journaux, validations), Root Cause Analyzer (confirmé seulement sur preuves), rapport
+    JSON et Markdown, test de non-régression proposé, exécuté réellement, ajouté à la bibliothèque après validation.
+  - Execution Environment Manager : un contrat pour LOCAL (par défaut), REMOTE et ARO (Playwright conteneurisé,
+    dépôts montés, journaux OpenShift par le ServiceAccount, manifeste de Job Kubernetes).
+  - Dashboard : section « Investiguer › Incidents » (liste, déclaration, périmètre, environnement, reproduction,
+    chronologie, graphe, code, hypothèses, expériences, diagnostic, rapport, non-régression).
+- Moteur : `network.captureBodies` (corps des échanges en erreur et des écritures, masqués, tronqués à 8 Kio) et
+  `browser.playwrightTrace` (trace Playwright du run, `trace.zip`), désactivés par défaut.
+
 - **Extraire plusieurs groupes métier d'un enregistrement vers la bibliothèque** (ADR 0002) :
   - un, plusieurs ou tous les groupes du Recorder, ou une partie d'un groupe ; un bloc par groupe ou
     un bloc composé qui garde ses groupes internes et leurs identifiants ;

@@ -16,6 +16,8 @@ import { emptyEditorUi } from './dashboard-editor.js';
 import { EditorController, type EditorHost } from './dashboard-editor-controller.js';
 import { PublishController, type PublishHost } from './dashboard-publish-controller.js';
 import { LibraryController, type LibraryHost } from './dashboard-library-controller.js';
+import { IncidentsController, type IncidentsHost } from './dashboard-incidents-controller.js';
+import { emptyIncidentsUi } from './dashboard-incidents.js';
 import {
   assertionBuckets,
   bindFormOf,
@@ -101,6 +103,8 @@ export class QaCrawlerDashboard extends Base {
   private readonly editor: EditorController;
   private readonly publisher: PublishController;
   private readonly library: LibraryController;
+  /** Les incidents : déclaration, investigation, suivi d'une reproduction en cours. */
+  private readonly incidents: IncidentsController;
   /** Le suivi des exécutions de tests générés en cours (écran Tests). */
   private testsTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
@@ -131,6 +135,7 @@ export class QaCrawlerDashboard extends Base {
       lib: emptyLibraryUi(),
       tst: emptyTestsUi(),
       ed: emptyEditorUi(),
+      inc: emptyIncidentsUi(),
     };
     // Le contrôleur de l'éditeur voit l'état courant du Dashboard (lu à chaque accès).
     const host = {
@@ -170,6 +175,19 @@ export class QaCrawlerDashboard extends Base {
     };
     Object.defineProperty(libraryHost, 'state', { get: () => this.state });
     this.library = new LibraryController(libraryHost as LibraryHost);
+    const incidentsHost = {
+      root: this.root,
+      api: () => this.api,
+      paint: () => {
+        this.paint();
+      },
+      navigate: (route: DashboardRoute) => {
+        this.navigate(route);
+      },
+      refresh: () => this.load(),
+    };
+    Object.defineProperty(incidentsHost, 'state', { get: () => this.state });
+    this.incidents = new IncidentsController(incidentsHost as IncidentsHost);
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
     });
@@ -187,10 +205,12 @@ export class QaCrawlerDashboard extends Base {
       if (form?.startsWith('lib-')) this.librarySubmit(event.target as HTMLFormElement);
       if (form === 'tst-generate') void this.testsGenerate();
       if (form === 'ed-add-submit') this.editor.submit(event.target as HTMLFormElement);
+      if (form?.startsWith('inc-')) this.incidents.submit(event.target as HTMLFormElement);
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
       const target = event.target as HTMLInputElement | HTMLTextAreaElement;
+      if (target.dataset.inc && target.type !== 'radio' && this.incidents.input(target)) return;
       const reqField = target.dataset.req as keyof ImportForm | undefined;
       if (reqField && reqField !== 'source' && target.type !== 'file') {
         (this.state.req.form as unknown as Record<string, string>)[reqField] = target.value;
@@ -257,6 +277,7 @@ export class QaCrawlerDashboard extends Base {
       if (this.editor.keydown(event as KeyboardEvent)) return;
       if (this.publisher.keydown(event as KeyboardEvent)) return;
       if (this.library.keydown(event as KeyboardEvent)) return;
+      if (this.incidents.keydown(event as KeyboardEvent)) return;
       if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
         this.closePanel();
         return;
@@ -303,6 +324,7 @@ export class QaCrawlerDashboard extends Base {
   disconnectedCallback(): void {
     this.connected = false;
     this.editor.dispose();
+    this.incidents.dispose();
     this.unsubscribe();
     this.unfollowRecording();
     if (this.replayTimer) clearTimeout(this.replayTimer);
@@ -1524,6 +1546,8 @@ export class QaCrawlerDashboard extends Base {
       this.state.recs.live = undefined;
     }
     if (route.view !== 'tests') this.stopTestsPolling();
+    // Quitter un incident arrête le suivi de sa reproduction ; un autre incident repart de zéro.
+    this.incidents.leave(route);
     if (route.view !== 'recording') {
       if (this.replayTimer) clearTimeout(this.replayTimer);
       this.replayTimer = undefined;
@@ -1671,6 +1695,9 @@ export class QaCrawlerDashboard extends Base {
         await this.loadProject(api, route.projectId, generation);
         if (this.state.review?.name !== route.name) this.state.review = emptyReviewUi(route.name);
         await this.loadReview(api, route.projectId, route.name, generation);
+      } else if (route.view === 'incidents' || route.view === 'incident') {
+        await this.loadProject(api, route.projectId, generation);
+        await this.incidents.load(api, route, () => generation === this.generation);
       } else if (route.view === 'access') {
         if (this.state.me?.rights.includes('MANAGE_ACCESS')) {
           const kind = this.state.access.journalKind;
@@ -1694,6 +1721,8 @@ export class QaCrawlerDashboard extends Base {
       this.fail(error);
     }
     this.paint();
+    if (generation === this.generation && (route.view === 'incidents' || route.view === 'incident'))
+      this.incidents.afterLoad();
     if (generation === this.generation && (route.view === 'project' || route.view === 'environments'))
       this.checkAll(api, generation);
   }
@@ -2270,6 +2299,7 @@ export class QaCrawlerDashboard extends Base {
     if (action?.startsWith('pub-') && this.publisher.click(action, target)) return;
     if (action?.startsWith('tst-') && this.testsClick(action, target)) return;
     if (action?.startsWith('ed-') && this.editor.click(action, target)) return;
+    if (action?.startsWith('inc-') && this.incidents.click(action, target)) return;
     switch (action) {
       case 'menu':
         this.state.menuOpen = !this.state.menuOpen;
@@ -2294,6 +2324,7 @@ export class QaCrawlerDashboard extends Base {
           view === 'tests' ||
           view === 'editor' ||
           view === 'explorations' ||
+          view === 'incidents' ||
           view === 'environments' ||
           view === 'sources' ||
           view === 'requirements' ||
@@ -2546,6 +2577,8 @@ export class QaCrawlerDashboard extends Base {
           this.navigate({ view: 'sources', projectId: route.projectId });
         else if (target.dataset.to === 'recordings' && route.view === 'recording')
           this.navigate({ view: 'recordings', projectId: route.projectId });
+        else if (target.dataset.to === 'incidents' && route.view === 'incident')
+          this.navigate({ view: 'incidents', projectId: route.projectId });
         else this.navigate({ view: 'projects' });
         return;
       }
@@ -2658,6 +2691,7 @@ export class QaCrawlerDashboard extends Base {
 
   private onChange(event: Event): void {
     const target = event.target as HTMLInputElement | HTMLSelectElement;
+    if (target.dataset.inc && this.incidents.change(target)) return;
     if (target.dataset.lib) {
       this.libraryField(target.dataset.lib, target.value);
       return;
@@ -2908,7 +2942,8 @@ export class QaCrawlerDashboard extends Base {
       focused?.dataset.lib ??
       focused?.dataset.edField ??
       focused?.dataset.edAdd ??
-      focused?.dataset.ed;
+      focused?.dataset.ed ??
+      focused?.dataset.inc;
     const focusValue = (focused as HTMLInputElement | null)?.value;
     // Les champs validés par « change », sans brouillon dans l'état : leur saisie en cours doit survivre à
     // un redessin venu d'ailleurs (événement du serveur, console, plan recalculé), sinon elle est perdue.
@@ -2933,7 +2968,7 @@ export class QaCrawlerDashboard extends Base {
       const key = CSS.escape(focusKey);
       const candidates = [
         ...this.root.querySelectorAll<HTMLElement>(
-          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"],[data-ed-field="${key}"],[data-ed-add="${key}"],[data-ed="${key}"]`,
+          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"],[data-ed-field="${key}"],[data-ed-add="${key}"],[data-ed="${key}"],[data-inc="${key}"]`,
         ),
       ];
       const twin = candidates.find(

@@ -70,7 +70,7 @@ export interface FlowStepReport {
     suspectEffects: string[];
     reasons: string[];
   };
-  /** Les requêtes déclenchées par CETTE étape (URL masquée, jamais un corps ni un en-tête). */
+  /** Les requêtes déclenchées par CETTE étape (URL masquée, jamais un en-tête ; un corps seulement avec network.captureBodies). */
   network?: StepNetworkReport;
   /** Où le temps de l'étape est passé : action, transition, stabilité, vérification. */
   timing?: StepTimingReport;
@@ -90,6 +90,11 @@ export interface StepRequestReport {
   /** Erreur réseau (ERR_CONNECTION_REFUSED…). */
   failure?: string;
   resourceType: string;
+  /** network.captureBodies seulement : heure de départ (ISO). */
+  startedAt?: string;
+  /** network.captureBodies seulement (erreurs, écritures xhr/fetch) : corps JSON/texte masqué, tronqué à 8 Kio. */
+  requestBody?: string;
+  responseBody?: string;
 }
 
 export interface StepNetworkReport {

@@ -1,3 +1,5 @@
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 import {
   chromium,
   type Browser,
@@ -16,14 +18,17 @@ import type { ScenarioConfig } from '../config/config.js';
 export class BrowserManager {
   private browser: Browser | undefined;
   private context: BrowserContext | undefined;
+  /** browser.playwrightTrace : la trace en cours, enregistrée à la fermeture du contexte de l'application. */
+  private tracing = false;
 
   /**
    * `handleSIGINT: false` : l'appelant gère Ctrl+C (annulation contrôlée, RunOptions.signal) ; le
    * navigateur reste ouvert jusqu'à ce que le moteur s'arrête et le ferme lui-même.
+   * `tracePath` : où enregistrer la trace Playwright quand browser.playwrightTrace est activé (sans lui, aucune trace).
    */
   constructor(
     private readonly options: ScenarioConfig['browser'],
-    private readonly lifecycle: { handleSIGINT?: boolean } = {},
+    private readonly lifecycle: { handleSIGINT?: boolean; tracePath?: string } = {},
   ) {}
 
   /** `extra` : options fixées par l'authentificateur (identifiants HTTP). */
@@ -50,6 +55,10 @@ export class BrowserManager {
       content:
         'if (typeof globalThis.__name !== "function") { globalThis.__name = function (fn) { return fn; }; }',
     });
+    if (this.options.playwrightTrace && this.lifecycle.tracePath) {
+      await this.context.tracing.start({ screenshots: true, snapshots: true });
+      this.tracing = true;
+    }
     return this.context;
   }
 
@@ -73,6 +82,7 @@ export class BrowserManager {
    * et ses contextes isolés (la fenêtre du recorder) restent ouverts.
    */
   async closeApplication(): Promise<void> {
+    await this.stopTracing();
     await this.context?.close().catch(() => undefined);
     this.context = undefined;
   }
@@ -81,7 +91,18 @@ export class BrowserManager {
     return this.browser?.version();
   }
 
+  /** Enregistre la trace Playwright (une seule fois) ; un échec n'empêche jamais la fermeture. */
+  private async stopTracing(): Promise<void> {
+    if (!this.tracing || !this.context || !this.lifecycle.tracePath) return;
+    this.tracing = false;
+    const tracePath = this.lifecycle.tracePath;
+    await mkdir(path.dirname(tracePath), { recursive: true })
+      .then(() => this.context?.tracing.stop({ path: tracePath }))
+      .catch(() => undefined);
+  }
+
   async close(): Promise<void> {
+    await this.stopTracing();
     await this.context?.close().catch(() => undefined);
     await this.browser?.close().catch(() => undefined);
     this.context = undefined;
