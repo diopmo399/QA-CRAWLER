@@ -240,6 +240,16 @@ describe('Dashboard — execution console in Chromium', () => {
     // Assez de place pour que la poignée ait de la marge (la fenêtre est haute) ; rendue après.
     await page.setViewportSize({ width: 1600, height: 1300 });
     const handle = editor().locator('[data-con-split]');
+    // La mise en page suit la nouvelle hauteur : la poignée est mesurée une fois immobile.
+    let previous = -1;
+    await expect
+      .poll(async () => {
+        const y = (await handle.boundingBox())?.y ?? -1;
+        const still = y === previous;
+        previous = y;
+        return still;
+      })
+      .toBe(true);
     const panelBox = await panel.boundingBox();
     const box = await handle.boundingBox();
     if (!box || !panelBox) throw new Error('no handle');
@@ -247,6 +257,8 @@ describe('Dashboard — execution console in Chromium', () => {
     await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2, box.y - 120, { steps: 6 });
     await page.mouse.up();
+    // Le glissement a été pris : le séparateur porte sa valeur.
+    await expect.poll(() => handle.getAttribute('aria-valuenow')).not.toBeNull();
     const taller = (await panel.boundingBox())?.height ?? 0;
     // La hauteur suit le pointeur jusqu'à la borne que le séparateur annonce (elle dépend de la place
     // au-dessus de l'éditeur, où une note d'un run précédent peut s'afficher).

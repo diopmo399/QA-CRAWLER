@@ -467,16 +467,31 @@ pre.code{margin:6px 0 0;max-height:320px;overflow:auto;padding:10px 12px;border-
 .notice.ok{display:flex;gap:8px;align-items:flex-start}
 form.col[data-action^="lib-"]{display:flex;flex-direction:column;gap:12px}
 .lib-intro{margin:0;max-width:900px}
-.lib-bar{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end}
-.lib-bar .field{font-size:12.5px;gap:4px}
-.lib-search{flex:1 1 240px;min-width:0}
-.lib-crit{flex:1 1 140px;min-width:130px;max-width:200px}
-.lib-shown{margin-left:auto;padding-bottom:10px}
+.lib-bar{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;padding:10px;border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface)}
+.lib-search{flex:1 1 220px;min-width:0;display:flex;align-items:center;gap:8px;height:36px;padding:0 10px;border:1px solid var(--qa-color-border-strong);border-radius:8px;background:var(--qa-color-surface);color:var(--qa-color-muted)}
+.lib-search:focus-within{border-color:var(--qa-color-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--qa-color-primary) 18%,transparent)}
+.lib-search .ico{width:16px;height:16px;flex:none}
+.lib-search input{flex:1;min-width:0;border:0;outline:0;background:transparent;font:inherit;font-size:13.5px;color:var(--qa-color-text);height:100%;padding:0}
+.lib-crits{display:flex;flex-wrap:wrap;gap:6px}
+.lib-crit{display:inline-flex;align-items:center;gap:2px;height:32px;padding:0 4px 0 10px;border:1px solid var(--qa-color-border);border-radius:999px;background:var(--qa-color-surface-2);font-size:12.5px;cursor:pointer}
+.lib-crit.on{border-color:color-mix(in srgb,var(--qa-color-primary) 50%,var(--qa-color-border));background:color-mix(in srgb,var(--qa-color-primary) 8%,var(--qa-color-surface))}
+.lib-crit-l{color:var(--qa-color-muted)}
+.lib-crit select{border:0;background-color:transparent;font:inherit;font-weight:600;color:var(--qa-color-text);height:30px;padding:0 22px 0 4px;min-width:0;cursor:pointer;box-shadow:none}
+.lib-crit select:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px;border-radius:6px}
+.lib-shown{margin-left:auto}
 .lib-jump{align-self:flex-start}
 .lib-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
 .lib-catalog{min-width:0}
 .lib-cards{display:flex;flex-direction:column;gap:10px}
-.lib-card{border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface);padding:12px 14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.lib-card{position:relative;border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface);padding:12px 14px 10px;display:flex;flex-direction:column;gap:6px;min-width:0;transition:border-color .12s,box-shadow .12s}
+.lib-card:hover{border-color:var(--qa-color-border-strong);box-shadow:0 2px 8px color-mix(in srgb,var(--qa-color-text) 7%,transparent)}
+.lib-card.composite{border-left:3px solid color-mix(in srgb,var(--qa-color-primary) 60%,var(--qa-color-border))}
+.lib-ok{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;margin-left:auto;color:color-mix(in srgb,var(--qa-color-success) 85%,var(--qa-color-text));background:var(--qa-color-success-soft)}
+.lib-ok .ico{width:13px;height:13px}
+.lib-origin{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lib-noio{margin:0;font-size:12.5px;color:var(--qa-color-muted)}
+.lib-add{margin-left:auto}
+.lib-add .ico{width:14px;height:14px}
 .lib-card.open{border-color:color-mix(in srgb,var(--qa-color-primary) 40%,var(--qa-color-border))}
 .lib-card p{margin:0}
 .lib-card-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -493,7 +508,7 @@ form.col[data-action^="lib-"]{display:flex;flex-direction:column;gap:12px}
 .lib-io-l{color:var(--qa-color-muted);font-weight:600;margin-right:2px}
 .lib-key{font-size:12px;padding:1px 6px;border-radius:6px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);overflow-wrap:anywhere}
 .lib-key.opt{border-style:dashed}
-.lib-card-f{display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:space-between}
+.lib-card-f{display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:space-between;border-top:1px solid var(--qa-color-border);margin-top:auto;padding-top:8px}
 .lib-file{font-size:11.5px;color:var(--qa-color-muted);overflow-wrap:anywhere;min-width:0}
 .lib-acts{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
 .lib-count{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--qa-color-surface);color:var(--qa-color-primary);font-size:11px;font-weight:700}
@@ -524,6 +539,7 @@ form.col[data-action^="lib-"]{display:flex;flex-direction:column;gap:12px}
 .lib-empty{margin:0;padding:16px;border:1px dashed var(--qa-color-border-strong);border-radius:10px;text-align:center}
 .lib-check{border-radius:10px;padding:10px 12px;border:1px solid var(--qa-color-border);display:flex;flex-direction:column;gap:6px;font-size:13px}
 .lib-check.ok{border-color:color-mix(in srgb,var(--qa-color-success) 40%,var(--qa-color-border));background:var(--qa-color-success-soft)}
+.lib-check.wait{border-color:color-mix(in srgb,var(--qa-color-primary) 30%,var(--qa-color-border));background:color-mix(in srgb,var(--qa-color-primary) 6%,var(--qa-color-surface))}
 .lib-check.ko{border-color:color-mix(in srgb,var(--qa-color-danger) 35%,var(--qa-color-border));background:var(--qa-color-danger-soft)}
 .lib-check p{margin:0}
 .lib-check-h{display:flex;gap:6px;align-items:center}
@@ -625,18 +641,22 @@ form.col[data-action^="lib-"]{display:flex;flex-direction:column;gap:12px}
 .lib-catalog .err,.lib-layout + .err{margin:0}
 .small{font-size:12px}
 /* Catalogue compact (grille ou liste), regroupements, récents. */
-.lib-cards.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.lib-cards.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
 .lib-cards.list{display:flex;flex-direction:column;gap:6px}
 .lib-cards.list .lib-card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 12px;padding:8px 12px}
 .lib-cards.list .lib-card-h,.lib-cards.list .lib-meta{grid-column:1}
-.lib-cards.list .lib-desc,.lib-cards.list .lib-ios{display:none}
+.lib-cards.list .lib-desc,.lib-cards.list .lib-ios,.lib-cards.list .lib-noio{display:none}
+.lib-cards.list .lib-card-f{border-top:0;margin:0;padding:0}
+.lib-cards.list .lib-card-f small{display:none}
+.lib-cards.list .lib-card-h{flex-wrap:nowrap;min-width:0}
+.lib-cards.list .lib-card-h h3{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lib-cards.list .lib-card-f{grid-column:2;grid-row:1 / span 2}
 .lib-cards.list .lib-meta{font-size:12.5px}
 .lib-title{all:unset;cursor:pointer;font:inherit;font-weight:650;overflow-wrap:anywhere;border-radius:4px}
 .lib-title:hover{color:var(--qa-color-primary);text-decoration:underline}
 .lib-title:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
 .lib-desc{font-size:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.lib-meta{display:flex;flex-wrap:wrap;gap:2px 12px;align-items:center}
+.lib-meta{display:flex;flex-wrap:wrap;gap:2px 10px;align-items:center;min-width:0}
 .lib-kind{font-size:11.5px;font-weight:600;border-radius:6px;padding:1px 7px;border:1px solid var(--qa-color-border);color:var(--qa-color-muted)}
 .lib-kind.composite{color:var(--qa-color-primary);border-color:color-mix(in srgb,var(--qa-color-primary) 40%,var(--qa-color-border));background:color-mix(in srgb,var(--qa-color-primary) 7%,var(--qa-color-surface))}
 .lib-bucket{display:flex;flex-direction:column;gap:8px}
@@ -657,7 +677,7 @@ form.col[data-action^="lib-"]{display:flex;flex-direction:column;gap:12px}
   .lib-jump{display:none}
 }
 @media (min-width:1500px){
-  .lib-layout{grid-template-columns:minmax(0,1fr) minmax(320px,380px) minmax(280px,340px)}
+  .lib-layout{grid-template-columns:minmax(0,1fr) 340px 290px}
   .lib-catalog{grid-row:auto}
   .lib-composer,.lib-diag{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow:auto}
   .lib-diag{grid-column:3;grid-row:1}

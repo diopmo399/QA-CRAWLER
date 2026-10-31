@@ -7,7 +7,7 @@ import type {
 } from '../core/contracts.js';
 import { can } from './dashboard-access.js';
 import { blockSheet, type BlockSheet } from './dashboard-library-sheet.js';
-import { header, icon } from './dashboard-parts.js';
+import { header, icon, visibleBrowserControl } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
 
@@ -76,6 +76,8 @@ export interface LibraryUi {
   };
   /** Insérer un bloc dans le scénario affiché (écran Scénarios). */
   insert: { block: string; at: 'start' | 'end' };
+  /** Le dernier parcours créé par le compositeur : il se rejoue d'ici (navigateur visible au choix). */
+  composed?: string;
   /** Le groupe d'un enregistrement en cours d'ajout (revue), et le nom proposé. */
   group?: { id: string; name: string };
   confirmRemove?: string;
@@ -99,6 +101,19 @@ export const emptyLibraryUi = (): LibraryUi => ({
   compose: { name: '', parts: [] },
   insert: { block: '', at: 'start' },
 });
+
+/** « Navigateur visible » et son ralenti, à côté d'un Rejouer (le même choix que le lancement d'une exécution). */
+export function replayVisibility(state: DashboardState): string {
+  return visibleBrowserControl(
+    state.t.visibleBrowser,
+    { headed: state.launch.headed === true, slowMoMs: state.launch.slowMoMs ?? 0 },
+    {
+      attr: 'data-bind',
+      available: state.capabilities?.visibleBrowser === true,
+      disabled: state.launch.busy,
+    },
+  );
+}
 
 /** La composition vérifiée : la vérification ne vaut que pour ce nom et ces blocs, dans cet ordre. */
 export const compositionKey = (compose: LibraryUi['compose']): string =>
@@ -180,16 +195,36 @@ function blockCard(state: DashboardState, block: LibraryBlockView, publish: bool
   const kind = kindOf(block);
   const when = block.updatedAt ?? block.createdAt;
   const inJourney = ui.compose.parts.filter((part) => part === block.name).length;
-  return `<li class="lib-card${opened ? ' open' : ''}" data-block="${esc(block.name)}">
-<div class="lib-card-h"><h3><button class="lib-title" data-action="lib-open" data-block="${esc(block.name)}" aria-haspopup="dialog">${esc(block.name)}</button></h3><span class="lib-ver" title="${esc(l.versionLabel)}">${esc(l.version(block.version))}</span>${stateBadge(state, block.state)}</div>
+  // Un contrat valide est l'état attendu : une coche discrète ; à revalider ou invalide se voit.
+  const status =
+    block.state === 'VALID'
+      ? `<span class="lib-ok" title="${esc(l.states.VALID)}">${icon('check')}<span class="sr">${esc(l.states.VALID)}</span></span>`
+      : stateBadge(state, block.state);
+  const origin = block.origin
+    ? block.origin.kind === 'recording'
+      ? l.originRecording(block.origin.name)
+      : l.originScenario(block.origin.name)
+    : l.unknownOrigin;
+  const io = (label: string, items: readonly { key: string; required?: boolean }[]): string =>
+    items.length > 0
+      ? `<span class="lib-io"><span class="lib-io-l">${esc(label)}</span>${items.map((item) => `<code class="lib-key${item.required === false ? ' opt' : ''}">${esc(item.key)}</code>`).join('')}</span>`
+      : '';
+  const ios = `${io(l.inputsLabel, block.contract.inputs)}${io(l.outputsLabel, block.contract.outputs)}`;
+  return `<li class="lib-card ${kind}${opened ? ' open' : ''}" data-block="${esc(block.name)}">
+<div class="lib-card-h"><h3><button class="lib-title" data-action="lib-open" data-block="${esc(block.name)}" aria-haspopup="dialog">${esc(block.name)}</button></h3><span class="lib-ver" title="${esc(l.versionLabel)}">${esc(l.version(block.version))}</span>${status}</div>
 ${block.description ? `<p class="lib-desc">${esc(block.description)}</p>` : ''}
-<p class="lib-meta"><span class="lib-kind ${kind}">${esc(kind === 'composite' ? l.kindComposite(block.groups?.length ?? 0) : l.kindStandalone)}</span><span>${esc(l.steps(block.steps))}</span>${ui.groupBy === 'origin' ? '' : `<span>${esc(originText(state, block))}</span>`}${when ? `<span>${esc(l.updatedOn(new Date(when).toLocaleDateString(state.t.locale)))}</span>` : ''}<span>${esc(l.usedIn(block.usedBy.length))}</span></p>
-<div class="lib-ios">${keys(state, l.inputsLabel, block.contract.inputs)}${keys(state, l.outputsLabel, block.contract.outputs)}</div>
-<div class="lib-card-f"><span class="lib-acts">${
+<p class="lib-meta"><span class="lib-kind ${kind}">${esc(kind === 'composite' ? l.kindComposite(block.groups?.length ?? 0) : l.kindStandalone)}</span><span>${esc(l.steps(block.steps))}</span>${ui.groupBy === 'origin' ? '' : `<span class="lib-origin" title="${esc(originText(state, block))}">${esc(origin)}</span>`}</p>
+${ios ? `<div class="lib-ios">${ios}</div>` : `<p class="lib-noio">${esc(l.noIo)}</p>`}
+<div class="lib-card-f"><small class="mu">${[
+    ...(when ? [l.updatedOn(new Date(when).toLocaleDateString(state.t.locale))] : []),
+    ...(block.usedBy.length > 0 ? [l.usedIn(block.usedBy.length)] : []),
+  ]
+    .map(esc)
+    .join(' · ')}</small>${
     publish
-      ? `<button class="btn small primary" data-action="lib-part-add" data-block="${esc(block.name)}">${icon('plus')}<span>${esc(l.addToJourney)}</span>${inJourney > 0 ? `<span class="lib-count" aria-label="${esc(l.inJourney(inJourney))}">${String(inJourney)}</span>` : ''}</button>`
+      ? `<button class="btn small lib-add" data-action="lib-part-add" data-block="${esc(block.name)}" title="${esc(l.addToJourney)}">${icon('plus')}<span>${esc(l.addShort)}</span>${inJourney > 0 ? `<span class="lib-count" aria-label="${esc(l.inJourney(inJourney))}">${String(inJourney)}</span>` : ''}</button>`
       : ''
-  }<button class="btn small ghost" data-action="lib-open" data-block="${esc(block.name)}" aria-haspopup="dialog">${esc(l.open)}</button></span></div></li>`;
+  }</div></li>`;
 }
 
 /** Le catalogue, regroupé par origine si demandé (un enregistrement, un scénario, sans origine). */
@@ -227,8 +262,17 @@ function checkSummary(state: DashboardState, check: CompositionCheck, stale: boo
     .filter((error) => !error.includes('no earlier block produces it') && !error.startsWith('test data '))
     // Le nom du parcours se donne dans le formulaire : dit dans la langue du Dashboard.
     .map((error) => (error === 'a name of 1 to 80 characters is required' ? l.journeyNameRequired : error));
-  return `<div class="lib-check ${check.ok ? 'ok' : 'ko'}" role="status">
-<p class="lib-check-h">${icon(check.ok ? 'check' : 'alert')}<b>${esc(check.ok ? l.checkOk : l.checkKo)}</b></p>
+  // Seul le nom manque (il se donne en dernier) : le parcours tient, ce n'est pas une erreur.
+  const nameOnly =
+    !check.ok &&
+    check.errors.length === 1 &&
+    check.errors[0] === 'a name of 1 to 80 characters is required' &&
+    check.missing.length === 0 &&
+    check.conflicts.length === 0;
+  const tone = check.ok ? 'ok' : nameOnly ? 'wait' : 'ko';
+  const shown = nameOnly ? [] : structural;
+  return `<div class="lib-check ${tone}" role="status">
+<p class="lib-check-h">${icon(check.ok || nameOnly ? 'check' : 'alert')}<b>${esc(check.ok ? l.checkOk : nameOnly ? l.checkNeedsName : l.checkKo)}</b></p>
 ${stale ? `<p class="warn-t">${esc(l.staleCheck)}</p>` : ''}
 <p class="mu">${esc(l.summary(check.blocks, check.steps))}${check.order.length > 0 ? ` · ${esc(l.orderLine(check.order.map((entry) => `#${String(entry.position)} ${entry.block}`).join(' → ')))}` : ''}</p>
 ${section(
@@ -245,7 +289,7 @@ ${section(
         `${esc(l.conflictLine(conflict.key, conflict.blocks))}<br><small class="mu">${esc(conflict.detail)}</small>`,
     ),
     'ko',
-  )}${section(l.errorsTitle, structural.map(esc), 'ko')}${section(
+  )}${section(l.errorsTitle, shown.map(esc), 'ko')}${section(
     l.sharedTitle,
     check.shared.map((entry) => esc(l.sharedLine(entry.key, entry.blocks))),
   )}${section(
@@ -377,7 +421,9 @@ function select(
   current: string,
   options: readonly (readonly [string, string])[],
 ): string {
-  return `<label class="field lib-crit">${esc(label)}<select data-lib="${field}">${options
+  // Un critère compact : son nom puis sa valeur, dans une pastille ; marqué quand il restreint le catalogue.
+  const narrowed = options[0] !== undefined && current !== options[0][0] && field !== 'sort';
+  return `<label class="lib-crit${narrowed ? ' on' : ''}"><span class="lib-crit-l">${esc(label)}</span><select data-lib="${field}">${options
     .map(
       ([value, text]) =>
         `<option value="${esc(value)}" ${value === current ? 'selected' : ''}>${esc(text)}</option>`,
@@ -412,7 +458,7 @@ export function libraryView(state: DashboardState): string {
   const toolbar =
     all.length === 0
       ? ''
-      : `<div class="lib-bar" role="search"><label class="field lib-search">${esc(l.search)}<input type="search" data-lib="query" value="${esc(ui.query)}" placeholder="${esc(l.searchPlaceholder)}" autocomplete="off"></label>${select(
+      : `<div class="lib-bar" role="search"><label class="lib-search">${icon('search')}<span class="sr">${esc(l.search)}</span><input type="search" data-lib="query" value="${esc(ui.query)}" placeholder="${esc(l.searchPlaceholder)}" autocomplete="off"></label><div class="lib-crits">${select(
           l.originLabel,
           'origin',
           ui.origin,
@@ -439,7 +485,7 @@ export function libraryView(state: DashboardState): string {
         ])}${select(l.groupByLabel, 'groupBy', ui.groupBy, [
           ['none', l.groupBys.none],
           ['origin', l.groupBys.origin],
-        ])}<span class="ed-seg lib-layouts" role="radiogroup" aria-label="${esc(l.layoutLabel)}">${(
+        ])}</div><span class="ed-seg lib-layouts" role="radiogroup" aria-label="${esc(l.layoutLabel)}">${(
           ['grid', 'list'] as const
         )
           .map(
@@ -460,7 +506,16 @@ export function libraryView(state: DashboardState): string {
       ? `<nav class="lib-recent" aria-label="${esc(l.recentTitle)}"><span class="lib-io-l">${esc(l.recentTitle)}</span>${recent.map((block) => `<button class="chip" data-action="lib-open" data-block="${esc(block.name)}">${esc(block.name)}</button>`).join('')}</nav>`
       : '';
   const details = ui.details ?? [];
-  const messages = `${ui.error ? `<div class="err" role="alert"><p>${esc(ui.error)}</p>${details.length > 1 ? `<ul class="plain tight">${details.map((detail) => `<li>${esc(detail)}</li>`).join('')}</ul>` : ''}</div>` : ''}${ui.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(ui.notice)}</span></p>` : ''}`;
+  // Le parcours tout juste créé se rejoue d'ici, avec ou sans navigateur visible.
+  const composed =
+    ui.composed && runnableScenarios(p.scenarios).some((scenario) => scenario.name === ui.composed)
+      ? ui.composed
+      : undefined;
+  const replay =
+    composed && can(state, 'RUN') && p.state !== 'ARCHIVED'
+      ? `<div class="form-acts start lib-replay"><button class="btn primary" data-action="replay-scenario" data-name="${esc(composed)}" ${state.launch.busy ? 'disabled' : ''} aria-busy="${String(state.launch.busy)}">${icon('play')}<span>${esc(l.replayComposed(composed))}</span></button>${replayVisibility(state)}</div>${state.launch.error && state.launch.scenarios.includes(composed) ? `<p class="err" role="alert">${esc(state.launch.error)}</p>` : ''}`
+      : '';
+  const messages = `${ui.error ? `<div class="err" role="alert"><p>${esc(ui.error)}</p>${details.length > 1 ? `<ul class="plain tight">${details.map((detail) => `<li>${esc(detail)}</li>`).join('')}</ul>` : ''}</div>` : ''}${ui.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(ui.notice)}</span></p>` : ''}${replay}`;
   const actions = publish
     ? `<button class="btn primary" data-action="lib-panel-open">${icon('plus')}<span>${esc(l.addBlock)}</span></button>`
     : '';
