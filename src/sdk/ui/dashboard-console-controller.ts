@@ -294,9 +294,14 @@ export class RunConsole {
     const value = Math.round(Math.min(max, Math.max(min, height)));
     this.ui.height = value;
     panel.closest<HTMLElement>('.ed-body')?.style.setProperty('--con-h', `${String(value)}px`);
+    panel.querySelector('[data-con-split]')?.setAttribute('aria-valuenow', String(value));
+    this.announceBounds(panel);
+  }
+
+  /** Les bornes du séparateur (motif ARIA « window splitter ») : elles dépendent de la place à l'écran. */
+  private announceBounds(panel: HTMLElement): void {
+    const { min, max } = this.bounds(panel);
     const handle = panel.querySelector('[data-con-split]');
-    handle?.setAttribute('aria-valuenow', String(value));
-    // Les bornes du séparateur (motif ARIA « window splitter ») : elles dépendent de la place à l'écran.
     handle?.setAttribute('aria-valuemin', String(min));
     handle?.setAttribute('aria-valuemax', String(max));
   }
@@ -309,6 +314,7 @@ export class RunConsole {
     event.preventDefault();
     const startY = event.clientY;
     const start = panel.getBoundingClientRect().height;
+    this.announceBounds(panel);
     handle.setPointerCapture(event.pointerId);
     panel.classList.add('sizing');
     const move = (moved: PointerEvent): void => {
