@@ -529,14 +529,16 @@ describe('guardedFiles', () => {
   it('lists in-scope files only, skips build folders and reports escaping symlinks', async () => {
     const files = guardedFiles(new ScopePolicy(scope()));
     const listed = await files.list(repo, { extensions: ['.java', 'yml'] });
-    const relative = listed.map((file) => path.relative(repo, file));
+    const relative = listed.map((file) => path.relative(repo, file).split(path.sep).join('/'));
     expect(relative).toEqual([
       'src/main/java/org/example/bff/books/Alias.java',
       'src/main/java/org/example/bff/books/BookController.java',
       'src/main/java/org/example/bff/books/BookService.java',
       'src/main/resources/application.yml',
     ]);
-    const deniedPaths = files.denied.map((entry) => path.relative(repo, entry.path));
+    const deniedPaths = files.denied.map((entry) =>
+      path.relative(repo, entry.path).split(path.sep).join('/'),
+    );
     expect(deniedPaths).toContain('src/main/java/org/example/bff/books/Escape.java');
     expect(deniedPaths).toContain('src/main/java/org/example/bff/books/escape-dir');
     expect(deniedPaths).toContain('src/main/resources/huge.yml');
