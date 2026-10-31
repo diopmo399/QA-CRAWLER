@@ -103,6 +103,7 @@ import type {
   Environment,
   ProjectDetail,
   ProjectSummary,
+  ScenarioView,
   AccessMe,
   ExtractionInput,
   JournalKind,
@@ -197,6 +198,9 @@ import {
   type FileConnectorKind,
 } from './requirements.js';
 import { AccessError, AccessStore, actionOf, can, rightFor, roleIn, type Identity } from './access.js';
+import { handleIncidentRoutes } from './incidents.js';
+import { IncidentService, type HostReplay, type IncidentHost } from '../../incident/service.js';
+import type { ExplorationResult } from '../../model/exploration-result.js';
 import { dashboardPage, flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
 import {
   ALWAYS_BLOCKED_RISKS,
@@ -355,6 +359,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     sseClients,
     access: new AccessStore(workspace),
     mode: options.access ?? 'single',
+    incidents: new Map(),
   };
 
   const server = createServer((request, response) => {
@@ -389,6 +394,8 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
         const settled = await explorations.idle(options.closeGraceMs ?? 30_000);
         if (!settled) options.onWarning?.('an exploration was still stopping when the server closed');
       }
+      // Les investigations enregistrent la fin de leurs rejeux (annulés ci-dessus) avant l'arrêt.
+      await Promise.allSettled([...context.incidents.values()].map((service) => service.settle()));
       await new Promise<void>((resolve, reject) => {
         for (const client of sseClients) client.end();
         server.close((error) => {
@@ -424,6 +431,8 @@ interface Context {
   sseClients: Set<ServerResponse>;
   access: AccessStore;
   mode: 'single' | 'named';
+  /** Les investigations d'incidents, une par projet. */
+  incidents: Map<string, IncidentService>;
 }
 
 async function handle(ctx: Context, request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -3142,6 +3151,37 @@ async function handlePlatform(
     }
     return false;
   }
+  if (sub === 'incidents') {
+    const project = await projectOf(ctx, id);
+    const service = incidentService(ctx, project);
+    const rest = segments.slice(4);
+    const [incidentId, incidentAction, incidentPart, incidentItem] = rest;
+    const identity = identityOf(request);
+    // Jouer l'application (reproduire, vérifier, exécuter le test proposé) : un environnement qui permet
+    // les écritures demande le droit de les permettre, comme une exécution.
+    const plays =
+      method === 'POST' &&
+      incidentId !== undefined &&
+      (incidentAction === 'reproduce' ||
+        (incidentAction === 'experiments' && incidentItem === 'run') ||
+        (incidentAction === 'regression' && incidentPart === 'run'));
+    if (plays) {
+      refuseArchived(project);
+      const incident = await service.store.get(incidentId);
+      if (incident) requireWrites(request, project.id, await environmentOf(project, incident.environmentId));
+    }
+    return handleIncidentRoutes({
+      service,
+      rest,
+      method,
+      url,
+      actor: identity.name,
+      body: () => readOptionalJson(request),
+      json,
+      canWrite: can(identity, 'RUN_WRITES', project.id),
+      fail: (status, code, text) => new HttpError(status, code, text),
+    });
+  }
   if (sub === 'executions') {
     const project = await projectOf(ctx, id);
     const reportsDir = path.join(project.dir, REPORTS_DIR);
@@ -3196,34 +3236,12 @@ async function handlePlatform(
             ),
           },
         );
-      const flowsDir = await flowsDirOf(project.dir);
       const selected = wanted ? known.filter((scenario) => wanted.includes(scenario.name)) : undefined;
-      const loaded = await projectMission(ctx, project, 'replay', {
-        ...(selected
-          ? {
-              flows: selected
-                .filter((scenario) => scenario.format === 'yaml')
-                .map((scenario) => scenario.name),
-              extraFlows: selected
-                .filter((scenario) => scenario.format === 'gherkin')
-                .map((scenario) => ({ gherkin: path.join(flowsDir, scenario.file) })),
-            }
-          : {}),
+      const { execution } = await launchReplay(ctx, project, {
+        ...(selected ? { scenarios: selected } : {}),
+        names: (selected ?? known).map((scenario) => scenario.name),
         ...(environment ? { environment } : {}),
-      });
-      const runDir = path.join(reportsDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-      await writeExecutionMeta(runDir, {
-        kind: 'REPLAY',
-        startedAt: new Date().toISOString(),
-        ...(environment ? { environment: { id: environment.id, name: environment.name } } : {}),
-        scenarios: (selected ?? known).map((scenario) => scenario.name),
-      });
-      const execution = ctx.explorations.start({
-        projectId: project.id,
-        config: withVisibleBrowser(loaded.config, visible),
-        reportsDir: runDir,
-        kind: 'REPLAY',
-        env: missionEnv(ctx, environment),
+        ...(visible ? { visible } : {}),
       });
       json(execution.snapshot(), 202);
       return true;
@@ -3231,6 +3249,171 @@ async function handlePlatform(
     return false;
   }
   return false;
+}
+
+/**
+ * Un rejeu du moteur (le chemin des exécutions) : les scénarios choisis de la bibliothèque, ou des flows
+ * hors bibliothèque (le test de non-régression proposé par une investigation, avant toute validation).
+ */
+async function launchReplay(
+  ctx: Context,
+  project: StoredProject,
+  options: {
+    scenarios?: ScenarioView[];
+    flows?: Record<string, unknown>[];
+    names: string[];
+    environment?: Environment;
+    visible?: VisibleBrowser;
+    configure?: (config: Awaited<ReturnType<typeof projectMission>>['config']) => void;
+  },
+): Promise<{ execution: ReturnType<ExplorationManager['start']>; runDir: string }> {
+  const flowsDir = await flowsDirOf(project.dir);
+  const reportsDir = path.join(project.dir, REPORTS_DIR);
+  const selected = options.scenarios;
+  const loaded = await projectMission(ctx, project, 'replay', {
+    ...(selected
+      ? {
+          flows: selected.filter((scenario) => scenario.format === 'yaml').map((scenario) => scenario.name),
+          extraFlows: selected
+            .filter((scenario) => scenario.format === 'gherkin')
+            .map((scenario) => ({ gherkin: path.join(flowsDir, scenario.file) })),
+        }
+      : {}),
+    ...(options.flows ? { flows: [], extraFlows: options.flows } : {}),
+    ...(options.environment ? { environment: options.environment } : {}),
+  });
+  options.configure?.(loaded.config);
+  const runDir = path.join(reportsDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  await writeExecutionMeta(runDir, {
+    kind: 'REPLAY',
+    startedAt: new Date().toISOString(),
+    ...(options.environment
+      ? { environment: { id: options.environment.id, name: options.environment.name } }
+      : {}),
+    scenarios: options.names,
+  });
+  const execution = ctx.explorations.start({
+    projectId: project.id,
+    config: withVisibleBrowser(loaded.config, options.visible),
+    reportsDir: runDir,
+    kind: 'REPLAY',
+    env: missionEnv(ctx, options.environment),
+  });
+  return { execution, runDir };
+}
+
+/** L'investigation d'un projet : son service, et l'hôte qui lui prête le moteur, la bibliothèque et les environnements. */
+function incidentService(ctx: Context, project: StoredProject): IncidentService {
+  const existing = ctx.incidents.get(project.id);
+  if (existing) return existing;
+  const host: IncidentHost = {
+    projectId: project.id,
+    projectDir: project.dir,
+    runDir: (run) => path.join(project.dir, REPORTS_DIR, run),
+    environment: async (environmentId) => {
+      const environments = await readEnvironments(project.dir);
+      const environment = environmentId
+        ? environments.find((entry) => entry.id === environmentId)
+        : environments[0];
+      if (environmentId && !environment)
+        throw new HttpError(404, 'NOT_FOUND', `environment ${environmentId} not found`);
+      return environment
+        ? { id: environment.id, baseUrl: environment.baseUrl, kind: environment.kind }
+        : { baseUrl: project.targetUrl };
+    },
+    scenarioYaml: async (name) => {
+      const scenario = (await listScenarios(project.dir)).find(
+        (entry) => entry.name === name && entry.format === 'yaml',
+      );
+      if (!scenario) return undefined;
+      const file = path.join(await flowsDirOf(project.dir), scenario.file);
+      return { file: scenario.file, text: await readFile(file, 'utf8') };
+    },
+    addScenario: async (name, yaml) => {
+      const known = await listScenarios(project.dir);
+      if (known.some((entry) => entry.name === name))
+        throw new HttpError(409, 'CONFLICT', `a scenario named "${name}" already exists`);
+      const base =
+        name
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^A-Za-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .toLowerCase() || 'incident';
+      const relative = `incidents/${base}/${base}.flow.yaml`;
+      const target = path.join(await flowsDirOf(project.dir), relative);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, yaml, { encoding: 'utf8', flag: 'wx' });
+      return relative;
+    },
+    replay: async (input) => {
+      refuseArchived(project);
+      const environment = await environmentOf(project, input.environmentId);
+      const known = await listScenarios(project.dir);
+      const scenario = input.scenario ? known.find((entry) => entry.name === input.scenario) : undefined;
+      if (input.scenario && !scenario)
+        throw new HttpError(404, 'NOT_FOUND', `unknown scenario: ${input.scenario}`);
+      if (!scenario && !input.flow) throw new HttpError(400, 'BAD_REQUEST', 'nothing to replay');
+      const visible = visibleBrowserOf(ctx, {
+        ...(input.headed !== undefined ? { headed: input.headed } : {}),
+        ...(input.slowMoMs !== undefined ? { slowMoMs: input.slowMoMs } : {}),
+      });
+      const flowName = typeof input.flow?.name === 'string' ? input.flow.name : 'flow';
+      const { execution, runDir } = await launchReplay(ctx, project, {
+        ...(scenario ? { scenarios: [scenario] } : {}),
+        ...(input.flow ? { flows: [input.flow] } : {}),
+        names: [scenario?.name ?? flowName],
+        ...(environment ? { environment } : {}),
+        ...(visible ? { visible } : {}),
+        // Les preuves d'une investigation : corps des échanges en erreur (masqués) et trace Playwright.
+        configure: (config) => {
+          Object.assign(config.network, { captureBodies: true });
+          Object.assign(config.browser, { playwrightTrace: true });
+        },
+      });
+      const done = new Promise<Awaited<HostReplay['done']>>((resolve) => {
+        const finish = (): void => {
+          const status = execution.status;
+          void readFile(path.join(runDir, 'result.json'), 'utf8')
+            .then((text) => JSON.parse(text) as ExplorationResult)
+            .catch(() => undefined)
+            .then((result) => {
+              resolve({
+                status:
+                  status === 'COMPLETED' ? 'COMPLETED' : status === 'CANCELLED' ? 'CANCELLED' : 'FAILED',
+                ...(result ? { result } : {}),
+                ...(execution.error ? { error: execution.error } : {}),
+              });
+            });
+        };
+        if (execution.terminal) {
+          finish();
+          return;
+        }
+        const unsubscribe = execution.subscribe((event) => {
+          if (event.type === 'status' && isTerminal(event.status)) {
+            unsubscribe();
+            finish();
+          }
+        });
+      });
+      return {
+        run: path.basename(runDir),
+        runDir,
+        ...(environment
+          ? { environmentId: environment.id, baseUrl: environment.baseUrl }
+          : { baseUrl: project.targetUrl }),
+        startedAt: new Date().toISOString(),
+        done,
+        cancel: () => {
+          ctx.explorations.cancel(execution.id);
+        },
+      };
+    },
+  };
+  const service = new IncidentService(host, { env: ctx.env });
+  ctx.incidents.set(project.id, service);
+  return service;
 }
 
 function publicProject(project: StoredProject): Project {

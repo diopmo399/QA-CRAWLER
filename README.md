@@ -2316,6 +2316,8 @@ Chaque action ouvre une fenêtre d'observation réseau, fermée une fois l'état
 
 Seuls sont gardés la méthode, l'URL (passée au masquage des paramètres sensibles), le statut, la durée et le type de ressource. **Jamais** les en-têtes (Authorization, cookies), ni les corps, ni les mots de passe. Réglages : `network.trace` (par défaut `true`), `network.resourceTypes` (`[document, xhr, fetch]`), `network.maxRequestsPerAction` (50). Les échanges s'affichent sous chaque transition dans `flow-graph.html`.
 
+`network.captureBodies` (par défaut `false`) : pour une investigation d'incident, garder aussi l'heure de départ de chaque échange et, pour les réponses en erreur (statut ≥ 400) et les écritures xhr/fetch, les corps JSON/texte — masqués (clés `password`, `token`, `secret`, `authorization`, `cookie`, `session`, `apikey`, `credential`, `private`… et jetons) et tronqués à 8 Kio. `browser.playwrightTrace` (par défaut `false`) enregistre la trace Playwright du run dans `<reportsDir>/trace.zip` (`npx playwright show-trace`).
+
 ## Ligne de commande
 
 ```bash

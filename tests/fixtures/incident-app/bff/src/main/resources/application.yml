@@ -1,0 +1,18 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: books-bff
+
+catalog:
+  # Le service catalogue (backend) ; surchargé par CATALOG_URL en recette.
+  url: ${CATALOG_URL:http://localhost:8081}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: recette
+catalog:
+  url: http://catalog-service:8080

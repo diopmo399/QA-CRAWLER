@@ -240,6 +240,13 @@ export class AccessStore {
 export function rightFor(segments: readonly string[], method: string): Right {
   const [, resource, id, sub, item, action] = segments;
   if (resource === 'access') return id === 'me' && method === 'GET' ? 'VIEW' : 'MANAGE_ACCESS';
+  // Lire le code des dépôts du périmètre d'une investigation : investiguer (RUN), pas seulement voir.
+  if (
+    resource === 'projects' &&
+    sub === 'incidents' &&
+    (segments[5] === 'source' || segments[5] === 'sources')
+  )
+    return 'RUN';
   if (method === 'GET' || method === 'HEAD') return 'VIEW';
   if (resource === 'checks') return 'RUN';
   if (resource === 'explorations') return sub === 'report-links' ? 'VIEW' : 'RUN';
@@ -278,6 +285,8 @@ export function rightFor(segments: readonly string[], method: string): Right {
         : 'DECIDE';
     case 'reports':
       return 'VIEW';
+    case 'incidents':
+      return incidentRight(segments);
     case 'requirements':
       // …/requirements/links[/:link] ; …/requirements/imports/:batch/publish
       return item === 'links' || segments[6] === 'publish' ? 'PUBLISH' : 'DECIDE';
@@ -287,6 +296,20 @@ export function rightFor(segments: readonly string[], method: string): Right {
 }
 
 const LIVE_CONTROLS = new Set<string>(RECORDING_CONTROLS);
+
+/**
+ * LES INCIDENTS (`…/incidents[/:id/…]`) : déclarer, délimiter, reproduire, analyser, vérifier, c'est
+ * investiguer (RUN) ; approuver une extension du périmètre est une décision (DECIDE) ; ajouter le test
+ * de non-régression à la bibliothèque, publier (PUBLISH). Une vérification avec effets de bord demande
+ * en plus RUN_WRITES (contrôlé par la route).
+ */
+function incidentRight(segments: readonly string[]): Right {
+  const [, , , , , action, part, decision] = segments;
+  if (action === 'scope' && part === 'extensions' && decision !== undefined) return 'DECIDE';
+  if (action === 'regression' && part === 'accept') return 'PUBLISH';
+  if (action === 'regression' && part === 'reject') return 'DECIDE';
+  return 'RUN';
+}
 
 const KEYWORDS = new Set([
   ...RECORDING_CONTROLS,
@@ -350,6 +373,23 @@ const KEYWORDS = new Set([
   'file',
   'decisions',
   'publish',
+  'incidents',
+  'update',
+  'scope',
+  'extensions',
+  'decision',
+  'capabilities',
+  'reproduce',
+  'analyze',
+  'experiments',
+  'run',
+  'diagnose',
+  'report',
+  'regression',
+  'reject',
+  'sources',
+  'source',
+  'screenshot',
 ]);
 
 /** L'action d'une requête, d'après les mots de sa route (les identifiants sont omis). */

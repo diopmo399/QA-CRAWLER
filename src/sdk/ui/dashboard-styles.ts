@@ -1,3 +1,11 @@
+import { INCIDENT_CODE_CSS } from './incident-code.js';
+import { INCIDENT_DIAGNOSIS_CSS } from './incident-diagnosis.js';
+import { INCIDENT_FRONTEND_TRACE_CSS } from './incident-frontend-trace.js';
+import { INCIDENT_GRAPH_CSS } from './incident-graph.js';
+import { INCIDENT_PARTS_CSS } from './incident-parts.js';
+import { INCIDENT_TIMELINE_CSS } from './incident-timeline.js';
+import { INCIDENT_UX_CSS } from './incident-ux.js';
+import { INCIDENT_WORKSPACE_CSS } from './incident-workspace.js';
 import { darkThemeCss } from './theme.js';
 
 /**
@@ -1137,4 +1145,44 @@ li.info .ed-sev{color:var(--qa-color-primary)}
   .ind-dl{grid-template-columns:minmax(0,1fr)}
   .menu-btn span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 }
-${darkThemeCss()}`;
+/* Incidents : liste, déclaration, périmètre ; l'espace d'investigation suit. */
+.inc-live{margin:0;min-height:1.5em;display:flex;align-items:center;gap:8px;color:var(--qa-color-muted)}
+.inc-live:empty{display:none}
+.spin.sm{width:14px;height:14px;border-width:2px;flex:none}
+.err-box{padding:12px 14px;border-radius:12px;background:var(--qa-color-danger-soft);display:flex;flex-direction:column;gap:6px}
+.inc-form{gap:14px}
+.inc-form fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;min-width:0}
+.inc-form legend{font-size:14px;font-weight:600;margin-bottom:8px;padding:0}
+.inc-targets .choice{flex:1 1 220px}
+.inc-app-form{border:1px dashed var(--qa-color-border-strong)!important;border-radius:12px;padding:14px!important}
+.inc-app{padding:8px 0;border-top:1px solid var(--qa-color-border)}
+.inc-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px 18px;margin:0}
+.inc-dl>div{min-width:0;display:flex;flex-direction:column;gap:2px}
+.inc-dl>div.wide{grid-column:1 / -1}
+.inc-dl dt{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--qa-color-muted);font-weight:600}
+.inc-dl dd{margin:0;overflow-wrap:anywhere}
+.inc-ext{border:1px solid var(--qa-color-border);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:6px}
+.inc-ext p{margin:0}
+.inc-pre{margin:6px 0 0;padding:12px;border-radius:10px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font:12px/1.5 var(--qa-font-family-mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
+/* L'espace d'investigation : primitives partagées, structure, graphe, chronologie, traçabilité frontend, code, diagnostic, coquille. */
+${INCIDENT_PARTS_CSS}
+${INCIDENT_UX_CSS}
+${INCIDENT_GRAPH_CSS}
+${INCIDENT_TIMELINE_CSS}
+${INCIDENT_FRONTEND_TRACE_CSS}
+${INCIDENT_CODE_CSS}
+${INCIDENT_DIAGNOSIS_CSS}
+${INCIDENT_WORKSPACE_CSS}
+${darkThemeCss([
+  // L'accent sombre est clair (#8B8BFF) : le blanc dessus n'atteint que 2,9:1. Le texte prend la surface
+  // (environ 5,6:1, AA). Le thème clair garde le blanc.
+  // Une règle par sélecteur : darkThemeCss préfixe chaque sélecteur par l'hôte sombre.
+  ...[
+    '.btn.primary',
+    '.chip[aria-pressed="true"]',
+    '.badge',
+    '.avatar',
+    '.ed-seg button[aria-checked="true"]',
+    '.ed-con-new',
+  ].map((selector) => [selector, 'color:var(--qa-color-surface)'] as const),
+])}`;
