@@ -8,7 +8,10 @@ export interface NetworkTraceOptions {
   resourceTypes: readonly string[];
   /** Plafond par action (interrogations périodiques, statistiques…). */
   maxRequestsPerAction: number;
-  /** network.captureBodies : heure de départ et corps (erreurs, écritures xhr/fetch), masqués et tronqués. */
+  /**
+   * network.captureBodies : heure de départ, corps (erreurs, écritures xhr/fetch) et en-têtes de la liste
+   * blanche (type, longueur, identifiants de corrélation…), masqués et tronqués.
+   */
   captureBodies?: boolean;
 }
 
@@ -20,18 +23,92 @@ export interface CapturedNetworkExchange extends NetworkExchange {
   requestBody?: string;
   /** Corps de la réponse, JSON/texte seulement, masqué et tronqué. */
   responseBody?: string;
+  /** En-têtes de la requête de la liste blanche (filterHeaders), masqués et tronqués ; jamais d'authentification ni de cookie. */
+  requestHeaders?: Record<string, string>;
+  /** En-têtes de la réponse de la liste blanche (filterHeaders), masqués et tronqués. */
+  responseHeaders?: Record<string, string>;
 }
 
 /** Ce que network.captureBodies a gardé d'un échange (rien quand l'option est désactivée). */
 export function capturedFieldsOf(
   exchange: NetworkExchange,
-): Pick<CapturedNetworkExchange, 'startedAt' | 'requestBody' | 'responseBody'> {
+): Pick<
+  CapturedNetworkExchange,
+  'startedAt' | 'requestBody' | 'responseBody' | 'requestHeaders' | 'responseHeaders'
+> {
   const captured: CapturedNetworkExchange = exchange;
   return {
     ...(captured.startedAt !== undefined ? { startedAt: captured.startedAt } : {}),
     ...(captured.requestBody !== undefined ? { requestBody: captured.requestBody } : {}),
     ...(captured.responseBody !== undefined ? { responseBody: captured.responseBody } : {}),
+    ...(captured.requestHeaders !== undefined ? { requestHeaders: { ...captured.requestHeaders } } : {}),
+    ...(captured.responseHeaders !== undefined ? { responseHeaders: { ...captured.responseHeaders } } : {}),
   };
+}
+
+/**
+ * LES EN-TÊTES GARDÉS (network.captureBodies seulement) : une liste blanche de ce qui explique un
+ * échange — type et longueur du contenu, négociation, cache, redirection, identifiants de corrélation
+ * (traceparent, X-Request-Id, B3). Tout le reste est ignoré ; notamment jamais Authorization,
+ * Cookie, Set-Cookie, Proxy-*, X-Api-Key, ni un nom qui évoque un secret, un jeton ou une session.
+ */
+export const CAPTURED_HEADERS: readonly string[] = [
+  'accept',
+  'accept-language',
+  'cache-control',
+  'content-encoding',
+  'content-language',
+  'content-length',
+  'content-type',
+  'etag',
+  'location',
+  'retry-after',
+  'traceparent',
+  'x-correlation-id',
+  'x-request-id',
+  'x-b3-traceid',
+  'x-b3-spanid',
+  'x-b3-parentspanid',
+  'x-b3-sampled',
+  'b3',
+];
+const ALLOWED_HEADERS = new Set(CAPTURED_HEADERS);
+/** Refusé même s'il figurait un jour dans la liste blanche. */
+const SENSITIVE_HEADER =
+  /authorization|cookie|^proxy-|api[-_]?key|secret|token|session|credential|passw|private|signature|auth/i;
+/** Longueur maximale d'une valeur d'en-tête gardée (« … » compris : une seconde passe ne change rien). */
+export const MAX_HEADER_VALUE = 200;
+
+/** Une redirection : le chemin seulement (ni hôte, ni requête), comme les chemins des étapes. */
+function locationPath(value: string): string {
+  try {
+    const url = new URL(value, 'http://relative.invalid');
+    return `${url.pathname}${url.search ? '?…' : ''}`;
+  } catch {
+    return value.replace(/[?#].*$/, '');
+  }
+}
+
+/**
+ * Les en-têtes de la liste blanche, noms en minuscules, valeurs masquées (redactText), sans caractère
+ * de contrôle et tronquées ; `undefined` quand aucun n'est gardé.
+ */
+export function filterHeaders(
+  headers: Readonly<Record<string, string | undefined>> | undefined,
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const kept: [string, string][] = [];
+  for (const [rawName, rawValue] of Object.entries(headers)) {
+    const name = rawName.trim().toLowerCase();
+    if (rawValue === undefined || !ALLOWED_HEADERS.has(name) || SENSITIVE_HEADER.test(name)) continue;
+    const flat = rawValue.replace(/\p{Cc}+/gu, ' ').trim();
+    let value = redactText(name === 'location' ? locationPath(flat) : flat);
+    if (value.length > MAX_HEADER_VALUE) value = `${value.slice(0, MAX_HEADER_VALUE - 1)}…`;
+    kept.push([name, value]);
+  }
+  if (kept.length === 0) return undefined;
+  kept.sort(([left], [right]) => left.localeCompare(right));
+  return Object.fromEntries(kept);
 }
 
 /** Taille maximale d'un corps gardé (8 Kio). */
@@ -122,6 +199,8 @@ export class NetworkTraceRecorder implements PageObserver {
     };
     if (this.options.captureBodies) {
       pending.exchange.startedAt = new Date(pending.startedAt).toISOString();
+      const headers = filterHeaders(request.headers());
+      if (headers) pending.exchange.requestHeaders = headers;
       if (this.isWrite(request)) this.captureRequestBody(request, pending.exchange);
     }
     window.pending.set(request, pending);
@@ -179,7 +258,11 @@ export class NetworkTraceRecorder implements PageObserver {
     const pending = this.pendingOf(response.request());
     if (!pending) return;
     pending.exchange.status = response.status();
-    if (this.options.captureBodies) this.captureResponseBody(response, pending);
+    if (this.options.captureBodies) {
+      const headers = filterHeaders(response.headers());
+      if (headers) pending.exchange.responseHeaders = headers;
+      this.captureResponseBody(response, pending);
+    }
   };
   private readonly onFinished = (request: Request): void => {
     const pending = this.pendingOf(request);

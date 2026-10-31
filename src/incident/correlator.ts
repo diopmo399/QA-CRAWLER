@@ -13,6 +13,7 @@ import type {
   OutgoingHttpCall,
   RelationStatus,
   ReproductionRun,
+  SourceLocation,
 } from './model.js';
 
 /**
@@ -228,12 +229,78 @@ export function isRelevantRequest(request: HttpExchange): boolean {
   );
 }
 
-function nodeKindOf(symbol: CodeSymbol): GraphNodeKind {
-  if (symbol.kind === 'REPOSITORY' || symbol.kind === 'SQL_QUERY') return 'REPOSITORY';
+/** Le genre de nœud d'un symbole ; une méthode d'un dépôt (requête dérivée) est un accès aux données. */
+function nodeKindOf(symbol: CodeSymbol, parent?: CodeSymbol): GraphNodeKind {
+  if (symbol.kind === 'REPOSITORY' || symbol.kind === 'SQL_QUERY' || parent?.kind === 'REPOSITORY')
+    return 'REPOSITORY';
   if (symbol.layer === 'FRONTEND') return 'FRONTEND_CODE';
   const endpoint = symbol.kind === 'CONTROLLER' || symbol.kind === 'ENDPOINT';
   if (symbol.layer === 'BFF') return endpoint ? 'BFF_ENDPOINT' : 'BFF_SERVICE';
   return endpoint ? 'BACKEND_ENDPOINT' : 'BACKEND_SERVICE';
+}
+
+/** La localisation dans le code d'un symbole (la ligne de fin quand l'analyseur la connaît). */
+export function sourceOfSymbol(symbol: CodeSymbol): SourceLocation {
+  const endLine = symbol.detail?.endLine;
+  return {
+    applicationId: symbol.applicationId,
+    layer: symbol.layer,
+    file: symbol.file,
+    line: symbol.line,
+    ...(typeof endLine === 'number' && endLine > symbol.line ? { endLine } : {}),
+    symbolId: symbol.id,
+  };
+}
+
+/** La table (SQL natif) ou l'entité (JPQL) qu'une requête `@Query` lit ou écrit, d'après son texte. */
+export function queryTarget(sql: string): string | undefined {
+  return /\b(?:from|into|update|join)\s+([A-Za-z_][\w.]*)/i.exec(sql)?.[1];
+}
+
+export interface DataAccess {
+  /** L'entité gérée par le dépôt (`JpaRepository<Publisher, Long>`). */
+  entity?: string;
+  /** La table : `@Table(name)` de l'entité, ou celle d'une requête native. */
+  table?: string;
+  /** Les symboles qui l'établissent (dépôt, entité). */
+  evidence: string[];
+}
+
+/**
+ * Ce que le code dit des données touchées par un dépôt ou une de ses requêtes : l'entité (type générique
+ * du dépôt, ou nom cité par une requête JPQL) et la table (`@Table` de l'entité, ou requête native). Lu
+ * dans le code, jamais observé : aucune requête SQL n'est tracée pendant la reproduction.
+ */
+export function dataAccessOf(symbol: CodeSymbol, symbols: ReadonlyMap<string, CodeSymbol>): DataAccess {
+  const parent = symbol.parent ? symbols.get(symbol.parent) : undefined;
+  const repository =
+    symbol.kind === 'REPOSITORY' ? symbol : parent?.kind === 'REPOSITORY' ? parent : undefined;
+  const evidence: string[] = [];
+  let entity = typeof repository?.detail?.entity === 'string' ? repository.detail.entity : undefined;
+  let table: string | undefined;
+  const sql = typeof symbol.detail?.sql === 'string' ? symbol.detail.sql : undefined;
+  const target = sql ? queryTarget(sql) : undefined;
+  if (target && symbol.detail?.nativeQuery === true) table = target;
+  else if (target) entity = target.split('.').at(-1) ?? target;
+  if (repository && repository.id !== symbol.id) evidence.push(repository.id);
+  if (entity && !table) {
+    const declared = [...symbols.values()].find(
+      (candidate) => candidate.name === entity && candidate.detail?.entity === true,
+    );
+    if (declared) {
+      evidence.push(declared.id);
+      if (typeof declared.detail?.table === 'string') table = declared.detail.table;
+    }
+  }
+  return { ...(entity ? { entity } : {}), ...(table ? { table } : {}), evidence };
+}
+
+/** Le libellé d'un accès aux données : le dépôt, puis l'entité et la table quand le code les donne. */
+function dataLabel(name: string, access: DataAccess): string {
+  const parts = [name, access.entity, access.table ? `table ${access.table}` : undefined].filter(
+    (part): part is string => part !== undefined,
+  );
+  return parts.join(' · ');
 }
 
 class GraphBuilder {
@@ -274,16 +341,24 @@ class GraphBuilder {
 
 const symbolNodeId = (symbolId: string): string => `code:${symbolId}`;
 
-function symbolNode(symbol: CodeSymbol, evidence: string[] = []): GraphNode {
+function symbolNode(
+  symbol: CodeSymbol,
+  symbols: ReadonlyMap<string, CodeSymbol>,
+  evidence: string[] = [],
+): GraphNode {
+  const parent = symbol.parent ? symbols.get(symbol.parent) : undefined;
+  const kind = nodeKindOf(symbol, parent);
+  const access = kind === 'REPOSITORY' ? dataAccessOf(symbol, symbols) : undefined;
   return {
     id: symbolNodeId(symbol.id),
-    kind: nodeKindOf(symbol),
-    label: symbol.name,
+    kind,
+    label: access ? dataLabel(symbol.name, access) : symbol.name,
     layer: symbol.layer,
-    evidence: [symbol.id, ...evidence],
+    evidence: [symbol.id, ...(access?.evidence ?? []), ...evidence],
     symbolId: symbol.id,
     file: symbol.file,
     line: symbol.line,
+    source: sourceOfSymbol(symbol),
   };
 }
 
@@ -388,7 +463,7 @@ export function buildGraph(input: {
       });
 
     // Exceptions nommées par le corps de la réponse : OBSERVED (le serveur l'a écrit).
-    if (request.responseBody) linkObservedExceptions(graph, request, requestId, code);
+    if (request.responseBody) linkObservedExceptions(graph, request, requestId, code, symbols);
 
     if (!code) continue;
 
@@ -401,7 +476,7 @@ export function buildGraph(input: {
       const symbol = symbols.get(call.symbolId);
       const frontId = graph.node(
         symbol
-          ? symbolNode(symbol)
+          ? symbolNode(symbol, symbols)
           : {
               id: symbolNodeId(call.symbolId),
               kind: 'FRONTEND_CODE',
@@ -410,6 +485,7 @@ export function buildGraph(input: {
               evidence: [call.symbolId],
               file: call.file,
               line: call.line,
+              source: sourceOfCall(call),
             },
       );
       graph.edge({
@@ -489,8 +565,19 @@ function endpointNodeOf(
     layer: endpoint.layer,
     evidence: [endpoint.symbolId, ...(evidence ? [evidence] : [])],
     symbolId: endpoint.symbolId,
-    ...(symbol ? { file: symbol.file, line: symbol.line } : {}),
+    ...(symbol ? { file: symbol.file, line: symbol.line, source: sourceOfSymbol(symbol) } : {}),
   });
+}
+
+/** La localisation d'un appel HTTP sortant : la ligne de l'appel, dans le symbole qui l'émet. */
+function sourceOfCall(call: OutgoingHttpCall): SourceLocation {
+  return {
+    applicationId: call.applicationId,
+    layer: call.layer,
+    file: call.file,
+    line: call.line,
+    symbolId: call.symbolId,
+  };
 }
 
 /**
@@ -526,6 +613,7 @@ function walk(
         symbolId: thrown.id,
         file: thrown.file,
         line: thrown.line,
+        source: sourceOfSymbol(thrown),
       });
       graph.edge({
         from,
@@ -544,7 +632,7 @@ function walk(
     for (const call of code.calls.filter((item) => item.from === current.symbolId && item.to !== undefined)) {
       const target = call.to ? symbols.get(call.to) : undefined;
       if (!target) continue;
-      graph.node(symbolNode(target));
+      graph.node(symbolNode(target, symbols));
       graph.edge({
         from,
         to: symbolNodeId(target.id),
@@ -576,6 +664,7 @@ function linkOutgoing(
     symbolId: call.symbolId,
     file: call.file,
     line: call.line,
+    source: sourceOfCall(call),
   });
   graph.edge({
     from,
@@ -653,6 +742,7 @@ function linkObservedExceptions(
   request: HttpExchange,
   requestId: string,
   code: CodeIndex | undefined,
+  symbolMap: ReadonlyMap<string, CodeSymbol>,
 ): void {
   const body = request.responseBody ?? '';
   const npe = nullDereferenceIn(body);
@@ -682,7 +772,7 @@ function linkObservedExceptions(
     // Le code dont la chaîne de déréférencement correspond au message : une déduction, jamais une trace.
     if (code && npe && exception.name === 'NullPointerException')
       for (const symbol of dereferencingSymbols(code, npe)) {
-        const from = graph.node(symbolNode(symbol));
+        const from = graph.node(symbolNode(symbol, symbolMap));
         graph.edge({
           from,
           to: id,

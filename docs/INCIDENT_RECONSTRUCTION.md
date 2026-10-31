@@ -43,9 +43,13 @@ src/incident/
   report.ts           Investigation Report Generator (JSON, Markdown)
   regression.ts       Regression Test Generator (flow de la bibliothèque, jamais ajouté sans validation)
   environments.ts     Execution Environment Manager : un contrat, trois adaptateurs (LOCAL, REMOTE, ARO)
-  service.ts          l'orchestration
+  timeline.ts         la chronologie unifiée (actions, requêtes, erreurs, journaux, code, vérifications)
+  frontend-trace.ts   la traçabilité frontend d'une action (élément → … → requête → erreur affichée)
+  service.ts          l'orchestration (et la lecture du code du périmètre pour l'explorateur)
 src/sdk/server/incidents.ts   les routes HTTP
-src/sdk/ui/dashboard-incidents*.ts   les écrans du Dashboard
+src/sdk/core/incident-contracts.ts   le contrat partagé avec le navigateur
+src/sdk/ui/dashboard-incidents*.ts   la liste et la déclaration des incidents
+src/sdk/ui/incident-*.ts             l'espace d'investigation (voir § 9)
 ```
 
 La reproduction et toute vérification qui rejoue l'application passent par le **même chemin que les
@@ -120,6 +124,9 @@ jouer un environnement qui permet les écritures ou approuver une vérification 
 | GET        | `/incidents/:i/report?format=json\|markdown`                 | rapport                                          |
 | POST       | `/incidents/:i/regression[/run\|/accept\|/reject]`           | test de non-régression                           |
 | POST       | `/incidents/:i/cancel`, `/resume`                            | annuler, reprendre                               |
+| GET        | `/incidents/:i/sources`                                      | fichiers lisibles du périmètre (droit `RUN`)     |
+| GET        | `/incidents/:i/source?application=&file=`                    | un fichier, en lecture seule, valeurs masquées   |
+| GET        | `/incidents/:i/screenshot?reproduction=&file=`               | une capture enregistrée (URL `data:`)            |
 
 ## 7. Le scénario d'intégration (incident connu)
 
@@ -159,3 +166,39 @@ joue toute l'investigation avec le vrai moteur et Chromium. Résultat obtenu sur
 - Horodatage des actions : le moteur ne garde pas l'heure de début de chaque étape ; elle est estimée à partir du
   début du flow et des durées des étapes précédentes. Une requête vue pendant la fenêtre de l'étape reste
   `OBSERVED` ; un rattachement par l'heure seule est `INFERRED`.
+
+## 9. L'espace d'investigation (Dashboard)
+
+« Investiguer › Investigations » ouvre l'espace d'investigation d'un incident ; la spécification UX est dans
+`docs/incident-reconstruction/ux-spec.md`, l'audit de départ dans `docs/incident-reconstruction/audit.md`, la revue
+QA et accessibilité dans `docs/incident-reconstruction/qa-review.md`.
+
+- **En-tête** : titre, gravité, environnement, scénario, statut, actions selon les droits ; **progression** en dix
+  étapes (Description → Périmètre → Environnement → Reproduction → Preuves → Analyse du code → Traçabilité →
+  Diagnostic → Rapport → Non-régression), calculée d'après l'investigation.
+- **Quinze onglets** : vue d'ensemble, périmètre, environnement, chronologie, traçabilité, requêtes HTTP, frontend,
+  BFF, backend, journaux, hypothèses, expériences, diagnostic, rapport, non-régression (navigation clavier : flèches, Début, Fin), chacun avec ses états chargement / vide / erreur /
+  accès refusé.
+- **Graphe full stack** en bande pleine largeur : couches Frontend, Réseau, BFF, Backend, Données ; statut de chaque
+  relation (trait et légende), chemin d'erreur, zoom avec l'échelle réelle et une échelle minimale lisible,
+  déplacement, un seul arrêt de tabulation (les flèches parcourent les nœuds) ; le tableau des relations donne la
+  même information sous forme accessible.
+- **Sélection synchronisée** (`src/sdk/ui/incident-links.ts`) : nœud, relation, requête, événement, preuve,
+  symbole, fichier, hypothèse, vérification et étape ont une clé ; les liens viennent des données de
+  l'investigation (jamais d'une supposition) et sont parcourus sur deux sauts. Une puce de preuve n'ouvre que ce
+  qu'elle désigne réellement ; une référence sans élément sélectionnable reste du texte.
+- **Panneau contextuel** : le détail de la sélection (preuve, requête avec en-têtes autorisés et corps masqué,
+  extrait de code, capture, erreur, hypothèse, vérification).
+- **Explorateur de code** : arborescence du périmètre, coloration TypeScript / Java / YAML / XML / properties,
+  lignes désignées par l'investigation (erreur, chemin, hypothèse) ; lecture seule, chemins absolus et `..`
+  refusés, liens symboliques qui sortent du dépôt refusés, valeurs sensibles des fichiers de configuration
+  masquées. Les méthodes du code n'ont jamais de durée : seules les étapes et les requêtes observées en ont.
+- **Démonstration** (`src/sdk/ui/incident-demo.ts`) : un incident fictif du catalogue de livres, bandeau
+  « Données de démonstration » toujours visible, aucun appel au serveur ; ce n'est jamais un diagnostic réel.
+
+Composants : `incident-workspace.ts` (coquille), `incident-workspace-controller.ts` (chargement, suivi toutes les
+1,5 s sans redessiner si la révision n'a pas changé, sélection, clavier, annonces dans la zone vivante du
+Dashboard), `incident-ux.ts` (en-tête, progression, onglets, environnement), `incident-graph.ts`,
+`incident-timeline.ts`, `incident-frontend-trace.ts`, `incident-code.ts`, `incident-diagnosis.ts`,
+`incident-parts.ts` (primitives partagées : sélection, statuts de relation, liens vers le code, puces de preuves,
+états de panneau, bandeau de démonstration).

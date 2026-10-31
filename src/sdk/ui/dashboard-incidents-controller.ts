@@ -1,36 +1,41 @@
 import { QaCrawlerError, type QaCrawlerClient } from '../core/client.js';
 import type { Incident } from '../core/incident-contracts.js';
-import { can } from './dashboard-access.js';
 import {
   applicationOf,
   emptyApplicationForm,
-  emptyExperimentForm,
   emptyExtensionForm,
   emptyIncidentForm,
   emptyIncidentsUi,
-  INCIDENT_TABS,
   incidentFormProblems,
   incidentInputOf,
   needsPolling,
-  parseParams,
   scopeFormOf,
   scopeOf,
   type ApplicationForm,
-  type ExperimentForm,
   type ExtensionForm,
   type IncidentForm,
-  type IncidentTab,
   type IncidentsUi,
+  type InvestigationRow,
   type ScopeForm,
 } from './dashboard-incidents.js';
 import type { DashboardRoute, DashboardState } from './dashboard-view.js';
+import { workspaceProgress } from './incident-ux.js';
+import {
+  WorkspaceController,
+  type OpOptions,
+  type OpRun,
+  type WorkspaceHost,
+} from './incident-workspace-controller.js';
+import { DEMO_INCIDENT_ID, isDemoIncident } from './incident-workspace.js';
+
+export { INCIDENT_POLL_MS } from './incident-workspace-controller.js';
 
 /**
- * LE CONTRÔLEUR DES INCIDENTS : il ne fait qu'appeler le client du SDK (déclarer, délimiter,
- * reproduire, analyser, vérifier, diagnostiquer, proposer un test) et garde l'état de la page. Une
- * reproduction ou une vérification en cours est suivie en relisant l'incident jusqu'à sa fin, et le
- * suivi s'arrête dès qu'on quitte la page. Une vérification avec effets de bord n'est exécutée
- * qu'après une approbation explicite dans la page ; le serveur revérifie droits et périmètre.
+ * LE CONTRÔLEUR DES INCIDENTS : la liste, la déclaration, la liste des investigations, l'ouverture d'un
+ * incident (ou de la démonstration), le périmètre et ses extensions, la reproduction, l'annulation et la
+ * reprise. L'espace d'investigation (onglets, sélection, graphe, code, diagnostic, suivi) est tenu par
+ * `WorkspaceController`, à qui il passe les `data-action` `ws-…`. Une seule opération à la fois ; un 409
+ * (révision périmée) relit l'incident et le dit. Le serveur revérifie droits et périmètre.
  */
 export interface IncidentsHost {
   readonly state: DashboardState;
@@ -44,8 +49,8 @@ export interface IncidentsHost {
 
 type IncidentRoute = Extract<DashboardRoute, { view: 'incident' }>;
 
-/** Une relecture par seconde et demie pendant une reproduction (comme le suivi des tests générés). */
-export const INCIDENT_POLL_MS = 1500;
+/** Les investigations dont la progression est lue (les plus récentes d'abord). */
+const MAX_PROGRESS = 40;
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const detailsOf = (error: unknown): string[] => (error instanceof QaCrawlerError ? error.details : []);
@@ -70,11 +75,27 @@ const SCOPE_FIELDS: Record<string, keyof Omit<ScopeForm, 'applications' | 'app' 
 };
 
 export class IncidentsController {
-  private timer: ReturnType<typeof setTimeout> | undefined;
   /** Le sélecteur à focaliser après le prochain chargement (ouverture d'une page). */
   private pendingFocus: string | undefined;
+  /** L'espace d'investigation de l'incident ouvert. */
+  readonly workspace: WorkspaceController;
 
-  constructor(private readonly host: IncidentsHost) {}
+  constructor(private readonly host: IncidentsHost) {
+    const workspaceHost = {
+      root: host.root,
+      api: () => host.api(),
+      paint: () => {
+        host.paint();
+      },
+      op: (busy: string, run: OpRun, options?: OpOptions) => this.op(busy, run, options),
+      receive: (incident: Incident) => {
+        this.receive(incident);
+      },
+      focus: (selector: string) => this.focus(selector),
+    };
+    Object.defineProperty(workspaceHost, 'state', { get: () => host.state });
+    this.workspace = new WorkspaceController(workspaceHost as WorkspaceHost);
+  }
 
   get ui(): IncidentsUi {
     this.host.state.inc ??= emptyIncidentsUi();
@@ -102,7 +123,7 @@ export class IncidentsController {
     if (this.host.root.activeElement) return;
     for (const candidate of [
       selector,
-      '[data-action="inc-tab"][aria-selected="true"]',
+      '[data-action="ws-ux-tab"][aria-selected="true"]',
       '[data-action="inc-refresh"]',
     ])
       if (candidate && this.focus(candidate)) return;
@@ -114,18 +135,13 @@ export class IncidentsController {
   leave(route: DashboardRoute): void {
     const ui = this.ui;
     if (route.view !== 'incident' || route.incidentId !== ui.incident?.id) {
-      this.stop();
+      this.workspace.stop();
       Object.assign(ui, {
         incident: undefined,
-        capabilities: undefined,
-        capabilitiesError: undefined,
+        loadError: undefined,
         validation: undefined,
-        report: undefined,
-        reportError: undefined,
         scopeForm: undefined,
-        approving: undefined,
         extension: emptyExtensionForm(),
-        experiment: emptyExperimentForm(),
       });
     }
     if (route.view !== 'incidents' || !route.create) ui.form = undefined;
@@ -136,7 +152,7 @@ export class IncidentsController {
     ui.notice = undefined;
   }
 
-  /** Ce que la vue affiche : la liste, ou l'incident et les données de son onglet. */
+  /** Ce que la vue affiche : la liste, les investigations, ou l'incident (et ce que son onglet lit). */
   async load(api: QaCrawlerClient, route: DashboardRoute, current: () => boolean): Promise<void> {
     const ui = this.ui;
     if (route.view === 'incidents') {
@@ -146,11 +162,50 @@ export class IncidentsController {
       if (route.create && !ui.form) ui.form = emptyIncidentForm(this.host.state.project);
       return;
     }
+    if (route.view === 'investigations') {
+      const list = await api.incidents.list(route.projectId);
+      if (!current()) return;
+      ui.list = list;
+      const open = [...list]
+        .filter((summary) => summary.state !== 'DRAFT')
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      // La progression demande l'incident entier : lue pour les plus récentes, en parallèle.
+      const read = await Promise.allSettled(
+        open.slice(0, MAX_PROGRESS).map((summary) => api.incidents.get(route.projectId, summary.id)),
+      );
+      if (!current()) return;
+      ui.investigations = open.map((summary, index): InvestigationRow => {
+        const result = read[index];
+        return result?.status === 'fulfilled'
+          ? { summary, progress: workspaceProgress(result.value) }
+          : { summary };
+      });
+      return;
+    }
     if (route.view !== 'incident') return;
-    const incident = await api.incidents.get(route.projectId, route.incidentId);
-    if (!current()) return;
-    this.receive(incident);
-    await this.loadTab(api, route, current);
+    if (isDemoIncident(route.incidentId)) {
+      // La démonstration : ses données viennent du module, aucune lecture du serveur.
+      const demo = await this.workspace.demo();
+      if (!current()) return;
+      ui.loadError = undefined;
+      this.receive(demo.demoIncident(), true);
+      this.workspace.ensure();
+      return;
+    }
+    try {
+      const incident = await api.incidents.get(route.projectId, route.incidentId);
+      if (!current()) return;
+      ui.loadError = undefined;
+      this.receive(incident, false);
+      this.workspace.ensure();
+    } catch (error) {
+      if (!current()) return;
+      ui.incident = undefined;
+      ui.loadError = {
+        message: message(error),
+        denied: error instanceof QaCrawlerError && error.status === 403,
+      };
+    }
   }
 
   /** Après le dessin d'un chargement : le focus demandé (ouverture d'un incident). */
@@ -160,118 +215,53 @@ export class IncidentsController {
     if (selector) this.focus(selector);
   }
 
-  /** Les données propres à l'onglet : capacités (Environnement), rapport (Chronologie, Rapport). */
-  private async loadTab(
-    api: QaCrawlerClient,
-    route: IncidentRoute,
-    current: () => boolean = () => true,
-  ): Promise<void> {
-    const ui = this.ui;
-    const tab = route.tab ?? 'scope';
-    const same = (): boolean => current() && this.route()?.incidentId === route.incidentId;
-    if (tab === 'environment') {
-      try {
-        const capabilities = await api.incidents.capabilities(route.projectId, route.incidentId);
-        if (!same()) return;
-        ui.capabilities = capabilities;
-        ui.capabilitiesError = undefined;
-      } catch (error) {
-        if (same()) ui.capabilitiesError = message(error);
-      }
-    } else if (tab === 'timeline' || tab === 'report') {
-      try {
-        const report = await api.incidents.report(route.projectId, route.incidentId);
-        if (!same()) return;
-        ui.report = report;
-        ui.reportError = undefined;
-      } catch (error) {
-        if (same()) ui.reportError = message(error);
-      }
-    }
-  }
-
   /** Un incident relu : il remplace l'affiché ; un incident qui avance encore est suivi. */
-  private receive(incident: Incident): void {
+  receive(incident: Incident, demo = this.ui.ws.demo && isDemoIncident(incident.id)): void {
     const ui = this.ui;
     const before = ui.incident;
-    // Le rapport est calculé sur l'incident : une nouvelle révision le rend périmé.
-    if (before && before.revision !== incident.revision) ui.report = undefined;
+    this.workspace.adopt(incident, demo);
     ui.incident = incident;
-    if (before?.state === 'REPRODUCING' && incident.state !== 'REPRODUCING')
+    if (before?.id === incident.id && before.state === 'REPRODUCING' && incident.state !== 'REPRODUCING')
       ui.notice = this.host.state.t.inc.done.reproductionOver(
         this.host.state.t.inc.states[incident.state] ?? incident.state,
       );
-    if (needsPolling(incident)) this.poll();
-  }
-
-  /** Relit l'incident tant qu'il avance sur le serveur ; s'arrête quand on quitte sa page. */
-  private poll(): void {
-    if (this.timer) return;
-    const api = this.host.api();
-    const route = this.route();
-    if (!api || !route) return;
-    const { projectId, incidentId } = route;
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      if (this.route()?.incidentId !== incidentId) return;
-      // Une opération en cours rendra l'incident à jour : le suivi attend le tour suivant.
-      if (this.ui.busy !== undefined) {
-        this.poll();
-        return;
-      }
-      void api.incidents
-        .get(projectId, incidentId)
-        .then(async (incident) => {
-          const now = this.route();
-          if (now?.incidentId !== incidentId) return;
-          this.receive(incident);
-          if (!this.ui.report && (now.tab === 'timeline' || now.tab === 'report'))
-            await this.loadTab(api, now);
-          this.paintKeepingFocus();
-        })
-        .catch(() => {
-          // Une lecture manquée n'arrête pas le suivi : la suivante réessaie.
-          this.poll();
-        });
-    }, INCIDENT_POLL_MS);
+    if (!demo && needsPolling(incident)) this.workspace.poll();
   }
 
   stop(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
+    this.workspace.stop();
   }
 
   /** Le suivi est-il actif (tests) ? */
   get polling(): boolean {
-    return this.timer !== undefined;
+    return this.workspace.polling;
   }
 
   dispose(): void {
-    this.stop();
+    this.workspace.stop();
   }
 
   // ── Opérations ─────────────────────────────────────────────────────────────────────────────
 
   /**
    * Une opération sur l'incident ouvert : une à la fois, son erreur (et ses raisons) dite dans la page.
-   * Une révision périmée (409) relit l'incident et le dit.
+   * Une révision périmée (409) relit l'incident et le dit. Jamais en démonstration.
    */
-  private async op(
-    busy: string,
-    run: (api: QaCrawlerClient, projectId: string, incident: Incident) => Promise<Incident | undefined>,
-    options: {
-      notice?: (incident: Incident) => string | undefined;
-      focus?: string;
-      after?: () => void;
-      /** Une modification sur la révision lue : un 409 veut dire que l'incident a changé entre-temps. */
-      revision?: boolean;
-    } = {},
-  ): Promise<void> {
+  async op(busy: string, run: OpRun, options: OpOptions = {}): Promise<void> {
     const api = this.host.api();
     const route = this.route();
     const ui = this.ui;
     const incident = ui.incident;
-    if (!api || !route || incident?.id !== route.incidentId || ui.busy !== undefined) return;
+    if (!api || !route || incident?.id !== route.incidentId || ui.busy !== undefined) {
+      options.settle?.();
+      return;
+    }
+    if (ui.ws.demo) {
+      ui.notice = this.host.state.t.inc.demo.unavailable;
+      options.settle?.();
+      this.host.paint();
+      return;
+    }
     ui.busy = busy;
     ui.error = undefined;
     ui.details = undefined;
@@ -285,11 +275,15 @@ export class IncidentsController {
       }
       options.after?.();
     } catch (error) {
-      ui.error = message(error);
-      ui.details = detailsOf(error);
+      const conflict = error instanceof QaCrawlerError && error.status === 409;
+      const text = conflict && options.revision ? this.host.state.t.inc.conflict : message(error);
+      if (options.onError) options.onError(text, detailsOf(error));
+      else {
+        ui.error = text;
+        ui.details = detailsOf(error);
+      }
       // Un refus 409 (révision périmée, état qui a changé) : l'incident du serveur est relu.
-      if (error instanceof QaCrawlerError && error.status === 409) {
-        if (options.revision) ui.error = this.host.state.t.inc.conflict;
+      if (conflict) {
         try {
           const fresh = await api.incidents.get(route.projectId, incident.id);
           if (this.route()?.incidentId === incident.id) this.receive(fresh);
@@ -299,14 +293,8 @@ export class IncidentsController {
       }
     }
     ui.busy = undefined;
-    const now = this.route();
-    if (now?.incidentId === incident.id && !ui.report && (now.tab === 'timeline' || now.tab === 'report'))
-      await this.loadTab(api, now);
+    options.settle?.();
     this.paintKeepingFocus(options.focus);
-  }
-
-  private stateLabel(state: string): string {
-    return this.host.state.t.inc.states[state] ?? state;
   }
 
   private async create(): Promise<void> {
@@ -330,7 +318,7 @@ export class IncidentsController {
     try {
       const incident = await api.incidents.create(route.projectId, incidentInputOf(form));
       ui.busy = undefined;
-      this.pendingFocus = '#inc-tab-scope';
+      this.pendingFocus = '#ws-ux-tab-scope';
       this.host.navigate({
         view: 'incident',
         projectId: route.projectId,
@@ -346,61 +334,10 @@ export class IncidentsController {
     }
   }
 
-  private download(name: string, content: string, type: string): void {
-    const url = URL.createObjectURL(new Blob([content], { type }));
-    const anchor = this.host.root.ownerDocument.createElement('a');
-    anchor.href = url;
-    anchor.download = name;
-    this.host.root.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => {
-      URL.revokeObjectURL(url);
-    }, 1000);
-  }
-
-  private exportReport(format: 'json' | 'markdown'): void {
-    const t = this.host.state.t.inc;
-    void this.op(`inc-export-${format}`, async (api, projectId, incident) => {
-      const file = `incident-${incident.id}.${format === 'json' ? 'json' : 'md'}`;
-      if (format === 'json') {
-        const report = await api.incidents.report(projectId, incident.id);
-        this.ui.report = report;
-        this.download(file, `${JSON.stringify(report, null, 2)}\n`, 'application/json;charset=utf-8');
-      } else {
-        const markdown = await api.incidents.reportMarkdown(projectId, incident.id);
-        this.download(file, markdown, 'text/markdown;charset=utf-8');
-      }
-      this.ui.notice = t.done.exported(file);
-      return undefined;
-    });
-  }
-
-  /** Passer d'un onglet à l'autre : la route change sur place, les données de l'onglet sont lues. */
-  private selectTab(tab: IncidentTab): void {
-    const route = this.route();
-    if (!route) return;
-    this.host.state.route = { ...route, tab };
-    this.ui.approving = undefined;
-    this.ui.invalid = undefined;
-    this.host.paint();
-    this.focus(`#inc-tab-${tab}`);
-    const api = this.host.api();
-    if (!api) return;
-    const next = this.route();
-    if (!next) return;
-    const needs =
-      (tab === 'environment' && !this.ui.capabilities) ||
-      ((tab === 'timeline' || tab === 'report') && !this.ui.report);
-    if (needs)
-      void this.loadTab(api, next).then(() => {
-        if (this.route()?.tab === tab) this.paintKeepingFocus(`#inc-tab-${tab}`);
-      });
-  }
-
   // ── Événements de la page ──────────────────────────────────────────────────────────────────
 
   click(action: string, target: HTMLElement): boolean {
+    if (action.startsWith('ws-')) return this.workspace.click(action, target);
     const ui = this.ui;
     const t = this.host.state.t.inc;
     const state = this.host.state;
@@ -429,17 +366,18 @@ export class IncidentsController {
       case 'inc-open': {
         const incidentId = target.dataset.incident;
         if (!incidentId || !('projectId' in route) || !route.projectId) return true;
-        this.pendingFocus = '#inc-tab-scope';
+        this.pendingFocus = '#ws-ux-tab-overview';
         this.host.navigate({ view: 'incident', projectId: route.projectId, incidentId });
         return true;
       }
-      case 'inc-tab': {
-        const tab = INCIDENT_TABS.find((entry) => entry === target.dataset.tab);
-        if (tab) this.selectTab(tab);
+      case 'inc-demo': {
+        if (!('projectId' in route) || !route.projectId) return true;
+        this.pendingFocus = '#ws-ux-tab-overview';
+        this.host.navigate({ view: 'incident', projectId: route.projectId, incidentId: DEMO_INCIDENT_ID });
         return true;
       }
       case 'inc-scope-edit':
-        if (!ui.incident) return true;
+        if (!ui.incident || ui.ws.demo) return true;
         ui.scopeForm = scopeFormOf(ui.incident.scope);
         this.host.paint();
         this.focus('[data-inc="scope.mode"]');
@@ -502,17 +440,6 @@ export class IncidentsController {
         );
         return true;
       }
-      case 'inc-capabilities':
-        void this.op(
-          'inc-capabilities',
-          async (api, projectId, incident) => {
-            ui.capabilities = await api.incidents.capabilities(projectId, incident.id);
-            ui.capabilitiesError = undefined;
-            return undefined;
-          },
-          { focus: '[data-action="inc-capabilities"]' },
-        );
-        return true;
       case 'inc-reproduce':
         void this.op(
           'inc-reproduce',
@@ -523,137 +450,8 @@ export class IncidentsController {
           },
         );
         return true;
-      case 'inc-analyze':
-        void this.op(
-          'inc-analyze',
-          (api, projectId, incident) => api.incidents.analyze(projectId, incident.id),
-          {
-            notice: (incident) => t.done.analyzed(incident.investigation.hypotheses.length),
-            focus: '[data-action="inc-analyze"]',
-          },
-        );
-        return true;
-      case 'inc-plan': {
-        const hypothesis = ui.incident?.investigation.hypotheses.find((entry) => entry.id === block);
-        const verification = hypothesis?.verifications[Number(target.dataset.index)];
-        if (!hypothesis || !verification) return true;
-        void this.op(
-          'inc-plan',
-          (api, projectId, incident) =>
-            api.incidents.planExperiment(projectId, incident.id, {
-              kind: verification.kind,
-              params: verification.params,
-              hypothesisId: hypothesis.id,
-            }),
-          {
-            notice: () => t.done.planned,
-            focus: `[data-action="inc-plan"][data-block="${CSS.escape(block)}"][data-index="${target.dataset.index ?? '0'}"]`,
-          },
-        );
-        return true;
-      }
-      case 'inc-run': {
-        const experiment = ui.incident?.investigation.experiments.find((entry) => entry.id === block);
-        if (!experiment) return true;
-        if (experiment.sideEffects || experiment.status === 'APPROVAL_REQUIRED') {
-          // L'approbation se donne dans la page, en connaissance de cause (jamais une boîte du navigateur).
-          ui.approving = experiment.id;
-          this.host.paint();
-          if (!this.focus('[data-action="inc-approve-yes"]')) this.focus('[data-action="inc-approve-no"]');
-          return true;
-        }
-        void this.op(
-          'inc-run',
-          (api, projectId, incident) => api.incidents.runExperiment(projectId, incident.id, experiment.id),
-          {
-            notice: (incident) => this.experimentNotice(incident, experiment.id),
-          },
-        );
-        return true;
-      }
-      case 'inc-approve-no':
-        ui.approving = undefined;
-        this.host.paint();
-        this.focus(`[data-action="inc-run"][data-block="${CSS.escape(block)}"]`);
-        return true;
-      case 'inc-approve-yes': {
-        if (ui.approving !== block || !can(state, 'RUN_WRITES')) return true;
-        void this.op(
-          'inc-approve-yes',
-          (api, projectId, incident) =>
-            api.incidents.runExperiment(projectId, incident.id, block, { approve: true }),
-          {
-            notice: (incident) => this.experimentNotice(incident, block),
-            after: () => {
-              ui.approving = undefined;
-            },
-            focus: '[data-action="inc-tab"][aria-selected="true"]',
-          },
-        );
-        return true;
-      }
-      case 'inc-diagnose':
-        void this.op(
-          'inc-diagnose',
-          (api, projectId, incident) => api.incidents.diagnose(projectId, incident.id),
-          {
-            notice: (incident) => {
-              const status = incident.investigation.diagnosis?.status;
-              return status ? t.done.diagnosed(t.diagnosisStatus[status] ?? status) : undefined;
-            },
-            focus: '[data-action="inc-diagnose"]',
-          },
-        );
-        return true;
-      case 'inc-report':
-        void this.op(
-          'inc-report',
-          async (api, projectId, incident) => {
-            ui.report = await api.incidents.report(projectId, incident.id);
-            ui.reportError = undefined;
-            return undefined;
-          },
-          { focus: '[data-action="inc-report"]' },
-        );
-        return true;
-      case 'inc-export-json':
-        this.exportReport('json');
-        return true;
-      case 'inc-export-markdown':
-        this.exportReport('markdown');
-        return true;
-      case 'inc-reg-propose':
-        void this.op(
-          'inc-reg-propose',
-          (api, projectId, incident) => api.incidents.proposeRegression(projectId, incident.id),
-          { notice: () => t.done.regressionProposed, focus: '[data-action="inc-reg-run"]' },
-        );
-        return true;
-      case 'inc-reg-run':
-        void this.op(
-          'inc-reg-run',
-          (api, projectId, incident) => api.incidents.runRegression(projectId, incident.id),
-          {
-            notice: () => t.done.regressionRun,
-            focus: '[data-action="inc-reg-run"]',
-          },
-        );
-        return true;
-      case 'inc-reg-accept':
-        void this.op(
-          'inc-reg-accept',
-          (api, projectId, incident) => api.incidents.acceptRegression(projectId, incident.id),
-          { notice: () => t.done.regressionAccepted, focus: '[data-action="inc-reg-run"]' },
-        );
-        return true;
-      case 'inc-reg-reject':
-        void this.op(
-          'inc-reg-reject',
-          (api, projectId, incident) => api.incidents.rejectRegression(projectId, incident.id),
-          { notice: () => t.done.regressionRejected, focus: '[data-action="inc-reg-propose"]' },
-        );
-        return true;
       case 'inc-cancel':
+        if (ui.ws.demo) return true;
         ui.confirmCancel = true;
         this.host.paint();
         this.focus('[data-action="inc-cancel-yes"]');
@@ -689,12 +487,6 @@ export class IncidentsController {
       default:
         return false;
     }
-  }
-
-  private experimentNotice(incident: Incident, experimentId: string): string | undefined {
-    const t = this.host.state.t.inc;
-    const done = incident.investigation.experiments.find((entry) => entry.id === experimentId);
-    return done ? t.done.experimentOver(t.experimentStatus[done.status] ?? done.status) : undefined;
   }
 
   submit(form: HTMLFormElement): boolean {
@@ -758,33 +550,14 @@ export class IncidentsController {
         );
         return true;
       }
-      case 'inc-plan-form': {
-        const experiment = ui.experiment;
-        void this.op(
-          'inc-plan-form',
-          (api, projectId, incident) =>
-            api.incidents.planExperiment(projectId, incident.id, {
-              kind: experiment.kind,
-              params: parseParams(experiment.params),
-              ...(experiment.hypothesisId ? { hypothesisId: experiment.hypothesisId } : {}),
-            }),
-          {
-            notice: () => t.done.planned,
-            after: () => {
-              ui.experiment = emptyExperimentForm();
-            },
-            focus: '[data-inc="exp.kind"]',
-          },
-        );
-        return true;
-      }
       default:
-        return false;
+        return this.workspace.submit(form);
     }
   }
 
   /** Une saisie : gardée dans l'état sans redessiner (le focus et le curseur restent). */
   input(target: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement): boolean {
+    if (target.dataset.wsField !== undefined) return this.workspace.input(target);
     const key = target.dataset.inc;
     if (!key) return false;
     const ui = this.ui;
@@ -812,16 +585,13 @@ export class IncidentsController {
       if (field in ui.extension) (ui.extension as unknown as Record<string, string>)[field] = value;
       return true;
     }
-    if (key.startsWith('exp.')) {
-      const field = key.slice(4) as keyof ExperimentForm;
-      if (field in ui.experiment) (ui.experiment as unknown as Record<string, string>)[field] = value;
-      return true;
-    }
     return key === 'target';
   }
 
-  /** Un choix (liste, bouton radio) : gardé ; la cible et la nature d'extension changent le formulaire. */
+  /** Un choix (liste, bouton radio, case à cocher) : gardé ; la cible et la nature d'extension changent le formulaire. */
   change(target: HTMLInputElement | HTMLSelectElement): boolean {
+    if (target.dataset.wsField !== undefined || target.dataset.action?.startsWith('ws-'))
+      return this.workspace.change(target);
     const key = target.dataset.inc;
     if (!key) return false;
     const ui = this.ui;
@@ -837,40 +607,32 @@ export class IncidentsController {
     return true;
   }
 
-  /** Les flèches passent d'un onglet à l'autre ; Échap referme une approbation ou une confirmation. */
+  /** Échap referme la confirmation d'annulation ; le reste du clavier de l'espace va à son contrôleur. */
   keydown(event: KeyboardEvent): boolean {
-    const route = this.route();
-    if (!route) return false;
+    if (!this.route()) return false;
     const ui = this.ui;
-    if (event.key === 'Escape' && ui.approving) {
-      const block = ui.approving;
-      ui.approving = undefined;
-      this.host.paint();
-      this.focus(`[data-action="inc-run"][data-block="${CSS.escape(block)}"]`);
-      return true;
-    }
     if (event.key === 'Escape' && ui.confirmCancel) {
       ui.confirmCancel = false;
       this.host.paint();
       this.focus('[data-action="inc-cancel"]');
       return true;
     }
-    const target = event.target as HTMLElement | null;
-    if (target?.dataset.action !== 'inc-tab') return false;
-    const at = INCIDENT_TABS.indexOf(route.tab ?? 'scope');
-    const next =
-      event.key === 'ArrowRight'
-        ? INCIDENT_TABS[(at + 1) % INCIDENT_TABS.length]
-        : event.key === 'ArrowLeft'
-          ? INCIDENT_TABS[(at - 1 + INCIDENT_TABS.length) % INCIDENT_TABS.length]
-          : event.key === 'Home'
-            ? INCIDENT_TABS[0]
-            : event.key === 'End'
-              ? INCIDENT_TABS[INCIDENT_TABS.length - 1]
-              : undefined;
-    if (!next) return false;
-    event.preventDefault();
-    this.selectTab(next);
-    return true;
+    return this.workspace.keydown(event);
+  }
+
+  pointerDown(event: PointerEvent): boolean {
+    return this.route() ? this.workspace.pointerDown(event) : false;
+  }
+
+  wheel(event: WheelEvent): boolean {
+    return this.route() ? this.workspace.wheel(event) : false;
+  }
+
+  beforePaint(): void {
+    if (this.route()) this.workspace.beforePaint();
+  }
+
+  afterPaint(): void {
+    if (this.route()) this.workspace.afterPaint();
   }
 }

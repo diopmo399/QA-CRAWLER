@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   buildGraph,
   citedPaths,
+  dataAccessOf,
   exceptionsIn,
   matchEndpoint,
   normalizePath,
   nullDereferenceIn,
   pathMatches,
+  queryTarget,
+  sourceOfSymbol,
   weakest,
 } from '../../src/incident/correlator.js';
 import type {
@@ -441,5 +444,185 @@ describe('buildGraph', () => {
     expect(edge(nothing, 'incident:inc_catalogue01', 'scenario:creer-livre')?.status).toBe('INFERRED');
     expect(edge(nothing, 'scenario:creer-livre', 'unknown:inc_catalogue01:request')?.status).toBe('UNKNOWN');
     expect(nothing.edges.some((item) => item.status === 'OBSERVED')).toBe(false);
+  });
+});
+
+describe('buildGraph — code locations and data access', () => {
+  /** Le détail d'un symbole remplacé sur une copie (les symboles de S sont partagés par les tests). */
+  const withDetail = (index: CodeIndex, id: string, detail: CodeSymbol['detail']): CodeIndex => ({
+    ...index,
+    symbols: index.symbols.map((item) => (item.id === id ? { ...item, detail } : item)),
+  });
+
+  it('sets a SourceLocation on every node that comes from the code, and none on observed nodes', () => {
+    const graph = buildGraph({
+      incident,
+      reproduction: catalogueReproduction(),
+      code: catalogueCode(),
+      depth: 3,
+    });
+    const fromCode = graph.nodes.filter((node) => node.symbolId !== undefined);
+    expect(fromCode.length).toBeGreaterThan(8);
+    for (const node of fromCode) {
+      expect(node.source, node.id).toBeDefined();
+      expect(node.source?.file).toBe(node.file);
+      expect(node.source?.line).toBe(node.line);
+      expect(node.source?.symbolId).toBe(node.symbolId);
+    }
+    const find = (id: string) => graph.nodes.find((node) => node.id === id);
+    expect(find(code(S.controller.id))?.source).toEqual({
+      applicationId: 'bff',
+      layer: 'BFF',
+      file: S.controller.file,
+      line: 24,
+      symbolId: S.controller.id,
+    });
+    expect(find(code(S.createBook.id))?.source).toMatchObject({ applicationId: 'front', layer: 'FRONTEND' });
+    // L'appel sortant : la ligne de l'appel, dans le symbole qui l'émet.
+    expect(find(`outgoing:${S.client.id}:28`)?.source).toEqual({
+      applicationId: 'bff',
+      layer: 'BFF',
+      file: S.client.file,
+      line: 28,
+      symbolId: S.client.id,
+    });
+    expect(find(`exception:code:${S.thrown.id}`)?.source).toMatchObject({ line: 33, layer: 'BFF' });
+    expect(find(code(S.catalogController.id))?.source).toMatchObject({
+      applicationId: 'catalog',
+      layer: 'BACKEND',
+    });
+    // Ce qui est observé (ou déclaré) ne vient pas du code : aucune localisation inventée.
+    for (const id of [
+      'incident:inc_catalogue01',
+      'scenario:creer-livre',
+      'action:rep_1:3',
+      'request:rep_1:req-3-1',
+      'exception:observed:rep_1:req-3-1:NullPointerException',
+    ])
+      expect(find(id)?.source, id).toBeUndefined();
+  });
+
+  it('takes the end line from the analyser when it knows it', () => {
+    const index = withDetail(catalogueCode(), S.catalogService.id, {
+      ...S.catalogService.detail,
+      endLine: 40,
+    });
+    const graph = buildGraph({ incident, reproduction: catalogueReproduction(), code: index, depth: 3 });
+    expect(graph.nodes.find((node) => node.id === code(S.catalogService.id))?.source?.endLine).toBe(40);
+    expect(graph.nodes.find((node) => node.id === code(S.controller.id))?.source?.endLine).toBeUndefined();
+  });
+
+  it('labels a repository with the entity and table read in the code, without new relations or changed statuses', () => {
+    const before = buildGraph({
+      incident,
+      reproduction: catalogueReproduction(),
+      code: catalogueCode(),
+      depth: 3,
+    });
+    const index = withDetail(catalogueCode(), S.publisherRepository.id, {
+      repositoryBase: 'JpaRepository',
+      entity: 'Publisher',
+      idType: 'Long',
+    });
+    const entity = symbol('catalog', 'BACKEND', 'DTO', `${CATALOG}/Publisher.java`, 'Publisher', 8, {
+      entity: true,
+      table: 'publishers',
+    });
+    index.symbols.push(entity);
+    const after = buildGraph({ incident, reproduction: catalogueReproduction(), code: index, depth: 3 });
+    const node = after.nodes.find((item) => item.id === code(S.publisherRepository.id));
+    expect(node?.kind).toBe('REPOSITORY');
+    expect(node?.layer).toBe('BACKEND');
+    expect(node?.label).toBe('PublisherRepository · Publisher · table publishers');
+    expect(node?.evidence).toEqual([S.publisherRepository.id, entity.id]);
+    // Aucune relation ajoutée, aucun statut changé : les données sont un détail du dépôt, pas un nœud.
+    const shape = (graph: InvestigationGraph) =>
+      graph.edges.map((item) => `${item.from}->${item.to}:${item.status}`).sort();
+    expect(shape(after)).toEqual(shape(before));
+    expect(after.nodes.map((item) => item.kind).sort()).toEqual(before.nodes.map((item) => item.kind).sort());
+  });
+
+  it('reads the table of a native @Query, the entity of a JPQL one, and keeps derived queries as data access', () => {
+    const index = withDetail(catalogueCode(), S.publisherRepository.id, {
+      repositoryBase: 'JpaRepository',
+      entity: 'Publisher',
+    });
+    const derived = symbol(
+      'catalog',
+      'BACKEND',
+      'FUNCTION',
+      S.publisherRepository.file,
+      'PublisherRepository.findByName',
+      9,
+      { derivedQuery: true },
+    );
+    derived.parent = S.publisherRepository.id;
+    const native = symbol(
+      'catalog',
+      'BACKEND',
+      'SQL_QUERY',
+      S.publisherRepository.file,
+      'PublisherRepository.findActive',
+      12,
+      { sql: 'SELECT * FROM publisher_t WHERE active = true', nativeQuery: true },
+    );
+    native.parent = S.publisherRepository.id;
+    const jpql = symbol(
+      'catalog',
+      'BACKEND',
+      'SQL_QUERY',
+      S.publisherRepository.file,
+      'PublisherRepository.byCatalog',
+      15,
+      {
+        sql: 'select p from org.example.catalog.books.CatalogPublisher p join p.books b',
+        nativeQuery: false,
+      },
+    );
+    jpql.parent = S.publisherRepository.id;
+    index.symbols.push(derived, native, jpql);
+    for (const [target, status] of [
+      [derived, 'INFERRED'],
+      [native, 'STATICALLY_RESOLVED'],
+      [jpql, 'STATICALLY_RESOLVED'],
+    ] as const)
+      index.calls.push({
+        from: S.catalogService.id,
+        to: target.id,
+        text: `${target.name}(...)`,
+        status,
+        file: S.catalogService.file,
+        line: 33,
+      });
+    const graph = buildGraph({ incident, reproduction: catalogueReproduction(), code: index, depth: 3 });
+    const node = (id: string) => graph.nodes.find((item) => item.id === code(id));
+    expect(node(derived.id)?.kind).toBe('REPOSITORY');
+    expect(node(derived.id)?.label).toBe('PublisherRepository.findByName · Publisher');
+    expect(node(native.id)?.label).toBe('PublisherRepository.findActive · Publisher · table publisher_t');
+    expect(node(jpql.id)?.label).toBe('PublisherRepository.byCatalog · CatalogPublisher');
+    expect(node(native.id)?.evidence).toContain(S.publisherRepository.id);
+    expect(edge(graph, code(S.catalogService.id), code(derived.id))?.status).toBe('INFERRED');
+    expect(edge(graph, code(S.catalogService.id), code(native.id))?.status).toBe('STATICALLY_RESOLVED');
+    expect(graph.edges.every((item) => !item.from.startsWith('code:') || item.status !== 'OBSERVED')).toBe(
+      true,
+    );
+    expect(queryTarget('UPDATE books SET title = :title')).toBe('books');
+    expect(queryTarget('select count(b) from Book b')).toBe('Book');
+    expect(queryTarget('select 1')).toBeUndefined();
+  });
+
+  it('describes data access from the code only', () => {
+    const symbols = new Map(Object.values(S).map((item) => [item.id, item]));
+    // Un dépôt sans type générique lu : ni entité ni table inventées.
+    expect(dataAccessOf(S.publisherRepository, symbols)).toEqual({ evidence: [] });
+    const typed = { ...S.publisherRepository, detail: { entity: 'Publisher' } };
+    expect(dataAccessOf(typed, new Map([[typed.id, typed]]))).toEqual({ entity: 'Publisher', evidence: [] });
+    expect(sourceOfSymbol(S.onSave)).toEqual({
+      applicationId: 'front',
+      layer: 'FRONTEND',
+      file: S.onSave.file,
+      line: 21,
+      symbolId: S.onSave.id,
+    });
   });
 });

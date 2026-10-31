@@ -3309,6 +3309,7 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
   const host: IncidentHost = {
     projectId: project.id,
     projectDir: project.dir,
+    runDir: (run) => path.join(project.dir, REPORTS_DIR, run),
     environment: async (environmentId) => {
       const environments = await readEnvironments(project.dir);
       const environment = environmentId

@@ -265,10 +265,10 @@ describe('Incident Reconstruction — the known incident with the real engine', 
     ).toBe(false);
   }, 180_000);
 
-  it('shows the investigation in the Dashboard (Chromium): list, graph with statuses, diagnosis', async () => {
+  it('shows the investigation in the Dashboard (Chromium): workspace, synchronized selection, code, diagnosis, demo', async () => {
     const browser = await chromium.launch();
     try {
-      const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
+      const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
       const failures: string[] = [];
       page.on('pageerror', (error) => failures.push(error.message));
       page.on('response', (response) => {
@@ -280,18 +280,58 @@ describe('Incident Reconstruction — the known incident with the real engine', 
       await dashboard.locator('select[data-action="project-context"]').selectOption(project.id);
       await dashboard.locator('.drawer [data-action="nav"][data-view="incidents"]').click();
       await dashboard.locator('[data-action="inc-open"]', { hasText: 'Erreur 500' }).click();
-      await dashboard.locator('[data-action="inc-tab"][data-tab="graph"]').click();
-      const graph = dashboard.locator('svg[aria-labelledby="inc-graph-desc"]');
+      // L'espace d'investigation : en-tête, progression, onglets, graphe full-stack à côté du contenu.
+      await dashboard.locator('#ws-ux-tab-overview[aria-selected="true"]').waitFor();
+      const graph = dashboard.locator('[data-ws-zone="graph"] svg.ws-graph-svg');
       await graph.waitFor();
-      const panel = await dashboard.locator('#inc-panel').textContent();
-      expect(panel).toMatch(/STATICALLY_RESOLVED|résolu/i);
-      await dashboard.locator('[data-action="inc-tab"][data-tab="diagnosis"]').click();
-      expect(await dashboard.locator('#inc-panel').textContent()).toMatch(/publisher/i);
+      expect(await graph.locator('.ws-graph-node').count()).toBeGreaterThan(5);
+      // La requête en échec, sélectionnée dans « Requêtes HTTP » : le graphe met en évidence ses nœuds,
+      // le panneau contextuel montre son détail.
+      await dashboard.locator('#ws-ux-tab-requests').click();
+      await dashboard.locator('.ws-timeline-path', { hasText: '/api/books' }).click();
+      await dashboard
+        .locator('[data-ws-zone="graph"] .ws-graph-node[data-ws-state="related"]')
+        .first()
+        .waitFor();
+      expect(
+        await dashboard
+          .locator(
+            '[data-ws-zone="graph"] .ws-graph-node[data-ws-state="selected"], [data-ws-zone="graph"] .ws-graph-node.ws-related',
+          )
+          .count(),
+      ).toBeGreaterThan(0);
+      const aside = dashboard.locator('[data-ws-zone="aside"]');
+      await aside.locator('.ws-timeline-detail').waitFor();
+      const detail = (await aside.textContent()) ?? '';
+      expect(detail).toContain('/api/books');
+      expect(detail).toContain('500');
+      expect(detail).toMatch(/NullPointerException/);
+      // Le code du backend, lu dans le périmètre : CatalogBookService, la ligne visée mise en évidence.
+      await dashboard.locator('#ws-ux-tab-backend').click();
+      const code = dashboard.locator('[data-ws-zone="main"] .ws-code');
+      await code.locator('.ws-code-sel').waitFor();
+      expect(await code.getAttribute('data-file')).toMatch(/CatalogBookService\.java$/);
+      expect(await code.textContent()).toContain('CatalogBookService');
+      // Le diagnostic : une cause probable n'est jamais présentée comme confirmée.
+      await dashboard.locator('#ws-ux-tab-diagnosis').click();
+      const diagnosis = (await dashboard.locator('#ws-ux-panel').textContent()) ?? '';
+      expect(diagnosis).toMatch(/publisher/i);
+      expect(diagnosis).toContain('Cause probable');
+      expect(diagnosis).not.toContain('Cause racine confirmée');
+      expect(await dashboard.locator('#ws-ux-panel .ws-dx-diag').getAttribute('data-status')).toBe(
+        'PROBABLE',
+      );
+      // La démonstration, depuis la liste : bandeau « Données de démonstration », actions désactivées.
+      await dashboard.locator('[data-action="back"][data-to="incidents"]').click();
+      await dashboard.locator('[data-action="inc-demo"]').first().click();
+      await dashboard.locator('#ws-demo-why').waitFor();
+      expect(await dashboard.locator('.ws-demo').first().textContent()).toContain('Données de démonstration');
+      expect(await dashboard.locator('[data-action="inc-reproduce"]').isDisabled()).toBe(true);
       expect(failures).toEqual([]);
     } finally {
       await browser.close();
     }
-  }, 60_000);
+  }, 90_000);
 
   it('cancels and resumes; LOCAL, REMOTE and ARO share one investigation contract', async () => {
     incident = await api<Incident>('POST', `/${incident.id}/cancel`);

@@ -67,6 +67,24 @@ async function route(ctx: IncidentRouteContext): Promise<boolean> {
       json(await service.capabilities(id));
       return true;
     }
+    if (action === 'sources' && part === undefined) {
+      json(await service.sourceTree(id));
+      return true;
+    }
+    if (action === 'source' && part === undefined) {
+      const application = ctx.url.searchParams.get('application');
+      const file = ctx.url.searchParams.get('file');
+      if (!application || !file) throw ctx.fail(400, 'BAD_REQUEST', 'application and file are required');
+      json(await service.source(id, application, file));
+      return true;
+    }
+    if (action === 'screenshot' && part === undefined) {
+      const reproduction = ctx.url.searchParams.get('reproduction');
+      const file = ctx.url.searchParams.get('file');
+      if (!reproduction || !file) throw ctx.fail(400, 'BAD_REQUEST', 'reproduction and file are required');
+      json(await service.screenshot(id, reproduction, file));
+      return true;
+    }
     if (action === 'report' && part === undefined) {
       const format = ctx.url.searchParams.get('format') ?? 'json';
       if (format === 'markdown') json({ markdown: await service.reportMarkdown(id) });

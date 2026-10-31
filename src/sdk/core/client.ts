@@ -102,6 +102,8 @@ import type {
   InvestigationReport,
   ProposedVerification,
   ScopeExtensionKind,
+  SourceFileView,
+  SourceTree,
 } from './incident-contracts.js';
 
 /**
@@ -597,6 +599,22 @@ export interface QaCrawlerClient {
     rejectRegression(projectId: string, incidentId: string): Promise<Incident>;
     cancel(projectId: string, incidentId: string): Promise<Incident>;
     resume(projectId: string, incidentId: string): Promise<Incident>;
+    /** Les fichiers lisibles du périmètre, par application (droit RUN). */
+    sourceTree(projectId: string, incidentId: string): Promise<SourceTree>;
+    /** Un fichier du périmètre, en lecture seule, valeurs sensibles masquées, avec ses lignes concernées (droit RUN). */
+    source(
+      projectId: string,
+      incidentId: string,
+      applicationId: string,
+      file: string,
+    ): Promise<SourceFileView>;
+    /** Une capture d'écran d'une reproduction, en image `data:` (la page n'affiche que celles-là). */
+    screenshot(
+      projectId: string,
+      incidentId: string,
+      reproductionId: string,
+      file: string,
+    ): Promise<{ dataUrl: string }>;
   };
   dispose(): void;
 }
@@ -1122,6 +1140,17 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       diagnose: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/diagnose`, {}),
       report: (projectId, incidentId) =>
         request('GET', `${incident(projectId, incidentId)}/report?format=json`),
+      sourceTree: (projectId, incidentId) => request('GET', `${incident(projectId, incidentId)}/sources`),
+      source: (projectId, incidentId, applicationId, file) =>
+        request(
+          'GET',
+          `${incident(projectId, incidentId)}/source?application=${encodeURIComponent(applicationId)}&file=${encodeURIComponent(file)}`,
+        ),
+      screenshot: (projectId, incidentId, reproductionId, file) =>
+        request(
+          'GET',
+          `${incident(projectId, incidentId)}/screenshot?reproduction=${encodeURIComponent(reproductionId)}&file=${encodeURIComponent(file)}`,
+        ),
       reportMarkdown: async (projectId, incidentId) => {
         const body = await request<{ markdown?: unknown } | undefined>(
           'GET',

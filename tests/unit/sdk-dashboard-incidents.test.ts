@@ -23,17 +23,17 @@ import {
   emptyApplicationForm,
   emptyIncidentForm,
   emptyIncidentsUi,
-  graphLayout,
   incidentFormProblems,
   incidentInputOf,
   needsPolling,
-  parseParams,
-  regressionVerdict,
   scopeFormOf,
   scopeOf,
-  shortRef,
   type IncidentsUi,
 } from '../../src/sdk/ui/dashboard-incidents.js';
+import { planInputOf, regressionVerdict } from '../../src/sdk/ui/incident-diagnosis.js';
+import { graphLayout2 } from '../../src/sdk/ui/incident-graph.js';
+import { evidenceChips } from '../../src/sdk/ui/incident-parts.js';
+import { emptyWorkspaceUi, workspaceCtx, type WorkspaceUi } from '../../src/sdk/ui/incident-workspace.js';
 import { emptyLibraryUi } from '../../src/sdk/ui/dashboard-library.js';
 import { emptyRecordingsUi } from '../../src/sdk/ui/dashboard-recordings.js';
 import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
@@ -47,9 +47,11 @@ import {
 
 /**
  * LES INCIDENTS DANS LE DASHBOARD ET LE CLIENT DU SDK : les routes appelées, la liste et la
- * déclaration, la page d'un incident par onglets (périmètre et extensions, reproduction, graphe et
- * statuts des relations, vérifications et approbation explicite, non-régression jamais « réussie »
- * sans exécution), les droits (un lecteur voit sans agir), le suivi d'une reproduction en cours.
+ * déclaration, l'espace d'investigation d'un incident par onglets (périmètre et extensions,
+ * reproduction depuis l'en-tête, graphe et statuts des relations, expériences et approbation explicite,
+ * non-régression jamais « réussie » sans exécution), les droits (un lecteur voit sans agir), le suivi
+ * d'une reproduction en cours. Le détail de l'espace (sélection, panneau, code, démonstration) est
+ * couvert par incident-ui-workspace.test.ts.
  */
 const at = '2026-10-30T09:00:00.000Z';
 const t = dashboardStrings('fr');
@@ -265,6 +267,12 @@ const role = (name: 'READER' | 'ANALYST' | 'PILOT') => ({
   },
 });
 
+/** L'état de l'espace d'investigation d'un incident (sélection, vues, fichiers lus). */
+const wsOf = (over: Partial<WorkspaceUi> = {}, id = 'inc_abc123def456'): WorkspaceUi => ({
+  ...emptyWorkspaceUi(id),
+  ...over,
+});
+
 const base = (route: DashboardRoute, inc: Partial<IncidentsUi> = {}, extra: Partial<DashboardState> = {}) =>
   ({
     t,
@@ -379,14 +387,21 @@ describe('SDK client — incidents', () => {
 });
 
 describe('dashboard — incidents: pure helpers', () => {
-  it('shortens an evidence id to its file or symbol, the full id staying in the tooltip', () => {
-    expect(
-      shortRef(
-        'catalog:src/main/java/org/example/catalog/books/CatalogBookService.java#CatalogBookService.register',
-      ),
-    ).toBe('CatalogBookService.register');
-    expect(shortRef('front:src/books/books-api.ts')).toBe('books-api.ts');
-    expect(shortRef('req_3')).toBe('req_3');
+  it('evidence is shown by its short name, the full id staying in the tooltip (shared chips)', () => {
+    const incident = incidentOf();
+    const ctx = workspaceCtx(incident, wsOf(), 'fr', () => true);
+    const chips = evidenceChips(ctx, [
+      'catalog:src/main/java/org/example/catalog/books/CatalogBookService.java#CatalogBookService.register',
+      'req_1',
+    ]);
+    // Une référence que l'investigation ne connaît pas (ici, aucun symbole déclaré) reste du texte : son
+    // nom court affiché, l'identifiant complet dans l'infobulle, rien à sélectionner.
+    expect(chips).toContain(
+      'title="catalog:src/main/java/org/example/catalog/books/CatalogBookService.java#CatalogBookService.register — référence sans élément sélectionnable dans l’investigation">CatalogBookService.register</span>',
+    );
+    // Une requête connue se sélectionne comme requête.
+    expect(chips).toContain('data-kind="request" data-ref="req_1"');
+    expect(chips).not.toContain('data-kind="evidence"');
   });
 
   it('the declaration form: required fields, ARO details, LOCAL/REMOTE/ARO execution config', () => {
@@ -465,18 +480,36 @@ describe('dashboard — incidents: pure helpers', () => {
     expect(next.limits).toEqual(scope.limits);
   });
 
-  it('parameters, reproduction availability, polling and the regression verdict', () => {
+  it('plan parameters, reproduction availability, polling and the regression verdict', () => {
+    // Les paramètres d'une expérience planifiée dans la page : clés en double ou vides refusées.
     expect(
-      parseParams(
-        'field=publisherId\nexpect=missing\nretries=2\nflag=true\npatterns=NullPointerException|/catalog\nbad',
-      ),
+      planInputOf({
+        kind: 'INSPECT_LOGS',
+        hypothesisId: 'hyp_1',
+        params: [
+          { key: 'field', value: 'publisherId' },
+          { key: 'retries', value: '2' },
+          { key: 'flag', value: 'true' },
+        ],
+      }),
     ).toEqual({
-      field: 'publisherId',
-      expect: 'missing',
-      retries: 2,
-      flag: true,
-      patterns: ['NullPointerException', '/catalog'],
+      ok: true,
+      input: {
+        kind: 'INSPECT_LOGS',
+        hypothesisId: 'hyp_1',
+        params: { field: 'publisherId', retries: 2, flag: true },
+      },
     });
+    expect(
+      planInputOf({
+        kind: 'REPLAY',
+        hypothesisId: '',
+        params: [
+          { key: 'a', value: '1' },
+          { key: 'a', value: '2' },
+        ],
+      }).ok,
+    ).toBe(false);
     expect(canReproduce({ state: 'SCOPED' })).toBe(true);
     expect(canReproduce({ state: 'DRAFT' })).toBe(false);
     expect(canReproduce({ state: 'REPRODUCING' })).toBe(false);
@@ -490,12 +523,12 @@ describe('dashboard — incidents: pure helpers', () => {
   });
 
   it('the graph is laid out in layers: incident, then frontend, BFF, backend; a missing end is never drawn', () => {
-    const layout = graphLayout(graph);
-    const x = (id: string): number => layout.nodes.find((node) => node.id === id)?.x ?? -1;
+    const layout = graphLayout2(graph);
+    const x = (id: string): number => layout.nodes.find((laid) => laid.node.id === id)?.x ?? -1;
     expect(x('n_inc')).toBeLessThan(x('n_req'));
     expect(x('n_req')).toBeLessThan(x('n_bff'));
     expect(x('n_bff')).toBeLessThan(x('n_svc'));
-    expect(layout.edges.map((edge) => edge.status)).toEqual(['OBSERVED', 'STATICALLY_RESOLVED', 'INFERRED']);
+    expect(layout.edges.map((laid) => laid.status)).toEqual(['OBSERVED', 'STATICALLY_RESOLVED', 'INFERRED']);
     expect(layout.dangling).toBe(1);
   });
 });
@@ -505,8 +538,11 @@ describe('dashboard — incidents: screens', () => {
     const html = renderDashboard(base({ view: 'incidents', projectId: 'prj_books' }, { list: [] }));
     expect(html).toContain('>Investiguer<');
     expect(html).toContain('data-action="nav" data-view="incidents" aria-current="page"');
-    expect(activeNav(page('graph'))).toBe('incidents');
+    expect(activeNav(page('traceability'))).toBe('incidents');
     expect(activeNav({ view: 'incidents', projectId: 'p' })).toBe('incidents');
+    // « Investigations » à côté d'« Incidents », dans la même section.
+    expect(html).toContain('data-action="nav" data-view="investigations"');
+    expect(activeNav({ view: 'investigations', projectId: 'p' })).toBe('investigations');
   });
 
   it('the list: escaped titles, severity, state, target and diagnosis; declaring needs the RUN right', () => {
@@ -572,35 +608,80 @@ describe('dashboard — incidents: screens', () => {
     expect(local).not.toContain('role="alert"');
   });
 
-  it('the incident page: header, accessible tabs, the symptom; cancel is confirmed in the page', () => {
+  it('the investigation workspace: header, progress, accessible tabs, three zones; cancel is confirmed in the page', () => {
     const incident = incidentOf();
-    const html = renderDashboard(base(page('scope'), { incident }));
+    const html = renderDashboard(base(page('overview'), { incident, ws: wsOf() }));
+    expect(html).toContain('<h1 id="ws-ux-title">Erreur 500 à la création d’un &lt;livre&gt;</h1>');
+    expect(html).toContain('<span class="sr">Gravité : </span>Haute');
+    expect(html).toContain('<nav class="ws-ux-stepper" aria-label="Progression de l’investigation">');
     expect(html).toContain(
-      'Erreur 500 à la création d’un &lt;livre&gt; <span class="pill warn">Reproduit</span>',
+      '<div class="tabs ws-ux-tabs" role="tablist" aria-label="Sections de l’investigation"',
     );
     expect(html).toContain(
-      '<div class="tabs inc-tabs" role="tablist" aria-label="Étapes de l’investigation">',
+      'id="ws-ux-tab-overview" data-action="ws-ux-tab" data-tab="overview" aria-selected="true" aria-controls="ws-ux-panel" tabindex="0"',
     );
+    for (const tab of [
+      'scope',
+      'environment',
+      'traceability',
+      'requests',
+      'frontend',
+      'bff',
+      'backend',
+      'logs',
+      'diagnosis',
+      'regression',
+    ])
+      expect(html).toContain(`data-tab="${tab}" aria-selected="false"`);
     expect(html).toContain(
-      '<button role="tab" id="inc-tab-scope" data-action="inc-tab" data-tab="scope" aria-selected="true" aria-controls="inc-panel" tabindex="0">Périmètre <span class="inc-count">1</span></button>',
+      '<div id="ws-ux-panel" class="ws-ux-panel" role="tabpanel" aria-labelledby="ws-ux-tab-overview"',
     );
-    expect(html).toContain('id="inc-tab-graph" data-action="inc-tab" data-tab="graph" aria-selected="false"');
-    expect(html).toContain('<div id="inc-panel" role="tabpanel" aria-labelledby="inc-tab-scope"');
+    // Le contenu, le graphe full-stack et le panneau contextuel.
+    expect(html).toContain('<div class="ws-ux-shell">');
+    expect(html).toContain('data-ws-zone="graph"');
+    expect(html).toContain('data-ws-zone="aside" aria-labelledby="ws-ctx-t"');
     expect(html).toContain('<dd>erreur HTTP 500 après Enregistrer</dd>');
     expect(html).toContain('data-action="inc-cancel"');
     expect(html).toContain('<p class="inc-live" role="status" aria-live="polite">');
-    const confirming = renderDashboard(base(page('scope'), { incident, confirmCancel: true }));
+    const confirming = renderDashboard(base(page('overview'), { incident, confirmCancel: true, ws: wsOf() }));
     expect(confirming).toContain('data-action="inc-cancel-yes"');
     expect(confirming).toContain('data-action="inc-cancel-no"');
-    const cancelled = renderDashboard(base(page('scope'), { incident: incidentOf({ state: 'CANCELLED' }) }));
+    const cancelled = renderDashboard(
+      base(page('overview'), {
+        incident: incidentOf({ state: 'CANCELLED', cancelledFrom: 'REPRODUCED' }),
+        ws: wsOf(),
+      }),
+    );
     expect(cancelled).toContain('data-action="inc-resume"');
     expect(cancelled).not.toContain('data-action="inc-cancel"');
+    expect(cancelled).toContain('Investigation annulée à l’état « Reproduit »');
+    // Le graphe est l'onglet Traçabilité : il n'est pas répété à côté.
+    const trace = renderDashboard(base(page('traceability'), { incident, ws: wsOf() }));
+    expect(trace).not.toContain('data-ws-zone="graph"');
+    expect(trace).toContain('ws-ux-shell ws-nograph');
     // Pendant le chargement : l'incident d'une autre page n'est jamais montré.
     const loading = renderDashboard(
       base({ view: 'incident', projectId: 'prj_books', incidentId: 'inc_other' }, { incident }),
     );
     expect(loading).toContain('aria-busy="true"');
     expect(loading).not.toContain('Erreur 500 à la création');
+    // Une lecture refusée (403) ou en échec : dite, avec « Réessayer » pour l'échec.
+    const denied = renderDashboard(
+      base(
+        { view: 'incident', projectId: 'prj_books', incidentId: 'inc_other' },
+        { loadError: { message: 'forbidden', denied: true } },
+      ),
+    );
+    expect(denied).toContain('Votre rôle ne permet pas de voir cet incident.');
+    expect(denied).not.toContain('data-action="inc-refresh">Réessayer');
+    const failed = renderDashboard(
+      base(
+        { view: 'incident', projectId: 'prj_books', incidentId: 'inc_other' },
+        { loadError: { message: 'server down', denied: false } },
+      ),
+    );
+    expect(failed).toContain('<div class="ws-state" role="alert"><p class="err">server down</p>');
+    expect(failed).toContain('data-action="inc-refresh">Réessayer</button>');
   });
 
   it('scope tab: applications, permissions, limits, pending extensions decided with DECIDE, validation issues', () => {
@@ -608,6 +689,7 @@ describe('dashboard — incidents: screens', () => {
     const html = renderDashboard(
       base(page('scope'), {
         incident,
+        ws: wsOf(),
         validation: {
           ok: false,
           issues: [{ field: 'applications[0].repository.root', message: 'does not exist' }],
@@ -641,114 +723,134 @@ describe('dashboard — incidents: screens', () => {
     expect(editing).toContain('data-inc="scope.depth" type="number" min="1" max="5"');
   });
 
-  it('environment tab: the target and the capabilities read from the server, limitations said', () => {
+  it('environment tab: LOCAL / REMOTE / ARO selector with the measured capabilities and the save action', () => {
     const incident = incidentOf();
     const html = renderDashboard(
       base(page('environment'), {
         incident,
-        capabilities: {
-          target: 'LOCAL',
-          playwright: 'LOCAL_PROCESS',
-          repositories: 'LOCAL',
-          tests: false,
-          logs: 'NONE',
-          kubernetesJobs: false,
-          limitations: ['mvn is not installed'],
-        },
+        ws: wsOf({
+          capabilities: {
+            target: 'LOCAL',
+            playwright: 'LOCAL_PROCESS',
+            repositories: 'LOCAL',
+            tests: false,
+            logs: 'NONE',
+            kubernetesJobs: false,
+            limitations: ['mvn is not installed'],
+          },
+        }),
       }),
     );
-    expect(html).toContain('<b>Local</b>');
-    expect(html).toContain('Recette <code>http://books.test/</code>');
-    expect(html).toContain('<dt>Tests</dt><dd>Indisponible</dd>');
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toMatch(
+      /role="radio" class="ws-ux-target" data-action="ws-ux-target" data-target="LOCAL" aria-checked="true"/,
+    );
+    expect(html).toContain('data-target="ARO" aria-checked="false"');
     expect(html).toContain('mvn is not installed');
-    const failed = renderDashboard(base(page('environment'), { incident, capabilitiesError: 'refused' }));
-    expect(failed).toContain('<section class="card" role="alert">');
+    expect(html).toContain('data-action="ws-ux-target-save"');
+    const failed = renderDashboard(
+      base(page('environment'), { incident, ws: wsOf({ capabilitiesState: { error: 'refused' } }) }),
+    );
+    expect(failed).toContain('Capacités non lues : refused');
+    // Un lecteur voit les cibles, sans enregistrer.
+    const reader = renderDashboard(base(page('environment'), { incident, ws: wsOf() }, role('READER')));
+    expect(reader).not.toContain('data-action="ws-ux-target-save"');
   });
 
-  it('reproduction tab: launch with RUN, live state while REPRODUCING, actions and requests with their correlation', () => {
-    const html = renderDashboard(base(page('reproduction'), { incident: incidentOf() }));
+  it('reproduction from the header: launch with RUN, disabled with its reason, live state while REPRODUCING', () => {
+    const html = renderDashboard(base(page('overview'), { incident: incidentOf(), ws: wsOf() }));
     expect(html).toContain('data-action="inc-reproduce"');
     expect(html).toContain('Reproduire de nouveau');
-    expect(html).toContain('<span class="pill warn">Symptôme observé</span>');
     expect(html).toContain('HTTP 500 observé sur POST /api/books');
-    expect(html).toContain('Cliquer sur Enregistrer');
-    expect(html).toContain('<tr class="inc-ko"><td><code>POST /api/books</code>');
-    expect(html).toContain('<span class="pill ok">Observée</span>');
-    expect(html).toContain('{&quot;status&quot;:500,&quot;message&quot;:&quot;Catalog error&quot;}');
+    expect(html).toContain('Symptôme observé');
     const running = renderDashboard(
-      base(page('reproduction'), { incident: incidentOf({ state: 'REPRODUCING' }) }),
+      base(page('overview'), { incident: incidentOf({ state: 'REPRODUCING' }), ws: wsOf() }),
     );
     expect(running).toContain('Reproduction en cours : la page suit son avancement.');
     expect(running).toMatch(/data-action="inc-reproduce"[^>]*disabled/);
     const draft = renderDashboard(
-      base(page('reproduction'), {
+      base(page('overview'), {
         incident: incidentOf({
           state: 'DRAFT',
           investigation: { ...incidentOf().investigation, reproductions: [] },
         }),
+        ws: wsOf(),
       }),
     );
-    expect(draft).toContain('Le périmètre doit d’abord être complet');
+    expect(draft).toContain('Reproduire l’incident');
+    expect(draft).toMatch(
+      /data-action="inc-reproduce"[^>]*disabled[^>]*title="Le périmètre doit d’abord être complet/,
+    );
     expect(
-      renderDashboard(base(page('reproduction'), { incident: incidentOf() }, role('READER'))),
+      renderDashboard(base(page('overview'), { incident: incidentOf(), ws: wsOf() }, role('READER'))),
     ).not.toContain('data-action="inc-reproduce"');
   });
 
-  it('timeline tab: the ordered evidence of the report and the incident log', () => {
-    const incident = incidentOf();
-    const html = renderDashboard(
-      base(page('timeline'), {
-        incident,
-        report: {
-          version: 1,
-          generatedAt: at,
-          incident,
-          environment: { execution: incident.execution },
-          scope,
-          timeline: [
-            { at, step: 1, kind: 'ACTION', summary: 'Cliquer sur Enregistrer', ref: 'act_1' },
-            { at, step: 1, kind: 'REQUEST', summary: 'POST /api/books → 500', ref: 'req_1' },
-          ],
-          requests: reproduction.requests,
-          code: { files: [], symbols: [], denied: [], truncated: [] },
-          hypotheses: [],
-          experiments: [],
-          limitations: [],
-        },
-      }),
-    );
-    expect(html).toContain('<ol class="inc-timeline">');
+  it('timeline tab: the unified timeline of the investigation, grouped by step, its request selectable', () => {
+    const incident = incidentOf({
+      investigation: {
+        ...incidentOf().investigation,
+        timeline: [
+          {
+            id: 'rep_1:ACTION:1',
+            order: 1,
+            at,
+            reproduction: 'rep_1',
+            step: 1,
+            layer: 'FRONTEND',
+            kind: 'ACTION',
+            status: 'OK',
+            summary: 'Cliquer sur Enregistrer',
+            evidence: [],
+          },
+          {
+            id: 'rep_1:REQUEST:req_1',
+            order: 2,
+            at,
+            reproduction: 'rep_1',
+            step: 1,
+            layer: 'NETWORK',
+            kind: 'REQUEST',
+            status: 'ERROR',
+            summary: 'POST /api/books → 500',
+            evidence: ['req_1'],
+            requestId: 'req_1',
+          },
+        ],
+      },
+    });
+    const html = renderDashboard(base(page('timeline'), { incident, ws: wsOf() }));
     expect(html.indexOf('Cliquer sur Enregistrer')).toBeLessThan(html.indexOf('POST /api/books → 500'));
-    expect(html).toContain('étape 1');
-    expect(html).toContain('Journal de l’incident');
-    expect(html).toContain('incident déclaré');
+    expect(html).toContain('data-action="ws-select" data-kind="event" data-ref="rep_1:REQUEST:req_1"');
+    expect(html).toContain('data-kind="request" data-ref="req_1"');
+    expect(html).toContain(
+      'id="ws-ux-tab-timeline" data-action="ws-ux-tab" data-tab="timeline" aria-selected="true"',
+    );
   });
 
-  it('graph tab: every relation shows its status, with a legend; a static path is never called observed', () => {
-    const html = renderDashboard(base(page('graph'), { incident: incidentOf() }));
-    expect(html).toContain('role="img" aria-labelledby="inc-graph-desc"');
-    expect(html).toContain(
-      '4 nœud(s), 4 relation(s) : 1 observée(s), 1 lue(s) dans le code, 1 déduite(s), 1 inconnue(s).',
-    );
-    expect(html).toContain('class="edge e-obs"');
-    expect(html).toContain('class="edge e-stat"');
-    expect(html).toContain('class="edge e-inf"');
-    expect(html).toContain('<ul class="inc-legend" aria-label="Légende des relations">');
+  it('traceability tab: every relation shows its status, with a legend; a static path is never called observed', () => {
+    const html = renderDashboard(base(page('traceability'), { incident: incidentOf(), ws: wsOf() }));
+    expect(html).toContain('data-ws-graph="canvas"');
+    expect(html).toContain('class="ws-graph-edge ws-ge-observed');
+    expect(html).toContain('class="ws-graph-edge ws-ge-statically_resolved');
+    expect(html).toContain('class="ws-graph-edge ws-ge-inferred');
+    expect(html).toContain('<ul class="ws-legend" aria-label="Légende des relations">');
     for (const text of ['Observée', 'Lue dans le code', 'Déduite', 'Inconnue'])
       expect(html).toContain(`<b>${text}</b>`);
-    expect(html).toContain('<span class="pill live">Lue dans le code</span>');
-    expect(html).toContain('n_repo (absent du graphe)');
     expect(html).toContain('appel dynamique');
     expect(html).toContain('n’est pas une trace d’exécution');
     const none = renderDashboard(
-      base(page('graph'), {
+      base(page('traceability'), {
         incident: incidentOf({ investigation: { ...incidentOf().investigation, graph: undefined } }),
+        ws: wsOf(),
       }),
     );
-    expect(none).toContain('Le graphe apparaît après l’analyse');
+    expect(none).toContain('Le graphe apparaît après l’analyse du code de l’incident.');
+    expect(none).not.toContain('data-ws-zone="graph"');
   });
 
-  it('code tab: symbols by layer, endpoints, outgoing calls with status, scope refusals', () => {
+  it('code tabs: the scope tree of the layer and the file read from the server, its line highlighted', () => {
+    const file = 'src/main/java/org/example/bff/books/BookController.java';
     const incident = incidentOf({
       investigation: {
         ...incidentOf().investigation,
@@ -756,58 +858,91 @@ describe('dashboard — incidents: screens', () => {
           applications: [{ id: 'bff', layer: 'BFF', files: 7, skipped: 1 }],
           symbols: [
             {
-              id: 'bff:BookController.java#BookController.create',
+              id: `bff:${file}#BookController.create`,
               applicationId: 'bff',
               layer: 'BFF',
               kind: 'ENDPOINT',
               name: 'BookController.create',
-              file: 'src/main/java/org/example/bff/books/BookController.java',
-              line: 21,
+              file,
+              line: 3,
             },
           ],
-          endpoints: [
-            { applicationId: 'bff', layer: 'BFF', method: 'POST', path: '/api/books', symbolId: 's' },
-          ],
-          outgoing: [
-            {
-              applicationId: 'bff',
-              layer: 'BFF',
-              symbolId: 's',
-              method: 'POST',
-              path: '/catalog/books',
-              status: 'INFERRED',
-              file: 'CatalogClient.java',
-              line: 14,
-            },
-          ],
+          endpoints: [],
+          outgoing: [],
           calls: [],
           denied: [{ path: '/repos/bff/.env', reason: 'sensitive file' }],
           truncated: [],
         },
+        graph: {
+          nodes: [
+            ...graph.nodes,
+            {
+              id: 'n_ctrl',
+              kind: 'BFF_ENDPOINT',
+              label: 'BookController.create',
+              layer: 'BFF',
+              evidence: [],
+              symbolId: `bff:${file}#BookController.create`,
+              source: { applicationId: 'bff', layer: 'BFF', file, line: 3 },
+            },
+          ],
+          edges: graph.edges,
+        },
       },
     });
-    const html = renderDashboard(base(page('code'), { incident }));
-    expect(html).toContain('BFF · 1 symbole(s) dans 1 fichier(s)');
-    expect(html).toContain('<code>src/main/java/org/example/bff/books/BookController.java:21</code>');
-    expect(html).toContain('<code>POST /catalog/books</code> <span class="pill warn">Déduite</span>');
-    expect(html).toContain('<code>/repos/bff/.env</code> sensitive file');
-    expect(html).toContain('7 fichier(s) lu(s), 1 ignoré(s)');
+    const view = {
+      applicationId: 'bff',
+      layer: 'BFF' as const,
+      file,
+      language: 'java' as const,
+      text: 'class BookController {\n  // créer\n  BookView create(CreateBookRequest request) {\n    return service.create(request);\n  }\n}',
+      symbols: [],
+      highlights: [{ line: 3, kind: 'PATH' as const, reason: 'BookController.create', refs: ['n_ctrl'] }],
+    };
+    const tree = {
+      applications: [
+        { applicationId: 'bff', name: 'BFF livres', layer: 'BFF' as const, files: [file], truncated: false },
+      ],
+      denied: [{ path: '.env', reason: 'sensitive file' }],
+    };
+    const html = renderDashboard(
+      base(page('bff'), {
+        incident,
+        ws: wsOf({ tree, sources: { [`bff:${file}`]: { view, revision: incident.revision } } }),
+      }),
+    );
+    expect(html).toContain('data-layer="BFF"');
+    expect(html).toContain('BookController.java');
+    expect(html).toContain('ws-code-sel');
+    expect(html).toContain('Lecture seule');
+    // Lecture refusée par le serveur (403) : panneau « accès refusé », sans contenu.
+    const denied = renderDashboard(base(page('bff'), { incident, ws: wsOf({ treeState: 'denied' }) }));
+    expect(denied).toContain('Votre rôle ne permet pas de lire le code du périmètre.');
+    expect(denied).not.toContain('class BookController');
   });
 
   it('hypotheses tab: status, confidence, supporting evidence, verifications to plan (RUN only)', () => {
-    const html = renderDashboard(base(page('hypotheses'), { incident: incidentOf() }));
-    expect(html).toContain('Éditeur absent non validé');
-    expect(html).toContain(
-      '<meter min="0" max="1" low="0.34" high="0.67" optimum="1" value="0.6" aria-label="Confiance">60 %</meter>',
+    const html = renderDashboard(
+      base(page('hypotheses'), {
+        incident: incidentOf(),
+        ws: wsOf({ dx: { ...wsOf().dx, expanded: ['hyp_1'] } }),
+      }),
     );
-    expect(html).toContain('Preuves favorables (1)');
+    expect(html).toContain('Éditeur absent non validé');
+    expect(html).toContain('role="meter"');
+    expect(html).toContain('aria-valuenow="60"');
     expect(html).toContain('NullPointerException dans la réponse');
-    expect(html).toContain('Preuves contraires (0)');
-    expect(html).toContain('data-action="inc-plan" data-block="hyp_1" data-index="0"');
-    expect(html).toContain('data-action="inc-analyze"');
-    const reader = renderDashboard(base(page('hypotheses'), { incident: incidentOf() }, role('READER')));
-    expect(reader).not.toContain('data-action="inc-plan"');
-    expect(reader).not.toContain('data-action="inc-analyze"');
+    expect(html).toContain('data-action="ws-dx-plan" data-hypothesis="hyp_1" data-index="0"');
+    expect(html).toContain('data-action="ws-dx-analyze"');
+    const reader = renderDashboard(
+      base(
+        page('hypotheses'),
+        { incident: incidentOf(), ws: wsOf({ dx: { ...wsOf().dx, expanded: ['hyp_1'] } }) },
+        role('READER'),
+      ),
+    );
+    expect(reader).not.toContain('data-action="ws-dx-plan"');
+    expect(reader).not.toContain('data-action="ws-dx-analyze"');
   });
 
   it('experiments: side effects need an explicit approval in the page, with RUN_WRITES; refusals show their reason', () => {
@@ -827,28 +962,23 @@ describe('dashboard — incidents: screens', () => {
     });
     const investigation = { ...incidentOf().investigation, experiments: [experiment(), refused] };
     const incident = incidentOf({ investigation });
-    const html = renderDashboard(base(page('experiments'), { incident }));
-    expect(html).toContain('data-action="inc-run" data-block="exp_1"');
-    expect(html).toContain('Examiner avant d’exécuter');
-    expect(html).not.toContain('data-action="inc-approve-yes"');
+    const html = renderDashboard(base(page('experiments'), { incident, ws: wsOf() }));
+    expect(html).toContain('data-action="ws-dx-run" data-experiment="exp_1" data-approval="required"');
+    expect(html).not.toContain('data-action="ws-dx-approve"');
     expect(html).toContain('readLogs is not allowed by the scope');
-    expect(html).toContain('1 opération(s) refusée(s) par le périmètre');
-    expect(html).not.toContain('data-action="inc-run" data-block="exp_2"');
+    expect(html).not.toContain('data-action="ws-dx-run" data-experiment="exp_2"');
+    expect(html).toContain('data-action="ws-dx-plan-submit"');
     // L'analyste (sans RUN_WRITES) voit l'approbation sans pouvoir la donner.
-    const analyst = renderDashboard(
-      base(page('experiments'), { incident, approving: 'exp_1' }, role('ANALYST')),
-    );
-    expect(analyst).toContain('role="group" aria-labelledby="inc-ap-exp_1"');
-    expect(analyst).not.toContain('data-action="inc-approve-yes"');
-    expect(analyst).toContain('Approuver demande le droit de permettre les écritures.');
-    const pilot = renderDashboard(base(page('experiments'), { incident, approving: 'exp_1' }, role('PILOT')));
-    expect(pilot).toContain('data-action="inc-approve-yes" data-block="exp_1"');
-    expect(pilot).toContain('Le périmètre n’autorise pas encore les effets de bord');
-    expect(pilot).toContain('data-action="inc-approve-no" data-block="exp_1"');
-    expect(html).toContain('data-action="inc-plan-form"');
+    const approving = wsOf({ dx: { ...wsOf().dx, approving: 'exp_1' } });
+    const analyst = renderDashboard(base(page('experiments'), { incident, ws: approving }, role('ANALYST')));
+    expect(analyst).toContain('class="ws-dx-approve" role="group"');
+    expect(analyst).not.toContain('data-action="ws-dx-approve"');
+    const pilot = renderDashboard(base(page('experiments'), { incident, ws: approving }, role('PILOT')));
+    expect(pilot).toContain('data-action="ws-dx-approve" data-experiment="exp_1"');
+    expect(pilot).toContain('data-action="ws-dx-approve-cancel" data-experiment="exp_1"');
   });
 
-  it('diagnosis and report: root cause, what is missing; exports through the report route', () => {
+  it('diagnosis and report: a probable cause is never called confirmed; exports through the report route', () => {
     const incident = incidentOf({
       state: 'DIAGNOSED',
       investigation: {
@@ -868,15 +998,18 @@ describe('dashboard — incidents: screens', () => {
         },
       },
     });
-    const diagnosis = renderDashboard(base(page('diagnosis'), { incident }));
-    expect(diagnosis).toContain('<span class="pill warn">Probable</span>');
+    const diagnosis = renderDashboard(base(page('diagnosis'), { incident, ws: wsOf() }));
+    expect(diagnosis).toContain('Cause probable');
+    expect(diagnosis).not.toMatch(/Cause racine confirmée/);
     expect(diagnosis).toContain('<b>publisherId vide déréférencé</b>');
     expect(diagnosis).toContain('un test unitaire qui échoue sans éditeur');
     expect(diagnosis).toContain('valider publisherId côté BFF');
-    const report = renderDashboard(base(page('report'), { incident, reportError: 'not found' }));
-    expect(report).toContain('data-action="inc-export-json"');
-    expect(report).toContain('data-action="inc-export-markdown"');
-    expect(report).toContain('<p class="err" role="alert">not found</p>');
+    const report = renderDashboard(
+      base(page('report'), { incident, ws: wsOf({ reportState: { error: 'not found' } }) }),
+    );
+    expect(report).toContain('data-action="ws-dx-export" data-format="json"');
+    expect(report).toContain('data-action="ws-dx-export" data-format="markdown"');
+    expect(report).toContain('not found');
   });
 
   it('non-regression: never "Réussi" without a real execution; accept needs PUBLISH, reject DECIDE', () => {
@@ -888,24 +1021,26 @@ describe('dashboard — incidents: screens', () => {
       status: 'PROPOSED' as const,
     };
     const without = incidentOf({ investigation: { ...incidentOf().investigation, regression: proposal } });
-    const html = renderDashboard(base(page('regression'), { incident: without }, role('PILOT')));
-    expect(html).toContain('Pas encore exécuté');
+    const html = renderDashboard(base(page('regression'), { incident: without, ws: wsOf() }, role('PILOT')));
+    expect(html).toContain('data-verdict="NOT_RUN"');
     expect(html).not.toContain('Réussi');
-    expect(html).toContain('data-action="inc-reg-run"');
-    expect(html).toContain('data-action="inc-reg-accept"');
-    expect(html).toContain('data-action="inc-reg-reject"');
+    expect(html).toContain('data-action="ws-dx-regression" data-op="run"');
+    expect(html).toContain('data-action="ws-dx-regression" data-op="accept"');
+    expect(html).toContain('data-action="ws-dx-regression" data-op="reject"');
     expect(html).toContain('flows:\n  - name: &quot;Non-régression&quot;');
-    const analyst = renderDashboard(base(page('regression'), { incident: without }, role('ANALYST')));
-    expect(analyst).not.toContain('data-action="inc-reg-accept"');
-    expect(analyst).toContain('data-action="inc-reg-reject"');
+    const analyst = renderDashboard(
+      base(page('regression'), { incident: without, ws: wsOf() }, role('ANALYST')),
+    );
+    expect(analyst).not.toContain('data-op="accept"');
+    expect(analyst).toContain('data-op="reject"');
     const failed = incidentOf({
       investigation: {
         ...incidentOf().investigation,
         regression: { ...proposal, execution: { run: 'run-9', passed: false, at } },
       },
     });
-    const failedHtml = renderDashboard(base(page('regression'), { incident: failed }));
-    expect(failedHtml).toContain('<span class="pill ko">Échoué</span>');
+    const failedHtml = renderDashboard(base(page('regression'), { incident: failed, ws: wsOf() }));
+    expect(failedHtml).toContain('data-verdict="FAILED"');
     expect(failedHtml).not.toContain('Réussi');
     const passed = incidentOf({
       investigation: {
@@ -913,17 +1048,22 @@ describe('dashboard — incidents: screens', () => {
         regression: { ...proposal, execution: { run: 'run-9', passed: true, at } },
       },
     });
-    expect(renderDashboard(base(page('regression'), { incident: passed }))).toContain(
-      '<span class="pill ok">Réussi</span>',
+    expect(renderDashboard(base(page('regression'), { incident: passed, ws: wsOf() }))).toContain(
+      'data-verdict="PASSED"',
     );
   });
 
   it('every screen exists in English too', () => {
     const en = dashboardStrings('en');
-    const html = renderDashboard({ ...base(page('graph'), { incident: incidentOf() }), t: en });
+    const html = renderDashboard({
+      ...base(page('traceability'), { incident: incidentOf(), ws: wsOf() }),
+      t: en,
+    });
     expect(html).toContain('>Investigate<');
-    expect(html).toContain('Relations legend');
+    expect(html).toContain('>Investigations<');
+    expect(html).toContain('Relation legend');
     expect(html).toContain('Read in the code');
+    expect(html).toContain('Selection detail');
   });
 });
 
@@ -962,7 +1102,7 @@ describe('dashboard — incidents: controller', () => {
     const get = vi.fn((_projectId: string, _incidentId: string) =>
       Promise.resolve(answers.shift() ?? running),
     );
-    const state = base(page('reproduction'));
+    const state = base(page('overview'));
     const { controller } = setup(state, { get });
     await controller.load({ incidents: { get } } as unknown as QaCrawlerClient, state.route, () => true);
     expect(get).toHaveBeenCalledTimes(1);
@@ -977,7 +1117,7 @@ describe('dashboard — incidents: controller', () => {
 
     // Une autre reproduction suivie, puis la page quittée : plus aucune lecture.
     const again = vi.fn(() => Promise.resolve(incidentOf({ state: 'REPRODUCING' })));
-    const state2 = base(page('reproduction'));
+    const state2 = base(page('overview'));
     const second = setup(state2, { get: again });
     await second.controller.load(
       { incidents: { get: again } } as unknown as QaCrawlerClient,
@@ -994,7 +1134,7 @@ describe('dashboard — incidents: controller', () => {
     expect(state2.inc?.incident).toBeUndefined();
   });
 
-  it('a side-effect verification waits for the approval in the page; only RUN_WRITES approves', async () => {
+  it('a side-effect experiment waits for the approval in the page; only RUN_WRITES approves', async () => {
     const investigation = { ...incidentOf().investigation, experiments: [experiment()] };
     const incident = incidentOf({ investigation });
     const done = incidentOf({
@@ -1005,29 +1145,30 @@ describe('dashboard — incidents: controller', () => {
       },
     });
     const runExperiment = vi.fn(() => Promise.resolve(done));
-    const state = base(page('experiments'), { incident }, role('PILOT'));
+    const state = base(page('experiments'), { incident, ws: wsOf() }, role('PILOT'));
     const { controller } = setup(state, { runExperiment });
-    controller.click('inc-run', element({ block: 'exp_1' }));
-    expect(state.inc?.approving).toBe('exp_1');
+    controller.click('ws-dx-run', element({ experiment: 'exp_1', approval: 'required' }));
+    expect(state.inc?.ws.dx.approving).toBe('exp_1');
     expect(runExperiment).not.toHaveBeenCalled();
-    controller.click('inc-approve-yes', element({ block: 'exp_1' }));
+    controller.click('ws-dx-approve', element({ experiment: 'exp_1' }));
     await vi.waitFor(() => {
       expect(state.inc?.busy).toBeUndefined();
     });
     expect(runExperiment).toHaveBeenCalledWith('prj_books', incident.id, 'exp_1', { approve: true });
-    expect(state.inc?.approving).toBeUndefined();
+    expect(state.inc?.ws.dx.approving).toBeUndefined();
+    expect(state.inc?.ws.dx.busy).toBeUndefined();
     expect(state.inc?.notice).toBe('Vérification : Terminée.');
 
     // Sans RUN_WRITES : l'approbation n'est pas envoyée.
     const analystRun = vi.fn(() => Promise.resolve(done));
-    const analystState = base(page('experiments'), { incident }, role('ANALYST'));
+    const analystState = base(page('experiments'), { incident, ws: wsOf() }, role('ANALYST'));
     const analyst = setup(analystState, { runExperiment: analystRun });
-    analyst.controller.click('inc-run', element({ block: 'exp_1' }));
-    analyst.controller.click('inc-approve-yes', element({ block: 'exp_1' }));
+    analyst.controller.click('ws-dx-run', element({ experiment: 'exp_1', approval: 'required' }));
+    analyst.controller.click('ws-dx-approve', element({ experiment: 'exp_1' }));
     expect(analystRun).not.toHaveBeenCalled();
   });
 
-  it('a verification without side effects runs on click; a server refusal is said in the page', async () => {
+  it('an experiment without side effects runs on click; a server refusal is said at its place', async () => {
     const plain = experiment({ id: 'exp_3', kind: 'REPLAY', status: 'PROPOSED', sideEffects: false });
     const incident = incidentOf({ investigation: { ...incidentOf().investigation, experiments: [plain] } });
     const runExperiment = vi.fn(() =>
@@ -1040,17 +1181,16 @@ describe('dashboard — incidents: controller', () => {
         }),
       ),
     );
-    const state = base(page('experiments'), { incident });
+    const state = base(page('experiments'), { incident, ws: wsOf() });
     const { controller } = setup(state, { runExperiment });
-    controller.click('inc-run', element({ block: 'exp_3' }));
+    controller.click('ws-dx-run', element({ experiment: 'exp_3' }));
     await vi.waitFor(() => {
       expect(state.inc?.busy).toBeUndefined();
     });
     expect(runExperiment).toHaveBeenCalledWith('prj_books', incident.id, 'exp_3');
-    expect(state.inc?.error).toBe('the experiment budget is exhausted');
-    expect(state.inc?.details).toEqual(['maxExperiments: 20']);
+    expect(state.inc?.ws.dx.errors['experiment:exp_3']).toBe('the experiment budget is exhausted');
     expect(renderDashboard(state)).toContain(
-      '<div class="err-box" role="alert"><p class="err"><b>the experiment budget is exhausted</b>',
+      '<div class="err-box ws-dx-err" role="alert"><p class="err">the experiment budget is exhausted</p>',
     );
   });
 

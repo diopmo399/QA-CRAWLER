@@ -53,6 +53,18 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
     dépôts montés, journaux OpenShift par le ServiceAccount, manifeste de Job Kubernetes).
   - Dashboard : section « Investiguer › Incidents » (liste, déclaration, périmètre, environnement, reproduction,
     chronologie, graphe, code, hypothèses, expériences, diagnostic, rapport, non-régression).
+  - **Espace d'investigation** (Dashboard, « Investiguer › Investigations ») : en-tête de l'incident, progression en
+    dix étapes, quinze onglets (vue d'ensemble, périmètre, environnement, chronologie, traçabilité, requêtes HTTP, frontend, BFF,
+    backend, journaux, hypothèses, expériences, diagnostic, rapport, non-régression), graphe
+    full stack (zoom, déplacement, clavier, chemin d'erreur, tableau des relations), panneau contextuel, sélection
+    synchronisée entre toutes les vues (une requête met en évidence son étape, ses nœuds, ses événements, son
+    code), explorateur de code en lecture seule (périmètre, valeurs sensibles masquées, lignes désignées par
+    l'investigation), traçabilité frontend (élément → composant → gestionnaire → service → client HTTP →
+    requête → erreur affichée), chronologie unifiée, choix de l'environnement LOCAL / REMOTE / ARO, thème sombre,
+    responsive, accessibilité (navigation clavier, contrastes AA, annonces) ; démonstration étiquetée
+    « Données de démonstration », sans appel au serveur, jamais présentée comme un diagnostic réel.
+  - Routes `GET …/incidents/:i/sources`, `…/source?application=&file=` (droit `RUN`) et
+    `…/screenshot?reproduction=&file=` ; en-têtes HTTP des échanges restreints à une liste autorisée.
 - Moteur : `network.captureBodies` (corps des échanges en erreur et des écritures, masqués, tronqués à 8 Kio) et
   `browser.playwrightTrace` (trace Playwright du run, `trace.zip`), désactivés par défaut.
 

@@ -240,6 +240,13 @@ export class AccessStore {
 export function rightFor(segments: readonly string[], method: string): Right {
   const [, resource, id, sub, item, action] = segments;
   if (resource === 'access') return id === 'me' && method === 'GET' ? 'VIEW' : 'MANAGE_ACCESS';
+  // Lire le code des dépôts du périmètre d'une investigation : investiguer (RUN), pas seulement voir.
+  if (
+    resource === 'projects' &&
+    sub === 'incidents' &&
+    (segments[5] === 'source' || segments[5] === 'sources')
+  )
+    return 'RUN';
   if (method === 'GET' || method === 'HEAD') return 'VIEW';
   if (resource === 'checks') return 'RUN';
   if (resource === 'explorations') return sub === 'report-links' ? 'VIEW' : 'RUN';
@@ -380,6 +387,9 @@ const KEYWORDS = new Set([
   'report',
   'regression',
   'reject',
+  'sources',
+  'source',
+  'screenshot',
 ]);
 
 /** L'action d'une requête, d'après les mots de sa route (les identifiants sont omis). */

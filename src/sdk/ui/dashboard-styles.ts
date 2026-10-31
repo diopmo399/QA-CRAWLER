@@ -1,3 +1,11 @@
+import { INCIDENT_CODE_CSS } from './incident-code.js';
+import { INCIDENT_DIAGNOSIS_CSS } from './incident-diagnosis.js';
+import { INCIDENT_FRONTEND_TRACE_CSS } from './incident-frontend-trace.js';
+import { INCIDENT_GRAPH_CSS } from './incident-graph.js';
+import { INCIDENT_PARTS_CSS } from './incident-parts.js';
+import { INCIDENT_TIMELINE_CSS } from './incident-timeline.js';
+import { INCIDENT_UX_CSS } from './incident-ux.js';
+import { INCIDENT_WORKSPACE_CSS } from './incident-workspace.js';
 import { darkThemeCss } from './theme.js';
 
 /**
@@ -1137,7 +1145,7 @@ li.info .ed-sev{color:var(--qa-color-primary)}
   .ind-dl{grid-template-columns:minmax(0,1fr)}
   .menu-btn span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 }
-/* Incidents : liste, déclaration, page d'investigation par onglets, graphe en couches. */
+/* Incidents : liste, déclaration, périmètre ; l'espace d'investigation suit. */
 .inc-live{margin:0;min-height:1.5em;display:flex;align-items:center;gap:8px;color:var(--qa-color-muted)}
 .inc-live:empty{display:none}
 .spin.sm{width:14px;height:14px;border-width:2px;flex:none}
@@ -1148,10 +1156,6 @@ li.info .ed-sev{color:var(--qa-color-primary)}
 .inc-targets .choice{flex:1 1 220px}
 .inc-app-form{border:1px dashed var(--qa-color-border-strong)!important;border-radius:12px;padding:14px!important}
 .inc-app{padding:8px 0;border-top:1px solid var(--qa-color-border)}
-.inc-tabs{overflow-x:auto;flex-wrap:nowrap}
-.inc-tabs button{white-space:nowrap}
-.inc-count{display:inline-flex;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font-size:12px;align-items:center;justify-content:center;font-weight:600}
-.inc-panel{gap:16px}
 .inc-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px 18px;margin:0}
 .inc-dl>div{min-width:0;display:flex;flex-direction:column;gap:2px}
 .inc-dl>div.wide{grid-column:1 / -1}
@@ -1159,47 +1163,26 @@ li.info .ed-sev{color:var(--qa-color-primary)}
 .inc-dl dd{margin:0;overflow-wrap:anywhere}
 .inc-ext{border:1px solid var(--qa-color-border);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:6px}
 .inc-ext p{margin:0}
-.inc-running{margin:0;display:flex;align-items:center;gap:8px;color:var(--qa-color-primary);font-weight:500}
-.tbl tr.inc-ko td{background:color-mix(in srgb,var(--qa-color-danger-soft) 60%,var(--qa-color-surface))}
 .inc-pre{margin:6px 0 0;padding:12px;border-radius:10px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font:12px/1.5 var(--qa-font-family-mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
-.inc-timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
-.inc-timeline li{display:grid;grid-template-columns:150px 170px minmax(0,1fr);gap:4px 12px;padding:10px 0;border-top:1px solid var(--qa-color-border);align-items:start}
-.inc-timeline li:first-child{border-top:0}
-.inc-at{font-size:13px}
-.inc-fig{margin:0;display:flex;flex-direction:column;gap:8px}
-.inc-graph{overflow:auto;border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-background);max-height:560px}
-.inc-graph svg{display:block;width:100%;min-width:880px;height:auto}
-.inc-graph .band{fill:var(--qa-color-surface);stroke:var(--qa-color-border)}
-.inc-graph .band-t{font:600 12px var(--qa-font-family);fill:var(--qa-color-muted);letter-spacing:.06em;text-transform:uppercase}
-.inc-graph .gn rect{fill:var(--qa-color-surface);stroke:var(--qa-color-border-strong);stroke-width:1.5}
-.inc-graph .gn.n-frontend rect{stroke:var(--qa-color-primary)}
-.inc-graph .gn.n-bff rect{stroke:var(--qa-color-success)}
-.inc-graph .gn.n-backend rect,.inc-graph .gn.n-database rect{stroke:var(--qa-color-warning)}
-.inc-graph .gk{font:600 10px var(--qa-font-family);fill:var(--qa-color-muted);text-transform:uppercase;letter-spacing:.04em}
-.inc-graph .gl{font:12px var(--qa-font-family-mono);fill:var(--qa-color-text)}
-.edge{fill:none;stroke-width:2}
-.edge.e-obs{stroke:var(--qa-color-primary);stroke-width:2.5}
-.edge.e-stat{stroke:var(--qa-color-success)}
-.edge.e-inf{stroke:var(--qa-color-warning);stroke-dasharray:6 4}
-.edge.e-unk{stroke:var(--qa-color-danger);stroke-dasharray:2 4}
-.mk.e-obs{fill:var(--qa-color-primary)}.mk.e-stat{fill:var(--qa-color-success)}.mk.e-inf{fill:var(--qa-color-warning)}.mk.e-unk{fill:var(--qa-color-danger)}
-.inc-legend{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px}
-.inc-legend li{display:flex;align-items:center;gap:8px}
-.inc-hyps,.inc-exps{gap:14px}
-.inc-hyp p,.inc-exp p{margin:0}
-.inc-hyp h4,.inc-exp h4{margin:4px 0 0;font-size:13px;font-weight:600}
-.inc-conf{display:flex;align-items:center;gap:10px}
-.inc-conf meter{width:160px;height:12px}
-.inc-params{display:flex;flex-wrap:wrap;gap:6px}
-.inc-refused{padding:10px 12px;border-radius:10px;background:var(--qa-color-danger-soft);display:flex;flex-direction:column;gap:6px}
-.inc-approve{border:2px solid color-mix(in srgb,var(--qa-color-danger) 55%,transparent);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px}
-.inc-approve h4{display:flex;align-items:center;gap:8px;margin:0}
-.inc-approve p{margin:0}
-.inc-root{padding:12px 14px;border-radius:12px;background:color-mix(in srgb,var(--qa-color-primary) 6%,var(--qa-color-surface));display:flex;flex-direction:column;gap:4px}
-.inc-root h3{margin:0}.inc-root p{margin:0}
-.inc-verdict{margin:0;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-@container (max-width:600px){
-  .inc-timeline li{grid-template-columns:minmax(0,1fr)}
-  .inc-conf meter{width:100px}
-}
-${darkThemeCss()}`;
+/* L'espace d'investigation : primitives partagées, structure, graphe, chronologie, traçabilité frontend, code, diagnostic, coquille. */
+${INCIDENT_PARTS_CSS}
+${INCIDENT_UX_CSS}
+${INCIDENT_GRAPH_CSS}
+${INCIDENT_TIMELINE_CSS}
+${INCIDENT_FRONTEND_TRACE_CSS}
+${INCIDENT_CODE_CSS}
+${INCIDENT_DIAGNOSIS_CSS}
+${INCIDENT_WORKSPACE_CSS}
+${darkThemeCss([
+  // L'accent sombre est clair (#8B8BFF) : le blanc dessus n'atteint que 2,9:1. Le texte prend la surface
+  // (environ 5,6:1, AA). Le thème clair garde le blanc.
+  // Une règle par sélecteur : darkThemeCss préfixe chaque sélecteur par l'hôte sombre.
+  ...[
+    '.btn.primary',
+    '.chip[aria-pressed="true"]',
+    '.badge',
+    '.avatar',
+    '.ed-seg button[aria-checked="true"]',
+    '.ed-con-new',
+  ].map((selector) => [selector, 'color:var(--qa-color-surface)'] as const),
+])}`;

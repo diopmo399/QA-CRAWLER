@@ -70,7 +70,7 @@ export interface FlowStepReport {
     suspectEffects: string[];
     reasons: string[];
   };
-  /** Les requêtes déclenchées par CETTE étape (URL masquée, jamais un en-tête ; un corps seulement avec network.captureBodies). */
+  /** Les requêtes déclenchées par CETTE étape (URL masquée ; corps et en-têtes d'une liste blanche seulement avec network.captureBodies). */
   network?: StepNetworkReport;
   /** Où le temps de l'étape est passé : action, transition, stabilité, vérification. */
   timing?: StepTimingReport;
@@ -95,6 +95,13 @@ export interface StepRequestReport {
   /** network.captureBodies seulement (erreurs, écritures xhr/fetch) : corps JSON/texte masqué, tronqué à 8 Kio. */
   requestBody?: string;
   responseBody?: string;
+  /**
+   * network.captureBodies seulement : en-têtes de la liste blanche (type, longueur, cache, redirection,
+   * identifiants de corrélation : traceparent, X-Request-Id, B3), noms en minuscules, valeurs masquées et
+   * tronquées ; jamais Authorization, Cookie, Set-Cookie, Proxy-*, X-Api-Key (voir filterHeaders).
+   */
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
 }
 
 export interface StepNetworkReport {

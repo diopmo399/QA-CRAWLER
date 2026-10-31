@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { ExplorationResult } from '../model/exploration-result.js';
 import type { FlowRunReport, FlowStepReport } from '../model/flow-run.js';
 import type { Issue, IssueType } from '../model/issue.js';
+import { filterHeaders } from '../observers/network-trace-recorder.js';
 import { redactText, redactUrl } from '../security/redactor.js';
 import type {
   ActionEvidence,
@@ -10,7 +11,6 @@ import type {
   EvidenceKind,
   ExecutionTarget,
   HttpExchange,
-  Incident,
   ReproductionRun,
 } from './model.js';
 
@@ -43,6 +43,18 @@ const pathOf = (url: string): string => {
 
 /** Un texte de preuve : masqué, sur une ligne quand c'est un résumé. */
 const clean = (text: string): string => redactText(text);
+
+/**
+ * Les en-têtes d'une requête d'étape (network.captureBodies) : déjà réduits à la liste blanche par le moteur, ils repassent
+ * par la liste blanche (un result.json ancien ou modifié n'apporte jamais un en-tête d'authentification).
+ */
+function headersOf<K extends 'requestHeaders' | 'responseHeaders'>(
+  key: K,
+  headers: Record<string, string> | undefined,
+): Partial<Record<K, Record<string, string>>> {
+  const kept = filterHeaders(headers);
+  return kept ? ({ [key]: kept } as Partial<Record<K, Record<string, string>>>) : {};
+}
 
 /** Le chemin d'une capture relatif au dossier du run, quand elle y est. */
 function relativeToRun(file: string, runDir: string | undefined): string {
@@ -179,6 +191,8 @@ export function reproductionFromResult(input: {
         correlation: 'OBSERVED',
         ...(request.requestBody !== undefined ? { requestBody: clean(request.requestBody) } : {}),
         ...(request.responseBody !== undefined ? { responseBody: clean(request.responseBody) } : {}),
+        ...headersOf('requestHeaders', request.requestHeaders),
+        ...headersOf('responseHeaders', request.responseHeaders),
       });
     });
     const action = actionOf(step, startedAt, requestIds, runDir);
@@ -406,16 +420,4 @@ export function symptomMatch(
   };
 }
 
-/**
- * LA reproduction de l'incident : le dernier run terminé de SON scénario. Les rejeux d'une vérification
- * (le scénario qui réussit, par exemple) sont gardés à côté, mais ne la remplacent jamais.
- */
-export function incidentReproduction(
-  incident: Pick<Incident, 'scenario' | 'investigation'>,
-): ReproductionRun | undefined {
-  const runs = incident.investigation.reproductions.filter((run) => run.status === 'COMPLETED');
-  return (
-    [...runs].reverse().find((run) => run.scenario === incident.scenario) ??
-    (incident.scenario ? undefined : runs.at(-1))
-  );
-}
+export { incidentReproduction } from './model.js';

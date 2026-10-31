@@ -262,6 +262,9 @@ export interface HttpExchange {
   requestBody?: string;
   /** Corps de réponse masqué et tronqué (erreurs, JSON/texte seulement). */
   responseBody?: string;
+  /** En-têtes filtrés (liste blanche : type, longueur, identifiants de corrélation…) ; jamais d'authentification ni de cookie. */
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
 }
 
 export interface ActionEvidence {
@@ -417,6 +420,8 @@ export interface GraphNode {
   symbolId?: string;
   file?: string;
   line?: number;
+  /** La localisation dans le code (application, fichier, lignes) quand le nœud vient du code. */
+  source?: SourceLocation;
 }
 
 export interface GraphEdge {
@@ -556,6 +561,10 @@ export interface Investigation {
   experiments: Experiment[];
   diagnosis?: Diagnosis;
   regression?: RegressionTestProposal;
+  /** La traçabilité frontend de la reproduction de l'incident (étape → élément → composant → handler → service → requête). */
+  frontendTrace?: FrontendTrace;
+  /** La chronologie unifiée (actions, requêtes, réponses, console, erreurs, captures, journaux, vérifications). */
+  timeline?: TimelineEvent[];
 }
 
 export interface IncidentInput {
@@ -633,4 +642,165 @@ export interface InvestigationReport {
   regression?: RegressionTestProposal;
   /** Ce que le rapport ne peut pas affirmer (reproduction absente, analyse partielle…). */
   limitations: string[];
+}
+
+// ── Investigation Workspace : contrats de l'interface ─────────────────────────────────────────
+
+/** Les noms du domaine, tels que l'interface les emploie. */
+export type ExecutionEnvironment = ExecutionEnvironmentConfig;
+export type TraceNode = GraphNode;
+export type TraceEdge = GraphEdge;
+export type RootCause = NonNullable<Diagnosis['rootCause']>;
+export type RegressionTest = RegressionTestProposal;
+
+/** Un endroit du code : toujours relatif à la racine du dépôt de l'application, dans le périmètre. */
+export interface SourceLocation {
+  applicationId: string;
+  layer: CodeLayer;
+  /** Relatif à la racine du dépôt, séparateur « / ». */
+  file: string;
+  line: number;
+  endLine?: number;
+  symbolId?: string;
+}
+
+export const TIMELINE_KINDS = [
+  'ACTION',
+  'PAGE',
+  'REQUEST',
+  'RESPONSE',
+  'CONSOLE',
+  'JS_ERROR',
+  'SCREENSHOT',
+  'TRACE',
+  'ASSERTION',
+  'LOG',
+  'EXPERIMENT',
+  'STATE',
+] as const;
+export type TimelineKind = (typeof TIMELINE_KINDS)[number];
+
+export const TIMELINE_STATUSES = ['OK', 'INFO', 'WARNING', 'ERROR'] as const;
+export type TimelineStatus = (typeof TIMELINE_STATUSES)[number];
+
+/**
+ * UN ÉVÉNEMENT DE LA CHRONOLOGIE. `id` est stable (dérivé de la reproduction et de la preuve) ; `order`
+ * classe les événements quand l'heure manque ou est estimée (`estimated`).
+ */
+export interface TimelineEvent {
+  id: string;
+  order: number;
+  at?: string;
+  /** L'heure est reconstruite (début du flow + durées des étapes précédentes), pas mesurée. */
+  estimated?: boolean;
+  reproduction?: string;
+  /** L'étape Playwright (index 1-based). */
+  step?: number;
+  layer: Layer;
+  kind: TimelineKind;
+  status: TimelineStatus;
+  summary: string;
+  /** Les preuves qui fondent l'événement (ids d'Evidence, de HttpExchange). */
+  evidence: string[];
+  /** L'échange HTTP concerné (REQUEST, RESPONSE). */
+  requestId?: string;
+  source?: SourceLocation;
+}
+
+/** Un maillon de la traçabilité frontend : ce qu'il désigne, d'où il vient, avec quel degré de certitude. */
+export interface TraceLink {
+  label: string;
+  status: RelationStatus;
+  /** Pourquoi ce maillon (ou pourquoi il est inconnu). */
+  reason: string;
+  evidence: string[];
+  symbolId?: string;
+  source?: SourceLocation;
+}
+
+/**
+ * UNE ÉTAPE DE LA TRAÇABILITÉ FRONTEND : étape Playwright → action → élément DOM → composant → handler →
+ * services TypeScript → clients HTTP → requêtes → réponses → erreur affichée. Ce qui ne s'observe pas sans
+ * instrumentation (composant, handler, service) est `INFERRED` ou `UNKNOWN`, jamais `OBSERVED`.
+ */
+export interface FrontendTraceStep {
+  index: number;
+  action: {
+    kind: string;
+    description: string;
+    status: string;
+    url?: string;
+    screenshot?: string;
+    evidence: string[];
+  };
+  element?: TraceLink;
+  component?: TraceLink;
+  handler?: TraceLink;
+  services: TraceLink[];
+  httpClients: TraceLink[];
+  requests: {
+    requestId: string;
+    method: string;
+    path: string;
+    status?: number;
+    correlation: RelationStatus;
+  }[];
+  /** Le message affiché après l'échec (assertion, texte de la page) quand il est observé. */
+  displayedError?: TraceLink;
+  /** Preuves console et erreurs JavaScript de l'étape. */
+  console: string[];
+  jsErrors: string[];
+}
+
+export interface FrontendTrace {
+  reproduction: string;
+  steps: FrontendTraceStep[];
+  /** Ce que la traçabilité ne peut pas établir (code frontend hors périmètre, étape sans requête…). */
+  limitations: string[];
+}
+
+/** Un fichier du périmètre, lu en lecture seule pour l'explorateur de code. */
+export interface SourceFileView {
+  applicationId: string;
+  layer: CodeLayer;
+  file: string;
+  language: 'typescript' | 'java' | 'yaml' | 'xml' | 'text';
+  text: string;
+  /** Les symboles de l'index de code déclarés dans ce fichier. */
+  symbols: CodeSymbol[];
+  /** Les lignes à mettre en évidence, et pourquoi (graphe, hypothèses, exceptions, sélection). */
+  highlights: {
+    line: number;
+    endLine?: number;
+    kind: 'ERROR' | 'PATH' | 'HYPOTHESIS' | 'SYMBOL';
+    reason: string;
+    refs: string[];
+  }[];
+}
+
+/** L'arborescence lisible du périmètre, par application. */
+export interface SourceTree {
+  applications: {
+    applicationId: string;
+    name: string;
+    layer: CodeLayer;
+    files: string[];
+    truncated: boolean;
+  }[];
+  denied: { path: string; reason: string }[];
+}
+
+/**
+ * LA reproduction de l'incident : le dernier run terminé de SON scénario. Les rejeux d'une vérification
+ * (le scénario qui réussit, par exemple) sont gardés à côté, mais ne la remplacent jamais. La même règle
+ * pour le serveur (rapport, graphe, hypothèses) et pour l'interface.
+ */
+export function incidentReproduction(
+  incident: Pick<Incident, 'scenario' | 'investigation'>,
+): ReproductionRun | undefined {
+  const runs = incident.investigation.reproductions.filter((run) => run.status === 'COMPLETED');
+  return (
+    [...runs].reverse().find((run) => run.scenario === incident.scenario) ??
+    (incident.scenario ? undefined : runs.at(-1))
+  );
 }

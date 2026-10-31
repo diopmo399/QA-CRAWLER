@@ -2,10 +2,15 @@ import { EventEmitter } from 'node:events';
 import type { Page, Request, Response } from 'playwright';
 import { describe, expect, it } from 'vitest';
 import { scenarioSchema } from '../../src/config/config.js';
+import { reproductionFromResult } from '../../src/incident/evidence.js';
+import type { ExplorationResult } from '../../src/model/exploration-result.js';
 import {
+  CAPTURED_HEADERS,
   capturedFieldsOf,
+  filterHeaders,
   isTextualContentType,
   MAX_CAPTURED_BODY,
+  MAX_HEADER_VALUE,
   NetworkTraceRecorder,
   redactBody,
   type CapturedNetworkExchange,
@@ -27,13 +32,15 @@ function fakeExchange(input: {
   resourceType: string;
   body?: string;
   type?: string;
+  headers?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
 }): FakeExchange {
   const request = {
     method: () => input.method,
     url: () => input.url,
     resourceType: () => input.resourceType,
     postData: () => input.body ?? null,
-    headers: () => (input.type ? { 'content-type': input.type } : {}),
+    headers: () => ({ ...(input.type ? { 'content-type': input.type } : {}), ...input.headers }),
     failure: () => null,
   } as unknown as Request;
   return {
@@ -42,7 +49,7 @@ function fakeExchange(input: {
       ({
         request: () => request,
         status: () => status,
-        headers: () => ({ 'content-type': type }),
+        headers: () => ({ 'content-type': type, ...input.responseHeaders }),
         text: () => Promise.resolve(body),
       }) as unknown as Response,
   };
@@ -206,5 +213,188 @@ describe('redactBody', () => {
     expect(isTextualContentType('image/png')).toBe(false);
     expect(isTextualContentType('multipart/form-data; boundary=x')).toBe(false);
     expect(isTextualContentType(undefined)).toBe(false);
+  });
+});
+
+/** Des en-têtes comme les envoie un navigateur connecté : secrets compris, qui ne doivent jamais être gardés. */
+const SECRET_REQUEST_HEADERS = {
+  authorization: 'Bearer abcdefghijklmnopqrstuvwxyz',
+  cookie: 'JSESSIONID=s3ss10n-value',
+  'proxy-authorization': 'Basic dXNlcjpwYXNz',
+  'x-api-key': 'k-123456789',
+  'x-auth-token': 'tok-123456789',
+  'x-csrf-token': 'csrf-123456789',
+  'x-session-id': 'sess-123456789',
+  'x-client-secret': 'cs-123456789',
+  'x-forwarded-for': '10.0.0.12',
+  'user-agent': 'Mozilla/5.0',
+};
+const SECRET_VALUES = [
+  'abcdefghijklmnopqrstuvwxyz',
+  's3ss10n-value',
+  'dXNlcjpwYXNz',
+  'k-123456789',
+  'tok-123456789',
+  'csrf-123456789',
+  'sess-123456789',
+  'cs-123456789',
+  '10.0.0.12',
+  'Mozilla',
+];
+
+describe('captured headers (network.captureBodies)', () => {
+  it('keeps only the allowlist, lower-cased and sorted, and never a credential', () => {
+    const kept = filterHeaders({
+      ...SECRET_REQUEST_HEADERS,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'X-Request-Id': 'req-42',
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+      'x-b3-traceid': '4bf92f3577b34da6',
+    });
+    expect(kept).toEqual({
+      accept: 'application/json',
+      'content-type': 'application/json',
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+      'x-b3-traceid': '4bf92f3577b34da6',
+      'x-request-id': 'req-42',
+    });
+    const text = JSON.stringify(kept);
+    for (const secret of SECRET_VALUES) expect(text).not.toContain(secret);
+    expect(
+      filterHeaders({ 'set-cookie': 'SESSION=abc; HttpOnly', authorization: 'Bearer x' }),
+    ).toBeUndefined();
+    expect(filterHeaders(undefined)).toBeUndefined();
+  });
+
+  it('never allowlists a sensitive name', () => {
+    for (const name of CAPTURED_HEADERS)
+      expect(name).not.toMatch(/authorization|cookie|^proxy-|api-?key|secret|token|session/);
+  });
+
+  it('masks secrets in values, strips control characters, truncates and keeps only the path of a redirect', () => {
+    const kept = filterHeaders({
+      'x-correlation-id': 'corr-1 password=hunter22',
+      'cache-control': `no-cache\r\nset-cookie: injected`,
+      'content-type': 'x'.repeat(MAX_HEADER_VALUE * 2),
+      location: 'https://catalogue.test/books/12?session=abc&token=xyz#top',
+    });
+    expect(kept?.['x-correlation-id']).toContain('corr-1');
+    expect(kept?.['x-correlation-id']).not.toContain('hunter22');
+    expect(kept?.['cache-control']).not.toMatch(/[\r\n]/);
+    expect(kept?.['content-type']).toHaveLength(MAX_HEADER_VALUE);
+    expect(kept?.['content-type']?.endsWith('…')).toBe(true);
+    expect(kept?.location).toBe('/books/12?…');
+    // Une seconde passe (relecture d'un result.json) ne change rien.
+    expect(filterHeaders(kept)).toEqual(kept);
+  });
+
+  it('records allowlisted request and response headers only when captureBodies is on', async () => {
+    const exchangeOf = (): FakeExchange =>
+      fakeExchange({
+        method: 'POST',
+        url: 'http://localhost:4100/api/books',
+        resourceType: 'fetch',
+        body: '{"title":"Atlas"}',
+        type: 'application/json',
+        headers: { ...SECRET_REQUEST_HEADERS, 'x-request-id': 'req-7' },
+        responseHeaders: {
+          'set-cookie': 'SESSION=s3ss10n-value; HttpOnly',
+          'x-request-id': 'req-7',
+          'content-length': '120',
+          location: 'http://localhost:4100/books/12?token=abc',
+        },
+      });
+    const off = recorder();
+    off.recorder.start('h0');
+    const plain = exchangeOf();
+    off.page.emit('request', plain.request);
+    off.page.emit('response', plain.response(201, '{}'));
+    const offExchange = off.recorder.stop('h0')?.requests[0] as CapturedNetworkExchange;
+    expect(offExchange.requestHeaders).toBeUndefined();
+    expect(offExchange.responseHeaders).toBeUndefined();
+
+    const on = recorder(true);
+    on.recorder.start('h1');
+    const save = exchangeOf();
+    on.page.emit('request', save.request);
+    on.page.emit('response', save.response(201, '{"id":12}'));
+    await flush();
+    const exchange = on.recorder.stop('h1')?.requests[0] as CapturedNetworkExchange;
+    expect(exchange.requestHeaders).toEqual({ 'content-type': 'application/json', 'x-request-id': 'req-7' });
+    expect(exchange.responseHeaders).toEqual({
+      'content-length': '120',
+      'content-type': 'application/json',
+      location: '/books/12?…',
+      'x-request-id': 'req-7',
+    });
+    const fields = capturedFieldsOf(exchange);
+    expect(fields.requestHeaders).toEqual(exchange.requestHeaders);
+    expect(fields.responseHeaders).toEqual(exchange.responseHeaders);
+    const text = JSON.stringify(fields);
+    for (const secret of SECRET_VALUES) expect(text).not.toContain(secret);
+  });
+
+  it('maps step headers to HttpExchange headers, re-checking the allowlist', () => {
+    const result = {
+      issues: [],
+      flows: [
+        {
+          name: 'creer-livre',
+          status: 'FAILED',
+          startedAt: '2026-10-30T09:00:00.000Z',
+          durationMs: 1000,
+          states: [],
+          issueIds: [],
+          explored: false,
+          steps: [
+            {
+              index: 1,
+              kind: 'click',
+              description: 'click "Enregistrer"',
+              status: 'PASSED',
+              optional: false,
+              durationMs: 1000,
+              network: {
+                requests: [
+                  {
+                    method: 'POST',
+                    path: '/api/books',
+                    status: 500,
+                    resourceType: 'fetch',
+                    startedAt: '2026-10-30T09:00:00.200Z',
+                    // Un result.json ancien ou modifié : l'authentification n'en sort jamais.
+                    requestHeaders: {
+                      'content-type': 'application/json',
+                      authorization: 'Bearer abcdefghijklmnopqrstuvwxyz',
+                      cookie: 'JSESSIONID=s3ss10n-value',
+                    },
+                    responseHeaders: { 'x-request-id': 'req-9', 'set-cookie': 'SESSION=s3ss10n-value' },
+                  },
+                  { method: 'GET', path: '/api/publishers', status: 200, resourceType: 'fetch' },
+                ],
+                writes: 1,
+                errors: 1,
+              },
+            },
+          ],
+        },
+      ],
+    } as unknown as ExplorationResult;
+    const run = reproductionFromResult({
+      id: 'rep_h',
+      scenario: 'creer-livre',
+      target: 'LOCAL',
+      startedAt: '2026-10-30T08:59:59.000Z',
+      result,
+      observed: 'erreur HTTP 500',
+    });
+    const [save, list] = run.requests;
+    expect(save?.requestHeaders).toEqual({ 'content-type': 'application/json' });
+    expect(save?.responseHeaders).toEqual({ 'x-request-id': 'req-9' });
+    expect(list?.requestHeaders).toBeUndefined();
+    expect(list?.responseHeaders).toBeUndefined();
+    const text = JSON.stringify(run);
+    for (const secret of SECRET_VALUES) expect(text).not.toContain(secret);
   });
 });

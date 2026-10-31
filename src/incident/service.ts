@@ -1,7 +1,12 @@
+import { readFile, realpath, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { redactText } from '../security/redactor.js';
 import type { ExplorationResult } from '../model/exploration-result.js';
 import { analyzeCode } from './code/index.js';
 import { buildGraph } from './correlator.js';
+import { buildFrontendTrace } from './frontend-trace.js';
+import { buildTimeline } from './timeline.js';
 import { environmentAdapter, type ExecutionEnvironmentAdapter } from './environments.js';
 import { incidentReproduction, reproductionFromResult } from './evidence.js';
 import { planExperiment, runExperiment } from './experiments.js';
@@ -18,6 +23,8 @@ import type {
   InvestigationReport,
   ReproductionRun,
   ScopeExtension,
+  SourceFileView,
+  SourceTree,
 } from './model.js';
 import { proposeRegressionTest } from './regression.js';
 import { buildReport, reportMarkdown } from './report.js';
@@ -62,6 +69,48 @@ export interface IncidentHost {
   addScenario(name: string, yaml: string): Promise<string>;
   /** L'URL de l'environnement cible (son hôte entre dans le périmètre de navigation). */
   environment(environmentId?: string): Promise<{ id?: string; baseUrl?: string; kind?: string }>;
+  /** Le dossier d'un run du moteur (captures, trace). */
+  runDir(run: string): string;
+}
+
+/** Ce que l'explorateur de code lit, par couche (les sources et leur configuration). */
+const SOURCE_EXTENSIONS: Record<'FRONTEND' | 'BFF' | 'BACKEND', string[]> = {
+  FRONTEND: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.json'],
+  BFF: ['.java', '.yml', '.yaml', '.properties', '.xml'],
+  BACKEND: ['.java', '.yml', '.yaml', '.properties', '.xml', '.sql'],
+};
+
+const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+};
+const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
+
+/** Une clé de configuration qui ressemble à un secret : sa valeur n'est jamais montrée. */
+const SECRET_KEY =
+  /(pass(word|wd)?|secret|token|api[-_.]?key|credential|private[-_.]?key|client[-_.]?secret)/i;
+
+/** Les valeurs sensibles d'un fichier masquées (configuration : clé = valeur, clé: valeur ; puis le masquage commun). */
+export function maskSource(file: string, text: string): string {
+  const config = /\.(ya?ml|properties|env|json|xml)$/i.test(file);
+  const lines = text.split('\n').map((line) => {
+    if (!config) return line;
+    const match = /^(\s*["']?([\w.-]+)["']?\s*[:=]\s*)(.+)$/.exec(line);
+    return match?.[2] && SECRET_KEY.test(match[2]) && !/^\$\{[^}]*\}$/.test(match[3]?.trim() ?? '')
+      ? `${match[1] ?? ''}[REDACTED]`
+      : line;
+  });
+  return redactText(lines.join('\n'));
+}
+
+function languageOf(file: string): SourceFileView['language'] {
+  if (/\.(ts|tsx|js|jsx|mjs|cjs|vue)$/i.test(file)) return 'typescript';
+  if (/\.java$/i.test(file)) return 'java';
+  if (/\.ya?ml$/i.test(file)) return 'yaml';
+  if (/\.xml$/i.test(file)) return 'xml';
+  return 'text';
 }
 
 export class IncidentServiceError extends Error {
@@ -85,6 +134,8 @@ export class IncidentService {
   readonly store: IncidentStore;
   /** Ce qui tourne par incident : un rejeu, une expérience ; l'annulation les arrête. */
   private readonly running = new Map<string, Set<() => void>>();
+  /** Le dernier numéro de reproduction attribué par incident (voir nextReproduction). */
+  private readonly allocated = new Map<string, number>();
   /** Les travaux en arrière-plan (tests : attendre leur fin). */
   private readonly pending = new Set<Promise<unknown>>();
 
@@ -122,6 +173,9 @@ export class IncidentService {
   async incident(id: string): Promise<Incident> {
     const incident = await this.store.get(id);
     if (!incident) throw new IncidentServiceError('NOT_FOUND', `incident ${id} not found`);
+    // La chronologie unifiée se déduit de tout le reste (reproductions, vérifications, journaux, historique) :
+    // calculée à chaque lecture, elle n'est jamais en retard sur l'historique.
+    incident.investigation.timeline = buildTimeline(incident);
     return incident;
   }
 
@@ -207,7 +261,7 @@ export class IncidentService {
       await this.store.transition(id, 'FAILED', actor, `replay refused: ${message(error)}`);
       throw error;
     }
-    const reproductionId = `rep_${String(incident.investigation.reproductions.length + 1)}`;
+    const reproductionId = this.nextReproduction(incident);
     const placeholder: ReproductionRun = {
       id: reproductionId,
       startedAt: replay.startedAt,
@@ -253,6 +307,13 @@ export class IncidentService {
             const at = current.investigation.reproductions.findIndex((entry) => entry.id === reproductionId);
             if (at >= 0) current.investigation.reproductions[at] = reproduction;
             else current.investigation.reproductions.push(reproduction);
+            // Une nouvelle reproduction de l'incident : sa traçabilité frontend, si le code est déjà analysé.
+            const reference = incidentReproduction(current);
+            if (reference?.id === reproduction.id && current.investigation.code)
+              current.investigation.frontendTrace = buildFrontendTrace({
+                reproduction,
+                code: current.investigation.code,
+              });
           },
           {
             kind: 'REPRODUCTION',
@@ -300,6 +361,111 @@ export class IncidentService {
     };
   }
 
+  // ── Lecture du code et des captures (lecture seule, dans le périmètre) ─────────────────────
+
+  /** Les fichiers lisibles du périmètre, application par application ; les refus sont rendus tels quels. */
+  async sourceTree(id: string): Promise<SourceTree> {
+    const incident = await this.incident(id);
+    const policy = await this.policy(incident);
+    const files = this.adapter(incident).files(policy);
+    const applications: SourceTree['applications'] = [];
+    for (const application of incident.scope.applications) {
+      const root = application.repository.root;
+      const starts =
+        application.repository.include.length > 0
+          ? application.repository.include.map((entry) => path.join(root, entry))
+          : [root];
+      const listed = new Set<string>();
+      for (const start of starts) {
+        try {
+          for (const file of await files.list(start, { extensions: SOURCE_EXTENSIONS[application.layer] }))
+            listed.add(path.relative(root, file).split(path.sep).join('/'));
+        } catch {
+          // un dossier refusé ou absent : la raison est dans files.denied
+        }
+      }
+      applications.push({
+        applicationId: application.id,
+        name: application.name,
+        layer: application.layer,
+        files: [...listed].sort(),
+        truncated: files.truncated.length > 0,
+      });
+    }
+    return { applications, denied: [...files.denied] };
+  }
+
+  /** Un fichier du périmètre, masqué, avec ses symboles et les lignes que l'investigation désigne. */
+  async source(id: string, applicationId: string, file: string): Promise<SourceFileView> {
+    const incident = await this.incident(id);
+    const application = incident.scope.applications.find((entry) => entry.id === applicationId);
+    if (!application)
+      throw new IncidentServiceError('NOT_FOUND', `application ${applicationId} is not in the scope`);
+    if (file === '' || path.isAbsolute(file) || file.split(/[\\/]/).includes('..'))
+      throw new IncidentServiceError('SCOPE', 'the file must be a path inside the repository');
+    const policy = await this.policy(incident);
+    const files = this.adapter(incident).files(policy);
+    const text = maskSource(file, await files.readText(path.join(application.repository.root, file)));
+    const code = incident.investigation.code;
+    const symbols = (code?.symbols ?? []).filter(
+      (symbol) => symbol.applicationId === applicationId && symbol.file === file,
+    );
+    const inFile = new Set(symbols.map((symbol) => symbol.id));
+    const highlights: SourceFileView['highlights'] = [];
+    for (const node of incident.investigation.graph?.nodes ?? []) {
+      const symbol = node.symbolId ? symbols.find((entry) => entry.id === node.symbolId) : undefined;
+      const line =
+        node.source?.applicationId === applicationId && node.source.file === file
+          ? node.source.line
+          : symbol?.line;
+      if (line === undefined) continue;
+      highlights.push({
+        line,
+        ...(node.source?.endLine !== undefined ? { endLine: node.source.endLine } : {}),
+        kind: node.kind === 'EXCEPTION' ? 'ERROR' : 'PATH',
+        reason: node.label,
+        refs: [node.id],
+      });
+    }
+    for (const hypothesis of incident.investigation.hypotheses)
+      for (const { ref, fact } of hypothesis.supporting) {
+        const symbol = inFile.has(ref) ? symbols.find((entry) => entry.id === ref) : undefined;
+        if (symbol)
+          highlights.push({
+            line: symbol.line,
+            kind: 'HYPOTHESIS',
+            reason: `${hypothesis.title} — ${fact}`,
+            refs: [hypothesis.id],
+          });
+      }
+    return {
+      applicationId,
+      layer: application.layer,
+      file,
+      language: languageOf(file),
+      text,
+      symbols,
+      highlights: highlights.sort((a, b) => a.line - b.line),
+    };
+  }
+
+  /** Une capture d'une reproduction, en image `data:` : seulement les captures qu'elle a enregistrées, dans son dossier. */
+  async screenshot(id: string, reproductionId: string, file: string): Promise<{ dataUrl: string }> {
+    const incident = await this.incident(id);
+    const reproduction = incident.investigation.reproductions.find((entry) => entry.id === reproductionId);
+    if (!reproduction?.run || !reproduction.screenshots.includes(file))
+      throw new IncidentServiceError('NOT_FOUND', 'screenshot not found');
+    const type = IMAGE_TYPES[path.extname(file).toLowerCase()];
+    if (!type) throw new IncidentServiceError('NOT_FOUND', 'screenshot not found');
+    const runDir = await realpath(this.host.runDir(reproduction.run));
+    const target = await realpath(path.resolve(runDir, file)).catch(() => undefined);
+    if (!target || !target.startsWith(runDir + path.sep))
+      throw new IncidentServiceError('SCOPE', 'the screenshot is outside its run');
+    if ((await stat(target)).size > MAX_SCREENSHOT_BYTES)
+      throw new IncidentServiceError('INVALID', 'the screenshot is too large to display');
+    return { dataUrl: `data:${type};base64,${(await readFile(target)).toString('base64')}` };
+  }
+
   // ── Analyse : code, graphe, hypothèses ──────────────────────────────────────────────────
 
   async analyze(id: string, actor: string): Promise<Incident> {
@@ -335,6 +501,11 @@ export class IncidentService {
       actor,
       (current) => {
         if (code) current.investigation.code = code;
+        if (reproduction)
+          current.investigation.frontendTrace = buildFrontendTrace({
+            reproduction,
+            ...(code ? { code } : {}),
+          });
         current.investigation.graph = graph;
         // Les hypothèses déjà vérifiées gardent leur statut ; les nouvelles s'ajoutent.
         const kept = current.investigation.hypotheses.filter((entry) => entry.status !== 'PROPOSED');
@@ -463,10 +634,10 @@ export class IncidentService {
     const stop = this.track(incident.id, () => {
       replay.cancel();
     });
+    const id = this.nextReproduction(await this.incident(incident.id));
     try {
       const outcome = await replay.done;
       const current = await this.incident(incident.id);
-      const id = `rep_${String(current.investigation.reproductions.length + 1)}`;
       const reproduction = this.reproductionOf({ ...current, scenario }, id, replay, outcome);
       await this.store.mutate(
         incident.id,
@@ -650,6 +821,20 @@ export class IncidentService {
       if (error instanceof IncidentStateError) throw new IncidentServiceError('STATE', error.message);
       throw error;
     }
+  }
+
+  /**
+   * L'identifiant d'une nouvelle reproduction (`rep_N`) : au-delà de celles enregistrées ET de celles déjà
+   * attribuées par ce serveur, pour qu'une vérification qui rejoue en même temps n'obtienne pas le même.
+   */
+  private nextReproduction(incident: Incident): string {
+    const numbers = incident.investigation.reproductions
+      .map((run) => /^rep_(\d+)$/.exec(run.id)?.[1])
+      .filter((value): value is string => value !== undefined)
+      .map(Number);
+    const next = Math.max(0, ...numbers, this.allocated.get(incident.id) ?? 0) + 1;
+    this.allocated.set(incident.id, next);
+    return `rep_${String(next)}`;
   }
 
   private track(id: string, stop: () => void): () => void {
