@@ -215,16 +215,26 @@ describe('dashboard — scenario library', () => {
     expect(html).toContain('<h1>Bibliothèque de scénarios</h1>');
     expect(html).toContain('Demandes · 3 bloc(s) réutilisable(s)');
     expect(html).toContain('data-action="lib-panel-open"');
+    // Un contrat valide : une coche discrète ; à revalider : une pastille.
     expect(html).toMatch(
-      /<h3><button class="lib-title" data-action="lib-open" data-block="Bloc connexion" aria-haspopup="dialog">Bloc connexion<\/button><\/h3><span class="lib-ver"[^>]*>v2<\/span><span class="lib-state ok">Contrat valide<\/span>/,
+      /<h3><button class="lib-title" data-action="lib-open" data-block="Bloc connexion" aria-haspopup="dialog">Bloc connexion<\/button><\/h3><span class="lib-ver"[^>]*>v2<\/span><span class="lib-ok" title="Contrat valide">/,
+    );
+    expect(html).toContain('<span class="lib-kind standalone">Autonome</span><span>2 étape(s)</span>');
+    // L'origine, courte ; le détail au survol.
+    expect(html).toContain(
+      '<span class="lib-origin" title="Scénario « Connexion »">Scénario Connexion</span>',
     );
     expect(html).toContain(
-      '<span class="lib-kind standalone">Autonome</span><span>2 étape(s)</span><span>Scénario « Connexion »</span>',
+      '<span class="lib-origin" title="Groupe « Création » de l’enregistrement creer">Enregistrement creer</span>',
     );
-    expect(html).toContain('<span>Utilisé dans 1 scénario(s)</span>');
-    expect(html).toMatch(/<span>modifié le [^<]+<\/span>/);
-    expect(html).toContain('Groupe « Création » de l’enregistrement creer');
-    expect(html).toContain('<code class="lib-key" title="résolue au rejeu">user.name ⟳</code>');
+    // Le pied : la date, et l'utilisation seulement quand il y en a une.
+    expect(html).toMatch(/<small class="mu">modifié le [^<]+ · Utilisé dans 1 scénario\(s\)<\/small>/);
+    expect(html).not.toContain('Utilisé dans aucun scénario');
+    expect(html).toContain('<code class="lib-key">user.name</code>');
+    expect(html).toContain('Ni entrée ni sortie : il se joue seul.');
+    expect(html).toContain(
+      'class="btn small lib-add" data-action="lib-part-add" data-block="Bloc seul" title="Ajouter au parcours"',
+    );
     expect(html).toContain('<span class="lib-state warn">À revalider</span>');
     expect(html).toContain('Bloc &lt;x&gt;');
     expect(html).toContain('<ul class="plain lib-cards grid">');

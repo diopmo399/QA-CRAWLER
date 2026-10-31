@@ -95,8 +95,11 @@ describe('Dashboard — scenario library in Chromium', () => {
     await dashboard().locator('.lib-card', { hasText: 'Bloc recherche' }).waitFor({ timeout: 15_000 });
     const card = dashboard().locator('.lib-card', { hasText: 'Bloc création' });
     expect(await card.locator('.lib-ver').textContent()).toBe('v1');
-    expect(await card.locator('.lib-state').textContent()).toBe('Contrat valide');
-    expect(await card.textContent()).toContain('Scénario « Créer un élément »');
+    // Un contrat valide : une coche discrète, son nom au survol.
+    expect(await card.locator('.lib-ok').getAttribute('title')).toBe('Contrat valide');
+    // L'origine, courte ; le détail au survol.
+    expect(await card.locator('.lib-origin').textContent()).toBe('Scénario Créer un élément');
+    expect(await card.locator('.lib-origin').getAttribute('title')).toBe('Scénario « Créer un élément »');
   });
 
   it('searches the catalog and opens the details of a block (provenance, history)', async () => {
