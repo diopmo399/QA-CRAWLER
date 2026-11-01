@@ -167,6 +167,7 @@ describe('SDK — two real runs compared, and their traceability', () => {
     }
   }, 60_000);
 
+  // La surface sombre du thème vert : #13201B.
   it('takes the dark theme by attribute or from the system, and the host variables still win', async () => {
     const page: Page = await browser.newPage();
     const background = (): Promise<string> =>
@@ -178,14 +179,14 @@ describe('SDK — two real runs compared, and their traceability', () => {
     try {
       await page.goto(`${server.url}/runs?project=${project.id}&base=${BASE}&head=${HEAD}&theme=dark`);
       await page.locator('qa-crawler-run-compare').getByRole('tab', { name: 'Comparaison' }).waitFor();
-      await expect.poll(background).toBe('rgb(22, 26, 44)');
+      await expect.poll(background).toBe('rgb(19, 32, 27)');
       await page.locator('qa-crawler-run-compare').evaluate((host) => {
         host.setAttribute('theme', 'auto');
       });
       await page.emulateMedia({ colorScheme: 'light' });
       await expect.poll(background).toBe('rgb(255, 255, 255)');
       await page.emulateMedia({ colorScheme: 'dark' });
-      await expect.poll(background).toBe('rgb(22, 26, 44)');
+      await expect.poll(background).toBe('rgb(19, 32, 27)');
       // Une variable posée par l'hôte sur l'élément l'emporte sur le thème.
       await page.locator('qa-crawler-run-compare').evaluate((host) => {
         (host as HTMLElement).style.setProperty('--qa-color-surface', '#102030');
