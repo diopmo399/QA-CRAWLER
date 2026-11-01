@@ -93,6 +93,43 @@ import type {
   TrendsView,
 } from './contracts.js';
 import { SDK_API_VERSION } from './contracts.js';
+import type {
+  EnvironmentCapabilities,
+  ExperimentKind,
+  Incident,
+  IncidentAttachmentContent,
+  IncidentAttachmentInput,
+  IncidentInput,
+  IncidentSummary,
+  InvestigationReport,
+  InvestigationReportPart,
+  ProposedVerification,
+  RegressionSpec,
+  ReportFormat,
+  ReportSection,
+  ScopeExtensionKind,
+  ScopeTree,
+  SourceFileView,
+  SourceTree,
+} from './incident-contracts.js';
+import type {
+  AiAssistantAnswer,
+  AiBudget,
+  AiCapabilities,
+  DeepInvestigationInput,
+  InvestigationMemory,
+} from './incident-ai-contracts.js';
+import type {
+  TriggerBudget,
+  TriggerInvestigationInput,
+  TriggerRunReport,
+} from './incident-trigger-contracts.js';
+
+/** Les options d'export du rapport : format (json par défaut) et sections (toutes par défaut). */
+export interface IncidentReportOptions {
+  format?: ReportFormat;
+  sections?: readonly ReportSection[];
+}
 
 /**
  * LE CLIENT DU SDK : les appels à l'API du serveur QA-CRAWLER, depuis le navigateur (ou Node 20+).
@@ -175,6 +212,33 @@ export interface RecordingStartInput {
   startPath?: string;
   /** Rejouer le flow généré tout de suite (REPLAY_CONFIRMED / REPLAY_FAILED). */
   validate?: boolean;
+}
+
+/** La vérification d'un périmètre d'investigation : ce qui ne va pas, champ par champ. */
+export interface IncidentScopeValidation {
+  ok: boolean;
+  issues: { field: string; message: string }[];
+}
+
+/** Une extension du périmètre demandée (retenue seulement après une décision). */
+export interface IncidentExtensionRequest {
+  kind: ScopeExtensionKind;
+  target: string;
+  applicationId?: string;
+  reason: string;
+}
+
+/** Une vérification à planifier (souvent une vérification proposée par une hypothèse). */
+export interface IncidentExperimentInput {
+  kind: ExperimentKind;
+  params: ProposedVerification['params'];
+  hypothesisId?: string;
+}
+
+/** La décision d'une personne sur une vérification proposée par l'investigation IA. */
+export interface IncidentAiDecision {
+  approve: boolean;
+  reason?: string;
 }
 
 export interface QaCrawlerClient {
@@ -509,6 +573,177 @@ export interface QaCrawlerClient {
     /** L'analyse de régression d'une exploration, par rapport à l'historique du moteur. */
     regression(projectId: string, run: string): Promise<RegressionView>;
   };
+  /**
+   * LES INCIDENTS : un incident déclaré est délimité, reproduit, relié au code puis diagnostiqué à
+   * partir de preuves. Chaque modification porte la révision lue (409 si elle a changé) ; une
+   * vérification avec effets de bord n'est exécutée qu'avec `approve: true` (et le droit RUN_WRITES).
+   */
+  incidents: {
+    list(projectId: string): Promise<IncidentSummary[]>;
+    create(projectId: string, input: IncidentInput): Promise<Incident>;
+    get(projectId: string, incidentId: string): Promise<Incident>;
+    /** Refusée (409) quand `revision` n'est plus celle du serveur. */
+    update(
+      projectId: string,
+      incidentId: string,
+      revision: number,
+      patch: Partial<IncidentInput>,
+    ): Promise<Incident>;
+    validateScope(projectId: string, incidentId: string): Promise<IncidentScopeValidation>;
+    requestExtension(
+      projectId: string,
+      incidentId: string,
+      input: IncidentExtensionRequest,
+    ): Promise<Incident>;
+    decideExtension(
+      projectId: string,
+      incidentId: string,
+      extensionId: string,
+      approve: boolean,
+    ): Promise<Incident>;
+    /** Ce que la cible d'exécution (LOCAL, REMOTE, ARO) sait faire, sondé par le serveur. */
+    capabilities(projectId: string, incidentId: string): Promise<EnvironmentCapabilities>;
+    /** L'incident passe REPRODUCING : relire `get` jusqu'à ce que l'état change. */
+    reproduce(
+      projectId: string,
+      incidentId: string,
+      options?: { headed?: boolean; slowMoMs?: number },
+    ): Promise<Incident>;
+    /** Index du code, graphe d'investigation et hypothèses. */
+    analyze(projectId: string, incidentId: string): Promise<Incident>;
+    planExperiment(projectId: string, incidentId: string, input: IncidentExperimentInput): Promise<Incident>;
+    runExperiment(
+      projectId: string,
+      incidentId: string,
+      experimentId: string,
+      options?: { approve?: boolean },
+    ): Promise<Incident>;
+    diagnose(projectId: string, incidentId: string): Promise<Incident>;
+    /**
+     * Le rapport. JSON sans `sections` : le rapport complet ; avec `sections` : les clés des sections écartées
+     * sont absentes. `markdown` → `{ markdown }`, `html` → `{ html }` (document autonome, échappé, sans script),
+     * `pdf` → `{ pdfBase64 }` (Chromium sans interface ; 501 PDF_UNAVAILABLE sans navigateur, 504 PDF_TIMEOUT).
+     */
+    report(
+      projectId: string,
+      incidentId: string,
+      options?: { format?: 'json'; sections?: undefined },
+    ): Promise<InvestigationReport>;
+    report(
+      projectId: string,
+      incidentId: string,
+      options: { format?: 'json'; sections: readonly ReportSection[] },
+    ): Promise<InvestigationReportPart>;
+    report(
+      projectId: string,
+      incidentId: string,
+      options: { format: 'markdown'; sections?: readonly ReportSection[] },
+    ): Promise<{ markdown: string }>;
+    report(
+      projectId: string,
+      incidentId: string,
+      options: { format: 'html'; sections?: readonly ReportSection[] },
+    ): Promise<{ html: string }>;
+    report(
+      projectId: string,
+      incidentId: string,
+      options: { format: 'pdf'; sections?: readonly ReportSection[] },
+    ): Promise<{ pdfBase64: string }>;
+    /** Le rapport en Markdown (le texte seul). */
+    reportMarkdown(projectId: string, incidentId: string): Promise<string>;
+    proposeRegression(projectId: string, incidentId: string): Promise<Incident>;
+    /** Le test Playwright TypeScript généré depuis le flow proposé (rien n'est écrit ni exécuté). */
+    regressionSpec(projectId: string, incidentId: string): Promise<RegressionSpec>;
+    /** Une exécution réelle : son verdict est enregistré dans `regression.execution`. */
+    runRegression(projectId: string, incidentId: string): Promise<Incident>;
+    /** Le test proposé entre dans la bibliothèque (PUBLISH). */
+    acceptRegression(projectId: string, incidentId: string): Promise<Incident>;
+    rejectRegression(projectId: string, incidentId: string): Promise<Incident>;
+    cancel(projectId: string, incidentId: string): Promise<Incident>;
+    resume(projectId: string, incidentId: string): Promise<Incident>;
+    /**
+     * L'INVESTIGATION IA : des modes réellement disponibles (DETERMINISTIC toujours) ; un run en arrière-plan
+     * dont la progression se relit dans `get` (investigation.ai.runs) ; des vérifications proposées qu'une
+     * personne tranche ; une mémoire d'investigation (stratégies, expériences, contradictions, couverture) ;
+     * un assistant qui cite des références existantes. Rien n'est confirmé par l'IA.
+     */
+    ai: {
+      capabilities(projectId: string, incidentId: string): Promise<AiCapabilities>;
+      memory(projectId: string, incidentId: string): Promise<InvestigationMemory | null>;
+      /** L'incident avec le run RUNNING : relire `get` jusqu'à ce que son statut change. */
+      investigate(projectId: string, incidentId: string, input?: DeepInvestigationInput): Promise<Incident>;
+      pause(projectId: string, incidentId: string): Promise<Incident>;
+      resume(projectId: string, incidentId: string, input?: DeepInvestigationInput): Promise<Incident>;
+      cancel(projectId: string, incidentId: string): Promise<Incident>;
+      ask(projectId: string, incidentId: string, question: string): Promise<AiAssistantAnswer>;
+      decideExperiment(
+        projectId: string,
+        incidentId: string,
+        experimentId: string,
+        decision: IncidentAiDecision,
+      ): Promise<Incident>;
+      /** DECIDE : une prolongation de budget, jamais automatique. */
+      extendBudget(
+        projectId: string,
+        incidentId: string,
+        added: Partial<AiBudget>,
+      ): Promise<InvestigationMemory>;
+    };
+    /** La découverte automatique des conditions déclenchantes (droit RUN ; décisions : DECIDE). */
+    trigger: {
+      /** Interprète la description en langage naturel ; chaque élément porte sa provenance. */
+      describe(projectId: string, incidentId: string, text: string): Promise<Incident>;
+      /** L'incident avec le run actif : relire `get` jusqu'à ce que son état soit final. */
+      start(projectId: string, incidentId: string, input?: TriggerInvestigationInput): Promise<Incident>;
+      pause(projectId: string, incidentId: string): Promise<Incident>;
+      resume(projectId: string, incidentId: string, input?: TriggerInvestigationInput): Promise<Incident>;
+      cancel(projectId: string, incidentId: string): Promise<Incident>;
+      decideExperiment(
+        projectId: string,
+        incidentId: string,
+        experimentId: string,
+        decision: IncidentAiDecision,
+      ): Promise<Incident>;
+      extendBudget(projectId: string, incidentId: string, added: Partial<TriggerBudget>): Promise<Incident>;
+      report(projectId: string, incidentId: string, runId?: string): Promise<TriggerRunReport>;
+    };
+    /** Les fichiers lisibles du périmètre, par application (droit RUN). */
+    sourceTree(projectId: string, incidentId: string): Promise<SourceTree>;
+    /** Un fichier du périmètre, en lecture seule, valeurs sensibles masquées, avec ses lignes concernées (droit RUN). */
+    source(
+      projectId: string,
+      incidentId: string,
+      applicationId: string,
+      file: string,
+    ): Promise<SourceFileView>;
+    /** Une capture d'écran d'une reproduction, en image `data:` (la page n'affiche que celles-là). */
+    screenshot(
+      projectId: string,
+      incidentId: string,
+      reproductionId: string,
+      file: string,
+    ): Promise<{ dataUrl: string }>;
+    /**
+     * Ajoute une pièce jointe (droit RUN) : type parmi ATTACHMENT_TYPES et contenu conforme (sinon 415
+     * UNSUPPORTED_TYPE / CONTENT_MISMATCH), au plus MAX_ATTACHMENT_BYTES (413 TOO_LARGE) et MAX_ATTACHMENTS
+     * (409 TOO_MANY) ; le nom est nettoyé (aucun chemin).
+     */
+    addAttachment(projectId: string, incidentId: string, input: IncidentAttachmentInput): Promise<Incident>;
+    /** Le contenu (droit RUN) : `{ dataUrl }` pour une image, `{ text }` masqué pour un texte. */
+    attachment(
+      projectId: string,
+      incidentId: string,
+      attachmentId: string,
+    ): Promise<IncidentAttachmentContent>;
+    removeAttachment(projectId: string, incidentId: string, attachmentId: string): Promise<Incident>;
+    /** Les dossiers du dépôt d'une application (droit RUN), pour choisir `include` ; profondeur 1..4 (3). */
+    scopeTree(
+      projectId: string,
+      incidentId: string,
+      applicationId: string,
+      depth?: number,
+    ): Promise<ScopeTree>;
+  };
   dispose(): void;
 }
 
@@ -680,6 +915,8 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
   const project = (id: string): string => `/projects/${encodeURIComponent(id)}`;
   const recording = (projectId: string, name: string): string =>
     `${project(projectId)}/recordings/${encodeURIComponent(name)}`;
+  const incident = (projectId: string, incidentId: string): string =>
+    `${project(projectId)}/incidents/${encodeURIComponent(incidentId)}`;
 
   return {
     capabilities: () => request('GET', '/capabilities'),
@@ -998,6 +1235,135 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request('GET', `${project(projectId)}/reports/exploration/${encodeURIComponent(run)}/traceability`),
       regression: (projectId, run) =>
         request('GET', `${project(projectId)}/reports/exploration/${encodeURIComponent(run)}/regression`),
+    },
+    incidents: {
+      list: (projectId) => request('GET', `${project(projectId)}/incidents`),
+      create: (projectId, input) => request('POST', `${project(projectId)}/incidents`, input),
+      get: (projectId, incidentId) => request('GET', incident(projectId, incidentId)),
+      update: (projectId, incidentId, revision, patch) =>
+        request('POST', `${incident(projectId, incidentId)}/update`, { revision, patch }),
+      validateScope: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/scope/validate`, {}),
+      requestExtension: (projectId, incidentId, input) =>
+        request('POST', `${incident(projectId, incidentId)}/scope/extensions`, input),
+      decideExtension: (projectId, incidentId, extensionId, approve) =>
+        request(
+          'POST',
+          `${incident(projectId, incidentId)}/scope/extensions/${encodeURIComponent(extensionId)}/decision`,
+          { approve },
+        ),
+      capabilities: (projectId, incidentId) =>
+        request('GET', `${incident(projectId, incidentId)}/capabilities`),
+      reproduce: (projectId, incidentId, reproduceOptions = {}) =>
+        request('POST', `${incident(projectId, incidentId)}/reproduce`, reproduceOptions),
+      analyze: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/analyze`, {}),
+      planExperiment: (projectId, incidentId, input) =>
+        request('POST', `${incident(projectId, incidentId)}/experiments`, input),
+      runExperiment: (projectId, incidentId, experimentId, runOptions = {}) =>
+        request(
+          'POST',
+          `${incident(projectId, incidentId)}/experiments/${encodeURIComponent(experimentId)}/run`,
+          runOptions,
+        ),
+      diagnose: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/diagnose`, {}),
+      report: ((projectId: string, incidentId: string, reportOptions: IncidentReportOptions = {}) => {
+        const query = new URLSearchParams({ format: reportOptions.format ?? 'json' });
+        if (reportOptions.sections !== undefined) query.set('sections', reportOptions.sections.join(','));
+        return request('GET', `${incident(projectId, incidentId)}/report?${query.toString()}`);
+      }) as QaCrawlerClient['incidents']['report'],
+      regressionSpec: (projectId, incidentId) =>
+        request('GET', `${incident(projectId, incidentId)}/regression/spec`),
+      addAttachment: (projectId, incidentId, input) =>
+        request('POST', `${incident(projectId, incidentId)}/attachments`, input),
+      attachment: (projectId, incidentId, attachmentId) =>
+        request('GET', `${incident(projectId, incidentId)}/attachments/${encodeURIComponent(attachmentId)}`),
+      removeAttachment: (projectId, incidentId, attachmentId) =>
+        request(
+          'DELETE',
+          `${incident(projectId, incidentId)}/attachments/${encodeURIComponent(attachmentId)}`,
+        ),
+      scopeTree: (projectId, incidentId, applicationId, depth) =>
+        request(
+          'GET',
+          `${incident(projectId, incidentId)}/scope/tree?application=${encodeURIComponent(applicationId)}${
+            depth !== undefined ? `&depth=${String(depth)}` : ''
+          }`,
+        ),
+      sourceTree: (projectId, incidentId) => request('GET', `${incident(projectId, incidentId)}/sources`),
+      source: (projectId, incidentId, applicationId, file) =>
+        request(
+          'GET',
+          `${incident(projectId, incidentId)}/source?application=${encodeURIComponent(applicationId)}&file=${encodeURIComponent(file)}`,
+        ),
+      screenshot: (projectId, incidentId, reproductionId, file) =>
+        request(
+          'GET',
+          `${incident(projectId, incidentId)}/screenshot?reproduction=${encodeURIComponent(reproductionId)}&file=${encodeURIComponent(file)}`,
+        ),
+      reportMarkdown: async (projectId, incidentId) => {
+        const body = await request<{ markdown?: unknown } | undefined>(
+          'GET',
+          `${incident(projectId, incidentId)}/report?format=markdown`,
+        );
+        return typeof body?.markdown === 'string' ? body.markdown : '';
+      },
+      proposeRegression: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/regression`, {}),
+      runRegression: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/regression/run`, {}),
+      acceptRegression: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/regression/accept`, {}),
+      rejectRegression: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/regression/reject`, {}),
+      cancel: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/cancel`, {}),
+      resume: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/resume`, {}),
+      ai: {
+        capabilities: (projectId, incidentId) =>
+          request('GET', `${incident(projectId, incidentId)}/ai/capabilities`),
+        memory: (projectId, incidentId) => request('GET', `${incident(projectId, incidentId)}/ai/memory`),
+        investigate: (projectId, incidentId, input = {}) =>
+          request('POST', `${incident(projectId, incidentId)}/ai/investigate`, input),
+        pause: (projectId, incidentId) => request('POST', `${incident(projectId, incidentId)}/ai/pause`, {}),
+        resume: (projectId, incidentId, input = {}) =>
+          request('POST', `${incident(projectId, incidentId)}/ai/resume`, input),
+        cancel: (projectId, incidentId) =>
+          request('POST', `${incident(projectId, incidentId)}/ai/cancel`, {}),
+        ask: (projectId, incidentId, question) =>
+          request('POST', `${incident(projectId, incidentId)}/ai/ask`, { question }),
+        decideExperiment: (projectId, incidentId, experimentId, decision) =>
+          request(
+            'POST',
+            `${incident(projectId, incidentId)}/ai/experiments/${encodeURIComponent(experimentId)}/decision`,
+            decision,
+          ),
+        extendBudget: (projectId, incidentId, added) =>
+          request('POST', `${incident(projectId, incidentId)}/ai/extend-budget`, { added }),
+      },
+      trigger: {
+        describe: (projectId, incidentId, text) =>
+          request('POST', `${incident(projectId, incidentId)}/trigger/describe`, { text }),
+        start: (projectId, incidentId, input = {}) =>
+          request('POST', `${incident(projectId, incidentId)}/trigger/start`, input),
+        pause: (projectId, incidentId) =>
+          request('POST', `${incident(projectId, incidentId)}/trigger/pause`, {}),
+        resume: (projectId, incidentId, input = {}) =>
+          request('POST', `${incident(projectId, incidentId)}/trigger/resume`, input),
+        cancel: (projectId, incidentId) =>
+          request('POST', `${incident(projectId, incidentId)}/trigger/cancel`, {}),
+        decideExperiment: (projectId, incidentId, experimentId, decision) =>
+          request(
+            'POST',
+            `${incident(projectId, incidentId)}/trigger/experiments/${encodeURIComponent(experimentId)}/decision`,
+            decision,
+          ),
+        extendBudget: (projectId, incidentId, added) =>
+          request('POST', `${incident(projectId, incidentId)}/trigger/extend-budget`, { added }),
+        report: (projectId, incidentId, runId) =>
+          request(
+            'GET',
+            `${incident(projectId, incidentId)}/trigger/report${runId ? `/${encodeURIComponent(runId)}` : ''}`,
+          ),
+      },
     },
     dispose() {
       disposed = true;

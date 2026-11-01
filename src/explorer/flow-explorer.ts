@@ -271,7 +271,7 @@ import {
 import { ConsoleObserver } from '../observers/console-observer.js';
 import { NetworkObserver } from '../observers/network-observer.js';
 import type { IssueAttribution, ObservationContext, PageObserver } from '../observers/observer.js';
-import { NetworkTraceRecorder } from '../observers/network-trace-recorder.js';
+import { capturedFieldsOf, NetworkTraceRecorder } from '../observers/network-trace-recorder.js';
 import type { ApiContract } from '../oracles/api-contract.js';
 import { BaselineOracle } from '../oracles/baseline-oracle.js';
 import { CompositeTestOracle, type OracleVerdict } from '../oracles/composite-oracle.js';
@@ -1316,7 +1316,11 @@ export class FlowExplorer {
       await this.screenshots.prepare();
 
     // Annulable de l'extérieur : Ctrl+C est géré par l'appelant, le moteur ferme le navigateur.
-    const browser = new BrowserManager(this.config.browser, { handleSIGINT: this.signal === undefined });
+    const browser = new BrowserManager(this.config.browser, {
+      handleSIGINT: this.signal === undefined,
+      // browser.playwrightTrace : la trace du run, à côté de ses rapports.
+      tracePath: path.join(this.config.output.reportsDir, 'trace.zip'),
+    });
     const observers = this.createObservers();
     let stopReason: StopReason = 'exhausted';
     try {
@@ -3435,6 +3439,8 @@ export class FlowExplorer {
           ...(exchange.durationMs !== undefined ? { durationMs: exchange.durationMs } : {}),
           ...(exchange.failure ? { failure: exchange.failure } : {}),
           resourceType: exchange.resourceType,
+          // network.captureBodies : heure de départ et corps masqués (rien sinon).
+          ...capturedFieldsOf(exchange),
         })),
         writes: exchanges.filter(
           (exchange) => !['GET', 'HEAD', 'OPTIONS'].includes(exchange.method.toUpperCase()),

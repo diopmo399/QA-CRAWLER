@@ -41,6 +41,7 @@ network:
   trace: true # attach to each transition the HTTP exchanges of its action (no header, no body)
   resourceTypes: [document, xhr, fetch]
   maxRequestsPerAction: 50
+  captureBodies: false # true: also keep start times and, for errors and xhr/fetch writes, JSON/text bodies (redacted, 8 KiB max)
 
 baseline:
   dir: baseline # learn writes it (with history under runs/), verify and explore read it
@@ -58,6 +59,7 @@ browser:
   viewport: { width: 1366, height: 768 }
   # locale: fr-FR
   ignoreHttpsErrors: false
+  playwrightTrace: false # true: record a Playwright trace of the run in <reportsDir>/trace.zip
   args: ['--disable-dev-shm-usage']
   slowMoMs: 0
 

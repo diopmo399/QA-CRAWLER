@@ -114,8 +114,9 @@ describe('Dashboard — named access, in Chromium', () => {
     await dashboard().locator('[data-action="journal-kind"][data-kind="ACCESS"]').click();
     const journal = dashboard().locator('.card:has(.chips)');
     await journal.locator('tbody tr').first().waitFor();
+    // Le journal se relit après le choix « Accès » : attendre la ligne de la révocation, pas la première ligne venue.
+    await expect.poll(async () => (await journal.textContent()) ?? '').toContain('access.members.revoke');
     const text = (await journal.textContent()) ?? '';
-    expect(text).toContain('access.members.revoke');
     expect(text).not.toContain(token);
   }, 60_000);
 

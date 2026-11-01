@@ -103,6 +103,7 @@ import type {
   Environment,
   ProjectDetail,
   ProjectSummary,
+  ScenarioView,
   AccessMe,
   ExtractionInput,
   JournalKind,
@@ -122,7 +123,9 @@ import {
   SDK_API_VERSION,
 } from '../core/contracts.js';
 import { isTerminal } from '../core/lifecycle.js';
-import { ExplorationManager, stepReason, type MissionRunner } from './explorations.js';
+import { ExplorationManager, stepLabel, stepReason, type MissionRunner } from './explorations.js';
+import type { ExplorationListener } from '../../explorer/flow-explorer.js';
+import { combineListeners } from '../../logging/engine-log.js';
 import {
   externalRunners,
   listTestRuns,
@@ -197,6 +200,13 @@ import {
   type FileConnectorKind,
 } from './requirements.js';
 import { AccessError, AccessStore, actionOf, can, rightFor, roleIn, type Identity } from './access.js';
+import { handleIncidentRoutes } from './incidents.js';
+import { IncidentService, type HostReplay, type IncidentHost } from '../../incident/service.js';
+import type { IncidentAiRuntime } from '../../incident/ai/index.js';
+import type { AiConfig } from '../../config/config.js';
+import { MAX_ATTACHMENT_BYTES } from '../../incident/model.js';
+import type { ReplayProgressEvent } from '../../incident/live.js';
+import type { ExplorationResult } from '../../model/exploration-result.js';
 import { dashboardPage, flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
 import {
   ALWAYS_BLOCKED_RISKS,
@@ -270,6 +280,13 @@ export interface SdkServerOptions {
    */
   closeGraceMs?: number;
   onWarning?: (message: string) => void;
+  /**
+   * La section `ai` d'une configuration QA-Crawler : l'investigation IA des incidents s'assemble d'après
+   * `ai.incidents` (mode DETERMINISTIC par défaut : rien n'est chargé, aucun fournisseur n'est créé).
+   */
+  ai?: AiConfig;
+  /** Un runtime IA déjà assemblé (tests : client scripté) ; il prime sur `ai`. */
+  aiRuntime?: IncidentAiRuntime;
 }
 
 export interface RunningSdkServer {
@@ -285,6 +302,8 @@ export interface RunningSdkServer {
 
 const JSON_TYPE = 'application/json; charset=utf-8';
 const MAX_BODY_BYTES = 256 * 1024;
+/** Une pièce jointe d'incident : MAX_ATTACHMENT_BYTES en base64 (4/3), plus le nom et l'enveloppe JSON. */
+const MAX_ATTACHMENT_BODY_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4 + 64 * 1024;
 const ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
 
 class HttpError extends Error {
@@ -320,8 +339,17 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
   const workspace = path.resolve(options.workspace);
   const projects = new Map<string, StoredProject>();
   const tickets = new Map<string, ReportTicket>();
+  // Les rejeux d'une investigation écoutent aussi le moteur (progression en direct), par dossier de run.
+  const replayWatchers = new Map<string, ExplorationListener>();
+  const baseRun: MissionRunner = options.run ?? runMission;
   const explorations = new ExplorationManager({
-    run: options.run ?? runMission,
+    run: (config, runOptions) => {
+      const watcher = replayWatchers.get(path.resolve(config.output.reportsDir));
+      return baseRun(
+        config,
+        watcher ? { ...runOptions, listener: combineListeners(runOptions.listener, watcher) } : runOptions,
+      );
+    },
     env,
     ...(options.concurrency ? { concurrency: options.concurrency } : {}),
     ...(options.onWarning ? { onWarning: options.onWarning } : {}),
@@ -334,6 +362,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
   const testRuns = new TestRunManager();
   const engineVersion = await readCoreVersion();
   const sseClients = new Set<ServerResponse>();
+  const ai = await incidentAiRuntime(options, env);
 
   const context: Context = {
     token,
@@ -355,6 +384,9 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     sseClients,
     access: new AccessStore(workspace),
     mode: options.access ?? 'single',
+    incidents: new Map(),
+    ...(ai ? { ai } : {}),
+    replayWatchers,
   };
 
   const server = createServer((request, response) => {
@@ -389,6 +421,9 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
         const settled = await explorations.idle(options.closeGraceMs ?? 30_000);
         if (!settled) options.onWarning?.('an exploration was still stopping when the server closed');
       }
+      // Les investigations enregistrent la fin de leurs rejeux (annulés ci-dessus) avant l'arrêt.
+      await Promise.allSettled([...context.incidents.values()].map((service) => service.settle()));
+      await ai?.close().catch(() => undefined);
       await new Promise<void>((resolve, reject) => {
         for (const client of sseClients) client.end();
         server.close((error) => {
@@ -424,6 +459,12 @@ interface Context {
   sseClients: Set<ServerResponse>;
   access: AccessStore;
   mode: 'single' | 'named';
+  /** Les investigations d'incidents, une par projet. */
+  incidents: Map<string, IncidentService>;
+  /** L'investigation IA, quand elle est configurée (sinon le module n'est pas chargé). */
+  ai?: IncidentAiRuntime;
+  /** Les écouteurs du moteur ajoutés à un rejeu (dossier du run → écouteur), retirés à sa fin. */
+  replayWatchers: Map<string, ExplorationListener>;
 }
 
 async function handle(ctx: Context, request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -474,7 +515,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
   if (method === 'OPTIONS') {
     if (!origin) throw new HttpError(403, 'ORIGIN_REFUSED', 'origin not allowed');
     response.writeHead(204, {
-      'access-control-allow-methods': 'GET, POST, OPTIONS',
+      'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
       'access-control-allow-headers': 'authorization, content-type, x-qa-crawler-sdk, last-event-id',
       'access-control-max-age': '600',
     });
@@ -763,7 +804,10 @@ async function environmentOf(project: StoredProject, raw: unknown): Promise<Envi
 }
 
 /** Un corps JSON facultatif : vide (ou sans type) vaut `{}`, comme avant l'ajout des options. */
-async function readOptionalJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readOptionalJson(
+  request: IncomingMessage,
+  maxBytes = MAX_BODY_BYTES,
+): Promise<Record<string, unknown>> {
   const length = Number(request.headers['content-length'] ?? '0');
   const type = request.headers['content-type'] ?? '';
   if (
@@ -771,7 +815,7 @@ async function readOptionalJson(request: IncomingMessage): Promise<Record<string
     (length === 0 && !request.headers['transfer-encoding'])
   )
     return {};
-  return readJson(request);
+  return readJson(request, maxBytes);
 }
 
 function reportLink(ctx: Context, request: IncomingMessage, directory: string, entry: string): ReportLink {
@@ -3142,6 +3186,44 @@ async function handlePlatform(
     }
     return false;
   }
+  if (sub === 'incidents') {
+    const project = await projectOf(ctx, id);
+    const service = incidentService(ctx, project);
+    const rest = segments.slice(4);
+    const [incidentId, incidentAction, incidentPart, incidentItem] = rest;
+    const identity = identityOf(request);
+    // Jouer l'application (reproduire, vérifier, exécuter le test proposé) : un environnement qui permet
+    // les écritures demande le droit de les permettre, comme une exécution.
+    const plays =
+      method === 'POST' &&
+      incidentId !== undefined &&
+      (incidentAction === 'reproduce' ||
+        (incidentAction === 'experiments' && incidentItem === 'run') ||
+        (incidentAction === 'regression' && incidentPart === 'run'));
+    if (plays) {
+      refuseArchived(project);
+      const incident = await service.store.get(incidentId);
+      if (incident) requireWrites(request, project.id, await environmentOf(project, incident.environmentId));
+    }
+    return handleIncidentRoutes({
+      service,
+      rest,
+      method,
+      url,
+      actor: identity.name,
+      // Seul l'envoi d'une pièce jointe dépasse la taille ordinaire d'un corps JSON.
+      body: () =>
+        readOptionalJson(
+          request,
+          method === 'POST' && incidentAction === 'attachments' && incidentPart === undefined
+            ? MAX_ATTACHMENT_BODY_BYTES
+            : MAX_BODY_BYTES,
+        ),
+      json,
+      canWrite: can(identity, 'RUN_WRITES', project.id),
+      fail: (status, code, text) => new HttpError(status, code, text),
+    });
+  }
   if (sub === 'executions') {
     const project = await projectOf(ctx, id);
     const reportsDir = path.join(project.dir, REPORTS_DIR);
@@ -3196,34 +3278,12 @@ async function handlePlatform(
             ),
           },
         );
-      const flowsDir = await flowsDirOf(project.dir);
       const selected = wanted ? known.filter((scenario) => wanted.includes(scenario.name)) : undefined;
-      const loaded = await projectMission(ctx, project, 'replay', {
-        ...(selected
-          ? {
-              flows: selected
-                .filter((scenario) => scenario.format === 'yaml')
-                .map((scenario) => scenario.name),
-              extraFlows: selected
-                .filter((scenario) => scenario.format === 'gherkin')
-                .map((scenario) => ({ gherkin: path.join(flowsDir, scenario.file) })),
-            }
-          : {}),
+      const { execution } = await launchReplay(ctx, project, {
+        ...(selected ? { scenarios: selected } : {}),
+        names: (selected ?? known).map((scenario) => scenario.name),
         ...(environment ? { environment } : {}),
-      });
-      const runDir = path.join(reportsDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-      await writeExecutionMeta(runDir, {
-        kind: 'REPLAY',
-        startedAt: new Date().toISOString(),
-        ...(environment ? { environment: { id: environment.id, name: environment.name } } : {}),
-        scenarios: (selected ?? known).map((scenario) => scenario.name),
-      });
-      const execution = ctx.explorations.start({
-        projectId: project.id,
-        config: withVisibleBrowser(loaded.config, visible),
-        reportsDir: runDir,
-        kind: 'REPLAY',
-        env: missionEnv(ctx, environment),
+        ...(visible ? { visible } : {}),
       });
       json(execution.snapshot(), 202);
       return true;
@@ -3231,6 +3291,284 @@ async function handlePlatform(
     return false;
   }
   return false;
+}
+
+/**
+ * Un rejeu du moteur (le chemin des exécutions) : les scénarios choisis de la bibliothèque, ou des flows
+ * hors bibliothèque (le test de non-régression proposé par une investigation, avant toute validation).
+ */
+async function launchReplay(
+  ctx: Context,
+  project: StoredProject,
+  options: {
+    scenarios?: ScenarioView[];
+    flows?: Record<string, unknown>[];
+    names: string[];
+    environment?: Environment;
+    visible?: VisibleBrowser;
+    configure?: (config: Awaited<ReturnType<typeof projectMission>>['config']) => void;
+    /** Un écouteur du moteur en plus (progression d'une investigation), retiré à la fin du run. */
+    watch?: (runDir: string) => ExplorationListener;
+  },
+): Promise<{ execution: ReturnType<ExplorationManager['start']>; runDir: string }> {
+  const flowsDir = await flowsDirOf(project.dir);
+  const reportsDir = path.join(project.dir, REPORTS_DIR);
+  const selected = options.scenarios;
+  const loaded = await projectMission(ctx, project, 'replay', {
+    ...(selected
+      ? {
+          flows: selected.filter((scenario) => scenario.format === 'yaml').map((scenario) => scenario.name),
+          extraFlows: selected
+            .filter((scenario) => scenario.format === 'gherkin')
+            .map((scenario) => ({ gherkin: path.join(flowsDir, scenario.file) })),
+        }
+      : {}),
+    ...(options.flows ? { flows: [], extraFlows: options.flows } : {}),
+    ...(options.environment ? { environment: options.environment } : {}),
+  });
+  options.configure?.(loaded.config);
+  const runDir = path.join(reportsDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  await writeExecutionMeta(runDir, {
+    kind: 'REPLAY',
+    startedAt: new Date().toISOString(),
+    ...(options.environment
+      ? { environment: { id: options.environment.id, name: options.environment.name } }
+      : {}),
+    scenarios: options.names,
+  });
+  const watchKey = path.resolve(runDir);
+  if (options.watch) ctx.replayWatchers.set(watchKey, options.watch(runDir));
+  let execution: ReturnType<ExplorationManager['start']>;
+  try {
+    execution = ctx.explorations.start({
+      projectId: project.id,
+      config: withVisibleBrowser(loaded.config, options.visible),
+      reportsDir: runDir,
+      kind: 'REPLAY',
+      env: missionEnv(ctx, options.environment),
+    });
+  } catch (error) {
+    ctx.replayWatchers.delete(watchKey);
+    throw error;
+  }
+  if (options.watch) {
+    const release = (): void => {
+      ctx.replayWatchers.delete(watchKey);
+    };
+    if (execution.terminal) release();
+    else {
+      const unsubscribe = execution.subscribe((event) => {
+        if (event.type === 'status' && isTerminal(event.status)) {
+          unsubscribe();
+          release();
+        }
+      });
+    }
+  }
+  return { execution, runDir };
+}
+
+/**
+ * La progression d'un rejeu d'investigation, relayée depuis le moteur : début de flow (nombre d'étapes),
+ * début et fin d'étape (descriptions sans valeur saisie, captures relatives au run). Une erreur du relais
+ * n'atteint jamais le moteur.
+ */
+function progressListener(
+  runDir: string,
+  onProgress: (event: ReplayProgressEvent) => void,
+): ExplorationListener {
+  const send = (event: ReplayProgressEvent): void => {
+    try {
+      onProgress(event);
+    } catch {
+      // la progression est un confort : le rejeu continue
+    }
+  };
+  const now = (): string => new Date().toISOString();
+  return {
+    onFlowStart: (flow) => {
+      send({ type: 'flow-start', at: now(), flow: redactText(flow.name), total: flow.steps.length });
+    },
+    onFlowStepStart: (_flow, step) => {
+      send({
+        type: 'step-start',
+        at: now(),
+        index: step.index,
+        kind: step.kind,
+        description: stepLabel({ kind: step.kind, description: step.description }),
+      });
+    },
+    onFlowStep: (_flow, step) => {
+      const relative = step.screenshot ? path.relative(runDir, path.resolve(step.screenshot)) : '';
+      const screenshot =
+        relative && !relative.startsWith('..') && !path.isAbsolute(relative)
+          ? relative.split(path.sep).join('/')
+          : undefined;
+      const reason = stepReason(step);
+      send({
+        type: 'step-end',
+        at: now(),
+        index: step.index,
+        kind: step.kind,
+        description: stepLabel(step),
+        status: step.status,
+        durationMs: step.durationMs,
+        ...(reason ? { reason } : {}),
+        ...(screenshot ? { screenshot } : {}),
+      });
+    },
+  };
+}
+
+/** L'investigation d'un projet : son service, et l'hôte qui lui prête le moteur, la bibliothèque et les environnements. */
+function incidentService(ctx: Context, project: StoredProject): IncidentService {
+  const existing = ctx.incidents.get(project.id);
+  if (existing) return existing;
+  const host: IncidentHost = {
+    projectId: project.id,
+    projectDir: project.dir,
+    runDir: (run) => path.join(project.dir, REPORTS_DIR, run),
+    environment: async (environmentId) => {
+      const environments = await readEnvironments(project.dir);
+      const environment = environmentId
+        ? environments.find((entry) => entry.id === environmentId)
+        : environments[0];
+      if (environmentId && !environment)
+        throw new HttpError(404, 'NOT_FOUND', `environment ${environmentId} not found`);
+      return environment
+        ? { id: environment.id, baseUrl: environment.baseUrl, kind: environment.kind }
+        : { baseUrl: project.targetUrl };
+    },
+    listScenarios: async () => {
+      const root = await flowsDirOf(project.dir);
+      const out: { name: string; file: string; text?: string }[] = [];
+      for (const scenario of (await listScenarios(project.dir)).slice(0, 200)) {
+        const text =
+          scenario.format === 'yaml'
+            ? await readFile(path.join(root, scenario.file), 'utf8').catch(() => undefined)
+            : undefined;
+        out.push({ name: scenario.name, file: scenario.file, ...(text !== undefined ? { text } : {}) });
+      }
+      return out;
+    },
+    scenarioYaml: async (name) => {
+      const scenario = (await listScenarios(project.dir)).find(
+        (entry) => entry.name === name && entry.format === 'yaml',
+      );
+      if (!scenario) return undefined;
+      const file = path.join(await flowsDirOf(project.dir), scenario.file);
+      return { file: scenario.file, text: await readFile(file, 'utf8') };
+    },
+    addScenario: async (name, yaml) => {
+      const known = await listScenarios(project.dir);
+      if (known.some((entry) => entry.name === name))
+        throw new HttpError(409, 'CONFLICT', `a scenario named "${name}" already exists`);
+      const base =
+        name
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^A-Za-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .toLowerCase() || 'incident';
+      const relative = `incidents/${base}/${base}.flow.yaml`;
+      const target = path.join(await flowsDirOf(project.dir), relative);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, yaml, { encoding: 'utf8', flag: 'wx' });
+      return relative;
+    },
+    replay: async (input) => {
+      refuseArchived(project);
+      const environment = await environmentOf(project, input.environmentId);
+      const known = await listScenarios(project.dir);
+      const scenario = input.scenario ? known.find((entry) => entry.name === input.scenario) : undefined;
+      if (input.scenario && !scenario)
+        throw new HttpError(404, 'NOT_FOUND', `unknown scenario: ${input.scenario}`);
+      if (!scenario && !input.flow) throw new HttpError(400, 'BAD_REQUEST', 'nothing to replay');
+      const visible = visibleBrowserOf(ctx, {
+        ...(input.headed !== undefined ? { headed: input.headed } : {}),
+        ...(input.slowMoMs !== undefined ? { slowMoMs: input.slowMoMs } : {}),
+      });
+      const flowName = typeof input.flow?.name === 'string' ? input.flow.name : 'flow';
+      const onProgress = input.onProgress;
+      const { execution, runDir } = await launchReplay(ctx, project, {
+        ...(scenario ? { scenarios: [scenario] } : {}),
+        ...(input.flow ? { flows: [input.flow] } : {}),
+        names: [scenario?.name ?? flowName],
+        ...(environment ? { environment } : {}),
+        ...(visible ? { visible } : {}),
+        // Les preuves d'une investigation : corps des échanges en erreur (masqués) et trace Playwright.
+        configure: (config) => {
+          Object.assign(config.network, { captureBodies: true });
+          Object.assign(config.browser, { playwrightTrace: true });
+        },
+        ...(onProgress ? { watch: (runDir: string) => progressListener(runDir, onProgress) } : {}),
+      });
+      const done = new Promise<Awaited<HostReplay['done']>>((resolve) => {
+        const finish = (): void => {
+          const status = execution.status;
+          void readFile(path.join(runDir, 'result.json'), 'utf8')
+            .then((text) => JSON.parse(text) as ExplorationResult)
+            .catch(() => undefined)
+            .then((result) => {
+              resolve({
+                status:
+                  status === 'COMPLETED' ? 'COMPLETED' : status === 'CANCELLED' ? 'CANCELLED' : 'FAILED',
+                ...(result ? { result } : {}),
+                ...(execution.error ? { error: execution.error } : {}),
+              });
+            });
+        };
+        if (execution.terminal) {
+          finish();
+          return;
+        }
+        const unsubscribe = execution.subscribe((event) => {
+          if (event.type === 'status' && isTerminal(event.status)) {
+            unsubscribe();
+            finish();
+          }
+        });
+      });
+      return {
+        run: path.basename(runDir),
+        runDir,
+        ...(environment
+          ? { environmentId: environment.id, baseUrl: environment.baseUrl }
+          : { baseUrl: project.targetUrl }),
+        startedAt: new Date().toISOString(),
+        done,
+        cancel: () => {
+          ctx.explorations.cancel(execution.id);
+        },
+      };
+    },
+  };
+  const service = new IncidentService(host, { env: ctx.env, ...(ctx.ai ? { ai: ctx.ai } : {}) });
+  ctx.incidents.set(project.id, service);
+  return service;
+}
+
+/**
+ * Le runtime IA des incidents : un runtime fourni (tests) ; sinon, assemblé d'après `ai.incidents` seulement quand le
+ * mode configuré n'est pas DETERMINISTIC — le module src/incident/ai n'est pas chargé autrement, et aucun
+ * fournisseur n'est créé.
+ */
+async function incidentAiRuntime(
+  options: SdkServerOptions,
+  env: NodeJS.ProcessEnv,
+): Promise<IncidentAiRuntime | undefined> {
+  if (options.aiRuntime) return options.aiRuntime;
+  const configured = options.ai;
+  if (!configured?.enabled || configured.incidents.mode === 'DETERMINISTIC') return undefined;
+  try {
+    const module = await import('../../incident/ai/index.js');
+    return module.createIncidentAiRuntime(configured, env);
+  } catch (error) {
+    options.onWarning?.(
+      `AI investigation unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
 }
 
 function publicProject(project: StoredProject): Project {
@@ -3639,14 +3977,31 @@ async function readBytes(request: IncomingMessage, maxBytes: number): Promise<Ui
   if (declared > maxBytes)
     throw new HttpError(413, 'TOO_LARGE', `the file is larger than ${String(maxBytes)} bytes`);
   const chunks: Buffer[] = [];
+  const size = await readBounded(request, maxBytes, chunks);
+  if (size > maxBytes)
+    throw new HttpError(413, 'TOO_LARGE', `the file is larger than ${String(maxBytes)} bytes`);
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
+/** Au-delà de ce multiple de la limite, le corps n'est plus lu : la connexion est coupée (abus). */
+const DISCARD_FACTOR = 8;
+
+/**
+ * Lit un corps borné : au-delà de `maxBytes`, le reste est lu puis jeté (rien n'est gardé) pour que la
+ * réponse 413 parte sur une connexion proprement lue — répondre avant la fin de l'envoi fait échouer la
+ * requête (ou la suivante, en keep-alive) chez le client, surtout sous Windows. Rend la taille reçue.
+ */
+async function readBounded(request: IncomingMessage, maxBytes: number, chunks: Buffer[]): Promise<number> {
   let size = 0;
   for await (const chunk of request) {
     size += (chunk as Buffer).length;
-    if (size > maxBytes)
-      throw new HttpError(413, 'TOO_LARGE', `the file is larger than ${String(maxBytes)} bytes`);
-    chunks.push(chunk as Buffer);
+    if (size > maxBytes * DISCARD_FACTOR) {
+      request.destroy();
+      break;
+    }
+    if (size <= maxBytes) chunks.push(chunk as Buffer);
   }
-  return new Uint8Array(Buffer.concat(chunks));
+  return size;
 }
 
 const PIPELINE_STATUS: Record<PipelineError['code'], number> = {
@@ -3874,17 +4229,16 @@ async function handleRequirements(
   throw new HttpError(404, 'NOT_FOUND', 'not found');
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(
+  request: IncomingMessage,
+  maxBytes = MAX_BODY_BYTES,
+): Promise<Record<string, unknown>> {
   const type = request.headers['content-type'] ?? '';
   if (!type.toLowerCase().startsWith('application/json'))
     throw new HttpError(415, 'UNSUPPORTED_MEDIA_TYPE', 'expected application/json');
   const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'TOO_LARGE', 'request body too large');
-    chunks.push(chunk as Buffer);
-  }
+  const size = await readBounded(request, maxBytes, chunks);
+  if (size > maxBytes) throw new HttpError(413, 'TOO_LARGE', 'request body too large');
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))

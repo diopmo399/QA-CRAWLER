@@ -234,20 +234,25 @@ describe('Dashboard — execution console in Chromium', () => {
     const panel = editor().locator('[data-con-panel]');
     const body = editor().locator('.ed-body');
     const explorer = editor().locator('.ed-explorer');
-    // Sous les trois colonnes, sur toute leur largeur.
-    const [wide, bodyBox] = [await panel.boundingBox(), await body.boundingBox()];
-    expect(Math.abs((wide?.width ?? 0) - (bodyBox?.width ?? 0))).toBeLessThanOrEqual(1);
+    // Sous les trois colonnes, sur toute leur largeur (une fois la disposition posée).
+    await expect
+      .poll(async () => {
+        const [wide, bodyBox] = [await panel.boundingBox(), await body.boundingBox()];
+        return Math.abs((wide?.width ?? 0) - (bodyBox?.width ?? 0));
+      })
+      .toBeLessThanOrEqual(1);
     // Assez de place pour que la poignée ait de la marge (la fenêtre est haute) ; rendue après.
     await page.setViewportSize({ width: 1600, height: 1300 });
     const handle = editor().locator('[data-con-split]');
-    // La mise en page suit la nouvelle hauteur : la poignée est mesurée une fois immobile.
-    let previous = -1;
+    // L'éditeur suit la hauteur de la fenêtre : attendre que la poignée ne bouge plus avant de la saisir
+    // (un glisser commencé pendant la remise en page manque la poignée).
+    let previous = '';
     await expect
       .poll(async () => {
-        const y = (await handle.boundingBox())?.y ?? -1;
-        const still = y === previous;
-        previous = y;
-        return still;
+        const current = JSON.stringify(await handle.boundingBox());
+        const stable = current === previous;
+        previous = current;
+        return stable;
       })
       .toBe(true);
     const panelBox = await panel.boundingBox();
@@ -279,8 +284,8 @@ describe('Dashboard — execution console in Chromium', () => {
     // Agrandie : les colonnes s'effacent, le journal reste ; réduite : elles reviennent.
     await editor().locator('[data-action="ed-con-max"]').click();
     await expect.poll(() => explorer.isVisible()).toBe(false);
-    expect((await panel.boundingBox())?.height ?? 0).toBeGreaterThan(500);
-    expect(await lines().count()).toBeGreaterThan(0);
+    await expect.poll(async () => (await panel.boundingBox())?.height ?? 0).toBeGreaterThan(500);
+    await expect.poll(() => lines().count()).toBeGreaterThan(0);
     await editor().locator('[data-action="ed-con-max"]').click();
     await expect.poll(() => explorer.isVisible()).toBe(true);
     await page.setViewportSize({ width: 1600, height: 1000 });

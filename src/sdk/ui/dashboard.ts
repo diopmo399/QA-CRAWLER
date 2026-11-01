@@ -16,6 +16,9 @@ import { emptyEditorUi } from './dashboard-editor.js';
 import { EditorController, type EditorHost } from './dashboard-editor-controller.js';
 import { PublishController, type PublishHost } from './dashboard-publish-controller.js';
 import { LibraryController, type LibraryHost } from './dashboard-library-controller.js';
+import { IncidentsController, type IncidentsHost } from './dashboard-incidents-controller.js';
+import { emptyIncidentsUi } from './dashboard-incidents.js';
+import { isDemoIncident } from './incident-workspace.js';
 import {
   assertionBuckets,
   bindFormOf,
@@ -87,6 +90,15 @@ export class QaCrawlerDashboard extends Base {
   }
 
   private root!: ShadowRoot;
+  /**
+   * La partie redessinée du Shadow DOM (`paint()` la réécrit), à côté de la feuille de style et de la zone
+   * live permanente des incidents (`.inc-live`) : créées une fois, jamais recréées, si bien qu'une
+   * annonce n'est dite qu'au changement de son texte (et pas à chaque redessin).
+   */
+  private view?: HTMLElement;
+  /** Un dessin en cours, et le dessin demandé pendant celui-ci (fait juste après). */
+  private painting = false;
+  private repaintQueued = false;
   private state!: DashboardState;
   private injectedClient?: QaCrawlerClient;
   private ownClient?: QaCrawlerClient;
@@ -101,6 +113,8 @@ export class QaCrawlerDashboard extends Base {
   private readonly editor: EditorController;
   private readonly publisher: PublishController;
   private readonly library: LibraryController;
+  /** Les incidents : déclaration, investigation, suivi d'une reproduction en cours. */
+  private readonly incidents: IncidentsController;
   /** Le suivi des exécutions de tests générés en cours (écran Tests). */
   private testsTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
@@ -131,6 +145,7 @@ export class QaCrawlerDashboard extends Base {
       lib: emptyLibraryUi(),
       tst: emptyTestsUi(),
       ed: emptyEditorUi(),
+      inc: emptyIncidentsUi(),
     };
     // Le contrôleur de l'éditeur voit l'état courant du Dashboard (lu à chaque accès).
     const host = {
@@ -170,6 +185,19 @@ export class QaCrawlerDashboard extends Base {
     };
     Object.defineProperty(libraryHost, 'state', { get: () => this.state });
     this.library = new LibraryController(libraryHost as LibraryHost);
+    const incidentsHost = {
+      root: this.root,
+      api: () => this.api,
+      paint: () => {
+        this.paint();
+      },
+      navigate: (route: DashboardRoute) => {
+        this.navigate(route);
+      },
+      refresh: () => this.load(),
+    };
+    Object.defineProperty(incidentsHost, 'state', { get: () => this.state });
+    this.incidents = new IncidentsController(incidentsHost as IncidentsHost);
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
     });
@@ -187,10 +215,14 @@ export class QaCrawlerDashboard extends Base {
       if (form?.startsWith('lib-')) this.librarySubmit(event.target as HTMLFormElement);
       if (form === 'tst-generate') void this.testsGenerate();
       if (form === 'ed-add-submit') this.editor.submit(event.target as HTMLFormElement);
+      if (form?.startsWith('inc-') || form?.startsWith('ws-'))
+        this.incidents.submit(event.target as HTMLFormElement);
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
       const target = event.target as HTMLInputElement | HTMLTextAreaElement;
+      if (target.dataset.inc && target.type !== 'radio' && this.incidents.input(target)) return;
+      if (target.dataset.wsField !== undefined && this.incidents.input(target)) return;
       const reqField = target.dataset.req as keyof ImportForm | undefined;
       if (reqField && reqField !== 'source' && target.type !== 'file') {
         (this.state.req.form as unknown as Record<string, string>)[reqField] = target.value;
@@ -251,12 +283,22 @@ export class QaCrawlerDashboard extends Base {
       (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
     });
     this.root.addEventListener('pointerdown', (event) => {
+      if (this.incidents.pointerDown(event as PointerEvent)) return;
       this.editor.pointerDown(event as PointerEvent);
     });
+    // La molette sur le graphe d'une investigation zoome (la page ne défile pas pendant ce temps).
+    this.root.addEventListener(
+      'wheel',
+      (event) => {
+        this.incidents.wheel(event as WheelEvent);
+      },
+      { passive: false },
+    );
     this.root.addEventListener('keydown', (event) => {
       if (this.editor.keydown(event as KeyboardEvent)) return;
       if (this.publisher.keydown(event as KeyboardEvent)) return;
       if (this.library.keydown(event as KeyboardEvent)) return;
+      if (this.incidents.keydown(event as KeyboardEvent)) return;
       if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
         this.closePanel();
         return;
@@ -303,6 +345,7 @@ export class QaCrawlerDashboard extends Base {
   disconnectedCallback(): void {
     this.connected = false;
     this.editor.dispose();
+    this.incidents.dispose();
     this.unsubscribe();
     this.unfollowRecording();
     if (this.replayTimer) clearTimeout(this.replayTimer);
@@ -1525,6 +1568,8 @@ export class QaCrawlerDashboard extends Base {
       this.state.recs.live = undefined;
     }
     if (route.view !== 'tests') this.stopTestsPolling();
+    // Quitter un incident arrête le suivi de sa reproduction ; un autre incident repart de zéro.
+    this.incidents.leave(route);
     if (route.view !== 'recording') {
       if (this.replayTimer) clearTimeout(this.replayTimer);
       this.replayTimer = undefined;
@@ -1672,6 +1717,11 @@ export class QaCrawlerDashboard extends Base {
         await this.loadProject(api, route.projectId, generation);
         if (this.state.review?.name !== route.name) this.state.review = emptyReviewUi(route.name);
         await this.loadReview(api, route.projectId, route.name, generation);
+      } else if (route.view === 'incidents' || route.view === 'incident' || route.view === 'investigations') {
+        // La démonstration n'interroge pas le serveur sur le projet ni sur l'incident : tout vient du module.
+        if (route.view !== 'incident' || !isDemoIncident(route.incidentId))
+          await this.loadProject(api, route.projectId, generation);
+        await this.incidents.load(api, route, () => generation === this.generation);
       } else if (route.view === 'access') {
         if (this.state.me?.rights.includes('MANAGE_ACCESS')) {
           const kind = this.state.access.journalKind;
@@ -1695,6 +1745,11 @@ export class QaCrawlerDashboard extends Base {
       this.fail(error);
     }
     this.paint();
+    if (
+      generation === this.generation &&
+      (route.view === 'incidents' || route.view === 'incident' || route.view === 'investigations')
+    )
+      this.incidents.afterLoad();
     if (generation === this.generation && (route.view === 'project' || route.view === 'environments'))
       this.checkAll(api, generation);
   }
@@ -2271,6 +2326,8 @@ export class QaCrawlerDashboard extends Base {
     if (action?.startsWith('pub-') && this.publisher.click(action, target)) return;
     if (action?.startsWith('tst-') && this.testsClick(action, target)) return;
     if (action?.startsWith('ed-') && this.editor.click(action, target)) return;
+    if ((action?.startsWith('inc-') || action?.startsWith('ws-')) && this.incidents.click(action, target))
+      return;
     switch (action) {
       case 'menu':
         this.state.menuOpen = !this.state.menuOpen;
@@ -2295,6 +2352,8 @@ export class QaCrawlerDashboard extends Base {
           view === 'tests' ||
           view === 'editor' ||
           view === 'explorations' ||
+          view === 'incidents' ||
+          view === 'investigations' ||
           view === 'environments' ||
           view === 'sources' ||
           view === 'requirements' ||
@@ -2547,6 +2606,8 @@ export class QaCrawlerDashboard extends Base {
           this.navigate({ view: 'sources', projectId: route.projectId });
         else if (target.dataset.to === 'recordings' && route.view === 'recording')
           this.navigate({ view: 'recordings', projectId: route.projectId });
+        else if (target.dataset.to === 'incidents' && route.view === 'incident')
+          this.navigate({ view: 'incidents', projectId: route.projectId });
         else this.navigate({ view: 'projects' });
         return;
       }
@@ -2659,6 +2720,12 @@ export class QaCrawlerDashboard extends Base {
 
   private onChange(event: Event): void {
     const target = event.target as HTMLInputElement | HTMLSelectElement;
+    if (target.dataset.inc && this.incidents.change(target)) return;
+    if (
+      (target.dataset.wsField !== undefined || target.dataset.action?.startsWith('ws-')) &&
+      this.incidents.change(target)
+    )
+      return;
     if (target.dataset.lib) {
       this.libraryField(target.dataset.lib, target.value);
       return;
@@ -2900,6 +2967,27 @@ export class QaCrawlerDashboard extends Base {
 
   private paint(): void {
     if (!this.connected) return;
+    // Un dessin demandé PENDANT un dessin (un champ modifié perd le focus quand la page est réécrite : son
+    // « change » arrive au milieu de la réécriture) est fait juste après, jamais imbriqué.
+    if (this.painting) {
+      if (!this.repaintQueued) {
+        this.repaintQueued = true;
+        queueMicrotask(() => {
+          this.repaintQueued = false;
+          this.paint();
+        });
+      }
+      return;
+    }
+    this.painting = true;
+    try {
+      this.paintNow();
+    } finally {
+      this.painting = false;
+    }
+  }
+
+  private paintNow(): void {
     const focused = this.root.activeElement as HTMLElement | null;
     const focusKey =
       focused?.dataset.action ??
@@ -2909,7 +2997,10 @@ export class QaCrawlerDashboard extends Base {
       focused?.dataset.lib ??
       focused?.dataset.edField ??
       focused?.dataset.edAdd ??
-      focused?.dataset.ed;
+      focused?.dataset.ed ??
+      focused?.dataset.inc ??
+      focused?.dataset.wsField ??
+      focused?.dataset.wsGraph;
     const focusValue = (focused as HTMLInputElement | null)?.value;
     // Les champs validés par « change », sans brouillon dans l'état : leur saisie en cours doit survivre à
     // un redessin venu d'ailleurs (événement du serveur, console, plan recalculé), sinon elle est perdue.
@@ -2920,27 +3011,41 @@ export class QaCrawlerDashboard extends Base {
         ? focused.value
         : undefined;
     // Le même bouton d'une liste (même bloc, même rang), et le curseur d'un champ texte, retrouvés.
-    const focusTwin = `${focused?.dataset.block ?? ''}|${focused?.dataset.index ?? ''}|${focused?.dataset.direction ?? ''}`;
+    // Dans l'espace d'investigation, l'élément retrouvé est celui de la même zone avec les mêmes données
+    // (`data-ref` d'une sélection, `data-tab`, `data-file`…), son état de sélection mis à part.
+    const workspaceKey =
+      focusKey !== undefined &&
+      (focusKey.startsWith('ws-') ||
+        focused?.dataset.wsField !== undefined ||
+        focused?.dataset.wsGraph !== undefined);
+    const focusTwin =
+      workspaceKey && focused
+        ? workspaceTwin(focused)
+        : `${focused?.dataset.block ?? ''}|${focused?.dataset.index ?? ''}|${focused?.dataset.direction ?? ''}`;
     const caret =
       focused instanceof HTMLInputElement && ['text', 'search'].includes(focused.type)
         ? focused.selectionStart
         : null;
     this.editor.beforePaint();
-    this.root.innerHTML = `<style>${DASHBOARD_CSS}</style>${renderDashboard(this.state)}`;
+    this.incidents.beforePaint();
+    this.paintView().innerHTML = renderDashboard(this.state);
     // L'éditeur de code et la comparaison reviennent dans la page redessinée.
     this.editor.afterPaint();
+    // L'espace d'investigation : défilements, détails ouverts, ligne de code visée.
+    this.incidents.afterPaint();
     if (focused?.closest('.cm-editor')) return;
     if (focusKey) {
       const key = CSS.escape(focusKey);
       const candidates = [
         ...this.root.querySelectorAll<HTMLElement>(
-          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"],[data-ed-field="${key}"],[data-ed-add="${key}"],[data-ed="${key}"]`,
+          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"],[data-ed-field="${key}"],[data-ed-add="${key}"],[data-ed="${key}"],[data-inc="${key}"],[data-ws-field="${key}"],[data-ws-graph="${key}"]`,
         ),
       ];
-      const twin = candidates.find(
-        (element) =>
-          `${element.dataset.block ?? ''}|${element.dataset.index ?? ''}|${element.dataset.direction ?? ''}` ===
-          focusTwin,
+      const twin = candidates.find((element) =>
+        workspaceKey
+          ? workspaceTwin(element) === focusTwin
+          : `${element.dataset.block ?? ''}|${element.dataset.index ?? ''}|${element.dataset.direction ?? ''}` ===
+            focusTwin,
       );
       const same = candidates.find((element) => (element as HTMLInputElement).value === focusValue);
       const target = (focusTwin !== '||' ? twin : undefined) ?? same ?? candidates[0];
@@ -2954,7 +3059,41 @@ export class QaCrawlerDashboard extends Base {
         target.value = typed;
       if (caret !== null && target instanceof HTMLInputElement) target.setSelectionRange(caret, caret);
     }
+    // Un bouton retrouvé dans un panneau réduit ou masqué (corps `hidden`) : le focus va au bouton qui
+    // le rouvre, jamais sur le corps de la page.
+    this.incidents.afterFocus();
   }
+
+  /** Le conteneur redessiné, créé au premier dessin avec la feuille de style et la zone live permanente. */
+  private paintView(): HTMLElement {
+    if (this.view?.isConnected) return this.view;
+    const style = document.createElement('style');
+    style.textContent = DASHBOARD_CSS;
+    const view = document.createElement('div');
+    view.className = 'qa-view';
+    const live = document.createElement('p');
+    live.className = 'sr inc-live';
+    live.setAttribute('role', 'status');
+    live.setAttribute('aria-live', 'polite');
+    live.setAttribute('aria-atomic', 'true');
+    this.root.replaceChildren(style, view, live);
+    this.view = view;
+    return view;
+  }
+}
+
+/**
+ * La signature d'un élément de l'espace d'investigation pour retrouver le focus après un redessin : sa
+ * zone et toutes ses données, sauf son état de sélection (qui change avec la sélection).
+ */
+function workspaceTwin(element: HTMLElement): string {
+  const zone = element.closest<HTMLElement>('[data-ws-zone]')?.dataset.wsZone ?? '';
+  const data = Object.entries(element.dataset)
+    .filter(([name]) => name !== 'wsState')
+    .map(([name, value]) => `${name}=${value ?? ''}`)
+    .sort()
+    .join('&');
+  return `${zone}|${data}`;
 }
 
 /** Les champs dont la saisie en cours est gardée au redessin (voir paint). */
