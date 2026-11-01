@@ -25,6 +25,15 @@ import { libraryView, runnableScenarios, type LibraryUi } from './dashboard-libr
 import { testsView, type TestsUi } from './dashboard-tests.js';
 import { editorView, type EditorUi } from './dashboard-editor.js';
 import {
+  emptyIncidentsUi,
+  incidentIcon,
+  incidentsView,
+  incidentView,
+  investigationsView,
+  type IncidentTab,
+  type IncidentsUi,
+} from './dashboard-incidents.js';
+import {
   importView,
   indicatorsView,
   requirementsView,
@@ -77,6 +86,12 @@ export type DashboardRoute =
   /** `environmentId: 'new'` : la création d'un environnement. */
   | { view: 'environments'; projectId: string; environmentId?: string }
   | { view: 'explorations'; projectId: string; run?: string }
+  /** Les incidents d'un projet ; `create` : le formulaire de déclaration ouvert. */
+  | { view: 'incidents'; projectId: string; create?: boolean }
+  /** Les investigations d'un projet : les incidents qui ne sont plus des brouillons, avec leur progression. */
+  | { view: 'investigations'; projectId: string }
+  /** L'espace d'investigation d'un incident, par onglet (vue d'ensemble par défaut) ; `demo` : la démonstration. */
+  | { view: 'incident'; projectId: string; incidentId: string; tab?: IncidentTab }
   | { view: 'sources'; projectId: string }
   | { view: 'import'; projectId: string; batchId: string }
   | { view: 'requirements'; projectId: string; entityId?: string }
@@ -184,6 +199,8 @@ export interface DashboardState {
   tst: TestsUi;
   /** L'éditeur des tests générés : fichiers ouverts, brouillons, vues, diagnostics. */
   ed: EditorUi;
+  /** Les incidents : la liste, la déclaration, l'incident ouvert (absent : rien de chargé). */
+  inc?: IncidentsUi;
   /** L'exécution suivie en direct (son instantané, ses étapes, la dernière phase annoncée). */
   live?: { snapshot: ExplorationSnapshot; steps: LiveStep[]; phase?: string; cancelRequested: boolean };
   execution?: ExecutionDetail;
@@ -216,6 +233,7 @@ const NAV: { section: NavSection; items: NavView[] }[] = [
       'explorations',
     ],
   },
+  { section: 'incidents', items: ['incidents', 'investigations'] },
   { section: 'requirements', items: ['requirements', 'traceability', 'sources'] },
   { section: 'measure', items: ['indicators', 'trends'] },
   { section: 'admin', items: ['environments', 'access'] },
@@ -234,6 +252,8 @@ export function activeNav(route: DashboardRoute): NavView {
   if (route.view === 'library') return 'library';
   if (route.view === 'tests') return 'tests';
   if (route.view === 'editor') return 'editor';
+  if (route.view === 'incidents' || route.view === 'incident') return 'incidents';
+  if (route.view === 'investigations') return 'investigations';
   if (
     route.view === 'requirements' ||
     route.view === 'traceability' ||
@@ -252,7 +272,7 @@ export function renderDashboard(state: DashboardState): string {
       `<div class="sec"><div class="sec-t">${esc(t.sections[section])}</div>${items
         .map(
           (view) =>
-            `<a href="#" data-action="nav" data-view="${view}" ${active === view ? 'aria-current="page"' : ''}>${icon(view)}<span>${esc(t.nav[view])}</span>${view === 'requirements' && state.req.repository && state.req.repository.pending > 0 ? `<span class="badge" aria-label="${esc(t.req.repoSub(state.req.repository.entities.length, state.req.repository.pending))}">${String(state.req.repository.pending)}</span>` : ''}</a>`,
+            `<a href="#" data-action="nav" data-view="${view}" ${active === view ? 'aria-current="page"' : ''}>${view === 'incidents' ? incidentIcon() : view === 'investigations' ? icon('search') : icon(view)}<span>${esc(t.nav[view])}</span>${view === 'requirements' && state.req.repository && state.req.repository.pending > 0 ? `<span class="badge" aria-label="${esc(t.req.repoSub(state.req.repository.entities.length, state.req.repository.pending))}">${String(state.req.repository.pending)}</span>` : ''}</a>`,
         )
         .join('')}</div>`,
   ).join('');
@@ -335,6 +355,12 @@ function body(state: DashboardState): string {
       return testsView(state);
     case 'editor':
       return editorView(state);
+    case 'incidents':
+      return incidentsView(state, state.inc ?? emptyIncidentsUi());
+    case 'investigations':
+      return investigationsView(state, state.inc ?? emptyIncidentsUi());
+    case 'incident':
+      return incidentView(state, state.inc ?? emptyIncidentsUi());
   }
 }
 

@@ -294,11 +294,17 @@ export class RunConsole {
     const value = Math.round(Math.min(max, Math.max(min, height)));
     this.ui.height = value;
     panel.closest<HTMLElement>('.ed-body')?.style.setProperty('--con-h', `${String(value)}px`);
+    panel.querySelector('[data-con-split]')?.setAttribute('aria-valuenow', String(value));
+    this.syncBounds(panel);
+  }
+
+  /** Les bornes du séparateur (motif ARIA « window splitter ») : elles dépendent de la place à l'écran. */
+  private syncBounds(panel: HTMLElement): void {
     const handle = panel.querySelector('[data-con-split]');
-    handle?.setAttribute('aria-valuenow', String(value));
-    // Les bornes du séparateur (motif ARIA « window splitter ») : elles dépendent de la place à l'écran.
-    handle?.setAttribute('aria-valuemin', String(min));
-    handle?.setAttribute('aria-valuemax', String(max));
+    if (!handle) return;
+    const { min, max } = this.bounds(panel);
+    handle.setAttribute('aria-valuemin', String(min));
+    handle.setAttribute('aria-valuemax', String(max));
   }
 
   /** Glisser la poignée : la hauteur suit le pointeur, sans redessiner l'écran. */
@@ -354,6 +360,12 @@ export class RunConsole {
 
   /** Après un rendu : la liste revient dans la page, à sa position (ou en bas, en suivi). */
   afterPaint(): void {
+    // Les bornes ARIA de la poignée dépendent de la place à l'écran : reposées après chaque rendu (un
+    // redimensionnement de la fenêtre redessine la poignée sans glisser).
+    const panel = this.host.root
+      .querySelector<HTMLElement>('[data-con-split]')
+      ?.closest<HTMLElement>('[data-con-panel]');
+    if (panel) this.syncBounds(panel);
     const slot = this.host.root.querySelector('[data-log-host]');
     if (!slot) return;
     this.ensureNodes();

@@ -16,6 +16,10 @@ export default tseslint.config(
       'coverage/',
       'tests/fixtures/static-apps/',
       'tests/fixtures/packaging/*-app/',
+      // Application fictive analysée par Incident Reconstruction (TSX hors du projet TypeScript).
+      'tests/fixtures/incident-app/',
+      // Application Angular fictive analysée par la découverte des déclencheurs (dépendances absentes).
+      'tests/fixtures/angular-app/',
       // Les exemples importent les paquets compilés (dist) : ils se vérifient en les lançant.
       'examples/',
     ],
