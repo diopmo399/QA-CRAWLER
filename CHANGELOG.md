@@ -61,8 +61,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   la ligne des sous-onglets, menu latéral plus compact (lignes de 36 px) qui reste dans la fenêtre sur écran
   large (collant, borné à la hauteur de la fenêtre, défilement interne) : sa fin et son pied se voient sans faire
   défiler la page. Couleurs du menu mesurées sur la maquette : fond `#004D2B` inchangé, sélecteur de projet en
-  vert relevé (`--qa-color-panel-raised`, `#005D38`), entrée active sur `#E6F4EA`, et le motif de deux vagues en
-  vert secondaire (l'une translucide) au bas du menu, masqué sur téléphone.
+  vert relevé (`--qa-color-panel-raised`, `#005D38`), entrée active sur `#E6F4EA`, et le motif du bas du menu relevé
+  sur la maquette : trois facettes à bords droits en vert secondaire (bande translucide en diagonale montante,
+  facette médiane, coin vif à droite), puis un filet et le pied ; masqué sur téléphone.
 
 - **Découverte automatique du périmètre** (étape « Périmètre » de l'investigation, `src/incident/scope-discovery.ts`) :
   le bloc « Applications et dépôts » remplace la saisie manuelle des applications (identifiant, nom, couche, dossiers,

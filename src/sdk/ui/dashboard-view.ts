@@ -311,9 +311,9 @@ export function renderDashboard(state: DashboardState): string {
 </div>`;
 }
 
-/** Les deux vagues vertes au bas du menu (décor de la maquette, en vert secondaire, l'une translucide). */
+/** Le motif au bas du menu (décor de la maquette) : trois facettes à bords droits en vert secondaire, en diagonale montante. */
 const SIDE_WAVE =
-  '<svg class="side-wave" viewBox="0 0 240 96" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="M0 44C38 16 76 70 122 42S196 6 240 28V50C196 36 160 70 122 62S60 34 0 66z" fill="var(--qa-color-secondary)" opacity=".45"/><path d="M0 62C46 30 90 84 138 52S210 30 240 44V72C200 60 170 88 138 80S70 60 0 90z" fill="var(--qa-color-secondary)"/></svg>';
+  '<svg class="side-wave" viewBox="0 0 240 126" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="M0 124L240 10V126H0z" fill="var(--qa-color-secondary)" opacity=".3"/><path d="M63 126L157 54L240 102V126z" fill="var(--qa-color-secondary)" opacity=".55"/><path d="M157 54L240 10V102z" fill="var(--qa-color-secondary)" opacity=".92"/></svg>';
 
 function body(state: DashboardState): string {
   const t = state.t;

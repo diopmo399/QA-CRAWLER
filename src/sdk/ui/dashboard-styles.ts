@@ -73,10 +73,10 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 .side a[aria-current="page"]{background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2);font-weight:600}
 .side a[aria-current="page"] .ico{opacity:1}
 .side a:focus-visible{outline:3px solid color-mix(in srgb,var(--qa-color-panel-text) 60%,transparent);outline-offset:1px}
-/* Le motif de la maquette : deux vagues vertes au bas du menu, derrière rien d'interactif. */
-.side-wave{display:block;flex:none;margin:auto -12px 0;width:calc(100% + 24px);height:96px;pointer-events:none}
+/* Le motif de la maquette : des facettes vertes au bas du menu, derrière rien d'interactif, puis un filet et le pied. */
+.side-wave{display:block;flex:none;margin:auto -12px 0;width:calc(100% + 24px);height:112px;pointer-events:none}
 .side-wave+.foot{margin-top:0}
-.foot{margin-top:auto;padding:10px 12px 0;font-size:12px;color:var(--qa-color-panel-muted);display:flex;flex-direction:column;gap:4px;position:relative}
+.foot{margin-top:auto;border-top:1px solid var(--qa-color-panel-border);padding:12px 12px 0;font-size:12px;color:var(--qa-color-panel-muted);display:flex;flex-direction:column;gap:4px;position:relative}
 .foot span{display:flex;align-items:center;gap:8px}
 .foot .on{width:8px;height:8px;border-radius:50%;background:var(--qa-color-panel-link);display:inline-block}
 .main{min-width:0;background:var(--qa-color-background);border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:20px}
