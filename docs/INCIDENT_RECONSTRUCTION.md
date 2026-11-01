@@ -32,6 +32,7 @@ src/incident/
   model.ts            le contrat commun (types, statuts)
   scope.ts            Investigation Scope Manager : défauts (GUIDED), validation, extensions approuvées
   scope-policy.ts     Scope Policy Engine : refus par défaut, fichiers, réseau, tests, commandes, OpenShift
+  scope-discovery.ts  la découverte automatique d'un dépôt pour le périmètre (applications, cadres, modules, relations)
   guarded-fs.ts       la seule lecture de fichiers de l'investigation (passe par la politique)
   incident-store.ts   Incident Manager : persistance, révisions, historique, états, annulation / reprise
   evidence.ts         Playwright Evidence Collector : du run du moteur aux preuves (masquées)
@@ -76,6 +77,28 @@ Modes : `MANUAL` (rien d'automatique), `GUIDED` (par défaut : l'investigation p
 `AUTO_WITHIN_SCOPE` (les vérifications sans effet de bord permises s'enchaînent ; le périmètre ne s'étend
 jamais seul). Toute extension (application, chemin, classe, endpoint, hôte, profondeur, effets de bord,
 commande) est une demande qui attend une approbation (droit `DECIDE`).
+
+**Découverte automatique** (`scope-discovery.ts`, route `POST …/scope/discover { root }`, droit `RUN`) : à partir
+d'un chemin de dépôt sur la machine qui investigue, les applications qu'il contient (manifestes `package.json`,
+`angular.json`, `pom.xml`, `build.gradle`, `pyproject.toml`, `requirements.txt`, `go.mod`, `*.csproj`), leurs cadres
+(Angular, React, Vue, Next.js, NestJS, Express, Spring Boot, Quarkus, FastAPI, Django, Gin, ASP.NET Core…), leurs
+langages, leur couche probable (frontend, BFF, backend), leurs modules (dossiers : `src/app` en Angular, le paquet
+Java, `src`…), points d'entrée, fichiers de configuration (noms seulement), services notables (JPA, Kafka, RxJS…),
+les relations entre applications (dépendance d'espace de travail déclarée ; proxy de développement ou URL de
+configuration vers le port `server.port` d'une autre application : déduit) et la structure du dépôt (application
+seule, monorepo — workspaces npm/pnpm, Nx, Lerna, Turborepo, Maven multi-module, Gradle multi-projets —,
+plusieurs applications). Tout est lu par les fichiers gardés, donc par le Scope Policy Engine sur une racine
+provisoire avec les permissions et limites de l'incident : fichiers sensibles refusés, liens symboliques jamais suivis,
+quatre niveaux de manifestes, 80 manifestes et 1500 dossiers au plus ; rien n'est écrit dans l'incident. La pertinence
+pour l'incident vient de ses mots (titre, description, symptôme, application nommée) retrouvés dans les noms et les
+modules ; les dépendances transversales d'une application proposée (ce qu'elle utilise ou appelle, ce qui appelle un
+service proposé) sont proposées avec elles. Chaque détection cite ses preuves (`fichier : indice`) ; ce qui n'est pas
+déterminable devient une question (couche déduite du nom, serveur Node, dossier de code sans manifeste) ; un
+chemin relatif, introuvable, qui n'est pas un dossier ou protégé est un problème expliqué avec sa correction, jamais
+une erreur HTTP. `GET …/scope/repositories` liste les dépôts déjà connus de l'environnement (sources du projet,
+périmètre de l'incident, autres incidents du projet) pour les réutiliser d'un clic. Une application ajoutée garde sa
+provenance (`origin` : découverte ou saisie, racine analysée, preuves). Le périmètre initial n'est pas une limite :
+pendant l'investigation, le même bloc demande des extensions `ADD_APPLICATION` à décider.
 
 Le Scope Policy Engine refuse par défaut et agit dans les adaptateurs (lecture de fichiers, journaux,
 tests, commandes, OpenShift) — pas seulement dans l'interface :
@@ -130,6 +153,8 @@ jouer un environnement qui permet les écritures ou approuver une vérification 
 | POST       | `/incidents/:i/attachments`                                                                     | ajouter une pièce jointe (droit `RUN`)                                           |
 | GET/DELETE | `/incidents/:i/attachments/:a`                                                                  | lire (masquée) / retirer une pièce jointe                                        |
 | GET        | `/incidents/:i/scope/tree?application=&depth=`                                                  | dossiers d'un dépôt pour le périmètre (`RUN`)                                    |
+| POST       | `/incidents/:i/scope/discover` `{ root }`                                                       | découverte automatique d'un dépôt (lecture seule, `RUN`)                         |
+| GET        | `/incidents/:i/scope/repositories`                                                              | dépôts déjà connus de l'environnement (`RUN`)                                    |
 | GET        | `/incidents/:i/report?format=json\|markdown\|html\|pdf&sections=`                               | rapport, sections choisies                                                       |
 | GET        | `/incidents/:i/regression/spec`                                                                 | test Playwright généré depuis le flow proposé                                    |
 | GET        | `/incidents/:i/ai/capabilities`                                                                 | modes IA disponibles, fournisseur, budget, politique de données                  |
@@ -231,9 +256,11 @@ Composants : `incident-workspace.ts` (coquille et vues), `incident-split.ts` (pa
 
 La liste (onglets Tous / Ouverts / En investigation / Résolus / Fermés, recherche, application, date de création, export
 CSV), la déclaration (application, type, sévérité, scénario, pièces jointes : captures et textes, contenu vérifié côté
-serveur, 5 Mio et 10 fichiers au plus, noms nettoyés, textes masqués à la lecture), le périmètre (arborescence des dossiers
-lue en lecture seule, profondeur 1 à 5, limites ; la mémoire maximale ne s'impose qu'au Job ARO, jamais en LOCAL ni en
-REMOTE), l'environnement (cartes LOCAL / REMOTE / ARO d'après les capacités mesurées, « Tester la connectivité » depuis le
+serveur, 5 Mio et 10 fichiers au plus, noms nettoyés, textes masqués à la lecture), le périmètre (« Applications et
+dépôts » : un chemin de projet ou un dépôt connu, « Analyser automatiquement », les applications détectées cochées quand
+elles sont proposées pour l'incident, couche corrigeable d'un choix, preuves et questions, « Ajouter au périmètre » ;
+la saisie manuelle reste dans « Paramètres avancés », repliée ; puis l'arborescence des dossiers lue en lecture seule,
+profondeur 1 à 5, limites ; la mémoire maximale ne s'impose qu'au Job ARO, jamais en LOCAL ni en REMOTE), l'environnement (cartes LOCAL / REMOTE / ARO d'après les capacités mesurées, « Tester la connectivité » depuis le
 serveur), la reproduction en direct (étapes annoncées par le moteur pendant le rejeu, durée seulement quand l'étape est
 finie, capture seulement si le moteur en a écrit une), les preuves (requêtes, console, captures, traces, actions ; commande
 cURL reconstruite, valeurs masquées), la traçabilité (colonnes ou couloirs horizontaux par couche), le code, le diagnostic

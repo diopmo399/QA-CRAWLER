@@ -109,6 +109,10 @@ async function route(ctx: IncidentRouteContext): Promise<boolean> {
       else json(sections ? await service.reportPart(id, sections) : await service.report(id));
       return true;
     }
+    if (action === 'scope' && part === 'repositories' && item === undefined) {
+      json(await service.knownRepositories(id));
+      return true;
+    }
     if (action === 'scope' && part === 'tree' && item === undefined) {
       const application = ctx.url.searchParams.get('application');
       if (!application) throw ctx.fail(400, 'BAD_REQUEST', 'application is required');
@@ -144,6 +148,10 @@ async function route(ctx: IncidentRouteContext): Promise<boolean> {
     case 'scope': {
       if (part === 'validate' && item === undefined) {
         json(await service.validateScope(id));
+        return true;
+      }
+      if (part === 'discover' && item === undefined) {
+        json(await service.discoverScope(id, text(ctx, body.root, 'root', 1000)));
         return true;
       }
       if (part === 'extensions' && item === undefined) {

@@ -3428,6 +3428,11 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
     projectId: project.id,
     projectDir: project.dir,
     runDir: (run) => path.join(project.dir, REPORTS_DIR, run),
+    sourceRoots: async () => {
+      const stored = await readProject(project.dir);
+      const root = stored?.draft.project.sourceRoot;
+      return root ? [{ root, label: `${project.name} (sources du projet)` }] : [];
+    },
     environment: async (environmentId) => {
       const environments = await readEnvironments(project.dir);
       const environment = environmentId

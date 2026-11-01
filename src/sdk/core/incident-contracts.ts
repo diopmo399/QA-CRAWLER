@@ -133,6 +133,119 @@ export const SCOPE_TREE_MAX_NODES = 400;
 export const MIN_MEMORY_MB = 64;
 export const MAX_MEMORY_MB = 16_384;
 
+// ── Découverte automatique du périmètre ───────────────────────────────────────────────────────
+
+/**
+ * La découverte : les manifestes sont cherchés jusqu'à SCOPE_DISCOVERY_DEPTH niveaux (quatre), l'arborescence
+ * des dossiers est lue plus profond (paquets Java) et bornée en nombre ; au plus SCOPE_DISCOVERY_MAX_MANIFESTS lus.
+ */
+export const SCOPE_DISCOVERY_DEPTH = 4;
+export const SCOPE_DISCOVERY_TREE_DEPTH = 9;
+export const SCOPE_DISCOVERY_MAX_NODES = 1500;
+export const SCOPE_DISCOVERY_MAX_MANIFESTS = 80;
+
+export const DISCOVERY_CONFIDENCES = ['HIGH', 'MEDIUM', 'LOW'] as const;
+export type DiscoveryConfidence = (typeof DISCOVERY_CONFIDENCES)[number];
+
+/** D'où vient une application du périmètre : détectée par la découverte automatique, ou saisie. */
+export interface ScopeApplicationOrigin {
+  kind: 'DISCOVERED' | 'MANUAL';
+  at: string;
+  /** La racine analysée (découverte) et ce qui a permis la détection. */
+  analyzedRoot?: string;
+  evidence?: string[];
+}
+
+/** Un module ou composant repéré dans une application (un dossier), et les mots de l'incident qu'il touche. */
+export interface DiscoveredModule {
+  /** Relatif à la racine de l'application. */
+  path: string;
+  name: string;
+  matched?: string[];
+}
+
+export interface DiscoveredApplication {
+  /** L'application prête pour le périmètre : identifiant unique, nom, couche déduite, racine absolue. */
+  application: ScopeApplication;
+  /** Relatif à la racine analysée (vide : la racine elle-même). */
+  path: string;
+  frameworks: string[];
+  languages: string[];
+  modules: DiscoveredModule[];
+  entryPoints: string[];
+  /** Les fichiers de configuration repérés (noms seulement, jamais leur contenu). */
+  configs: string[];
+  /** Les services et dépendances notables (HTTP, JPA, Kafka, clients REST…). */
+  services: string[];
+  confidence: DiscoveryConfidence;
+  /** Ce qui a permis la détection : « fichier : indice ». */
+  evidence: string[];
+  /** Ce que la découverte n'a pas pu déterminer (à demander). */
+  questions: string[];
+  /** La pertinence pour l'incident (0 à 1), et pourquoi. */
+  relevance: number;
+  reasons: string[];
+  /** Proposée dans le périmètre initial (cochée d'office). */
+  suggested: boolean;
+  /** L'identifiant de l'application du périmètre qui a déjà cette racine. */
+  alreadyInScope?: string;
+}
+
+export interface DiscoveryRelation {
+  /** Identifiants d'applications détectées. */
+  from: string;
+  to: string;
+  kind: 'CALLS' | 'USES';
+  status: 'STATICALLY_RESOLVED' | 'INFERRED';
+  evidence: string;
+}
+
+export const DISCOVERY_PROBLEM_CODES = [
+  'ROOT_RELATIVE',
+  'ROOT_MISSING',
+  'ROOT_NOT_DIRECTORY',
+  'ROOT_DENIED',
+  'READ_SOURCES_DENIED',
+  'ENVIRONMENT_CANNOT_LIST',
+  'NOTHING_RECOGNIZED',
+  'PARTIAL',
+] as const;
+export type DiscoveryProblemCode = (typeof DISCOVERY_PROBLEM_CODES)[number];
+
+/** Un problème de découverte : ce qui s'est passé, et comment le corriger. */
+export interface DiscoveryProblem {
+  code: DiscoveryProblemCode;
+  message: string;
+  hint: string;
+}
+
+/** Le résultat de l'analyse automatique d'un dépôt (lecture seule : rien n'est écrit dans l'incident). */
+export interface ScopeDiscovery {
+  root: string;
+  status: 'OK' | 'PARTIAL' | 'FAILED';
+  structure: 'SINGLE' | 'MONOREPO' | 'MULTI_APP' | 'UNKNOWN';
+  /** Les outils de dépôt reconnus (Nx, pnpm workspaces, Maven multi-module…). */
+  tools: string[];
+  applications: DiscoveredApplication[];
+  relations: DiscoveryRelation[];
+  problems: DiscoveryProblem[];
+  denied: { path: string; reason: string }[];
+  truncated: string[];
+  /** Les mots de l'incident retenus pour la pertinence. */
+  keywords: string[];
+  /** Les manifestes lus (relatifs à la racine), pour la traçabilité. */
+  read: string[];
+  discoveredAt: string;
+}
+
+/** Un dépôt déjà connu de l'environnement d'investigation, proposé à la réutilisation. */
+export interface KnownRepository {
+  root: string;
+  label: string;
+  source: 'PROJECT' | 'SCOPE' | 'INCIDENT';
+  incidentId?: string;
+}
+
 /** Un dossier du dépôt d'une application, pour choisir le périmètre (lecture seule, profondeur bornée). */
 export interface ScopeTreeNode {
   /** Chemin relatif à la racine du dépôt, séparé par « / » (vide : la racine). */
@@ -203,6 +316,8 @@ export interface ScopeApplication {
   logFiles?: string[];
   /** Consultation OpenShift (REMOTE facultatif, ARO) : lecture seule, dans ce namespace. */
   openshift?: { namespace: string; selector: string };
+  /** Absente : saisie à la main (fiches écrites avant la découverte automatique). */
+  origin?: ScopeApplicationOrigin;
 }
 
 export interface ScopePermissions {

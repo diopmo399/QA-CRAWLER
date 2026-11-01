@@ -50,6 +50,9 @@ import {
   type ReportSection,
   type ReproductionRun,
   type ScopeExtension,
+  type KnownRepository,
+  type ScopeApplication,
+  type ScopeDiscovery,
   type ScopeTree,
   type SourceFileView,
   type SourceTree,
@@ -57,7 +60,9 @@ import {
 import { proposeRegressionTest } from './regression.js';
 import { buildReport, reportMarkdown, reportPart } from './report.js';
 import { PDF_TIMEOUT_MS, renderPdf, reportHtml, type PdfRenderer } from './report-export.js';
+import { guardedFiles } from './guarded-fs.js';
 import { scopeTreeOf } from './scope-tree.js';
+import { discoverRepository } from './scope-discovery.js';
 import { diagnose } from './root-cause.js';
 import { decideExtension, requestExtension, validateScope } from './scope.js';
 import { ScopePolicy } from './scope-policy.js';
@@ -74,7 +79,7 @@ import {
 } from '../sdk/core/incident-trigger-contracts.js';
 import { analyzeAngular } from './code/angular.js';
 import { createAiSequenceProposer } from './trigger/ai-hook.js';
-import { interpretBrief } from './trigger/brief.js';
+import { interpretBrief, keywordsOf } from './trigger/brief.js';
 import { TriggerEngine, resolveTriggerBudget, type TriggerEngineOutcome } from './trigger/engine.js';
 import { buildTriggerReport } from './trigger/report.js';
 import {
@@ -137,6 +142,8 @@ export interface IncidentHost {
   addScenario(name: string, yaml: string): Promise<string>;
   /** L'URL de l'environnement cible (son hôte entre dans le périmètre de navigation). */
   environment(environmentId?: string): Promise<{ id?: string; baseUrl?: string; kind?: string }>;
+  /** Les dépôts que le projet déclare (dossier des sources Angular…), proposés à la réutilisation par la découverte du périmètre. */
+  sourceRoots?(): Promise<{ root: string; label: string }[]>;
   /** Le dossier d'un run du moteur (captures, trace). */
   runDir(run: string): string;
 }
@@ -992,6 +999,69 @@ export class IncidentService {
       maxNodes: SCOPE_TREE_MAX_NODES,
     });
     return scopeTreeOf(application, listing, depth);
+  }
+
+  /**
+   * La découverte automatique d'un dépôt pour le périmètre : lue par le Scope Policy Engine sur une racine
+   * provisoire (la racine demandée, permissions et limites de l'incident), jamais écrite dans l'incident ;
+   * la pertinence vient des mots de l'incident (titre, description, symptôme, application nommée).
+   */
+  async discoverScope(id: string, root: string): Promise<ScopeDiscovery> {
+    const incident = await this.incident(id);
+    const trimmed = root.trim();
+    const keywords = keywordsOf(
+      `${incident.title} ${incident.application ?? ''} ${incident.description} ${incident.observed}`,
+      16,
+    );
+    const common = { keywords, existing: incident.scope.applications, now: this.now().toISOString() };
+    const named = incident.application ? { application: incident.application } : {};
+    if (!path.isAbsolute(trimmed) && !path.win32.isAbsolute(trimmed)) {
+      // Aucun accès au disque pour un chemin relatif : le module explique le problème.
+      const probe = guardedFiles(new ScopePolicy(incident.scope, { execution: incident.execution }));
+      return discoverRepository({ root: trimmed, files: probe, ...common, ...named });
+    }
+    const probe: ScopeApplication = {
+      id: 'discovery',
+      name: path.basename(trimmed) || trimmed,
+      layer: 'BACKEND',
+      repository: { root: trimmed, include: [] },
+    };
+    const scope = { ...incident.scope, applications: [probe] };
+    const policy = new ScopePolicy(scope, { execution: incident.execution });
+    const files = this.adapter({ ...incident, scope }).files(policy);
+    return discoverRepository({ root: trimmed, files, ...common, ...named });
+  }
+
+  /**
+   * Les dépôts déjà connus de l'environnement d'investigation : ceux du projet (sources déclarées), du
+   * périmètre de cet incident, et des autres incidents du projet (cinquante au plus) ; une racine une fois.
+   */
+  async knownRepositories(id: string): Promise<{ repositories: KnownRepository[] }> {
+    const incident = await this.incident(id);
+    const seen = new Set<string>();
+    const repositories: KnownRepository[] = [];
+    const add = (entry: KnownRepository): void => {
+      const key = path.resolve(entry.root);
+      if (seen.has(key)) return;
+      seen.add(key);
+      repositories.push(entry);
+    };
+    for (const declared of (await this.host.sourceRoots?.()) ?? [])
+      add({ root: declared.root, label: declared.label, source: 'PROJECT' });
+    for (const application of incident.scope.applications)
+      add({ root: application.repository.root, label: application.name, source: 'SCOPE' });
+    for (const summary of (await this.store.list()).slice(0, 50)) {
+      if (summary.id === incident.id) continue;
+      const other = await this.store.get(summary.id);
+      for (const application of other?.scope.applications ?? [])
+        add({
+          root: application.repository.root,
+          label: `${application.name} (${summary.title})`,
+          source: 'INCIDENT',
+          incidentId: summary.id,
+        });
+    }
+    return { repositories };
   }
 
   // ── Test Playwright du test de non-régression ───────────────────────────────────────────

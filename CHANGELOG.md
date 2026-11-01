@@ -32,6 +32,23 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Découverte automatique du périmètre** (étape « Périmètre » de l'investigation, `src/incident/scope-discovery.ts`) :
+  le bloc « Applications et dépôts » remplace la saisie manuelle des applications (identifiant, nom, couche, dossiers,
+  classes, racine) par un chemin de projet — ou un dépôt déjà connu de l'environnement, réutilisé d'un clic — et
+  « Analyser automatiquement ». Le serveur détecte les applications (package.json, angular.json, pom.xml, build.gradle,
+  pyproject.toml, requirements.txt, go.mod, *.csproj), leurs cadres et langages, leur couche probable, leurs modules,
+  points d'entrée, configurations et services, les relations entre applications (dépendances déclarées, proxy ou URL vers
+  le port d'une autre application) et la structure du dépôt (application seule, monorepo npm/pnpm/Nx/Lerna/Turborepo,
+  Maven multi-module, Gradle multi-projets, plusieurs applications). Les applications proposées pour l'incident (mots de
+  la description retrouvés, application nommée, dépendances transversales) sont cochées ; la couche se corrige d'un
+  choix ; chaque détection cite ses preuves, ce qui n'est pas déterminable devient une question ; un chemin relatif,
+  introuvable, qui n'est pas un dossier ou protégé est expliqué avec sa correction. Lecture seule par le Scope Policy
+  Engine (fichiers sensibles refusés, liens jamais suivis, bornes), rien n'est écrit ; « Ajouter au périmètre »
+  complète le périmètre (brouillon, périmètre défini) ou demande des extensions `ADD_APPLICATION` à décider une fois
+  l'investigation commencée ; chaque application ajoutée garde sa provenance (`origin`). La saisie manuelle reste dans
+  « Paramètres avancés », repliée. Routes `POST …/scope/discover`, `GET …/scope/repositories` (droit `RUN`), client
+  `incidents.discoverScope`, `incidents.knownRepositories`.
+
 - **Découverte autonome des déclencheurs** (`src/incident/trigger`, `docs/incident-reconstruction/trigger-discovery.md`) :
   interprète de description (FR/EN, provenance), découverte du périmètre (statuts du Scope Policy Engine), analyse
   statique Angular (`src/incident/code/angular.ts`), collecteur d'observations navigateur, oracle de défaillance

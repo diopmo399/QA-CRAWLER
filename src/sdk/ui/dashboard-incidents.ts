@@ -1,5 +1,5 @@
 import type { IncidentScopeValidation } from '../core/client.js';
-import type { ProjectDetail } from '../core/contracts.js';
+import type { ProjectDetail, Right } from '../core/contracts.js';
 import {
   ATTACHMENT_TYPES,
   EXECUTION_TARGETS,
@@ -31,6 +31,12 @@ import { formatDate, header, icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { panelState, type Lang } from './incident-parts.js';
 import { emptyScopeUi, renderScopeEditor, type ScopeTrees, type ScopeUi } from './incident-scope.js';
+import {
+  advancedDetails,
+  emptyDiscoveryUi,
+  renderScopeDiscovery,
+  type DiscoveryUi,
+} from './incident-scope-discovery.js';
 import { uxText, type WorkspaceProgress } from './incident-ux.js';
 import {
   disableForDemo,
@@ -144,6 +150,8 @@ export interface IncidentsUi {
   /** Le brouillon de l'écran « Définition du périmètre » et les arborescences lues par application. */
   scope: ScopeUi;
   scopeTrees: Record<string, ScopeTrees[string]>;
+  /** Le bloc « Applications et dépôts » : chemin saisi, dépôts connus, résultat de la découverte, sélection. */
+  discovery: DiscoveryUi;
   /** La liste « Investigations » : les incidents qui ne sont plus des brouillons, avec leur progression. */
   investigations?: InvestigationRow[];
   /** L'incident ouvert, tel que lu (sa révision sert aux modifications). */
@@ -180,6 +188,7 @@ export const emptyIncidentsUi = (): IncidentsUi => ({
   query: '',
   scope: emptyScopeUi(),
   scopeTrees: {},
+  discovery: emptyDiscoveryUi(),
   extension: emptyExtensionForm(),
   confirmCancel: false,
   ws: emptyWorkspaceUi(),
@@ -1157,7 +1166,7 @@ function scopeTab(state: DashboardState, ui: IncidentsUi, incident: Incident): s
       : `<div class="tw"><table class="tbl"><thead><tr><th scope="col">${esc(s.application)}</th><th scope="col">${esc(s.layer)}</th><th scope="col">${esc(s.repository)}</th><th scope="col">${esc(s.include)}</th><th scope="col">${esc(s.classes)}</th></tr></thead><tbody>${scope.applications
           .map(
             (app) =>
-              `<tr><td><b>${esc(app.name)}</b><small class="mu block"><code>${esc(app.id)}</code>${app.baseUrl ? ` · ${esc(app.baseUrl)}` : ''}</small></td><td>${esc(label(i.layers, app.layer))}</td><td><code>${esc(app.repository.root)}</code></td><td>${app.repository.include.length === 0 ? `<span class="mu">${esc(s.wholeRoot)}</span>` : app.repository.include.map((entry) => `<code>${esc(entry)}</code>`).join(' ')}</td><td>${(app.repository.classes ?? []).length === 0 ? `<span class="mu">${esc(s.allClasses)}</span>` : (app.repository.classes ?? []).map((entry) => `<code>${esc(entry)}</code>`).join(' ')}</td></tr>`,
+              `<tr><td><b>${esc(app.name)}</b><small class="mu block"><code>${esc(app.id)}</code>${app.baseUrl ? ` · ${esc(app.baseUrl)}` : ''}${app.origin?.kind === 'DISCOVERED' ? ` · ${esc(s.discovered(formatDate(app.origin.at, state.t.locale)))}` : ''}</small></td><td>${esc(label(i.layers, app.layer))}</td><td><code>${esc(app.repository.root)}</code></td><td>${app.repository.include.length === 0 ? `<span class="mu">${esc(s.wholeRoot)}</span>` : app.repository.include.map((entry) => `<code>${esc(entry)}</code>`).join(' ')}</td><td>${(app.repository.classes ?? []).length === 0 ? `<span class="mu">${esc(s.allClasses)}</span>` : (app.repository.classes ?? []).map((entry) => `<code>${esc(entry)}</code>`).join(' ')}</td></tr>`,
           )
           .join('')}</tbody></table></div>`;
   const chipsOf = (items: (string | number)[], none: string): string =>
@@ -1214,18 +1223,29 @@ function scopeTab(state: DashboardState, ui: IncidentsUi, incident: Incident): s
     ? scopeEditor(state, ui)
     : `${facts}<details class="inc-sc-apps-d"><summary>${esc(f.appsDetails(scope.applications.length))}</summary>${apps}</details><h3>${esc(s.permissions)}</h3>${permissions}`;
   const scopeUi = ui.scope.incidentId === incident.id ? ui.scope : emptyScopeUi(incident.id);
-  const editor = renderScopeEditor(
-    {
-      incident,
-      lang: state.t.locale,
-      can: (right) => can(state, right),
-      demo: ui.ws.demo && isDemoIncident(incident.id),
-    },
-    scopeUi,
-    ui.scopeTrees,
-    { busy: ui.busy !== undefined, ...(ui.validation ? { validation: ui.validation } : {}) },
+  const scopeCtx = {
+    incident,
+    lang: state.t.locale,
+    can: (right: Right) => can(state, right),
+    demo: ui.ws.demo && isDemoIncident(incident.id),
+  };
+  const discoveryUi = ui.discovery.incidentId === incident.id ? ui.discovery : emptyDiscoveryUi(incident.id);
+  const discovery = renderScopeDiscovery(
+    scopeCtx,
+    discoveryUi,
+    ui.busy !== undefined ? { busy: ui.busy } : {},
   );
-  return `${editor}<section class="card wide inc-sc-other" aria-label="${esc(f.otherScope)}">${head}${draft}${body}</section>${extensions}`;
+  const editor = renderScopeEditor(scopeCtx, scopeUi, ui.scopeTrees, {
+    busy: ui.busy !== undefined,
+    ...(ui.validation ? { validation: ui.validation } : {}),
+  });
+  // La saisie manuelle (identifiant, couche, racine, dossiers, classes) reste disponible, repliée.
+  const advanced = advancedDetails(
+    state.t.locale,
+    discoveryUi.advanced || ui.scopeForm !== undefined,
+    `<section class="card wide inc-sc-other" aria-label="${esc(f.otherScope)}">${head}${draft}${body}</section>`,
+  );
+  return `${discovery}${editor}${advanced}${extensions}`;
 }
 
 function scopeEditor(state: DashboardState, ui: IncidentsUi): string {

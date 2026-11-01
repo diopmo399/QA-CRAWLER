@@ -107,6 +107,8 @@ import type {
   RegressionSpec,
   ReportFormat,
   ReportSection,
+  KnownRepository,
+  ScopeDiscovery,
   ScopeExtensionKind,
   ScopeTree,
   SourceFileView,
@@ -743,6 +745,10 @@ export interface QaCrawlerClient {
       applicationId: string,
       depth?: number,
     ): Promise<ScopeTree>;
+    /** La découverte automatique d'un dépôt pour le périmètre (droit RUN) : lecture seule, rien n'est écrit. */
+    discoverScope(projectId: string, incidentId: string, root: string): Promise<ScopeDiscovery>;
+    /** Les dépôts déjà connus de l'environnement (projet, périmètre, autres incidents), à réutiliser (droit RUN). */
+    knownRepositories(projectId: string, incidentId: string): Promise<{ repositories: KnownRepository[] }>;
   };
   dispose(): void;
 }
@@ -1289,6 +1295,10 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
             depth !== undefined ? `&depth=${String(depth)}` : ''
           }`,
         ),
+      discoverScope: (projectId, incidentId, root) =>
+        request('POST', `${incident(projectId, incidentId)}/scope/discover`, { root }),
+      knownRepositories: (projectId, incidentId) =>
+        request('GET', `${incident(projectId, incidentId)}/scope/repositories`),
       sourceTree: (projectId, incidentId) => request('GET', `${incident(projectId, incidentId)}/sources`),
       source: (projectId, incidentId, applicationId, file) =>
         request(

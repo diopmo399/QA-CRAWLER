@@ -38,6 +38,14 @@ import {
   scopeTreeRequests,
   type ScopeUi,
 } from './incident-scope.js';
+import {
+  applyPlan,
+  emptyDiscoveryUi,
+  reduceDiscovery,
+  withKnown,
+  withResult,
+  type DiscoveryUi,
+} from './incident-scope-discovery.js';
 import type { PrefsStorage } from './incident-split.js';
 import { rovingTarget, workspaceProgress } from './incident-ux.js';
 import {
@@ -190,6 +198,7 @@ export class IncidentsController {
         extension: emptyExtensionForm(),
         scope: emptyScopeUi(),
         scopeTrees: {},
+        discovery: emptyDiscoveryUi(),
       });
     }
     if (route.view !== 'incidents' || !route.create) ui.form = undefined;
@@ -562,6 +571,121 @@ export class IncidentsController {
     }
   }
 
+  // ── Applications et dépôts (découverte automatique) ──────────────────────────────────────
+
+  /** Le bloc de découverte de l'incident ouvert (un autre incident repart de zéro). */
+  private discoveryUi(): DiscoveryUi {
+    const ui = this.ui;
+    const id = ui.incident?.id;
+    if (ui.discovery.incidentId !== id) ui.discovery = emptyDiscoveryUi(id);
+    return ui.discovery;
+  }
+
+  private discoveryAction(action: string, dataset: Record<string, string | undefined>): void {
+    this.ui.discovery = reduceDiscovery(this.discoveryUi(), action, dataset) ?? this.ui.discovery;
+  }
+
+  /** Les dépôts connus de l'environnement, lus une fois par incident quand l'onglet « Périmètre » s'ouvre. */
+  private ensureKnownRepositories(): void {
+    const route = this.route();
+    const ui = this.ui;
+    const incident = ui.incident;
+    const api = this.host.api();
+    if (!route || route.tab !== 'scope' || !api || !incident || incident.id !== route.incidentId) return;
+    const context = this.scopeContext();
+    if (!context || context.demo || !context.can('RUN')) return;
+    const discovery = this.discoveryUi();
+    if (discovery.known !== undefined || discovery.knownState !== undefined) return;
+    ui.discovery = { ...discovery, knownState: 'loading' };
+    api.incidents.knownRepositories(route.projectId, incident.id).then(
+      (result) => {
+        if (this.ui.incident?.id !== incident.id) return;
+        this.ui.discovery = withKnown(this.discoveryUi(), result.repositories);
+        this.host.paint();
+      },
+      (error: unknown) => {
+        if (this.ui.incident?.id !== incident.id) return;
+        const denied = error instanceof QaCrawlerError && error.status === 403;
+        this.ui.discovery = {
+          ...this.discoveryUi(),
+          knownState: denied ? 'denied' : { error: message(error) },
+        };
+        this.host.paint();
+      },
+    );
+  }
+
+  /** « Analyser automatiquement » : le chemin saisi (ou un dépôt connu) analysé par le serveur, en lecture seule. */
+  private runDiscovery(root?: string): void {
+    const context = this.scopeContext();
+    if (!context || !scopeEditable(context)) return;
+    if (root !== undefined) this.discoveryAction('inc-disc-known', { root });
+    const typed = this.discoveryUi().root.trim();
+    if (typed === '') {
+      this.focus('[data-inc="disc.root"]');
+      return;
+    }
+    void this.op(
+      'inc-disc-run',
+      async (api, projectId, incident) => {
+        const result = await api.incidents.discoverScope(projectId, incident.id, typed);
+        if (this.ui.incident?.id === incident.id) this.ui.discovery = withResult(this.discoveryUi(), result);
+        return undefined;
+      },
+      {
+        focus: '[data-action="inc-disc-apply"]:not([disabled]), [data-inc="disc.root"]',
+      },
+    );
+  }
+
+  /**
+   * « Ajouter au périmètre » : les applications cochées enregistrées dans le périmètre (brouillon, périmètre
+   * défini) ou, l'investigation commencée, demandées comme extensions (à décider) ; la découverte reste tracée
+   * dans chaque application ajoutée (origine, racine analysée, preuves).
+   */
+  private applyDiscovery(): void {
+    const ui = this.ui;
+    const incident = ui.incident;
+    const context = this.scopeContext();
+    if (!incident || !context || !scopeEditable(context)) return;
+    const plan = applyPlan(incident, this.discoveryUi());
+    if (plan.kind === 'NONE') return;
+    const t = this.host.state.t.inc;
+    if (plan.kind === 'UPDATE') {
+      void this.op(
+        'inc-disc-apply',
+        (api, projectId, current) =>
+          api.incidents.update(projectId, current.id, current.revision, { scope: plan.scope }),
+        {
+          notice: () => t.done.applicationsAdded(plan.added.length),
+          revision: true,
+          after: () => {
+            ui.discovery = reduceDiscovery(this.discoveryUi(), 'inc-disc-clear', {}) ?? ui.discovery;
+            ui.validation = undefined;
+          },
+          focus: '[data-action="inc-scope-next"]',
+        },
+      );
+      return;
+    }
+    void this.op(
+      'inc-disc-apply',
+      async (api, projectId, current) => {
+        let next: Incident | undefined;
+        for (const request of plan.requests)
+          next = await api.incidents.requestExtension(projectId, current.id, request);
+        return next;
+      },
+      {
+        notice: () => t.done.extensionsRequested(plan.requests.length),
+        after: () => {
+          ui.discovery = reduceDiscovery(this.discoveryUi(), 'inc-disc-clear', {}) ?? ui.discovery;
+        },
+        focus: '[data-action="inc-ext-approve"], [data-inc="disc.root"]',
+      },
+    );
+  }
+
   /**
    * « Étape suivante » : le brouillon vérifié dans la page, enregistré s'il a changé (révision lue ; 409 :
    * relu et dit), puis le périmètre enregistré vérifié par le serveur ; valide, « Environnement » s'ouvre.
@@ -698,6 +822,24 @@ export class IncidentsController {
         this.focus(`[data-action="inc-scope-toggle"][data-block="${attr(app ?? '')}"][data-index=""]`);
         return true;
       }
+      case 'inc-disc-run':
+        this.runDiscovery();
+        return true;
+      case 'inc-disc-known':
+        this.runDiscovery(target.dataset.root ?? '');
+        return true;
+      case 'inc-disc-apply':
+        this.applyDiscovery();
+        return true;
+      case 'inc-disc-clear':
+        this.discoveryAction('inc-disc-clear', {});
+        this.host.paint();
+        this.focus('[data-inc="disc.root"]');
+        return true;
+      case 'inc-disc-advanced':
+        // Le résumé bascule le dépliage lui-même : l'état est gardé pour le prochain dessin, sans redessiner.
+        this.discoveryAction('inc-disc-advanced', { open: target.dataset.open });
+        return true;
       case 'inc-scope-next':
         this.scopeNext();
         return true;
@@ -864,6 +1006,9 @@ export class IncidentsController {
         );
         return true;
       }
+      case 'inc-disc-run':
+        this.runDiscovery();
+        return true;
       case 'inc-ext-request': {
         const extension = ui.extension;
         const missing = [
@@ -927,6 +1072,18 @@ export class IncidentsController {
       (ui.form as unknown as Record<string, string>)[key] = value;
       return true;
     }
+    if (key === 'disc.root') {
+      this.discoveryAction('inc-disc-root', { value });
+      return true;
+    }
+    if (key.startsWith('disc.layer.')) {
+      this.discoveryAction('inc-disc-layer', { block: key.slice('disc.layer.'.length), value });
+      return true;
+    }
+    if (key.startsWith('disc.app.')) {
+      this.discoveryAction('inc-disc-toggle', { block: key.slice('disc.app.'.length) });
+      return true;
+    }
     if (key === 'scope.range') {
       this.scopeAction('inc-scope-depth', { value });
       // Pendant le glissement : la valeur dite et affichée, sans redessiner (le curseur reste saisi).
@@ -977,7 +1134,14 @@ export class IncidentsController {
       return true;
     }
     this.input(target);
-    if (key === 'ext.kind' || key === 'severity' || key === 'scope.range') this.host.paint();
+    if (
+      key === 'ext.kind' ||
+      key === 'severity' ||
+      key === 'scope.range' ||
+      key.startsWith('disc.layer.') ||
+      key.startsWith('disc.app.')
+    )
+      this.host.paint();
     return true;
   }
 
@@ -1027,6 +1191,7 @@ export class IncidentsController {
   beforePaint(): void {
     if (!this.route()) return;
     this.ensureScopeTrees();
+    this.ensureKnownRepositories();
     this.workspace.beforePaint();
   }
 

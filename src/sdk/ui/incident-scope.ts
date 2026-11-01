@@ -420,7 +420,8 @@ const fr = {
       'Les vérifications sans effet de bord autorisées s’exécutent seules ; le périmètre ne s’étend jamais seul.',
   } as Record<ScopeMode, string>,
   applications: 'Applications',
-  noApplication: 'Aucune application dans le périmètre : en ajouter une dans « Autres paramètres ».',
+  noApplication:
+    'Aucune application dans le périmètre : analysez un dépôt dans « Applications et dépôts », ci-dessus.',
   layers: { FRONTEND: 'Frontend', BFF: 'BFF', BACKEND: 'Backend' } as Record<CodeLayer, string>,
   wholeApp: 'tout le dépôt',
   expand: (name: string) => `Déplier ${name}`,
@@ -493,7 +494,8 @@ const en: typeof fr = {
       'Allowed verifications without side effects run on their own; the scope never grows by itself.',
   },
   applications: 'Applications',
-  noApplication: 'No application in the scope: add one in “Other settings”.',
+  noApplication:
+    'No application in the scope: analyze a repository in “Applications and repositories”, above.',
   layers: { FRONTEND: 'Frontend', BFF: 'BFF', BACKEND: 'Backend' },
   wholeApp: 'whole repository',
   expand: (name) => `Expand ${name}`,
