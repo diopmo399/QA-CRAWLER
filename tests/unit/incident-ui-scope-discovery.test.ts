@@ -332,14 +332,19 @@ describe('renderScopeDiscovery', () => {
     expect(html).toContain('<b>Analyse des modules</b><small>6 module(s)</small>');
     expect(html).toContain('<b>Cartographie des dépendances</b><small>1 relation(s)</small>');
     expect(html).toContain('<section class="inc-sd-done" role="status" aria-label="Analyse terminée">');
+    // Le bandeau : la coche, le titre, le sous-titre, puis les mesures (valeur au-dessus du libellé).
     expect(html).toContain(
-      '<span class="inc-sd-metric-l">Applications</span><b class="inc-sd-metric-v">4</b>',
+      '<b>Analyse terminée</b><span>4 application(s) détectée(s), 2 proposée(s) pour cet incident</span>',
     );
-    expect(html).toContain('<span class="inc-sd-metric-l">Modules</span><b class="inc-sd-metric-v">6</b>');
     expect(html).toContain(
-      '<span class="inc-sd-metric-l">Éléments lus</span><b class="inc-sd-metric-v">3</b>',
+      '<b class="inc-sd-metric-v">4</b><span class="inc-sd-metric-l">Application(s)</span>',
     );
-    expect(html).toContain('<span class="inc-sd-metric-l">Durée</span><b class="inc-sd-metric-v">1,8 s</b>');
+    expect(html).toContain('<b class="inc-sd-metric-v">6</b><span class="inc-sd-metric-l">Modules</span>');
+    // Les éléments : 3 fichiers lus, 6 modules, 4 points d'entrée, 4 configurations, 4 services.
+    expect(html).toContain('<b class="inc-sd-metric-v">21</b><span class="inc-sd-metric-l">Éléments</span>');
+    expect(html).toContain(
+      '<b class="inc-sd-metric-v">1,8 s</b><span class="inc-sd-metric-l">Durée d’analyse</span>',
+    );
     // L'application principale : la proposée la plus pertinente, désignée par un mot de l'incident.
     expect(principalApplication(resultOf())).toBe('web');
     expect(html).toContain('<span class="inc-sd-pill main">Application principale</span>');

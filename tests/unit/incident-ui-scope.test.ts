@@ -360,10 +360,14 @@ describe('renderScopeEditor', () => {
     // Les trois modes : un groupe de boutons radio (tabindex itinérant), la description du mode choisi.
     expect(html).toContain('<div class="inc-sc-modes" role="radiogroup" aria-label="Mode d’investigation">');
     expect(html).toMatch(
-      /role="radio" class="inc-sc-mode" data-action="inc-scope-mode" data-mode="GUIDED" data-index="GUIDED" aria-checked="true" tabindex="0" aria-describedby="inc-sc-mode-h">Mode guidé</,
+      /role="radio" class="inc-sc-mode" data-action="inc-scope-mode" data-mode="GUIDED" data-index="GUIDED" aria-checked="true" tabindex="0" aria-describedby="inc-sc-mode-h"><svg class="ico"[^>]*>.*?<\/svg><span>Mode guidé<\/span></,
     );
-    expect(html).toMatch(/data-mode="MANUAL"[^>]*aria-checked="false" tabindex="-1"[^>]*>Mode manuel</);
-    expect(html).toMatch(/data-mode="AUTO_WITHIN_SCOPE"[^>]*>Mode automatique</);
+    expect(html).toMatch(
+      /data-mode="MANUAL"[^>]*aria-checked="false" tabindex="-1"[^>]*><svg class="ico"[^>]*>.*?<\/svg><span>Mode manuel<\/span></,
+    );
+    expect(html).toMatch(
+      /data-mode="AUTO_WITHIN_SCOPE"[^>]*><svg class="ico"[^>]*>.*?<\/svg><span>Mode automatique<\/span></,
+    );
     expect(html).toContain('Les extensions et vérifications sont proposées ; chacune attend votre clic.');
     // L'application : une case partielle (aria-checked="mixed"), son badge de couche.
     expect(html).toMatch(
@@ -391,7 +395,10 @@ describe('renderScopeEditor', () => {
     expect(html).toContain(
       '<input type="range" id="inc-sc-depth" data-inc="scope.range" min="1" max="5" step="1" value="3" aria-valuetext="3 sur 5 — Standard" aria-describedby="inc-sc-depth-h">',
     );
-    expect(html).toContain('<label for="inc-sc-depth" class="inc-sc-h">Profondeur d’analyse</label>');
+    // Le libellé, suivi de l'icône d'information qui porte l'explication en infobulle.
+    expect(html).toMatch(
+      /<label for="inc-sc-depth" class="inc-sc-h">Profondeur d’analyse<span class="inc-sc-info" title="[^"]+" aria-hidden="true"><svg class="ico"[^>]*>.*?<\/svg><\/span><\/label>/,
+    );
     for (const level of ['Limitée', 'Standard', 'Complète'])
       expect(html).toContain(`<small>${level}</small>`);
     // Les éléments inclus : couche, application, chemin, bouton de retrait nommé.

@@ -44,6 +44,16 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   dossier, résumé « Analyse terminée » (applications, modules, fichiers lus, durée mesurée par le serveur :
   `durationMs`), glyphe du cadre et badge « Application principale » sur les cartes, résumé de la sélection
   des applications avec « Gérer » qui replie ou déplie les dossiers. Aucune règle métier ni route ne change.
+  Alignement sur la maquette : logo araignée blanc sans cartouche, bouton « Incidents » en pastille vert clair,
+  « Annuler l'investigation » en bouton principal, vues principales (Vue d'ensemble, Reproduction, …) avec icône
+  et onglet actif en pastille vert clair dans une barre blanche, cercles d'étapes de 24 px ; bandeau du Périmètre
+  compact avec illustration portable-loupe, vagues vertes et indicateurs en pastilles blanches ; carte
+  « Applications et dépôts » avec icône de dossier, champ « Chemin du projet * » (`required`), icône
+  d'information devant l'aide ; résumé d'analyse en une bande (coche verte, sous-titre, puis Application(s),
+  Modules, Éléments, Durée d'analyse séparés par des filets, « Éléments » = fichiers lus + modules + points
+  d'entrée + configurations + services) ; « Détails de la détection (modules, structure, dépendances) »,
+  « Fichiers lus (n) » à droite, « Effacer le résultat » avec corbeille ; « Définition du périmètre » avec icône,
+  modes à icônes, « Gérer » avec crayon, « Profondeur d'analyse » avec infobulle.
 
 - **Découverte automatique du périmètre** (étape « Périmètre » de l'investigation, `src/incident/scope-discovery.ts`) :
   le bloc « Applications et dépôts » remplace la saisie manuelle des applications (identifiant, nom, couche, dossiers,

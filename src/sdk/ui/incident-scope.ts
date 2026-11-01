@@ -62,6 +62,12 @@ export const SCOPE_BOUNDS = {
 
 /** L'ordre des modes à l'écran (« Mode guidé » d'abord : le mode par défaut). */
 export const SCOPE_MODES_ORDER: readonly ScopeMode[] = ['GUIDED', 'MANUAL', 'AUTO_WITHIN_SCOPE'];
+/** L'icône de chaque mode (guidé : exploration ; manuel : édition ; automatique : exécution). */
+const MODE_ICONS: Record<ScopeMode, string> = {
+  GUIDED: 'explorations',
+  MANUAL: 'edit',
+  AUTO_WITHIN_SCOPE: 'play',
+};
 
 export const MIN_SCOPE_DEPTH = 1;
 export const MAX_SCOPE_DEPTH = 5;
@@ -681,7 +687,7 @@ function selectionSummary(ctx: ScopeContext, ui: ScopeUi): string {
     return selection.whole || selection.paths.length > 0;
   });
   const hidden = ui.treeHidden === true;
-  return `<div class="inc-sc-sel"><div class="inc-sc-sel-t"><b>${esc(t.selected(kept.length, apps.length))}</b><span class="inc-sc-sel-n">${kept.map((app) => `<span class="inc-sc-sel-a">${layerPill(ctx.lang, app.layer)}${esc(app.name)}</span>`).join('')}</span></div><button type="button" class="btn small" data-action="inc-scope-manage" aria-expanded="${String(!hidden)}"${hidden ? '' : ' aria-controls="inc-sc-apps-tree"'} title="${esc(t.manageHint)}">${icon(hidden ? 'down' : 'up')}<span>${esc(hidden ? t.manage : t.manageClose)}</span></button></div>`;
+  return `<div class="inc-sc-sel"><div class="inc-sc-sel-t"><b>${esc(t.selected(kept.length, apps.length))}</b><span class="inc-sc-sel-n">${kept.map((app) => `<span class="inc-sc-sel-a">${layerPill(ctx.lang, app.layer)}${esc(app.name)}</span>`).join('')}</span></div><button type="button" class="btn small" data-action="inc-scope-manage" aria-expanded="${String(!hidden)}"${hidden ? '' : ' aria-controls="inc-sc-apps-tree"'} title="${esc(t.manageHint)}">${icon(hidden ? 'edit' : 'up')}<span>${esc(hidden ? t.manage : t.manageClose)}</span></button></div>`;
 }
 
 function applicationsTree(ctx: ScopeContext, ui: ScopeUi, trees: ScopeTrees, disabled: boolean): string {
@@ -752,7 +758,7 @@ function depthControl(ctx: ScopeContext, ui: ScopeUi, disabled: boolean): string
         `<span class="${value === depth ? 'on' : ''}"><b>${String(value)}</b>${value % 2 === 1 ? `<small>${esc(t.depthLevels[value] ?? '')}</small>` : ''}</span>`,
     )
     .join('');
-  return `<section class="inc-sc-box-s inc-sc-depth"><label for="inc-sc-depth" class="inc-sc-h">${esc(t.depth)}</label><input type="range" id="inc-sc-depth" data-inc="scope.range" min="${String(MIN_SCOPE_DEPTH)}" max="${String(MAX_SCOPE_DEPTH)}" step="1" value="${String(depth)}" aria-valuetext="${esc(t.depthValue(depth, level))}" aria-describedby="inc-sc-depth-h"${disabled ? ' disabled' : ''}><div class="inc-sc-ticks" aria-hidden="true">${ticks}</div><small id="inc-sc-depth-h" class="mu"><b class="inc-sc-depth-v">${esc(t.depthValue(depth, level))}</b> · ${esc(t.depthHint)}</small></section>`;
+  return `<section class="inc-sc-box-s inc-sc-depth"><label for="inc-sc-depth" class="inc-sc-h">${esc(t.depth)}<span class="inc-sc-info" title="${esc(t.depthHint)}" aria-hidden="true">${icon('info')}</span></label><input type="range" id="inc-sc-depth" data-inc="scope.range" min="${String(MIN_SCOPE_DEPTH)}" max="${String(MAX_SCOPE_DEPTH)}" step="1" value="${String(depth)}" aria-valuetext="${esc(t.depthValue(depth, level))}" aria-describedby="inc-sc-depth-h"${disabled ? ' disabled' : ''}><div class="inc-sc-ticks" aria-hidden="true">${ticks}</div><small id="inc-sc-depth-h" class="mu"><b class="inc-sc-depth-v">${esc(t.depthValue(depth, level))}</b> · ${esc(t.depthHint)}</small></section>`;
 }
 
 function limitField(
@@ -805,7 +811,7 @@ export function renderScopeEditor(
   const mode = ui.mode ?? incident.scope.mode;
   const modes = `<div class="inc-sc-modes" role="radiogroup" aria-label="${esc(t.modes)}">${SCOPE_MODES_ORDER.map(
     (key) =>
-      `<button type="button" role="radio" class="inc-sc-mode" data-action="inc-scope-mode" data-mode="${key}" data-index="${key}" aria-checked="${String(key === mode)}" tabindex="${key === mode ? '0' : '-1'}" aria-describedby="inc-sc-mode-h"${disabled ? ' disabled' : ''}>${esc(t.modeTabs[key])}</button>`,
+      `<button type="button" role="radio" class="inc-sc-mode" data-action="inc-scope-mode" data-mode="${key}" data-index="${key}" aria-checked="${String(key === mode)}" tabindex="${key === mode ? '0' : '-1'}" aria-describedby="inc-sc-mode-h"${disabled ? ' disabled' : ''}>${icon(MODE_ICONS[key])}<span>${esc(t.modeTabs[key])}</span></button>`,
   ).join('')}</div><p id="inc-sc-mode-h" class="mu inc-sc-mode-h">${esc(t.modeHints[mode])}</p>`;
   const dirty = editable && scopeDirty(incident, ui);
   const problems = ui.invalid.length > 0 ? `<p class="err" role="alert">${esc(t.invalid)}</p>` : '';
@@ -827,7 +833,7 @@ export function renderScopeEditor(
       ? `<button type="button" class="btn" data-action="inc-validate"${opts.busy || incident.state === 'CANCELLED' ? ' disabled' : ''}>${esc(t.check)}</button>`
       : '';
   const footer = `<div class="inc-sc-foot">${check}${dirty ? `<span class="mu">${esc(t.dirty)}</span><button type="button" class="btn ghost" data-action="inc-scope-reset"${opts.busy ? ' disabled' : ''}>${esc(t.reset)}</button>` : ''}${next}</div>`;
-  return `<section class="card wide inc-sc" aria-labelledby="inc-sc-t"><div class="inc-sc-head"><div><h2 id="inc-sc-t" class="fl">${esc(t.title)}</h2><p class="mu">${esc(t.sub)}</p></div></div>${notes}${modes}<div class="inc-sc-grid"><section class="inc-sc-box-s inc-sc-apps" aria-labelledby="inc-sc-apps-t"><h3 id="inc-sc-apps-t">${icon('code')}<span>${esc(t.applications)}</span></h3>${selectionSummary(ctx, ui)}${treeHidden ? '' : applicationsTree(ctx, ui, trees, disabled)}${editable && !treeHidden && incident.scope.applications.length > 0 ? `<p class="mu inc-sc-note">${esc(t.replaceNote)}</p>` : ''}</section><div class="inc-sc-side">${depthControl(ctx, ui, disabled)}${includedList(ctx, ui, disabled)}${limitsBlock(ctx, ui, disabled)}</div></div>${problems}${validation}${footer}</section>`;
+  return `<section class="card wide inc-sc" aria-labelledby="inc-sc-t"><div class="inc-sc-head"><span class="inc-sc-ic" aria-hidden="true">${icon('explorations')}</span><div><h2 id="inc-sc-t" class="fl">${esc(t.title)}</h2><p class="mu">${esc(t.sub)}</p></div></div>${notes}${modes}<div class="inc-sc-grid"><section class="inc-sc-box-s inc-sc-apps" aria-labelledby="inc-sc-apps-t"><h3 id="inc-sc-apps-t">${icon('code')}<span>${esc(t.applications)}</span></h3>${selectionSummary(ctx, ui)}${treeHidden ? '' : applicationsTree(ctx, ui, trees, disabled)}${editable && !treeHidden && incident.scope.applications.length > 0 ? `<p class="mu inc-sc-note">${esc(t.replaceNote)}</p>` : ''}</section><div class="inc-sc-side">${depthControl(ctx, ui, disabled)}${includedList(ctx, ui, disabled)}${limitsBlock(ctx, ui, disabled)}</div></div>${problems}${validation}${footer}</section>`;
 }
 
 /** Le texte de la profondeur (aria-valuetext et légende), pour la mise à jour pendant le glissement. */
@@ -841,7 +847,14 @@ export function depthText(lang: Lang, depth: number): string {
 /** Les styles de l'écran (préfixe `inc-sc-`) : jetons du thème seulement, clair et sombre. */
 export const INCIDENT_SCOPE_CSS = `
 .inc-sc{display:flex;flex-direction:column;gap:12px;min-width:0}
-.inc-sc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}
+.inc-sc-head{display:flex;align-items:flex-start;gap:12px}
+.inc-sc-ic{width:40px;height:40px;border-radius:10px;background:var(--qa-color-primary-soft);color:var(--qa-color-primary);display:grid;place-items:center;flex:none}
+.inc-sc-ic .ico{width:22px;height:22px}
+.inc-sc-head h2{font-size:18px}
+.inc-sc-info{display:inline-grid;place-items:center;margin-left:6px;color:var(--qa-color-muted)}
+.inc-sc-info .ico{width:14px;height:14px}
+.inc-sc-mode{display:inline-flex;align-items:center;gap:8px}
+.inc-sc-mode .ico{width:16px;height:16px}
 .inc-sc-head h2{margin:0}
 .inc-sc-head p{margin:2px 0 0}
 .inc-sc-modes{display:inline-flex;align-self:flex-start;max-width:100%;gap:4px;padding:4px;border-radius:12px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);overflow-x:auto;scrollbar-width:thin}

@@ -235,7 +235,7 @@ const fr = {
   partial: 'Analyse partielle',
   heroTitle: 'Périmètre d’investigation',
   heroText:
-    'La découverte automatique lit le dépôt et propose les applications utiles à l’incident : vous validez, vous ne décrivez pas l’architecture.',
+    'Détectez automatiquement les applications, leurs modules et leurs dépendances à partir de votre projet.',
   indicators: {
     applications: 'Détection des applications',
     modules: 'Analyse des modules',
@@ -249,10 +249,14 @@ const fr = {
   indicatorRelations: (n: number) => `${String(n)} relation(s)`,
   done: 'Analyse terminée',
   donePartial: 'Analyse partielle',
-  metricApps: 'Applications',
+  metricApps: 'Application(s)',
   metricModules: 'Modules',
-  metricRead: 'Éléments lus',
-  metricDuration: 'Durée',
+  metricRead: 'Éléments',
+  metricReadHint: 'Éléments relevés : fichiers lus, modules, points d’entrée, configurations, services.',
+  metricDuration: 'Durée d’analyse',
+  analysisDetails: 'Détails de l’analyse',
+  detailsLong: 'Détails de la détection (modules, structure, dépendances)',
+  required: 'obligatoire',
   principal: 'Application principale',
   frameworkOf: (name: string) => `Cadre : ${name}`,
 };
@@ -322,8 +326,7 @@ const en: typeof fr = {
   failed: 'Analysis impossible',
   partial: 'Partial analysis',
   heroTitle: 'Investigation scope',
-  heroText:
-    'The automatic discovery reads the repository and proposes the applications useful to the incident: you validate, you do not describe the architecture.',
+  heroText: 'Detect the applications, their modules and their dependencies automatically from your project.',
   indicators: {
     applications: 'Application detection',
     modules: 'Module analysis',
@@ -337,10 +340,14 @@ const en: typeof fr = {
   indicatorRelations: (n) => `${String(n)} relation(s)`,
   done: 'Analysis complete',
   donePartial: 'Partial analysis',
-  metricApps: 'Applications',
+  metricApps: 'Application(s)',
   metricModules: 'Modules',
-  metricRead: 'Files read',
-  metricDuration: 'Duration',
+  metricRead: 'Items',
+  metricReadHint: 'Items found: files read, modules, entry points, configurations, services.',
+  metricDuration: 'Analysis time',
+  analysisDetails: 'Analysis details',
+  detailsLong: 'Detection details (modules, structure, dependencies)',
+  required: 'required',
   principal: 'Main application',
   frameworkOf: (name) => `Framework: ${name}`,
 };
@@ -454,7 +461,7 @@ function applicationCard(
           .join('')}</ul>`;
   const row = (label: string, body: string): string =>
     body ? `<div class="inc-sd-row"><dt>${esc(label)}</dt><dd>${body}</dd></div>` : '';
-  const details = `<details class="inc-sd-det"><summary>${esc(t.details)}</summary><dl class="inc-sd-dl">${row(t.modules(entry.modules.length), modules)}${row(t.entryPoints, codes(entry.entryPoints))}${row(t.configs, codes(entry.configs))}${row(t.services, entry.services.map((service) => pill(service)).join(''))}${row(
+  const details = `<details class="inc-sd-det"><summary>${esc(t.detailsLong)}</summary><dl class="inc-sd-dl">${row(t.modules(entry.modules.length), modules)}${row(t.entryPoints, codes(entry.entryPoints))}${row(t.configs, codes(entry.configs))}${row(t.services, entry.services.map((service) => pill(service)).join(''))}${row(
     t.evidence,
     entry.evidence.length > 0
       ? `<ul class="plain inc-sd-ev">${entry.evidence.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>`
@@ -488,12 +495,23 @@ function resultBlock(
       : '';
   if (result.applications.length === 0) return `<div class="inc-sd-res">${problems}</div>`;
   const suggested = result.applications.filter((entry) => entry.suggested).length;
-  const summary = `<p class="inc-sd-sum">${pill(t.structures[result.structure], 'st')}<span>${esc(t.summary(result.applications.length, suggested))}</span>${result.tools.length > 0 ? `<small class="mu">${esc(t.tools(result.tools.join(', ')))}</small>` : ''}</p><small class="mu">${esc(result.keywords.length > 0 ? t.keywords(result.keywords.join(', ')) : t.noKeywords)}</small>`;
+  const summary = `<p class="inc-sd-sum">${pill(t.structures[result.structure], 'st')}<span>${esc(t.summary(result.applications.length, suggested))}</span>${result.tools.length > 0 ? `<small class="mu">${esc(t.tools(result.tools.join(', ')))}</small>` : ''}</p>`;
   const principal = principalApplication(result);
   const modules = result.applications.reduce((total, entry) => total + entry.modules.length, 0);
-  const metric = (label: string, value: string): string =>
-    `<div class="inc-sd-metric"><span class="inc-sd-metric-l">${esc(label)}</span><b class="inc-sd-metric-v">${esc(value)}</b></div>`;
-  const done = `<section class="inc-sd-done${result.status === 'PARTIAL' ? ' partial' : ''}" role="status" aria-label="${esc(result.status === 'PARTIAL' ? t.donePartial : t.done)}"><p class="inc-sd-done-h">${icon(result.status === 'PARTIAL' ? 'alert' : 'check')}<b>${esc(result.status === 'PARTIAL' ? t.donePartial : t.done)}</b></p><div class="inc-sd-metrics">${metric(t.metricApps, String(result.applications.length))}${metric(t.metricModules, String(modules))}${metric(t.metricRead, String(result.read.length))}${metric(t.metricDuration, durationText(result.durationMs, ctx.lang))}</div></section>`;
+  const items =
+    result.read.length +
+    result.applications.reduce(
+      (total, entry) =>
+        total +
+        entry.modules.length +
+        entry.entryPoints.length +
+        entry.configs.length +
+        entry.services.length,
+      0,
+    );
+  const metric = (label: string, value: string, glyph: string, hint?: string): string =>
+    `<div class="inc-sd-metric"${hint ? ` title="${esc(hint)}"` : ''}>${icon(glyph)}<span class="inc-sd-metric-t"><b class="inc-sd-metric-v">${esc(value)}</b><span class="inc-sd-metric-l">${esc(label)}</span></span></div>`;
+  const done = `<section class="inc-sd-done${result.status === 'PARTIAL' ? ' partial' : ''}" role="status" aria-label="${esc(result.status === 'PARTIAL' ? t.donePartial : t.done)}"><div class="inc-sd-done-h"><span class="inc-sd-done-i" aria-hidden="true">${icon(result.status === 'PARTIAL' ? 'alert' : 'check')}</span><span class="inc-sd-done-t"><b>${esc(result.status === 'PARTIAL' ? t.donePartial : t.done)}</b><span>${esc(t.summary(result.applications.length, suggested))}</span></span></div><div class="inc-sd-metrics">${metric(t.metricApps, String(result.applications.length), 'overview')}${metric(t.metricModules, String(modules), 'library')}${metric(t.metricRead, String(items), 'code', t.metricReadHint)}${metric(t.metricDuration, durationText(result.durationMs, ctx.lang), 'history')}</div></section>`;
   const apps = `<ul class="inc-sd-apps" role="list">${result.applications.map((entry) => applicationCard(ctx, ui, entry, disabled, entry.application.id === principal)).join('')}</ul>`;
   const nameOf = (id: string): string =>
     result.applications.find((entry) => entry.application.id === id)?.application.name ?? id;
@@ -514,14 +532,14 @@ function resultBlock(
     result.truncated.length > 0
       ? `<details class="inc-sd-more"><summary>${esc(t.truncated)}</summary><ul class="plain">${result.truncated.map((entry) => `<li>${esc(entry)}</li>`).join('')}</ul></details>`
       : '';
-  const read = `<details class="inc-sd-more"><summary>${esc(t.read(result.read.length))}</summary><p>${codes(result.read)}</p></details>`;
+  const read = `<details class="inc-sd-more"><summary>${icon('requirements')}${esc(t.read(result.read.length))}</summary>${summary}<small class="mu block">${esc(result.keywords.length > 0 ? t.keywords(result.keywords.join(', ')) : t.noKeywords)}</small><p>${codes(result.read)}</p></details>`;
   const plan = applyPlan(ctx.incident, ui);
   const count =
     plan.kind === 'UPDATE' ? plan.added.length : plan.kind === 'EXTENSIONS' ? plan.requests.length : 0;
   const footer = disabled
     ? ''
-    : `<div class="inc-sd-foot"><button type="button" class="btn ghost" data-action="inc-disc-clear"${busy ? ' disabled' : ''}>${esc(t.clear)}</button><small class="mu">${esc(plan.kind === 'EXTENSIONS' ? t.applyExtensionsHint : t.applyHint)}</small><button type="button" class="btn primary" data-action="inc-disc-apply" aria-describedby="inc-sd-apply-h"${count === 0 || busy ? ' disabled' : ''} aria-busy="${String(busy)}">${icon(plan.kind === 'EXTENSIONS' ? 'plus' : 'check')}<span>${esc(plan.kind === 'EXTENSIONS' ? t.applyExtensions(count) : t.apply(count))}</span></button><small id="inc-sd-apply-h" class="sr">${esc(count === 0 ? t.applyNone : plan.kind === 'EXTENSIONS' ? t.applyExtensionsHint : t.applyHint)}</small></div>`;
-  return `<div class="inc-sd-res">${problems}${done}${summary}${apps}${relations}${denied}${truncated}${read}${footer}</div>`;
+    : `<div class="inc-sd-foot"><button type="button" class="btn" data-action="inc-disc-clear"${busy ? ' disabled' : ''}>${icon('trash')}<span>${esc(t.clear)}</span></button><small class="mu">${esc(plan.kind === 'EXTENSIONS' ? t.applyExtensionsHint : t.applyHint)}</small><button type="button" class="btn primary" data-action="inc-disc-apply" aria-describedby="inc-sd-apply-h"${count === 0 || busy ? ' disabled' : ''} aria-busy="${String(busy)}">${icon('plus')}<span>${esc(plan.kind === 'EXTENSIONS' ? t.applyExtensions(count) : t.apply(count))}</span></button><small id="inc-sd-apply-h" class="sr">${esc(count === 0 ? t.applyNone : plan.kind === 'EXTENSIONS' ? t.applyExtensionsHint : t.applyHint)}</small></div>`;
+  return `<div class="inc-sd-res">${problems}${done}${apps}<div class="inc-sd-more-row">${relations}${denied}${truncated}${read}</div>${footer}</div>`;
 }
 
 /**
@@ -529,8 +547,12 @@ function resultBlock(
  * (`inc-disc-run`) lance l'analyse du chemin saisi ; un dépôt connu (`inc-disc-known`) remplit le chemin et
  * lance l'analyse.
  */
+/** L'illustration : un portable ouvert sur du code, et une loupe (traits, jamais une image). */
 const HERO_ART =
-  '<svg viewBox="0 0 96 72" aria-hidden="true"><path d="M8 18a4 4 0 014-4h18l6 6h30a4 4 0 014 4v30a4 4 0 01-4 4H12a4 4 0 01-4-4z"/><path d="M8 28h62"/><path d="M26 40h14M26 47h22"/><circle cx="68" cy="48" r="11"/><path d="M76 56l10 10"/><path d="M63 48h10M68 43v10"/></svg>';
+  '<svg viewBox="0 0 132 84" aria-hidden="true"><rect x="16" y="8" width="88" height="54" rx="6"/><path d="M6 66h108a4 4 0 010 8H6a4 4 0 010-8z" class="inc-sd-art-fill"/><path d="M48 44l-9-9 9-9M72 26l9 9-9 9M64 22l-8 26"/><circle cx="104" cy="60" r="13" class="inc-sd-art-glass"/><path d="M113.5 69.5l12 12" stroke-width="4"/></svg>';
+/** La décoration géométrique à droite du bandeau : deux vagues vertes, discrètes. */
+const HERO_DECO =
+  '<svg class="inc-sd-hero-deco" viewBox="0 0 420 120" preserveAspectRatio="none" aria-hidden="true"><path d="M0 120C90 40 170 110 260 60S380 10 420 30V120z" opacity=".22"/><path d="M60 120C150 70 220 120 300 80S390 40 420 60V120z" opacity=".32"/></svg>';
 
 /** Le bandeau de présentation : trois indicateurs qui reflètent l'état réel de la découverte (attente, en cours, résultat, échec). */
 function heroBlock(ctx: ScopeContext, ui: DiscoveryUi, running: boolean): string {
@@ -589,7 +611,7 @@ function heroBlock(ctx: ScopeContext, ui: DiscoveryUi, running: boolean): string
         `<li class="inc-sd-ind inc-sd-ind-${status}"><span class="inc-sd-ind-i" aria-hidden="true">${status === 'done' ? icon('check') : status === 'failed' ? icon('cross') : status === 'running' ? '<span class="spin sm"></span>' : icon('right')}</span><span class="inc-sd-ind-t"><b>${esc(label)}</b><small>${esc(value)}</small></span></li>`,
     )
     .join('');
-  return `<section class="inc-sd-hero" aria-labelledby="inc-sd-hero-t"><div class="inc-sd-hero-art">${HERO_ART}</div><div class="inc-sd-hero-b"><h2 id="inc-sd-hero-t">${esc(t.heroTitle)}</h2><p>${esc(t.heroText)}</p><ul class="inc-sd-inds" role="list">${items}</ul></div></section>`;
+  return `<section class="inc-sd-hero" aria-labelledby="inc-sd-hero-t">${HERO_DECO}<div class="inc-sd-hero-art">${HERO_ART}</div><div class="inc-sd-hero-b"><h2 id="inc-sd-hero-t">${esc(t.heroTitle)}</h2><p>${esc(t.heroText)}</p><ul class="inc-sd-inds" role="list">${items}</ul></div></section>`;
 }
 
 export function renderScopeDiscovery(
@@ -610,10 +632,10 @@ export function renderScopeDiscovery(
         ? `<p class="note">${icon('info')}<span>${esc(t.locked)}</span></p>`
         : '';
   const form = editable
-    ? `<form class="inc-sd-form" data-action="inc-disc-run" novalidate><label class="field inc-sd-root" for="inc-sd-root">${esc(t.root)}<span class="inc-sd-root-w">${icon('projects')}<input id="inc-sd-root" data-inc="disc.root" class="mono" value="${esc(ui.root)}" placeholder="${esc(t.placeholder)}" autocomplete="off" spellcheck="false" aria-describedby="inc-sd-root-h"${busy ? ' disabled' : ''}></span></label><button type="submit" class="btn primary" data-action="inc-disc-run" aria-busy="${String(running)}"${busy ? ' disabled' : ''}>${running ? '<span class="spin sm" aria-hidden="true"></span>' : icon('search')}<span>${esc(running ? t.analyzing : t.analyze)}</span></button></form><small id="inc-sd-root-h" class="mu">${esc(t.rootHint)}</small>${knownBlock(ctx, ui, disabled)}`
+    ? `<form class="inc-sd-form" data-action="inc-disc-run" novalidate><label class="field inc-sd-root" for="inc-sd-root"><span class="inc-sd-root-l">${esc(t.root)} <span class="inc-sd-req" aria-hidden="true">*</span><span class="sr"> (${esc(t.required)})</span></span><span class="inc-sd-root-w">${icon('projects')}<input id="inc-sd-root" data-inc="disc.root" class="mono" value="${esc(ui.root)}" placeholder="${esc(t.placeholder)}" autocomplete="off" spellcheck="false" required aria-required="true" aria-describedby="inc-sd-root-h"${busy ? ' disabled' : ''}><span class="inc-sd-root-r" aria-hidden="true">${icon('projects')}</span></span></label><button type="submit" class="btn primary" data-action="inc-disc-run" aria-busy="${String(running)}"${busy ? ' disabled' : ''}>${running ? '<span class="spin sm" aria-hidden="true"></span>' : icon('search')}<span>${esc(running ? t.analyzing : t.analyze)}</span></button></form><small id="inc-sd-root-h" class="mu inc-sd-hint">${icon('info')}<span>${esc(t.rootHint)}</span></small>${knownBlock(ctx, ui, disabled)}`
     : '';
   const result = ui.result ? resultBlock(ctx, ui, ui.result, disabled, busy) : '';
-  return `${heroBlock(ctx, ui, running)}<section class="card wide inc-sd" aria-labelledby="inc-sd-t"><div class="inc-sd-head"><h2 id="inc-sd-t" class="fl">${icon('projects')}<span>${esc(t.title)}</span></h2><p class="mu">${esc(t.sub)}</p></div>${note}${form}${result}</section>`;
+  return `${heroBlock(ctx, ui, running)}<section class="card wide inc-sd" aria-labelledby="inc-sd-t"><div class="inc-sd-head"><span class="inc-sd-ic" aria-hidden="true">${icon('projects')}</span><div><h2 id="inc-sd-t" class="fl"><span>${esc(t.title)}</span></h2><p class="mu">${esc(t.sub)}</p></div></div>${note}${form}${result}</section>`;
 }
 
 /** L'enveloppe de la section avancée (saisie manuelle), repliée par défaut. */
@@ -626,47 +648,66 @@ export function advancedDetails(lang: Lang, open: boolean, body: string): string
 
 /** Les styles du bloc (préfixe `inc-sd-`) : jetons du thème seulement, clair et sombre. */
 export const INCIDENT_SCOPE_DISCOVERY_CSS = `
-.inc-sd-hero{position:relative;overflow:hidden;flex:none;display:flex;align-items:center;gap:18px;padding:18px 22px;border-radius:var(--qa-radius);background:var(--qa-color-primary-soft-2);border:1px solid color-mix(in srgb,var(--qa-color-primary) 18%,var(--qa-color-border));min-width:0}
-.inc-sd-hero::before,.inc-sd-hero::after{content:"";position:absolute;border-radius:50%;pointer-events:none;border:14px solid color-mix(in srgb,var(--qa-color-primary) 9%,transparent)}
-.inc-sd-hero::before{width:180px;height:180px;right:-60px;top:-70px}
-.inc-sd-hero::after{width:110px;height:110px;right:70px;bottom:-70px;border-width:10px}
-.inc-sd-hero-art{flex:none;width:96px;height:72px;color:var(--qa-color-primary)}
-.inc-sd-hero-art svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.inc-sd-hero-b{display:flex;flex-direction:column;gap:6px;min-width:0;position:relative}
-.inc-sd-hero h2{margin:0;font-size:18px;font-weight:700;color:var(--qa-color-primary-2)}
-.inc-sd-hero p{margin:0;color:var(--qa-color-muted);max-width:68ch}
-.inc-sd-inds{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:8px 18px}
-.inc-sd-ind{display:inline-flex;align-items:center;gap:8px;min-width:0}
-.inc-sd-ind-i{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;border:1.5px solid var(--qa-color-border-strong);background:var(--qa-color-surface);color:var(--qa-color-muted)}
+.inc-sd-hero{position:relative;overflow:hidden;flex:none;display:flex;align-items:center;gap:20px;padding:12px 22px;border-radius:var(--qa-radius);background:var(--qa-color-primary-soft);border:1px solid color-mix(in srgb,var(--qa-color-primary) 18%,var(--qa-color-border));min-width:0}
+.inc-sd-hero-deco{position:absolute;right:0;bottom:0;width:min(46%,420px);height:100%;fill:var(--qa-color-primary);pointer-events:none}
+.inc-sd-hero-art{flex:none;width:118px;height:75px;color:var(--qa-color-primary-2);position:relative}
+.inc-sd-hero-art svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.inc-sd-hero-art .inc-sd-art-fill{fill:var(--qa-color-surface)}
+.inc-sd-hero-art .inc-sd-art-glass{fill:color-mix(in srgb,var(--qa-color-surface) 70%,transparent)}
+.inc-sd-hero-b{display:flex;flex-direction:column;gap:4px;min-width:0;position:relative}
+.inc-sd-hero h2{margin:0;font-size:19px;font-weight:700;color:var(--qa-color-primary-2)}
+.inc-sd-hero p{margin:0;color:var(--qa-color-text);max-width:72ch}
+.inc-sd-inds{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:8px 10px}
+.inc-sd-ind{display:inline-flex;align-items:center;gap:8px;min-width:0;padding:5px 12px 5px 6px;border-radius:999px;background:var(--qa-color-surface);border:1px solid color-mix(in srgb,var(--qa-color-primary) 14%,var(--qa-color-border))}
+.inc-sd-ind-i{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;flex:none;border:1.5px solid var(--qa-color-border-strong);background:var(--qa-color-surface);color:var(--qa-color-muted)}
 .inc-sd-ind-i .ico{width:14px;height:14px;stroke-width:2.5}
 .inc-sd-ind-done .inc-sd-ind-i{background:var(--qa-color-success);border-color:var(--qa-color-success);color:var(--qa-color-surface)}
 .inc-sd-ind-failed .inc-sd-ind-i{background:var(--qa-color-danger-soft);border-color:var(--qa-color-danger);color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
 .inc-sd-ind-running .inc-sd-ind-i{border-color:var(--qa-color-primary);color:var(--qa-color-primary)}
-.inc-sd-ind-t{display:flex;flex-direction:column;line-height:1.25}
+.inc-sd-ind-t{display:inline-flex;align-items:baseline;gap:6px;line-height:1.25;min-width:0;flex-wrap:wrap}
 .inc-sd-ind-t b{font-size:13px}
 .inc-sd-ind-t small{color:var(--qa-color-muted);font-size:12px}
 .inc-sd-ind-done .inc-sd-ind-t small{color:var(--qa-color-primary-2);font-weight:600}
+.inc-sd-head{display:flex;align-items:flex-start;gap:12px}
+.inc-sd-ic{width:40px;height:40px;border-radius:10px;background:var(--qa-color-primary-soft);color:var(--qa-color-primary);display:grid;place-items:center;flex:none}
+.inc-sd-ic .ico{width:22px;height:22px}
+.inc-sd-head h2{font-size:18px}
+.inc-sd-root-l{display:inline-flex;align-items:baseline;gap:2px}
+.inc-sd-req{color:var(--qa-color-danger);font-weight:700}
+.inc-sd-more-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 18px}
+.inc-sd-more-row>.inc-sd-more:last-child{margin-left:auto}
+.inc-sd-more-row:empty{display:none}
+.inc-sd-root-r{position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--qa-color-muted);pointer-events:none}
+.inc-sd-root-w input{padding-right:38px}
+.inc-sd-hint{display:flex;align-items:flex-start;gap:6px}
+.inc-sd-hint .ico{width:14px;height:14px;flex:none;margin-top:2px}
 .inc-sd{display:flex;flex-direction:column;gap:10px;min-width:0}
 .inc-sd-root-w{position:relative;display:block}
 .inc-sd-root-w>.ico{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--qa-color-muted);pointer-events:none}
 .inc-sd-root-w input{width:100%;padding-left:38px}
-.inc-sd-done{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:10px;background:var(--qa-color-success-soft);border:1px solid color-mix(in srgb,var(--qa-color-success) 35%,var(--qa-color-border));color:var(--qa-color-text);min-width:0}
-.inc-sd-done-h{margin:0;display:flex;align-items:center;gap:8px}
-.inc-sd-done-h .ico{width:22px;height:22px;color:var(--qa-color-surface);background:var(--qa-color-success);border-radius:50%;padding:4px;stroke-width:3}
-.inc-sd-done-h b{color:var(--qa-color-primary-2);font-size:15px}
-.inc-sd-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
-.inc-sd-metric{display:flex;flex-direction:column;gap:2px;padding:8px 12px;border-radius:8px;background:var(--qa-color-surface);border:1px solid color-mix(in srgb,var(--qa-color-success) 25%,var(--qa-color-border));min-width:0}
-.inc-sd-metric-l{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--qa-color-muted)}
-.inc-sd-metric-v{font-size:20px;line-height:1.2;color:var(--qa-color-primary-2)}
+.inc-sd-done{display:flex;align-items:center;gap:12px 24px;flex-wrap:wrap;padding:12px 16px;border-radius:10px;background:var(--qa-color-success-soft);border:1px solid color-mix(in srgb,var(--qa-color-success) 35%,var(--qa-color-border));color:var(--qa-color-text);min-width:0}
+.inc-sd-done-h{display:flex;align-items:center;gap:12px;flex:1 1 300px;min-width:0}
+.inc-sd-done-i{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--qa-color-success);color:var(--qa-color-surface)}
+.inc-sd-done-i .ico{width:18px;height:18px;stroke-width:3}
+.inc-sd-done-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+.inc-sd-done-t b{color:var(--qa-color-primary-2);font-size:16px}
+.inc-sd-done-t span{font-size:13px;color:var(--qa-color-muted)}
+.inc-sd-metrics{display:flex;flex-wrap:wrap;gap:0;align-items:stretch}
+.inc-sd-metric{display:flex;align-items:center;gap:10px;padding:4px 18px;border-left:1px solid color-mix(in srgb,var(--qa-color-success) 30%,var(--qa-color-border));min-width:0}
+.inc-sd-metric .ico{width:20px;height:20px;color:var(--qa-color-primary);flex:none}
+.inc-sd-metric-t{display:flex;flex-direction:column;line-height:1.15}
+.inc-sd-metric-l{font-size:12.5px;color:var(--qa-color-muted)}
+.inc-sd-metric-v{font-size:17px;color:var(--qa-color-text)}
 .inc-sd-done.partial{background:var(--qa-color-warning-soft);border-color:color-mix(in srgb,var(--qa-color-warning) 35%,var(--qa-color-border))}
-.inc-sd-done.partial .inc-sd-done-h .ico{background:var(--qa-color-warning)}
-.inc-sd-done.partial .inc-sd-done-h b{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text))}
-.inc-sd-done.partial .inc-sd-metric{border-color:color-mix(in srgb,var(--qa-color-warning) 30%,var(--qa-color-border))}
+.inc-sd-done.partial .inc-sd-done-i{background:var(--qa-color-warning)}
+.inc-sd-done.partial .inc-sd-done-t b{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text))}
+.inc-sd-done.partial .inc-sd-metric{border-left-color:color-mix(in srgb,var(--qa-color-warning) 30%,var(--qa-color-border))}
 .inc-sd-fw{width:28px;height:28px;border-radius:8px;display:inline-grid;place-items:center;font-size:11.5px;font-weight:700;flex:none;border:1px solid var(--qa-color-border);background:var(--qa-color-surface-2);color:var(--qa-color-muted)}
 .inc-sd-fw-front{color:var(--qa-color-primary);background:var(--qa-color-primary-soft)}
 .inc-sd-fw-java,.inc-sd-fw-py,.inc-sd-fw-go,.inc-sd-fw-net{color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text));background:var(--qa-color-success-soft)}
 .inc-sd-fw-node{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text));background:var(--qa-color-warning-soft)}
-.inc-sd-pill.main{color:var(--qa-color-surface);background:var(--qa-color-primary);border-color:var(--qa-color-primary)}
+.inc-sd-pill.main{color:var(--qa-color-primary-2);background:var(--qa-color-primary-soft);border-color:color-mix(in srgb,var(--qa-color-primary) 25%,var(--qa-color-border))}
+.inc-sd-more summary .ico{width:14px;height:14px;vertical-align:-2px;margin-right:4px}
 .inc-sd-head h2{margin:0;display:flex;align-items:center;gap:8px}
 .inc-sd-head h2 .ico{width:18px;height:18px;color:var(--qa-color-muted)}
 .inc-sd-head p{margin:2px 0 0}
@@ -736,13 +777,17 @@ export const INCIDENT_SCOPE_DISCOVERY_CSS = `
 @container (max-width:640px){
   .inc-sd-row{grid-template-columns:minmax(0,1fr)}
   .inc-sd-hero{flex-direction:column;align-items:flex-start;padding:16px}
-  .inc-sd-hero-art{width:64px;height:48px}
-  .inc-sd-hero::before,.inc-sd-hero::after{display:none}
+  .inc-sd-hero-art{width:88px;height:56px}
+  .inc-sd-hero-deco{display:none}
+  .inc-sd-metrics{flex-direction:column;align-items:stretch;flex:1 1 100%}
+  .inc-sd-metric{border-left:0;border-top:1px solid color-mix(in srgb,var(--qa-color-success) 30%,var(--qa-color-border));padding:6px 0}
 }
 @media (max-width:640px){
   .inc-sd-row{grid-template-columns:minmax(0,1fr)}
   .inc-sd-hero{flex-direction:column;align-items:flex-start;padding:16px}
-  .inc-sd-hero-art{width:64px;height:48px}
-  .inc-sd-hero::before,.inc-sd-hero::after{display:none}
+  .inc-sd-hero-art{width:88px;height:56px}
+  .inc-sd-hero-deco{display:none}
+  .inc-sd-metrics{flex-direction:column;align-items:stretch;flex:1 1 100%}
+  .inc-sd-metric{border-left:0;border-top:1px solid color-mix(in srgb,var(--qa-color-success) 30%,var(--qa-color-border));padding:6px 0}
 }
 `;

@@ -1112,7 +1112,7 @@ function headerActions(state: DashboardState, ui: IncidentsUi, incident: Inciden
       ? ''
       : ui.confirmCancel
         ? `<span class="confirm" role="group" aria-label="${esc(i.cancelInvestigation)}"><small>${esc(i.cancelHint)}</small><button class="btn danger" data-action="inc-cancel-yes" ${ui.busy !== undefined ? 'disabled' : ''}>${esc(i.cancelConfirm)}</button><button class="btn ghost" data-action="inc-cancel-no">${esc(t.cancelAction)}</button></span>`
-        : actionButton(ui, 'inc-cancel', i.cancelInvestigation);
+        : actionButton(ui, 'inc-cancel', i.cancelInvestigation, { primary: true });
   const resume =
     incident.state === 'CANCELLED' ? actionButton(ui, 'inc-resume', i.resume, { primary: true }) : '';
   return `${refresh}${resume}${incident.state === 'CANCELLED' ? '' : reproduce}${cancelControl}`;

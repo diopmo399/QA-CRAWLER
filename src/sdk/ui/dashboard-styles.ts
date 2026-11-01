@@ -56,8 +56,8 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 .brand{display:flex;align-items:center;gap:12px;padding:0 6px;min-width:0}
 .brand b{display:block;font-weight:700;font-size:16px;letter-spacing:.02em;color:var(--qa-color-panel-text)}
 .brand small{display:block;color:var(--qa-color-panel-muted);font-size:12px;line-height:1.3}
-.logo{width:38px;height:38px;border-radius:10px;background:var(--qa-color-secondary);color:var(--qa-color-panel-text);display:grid;place-items:center;font-weight:600;flex:none}
-.logo svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.logo{width:44px;height:44px;border-radius:10px;background:transparent;color:var(--qa-color-panel-text);display:grid;place-items:center;font-weight:600;flex:none}
+.logo svg{width:40px;height:40px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .menu-btn{display:none;align-items:center;gap:8px;min-height:44px;padding:0 14px;border-radius:10px;border:1px solid var(--qa-color-panel-border);background:var(--qa-color-panel-2);color:var(--qa-color-panel-text);font-weight:500;cursor:pointer}
 .drawer{display:flex;flex-direction:column;gap:20px;flex:1}
 .ctx{display:flex;flex-direction:column;gap:6px;padding:0 6px}
