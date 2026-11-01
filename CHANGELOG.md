@@ -64,6 +64,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   vert relevé (`--qa-color-panel-raised`, `#005D38`), entrée active sur `#E6F4EA`, et le motif du bas du menu relevé
   sur la maquette : trois facettes à bords droits en vert secondaire (bande translucide en diagonale montante,
   facette médiane, coin vif à droite), puis un filet et le pied ; masqué sur téléphone.
+  Ergonomie : « Définition du périmètre » en deux colonnes équilibrées (Applications | Profondeur, puis Éléments
+  inclus | Limites ; une colonne sous 760 px) ; le pied de la découverte dit l'état de la sélection (« N cochée(s)
+  sur M détectée(s) : une application n'entre dans le périmètre qu'après Ajouter ») ; l'accordéon « Paramètres
+  avancés » ne rend son contenu qu'ouvert (l'état reste dans le modèle) ; dans les formulaires, le libellé et
+  l'astérisque tiennent sur une ligne et l'aide reste sous son champ (plus de colonne orpheline pour « Cible ») ;
+  titres de section du menu plus lisibles, marges du contenu resserrées (24 px).
 
 - **Découverte automatique du périmètre** (étape « Périmètre » de l'investigation, `src/incident/scope-discovery.ts`) :
   le bloc « Applications et dépôts » remplace la saisie manuelle des applications (identifiant, nom, couche, dossiers,

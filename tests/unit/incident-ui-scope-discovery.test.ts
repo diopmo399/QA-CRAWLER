@@ -479,8 +479,10 @@ describe('renderScopeDiscovery', () => {
     expect(escaped).toContain('&lt;p&gt;/');
     // La section avancée : repliée, dépliée.
     expect(advancedDetails('fr', false, '<p>x</p>')).toBe(
-      '<details class="inc-sd-adv"><summary data-action="inc-disc-advanced" data-open="false">Paramètres avancés (saisie manuelle)</summary><p>x</p></details>',
+      '<details class="inc-sd-adv"><summary data-action="inc-disc-advanced" data-open="false">Paramètres avancés (saisie manuelle)</summary></details>',
     );
+    // Ouvert : le contenu est rendu.
+    expect(advancedDetails('fr', true, '<p>x</p>')).toContain('</summary><p>x</p></details>');
     expect(advancedDetails('en', true, '')).toContain(
       '<details class="inc-sd-adv" open><summary data-action="inc-disc-advanced" data-open="true">Advanced settings (manual entry)</summary>',
     );

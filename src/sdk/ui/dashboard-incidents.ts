@@ -931,7 +931,11 @@ function textField(
   const input = options.area
     ? `<textarea ${common} rows="3">${esc(value)}</textarea>`
     : `<input ${common} value="${esc(value)}">`;
-  return `<label class="field" for="${id}">${esc(text)}${options.required ? ' <span aria-hidden="true">*</span>' : ''}${input}</label>${options.hint ? `<small id="${id}-h" class="mu">${esc(options.hint)}</small>` : ''}`;
+  const label = `<label class="field" for="${id}"><span class="field-l">${esc(text)}${options.required ? ' <span class="req" aria-hidden="true">*</span>' : ''}</span>${input}</label>`;
+  // L'aide reste dans la cellule de son champ (sinon la grille des champs lui donne une colonne à elle).
+  return options.hint
+    ? `<div class="field-w">${label}<small id="${id}-h" class="mu">${esc(options.hint)}</small></div>`
+    : label;
 }
 
 function selectField(

@@ -842,8 +842,12 @@ export class IncidentsController {
         this.focus('[data-inc="disc.root"]');
         return true;
       case 'inc-disc-advanced':
-        // Le résumé bascule le dépliage lui-même : l'état est gardé pour le prochain dessin, sans redessiner.
+        // Le contenu de l'accordéon n'est rendu qu'ouvert : l'état est mis à jour, puis l'écran redessiné après
+        // le basculement natif du résumé (qui suit les écouteurs), pour que l'attribut « open » suive l'état.
         this.discoveryAction('inc-disc-advanced', { open: target.dataset.open });
+        setTimeout(() => {
+          this.host.paint();
+        }, 0);
         return true;
       case 'inc-scope-next':
         this.scopeNext();

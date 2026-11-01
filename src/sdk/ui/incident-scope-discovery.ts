@@ -222,6 +222,8 @@ const fr = {
   apply: (count: number) => `Ajouter ${String(count)} application(s) au périmètre`,
   applyExtensions: (count: number) => `Demander l’extension du périmètre (${String(count)})`,
   applyNone: 'Cochez au moins une application.',
+  selection: (checked: number, detected: number) =>
+    `${String(checked)} cochée(s) sur ${String(detected)} détectée(s) : une application n’entre dans le périmètre qu’après « Ajouter ».`,
   applyHint:
     'Le périmètre initial n’est pas une limite : pendant l’investigation, il s’étend par extension approuvée, et chaque découverte reste tracée.',
   applyExtensionsHint:
@@ -314,6 +316,8 @@ const en: typeof fr = {
   apply: (count) => `Add ${String(count)} application(s) to the scope`,
   applyExtensions: (count) => `Request the scope extension (${String(count)})`,
   applyNone: 'Check at least one application.',
+  selection: (checked: number, detected: number) =>
+    `${String(checked)} checked of ${String(detected)} detected: an application enters the scope only after “Add”.`,
   applyHint:
     'The initial scope is not a limit: during the investigation it grows through approved extensions, and every discovery stays traced.',
   applyExtensionsHint:
@@ -561,7 +565,7 @@ function resultBlock(
     plan.kind === 'UPDATE' ? plan.added.length : plan.kind === 'EXTENSIONS' ? plan.requests.length : 0;
   const footer = disabled
     ? ''
-    : `<div class="inc-sd-foot"><button type="button" class="btn" data-action="inc-disc-clear"${busy ? ' disabled' : ''}>${icon('trash')}<span>${esc(t.clear)}</span></button><small class="mu">${esc(plan.kind === 'EXTENSIONS' ? t.applyExtensionsHint : t.applyHint)}</small><button type="button" class="btn primary" data-action="inc-disc-apply" aria-describedby="inc-sd-apply-h"${count === 0 || busy ? ' disabled' : ''} aria-busy="${String(busy)}">${icon('plus')}<span>${esc(plan.kind === 'EXTENSIONS' ? t.applyExtensions(count) : t.apply(count))}</span></button><small id="inc-sd-apply-h" class="sr">${esc(count === 0 ? t.applyNone : plan.kind === 'EXTENSIONS' ? t.applyExtensionsHint : t.applyHint)}</small></div>`;
+    : `<div class="inc-sd-foot"><button type="button" class="btn" data-action="inc-disc-clear"${busy ? ' disabled' : ''}>${icon('trash')}<span>${esc(t.clear)}</span></button><small class="mu"><b>${esc(t.selection(count, result.applications.length))}</b> ${esc(plan.kind === 'EXTENSIONS' ? t.applyExtensionsHint : t.applyHint)}</small><button type="button" class="btn primary" data-action="inc-disc-apply" aria-describedby="inc-sd-apply-h"${count === 0 || busy ? ' disabled' : ''} aria-busy="${String(busy)}">${icon('plus')}<span>${esc(plan.kind === 'EXTENSIONS' ? t.applyExtensions(count) : t.apply(count))}</span></button><small id="inc-sd-apply-h" class="sr">${esc(count === 0 ? t.applyNone : plan.kind === 'EXTENSIONS' ? t.applyExtensionsHint : t.applyHint)}</small></div>`;
   return `<div class="inc-sd-res">${problems}${done}${apps}<div class="inc-sd-more-row">${relations}${denied}${truncated}${read}</div>${footer}</div>`;
 }
 
@@ -664,7 +668,8 @@ export function renderScopeDiscovery(
 /** L'enveloppe de la section avancée (saisie manuelle), repliée par défaut. */
 export function advancedDetails(lang: Lang, open: boolean, body: string): string {
   const t = TEXT[lang];
-  return `<details class="inc-sd-adv"${open ? ' open' : ''}><summary data-action="inc-disc-advanced" data-open="${String(open)}">${esc(t.advanced)}</summary>${body}</details>`;
+  // Le contenu n'est rendu qu'ouvert : le parcours principal reste léger, rien n'est perdu (l'état vit dans le modèle).
+  return `<details class="inc-sd-adv"${open ? ' open' : ''}><summary data-action="inc-disc-advanced" data-open="${String(open)}">${esc(t.advanced)}</summary>${open ? body : ''}</details>`;
 }
 
 // ── Styles ───────────────────────────────────────────────────────────────────────────────────

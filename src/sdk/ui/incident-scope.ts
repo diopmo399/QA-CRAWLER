@@ -833,7 +833,7 @@ export function renderScopeEditor(
       ? `<button type="button" class="btn" data-action="inc-validate"${opts.busy || incident.state === 'CANCELLED' ? ' disabled' : ''}>${esc(t.check)}</button>`
       : '';
   const footer = `<div class="inc-sc-foot">${check}${dirty ? `<span class="mu">${esc(t.dirty)}</span><button type="button" class="btn ghost" data-action="inc-scope-reset"${opts.busy ? ' disabled' : ''}>${esc(t.reset)}</button>` : ''}${next}</div>`;
-  return `<section class="card wide inc-sc" aria-labelledby="inc-sc-t"><div class="inc-sc-head"><span class="inc-sc-ic" aria-hidden="true">${icon('explorations')}</span><div><h2 id="inc-sc-t" class="fl">${esc(t.title)}</h2><p class="mu">${esc(t.sub)}</p></div></div>${notes}${modes}<div class="inc-sc-grid"><section class="inc-sc-box-s inc-sc-apps" aria-labelledby="inc-sc-apps-t"><h3 id="inc-sc-apps-t">${icon('code')}<span>${esc(t.applications)}</span></h3>${selectionSummary(ctx, ui)}${treeHidden ? '' : applicationsTree(ctx, ui, trees, disabled)}${editable && !treeHidden && incident.scope.applications.length > 0 ? `<p class="mu inc-sc-note">${esc(t.replaceNote)}</p>` : ''}</section><div class="inc-sc-side">${depthControl(ctx, ui, disabled)}${includedList(ctx, ui, disabled)}${limitsBlock(ctx, ui, disabled)}</div></div>${problems}${validation}${footer}</section>`;
+  return `<section class="card wide inc-sc" aria-labelledby="inc-sc-t"><div class="inc-sc-head"><span class="inc-sc-ic" aria-hidden="true">${icon('explorations')}</span><div><h2 id="inc-sc-t" class="fl">${esc(t.title)}</h2><p class="mu">${esc(t.sub)}</p></div></div>${notes}${modes}<div class="inc-sc-grid"><section class="inc-sc-box-s inc-sc-apps" aria-labelledby="inc-sc-apps-t"><h3 id="inc-sc-apps-t">${icon('code')}<span>${esc(t.applications)}</span></h3>${selectionSummary(ctx, ui)}${treeHidden ? '' : applicationsTree(ctx, ui, trees, disabled)}${editable && !treeHidden && incident.scope.applications.length > 0 ? `<p class="mu inc-sc-note">${esc(t.replaceNote)}</p>` : ''}</section>${depthControl(ctx, ui, disabled)}${includedList(ctx, ui, disabled)}${limitsBlock(ctx, ui, disabled)}</div>${problems}${validation}${footer}</section>`;
 }
 
 /** Le texte de la profondeur (aria-valuetext et légende), pour la mise à jour pendant le glissement. */
@@ -864,7 +864,10 @@ export const INCIDENT_SCOPE_CSS = `
 .inc-sc-mode:disabled{cursor:default}
 .inc-sc-mode:disabled:not([aria-checked="true"]){opacity:.75}
 .inc-sc-mode-h{margin:0;font-size:13px}
-.inc-sc-grid{display:grid;grid-template-columns:minmax(260px,1fr) minmax(300px,1.15fr);gap:12px;align-items:start;min-width:0}
+/* Deux colonnes équilibrées : Applications | Profondeur, puis Éléments inclus | Limites ; une colonne sur écran étroit. */
+.inc-sc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:stretch;min-width:0}
+.inc-sc-grid>.inc-sc-apps{grid-column:1;grid-row:1}
+.inc-sc-grid>.inc-sc-depth{grid-column:2;grid-row:1}
 .inc-sc-side{display:flex;flex-direction:column;gap:12px;min-width:0}
 .inc-sc-box-s{border:1px solid var(--qa-color-border);border-radius:10px;padding:10px 12px;background:var(--qa-color-surface);display:flex;flex-direction:column;gap:8px;min-width:0}
 .inc-sc-box-s h3,.inc-sc-h{margin:0;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px}
@@ -934,10 +937,12 @@ export const INCIDENT_SCOPE_CSS = `
 .inc-sc-foot .btn .ico{width:16px;height:16px}
 @container (max-width:760px){
   .inc-sc-grid{grid-template-columns:minmax(0,1fr)}
+  .inc-sc-grid>.inc-sc-apps,.inc-sc-grid>.inc-sc-depth{grid-column:auto;grid-row:auto}
   .inc-sc-apps{max-height:none}
 }
 @media (max-width:760px){
   .inc-sc-grid{grid-template-columns:minmax(0,1fr)}
+  .inc-sc-grid>.inc-sc-apps,.inc-sc-grid>.inc-sc-depth{grid-column:auto;grid-row:auto}
   .inc-sc-apps{max-height:none}
 }
 `;

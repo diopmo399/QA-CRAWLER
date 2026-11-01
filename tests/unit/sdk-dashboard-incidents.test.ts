@@ -10,6 +10,7 @@ import type {
   ReproductionRun,
 } from '../../src/incident/model.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
+import { emptyDiscoveryUi } from '../../src/sdk/ui/incident-scope-discovery.js';
 import { emptyEditorUi } from '../../src/sdk/ui/dashboard-editor.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
 import {
@@ -957,19 +958,25 @@ describe('dashboard — incidents: screens', () => {
 
   it('scope tab: applications, permissions, limits, pending extensions decided with DECIDE, validation issues', () => {
     const incident = incidentOf();
+    // L'accordéon « Paramètres avancés » ouvert : son contenu (saisie manuelle, extensions) est rendu.
     const html = renderDashboard(
       base(page('scope'), {
         incident,
         ws: wsOf(),
+        discovery: { ...emptyDiscoveryUi(incident.id), advanced: true },
         validation: {
           ok: false,
           issues: [{ field: 'applications[0].repository.root', message: 'does not exist' }],
         },
       }),
     );
-    // L'écran « Définition du périmètre » en tête, puis les autres paramètres.
+    // L'écran « Définition du périmètre » en tête, puis les autres paramètres ; fermé (défaut), l'accordéon ne
+    // rend pas son contenu.
     expect(html).toContain('<h2 id="inc-sc-t" class="fl">Définition du périmètre</h2>');
     expect(html.indexOf('inc-sc-t')).toBeLessThan(html.indexOf('Autres paramètres du périmètre'));
+    const closed = renderDashboard(base(page('scope'), { incident, ws: wsOf() }));
+    expect(closed.indexOf('inc-sc-t')).toBeLessThan(closed.indexOf('class="inc-sd-adv"'));
+    expect(closed).not.toContain('Autres paramètres du périmètre');
     expect(html).toMatch(/data-action="inc-scope-mode" data-mode="GUIDED"[^>]*aria-checked="true"/);
     expect(html).toContain('data-action="inc-scope-toggle" data-block="bff" data-index=""');
     // Pas encore d'arborescence lue : la lecture est en cours (le contrôleur la lance).
