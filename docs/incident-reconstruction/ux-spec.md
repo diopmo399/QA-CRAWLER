@@ -202,10 +202,14 @@ Règles : tout en flex/grid ; chaque panneau `min-height:0; min-width:0; overflo
 
 ## 6. Langage visuel
 
-- **Coquille** : panneau de navigation sombre (`--qa-color-panel`, indigo nuit) déjà en place ; contenu
-  sur fond clair (`--qa-color-background`) en cartes blanches (`.card`, rayon `--qa-radius`).
-- **Accent** : `--qa-color-primary` (bleu indigo) pour la sélection, l'étape actuelle, l'onglet actif ;
+- **Coquille** : panneau de navigation vert foncé (`--qa-color-panel`, `#004D2B`) avec le motif de facettes
+  au bas du menu ; contenu sur fond clair (`--qa-color-background`) en cartes blanches (`.card`, rayon
+  `--qa-radius`).
+- **Accent** : `--qa-color-primary` (vert `#006B3F`) pour la sélection, l'étape actuelle, l'onglet actif ;
   en-tête du Workspace avec liseré gauche de l'accent.
+- **Capture de référence** : `captures/scope-1440-full.png`, l'étape Périmètre complète à 1440 px (menu,
+  en-tête, étapes, vues, bandeau, « Applications et dépôts » avec un résultat d'analyse réel, « Définition
+  du périmètre », extensions), prise par Chromium sur le serveur SDK réel.
 - **Typographie** : IBM Plex Sans, IBM Plex Mono pour code, chemins, requêtes.
 - **Pastilles** : `.pill` ok / ko / warn / live / mu (états, gravité, diagnostic, verdicts).
 - **Relations** (`incident-parts.ts`) : Observée = accent, trait plein épais ; Lue dans le code = succès,
