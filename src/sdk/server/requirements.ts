@@ -1,6 +1,4 @@
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { ExplorationResult } from '../../model/exploration-result.js';
 import type { ClassifyOptions } from '../../requirements/classify.js';
 import type { ConnectorDescription, SourceConnector } from '../../requirements/connector.js';
 import { ConfluenceConnector, type ConfluenceInput } from '../../requirements/connectors/confluence.js';
@@ -31,7 +29,7 @@ import type {
 } from '../core/contracts.js';
 import { ENV_NAME_PATTERN, SEVERITIES } from '../core/contracts.js';
 import type * as Wire from '../core/requirements-contracts.js';
-import { listExecutions, scenarioHistory } from './platform.js';
+import { listExecutions, runDigest, scenarioHistory } from './platform.js';
 
 /**
  * LES EXIGENCES, côté serveur : le référentiel d'un projet (`<projet>/requirements/`), ses imports, la
@@ -451,17 +449,6 @@ const median = (values: number[]): number | undefined => {
     : ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
 };
 
-async function issuesOf(reportsDir: string, run: string): Promise<Partial<Record<Severity, number>>> {
-  try {
-    const result = JSON.parse(
-      await readFile(path.join(reportsDir, run, 'result.json'), 'utf8'),
-    ) as ExplorationResult;
-    return result.stats.issuesBySeverity;
-  } catch {
-    return {};
-  }
-}
-
 export interface TrendProject {
   id: string;
   name: string;
@@ -496,7 +483,7 @@ export async function computeTrends(
         (entry) => at >= entry.start && at < entry.start + 7 * DAY_MS && at <= now.getTime(),
       );
       if (!week) continue;
-      const bySeverity = await issuesOf(project.reportsDir, execution.run);
+      const { issuesBySeverity: bySeverity } = await runDigest(project.id, project.reportsDir, execution.run);
       for (const severity of SEVERITIES) week.issues[severity] += bySeverity[severity] ?? 0;
       if (execution.kind === 'REPLAY' && (execution.verdict === 'PASSED' || execution.verdict === 'FAILED')) {
         week.finished += 1;

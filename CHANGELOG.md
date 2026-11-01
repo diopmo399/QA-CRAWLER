@@ -718,8 +718,29 @@ defaults`). Test d'intégration : flows passés, panne détectée, écritures bl
   régler), tests concurrents à l'intérieur des fichiers longs (chacun dans son propre dossier de
   rapports), et job CI `integration` découpé en trois shards parallèles (le job `build` ne lance
   plus l'intégration). Sur une machine à 4 cœurs : de 1 250 s à environ 600 s.
+- Dashboard : passer d'un menu à l'autre est plus rapide.
+  - Le menu suit le clic tout de suite. L'écran quitté reste affiché, grisé et inactif, avec une fine
+    barre de progression si le chargement dure, jusqu'à ce que le nouvel écran soit prêt. Dans un même
+    menu (fichier de l'éditeur, détail d'une exécution), l'écran reste utilisable comme avant ; l'éditeur
+    s'affiche dès les lectures communes faites et dit lui-même ce qu'il charge encore.
+  - Les lectures d'un écran (catalogue, droits, projet, données de la vue) partent ensemble au lieu de
+    se suivre ; les capacités du serveur ne se relisent qu'au premier chargement.
+  - Le serveur garde ce qu'il tire de chaque run (fiche, verdict, statuts des flows, anomalies par
+    gravité), les flows des scénarios et la configuration du projet tant que leur fichier garde sa date
+    de modification et sa taille ; un fichier modifié depuis moins de deux secondes est toujours relu.
+    Avec 315 runs, la liste des projets passe de 206 à 38 ms, le détail d'un projet de 194 à 36 ms,
+    la liste des exécutions de 171 à 36 ms, l'historique des scénarios de 356 à 54 ms et la vue
+    d'ensemble de 411 à 69 ms.
+  - Maven est sondé (`mvn -v`) en arrière-plan dès l'ouverture du Dashboard : le premier passage sur
+    l'écran Tests n'attend plus le démarrage de la JVM.
 
 ### Corrigé
+
+- Dashboard : une saisie validée par Entrée pouvait ne pas apparaître (par exemple le nom d'une étape
+  dans l'éditeur, sans la mention « Modifications non enregistrées »). Chromium déclenche le « change »
+  d'un champ qui a le focus quand un redessin le retire ; la validation redessinait alors pendant le
+  redessin en cours, dont le HTML, calculé avant, l'emportait. Un redessin demandé pendant un autre est
+  désormais rejoué juste après, sur l'état à jour.
 
 - Un flow invalide n'entre plus dans la bibliothèque (le bloc est `INVALID`) ; un scénario invalide au
   lancement répond 422 au lieu de 500, et l'écran Scénarios dit le refus de « Rejouer » au lieu de

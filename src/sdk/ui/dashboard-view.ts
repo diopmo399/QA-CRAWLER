@@ -143,6 +143,11 @@ export interface DashboardState {
   phase: 'idle' | 'loading' | 'ready' | 'error';
   error?: string;
   route: DashboardRoute;
+  /**
+   * Pendant le chargement d'un autre écran : celui dont le contenu reste affiché (grisé, inactif). Le menu
+   * suit déjà la nouvelle route, le contenu change quand ses données sont là.
+   */
+  shown?: DashboardRoute;
   days: number;
   overview?: OverviewView;
   projects?: ProjectSummary[];
@@ -298,7 +303,7 @@ export function renderDashboard(state: DashboardState): string {
 <div class="top"><div class="brand"><span class="logo" aria-hidden="true">Q</span><span><b>${esc(t.product)}</b><small>${esc(t.tag)}</small></span></div><button class="menu-btn" data-action="menu" aria-expanded="${state.menuOpen ? 'true' : 'false'}" aria-controls="qa-drawer">${icon(state.menuOpen ? 'close' : 'menu')}<span>${esc(state.menuOpen ? t.menuClose : t.menu)}</span></button></div>
 <div class="drawer" id="qa-drawer">${context}${sections}${foot}</div>
 </nav>
-<main class="main">${state.notice ? `<p class="notice" role="status">${esc(state.notice)}</p>` : ''}${body(state)}</main>
+<main class="main"${state.shown ? ' aria-busy="true" inert' : ''}>${state.notice ? `<p class="notice" role="status">${esc(state.notice)}</p>` : ''}${body(state.shown ? { ...state, route: state.shown } : state)}</main>
 </div>`;
 }
 

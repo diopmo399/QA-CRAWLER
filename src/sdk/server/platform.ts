@@ -219,8 +219,95 @@ const exists = (file: string): Promise<boolean> =>
 
 /** Le dossier des flows du projet (`paths.flows` de qa-crawler.config.yaml). */
 export async function flowsDirOf(projectDir: string): Promise<string> {
-  const project = await loadProjectConfig(path.join(projectDir, PROJECT_FILE));
-  return path.resolve(projectDir, project.config.paths.flows);
+  const file = path.resolve(projectDir, PROJECT_FILE);
+  const { stamp, settled } = await stampOf(file);
+  const cached = FLOWS_DIRS.get(file);
+  if (cached?.stamp === stamp) return cached.value;
+  const project = await loadProjectConfig(file);
+  const value = path.resolve(projectDir, project.config.paths.flows);
+  if (settled) remember(FLOWS_DIRS, file, { stamp, value });
+  return value;
+}
+
+/**
+ * Ce qui se relit à chaque écran (configuration du projet, flows des scénarios, résumés des runs) est
+ * gardé tant que le fichier lu garde sa date de modification et sa taille ; sinon il est relu.
+ */
+const FLOWS_DIRS = new Map<string, { stamp: string; value: string }>();
+const FLOW_FILES = new Map<string, { stamp: string; value: FlowEntry[] }>();
+const CACHE_MAX = 20_000;
+
+function remember<T>(cache: Map<string, T>, key: string, value: T): void {
+  cache.delete(key);
+  if (cache.size >= CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, value);
+}
+
+/**
+ * L'empreinte d'un fichier (date de modification, taille). Les dates du système de fichiers sont
+ * grossières (quelques millisecondes) : un fichier modifié il y a moins de FRESH_MS peut encore changer
+ * sans que son empreinte change ; il est relu à chaque fois (`settled` faux) et n'est gardé qu'ensuite.
+ */
+async function stampOf(file: string): Promise<{ stamp: string; settled: boolean }> {
+  try {
+    const info = await stat(file);
+    return {
+      stamp: `${String(info.mtimeMs)}:${String(info.size)}`,
+      settled: Date.now() - info.mtimeMs > FRESH_MS,
+    };
+  } catch {
+    return { stamp: '-', settled: true };
+  }
+}
+
+const FRESH_MS = 2_000;
+
+type FlowEntry = Pick<ScenarioView, 'name' | 'steps' | 'description' | 'reusable' | 'uses' | 'revision'>;
+
+/** Les flows nommés d'un fichier YAML ; un fichier illisible n'en a aucun. */
+async function flowEntries(file: string): Promise<FlowEntry[]> {
+  // La date d'abord : un fichier réécrit pendant la lecture change de date, il sera relu.
+  const { stamp, settled } = await stampOf(file);
+  const cached = FLOW_FILES.get(file);
+  if (cached?.stamp === stamp) return cached.value;
+  let parsed: unknown;
+  let text = '';
+  try {
+    text = await readFile(file, 'utf8');
+    parsed = parseYaml(text);
+  } catch {
+    parsed = undefined;
+  }
+  const value: FlowEntry[] = [];
+  if (parsed !== null && typeof parsed === 'object') {
+    const document = parsed as Record<string, unknown>;
+    const flows = Array.isArray(document.flows)
+      ? (document.flows as Record<string, unknown>[])
+      : 'steps' in document
+        ? [document]
+        : [];
+    for (const flow of flows) {
+      if (typeof flow.name !== 'string') continue;
+      const runs = Array.isArray(flow.steps)
+        ? (flow.steps as unknown[])
+            .map((step) => (step && typeof step === 'object' ? (step as { run?: unknown }).run : undefined))
+            .filter((run): run is string => typeof run === 'string')
+        : [];
+      value.push({
+        name: flow.name,
+        ...(Array.isArray(flow.steps) ? { steps: flow.steps.length } : {}),
+        ...(typeof flow.description === 'string' ? { description: flow.description } : {}),
+        ...(flow.reusable === true ? { reusable: true } : {}),
+        ...(runs.length > 0 ? { uses: runs } : {}),
+        revision: revisionOf(text),
+      });
+    }
+  }
+  if (settled) remember(FLOW_FILES, file, { stamp, value });
+  return value;
 }
 
 /** Les scénarios : un par flow YAML nommé, un par fichier .feature (désigné par son chemin). */
@@ -240,41 +327,19 @@ export async function listScenarios(projectDir: string): Promise<ScenarioView[]>
       continue;
     }
     if (!/\.ya?ml$/.test(file) || path.basename(file).includes('test-data')) continue;
-    let parsed: unknown;
-    let text = '';
-    try {
-      text = await readFile(file, 'utf8');
-      parsed = parseYaml(text);
-    } catch {
-      continue;
-    }
-    if (parsed === null || typeof parsed !== 'object') continue;
-    const document = parsed as Record<string, unknown>;
-    const flows = Array.isArray(document.flows)
-      ? (document.flows as Record<string, unknown>[])
-      : 'steps' in document
-        ? [document]
-        : [];
-    for (const flow of flows) {
-      if (typeof flow.name !== 'string') continue;
-      const from = origin[relative];
-      const runs = Array.isArray(flow.steps)
-        ? (flow.steps as unknown[])
-            .map((step) => (step && typeof step === 'object' ? (step as { run?: unknown }).run : undefined))
-            .filter((run): run is string => typeof run === 'string')
-        : [];
+    const from = origin[relative];
+    for (const { name, steps, description, reusable, uses, revision } of await flowEntries(file))
       scenarios.push({
-        name: flow.name,
+        name,
         file: relative,
         format: 'yaml',
-        ...(Array.isArray(flow.steps) ? { steps: flow.steps.length } : {}),
+        ...(steps !== undefined ? { steps } : {}),
         ...(from ? { fromRecording: from } : {}),
-        ...(typeof flow.description === 'string' ? { description: flow.description } : {}),
-        ...(flow.reusable === true ? { reusable: true } : {}),
-        ...(runs.length > 0 ? { uses: runs } : {}),
-        revision: revisionOf(text),
+        ...(description !== undefined ? { description } : {}),
+        ...(reusable ? { reusable } : {}),
+        ...(uses ? { uses: [...uses] } : {}),
+        revision,
       });
-    }
   }
   return scenarios;
 }
@@ -403,17 +468,47 @@ export async function listExecutions(projectId: string, reportsDir: string): Pro
     .filter((entry) => entry.isDirectory() && entry.name.startsWith(RUN_PREFIX) && isRunName(entry.name))
     .map((entry) => entry.name);
   const records = await Promise.all(
-    runs.map(async (run) => {
-      const directory = path.join(reportsDir, run);
-      return recordOf(
-        projectId,
-        run,
-        await readJson<ExecutionMeta>(path.join(directory, EXECUTION_META_FILE)),
-        await readJson<ExplorationResult>(path.join(directory, RESULT_FILE)),
-      );
-    }),
+    // Une copie : le résumé gardé ne change pas si l'appelant modifie ce qu'il reçoit.
+    runs.map(async (run) => structuredClone((await runDigest(projectId, reportsDir, run)).record)),
   );
   return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.run.localeCompare(a.run));
+}
+
+/** Ce que les listes, l'historique et les indicateurs tirent d'un run, sans relire son résultat complet. */
+export interface RunDigest {
+  readonly record: ExecutionRecord;
+  readonly flows: readonly Pick<FlowRunReport, 'name' | 'status' | 'durationMs'>[];
+  readonly issuesBySeverity: Partial<Record<Severity, number>>;
+}
+
+/**
+ * Les résumés des runs déjà lus : chaque liste relisait et analysait le résultat de tous les runs, un
+ * coût qui grandit avec l'historique. Un résumé vaut tant que la fiche et le résultat du run gardent leur
+ * date de modification et leur taille ; sinon il est recalculé.
+ */
+const RUN_DIGESTS = new Map<string, { stamp: string; digest: RunDigest }>();
+
+export async function runDigest(projectId: string, reportsDir: string, run: string): Promise<RunDigest> {
+  const directory = path.join(reportsDir, run);
+  const metaFile = path.join(directory, EXECUTION_META_FILE);
+  const resultFile = path.join(directory, RESULT_FILE);
+  // Les dates d'abord : un fichier réécrit pendant la lecture change de date, le résumé sera refait.
+  const stamps = await Promise.all([stampOf(metaFile), stampOf(resultFile)]);
+  const stamp = stamps.map((entry) => entry.stamp).join('|');
+  const key = `${projectId}\0${path.resolve(directory)}`;
+  const cached = RUN_DIGESTS.get(key);
+  if (cached?.stamp === stamp) return cached.digest;
+  const [meta, result] = await Promise.all([
+    readJson<ExecutionMeta>(metaFile),
+    readJson<ExplorationResult>(resultFile),
+  ]);
+  const digest: RunDigest = {
+    record: recordOf(projectId, run, meta, result),
+    flows: (result?.flows ?? []).map(({ name, status, durationMs }) => ({ name, status, durationMs })),
+    issuesBySeverity: { ...(result?.stats.issuesBySeverity ?? {}) },
+  };
+  if (stamps.every((entry) => entry.settled)) remember(RUN_DIGESTS, key, { stamp, digest });
+  return digest;
 }
 
 /**
@@ -430,8 +525,8 @@ export async function scenarioHistory(
   const records = await listExecutions(projectId, reportsDir);
   const byName = new Map<string, ScenarioRunStatus[]>();
   for (const record of records) {
-    const result = await readJson<ExplorationResult>(path.join(reportsDir, record.run, RESULT_FILE));
-    for (const flow of result?.flows ?? []) {
+    const { flows } = await runDigest(projectId, reportsDir, record.run);
+    for (const flow of flows) {
       const runs = byName.get(flow.name) ?? [];
       if (runs.length >= limit) continue;
       runs.push({ run: record.run, at: record.createdAt, status: flow.status, durationMs: flow.durationMs });
@@ -585,18 +680,15 @@ export async function computeOverview(
           else day.failed += 1;
         }
       }
-      const result = await readJson<ExplorationResult>(
-        path.join(project.reportsDir, execution.run, RESULT_FILE),
-      );
-      const bySeverity = result?.stats.issuesBySeverity as Partial<Record<Severity, number>> | undefined;
-      for (const severity of SEVERITIES) issues[severity] += bySeverity?.[severity] ?? 0;
-      if (!project.archived && (bySeverity?.CRITICAL ?? 0) > 0)
+      const bySeverity = (await runDigest(project.id, project.reportsDir, execution.run)).issuesBySeverity;
+      for (const severity of SEVERITIES) issues[severity] += bySeverity[severity] ?? 0;
+      if (!project.archived && (bySeverity.CRITICAL ?? 0) > 0)
         alerts.push({
           kind: 'CRITICAL_ISSUES',
           projectId: project.id,
           projectName: project.name,
           run: execution.run,
-          message: `${String(bySeverity?.CRITICAL ?? 0)} critical issue(s) in ${execution.run}`,
+          message: `${String(bySeverity.CRITICAL ?? 0)} critical issue(s) in ${execution.run}`,
         });
     }
     const last = executions.find(

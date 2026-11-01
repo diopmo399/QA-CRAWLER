@@ -132,6 +132,20 @@ describe('dashboard rendering', () => {
     expect(html).toContain('data-action="open-run" data-project="prj_a" data-run="run-a"');
   });
 
+  it('while another screen loads: the menu follows the new route, the left screen stays shown, inert', () => {
+    const html = renderDashboard(
+      base({ overview, route: { view: 'executions', projectId: 'prj_a' }, shown: { view: 'overview' } }),
+    );
+    expect(html).toContain('<main class="main" aria-busy="true" inert>');
+    expect(html).toMatch(/data-view="executions" aria-current="page"/);
+    expect(html).not.toMatch(/data-view="overview" aria-current="page"/);
+    // Le contenu affiché reste celui de l'écran quitté, jusqu'à ce que le nouveau soit prêt.
+    expect(html).toContain('2 réussis sur 3 rejeux terminés');
+    const ready = renderDashboard(base({ overview }));
+    expect(ready).toContain('<main class="main">');
+    expect(ready).not.toContain('inert');
+  });
+
   it('overview without a finished replay shows no rate, never 0 %', () => {
     const html = renderDashboard(
       base({

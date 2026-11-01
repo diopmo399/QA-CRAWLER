@@ -69,6 +69,11 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 .foot span{display:flex;align-items:center;gap:8px}
 .foot .on{width:8px;height:8px;border-radius:50%;background:#34D399;display:inline-block}
 .main{min-width:0;background:var(--qa-color-background);border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:20px}
+.main[aria-busy="true"]{position:relative}
+.main[aria-busy="true"]>*{animation:dim .15s .12s both}
+.main[aria-busy="true"]::before{content:"";position:absolute;inset:0 16px auto;height:3px;border-radius:3px;background:linear-gradient(90deg,transparent,var(--qa-color-primary),transparent) no-repeat;background-size:40% 100%;animation:bar 1s .12s linear infinite both}
+@keyframes dim{from{opacity:1}to{opacity:.55}}
+@keyframes bar{from{background-position:-70% 0}to{background-position:170% 0}}
 
 /* En-tête d'écran. */
 .hd{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
@@ -123,7 +128,7 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 .msg{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:48px 24px;text-align:center;background:var(--qa-color-surface);border:1px solid var(--qa-color-border);border-radius:var(--qa-radius)}
 .spin{width:22px;height:22px;border-radius:50%;border:3px solid var(--qa-color-border);border-top-color:var(--qa-color-primary);animation:sp 1s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.spin,.dot{animation:none!important}}
+@media (prefers-reduced-motion:reduce){.spin,.dot,.main[aria-busy="true"]::before{animation:none!important}}
 
 /* Graphique des rejeux par jour. */
 .bars{display:flex;align-items:flex-end;gap:8px;height:170px;padding-top:6px;overflow-x:auto}
