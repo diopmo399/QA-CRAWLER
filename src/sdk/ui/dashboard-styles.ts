@@ -52,6 +52,8 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 /* La coquille : menu et contenu côte à côte, chacun dans son cadre arrondi. */
 .dash{display:grid;grid-template-columns:240px minmax(0,1fr);gap:16px;align-items:stretch;min-height:640px}
 .side{background:var(--qa-color-panel);color:var(--qa-color-panel-text);border-radius:16px;padding:18px 12px;display:flex;flex-direction:column;gap:16px;min-width:0;overflow:auto;scrollbar-width:thin}
+/* Écran large : le menu reste dans la fenêtre (collant, borné à sa hauteur) et défile seul ; la page ne défile pas pour lui. */
+@container (min-width:961px){.side{position:sticky;top:16px;max-height:calc(100dvh - 32px);align-self:start;scrollbar-color:var(--qa-color-panel-border) transparent}}
 .top{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .brand{display:flex;align-items:center;gap:12px;padding:0 6px;min-width:0}
 .brand b{display:block;font-weight:700;font-size:16px;letter-spacing:.02em;color:var(--qa-color-panel-text)}

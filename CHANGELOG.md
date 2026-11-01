@@ -58,7 +58,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   Python, Go, .NET, TypeScript) avec sa lettre, carte d'application sur deux colonnes (nom, badge et raisons à
   gauche ; couche et pastilles à droite), bouton « Analyser automatiquement » aligné sur le champ, dix étapes sur
   une ligne sans traits de liaison, outils de l'espace (« Mode compact », panneaux masqués, réinitialisation) sur
-  la ligne des sous-onglets, menu latéral plus compact (lignes de 36 px).
+  la ligne des sous-onglets, menu latéral plus compact (lignes de 36 px) qui reste dans la fenêtre sur écran
+  large (collant, borné à la hauteur de la fenêtre, défilement interne) : sa fin et son pied se voient sans faire
+  défiler la page.
 
 - **Découverte automatique du périmètre** (étape « Périmètre » de l'investigation, `src/incident/scope-discovery.ts`) :
   le bloc « Applications et dépôts » remplace la saisie manuelle des applications (identifiant, nom, couche, dossiers,
