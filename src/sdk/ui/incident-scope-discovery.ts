@@ -471,13 +471,16 @@ export const INCIDENT_SCOPE_DISCOVERY_CSS = `
 .inc-sd-root{flex:1 1 320px;min-width:0}
 .inc-sd-form .btn{flex:none}
 .inc-sd-known{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0;font-size:13px}
-.inc-sd-chips{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
-.inc-sd-chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-height:30px;padding:2px 10px;border:1px solid var(--qa-color-border);border-radius:999px;background:var(--qa-color-surface-2);color:var(--qa-color-text);font:inherit;font-size:12.5px;cursor:pointer}
+.inc-sd-known{min-width:0;max-width:100%}
+.inc-sd-chips{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px;min-width:0;max-width:100%}
+.inc-sd-chips li{min-width:0;max-width:100%}
+.inc-sd-chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;min-height:30px;padding:2px 10px;border:1px solid var(--qa-color-border);border-radius:999px;background:var(--qa-color-surface-2);color:var(--qa-color-text);font:inherit;font-size:12.5px;cursor:pointer;text-align:left}
 .inc-sd-chip:hover:not(:disabled){border-color:var(--qa-color-primary);background:color-mix(in srgb,var(--qa-color-primary) 8%,var(--qa-color-surface))}
 .inc-sd-chip:disabled{cursor:default;opacity:.7}
 .inc-sd-chip .ico{width:14px;height:14px;color:var(--qa-color-muted);flex:none}
-.inc-sd-chip code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px;background:transparent;border:0;padding:0;font-size:12px}
-.inc-sd-chip-l{font-weight:600;white-space:nowrap}
+.inc-sd-chip code{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px;background:transparent;border:0;padding:0;font-size:12px}
+.inc-sd-chip-l{flex:0 1 auto;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inc-sd-chip small{flex:none}
 .inc-sd-res{display:flex;flex-direction:column;gap:10px;min-width:0}
 .inc-sd-problems{border:1px solid var(--qa-color-border);border-left:3px solid var(--qa-color-warning);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;background:var(--qa-color-surface)}
 .inc-sd-problems[role="alert"]{border-left-color:var(--qa-color-danger)}
