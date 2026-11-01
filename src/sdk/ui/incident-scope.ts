@@ -844,10 +844,10 @@ export const INCIDENT_SCOPE_CSS = `
 .inc-sc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}
 .inc-sc-head h2{margin:0}
 .inc-sc-head p{margin:2px 0 0}
-.inc-sc-modes{display:flex;gap:2px;border-bottom:1px solid var(--qa-color-border);overflow-x:auto;scrollbar-width:thin}
-.inc-sc-mode{flex:none;min-height:38px;padding:0 16px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--qa-color-muted);font:inherit;font-weight:600;cursor:pointer;white-space:nowrap;border-radius:8px 8px 0 0}
-.inc-sc-mode:hover:not(:disabled){color:var(--qa-color-text);background:var(--qa-color-surface-2)}
-.inc-sc-mode[aria-checked="true"]{color:var(--qa-color-primary);border-bottom-color:var(--qa-color-primary);background:color-mix(in srgb,var(--qa-color-primary) 8%,var(--qa-color-surface))}
+.inc-sc-modes{display:inline-flex;align-self:flex-start;max-width:100%;gap:4px;padding:4px;border-radius:12px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);overflow-x:auto;scrollbar-width:thin}
+.inc-sc-mode{flex:none;min-height:36px;padding:0 16px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--qa-color-muted);font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+.inc-sc-mode:hover:not(:disabled){color:var(--qa-color-text);background:color-mix(in srgb,var(--qa-color-surface) 60%,var(--qa-color-surface-2))}
+.inc-sc-mode[aria-checked="true"]{color:var(--qa-color-primary-2);background:var(--qa-color-surface);border-color:color-mix(in srgb,var(--qa-color-primary) 30%,var(--qa-color-border));box-shadow:0 1px 2px color-mix(in srgb,var(--qa-color-text) 8%,transparent)}
 .inc-sc-mode:disabled{cursor:default}
 .inc-sc-mode:disabled:not([aria-checked="true"]){opacity:.75}
 .inc-sc-mode-h{margin:0;font-size:13px}

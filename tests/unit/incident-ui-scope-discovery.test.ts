@@ -331,10 +331,15 @@ describe('renderScopeDiscovery', () => {
     expect(html).toContain('<b>Détection des applications</b><small>4 détectée(s)</small>');
     expect(html).toContain('<b>Analyse des modules</b><small>6 module(s)</small>');
     expect(html).toContain('<b>Cartographie des dépendances</b><small>1 relation(s)</small>');
-    expect(html).toContain('<p class="inc-sd-done" role="status">');
+    expect(html).toContain('<section class="inc-sd-done" role="status" aria-label="Analyse terminée">');
     expect(html).toContain(
-      '<b>Analyse terminée</b><span>4 application(s)</span><span>6 module(s)</span><span>3 fichier(s) lu(s)</span><span>en 1,8 s</span>',
+      '<span class="inc-sd-metric-l">Applications</span><b class="inc-sd-metric-v">4</b>',
     );
+    expect(html).toContain('<span class="inc-sd-metric-l">Modules</span><b class="inc-sd-metric-v">6</b>');
+    expect(html).toContain(
+      '<span class="inc-sd-metric-l">Éléments lus</span><b class="inc-sd-metric-v">3</b>',
+    );
+    expect(html).toContain('<span class="inc-sd-metric-l">Durée</span><b class="inc-sd-metric-v">1,8 s</b>');
     // L'application principale : la proposée la plus pertinente, désignée par un mot de l'incident.
     expect(principalApplication(resultOf())).toBe('web');
     expect(html).toContain('<span class="inc-sd-pill main">Application principale</span>');
@@ -414,7 +419,9 @@ describe('renderScopeDiscovery', () => {
     const partialHtml = renderScopeDiscovery(ctxOf(), withResult(emptyDiscoveryUi('inc_1'), partial));
     expect(partialHtml).toContain('<div class="inc-sd-problems" role="status">');
     expect(partialHtml).toContain('<b>Analyse partielle</b>');
-    expect(partialHtml).toContain('<p class="inc-sd-done partial" role="status">');
+    expect(partialHtml).toContain(
+      '<section class="inc-sd-done partial" role="status" aria-label="Analyse partielle">',
+    );
     expect(partialHtml).toContain('Refus de lecture (1)');
     expect(partialHtml).toContain('<code>/repos/mono/.env</code>');
     expect(partialHtml).toContain('Lecture partielle</summary>');

@@ -249,10 +249,10 @@ const fr = {
   indicatorRelations: (n: number) => `${String(n)} relation(s)`,
   done: 'Analyse terminée',
   donePartial: 'Analyse partielle',
-  doneApps: (n: number) => `${String(n)} application(s)`,
-  doneModules: (n: number) => `${String(n)} module(s)`,
-  doneRead: (n: number) => `${String(n)} fichier(s) lu(s)`,
-  doneDuration: (text: string) => `en ${text}`,
+  metricApps: 'Applications',
+  metricModules: 'Modules',
+  metricRead: 'Éléments lus',
+  metricDuration: 'Durée',
   principal: 'Application principale',
   frameworkOf: (name: string) => `Cadre : ${name}`,
 };
@@ -337,10 +337,10 @@ const en: typeof fr = {
   indicatorRelations: (n) => `${String(n)} relation(s)`,
   done: 'Analysis complete',
   donePartial: 'Partial analysis',
-  doneApps: (n) => `${String(n)} application(s)`,
-  doneModules: (n) => `${String(n)} module(s)`,
-  doneRead: (n) => `${String(n)} file(s) read`,
-  doneDuration: (text) => `in ${text}`,
+  metricApps: 'Applications',
+  metricModules: 'Modules',
+  metricRead: 'Files read',
+  metricDuration: 'Duration',
   principal: 'Main application',
   frameworkOf: (name) => `Framework: ${name}`,
 };
@@ -491,7 +491,9 @@ function resultBlock(
   const summary = `<p class="inc-sd-sum">${pill(t.structures[result.structure], 'st')}<span>${esc(t.summary(result.applications.length, suggested))}</span>${result.tools.length > 0 ? `<small class="mu">${esc(t.tools(result.tools.join(', ')))}</small>` : ''}</p><small class="mu">${esc(result.keywords.length > 0 ? t.keywords(result.keywords.join(', ')) : t.noKeywords)}</small>`;
   const principal = principalApplication(result);
   const modules = result.applications.reduce((total, entry) => total + entry.modules.length, 0);
-  const done = `<p class="inc-sd-done${result.status === 'PARTIAL' ? ' partial' : ''}" role="status">${icon(result.status === 'PARTIAL' ? 'alert' : 'check')}<b>${esc(result.status === 'PARTIAL' ? t.donePartial : t.done)}</b><span>${esc(t.doneApps(result.applications.length))}</span><span>${esc(t.doneModules(modules))}</span><span>${esc(t.doneRead(result.read.length))}</span><span>${esc(t.doneDuration(durationText(result.durationMs, ctx.lang)))}</span></p>`;
+  const metric = (label: string, value: string): string =>
+    `<div class="inc-sd-metric"><span class="inc-sd-metric-l">${esc(label)}</span><b class="inc-sd-metric-v">${esc(value)}</b></div>`;
+  const done = `<section class="inc-sd-done${result.status === 'PARTIAL' ? ' partial' : ''}" role="status" aria-label="${esc(result.status === 'PARTIAL' ? t.donePartial : t.done)}"><p class="inc-sd-done-h">${icon(result.status === 'PARTIAL' ? 'alert' : 'check')}<b>${esc(result.status === 'PARTIAL' ? t.donePartial : t.done)}</b></p><div class="inc-sd-metrics">${metric(t.metricApps, String(result.applications.length))}${metric(t.metricModules, String(modules))}${metric(t.metricRead, String(result.read.length))}${metric(t.metricDuration, durationText(result.durationMs, ctx.lang))}</div></section>`;
   const apps = `<ul class="inc-sd-apps" role="list">${result.applications.map((entry) => applicationCard(ctx, ui, entry, disabled, entry.application.id === principal)).join('')}</ul>`;
   const nameOf = (id: string): string =>
     result.applications.find((entry) => entry.application.id === id)?.application.name ?? id;
@@ -624,7 +626,7 @@ export function advancedDetails(lang: Lang, open: boolean, body: string): string
 
 /** Les styles du bloc (préfixe `inc-sd-`) : jetons du thème seulement, clair et sombre. */
 export const INCIDENT_SCOPE_DISCOVERY_CSS = `
-.inc-sd-hero{position:relative;overflow:hidden;display:flex;align-items:center;gap:18px;padding:18px 22px;border-radius:var(--qa-radius);background:var(--qa-color-primary-soft-2);border:1px solid color-mix(in srgb,var(--qa-color-primary) 18%,var(--qa-color-border));min-width:0}
+.inc-sd-hero{position:relative;overflow:hidden;flex:none;display:flex;align-items:center;gap:18px;padding:18px 22px;border-radius:var(--qa-radius);background:var(--qa-color-primary-soft-2);border:1px solid color-mix(in srgb,var(--qa-color-primary) 18%,var(--qa-color-border));min-width:0}
 .inc-sd-hero::before,.inc-sd-hero::after{content:"";position:absolute;border-radius:50%;pointer-events:none;border:14px solid color-mix(in srgb,var(--qa-color-primary) 9%,transparent)}
 .inc-sd-hero::before{width:180px;height:180px;right:-60px;top:-70px}
 .inc-sd-hero::after{width:110px;height:110px;right:70px;bottom:-70px;border-width:10px}
@@ -648,13 +650,18 @@ export const INCIDENT_SCOPE_DISCOVERY_CSS = `
 .inc-sd-root-w{position:relative;display:block}
 .inc-sd-root-w>.ico{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--qa-color-muted);pointer-events:none}
 .inc-sd-root-w input{width:100%;padding-left:38px}
-.inc-sd-done{margin:0;display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;padding:10px 14px;border-radius:10px;background:var(--qa-color-success-soft);border:1px solid color-mix(in srgb,var(--qa-color-success) 35%,var(--qa-color-border));color:var(--qa-color-text)}
-.inc-sd-done .ico{width:20px;height:20px;color:var(--qa-color-surface);background:var(--qa-color-success);border-radius:50%;padding:3px;stroke-width:3}
-.inc-sd-done b{color:var(--qa-color-primary-2)}
-.inc-sd-done span{font-size:13px;color:var(--qa-color-muted)}
+.inc-sd-done{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:10px;background:var(--qa-color-success-soft);border:1px solid color-mix(in srgb,var(--qa-color-success) 35%,var(--qa-color-border));color:var(--qa-color-text);min-width:0}
+.inc-sd-done-h{margin:0;display:flex;align-items:center;gap:8px}
+.inc-sd-done-h .ico{width:22px;height:22px;color:var(--qa-color-surface);background:var(--qa-color-success);border-radius:50%;padding:4px;stroke-width:3}
+.inc-sd-done-h b{color:var(--qa-color-primary-2);font-size:15px}
+.inc-sd-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.inc-sd-metric{display:flex;flex-direction:column;gap:2px;padding:8px 12px;border-radius:8px;background:var(--qa-color-surface);border:1px solid color-mix(in srgb,var(--qa-color-success) 25%,var(--qa-color-border));min-width:0}
+.inc-sd-metric-l{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--qa-color-muted)}
+.inc-sd-metric-v{font-size:20px;line-height:1.2;color:var(--qa-color-primary-2)}
 .inc-sd-done.partial{background:var(--qa-color-warning-soft);border-color:color-mix(in srgb,var(--qa-color-warning) 35%,var(--qa-color-border))}
-.inc-sd-done.partial .ico{background:var(--qa-color-warning)}
-.inc-sd-done.partial b{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text))}
+.inc-sd-done.partial .inc-sd-done-h .ico{background:var(--qa-color-warning)}
+.inc-sd-done.partial .inc-sd-done-h b{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text))}
+.inc-sd-done.partial .inc-sd-metric{border-color:color-mix(in srgb,var(--qa-color-warning) 30%,var(--qa-color-border))}
 .inc-sd-fw{width:28px;height:28px;border-radius:8px;display:inline-grid;place-items:center;font-size:11.5px;font-weight:700;flex:none;border:1px solid var(--qa-color-border);background:var(--qa-color-surface-2);color:var(--qa-color-muted)}
 .inc-sd-fw-front{color:var(--qa-color-primary);background:var(--qa-color-primary-soft)}
 .inc-sd-fw-java,.inc-sd-fw-py,.inc-sd-fw-go,.inc-sd-fw-net{color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text));background:var(--qa-color-success-soft)}
